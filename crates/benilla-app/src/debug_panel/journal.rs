@@ -148,6 +148,7 @@ pub(super) fn journal_ui(
     self_guid: Res<SelfGuid>,
     names: Res<crate::names::NameCache>,
     net_commands: Res<NetCommands>,
+    objects: crate::net::Objects,
     time: Res<Time>,
     // The copied row's `at` (unique per row) and when it was copied, for the confirmation flash.
     mut copied: Local<Option<(f64, f32)>>,
@@ -177,7 +178,7 @@ pub(super) fn journal_ui(
                             "you".to_string()
                         } else {
                             names
-                                .resolve(r.caster, &net_commands)
+                                .resolve(&objects, r.caster, &net_commands)
                                 .map(str::to_string)
                                 .unwrap_or_else(|| format!("guid {:#x}", r.caster))
                         };

@@ -245,7 +245,7 @@ fn feed_battlefield(
     }
     let pending = std::mem::take(&mut state.players);
     for (guid, joined) in pending {
-        let Some(name) = names.resolve(guid, &commands).map(str::to_string) else {
+        let Some(name) = names.resolve_player(guid, &commands).map(str::to_string) else {
             state.players.push((guid, joined));
             continue;
         };

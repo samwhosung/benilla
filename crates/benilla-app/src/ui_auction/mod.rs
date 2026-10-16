@@ -362,7 +362,7 @@ fn high_bidder(
             return AuctionHighBidder::Nil;
         }
         return names
-            .resolve(entry.bidder_guid, commands)
+            .resolve_player(entry.bidder_guid, commands)
             .map_or(AuctionHighBidder::Nil, |n| {
                 AuctionHighBidder::Name(n.to_string())
             });
@@ -420,7 +420,7 @@ fn resolve_row(
         player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
         high_bidder: high_bidder(list, entry, self_guid, names, commands),
         owner: names
-            .resolve(entry.owner_guid, commands)
+            .resolve_player(entry.owner_guid, commands)
             .map(str::to_string),
         link,
     }

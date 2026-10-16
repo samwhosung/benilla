@@ -13,8 +13,9 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use benilla_protocol::guid;
+use benilla_protocol::messages::ObjectFields;
 
-use crate::net::{ClientCommand, NetCommands, ObjectStore};
+use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects};
 use crate::query_cache::QueryCache;
 
 /// The creature template's `type_flags` dword from `SMSG_CREATURE_QUERY_RESPONSE`, cached by the
@@ -114,9 +115,13 @@ impl NameKey {
     /// With a descriptor this is `0x609210` exactly: the pet number and entry are the unit's
     /// fields, not the guid's bits (a vmangos companion pet has a `HIGHGUID_PET` guid but
     /// `PETNUMBER` 0; a charmed creature has a `HIGHGUID_UNIT` guid and a pet number). Without
-    /// one, a `HIGHGUID_PET` guid's entry slot is taken as the pet number, right only for a
-    /// permanent pet.
-    fn of(guid_val: u64, unit: Option<&ObjectStore>) -> Option<Self> {
+    /// one, the unit is not streamed, and the only reference read is the combat-log namer's
+    /// (`0x6264e0`): for an F-prefixed guid it keys the creature cache by the 16-bit word at
+    /// guid bits 32-47 (`0x6265c4`-`0x6265e0`), never a pet number.
+    /// Deviation: an unstreamed guid is read as the servers benilla targets lay it out, a
+    /// 24-bit entry at bits 24-47 (`guid::entry`) and a `HIGHGUID_PET` guid's slot as the pet
+    /// number, right only for a permanent pet.
+    fn of(guid_val: u64, unit: Option<&ObjectFields>) -> Option<Self> {
         if guid::is_player(guid_val) {
             return Some(Self::Player(guid_val));
         }
@@ -124,12 +129,9 @@ impl NameKey {
             return None;
         }
         match unit {
-            Some(unit) => match unit.0.unit_pet_number() {
-                0 => unit
-                    .0
-                    .object_entry()
-                    .filter(|&e| e != 0)
-                    .map(Self::Creature),
+            // An entry of 0 has no key: the cache refuses it (`0x556aad`-`0x556ab6`).
+            Some(unit) => match unit.unit_pet_number() {
+                0 => unit.object_entry().filter(|&e| e != 0).map(Self::Creature),
                 n => Some(Self::Pet(n)),
             },
             None => guid::pet_number(guid_val)
@@ -140,10 +142,27 @@ impl NameKey {
 }
 
 impl NameCache {
-    /// The name for a guid with no descriptor in hand; on a miss, asks once and returns `None`.
-    /// A caller holding the unit's [`ObjectStore`] uses [`Self::resolve_unit`]: the guid alone
-    /// cannot name a companion pet or a guardian. A game object is `None` without a query.
-    pub(crate) fn resolve(&self, guid_val: u64, commands: &NetCommands) -> Option<&str> {
+    /// The name for a guid; on a miss, asks once and returns `None`. The reference names a unit
+    /// from its descriptor (`0x609210` reads `[unit+8]`, and `0x60b151` keys the creature cache
+    /// by `[descriptor+0xc]`), so a streamed guid goes through [`Self::resolve_unit`] with its
+    /// store, and only a guid that is not streamed falls to its bits ([`NameKey::of`]). A game
+    /// object is `None` without a query.
+    pub(crate) fn resolve(
+        &self,
+        objects: &Objects,
+        guid_val: u64,
+        commands: &NetCommands,
+    ) -> Option<&str> {
+        self.resolve_unit(guid_val, objects.store(guid_val), commands)
+    }
+
+    /// [`Self::resolve`] for a guid that is a player by construction (a chat sender, a roster
+    /// member, an item's creator): a player is named by its guid whether or not it is streamed.
+    pub(crate) fn resolve_player(&self, guid_val: u64, commands: &NetCommands) -> Option<&str> {
+        debug_assert!(
+            guid::is_player(guid_val),
+            "{guid_val:#x} is not a player guid"
+        );
         self.resolve_unit(guid_val, None, commands)
     }
 
@@ -152,6 +171,17 @@ impl NameCache {
         &self,
         guid_val: u64,
         unit: Option<&ObjectStore>,
+        commands: &NetCommands,
+    ) -> Option<&str> {
+        self.resolve_fields(guid_val, unit.map(|u| &u.0), commands)
+    }
+
+    /// [`Self::resolve_unit`] for a descriptor not yet attached to an entity, as a create block
+    /// holds it.
+    pub(crate) fn resolve_fields(
+        &self,
+        guid_val: u64,
+        unit: Option<&ObjectFields>,
         commands: &NetCommands,
     ) -> Option<&str> {
         match NameKey::of(guid_val, unit)? {
@@ -205,7 +235,7 @@ impl NameCache {
 
     /// The cached name for a unit keyed off its descriptor, with no query on a miss.
     pub(crate) fn peek_unit(&self, guid_val: u64, unit: Option<&ObjectStore>) -> Option<&str> {
-        match NameKey::of(guid_val, unit)? {
+        match NameKey::of(guid_val, unit.map(|u| &u.0))? {
             NameKey::Player(guid_val) => self.players.get(guid_val).map(String::as_str),
             NameKey::Pet(pet_number) => self.pets.get(pet_number).map(String::as_str),
             NameKey::Creature(entry) => self.creatures.get(entry).map(|r| r.name.as_str()),
@@ -816,7 +846,7 @@ mod tests {
         let g0 = cache.generation();
 
         let player = compose(0, 0, 7);
-        assert_eq!(cache.resolve(player, &cmds), None);
+        assert_eq!(cache.resolve_unit(player, None, &cmds), None);
         assert_eq!(
             cache.generation(),
             g0,
@@ -827,7 +857,7 @@ mod tests {
         let landed = cache.generation();
         assert_ne!(g0, landed, "the answer landing is the edge");
 
-        assert_eq!(cache.resolve(player, &cmds), Some("Benilla"));
+        assert_eq!(cache.resolve_unit(player, None, &cmds), Some("Benilla"));
         assert_eq!(cache.generation(), landed, "a cache hit moves nothing");
 
         cache.insert_pet(137, "Voidwalker".into());
@@ -849,7 +879,7 @@ mod tests {
         let mut cache = NameCache::default();
         let voidwalker = compose(guid::HIGH_PET, 137, 9);
 
-        assert_eq!(cache.resolve(voidwalker, &cmds), None);
+        assert_eq!(cache.resolve_unit(voidwalker, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::PetNameQuery {
@@ -857,11 +887,14 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(cache.resolve(voidwalker, &cmds), None);
+        assert_eq!(cache.resolve_unit(voidwalker, None, &cmds), None);
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 
         cache.insert_pet(137, "Voidwalker".into());
-        assert_eq!(cache.resolve(voidwalker, &cmds), Some("Voidwalker"));
+        assert_eq!(
+            cache.resolve_unit(voidwalker, None, &cmds),
+            Some("Voidwalker")
+        );
         assert_eq!(cache.peek(voidwalker), Some("Voidwalker"));
         // Pet names are per-spawn, so a disconnect drops them.
         cache.clear_pending();
@@ -878,7 +911,7 @@ mod tests {
         let cache = NameCache::default();
         let rex = compose(guid::HIGH_PET, 7, 42);
 
-        assert_eq!(cache.resolve(rex, &cmds), None);
+        assert_eq!(cache.resolve_unit(rex, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::PetNameQuery { pet_number: 7, .. })
@@ -886,7 +919,7 @@ mod tests {
 
         let mut warm = NameCache::default();
         warm.insert_pet(7, "Rex".into());
-        assert_eq!(warm.resolve(rex, &cmds), Some("Rex"));
+        assert_eq!(warm.resolve_unit(rex, None, &cmds), Some("Rex"));
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
             "a seeded pet must not re-ask"
@@ -1006,7 +1039,7 @@ mod tests {
             "templates outlive the world session"
         );
         // The in-flight marks went too.
-        assert_eq!(cache.resolve(0x11, &cmds), None);
+        assert_eq!(cache.resolve_unit(0x11, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::NameQuery { guid: 0x11 })
@@ -1077,7 +1110,7 @@ mod tests {
         let (cmds, rx) = commands();
         let mut cache = NameCache::default();
         cache.insert_player(0x11, "Aldric".into(), Some((1, 2, 0)));
-        assert_eq!(cache.resolve(0x11, &cmds), Some("Aldric"));
+        assert_eq!(cache.resolve_unit(0x11, None, &cmds), Some("Aldric"));
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)), "no ask");
 
         let before = cache.generation();
@@ -1092,7 +1125,7 @@ mod tests {
             "the traits go with the name"
         );
 
-        assert_eq!(cache.resolve(0x11, &cmds), None);
+        assert_eq!(cache.resolve_unit(0x11, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::NameQuery { guid: 0x11 })
@@ -1106,9 +1139,9 @@ mod tests {
         let wolf_a = compose(guid::HIGH_UNIT, 69, 1);
         let wolf_b = compose(guid::HIGH_UNIT, 69, 2);
 
-        assert_eq!(cache.resolve(wolf_a, &cmds), None);
+        assert_eq!(cache.resolve_unit(wolf_a, None, &cmds), None);
         // Same entry, different spawn: no second query.
-        assert_eq!(cache.resolve(wolf_b, &cmds), None);
+        assert_eq!(cache.resolve_unit(wolf_b, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::CreatureQuery { entry: 69, .. })
@@ -1129,7 +1162,7 @@ mod tests {
                 display_id: 0,
             }),
         );
-        assert_eq!(cache.resolve(wolf_b, &cmds), Some("Young Wolf"));
+        assert_eq!(cache.resolve_unit(wolf_b, None, &cmds), Some("Young Wolf"));
     }
 
     #[test]
@@ -1138,13 +1171,13 @@ mod tests {
         let mut cache = NameCache::default();
         let g = compose(guid::HIGH_PLAYER, 0, 7);
 
-        assert_eq!(cache.resolve(g, &cmds), None);
+        assert_eq!(cache.resolve_unit(g, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::NameQuery { guid }) if guid == g
         ));
         cache.insert_player(g, String::new(), None); // server: unknown guid
-        assert_eq!(cache.resolve(g, &cmds), None);
+        assert_eq!(cache.resolve_unit(g, None, &cmds), None);
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
@@ -1154,11 +1187,11 @@ mod tests {
         let mut cache = NameCache::default();
         let g = compose(guid::HIGH_UNIT, 100, 1);
 
-        assert_eq!(cache.resolve(g, &cmds), None);
+        assert_eq!(cache.resolve_unit(g, None, &cmds), None);
         let _ = rx.try_recv();
         // A disconnect dropped the answer.
         cache.clear_pending();
-        assert_eq!(cache.resolve(g, &cmds), None);
+        assert_eq!(cache.resolve_unit(g, None, &cmds), None);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::CreatureQuery { entry: 100, .. })
@@ -1213,7 +1246,7 @@ mod tests {
 
     /// `[[unit+8]+0xc]` keys the creature cache (`0x604629`): a creature whose guid bits spell
     /// another entry is named, and asked for, by its descriptor, and a descriptor with no entry
-    /// yet has no key (an entry of 0 stores no record, `0x60464b`).
+    /// yet has no key (the cache refuses 0, `0x556aad`-`0x556ab6`, and `0x604646` skips the store).
     #[test]
     fn a_creature_is_keyed_by_its_descriptor_entry_not_its_guid_bits() {
         let (cmds, rx) = commands();
@@ -1237,6 +1270,37 @@ mod tests {
         let bare = unit(&[]);
         assert_eq!(cache.resolve_unit(wolf, Some(&bare), &cmds), None);
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    /// `resolve` finds the streamed object and names it from its descriptor (`0x609210`), so a
+    /// creature whose guid bits spell another entry is asked for, and named, by the field entry;
+    /// only an unstreamed guid falls to its bits.
+    #[test]
+    fn resolve_names_a_streamed_unit_by_its_descriptor_not_its_guid_bits() {
+        let (cmds, rx) = commands();
+        let wolf = compose(guid::HIGH_UNIT, 299, 4);
+        let mut objs = crate::ui_items::TestObjects::new();
+        objs.spawn_object(
+            wolf,
+            ObjectFields::from_pairs(&[(ENTRY, 2_671), (PETNUMBER, 0)]),
+        );
+        let objects = objs.get();
+
+        let cold = NameCache::default();
+        assert_eq!(cold.resolve(&objects, wolf, &cmds), None);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CreatureQuery { entry: 2_671, guid }) if guid == wolf
+        ));
+
+        let mut warm = NameCache::default();
+        warm.insert_creature(299, Some(record("Guid Bits")));
+        warm.insert_creature(2_671, Some(record("Field Entry")));
+        assert_eq!(warm.resolve(&objects, wolf, &cmds), Some("Field Entry"));
+
+        // Not streamed: the bits are all there is.
+        let stranger = compose(guid::HIGH_UNIT, 299, 5);
+        assert_eq!(warm.resolve(&objects, stranger, &cmds), Some("Guid Bits"));
     }
 
     #[test]

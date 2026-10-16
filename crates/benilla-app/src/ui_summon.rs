@@ -85,7 +85,7 @@ fn feed_summon(
     // A miss asks and reports `""` this frame; a zero guid names nobody and is never asked about.
     let summoner_name = match summon.pending() {
         Some(guid) => names
-            .resolve(guid, &commands)
+            .resolve_player(guid, &commands)
             .unwrap_or_default()
             .to_string(),
         None => String::new(),

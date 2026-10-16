@@ -504,7 +504,7 @@ pub(crate) fn feed_quest(
     });
     let npc_name = giver
         .npc
-        .and_then(|g| names.resolve(g, &commands).map(str::to_string));
+        .and_then(|g| names.resolve(&objects, g, &commands).map(str::to_string));
     let name_changed = *last_name != npc_name;
     if fresh == *last && !name_changed {
         return;

@@ -551,11 +551,15 @@ impl Objects<'_, '_> {
 
     /// A streamed object's merged descriptor fields, found as `0x468460` does, by guid.
     pub fn object(&self, guid: u64) -> Option<&ObjectFields> {
+        self.store(guid).map(|s| &s.0)
+    }
+
+    /// [`Self::object`] with its component.
+    pub(crate) fn store(&self, guid: u64) -> Option<&ObjectStore> {
         self.index
             .0
             .get(&guid)
             .and_then(|&e| self.stores.get(e).ok())
-            .map(|s| &s.0)
     }
 
     /// Every streamed object, items included.

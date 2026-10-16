@@ -182,7 +182,10 @@ fn feed_quest_share(
             );
             continue;
         };
-        match names.resolve(v.member, &commands).map(str::to_string) {
+        match names
+            .resolve_player(v.member, &commands)
+            .map(str::to_string)
+        {
             Some(name) => {
                 let err = UiError::s(key, name);
                 let get = |k: &str| script.lua().globals().get::<String>(k).ok();
@@ -209,7 +212,10 @@ fn feed_quest_share(
     // The escort confirm, once the member's name lands: player first, then title, as
     // `QUEST_ACCEPT` fills them.
     if let Some(c) = share.pending_confirm.as_ref() {
-        if let Some(name) = names.resolve(c.sender, &commands).map(str::to_string) {
+        if let Some(name) = names
+            .resolve_player(c.sender, &commands)
+            .map(str::to_string)
+        {
             let title = c.title.clone();
             share.confirm_quest = Some(c.quest_id);
             share.pending_confirm = None;

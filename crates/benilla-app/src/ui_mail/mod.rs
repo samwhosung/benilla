@@ -355,7 +355,7 @@ fn resolve_row(
 
     let sender = entry
         .sender_guid
-        .and_then(|g| names.resolve(g, commands).map(str::to_string));
+        .and_then(|g| names.resolve_player(g, commands).map(str::to_string));
 
     let stationery_texture = stationery
         .map(|s| s.0.texture(entry.stationery).to_string())
@@ -390,7 +390,7 @@ fn resolve_row(
             let seller = a.result == auction_mail::SOLD;
             let n = invoice::parse_body(raw_body?, seller)?;
             // An unresolved counterparty fills in when its name lands, as in the reference.
-            let player_name = names.resolve(n.player_guid, commands)?.to_string();
+            let player_name = names.resolve_player(n.player_guid, commands)?.to_string();
             Some(benilla_ui::script::MailInvoice {
                 seller,
                 item_name: notice_item_name.clone()?,

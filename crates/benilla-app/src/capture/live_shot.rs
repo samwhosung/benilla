@@ -97,7 +97,10 @@ fn fire_live_shot(
     time: ProbeClock,
     mut commands: Commands,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    subjects: Query<(&Guid, &Transform), (With<NetEntity>, Without<SelfPlayer>)>,
+    subjects: Query<
+        (&Guid, &Transform, Option<&ObjectStore>),
+        (With<NetEntity>, Without<SelfPlayer>),
+    >,
     camera: Query<(&Camera, &Transform), With<WorldCamera>>,
     names: Res<NameCache>,
     net_commands: Res<NetCommands>,
@@ -140,7 +143,7 @@ fn fire_live_shot(
         // `resolve` sends the name query on a miss, so scanning fills the cache within frames.
         let mut found: Option<(String, f32, Vec2)> = None;
         let mut nearby: Vec<(f32, String)> = Vec::new();
-        for (guid, tf) in &subjects {
+        for (guid, tf, store) in &subjects {
             // Only name-bearing families: a GameObject's name rides its own query, not this cache.
             if !guid::is_player(guid.0)
                 && !guid::is_creature_or_pet(guid.0)
@@ -150,7 +153,7 @@ fn fire_live_shot(
             }
             let dist = cam_pose.translation.distance(tf.translation);
             let name = names
-                .resolve(guid.0, &net_commands)
+                .resolve_unit(guid.0, store, &net_commands)
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("<unresolved 0x{:x}>", guid.0));
             if dist <= shot.require_dist.max(REQUIRE_NEARBY_RANGE) {

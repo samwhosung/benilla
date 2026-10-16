@@ -829,7 +829,7 @@ pub(super) fn drain_party(
                     selection
                         .guid
                         .filter(|g| benilla_protocol::guid::is_player(*g))
-                        .and_then(|g| names.resolve(g, &commands).map(str::to_string))
+                        .and_then(|g| names.resolve_player(g, &commands).map(str::to_string))
                 } else {
                     member_for_token(&group, &token).map(|m| m.name.clone())
                 };

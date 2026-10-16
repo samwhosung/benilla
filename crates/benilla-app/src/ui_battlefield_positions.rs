@@ -137,7 +137,7 @@ fn feed_battlefield_positions(
             continue;
         }
         let (x, y) = live_or_packet(p, &guids, &unit_pos);
-        let name = names.resolve(p.guid, &commands).map(str::to_string);
+        let name = names.resolve_player(p.guid, &commands).map(str::to_string);
         match name {
             None => {
                 if !pending_names.contains(&p.guid) {

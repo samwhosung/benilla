@@ -194,7 +194,15 @@ fn vendor_swap_probe(
             };
             let (brog, dobbins) = (find(BROG_ENTRY), find(DOBBINS_ENTRY));
             // Both names must be cached before the legs read them back out of the VM.
-            let named = |g: Option<u64>| g.is_some_and(|g| names.resolve(g, &net).is_some());
+            let named = |g: Option<u64>| {
+                g.is_some_and(|g| {
+                    let store = units
+                        .iter()
+                        .find(|(guid, ..)| guid.0 == g)
+                        .map(|(_, _, s, _)| s);
+                    names.resolve_unit(g, store, &net).is_some()
+                })
+            };
             let (brog_named, dobbins_named) = (named(brog), named(dobbins));
             if brog_named && dobbins_named {
                 probe.brog = brog;

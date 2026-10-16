@@ -165,7 +165,10 @@ fn drain_result_lines(
         if update.guid == 0 {
             continue;
         }
-        match names.resolve(update.guid, commands).map(str::to_string) {
+        match names
+            .resolve_player(update.guid, commands)
+            .map(str::to_string)
+        {
             // The name, once per `%s` the key's arity names (twice for the player link).
             Some(name) => ready.push(UiError::strings(key, &vec![name.as_str(); pushes])),
             None => still_pending.push(update),
@@ -229,7 +232,7 @@ fn friend_rows(
         .iter()
         .map(|entry| {
             let name = names
-                .resolve(entry.guid, commands)
+                .resolve_player(entry.guid, commands)
                 .map(str::to_string)
                 .unwrap_or_default();
             let online = entry.is_online();
@@ -280,7 +283,7 @@ fn ignore_rows(
             (
                 *guid,
                 names
-                    .resolve(*guid, commands)
+                    .resolve_player(*guid, commands)
                     .map(str::to_string)
                     .unwrap_or_default(),
             )

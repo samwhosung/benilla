@@ -682,7 +682,7 @@ fn resolve_slot(
         fields
             .item_creator()
             .filter(|&g| g != 0)
-            .and_then(|g| names.resolve(g, commands).map(str::to_string)),
+            .and_then(|g| names.resolve_player(g, commands).map(str::to_string)),
         // The tooltip's unlocked (0x4) and wrapped (0x8) bits.
         fields.item_flags().unwrap_or(0),
         // `0x5da2c0`: soulbound, or carrying a binding enchant, off the raw descriptor.

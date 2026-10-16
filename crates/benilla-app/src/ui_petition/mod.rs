@@ -258,7 +258,9 @@ impl PetitionState {
         Some(benilla_ui::script::PetitionSlotView {
             is_charter,
             title,
-            owner: names.resolve(owner_guid, commands).map(str::to_string),
+            owner: names
+                .resolve_player(owner_guid, commands)
+                .map(str::to_string),
         })
     }
 
@@ -275,7 +277,7 @@ impl PetitionState {
         if !open.signers.contains(&signer) {
             open.signers.push(signer);
         }
-        names.resolve(signer, commands).map(str::to_string)
+        names.resolve_player(signer, commands).map(str::to_string)
     }
 
     /// The `MSG_PETITION_DECLINE` `ClosePetition()` sends (`0x4f3f60`'s leg at `0x4f3fb5`), only

@@ -448,7 +448,7 @@ fn feed_item_text(
                 .and_then(|o| o.item_creator());
             let creator = match creator_guid {
                 None => None, // authorless
-                Some(guid) => match names.resolve(guid, &commands) {
+                Some(guid) => match names.resolve_player(guid, &commands) {
                     Some(name) => Some(name.to_string()),
                     None => return, // name query in flight
                 },

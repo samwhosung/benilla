@@ -158,6 +158,7 @@ fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             s,
             &c.index,
             &c.self_guid,
+            &l.stores,
             &mut l.feedback,
             &mut l.center,
             &l.names,

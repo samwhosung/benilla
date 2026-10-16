@@ -220,7 +220,13 @@ fn feed_taxi(
     let flightmaster_name = state
         .open
         .as_ref()
-        .and_then(|open| names.resolve(open.flightmaster, &commands))
+        .and_then(|open| {
+            let store = index
+                .0
+                .get(&open.flightmaster)
+                .and_then(|&e| stores.get(e).ok());
+            names.resolve_unit(open.flightmaster, store, &commands)
+        })
         .map(str::to_string);
     let name_changed = *last_name != flightmaster_name;
 

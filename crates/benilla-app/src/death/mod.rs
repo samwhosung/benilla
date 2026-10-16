@@ -244,7 +244,7 @@ fn feed_death(
     if let Some(name) = offer_announcement(memo, &death_net, store.0.is_dead_or_ghost(), |offer| {
         // A player caster's name is empty on the wire; hold the popup until the cache resolves it.
         if offer.name.is_empty() {
-            names.resolve(offer.caster, &net).map(str::to_owned)
+            names.resolve_player(offer.caster, &net).map(str::to_owned)
         } else {
             Some(offer.name.clone())
         }

@@ -681,7 +681,7 @@ fn object_create(
     // (`0x5fb880`) queries every creature (`0x60afb0`, at `0x60b157`), whose name is the record's
     // field 0 (`0x60934b`). Its `CreatureCache.wdb` answers without the wire; ours lasts a session.
     if matches!(kind, EntityKind::Unit | EntityKind::Player) {
-        let _ = names.resolve(guid, net_commands);
+        let _ = names.resolve_fields(guid, Some(&fields), net_commands);
         // A pet guid carries a pet number, so `resolve` asks the pet-name query; the template is
         // asked by the descriptor's entry as well, the reference's cache key (`[[unit+8]+0xc]`).
         if let Some(entry) = fields.object_entry().filter(|&e| e != 0) {

@@ -24,6 +24,15 @@ use crate::ui_unit::{CombatTextEvent, UnitCombatFeedback};
 
 use crate::net::{GuidIndex, NetCommands, ObjectStore, SelfGuid};
 
+/// A streamed unit's descriptor, which names it (`0x609210`); `None` for a guid not streamed.
+fn streamed<'a>(
+    index: &GuidIndex,
+    stores: &'a Query<&mut ObjectStore>,
+    guid: u64,
+) -> Option<&'a ObjectStore> {
+    index.0.get(&guid).and_then(|&e| stores.get(e).ok())
+}
+
 /// Gate A: the recipient's entity, unless the recipient is us (`0x607140` and `0x6128b0` compare
 /// the anchor guid to the active player and return before submitting).
 fn gated_anchor(guid: u64, index: &GuidIndex, self_guid: &SelfGuid) -> Option<Entity> {
@@ -325,7 +334,7 @@ pub(super) fn periodic_aura_log(
                     message_type: "PERIODIC_HEAL",
                     data: Some(
                         names
-                            .resolve(s.caster, net)
+                            .resolve_unit(s.caster, streamed(index, stores, s.caster), net)
                             .map(str::to_string)
                             .unwrap_or_default(),
                     ),
@@ -457,6 +466,7 @@ pub(super) fn spell_heal_log(
     s: SpellHealLog,
     index: &GuidIndex,
     self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
     feedback: &mut MessageWriter<UnitCombatFeedback>,
     center: &mut MessageWriter<CombatTextEvent>,
     names: &NameCache,
@@ -476,7 +486,7 @@ pub(super) fn spell_heal_log(
             message_type: if s.critical { "HEAL_CRIT" } else { "HEAL" },
             data: Some(
                 names
-                    .resolve(s.healer, net)
+                    .resolve_unit(s.healer, streamed(index, stores, s.healer), net)
                     .map(str::to_string)
                     .unwrap_or_default(),
             ),

@@ -558,9 +558,14 @@ pub(crate) fn feed_trainer(
     // `TRAINER_SHOW` and `TRAINER_UPDATE` carry no argument (`SignalEvent` `0x4d7b73`, `0x4d83f9`)
     // and the stock window titles with `UnitName("npc")` (`Blizzard_TrainerUI.lua:90`), so a
     // name-only change re-fires `TRAINER_UPDATE` to repaint it.
-    let trainer_name = open
-        .trainer
-        .and_then(|g| names.resolve(g, &commands).map(str::to_string));
+    let trainer_name = open.trainer.and_then(|g| {
+        let store = re_eval
+            .index
+            .0
+            .get(&g)
+            .and_then(|&e| re_eval.stores.get(e).ok());
+        names.resolve_unit(g, store, &commands).map(str::to_string)
+    });
     let name_changed = *last_name != trainer_name;
     if fresh == *last && !name_changed && !forced {
         return;

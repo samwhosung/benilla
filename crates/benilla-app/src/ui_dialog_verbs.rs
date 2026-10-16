@@ -490,7 +490,7 @@ fn feed_meeting_stone(
     for guid in pending {
         match inputs
             .names
-            .resolve(guid, &inputs.commands)
+            .resolve_player(guid, &inputs.commands)
             .map(str::to_string)
         {
             Some(name) => lines.extend(crate::ui_action::keyed_line_s(

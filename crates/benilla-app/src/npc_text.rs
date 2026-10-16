@@ -175,7 +175,7 @@ pub(crate) fn player_identity(
 ) -> Option<Subject> {
     let (store, guid) = self_q.iter().next()?;
     Some(Subject {
-        name: names.resolve(guid.0, commands)?.to_string(),
+        name: names.resolve_player(guid.0, commands)?.to_string(),
         race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
         class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),

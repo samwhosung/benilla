@@ -14,6 +14,7 @@ fn minimap_app() -> App {
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx))
         .init_resource::<NameCache>()
+        .init_resource::<crate::net::GuidIndex>()
         .init_resource::<MinimapBlipHover>()
         .add_systems(Update, drive_blip_tooltip);
     let mut script = UiScript::new().unwrap();

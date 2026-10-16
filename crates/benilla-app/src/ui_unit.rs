@@ -1083,7 +1083,8 @@ pub(crate) fn enrich_unit(
         return;
     }
     // The record is keyed by the unit's own `OBJECT_FIELD_ENTRY` (`[[unit+8]+0xc]`, `0x604629`);
-    // an entry of 0 stores none (`0x60464b`).
+    // an entry of 0 is no key: the cache refuses it (`0x556aad`-`0x556ab6`), so `0x604646` skips
+    // the store.
     let entry = store.0.object_entry().filter(|&e| e != 0);
     // The creature record (`CGUnit+0xb30`); `None` until the query answers, a real state the
     // plate draws under the name `UNKNOWNOBJECT`.

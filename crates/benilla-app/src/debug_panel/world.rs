@@ -40,7 +40,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         Some(guid) => {
             let name = world
                 .names
-                .resolve(guid, &world.net_commands)
+                .resolve_player(guid, &world.net_commands)
                 .unwrap_or("…")
                 .to_string();
             ui.strong(name);

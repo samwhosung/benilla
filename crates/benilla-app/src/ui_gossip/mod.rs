@@ -260,6 +260,7 @@ fn feed_gossip(
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
+    objects: crate::net::Objects,
     unit_names: crate::ui_unit::NameTables,
     states: Res<crate::world_state::WorldStates>,
     mut last: crate::ui_script::WindowMemo<Option<GossipMenu>>,
@@ -280,7 +281,7 @@ fn feed_gossip(
     // before the hold, so the name query goes out beside the text query.
     let npc_name = state
         .npc
-        .and_then(|g| names.resolve(g, &commands).map(str::to_string));
+        .and_then(|g| names.resolve(&objects, g, &commands).map(str::to_string));
     // While the text query is out, fire nothing and keep the last snapshot: the reference returns
     // at `0x4e2068` with no write and no event, so its frame keeps what it last showed. Reading
     // the hold as a close would flash an open window.
@@ -467,6 +468,7 @@ mod tests {
         app.insert_resource(NetCommands(tx))
             .init_resource::<GossipState>()
             .init_resource::<NameCache>()
+            .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::world_state::WorldStates>()
             .add_systems(Update, (feed_gossip, drain_gossip).chain());
         let mut script = UiScript::new().unwrap();

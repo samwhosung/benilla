@@ -633,7 +633,7 @@ fn feed_merchant(
     // the name's landing alone re-fires `MERCHANT_UPDATE`.
     let vendor_name = open
         .vendor
-        .and_then(|g| names.resolve(g, &commands).map(str::to_string));
+        .and_then(|g| names.resolve(&objects, g, &commands).map(str::to_string));
     let name_changed = *last_name != vendor_name;
     if fresh == *last && !name_changed {
         return;

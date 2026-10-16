@@ -26,7 +26,7 @@ fn target_player_name(
     if !benilla_protocol::guid::is_player(guid) {
         return None;
     }
-    names.resolve(guid, commands).map(str::to_string)
+    names.resolve_player(guid, commands).map(str::to_string)
 }
 
 /// The target guid a `CMSG_TEXT_EMOTE` carries (`DoEmote`'s caller, `0x49fdb1`): the selection,

@@ -73,6 +73,7 @@ type CensusQuery = (
     // The rest of `ground_derived`'s inputs, so the listing is the clamp's own population.
     Has<Embodied>,
     Has<RemoteMotion>,
+    Option<&'static crate::net::ObjectStore>,
 );
 
 /// One line per [`ground_derived`] body within [`GroundCensus::radius`], worst drop first, under
@@ -104,7 +105,7 @@ fn fire_ground_census(
     let radius2 = probe.radius * probe.radius;
 
     let mut rows: Vec<(f32, bool, String)> = Vec::new();
-    for (guid, net, t, clamped, spline, swimming, embodied, relayed) in &units {
+    for (guid, net, t, clamped, spline, swimming, embodied, relayed, store) in &units {
         if !ground_derived(
             net.kind,
             spline.is_some(),
@@ -122,7 +123,7 @@ fn fire_ground_census(
         let above = lowest_surface_above(&world, t.translation);
         let wow = bevy_to_wow(t.translation);
         let name = names
-            .resolve(guid.0, &net_commands)
+            .resolve_unit(guid.0, store, &net_commands)
             .unwrap_or("?")
             .to_string();
         rows.push((

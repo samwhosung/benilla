@@ -546,7 +546,7 @@ fn slot_view(
     let creator = obj
         .item_creator()
         .filter(|&g| g != 0)
-        .and_then(|g| names.resolve(g, commands).map(str::to_string));
+        .and_then(|g| names.resolve_player(g, commands).map(str::to_string));
     // All seven enchant slots: our own gear streams as item objects, where an inspected player's
     // descriptor carries only two.
     let enchants = crate::items::enchant_lines(

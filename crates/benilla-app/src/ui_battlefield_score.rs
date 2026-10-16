@@ -65,7 +65,7 @@ fn resolve_board(
 ) -> Option<Vec<BattlefieldScoreRow>> {
     let mut rows = Vec::with_capacity(log.rows.len());
     for r in &log.rows {
-        let name = names.resolve(r.guid, commands)?.to_string();
+        let name = names.resolve_player(r.guid, commands)?.to_string();
         let (race, class) = names
             .player_traits(r.guid)
             .map_or((0, 0), |(race, class, _)| (race, class));

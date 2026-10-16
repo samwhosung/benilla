@@ -384,7 +384,7 @@ fn render(
         RollLine::AllPassed(_) => false,
     };
     let name = match roller {
-        Some(g) if needs_name => Some(names.resolve(g, commands)?.to_string()),
+        Some(g) if needs_name => Some(names.resolve_player(g, commands)?.to_string()),
         _ => None,
     };
 

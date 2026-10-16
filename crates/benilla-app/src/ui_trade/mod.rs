@@ -561,7 +561,10 @@ fn answer_trade_request(
     // `CGUnit` (`0x609210`); this may wait on a name query, with no timer, since vmangos cancels
     // the trade to us when the initiator leaves (`Player.cpp:11747`), which clears the request.
     if block_trades.0 {
-        let Some(name) = names.resolve(initiator, &commands).map(str::to_string) else {
+        let Some(name) = names
+            .resolve_player(initiator, &commands)
+            .map(str::to_string)
+        else {
             return;
         };
         info!(target: "trade", "BEGIN_TRADE from {name} refused by BlockTrades; sending CMSG_BUSY_TRADE");
@@ -989,7 +992,10 @@ fn feed_trade(
         if line.needs_live_object && streamed_player(&index, &stores, line.who).is_none() {
             continue;
         }
-        match names.resolve(line.who, &commands).map(str::to_string) {
+        match names
+            .resolve_player(line.who, &commands)
+            .map(str::to_string)
+        {
             Some(name) => errors.0.push(crate::ui_action::UiError::s(line.key, name)),
             // Not cached: `resolve` has asked, so park it and retry next frame.
             None => trade.owe_named_line(line),

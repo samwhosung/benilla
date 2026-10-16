@@ -209,7 +209,7 @@ fn drive_mouseover_tooltip(
         let Some(owner) = store.0.corpse_owner() else {
             return;
         };
-        let Some(name) = names.resolve(owner, &commands).map(str::to_string) else {
+        let Some(name) = names.resolve_player(owner, &commands).map(str::to_string) else {
             return;
         };
         // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.

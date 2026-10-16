@@ -409,6 +409,7 @@ pub(super) fn drive_blip_tooltip(
     hover: Res<MinimapBlipHover>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
+    objects: crate::net::Objects,
 ) {
     let Some(mut script) = script else {
         return;
@@ -420,7 +421,7 @@ pub(super) fn drive_blip_tooltip(
         MinimapBlipHover::None => None,
         MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
         MinimapBlipHover::Npc(npc, grey) => names
-            .resolve(*npc, &commands)
+            .resolve(&objects, *npc, &commands)
             .map(|n| (n.to_string(), *grey)),
         MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
     };
