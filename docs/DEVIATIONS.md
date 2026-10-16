@@ -220,7 +220,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### screenshot
 
-- UTC, not local time, because there is no timezone source (as for Lua `date()`, `benilla_ui::civil`). ([`src/screenshot.rs:67`](../crates/benilla-app/src/screenshot.rs#L67))
+- UTC, not local time, because there is no timezone source (as for Lua `date()`, `benilla_ui::civil`). ([`src/screenshot.rs:69`](../crates/benilla-app/src/screenshot.rs#L69))
 
 #### shaders
 
