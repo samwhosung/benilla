@@ -27,6 +27,15 @@ impl CreateSources<'_> {
             || self.creatures.as_ref().is_some_and(|r| r.is_changed())
     }
 
+    /// Every catalog has arrived, so the verbs' catalog is whole: a create screen shown before
+    /// then lists races with no faction, whose `OnShow` raises.
+    pub(crate) fn complete(&self) -> bool {
+        self.create.is_some()
+            && self.classes.is_some()
+            && self.factions.is_some()
+            && self.creatures.is_some()
+    }
+
     /// The verbs' catalog, empty without `ChrRaces`.
     pub(crate) fn catalog(&self) -> GlueCreateCatalog {
         match &self.create {

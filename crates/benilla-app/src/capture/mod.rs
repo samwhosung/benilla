@@ -45,8 +45,10 @@ use benilla_world::schedule::WorldStage;
 use benilla_world::terrain_stream::WorldLoadProgress;
 use benilla_world::view::WorldCamera;
 
+mod create_stage;
 mod depth_probe;
 mod fixtures;
+mod glue_press;
 mod live_shot;
 mod phase_probe;
 mod pick_probe;
@@ -116,7 +118,6 @@ pub(crate) use probes::{
     RevealAuditPlugin, SchedCensusPlugin, StallPlugin, TrailCensusPlugin, UnitVisualsPlugin,
 };
 pub(crate) use scenarios::ui_opted_in;
-use scenarios::GlueScreen;
 use scenarios::{
     Scenario, SubjectKind, TrainerList, UiFixture, GLUE_SCENARIOS, GROUND_EYE, SCENARIOS,
 };
@@ -134,27 +135,23 @@ pub(crate) use probe_look::ProbeLookPlugin;
 pub(crate) use probe_pitch::ProbePitchPlugin;
 
 /// The screen a capture starts on, the dev arm of [`crate::run_mode::start_state`]: a glue capture
-/// boots onto its screen, any other capture straight in-world, no capture the login screen.
+/// boots onto the login screen, from which it presses its own screen up, any other capture
+/// straight in-world, no capture the login screen.
 ///
 /// One of three readers of `$WOW_CAPTURE`, with `run_mode` and `dev_state::deterministic_run`,
 /// one per layer and sharing no symbol: keep them in step.
 pub(crate) fn start_state() -> crate::client_state::ClientState {
-    match glue_screen() {
-        Some(GlueScreen::CharCreate) => crate::client_state::ClientState::CharCreate,
-        Some(GlueScreen::Login | GlueScreen::RealmList) => crate::client_state::ClientState::Login,
-        None if crate::run_mode::scenario_active() => crate::client_state::ClientState::InWorld,
-        None => crate::client_state::ClientState::Login,
+    if glue_capture() || !crate::run_mode::scenario_active() {
+        crate::client_state::ClientState::Login
+    } else {
+        crate::client_state::ClientState::InWorld
     }
 }
 
-/// The glue screen `$WOW_CAPTURE` names, if any; read before the plugins build, since it decides
-/// the start screen.
-fn glue_screen() -> Option<GlueScreen> {
-    let name = std::env::var("WOW_CAPTURE").ok()?;
-    GLUE_SCENARIOS
-        .iter()
-        .find(|g| g.name == name)
-        .map(|g| g.screen)
+/// `$WOW_CAPTURE` names a glue scenario; read before the plugins build, since it decides the start
+/// screen.
+fn glue_capture() -> bool {
+    std::env::var("WOW_CAPTURE").is_ok_and(|name| GLUE_SCENARIOS.iter().any(|g| g.name == name))
 }
 
 /// The `fxview` effect viewer: spawn one effect or missile model through the game's own
@@ -419,14 +416,10 @@ impl Plugin for CapturePlugin {
         let name = std::env::var("WOW_CAPTURE").unwrap_or_default();
         // A glue capture has no map, viewpoint or fixture; only the shutter is shared.
         let glue = GLUE_SCENARIOS.iter().find(|g| g.name == name).copied();
-        if let Some(g) = glue {
-            // The preview pick rides `WOW_CHARCREATE_PICK`, and a pick already in the environment
-            // wins, so one scenario photographs every race's stage.
-            if let Some((race, sex, class)) = g.pick {
-                if std::env::var_os("WOW_CHARCREATE_PICK").is_none() {
-                    std::env::set_var("WOW_CHARCREATE_PICK", format!("{race},{sex},{class}"));
-                }
-            }
+        // A pick in the environment wins over the scenario's, so one scenario photographs every
+        // race's stage.
+        if let Some(pick) = glue.and_then(|g| g.pick) {
+            app.insert_resource(create_stage::CreatePick::resolve(pick));
         }
         // `fxview`, `waterfx`, `vista` and `name-close` are built from knobs, not the tables, and
         // are never in the golden sweep.
@@ -676,8 +669,27 @@ impl Plugin for CapturePlugin {
             // Before `UnitFeed`: the seed stands in for wire data live play delivers on earlier
             // frames, so the same frame's feeds and the one-shot `MERCHANT_SHOW` paint must see it.
             .add_systems(Update, seed_ui_fixture.before(crate::ui_unit::UnitFeed))
-            .add_systems(Update, realm_list::seed_realm_list)
+            .add_systems(
+                Update,
+                (
+                    accept_agreements,
+                    realm_list::seed_realm_list,
+                    create_stage::seed_create_stage,
+                )
+                    .chain(),
+            )
             .add_systems(Last, drive_capture);
+    }
+}
+
+/// A glue capture photographs the account form, not a fresh state folder's user agreements: each
+/// one the login screen holds up is accepted as a player accepts it.
+fn accept_agreements(ctx: Res<CaptureCtx>, stock: crate::ui_script::glue::StockGlueProbe) {
+    if ctx.scenario.is_some() {
+        return;
+    }
+    if let Some(vm) = stock.vm().filter(|vm| vm.frame_visible("TOSFrame")) {
+        glue_press::press_accept_agreements(vm);
     }
 }
 
@@ -1050,18 +1062,5 @@ fn drive_capture(
             (true, false) => clock.pause(),
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod glue_capture_tests {
-    /// `ui_script::glue` puts the native screens up for a glue capture by its name's `glue-`
-    /// prefix, so every glue capture carries it and no other capture does.
-    #[test]
-    fn the_glue_captures_and_only_they_are_named_glue() {
-        assert!(super::GLUE_SCENARIOS
-            .iter()
-            .all(|g| g.name.starts_with("glue-")));
-        assert!(!super::SCENARIOS.iter().any(|s| s.name.starts_with("glue-")));
     }
 }

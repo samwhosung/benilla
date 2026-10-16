@@ -37,13 +37,6 @@ use super::reference_ui;
 /// The dev switch that puts the native glue screens up instead of the stock ones.
 const NATIVE_SWITCH: &str = "WOW_GLUE_NATIVE";
 
-/// The instruments outside the native screens' modules that still drive them, which a dev run
-/// that names one puts up: the rig and the create probe (`capture::probe_rig`,
-/// `capture::probe_charcreate`) create, delete and pick through the park's own enumerations, which
-/// the stock screen replaces with its own ask, and the glue captures (`WOW_CAPTURE=glue-…`,
-/// `capture::scenarios::GLUE_SCENARIOS`) photograph and feed the native screens.
-const NATIVE_INSTRUMENTS: [&str; 2] = ["WOW_RIG", "WOW_PROBE_CHARCREATE"];
-
 /// The native screens' own instruments, inert under the stock screens: named in a warning when a
 /// run sets one without [`NATIVE_SWITCH`].
 const NATIVE_ONLY: [&str; 10] = [
@@ -91,19 +84,9 @@ impl GlueStock {
     }
 }
 
-/// What in a dev run's environment asks for the native screens, if anything: the switch, or an
-/// instrument that still drives them ([`NATIVE_INSTRUMENTS`], a glue capture).
+/// What in a dev run's environment asks for the native screens, if anything: the switch.
 fn native_asked(var: impl Fn(&str) -> Option<String>) -> Option<String> {
-    if var(NATIVE_SWITCH).as_deref() == Some("1") {
-        return Some(format!("{NATIVE_SWITCH}=1"));
-    }
-    if let Some(name) = var("WOW_CAPTURE").filter(|n| n.starts_with("glue-")) {
-        return Some(format!("WOW_CAPTURE={name} photographs the native screens"));
-    }
-    NATIVE_INSTRUMENTS
-        .into_iter()
-        .find(|k| var(k).is_some())
-        .map(|k| format!("{k} drives the native screens' roster"))
+    (var(NATIVE_SWITCH).as_deref() == Some("1")).then(|| format!("{NATIVE_SWITCH}=1"))
 }
 
 /// The stock screens stand: the resource says so, or is absent and the default holds.
@@ -165,6 +148,12 @@ impl StockVm<'_> {
             .eval::<f64>(chunk)
             .inspect_err(|e| error!("glue probe: {chunk} raised: {e}"))
             .ok()
+    }
+
+    /// The create screen's character as its verbs left it (`[0xb42078]`), `None` with no VM or
+    /// no character built.
+    pub(crate) fn create_look(&self) -> Option<benilla_ui::script::GlueCreateLook> {
+        self.0?.glue_create_look()
     }
 
     /// Run a Lua chunk, the way a button's handler calls a stock function; a raise is logged.
@@ -503,8 +492,8 @@ mod tests {
         assert_eq!(nil_call("x.lua:1: bad argument #1"), None);
     }
 
-    /// The stock screens stand unless a dev run asks for the native ones, by the switch or by an
-    /// instrument that still drives them; any other value of the switch leaves the stock screens up.
+    /// The stock screens stand unless a dev run asks for the native ones by the switch; any other
+    /// value of the switch, and every instrument, leaves the stock screens up.
     #[test]
     fn the_native_screens_stand_only_when_a_dev_run_asks() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
@@ -518,10 +507,9 @@ mod tests {
         assert_eq!(native_asked(env(&[])), None);
         assert_eq!(native_asked(env(&[("WOW_GLUE_NATIVE", "0")])), None);
         assert!(native_asked(env(&[("WOW_GLUE_NATIVE", "1")])).is_some());
-        assert!(native_asked(env(&[("WOW_RIG", "60")])).is_some());
-        assert!(native_asked(env(&[("WOW_PROBE_CHARCREATE", "Zz")])).is_some());
-        assert!(native_asked(env(&[("WOW_CAPTURE", "glue-login")])).is_some());
-        assert_eq!(native_asked(env(&[("WOW_CAPTURE", "water-noon")])), None);
+        assert_eq!(native_asked(env(&[("WOW_RIG", "60")])), None);
+        assert_eq!(native_asked(env(&[("WOW_PROBE_CHARCREATE", "Zz")])), None);
+        assert_eq!(native_asked(env(&[("WOW_CAPTURE", "glue-login")])), None);
         assert!(is_stock(None), "absent, the default holds");
         assert!(is_stock(Some(&GlueStock::default())));
         assert!(!is_stock(Some(&GlueStock(false))));

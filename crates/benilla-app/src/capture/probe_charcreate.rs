@@ -1,15 +1,17 @@
 //! The character-create live probe (`WOW_PROBE_CHARCREATE="<name>[,race,class,gender[,skin,\
-//! face,hair,haircolor,facial]]"`), inert without the env. At character select it sends
-//! [`CharRequest::Create`], logs the `SMSG_CHAR_CREATE` result byte, then deletes the new
-//! character and logs that result too, unless `WOW_PROBE_CHARCREATE_KEEP=1`. Run it without
-//! `WOW_CHAR`, which would enter the world; the switches are `docs/CONTRIBUTING.md`, "Running it
-//! unattended". It reads the park's own rosters, so it puts the native glue screens up
-//! (`ui_script::glue::NATIVE_INSTRUMENTS`).
+//! face,hair,haircolor,facial]]"`), inert without the env. At character select it presses Create
+//! New Character, puts the body up on the stock create screen and presses Okay
+//! ([`super::glue_press`]), logs the `SMSG_CHAR_CREATE` result byte, then deletes the new
+//! character from the select screen and logs that result too, unless
+//! `WOW_PROBE_CHARCREATE_KEEP=1`. Run it without `WOW_CHAR`, which would enter the world; the
+//! switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
 
-use crate::net::{CharActionResultMessage, CharListMessage, CharPick, CharRequest};
+use super::glue_press;
+use crate::net::{CharActionResultMessage, CharListMessage};
+use crate::ui_script::glue::StockGlueProbe;
 
 pub(crate) struct ProbeCharCreatePlugin;
 
@@ -28,6 +30,7 @@ impl Plugin for ProbeCharCreatePlugin {
             keep,
             state: ProbeState::AwaitingRoster,
             roster: Vec::new(),
+            listed: false,
         })
         .add_systems(Update, drive_charcreate_probe);
     }
@@ -54,11 +57,15 @@ fn parse_req(spec: &str) -> Option<CharCreateReq> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProbeState {
-    /// Waiting for the first roster (the socket parking at select).
+    /// Waiting for the select screen to hold the first roster.
     AwaitingRoster,
-    /// Sent `Create`, waiting for its result.
+    /// Pressed Create New Character, waiting for the create screen.
+    CreateScreen,
+    /// Pressed the create screen's Okay, waiting for its result.
     Creating,
-    /// Sent `Delete`, waiting for its result.
+    /// Created, waiting for the select screen to hold the roster with the new row.
+    AwaitingCreated,
+    /// Pressed the delete, waiting for its result.
     Deleting,
     /// Nothing left to do.
     Done,
@@ -69,93 +76,119 @@ struct CharCreateProbe {
     req: CharCreateReq,
     keep: bool,
     state: ProbeState,
-    /// The freshest roster, where a successful create finds its guid to clean up.
+    /// The freshest roster, where a successful create finds its row to clean up.
     roster: Vec<benilla_protocol::Character>,
+    /// A roster has come since the probe last left the select screen.
+    listed: bool,
 }
 
-/// Drive create, then delete, off the roster and result messages.
+/// Drive create, then delete, through the stock screens off the roster and result messages.
 fn drive_charcreate_probe(
     mut probe: ResMut<CharCreateProbe>,
-    pick: Res<CharPick>,
+    stock: StockGlueProbe,
     mut lists: MessageReader<CharListMessage>,
     mut results: MessageReader<CharActionResultMessage>,
 ) {
-    // The fresh roster arrives before each successful action's result.
-    let got_roster = lists.read().fold(false, |_, m| {
-        probe.roster = m.characters.clone();
-        true
-    });
+    if let Some(list) = lists.read().last() {
+        probe.roster = list.characters.clone();
+        probe.listed = true;
+    }
+    let vm = stock.vm().filter(|vm| vm.is_up());
 
     match probe.state {
         ProbeState::AwaitingRoster => {
-            if got_roster {
-                info!(
-                    "probe-charcreate: parked at select — creating {:?} (race {} class {} gender {}; \
-                     appearance {}/{}/{}/{}/{})",
-                    probe.req.name,
-                    probe.req.race,
-                    probe.req.class,
-                    probe.req.gender,
-                    probe.req.skin,
-                    probe.req.face,
-                    probe.req.hair_style,
-                    probe.req.hair_color,
-                    probe.req.facial_hair,
-                );
-                let _ = pick.0.send(CharRequest::Create(probe.req.clone()));
-                probe.state = ProbeState::Creating;
+            let Some(vm) =
+                vm.filter(|vm| probe.listed && glue_press::select_holds(*vm, &probe.roster))
+            else {
+                return;
+            };
+            info!(
+                "probe-charcreate: at select — creating {:?} (race {} class {} gender {}; \
+                 appearance {}/{}/{}/{}/{})",
+                probe.req.name,
+                probe.req.race,
+                probe.req.class,
+                probe.req.gender,
+                probe.req.skin,
+                probe.req.face,
+                probe.req.hair_style,
+                probe.req.hair_color,
+                probe.req.facial_hair,
+            );
+            glue_press::press_create_screen(vm);
+            probe.state = ProbeState::CreateScreen;
+        }
+        ProbeState::CreateScreen => {
+            let Some(vm) = vm.filter(|vm| glue_press::create_up(*vm)) else {
+                return;
+            };
+            match glue_press::press_body(vm, &probe.req) {
+                Ok(()) => {
+                    glue_press::press_okay(vm, &probe.req.name);
+                    probe.state = ProbeState::Creating;
+                }
+                Err(why) => {
+                    error!("probe-charcreate: the create screen refused the body ({why})");
+                    probe.state = ProbeState::Done;
+                }
             }
         }
         ProbeState::Creating => {
-            for r in results.read() {
-                if r.action != CharAction::Create {
-                    continue;
+            let Some(r) = results.read().find(|r| r.action == CharAction::Create) else {
+                return;
+            };
+            info!(
+                "probe-charcreate: create result = {:#04x} ({})",
+                r.code,
+                result_label(CharAction::Create, r.code)
+            );
+            let created = r.code == messages::CHAR_CREATE_SUCCESS;
+            if created && !probe.keep {
+                // The screen goes back to select and asks for the roster with the new row.
+                probe.listed = false;
+                probe.state = ProbeState::AwaitingCreated;
+            } else {
+                if created {
+                    info!("probe-charcreate: KEEP set — leaving the new character in place");
                 }
-                info!(
-                    "probe-charcreate: create result = {:#04x} ({})",
-                    r.code,
-                    result_label(CharAction::Create, r.code)
-                );
-                let created = r.code == messages::CHAR_CREATE_SUCCESS;
-                if created && !probe.keep {
-                    match probe
-                        .roster
-                        .iter()
-                        .find(|c| c.name.eq_ignore_ascii_case(&probe.req.name))
-                    {
-                        Some(c) => {
-                            let guid = c.guid;
-                            info!("probe-charcreate: cleaning up — deleting guid {guid}");
-                            let _ = pick.0.send(CharRequest::Delete(guid));
-                            probe.state = ProbeState::Deleting;
-                        }
-                        None => {
-                            warn!("probe-charcreate: created char not in roster — cannot clean up");
-                            probe.state = ProbeState::Done;
-                        }
-                    }
-                } else {
-                    if created {
-                        info!("probe-charcreate: KEEP set — leaving the new character in place");
-                    }
+                probe.state = ProbeState::Done;
+            }
+        }
+        ProbeState::AwaitingCreated => {
+            let Some(vm) =
+                vm.filter(|vm| probe.listed && glue_press::select_holds(*vm, &probe.roster))
+            else {
+                return;
+            };
+            match probe
+                .roster
+                .iter()
+                .position(|c| c.name.eq_ignore_ascii_case(&probe.req.name))
+            {
+                Some(row) => {
+                    info!(
+                        "probe-charcreate: cleaning up — deleting guid {}",
+                        probe.roster[row].guid
+                    );
+                    glue_press::press_delete(vm, row);
+                    probe.state = ProbeState::Deleting;
+                }
+                None => {
+                    warn!("probe-charcreate: created char not in roster — cannot clean up");
                     probe.state = ProbeState::Done;
                 }
-                break;
             }
         }
         ProbeState::Deleting => {
-            for r in results.read() {
-                if r.action != CharAction::Delete {
-                    continue;
-                }
-                info!(
-                    "probe-charcreate: delete result = {:#04x} ({})",
-                    r.code,
-                    result_label(CharAction::Delete, r.code)
-                );
-                probe.state = ProbeState::Done;
-                break;
-            }
+            let Some(r) = results.read().find(|r| r.action == CharAction::Delete) else {
+                return;
+            };
+            info!(
+                "probe-charcreate: delete result = {:#04x} ({})",
+                r.code,
+                result_label(CharAction::Delete, r.code)
+            );
+            probe.state = ProbeState::Done;
         }
         ProbeState::Done => {}
     }

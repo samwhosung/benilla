@@ -30,18 +30,20 @@
 //! (`ObjectMgr.cpp:12079-12117`), so re-dressing a body leaves the old set in its bags or mailed;
 //! a fresh rig-named character starts with empty bags.
 //!
-//! The rig picks, creates and deletes through the park's own rosters, so a rig run puts the
-//! native glue screens up (`ui_script::glue::NATIVE_INSTRUMENTS`).
+//! The rig picks, creates and deletes on the stock glue screens, as a player's clicks do
+//! ([`super::glue_press`]): Enter World on its row, Create New Character and the create screen's
+//! Okay, the delete dialog's Okay. A fresh body has every customization at its first choice.
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
 
+use super::glue_press;
 use super::probes::ProbeClock;
-use crate::glue_session::roster::{send_pick, Roster};
+use crate::glue_session::roster::press_enter_world;
 use crate::net::{
-    CharActionResultMessage, CharListMessage, CharPick, CharRequest, EnteredWorldMessage,
-    ObjectStore, SelfPlayer,
+    CharActionResultMessage, CharListMessage, EnteredWorldMessage, ObjectStore, SelfPlayer,
 };
+use crate::ui_script::glue::StockGlueProbe;
 
 /// Grace after world entry before the first GM line, while the descriptor and the UI VM come up;
 /// a command sent into a half-built session is dropped.
@@ -85,6 +87,7 @@ impl Plugin for ProbeRigPlugin {
             spec,
             phase: RigPhase::AwaitRoster,
             roster: Vec::new(),
+            listed: false,
             evicted: false,
             steps: Vec::new(),
             sent: 0,
@@ -209,13 +212,18 @@ impl RigSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RigPhase {
-    /// Parked at select, waiting for a roster to look our character up in.
+    /// At select, waiting for a roster the stock screen holds to look our character up in.
     AwaitRoster,
-    /// Sent `Create`, waiting for its result.
+    /// Pressed Create New Character, waiting for the create screen.
+    CreateScreen,
+    /// Pressed the create screen's Okay, waiting for its result.
     Creating,
-    /// Sent `Delete` (the roster was full), waiting for its result before retrying the create.
+    /// The account is full: backing out to select to delete this guid, the rig character
+    /// cheapest to rebuild.
+    Evicting(u64),
+    /// Pressed the delete, waiting for its result before retrying the create.
     Deleting,
-    /// Sent `Enter`, waiting to be in the world.
+    /// Pressed Enter World, or left the pick to `WOW_CHAR`, waiting to be in the world.
     Entering,
     /// In the world; the GM batch starts at this `Time::elapsed_secs`.
     Settling(f32),
@@ -233,6 +241,8 @@ struct Rig {
     phase: RigPhase,
     /// The freshest roster.
     roster: Vec<benilla_protocol::Character>,
+    /// A roster has come since the rig last left the select screen, so the screen will load it.
+    listed: bool,
     /// A server-limit eviction has been spent; only one is allowed.
     evicted: bool,
     steps: Vec<String>,
@@ -240,60 +250,85 @@ struct Rig {
     next_at: f32,
 }
 
-/// The whole rig: find-or-create the body at select, enter as it, then apply the state batch.
+/// The whole rig: find-or-create the body on the stock select and create screens, enter as it,
+/// then apply the state batch.
+#[allow(clippy::too_many_arguments)]
 fn drive_rig(
     mut rig: ResMut<Rig>,
-    mut roster: ResMut<Roster>,
-    pick: Res<CharPick>,
+    // The glue screens to press, and the world's VM the GM batch is typed into.
+    mut vms: ParamSet<(
+        StockGlueProbe,
+        Option<NonSendMut<benilla_ui::script::UiScript>>,
+    )>,
     time: ProbeClock,
     mut lists: MessageReader<CharListMessage>,
     mut results: MessageReader<CharActionResultMessage>,
     mut entered: MessageReader<EnteredWorldMessage>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
 ) {
     if let Some(list) = lists.read().last() {
         rig.roster = list.characters.clone();
+        rig.listed = true;
     }
     let entered_world = entered.read().next().is_some();
+    let stock = vms.p0();
+    let vm = stock.vm().filter(|vm| vm.is_up());
 
     match rig.phase {
         RigPhase::AwaitRoster => {
-            if rig.roster.is_empty() && rig.spec.body.is_none() {
-                return; // no roster yet, and nothing to create
+            if !rig.listed || (rig.roster.is_empty() && rig.spec.body.is_none()) {
+                return; // no roster yet, or nothing to create
             }
             let Some(want) = rig_char_name(&rig.spec) else {
-                // No body asked for: char_select's own pick stands.
+                // No body asked for: the roster policy's own pick (`WOW_CHAR`) stands.
                 rig.phase = RigPhase::Entering;
+                return;
+            };
+            let Some(vm) = vm.filter(|vm| glue_press::select_holds(*vm, &rig.roster)) else {
                 return;
             };
             match rig
                 .roster
                 .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&want))
+                .position(|c| c.name.eq_ignore_ascii_case(&want))
             {
-                Some(c) => {
-                    let guid = c.guid;
-                    info!("rig: reusing {want} (guid {guid})");
-                    send_pick(&mut roster, &pick, guid);
+                Some(row) => {
+                    info!("rig: reusing {want} (guid {})", rig.roster[row].guid);
+                    press_enter_world(vm, row);
                     rig.phase = RigPhase::Entering;
                 }
-                None if rig.roster.is_empty() => {} // the enum hasn't landed yet
                 None => {
-                    let (race, class, gender) = rig.spec.body.expect("name implies a body");
                     info!("rig: {want} does not exist — creating it");
-                    let _ = pick.0.send(CharRequest::Create(CharCreateReq {
-                        name: want,
-                        race,
-                        class,
-                        gender,
-                        skin: 0,
-                        face: 0,
-                        hair_style: 0,
-                        hair_color: 0,
-                        facial_hair: 0,
-                    }));
+                    glue_press::press_create_screen(vm);
+                    rig.phase = RigPhase::CreateScreen;
+                }
+            }
+        }
+        RigPhase::CreateScreen => {
+            let Some(vm) = vm.filter(|vm| glue_press::create_up(*vm)) else {
+                return;
+            };
+            let (race, class, gender) = rig.spec.body.expect("a create implies a body");
+            let name = rig_char_name(&rig.spec).expect("a body names a character");
+            let req = CharCreateReq {
+                name: name.clone(),
+                race,
+                class,
+                gender,
+                skin: 0,
+                face: 0,
+                hair_style: 0,
+                hair_color: 0,
+                facial_hair: 0,
+            };
+            match glue_press::press_body(vm, &req) {
+                Ok(()) => {
+                    glue_press::press_okay(vm, &name);
                     rig.phase = RigPhase::Creating;
+                }
+                Err(why) => {
+                    error!("rig: the create screen refused the body ({why}) — nothing rigged");
+                    rig.phase = RigPhase::Done;
                 }
             }
         }
@@ -302,7 +337,11 @@ fn drive_rig(
                 return;
             };
             match r.code {
-                messages::CHAR_CREATE_SUCCESS => rig.phase = RigPhase::AwaitRoster,
+                // The screen goes back to select and asks for the roster with the new row.
+                messages::CHAR_CREATE_SUCCESS => {
+                    rig.listed = false;
+                    rig.phase = RigPhase::AwaitRoster;
+                }
                 messages::CHAR_CREATE_SERVER_LIMIT if !rig.evicted => {
                     rig.evicted = true;
                     match crate::run_mode::rig_suffix().and_then(|word| {
@@ -314,8 +353,7 @@ fn drive_rig(
                                  (guid {guid}). Only this checkout's rig-named characters are ever \
                                  deleted; Probe<N> and hand-made characters are never touched."
                             );
-                            let _ = pick.0.send(CharRequest::Delete(guid));
-                            rig.phase = RigPhase::Deleting;
+                            rig.phase = RigPhase::Evicting(guid);
                         }
                         None => {
                             error!(
@@ -332,9 +370,47 @@ fn drive_rig(
                 }
             }
         }
+        RigPhase::Evicting(guid) => {
+            let Some(vm) = vm else { return };
+            // The failure's `OKAY` stands over the create screen: dismissed, then Back to select,
+            // which asks for its roster.
+            if glue_press::dialog_up(vm) {
+                glue_press::press_dialog_okay(vm);
+                return;
+            }
+            if glue_press::create_up(vm) {
+                rig.listed = false;
+                glue_press::press_back(vm);
+                return;
+            }
+            if !rig.listed || !glue_press::select_holds(vm, &rig.roster) {
+                return;
+            }
+            match rig.roster.iter().position(|c| c.guid == guid) {
+                Some(row) => {
+                    glue_press::press_delete(vm, row);
+                    rig.phase = RigPhase::Deleting;
+                }
+                None => {
+                    error!("rig: guid {guid} left the roster before its delete — nothing rigged");
+                    rig.phase = RigPhase::Done;
+                }
+            }
+        }
         RigPhase::Deleting => {
-            if results.read().any(|r| r.action == CharAction::Delete) {
+            let Some(r) = results.read().find(|r| r.action == CharAction::Delete) else {
+                return;
+            };
+            if r.code == messages::CHAR_DELETE_SUCCESS {
+                // The screen asks for the roster again (`0x46c1a7`).
+                rig.listed = false;
                 rig.phase = RigPhase::AwaitRoster;
+            } else {
+                error!(
+                    "rig: the eviction's delete failed ({:#04x}) — nothing rigged",
+                    r.code
+                );
+                rig.phase = RigPhase::Done;
             }
         }
         RigPhase::Entering => {
@@ -358,7 +434,7 @@ fn drive_rig(
             rig.phase = RigPhase::Commanding;
         }
         RigPhase::Commanding => {
-            let Some(mut script) = script else { return };
+            let Some(mut script) = vms.p1() else { return };
             while rig.sent < rig.steps.len() && time.elapsed_secs() >= rig.next_at {
                 let line = rig.steps[rig.sent].clone();
                 info!("rig: {line}");

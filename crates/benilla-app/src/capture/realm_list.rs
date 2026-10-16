@@ -1,7 +1,11 @@
-//! `glue-realmlist`: the realm list over the login screen with realms in two categories, which the
-//! live server cannot show (it lists one). The list is published as the realm park publishes one,
-//! then the dialog is raised as Change Realm raises it; the tabs are named from the install's own
-//! Region, so bytes 1 and 2 are "English" and "German" under Region 3 and 1 alone under Region 1.
+//! `glue-realmlist`: the stock realm list over the login screen with realms in two categories,
+//! which the live server cannot show (it lists one). A session with no characters that has chosen
+//! no realm gets the realm wizard instead (`GET_PREFERRED_REALM_INFO`, `0x46e718`), so the run
+//! takes the wizard's way to a choice: the list asked for (`RequestRealmList(1)`) and answered as
+//! the realm park answers, the wizard's first language suggested (`SetPreferredInfo`), the
+//! suggestion dismissed back to the login screen, and the list asked for and answered again, which
+//! the glue manager now raises as the list. The tabs are named from the install's own Region, so
+//! bytes 1 and 2 are "English" and "German" under Region 3 and 1 alone under Region 1.
 
 use bevy::prelude::*;
 
@@ -34,27 +38,35 @@ fn fixture() -> Vec<RealmInfo> {
     ]
 }
 
-/// Publish the list, let the policy take it, then raise the dialog.
+/// Walk the login screen to the list: ask, answer, choose through the wizard, ask and answer again.
 pub(super) fn seed_realm_list(
     ctx: Res<CaptureCtx>,
     mut step: Local<u8>,
     mut lists: MessageWriter<crate::net::RealmListMessage>,
-    mut realms: ResMut<crate::realm_select::Realms>,
-    choice: Res<crate::net::RealmChoice>,
+    stock: crate::ui_script::glue::StockGlueProbe,
 ) {
     if ctx.name != NAME {
         return;
     }
+    let Some(vm) = stock.vm().filter(|vm| vm.is_up()) else {
+        return;
+    };
+    let answer = |lists: &mut MessageWriter<crate::net::RealmListMessage>| {
+        lists.write(crate::net::RealmListMessage {
+            realms: fixture(),
+            failed: false,
+        });
+    };
     match *step {
-        0 => {
-            lists.write(crate::net::RealmListMessage {
-                realms: fixture(),
-                failed: false,
-            });
+        0 if super::glue_press::login_form_up(vm) => vm.press("RequestRealmList(1)"),
+        1 | 4 => answer(&mut lists),
+        2 if vm.frame_visible("RealmWizard") => {
+            vm.press("RealmWizardLocationButton_OnClick(1) SetPreferredInfo(1, nil, nil)")
         }
-        2 => crate::realm_select::open_over_char_select(&mut realms, &choice),
-        3.. => return,
-        _ => {}
+        3 if vm.frame_visible("GlueDialog") => {
+            vm.press("GlueDialog:Hide() SetGlueScreen(\"login\") RequestRealmList(1)")
+        }
+        _ => return,
     }
     *step += 1;
 }
