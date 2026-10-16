@@ -149,7 +149,6 @@ const NOT_YET: &[(&str, &[&str])] = &[
             "PatchDownloadApply",
             "PatchDownloadCancel",
             "PatchDownloadProgress",
-            "Screenshot",
             "SetMovieSubtitles",
             "SurveyNotificationDone",
         ],
@@ -290,6 +289,68 @@ fn glue_events_register_by_the_glue_table() {
     assert_eq!(
         s.eval::<Vec<String>>("return heard").unwrap(),
         ["all:SET_GLUE_SCREEN"]
+    );
+}
+
+/// `Screenshot` (`0x46d3d0`, table `0x8373b8`) arms a capture, and its callback `0x46c520` answers
+/// with glue event 14 on success and 15 on failure, the glue table's own names
+/// (`reference/glue_events.tsv`); the in-game pair would reach no glue frame.
+#[test]
+fn the_glue_screenshot_arms_a_capture_and_is_answered_with_the_glue_events() {
+    let mut s = UiScript::new_glue().unwrap();
+    assert_eq!(glue_events()[14], "GLUE_SCREENSHOT_SUCCEEDED");
+    assert_eq!(glue_events()[15], "GLUE_SCREENSHOT_FAILED");
+    s.run(
+        r#"
+        heard = {}
+        f = CreateFrame("Frame")
+        f:SetScript("OnEvent", function() table.insert(heard, event) end)
+        f:RegisterEvent("GLUE_SCREENSHOT_SUCCEEDED")
+        f:RegisterEvent("GLUE_SCREENSHOT_FAILED")
+        f:RegisterEvent("SCREENSHOT_SUCCEEDED")
+        Screenshot()
+        "#,
+    )
+    .expect("the glue VM binds Screenshot");
+    assert_eq!(s.take_screenshot_asks(), 1, "one call, one capture");
+    assert_eq!(s.take_screenshot_asks(), 0, "and the ask is spent");
+    assert!(
+        s.eval::<Vec<String>>("return heard").unwrap().is_empty(),
+        "the call itself answers nothing"
+    );
+    let e = s.screenshot_event(true);
+    s.fire_event(e, vec![]);
+    let e = s.screenshot_event(false);
+    s.fire_event(e, vec![]);
+    s.fire_event("SCREENSHOT_SUCCEEDED", vec![]);
+    assert_eq!(
+        s.eval::<Vec<String>>("return heard").unwrap(),
+        ["GLUE_SCREENSHOT_SUCCEEDED", "GLUE_SCREENSHOT_FAILED"],
+        "the glue names, and neither in-game one"
+    );
+}
+
+/// The in-game state answers with its own names.
+#[test]
+fn the_in_game_screenshot_is_answered_with_the_in_game_events() {
+    let mut s = UiScript::new().unwrap();
+    s.run(
+        r#"
+        heard = {}
+        f = CreateFrame("Frame")
+        f:SetScript("OnEvent", function() table.insert(heard, event) end)
+        f:RegisterEvent("SCREENSHOT_SUCCEEDED")
+        f:RegisterEvent("SCREENSHOT_FAILED")
+        "#,
+    )
+    .unwrap();
+    let e = s.screenshot_event(true);
+    s.fire_event(e, vec![]);
+    let e = s.screenshot_event(false);
+    s.fire_event(e, vec![]);
+    assert_eq!(
+        s.eval::<Vec<String>>("return heard").unwrap(),
+        ["SCREENSHOT_SUCCEEDED", "SCREENSHOT_FAILED"]
     );
 }
 

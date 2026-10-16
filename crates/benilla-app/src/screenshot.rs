@@ -1,7 +1,10 @@
 //! Print screen: the capture, the file writer and the "Screen Captured" status, which must never
 //! appear in the shot it announces. The binding runs `TakeScreenshot()` (`WorldFrame.lua:46`),
 //! which hides `ScreenshotStatus` and calls `Screenshot()`; the engine later answers
-//! `SCREENSHOT_SUCCEEDED` or `SCREENSHOT_FAILED`.
+//! `SCREENSHOT_SUCCEEDED` or `SCREENSHOT_FAILED`. The glue screens call `Screenshot()` directly
+//! on `PRINTSCREEN` (`AccountLogin.lua:81`); the same capture answers them with the glue's
+//! `GLUE_SCREENSHOT_SUCCEEDED` or `GLUE_SCREENSHOT_FAILED` (`0x46c520`), whichever VM is up
+//! ([`UiScript::screenshot_event`]).
 //!
 //! Our UI quads are built at the top of `UiInput` and the binding runs at its bottom, so a capture
 //! on the press frame would still show a second press's fading status; [`ask_for_captures`]
@@ -14,8 +17,7 @@
 //! The reference fires `SCREENSHOT_SUCCEEDED` even when the write fails, a bug not copied:
 //! [`report_captures`] answers `SCREENSHOT_FAILED` and logs the reason.
 //!
-//! As in the reference, a raw `Screenshot()` from Lua skips the `Hide()`. The glue screens'
-//! capture keys are not built.
+//! As in the reference, a raw `Screenshot()` from Lua skips the `Hide()`.
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
@@ -145,8 +147,8 @@ fn write_capture(captured: On<ScreenshotCaptured>, mut state: ResMut<ScreenshotS
         .detach();
 }
 
-/// Fires `SCREENSHOT_SUCCEEDED` or `SCREENSHOT_FAILED` for finished writes, always a frame after
-/// the capture, so the status cannot be in the picture.
+/// Answers finished writes with the VM's success or failure event, always a frame after the
+/// capture, so the status cannot be in the picture.
 fn report_captures(script: Option<NonSendMut<UiScript>>, state: Res<ScreenshotState>) {
     let Some(mut script) = script else {
         return;
@@ -156,11 +158,13 @@ fn report_captures(script: Option<NonSendMut<UiScript>>, state: Res<ScreenshotSt
             Outcome::Saved(path) => {
                 // At info: the folder is not where WoW puts it.
                 info!("screenshot: wrote {}", path.display());
-                script.fire_event("SCREENSHOT_SUCCEEDED", Vec::new());
+                let event = script.screenshot_event(true);
+                script.fire_event(event, Vec::new());
             }
             Outcome::Failed(why) => {
                 warn!("screenshot: FAILED — {why}");
-                script.fire_event("SCREENSHOT_FAILED", Vec::new());
+                let event = script.screenshot_event(false);
+                script.fire_event(event, Vec::new());
             }
         }
     }
@@ -241,6 +245,58 @@ mod tests {
                 .iter(app.world())
                 .count(),
             1
+        );
+    }
+
+    /// The glue's `Screenshot()` goes through the same ask and the same writer answer: a capture
+    /// is spawned a frame after the call, and a finished write fires the glue events (`0x46c520`).
+    #[test]
+    fn a_glue_screen_screenshot_is_one_capture_answered_with_the_glue_events() {
+        let mut app = App::new();
+        app.init_resource::<ScreenshotState>();
+        let glue = UiScript::new_glue().unwrap();
+        glue.run(
+            r#"
+            heard = {}
+            f = CreateFrame("Frame")
+            f:SetScript("OnEvent", function() table.insert(heard, event) end)
+            f:RegisterEvent("GLUE_SCREENSHOT_SUCCEEDED")
+            f:RegisterEvent("GLUE_SCREENSHOT_FAILED")
+            Screenshot()
+            "#,
+        )
+        .unwrap();
+        app.insert_non_send_resource(glue);
+        app.add_systems(Update, (ask_for_captures, report_captures).chain());
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<ScreenshotState>().pending,
+            1,
+            "the glue call is staged as an ask"
+        );
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query::<&Screenshot>()
+                .iter(app.world())
+                .count(),
+            1,
+            "and one capture follows a frame later"
+        );
+
+        let tx = app.world().resource::<ScreenshotState>().tx.clone();
+        tx.send(Outcome::Saved("x.png".into())).unwrap();
+        tx.send(Outcome::Failed("disk".into())).unwrap();
+        app.update();
+        let heard = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("return heard")
+            .unwrap();
+        assert_eq!(
+            heard,
+            ["GLUE_SCREENSHOT_SUCCEEDED", "GLUE_SCREENSHOT_FAILED"]
         );
     }
 

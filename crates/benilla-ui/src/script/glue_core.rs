@@ -727,6 +727,8 @@ pub(super) fn global_text(lua: &Lua, key: &str) -> String {
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
+    // `Screenshot` (`0x46d3d0`): the in-game verb's capture ask, answered with the glue's events.
+    super::screenshot::install(lua)?;
     let g = lua.globals();
 
     // Both arguments `is-number-or-string` (`0x46d168`, `0x46d178`), else the usage error
