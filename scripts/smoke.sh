@@ -200,7 +200,7 @@ fi
 # fails anything but a completed walk.
 echo "smoke: running the realm-list boundary walk (~12 s, opens a window)…"
 rlog="$(mktemp "${TMPDIR:-/tmp}/benilla-smoke-realm.XXXXXX")"
-# No WOW_CHAR: the walk drives character select, and `realm_select::smoke` refuses a seated body.
+# No WOW_CHAR: the walk drives character select, and `glue_session::realm_smoke` refuses a seated body.
 WOW_UNATTENDED=1 WOW_NOSOUND=1 WOW_USER="$user" WOW_PASS="$pass" WOW_REALM_SMOKE=1 \
     timeout 120 cargo run -q -p benilla >"$rlog" 2>&1
 rcode=$?

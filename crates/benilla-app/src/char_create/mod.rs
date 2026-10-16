@@ -36,24 +36,33 @@ const HORDE: [u8; 4] = [2, 5, 6, 8]; // Orc, Scourge, Tauren, Troll
 /// The reference's initial facing (`SetCharacterCreateFacing(-15)`), reset on every race switch.
 const INITIAL_FACING: f32 = -15.0 * std::f32::consts::PI / 180.0;
 
-/// The character-creation screen and its selection state.
+/// The character-creation screen and its selection state, on the native screens alone: under
+/// `WOW_GLUE_STOCK=1` the stock `CharacterCreate` is a glue screen of the glue VM, and the app
+/// never enters [`ClientState::CharCreate`].
 pub(crate) struct CharCreatePlugin;
 
 impl Plugin for CharCreatePlugin {
     fn build(&self, app: &mut App) {
+        use crate::ui_script::glue::native_glue;
         app.init_resource::<CreateSelection>()
-            .add_systems(OnEnter(ClientState::CharCreate), screen::enter_create)
-            .add_systems(OnExit(ClientState::CharCreate), screen::exit_create)
-            .add_systems(Update, debug_enter)
+            .add_systems(
+                OnEnter(ClientState::CharCreate),
+                screen::enter_create.run_if(native_glue),
+            )
+            .add_systems(
+                OnExit(ClientState::CharCreate),
+                screen::exit_create.run_if(native_glue),
+            )
+            .add_systems(Update, debug_enter.run_if(native_glue))
             .add_systems(
                 Update,
                 (
                     screen::rescale_screen,
-                    create_input.run_if(crate::ui_script::glue::native_glue),
+                    create_input,
                     debug_auto_create,
                     debug_pick,
                     debug_shot,
-                    rotate_model.run_if(crate::ui_script::glue::native_glue),
+                    rotate_model,
                     refresh::refresh_dynamic,
                     refresh_name_box,
                     refresh::refresh_hover,
@@ -67,6 +76,7 @@ impl Plugin for CharCreatePlugin {
                     // The create screen writes the glue booth's preview.
                     .in_set(crate::portrait::GluePreviewFeed)
                     .run_if(in_state(ClientState::CharCreate))
+                    .run_if(native_glue)
                     .after(benilla_world::schedule::WorldStage::Net),
             );
     }

@@ -209,7 +209,6 @@ fn spawn_screen(
 
     commands
         .spawn((
-            crate::glue::NativeGlue,
             RealmListUi { with_art, s },
             GlobalZIndex(REALM_Z),
             // `enableMouse="true"` on a full-screen frame: clicks never reach the screen below.

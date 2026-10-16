@@ -182,6 +182,7 @@ mod tests {
                 Roster::with_pending_pick(vec![character(7, "Seven")], 7).env_settled(),
             )
             .insert_resource(CharPick(tx.into()))
+            .init_resource::<crate::glue_session::roster::RunPick>()
             .init_resource::<crate::cvars::Cvars>()
             .add_message::<CharListMessage>()
             .add_message::<EnteredWorldMessage>()
@@ -229,6 +230,7 @@ mod tests {
                     Roster::with_pending_pick(vec![character(7, "Seven")], 7).env_settled(),
                 )
                 .insert_resource(CharPick(tx.into()))
+                .init_resource::<crate::glue_session::roster::RunPick>()
                 .init_resource::<crate::cvars::Cvars>()
                 .add_message::<CharListMessage>()
                 .add_message::<EnteredWorldMessage>()

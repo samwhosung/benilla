@@ -1,5 +1,6 @@
 //! The glue round-trip (`WOW_GLUE_ROUNDTRIP=1`): once a roster has arrived at character select, go
-//! to character create, Back to character select, and exit. Ungated, since it crosses states.
+//! to character create, Back to character select, and exit. Ungated, since it crosses states and
+//! runs over either glue screen set.
 //!
 //! "Roster has arrived" counts the roster, not its characters: an account with none reaches select
 //! all the same. Under `WOW_GLUE_STOCK=1` the stock screens are driven through their own verbs in
@@ -8,8 +9,8 @@
 
 use bevy::prelude::*;
 
-use super::ClientState;
-use crate::glue_session::roster::Roster;
+use super::roster::Roster;
+use crate::client_state::ClientState;
 use crate::net::CharListMessage;
 use crate::ui_script::glue::StockGlueProbe;
 

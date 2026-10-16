@@ -4,21 +4,17 @@
 
 use bevy::prelude::*;
 
-use super::roster::{send_pick, Roster};
+use super::roster::{press_enter_world, send_pick, Roster};
 use crate::client_state::ClientState;
 use crate::net::{CharListMessage, CharPick};
 use crate::ui_script::glue::{StockGlueProbe, StockVm};
 
 /// Enter the world again as the roster's first character, the way a player does on the screens
-/// that stand. On the stock screens that is the row selected and Enter World pressed
-/// (`CharacterSelect.lua`'s `CharacterSelectButton_OnDoubleClick`), whose `EnterWorld` reaches the
-/// glue manager's `CGlueMgr::EnterWorld` (`0x46b500`): `lastCharacterIndex` written and saved,
-/// state 8, then the pick. The native screens' Enter World is the pick itself.
+/// that stand: on the stock screens their Enter World ([`press_enter_world`]); the native screens'
+/// Enter World is the pick itself.
 pub(crate) fn reenter_first(stock: Option<StockVm>, roster: &mut Roster, pick: &CharPick) {
     match stock {
-        Some(vm) => {
-            vm.press("CharacterSelect_SelectCharacter(1) CharSelectEnterWorldButton:Click()")
-        }
+        Some(vm) => press_enter_world(vm, 0),
         None => {
             if let Some(guid) = roster.chars.first().map(|c| c.guid) {
                 send_pick(roster, pick, guid);

@@ -741,7 +741,6 @@ fn spawn_panel(
     commands
         .spawn((
             AddonsUi,
-            crate::glue::NativeGlue,
             GlobalZIndex(1200), // over the select screen's 1100, like the delete dialog
             // The reference's full-screen BACKGROUND layer, black at 0.75; it also keeps a stray
             // click off the screen behind.

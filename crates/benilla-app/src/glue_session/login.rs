@@ -2,7 +2,7 @@
 //! pre-logon park, the glue screens' asks, the login's success edge, the quit and the saved
 //! account. What a screen shows of it is the screen's: the native login screen ([`crate::login`])
 //! reads [`LoginNotice`], the stock glue manager ([`crate::ui_script::glue_mgr`]) the net messages
-//! themselves.
+//! themselves and the one notice with no message behind it.
 //!
 //! The credential policy drives the IO thread's pre-logon park: `WOW_USER` plus `WOW_PASS`
 //! auto-submit, pending credentials resubmit every 3 s (app-side; the IO thread never sleeps),
@@ -48,7 +48,8 @@ pub(super) fn build(app: &mut App) {
                 .chain()
                 .in_set(LoginPolicy)
                 .after(benilla_world::schedule::WorldStage::Net),
-        );
+        )
+        .add_systems(Update, debug_login_shot.after(LoginPolicy));
 }
 
 // ── The credential policy ────────────────────────────────────────────────────────────────────────
@@ -234,8 +235,9 @@ pub(crate) fn close_logon(
 }
 
 /// What the policy decided a screen should tell the player, in the order it decided it. The
-/// native login screen opens and closes its glue dialog on these; the stock glue manager reads
-/// the net messages itself.
+/// native login screen opens and closes its glue dialog on these. The stock glue manager reads the
+/// net message behind each instead, on the reference's path ([`crate::ui_script::glue_mgr`]), and
+/// this only for [`LoginNotice::GuardRefused`], which has none.
 #[derive(Message, Debug, Clone)]
 pub(crate) enum LoginNotice {
     /// The account guard refused the env fast path, with why.
@@ -468,6 +470,36 @@ fn drive_quit(arm: Option<Res<QuitArm>>, time: Res<Time>, mut exit: MessageWrite
             exit.write(AppExit::Success);
         }
     }
+}
+
+// ── The login shot ───────────────────────────────────────────────────────────────────────────────
+
+/// `WOW_LOGIN_SHOT_OUT=<path>`: one PNG of the login screen once it has settled, whichever screen
+/// set stands.
+fn debug_login_shot(
+    mut commands: Commands,
+    state: Res<State<ClientState>>,
+    time: Res<Time>,
+    mut entered_at: Local<Option<f32>>,
+    mut done: Local<bool>,
+) {
+    if *done || *state.get() != ClientState::Login {
+        return;
+    }
+    let Ok(out) = std::env::var("WOW_LOGIN_SHOT_OUT") else {
+        *done = true;
+        return;
+    };
+    let start = *entered_at.get_or_insert(time.elapsed_secs());
+    if time.elapsed_secs() - start < 8.0 {
+        return;
+    }
+    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(out.clone()));
+    info!("login: shot instrument writing {out}");
+    *done = true;
 }
 
 // ── The login smoke's spec ───────────────────────────────────────────────────────────────────────

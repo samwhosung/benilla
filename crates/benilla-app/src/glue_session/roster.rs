@@ -7,8 +7,22 @@ use benilla_protocol::Character;
 use bevy::prelude::*;
 
 use crate::net::{CharListMessage, CharPick, CharRequest};
+use crate::ui_script::glue::{StockGlueProbe, StockVm};
 
 // ── The roster and pick policy ──────────────────────────────────────────────────────────────────
+
+/// The run's own pick (`WOW_CHAR`, `WOW_RIG`) on the stock screens, by guid, until their select
+/// screen stands to take it ([`enter_run_pick`]).
+#[derive(Resource, Default)]
+pub(crate) struct RunPick(Option<u64>);
+
+#[cfg(test)]
+impl RunPick {
+    /// The pick armed for `guid`, as the roster policy arms it on the stock screens.
+    pub(crate) fn armed(guid: u64) -> Self {
+        RunPick(Some(guid))
+    }
+}
 
 /// The account roster and the pick policy's memory.
 #[derive(Resource, Default)]
@@ -210,10 +224,14 @@ pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64) {
 
 /// Drain each [`CharListMessage`] into the roster, then answer it with the pending pick
 /// (reconnect), the `WOW_CHAR` fast path (first roster only), or nothing, leaving the screen up.
+/// On the stock screens the fast path is theirs to press ([`enter_run_pick`]).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_roster_policy(
     mut msgs: MessageReader<CharListMessage>,
     mut roster: ResMut<Roster>,
     pick: Res<CharPick>,
+    stock: Option<Res<crate::ui_script::glue::GlueStock>>,
+    mut run_pick: ResMut<RunPick>,
     // The remembered row, read off the registry, the store that outlives every VM.
     cvars: Res<crate::cvars::Cvars>,
     // Present only when a rig drives the run and picks its own character.
@@ -292,8 +310,13 @@ pub(super) fn apply_roster_policy(
             {
                 Some(c) => {
                     let guid = c.guid;
-                    info!("char select: WOW_CHAR={name} — fast path");
-                    send_pick(&mut roster, &pick, guid);
+                    if stock.as_deref().is_some_and(|s| s.0) {
+                        info!("char select: WOW_CHAR={name} — fast path, by Enter World");
+                        run_pick.0 = Some(guid);
+                    } else {
+                        info!("char select: WOW_CHAR={name} — fast path");
+                        send_pick(&mut roster, &pick, guid);
+                    }
                 }
                 None => {
                     warn!("char select: WOW_CHAR={name} not on this account — showing roster");
@@ -309,6 +332,43 @@ pub(super) fn apply_roster_policy(
             }
         }
     }
+}
+
+/// Enter the world as `row` (0-based) on the stock select screen, the way a player does: the row
+/// selected and Enter World pressed (`CharacterSelect.lua`'s
+/// `CharacterSelectButton_OnDoubleClick`), whose `EnterWorld` reaches `CGlueMgr::EnterWorld`
+/// (`0x46b500`): `lastCharacterIndex` written and saved, state 8, then the pick.
+pub(crate) fn press_enter_world(vm: StockVm, row: usize) {
+    let n = row + 1;
+    vm.press(&format!(
+        "CharacterSelect_SelectCharacter({n}) CharSelectEnterWorldButton:Click()"
+    ));
+}
+
+/// The run's own pick on the stock screens ([`RunPick`]): once their select screen stands with the
+/// roster loaded into it (`0x4724d0`), the row is pressed into the world through the screen's
+/// Enter World ([`press_enter_world`]), never sent past it.
+pub(crate) fn enter_run_pick(
+    roster: Res<Roster>,
+    mut run_pick: ResMut<RunPick>,
+    stock: StockGlueProbe,
+) {
+    let Some(guid) = run_pick.0 else {
+        return;
+    };
+    let Some(vm) = stock.vm().filter(|vm| vm.frame_visible("CharacterSelect")) else {
+        return;
+    };
+    let Some(row) = roster.chars.iter().position(|c| c.guid == guid) else {
+        run_pick.0 = None;
+        return;
+    };
+    let loaded = vm.text(&format!("return (GetCharacterInfo({}))", row + 1));
+    if loaded.as_deref() != Some(roster.chars[row].name.as_str()) {
+        return;
+    }
+    run_pick.0 = None;
+    press_enter_world(vm, row);
 }
 
 /// A `Character` with only its identity filled in.
@@ -346,6 +406,7 @@ pub(crate) fn test_character(guid: u64, name: &str) -> Character {
 pub(crate) fn add_test_systems(app: &mut App, pick: crossbeam_channel::Sender<CharRequest>) {
     app.insert_state(crate::client_state::ClientState::CharSelect)
         .init_resource::<Roster>()
+        .init_resource::<RunPick>()
         .insert_resource(CharPick(pick.into()))
         .add_message::<CharListMessage>()
         .add_systems(
@@ -403,6 +464,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Roster>()
+            .init_resource::<RunPick>()
             .insert_resource(CharPick(tx.into()))
             .insert_resource(match stored {
                 Some(v) => crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, v),
@@ -518,6 +580,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Roster>()
+            .init_resource::<RunPick>()
             .insert_resource(CharPick(tx.into()))
             .insert_resource(crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, "0"))
             .add_message::<CharListMessage>()

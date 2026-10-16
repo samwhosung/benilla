@@ -88,6 +88,24 @@ impl StockVm<'_> {
         self.0.is_some_and(|s| s.frame_visible(name))
     }
 
+    /// A Lua chunk's string value, as a stock function's caller reads it; `None` with no VM, for
+    /// `nil`, and on a raise, which is logged.
+    pub(crate) fn text(&self, chunk: &str) -> Option<String> {
+        self.0?
+            .eval::<Option<String>>(chunk)
+            .inspect_err(|e| error!("glue probe: {chunk} raised: {e}"))
+            .ok()
+            .flatten()
+    }
+
+    /// A Lua chunk's number value; `None` with no VM and on a raise, which is logged.
+    pub(crate) fn number(&self, chunk: &str) -> Option<f64> {
+        self.0?
+            .eval::<f64>(chunk)
+            .inspect_err(|e| error!("glue probe: {chunk} raised: {e}"))
+            .ok()
+    }
+
     /// Run a Lua chunk, the way a button's handler calls a stock function; a raise is logged.
     pub(crate) fn press(&self, chunk: &str) {
         if let Some(Err(e)) = self.0.map(|s| s.run(chunk)) {

@@ -1,9 +1,9 @@
 //! The native login screen, the reference's `AccountLogin` glue: the form, its input, its caret
 //! and its dialogs; the layout is [`screen`]. The login engine it drives, the credentials, the
 //! asks and the success edge, is [`crate::glue_session::login`]'s, which serves the stock screens
-//! too; this screen shows what it decides ([`LoginNotice`]). All of it but the login shot runs on
-//! the native screens alone. Deviation: the Credits, Cinematics and TOS side of the reference
-//! screen is absent, because the screen keeps only what logging in needs.
+//! too; this screen shows what it decides ([`LoginNotice`]). All of it runs on the native screens
+//! alone. Deviation: the Credits, Cinematics and TOS side of the reference screen is absent,
+//! because the screen keeps only what logging in needs.
 
 mod screen;
 mod smoke;
@@ -53,43 +53,38 @@ impl Plugin for LoginPlugin {
             .add_systems(
                 Update,
                 (
+                    // Every state: a lost session's dialog opens wherever the session died.
+                    show_login_notices,
                     (
-                        // Every state: a lost session's dialog opens wherever the session died.
-                        show_login_notices,
+                        screen::materialize_screen,
+                        login_input,
+                        tick_login_caret,
+                        screen::refresh_boxes,
+                        screen::refresh_checkbox,
+                        // The shared glue dialog stays inside this chain: ordering it from
+                        // outside would order a shared painter against its own
+                        // `SystemTypeSet`, which panics at schedule build, at boot, where no
+                        // unit test sees it.
+                        crate::glue::dialog::drive_glue_dialog,
+                        answer_dialog,
+                        // After the driver: it spawns the dialog's edit box, and a realmlist
+                        // Okay changes the address repainted here.
                         (
-                            screen::materialize_screen,
-                            login_input,
-                            tick_login_caret,
-                            screen::refresh_boxes,
-                            screen::refresh_checkbox,
-                            // The shared glue dialog stays inside this chain: ordering it from
-                            // outside would order a shared painter against its own
-                            // `SystemTypeSet`, which panics at schedule build, at boot, where no
-                            // unit test sees it.
-                            crate::glue::dialog::drive_glue_dialog,
-                            answer_dialog,
-                            // After the driver: it spawns the dialog's edit box, and a realmlist
-                            // Okay changes the address repainted here.
-                            (
-                                crate::glue::dialog::refresh_dialog_box,
-                                screen::refresh_realmlist,
-                            ),
-                        )
-                            .chain()
-                            .before(crate::glue::GlueVisuals)
-                            // `answer_dialog` holds the VM, and every VM holder in `Update`
-                            // declares its side of the UI tick; a glue screen has nothing the
-                            // tick must see.
-                            .after(crate::ui_script::UiInput)
-                            .run_if(in_state(ClientState::Login)),
-                        smoke::debug_login_smoke,
+                            crate::glue::dialog::refresh_dialog_box,
+                            screen::refresh_realmlist,
+                        ),
                     )
                         .chain()
-                        .run_if(crate::ui_script::glue::native_glue),
-                    // Either screen set: it shoots whatever login screen stands.
-                    screen::debug_login_shot,
+                        .before(crate::glue::GlueVisuals)
+                        // `answer_dialog` holds the VM, and every VM holder in `Update`
+                        // declares its side of the UI tick; a glue screen has nothing the
+                        // tick must see.
+                        .after(crate::ui_script::UiInput)
+                        .run_if(in_state(ClientState::Login)),
+                    smoke::debug_login_smoke,
                 )
                     .chain()
+                    .run_if(crate::ui_script::glue::native_glue)
                     // What the login engine decided this frame, shown this frame.
                     .after(LoginPolicy)
                     .after(benilla_world::schedule::WorldStage::Net),

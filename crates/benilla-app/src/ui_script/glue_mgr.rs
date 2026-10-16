@@ -164,7 +164,7 @@ use benilla_ui::script::{
     GLUE_STATUS_KEYS,
 };
 
-use crate::glue_session::login::GlueLogin;
+use crate::glue_session::login::{GlueLogin, LoginNotice};
 use crate::glue_session::queue::QueueEstimate;
 use crate::glue_session::realm::RunModeRealm;
 use crate::net::{
@@ -1255,6 +1255,15 @@ impl GlueMgr {
         }
     }
 
+    /// The account guard refused the run's own credentials ([`LoginNotice::GuardRefused`]):
+    /// benilla's refusal of a scripted login on an account its checkout does not declare, before
+    /// any logon. It shows as `CGlueMgr::Login`'s own refusal of an empty account does
+    /// (`0x46b090`-`0x46b0ac`): `OPEN_STATUS_DIALOG` with `OKAY` and the words, the state left as
+    /// it is.
+    fn on_guard_refused(&mut self, why: &str) {
+        self.open("OKAY", Some(Text::Raw(why.to_string())));
+    }
+
     /// The logon authenticated: login state 4, which arms the final latch (`0x46b0f0`).
     fn on_logon_done(&mut self) {
         if self.state == ScreenState::Logon {
@@ -1767,6 +1776,8 @@ pub(crate) struct LoginNews<'w, 's> {
     char_actions: MessageReader<'w, 's, CharActionResultMessage>,
     renames: MessageReader<'w, 's, CharRenameMessage>,
     login_refusals: MessageReader<'w, 's, CharacterLoginFailedMessage>,
+    /// What the login engine decided with no network message behind it.
+    notices: MessageReader<'w, 's, LoginNotice>,
     /// The name check's lists, which the glue VM is seated with (`0x6c91a0`).
     names: Option<Res<'w, crate::text_filter::NameFilter>>,
 }
@@ -1994,6 +2005,11 @@ pub(crate) fn drive_glue_mgr(
         }
         for msg in news.failures.read() {
             mgr.on_failed(msg);
+        }
+        for notice in news.notices.read() {
+            if let LoginNotice::GuardRefused(why) = notice {
+                mgr.on_guard_refused(why);
+            }
         }
         // A session of an attempt a Cancel or a disconnect has passed is not the screen's.
         let generation = crate::net::LoginAbandon::now(asks.abandon.as_deref());

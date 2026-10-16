@@ -18,7 +18,7 @@ use crate::glue_strings::GlueStrings;
 use crate::portrait::{PortraitImages, PortraitSource, GLUE_SLOT};
 use benilla_assets::WorldAssets;
 
-use super::{ClientState, Field, LoginForm};
+use super::{Field, LoginForm};
 
 const SCREEN_Z: i32 = 1100;
 /// `GlueFontDisableSmall`'s color (GlueFonts.xml), the `AccountLoginRealmName` readout's grey.
@@ -141,7 +141,6 @@ fn spawn_screen(
 
     let root = commands
         .spawn((
-            crate::glue::NativeGlue,
             LoginUi {
                 with_art: art.button_up.is_some(),
                 s,
@@ -623,31 +622,4 @@ pub(super) fn exit_login(
 pub(super) fn clear_login_scene(mut preview: ResMut<crate::portrait::GluePreview>) {
     preview.scene = None;
     preview.look = None;
-}
-
-/// `WOW_LOGIN_SHOT_OUT=<path>`: one PNG of the login screen once it has settled.
-pub(super) fn debug_login_shot(
-    mut commands: Commands,
-    state: Res<State<ClientState>>,
-    time: Res<Time>,
-    mut entered_at: Local<Option<f32>>,
-    mut done: Local<bool>,
-) {
-    if *done || *state.get() != ClientState::Login {
-        return;
-    }
-    let Ok(out) = std::env::var("WOW_LOGIN_SHOT_OUT") else {
-        *done = true;
-        return;
-    };
-    let start = *entered_at.get_or_insert(time.elapsed_secs());
-    if time.elapsed_secs() - start < 8.0 {
-        return;
-    }
-    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-    commands
-        .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(out.clone()));
-    info!("login: shot instrument writing {out}");
-    *done = true;
 }

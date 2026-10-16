@@ -569,9 +569,8 @@ pub(crate) mod schedule_tests {
     #[test]
     fn the_glue_preview_has_one_feeder_per_switch() {
         use crate::client_state::ClientState;
-        // The create screen's state, which only the native select screen enters, and its
-        // instrument.
-        const EITHER: [&str; 2] = ["benilla_app::char_create::", "drive_create_test"];
+        // The booth's own create instrument.
+        const EITHER: [&str; 1] = ["drive_create_test"];
         let mut app = headless_client();
         let mut writers = Vec::new();
         writers.extend(resource_writers::<crate::portrait::GluePreview>(
@@ -628,48 +627,143 @@ pub(crate) mod schedule_tests {
         }
     }
 
-    /// Under `WOW_GLUE_STOCK=1` the login engine runs without the native screens' dialog: no
-    /// login or glue-session system writes the hidden `GlueDialog` there. The engine tells a
-    /// screen what it decided (`LoginNotice`), and the native login screen shows it.
-    #[test]
-    fn the_login_engine_writes_no_native_dialog_under_the_stock_screens() {
-        use crate::client_state::ClientState;
-        let mut app = headless_client();
-        let mut writers = resource_writers::<crate::glue::dialog::GlueDialog>(&mut app, Update);
-        for state in [
-            ClientState::Login,
-            ClientState::CharSelect,
-            ClientState::InWorld,
-        ] {
-            writers.extend(resource_writers::<crate::glue::dialog::GlueDialog>(
-                &mut app,
-                OnEnter(state),
-            ));
-            writers.extend(resource_writers::<crate::glue::dialog::GlueDialog>(
-                &mut app,
-                OnExit(state),
-            ));
+    /// The native glue screens' modules: their systems, components and resources. `glue_strings`
+    /// is theirs: the stock screens read their words off their own `GlueStrings.lua`.
+    const NATIVE_GLUE: [&str; 6] = [
+        "benilla_app::login::",
+        "benilla_app::char_select::",
+        "benilla_app::char_create::",
+        "benilla_app::realm_select::",
+        "benilla_app::glue::",
+        "benilla_app::glue_strings::",
+    ];
+
+    /// Every system of every schedule that is of the native glue screens, with the run conditions
+    /// on it and on every set it is under: a system of their modules, or one anywhere that reads,
+    /// writes or filters for a component or resource of theirs (the dialog, the trees' markers,
+    /// the screens' state). Each entry is `(schedule, system, conditions, why)`.
+    fn native_glue_systems(app: &mut App) -> Vec<(String, String, Vec<String>, String)> {
+        let labels: Vec<_> = app
+            .world()
+            .resource::<bevy::ecs::schedule::Schedules>()
+            .iter()
+            .map(|(_, schedule)| schedule.label())
+            .collect();
+        let native = |name: &str| NATIVE_GLUE.iter().any(|m| name.starts_with(m));
+        let mut out = Vec::new();
+        for label in labels {
+            app.world_mut().schedule_scope(label, |world, schedule| {
+                schedule.graph_mut().systems.initialize(world);
+                let ids: HashMap<ComponentId, String> = world
+                    .components()
+                    .iter_registered()
+                    .map(|info| (info.id(), info.name().to_string()))
+                    .filter(|(_, name)| native(name))
+                    .collect();
+                let graph = schedule.graph();
+                for (key, system, conds) in graph.systems.iter() {
+                    let name = system.name().to_string();
+                    let mut why = native(&name).then(|| "its module".to_string());
+                    if let Some(with_access) = graph.systems.get(key) {
+                        let set = &with_access.access;
+                        let combined = set.combined_access();
+                        // A system over every component or resource (an `EntityMut` query, an
+                        // exclusive system) names none of them, so only named access counts.
+                        let named: HashSet<ComponentId> = combined
+                            .try_iter_component_access()
+                            .map(|it| it.map(|kind| *kind.index()).collect())
+                            .unwrap_or_default();
+                        let all_resources = combined.has_read_all_resources();
+                        for (id, ty) in &ids {
+                            let touched = named.contains(id)
+                                || (!all_resources
+                                    && (combined.has_resource_read(*id)
+                                        || combined.has_resource_write(*id)))
+                                || set
+                                    .filtered_accesses()
+                                    .iter()
+                                    .any(|f| f.with_filters().any(|w| w == *id));
+                            if touched && why.is_none() {
+                                why = Some(ty.clone());
+                            }
+                        }
+                    }
+                    let Some(why) = why else {
+                        continue;
+                    };
+                    let mut conditions: Vec<String> = conds
+                        .iter()
+                        .map(|c| c.condition.name().to_string())
+                        .collect();
+                    let mut stack = vec![NodeId::System(key)];
+                    while let Some(node) = stack.pop() {
+                        for parent in graph
+                            .hierarchy()
+                            .graph()
+                            .neighbors_directed(node, Direction::Incoming)
+                        {
+                            if let NodeId::Set(set) = parent {
+                                if let Some((_, _, set_conds)) =
+                                    graph.system_sets.iter().find(|(k, _, _)| *k == set)
+                                {
+                                    conditions.extend(
+                                        set_conds.iter().map(|c| c.condition.name().to_string()),
+                                    );
+                                }
+                                stack.push(parent);
+                            }
+                        }
+                    }
+                    out.push((format!("{label:?}"), name, conditions, why));
+                }
+            });
         }
-        if !writers.iter().any(|(n, _)| n.contains("benilla_app::")) {
+        out
+    }
+
+    /// Under `WOW_GLUE_STOCK=1` nothing of the native glue screens runs, in any schedule: every
+    /// system of their modules, and every system that writes their dialog or reads, writes or
+    /// filters for their trees or state, carries the `native_glue` gate. What the stock screens
+    /// need of the session lives in `glue_session`, which tells a native screen what it decided by
+    /// a message.
+    #[test]
+    fn nothing_of_the_native_screens_runs_under_the_stock_screens() {
+        let mut app = headless_client();
+        let systems = native_glue_systems(&mut app);
+        if !systems
+            .iter()
+            .any(|(_, n, _, _)| n.contains("benilla_app::"))
+        {
             eprintln!(
                 "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
             );
             return;
         }
-        let ungated: Vec<&str> = writers
+        let mut ungated: Vec<String> = systems
             .iter()
-            .filter(|(name, _)| {
-                ["benilla_app::login::", "benilla_app::glue_session::"]
-                    .iter()
-                    .any(|m| name.starts_with(m))
-            })
-            .filter(|(_, conds)| !conds.iter().any(|c| c.ends_with("::native_glue")))
-            .map(|(name, _)| name.as_str())
+            .filter(|(_, _, conds, _)| !conds.iter().any(|c| c.ends_with("::native_glue")))
+            .map(|(schedule, name, _, why)| format!("{schedule} {name} ({why})"))
             .collect();
+        ungated.sort();
+        ungated.dedup();
         assert!(
             ungated.is_empty(),
-            "login systems that write the native dialog under the stock screens: {ungated:?}"
+            "native glue systems that run under the stock screens:\n{}",
+            ungated.join("\n")
         );
+        // The census sees the native screens at all: a renamed module would pass it empty.
+        for want in [
+            "benilla_app::login::screen::materialize_screen",
+            "benilla_app::char_select::screen::materialize_screen",
+            "benilla_app::char_create::create_input",
+            "benilla_app::realm_select::screen::drive_screen",
+            "benilla_app::glue::dialog::drive_glue_dialog",
+        ] {
+            assert!(
+                systems.iter().any(|(_, n, _, _)| n == want),
+                "{want} is not in the census"
+            );
+        }
     }
 
     /// One row of the class table: the type's name for the message, and its `TypeId`.
@@ -829,12 +923,10 @@ pub(crate) mod schedule_tests {
     }
 
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
-    /// particle `EffectQuads` are most of it. Six are `glue::hide_native_glue`'s `Visibility`
-    /// against the world's and the fade cover's writers, populations it never shares an entity
-    /// with (the native glue roots alone). One is `glue::backdrop::fit_tiled_backgrounds`'s
+    /// particle `EffectQuads` are most of it. One is `glue::backdrop::fit_tiled_backgrounds`'s
     /// `ImageNode` rect against bevy's private accessibility `image_changed`, which reads only
     /// the change tick for a label: either order labels the same node.
-    const POST_UPDATE_CEILING: usize = 378;
+    const POST_UPDATE_CEILING: usize = 372;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may
@@ -907,7 +999,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_966;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_939;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

@@ -8,7 +8,9 @@ pub(crate) mod login;
 pub(crate) mod logout_smoke;
 pub(crate) mod queue;
 pub(crate) mod realm;
+pub(crate) mod realm_smoke;
 pub(crate) mod roster;
+mod roundtrip;
 
 use bevy::prelude::*;
 
@@ -20,19 +22,30 @@ impl Plugin for GlueSessionPlugin {
         realm::build(app);
         login::build(app);
         app.init_resource::<roster::Roster>()
+            .init_resource::<roster::RunPick>()
             .add_systems(
                 Update,
                 edges::session_edges()
                     .in_set(edges::SessionEdges)
                     .after(benilla_world::schedule::WorldStage::Net),
             )
+            // After the UI tick, the glue manager's frame and the session's edges, in one chain:
+            // on the stock screens each reads the frames those moved and presses their verbs.
             .add_systems(
                 Update,
-                logout_smoke::debug_logout_smoke
-                    .after(crate::player::ControlRestore)
-                    // After the UI tick: on the stock screens it reads their frames and presses
-                    // their Enter World.
-                    .after(crate::ui_script::UiInput),
+                (
+                    // The run's own pick, which the edges arm and the manager's roster load lets
+                    // the stock screen take.
+                    roster::enter_run_pick,
+                    logout_smoke::debug_logout_smoke.after(crate::player::ControlRestore),
+                    roundtrip::debug_glue_roundtrip.run_if(roundtrip::enabled),
+                    realm_smoke::debug_realm_smoke.run_if(realm_smoke::enabled),
+                )
+                    .chain()
+                    .after(crate::ui_script::UiInput)
+                    .after(crate::ui_script::glue_mgr::drive_glue_mgr)
+                    .after(edges::SessionEdges)
+                    .after(login::LoginPolicy),
             );
     }
 }

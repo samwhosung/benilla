@@ -21,7 +21,7 @@
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
 //!
 //! Under `WOW_GLUE_STOCK=1` the stock `RealmList` and its verbs take the list instead
-//! ([`crate::ui_script::glue_mgr`]), and this policy stands down; the stock connect takes the same
+//! ([`crate::ui_script::glue_mgr`]), and none of this runs; the stock connect takes the same
 //! [`RunModeRealm`].
 
 mod category;
@@ -301,25 +301,28 @@ pub(crate) struct RealmSelectSet;
 
 impl Plugin for RealmSelectPlugin {
     fn build(&self, app: &mut App) {
+        use crate::ui_script::glue::native_glue;
         app.init_resource::<Realms>()
             // `shown` is written only in `Update`, so any slot here sees the frame's start.
-            .add_systems(PreUpdate, take_input)
             .add_systems(
                 PreUpdate,
-                take_tables.run_if(resource_changed::<RealmTables>),
+                (
+                    take_input,
+                    take_tables.run_if(resource_changed::<RealmTables>),
+                )
+                    .run_if(native_glue),
             )
             .add_systems(
                 Update,
                 (
-                    apply_realm_policy.run_if(crate::ui_script::glue::native_glue),
+                    apply_realm_policy,
                     // Ungated by state: the dialog stands over login and character select alike.
                     screen::drive_screen,
                     // Input before the row refresh, so a click shows on the frame it landed.
                     (
                         (input::clicks, input::keys)
                             .chain()
-                            .run_if(|realms: Res<Realms>| realms.owns_input())
-                            .run_if(crate::ui_script::glue::native_glue),
+                            .run_if(|realms: Res<Realms>| realms.owns_input()),
                         (tick_refresh, screen::refresh_list)
                             .chain()
                             .run_if(|realms: Res<Realms>| realms.shown),
@@ -327,6 +330,7 @@ impl Plugin for RealmSelectPlugin {
                         .chain(),
                 )
                     .chain()
+                    .run_if(native_glue)
                     .in_set(RealmSelectSet)
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(crate::glue::GlueVisuals),
@@ -336,7 +340,8 @@ impl Plugin for RealmSelectPlugin {
             .add_systems(
                 Update,
                 smoke::debug_realm_smoke
-                    .run_if(smoke::enabled)
+                    .run_if(crate::glue_session::realm_smoke::enabled)
+                    .run_if(native_glue)
                     .after(crate::ui_script::UiInput)
                     .after(screen::drive_screen)
                     .before(input::clicks),

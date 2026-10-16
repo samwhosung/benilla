@@ -1,6 +1,6 @@
-//! What the pre-world glue screens share: the art set, the widget builders, the ADD-mode material,
-//! the one dialog and the screen-agnostic interaction systems. Each screen keeps its own layout,
-//! actions and selection.
+//! What the native pre-world glue screens share: the art set, the widget builders, the ADD-mode
+//! material, the one dialog and the screen-agnostic interaction systems. Each screen keeps its own
+//! layout, actions and selection.
 
 pub(crate) mod add_material;
 pub(crate) mod art;
@@ -15,22 +15,6 @@ use bevy::ui::FocusPolicy;
 use art::{tc_rect, GlueArt, BTN_BG, BTN_HOVER, BUTTON_TC, GOLD};
 use widgets::{ArtSwap, GlueBtn, GlueCaption, GlueDisabled, OutlineCopy};
 
-/// The root of a native glue screen or dialog, which [`hide_native_glue`] keeps hidden while the
-/// stock glue screens stand in its place.
-#[derive(Component)]
-pub(crate) struct NativeGlue;
-
-/// Under `WOW_GLUE_STOCK=1`, keep every native glue tree hidden, after any screen system shows one
-/// and before visibility propagates: their state machine still drives the network, unseen, and a
-/// hidden node takes no click.
-pub(crate) fn hide_native_glue(mut roots: Query<&mut Visibility, With<NativeGlue>>) {
-    for mut v in &mut roots {
-        if *v != Visibility::Hidden {
-            *v = Visibility::Hidden;
-        }
-    }
-}
-
 /// The glue widgets' look passes, registered once for every glue screen.
 ///
 /// A screen orders its own refresh `.before(GlueVisuals)` so the flags and captions it writes
@@ -38,33 +22,45 @@ pub(crate) fn hide_native_glue(mut roots: Query<&mut Visibility, With<NativeGlue
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct GlueVisuals;
 
-/// The shared glue infrastructure: the ADD material pipeline, [`GlueArt`], the GlueStrings table
-/// and the one [`dialog::GlueDialog`]. Registered before any screen plugin.
+/// The native glue screens' shared infrastructure: the ADD material pipeline, [`GlueArt`], the
+/// GlueStrings table and the one [`dialog::GlueDialog`], all of it on the native screens alone.
+/// Registered before any screen plugin.
 pub(crate) struct GluePlugin;
 
 impl Plugin for GluePlugin {
     fn build(&self, app: &mut App) {
+        use crate::ui_script::glue::native_glue;
         app.add_plugins(bevy::ui_render::UiMaterialPlugin::<
             add_material::AddUiMaterial,
         >::default())
             .init_resource::<GlueArt>()
+            // The stock screens read the same words off their own `GlueStrings.lua`.
             .add_systems(
                 Startup,
-                crate::glue_strings::load_glue_strings.after(benilla_assets::AssetSet::Open),
+                crate::glue_strings::load_glue_strings
+                    .after(benilla_assets::AssetSet::Open)
+                    .run_if(native_glue),
             )
             .init_resource::<GlueClicks>()
             .init_resource::<dialog::GlueDialog>()
             .add_message::<dialog::GlueDialogAnswer>()
-            .add_systems(PreUpdate, glue_clicks.after(bevy::ui::UiSystems::Focus))
+            .add_systems(
+                PreUpdate,
+                glue_clicks
+                    .after(bevy::ui::UiSystems::Focus)
+                    .run_if(native_glue),
+            )
             .add_systems(
                 Update,
-                (backdrop::fit_backdrop_borders, seat_outline_copies),
+                (backdrop::fit_backdrop_borders, seat_outline_copies).run_if(native_glue),
             )
             // Fitted before layout, so a screen spawned this frame never lays out against the
             // window first.
             .add_systems(
                 PostUpdate,
-                fit_glue_canvas.before(bevy::ui::UiSystems::Layout),
+                fit_glue_canvas
+                    .before(bevy::ui::UiSystems::Layout)
+                    .run_if(native_glue),
             )
             // After layout, so a background never draws its sheet stretched once.
             .add_systems(
@@ -72,17 +68,14 @@ impl Plugin for GluePlugin {
                 backdrop::fit_tiled_backgrounds
                     .after(bevy::ui::UiSystems::Layout)
                     // The stack writes only `stack_index`, which the fit never reads.
-                    .ambiguous_with(bevy::ui::UiSystems::Stack),
-            )
-            .add_systems(
-                PostUpdate,
-                hide_native_glue
-                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .run_if(not(crate::ui_script::glue::native_glue)),
+                    .ambiguous_with(bevy::ui::UiSystems::Stack)
+                    .run_if(native_glue),
             )
             .add_systems(
                 Update,
-                (art_swaps, glue_button_visuals, glue_hilights, sync_outlines).in_set(GlueVisuals),
+                (art_swaps, glue_button_visuals, glue_hilights, sync_outlines)
+                    .in_set(GlueVisuals)
+                    .run_if(native_glue),
             );
     }
 }

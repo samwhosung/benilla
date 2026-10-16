@@ -2043,6 +2043,7 @@ fn a_call_before_the_seat_runs_on_the_seating_frame() {
         .add_message::<crate::net::CharActionResultMessage>()
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
+        .add_message::<LoginNotice>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()
@@ -2087,6 +2088,7 @@ fn stock_app() -> (
         .add_message::<crate::net::CharActionResultMessage>()
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
+        .add_message::<LoginNotice>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
@@ -2237,6 +2239,23 @@ fn the_stock_login_reaches_the_native_login_and_shows_its_status() {
     assert!(!unknown.is_empty());
     assert_eq!(dialog(&app), Some(("OKAY".into(), unknown)));
     assert_eq!(mgr(&app).state, ScreenState::Idle);
+}
+
+/// The account guard's refusal of the run's own credentials, which no network message carries,
+/// reaches the stock screen as the stock `OKAY` dialog with the guard's words, the way the Login
+/// verb refuses an empty account; nothing logs on and the screen stays idle.
+#[test]
+fn the_account_guards_refusal_opens_the_stock_okay_dialog() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, rx, _) = stock_app();
+    assert_eq!(dialog(&app), None);
+    let why = "WOW_USER=other is not the account this checkout declares.";
+    app.world_mut()
+        .write_message(LoginNotice::GuardRefused(why.into()));
+    app.update();
+    assert_eq!(dialog(&app), Some(("OKAY".into(), why.into())));
+    assert_eq!(mgr(&app).state, ScreenState::Idle);
+    assert!(rx.try_recv().is_err(), "nothing logs on");
 }
 
 /// The stock select shown with no world link names the realm off `realmName` and its type off the
@@ -2562,6 +2581,7 @@ fn live_app_with(
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::EnteredWorldMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
+        .add_message::<LoginNotice>()
         .add_message::<crate::net::LoggedOutMessage>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
@@ -4173,6 +4193,7 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
         w.insert_resource(super::super::glue::GlueStock(true));
         // The roster the IO thread already published, as the session's edges took it.
         w.insert_resource(crate::glue_session::roster::Roster::with_chars(roster3()));
+        w.init_resource::<crate::glue_session::roster::RunPick>();
         w.init_resource::<crate::glue::dialog::GlueDialog>();
     }
     app.add_plugins(bevy::state::app::StatesPlugin)
@@ -4321,6 +4342,45 @@ fn the_logout_smokes_stock_reentry_goes_through_enter_world() {
         world.bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN),
         [0x11u64.to_le_bytes().to_vec()],
         "the first row, Alpha"
+    );
+}
+
+/// The run's own pick (`WOW_CHAR`) on the stock screens is a player's too: once the select screen
+/// has its roster, the row is selected and Enter World pressed, so the entry takes the manager's
+/// `EnterWorld` (`0x46b500`), state 8 and `lastCharacterIndex`, not a pick sent past the screen.
+#[test]
+fn the_runs_own_stock_pick_goes_through_enter_world() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("run-pick");
+    let (mut app, world) = entry_app(false);
+    app.world_mut()
+        .insert_resource(crate::glue_session::roster::RunPick::armed(0x12));
+    app.add_systems(
+        Update,
+        crate::glue_session::roster::enter_run_pick.after(drive_glue_mgr),
+    );
+    app.update();
+    assert_eq!(
+        mgr(&app).state,
+        ScreenState::EnterWorld,
+        "the pick is the stock Enter World, not a pick behind the manager's back"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<crate::cvars::Cvars>()
+            .get(crate::glue_session::roster::CVAR_LAST_CHARACTER),
+        Some("1")
+    );
+    until_entry(&mut app, "the world", |app| {
+        client_state(app) == ClientState::InWorld
+    });
+    assert_eq!(
+        world.bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN),
+        [0x12u64.to_le_bytes().to_vec()],
+        "the armed row, Bravo"
     );
 }
 

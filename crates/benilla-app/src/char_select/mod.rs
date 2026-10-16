@@ -8,7 +8,6 @@ pub(crate) use addons::okay_after_clicks;
 mod dialog;
 mod input;
 mod refresh;
-mod roundtrip;
 mod screen;
 
 use benilla_protocol::CharAction;
@@ -20,64 +19,54 @@ use crate::glue_strings::GlueStrings;
 
 use crate::net::{CharActionResultMessage, CharPick, CharacterLoginFailedMessage};
 
-/// The native character-select screen.
+/// The native character-select screen. All of it runs on the native screens alone: under
+/// `WOW_GLUE_STOCK=1` the stock `CharacterSelect` stands in its place, and the session it shows is
+/// [`crate::glue_session`]'s.
 pub(crate) struct CharSelectPlugin;
 
 impl Plugin for CharSelectPlugin {
     fn build(&self, app: &mut App) {
+        use crate::ui_script::glue::native_glue;
         app.init_resource::<dialog::DeleteDialog>()
             .init_resource::<addons::AddonsPanel>()
             .init_resource::<refresh::SelectBackground>()
             .add_systems(
                 OnEnter(ClientState::CharSelect),
-                (
-                    screen::enter_select.run_if(crate::ui_script::glue::native_glue),
-                    stamp_select_entry,
-                ),
+                (screen::enter_select, stamp_select_entry).run_if(native_glue),
             )
             .add_systems(
                 OnExit(ClientState::CharSelect),
                 (
                     screen::exit_select,
-                    screen::clear_select_scene.run_if(crate::ui_script::glue::native_glue),
+                    screen::clear_select_scene,
                     clear_select_entry,
-                ),
+                )
+                    .run_if(native_glue),
             )
             .add_systems(
                 OnEnter(ClientState::InWorld),
-                refresh::reset_select_background,
-            )
-            .add_systems(
-                Update,
-                // After the UI tick: the stock arm reads the frames it built and presses its verbs.
-                roundtrip::debug_glue_roundtrip
-                    .run_if(roundtrip::enabled)
-                    .after(crate::ui_script::UiInput),
+                refresh::reset_select_background.run_if(native_glue),
             )
             .add_systems(
                 Update,
                 (
-                    refusal_dialog(),
+                    open_login_refusal,
                     (
                         screen::materialize_screen,
-                        input::select_input.run_if(crate::ui_script::glue::native_glue),
-                        input::rotate_model.run_if(crate::ui_script::glue::native_glue),
+                        input::select_input,
+                        input::rotate_model,
                         debug_select_dialog,
-                        dialog::drive_delete_dialog.run_if(crate::ui_script::glue::native_glue),
+                        dialog::drive_delete_dialog,
                         // Ahead of the dialog driver, so a refused delete shows the frame it lands.
                         delete_result,
                         // The one `GlueDialog`: here, the refused login and the refused delete.
-                        crate::glue::dialog::drive_glue_dialog
-                            .run_if(crate::ui_script::glue::native_glue),
+                        crate::glue::dialog::drive_glue_dialog,
                         debug_select_addons,
                         debug_select_walk,
-                        addons::drive_addons_panel.run_if(crate::ui_script::glue::native_glue),
+                        addons::drive_addons_panel,
                         refresh::refresh_list,
                         refresh::refresh_banner_and_buttons,
-                        // The stock screens drive the booth off the glue VM instead.
-                        refresh::feed_glue_preview
-                            .run_if(crate::ui_script::glue::native_glue)
-                            .in_set(crate::portrait::GluePreviewFeed),
+                        refresh::feed_glue_preview.in_set(crate::portrait::GluePreviewFeed),
                         debug_select_shot,
                     )
                         .chain()
@@ -88,6 +77,7 @@ impl Plugin for CharSelectPlugin {
                         .run_if(in_state(ClientState::CharSelect)),
                 )
                     .chain()
+                    .run_if(native_glue)
                     // The session's edges first: the state and the pick a screen shows.
                     .after(crate::glue_session::edges::SessionEdges)
                     .after(benilla_world::schedule::WorldStage::Net),
@@ -97,22 +87,16 @@ impl Plugin for CharSelectPlugin {
                 Update,
                 screen::hide_under_world_cover
                     .after(benilla_world::schedule::WorldStage::Present)
-                    .run_if(in_state(ClientState::CharSelect)),
+                    .run_if(in_state(ClientState::CharSelect))
+                    .run_if(native_glue),
             );
     }
 }
 
-/// The native screens' half of a refused login, in any state: the refusal arrives in the world,
-/// and the edge that takes the session back to select is [`crate::glue_session::edges`]'s.
-fn refusal_dialog() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
-    open_login_refusal
-        .run_if(crate::ui_script::glue::native_glue)
-        .into_configs()
-}
-
-/// `SMSG_CHARACTER_LOGIN_FAILED` in the glue dialog: a refusal the player cannot see is a
-/// select screen that does nothing. Under the stock glue the words are its glue manager's
-/// (state 9), so [`refusal_dialog`] runs this on the native screens only.
+/// `SMSG_CHARACTER_LOGIN_FAILED` in the glue dialog, in any state: the refusal arrives in the
+/// world, and the edge that takes the session back to select is [`crate::glue_session::edges`]'s.
+/// A refusal the player cannot see is a select screen that does nothing. Under the stock glue the
+/// words are its glue manager's (state 9).
 fn open_login_refusal(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
     mut dialog: ResMut<crate::glue::dialog::GlueDialog>,
@@ -421,31 +405,25 @@ mod tests {
 
     use super::*;
 
-    /// A refused login opens its words in the native glue dialog, and under the stock glue opens
-    /// none: the stock screen's own (its glue manager's state 9) says why.
+    /// A refused login opens its words in the native glue dialog. Under the stock glue nothing of
+    /// this screen runs (the schedule census in `game_plugins`), and the stock screen's own words
+    /// are its glue manager's state 9.
     #[test]
-    fn a_refusal_opens_the_native_dialog_only_off_the_stock_glue() {
-        for stock in [false, true] {
-            let mut app = App::new();
-            app.add_plugins(MinimalPlugins)
-                .insert_resource(crate::ui_script::glue::GlueStock(stock))
-                .init_resource::<crate::glue::dialog::GlueDialog>()
-                .add_message::<CharacterLoginFailedMessage>()
-                .add_systems(Update, refusal_dialog());
-            app.world_mut()
-                .write_message(CharacterLoginFailedMessage { result: 0x01 });
-            app.update();
-            let dialog = app.world().resource::<crate::glue::dialog::GlueDialog>();
-            if stock {
-                assert!(dialog.kind.is_none() && dialog.text.is_empty());
-            } else {
-                // No GlueStrings here, so the fallback literal; the shipped one is checked below.
-                assert_eq!(
-                    dialog.text, "World server is down",
-                    "a refusal the player cannot see is the bug this whole path exists to end",
-                );
-            }
-        }
+    fn a_refusal_opens_the_native_dialog() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::glue::dialog::GlueDialog>()
+            .add_message::<CharacterLoginFailedMessage>()
+            .add_systems(Update, open_login_refusal);
+        app.world_mut()
+            .write_message(CharacterLoginFailedMessage { result: 0x01 });
+        app.update();
+        let dialog = app.world().resource::<crate::glue::dialog::GlueDialog>();
+        // No GlueStrings here, so the fallback literal; the shipped one is checked below.
+        assert_eq!(
+            dialog.text, "World server is down",
+            "a refusal the player cannot see is the bug this whole path exists to end",
+        );
     }
 
     /// Every refusal byte resolves to the sentence 1.12 ships, off the player's chain. `4` is
