@@ -262,7 +262,7 @@
 - `WOW_FX_UP` — benilla-app/src/capture/mod.rs
 - `WOW_FX_YAW` — benilla-app/src/capture/mod.rs
 - `WOW_GHOST_PROBE` — benilla-app/src/death/mod.rs
-- `WOW_GLUE_ROUNDTRIP` — benilla-app/src/char_select/mod.rs, benilla-world/src/bgwin.rs
+- `WOW_GLUE_ROUNDTRIP` — benilla-app/src/char_select/roundtrip.rs, benilla-world/src/bgwin.rs
 - `WOW_GLUE_STOCK` — benilla-app/src/ui_script/glue.rs
 - `WOW_GLYPH_CACHE` — benilla-app/src/ui_text/engine/gpu.rs
 - `WOW_GM` — benilla-app/src/probe_shield.rs
