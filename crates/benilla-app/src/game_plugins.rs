@@ -181,6 +181,7 @@ impl PluginGroup for GamePlugins {
             .add(UiGmTicketPlugin)
             .add(UiFollowPlugin)
             .add(UiInstancePlugin)
+            .add(crate::ui_billing::UiBillingPlugin)
             .add(UiLogoutPlugin)
             .add(UiSocialPlugin)
             // After the social session, whose FriendsFrame and ignore list it uses.

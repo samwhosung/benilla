@@ -1915,14 +1915,6 @@ mod tests {
                  `ShowFriends` too",
             ),
             (
-                "BILLING_NAG_DIALOG",
-                "UIParent.lua — the subscription-time nag; vmangos never sends it",
-            ),
-            (
-                "IGR_BILLING_NAG_DIALOG",
-                "UIParent.lua — the internet-cafe billing nag, likewise never sent",
-            ),
-            (
                 "GOSSIP_ENTER_CODE",
                 "UIParent.lua — the code-entry gossip option (a door with a combination); \
                  benilla's gossip feed carries no code-entry option kind yet",

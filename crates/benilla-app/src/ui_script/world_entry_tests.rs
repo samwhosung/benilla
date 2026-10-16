@@ -703,6 +703,62 @@ fn reload_ui_is_a_fresh_login_in_place() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The connection's billing group reaches every in-game VM, as `GetBillingTimeRested` reads the
+/// session's word (`0x48ec59`), a reload's VM included; the world entry arms the play-time warning
+/// (`0x48f630`) and a reload, which jumps to `UI_Init` alone (`0x495669`), does not.
+#[test]
+fn the_billing_group_reaches_each_vm_and_arms_at_entry_only() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("billing");
+    let mut world = booted_world();
+    let group = |time_remaining, time_rested| {
+        crate::net::SessionBilling(benilla_protocol::messages::Billing {
+            time_remaining,
+            plan_flags: 0,
+            time_rested,
+        })
+    };
+    let rested = |world: &World| {
+        world
+            .get_non_send_resource::<benilla_ui::script::UiScript>()
+            .expect("in-world VM")
+            .eval::<f64>("return GetBillingTimeRested()")
+            .unwrap()
+    };
+    let armed = |world: &World| {
+        world
+            .resource::<crate::ui_billing::PlayTimeWarning>()
+            .armed()
+    };
+
+    world.insert_resource(group(20, 150));
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(rested(&world), 150.0, "the entry's VM reads the session");
+    assert!(armed(&world), "20 minutes left arms the warning");
+
+    // A group that would not arm, so only an arm could clear it.
+    world.insert_resource(group(0, 151));
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert_eq!(
+        rested(&world),
+        151.0,
+        "the reload's VM reads the session too"
+    );
+    assert!(armed(&world), "a reload does not arm again");
+
+    log_in_as(&mut world, "Onehunter", 1);
+    assert!(
+        !armed(&world),
+        "the next entry arms from the group it finds"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `DisableAddOn` only marks the live registry; the reload's shutdown tail writes `AddOns.txt`
 /// (the reference's last write before the state dies) and the rebuild reads it back.
 #[test]
