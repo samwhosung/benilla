@@ -83,10 +83,6 @@ struct UnitFeedMemo {
     last_level: Option<u32>,
     /// `(count, banked target)`, diffed as a pair because the server writes them as one.
     last_combo: Option<(u8, u64)>,
-    /// Our last in-combat flag; first sight fires only when already in combat.
-    in_combat: Option<bool>,
-    /// Our last PvP-preference bit; the first descriptor is silent, as the reference diffs bits.
-    pvp_desired: Option<bool>,
     /// `(HIDE_HELM, HIDE_CLOAK)`, pushed on the edge only: the Options setter flips the VM's
     /// belief ahead of the server, and a per-frame push would snap it back.
     worn_hidden: Option<(bool, bool)>,
@@ -1154,10 +1150,6 @@ fn drain_action_bar_toggles(script: Option<NonSendMut<UiScript>>, commands: Res<
     }
 }
 
-/// The PvP preference bit `CMSG_TOGGLE_PVP` flips (vmangos `Player.h:324`); not the
-/// `UNIT_FIELD_FLAGS` PvP bit `0x1000` the icon draws, which lingers for the server's timer.
-const PLAYER_FLAGS_PVP_DESIRED: u32 = 0x200;
-
 /// Inside a rest area (vmangos `Player.h:320`), the bit `IsResting` (`0x516ea0`) tests.
 const PLAYER_FLAGS_RESTING: u32 = 0x20;
 
@@ -1166,18 +1158,16 @@ const PLAYER_FLAGS_RESTING: u32 = 0x20;
 const PLAYER_FLAGS_PARTIAL_PLAY_TIME: u32 = 0x1000;
 const PLAYER_FLAGS_NO_PLAY_TIME: u32 = 0x2000;
 
-/// The `(toast, verbose)` GlobalStrings keys for a real change of the PvP-preference bit, silent on
-/// first sight (the reference diffs bits). The toasts are catalog rows 437/438 (kind 1, yellow
-/// `UI_INFO_MESSAGE`); the verbose keys are no rows, so the handler picks their chat surface.
-fn pvp_announcement(was: Option<bool>, now: bool) -> Option<(&'static str, &'static str)> {
-    if was? == now {
-        return None;
-    }
-    Some(if now {
+/// The `(toast, verbose)` GlobalStrings keys for the PvP-preference bit's new state
+/// ([`crate::field_watch::FieldNotice::PvpPreference`]). The toasts are catalog rows 437/438
+/// (`0x1b5`/`0x1b6`, kind 1, yellow `UI_INFO_MESSAGE`); the verbose keys are no rows, so the handler
+/// picks their chat surface.
+fn pvp_announcement(on: bool) -> (&'static str, &'static str) {
+    if on {
         ("ERR_PVP_TOGGLE_ON", "PVP_TOGGLE_ON_VERBOSE")
     } else {
         ("ERR_PVP_TOGGLE_OFF", "PVP_TOGGLE_OFF_VERBOSE")
-    })
+    }
 }
 
 /// The rest-state chat key: `0x5de4e0` messages only on a real byte change (the `rep cmpsb` diff at
@@ -1525,10 +1515,8 @@ fn feed_units(
     // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead of
     // the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read real
     // values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field watches
-    // (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), fired by `field_events` after this push.
-    // Below `0x5ee990`'s local-GUID gate (`0x5eea93`) the flag arms test their own bits:
-    // `PLAYER_UPDATE_RESTING` on either edge of `0x20` (`0x5eead0`, fire `0x5eeaf2`),
-    // `PLAYTIME_CHANGED` on `0x3000` (`0x5eeb65`, fire `0x5eeb6f`).
+    // (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
+    // (`crate::field_watch`), fired by `field_events` after this push.
     if let Some((store, _)) = self_q.iter().next() {
         let xp = xp_pair(store);
         let rest = (
@@ -1541,8 +1529,7 @@ fn feed_units(
             memo.last_xp = Some(xp);
             script.set_player_xp(xp.0, xp.1);
         }
-        let rest_prev = memo.last_rest;
-        if rest_prev != Some(rest) {
+        if memo.last_rest != Some(rest) {
             gate.audit("feed_units", "the rest snapshot");
             memo.last_rest = Some(rest);
             script.set_rest_state(rest.0, rest.1, rest.2 & PLAYER_FLAGS_RESTING != 0);
@@ -1551,17 +1538,6 @@ fn feed_units(
                 rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
                 rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
             );
-        }
-        // The self-only flag events on their own bits' edges; the login create is silent.
-        if let Some(p) = rest_prev {
-            let moved = p.2 ^ rest.2;
-            if moved & PLAYER_FLAGS_RESTING != 0 {
-                script.fire_event("PLAYER_UPDATE_RESTING", vec![]);
-            }
-            // `PLAYTIME_CHANGED` (id 530), argless; stock `PlayerFrame.lua:23` registers it.
-            if moved & (PLAYER_FLAGS_PARTIAL_PLAY_TIME | PLAYER_FLAGS_NO_PLAY_TIME) != 0 {
-                script.fire_event("PLAYTIME_CHANGED", vec![]);
-            }
         }
     }
 
@@ -1633,8 +1609,6 @@ fn feed_units(
         memo.last_rest = None;
         memo.last_level = None;
         memo.last_combo = None;
-        memo.in_combat = None;
-        memo.pvp_desired = None;
         // Edge-only pushes: a stale memo would skip a new character whose values match it.
         memo.worn_hidden = None;
         memo.action_bar_toggles = None;
@@ -1671,57 +1645,6 @@ fn feed_units(
         script.with_input_events(cause, |script| {
             script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
         });
-    }
-
-    // `PLAYER_REGEN_DISABLED`/`ENABLED` on our in-combat flag's edge (`UNIT_FLAG_IN_COMBAT`
-    // `0x00080000`, vmangos `UnitDefines.h:564`); the reference's own trigger is untraced.
-    if let Some((store, _)) = self_pair {
-        let in_combat = store.0.unit_flags() & 0x0008_0000 != 0;
-        if memo.in_combat != Some(in_combat) {
-            gate.audit("feed_units", "the combat-flag edge");
-            let first_sight = memo.in_combat.is_none();
-            memo.in_combat = Some(in_combat);
-            if !first_sight || in_combat {
-                script.fire_event(
-                    if in_combat {
-                        "PLAYER_REGEN_DISABLED"
-                    } else {
-                        "PLAYER_REGEN_ENABLED"
-                    },
-                    vec![],
-                );
-            }
-        }
-    }
-
-    // The reference's local `PLAYER_FLAGS` handler answers a preference change (`0x5eeaff`), not
-    // the icon's flag, with a yellow toast and a system chat line.
-    if let Some((store, _)) = self_pair {
-        let desired = store.0.player_flags() & PLAYER_FLAGS_PVP_DESIRED != 0;
-        if let Some((toast, verbose)) = pvp_announcement(memo.pvp_desired, desired) {
-            gate.audit("feed_units", "the PvP-desired edge");
-            // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
-            // `Shown::keyed`'s unknown-key fallback would show it red.
-            let lines = [
-                crate::ui_action::keyed_line(&script, toast),
-                script
-                    .lua()
-                    .globals()
-                    .get::<String>(verbose)
-                    .ok()
-                    .filter(|t| !t.is_empty())
-                    .map(|t| {
-                        crate::ui_action::Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, t)
-                    }),
-            ];
-            crate::ui_action::show_messages(
-                &mut script,
-                &mut sink,
-                "ui_unit",
-                lines.into_iter().flatten(),
-            );
-        }
-        memo.pvp_desired = Some(desired);
     }
 
     // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips the
@@ -2814,11 +2737,12 @@ mod tests {
         );
     }
 
-    /// `PLAYER_UPDATE_RESTING` fires at `0x5eeaf2`, inside the `0x20` arm whose `je` (`0x5eead4`)
-    /// skips to `0x5eeafc`.
+    /// The flag events are the field watches' (`crate::field_watch`): the feed that pushes our
+    /// flags fires none of them on any edge, so a values block raises each once.
     #[test]
-    fn the_self_flag_events_each_fire_on_their_own_bits() {
+    fn the_flag_pushes_fire_no_flag_event() {
         use bevy::ecs::system::RunSystemOnce;
+        const FIELD_UNIT_FLAGS: u16 = 46;
         const FIELD_PLAYER_FLAGS: u16 = 190;
 
         let mut app = App::new();
@@ -2828,7 +2752,6 @@ mod tests {
             .init_resource::<Reputations>()
             .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<crate::ui_chat::ChatLog>()
-            // The feed's `MessageSink` reads chat and sounds: a message key's row carries its cue.
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -2837,11 +2760,14 @@ mod tests {
         script
             .run(
                 r#"
+                ERR_PVP_TOGGLE_ON = "on"
+                ERR_PVP_TOGGLE_OFF = "off"
                 SEEN = {}
                 local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_UPDATE_RESTING")
-                f:RegisterEvent("PLAYTIME_CHANGED")
-                f:RegisterEvent("UPDATE_EXHAUSTION")
+                for _, e in ipairs({"PLAYER_UPDATE_RESTING", "PLAYTIME_CHANGED",
+                        "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "UI_INFO_MESSAGE"}) do
+                    f:RegisterEvent(e)
+                end
                 f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
             "#,
             )
@@ -2853,23 +2779,21 @@ mod tests {
                 SelfPlayer,
                 Guid(0x77),
                 ObjectStore(
-                    benilla_protocol::ObjectFields::from_pairs(&[])
+                    benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_FLAGS, 0x8_0000)])
                         .into_created(benilla_protocol::messages::ObjectType::Player),
                 ),
             ))
             .id();
-
-        // Set PLAYER_FLAGS, run the feed, read back what fired.
-        let step = |app: &mut App, flags: u32| -> Vec<String> {
+        let mut step = |unit_flags: u32, player_flags: u32| -> Vec<String> {
             app.world_mut()
                 .entity_mut(me)
                 .get_mut::<ObjectStore>()
                 .unwrap()
                 .0
-                .merge(benilla_protocol::ObjectFields::from_pairs(&[(
-                    FIELD_PLAYER_FLAGS,
-                    flags,
-                )]));
+                .merge(benilla_protocol::ObjectFields::from_pairs(&[
+                    (FIELD_UNIT_FLAGS, unit_flags),
+                    (FIELD_PLAYER_FLAGS, player_flags),
+                ]));
             app.world_mut().run_system_once(feed_units).unwrap();
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
@@ -2877,55 +2801,10 @@ mod tests {
             s.run("SEEN = {}").unwrap();
             out
         };
-
-        // `UPDATE_EXHAUSTION` is other watchers (`0x5de4e0`/`0x5de4b0`) and fires on first sight
-        // here, so it is filtered out.
-        let flag_events = |v: Vec<String>| -> Vec<String> {
-            v.into_iter().filter(|e| e != "UPDATE_EXHAUSTION").collect()
-        };
-        assert!(
-            flag_events(step(&mut app, 0)).is_empty(),
-            "the login descriptor is a create: structurally silent"
-        );
-
-        // `PLAYER_FLAGS_HIDE_HELM` `0x400` moves and the resting bit does not.
-        assert!(
-            flag_events(step(&mut app, 0x400)).is_empty(),
-            "a non-resting, non-playtime bit fires neither self event"
-        );
-        // The resting bit's own edge, both ways: `0x5eead0 test byte [ebp-4],0x20`.
-        assert_eq!(
-            flag_events(step(&mut app, 0x400 | PLAYER_FLAGS_RESTING)),
-            vec!["PLAYER_UPDATE_RESTING".to_string()]
-        );
-        assert_eq!(
-            flag_events(step(&mut app, 0x400)),
-            vec!["PLAYER_UPDATE_RESTING".to_string()],
-            "the fire is on the XOR-diff, so the clear edge fires it too"
-        );
-
-        // `PLAYTIME_CHANGED`: `0x5eeb65 test ah,0x30`, the two play-time regimes together.
-        assert_eq!(
-            flag_events(step(&mut app, 0x400 | PLAYER_FLAGS_PARTIAL_PLAY_TIME)),
-            vec!["PLAYTIME_CHANGED".to_string()]
-        );
-        assert_eq!(
-            flag_events(step(
-                &mut app,
-                0x400 | PLAYER_FLAGS_PARTIAL_PLAY_TIME | PLAYER_FLAGS_NO_PLAY_TIME
-            )),
-            vec!["PLAYTIME_CHANGED".to_string()],
-            "the second regime bit is the same arm, not a second event"
-        );
-
-        // Both arms from one dword, in the handler's order.
-        assert_eq!(
-            flag_events(step(&mut app, 0x400 | PLAYER_FLAGS_RESTING)),
-            vec![
-                "PLAYER_UPDATE_RESTING".to_string(),
-                "PLAYTIME_CHANGED".to_string()
-            ]
-        );
+        // In combat at first sight, then every flag arm's bits both ways.
+        for (unit_flags, player_flags) in [(0x8_0000, 0), (0, 0x3220), (0x8_0000, 0)] {
+            assert_eq!(step(unit_flags, player_flags), Vec::<String>::new());
+        }
     }
 
     /// The XP and rest values are pushed on first sight and on every change, and the push fires
@@ -3424,23 +3303,14 @@ mod tests {
 
     /// Asserted on keys: English text cannot tell apart two keys that agree in enUS.
     #[test]
-    fn pvp_announcement_speaks_only_on_an_edge() {
+    fn pvp_announcement_names_the_new_state() {
         assert_eq!(
-            pvp_announcement(None, false),
-            None,
-            "first sight, unflagged"
-        );
-        assert_eq!(pvp_announcement(None, true), None, "first sight, flagged");
-        assert_eq!(pvp_announcement(Some(true), true), None, "no change");
-        assert_eq!(pvp_announcement(Some(false), false), None, "no change");
-
-        assert_eq!(
-            pvp_announcement(Some(false), true),
-            Some(("ERR_PVP_TOGGLE_ON", "PVP_TOGGLE_ON_VERBOSE"))
+            pvp_announcement(true),
+            ("ERR_PVP_TOGGLE_ON", "PVP_TOGGLE_ON_VERBOSE")
         );
         assert_eq!(
-            pvp_announcement(Some(true), false),
-            Some(("ERR_PVP_TOGGLE_OFF", "PVP_TOGGLE_OFF_VERBOSE"))
+            pvp_announcement(false),
+            ("ERR_PVP_TOGGLE_OFF", "PVP_TOGGLE_OFF_VERBOSE")
         );
     }
 
@@ -3456,8 +3326,8 @@ mod tests {
         s.run(&String::from_utf8_lossy(&src)).expect("runs clean");
         let g = |key: &str| s.lua().globals().get::<String>(key).unwrap_or_default();
 
-        for (was, now) in [(false, true), (true, false)] {
-            let (toast, verbose) = pvp_announcement(Some(was), now).expect("an edge speaks");
+        for on in [true, false] {
+            let (toast, verbose) = pvp_announcement(on);
             assert!(!g(toast).is_empty(), "{toast} missing");
             assert!(!g(verbose).is_empty(), "{verbose} missing");
         }

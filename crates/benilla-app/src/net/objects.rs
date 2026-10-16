@@ -104,6 +104,7 @@ pub(crate) struct Scene<'w, 's> {
     go_templates: ResMut<'w, GameObjectTemplates>,
     death_net: ResMut<'w, crate::death::DeathNet>,
     group: ResMut<'w, crate::ui_party::GroupState>,
+    pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).
@@ -155,6 +156,7 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
         me,
         creature_cached: &|entry| names.creature_record(entry).is_some(),
         others: &others,
+        pet_bar: sc.pet_bar.as_ref().map_or(0, |bar| bar.spells.pet_guid),
     };
     let fired = crate::field_watch::values(&around, guid, kind, fields, edges);
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
@@ -194,6 +196,9 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         crate::death::net::note_corpse(guid, kind, &fields, &sc.self_guid, &mut sc.death_net);
         let other_player =
             (kind == EntityKind::Player && sc.self_guid.0 != Some(guid)).then(|| fields.clone());
+        // A player's first create runs `PostInit` (`0x5debe0`); a create of one already held runs
+        // its `PostUpdate` (`0x5dec90`) instead.
+        let first_player = kind == EntityKind::Player && !sc.index.0.contains_key(&guid);
         let edges = object_create(
             guid,
             kind,
@@ -217,6 +222,11 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             &sc.net,
         );
         notify_values(&mut sc, guid, &edges);
+        // `PostInit`'s guild tag (`0x5dec19`), ahead of its party record (`0x5dec5f`).
+        if first_player {
+            sc.field_notices
+                .write_batch(crate::field_watch::guild_tag(guid));
+        }
         if let Some(fields) = other_player {
             compare_party_record(&mut sc, guid, &fields);
         }
@@ -1528,9 +1538,10 @@ mod tests {
                 create(MOB, EntityKind::Unit, &[(STAT0, 5)]),
             ],
         );
-        assert!(
-            drain(world).is_empty(),
-            "a first create runs no notify pass"
+        assert_eq!(
+            drain(world),
+            crate::field_watch::guild_tag(ME),
+            "a first create runs no notify pass, only a player's own `PostInit`"
         );
         super::super::handlers::dispatch(
             world,
@@ -1557,8 +1568,9 @@ mod tests {
         );
     }
 
-    /// Another player's create, first or again, compares its party record with its descriptor
-    /// and signals the difference, writing nothing back; our own create compares nothing.
+    /// A player's first create runs its guild tag (`0x5dec19`), a re-create does not; another
+    /// player's create, first or again, then compares its party record with its descriptor and
+    /// signals the difference, writing nothing back; our own create compares nothing.
     #[test]
     fn another_players_create_signals_its_record_against_its_descriptor() {
         use crate::field_watch::FieldNotice;
@@ -1610,7 +1622,11 @@ mod tests {
         let mate = [(HEALTH, 100), (MAXHEALTH, 200), (LEVEL, 60)];
         super::super::handlers::dispatch(world, vec![create(MATE, &mate)]);
         let signal = |id| FieldNotice::Signal { guid: MATE, id };
-        assert_eq!(drain(world), [signal(22)], "the maximum differs");
+        assert_eq!(
+            drain(world),
+            [FieldNotice::Global { id: 376 }, signal(345), signal(22)],
+            "the guild tag, then the maximum differs"
+        );
         // Written back nothing, so a re-create of the same descriptor signals the same again.
         super::super::handlers::dispatch(world, vec![create(MATE, &mate)]);
         assert_eq!(drain(world), [signal(22)]);
@@ -1619,7 +1635,11 @@ mod tests {
             record
         );
         super::super::handlers::dispatch(world, vec![create(ME, &mate)]);
-        assert!(drain(world).is_empty(), "our own create");
+        assert_eq!(
+            drain(world),
+            crate::field_watch::guild_tag(ME),
+            "our own create: the guild tag alone"
+        );
     }
 
     /// The object handlers over a headless client with our player live (an empty store created

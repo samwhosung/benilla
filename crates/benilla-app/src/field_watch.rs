@@ -48,6 +48,14 @@ pub(crate) enum FieldNotice {
     /// hand (16) signal `UNIT_ATTACK` through `0x5ed970`, ranged (17) `UNIT_RANGED_ATTACK_POWER`
     /// (`0x5deecb`).
     Weapon { slot: u8 },
+    /// A callback's `FrameScript_SignalEvent(id)` (`0x703e50`): the event with no arguments, for
+    /// every listener, whatever unit raised it.
+    Global { id: u16 },
+    /// `0x5ee990`'s PvP-preference arm on the active player (`0x5eeaff`): the toast `0x1b5` when
+    /// the bit is now set, else `0x1b6` (`0x496720`), then `PVP_TOGGLE_ON_VERBOSE` or
+    /// `PVP_TOGGLE_OFF_VERBOSE` (`0x8606e0`, `0x8606c8`) as a chat line of type `0xa`
+    /// (`0x5eeb5d`).
+    PvpPreference { on: bool },
 }
 
 /// The event ids the producers pass to `0x515e50`, by their event-table names.
@@ -67,6 +75,30 @@ pub(crate) mod id {
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
+    pub(crate) const PLAYER_REGEN_DISABLED: u16 = 190;
+    pub(crate) const PLAYER_REGEN_ENABLED: u16 = 191;
+    pub(crate) const PET_ATTACK_START: u16 = 334;
+    pub(crate) const PET_ATTACK_STOP: u16 = 335;
+    pub(crate) const PLAYER_GUILD_UPDATE: u16 = 345;
+    pub(crate) const TABARD_CANSAVE_CHANGED: u16 = 376;
+    pub(crate) const PLAYER_UPDATE_RESTING: u16 = 405;
+    pub(crate) const PET_UI_UPDATE: u16 = 427;
+    pub(crate) const PLAYTIME_CHANGED: u16 = 530;
+}
+
+/// `CGPlayer_C::RefreshGuildTag` (`0x5e08e0`) on the player `guid`: `TABARD_CANSAVE_CHANGED` bare
+/// (`0x5e0907`), then `PLAYER_GUILD_UPDATE` through `0x515e50` (`0x5e0922`). A player's first create
+/// runs it from `PostInit` (`0x5dec19`) and a `PLAYER_GUILDID` change from `0x5e2795`.
+pub(crate) fn guild_tag(guid: u64) -> [FieldNotice; 2] {
+    [
+        FieldNotice::Global {
+            id: id::TABARD_CANSAVE_CHANGED,
+        },
+        FieldNotice::Signal {
+            guid,
+            id: id::PLAYER_GUILD_UPDATE,
+        },
+    ]
 }
 
 /// The first field of the object, unit and player sections: their byte offsets in the field
@@ -160,9 +192,12 @@ const DYNAMIC_FLAGS: (u16, u16) = (0x224, 4);
 const ENTRY: (u16, u16) = (0xc, 4);
 
 /// The player type watchers of `0x5e2510` whose callbacks signal, as (byte offset, length) in the
-/// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_BYTES_3` bytes 2 and 3
+/// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_GUILDID` (`0x5e258f` →
+/// `0x5e2770`), `PLAYER_GUILDRANK` (`0x5e25a7` → `0x5e27b0`), `PLAYER_BYTES_3` bytes 2 and 3
 /// (`0x5e2a30`, `0x5e2a50`) and the duel team (`0x5e27d0`).
 const PLAYER_FLAGS: (u16, u16) = (0x08, 4);
+const GUILD_ID: (u16, u16) = (0x0c, 4);
+const GUILD_RANK: (u16, u16) = (0x10, 4);
 const BYTES_3_BYTE_2: (u16, u16) = (0x1e, 1);
 const BYTES_3_BYTE_3: (u16, u16) = (0x1f, 1);
 const DUEL_TEAM: (u16, u16) = (0x20, 4);
@@ -187,6 +222,8 @@ pub(crate) struct Around<'a> {
     pub(crate) creature_cached: &'a dyn Fn(u32) -> bool,
     /// `CGUnit_C::RefreshReaction`'s sweep for the active player ([`reaction_sweep`]).
     pub(crate) others: &'a dyn Fn() -> Vec<u64>,
+    /// The pet bar's guid, the client's `[0xb714a0]`; 0 for no bar.
+    pub(crate) pet_bar: u64,
 }
 
 /// One values block's changed dwords, `(index, old, new)` ascending, as the store's merge reports
@@ -312,22 +349,53 @@ pub(crate) fn values(
         }
     }
     if let Some(at) = at(UNIT_SECTION, UNIT_FLAGS, List::Type) {
-        // `0x5ff580` on the flipped bits: the reaction on 0x4080 (`0x5ff71c`) and again on 0x1000
-        // (`0x5ff72b`), `UNIT_AURA` on 0x8000000 (`0x5ff7e2`).
+        // `0x5ff580` on the flipped bits, against the new flags.
         let flipped = block.flipped(UNIT_SECTION + UNIT_FLAGS.0 / 4);
+        let flags = fields.unit_flags();
+        // The active player's arm first (`0x5ff5b4`, `0x5ff5c7` → `0x5ff4e0`): the in-combat bit
+        // 0x80000 signals `PLAYER_REGEN_DISABLED` when now set, else `PLAYER_REGEN_ENABLED`
+        // (`0x5ff513`-`0x5ff533`).
+        if around.me == Some(guid) && flipped & 0x8_0000 != 0 {
+            let id = if flags & 0x8_0000 != 0 {
+                id::PLAYER_REGEN_DISABLED
+            } else {
+                id::PLAYER_REGEN_ENABLED
+            };
+            pass.push(at, FieldNotice::Global { id });
+        }
+        // The reaction on 0x4080 (`0x5ff71c`) and again on 0x1000 (`0x5ff72b`).
         if flipped & 0x4080 != 0 {
             pass.reaction(at, guid, fields, around);
         }
         if flipped & 0x1000 != 0 {
             pass.reaction(at, guid, fields, around);
         }
+        // 0x800 on a unit whose charmer, else summoner, is the active player (`0x5ff75e`-
+        // `0x5ff784`): `PET_ATTACK_START` when now set, else `PET_ATTACK_STOP` (`0x5ff79f`).
+        if flipped & 0x800 != 0
+            && around.me.is_some()
+            && fields.unit_owner(OwnerFallback::SummonedBy) == around.me
+        {
+            let id = if flags & 0x800 != 0 {
+                id::PET_ATTACK_START
+            } else {
+                id::PET_ATTACK_STOP
+            };
+            pass.push(at, FieldNotice::Global { id });
+        }
+        // `UNIT_AURA` on 0x8000000 (`0x5ff7e2`).
         if flipped & 0x0800_0000 != 0 {
             pass.signal(at, guid, id::UNIT_AURA);
         }
     }
     if let Some(at) = at(UNIT_SECTION, PET_NUMBER, List::Type) {
-        // `0x604bf0`: `UNIT_CLASSIFICATION_CHANGED` on any change (`0x604bfb`).
+        // `0x604bf0`: `UNIT_CLASSIFICATION_CHANGED` on any change (`0x604bfb`), then
+        // `PET_UI_UPDATE` bare when the unit is the pet bar's (`0x604c03`-`0x604c16`).
         pass.signal(at, guid, id::UNIT_CLASSIFICATION_CHANGED);
+        if guid == around.pet_bar {
+            let id = id::PET_UI_UPDATE;
+            pass.push(at, FieldNotice::Global { id });
+        }
     }
     if let Some(at) = at(UNIT_SECTION, DYNAMIC_FLAGS, List::Type) {
         // `0x600440` on the flipped bits: 0x20, the dead look, signals `UNIT_HEALTH` and the power
@@ -355,10 +423,42 @@ pub(crate) fn values(
         if let Some(at) = at(PLAYER_SECTION, PLAYER_FLAGS, List::Type) {
             // `0x5ee990`: the reaction on 0x180 (`0x5eea04`), then `PLAYER_FLAGS_CHANGED` on any
             // bit (`0x5eea35`).
-            if block.flipped(PLAYER_SECTION + PLAYER_FLAGS.0 / 4) & 0x180 != 0 {
+            let flipped = block.flipped(PLAYER_SECTION + PLAYER_FLAGS.0 / 4);
+            if flipped & 0x180 != 0 {
                 pass.reaction(at, guid, fields, around);
             }
             pass.signal(at, guid, id::PLAYER_FLAGS_CHANGED);
+            // Below the active-player gate (`0x5eea93`-`0x5eeaae`), each arm on its own bits
+            // against the new flags.
+            if around.me == Some(guid) {
+                let flags = fields.player_flags();
+                // 0x20, resting: `PLAYER_UPDATE_RESTING` on either edge (`0x5eead0`, `0x5eeaf2`).
+                if flipped & 0x20 != 0 {
+                    let id = id::PLAYER_UPDATE_RESTING;
+                    pass.push(at, FieldNotice::Global { id });
+                }
+                // 0x200, the PvP preference (`0x5eeaff`).
+                if flipped & 0x200 != 0 {
+                    let on = flags & 0x200 != 0;
+                    pass.push(at, FieldNotice::PvpPreference { on });
+                }
+                // 0x3000, the two play-time limits: `PLAYTIME_CHANGED` (`0x5eeb65`, `0x5eeb6f`).
+                if flipped & 0x3000 != 0 {
+                    let id = id::PLAYTIME_CHANGED;
+                    pass.push(at, FieldNotice::Global { id });
+                }
+            }
+        }
+        if let Some(at) = at(PLAYER_SECTION, GUILD_ID, List::Type) {
+            // `0x5e2770`: the player's guild tag (`0x5e2795`).
+            for notice in guild_tag(guid) {
+                pass.push(at, notice);
+            }
+        }
+        if let Some(at) = at(PLAYER_SECTION, GUILD_RANK, List::Type) {
+            // `0x5e27b0`: `PLAYER_GUILD_UPDATE` bare (`0x5e27b5`).
+            let id = id::PLAYER_GUILD_UPDATE;
+            pass.push(at, FieldNotice::Global { id });
         }
         if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_2, List::Type) {
             pass.signal(at, guid, id::UNIT_NAME_UPDATE);
@@ -479,6 +579,7 @@ mod tests {
                 me,
                 creature_cached: &|_| false,
                 others: &Vec::new,
+                pet_bar: 0,
             },
             guid,
             kind,
@@ -805,6 +906,7 @@ mod tests {
             me: Some(ME),
             creature_cached: &|_| false,
             others: &|| vec![MOB, OTHER],
+            pet_bar: 0,
         };
         assert_eq!(
             block_around(&mut me, &around, ME, &[(35, 2)]),
@@ -899,12 +1001,188 @@ mod tests {
             me: Some(ME),
             creature_cached: &|entry| entry == 299,
             others: &Vec::new,
+            pet_bar: 0,
         };
         assert_eq!(
             block_around(&mut mob, &cached, MOB, &[(3, 299)]),
             [signal(MOB, 183)]
         );
         assert!(block_around(&mut mob, &cached, MOB, &[(3, 300)]).is_empty());
+    }
+
+    /// The pet bar's unit adds `PET_UI_UPDATE` after its classification signal (`0x604c16`); any
+    /// other unit's pet number signals the classification alone.
+    #[test]
+    fn the_bar_pets_number_signals_the_pet_ui() {
+        let bar = Around {
+            me: Some(ME),
+            creature_cached: &|_| false,
+            others: &Vec::new,
+            pet_bar: PET,
+        };
+        let mut pet = unit();
+        assert_eq!(
+            block_around(&mut pet, &bar, PET, &[(139, 4)]),
+            [signal(PET, 187), FieldNotice::Global { id: 427 }]
+        );
+        let mut mob = unit();
+        assert_eq!(
+            block_around(&mut mob, &bar, MOB, &[(139, 4)]),
+            [signal(MOB, 187)]
+        );
+    }
+
+    /// `0x5ee990`'s arms below the active-player gate, each on its own bits, after
+    /// `PLAYER_FLAGS_CHANGED` and in the callback's order; another player's flags reach none.
+    #[test]
+    fn the_active_players_flag_arms_signal_on_their_own_bits() {
+        let flags = pf(PLAYER_FLAGS.0);
+        let changed = signal(ME, 407);
+        let resting = FieldNotice::Global { id: 405 };
+        let playtime = FieldNotice::Global { id: 530 };
+        let mut me = player();
+        // `PLAYER_FLAGS_HIDE_HELM`, a bit no arm tests.
+        assert_eq!(block(&mut me, Some(ME), ME, &[(flags, 0x400)]), [changed]);
+        // The resting bit, both edges (`0x5eead0`).
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x420)]),
+            [changed, resting]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x400)]),
+            [changed, resting]
+        );
+        // The two play-time bits are one arm (`0x5eeb65 test ah,0x30`).
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x1400)]),
+            [changed, playtime]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x3400)]),
+            [changed, playtime]
+        );
+        // The PvP preference names its new state.
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x3600)]),
+            [changed, FieldNotice::PvpPreference { on: true }]
+        );
+        // Every arm from one dword, in the callback's order.
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x420)]),
+            [
+                changed,
+                resting,
+                FieldNotice::PvpPreference { on: false },
+                playtime
+            ]
+        );
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(flags, 0x3220)]),
+            [signal(OTHER, 407)]
+        );
+    }
+
+    /// `0x5ff580` on `UNIT_FIELD_FLAGS`: the active player's combat bit first (`0x5ff4e0`), the
+    /// reactions, then the combat bit of a unit whose charmer, else summoner, is the player.
+    #[test]
+    fn the_unit_flags_arms_signal_combat_for_the_player_and_its_pet() {
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(46, 0x8_0000)]),
+            [FieldNotice::Global { id: 190 }, bridge(ME, 40)]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(46, 0x8_0080)]),
+            [signal(ME, 29), bridge(ME, 40)],
+            "the combat bit did not move"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(46, 0)]),
+            [
+                FieldNotice::Global { id: 191 },
+                signal(ME, 29),
+                bridge(ME, 40)
+            ]
+        );
+        // Another unit's combat bit is no player's regen.
+        let mut mob = unit();
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x8_0000)]),
+            [bridge(MOB, 40)]
+        );
+
+        // Ours by SUMMONEDBY: start and stop, after the reaction and before `UNIT_AURA`.
+        let summoned = |by: u64| [(12, by as u32), (13, (by >> 32) as u32)];
+        let mut pet = unit();
+        block(&mut pet, Some(ME), PET, &summoned(ME));
+        assert_eq!(
+            block(&mut pet, Some(ME), PET, &[(46, 0x0800_1800)]),
+            [
+                signal(PET, 29),
+                FieldNotice::Global { id: 334 },
+                signal(PET, 41),
+                bridge(PET, 40)
+            ]
+        );
+        assert_eq!(
+            block(&mut pet, Some(ME), PET, &[(46, 0x0800_1000)]),
+            [FieldNotice::Global { id: 335 }, bridge(PET, 40)]
+        );
+        // Another player's minion, and ours charmed away: CHARMEDBY comes first (`0x5ff772`).
+        let mut theirs = unit();
+        block(&mut theirs, Some(ME), MOB, &summoned(OTHER));
+        assert_eq!(
+            block(&mut theirs, Some(ME), MOB, &[(46, 0x800)]),
+            [bridge(MOB, 40)]
+        );
+        block(
+            &mut pet,
+            Some(ME),
+            PET,
+            &[(10, OTHER as u32), (11, (OTHER >> 32) as u32)],
+        );
+        assert!(!block(&mut pet, Some(ME), PET, &[(46, 0x0800_1800)])
+            .contains(&FieldNotice::Global { id: 334 }));
+        // Charmed by us, summoned by no one.
+        let mut charmed = unit();
+        block(&mut charmed, Some(ME), MOB, &[(10, ME as u32)]);
+        assert_eq!(
+            block(&mut charmed, Some(ME), MOB, &[(46, 0x800)]),
+            [FieldNotice::Global { id: 334 }, bridge(MOB, 40)]
+        );
+    }
+
+    /// `PLAYER_GUILDID` runs the guild tag on any player (`0x5e2770`), `PLAYER_GUILDRANK` signals
+    /// `PLAYER_GUILD_UPDATE` bare (`0x5e27b0`).
+    #[test]
+    fn the_guild_watchers_reach_every_player() {
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(pf(GUILD_ID.0), 5)]),
+            [FieldNotice::Global { id: 376 }, signal(OTHER, 345)]
+        );
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(pf(GUILD_RANK.0), 2)]),
+            [FieldNotice::Global { id: 345 }]
+        );
+        let mut me = player();
+        assert_eq!(
+            block(
+                &mut me,
+                Some(ME),
+                ME,
+                &[(pf(GUILD_ID.0), 5), (pf(GUILD_RANK.0), 1)]
+            ),
+            [
+                FieldNotice::Global { id: 376 },
+                signal(ME, 345),
+                FieldNotice::Global { id: 345 }
+            ]
+        );
+        // A creature carries no player watchers.
+        let mut mob = unit();
+        assert!(block(&mut mob, Some(ME), MOB, &[(pf(GUILD_ID.0), 5)]).is_empty());
     }
 
     /// The active player's own charmed-by watch refreshes after the type watcher on the same
@@ -916,6 +1194,7 @@ mod tests {
             me: Some(ME),
             creature_cached: &|_| false,
             others: &|| vec![MOB],
+            pet_bar: 0,
         };
         assert_eq!(
             block_around(&mut me, &around, ME, &[(10, 0x55)]),

@@ -1979,7 +1979,6 @@ mod tests {
             ),
             ("ITEM_TEXT_TRANSLATION", "ItemTextFrame.lua"),
             ("PET_UI_CLOSE", "PetPaperDollFrame.lua"),
-            ("PET_UI_UPDATE", "PetPaperDollFrame.lua"),
             (
                 "SHOW_COMPARE_TOOLTIP",
                 "PaperDollFrame.lua — the second `TRADE_REQUEST`: event 377 is \

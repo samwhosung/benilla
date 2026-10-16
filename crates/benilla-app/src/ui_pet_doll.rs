@@ -7,8 +7,9 @@
 //! are the unit-field bridge's, fired with `arg1 = "pet"` when the pet's own fields change
 //! ([`crate::ui_unit::field_events`]); this feed only pushes what their handlers read. Nothing
 //! fires `UNIT_DEFENSE` for a pet: its one producer, `0x5ed990`, signals `"player"`.
-//! `UNIT_LEVEL` and the `UNIT_PET*` events are the bridge's and `SetPetGuid`'s
-//! ([`crate::field_watch`], [`crate::ui_pet`]); nothing fires `PET_UI_UPDATE` or `PET_UI_CLOSE`.
+//! `UNIT_LEVEL` and the `UNIT_PET*` events are the bridge's and `SetPetGuid`'s, `PET_UI_UPDATE` the
+//! pet-number watcher's on the bar's pet ([`crate::field_watch`], [`crate::ui_pet`]); nothing fires
+//! `PET_UI_CLOSE`.
 
 use bevy::prelude::*;
 

@@ -52,13 +52,10 @@ pub(super) fn feed_guild(
 
     // Our guild id and rank come from our own descriptor, mirrored only while the avatar is
     // streamed: the frames between logout despawn and teardown must not read as leaving the guild.
-    let mut id_changed = false;
-    let mut rank_changed = false;
+    // Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`), fired after
+    // this push.
     if let Some(store) = self_q.iter().next() {
-        let (id, rank) = (store.0.player_guild_id(), store.0.player_guild_rank());
-        id_changed = id != guild.guild_id;
-        rank_changed = rank != guild.rank_index;
-        guild.mirror_self(id, rank);
+        guild.mirror_self(store.0.player_guild_id(), store.0.player_guild_rank());
     }
 
     // Rebuilt only on a change: every apply and every local intent sets the flag.
@@ -131,20 +128,6 @@ pub(super) fn feed_guild(
     if fed.motd != guild.motd {
         fed.motd = guild.motd.clone();
         script.fire_event("GUILD_MOTD", vec![ScriptValue::Str(guild.motd.clone())]);
-    }
-
-    // `PLAYER_GUILD_UPDATE`, as the reference's descriptor callbacks fire it (`0x5e27b0`,
-    // `0x5e2770`, `0x515e50`): bare on a `PLAYER_GUILDRANK` change, and once per unit token naming
-    // the player, the token as arg1, on a `PLAYER_GUILDID` change. Only our own avatar's edges
-    // fire here; other players' are not built, and the reference's per-token walk is unconfirmed.
-    if id_changed {
-        script.fire_event(
-            "PLAYER_GUILD_UPDATE",
-            vec![ScriptValue::Str("player".to_string())],
-        );
-    }
-    if rank_changed {
-        script.fire_event("PLAYER_GUILD_UPDATE", Vec::new());
     }
 
     // `GUILD_INVITE_REQUEST` shows the popup. There is no hide edge: nothing in the 1.12 client

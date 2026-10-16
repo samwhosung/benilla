@@ -193,8 +193,9 @@ fn feed_tabard(
     for _ in 0..std::mem::take(&mut open.pending_events) {
         script.fire_event("TABARD_SAVE_PENDING", vec![]);
     }
-    // `TABARD_CANSAVE_CHANGED` fires when a guild record arrives (`0x5e08e0`); here, when our
-    // identity cache moves.
+    // `TABARD_CANSAVE_CHANGED` on a re-fetched guild record, which refreshes each held member's
+    // tag (`0x5e2890` → `0x5e29c0` → `0x5e08e0`); here, when our identity cache moves. A guild id
+    // change and a player's first create are the field watches' (`crate::field_watch::guild_tag`).
     let gen = guilds.identity_generation();
     let last_gen = last_identity.get(&script);
     if last_gen.is_some() && *last_gen != Some(gen) {

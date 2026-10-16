@@ -101,6 +101,29 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
             };
             script.fire_event(event, vec![super::player_token()]);
         }
+        FieldNotice::Global { id } => {
+            if let Some(global) = global_event(id) {
+                script.fire_event(global, vec![]);
+            }
+        }
+        FieldNotice::PvpPreference { on } => {
+            let (toast, verbose) = super::pvp_announcement(on);
+            // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
+            // `Shown::keyed`'s unknown-key fallback would show it red.
+            let lines = [
+                crate::ui_action::keyed_line(script, toast),
+                script
+                    .lua()
+                    .globals()
+                    .get::<String>(verbose)
+                    .ok()
+                    .filter(|t| !t.is_empty())
+                    .map(|t| {
+                        crate::ui_action::Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, t)
+                    }),
+            ];
+            crate::ui_action::show_messages(script, sink, "ui_unit", lines.into_iter().flatten());
+        }
     }
 }
 
@@ -176,8 +199,26 @@ fn unit_event(id: u16) -> Option<&'static str> {
         162..=164 => "UNIT_RANGED_ATTACK_POWER",
         183 => "UNIT_NAME_UPDATE",
         187 => "UNIT_CLASSIFICATION_CHANGED",
+        345 => "PLAYER_GUILD_UPDATE",
         407 => "PLAYER_FLAGS_CHANGED",
         522 => "UNIT_QUEST_LOG_CHANGED",
+        _ => return None,
+    })
+}
+
+/// The event-table name of an id a [`FieldNotice::Global`] carries.
+fn global_event(id: u16) -> Option<&'static str> {
+    use crate::field_watch::id;
+    Some(match id {
+        id::PLAYER_REGEN_DISABLED => "PLAYER_REGEN_DISABLED",
+        id::PLAYER_REGEN_ENABLED => "PLAYER_REGEN_ENABLED",
+        id::PET_ATTACK_START => "PET_ATTACK_START",
+        id::PET_ATTACK_STOP => "PET_ATTACK_STOP",
+        id::PLAYER_GUILD_UPDATE => "PLAYER_GUILD_UPDATE",
+        id::TABARD_CANSAVE_CHANGED => "TABARD_CANSAVE_CHANGED",
+        id::PLAYER_UPDATE_RESTING => "PLAYER_UPDATE_RESTING",
+        id::PET_UI_UPDATE => "PET_UI_UPDATE",
+        id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",
         _ => return None,
     })
 }
@@ -230,6 +271,15 @@ mod tests {
         }
         for id in crate::field_watch::BRIDGE_IDS {
             assert!(unit_event(id).is_some(), "bridge id {id}");
+        }
+        for id in 0..=600 {
+            if let Some(event) = global_event(id) {
+                assert_eq!(
+                    Some(event),
+                    table.get(&id).map(String::as_str),
+                    "global id {id}"
+                );
+            }
         }
         for id in [149, 189, 201, 372, 406, 523, 524] {
             assert_eq!(
@@ -358,6 +408,48 @@ mod tests {
                 "UNIT_RANGED_ATTACK_POWER player",
                 "UPDATE_EXHAUSTION player",
             ]
+        );
+    }
+
+    /// A global notice fires its event bare, once, whatever unit raised it; the PvP preference
+    /// shows its toast for the new state, then its verbose sentence as a chat line.
+    #[test]
+    fn a_global_notice_fires_bare_and_the_pvp_preference_speaks() {
+        let mut app = world(seated());
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                r#"
+                ERR_PVP_TOGGLE_ON = "on"
+                ERR_PVP_TOGGLE_OFF = "off"
+                PVP_TOGGLE_ON_VERBOSE = "on, verbose"
+                PVP_TOGGLE_OFF_VERBOSE = "off, verbose"
+            "#,
+            )
+            .unwrap();
+        assert_eq!(
+            fired(
+                &mut app,
+                &[
+                    FieldNotice::Global { id: 190 },
+                    FieldNotice::PvpPreference { on: true },
+                    FieldNotice::Global { id: 335 },
+                    FieldNotice::PvpPreference { on: false },
+                    FieldNotice::Global { id: 300 },
+                ]
+            ),
+            [
+                "PLAYER_REGEN_DISABLED nil",
+                "UI_INFO_MESSAGE on",
+                "PET_ATTACK_STOP nil",
+                "UI_INFO_MESSAGE off",
+            ]
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_chat::ChatLog>()
+                .pending_lines(),
+            ["on, verbose", "off, verbose"]
         );
     }
 
@@ -537,6 +629,7 @@ mod tests {
                 me: Some(ME),
                 creature_cached: &|_| false,
                 others: &Vec::new,
+                pet_bar: 0,
             },
             ME,
             benilla_protocol::messages::ObjectType::Player,

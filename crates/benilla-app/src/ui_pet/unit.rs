@@ -20,18 +20,11 @@ pub(crate) struct PetUnitMemory {
     pushed: Option<UnitState>,
     /// `UNIT_PET`'s trigger; `None` until the first feed, so a pet out at login announces once.
     guid: Option<u64>,
-    /// The pet's last in-combat flag, `PET_ATTACK_*`'s trigger; `None` until a pet resolves, so a
-    /// pet already fighting at login announces once.
-    in_combat: Option<bool>,
     /// The last `(pet guid, UNIT_FIELD_PET_NAME_TIMESTAMP)`: the rename signal.
     name_stamp: Option<(u64, Option<u32>)>,
     /// The name cache's counter, which catches a `resolve` answer landing frames later.
     names_generation: gate::Watch,
 }
-
-/// `UNIT_FIELD_FLAGS` `0x800`, the server-written in-combat flag: the whole trigger for
-/// `PET_ATTACK_START`/`PET_ATTACK_STOP` (`0x5ff75e`).
-pub(super) const UNIT_FLAG_PET_IN_COMBAT: u32 = 0x0000_0800;
 
 /// Feed the `"pet"` token and the pet frame's events. The token follows the bar's guid, as
 /// `UNIT_PET` does (`SetPet`, `0x4bc7e0`), not our `UNIT_FIELD_SUMMON`, so a charmed unit has a
@@ -127,31 +120,6 @@ pub(crate) fn feed_pet_unit(
         debug!("ui_pet: UNIT_PET — pet is now {pet_guid:#x}");
         script.fire_event("UNIT_PET", vec![ScriptValue::Str("player".into())]);
     }
-
-    // PET_ATTACK_START/STOP (334/335), the pet frame's attack glow, fire on the pet's
-    // `UNIT_FIELD_FLAGS & 0x800` edge: a field callback (`0x5ff580`, at `0x5ff793`/`0x5ff79a`,
-    // registered by offset at `0x6042e2`), not the Attack button's latch.
-    let in_combat = fresh
-        .as_ref()
-        .and_then(|_| pet_combat_flag(pet.store(pet_guid)?, pet.self_guid.0));
-    if let Some(now) = in_combat {
-        if memory.in_combat != Some(now) {
-            gate.audit("feed_pet_unit", "the pet combat-flag edge");
-            memory.in_combat = Some(now);
-            debug!("ui_pet: pet in-combat flag → {now}");
-            script.fire_event(
-                if now {
-                    "PET_ATTACK_START"
-                } else {
-                    "PET_ATTACK_STOP"
-                },
-                vec![],
-            );
-        }
-    } else {
-        // No pet, or not ours: forget the edge; `0x5ff580` is not called when a unit leaves.
-        memory.in_combat = None;
-    }
 }
 
 /// Drop our pet's cached name when its name timestamp moves, as `0x604aa0` does from the field
@@ -191,14 +159,4 @@ fn watch_name_timestamp(
 /// Whether the same pet's name timestamp moved; a new guid is never a rename.
 pub(super) fn was_renamed(previous: Option<(u64, Option<u32>)>, now: (u64, Option<u32>)) -> bool {
     previous.is_some_and(|(guid, stamp)| guid == now.0 && stamp != now.1)
-}
-
-/// The in-combat flag as `0x5ff580` sees it: `None` unless the unit is ours by CHARMEDBY, else
-/// SUMMONEDBY (`0x5ff780`, not `0x5ee5a0`'s CREATEDBY fallback); then the flag (`0x5ff78d`).
-pub(super) fn pet_combat_flag(store: &ObjectStore, self_guid: Option<u64>) -> Option<bool> {
-    (store
-        .0
-        .unit_owner(benilla_protocol::OwnerFallback::SummonedBy)
-        == self_guid)
-        .then(|| store.0.unit_flags() & UNIT_FLAG_PET_IN_COMBAT != 0)
 }
