@@ -367,9 +367,6 @@ impl Plugin for RealmSelectPlugin {
                     // Ungated by state: the dialog stands over login and character select alike.
                     screen::drive_screen,
                     // Input before the row refresh, so a click shows on the frame it landed.
-                    smoke::debug_realm_smoke
-                        .run_if(smoke::enabled)
-                        .after(crate::ui_script::UiInput),
                     (
                         (input::clicks, input::keys)
                             .chain()
@@ -385,6 +382,16 @@ impl Plugin for RealmSelectPlugin {
                     .in_set(RealmSelectSet)
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(crate::glue::GlueVisuals),
+            )
+            // The walk presses after the stock UI's input and before the native screen's, outside
+            // the chain so no player system inherits its order.
+            .add_systems(
+                Update,
+                smoke::debug_realm_smoke
+                    .run_if(smoke::enabled)
+                    .after(crate::ui_script::UiInput)
+                    .after(screen::drive_screen)
+                    .before(input::clicks),
             );
     }
 }
