@@ -68,6 +68,11 @@ fn obsidian_node_rock_binds_its_reflection_as_stage_one() {
         "World\\SkillActivated\\TradeskillNodes\\Obsidian_Miningnode_01.m2",
     )
     .expect("load Obsidian_Miningnode_01");
+    // The combiner array itself: a combine of 1 is also the past-the-array fallback.
+    let bytes = chain
+        .read_file("World\\SkillActivated\\TradeskillNodes\\Obsidian_Miningnode_01.m2")
+        .expect("read the m2");
+    assert_eq!(benilla_m2::parse_texture_combiners(&bytes), vec![1; 5]);
     let two: Vec<_> = subs.iter().filter(|s| s.stage1.is_some()).collect();
     assert_eq!(two.len(), 1, "one two-texture unit");
     let rock = two[0];

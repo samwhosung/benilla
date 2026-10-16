@@ -505,27 +505,28 @@ mod tests {
         ));
     }
 
-    /// Stage 1 combines by the gx preset tables: colour `0x80a25c` (4, 4, 13, 7, 5, 12 as
-    /// `D3DTOP`) and alpha `0x80a274` (3, 4, 3, 7, 5, 3), the OpenGL records of `0x85c250` alike
-    /// but for preset 2's weight. Every stock two-texture unit is preset 1, colour and alpha
+    /// Stage 1 combines by the gx preset tables of the default device, Direct3D (`gxApi`,
+    /// `0x63a230`): colour `0x80a25c` (4, 4, 13, 7, 5, 12 as `D3DTOP`) and alpha `0x80a274` (3, 4,
+    /// 3, 7, 5, 3), args TEXTURE and CURRENT. The OpenGL records of `0x85c250` differ only in the
+    /// weights of presets 2 and 5. Every stock two-texture unit is preset 1, colour and alpha
     /// modulated.
     #[test]
     fn stage1_combines_by_the_gx_presets() {
         let src = include_str!("shaders/wow_model.wgsl");
         for (line, why) in [
             (
-                "var c = prev.rgb * tex.rgb;",
+                "var c = prev * tex.rgb;",
                 "presets 0 and 1 modulate the colour",
             ),
             (
-                "c = mix(prev.rgb, tex.rgb, tex.a);",
-                "preset 2 blends by the texel's alpha",
+                "c = mix(prev, tex.rgb, tex.a);",
+                "preset 2, BLENDTEXTUREALPHA, blends by the texel's alpha",
             ),
-            ("c = prev.rgb + tex.rgb;", "preset 3 adds"),
-            ("c = 2.0 * prev.rgb * tex.rgb;", "preset 4 modulates twice"),
+            ("c = prev + tex.rgb;", "preset 3 adds"),
+            ("c = 2.0 * prev * tex.rgb;", "preset 4 modulates twice"),
             (
-                "c = mix(prev.rgb, tex.rgb, prev.a);",
-                "preset 5 blends by the previous alpha",
+                "c = mix(prev, tex.rgb, diffuse_a);",
+                "preset 5, BLENDDIFFUSEALPHA, blends by the diffuse alpha",
             ),
             (
                 "return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));",
@@ -535,8 +536,8 @@ mod tests {
             ("a = prev + tex;", "preset 3 adds the alpha"),
             ("a = 2.0 * prev * tex;", "preset 4 doubles the alpha"),
             (
-                "rgb = stage1_rgb(stage1_preset, vec4<f32>(rgb, stage0_alpha), tex1);",
-                "stage 1 combines with the lit stage-0 result",
+                "rgb = stage1_rgb(stage1_preset, rgb, tex1, obj_fade);",
+                "stage 1 combines with the lit stage-0 result, preset 5 by the diffuse alpha",
             ),
             (
                 "base_color.a = stage1_alpha(stage1_preset, base_color.a, tex1.a);",

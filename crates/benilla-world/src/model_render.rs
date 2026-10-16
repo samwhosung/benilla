@@ -382,12 +382,15 @@ pub fn zfill_material(
     cache: &mut MaterialCache,
     materials: &mut Assets<WowModelMaterial>,
     texture: Option<Handle<Image>>,
+    env_map: bool,
     stage1: Option<&benilla_assets::Stage1>,
     two_sided: bool,
     cutout: bool,
     light: &Buffer,
 ) -> Handle<WowModelMaterial> {
-    // Only a cutout reads stage 1, whose alpha joins the one it tests.
+    // Only a cutout reads the coordinates and stage 1, which shape the alpha it tests; the
+    // reference's depth-only element binds the same coordinates as the colour pass (`0x70b833`).
+    let env_map = env_map && cutout;
     let stage1 = stage1.filter(|_| cutout);
     let key = MatKey {
         light: light.id(),
@@ -406,7 +409,7 @@ pub fn zfill_material(
         no_depth_write: false,
         no_depth_test: false,
         fog_policy: benilla_formats::FogPolicy::Scene,
-        env_map: false,
+        env_map,
         stage1: stage1.map(|s| (s.texture.id(), s.combine)),
         shade: ShadeSel::Lit,
         batch_order: 0,
@@ -441,7 +444,11 @@ pub fn zfill_material(
                 clutter_fade: Vec4::new(
                     0.0,
                     0.0,
-                    f32::from(ZFILL_MARKER | if cutout { TWIN_CUTOUT_MARKER } else { 0 }),
+                    f32::from(
+                        ZFILL_MARKER
+                            | if cutout { TWIN_CUTOUT_MARKER } else { 0 }
+                            | (u16::from(env_map) * ENV_MAP_MARKER),
+                    ),
                     0.0,
                 ),
                 // `y` stays 0: the zfill pipeline forces its own depth write.

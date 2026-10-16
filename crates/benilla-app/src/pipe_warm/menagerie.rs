@@ -169,7 +169,7 @@ pub(super) fn spawn_menagerie(
         // The depth-prime twin (colour writes masked off), plain and cutout.
         for cutout in [false, true] {
             mats.push(zfill_material(
-                cache, materials, None, None, two_sided, cutout, light,
+                cache, materials, None, false, None, two_sided, cutout, light,
             ));
         }
         // The WMO-skybox lane: `sky_depth` is a `WowModelKey` axis (the forced-far-depth branch).

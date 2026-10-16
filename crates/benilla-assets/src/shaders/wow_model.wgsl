@@ -150,20 +150,21 @@ fn wow_env_uv(p_view: vec3<f32>, n_view: vec3<f32>) -> vec2<f32> {
     return refl.xy * 0.5 + vec2<f32>(0.5, 0.5);
 }
 
-// Stage 1's colour combine on `prev`, the stage-0 result, by gx preset (`0x80a25c`, `0x85c250`):
-// 0 and 1 modulate, 2 interpolates by the texel's alpha as Direct3D's BLENDTEXTUREALPHA does (the
-// OpenGL record weights by the constant colour's instead), 3 adds, 4 modulates ×2, 5 interpolates
-// by the previous alpha. Each stage's result saturates.
-fn stage1_rgb(preset: u32, prev: vec4<f32>, tex: vec4<f32>) -> vec3<f32> {
-    var c = prev.rgb * tex.rgb;
+// Stage 1's colour combine on `prev`, the stage-0 result, by gx preset as the default device,
+// Direct3D, maps it (`0x80a25c` = 4, 4, 13, 7, 5, 12 as `D3DTOP`, args TEXTURE and CURRENT, which
+// the device never changes): 0 and 1 modulate, 2 BLENDTEXTUREALPHA interpolates by the texel's
+// alpha, 3 adds, 4 modulates ×2, 5 BLENDDIFFUSEALPHA interpolates by `diffuse_a`, the vertex
+// colour's alpha. Each stage's result saturates.
+fn stage1_rgb(preset: u32, prev: vec3<f32>, tex: vec4<f32>, diffuse_a: f32) -> vec3<f32> {
+    var c = prev * tex.rgb;
     if (preset == 2u) {
-        c = mix(prev.rgb, tex.rgb, tex.a);
+        c = mix(prev, tex.rgb, tex.a);
     } else if (preset == 3u) {
-        c = prev.rgb + tex.rgb;
+        c = prev + tex.rgb;
     } else if (preset == 4u) {
-        c = 2.0 * prev.rgb * tex.rgb;
+        c = 2.0 * prev * tex.rgb;
     } else if (preset == 5u) {
-        c = mix(prev.rgb, tex.rgb, prev.a);
+        c = mix(prev, tex.rgb, diffuse_a);
     }
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
@@ -586,7 +587,6 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // alpha the cutout and the blend read; its colour combines after the light (below).
     let stage1_on = m.stage1.x > 0.5;
     let stage1_preset = u32(m.stage1.y);
-    let stage0_alpha = base_color.a;
     var tex1 = vec4<f32>(1.0);
     if (stage1_on) {
         tex1 = textureSampleBias(stage1_texture, stage1_sampler, in.env_uv, view.mip_bias);
@@ -832,7 +832,8 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     }
     // Stage 1 combines with the stage-0 result, the lit texel, before the fog.
     if (stage1_on) {
-        rgb = stage1_rgb(stage1_preset, vec4<f32>(rgb, stage0_alpha), tex1);
+        // The diffuse alpha is the batch and instance alpha, the shader's `obj_fade`.
+        rgb = stage1_rgb(stage1_preset, rgb, tex1, obj_fade);
     }
 
     // Linear fog by planar eye depth, as in terrain.wgsl. Per-batch colour policy (`clutter_fade.z`

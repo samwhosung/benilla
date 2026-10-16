@@ -357,6 +357,7 @@ impl M2BatchMaterials<'_> {
                 &mut self.cache.0,
                 &mut self.materials,
                 Some(texture),
+                false, // a composite sheet reads its UVs
                 None,
                 two_sided,
                 blend == ModelBlend::AlphaTest,
@@ -390,6 +391,7 @@ impl M2BatchMaterials<'_> {
                 &mut self.cache.0,
                 &mut self.materials,
                 texture,
+                sub.env_map,
                 sub.stage1.as_ref(),
                 sub.two_sided,
                 b == ModelBlend::AlphaTest,
