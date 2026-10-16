@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::test_support::link_dir;
 use super::{survey, Used};
 
 /// One throwaway AddOns root, cleaned up on drop even if a test panics; its own temp prefix keeps
@@ -208,7 +209,7 @@ fn bagnon_is_reachable_and_omnicc_is_not_broken() {
     let corpus = benilla_formats::addon_corpus_or_skip!();
     let fx = Fixtures::new("oracle");
     for name in ["!OmniCC", "Bagnon", "Bagnon_Core", "Bagnon_Forever"] {
-        std::os::unix::fs::symlink(corpus.join(name), fx.root().join(name)).unwrap();
+        link_dir(&corpus.join(name), &fx.root().join(name)).unwrap();
     }
     let reports = survey(fx.root());
     let row = |name: &str| {

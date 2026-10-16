@@ -31,6 +31,8 @@ mod probe_tests;
 pub mod render;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod test_support;
 /// The control for the one-VM-per-addon bound: the whole folder in one VM, as the 1.12 client runs
 /// it.
 pub mod together;
