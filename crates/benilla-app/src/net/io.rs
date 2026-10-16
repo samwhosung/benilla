@@ -863,7 +863,7 @@ fn world(
             // reference's does (`super::enter_world_on_self_create`); a server may drop it before then.
             session.player_login(refuse_once(guid))?;
 
-            let billing_time_rested = session.billing_time_rested();
+            let billing = session.billing();
             let tutorial_flags = session.take_tutorial_flags();
             // `SMSG_ADDON_INFO` carries no names, so it is paired back against the block we sent. No
             // reply means no AddOn index space at all, carried as `None`. The link's one reply
@@ -893,7 +893,7 @@ fn world(
                 .send(SessionEvent::Connected {
                     self_guid: guid,
                     name,
-                    billing_time_rested,
+                    billing,
                     tutorial_flags,
                     addon_info,
                 })

@@ -91,6 +91,40 @@ fn warden_data_ahead_of_the_auth_response_is_read_past() {
     assert!(session.warden_asked());
 }
 
+/// A queued login as vmangos writes it: the billing group on the first `AUTH_WAIT_QUEUE`
+/// (`World.cpp:374-381`), then a position and the closing `AUTH_OK` without it
+/// (`WorldSession.cpp:961-976`). The session keeps the group the queue gave.
+#[test]
+fn the_billing_group_of_the_queue_outlasts_the_bare_auth_ok() {
+    let addr = fake_server(vec![
+        (
+            opcode::SMSG_AUTH_RESPONSE,
+            // 45 minutes left, trial and restricted, 90 minutes rested, second in line.
+            [
+                &[messages::AUTH_WAIT_QUEUE][..],
+                &45u32.to_le_bytes(),
+                &[0x44],
+                &90u32.to_le_bytes(),
+                &2u32.to_le_bytes(),
+            ]
+            .concat(),
+        ),
+        (
+            opcode::SMSG_AUTH_RESPONSE,
+            vec![messages::AUTH_WAIT_QUEUE, 0x01, 0x00, 0x00, 0x00],
+        ),
+    ]);
+    let session = WorldSession::connect(&addr, "one", SESSION_KEY).expect("the connect completes");
+    assert_eq!(
+        session.billing(),
+        messages::Billing {
+            time_remaining: 45,
+            plan_flags: 0x44,
+            time_rested: 90,
+        }
+    );
+}
+
 /// Every packet the observer saw, with the thread that wrote it: the tests of this file share one
 /// process, so each filters for its own thread.
 static SEEN: std::sync::Mutex<Vec<(thread::ThreadId, u16, Vec<u8>)>> =

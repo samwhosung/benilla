@@ -50,7 +50,6 @@ fn app() -> (App, Receiver<ClientCommand>) {
 /// The login edge `connected` writes at `CMSG_PLAYER_LOGIN`.
 fn log_in(app: &mut App) {
     app.world_mut().write_message(EnteredWorldMessage {
-        billing_time_rested: 0,
         tutorial_flags: None,
     });
 }

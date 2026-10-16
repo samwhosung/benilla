@@ -108,7 +108,6 @@ mod tests {
         app.world_mut().resource_mut::<Roster>().pending_pick = Some(7);
 
         app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
             tutorial_flags: None,
         });
         app.world_mut()
@@ -148,7 +147,6 @@ mod tests {
             .add_systems(Update, (enter_on_connected, back_on_disconnect).chain());
 
         app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
             tutorial_flags: None,
         });
         app.world_mut()
@@ -189,7 +187,6 @@ mod tests {
             .add_systems(Update, session_edges());
 
         app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
             tutorial_flags: None,
         });
         app.world_mut()

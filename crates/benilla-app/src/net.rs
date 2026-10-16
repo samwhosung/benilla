@@ -86,6 +86,7 @@ impl Plugin for NetPlugin {
             .init_resource::<GuidIndex>()
             .init_resource::<SelfGuid>()
             .init_resource::<AddonInfoReply>()
+            .init_resource::<SessionBilling>()
             .init_resource::<PendingTransfer>()
             .init_resource::<NetStatus>()
             .init_resource::<DroppedOpcodes>()
@@ -2210,8 +2211,6 @@ pub(crate) struct CharacterLoginFailedMessage {
 /// We entered the world.
 #[derive(Message)]
 pub(crate) struct EnteredWorldMessage {
-    /// Rested billing minutes from `SMSG_AUTH_RESPONSE`, the only time they arrive.
-    pub(crate) billing_time_rested: u32,
     /// The tutorial flags, if `SMSG_TUTORIAL_FLAGS` came during the login handshake.
     pub(crate) tutorial_flags: Option<Vec<u8>>,
 }
@@ -2227,6 +2226,12 @@ pub(crate) struct WorldEnterCascadeMessage;
 /// rewritten on every login from the reply its link got.
 #[derive(Resource, Default)]
 pub(crate) struct AddonInfoReply(pub(crate) Option<Vec<benilla_protocol::messages::AddonRecord>>);
+
+/// The connection's billing group, from its authentication alone (`0x5b41b0`); a resource for the
+/// same reason as [`AddonInfoReply`], rewritten at every login. The in-game `GetBillingTimeRested`
+/// and [`crate::ui_billing`]'s warning read it.
+#[derive(Resource, Default, Clone, Copy)]
+pub(crate) struct SessionBilling(pub(crate) benilla_protocol::messages::Billing);
 
 /// `SMSG_TRIGGER_CINEMATIC`: a `CinematicSequences.dbc` id; [`crate::cinematic`] plays and acks it.
 #[derive(Message)]

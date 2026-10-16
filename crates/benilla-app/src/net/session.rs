@@ -59,7 +59,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Pong, on_pong);
 }
 
-/// The edges the bridge publishes as messages, and the two resources they park in.
+/// The edges the bridge publishes as messages, and the three resources they park in.
 #[derive(SystemParam)]
 pub(crate) struct Edges<'w> {
     teleports: MessageWriter<'w, TeleportMessage>,
@@ -71,6 +71,7 @@ pub(crate) struct Edges<'w> {
     char_login_failures: MessageWriter<'w, CharacterLoginFailedMessage>,
     entered_world: MessageWriter<'w, EnteredWorldMessage>,
     addon_reply: ResMut<'w, super::AddonInfoReply>,
+    billing: ResMut<'w, super::SessionBilling>,
     logged_out: MessageWriter<'w, LoggedOutMessage>,
     knockbacks: MessageWriter<'w, KnockBackMessage>,
     login_stages: MessageWriter<'w, LoginStageMessage>,
@@ -178,15 +179,15 @@ fn on_connected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     if let SessionEvent::Connected {
         self_guid: guid,
         name,
-        billing_time_rested,
+        billing,
         tutorial_flags,
         addon_info,
     } = ev
     {
+        e.billing.0 = billing;
         connected(
             guid,
             name,
-            billing_time_rested,
             tutorial_flags,
             addon_info,
             &mut e.addon_reply,
@@ -509,7 +510,6 @@ fn cinematic_triggered(
 fn connected(
     guid: u64,
     name: String,
-    billing_time_rested: u32,
     tutorial_flags: Option<Vec<u8>>,
     addon_info: Option<Vec<benilla_protocol::messages::AddonRecord>>,
     addon_reply: &mut crate::net::AddonInfoReply,
@@ -530,10 +530,7 @@ fn connected(
     // Set before the world-entry UI load reads it, and every login, so a silent server inherits
     // no earlier answer.
     addon_reply.0 = addon_info;
-    entered_world.write(EnteredWorldMessage {
-        billing_time_rested,
-        tutorial_flags,
-    });
+    entered_world.write(EnteredWorldMessage { tutorial_flags });
 }
 
 /// `SMSG_LOGOUT_COMPLETE`: back to character select.

@@ -55,10 +55,10 @@ pub struct WorldSession {
 pub(super) struct LinkFacts {
     /// Roster guid to race, so [`WorldSession::player_login`] can pick the chat language.
     roster_races: std::collections::HashMap<u64, u8>,
-    /// The rested billing minutes the admitting `SMSG_AUTH_RESPONSE` carried. Deviation: `0` when
-    /// the body is too short, where the reference leaves its global as it was; this field lives
-    /// per connection, with nothing earlier to keep.
-    billing_time_rested: u32,
+    /// The billing group the last `SMSG_AUTH_RESPONSE` to carry one gave. Deviation: zeros until
+    /// one does, where the reference's words are never initialised (the session is allocated
+    /// without zero-fill, `ui/billing` in benilla-re).
+    billing: messages::Billing,
     /// `SMSG_ADDON_INFO`'s per-record status bytes in order; `None` until the server answers.
     /// vmangos sends it once per connection, after the authentication
     /// (`WorldSocket.cpp:446-448`), and the reference applies it to add-on records that outlive
@@ -147,16 +147,19 @@ impl WorldSession {
 
         // AUTH_RESPONSE is not always first, so others are skipped.
         loop {
-            match session.recv()? {
-                ServerPacket::AuthResponse {
-                    result,
-                    billing_time_rested,
-                    ..
-                } if result == messages::AUTH_OK => {
-                    // The reference keeps the last AUTH_RESPONSE's billing group.
-                    session.link.billing_time_rested = billing_time_rested.unwrap_or(0);
-                    break;
-                }
+            let packet = session.recv()?;
+            // Either admitting code may carry the group and one without leaves the last
+            // (`0x5b41f9`): vmangos sends it on the first queue response and not on the closing
+            // `AUTH_OK` (`World.cpp:374-381`, `WorldSession.cpp:961-967`).
+            if let ServerPacket::AuthResponse {
+                billing: Some(billing),
+                ..
+            } = packet
+            {
+                session.link.billing = billing;
+            }
+            match packet {
+                ServerPacket::AuthResponse { result, .. } if result == messages::AUTH_OK => break,
                 // Queued, not refused: the server re-sends as we move up and ends with `AUTH_OK`.
                 ServerPacket::AuthResponse {
                     result,
@@ -189,9 +192,9 @@ impl WorldSession {
         Ok(session)
     }
 
-    /// Rested billing minutes (`GetBillingTimeRested`); always 0 from vmangos (`World.cpp:331`).
-    pub fn billing_time_rested(&self) -> u32 {
-        self.link.billing_time_rested
+    /// The connection's billing group; vmangos sends no time and no rest (`World.cpp:327-331`).
+    pub fn billing(&self) -> messages::Billing {
+        self.link.billing
     }
 
     /// The tutorial bank captured during the login handshake, if any.

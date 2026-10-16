@@ -194,8 +194,8 @@ pub enum SessionEvent {
     Connected {
         self_guid: u64,
         name: String,
-        /// Rested billing minutes for `GetBillingTimeRested()`, sent once, at auth.
-        billing_time_rested: u32,
+        /// The connection's billing group, from its authentication alone.
+        billing: crate::messages::Billing,
         /// `SMSG_TUTORIAL_FLAGS` if it came during the handshake; `None` if it comes in-world.
         tutorial_flags: Option<Vec<u8>>,
         /// The `SMSG_ADDON_INFO` records. `None` is no reply at all, where the reference's

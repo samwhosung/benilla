@@ -2448,15 +2448,10 @@ fn pump(
                     .renames
                     .write(crate::net::CharRenameMessage { result, renamed });
             }
-            E::Connected {
-                billing_time_rested,
-                tutorial_flags,
-                ..
-            } => {
-                char_writes.entered.write(crate::net::EnteredWorldMessage {
-                    billing_time_rested,
-                    tutorial_flags,
-                });
+            E::Connected { tutorial_flags, .. } => {
+                char_writes
+                    .entered
+                    .write(crate::net::EnteredWorldMessage { tutorial_flags });
             }
             E::CharacterLoginFailed { result } => {
                 char_writes

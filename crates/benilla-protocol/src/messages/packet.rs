@@ -67,9 +67,8 @@ pub enum ServerPacket {
         result: u8,
         /// Our login-queue place; only for [`super::AUTH_WAIT_QUEUE`] with a long enough body.
         queue_position: Option<u32>,
-        /// Rested billing minutes (`PlayerFrame.lua:246` divides by 60), returned unconverted by
-        /// `GetBillingTimeRested()` (`0x48ec50`); `None` on a body too short for the group.
-        billing_time_rested: Option<u32>,
+        /// The billing group; `None` on a body too short for it.
+        billing: Option<super::Billing>,
     },
     CharEnum {
         characters: Vec<Character>,

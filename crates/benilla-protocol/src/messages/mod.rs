@@ -293,6 +293,30 @@ pub const AUTH_NO_TIME: u8 = 0x1E;
 pub const AUTH_DB_BUSY: u8 = 0x1F;
 pub const AUTH_SUSPENDED: u8 = 0x20;
 pub const AUTH_PARENTAL_CONTROL: u8 = 0x21;
+/// The billing group an `AUTH_OK` or `AUTH_WAIT_QUEUE` response carries when 5 or more bytes
+/// follow its result (`0x5b41f9`), which the client keeps on the connection (`0x5b41b0`). vmangos
+/// writes 0, the trial bits or none, and 0 (`World.cpp:327-331`, `:376-380`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Billing {
+    /// Minutes of play left (`+0x1af4`): the glue's `GetBillingTimeRemaining` and the in-game
+    /// play-time warning read it.
+    pub time_remaining: u32,
+    /// The plan flags (`+0x1afc`), vmangos `BillingPlanFlags` (`WorldSession.h:123-134`).
+    pub plan_flags: u8,
+    /// Rested minutes (`+0x1af8`), `GetBillingTimeRested()` unconverted (`0x48ec50`);
+    /// `PlayerFrame.lua:246` divides it by 60.
+    pub time_rested: u32,
+}
+
+impl Billing {
+    /// A recurring subscription: the play-time warning never arms (`0x48f654`), and the glue's
+    /// `GetBillingTimeRemaining` answers 0 (`0x46dc0a`). vmangos `BILLING_FLAG_RECURRING`.
+    pub const RECURRING: u8 = 0x02;
+    /// An internet-cafe plan: its warning is `IGR_BILLING_NAG_DIALOG`, not the minutes
+    /// (`0x4956cb`). vmangos `BILLING_FLAG_IGR`.
+    pub const IGR: u8 = 0x08;
+}
+
 /// `LogoutResult::Success` (`SMSG_LOGOUT_RESPONSE`).
 pub const LOGOUT_SUCCESS: u32 = 0x0;
 /// Faction-tongue `Language` ids (vmangos `SharedDefines.h:256-261`); vmangos rejects

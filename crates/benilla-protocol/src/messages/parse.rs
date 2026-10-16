@@ -297,17 +297,19 @@ fn parse_server_body(
             // showing a stale queue position as current is a client bug.
             let result = read_u8(&mut r)?;
             let queued = result == super::AUTH_WAIT_QUEUE;
-            let mut billing_time_rested = None;
+            let mut billing = None;
             if (result == super::AUTH_OK || queued) && r.len() >= 5 {
-                let _billing_time_remaining = read_u32_le(&mut r)?;
-                let _billing_plan_flags = read_u8(&mut r)?;
-                // The only source of `GetBillingTimeRested()` (the client's writer is `0x5b421a`).
-                billing_time_rested = Some(read_u32_le(&mut r)?);
+                // Read in the client's order, into `+0x1af4`, `+0x1afc` and `+0x1af8`.
+                billing = Some(super::Billing {
+                    time_remaining: read_u32_le(&mut r)?,
+                    plan_flags: read_u8(&mut r)?,
+                    time_rested: read_u32_le(&mut r)?,
+                });
             }
             ServerPacket::AuthResponse {
                 result,
                 queue_position: queued.then(|| read_u32_le(&mut r).ok()).flatten(),
-                billing_time_rested,
+                billing,
             }
         }
         opcode::SMSG_CHAR_ENUM => {
@@ -1644,6 +1646,64 @@ fn parse_server_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SMSG_AUTH_RESPONSE` as vmangos writes its four shapes: the admitting `AUTH_OK` and the first
+    /// `AUTH_WAIT_QUEUE` with the billing group (`World.cpp:325-331`, `:374-381`), then the queue's
+    /// later positions and its closing `AUTH_OK` without (`WorldSession.cpp:961-976`).
+    #[test]
+    fn the_auth_response_billing_group_decodes_in_the_clients_order() {
+        use crate::messages::{Billing, AUTH_OK, AUTH_WAIT_QUEUE};
+        let decode = |body: &[u8]| match parse_server_with_tail(opcode::SMSG_AUTH_RESPONSE, body)
+            .expect("a vmangos body decodes")
+        {
+            (
+                ServerPacket::AuthResponse {
+                    result,
+                    queue_position,
+                    billing,
+                },
+                tail,
+            ) => (result, queue_position, billing, tail),
+            _ => panic!("SMSG_AUTH_RESPONSE decodes as AuthResponse"),
+        };
+        // A trial account (`BILLING_FLAG_TRIAL | BILLING_FLAG_RESTRICTED`) with one minute left.
+        let ok = [0x0c, 0x01, 0x00, 0x00, 0x00, 0x44, 0x5a, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode(&ok),
+            (
+                AUTH_OK,
+                None,
+                Some(Billing {
+                    time_remaining: 1,
+                    plan_flags: 0x44,
+                    time_rested: 90,
+                }),
+                0
+            )
+        );
+        let queued = [
+            0x1b, 0x2c, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(
+            decode(&queued),
+            (
+                AUTH_WAIT_QUEUE,
+                Some(3),
+                Some(Billing {
+                    time_remaining: 300,
+                    plan_flags: Billing::RECURRING,
+                    time_rested: 0,
+                }),
+                0
+            )
+        );
+        // Four bytes after the result are under the client's 5: the position alone.
+        assert_eq!(
+            decode(&[0x1b, 0x05, 0x00, 0x00, 0x00]),
+            (AUTH_WAIT_QUEUE, Some(5), None, 0)
+        );
+        assert_eq!(decode(&[0x0c]), (AUTH_OK, None, None, 0));
+    }
 
     /// `SMSG_SET_FORCED_REACTIONS`: a count, then `(faction, rank)` pairs of `u32`s.
     #[test]
