@@ -25,6 +25,30 @@ pub(super) const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 pub(super) const ENCHANT_RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 pub(super) const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 pub(super) const GRAY: [f32; 4] = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
+/// The skill-difficulty ramp's rungs `0x529fa0` hands out, written by their initializers: gray
+/// `0xc0cf50` ff808080 ([`GRAY`]), green `0xc0d420` ff40c040, yellow `0xc0cf18` ffffff00, orange
+/// `0xc0d3a4` ffff8040 and red `0xc0d3a8` ffff2020 ([`RED`]). The green is also the colour of a
+/// satisfiable `LOCKED` line.
+pub(super) const LOCK_GREEN: [f32; 4] = [64.0 / 255.0, 192.0 / 255.0, 64.0 / 255.0, 1.0];
+pub(super) const SKILL_YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+pub(super) const SKILL_ORANGE: [f32; 4] = [1.0, 128.0 / 255.0, 64.0 / 255.0, 1.0];
+
+/// `0x529fa0(required, value)`: gray 100 above the requirement, green 50, yellow 25, orange from
+/// the requirement itself, red below it.
+pub(in crate::script) fn skill_color(required: i32, value: i32) -> [f32; 4] {
+    if value >= required.wrapping_add(100) {
+        GRAY
+    } else if value >= required.wrapping_add(50) {
+        LOCK_GREEN
+    } else if value >= required.wrapping_add(25) {
+        SKILL_YELLOW
+    } else if value >= required {
+        SKILL_ORANGE
+    } else {
+        RED
+    }
+}
+
 /// An equipped set member's cream, `0xc0d368` (ffffff97, written at `0x529050`).
 pub(super) const CREAM: [f32; 4] = [1.0, 1.0, 151.0 / 255.0, 1.0];
 

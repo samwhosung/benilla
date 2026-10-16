@@ -21,6 +21,7 @@ use crate::ui_unit::UnitFeed;
 mod drain;
 mod equip_error;
 pub(crate) mod feed;
+mod lock_openers;
 pub(crate) mod locks;
 mod net;
 
@@ -1033,6 +1034,9 @@ impl Plugin for UiItemsPlugin {
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
                     feed_player_req.in_set(UnitFeed),
+                    // The item tooltip's lock check: `Lock.dbc` once, the player's openers on change.
+                    lock_openers::feed_lock_rows.in_set(UnitFeed),
+                    lock_openers::feed_lock_openers.in_set(UnitFeed),
                     // After the input pass, so a repair-mode click goes out the same frame; a
                     // plain `UseContainerItem` is a script call.
                     drain_container_repairs.after(UiInput),

@@ -55,7 +55,7 @@ pub(in crate::script) struct ItemInstance {
     /// and a nonzero one draws LOCKED even without an object (`0x52bdd2`).
     pub block_lock_id: u32,
     /// The remaining use cooldown in ms (`[this+0x408]`, `start + duration - now`), 0 for none. Only
-    /// the three setters that query the item's cooldown fill it, `SetBagItem` (`0x53486b`),
+    /// the three setters that query the item's cooldown fill it, `SetBagItem` (`0x53488c`),
     /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so
     /// with p6 = 1; every other source stores 0 there (`0x5326e0`).
     pub cooldown_ms: u32,
@@ -199,7 +199,7 @@ pub(super) fn render_view_flagged(
         if v.start_quest != 0 {
             keyed("ITEM_STARTS_QUEST", &[], WHITE, false)?;
         }
-        // LOCKED, red (`0x52bdde`..`0x52be58`), for a lock row the template or the block names
+        // LOCKED (`0x52bdde`..`0x52be58`), for a lock row the template or the block names
         // (`0x52bd57`..`0x52bda9`) and a source that passes the gate (`0x52bdb3`..`0x52bdd8`): an
         // item object lacking UNLOCKED `0x4`, or a block with a lock id of its own. A template
         // source has neither, so it draws no LOCKED. Every lock path then sets the builder's
@@ -208,7 +208,13 @@ pub(super) fn render_view_flagged(
         let has_row = v.lock_id != 0 || block_lock != 0;
         let passes = block_lock != 0 || inst.is_some_and(|i| i.object && i.flags & 0x4 == 0);
         if has_row && passes {
-            keyed("LOCKED", &[], RED, false)?;
+            // The record's row first, else the block's (`0x52bd57`, `0x52bd78`).
+            let row = if v.lock_id != 0 {
+                v.lock_id
+            } else {
+                block_lock
+            };
+            keyed("LOCKED", &[], lock_color(lua, row, v.item_level), false)?;
             live = true;
         }
     }
@@ -683,6 +689,23 @@ pub(super) fn render_view_flagged(
         keyed("ITEM_READABLE", &[], GREEN, false)?;
     }
     Ok(live)
+}
+
+/// The colour of `LOCKED` for lock row `row` of an item of `item_level` (`0x52bdde`..`0x52be3d`):
+/// red unless the lock check `0x5da5e0` finds an opener, then the margin ramp `0x529fa0` for a
+/// known spell, else the green `0xc0d420` for a held key or a lock with no key or skill slot. A
+/// row the app never pushed (no `Lock.dbc`) has nothing to open it, so it stays red.
+fn lock_color(lua: &Lua, row: u32, item_level: u32) -> [f32; 4] {
+    use crate::script::{check_lock, LockCheck};
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let Some(slots) = model.lock_rows.get(&row) else {
+        return RED;
+    };
+    match check_lock(slots, item_level, model.lock_openers.as_ref()) {
+        LockCheck::Closed => RED,
+        LockCheck::Open => LOCK_GREEN,
+        LockCheck::Skill { required, points } => skill_color(required, points),
+    }
 }
 
 /// [`render_view_flagged`] for a caller that does not answer the flag.

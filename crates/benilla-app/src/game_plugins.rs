@@ -849,6 +849,10 @@ pub(crate) mod schedule_tests {
     ///   `creature_anim::spell_visual::route_cast_visuals` over the `CastEvent` messages: both are
     ///   level-triggered readers, so a cancel seen a frame early or late is decided again next
     ///   frame;
+    /// - `ui_items::lock_openers::feed_lock_openers` against `ui_action::feed::feed_actions` and
+    ///   `normalize_action_ranks` over `PlayerActions` and the VM: it reads only the book's spell
+    ///   ids, which those two never rewrite, and writes the lock state alone; its gate watches
+    ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
     ///   `own_control_lost` only, and the loader writes the saved camera pose.
@@ -856,7 +860,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_964;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_965;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

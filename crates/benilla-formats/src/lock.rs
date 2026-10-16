@@ -115,6 +115,11 @@ impl LockCatalog {
                 .is_some_and(|s| s.iter().any(|slot| slot.key_type != LOCK_KEY_NONE))
     }
 
+    /// Every row, by lock id and in no order.
+    pub fn rows(&self) -> impl Iterator<Item = (u32, &[LockSlot; MAX_LOCK_SLOTS])> {
+        self.locks.iter().map(|(&id, slots)| (id, slots))
+    }
+
     pub fn len(&self) -> usize {
         self.locks.len()
     }

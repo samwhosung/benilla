@@ -1258,7 +1258,7 @@ pub(crate) fn feed_containers(
 
         // The worn items' use cooldowns, for the tooltip line; no event rides them.
         let worn = worn_cooldowns(
-            &store,
+            store,
             &inv.objects,
             &items,
             &commands,

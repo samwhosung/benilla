@@ -991,6 +991,11 @@ pub(crate) struct Model {
     pub(crate) random_properties: HashMap<u32, super::RandomPropertyView>,
     /// The player's level, class, race and skills, for a tooltip's red requirement lines.
     pub(crate) player_req: PlayerReqState,
+    /// `Lock.dbc` by lock id, pushed whole at startup, and what the active player opens locks with
+    /// (`None` before the first push: no active player). The item tooltip's `LOCKED` colour walks
+    /// them ([`super::lock_check::check_lock`]).
+    pub(crate) lock_rows: HashMap<u32, Vec<super::LockSlotView>>,
+    pub(crate) lock_openers: Option<super::LockOpeners>,
     /// Spell id to its tooltip view, and the misses asked for.
     pub(crate) spell_tooltips: HashMap<u32, super::SpellTooltipView>,
     pub(crate) spell_tooltip_asks: HashSet<u32>,
@@ -1677,6 +1682,8 @@ impl Model {
             random_properties: HashMap::new(),
             item_stat_asks: HashSet::new(),
             player_req: PlayerReqState::default(),
+            lock_rows: HashMap::new(),
+            lock_openers: None,
             spell_tooltips: HashMap::new(),
             spell_tooltip_asks: HashSet::new(),
             pet_spell_tooltips: HashMap::new(),
