@@ -406,6 +406,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
             creator: None,
             flags: 0,
             enchants: Vec::new(),
+            spell_0: false,
         },
     );
     s.set_container(

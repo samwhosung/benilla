@@ -123,6 +123,20 @@ impl ItemInfo {
         self.spell_charges_0 != 0 && self.spell_charges_0 != -1
     }
 
+    /// The reference's `template+0x11c != 0`: block 0 names a spell, of any trigger. The worn-item
+    /// cooldown getter runs no query without one (`0x4c8b47`).
+    pub fn has_spell_0(&self) -> bool {
+        self.spells.iter().any(|s| s.index == 0)
+    }
+
+    /// The depleted-charge gate: block 0 carries charges (`template+0x144 != 0`, -1 unlimited
+    /// included) and the instance's `ITEM_FIELD_SPELL_CHARGES[0]` is 0. The tooltip setters and the
+    /// cooldown getters then skip the cooldown query (`0x5347e3`, `0x53318a`, `0x4f9a48`,
+    /// `0x4c8b55`).
+    pub fn charges_depleted(&self, charges_left: i32) -> bool {
+        self.spell_charges_0 != 0 && charges_left == 0
+    }
+
     /// The first ON_USE spell's block ordinal, the third byte of `CMSG_USE_ITEM`; usually 0, but
     /// an item with an ON_EQUIP block 0 has its on-use in a later block.
     pub fn use_spell_index(&self) -> Option<u8> {

@@ -376,6 +376,7 @@ mod tests {
             equip_slots: vec![1],
             creator: None,
             enchants: Vec::new(),
+            spell_0: false,
         });
         slots[11] = Some(InvSlotView {
             duration_ms: None,
@@ -399,6 +400,7 @@ mod tests {
             equip_slots: vec![11, 12], // either finger: the doll-to-doll swap
             creator: None,
             enchants: Vec::new(),
+            spell_0: false,
         });
         slots[19] = Some(InvSlotView {
             duration_ms: None,
@@ -422,6 +424,7 @@ mod tests {
             equip_slots: vec![19],
             creator: None,
             enchants: Vec::new(),
+            spell_0: false,
         });
         slots
     }
@@ -455,6 +458,7 @@ mod tests {
                 creator: None,
                 flags: 0,
                 enchants: Vec::new(),
+                spell_0: false,
             },
         );
         ContainerState {
@@ -612,6 +616,7 @@ mod tests {
             equip_slots: vec![20, 21, 22, 23],
             creator: None,
             enchants: Vec::new(),
+            spell_0: false,
         });
         s.set_inventory_slots(slots);
 
@@ -657,6 +662,7 @@ mod tests {
                 creator: None,
                 flags: 0,
                 enchants: Vec::new(),
+                spell_0: false,
             },
         );
         s.set_container(

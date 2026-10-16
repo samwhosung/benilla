@@ -85,6 +85,7 @@ fn seed_items(s: &mut UiScript) {
         equip_slots: vec![1],
         creator: None,
         enchants: Vec::new(),
+        spell_0: false,
     });
     s.set_inventory_slots(inv);
     s.set_item_template(
@@ -140,6 +141,7 @@ fn seed_items(s: &mut UiScript) {
             creator: None,
             flags: 0,
             enchants: Vec::new(),
+            spell_0: false,
         },
     );
     s.set_container(
@@ -213,6 +215,7 @@ fn doll_hover_renders_the_live_instance() {
         equip_slots: vec![1],
         creator: None,
         enchants: Vec::new(),
+        spell_0: false,
     });
     s.set_inventory_slots(inv);
     s.set_item_template(

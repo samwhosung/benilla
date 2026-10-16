@@ -1231,6 +1231,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             creator: None,
             flags: 0,
             enchants: Vec::new(),
+            spell_0: false,
         },
     );
     s.set_container(

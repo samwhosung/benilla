@@ -1032,6 +1032,7 @@ mod tests {
                 creator: None,
                 flags: 0,
                 enchants: Vec::new(),
+                spell_0: false,
             },
         );
         crate::script::container::ContainerState {

@@ -466,7 +466,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     object: unit.eq_ignore_ascii_case("player"),
                                     block_lock_id: 0,
                                     // The player's own item answers the cooldown query
-                                    // (`0x5331ec`); an inspected record has none.
+                                    // (`0x5331ec`), unless it is charged and spent
+                                    // (`0x53318a`-`0x53319b`, the feed's `None`); an inspected
+                                    // record has none.
                                     cooldown_ms: if unit.eq_ignore_ascii_case("player") {
                                         super::tooltip_spell::live_remaining_ms(
                                             model.inv_slot_cooldown(slot),
@@ -555,7 +557,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 {
                     // `0x534620` takes the p6=1 leg iff the cooldown query `0x6e2ed0` reports
                     // enable, start and duration all non-zero; that boolean is the inverse of the
-                    // openable gate. `hasCooldown` is the builder's own return.
+                    // openable gate. `hasCooldown` is the builder's own return. A charged
+                    // template whose copy has no charge left skips the query for the p6=0 leg
+                    // (`0x5347e3`-`0x5347f4`); the feed leaves such a slot's cooldown `None`.
                     Some(s) => {
                         let has_cd = s
                             .cooldown

@@ -198,6 +198,9 @@ pub struct InvSlotView {
     pub occupied_seats: Option<u32>,
     /// The on-use spell the dispatcher reads (`0x5d8c80`), 0 for none or while unresolved.
     pub use_spell: u32,
+    /// The template's block 0 names a spell (`+0x11c`, any trigger): `GetInventoryItemCooldown`
+    /// runs no query without one (`0x4c8b47`).
+    pub spell_0: bool,
     /// The arm `UseInventoryItem` takes in the dispatcher, with no equip fork; `link` is set once
     /// the template is cached, which the dispatcher needs (`0x5d8d5c`).
     pub use_fork: super::container::UseFork,
@@ -531,6 +534,7 @@ impl InvSlotView {
             bonding: slot.bonding,
             occupied_seats: slot.occupied_seats,
             use_spell: slot.use_spell,
+            spell_0: slot.spell_0,
             link: slot.link.clone(),
             guid: slot.guid,
             creator: slot.creator.clone(),
@@ -882,13 +886,45 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInventoryItemCooldown(unit, slot) → (start, duration, enable). Not fed: with no
-    // equipped-item cooldown source it answers `(0, 0, 1)`, no cooldown, as the container verb
-    // does; stock calls it on every slot update (`PaperDollFrame.lua:691`).
+    // The reference's verbatim strings (`0x848a74`, `0x848a40`): arg 1 neither number nor string,
+    // arg 2 not a number or not a whitelisted slot.
+    const USAGE_GET_INVENTORY_ITEM_COOLDOWN: &str = "Usage: GetInventoryItemCooldown(unit, slot)";
+    const INVALID_SLOT_GET_INVENTORY_ITEM_COOLDOWN: &str =
+        "Invalid inventory slot in GetInventoryItemCooldown";
+    // GetInventoryItemCooldown(unit, slot) (`0x4c8a60`) → (start, duration, enable) on the
+    // `GetTime` clock, three zeros for every case but one (`0x4c8bdf`): slot -1 (the ammo leg), a
+    // unit that is not the active player (a player in range passes `0x4944a0`, but only the active
+    // player's table holds items, `0x6228a0`), an empty slot, a template with no block-0 spell
+    // (`+0x11c`, `0x4c8b47`) and a charged one with none left (`0x4c8b55`-`0x4c8b6a`). The rest
+    // push the item query `0x6e2ed0`, scaled by 0.001 (`0x4c8b9e`, `0x4c8bbd`), with its enable
+    // as it is.
     g.set(
         "GetInventoryItemCooldown",
-        lua.create_function(|_, (_token, _slot): (Option<String>, i64)| {
-            Ok((0.0f64, 0.0f64, 1i64))
+        lua.create_function(|lua, (unit, slot): (Value, Value)| {
+            let token =
+                super::binding_abi::string_arg(lua, unit, USAGE_GET_INVENTORY_ITEM_COOLDOWN)?;
+            let slot0 = super::binding_abi::number_arg(
+                lua,
+                slot,
+                INVALID_SLOT_GET_INVENTORY_ITEM_COOLDOWN,
+            )?
+            .wrapping_sub(1);
+            if !inventory_slot_reader_accepts(slot0) {
+                return Err(mlua::Error::RuntimeError(
+                    INVALID_SLOT_GET_INVENTORY_ITEM_COOLDOWN.into(),
+                ));
+            }
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let live = usize::try_from(slot0 + 1).ok();
+            let answer = live
+                .filter(|_| slot0 != -1 && token.eq_ignore_ascii_case("player"))
+                .filter(|&live| {
+                    model
+                        .inv_slot("player", live)
+                        .is_some_and(|v| v.item_id != 0 && v.spell_0)
+                })
+                .and_then(|live| model.inv_slot_cooldown(live));
+            Ok(super::container::item_cooldown_triple(answer, model.now))
         })?,
     )?;
 
