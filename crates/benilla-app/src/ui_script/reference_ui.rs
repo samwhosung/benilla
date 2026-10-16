@@ -1114,7 +1114,7 @@ mod tests {
                 .collect()
         };
 
-        // Every function each chain entry and its same-name `.lua` define.
+        // Every function each chain entry and the files it loads define.
         let toc = &super::super::manifest::manifest_files();
         // Load order: each manifest entry at its line, ours included (`ours_wins` reads both
         // sides), then each reached addon's files after everything.
@@ -1136,21 +1136,13 @@ mod tests {
         let mut chain_frames: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for entry in &chain {
-            let leaf = entry.rsplit(['\\', '/']).next().unwrap_or(entry);
-            let mut cands = vec![entry.clone()];
-            if let Some(stem) = entry.strip_suffix(".xml") {
-                cands.push(format!("{stem}.lua"));
-            }
-            for cand in cands {
-                let Some(b) = super::read(&cand.replace('\\', "/")) else {
-                    continue;
-                };
-                let text = String::from_utf8_lossy(&b).into_owned();
+            // Each definition is credited to the file it is in, which for `ActionBarFrame.xml`
+            // is `ActionButton.lua`, not the entry.
+            for (path, text) in entry_files(entry) {
+                let file = path.rsplit('/').next().unwrap_or(&path).to_string();
                 for name in defined_in(&text) {
                     let at = pos[entry];
-                    chain_home.entry(name).or_insert_with(|| {
-                        (cand.rsplit('/').next().unwrap_or(leaf).to_string(), at)
-                    });
+                    chain_home.entry(name).or_insert_with(|| (file.clone(), at));
                 }
             }
         }
@@ -1184,18 +1176,16 @@ mod tests {
             if line.is_empty() || line.starts_with('#') || !line.ends_with(".xml") {
                 continue;
             }
-            for cand in [line.to_string(), format!("{}.lua", &line[..line.len() - 4])] {
-                let Some(b) = super::read(&format!("Interface/FrameXML/{cand}")) else {
-                    continue;
-                };
-                let text = String::from_utf8_lossy(&b).into_owned();
-                if cand.ends_with(".xml") {
+            // A window's frames belong to its toc line; a function belongs to the file it is in.
+            for (path, text) in entry_files(&format!("Interface\\FrameXML\\{line}")) {
+                let file = path.rsplit('/').next().unwrap_or(&path).to_string();
+                if path.ends_with(".xml") {
                     for name in declares(&text) {
                         chain_frames.entry(name).or_insert_with(|| line.to_string());
                     }
                 }
                 for (name, n) in params_in(&text) {
-                    ref_arity.entry(name).or_insert((n, cand.clone()));
+                    ref_arity.entry(name).or_insert((n, file.clone()));
                 }
             }
         }
@@ -1778,7 +1768,18 @@ mod tests {
         out
     }
 
+    /// The text of every file a toc entry loads, itself included.
     fn entry_sources(entry: &str) -> Vec<String> {
+        entry_files(entry)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
+    }
+
+    /// Every file a toc entry loads, itself first and the rest in the order the walk reaches them:
+    /// each `<Script file=>` and `<Include file=>`, transitively, as `(path, text)` with `/`
+    /// separators.
+    fn entry_files(entry: &str) -> Vec<(String, String)> {
         fn read_one(path: &str, chain: bool) -> Option<String> {
             if chain {
                 let bytes = super::read(&path.replace('\\', "/"))?;
@@ -1821,7 +1822,7 @@ mod tests {
                     queue.push(next);
                 }
             }
-            out.push(text);
+            out.push((path, text));
         }
         out
     }
