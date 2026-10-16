@@ -385,7 +385,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_quest_log
 
-- An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/ui_quest_log.rs:174`](../crates/benilla-app/src/ui_quest_log.rs#L174))
+- An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/ui_quest_log.rs:344`](../crates/benilla-app/src/ui_quest_log.rs#L344))
 
 #### ui_quest_share
 
