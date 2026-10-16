@@ -468,12 +468,12 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### model
 
-- A card authored facing away from the viewer is lit on the face it presents, because the reference shades it inverted and camera-dependent. ([`src/model.rs:117`](../crates/benilla-assets/src/model.rs#L117))
+- A card authored facing away from the viewer is lit on the face it presents, because the reference shades it inverted and camera-dependent. ([`src/model.rs:129`](../crates/benilla-assets/src/model.rs#L129))
 
 #### shaders
 
 - This is the `specular`/`pixelShaders` = 1 leg the reference install runs; both CVars (`0x6886a0`/`0x688712`) default to 0, where water has no program, no specular, a plain ADD combine and no blend. ([`src/shaders/liquid.wgsl:18`](../crates/benilla-assets/src/shaders/liquid.wgsl#L18))
-- `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0. `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T` back to 0.0 together. ([`src/shaders/wow_model.wgsl:591`](../crates/benilla-assets/src/shaders/wow_model.wgsl#L591))
+- `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0. `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T` back to 0.0 together. ([`src/shaders/wow_model.wgsl:655`](../crates/benilla-assets/src/shaders/wow_model.wgsl#L655))
 
 #### wmo
 
@@ -517,9 +517,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### models
 
 - The fraction is clamped to `[0, 1]`; the reference extrapolates, which for a window whose brackets miss the band can push a fix16 factor negative and cull the batch on a quirk. ([`src/models/key_anim.rs:130`](../crates/benilla-formats/src/models/key_anim.rs#L130))
-- Owners past the ceiling (Maraudon's waterfalls, the glue screens) keep the interleave with their emitters, because a bias past a 200-yard owner would jump every transparent surface in the zone. ([`src/models/m2_batches.rs:658`](../crates/benilla-formats/src/models/m2_batches.rs#L658))
-- The fx lane redraws them as projected decals (`ground_fx`) so they drape the terrain. ([`src/models/types.rs:358`](../crates/benilla-formats/src/models/types.rs#L358))
-- Consumers light such a card off the side it presents, because the reference's shading of it is inverted and follows the camera. ([`src/models/types.rs:427`](../crates/benilla-formats/src/models/types.rs#L427))
+- Owners past the ceiling (Maraudon's waterfalls, the glue screens) keep the interleave with their emitters, because a bias past a 200-yard owner would jump every transparent surface in the zone. ([`src/models/m2_batches.rs:680`](../crates/benilla-formats/src/models/m2_batches.rs#L680))
+- The fx lane redraws them as projected decals (`ground_fx`) so they drape the terrain. ([`src/models/types.rs:380`](../crates/benilla-formats/src/models/types.rs#L380))
+- Consumers light such a card off the side it presents, because the reference's shading of it is inverted and follows the camera. ([`src/models/types.rs:450`](../crates/benilla-formats/src/models/types.rs#L450))
 - The UV comes from the model-space position, not each surface's own `(i, j)`, because the two agree on cell-aligned surfaces and the position never seams where they are not. ([`src/models/wmo/group.rs:19`](../crates/benilla-formats/src/models/wmo/group.rs#L19))
 
 #### particles
