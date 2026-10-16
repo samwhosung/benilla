@@ -7,6 +7,25 @@ use bevy::prelude::*;
 use super::roster::{send_pick, Roster};
 use crate::client_state::ClientState;
 use crate::net::{CharListMessage, CharPick};
+use crate::ui_script::glue::{StockGlueProbe, StockVm};
+
+/// Enter the world again as the roster's first character, the way a player does on the screens
+/// that stand. On the stock screens that is the row selected and Enter World pressed
+/// (`CharacterSelect.lua`'s `CharacterSelectButton_OnDoubleClick`), whose `EnterWorld` reaches the
+/// glue manager's `CGlueMgr::EnterWorld` (`0x46b500`): `lastCharacterIndex` written and saved,
+/// state 8, then the pick. The native screens' Enter World is the pick itself.
+pub(crate) fn reenter_first(stock: Option<StockVm>, roster: &mut Roster, pick: &CharPick) {
+    match stock {
+        Some(vm) => {
+            vm.press("CharacterSelect_SelectCharacter(1) CharSelectEnterWorldButton:Click()")
+        }
+        None => {
+            if let Some(guid) = roster.chars.first().map(|c| c.guid) {
+                send_pick(roster, pick, guid);
+            }
+        }
+    }
+}
 
 /// The logout smoke (`WOW_LOGOUT_SMOKE=1`, with `WOW_CHAR`): once in the world, `/logout`, return
 /// to CharSelect, wait for the roster the logout brings on the link the world was entered by,
@@ -25,6 +44,7 @@ pub(super) fn debug_logout_smoke(
     mut close: MessageWriter<bevy::window::WindowCloseRequested>,
     windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mut lists: MessageReader<CharListMessage>,
+    stock: StockGlueProbe,
     // The world session's number at the entry, and whether a roster has come since the logout.
     mut link: Local<Option<u64>>,
     mut relisted: Local<bool>,
@@ -70,16 +90,22 @@ pub(super) fn debug_logout_smoke(
         }
         // Residency is read here, not on arrival: `release_world` runs about 150 ms after the
         // state edge, on the world-live falling edge.
-        // The roster the logout brings, not the one that survived it, decides the re-entry.
-        3 if now - *mark > 4.0 && *relisted => {
-            match roster.chars.first().map(|c| (c.guid, c.name.clone())) {
-                Some((guid, name)) => {
+        // The roster the logout brings, not the one that survived it, decides the re-entry. On
+        // the stock screens, once their select screen stands to press.
+        3 if now - *mark > 4.0
+            && *relisted
+            && stock
+                .vm()
+                .is_none_or(|vm| vm.frame_visible("CharacterSelect")) =>
+        {
+            match roster.chars.first().map(|c| c.name.clone()) {
+                Some(name) => {
                     info!(
                         "logout-smoke: {} tiles resident after the release (must be 0)",
                         streamer.residency().1
                     );
                     info!("logout-smoke: re-entering the world as {name}");
-                    send_pick(&mut roster, &pick, guid);
+                    reenter_first(stock.vm(), &mut roster, &pick);
                     (*phase, *mark) = (4, now);
                 }
                 None => {

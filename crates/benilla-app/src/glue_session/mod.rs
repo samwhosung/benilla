@@ -4,7 +4,7 @@
 //! stand.
 
 pub(crate) mod edges;
-mod logout_smoke;
+pub(crate) mod logout_smoke;
 pub(crate) mod realm;
 pub(crate) mod roster;
 
@@ -25,7 +25,11 @@ impl Plugin for GlueSessionPlugin {
             )
             .add_systems(
                 Update,
-                logout_smoke::debug_logout_smoke.after(crate::player::ControlRestore),
+                logout_smoke::debug_logout_smoke
+                    .after(crate::player::ControlRestore)
+                    // After the UI tick: on the stock screens it reads their frames and presses
+                    // their Enter World.
+                    .after(crate::ui_script::UiInput),
             );
     }
 }

@@ -4285,6 +4285,45 @@ fn the_stock_enter_world_logs_in_and_the_glue_leaves_with_the_screen() {
     assert_eq!(mgr(&app).state, ScreenState::Idle);
 }
 
+/// The logout smoke's re-entry on the stock screens is a player's: the first row selected and
+/// Enter World pressed, so it goes through the manager's `EnterWorld` (`0x46b500`) and state 8,
+/// not around it with a bare pick.
+#[test]
+fn the_logout_smokes_stock_reentry_goes_through_enter_world() {
+    use bevy::ecs::system::RunSystemOnce;
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("smoke-reentry");
+    let (mut app, world) = entry_app(false);
+    // Off the first row, so the re-entry's own selection shows.
+    vm(&app).run("CharacterSelect_SelectCharacter(3)").unwrap();
+    app.world_mut()
+        .run_system_once(
+            |stock: crate::ui_script::glue::StockGlueProbe,
+             mut roster: ResMut<crate::glue_session::roster::Roster>,
+             pick: Res<crate::net::CharPick>| {
+                crate::glue_session::logout_smoke::reenter_first(stock.vm(), &mut roster, &pick);
+            },
+        )
+        .unwrap();
+    app.update();
+    assert_eq!(
+        mgr(&app).state,
+        ScreenState::EnterWorld,
+        "the re-entry is the stock Enter World, not a pick behind the manager's back"
+    );
+    until_entry(&mut app, "the world", |app| {
+        client_state(app) == ClientState::InWorld
+    });
+    assert_eq!(
+        world.bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN),
+        [0x11u64.to_le_bytes().to_vec()],
+        "the first row, Alpha"
+    );
+}
+
 /// A refused login (vmangos's result 1) that lands once the client is in the world comes back to
 /// the stock select in state 9, on a glue rebuilt with the link and the server carried over: the
 /// screen's own list ask sends nothing (`0x46b880`), state 9's frame opens `OKAY` with
