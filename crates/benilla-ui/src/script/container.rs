@@ -75,6 +75,11 @@ pub struct ContainerSlot {
     /// The `ITEM_FIELD_GIFTCREATOR` name for a wrapped item's `ITEM_WRAPPED_BY` line, once
     /// resolved; only a wrapped item asks for it, as the gift arm does (`0x52e29d`).
     pub gift_creator: Option<String>,
+    /// The `ITEM_FIELD_CREATOR` guid, 0 for none: with no [`Self::creator`] yet, the name the
+    /// tooltip waits for.
+    pub creator_guid: u64,
+    /// The `ITEM_FIELD_GIFTCREATOR` guid, 0 for none, as [`Self::creator_guid`].
+    pub gift_creator_guid: u64,
     /// `ITEM_FIELD_FLAGS`; the tooltip reads UNLOCKED `0x4` and WRAPPED `0x8`.
     pub flags: u32,
     /// Bound at runtime (`0x5da2c0`): `ITEM_FIELD_FLAGS & 1`, or an enchant whose
@@ -1063,6 +1068,8 @@ mod tests {
                 readable: false,
                 creator: None,
                 gift_creator: None,
+                creator_guid: 0,
+                gift_creator_guid: 0,
                 flags: 0,
                 enchants: Vec::new(),
             },
@@ -1762,6 +1769,8 @@ mod tests {
                 readable: false,
                 creator: None,
                 gift_creator: None,
+                creator_guid: 0,
+                gift_creator_guid: 0,
                 flags: 0,
                 enchants: Vec::new(),
             },

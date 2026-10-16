@@ -46,6 +46,9 @@ pub struct TradeSlotItem {
     /// side, the block's `+0x418` on the partner's, `0x534574`); `None` while unresolved or when
     /// the guid is 0, which prints no `ITEM_WRAPPED_BY` line.
     pub gift_creator: Option<String>,
+    /// The giver's guid, 0 for none: with no [`Self::gift_creator`] yet, the name the tooltip
+    /// waits for.
+    pub gift_creator_guid: u64,
     /// Slot 7 only: the name of the spell being cast on the item, which stock shows in green
     /// (`TradeFrame.lua:62`); `None` on every other slot and while nothing is cast.
     pub enchantment: Option<String>,
@@ -487,6 +490,7 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             object_flags: Some(s.flags),
             wrapped: s.flags & 0x8 != 0,
             gift_creator: s.gift_creator.clone(),
+            gift_creator_guid: s.gift_creator_guid,
             enchantment: None,
             link: s.link.clone(),
         })
@@ -772,6 +776,7 @@ mod tests {
             object_flags: None,
             wrapped: false,
             gift_creator: None,
+            gift_creator_guid: 0,
             enchantment: None,
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
@@ -818,6 +823,7 @@ mod tests {
             object_flags: None,
             wrapped: false,
             gift_creator: None,
+            gift_creator_guid: 0,
             enchantment: None,
             link: None,
         });

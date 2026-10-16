@@ -77,27 +77,42 @@ fn fixture() -> UiScript {
         ..Default::default()
     });
     s.set_trade(Some(trade));
-    s.set_container(0, Some(backpack(None)));
+    s.set_container(0, Some(backpack((SMITH, None))));
     s
 }
 
-/// The backpack with the copper bar in slot 1, made by `creator`.
-fn backpack(creator: Option<&str>) -> ContainerState {
+const SMITH: u64 = 0x5;
+const CHARTER: u32 = 5863;
+
+/// One backpack slot's item object, made by `creator` (a guid, and its name once resolved).
+fn held(item_id: u32, name: &str, guid: u64, creator: (u64, Option<&str>)) -> ContainerSlot {
+    ContainerSlot {
+        item_id,
+        guid,
+        count: 1,
+        quality: Some(1),
+        link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[{name}]|h|r")),
+        creator_guid: creator.0,
+        creator: creator.1.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+/// The backpack: the copper bar in slot 1, made by `creator`, and a second, uncrafted bar in
+/// slot 2.
+fn backpack(creator: (u64, Option<&str>)) -> ContainerState {
     ContainerState {
         name: Some("Backpack".into()),
         num_slots: 16,
-        slots: HashMap::from([(
-            1,
-            ContainerSlot {
-                item_id: BAR,
-                count: 1,
-                quality: Some(1),
-                link: Some(format!("|cffffffff|Hitem:{BAR}:0:0:0|h[Copper Bar]|h|r")),
-                creator: creator.map(str::to_string),
-                ..Default::default()
-            },
-        )]),
+        slots: HashMap::from([
+            (1, held(BAR, "Copper Bar", 0x4000_0000_0000_0001, creator)),
+            (2, held(BAR, "Copper Bar", 0x4000_0000_0000_0002, (0, None))),
+        ]),
     }
+}
+
+fn cleared(s: &mut UiScript) -> i64 {
+    s.eval("return cleared").unwrap()
 }
 
 fn key_arrives(s: &mut UiScript) {
@@ -144,7 +159,7 @@ fn a_made_by_name_that_arrives_adds_its_line() {
     s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)")
         .unwrap();
     assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
-    s.set_container(0, Some(backpack(Some("Smith"))));
+    s.set_container(0, Some(backpack((SMITH, Some("Smith")))));
     s.tick(0.1);
     assert_eq!(
         lines(&mut s, "TT"),
@@ -239,5 +254,150 @@ fn a_tooltip_showing_another_item_by_then_rebuilds_that_item() {
     key_arrives(&mut s);
     assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
     assert_eq!(s.eval::<i64>("return cleared").unwrap(), cleared + 1);
+    assert!(s.take_errors().is_empty());
+}
+
+/// The name cache's answer outlives the build that asked, as every ask does: a plate showing
+/// another item by then rebuilds that item, from scratch.
+#[test]
+fn a_late_name_rebuilds_the_item_the_plate_shows_by_then() {
+    let mut s = fixture();
+    s.run(
+        "TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)
+         TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 2) TT:AddLine('addon line')",
+    )
+    .unwrap();
+    let before = cleared(&mut s);
+    s.set_container(0, Some(backpack((SMITH, Some("Smith")))));
+    s.tick(0.1);
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    assert_eq!(cleared(&mut s), before + 1);
+    assert!(s.take_errors().is_empty());
+}
+
+/// An item with no creator asks the name cache nothing (`0x52e1eb`), so the same entry turning up
+/// crafted later rebuilds nothing.
+#[test]
+fn an_item_with_no_creator_waits_for_no_name() {
+    let mut s = fixture();
+    s.set_container(0, Some(backpack((0, None))));
+    s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)")
+        .unwrap();
+    let before = cleared(&mut s);
+    s.set_container(0, Some(backpack((SMITH, Some("Smith")))));
+    s.tick(0.1);
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    assert_eq!(cleared(&mut s), before);
+    assert!(s.take_errors().is_empty());
+}
+
+/// A charter's petition record answers the petition cache (`0x52b92f`): its title and owner lines
+/// appear in place.
+#[test]
+fn a_charters_petition_answer_adds_its_lines() {
+    let mut s = fixture();
+    s.set_item_template(
+        CHARTER,
+        ItemTemplateView {
+            name: "Charter".into(),
+            quality: 1,
+            flags: 0x2000,
+            ..Default::default()
+        },
+    );
+    let charter = |petition: Option<PetitionSlotView>| ContainerState {
+        name: Some("Backpack".into()),
+        num_slots: 16,
+        slots: HashMap::from([(
+            1,
+            ContainerSlot {
+                petition,
+                ..held(CHARTER, "Charter", 0x4000_0000_0000_0009, (0, None))
+            },
+        )]),
+    };
+    s.set_container(0, Some(charter(None)));
+    s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)")
+        .unwrap();
+    assert_eq!(lines(&mut s, "TT"), ["Charter", "[ITEM_SIGNABLE]"]);
+    s.set_container(
+        0,
+        Some(charter(Some(PetitionSlotView {
+            is_charter: false,
+            title: "Pact".into(),
+            owner: Some("Bob".into()),
+        }))),
+    );
+    s.tick(0.1);
+    assert_eq!(
+        lines(&mut s, "TT"),
+        [
+            "Charter",
+            "[PETITION_TITLE Pact]",
+            "[PETITION_CREATOR Bob]",
+            "[ITEM_SIGNABLE]"
+        ]
+    );
+    assert!(s.take_errors().is_empty());
+}
+
+/// A compare's ask takes the tooltip as its cookie with no dedupe (`0x5361d7` pushes 0), so two
+/// asks are two callback nodes: the answer rebuilds the item the plate keeps twice, each with its
+/// own clear.
+#[test]
+fn each_compare_ask_rebuilds_the_kept_item_on_the_answer() {
+    const OFFER: u32 = 7777;
+    let mut s = fixture();
+    s.set_merchant(Some(MerchantState {
+        items: vec![MerchantItem {
+            item_id: OFFER,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    s.run(
+        "TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 2) TT:AddLine('addon line')
+         assert(TT:SetMerchantCompareItem(1) == nil)
+         assert(TT:SetMerchantCompareItem(1) == nil)",
+    )
+    .unwrap();
+    let before = cleared(&mut s);
+    s.set_item_template(
+        OFFER,
+        ItemTemplateView {
+            name: "Offer".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    s.tick(0.1);
+    // The vendor is open: the bar's price line is the builder's own (`0x52e4a3`).
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar", "[ITEM_UNSELLABLE]"]);
+    assert_eq!(cleared(&mut s), before + 2);
+    assert!(s.take_errors().is_empty());
+}
+
+/// `SetAction`'s item leg keeps the player's own object like any build (`0x5324d5`): its maker's
+/// late name rebuilds it with the line.
+#[test]
+fn an_action_items_late_maker_name_adds_its_line() {
+    let mut s = fixture();
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0x80,
+            action: BAR,
+            ..Default::default()
+        }),
+    );
+    s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetAction(1)")
+        .unwrap();
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    s.set_container(0, Some(backpack((SMITH, Some("Smith")))));
+    s.tick(0.1);
+    assert_eq!(
+        lines(&mut s, "TT"),
+        ["Copper Bar", "|cff00ff00[CREATED_BY Smith]|r"]
+    );
     assert!(s.take_errors().is_empty());
 }

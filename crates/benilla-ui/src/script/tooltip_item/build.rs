@@ -11,8 +11,8 @@
 //!
 //! benilla's caches answer by push: a template through [`UiScript::set_item_template`], a set and
 //! its members' names through [`UiScript::set_item_set`], and a name or a petition inside the
-//! source's own view, which the app re-pushes once it resolves. [`answer_item_caches`] runs once a
-//! tick and settles every wait at once.
+//! views that carry its guid, which the app re-pushes once it resolves. [`answer_item_caches`]
+//! settles the waits once a tick, one rebuild per answered ask.
 //!
 //! [`UiScript::set_item_template`]: crate::script::UiScript::set_item_template
 //! [`UiScript::set_item_set`]: crate::script::UiScript::set_item_set
@@ -39,10 +39,6 @@ pub(crate) struct ItemBuild {
     pub(in crate::script) in_flight: InFlight,
     /// `SetBagItem`'s stack, priced at an open merchant out of repair mode.
     pub(in crate::script) sell_count: Option<u32>,
-    /// The view the instance's names and petition were read from, re-read when they answer.
-    pub(in crate::script) names: Option<NameSource>,
-    /// The names and petition the last render read and lacked.
-    pub(super) lacked: Lacked,
 }
 
 impl ItemBuild {
@@ -69,115 +65,21 @@ pub(in crate::script) enum InFlight {
     View(Box<ItemTemplateView>),
 }
 
-/// The view a source read the instance's names from: benilla's name and petition caches answer
-/// inside it.
-#[derive(Clone, PartialEq)]
-pub(in crate::script) enum NameSource {
-    /// A bag slot, the cursor's numbering (`SetBagItem`, and the sell and send-mail slots).
-    Bag { bag: i64, slot: u32 },
-    /// A unit's inventory slot (`SetInventoryItem`).
-    Inventory { unit: String, slot: usize },
-    /// A trade slot, 1-based (`SetTradePlayerItem`, `SetTradeTargetItem`).
-    Trade { player_side: bool, slot: usize },
-    /// The player's own item of the entry, as the action bar finds it.
-    Owned,
-}
-
-/// The fields of a source's view that a cache fills.
-#[derive(PartialEq)]
-struct Names {
-    creator: Option<String>,
-    gift_creator: Option<String>,
-    petition: Option<crate::script::PetitionSlotView>,
-}
-
-impl NameSource {
-    /// The names the source holds now, `None` once it no longer holds the item.
-    fn read(&self, model: &Model, item_id: u32) -> Option<Names> {
-        match self {
-            NameSource::Bag { bag, slot } => model
-                .containers
-                .get(bag)
-                .and_then(|c| c.slots.get(slot))
-                .filter(|s| s.item_id == item_id)
-                .map(|s| Names {
-                    creator: s.creator.clone(),
-                    gift_creator: s.gift_creator.clone(),
-                    petition: s.petition.clone(),
-                }),
-            NameSource::Inventory { unit, slot } => model
-                .inv_slot(unit, *slot)
-                .filter(|s| s.item_id == item_id)
-                .map(|s| Names {
-                    creator: s.creator,
-                    gift_creator: s.gift_creator,
-                    petition: None,
-                }),
-            NameSource::Trade { player_side, slot } => model
-                .trade
-                .as_ref()
-                .and_then(|t| {
-                    let side = if *player_side { &t.player } else { &t.target };
-                    slot.checked_sub(1)
-                        .and_then(|n| side.slots.get(n))?
-                        .as_ref()
-                })
-                .filter(|s| s.item_id == item_id)
-                .map(|s| Names {
-                    creator: None,
-                    gift_creator: s.gift_creator.clone(),
-                    petition: None,
-                }),
-            NameSource::Owned => super::owned_instance(model, item_id).map(|i| Names {
-                creator: i.creator,
-                gift_creator: i.gift_creator,
-                petition: i.petition,
-            }),
-        }
-    }
-}
-
-/// Which of the cache-filled fields the render read and found empty: the creator for the maker
-/// line, the giver for a gift's, the petition and its owner for a charter's.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Lacked {
-    creator: bool,
-    gift_creator: bool,
-    petition: bool,
-}
-
-impl Lacked {
-    fn of(v: &ItemTemplateView, inst: &ItemInstance) -> Self {
-        let wrapped = inst.wrapped();
-        Self {
-            creator: !wrapped && inst.creator.is_none(),
-            gift_creator: wrapped && inst.gift_creator.is_none(),
-            petition: v.flags & 0x2000 != 0
-                && inst.petition.as_ref().is_none_or(|p| p.owner.is_none()),
-        }
-    }
-
-    fn any(self) -> bool {
-        self.creator || self.gift_creator || self.petition
-    }
-
-    /// A field the render lacked is there now.
-    fn answered_by(self, now: &Names) -> bool {
-        (self.creator && now.creator.is_some())
-            || (self.gift_creator && now.gift_creator.is_some())
-            || (self.petition && now.petition.as_ref().is_some_and(|p| p.owner.is_some()))
-    }
-}
-
 /// A cache a build missed, with the tooltip as the answer's cookie.
 #[derive(Clone, PartialEq)]
 pub(crate) enum CacheWait {
-    /// The item record cache (`0xc0e2a0`): the item itself, or a lock's key.
+    /// The item record cache (`0xc0e2a0`): the item itself, a lock's key, a compare's offer.
     Template(u32),
-    /// A set's view.
+    /// A set's view, which benilla's app pushes on ask.
     Set(u32),
-    /// The item-name cache (`0xc0e2dc`): a set whose members' names were not all in.
-    SetMembers { set: u32, unnamed: usize },
+    /// The item-name cache (`0xc0e2dc`): one set member still unnamed.
+    MemberName { set: u32, item: u32 },
+    /// The name cache (`0xc0e228`): a creator's or a giver's guid.
+    Name(u64),
+    /// The petition cache (`0xc0e0fc`): the charter object of this guid has no record yet.
+    Petition(u64),
+    /// The name cache, for the owner of the charter object of this guid.
+    PetitionOwner(u64),
 }
 
 impl CacheWait {
@@ -185,17 +87,101 @@ impl CacheWait {
         match *self {
             CacheWait::Template(id) => model.item_templates.contains_key(&id),
             CacheWait::Set(id) => model.item_sets.contains_key(&id),
-            CacheWait::SetMembers { set, unnamed } => model
-                .item_sets
-                .get(&set)
-                .is_some_and(|v| unnamed_members(v) < unnamed),
+            CacheWait::MemberName { set, item } => model.item_sets.get(&set).is_some_and(|v| {
+                v.members
+                    .iter()
+                    .any(|(id, name)| *id == item && name.is_some())
+            }),
+            CacheWait::Name(guid) => name_of(model, guid).is_some(),
+            CacheWait::Petition(guid) => {
+                container_object(model, guid).is_some_and(|s| s.petition.is_some())
+            }
+            CacheWait::PetitionOwner(guid) => container_object(model, guid)
+                .and_then(|s| s.petition.as_ref())
+                .is_some_and(|p| p.owner.is_some()),
         }
     }
 }
 
-/// How many of a set's members still have no name.
-pub(super) fn unnamed_members(v: &crate::script::ItemSetView) -> usize {
-    v.members.iter().filter(|(_, n)| n.is_none()).count()
+/// A name the app resolved for `guid`, read off any view that carries it as a creator or a giver.
+/// benilla's name cache lives in the app, which re-pushes those views once a name answers.
+fn name_of(model: &Model, guid: u64) -> Option<String> {
+    let of = |g: u64, name: &Option<String>| (g == guid).then(|| name.clone()).flatten();
+    let bags = model.containers.values().flat_map(|c| c.slots.values());
+    let held = bags.filter_map(|s| {
+        of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
+    });
+    let worn = model.inventory_slots.iter().flatten().filter_map(|s| {
+        of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
+    });
+    let traded = model
+        .trade
+        .iter()
+        .flat_map(|t| t.player.slots.iter().chain(t.target.slots.iter()))
+        .flatten()
+        .filter_map(|s| of(s.gift_creator_guid, &s.gift_creator));
+    held.chain(worn).chain(traded).next()
+}
+
+/// The bag slot that holds the item object `guid`, wherever it moved.
+fn container_object(model: &Model, guid: u64) -> Option<&crate::script::ContainerSlot> {
+    model
+        .containers
+        .values()
+        .flat_map(|c| c.slots.values())
+        .find(|s| s.guid == guid)
+}
+
+/// The item object `guid` as the builder reads it live (`0x52b777` finds it by guid), and its
+/// stack, wherever it is held: a bag slot or a worn one.
+fn live_object(model: &Model, guid: u64) -> Option<(ItemInstance, u32)> {
+    if let Some(s) = container_object(model, guid) {
+        return Some((super::slot_instance(s, false), s.count.max(1)));
+    }
+    model
+        .inventory_slots
+        .iter()
+        .flatten()
+        .find(|s| s.guid == guid)
+        .map(|s| (super::worn_instance(s, true), s.count.max(1)))
+}
+
+impl ItemBuild {
+    /// The inputs a rebuild runs with. The builder reads the item object live by its kept guid
+    /// (p3, `0x52e560`), and the block fields as they were kept (`+0x3d0`..`+0x440`): the open
+    /// gate's p6 and the cooldown. A name the build lacked is read as it is now.
+    ///
+    /// Deviation: an object no longer held, or a source that keeps no guid (the player's own
+    /// trade slot), rebuilds from the instance the build read, where the reference's lookup finds
+    /// no object and builds from the record and the block alone; benilla's views carry no object
+    /// to read once it is gone, and the kept instance is what the plate showed.
+    fn refreshed(mut self, model: &Model) -> Self {
+        let Some(kept) = self.inst.take() else {
+            return self;
+        };
+        let live = (kept.object && kept.guid != 0)
+            .then(|| live_object(model, kept.guid))
+            .flatten();
+        let mut inst = match live {
+            Some((mut inst, count)) => {
+                inst.openable_source = kept.openable_source;
+                inst.cooldown_ms = kept.cooldown_ms;
+                inst.block_lock_id = kept.block_lock_id;
+                inst.block_wrapped = kept.block_wrapped;
+                self.sell_count = self.sell_count.map(|_| count);
+                inst
+            }
+            None => kept,
+        };
+        if inst.creator.is_none() && inst.creator_guid != 0 {
+            inst.creator = name_of(model, inst.creator_guid);
+        }
+        if inst.gift_creator.is_none() && inst.gift_creator_guid != 0 {
+            inst.gift_creator = name_of(model, inst.gift_creator_guid);
+        }
+        self.inst = Some(inst);
+        self
+    }
 }
 
 /// Records a miss of the build under way; [`build_item`] hands it to its tooltip.
@@ -203,15 +189,18 @@ pub(super) fn note_miss(model: &mut Model, wait: CacheWait) {
     model.item_cache_misses.push(wait);
 }
 
-/// Hands the misses recorded since the last call to the tooltip `h` as its waits.
-pub(super) fn keep_misses(model: &mut Model, h: FrameHandle) {
+/// Hands the misses recorded since the last call to the tooltip `h` as its waits, one callback
+/// node each. The builder's asks pass the dedupe flag, so an ask already waiting with this cookie
+/// adds none (`0x55bbb3`..`0x55bbe3`); the compare asks pass 0 (`0x5361d7`, `0x535f39`), so each
+/// stacks another, and every node runs on the answer.
+pub(super) fn keep_misses(model: &mut Model, h: FrameHandle, dedupe: bool) {
     let misses = std::mem::take(&mut model.item_cache_misses);
     if misses.is_empty() {
         return;
     }
     let waits = model.item_cache_waits.entry(h).or_default();
     for m in misses {
-        if !waits.contains(&m) {
+        if !dedupe || !waits.contains(&m) {
             waits.push(m);
         }
     }
@@ -224,7 +213,7 @@ pub(in crate::script) fn build_item(
     lua: &Lua,
     this: &Table,
     h: FrameHandle,
-    mut build: ItemBuild,
+    build: ItemBuild,
 ) -> mlua::Result<bool> {
     clear(lua, h);
     // What an earlier render outside a build noted is no miss of this one.
@@ -234,14 +223,7 @@ pub(in crate::script) fn build_item(
         .clear();
     let view = view_of(lua, build.item_id);
     let live = match &view {
-        Some(v) => {
-            let live = render::render_view_flagged(lua, this, v, build.flags, build.inst.as_ref())?;
-            build.lacked = match (&build.names, &build.inst) {
-                (Some(_), Some(inst)) => Lacked::of(v, inst),
-                _ => Lacked::default(),
-            };
-            live
-        }
+        Some(v) => render::render_view_flagged(lua, this, v, build.flags, build.inst.as_ref())?,
         None => {
             match &build.in_flight {
                 InFlight::Nothing => {}
@@ -264,7 +246,7 @@ pub(in crate::script) fn build_item(
     let sell = build.sell_count.zip(view.as_ref().map(|v| v.sell_price));
     {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        keep_misses(&mut model, h);
+        keep_misses(&mut model, h, true);
         model.item_builds.insert(h, build);
     }
     // The sell price, after the lines (`0x52e376`): `OnTooltipAddMoney` with the stack's price,
@@ -287,68 +269,50 @@ pub(in crate::script) fn build_item(
 }
 
 /// `CGTooltip::OnCacheAnswer` (`0x52e530`) for every answer pushed since the last tick: each
-/// tooltip a cache answered rebuilds from the inputs it keeps, once however many answered. One
-/// that keeps none takes the answer and stays as it is.
+/// callback node an answer settles rebuilds its tooltip from the inputs it keeps then, so two
+/// answers are two rebuilds. A tooltip that keeps none takes the answer and stays as it is.
 pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
-    let due: Vec<(u32, FrameHandle)> = {
+    let due: Vec<(u32, FrameHandle, usize)> = {
         let mut guard = lua.app_data_mut::<Model>().expect("model app_data");
         let model = &mut *guard;
-        if model.item_cache_waits.is_empty() && model.item_builds.is_empty() {
+        if model.item_cache_waits.is_empty() {
             return Vec::new();
         }
-        let mut tips: Vec<FrameHandle> = model.item_cache_waits.keys().copied().collect();
-        tips.extend(
-            model
-                .item_builds
-                .iter()
-                .filter(|(h, b)| b.lacked.any() && !model.item_cache_waits.contains_key(h))
-                .map(|(h, _)| *h),
-        );
+        let tips: Vec<FrameHandle> = model.item_cache_waits.keys().copied().collect();
         let mut due = Vec::new();
         for h in tips {
-            let mut answered = false;
-            if let Some(mut waits) = model.item_cache_waits.remove(&h) {
-                let before = waits.len();
-                waits.retain(|w| !w.answered(model));
-                answered = waits.len() != before;
-                if !waits.is_empty() {
-                    model.item_cache_waits.insert(h, waits);
-                }
-            }
-            let Some(build) = model.item_builds.get(&h) else {
+            let Some(mut waits) = model.item_cache_waits.remove(&h) else {
                 continue;
             };
-            let now = build
-                .lacked
-                .any()
-                .then(|| build.names.as_ref()?.read(model, build.item_id))
-                .flatten();
-            answered |= now.as_ref().is_some_and(|n| build.lacked.answered_by(n));
-            if !answered {
-                continue;
+            let before = waits.len();
+            waits.retain(|w| !w.answered(model));
+            let answers = before - waits.len();
+            if !waits.is_empty() {
+                model.item_cache_waits.insert(h, waits);
             }
-            // The rebuild reads the names the source holds now.
-            if let Some(now) = now {
-                if let Some(inst) = model.item_builds.get_mut(&h).and_then(|b| b.inst.as_mut()) {
-                    inst.creator = now.creator;
-                    inst.gift_creator = now.gift_creator;
-                    inst.petition = now.petition;
-                }
+            if answers > 0 {
+                due.push((model.frame_id(h), h, answers));
             }
-            due.push((model.frame_id(h), h));
         }
         due
     };
     let mut errors = Vec::new();
-    for (id, h) in due {
-        let build = {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            model.item_builds.get(&h).cloned()
-        };
-        let Some(build) = build else { continue };
-        let rebuilt = frame_wrapper(lua, id).and_then(|this| build_item(lua, &this, h, build));
-        if let Err(e) = rebuilt {
-            errors.push(e);
+    for (id, h, answers) in due {
+        for _ in 0..answers {
+            let build = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .item_builds
+                    .get(&h)
+                    .cloned()
+                    .map(|b| b.refreshed(&model))
+            };
+            // Nothing kept (`0x52e556`): a clear in between, or a rebuild's own hide.
+            let Some(build) = build else { break };
+            let rebuilt = frame_wrapper(lua, id).and_then(|this| build_item(lua, &this, h, build));
+            if let Err(e) = rebuilt {
+                errors.push(e);
+            }
         }
     }
     errors

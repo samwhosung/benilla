@@ -548,6 +548,7 @@ fn slot_view(
         .filter(|&g| g != 0)
         .and_then(|g| names.resolve_player(g, commands).map(str::to_string));
     let gift_creator = crate::items::gift_creator_name(obj, names, commands);
+    let (creator_guid, gift_creator_guid) = crate::items::creator_guids(obj);
     // All seven enchant slots: our own gear streams as item objects, where an inspected player's
     // descriptor carries only two.
     let enchants = crate::items::enchant_lines(
@@ -627,6 +628,8 @@ fn slot_view(
         consumable,
         creator,
         gift_creator,
+        creator_guid,
+        gift_creator_guid,
         enchants,
         duration_ms,
     })
@@ -718,6 +721,8 @@ fn inventory_slots(
             consumable: false,
             creator: None,
             gift_creator: None,
+            creator_guid: 0,
+            gift_creator_guid: 0,
             // No ammo instance streams, only its template id: no enchants, no countdown.
             enchants: Vec::new(),
             duration_ms: None,

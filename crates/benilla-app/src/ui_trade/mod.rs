@@ -628,6 +628,7 @@ fn resolve_slot(
         object_flags: None,
         wrapped: item.wrapped,
         gift_creator,
+        gift_creator_guid: if item.wrapped { item.gift_creator } else { 0 },
         enchantment: None,
         link,
     }

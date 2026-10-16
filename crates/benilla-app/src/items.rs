@@ -238,6 +238,23 @@ pub(crate) fn gift_creator_name(
     names.resolve_player(giver, commands).map(str::to_string)
 }
 
+/// The creator's guid (`ITEM_FIELD_CREATOR`, asked at `0x52e1f4`) and, for a wrapped item only,
+/// the giver's (`0x52e28d`), 0 where nothing is asked: the tooltip waits on a nonzero one whose
+/// name is not in yet.
+pub(crate) fn creator_guids(fields: &ObjectFields) -> (u64, u64) {
+    let wrapped = fields
+        .item_flags()
+        .is_some_and(|f| f & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0);
+    (
+        fields.item_creator().unwrap_or(0),
+        if wrapped {
+            fields.item_gift_creator().unwrap_or(0)
+        } else {
+            0
+        },
+    )
+}
+
 /// `0x5da2c0`: already bound when `ITEM_FIELD_FLAGS & 1` is set or a live enchant slot names a
 /// binding `SpellItemEnchantment` row (`0x5da300` to `0x5da320`). The enchant cursor's bind
 /// question (gate `0x495d60`) and the tooltip's Soulbound line both read it. It reads the raw

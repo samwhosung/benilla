@@ -215,6 +215,11 @@ pub struct InvSlotView {
     pub creator: Option<String>,
     /// The resolved `ITEM_FIELD_GIFTCREATOR` name, the tooltip's `ITEM_WRAPPED_BY` line.
     pub gift_creator: Option<String>,
+    /// The `ITEM_FIELD_CREATOR` guid, 0 for none: with no [`Self::creator`] yet, the name the
+    /// tooltip waits for.
+    pub creator_guid: u64,
+    /// The `ITEM_FIELD_GIFTCREATOR` guid, 0 for none, as [`Self::creator_guid`].
+    pub gift_creator_guid: u64,
     /// The resolved enchant slots in slot order. An inspected player's record has all 7 too, but
     /// vmangos fills only PERM and TEMP (`Player.cpp:10594-10595`).
     pub enchants: Vec<super::EnchantView>,
@@ -541,6 +546,8 @@ impl InvSlotView {
             guid: slot.guid,
             creator: slot.creator.clone(),
             gift_creator: slot.gift_creator.clone(),
+            creator_guid: slot.creator_guid,
+            gift_creator_guid: slot.gift_creator_guid,
             enchants: slot.enchants.clone(),
             // The item's own flags (UNLOCKED, WRAPPED) and expiry, which the tooltip builder reads.
             flags: slot.flags,

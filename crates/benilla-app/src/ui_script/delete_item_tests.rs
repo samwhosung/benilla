@@ -37,6 +37,8 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
             readable: false,
             creator: None,
             gift_creator: None,
+            creator_guid: 0,
+            gift_creator_guid: 0,
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,

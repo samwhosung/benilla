@@ -21,7 +21,7 @@ pub(in crate::script) mod build;
 pub(in crate::script) mod names;
 pub(in crate::script) mod render;
 
-use build::{build_item, InFlight, ItemBuild, NameSource};
+use build::{build_item, InFlight, ItemBuild};
 use names::quality_color;
 use render::BuilderFlags;
 
@@ -88,7 +88,11 @@ fn offered_view(
         .item_cache_misses
         .clear();
     let v = view_of(lua, item_id);
-    build::keep_misses(&mut lua.app_data_mut::<Model>().expect("model app_data"), h);
+    build::keep_misses(
+        &mut lua.app_data_mut::<Model>().expect("model app_data"),
+        h,
+        false,
+    );
     v
 }
 
@@ -168,6 +172,9 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         durability: s.durability,
         creator: s.creator.clone(),
         gift_creator: s.gift_creator.clone(),
+        creator_guid: s.creator_guid,
+        gift_creator_guid: s.gift_creator_guid,
+        guid: s.guid,
         has_text: s.readable,
         flags: s.flags,
         already_bound: s.already_bound,
@@ -199,18 +206,7 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         !broken && flags & BROKEN == 0
     };
     let worn = |s: &crate::script::InvSlotView| {
-        (s.item_id == item_id && usable(s.flags, s.durability)).then(|| render::ItemInstance {
-            name: s.name.clone(),
-            durability: s.durability,
-            creator: s.creator.clone(),
-            gift_creator: s.gift_creator.clone(),
-            flags: s.flags,
-            already_bound: s.already_bound,
-            enchants: s.enchants.clone(),
-            duration_ms: s.duration_ms,
-            object: true,
-            ..Default::default()
-        })
+        (s.item_id == item_id && usable(s.flags, s.durability)).then(|| worn_instance(s, true))
     };
     let held = |bag: i64| -> Option<render::ItemInstance> {
         let c = model.containers.get(&bag)?;
@@ -242,6 +238,29 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         }
     }
     held(0).or_else(|| held(super::char_stats::KEYRING_CONTAINER))
+}
+
+/// A worn (or inspected) slot's item as the builder's item: an object of the player's own, else
+/// the visible-item record (`0x533354`), which has no durability or creator to show.
+pub(super) fn worn_instance(s: &crate::script::InvSlotView, object: bool) -> render::ItemInstance {
+    render::ItemInstance {
+        // App-composed, with the suffix off `ITEM_FIELD_RANDOM_PROPERTIES_ID`.
+        name: s.name.clone(),
+        durability: s.durability,
+        creator: s.creator.clone(),
+        gift_creator: s.gift_creator.clone(),
+        creator_guid: s.creator_guid,
+        gift_creator_guid: s.gift_creator_guid,
+        guid: if object { s.guid } else { 0 },
+        flags: s.flags,
+        already_bound: s.already_bound,
+        // A charter has `InventoryType` 0 and is never equipped.
+        petition: None,
+        enchants: s.enchants.clone(),
+        duration_ms: s.duration_ms,
+        object,
+        ..Default::default()
+    }
 }
 
 /// The item at `(bag, slot)` in the cursor's numbering, as a live object with no block, for the
@@ -291,14 +310,12 @@ pub(super) fn render_owned(
     inst: Option<render::ItemInstance>,
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
-    let names = inst.is_some().then_some(NameSource::Owned);
     build_item(
         lua,
         this,
         h,
         ItemBuild {
             inst,
-            names,
             ..ItemBuild::new(item_id)
         },
     )
@@ -494,46 +511,25 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         .inv_slot(&unit, slot)
                         .filter(|s| s.item_id != 0)
                         .map(|s| {
-                            (
-                                s.item_id,
-                                s.name.clone(),
-                                s.quality,
-                                render::ItemInstance {
-                                    // App-composed, with the suffix off
-                                    // `ITEM_FIELD_RANDOM_PROPERTIES_ID`.
-                                    name: s.name.clone(),
-                                    durability: s.durability,
-                                    creator: s.creator.clone(),
-                                    gift_creator: s.gift_creator.clone(),
-                                    has_text: false,
-                                    flags: s.flags,
-                                    already_bound: s.already_bound,
-                                    // A charter has `InventoryType` 0 and is never equipped.
-                                    petition: None,
-                                    enchants: s.enchants.clone(),
-                                    // `0x532ee0` has p6=0 legs too (`0x533106`, `0x5332ad`), but
-                                    // nothing openable is equippable.
-                                    openable_source: false,
-                                    duration_ms: s.duration_ms,
-                                    // Only the player's own doll holds item objects; an
-                                    // inspected unit's item is a block (`0x532ee0`).
-                                    object: unit.eq_ignore_ascii_case("player"),
-                                    block_lock_id: 0,
-                                    block_wrapped: false,
-                                    // The player's own item answers the cooldown query
-                                    // (`0x5331ec`), unless it is charged and spent
-                                    // (`0x53318a`-`0x53319b`, the feed's `None`); an inspected
-                                    // record has none.
-                                    cooldown_ms: if unit.eq_ignore_ascii_case("player") {
-                                        super::tooltip_spell::live_remaining_ms(
-                                            model.inv_slot_cooldown(slot),
-                                            model.now,
-                                        )
-                                    } else {
-                                        0
-                                    },
-                                },
-                            )
+                            (s.item_id, s.name.clone(), s.quality, {
+                                // Only the player's own doll holds item objects; an
+                                // inspected unit's item is a block (`0x532ee0`). `0x532ee0`
+                                // has p6=0 legs too (`0x533106`, `0x5332ad`), but nothing
+                                // openable is equippable.
+                                let player = unit.eq_ignore_ascii_case("player");
+                                let mut inst = worn_instance(&s, player);
+                                // The player's own item answers the cooldown query
+                                // (`0x5331ec`), unless it is charged and spent
+                                // (`0x53318a`-`0x53319b`, the feed's `None`); an inspected
+                                // record has none.
+                                if player {
+                                    inst.cooldown_ms = super::tooltip_spell::live_remaining_ms(
+                                        model.inv_slot_cooldown(slot),
+                                        model.now,
+                                    );
+                                }
+                                inst
+                            })
                         });
                     let cost = if unit.eq_ignore_ascii_case("player") {
                         model.inv_repair_cost(slot)
@@ -572,10 +568,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         flags,
                         inst: Some(inst),
                         in_flight,
-                        names: Some(NameSource::Inventory {
-                            unit: unit.clone(),
-                            slot,
-                        }),
                         ..ItemBuild::new(item_id)
                     },
                 )?;
@@ -652,7 +644,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     inst: Some(inst),
                     in_flight,
                     sell_count: Some(count),
-                    names: Some(NameSource::Bag { bag, slot }),
                     ..ItemBuild::new(item_id)
                 },
             )?;
@@ -695,6 +686,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     block_lock_id: if player_side { 0 } else { item.lock_id },
                     block_wrapped: !player_side && item.wrapped,
                     gift_creator: item.gift_creator.clone(),
+                    gift_creator_guid: item.gift_creator_guid,
                     object: item.object_flags.is_some(),
                     flags: item.object_flags.unwrap_or(0),
                     ..Default::default()
@@ -710,7 +702,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     ItemBuild {
                         inst: Some(inst),
                         in_flight,
-                        names: Some(NameSource::Trade { player_side, slot }),
                         ..ItemBuild::new(item.item_id)
                     },
                 )?;
@@ -1058,18 +1049,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
             // expiry and temporary enchants follow the bag slot it came from.
-            let (item_id, inst, names) = {
+            let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.auction_sell_item.as_ref() {
-                    Some(it) => {
-                        let inst = held_instance(&model, it.bag, it.slot);
-                        let names = inst.is_some().then_some(NameSource::Bag {
-                            bag: it.bag,
-                            slot: it.slot,
-                        });
-                        (it.item_id, inst, names)
-                    }
-                    None => (0, None, None),
+                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    None => (0, None),
                 }
             };
             if item_id == 0 {
@@ -1081,7 +1065,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 h,
                 ItemBuild {
                     inst,
-                    names,
                     ..ItemBuild::new(item_id)
                 },
             )?;
@@ -1098,18 +1081,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
             // expiry and temporary enchants follow the bag slot it came from.
-            let (item_id, inst, names) = {
+            let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.mail_send_item.as_ref() {
-                    Some(it) => {
-                        let inst = held_instance(&model, it.bag, it.slot);
-                        let names = inst.is_some().then_some(NameSource::Bag {
-                            bag: it.bag,
-                            slot: it.slot,
-                        });
-                        (it.item_id, inst, names)
-                    }
-                    None => (0, None, None),
+                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    None => (0, None),
                 }
             };
             if item_id == 0 {
@@ -1121,7 +1097,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 h,
                 ItemBuild {
                     inst,
-                    names,
                     ..ItemBuild::new(item_id)
                 },
             )?;

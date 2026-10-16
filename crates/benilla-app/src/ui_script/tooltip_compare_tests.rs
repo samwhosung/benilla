@@ -85,6 +85,8 @@ fn seed_items(s: &mut UiScript) {
         equip_slots: vec![1],
         creator: None,
         gift_creator: None,
+        creator_guid: 0,
+        gift_creator_guid: 0,
         enchants: Vec::new(),
         spell_0: false,
     });
@@ -141,6 +143,8 @@ fn seed_items(s: &mut UiScript) {
             readable: false,
             creator: None,
             gift_creator: None,
+            creator_guid: 0,
+            gift_creator_guid: 0,
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
@@ -217,6 +221,8 @@ fn doll_hover_renders_the_live_instance() {
         equip_slots: vec![1],
         creator: None,
         gift_creator: None,
+        creator_guid: 0,
+        gift_creator_guid: 0,
         enchants: Vec::new(),
         spell_0: false,
     });

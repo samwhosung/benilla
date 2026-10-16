@@ -87,6 +87,8 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             readable: false,
             creator: None,
             gift_creator: None,
+            creator_guid: 0,
+            gift_creator_guid: 0,
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
