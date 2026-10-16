@@ -16,10 +16,7 @@ use benilla_assets::m2_url;
 use benilla_assets::materials::WowModelMaterial;
 
 use super::booth::{redress_booth_batches, set_grip, BoothBatch, BoothRig};
-use super::framing::{
-    attachment_point, diag_to_vert, glue_box_aspect, glue_box_physical, glue_scene_framing,
-    stock_pane_view, ArtExtent, GLUE_AUTHORED_ASPECT, PORTRAIT_ASPECT,
-};
+use super::framing::{attachment_point, diag_to_vert, stock_pane_view, PORTRAIT_ASPECT};
 use super::{
     aim, body_frame, new_target_image, spawn_booth_effects, spawn_booth_model, Booth,
     BoothBillboardSpec, BoothCam, BoothEffects, BoothInstance, BoothLight, BoothMotion, BoothPart,
@@ -226,7 +223,7 @@ pub(crate) struct GluePreview {
     pub(crate) yaw: f32,
     pub(crate) fog: Option<SceneFog>,
     /// The stock screens' pane the scene fills, `[left, right, top, bottom]` as window fractions
-    /// from the top-left ([`super::framing::stock_pane_view`]); `None` frames the native way.
+    /// from the top-left ([`super::framing::stock_pane_view`]); `None` frames at the window.
     pub(crate) pane: Option<[f32; 4]>,
     /// The stage's instance: a change starts the scene over, as each `SetModel` makes a new
     /// instance (`0x76cce0`), the same file included. The stock feeder numbers each (pane,
@@ -283,14 +280,6 @@ pub(crate) struct CreateScene {
     spawned: bool,
     /// The authored camera 0, captured at spawn.
     cam: Option<benilla_assets::PortraitCamera>,
-    /// The shipped scene's art extent ([`benilla_formats::shipped_glue_art_extent`]): caps how far
-    /// [`glue_scene_framing`] opens upward on a narrow window. `None` with no scene.
-    art: Option<ArtExtent>,
-    /// `Some(aspect)` while the window is wider than [`super::framing::GLUE_BOX_ASPECT`] under the
-    /// native screens: the camera renders into a centred viewport of this aspect
-    /// ([`pillarbox_glue_scene`]); a stock pane is its own viewport. Set from the window, not the
-    /// scene, so the chrome's canvas never moves on a race change.
-    viewport_aspect: Option<f32>,
     /// The character's stage spot, scene attachment 0 in Bevy model space (`ZERO` with no scene);
     /// the body seats on attachment 0 at select too (`0x473039`).
     char_spot: Vec3,
@@ -346,7 +335,6 @@ struct ParkedScene {
     token: &'static str,
     handle: Handle<M2Model>,
     cam: Option<benilla_assets::PortraitCamera>,
-    art: Option<ArtExtent>,
     char_spot: Vec3,
     char_facing: Quat,
     char_scale: f32,
@@ -366,8 +354,6 @@ impl CreateScene {
             handle: None,
             spawned: false,
             cam: None,
-            art: None,
-            viewport_aspect: None,
             char_spot: Vec3::ZERO,
             char_facing: Quat::IDENTITY,
             char_scale: 1.0,
@@ -416,7 +402,6 @@ impl CreateScene {
                     token,
                     handle,
                     cam: self.cam,
-                    art: self.art,
                     char_spot: self.char_spot,
                     char_facing: self.char_facing,
                     char_scale: self.char_scale,
@@ -440,8 +425,6 @@ impl CreateScene {
         }
         self.spawned = false;
         self.cam = None;
-        self.art = None;
-        // `viewport_aspect` stays: the frame is the window's, not the stage's.
         self.char_spot = Vec3::ZERO;
         let Some(p) = returning else {
             // A new instance's clock starts from 0, as the widget scene's constructor zeroes it
@@ -455,7 +438,6 @@ impl CreateScene {
         self.token = Some(p.token);
         self.handle = Some(p.handle);
         self.cam = p.cam;
-        self.art = p.art;
         self.char_spot = p.char_spot;
         self.char_facing = p.char_facing;
         self.char_scale = p.char_scale;
@@ -485,8 +467,6 @@ impl CreateScene {
         self.handle = None;
         self.spawned = false;
         self.cam = None;
-        self.art = None;
-        self.viewport_aspect = None;
         self.char_spot = Vec3::ZERO;
         self.char_facing = Quat::IDENTITY;
         self.char_scale = 1.0;
@@ -933,8 +913,8 @@ pub(super) fn sync_glue_scene(
         return;
     };
 
-    // The frame box is set from the window alone, before a token resolves, so the chrome's canvas
-    // ([`crate::glue::GlueCanvas`]) neither moves with the race nor flickers during a swap.
+    // The target is the window's, before a token resolves; a pane is a viewport inside it
+    // ([`pillarbox_glue_scene`]).
     if let Ok(w) = window.single() {
         resize_target(
             &mut images,
@@ -942,12 +922,6 @@ pub(super) fn sync_glue_scene(
             w.physical_width().max(1),
             w.physical_height().max(1),
         );
-        // A stock pane is its own frame ([`pillarbox_glue_scene`]).
-        let box_aspect =
-            glue_box_aspect(w.width() / w.height().max(1.0)).filter(|_| preview.pane.is_none());
-        if scene.viewport_aspect != box_aspect {
-            scene.viewport_aspect = box_aspect;
-        }
     }
 
     scene.evict(&mut commands, &preview.live);
@@ -1235,25 +1209,6 @@ pub(super) fn sync_glue_scene(
         scene_rig.finish(&mut commands);
         scene.spawned = true;
         scene.cam = model.camera0;
-        scene.art = benilla_formats::shipped_glue_art_extent(token);
-        if let (Some(art), Some(cam)) = (scene.art, model.camera0.as_ref()) {
-            let t0 = benilla_formats::authored_half_height(cam.fov);
-            // Where the frame's edge lands on this stage's art.
-            let frame = super::framing::GLUE_BOX_ASPECT * super::framing::glue_zoom_floor(cam.fov);
-            info!(
-                "create scene: UI_{token} art extent — half_w {:.4} (widens to {:.2}:1), half_h {:.4} \
-                 (opens to 1:{:.2}); the frame ends at {frame:.4} — {}",
-                art.half_w,
-                art.half_w / t0,
-                art.half_h,
-                art.half_h / (t0 * GLUE_AUTHORED_ASPECT),
-                if frame <= art.half_w.max(t0 * GLUE_AUTHORED_ASPECT) {
-                    "inside the art"
-                } else {
-                    "PAST the art (void at the frame's edges)"
-                },
-            );
-        }
         scene.char_spot = stage;
         scene.char_facing = stage_facing;
         scene.char_scale = stage_scale;
@@ -1297,15 +1252,14 @@ pub(super) fn sync_glue_scene(
             .unwrap_or(4.0 / 3.0);
         let fwd = (cam.target - cam.eye).normalize_or_zero();
         let up = Quat::from_axis_angle(fwd, cam.roll) * Vec3::Y;
-        // The record fov is diagonal. A stock pane converts it at the pane's own aspect, as the
-        // reference does; the native screens' [`glue_scene_framing`] holds the authored 4:3 view
-        // box instead (the Deviation is stated there). Far is kept generous (27.8 authored on Orc).
+        // The record fov is diagonal, converted at the pane's own aspect as the reference does.
+        // Far is kept generous (27.8 authored on Orc).
         let pane = window
             .single()
             .ok()
             .zip(preview.pane)
             .and_then(|(w, pane)| stock_pane_view(w.physical_width(), w.physical_height(), pane));
-        let vert_fov = scene_vert_fov(cam.fov, aspect, scene.art, pane);
+        let vert_fov = scene_vert_fov(cam.fov, aspect, pane);
         let rig = (
             Transform::from_translation(cam.eye).looking_at(cam.target, up),
             Projection::from(PerspectiveProjection {
@@ -1319,25 +1273,16 @@ pub(super) fn sync_glue_scene(
     }
 }
 
-/// The scene camera's vertical opening for its record's diagonal `fov`: at a stock pane's own
-/// aspect by the reference's law (`0x5c3cc0`), else the native screens' [`glue_scene_framing`]
-/// for the window.
-fn scene_vert_fov(
-    fov: f32,
-    window_aspect: f32,
-    art: Option<ArtExtent>,
-    pane: Option<super::framing::PaneView>,
-) -> f32 {
-    match pane {
-        Some(view) => diag_to_vert(fov, view.aspect),
-        None => glue_scene_framing(fov, window_aspect, art),
-    }
+/// The scene camera's vertical opening for its record's diagonal `fov` by the reference's law
+/// (`0x5c3cc0`): at a stock pane's own aspect, else, with no pane laid out, the window's, as a
+/// fullscreen `ModelFFX` fills it (`0x76d42d`).
+fn scene_vert_fov(fov: f32, window_aspect: f32, pane: Option<super::framing::PaneView>) -> f32 {
+    diag_to_vert(fov, pane.map_or(window_aspect, |view| view.aspect))
 }
 
-/// Set the glue booth camera's viewport: a stock pane's rect ([`stock_pane_view`]), else the
-/// native pillarbox to [`CreateScene::viewport_aspect`], black either side; writes only on change.
+/// Set the glue booth camera's viewport: a stock pane's rect ([`stock_pane_view`]), else the whole
+/// window; writes only on change.
 pub(super) fn pillarbox_glue_scene(
-    scene: Res<CreateScene>,
     preview: Res<GluePreview>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut cams: Query<(&BoothCam, &mut Camera)>,
@@ -1346,23 +1291,13 @@ pub(super) fn pillarbox_glue_scene(
         return;
     };
     let full_h = w.physical_height().max(1);
-    let viewport = match preview.pane {
-        Some(pane) => {
-            stock_pane_view(w.physical_width(), full_h, pane).map(|view| bevy::camera::Viewport {
-                physical_position: view.position,
-                physical_size: view.size,
-                ..default()
-            })
-        }
-        // The same arithmetic the chrome's canvas insets by ([`glue_box_physical`]).
-        None => glue_box_physical(w.physical_width(), full_h, scene.viewport_aspect).map(
-            |(x, box_w)| bevy::camera::Viewport {
-                physical_position: UVec2::new(x, 0),
-                physical_size: UVec2::new(box_w, full_h),
-                ..default()
-            },
-        ),
-    };
+    let viewport = preview.pane.and_then(|pane| {
+        stock_pane_view(w.physical_width(), full_h, pane).map(|view| bevy::camera::Viewport {
+            physical_position: view.position,
+            physical_size: view.size,
+            ..default()
+        })
+    });
     for (booth, mut cam) in cams.iter_mut() {
         if booth.0 != GLUE_SLOT {
             continue;
@@ -2263,33 +2198,28 @@ mod tests {
                 "{w}x{h}: {}",
                 view.aspect
             );
-            let vert = scene_vert_fov(fov, a, None, Some(view));
+            let vert = scene_vert_fov(fov, a, Some(view));
             let law = fov / (want * want + 1.0).sqrt();
             assert!((vert - law).abs() < 1e-3, "{w}x{h}: {vert} vs {law}");
         }
-        // Not the native screens' held box: at 16:10 that opens wider than the law.
-        let native = scene_vert_fov(fov, 1.6, None, None);
-        assert!((native - fov / (1.6f32 * 1.6 + 1.0).sqrt()).abs() > 1e-2);
+        // With no pane, the window's own aspect by the same law.
+        let window = scene_vert_fov(fov, 1.6, None);
+        assert!((window - fov / (1.6f32 * 1.6 + 1.0).sqrt()).abs() < 1e-3);
     }
 
-    /// The booth camera's viewport is the stock pane's rect, no pillarbox inside it; the native
-    /// screens keep their pillarbox past [`super::super::framing::GLUE_BOX_ASPECT`].
+    /// The booth camera's viewport is the stock pane's rect, no pillarbox inside it, and with no
+    /// pane the whole window.
     #[test]
-    fn the_viewport_is_the_stock_pane_and_the_native_box_otherwise() {
+    fn the_viewport_is_the_stock_pane_or_the_window() {
         for stock in [true, false] {
             for (w, h) in WINDOWS {
                 let a = w as f32 / h as f32;
                 let mut app = App::new();
-                let root = app.world_mut().spawn_empty().id();
-                let pet = app.world_mut().spawn_empty().id();
-                let mut scene = CreateScene::empty(root, pet);
-                scene.viewport_aspect = glue_box_aspect(a).filter(|_| !stock);
                 let preview = GluePreview {
                     pane: stock.then(|| glue_parent(a)),
                     ..GluePreview::default()
                 };
-                app.insert_resource(scene)
-                    .insert_resource(preview)
+                app.insert_resource(preview)
                     .add_systems(Update, pillarbox_glue_scene);
                 app.world_mut().spawn((
                     Window {
@@ -2314,8 +2244,7 @@ mod tests {
                     let view = super::super::framing::stock_pane_view(w, h, glue_parent(a));
                     view.map(|v| (v.position, v.size))
                 } else {
-                    glue_box_physical(w, h, glue_box_aspect(a))
-                        .map(|(x, bw)| (UVec2::new(x, 0), UVec2::new(bw, h)))
+                    None
                 };
                 assert_eq!(vp, want, "stock {stock} {w}x{h}");
                 if stock && a <= 16.0 / 9.0 {
@@ -3377,7 +3306,6 @@ mod tests {
             token: "MainMenu",
             handle: Handle::default(),
             cam: None,
-            art: None,
             char_spot: Vec3::ZERO,
             char_facing: Quat::IDENTITY,
             char_scale: 1.0,

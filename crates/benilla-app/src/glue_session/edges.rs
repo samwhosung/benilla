@@ -1,10 +1,10 @@
-//! The session's edges, whichever glue screens stand: the world entry, the logout, a refused
+//! The session's edges: the world entry, the logout, a refused
 //! login and a dead session move [`ClientState`] and the pick, in one chain with the roster policy
 //! ([`super::roster`]). What a screen shows of them is the screen's.
 
 use bevy::prelude::*;
 
-use super::roster::{apply_roster_policy, persist_last_character, Roster};
+use super::roster::{apply_roster_policy, Roster};
 use crate::client_state::ClientState;
 use crate::net::{CharacterLoginFailedMessage, EnteredWorldMessage, LoggedOutMessage};
 
@@ -27,9 +27,6 @@ pub(crate) fn session_edges(
         back_on_login_refused,
         apply_roster_policy,
         back_on_disconnect,
-        // Last and ungated: it mirrors the pick the frame ended with, and world entry is reached
-        // from the create screen too.
-        persist_last_character,
     )
         .chain()
         .into_configs()
@@ -75,8 +72,7 @@ fn back_on_disconnect(
 
 /// `SMSG_CHARACTER_LOGIN_FAILED`: back to select. The IO thread announces the entry with the pick,
 /// so this undoes a half-built one. The pick must be cleared, or the roster behind the refusal is
-/// auto-answered and the refused login loops. The refusal's words are each screen set's own: the
-/// native select's glue dialog, or the stock glue manager's state 9.
+/// auto-answered and the refused login loops. The refusal's words are the glue manager's state 9.
 fn back_on_login_refused(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
     mut roster: ResMut<Roster>,
@@ -247,9 +243,8 @@ mod tests {
             app.world_mut().write_message(CharListMessage {
                 characters: vec![character(7, "Seven")],
                 realm: None,
-                cause: benilla_protocol::RosterCause::Park,
+                cause: benilla_protocol::RosterCause::Unasked,
                 epoch: 1,
-                generation: 0,
             });
             app.update();
             app.update();

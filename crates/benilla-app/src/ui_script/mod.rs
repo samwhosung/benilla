@@ -16,11 +16,11 @@ use benilla_world::schedule::WorldStage;
 pub(crate) mod addons;
 mod content;
 pub(crate) mod extract;
-/// The stock glue screens, and the switch to the native ones.
+/// The stock glue screens as the session and the instruments see them.
 pub(crate) mod glue;
 /// The stock create screen's catalog off the host's DBC catalogs.
 pub(crate) mod glue_create;
-/// `CGlueMgr`'s screen states over the native login, for the stock glue screens.
+/// `CGlueMgr`'s screen states over benilla's login, for the stock glue screens.
 pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;
 mod input;
@@ -303,7 +303,6 @@ impl Plugin for UiScriptPlugin {
         // The quit root runs in `Last`: the close button's `AppExit` is written in `PostUpdate`.
         crate::shutdown::on_app_exit(app, shutdown_on_exit.into_configs());
         app.insert_resource(UiScaleCvar(default_ui_scale()))
-            .insert_resource(glue::GlueStock::from_env())
             .init_non_send_resource::<glue_mgr::SharedGlueMgr>()
             .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
@@ -425,9 +424,7 @@ impl Plugin for UiScriptPlugin {
                 Update,
                 (
                     // After the tick whose Lua called its verbs.
-                    glue_mgr::drive_glue_mgr
-                        .after(UiInput)
-                        .after(crate::realm_select::RealmSelectSet),
+                    glue_mgr::drive_glue_mgr.after(UiInput),
                     // Off the roster and the screen the manager and the tick just moved.
                     glue_scene::feed_stock_glue_preview.in_set(crate::portrait::GluePreviewFeed),
                     // Each reads only its message, so no state orders it but the sets.
@@ -435,7 +432,6 @@ impl Plugin for UiScriptPlugin {
                     server_alert::open_addon_launched.after(WorldStage::Stream),
                 )
                     .chain()
-                    .run_if(glue::stock_glue)
                     .before(crate::glue_session::login::LoginPolicy)
                     .after(WorldStage::Net),
             );

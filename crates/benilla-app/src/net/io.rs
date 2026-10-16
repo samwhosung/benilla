@@ -22,7 +22,7 @@
 //! hands it the [`WorldWriter`] over a swap channel, and a logout takes it back, so there is only
 //! ever one writer.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,9 +30,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
-    messages::{self, SurveyAnswer},
-    AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd, SessionEvent,
-    WardenRequired, WorldReader, WorldSession, WorldWriter,
+    messages::SurveyAnswer, AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd,
+    SessionEvent, WardenRequired, WorldReader, WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
 
@@ -85,11 +84,6 @@ pub(crate) struct LoginRequest {
 pub(super) struct Parks {
     pub(super) login_rx: Receiver<LoginRequest>,
     pub(super) park_rx: Receiver<ParkRequest>,
-    /// The screen asks for the roster itself ([`CharRequest::Enumerate`], the stock glue's
-    /// `GetCharacterListUpdate`); false is the native screens' policy, the IO thread enumerating
-    /// on reaching the character park and after a create or delete. Read as each world park is
-    /// entered; the app sets it as it installs the VM that runs ([`super::RosterPolicy`]).
-    pub(super) screen_asks_roster: Arc<AtomicBool>,
 }
 
 /// World sessions begun this process, each numbered from 1; the events a session sends carry its
@@ -259,7 +253,6 @@ pub(super) struct NetHandles {
     pub(super) commands: Sender<ClientCommand>,
     pub(super) pick: ParkSender<CharRequest>,
     pub(super) realm: ParkSender<RealmRequest>,
-    pub(super) screen_asks_roster: Arc<AtomicBool>,
     pub(super) login: Sender<LoginRequest>,
     pub(super) login_abandon: Arc<AtomicU64>,
     pub(super) ping: Arc<Mutex<PingClock>>,
@@ -274,8 +267,6 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
     let (events_tx, events_rx) = crossbeam_channel::unbounded();
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let (park_tx, park_rx) = crossbeam_channel::unbounded::<ParkRequest>();
-    let screen_asks_roster = Arc::new(AtomicBool::new(false));
-    let policy = Arc::clone(&screen_asks_roster);
     let (login_tx, login_rx) = crossbeam_channel::unbounded::<LoginRequest>();
     let login_abandon = Arc::new(AtomicU64::new(0));
     let ping_clock = Arc::new(Mutex::new(PingClock::default()));
@@ -303,11 +294,7 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
-                let parks = Parks {
-                    login_rx,
-                    park_rx,
-                    screen_asks_roster: policy,
-                };
+                let parks = Parks { login_rx, park_rx };
                 // Opcodes already reported for trailing bytes, once per process.
                 let mut tails_announced = std::collections::HashSet::new();
                 loop {
@@ -350,7 +337,6 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
         commands: cmd_tx,
         pick: ParkSender::park(park_tx.clone()),
         realm: ParkSender::park(park_tx),
-        screen_asks_roster,
         login: login_tx,
         login_abandon,
         ping: ping_clock,
@@ -619,11 +605,7 @@ fn world(
     ping_clock: &Mutex<PingClock>,
     tails_announced: &mut std::collections::HashSet<u16>,
 ) -> Result<WorldEnd> {
-    let Parks {
-        login_rx,
-        park_rx,
-        screen_asks_roster,
-    } = parks;
+    let Parks { login_rx, park_rx } = parks;
     let stage = |s: LoginStage| {
         let _ = events_tx.send(SessionEvent::LoginStage { stage: s });
     };
@@ -714,35 +696,13 @@ fn world(
             return Ok(WorldEnd::Failed);
         }
 
-        // The roster as the account holds it, an empty one included: the reference builds
-        // `CMSG_CHAR_CREATE` in one place (`0x5aac50`), reached only from the create screen.
-        // Failures here are still pre-roster.
-        //
-        // Only the native screens' policy enumerates here and after a create or delete. The stock
-        // screen asks for its roster when it shows and after each action it makes
+        // No roster here: the screen asks for it when it shows and after each action it makes
         // (`GetCharacterListUpdate`, [`CharRequest::Enumerate`], `0x46c1a7`), as the reference
         // does: the world connect completes with the authentication response (`0x5ab2b8`), and
-        // the `CMSG_CHAR_ENUM` is the screen's.
-        let mut asks = screen_asks_roster.load(Ordering::SeqCst);
-        let mut characters = if asks {
-            Vec::new()
-        } else {
-            match session.char_enum() {
-                Ok(c) => c,
-                Err(e) => {
-                    if canceled() {
-                        return Ok(WorldEnd::Failed);
-                    }
-                    if let Some(w) = e.downcast_ref::<WardenRequired>() {
-                        return fail_terminal(w.to_string());
-                    }
-                    return fail(None, format!("character roster: {e:#}"));
-                }
-            }
-        };
-        if canceled() {
-            return Ok(WorldEnd::Failed);
-        }
+        // the `CMSG_CHAR_ENUM` is the screen's. The reference builds `CMSG_CHAR_CREATE` in one
+        // place (`0x5aac50`), reached only from the create screen. The last roster an ask
+        // brought names the character entered as.
+        let mut characters: Vec<benilla_protocol::Character> = Vec::new();
         // A request or realm answer queued during a dead cycle must not answer this roster: a
         // reconnect must land on the list, not bounce back in off a stale pick. The app re-sends
         // its wants.
@@ -761,19 +721,6 @@ fn world(
                 generation,
             })
             .is_err()
-        {
-            return Ok(WorldEnd::Cycle(Cycle::Exit));
-        }
-        if !asks
-            && events_tx
-                .send(SessionEvent::CharacterList {
-                    characters: characters.clone(),
-                    realm: Some(realm.clone()),
-                    cause: RosterCause::Park,
-                    epoch,
-                    generation,
-                })
-                .is_err()
         {
             return Ok(WorldEnd::Cycle(Cycle::Exit));
         }
@@ -904,28 +851,7 @@ fn world(
                         continue;
                     }
                 };
-                // A success changed the roster: under the native policy re-emit it before the result,
-                // so the screen has the fresh list when it reacts. The stock screen asks again itself
-                // (`0x46c1a7`).
-                let changed = match action {
-                    CharAction::Create => code == messages::CHAR_CREATE_SUCCESS,
-                    CharAction::Delete => code == messages::CHAR_DELETE_SUCCESS,
-                };
-                if changed && !asks {
-                    characters = session.char_enum()?;
-                    if events_tx
-                        .send(SessionEvent::CharacterList {
-                            characters: characters.clone(),
-                            realm: Some(realm.clone()),
-                            cause: RosterCause::Changed,
-                            epoch,
-                            generation,
-                        })
-                        .is_err()
-                    {
-                        return Ok(WorldEnd::Cycle(Cycle::Exit));
-                    }
-                }
+                // A success changed the roster; the screen asks for it again itself (`0x46c1a7`).
                 if events_tx
                     .send(SessionEvent::CharActionResult { action, code })
                     .is_err()
@@ -1007,30 +933,7 @@ fn world(
             };
             session = WorldSession::rejoin(reader, writer)?;
             bevy::log::info!("net: {reason} — back at character select on the same link");
-            // The native screens wait for the park's own enumeration, as on the dial; the stock
-            // screen's `CharacterSelect_OnShow` asks for its roster itself (`0x46b880`).
-            asks = screen_asks_roster.load(Ordering::SeqCst);
-            if !asks {
-                characters = match session.char_enum() {
-                    Ok(c) => c,
-                    Err(e) => match e.downcast_ref::<WardenRequired>() {
-                        Some(w) => return fail_terminal(w.to_string()),
-                        None => return Err(e),
-                    },
-                };
-                if events_tx
-                    .send(SessionEvent::CharacterList {
-                        characters: characters.clone(),
-                        realm: Some(realm.clone()),
-                        cause: RosterCause::Park,
-                        epoch,
-                        generation,
-                    })
-                    .is_err()
-                {
-                    return Ok(WorldEnd::Cycle(Cycle::Exit));
-                }
-            }
+            // The screen's `CharacterSelect_OnShow` asks for its roster itself (`0x46b880`).
         }
     } // 'realm
 }

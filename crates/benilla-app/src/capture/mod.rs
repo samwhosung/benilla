@@ -688,7 +688,7 @@ fn accept_agreements(ctx: Res<CaptureCtx>, stock: crate::ui_script::glue::StockG
     if ctx.scenario.is_some() {
         return;
     }
-    if let Some(vm) = stock.vm().filter(|vm| vm.frame_visible("TOSFrame")) {
+    if let Some(vm) = Some(stock.vm()).filter(|vm| vm.frame_visible("TOSFrame")) {
         glue_press::press_accept_agreements(vm);
     }
 }

@@ -5,8 +5,7 @@
 //!
 //! No glue screen stands to make these asks: the character is still in the world, the world's VM
 //! up and the glue torn down, so the stock screens' connect and their `GetCharacterListUpdate`
-//! never run. The reference has no reconnect at all (a lost session is `DISCONNECTED_FROM_SERVER`);
-//! the native screens' realm and roster policies answer every park on their own.
+//! never run. The reference has no reconnect at all (a lost session is `DISCONNECTED_FROM_SERVER`).
 
 use bevy::prelude::*;
 

@@ -1,7 +1,5 @@
-//! What the glue screens stand on, whichever set is up, the stock GlueXML screens
-//! ([`crate::ui_script::glue_mgr`]) or the native ones: the session's state, its network asks and
-//! the run's own policy, never a screen's look or input. Nothing here is gated on which screens
-//! stand.
+//! What the stock glue screens ([`crate::ui_script::glue_mgr`]) stand on: the session's state, its
+//! network asks and the run's own policy, never a screen's look or input.
 
 pub(crate) mod edges;
 pub(crate) mod login;
@@ -32,17 +30,15 @@ impl Plugin for GlueSessionPlugin {
             )
             .add_systems(
                 Update,
-                reconnect::answer_reconnect
-                    .run_if(crate::ui_script::glue::stock_glue)
-                    .after(edges::SessionEdges),
+                reconnect::answer_reconnect.after(edges::SessionEdges),
             )
             // After the UI tick, the glue manager's frame and the session's edges, in one chain:
-            // on the stock screens each reads the frames those moved and presses their verbs.
+            // each reads the frames those moved and presses their verbs.
             .add_systems(
                 Update,
                 (
                     // The run's own pick, which the edges arm and the manager's roster load lets
-                    // the stock screen take.
+                    // the select screen take.
                     roster::enter_run_pick,
                     logout_smoke::debug_logout_smoke.after(crate::player::ControlRestore),
                     roundtrip::debug_glue_roundtrip.run_if(roundtrip::enabled),

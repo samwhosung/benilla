@@ -78,14 +78,12 @@ pub enum LoginStage {
 /// What a roster was fetched for. The screen takes a reply as its own only when it asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RosterCause {
-    /// The IO thread's own enumeration on reaching the character park, which the native screens
-    /// wait for; the stock screens ask for theirs instead.
-    Park,
+    /// A roster no ask of the screen's fetched: an `SMSG_CHAR_ENUM` the world stream carried on its
+    /// own.
+    Unasked,
     /// The reply to a roster request from the screen (`CMSG_CHAR_ENUM` for
     /// `GetCharacterListUpdate`, `0x5aabb0`).
     Asked,
-    /// A create or delete changed the roster; re-sent before the action's result.
-    Changed,
 }
 
 /// How a world session ended. On a loss the reference fires `DISCONNECTED_FROM_SERVER` and

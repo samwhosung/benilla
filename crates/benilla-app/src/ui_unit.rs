@@ -100,7 +100,7 @@ impl Plugin for UiUnitPlugin {
             Update,
             UnitFeed
                 .in_set(crate::ui_script::UiFeed)
-                // The whole set: a login one-shot or a per-VM memo spent on the boot VM is lost.
+                // The whole set: a login one-shot or a per-VM memo spent on the glue VM is lost.
                 .run_if(crate::ui_script::ingame_ui_up),
         )
         .init_resource::<UnitFeedState>()
@@ -628,7 +628,8 @@ pub(crate) fn race_faction_group(race: u8) -> Option<&'static str> {
     if !(1..=8).contains(&race) {
         return None;
     }
-    Some(if crate::char_create::ALLIANCE.contains(&race) {
+    // Human, Dwarf, Night Elf, Gnome.
+    Some(if [1, 3, 4, 7].contains(&race) {
         "Alliance"
     } else {
         "Horde"

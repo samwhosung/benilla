@@ -95,16 +95,6 @@ impl RealmTables {
     }
 }
 
-/// The realm type as `(pvp, rp)`, shared by `GetRealmInfo`, `GetServerName` and the world-entry
-/// latch: each scans `Cfg_Configs.dbc` for the first row whose `RealmType` is the realm's wire
-/// type and reads `PlayerKillingAllowed` and `RoleplayingRealm` (`0x46efda`); a type with no row
-/// reads neither.
-pub(crate) fn pvp_rp(types: &RealmConfigs, realm_type: u32) -> (bool, bool) {
-    types
-        .get(realm_type)
-        .map_or((false, false), |c| (c.pvp, c.rp))
-}
-
 /// Read the client Region's category set once, after the archive chain opens.
 fn load_categories(
     mut tables: ResMut<RealmTables>,
@@ -201,11 +191,6 @@ impl RunModeRealm {
         self.named.as_deref()
     }
 
-    /// Nobody is at the keyboard to pick a realm.
-    pub(crate) fn unattended(&self) -> bool {
-        self.unattended
-    }
-
     /// The realm an unattended run takes off `realms`, a list in the server's order: the first up
     /// of those holding the most of the account's characters, so a probe returns to the realm it
     /// plays on. `None` for an attended run or a list with no realm up.
@@ -266,19 +251,6 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let loaded = benilla_formats::load_realm_categories(&mut chain, 1).expect("DBC");
         assert_eq!(Some(loaded), RealmTables::us_client().categories);
-    }
-
-    /// No row: the scan reads neither column, so the type is Normal, as it is with no table.
-    #[test]
-    fn a_type_with_no_row_is_normal() {
-        let types = RealmConfigs::from_rows(vec![benilla_formats::RealmConfig {
-            realm_type: 1,
-            pvp: true,
-            rp: false,
-        }]);
-        assert_eq!(pvp_rp(&types, 1), (true, false));
-        assert_eq!(pvp_rp(&types, 77), (false, false));
-        assert_eq!(pvp_rp(&RealmConfigs::default(), 1), (false, false));
     }
 
     /// A name matches case folded and only a realm that is up; the names are tried in order.

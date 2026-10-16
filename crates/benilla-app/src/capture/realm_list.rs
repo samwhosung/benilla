@@ -48,7 +48,7 @@ pub(super) fn seed_realm_list(
     if ctx.name != NAME {
         return;
     }
-    let Some(vm) = stock.vm().filter(|vm| vm.is_up()) else {
+    let Some(vm) = Some(stock.vm()).filter(|vm| vm.is_up()) else {
         return;
     };
     let answer = |lists: &mut MessageWriter<crate::net::RealmListMessage>| {

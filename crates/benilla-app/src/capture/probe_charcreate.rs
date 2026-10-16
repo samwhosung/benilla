@@ -93,7 +93,7 @@ fn drive_charcreate_probe(
         probe.roster = list.characters.clone();
         probe.listed = true;
     }
-    let vm = stock.vm().filter(|vm| vm.is_up());
+    let vm = Some(stock.vm()).filter(|vm| vm.is_up());
 
     match probe.state {
         ProbeState::AwaitingRoster => {

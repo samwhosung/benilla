@@ -316,7 +316,7 @@ impl Plugin for UiAuctionPlugin {
                     // a landed template; the drain after the input pass so a click goes out the
                     // same frame.
                     // Only with the interface up: a sale notice landing in the login burst would
-                    // otherwise be shown on the boot VM and lost.
+                    // otherwise be shown on the glue VM and lost.
                     feed_auction
                         .after(crate::ui_unit::UnitFeed)
                         .in_set(UiFeed)

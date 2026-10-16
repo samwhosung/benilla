@@ -1,5 +1,5 @@
-//! The app's lifecycle, which every system may read whichever glue screens stand: the screen that
-//! owns the session ([`ClientState`]), the one "only while in the world" gate ([`InWorldGated`]),
+//! The app's lifecycle, which every system may read: the screen that owns the session
+//! ([`ClientState`]), the one "only while in the world" gate ([`InWorldGated`]),
 //! and the engine's one-bit mirror of it.
 
 use bevy::prelude::*;
@@ -12,11 +12,9 @@ pub(crate) enum ClientState {
     /// screen.
     #[default]
     Login,
-    /// Parked at character select, the IO thread waiting for a pick.
+    /// Parked at character select, the IO thread waiting for a pick; the create screen stands in
+    /// it too (the IO thread serves create and delete in place).
     CharSelect,
-    /// The character-creation screen, still parked at select (the IO thread serves create and
-    /// delete in place).
-    CharCreate,
     /// A character is in (or entering) the world.
     InWorld,
 }
@@ -29,8 +27,7 @@ pub(crate) struct InWorldGated;
 
 /// The lifecycle state, its gate and its mirror.
 pub(crate) struct ClientStatePlugin {
-    /// The screen this session opens on: `Login` when connected, `InWorld` for a world capture,
-    /// the photographed glue screen for a glue capture.
+    /// The screen this session opens on: `InWorld` for a world capture, else `Login`.
     pub(crate) start: ClientState,
 }
 

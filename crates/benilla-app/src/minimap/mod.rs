@@ -931,7 +931,7 @@ impl Plugin for MinimapPlugin {
                         .before(UiQuadAppend),
                     // Before the script tick, after the containment verdict it reads. Gated on the
                     // in-game UI: a member's ping in the login burst would otherwise spend its
-                    // `fresh` latch on the boot VM, which has no `MiniMapPing` frame.
+                    // `fresh` latch on the glue VM, which has no `MiniMapPing` frame.
                     ping::drive_minimap_ping
                         .after(feed_minimap_inside)
                         .in_set(crate::ui_script::UiFeed)

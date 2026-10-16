@@ -8,10 +8,9 @@
 //! 4. one more Change Realm and Okay, proving the IO thread is at the park the app expects.
 //!
 //! "At character select" is the screen up and a roster having arrived, however many characters it
-//! held. The walk is the same over either glue screen set, through a [`Seat`]: here the stock
-//! screens' own verbs pressed in the glue VM (`CharacterSelect_ChangeRealm`, `RealmList_OnOk`,
-//! `RealmList_OnCancel`) and their frames read; the native dialog's seat is
-//! [`crate::realm_select`]'s.
+//! held. The walk presses the stock screens' own verbs in the glue VM
+//! (`CharacterSelect_ChangeRealm`, `RealmList_OnOk`, `RealmList_OnCancel`) and reads their frames,
+//! through a [`Seat`] a test can stand in for.
 //!
 //! Inert without the env.
 
@@ -31,7 +30,7 @@ const ENTRY_TIMEOUT: f32 = 60.0;
 const DWELL: f32 = 1.0;
 
 #[derive(Default)]
-pub(crate) struct Walk {
+pub(super) struct Walk {
     phase: u8,
     mark: f32,
     /// The roster count to reach: an entered realm sends a new roster.
@@ -43,8 +42,8 @@ pub(crate) struct Walk {
     arrived: Option<f32>,
 }
 
-/// What the walk presses and reads: the native dialog, or the stock screens in the glue VM.
-pub(crate) trait Seat {
+/// What the walk presses and reads: the stock screens in the glue VM, or a test's stand-in.
+trait Seat {
     /// The character screen is up, whatever its roster holds.
     fn screen_up(&self) -> bool;
     /// The realm list is on screen.
@@ -123,9 +122,7 @@ pub(super) fn debug_realm_smoke(
     mut walk: Local<Walk>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let Some(vm) = stock.vm() else {
-        return;
-    };
+    let vm = stock.vm();
     let seen = msgs.read().count() as u32;
     walk_frame(
         &mut walk,
@@ -140,7 +137,7 @@ pub(super) fn debug_realm_smoke(
 
 /// One frame of the walk on `seat`, every leg logging itself, so a timeout names the boundary
 /// that stalled; `seen` is the rosters that arrived this frame.
-pub(crate) fn walk_frame(
+fn walk_frame(
     walk: &mut Walk,
     seen: u32,
     roster: &Roster,

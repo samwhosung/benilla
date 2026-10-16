@@ -272,7 +272,7 @@ fn drive_rig(
     }
     let entered_world = entered.read().next().is_some();
     let stock = vms.p0();
-    let vm = stock.vm().filter(|vm| vm.is_up());
+    let vm = Some(stock.vm()).filter(|vm| vm.is_up());
 
     match rig.phase {
         RigPhase::AwaitRoster => {

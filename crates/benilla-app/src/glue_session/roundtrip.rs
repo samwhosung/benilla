@@ -1,16 +1,14 @@
 //! The glue round-trip (`WOW_GLUE_ROUNDTRIP=1`): once a roster has arrived at character select, go
-//! to character create, Back to character select, and exit. Ungated, since it crosses states and
-//! runs over either glue screen set.
+//! to character create, Back to character select, and exit.
 //!
 //! "Roster has arrived" counts the roster, not its characters: an account with none reaches select
-//! all the same. The stock screens are driven through their own verbs in the glue VM
+//! all the same. The screens are driven through their own verbs in the glue VM
 //! (`SetGlueScreen("charcreate")`, `CharacterCreate_Back`) and their frames are read, since the
-//! app's [`ClientState`] does not follow the stock create screen.
+//! app's [`crate::client_state::ClientState`] does not follow the create screen.
 
 use bevy::prelude::*;
 
 use super::roster::Roster;
-use crate::client_state::ClientState;
 use crate::net::CharListMessage;
 use crate::ui_script::glue::StockGlueProbe;
 
@@ -98,40 +96,25 @@ pub(super) fn enabled() -> bool {
 pub(super) fn debug_glue_roundtrip(
     mut msgs: MessageReader<CharListMessage>,
     roster: Res<Roster>,
-    state: Res<State<ClientState>>,
-    mut next: ResMut<NextState<ClientState>>,
     stock: StockGlueProbe,
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
     mut trip: Local<Roundtrip>,
 ) {
     trip.rosters += msgs.read().count() as u32;
-    // `Some` when the stock switch is on: the frames say which screen is up, and with no glue VM
-    // standing none is.
-    let stock_vm = stock.vm();
-    let screen = match stock_vm {
-        Some(vm) if vm.frame_visible("CharacterSelect") => Screen::Select,
-        Some(vm) if vm.frame_visible("CharacterCreate") => Screen::Create,
-        Some(_) => Screen::Other,
-        None => match state.get() {
-            ClientState::CharSelect => Screen::Select,
-            ClientState::CharCreate => Screen::Create,
-            _ => Screen::Other,
-        },
+    // The frames say which screen is up; with no glue VM standing none is.
+    let vm = stock.vm();
+    let screen = if vm.frame_visible("CharacterSelect") {
+        Screen::Select
+    } else if vm.frame_visible("CharacterCreate") {
+        Screen::Create
+    } else {
+        Screen::Other
     };
     match trip.step(time.elapsed_secs(), screen, roster.chars.len()) {
         Act::Wait => {}
-        act @ (Act::EnterCreate | Act::BackToSelect) => {
-            let (chunk, to) = if act == Act::EnterCreate {
-                ("SetGlueScreen('charcreate')", ClientState::CharCreate)
-            } else {
-                ("CharacterCreate_Back()", ClientState::CharSelect)
-            };
-            match stock_vm {
-                Some(vm) => vm.press(chunk),
-                None => next.set(to),
-            }
-        }
+        Act::EnterCreate => vm.press("SetGlueScreen('charcreate')"),
+        Act::BackToSelect => vm.press("CharacterCreate_Back()"),
         Act::Done => {
             exit.write(AppExit::Success);
         }
@@ -215,35 +198,5 @@ mod tests {
             };
             assert!(why.contains(leg), "{why}");
         }
-    }
-
-    /// The system counts the roster message, not the characters in it: an empty one at select
-    /// sends the app to create, on the native screens, whose arm moves the state.
-    #[test]
-    fn the_system_takes_an_empty_roster_message_for_arrival() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_resource(crate::ui_script::glue::GlueStock(false))
-            .insert_state(ClientState::CharSelect)
-            .init_resource::<Roster>()
-            .add_message::<CharListMessage>()
-            .add_systems(Update, debug_glue_roundtrip);
-        let pending = |app: &App| {
-            matches!(
-                app.world().resource::<NextState<ClientState>>(),
-                NextState::Pending(ClientState::CharCreate)
-            )
-        };
-        app.update();
-        assert!(!pending(&app), "no roster yet");
-        app.world_mut().write_message(CharListMessage {
-            characters: Vec::new(),
-            realm: None,
-            cause: benilla_protocol::RosterCause::Park,
-            epoch: 0,
-            generation: 0,
-        });
-        app.update();
-        assert!(pending(&app), "an empty roster is a roster");
     }
 }

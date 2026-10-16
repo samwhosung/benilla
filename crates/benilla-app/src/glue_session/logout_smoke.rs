@@ -1,27 +1,12 @@
 //! The logout smoke, `scripts/smoke.sh`'s round trip: a world entry, a logout back to character
-//! select on the same link, and a second entry. Ungated, since it crosses states and runs over
-//! either glue screen set.
+//! select on the same link, and a second entry. Ungated, since it crosses states.
 
 use bevy::prelude::*;
 
-use super::roster::{press_enter_world, send_pick, Roster};
+use super::roster::{press_enter_world, Roster};
 use crate::client_state::ClientState;
-use crate::net::{CharListMessage, CharPick};
-use crate::ui_script::glue::{StockGlueProbe, StockVm};
-
-/// Enter the world again as the roster's first character, the way a player does on the screens
-/// that stand: on the stock screens their Enter World ([`press_enter_world`]); the native screens'
-/// Enter World is the pick itself.
-pub(crate) fn reenter_first(stock: Option<StockVm>, roster: &mut Roster, pick: &CharPick) {
-    match stock {
-        Some(vm) => press_enter_world(vm, 0),
-        None => {
-            if let Some(guid) = roster.chars.first().map(|c| c.guid) {
-                send_pick(roster, pick, guid);
-            }
-        }
-    }
-}
+use crate::net::CharListMessage;
+use crate::ui_script::glue::StockGlueProbe;
 
 /// The logout smoke (`WOW_LOGOUT_SMOKE=1`, with `WOW_CHAR`): once in the world, `/logout`, return
 /// to CharSelect, wait for the roster the logout brings on the link the world was entered by,
@@ -32,8 +17,7 @@ pub(super) fn debug_logout_smoke(
     state: Res<State<ClientState>>,
     player: Res<crate::player::Player>,
     commands: Res<crate::net::NetCommands>,
-    mut roster: ResMut<Roster>,
-    pick: Res<CharPick>,
+    roster: Res<Roster>,
     streamer: Res<benilla_world::terrain_stream::TerrainStreamer>,
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
@@ -88,12 +72,7 @@ pub(super) fn debug_logout_smoke(
         // state edge, on the world-live falling edge.
         // The roster the logout brings, not the one that survived it, decides the re-entry. On
         // the stock screens, once their select screen stands to press.
-        3 if now - *mark > 4.0
-            && *relisted
-            && stock
-                .vm()
-                .is_none_or(|vm| vm.frame_visible("CharacterSelect")) =>
-        {
+        3 if now - *mark > 4.0 && *relisted && stock.vm().frame_visible("CharacterSelect") => {
             match roster.chars.first().map(|c| c.name.clone()) {
                 Some(name) => {
                     info!(
@@ -101,7 +80,8 @@ pub(super) fn debug_logout_smoke(
                         streamer.residency().1
                     );
                     info!("logout-smoke: re-entering the world as {name}");
-                    reenter_first(stock.vm(), &mut roster, &pick);
+                    // Enter World on the first row, the way a player does.
+                    press_enter_world(stock.vm(), 0);
                     (*phase, *mark) = (4, now);
                 }
                 None => {

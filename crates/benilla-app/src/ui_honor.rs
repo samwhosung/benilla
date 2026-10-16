@@ -87,9 +87,9 @@ impl Plugin for UiHonorPlugin {
 }
 
 /// The overhead name's rank strings ([`crate::nameplates::PvpNameStrings`]), read off a VM the
-/// first frame it is in the world. Every VM is installed whole, outside `Update` (the boot VM with
-/// `GlobalStrings.lua` run, a world VM after its FrameXML and addon load), so the read sees what
-/// the load defined; any other frame pays one compare.
+/// first frame it is in the world. Every VM is installed whole, outside `Update` (the glue VM after
+/// its GlueXML, a world VM after its FrameXML and addon load), so the read sees what the load
+/// defined; any other frame pays one compare.
 fn feed_pvp_name_strings(
     script: Option<NonSend<UiScript>>,
     mut strings: ResMut<crate::nameplates::PvpNameStrings>,

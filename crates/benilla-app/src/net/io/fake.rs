@@ -765,18 +765,8 @@ pub(crate) struct Cycles {
     pub(crate) abandon: Arc<AtomicU64>,
 }
 
-/// The read thread's cycle loop and the write thread, as [`super::spawn_net`] runs them: the native
-/// screens' policy, the IO thread enumerating on reaching the character park.
+/// The read thread's cycle loop and the write thread, as [`super::spawn_net`] runs them.
 pub(crate) fn spawn_cycles() -> Cycles {
-    spawn_cycles_for(false)
-}
-
-/// [`spawn_cycles`] under the stock screen's policy: the roster comes only when it is asked for.
-pub(crate) fn spawn_cycles_asking() -> Cycles {
-    spawn_cycles_for(true)
-}
-
-fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (commands, cmd_rx) = crossbeam_channel::unbounded::<ClientCommand>();
     let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WriterSwap>();
@@ -786,11 +776,7 @@ fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     let abandon = Arc::new(AtomicU64::new(0));
     let thread_abandon = Arc::clone(&abandon);
     thread::spawn(move || {
-        let parks = Parks {
-            login_rx,
-            park_rx,
-            screen_asks_roster: Arc::new(std::sync::atomic::AtomicBool::new(screen_asks_roster)),
-        };
+        let parks = Parks { login_rx, park_rx };
         let clock = Mutex::new(PingClock::default());
         let mut tails = Default::default();
         loop {

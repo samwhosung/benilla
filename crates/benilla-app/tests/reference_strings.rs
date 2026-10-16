@@ -116,10 +116,8 @@ const RESOLVERS: &[&str] = &[
     ".text(",
     "keyed_line",
     "globals().get::<String>",
-    "GlueStrings",
     "by_key(",
     "UiError::key",
-    "glue_strings",
 ];
 
 /// [`RESOLVERS`], on an identifier boundary for the bare-word entries (`by_key(` must not match

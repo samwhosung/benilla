@@ -42,7 +42,6 @@ fn failed(refusal: Option<LoginRefusal>, terminal: bool) -> LoginFailedMessage {
         refusal,
         reason: "test".into(),
         terminal,
-        dial: None,
     }
 }
 
@@ -441,7 +440,7 @@ fn the_authentication_puts_the_character_screen_up() {
     m.state = ScreenState::Connect;
     let alpha = || vec![crate::glue_session::roster::test_character(7, "Alpha")];
     m.on_roster(alpha(), RosterCause::Asked, 0);
-    m.on_roster(alpha(), RosterCause::Park, 0);
+    m.on_roster(alpha(), RosterCause::Unasked, 0);
     m.tick();
     settle(&mut m);
     assert!(
@@ -499,14 +498,12 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         m.tick();
         settle(&mut m);
         assert!(m.outbox.is_empty(), "a running query shows no text");
-        // Rosters nothing asked for are not this screen's.
-        for cause in [RosterCause::Park, RosterCause::Changed] {
-            m.on_roster(
-                vec![crate::glue_session::roster::test_character(1, "Stray")],
-                cause,
-                0,
-            );
-        }
+        // A roster nothing asked for is not this screen's.
+        m.on_roster(
+            vec![crate::glue_session::roster::test_character(1, "Stray")],
+            RosterCause::Unasked,
+            0,
+        );
         m.tick();
         settle(&mut m);
         assert!(m.outbox.is_empty());
@@ -2043,7 +2040,7 @@ fn a_call_before_the_seat_runs_on_the_seating_frame() {
         .add_message::<crate::net::CharActionResultMessage>()
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
-        .add_message::<LoginNotice>()
+        .add_message::<LoginGuardRefused>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()
@@ -2088,7 +2085,7 @@ fn stock_app() -> (
         .add_message::<crate::net::CharActionResultMessage>()
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
-        .add_message::<LoginNotice>()
+        .add_message::<LoginGuardRefused>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
@@ -2201,7 +2198,7 @@ fn the_select_cells_outlive_the_glue_vm() {
 /// `CANCEL` dialog; the logon's stage and a refusal re-text it with the reference's keys; and the
 /// agreements gate it.
 #[test]
-fn the_stock_login_reaches_the_native_login_and_shows_its_status() {
+fn the_stock_login_reaches_the_login_engine_and_shows_its_status() {
     let _ = benilla_formats::wow_data_or_skip!();
     let (mut app, rx, _) = stock_app();
 
@@ -2250,8 +2247,7 @@ fn the_account_guards_refusal_opens_the_stock_okay_dialog() {
     let (mut app, rx, _) = stock_app();
     assert_eq!(dialog(&app), None);
     let why = "WOW_USER=other is not the account this checkout declares.";
-    app.world_mut()
-        .write_message(LoginNotice::GuardRefused(why.into()));
+    app.world_mut().write_message(LoginGuardRefused(why.into()));
     app.update();
     assert_eq!(dialog(&app), Some(("OKAY".into(), why.into())));
     assert_eq!(mgr(&app).state, ScreenState::Idle);
@@ -2312,7 +2308,7 @@ fn the_stock_realm_list_dialog_after_a_world_failure_closes_on_its_reply() {
     assert_eq!(mgr(&app).state, ScreenState::Idle);
 }
 
-/// The status dialog's Cancel is `StatusDialogClick`, which abandons the native attempt.
+/// The status dialog's Cancel is `StatusDialogClick`, which abandons the attempt in flight.
 #[test]
 fn the_status_dialogs_cancel_abandons_the_attempt() {
     let _ = benilla_formats::wow_data_or_skip!();
@@ -2440,13 +2436,12 @@ fn pump(
                 refusal,
                 reason,
                 terminal,
-                dial,
+                ..
             } => {
                 failures.write(LoginFailedMessage {
                     refusal,
                     reason,
                     terminal,
-                    dial,
                 });
             }
             E::CharacterList {
@@ -2454,14 +2449,13 @@ fn pump(
                 realm,
                 cause,
                 epoch,
-                generation,
+                ..
             } => {
                 rosters.write(CharListMessage {
                     characters,
                     realm,
                     cause,
                     epoch,
-                    generation,
                 });
             }
             E::WorldAuthenticated {
@@ -2536,7 +2530,7 @@ fn live_app_with(
     // The race and class rows the roster's names come from, off the player's own chain.
     let data = benilla_formats::wow_data().expect("callers skip without an install");
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-    let cycles = fake::spawn_cycles_asking();
+    let cycles = fake::spawn_cycles();
     let mut app = App::new();
     app.init_resource::<Time>()
         .init_non_send_resource::<SharedGlueMgr>()
@@ -2581,7 +2575,7 @@ fn live_app_with(
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::EnteredWorldMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
-        .add_message::<LoginNotice>()
+        .add_message::<LoginGuardRefused>()
         .add_message::<crate::net::LoggedOutMessage>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
@@ -3622,9 +3616,9 @@ fn three_addon_app(reply: Option<&dyn Fn(&fake::World)>) -> (App, fake::Realmd, 
 /// The stock select runs end to end with nothing stubbed: its `OnShow` reaches
 /// `GetCharacterListUpdate` past `UpdateAddonButton`, the add-ons button shows for the registry
 /// the server's reply left, and the stock `AddonList` opens, shows each row through the glue
-/// verbs, toggles through its checkboxes, and Okay writes the files the native screen writes.
+/// verbs, toggles through its checkboxes, and Okay writes each character's enable file.
 #[test]
-fn the_stock_addon_list_opens_toggles_and_saves_like_the_native_screen() {
+fn the_stock_addon_list_opens_toggles_and_saves() {
     let _ = benilla_formats::wow_data_or_skip!();
     let _l = crate::local_state::test_env::ENV_LOCK
         .lock()
@@ -3702,22 +3696,6 @@ fn the_stock_addon_list_opens_toggles_and_saves_like_the_native_screen() {
         text("Alpha-Charlie.txt"),
         "Alpha: disabled\nBeta: disabled\n",
         "a character with no file gets one, as every node the All view set is dirty"
-    );
-
-    // The native screen, given the same clicks on the same files, writes the same bytes.
-    let (native_home, _native_guard) = addon_home("native");
-    three_addons(&native_home);
-    let chars: Vec<String> = roster3().iter().map(|c| c.name.clone()).collect();
-    // All view: Alpha off and Beta off, then the view on Alpha with Beta on, as above.
-    crate::char_select::okay_after_clicks(
-        "Alpha",
-        &chars,
-        &[(None, 0, false), (None, 1, false), (Some(0), 1, true)],
-    );
-    assert_eq!(
-        stock,
-        enable_files(&native_home),
-        "the stock AddOns screen's files are the native screen's, byte for byte"
     );
 }
 
@@ -4190,7 +4168,6 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
         w.remove_resource::<State<ClientState>>();
         w.remove_resource::<NextState<ClientState>>();
         w.insert_resource(cvars);
-        w.insert_resource(super::super::glue::GlueStock(true));
         // The roster the IO thread already published, as the session's edges took it.
         w.insert_resource(crate::glue_session::roster::Roster::with_chars(roster3()));
         w.init_resource::<crate::glue_session::roster::RunPick>();
@@ -4320,13 +4297,9 @@ fn the_logout_smokes_stock_reentry_goes_through_enter_world() {
     // Off the first row, so the re-entry's own selection shows.
     vm(&app).run("CharacterSelect_SelectCharacter(3)").unwrap();
     app.world_mut()
-        .run_system_once(
-            |stock: crate::ui_script::glue::StockGlueProbe,
-             mut roster: ResMut<crate::glue_session::roster::Roster>,
-             pick: Res<crate::net::CharPick>| {
-                crate::glue_session::logout_smoke::reenter_first(stock.vm(), &mut roster, &pick);
-            },
-        )
+        .run_system_once(|stock: crate::ui_script::glue::StockGlueProbe| {
+            crate::glue_session::roster::press_enter_world(stock.vm(), 0);
+        })
         .unwrap();
     app.update();
     assert_eq!(

@@ -990,7 +990,7 @@ impl Plugin for UiDialogVerbsPlugin {
                     close_npc_session_out_of_range::<PetUnlearnState>.before(feed_dialog_verbs),
                     // Gated on the in-game interface: vmangos can send `SMSG_RAID_GROUP_ONLY` in
                     // the login burst (`Player.cpp:18686`), and an `INSTANCE_BOOT_START` fired at
-                    // the boot VM would be lost; the queue waits instead.
+                    // the glue VM would be lost; the queue waits instead.
                     feed_dialog_verbs
                         .in_set(UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),

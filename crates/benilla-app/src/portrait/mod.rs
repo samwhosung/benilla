@@ -40,8 +40,7 @@ use benilla_assets::materials::WowModelMaterial;
 
 mod framing;
 pub(crate) use framing::{
-    attachment_point, glue_box_aspect, glue_canvas_bars, head_anchor, pane_projection,
-    PortraitAnchors, WowPortraitProjection,
+    attachment_point, head_anchor, pane_projection, PortraitAnchors, WowPortraitProjection,
 };
 use framing::{body_frame, frame, PORTRAIT_FOV};
 mod booth;
@@ -97,8 +96,8 @@ pub(crate) struct PaneSync;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PaneComposite;
 
-/// The systems that write [`GluePreview`], one per glue screen set (the native screens', the
-/// stock glue VM's); the glue booth reads it after them, the same frame.
+/// The system that writes [`GluePreview`] off the glue VM; the glue booth reads it after it, the
+/// same frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct GluePreviewFeed;
 

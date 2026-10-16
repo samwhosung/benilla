@@ -37,7 +37,7 @@ pub(super) fn seed_create_stage(
     let Some(CreatePick((race, sex, class))) = pick.as_deref().copied() else {
         return;
     };
-    let Some(vm) = stock.vm().filter(|vm| vm.is_up()) else {
+    let Some(vm) = Some(stock.vm()).filter(|vm| vm.is_up()) else {
         return;
     };
     match *step {

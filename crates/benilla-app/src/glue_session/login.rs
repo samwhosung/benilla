@@ -1,8 +1,7 @@
-//! The login engine, whichever glue screens stand: the session's credentials, the IO thread's
-//! pre-logon park, the glue screens' asks, the login's success edge, the quit and the saved
-//! account. What a screen shows of it is the screen's: the native login screen ([`crate::login`])
-//! reads [`LoginNotice`], the stock glue manager ([`crate::ui_script::glue_mgr`]) the net messages
-//! themselves and the one notice with no message behind it.
+//! The login engine: the session's credentials, the IO thread's pre-logon park, the glue screens'
+//! asks, the login's success edge, the quit and the saved account. What the screens show of it is
+//! the glue manager's ([`crate::ui_script::glue_mgr`]), which reads the net messages themselves and
+//! the one refusal with no message behind it ([`LoginGuardRefused`]).
 //!
 //! The credential policy drives the IO thread's pre-logon park: `WOW_USER` plus `WOW_PASS`
 //! auto-submit, pending credentials resubmit every 3 s (app-side; the IO thread never sleeps),
@@ -14,13 +13,12 @@
 
 use std::sync::atomic::Ordering;
 
-use benilla_protocol::{DialFailure, LoginRefusal};
 use bevy::prelude::*;
 
 use crate::client_state::ClientState;
 use crate::net::{
-    CharListMessage, DisconnectedMessage, LoginAbandon, LoginFailedMessage, LoginQueuedMessage,
-    LoginRequest, LoginSubmit, WorldAuthMessage,
+    DisconnectedMessage, LoginAbandon, LoginFailedMessage, LoginQueuedMessage, LoginRequest,
+    LoginSubmit, WorldAuthMessage,
 };
 
 /// The resubmit delay after a transport failure with pending credentials.
@@ -38,13 +36,13 @@ pub(crate) struct LoginPolicy;
 pub(super) fn build(app: &mut App) {
     app.init_resource::<LoginIntent>()
         .add_message::<GlueLogin>()
-        .add_message::<LoginNotice>()
+        .add_message::<LoginGuardRefused>()
         .add_systems(
             Update,
             // Every state: the reconnect resubmit fires while `InWorld`, and the roster edge
             // lands wherever it lands. The screen moves and the quit go through `Commands`,
             // applied before `drive_quit` in this chain.
-            (answer_glue, drive_policy, to_select_on_roster, drive_quit)
+            (answer_glue, drive_policy, to_select_on_auth, drive_quit)
                 .chain()
                 .in_set(LoginPolicy)
                 .after(benilla_world::schedule::WorldStage::Net),
@@ -95,29 +93,10 @@ impl LoginIntent {
     pub(crate) fn account(&self) -> Option<&str> {
         self.creds.as_ref().map(|(user, _)| user.as_str())
     }
-
-    /// Whether an attempt is between its send and its answer.
-    pub(crate) fn in_flight(&self) -> bool {
-        self.in_flight
-    }
-}
-
-#[cfg(test)]
-impl LoginIntent {
-    /// A typed attempt as `user`, in flight, for a screen's tests.
-    pub(crate) fn test_in_flight(user: &str) -> Self {
-        LoginIntent {
-            creds: Some((user.to_string(), "secret".to_string())),
-            in_flight: true,
-            announced: true,
-            ..default()
-        }
-    }
 }
 
 /// One login attempt's inputs as a single [`SystemParam`]: the policy's memory, the channel to
-/// the parked IO thread, the abandon generation a Cancel bumps, and the realmlist it dials. A
-/// bundle keeps the native screen's input under Bevy's sixteen-parameter ceiling.
+/// the parked IO thread, the abandon generation a Cancel bumps, and the realmlist it dials.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Attempt<'w> {
     pub(crate) intent: ResMut<'w, LoginIntent>,
@@ -129,7 +108,7 @@ pub(crate) struct Attempt<'w> {
 impl Attempt<'_> {
     /// Send one login attempt to the parked IO thread, stamped with the abandon generation. The
     /// realmlist is read at submit time, so an attempt keeps the server it started with.
-    /// `announced` says a screen sent it, which shows its connecting dialog and its failure.
+    /// `announced` says a screen sent it: a person typed it.
     pub(crate) fn send(&mut self, user: &str, pass: &str, announced: bool) {
         self.intent.creds = Some((user.to_string(), pass.to_string()));
         self.intent.in_flight = true;
@@ -145,8 +124,8 @@ impl Attempt<'_> {
     }
 }
 
-/// What the glue screens ask of the login engine: the stock ones past the glue manager's own
-/// guards ([`crate::ui_script::glue_mgr`]), and the native realm list's Cancel over login.
+/// What the glue screens ask of the login engine, past the glue manager's own guards
+/// ([`crate::ui_script::glue_mgr`]).
 #[derive(Message)]
 pub(crate) enum GlueLogin {
     /// `CGlueMgr::Login` (`0x46afb0`) reaching `ClientServices`' logon (`0x5ab4b0`): one attempt,
@@ -172,9 +151,8 @@ pub(crate) enum GlueLogin {
     CloseLink,
 }
 
-/// The glue manager's asks: a submit as the native screen's own Login press makes it (the account
-/// saving is the stock Lua's `SetSavedAccountName`), a cancel as the native Cancel, a disconnect
-/// as select's Back, a quit as the native quit with no grace.
+/// The glue manager's asks: a typed submit (the account saving is the stock Lua's
+/// `SetSavedAccountName`), a cancel, a disconnect as select's Back, a quit with no grace.
 pub(crate) fn answer_glue(
     mut asks: MessageReader<GlueLogin>,
     mut attempt: Attempt,
@@ -195,10 +173,7 @@ pub(crate) fn answer_glue(
             }
             GlueLogin::Disconnect => {
                 close_logon(&attempt.abandon, &mut attempt.intent, realm.as_deref());
-                if matches!(
-                    state.get(),
-                    ClientState::CharSelect | ClientState::CharCreate
-                ) {
+                if *state.get() == ClientState::CharSelect {
                     if let Some(pick) = pick.as_deref() {
                         let _ = pick.0.send(crate::net::CharRequest::Abandon);
                     }
@@ -234,25 +209,10 @@ pub(crate) fn close_logon(
     }
 }
 
-/// What the policy decided a screen should tell the player, in the order it decided it. The
-/// native login screen opens and closes its glue dialog on these. The stock glue manager reads the
-/// net message behind each instead, on the reference's path ([`crate::ui_script::glue_mgr`]), and
-/// this only for [`LoginNotice::GuardRefused`], which has none.
+/// The account guard refused the env fast path, with why: the one refusal the glue manager shows
+/// that has no net message behind it ([`crate::ui_script::glue_mgr`]).
 #[derive(Message, Debug, Clone)]
-pub(crate) enum LoginNotice {
-    /// The account guard refused the env fast path, with why.
-    GuardRefused(String),
-    /// A failure no resubmit can change, in the server's own words.
-    Terminal(String),
-    /// A refusal from either server, shown even on the silent path.
-    Refused(LoginRefusal),
-    /// A screen's attempt failed in transport; the dial verdict when no socket opened.
-    Unreachable(Option<DialFailure>),
-    /// The session is over: `DISCONNECTED_FROM_SERVER`.
-    SessionOver,
-    /// The current attempt's success edge ([`to_select_on_roster`]).
-    LoggedOn,
-}
+pub(crate) struct LoginGuardRefused(pub(crate) String);
 
 /// The policy tick and the net-message reactions; a screen's own submit is [`Attempt::send`].
 pub(crate) fn drive_policy(
@@ -261,19 +221,17 @@ pub(crate) fn drive_policy(
     mut queued: MessageReader<LoginQueuedMessage>,
     mut failures: MessageReader<LoginFailedMessage>,
     mut disconnects: MessageReader<DisconnectedMessage>,
-    mut notices: MessageWriter<LoginNotice>,
+    mut refusals: MessageWriter<LoginGuardRefused>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
-    // A driverless run exits non-zero ("login: FATAL") on a failure no resubmit can change, as
-    // [`crate::run_mode::fatal_when_driverless`] decides; the smoke owns its own verdict.
-    let smoke = std::env::var_os("WOW_LOGIN_SMOKE").is_some();
 
-    // The env fast path, once: `WOW_USER` and `WOW_PASS` both set auto-submit, except under the
-    // login smoke, which drives its own credentials. There is no default account.
+    // The env fast path, once: `WOW_USER` and `WOW_PASS` both set auto-submit. There is no
+    // default account. A driverless run exits non-zero ("login: FATAL") on a failure no resubmit
+    // can change, as [`crate::run_mode::fatal_when_driverless`] decides.
     if !attempt.intent.env_read {
         attempt.intent.env_read = true;
-        if crate::run_mode::env_login() && !smoke {
+        if crate::run_mode::env_login() {
             let user = std::env::var("WOW_USER").unwrap_or_default();
             let pass = std::env::var("WOW_PASS").unwrap_or_default();
             // A vmangos login kicks whoever holds the account, so the automated path logs in
@@ -292,7 +250,7 @@ pub(crate) fn drive_policy(
                 }
                 Err(why) => {
                     error!("login: REFUSING the env fast path — {why} Set WOW_ALLOW_ACCOUNT=1 if the cross-account login is deliberate.");
-                    notices.write(LoginNotice::GuardRefused(why));
+                    refusals.write(LoginGuardRefused(why));
                     // The refusal is deterministic, so the run can never get past this screen.
                     if crate::run_mode::fatal_when_driverless(
                         "the account guard refused the only credentials this run has",
@@ -319,12 +277,11 @@ pub(crate) fn drive_policy(
         // `announced` is set only by a screen's submit, and `LoginIntent::clear` leaves it, so
         // it says a person typed this attempt; only an untyped attempt may end the run.
         let typed = attempt.intent.announced;
-        let may_end_the_run = !typed && !smoke;
+        let may_end_the_run = !typed;
         if msg.terminal {
             // No resubmit can change it: show the server's words and drop the credentials.
             warn!("login: {}", msg.reason);
             attempt.intent.clear();
-            notices.write(LoginNotice::Terminal(msg.reason.clone()));
             if may_end_the_run
                 && crate::run_mode::fatal_when_driverless(&format!(
                     "terminal login failure with nobody at the keyboard ({})",
@@ -341,7 +298,6 @@ pub(crate) fn drive_policy(
                 let byte = refusal.byte();
                 warn!("login: refused ({refusal:?}, {byte:#04x}) — {}", msg.reason);
                 attempt.intent.clear();
-                notices.write(LoginNotice::Refused(refusal));
                 if may_end_the_run
                     && crate::run_mode::fatal_when_driverless(&format!(
                         "refused ({refusal:?}, {byte:#04x}) and no resubmit can change it"
@@ -350,10 +306,7 @@ pub(crate) fn drive_policy(
                     exit.write(AppExit::error());
                 }
             }
-            None if typed => {
-                warn!("login: {}", msg.reason);
-                notices.write(LoginNotice::Unreachable(msg.dial.clone()));
-            }
+            None if typed => warn!("login: {}", msg.reason),
             None => {
                 // A silent transport failure schedules the paced resubmit.
                 debug!("login: transport failure ({}) — retrying", msg.reason);
@@ -379,7 +332,6 @@ pub(crate) fn drive_policy(
                 msg.reason
             );
             attempt.intent.clear();
-            notices.write(LoginNotice::SessionOver);
             continue;
         }
         // Otherwise an unattended run's silent re-auth, paced after the stream death.
@@ -401,16 +353,12 @@ pub(crate) fn drive_policy(
 }
 
 /// The login's success edge: go to CharSelect, but only from `Login`, since an unattended
-/// reconnect's roster lands while `InWorld`, and a logout's at character select. The native
-/// screens take the roster for it, which the IO thread fetches on reaching the park; the stock
-/// screens take the world server's authentication (`SMSG_AUTH_RESPONSE`, `0x5ab2b8`), since the
-/// roster there is the screen's own ask and comes only once the screen is up.
-fn to_select_on_roster(
-    mut msgs: MessageReader<CharListMessage>,
+/// reconnect's authentication lands while `InWorld`, and a logout's at character select. The edge
+/// is the world server's authentication (`SMSG_AUTH_RESPONSE`, `0x5ab2b8`), since the roster is
+/// the select screen's own ask and comes only once the screen is up.
+fn to_select_on_auth(
     mut auths: MessageReader<WorldAuthMessage>,
-    stock: Option<Res<crate::ui_script::glue::GlueStock>>,
     mut intent: ResMut<LoginIntent>,
-    mut notices: MessageWriter<LoginNotice>,
     state: Res<State<ClientState>>,
     mut next: ResMut<NextState<ClientState>>,
     abandon: Option<Res<LoginAbandon>>,
@@ -421,14 +369,7 @@ fn to_select_on_roster(
     // behind the screen's back is abandoned.
     let now = LoginAbandon::now(abandon.as_deref());
     let (mut edge, mut stale) = (false, false);
-    let generations: Vec<u64> = if crate::ui_script::glue::is_stock(stock.as_deref()) {
-        msgs.read().for_each(drop);
-        auths.read().map(|m| m.generation).collect()
-    } else {
-        auths.read().for_each(drop);
-        msgs.read().map(|m| m.generation).collect()
-    };
-    for generation in generations {
+    for generation in auths.read().map(|m| m.generation) {
         if generation == now {
             edge = true;
         } else {
@@ -446,22 +387,14 @@ fn to_select_on_roster(
     intent.in_flight = false;
     intent.park = IoPark::Active;
     intent.retry_at = None;
-    notices.write(LoginNotice::LoggedOn);
     if *state.get() == ClientState::Login {
         next.set(ClientState::CharSelect);
     }
 }
 
-/// The armed quit: `AppExit` once the time it holds has passed, so a screen's quit sound can play.
+/// The armed quit: `AppExit` once the time it holds has passed.
 #[derive(Resource, Default)]
 pub(crate) struct QuitArm(Option<f32>);
-
-impl QuitArm {
-    /// A quit that fires at `Time::elapsed_secs` `at`.
-    pub(crate) fn at(at: f32) -> Self {
-        QuitArm(Some(at))
-    }
-}
 
 /// Fire the armed quit once its grace has elapsed.
 fn drive_quit(arm: Option<Res<QuitArm>>, time: Res<Time>, mut exit: MessageWriter<AppExit>) {
@@ -474,8 +407,7 @@ fn drive_quit(arm: Option<Res<QuitArm>>, time: Res<Time>, mut exit: MessageWrite
 
 // ── The login shot ───────────────────────────────────────────────────────────────────────────────
 
-/// `WOW_LOGIN_SHOT_OUT=<path>`: one PNG of the login screen once it has settled, whichever screen
-/// set stands.
+/// `WOW_LOGIN_SHOT_OUT=<path>`: one PNG of the login screen once it has settled.
 fn debug_login_shot(
     mut commands: Commands,
     state: Res<State<ClientState>>,
@@ -500,23 +432,6 @@ fn debug_login_shot(
         .observe(save_to_disk(out.clone()));
     info!("login: shot instrument writing {out}");
     *done = true;
-}
-
-// ── The login smoke's spec ───────────────────────────────────────────────────────────────────────
-
-/// Split `WOW_LOGIN_SMOKE=user:pass[:Character]` three ways: a `split_once(':')` would hand the
-/// character name to the password, a refusal indistinguishable from a wrong password.
-pub(crate) fn smoke_spec(spec: &str) -> (&str, &str, Option<&str>) {
-    let mut parts = spec.splitn(3, ':');
-    let user = parts.next().unwrap_or_default();
-    let pass = parts.next().unwrap_or_default();
-    let character = parts.next().map(str::trim).filter(|n| !n.is_empty());
-    (user, pass, character)
-}
-
-/// The optional third field, the character to enter as; [`super::roster`]'s policy acts on it.
-pub(crate) fn smoke_character(spec: &str) -> Option<String> {
-    smoke_spec(spec).2.map(str::to_string)
 }
 
 // ── The saved account name ───────────────────────────────────────────────────────────────────────
@@ -580,7 +495,7 @@ mod tests {
             .add_message::<LoginQueuedMessage>()
             .add_message::<LoginFailedMessage>()
             .add_message::<DisconnectedMessage>()
-            .add_message::<LoginNotice>()
+            .add_message::<LoginGuardRefused>()
             .add_message::<AppExit>()
             .add_systems(Update, drive_policy);
         app.world_mut().resource_mut::<LoginIntent>().env_read = true;
@@ -588,19 +503,10 @@ mod tests {
         (app, rx)
     }
 
-    /// The notices written this frame.
-    fn notices(app: &App) -> Vec<LoginNotice> {
-        app.world()
-            .resource::<Messages<LoginNotice>>()
-            .iter_current_update_messages()
-            .cloned()
-            .collect()
-    }
-
     /// A lost session does not log itself back in: a displaced client's resubmit would kick the
     /// client that displaced it. `GlueParent.lua` retries nothing.
     #[test]
-    fn a_lost_session_clears_the_credentials_and_says_so() {
+    fn a_lost_session_clears_the_credentials() {
         let (mut app, _requests) = policy_app();
         app.world_mut().resource_mut::<LoginIntent>().creds =
             Some(("player".into(), "secret".into()));
@@ -618,10 +524,6 @@ mod tests {
              account back off the client that displaced us",
         );
         assert!(intent.retry_at.is_none(), "and nothing is scheduled");
-        assert!(matches!(
-            notices(&app).as_slice(),
-            [LoginNotice::SessionOver]
-        ));
     }
 
     /// A logout rides the same message but keeps the world link, so nothing logs on again: the
@@ -640,10 +542,6 @@ mod tests {
             session_over: false,
         });
         app.update();
-        assert!(
-            notices(&app).is_empty(),
-            "with nothing to say: nothing went wrong"
-        );
         app.update();
 
         let intent = app.world().resource::<LoginIntent>();
@@ -661,63 +559,35 @@ mod tests {
         );
     }
 
-    /// The login's success edge is the authentication under the stock screens, whose roster comes
-    /// only after the screen is up and asks, and the roster under the native ones. Until the stock
-    /// edge the state stays `Login`, so the screen's Exit still abandons the attempt.
+    /// The login's success edge is the authentication: a roster alone moves nothing, and until
+    /// the edge the state stays `Login`, so the screen's Exit still abandons the attempt.
     #[test]
-    fn the_stock_login_ends_at_the_authentication_and_the_native_at_the_roster() {
-        let roster = || CharListMessage {
+    fn the_login_ends_at_the_authentication() {
+        let mut app = edge_app(0);
+        app.world_mut().write_message(crate::net::CharListMessage {
             characters: Vec::new(),
             realm: None,
             cause: benilla_protocol::RosterCause::Asked,
             epoch: 1,
-            generation: 0,
-        };
-        let auth = || WorldAuthMessage {
+        });
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::Login
+        );
+        app.world_mut().write_message(WorldAuthMessage {
             realm: test_realm(),
             epoch: 1,
             generation: 0,
-        };
-        for stock in [true, false] {
-            let mut app = edge_app(stock, 0);
-            let (first, second) = (
-                |app: &mut App| {
-                    if stock {
-                        app.world_mut().write_message(roster());
-                    } else {
-                        app.world_mut().write_message(auth());
-                    }
-                },
-                |app: &mut App| {
-                    if stock {
-                        app.world_mut().write_message(auth());
-                    } else {
-                        app.world_mut().write_message(roster());
-                    }
-                },
-            );
-            // The message of the other policy's edge leaves the screen where it is.
-            first(&mut app);
-            app.update();
-            app.update();
-            assert_eq!(
-                *app.world().resource::<State<ClientState>>().get(),
-                ClientState::Login,
-                "stock {stock}"
-            );
-            second(&mut app);
-            app.update();
-            assert!(
-                matches!(notices(&app).as_slice(), [LoginNotice::LoggedOn]),
-                "stock {stock}: the edge is told"
-            );
-            app.update();
-            assert_eq!(
-                *app.world().resource::<State<ClientState>>().get(),
-                ClientState::CharSelect,
-                "stock {stock}"
-            );
-        }
+        });
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::CharSelect
+        );
+        assert!(!app.world().resource::<LoginIntent>().in_flight);
     }
 
     fn test_realm() -> benilla_protocol::RealmInfo {
@@ -733,78 +603,63 @@ mod tests {
         }
     }
 
-    /// [`to_select_on_roster`] alone on the login screen, under one switch, at one abandon
-    /// generation.
-    fn edge_app(stock: bool, generation: u64) -> App {
+    /// [`to_select_on_auth`] alone on the login screen, at one abandon generation.
+    fn edge_app(generation: u64) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
             .insert_state(ClientState::Login)
-            .insert_resource(crate::ui_script::glue::GlueStock(stock))
             .insert_resource(LoginAbandon(std::sync::Arc::new(
                 std::sync::atomic::AtomicU64::new(generation),
             )))
             .init_resource::<LoginIntent>()
-            .add_message::<CharListMessage>()
+            .add_message::<crate::net::CharListMessage>()
             .add_message::<WorldAuthMessage>()
-            .add_message::<LoginNotice>()
-            .add_systems(Update, to_select_on_roster);
+            .add_systems(Update, to_select_on_auth);
+        {
+            let mut intent = app.world_mut().resource_mut::<LoginIntent>();
+            intent.in_flight = true;
+        }
         app
     }
 
     /// An attempt a Cancel or a disconnect has passed since is no edge: the screen stays on login
-    /// and the session that parked behind its back is abandoned, under either policy.
+    /// and the session that parked behind its back is abandoned.
     #[test]
     fn a_login_edge_behind_the_abandon_generation_abandons_the_session() {
-        for stock in [true, false] {
-            let (tx, rx) = crossbeam_channel::unbounded();
-            let mut app = edge_app(stock, 1);
-            app.insert_resource(crate::net::CharPick(tx.into()));
-            let send = |app: &mut App, generation: u64| {
-                if stock {
-                    app.world_mut().write_message(WorldAuthMessage {
-                        realm: test_realm(),
-                        epoch: 1,
-                        generation,
-                    });
-                } else {
-                    app.world_mut().write_message(CharListMessage {
-                        characters: Vec::new(),
-                        realm: None,
-                        cause: benilla_protocol::RosterCause::Park,
-                        epoch: 1,
-                        generation,
-                    });
-                }
-            };
-            send(&mut app, 0);
-            app.update();
-            assert!(
-                notices(&app).is_empty(),
-                "stock {stock}: a stale edge is no edge"
-            );
-            app.update();
-            assert_eq!(
-                *app.world().resource::<State<ClientState>>().get(),
-                ClientState::Login,
-                "stock {stock}: a stale edge"
-            );
-            assert!(
-                matches!(rx.try_recv(), Ok(crate::net::CharRequest::Abandon)),
-                "stock {stock}: the parked session is abandoned"
-            );
-            send(&mut app, 1);
-            app.update();
-            app.update();
-            assert_eq!(
-                *app.world().resource::<State<ClientState>>().get(),
-                ClientState::CharSelect,
-                "stock {stock}: the current attempt's edge"
-            );
-            assert!(rx.try_recv().is_err());
-        }
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = edge_app(1);
+        app.insert_resource(crate::net::CharPick(tx.into()));
+        let send = |app: &mut App, generation: u64| {
+            app.world_mut().write_message(WorldAuthMessage {
+                realm: test_realm(),
+                epoch: 1,
+                generation,
+            });
+        };
+        send(&mut app, 0);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::Login,
+            "a stale edge is no edge"
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(crate::net::CharRequest::Abandon)),
+            "the parked session is abandoned"
+        );
+        send(&mut app, 1);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::CharSelect,
+            "the current attempt's edge"
+        );
+        assert!(rx.try_recv().is_err());
     }
 
-    /// Under the stock glue an unattended run's transport failure is still resubmitted: the
+    /// An unattended run's transport failure is still resubmitted: the
     /// logon arm's cancel (`0x46bbbf` → `0x5b3320`) closes only a link that is open and keeps the
     /// credentials and the paced resubmit.
     #[test]
@@ -824,7 +679,6 @@ mod tests {
             refusal: None,
             reason: "connection refused".into(),
             terminal: false,
-            dial: None,
         });
         // The arm's cancel and its dialog's press, as the glue manager asks them.
         app.world_mut().write_message(GlueLogin::CloseLink);
@@ -834,10 +688,6 @@ mod tests {
             realm_rx.try_recv(),
             Ok(crate::net::RealmRequest::Close)
         ));
-        assert!(
-            notices(&app).is_empty(),
-            "an untyped attempt's failure is silent"
-        );
         {
             let intent = app.world().resource::<LoginIntent>();
             assert!(intent.creds.is_some(), "the credentials stay");
@@ -870,7 +720,6 @@ mod tests {
             Some(RETRY_DELAY_SECS),
             "paced by the flat 3 s off a zeroed clock, not fired on the spot",
         );
-        assert!(notices(&app).is_empty());
     }
 
     /// Each attempt dials the realmlist current at its submit.
@@ -922,20 +771,20 @@ mod tests {
         let mut cursor = bevy::ecs::message::MessageCursor::<AppExit>::default();
         app.update();
         let _ = exited(&mut app, &mut cursor);
-        app.world_mut().resource_mut::<LoginIntent>().announced = typed;
+        {
+            let mut intent = app.world_mut().resource_mut::<LoginIntent>();
+            intent.announced = typed;
+            intent.creds = Some(("player".into(), "secret".into()));
+        }
         app.world_mut().write_message(LoginFailedMessage {
-            refusal: Some(LoginRefusal::Logon(0x05)),
+            refusal: Some(benilla_protocol::LoginRefusal::Logon(0x05)),
             reason: "server rejected logon: result 0x05".into(),
             terminal: false,
-            dial: None,
         });
         app.update();
         assert!(
-            matches!(
-                notices(&app).as_slice(),
-                [LoginNotice::Refused(LoginRefusal::Logon(0x05))]
-            ),
-            "every refusal is told, exit or not",
+            app.world().resource::<LoginIntent>().creds.is_none(),
+            "every refusal drops the credentials, exit or not",
         );
         exited(&mut app, &mut cursor)
     }
@@ -945,7 +794,6 @@ mod tests {
     #[test]
     fn a_typed_password_refusal_never_exits() {
         let _lock = crate::local_state::test_env::ENV_LOCK.lock();
-        let _smoke = crate::local_state::test_env::EnvGuard::unset("WOW_LOGIN_SMOKE");
 
         // A person's own launch line (as `.cargo/config.toml`'s example), declaring nobody absent.
         let _user = crate::local_state::test_env::EnvGuard::set("WOW_USER", "player");
@@ -973,19 +821,6 @@ mod tests {
             !refusal_exits(true),
             "a password typed at the screen is attended by direct evidence — dialog, another go",
         );
-    }
-
-    /// The character name must never end up in the password.
-    #[test]
-    fn the_smoke_spec_splits_three_ways() {
-        assert_eq!(
-            smoke_spec("probe1:secret:Probeone"),
-            ("probe1", "secret", Some("Probeone"))
-        );
-        assert_eq!(smoke_spec("probe1:secret"), ("probe1", "secret", None));
-        // A trailing colon names no character; vmangos account passwords hold no colon.
-        assert_eq!(smoke_spec("player:pass:"), ("player", "pass", None));
-        assert_eq!(smoke_spec("player"), ("player", "", None));
     }
 
     /// Save, load and clear round-trip through the file (`Get`/`SetSavedAccountName`).

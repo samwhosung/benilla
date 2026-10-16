@@ -281,8 +281,8 @@ pub(crate) fn register_dev_commands(script: &benilla_ui::script::UiScript, dev: 
 }
 
 /// Build the table in `PostStartup`, after `Startup` has inserted the VM and the emote catalog,
-/// off the boot VM's `GlobalStrings.lua` and emote tokens. Where the stock glue screens hold the
-/// world instead, their VM has neither, so a boot VM's contents are built for this read alone
+/// off `GlobalStrings.lua` and the emote tokens. The glue VM the world holds at startup has
+/// neither, so they are built on a VM of their own for this read alone
 /// ([`crate::ui_script::strings_vm`]).
 pub(crate) fn build_slash_commands(world: &mut World) {
     let glue_side = world

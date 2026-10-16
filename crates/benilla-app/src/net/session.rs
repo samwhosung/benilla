@@ -135,8 +135,8 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
             refusal,
             reason,
             terminal,
-            dial,
-        } => login_failed(refusal, reason, terminal, dial, &mut e.login_failures),
+            ..
+        } => login_failed(refusal, reason, terminal, &mut e.login_failures),
         SessionEvent::RealmList { realms, failed } => {
             e.realm_lists.write(RealmListMessage { realms, failed });
         }
@@ -163,7 +163,7 @@ fn on_character_list(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
         realm,
         cause,
         epoch,
-        generation,
+        ..
     } = ev
     {
         character_list(
@@ -171,7 +171,6 @@ fn on_character_list(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             realm,
             cause,
             epoch,
-            generation,
             &mut b.status,
             &mut e.char_lists,
         );
@@ -455,14 +454,12 @@ fn login_failed(
     refusal: Option<benilla_protocol::LoginRefusal>,
     reason: String,
     terminal: bool,
-    dial: Option<benilla_protocol::DialFailure>,
     out: &mut MessageWriter<LoginFailedMessage>,
 ) {
     out.write(LoginFailedMessage {
         refusal,
         reason,
         terminal,
-        dial,
     });
 }
 
@@ -481,7 +478,6 @@ fn character_list(
     realm: Option<benilla_protocol::RealmInfo>,
     cause: benilla_protocol::RosterCause,
     epoch: u64,
-    generation: u64,
     status: &mut NetStatus,
     char_lists: &mut MessageWriter<CharListMessage>,
 ) {
@@ -497,11 +493,10 @@ fn character_list(
         realm,
         cause,
         epoch,
-        generation,
     });
 }
 
-/// `SMSG_CHARACTER_LOGIN_FAILED`: the announced entry is void; `crate::char_select` says why.
+/// `SMSG_CHARACTER_LOGIN_FAILED`: the announced entry is void; the glue manager says why.
 fn character_login_failed(result: u8, out: &mut MessageWriter<CharacterLoginFailedMessage>) {
     warn!("net: character login refused (result {result:#04x})");
     out.write(CharacterLoginFailedMessage { result });

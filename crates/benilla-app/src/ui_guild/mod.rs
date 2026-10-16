@@ -691,7 +691,7 @@ impl Plugin for UiGuildPlugin {
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     feed::drain_guild.after(UiInput),
                 )
-                    // Never against the boot VM: the feed's edge memo survives the entry load, so
+                    // Never against the glue VM: the feed's edge memo survives the entry load, so
                     // an edge spent on a VM with no frames, such as the login MOTD, is lost.
                     .run_if(crate::ui_script::ingame_ui_up),
             );

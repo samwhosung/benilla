@@ -400,7 +400,7 @@ fn tip_font_path(locale: usize) -> &'static str {
     }
 }
 
-/// The tip's font, loaded off the patch chain like the UI font ([`crate::char_select::wow_font`]).
+/// The tip's font, loaded off the patch chain.
 fn tip_font(assets: &AssetServer, locale: usize) -> Handle<Font> {
     assets.load(tip_font_path(locale))
 }

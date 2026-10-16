@@ -133,11 +133,6 @@ impl PluginGroup for GamePlugins {
             .add(crate::death::DeathPlugin)
             .add(crate::client_state::ClientStatePlugin { start: self.start })
             .add(crate::glue_session::GlueSessionPlugin)
-            .add(crate::glue::GluePlugin)
-            .add(crate::char_select::CharSelectPlugin)
-            .add(crate::login::LoginPlugin)
-            .add(crate::realm_select::RealmSelectPlugin)
-            .add(crate::char_create::CharCreatePlugin)
             .add(SoundPlugin)
             .add(TargetPlugin)
             .add(TransportPlugin)
@@ -582,27 +577,22 @@ pub(crate) mod schedule_tests {
             })
     }
 
-    /// The glue booth has one feeder per switch: under the stock screens only the glue VM's
-    /// writes `GluePreview`, and under the native ones only the native screens' do. A writer of neither kind is
-    /// named here with why it cannot run against the other.
+    /// The glue booth has one feeder, in any schedule: the glue VM's, which reads the stock
+    /// screens' models off the VM. Beside it only the booth's own create instrument writes
+    /// `GluePreview`.
     #[test]
-    fn the_glue_preview_has_one_feeder_per_switch() {
-        use crate::client_state::ClientState;
-        // The booth's own create instrument.
-        const EITHER: [&str; 1] = ["drive_create_test"];
+    fn the_glue_preview_has_one_feeder() {
         let mut app = headless_client();
+        let labels: Vec<_> = app
+            .world()
+            .resource::<bevy::ecs::schedule::Schedules>()
+            .iter()
+            .map(|(_, schedule)| schedule.label())
+            .collect();
         let mut writers = Vec::new();
-        writers.extend(resource_writers::<crate::portrait::GluePreview>(
-            &mut app, Update,
-        ));
-        for state in [ClientState::Login, ClientState::CharSelect] {
+        for label in labels {
             writers.extend(resource_writers::<crate::portrait::GluePreview>(
-                &mut app,
-                OnEnter(state),
-            ));
-            writers.extend(resource_writers::<crate::portrait::GluePreview>(
-                &mut app,
-                OnExit(state),
+                &mut app, label,
             ));
         }
         if !writers.iter().any(|(n, _)| n.contains("benilla_app::")) {
@@ -611,178 +601,17 @@ pub(crate) mod schedule_tests {
             );
             return;
         }
-        let has = |conds: &[String], c: &str| conds.iter().any(|n| n.ends_with(c));
-        let mut stock = Vec::new();
-        let mut native = Vec::new();
-        let mut neither = Vec::new();
-        for (name, conds) in &writers {
-            match (has(conds, "::stock_glue"), has(conds, "::native_glue")) {
-                (true, false) => stock.push(name.as_str()),
-                (false, true) => native.push(name.as_str()),
-                _ if EITHER.iter().any(|e| name.contains(e)) => {}
-                _ => neither.push(name.as_str()),
-            }
-        }
-        assert!(
-            neither.is_empty(),
-            "GluePreview writers on neither switch: {neither:?}"
-        );
+        let mut names: Vec<&str> = writers.iter().map(|(n, _)| n.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
         assert_eq!(
-            stock,
-            ["benilla_app::ui_script::glue_scene::feed_stock_glue_preview"],
-            "the stock screens' one feeder"
+            names,
+            [
+                "benilla_app::portrait::glue_booth::drive_create_test",
+                "benilla_app::ui_script::glue_scene::feed_stock_glue_preview",
+            ],
+            "the GluePreview writers"
         );
-        for want in [
-            "benilla_app::char_select::refresh::feed_glue_preview",
-            "benilla_app::login::show_main_menu",
-            "benilla_app::login::screen::clear_login_scene",
-            "benilla_app::char_select::screen::enter_select",
-            "benilla_app::char_select::screen::clear_select_scene",
-        ] {
-            assert!(
-                native.contains(&want),
-                "{want} is not gated to the native screens: {native:?}"
-            );
-        }
-    }
-
-    /// The native glue screens' modules: their systems, components and resources. `glue_strings`
-    /// is theirs: the stock screens read their words off their own `GlueStrings.lua`.
-    const NATIVE_GLUE: [&str; 6] = [
-        "benilla_app::login::",
-        "benilla_app::char_select::",
-        "benilla_app::char_create::",
-        "benilla_app::realm_select::",
-        "benilla_app::glue::",
-        "benilla_app::glue_strings::",
-    ];
-
-    /// Every system of every schedule that is of the native glue screens, with the run conditions
-    /// on it and on every set it is under: a system of their modules, or one anywhere that reads,
-    /// writes or filters for a component or resource of theirs (the dialog, the trees' markers,
-    /// the screens' state). Each entry is `(schedule, system, conditions, why)`.
-    fn native_glue_systems(app: &mut App) -> Vec<(String, String, Vec<String>, String)> {
-        let labels: Vec<_> = app
-            .world()
-            .resource::<bevy::ecs::schedule::Schedules>()
-            .iter()
-            .map(|(_, schedule)| schedule.label())
-            .collect();
-        let native = |name: &str| NATIVE_GLUE.iter().any(|m| name.starts_with(m));
-        let mut out = Vec::new();
-        for label in labels {
-            app.world_mut().schedule_scope(label, |world, schedule| {
-                schedule.graph_mut().systems.initialize(world);
-                let ids: HashMap<ComponentId, String> = world
-                    .components()
-                    .iter_registered()
-                    .map(|info| (info.id(), info.name().to_string()))
-                    .filter(|(_, name)| native(name))
-                    .collect();
-                let graph = schedule.graph();
-                for (key, system, conds) in graph.systems.iter() {
-                    let name = system.name().to_string();
-                    let mut why = native(&name).then(|| "its module".to_string());
-                    if let Some(with_access) = graph.systems.get(key) {
-                        let set = &with_access.access;
-                        let combined = set.combined_access();
-                        // A system over every component or resource (an `EntityMut` query, an
-                        // exclusive system) names none of them, so only named access counts.
-                        let named: HashSet<ComponentId> = combined
-                            .try_iter_component_access()
-                            .map(|it| it.map(|kind| *kind.index()).collect())
-                            .unwrap_or_default();
-                        let all_resources = combined.has_read_all_resources();
-                        for (id, ty) in &ids {
-                            let touched = named.contains(id)
-                                || (!all_resources
-                                    && (combined.has_resource_read(*id)
-                                        || combined.has_resource_write(*id)))
-                                || set
-                                    .filtered_accesses()
-                                    .iter()
-                                    .any(|f| f.with_filters().any(|w| w == *id));
-                            if touched && why.is_none() {
-                                why = Some(ty.clone());
-                            }
-                        }
-                    }
-                    let Some(why) = why else {
-                        continue;
-                    };
-                    let mut conditions: Vec<String> = conds
-                        .iter()
-                        .map(|c| c.condition.name().to_string())
-                        .collect();
-                    let mut stack = vec![NodeId::System(key)];
-                    while let Some(node) = stack.pop() {
-                        for parent in graph
-                            .hierarchy()
-                            .graph()
-                            .neighbors_directed(node, Direction::Incoming)
-                        {
-                            if let NodeId::Set(set) = parent {
-                                if let Some((_, _, set_conds)) =
-                                    graph.system_sets.iter().find(|(k, _, _)| *k == set)
-                                {
-                                    conditions.extend(
-                                        set_conds.iter().map(|c| c.condition.name().to_string()),
-                                    );
-                                }
-                                stack.push(parent);
-                            }
-                        }
-                    }
-                    out.push((format!("{label:?}"), name, conditions, why));
-                }
-            });
-        }
-        out
-    }
-
-    /// Under the stock screens nothing of the native glue screens runs, in any schedule: every
-    /// system of their modules, and every system that writes their dialog or reads, writes or
-    /// filters for their trees or state, carries the `native_glue` gate. What the stock screens
-    /// need of the session lives in `glue_session`, which tells a native screen what it decided by
-    /// a message.
-    #[test]
-    fn nothing_of_the_native_screens_runs_under_the_stock_screens() {
-        let mut app = headless_client();
-        let systems = native_glue_systems(&mut app);
-        if !systems
-            .iter()
-            .any(|(_, n, _, _)| n.contains("benilla_app::"))
-        {
-            eprintln!(
-                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
-            );
-            return;
-        }
-        let mut ungated: Vec<String> = systems
-            .iter()
-            .filter(|(_, _, conds, _)| !conds.iter().any(|c| c.ends_with("::native_glue")))
-            .map(|(schedule, name, _, why)| format!("{schedule} {name} ({why})"))
-            .collect();
-        ungated.sort();
-        ungated.dedup();
-        assert!(
-            ungated.is_empty(),
-            "native glue systems that run under the stock screens:\n{}",
-            ungated.join("\n")
-        );
-        // The census sees the native screens at all: a renamed module would pass it empty.
-        for want in [
-            "benilla_app::login::screen::materialize_screen",
-            "benilla_app::char_select::screen::materialize_screen",
-            "benilla_app::char_create::create_input",
-            "benilla_app::realm_select::screen::drive_screen",
-            "benilla_app::glue::dialog::drive_glue_dialog",
-        ] {
-            assert!(
-                systems.iter().any(|(_, n, _, _)| n == want),
-                "{want} is not in the census"
-            );
-        }
     }
 
     /// One row of the class table: the type's name for the message, and its `TypeId`.
@@ -942,10 +771,8 @@ pub(crate) mod schedule_tests {
     }
 
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
-    /// particle `EffectQuads` are most of it. One is `glue::backdrop::fit_tiled_backgrounds`'s
-    /// `ImageNode` rect against bevy's private accessibility `image_changed`, which reads only
-    /// the change tick for a label: either order labels the same node.
-    const POST_UPDATE_CEILING: usize = 372;
+    /// particle `EffectQuads` are most of it.
+    const POST_UPDATE_CEILING: usize = 371;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may
@@ -961,9 +788,6 @@ pub(crate) mod schedule_tests {
     ///   would, off the same clock;
     /// - the area-spirit-healer poll over `Transform` and `NetEntity`: it is level-triggered, so a
     ///   unit seen a frame early or late is decided again next frame;
-    /// - `ui_script::glue_scene::feed_stock_glue_preview` against the native glue screens'
-    ///   writers of `GluePreview`: the switch runs one side or the other (`stock_glue` against
-    ///   `native_glue`), never both;
     /// - the cursor classifier against `world_focus`'s focus publish and settle release over
     ///   `Player`: it reads `own_control_lost`, and they write only `settling` and `world_stale`;
     /// - `ui_quest::lines::feed_quest_lines` and the reader's begin and feed
@@ -1010,15 +834,12 @@ pub(crate) mod schedule_tests {
     ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
-    ///   `own_control_lost` only, and the loader writes the saved camera pose;
-    /// - the native refused-login dialog (`char_select::open_login_refusal`), split off the
-    ///   session's refusal edge, against the exclusive `terrain_stream::finish_colliders`, as the
-    ///   edge itself already pairs: it writes only `GlueDialog`, which no collider attach reads.
+    ///   `own_control_lost` only, and the loader writes the saved camera pose.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_939;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_348;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1617,7 +1438,7 @@ pub(crate) mod schedule_tests {
     const CONSUMES: &[&str] = &["fire_event(", "mem::take(", ".drain("];
 
     /// Why an ungated one-shot consumer holding the VM loses nothing in the one-frame window
-    /// where the wire is in world and the boot VM is still live and frameless.
+    /// where the wire is in world and the glue VM is still live.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Because {
         /// The consumed queue is filled only by Lua asking; a frameless VM asks for nothing.
@@ -1639,7 +1460,7 @@ pub(crate) mod schedule_tests {
         ("bindings.rs", "sync_dispatch", Because::MemoLatched,
          "`seen_generation` is a `VmMemo`: a new VM reads `None` and rebuilds, and its seed's load owes the UPDATE_BINDINGS"),
         ("capture/probe_bg.rs", "bg_probe", Because::SelfHealing,
-         "the battleground probe: dev-only (`WOW_PROBE_BG`, `cfg(feature = \"dev\")`) so it is not in a player build at all, and its `mem::take` is of its OWN pending-events string, not a queue anything else fills. Its one real VM dependency is the Lua event tap, which self-heals: `EVENT_DRAIN` returns a `<tap-gone>` sentinel when the tap's globals are missing — the case this window causes, since a tap installed in the boot VM is discarded when `mint_entry_vm` builds the interface — and the probe re-installs on the next frame"),
+         "the battleground probe: dev-only (`WOW_PROBE_BG`, `cfg(feature = \"dev\")`) so it is not in a player build at all, and its `mem::take` is of its OWN pending-events string, not a queue anything else fills. Its one real VM dependency is the Lua event tap, which self-heals: `EVENT_DRAIN` returns a `<tap-gone>` sentinel when the tap's globals are missing — the case this window causes, since a tap installed in the glue VM is discarded when `mint_entry_vm` builds the interface — and the probe re-installs on the next frame"),
         ("death/mod.rs", "feed_death", Because::MemoLatched,
          "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo makes the first snapshot an edge and re-announces a held offer, confirm and corpse range"),
         ("screenshot.rs", "ask_for_captures", Because::FilledByVm,
@@ -1767,7 +1588,7 @@ pub(crate) mod schedule_tests {
         let post = census(&mut app, PostUpdate, SyncPoints::Built);
         // The leave-world sweep's legs run only inside its schedule, whose callers hold the
         // interface up: the worldport's producer is gated with the unit feed, the shutdown edges
-        // run the sweep before a parked boot VM returns, and the quit returns inside the
+        // run the sweep before a parked glue VM returns, and the quit returns inside the
         // entry-load window.
         let swept: Vec<String> = census(
             &mut app,
