@@ -5,8 +5,9 @@
 //!
 //! `NotifyInspect(unit)` sends `CMSG_INSPECT`, which also sets the server-side selection, and
 //! latches the token; the window paints without waiting for `SMSG_INSPECT`, a bare guid echo.
-//! `UNIT_INVENTORY_CHANGED` and `UNIT_LEVEL` fire for the inspected token on change, a first
-//! resolve included (`InspectPaperDollFrame.lua:2-5`, `82`).
+//! `UNIT_INVENTORY_CHANGED` fires for the inspected token on change, a first resolve included
+//! (`InspectPaperDollFrame.lua:2-5`, `82`). Its `UNIT_LEVEL` is the unit-field bridge's
+//! ([`crate::field_watch`]), fired per token on a values block that moves the level.
 
 use bevy::prelude::*;
 
@@ -24,7 +25,7 @@ pub(crate) struct InspectTarget {
     pub(crate) token: Option<String>,
 }
 
-/// The last view pushed and level seen, per VM ([`crate::ui_script::VmMemo`]), so a `/reload`'s
+/// The last view pushed, per VM ([`crate::ui_script::VmMemo`]), so a `/reload`'s
 /// new VM gets the view re-pushed and its events re-fired.
 #[derive(Resource, Default)]
 struct InspectFeedState {
@@ -35,7 +36,6 @@ struct InspectFeedState {
 #[derive(Default)]
 struct InspectFeedMemo {
     last: Option<InspectView>,
-    last_level: Option<u32>,
 }
 
 pub(crate) struct InspectUiPlugin;
@@ -157,7 +157,6 @@ fn feed_inspect(
         if memo.last.is_some() {
             script.set_inspect(None);
             memo.last = None;
-            memo.last_level = None;
         }
         return;
     };
@@ -193,9 +192,70 @@ fn feed_inspect(
             vec![ScriptValue::Str(token.clone())],
         );
     }
-    let level = store.0.unit_level();
-    if memo.last_level != level {
-        memo.last_level = level;
-        script.fire_event("UNIT_LEVEL", vec![ScriptValue::Str(token)]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// The inspected unit's level is the bridge's to announce: the feed fires no `UNIT_LEVEL`,
+    /// at the first resolve or on a change.
+    #[test]
+    fn the_inspect_feed_fires_no_level_event() {
+        const MATE: u64 = 0x2001;
+        const UNIT_FIELD_LEVEL: u16 = 34;
+        let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        std::mem::forget(rx);
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(InspectTarget {
+                token: Some("target".into()),
+            })
+            .init_resource::<InspectFeedState>()
+            .init_resource::<Items>()
+            .init_resource::<GuidIndex>()
+            .insert_resource(crate::target::Selection {
+                guid: Some(MATE),
+                ..Default::default()
+            })
+            .init_resource::<crate::ui_party::GroupState>();
+        let mate = app
+            .world_mut()
+            .spawn(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (UNIT_FIELD_LEVEL, 10),
+            ])))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(MATE, mate);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = 0
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UNIT_LEVEL")
+                f:SetScript("OnEvent", function() SEEN = SEEN + 1 end)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        for level in [10, 11] {
+            app.world_mut()
+                .entity_mut(mate)
+                .get_mut::<ObjectStore>()
+                .unwrap()
+                .0
+                .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                    UNIT_FIELD_LEVEL,
+                    level,
+                )]));
+            app.world_mut().run_system_once(feed_inspect).unwrap();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0, "level {level}");
+        }
     }
 }
