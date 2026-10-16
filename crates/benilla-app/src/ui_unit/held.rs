@@ -271,7 +271,7 @@ pub(crate) fn feed_name_candidates(
         let record = store
             .as_ref()
             .and_then(|s| s.0.object_entry())
-            .or_else(|| benilla_protocol::guid::entry(guid))
+            .filter(|&e| e != 0)
             .is_some_and(|e| names.creature_record(e).is_some());
         let fresh = rebuild
             || store.as_ref().is_some_and(|s| s.is_changed())
@@ -377,7 +377,12 @@ mod tests {
         unit(0x09, target, health)
     }
 
-    fn spawn(app: &mut App, guid: u64, store: ObjectStore) -> Entity {
+    /// Streams `guid` in. A creature's descriptor carries its `OBJECT_FIELD_ENTRY` (field 3), the
+    /// key its name and record are cached under; these guids spell it in their entry bits.
+    fn spawn(app: &mut App, guid: u64, mut store: ObjectStore) -> Entity {
+        if let Some(entry) = benilla_protocol::guid::entry(guid) {
+            store.0.merge(ObjectFields::from_pairs(&[(3, entry)]));
+        }
         let e = app.world_mut().spawn((Guid(guid), store)).id();
         app.world_mut()
             .resource_mut::<GuidIndex>()

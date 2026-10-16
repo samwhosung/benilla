@@ -361,7 +361,10 @@ impl TargetScan<'_, '_> {
             if guid::is_creature_or_pet(guid_c.0) {
                 if let (Some(types), Some(ty)) = (
                     self.creature_types.as_deref(),
-                    guid::entry(guid_c.0).and_then(|e| self.names.creature_type(e)),
+                    store
+                        .and_then(|s| s.0.object_entry())
+                        .filter(|&e| e != 0)
+                        .and_then(|e| self.names.creature_type(e)),
                 ) {
                     if types.0.no_tab_target(ty) {
                         trace_unit(guid_c.0, tf, "REJECT critter-type");

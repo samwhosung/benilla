@@ -1082,12 +1082,12 @@ pub(crate) fn enrich_unit(
         // No faction line for players: their factions have no reputation slot.
         return;
     }
-    let Some(entry) = benilla_protocol::guid::entry(guid) else {
-        return;
-    };
+    // The record is keyed by the unit's own `OBJECT_FIELD_ENTRY` (`[[unit+8]+0xc]`, `0x604629`);
+    // an entry of 0 stores none (`0x60464b`).
+    let entry = store.0.object_entry().filter(|&e| e != 0);
     // The creature record (`CGUnit+0xb30`); `None` until the query answers, a real state the
     // plate draws under the name `UNKNOWNOBJECT`.
-    let rec = names.creature_record(entry);
+    let rec = entry.and_then(|e| names.creature_record(e));
     if let Some(rec) = rec {
         state.subtitle = rec.subname.clone();
         // The client's one rank getter, never `rec.rank`: an enslaved elite reads rank 0.
@@ -3176,7 +3176,10 @@ mod tests {
         use benilla_protocol::messages::ObjectFields;
 
         const ENTRY: u32 = 12397; // Ol' Sooty, a rank-1 elite
-        const GUID: u64 = (0xF130u64 << 48) | ((ENTRY as u64) << 24) | 0x42;
+                                  // The guid's entry bits name another creature: the record is keyed by the descriptor's
+                                  // `OBJECT_FIELD_ENTRY` (field 3), `[[unit+8]+0xc]` at `0x604629`.
+        const GUID: u64 = (0xF130u64 << 48) | (299u64 << 24) | 0x42;
+        const OBJECT_ENTRY: u16 = 3;
         /// `UNIT_FIELD_PETNUMBER`, absolute descriptor index (`OBJECT_END(6) + 0x85`).
         const PETNUMBER: u16 = 139;
 
@@ -3197,7 +3200,9 @@ mod tests {
         );
 
         let rank_of = |fields: &[(u16, u32)]| {
-            let store = ObjectStore(ObjectFields::from_pairs(fields));
+            let mut pairs = vec![(OBJECT_ENTRY, ENTRY)];
+            pairs.extend_from_slice(fields);
+            let store = ObjectStore(ObjectFields::from_pairs(&pairs));
             let mut s = UnitState::default();
             enrich_unit(&mut s, GUID, &names, &store, None, None);
             s.rank
@@ -3216,10 +3221,14 @@ mod tests {
         );
 
         // The record gate: rank 0 until the creature query answers.
+        let store = ObjectStore(ObjectFields::from_pairs(&[(OBJECT_ENTRY, ENTRY + 1)]));
+        let mut s = UnitState::default();
+        enrich_unit(&mut s, GUID, &names, &store, None, None);
+        assert_eq!(s.rank, 0, "an un-queried creature has no classification");
         let store = ObjectStore(ObjectFields::from_pairs(&[]));
         let mut s = UnitState::default();
-        enrich_unit(&mut s, GUID ^ (1 << 24), &names, &store, None, None);
-        assert_eq!(s.rank, 0, "an un-queried creature has no classification");
+        enrich_unit(&mut s, GUID, &names, &store, None, None);
+        assert_eq!(s.rank, 0, "a descriptor with no entry yet has no record");
     }
 
     /// The entry gate `0x612610` passes with no record; the record's `HIDE_FACTION_TOOLTIP`
@@ -3254,7 +3263,10 @@ mod tests {
                     .map(|n| (id, n.to_string()))
             })
             .expect("some faction template shows a tooltip line to a human warrior");
-        let store = ObjectStore(ObjectFields::from_pairs(&[(FACTIONTEMPLATE, template_id)]));
+        let store = ObjectStore(ObjectFields::from_pairs(&[
+            (3, ENTRY), // `OBJECT_FIELD_ENTRY`
+            (FACTIONTEMPLATE, template_id),
+        ]));
 
         let line_for = |names: &NameCache| {
             let mut state = UnitState::default();

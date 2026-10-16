@@ -129,7 +129,6 @@ impl NameKey {
                     .0
                     .object_entry()
                     .filter(|&e| e != 0)
-                    .or_else(|| guid::entry(guid_val))
                     .map(Self::Creature),
                 n => Some(Self::Pet(n)),
             },
@@ -1210,6 +1209,34 @@ mod tests {
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
             "no pet-name query for a unit whose PETNUMBER is 0"
         );
+    }
+
+    /// `[[unit+8]+0xc]` keys the creature cache (`0x604629`): a creature whose guid bits spell
+    /// another entry is named, and asked for, by its descriptor, and a descriptor with no entry
+    /// yet has no key (an entry of 0 stores no record, `0x60464b`).
+    #[test]
+    fn a_creature_is_keyed_by_its_descriptor_entry_not_its_guid_bits() {
+        let (cmds, rx) = commands();
+        let mut cache = NameCache::default();
+        let wolf = compose(guid::HIGH_UNIT, 299, 4);
+        let store = unit(&[(ENTRY, 2_671)]);
+        cache.insert_creature(299, Some(record("Guid Bits")));
+        cache.insert_creature(2_671, Some(record("Field Entry")));
+        assert_eq!(
+            cache.resolve_unit(wolf, Some(&store), &cmds),
+            Some("Field Entry")
+        );
+
+        let cold = NameCache::default();
+        assert_eq!(cold.resolve_unit(wolf, Some(&store), &cmds), None);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CreatureQuery { entry: 2_671, .. })
+        ));
+
+        let bare = unit(&[]);
+        assert_eq!(cache.resolve_unit(wolf, Some(&bare), &cmds), None);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
