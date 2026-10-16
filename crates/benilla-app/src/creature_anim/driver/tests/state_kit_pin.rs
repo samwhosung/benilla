@@ -297,3 +297,72 @@ fn the_pinned_clip_outlives_its_aura_until_its_window_ends() {
     );
     assert_eq!(main_node(&app, unit), Some(nodes[0]));
 }
+
+/// One pass pins the mount and the body (`0x5fdeee`, `0x5fdf08`): a still rider plays the kit's
+/// id over Mount (91), and its mount child plays it too, off the host's still test.
+#[test]
+fn a_still_rider_and_its_mount_both_take_the_pin() {
+    use benilla_protocol::ObjectFields;
+    const FIELD_MOUNTDISPLAYID: u16 = 133;
+
+    let mut app = app();
+    let (rider, nodes) = spawn_orc(&mut app);
+    let (mount, mount_nodes) = spawn_orc(&mut app);
+    app.world_mut().entity_mut(rider).insert((
+        crate::net::ObjectStore(ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, 2402)])),
+        crate::entities::mount::MountChild(mount),
+        sleeping(),
+    ));
+    app.world_mut()
+        .entity_mut(mount)
+        .remove::<MovementState>()
+        .insert(crate::entities::mount::MountBody { host: rider });
+    app.update();
+    assert_eq!(
+        base(&app, rider),
+        Some(EMOTE_SLEEP),
+        "the rider's Mount is pinned"
+    );
+    assert_eq!(main_node(&app, rider), Some(nodes[1]));
+    assert_eq!(
+        base(&app, mount),
+        Some(EMOTE_SLEEP),
+        "the mount takes its host's pin"
+    );
+    assert_eq!(main_node(&app, mount), Some(mount_nodes[1]));
+
+    app.world_mut().entity_mut(rider).insert(MovementState {
+        flags: move_flags::FORWARD,
+        speed: 7.0,
+        ..Default::default()
+    });
+    app.update();
+    assert_ne!(
+        base(&app, rider),
+        Some(EMOTE_SLEEP),
+        "a moving rider is not pinned"
+    );
+    assert_ne!(base(&app, mount), Some(EMOTE_SLEEP), "nor is its mount");
+}
+
+/// FALLING is outside `0x20000f`, and the jump's own play (`0x60e4d9`) reaches the pin: a still
+/// unit's JumpStart becomes the kit's id.
+#[test]
+fn a_still_units_jump_plays_the_pin() {
+    let mut app = app();
+    let (unit, nodes) = spawn_orc(&mut app);
+    app.world_mut().entity_mut(unit).insert(sleeping());
+    app.update();
+    app.world_mut().entity_mut(unit).insert(MovementState {
+        flags: move_flags::FALLING,
+        vertical_speed: 7.0,
+        ..Default::default()
+    });
+    app.update();
+    assert_eq!(
+        base(&app, unit),
+        Some(EMOTE_SLEEP),
+        "no JumpStart over the pin"
+    );
+    assert_eq!(main_node(&app, unit), Some(nodes[1]));
+}

@@ -283,6 +283,8 @@ pub(super) fn drive_animations(
         &Transform,
         // Read only by the debug trace.
         Has<SelfPlayer>,
+        // The rider's pins: `0x5fde80` writes the kit id into the mount's working state too.
+        Option<&StateKitPins>,
     )>,
     mut swings: MessageReader<SwingMessage>,
     mut impacts: MessageReader<SwingImpact>,
@@ -455,12 +457,13 @@ pub(super) fn drive_animations(
             move_modes,
             host_scale,
             ridden_by_self,
+            state_pins,
         ) = match mount_body {
             Some(mb) => match mount_hosts.get(mb.host) {
-                Ok((s, r, m, sp, f, sw, md, t, host_self)) => {
-                    (s, r, m, sp, f, sw, md, t.scale.x, host_self)
+                Ok((s, r, m, sp, f, sw, md, t, host_self, pins)) => {
+                    (s, r, m, sp, f, sw, md, t.scale.x, host_self, pins)
                 }
-                Err(_) => (None, None, None, None, None, false, None, 1.0, false),
+                Err(_) => (None, None, None, None, None, false, None, 1.0, false, None),
             },
             None => (
                 spline,
@@ -472,6 +475,7 @@ pub(super) fn drive_animations(
                 move_modes,
                 1.0,
                 false,
+                state_pins,
             ),
         };
         // The `0x5fe2f0` rate divisor's `|modelScale|`: a mount child's display column composes
@@ -605,6 +609,7 @@ pub(super) fn drive_animations(
                 }
                 drv.mode = Mode::Gait;
                 drv.gait = Some(DEATH);
+                drv.gait_pinned = false; // a death is never pinned (`0x5fda90`)
                 drv.deferred = None; // a normal arm clears the cache
             }
             continue;
@@ -672,29 +677,23 @@ pub(super) fn drive_animations(
         let special = special.filter(|s| !(looting && matches!(s, select::Special::Pose(_))));
 
         // The stationary state-kit pin (`0x5fde80`): with no `[+0x9e8] & 0x20000f` bit (turning
-        // keeps it), every play past `0x5fe2f0`'s lock and fast path plays the head state kit's
-        // id instead, so a pose's enter, loop and stand-up, a landing and a one-shot all become
-        // the pin. Deviation: a mounted rider is left unpinned, as its mount child, which the
-        // reference pins in the same pass, is driven apart.
+        // and falling keep it), every play past `0x5fe2f0`'s lock and fast path plays the head
+        // state kit's id instead, so a pose's enter, loop and stand-up, a JumpStart (`0x60e4d9`),
+        // a landing and a one-shot all become the pin. One pass writes it into the mount's and
+        // the body's working states (`0x5fdeee`, `0x5fdf08`): a rider plays it over Mount (91),
+        // since the pin runs after `0x5fe809`, and a mount child takes its host's.
         let kit_pin = state_pins
             .and_then(StateKitPins::head)
-            .filter(|_| !mounted && mv.flags & move_flags::CAST_PIN_MOVE == 0);
-        let special =
-            special.filter(|s| !(kit_pin.is_some() && matches!(s, select::Special::Pose(_))));
+            .filter(|_| mv.flags & move_flags::CAST_PIN_MOVE == 0);
+        let special = special.filter(|_| kit_pin.is_none());
         if kit_pin.is_some() {
             match drv.mode {
-                Mode::Entering(select::Special::Pose(_))
-                | Mode::Looping(select::Special::Pose(_))
-                | Mode::Exiting(select::Special::Pose(_), _)
-                | Mode::Land { .. } => {
+                Mode::Entering(_) | Mode::Looping(_) | Mode::Exiting(..) | Mode::Land { .. } => {
                     drv.mode = Mode::Gait;
                     drv.gait = None;
                 }
-                // A one-shot over a pose finishes into the pin, never the pose's loop.
-                Mode::Swing {
-                    id,
-                    under: Some(select::Special::Pose(_)),
-                } => drv.mode = Mode::Swing { id, under: None },
+                // A one-shot over a Special finishes into the pin, never the Special's loop.
+                Mode::Swing { id, under: Some(_) } => drv.mode = Mode::Swing { id, under: None },
                 _ => {}
             }
         }

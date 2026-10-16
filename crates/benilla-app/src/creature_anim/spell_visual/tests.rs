@@ -1793,3 +1793,101 @@ fn a_state_kits_anim_pins_its_unit_while_the_aura_lives() {
     app.update();
     assert_eq!(pins(&app, unit), None, "no live kit, no pin");
 }
+
+/// One sweep arms by ascending slot (`0x604e7b`-`0x604e85`), so the highest slot's kit is the
+/// head, whatever the spell ids: Sneezing Fit (6902) in slot 33 over Peon Sleeping in slot 32.
+#[test]
+fn a_sweeps_pins_arm_in_slot_order() {
+    use benilla_protocol::messages::{ObjectFields, ObjectType};
+
+    const PEON_SLEEPING: u32 = 17743;
+    const SLEEP_VISUAL: u32 = 4762;
+    const SLEEP_KIT: u32 = 906;
+    const EMOTE_SLEEP: u16 = 71;
+    const SNEEZING_FIT: u32 = 6902;
+    const SNEEZE_VISUAL: u32 = 517;
+    const SNEEZE_KIT: u32 = 586;
+    const STUN: u16 = 14;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_message::<SpellKitFx>()
+        .add_message::<crate::net::FieldChanged>()
+        .add_message::<crate::aura_visual::AuraProc>()
+        .add_message::<SpellKitSound>()
+        .add_message::<super::BaseAnimRecompute>();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([
+            (
+                SLEEP_VISUAL,
+                VisualStages {
+                    state: SLEEP_KIT,
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZE_VISUAL,
+                VisualStages {
+                    state: SNEEZE_KIT,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        HashMap::from([
+            (
+                SLEEP_KIT,
+                VisualKit {
+                    anim_id: Some(EMOTE_SLEEP),
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZE_KIT,
+                VisualKit {
+                    anim_id: Some(STUN),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([
+            (
+                PEON_SLEEPING,
+                SpellDisplay {
+                    visual: SLEEP_VISUAL,
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZING_FIT,
+                SpellDisplay {
+                    visual: SNEEZE_VISUAL,
+                    ..Default::default()
+                },
+            ),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    app.add_systems(Update, super::arm_aura_state_fx);
+
+    let unit = app
+        .world_mut()
+        .spawn(crate::net::ObjectStore(
+            ObjectFields::from_pairs(&[(79, PEON_SLEEPING), (80, SNEEZING_FIT), (99, 0x99)])
+                .into_created(ObjectType::Unit),
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world()
+            .entity(unit)
+            .get::<super::super::StateKitPins>()
+            .cloned(),
+        Some(super::super::StateKitPins(vec![
+            (SNEEZING_FIT, STUN),
+            (PEON_SLEEPING, EMOTE_SLEEP)
+        ])),
+        "slot 33's kit armed last, so it is the head"
+    );
+}

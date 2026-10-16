@@ -1015,12 +1015,17 @@ pub(crate) fn arm_aura_state_fx(
         let prev = armed.entry(entity).or_default();
         let pins = pinned.entry(entity).or_default();
         let pins_before = pins.clone();
-        // Occupied slots, deduped: one state instance per spell however many casters hold it.
-        let mut cur: Vec<u32> = store.0.unit_auras().map(|a| a.spell_id).collect();
-        cur.sort_unstable();
-        cur.dedup();
+        // Occupied slots in ascending order, deduped by first slot: one state instance per spell
+        // however many casters hold it. `0x604d00` removes first, then adds by slot ascending
+        // (`0x604e7b`-`0x604e85`), so the highest new slot's effect ends at the head.
+        let mut cur: Vec<u32> = Vec::new();
+        for a in store.0.unit_auras() {
+            if !cur.contains(&a.spell_id) {
+                cur.push(a.spell_id);
+            }
+        }
         for &spell_id in prev.iter() {
-            if cur.binary_search(&spell_id).is_err() {
+            if !cur.contains(&spell_id) {
                 fx.write(SpellKitFx::Reap {
                     entity,
                     spell_id,
@@ -1083,10 +1088,13 @@ pub(crate) fn arm_aura_state_fx(
             // The stage-2 anim leg, on the add edge only: an aura refreshed in place keeps its id,
             // and `0x604d00` fires neither arm.
             // The kind-2 effect carries the kit, flagged 0x1000, at the head of `+0xb4`; one
-            // with no model is made bare for it (`0x60f3d4`, `0x60f424`).
+            // with no model is made bare for it (`0x60f3d4`, `0x60f424`). Only a positive id pins
+            // (`0x5fdeb5 jle`); the recompute skips only a negative one (`0x60f366`).
             if let Some(anim_id) = kit.anim_id {
                 recomputes.write(BaseAnimRecompute { entity, anim_id });
-                pins.insert(0, (spell_id, anim_id));
+                if anim_id > 0 {
+                    pins.insert(0, (spell_id, anim_id));
+                }
             }
             next.push(spell_id);
         }
