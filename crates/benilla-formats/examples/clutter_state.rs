@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
             println!("  MISSING {path}");
             continue;
         };
-        let subs = match benilla_formats::parse_m2_render_submeshes(&bytes, "", &[]) {
+        let subs = match benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None) {
             Ok(s) => s,
             Err(e) => {
                 println!("  UNPARSED {path}: {e}");

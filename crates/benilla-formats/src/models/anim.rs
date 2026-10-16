@@ -49,7 +49,8 @@ impl Skeleton {
     }
 }
 
-/// Parse the bone hierarchy (stride `0x6c`: parent `+0x08`, pivot `+0x60`, as `0x714260` reads).
+/// Parse the bone hierarchy as `0x714260` reads it: parent and pivot from the version-aware bone
+/// records (108-byte records pre-Wrath, 88 with the name CRC in Wrath).
 pub fn parse_m2_skeleton(bytes: &[u8]) -> Result<Skeleton> {
     let format =
         parse_m2(&mut Cursor::new(bytes)).map_err(|e| anyhow::anyhow!("parsing M2: {e}"))?;
@@ -226,7 +227,13 @@ pub fn m2_bone_spins(bytes: &[u8]) -> HashMap<u16, BoneSpin> {
     let Some(seq) = anims.iter().find(|a| a.anim_id == 0) else {
         return out;
     };
-    let (bone_count, bone_ofs) = (le_u32(bytes, 0x34) as usize, le_u32(bytes, 0x38) as usize);
+    let Some(lay) = benilla_m2::M2Layout::of(bytes) else {
+        return out;
+    };
+    let (bone_count, bone_ofs) = (
+        le_u32(bytes, lay.bones) as usize,
+        le_u32(bytes, lay.bones + 4) as usize,
+    );
     for keys in &seq.bones {
         let idx = keys.bone as usize;
         // Rotation only and at least two keys: one key is a pose, not a spin.
@@ -240,7 +247,7 @@ pub fn m2_bone_spins(bytes: &[u8]) -> HashMap<u16, BoneSpin> {
         // The rotation track's `interp_type`, bounds-checked here: `le_u16` panics past the end.
         let interp = idx < bone_count
             && bone_ofs
-                .checked_add(idx * 0x6c + 0x28)
+                .checked_add(idx * lay.bone_stride + lay.bone_rotation_ofs)
                 .is_some_and(|t| t + 2 <= bytes.len() && le_u16(bytes, t) != 0);
         out.insert(
             keys.bone,
@@ -425,6 +432,17 @@ fn read_channel_track<T>(
     }
 }
 
+/// A benilla-m2 `M2Track` — Wrath's nested read, already rebased onto the shared absolute
+/// timeline by `band_starts` — as a [`ChannelTrack`]: the same fields, the same band cut.
+fn to_channel<T>(t: benilla_m2::M2Track<T>) -> ChannelTrack<T> {
+    ChannelTrack {
+        step: t.interp == 0,
+        gseq: t.gseq,
+        ranges: t.ranges,
+        keys: t.keys,
+    }
+}
+
 impl<T: super::key_anim::Lerp + PartialEq> ChannelTrack<T> {
     /// The keys for file slot `slot` over the band `[start, end]` (absolute ms), in seconds from
     /// its start. In-band keys go by timestamp; `ranges[slot]` is a bracket (its `hi` can sit in a
@@ -489,18 +507,42 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
     if b.len() < 0x40 || &b[0..4] != b"MD20" {
         return Vec::new();
     }
-    let (seq_count, seq_ofs) = (le_u32(b, 0x1c) as usize, le_u32(b, 0x20) as usize);
-    let (bone_count, bone_ofs) = (le_u32(b, 0x34) as usize, le_u32(b, 0x38) as usize);
-    // HandsClosed's file slot, which indexes the key windows, and its start ms.
+    let Some(lay) = benilla_m2::M2Layout::of(b) else {
+        return Vec::new();
+    };
+    let (seq_count, seq_ofs) = (
+        le_u32(b, lay.sequences) as usize,
+        le_u32(b, lay.sequences + 4) as usize,
+    );
+    let (bone_count, bone_ofs) = (
+        le_u32(b, lay.bones) as usize,
+        le_u32(b, lay.bones + 4) as usize,
+    );
+    let band_starts = if lay.wrath {
+        benilla_m2::band_starts_for(b, &lay)
+    } else {
+        Vec::new()
+    };
+    // HandsClosed's file slot, which indexes the key windows, and its start ms — a Wrath band's
+    // accumulated start, since its tracks are rebased onto the shared timeline.
     let mut hands_closed = None;
+    let mut band_acc = 0u32;
     for s in 0..seq_count {
-        let rec = seq_ofs + s * 0x44;
-        if rec + 0x44 > b.len() {
+        let rec = seq_ofs + s * lay.sequence_stride;
+        if rec + lay.sequence_stride > b.len() {
             break;
         }
+        let frame = if lay.wrath {
+            band_acc
+        } else {
+            le_u32(b, rec + 4)
+        };
         if le_u16(b, rec) == 15 {
-            hands_closed = Some((s, le_u32(b, rec + 0x04)));
+            hands_closed = Some((s, frame));
             break;
+        }
+        if lay.wrath {
+            band_acc = band_acc.saturating_add(le_u32(b, rec + 4));
         }
     }
     let Some((slot, frame)) = hands_closed else {
@@ -517,10 +559,19 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
     let mut out = Vec::new();
     for &bone in bones {
         let bi = bone as usize;
-        if bi >= bone_count || bone_ofs + bi * 0x6c + 0x6c > b.len() {
+        if bi >= bone_count || bone_ofs + bi * lay.bone_stride + lay.bone_stride > b.len() {
             continue;
         }
-        let tr = read_channel_track(b, bone_ofs + bi * 0x6c + 0x28, 16, quat);
+        let brec = bone_ofs + bi * lay.bone_stride;
+        let tr = if lay.wrath {
+            to_channel(benilla_m2::track_quat_wrath(
+                b,
+                brec + lay.bone_rotation_ofs,
+                &band_starts,
+            ))
+        } else {
+            read_channel_track(b, brec + lay.bone_rotation_ofs, 16, quat)
+        };
         if tr.gseq != 0xffff || tr.keys.is_empty() {
             continue; // a global-sequence track runs on its own clock
         }
@@ -538,14 +589,32 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
 }
 
 /// Parse every sequence at the animate kernel's offsets (`0x714260`): sequences at MD20
-/// `0x1c`/`0x20` (stride `0x44`), bones at `0x34`/`0x38` (stride `0x6c`). Zero-length sequences
-/// are skipped.
+/// `0x1c`/`0x20` (stride `0x44` pre-Wrath, `0x40` in Wrath, whose `length` owns the band), bones
+/// at `0x34`/`0x38` (stride `0x6c`) pre-Wrath and `0x2c` (stride `0x58`) in Wrath. Zero-length
+/// sequences are skipped.
 pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
     if b.len() < 0x40 || &b[0..4] != b"MD20" {
         return Vec::new();
     }
-    let (seq_count, seq_ofs) = (le_u32(b, 0x1c) as usize, le_u32(b, 0x20) as usize);
-    let (bone_count, bone_ofs) = (le_u32(b, 0x34) as usize, le_u32(b, 0x38) as usize);
+    let Some(lay) = benilla_m2::M2Layout::of(b) else {
+        return Vec::new();
+    };
+    let (seq_count, seq_ofs) = (
+        le_u32(b, lay.sequences) as usize,
+        le_u32(b, lay.sequences + 4) as usize,
+    );
+    let (bone_count, bone_ofs) = (
+        le_u32(b, lay.bones) as usize,
+        le_u32(b, lay.bones + 4) as usize,
+    );
+    // A Wrath sequence owns a clock: its band starts where the previous length left off, and the
+    // nested tracks rebase their clips by the same starts (benilla-m2 carries them for its own
+    // arrays; the bone-channel cut below reuses them).
+    let band_starts = if lay.wrath {
+        benilla_m2::band_starts_for(b, &lay)
+    } else {
+        Vec::new()
+    };
     let vec3 = |b: &[u8], o: usize| [le_f32(b, o), le_f32(b, o + 4), le_f32(b, o + 8)];
     let quat = |b: &[u8], o: usize| {
         [
@@ -555,9 +624,15 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
             le_f32(b, o + 12),
         ]
     };
-    // The event table (MD20 `0x114`/`0x118`, stride 44; the `M2TrackBase` at `+24` puts the
-    // absolute-ms timestamps at `+36`), read once and cut per sequence like the bone keys.
-    let (ev_count, ev_ofs) = (le_u32(b, 0x114) as usize, le_u32(b, 0x118) as usize);
+    // The event table (MD20 `lay.events`, stride `lay.event_stride`; the timer track's
+    // timestamp array sits at `+0x24` pre-Wrath and at `+0x1c` in Wrath, whose value-less
+    // track is a 12-byte `M2TrackBase` pointing at an M2Array of per-sequence (count, offset)
+    // pairs whose timestamps are rebased by `band_starts`), read once and cut per sequence
+    // like the bone keys.
+    let (ev_count, ev_ofs) = (
+        le_u32(b, lay.events) as usize,
+        le_u32(b, lay.events + 4) as usize,
+    );
     /// One `M2Event` record as the file holds it.
     struct EventRecord {
         ident: [u8; 4],
@@ -567,11 +642,14 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
         times: Vec<u32>,
     }
     // Raw header counts: reservations cap at the bytes present, as a failed allocation aborts.
-    let mut model_events: Vec<EventRecord> =
-        Vec::with_capacity(capped(ev_count, 44, b.len().saturating_sub(ev_ofs)));
+    let mut model_events: Vec<EventRecord> = Vec::with_capacity(capped(
+        ev_count,
+        lay.event_stride,
+        b.len().saturating_sub(ev_ofs),
+    ));
     for e in 0..ev_count {
-        let erec = ev_ofs + e * 44;
-        if erec + 44 > b.len() {
+        let erec = ev_ofs + e * lay.event_stride;
+        if erec + lay.event_stride > b.len() {
             break;
         }
         let ident: [u8; 4] = match b.get(erec..erec + 4).and_then(|s| s.try_into().ok()) {
@@ -581,15 +659,41 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
         let data = le_u32(b, erec + 4);
         let bone = le_u32(b, erec + 8) as u16;
         let position = vec3(b, erec + 12);
-        let (nts, ots) = (le_u32(b, erec + 36) as usize, le_u32(b, erec + 40) as usize);
-        let mut times = Vec::with_capacity(capped(nts, 4, b.len().saturating_sub(ots)));
-        for t in 0..nts {
-            let o = ots + t * 4;
-            if o + 4 > b.len() {
-                break;
+        let times = if lay.wrath {
+            // Each per-sequence clip is relative to its band; rebase onto the shared timeline.
+            let (nts, ots) = (
+                le_u32(b, erec + 0x1c) as usize,
+                le_u32(b, erec + 0x20) as usize,
+            );
+            let mut out = Vec::new();
+            for s in 0..nts {
+                let o = ots + s * 8;
+                if o + 8 > b.len() {
+                    break;
+                }
+                let (tc, tco) = (le_u32(b, o) as usize, le_u32(b, o + 4) as usize);
+                let base = *band_starts.get(s).unwrap_or(&0);
+                for t in 0..tc {
+                    let o = tco + t * 4;
+                    if o + 4 > b.len() {
+                        break;
+                    }
+                    out.push(le_u32(b, o).wrapping_add(base));
+                }
             }
-            times.push(le_u32(b, o));
-        }
+            out
+        } else {
+            let (nts, ots) = (le_u32(b, erec + 36) as usize, le_u32(b, erec + 40) as usize);
+            let mut out = Vec::with_capacity(capped(nts, 4, b.len().saturating_sub(ots)));
+            for t in 0..nts {
+                let o = ots + t * 4;
+                if o + 4 > b.len() {
+                    break;
+                }
+                out.push(le_u32(b, o));
+            }
+            out
+        };
         model_events.push(EventRecord {
             ident,
             data,
@@ -601,41 +705,101 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
 
     let bone_tracks: Vec<BoneChannels> = (0..bone_count)
         .map_while(|i| {
-            let brec = bone_ofs + i * 0x6c;
-            (brec + 0x60 <= b.len()).then(|| {
-                (
-                    read_channel_track(b, brec + 0x0c, 12, vec3),
-                    read_channel_track(b, brec + 0x28, 16, quat),
-                    read_channel_track(b, brec + 0x44, 12, vec3),
-                )
+            let brec = bone_ofs + i * lay.bone_stride;
+            (brec + lay.pivot_ofs <= b.len()).then(|| {
+                if lay.wrath {
+                    // Wrath's 20-byte nested tracks, already rebased onto the shared timeline by
+                    // `band_starts`; the per-sequence cut below is the same one as pre-Wrath's.
+                    (
+                        to_channel(benilla_m2::track_vec3_timed_wrath(
+                            b,
+                            brec + lay.bone_translation_ofs,
+                            &band_starts,
+                        )),
+                        to_channel(benilla_m2::track_quat_wrath(
+                            b,
+                            brec + lay.bone_rotation_ofs,
+                            &band_starts,
+                        )),
+                        to_channel(benilla_m2::track_vec3_timed_wrath(
+                            b,
+                            brec + lay.bone_scale_ofs,
+                            &band_starts,
+                        )),
+                    )
+                } else {
+                    (
+                        read_channel_track(b, brec + lay.bone_translation_ofs, 12, vec3),
+                        read_channel_track(b, brec + lay.bone_rotation_ofs, 16, quat),
+                        read_channel_track(b, brec + lay.bone_scale_ofs, 12, vec3),
+                    )
+                }
             })
         })
         .collect();
 
     let mut out = Vec::new();
+    let mut band_acc = 0u32;
     for s in 0..seq_count {
-        let rec = seq_ofs + s * 0x44;
-        if rec + 0x44 > b.len() {
+        let rec = seq_ofs + s * lay.sequence_stride;
+        if rec + lay.sequence_stride > b.len() {
             break;
         }
         let anim_id = le_u16(b, rec);
         let seq_index = s;
-        let (start, end, flags) = (
-            le_u32(b, rec + 0x04),
-            le_u32(b, rec + 0x08),
-            le_u32(b, rec + 0x10),
-        );
-        let move_speed = le_f32(b, rec + 0x0c);
-        let blend_time = le_u32(b, rec + 0x20) as f32 / 1000.0;
-        let (bmin, bmax) = (vec3(b, rec + 0x24), vec3(b, rec + 0x30));
+        // Pre-Wrath records carry `start`/`end` on the shared timeline; a Wrath record owns a
+        // clock (`length` @+4, `flags` @+0x0c, `blendTime` @+0x1c, the box @+0x20/0x2c), so its
+        // band is the accumulated one, matching `band_starts`.
+        let (
+            start,
+            end,
+            flags,
+            move_speed,
+            blend_time,
+            bmin,
+            bmax,
+            bounds_radius,
+            frequency,
+            min_replay,
+            max_replay,
+        ) = if lay.wrath {
+            let end = band_acc.saturating_add(le_u32(b, rec + 4));
+            (
+                band_acc,
+                end,
+                le_u32(b, rec + 0x0c),
+                le_f32(b, rec + 8),
+                le_u32(b, rec + 0x1c) as f32 / 1000.0,
+                vec3(b, rec + 0x20),
+                vec3(b, rec + 0x2c),
+                le_f32(b, rec + 0x38),
+                le_u16(b, rec + 0x10),
+                le_u32(b, rec + 0x14),
+                le_u32(b, rec + 0x18),
+            )
+        } else {
+            (
+                le_u32(b, rec + 0x04),
+                le_u32(b, rec + 0x08),
+                le_u32(b, rec + 0x10),
+                le_f32(b, rec + 0x0c),
+                le_u32(b, rec + 0x20) as f32 / 1000.0,
+                vec3(b, rec + 0x24),
+                vec3(b, rec + 0x30),
+                le_f32(b, rec + 0x3c),
+                le_u16(b, rec + 0x14),
+                le_u32(b, rec + 0x18),
+                le_u32(b, rec + 0x1c),
+            )
+        };
+        if lay.wrath {
+            band_acc = end;
+        }
         let bounds_center = [
             (bmin[0] + bmax[0]) * 0.5,
             (bmin[1] + bmax[1]) * 0.5,
             (bmin[2] + bmax[2]) * 0.5,
         ];
-        let bounds_radius = le_f32(b, rec + 0x3c);
-        let frequency = le_u16(b, rec + 0x14);
-        let (min_replay, max_replay) = (le_u32(b, rec + 0x18), le_u32(b, rec + 0x1c));
         let duration = end.saturating_sub(start) as f32 / 1000.0;
         if duration <= 0.0 {
             continue;
@@ -730,13 +894,62 @@ fn read_global_channel<T>(
     (keys.len() > 1).then_some(GlobalSeqChannel { period_ms, keys })
 }
 
+/// The Wrath global-sequence form of [`read_global_channel`]: the track's one clip `[0]` is a
+/// `(count, offset)` pair into a flat timestamp and value array, loop-relative to the period.
+fn read_global_channel_wrath<T>(
+    b: &[u8],
+    track: usize,
+    stride: usize,
+    period_of: &impl Fn(u16) -> Option<u32>,
+    read_value: impl Fn(&[u8], usize) -> T,
+) -> Option<GlobalSeqChannel<T>> {
+    if track + 0x14 > b.len() {
+        return None;
+    }
+    let gseq = le_u16(b, track + 0x02);
+    if gseq == 0xffff {
+        return None;
+    }
+    let period_ms = period_of(gseq)?;
+    let (tn, to) = (le_u32(b, track + 4) as usize, le_u32(b, track + 8) as usize);
+    let (vn, vo) = (
+        le_u32(b, track + 0x0c) as usize,
+        le_u32(b, track + 0x10) as usize,
+    );
+    if tn == 0 || vn == 0 {
+        return None;
+    }
+    let (tc, tco) = (le_u32(b, to) as usize, le_u32(b, to + 4) as usize);
+    let (vc, vco) = (le_u32(b, vo) as usize, le_u32(b, vo + 4) as usize);
+    let n = tc.min(vc);
+    if n <= 1 {
+        return None; // a constant, not a loop
+    }
+    // `n` is a raw count; the timestamp array bounds how many keys the file holds.
+    let mut keys = Vec::with_capacity(capped(n, 4, b.len().saturating_sub(tco)));
+    for k in 0..n {
+        let (t_off, v_off) = (tco + k * 4, vco + k * stride);
+        if t_off + 4 > b.len() || v_off + stride > b.len() {
+            break;
+        }
+        keys.push((le_u32(b, t_off), read_value(b, v_off)));
+    }
+    (keys.len() > 1).then_some(GlobalSeqChannel { period_ms, keys })
+}
+
 /// Every bone's global-sequence channels, the free-clock loops [`parse_m2_animations`] leaves out
 /// (the eye blink's eyelid scale); global sequences at MD20 `0x14`/`0x18`.
 pub fn parse_m2_global_sequence_bones(b: &[u8]) -> Vec<GlobalSeqBone> {
     if b.len() < 0x40 || &b[0..4] != b"MD20" {
         return Vec::new();
     }
-    let (gseq_count, gseq_ofs) = (le_u32(b, 0x14) as usize, le_u32(b, 0x18) as usize);
+    let Some(lay) = benilla_m2::M2Layout::of(b) else {
+        return Vec::new();
+    };
+    let (gseq_count, gseq_ofs) = (
+        le_u32(b, lay.global_loops) as usize,
+        le_u32(b, lay.global_loops + 4) as usize,
+    );
     let period_of = |gseq: u16| -> Option<u32> {
         let i = gseq as usize;
         if i >= gseq_count {
@@ -758,16 +971,29 @@ pub fn parse_m2_global_sequence_bones(b: &[u8]) -> Vec<GlobalSeqBone> {
             le_f32(b, o + 12),
         ]
     };
-    let (bone_count, bone_ofs) = (le_u32(b, 0x34) as usize, le_u32(b, 0x38) as usize);
+    let (bone_count, bone_ofs) = (
+        le_u32(b, lay.bones) as usize,
+        le_u32(b, lay.bones + 4) as usize,
+    );
     let mut out = Vec::new();
     for i in 0..bone_count {
-        let brec = bone_ofs + i * 0x6c;
-        if brec + 0x60 > b.len() {
+        let brec = bone_ofs + i * lay.bone_stride;
+        if brec + lay.pivot_ofs > b.len() {
             break;
         }
-        let translation = read_global_channel(b, brec + 0x0c, 12, &period_of, vec3);
-        let rotation = read_global_channel(b, brec + 0x28, 16, &period_of, quat);
-        let scale = read_global_channel(b, brec + 0x44, 12, &period_of, vec3);
+        let (translation, rotation, scale) = if lay.wrath {
+            (
+                read_global_channel_wrath(b, brec + lay.bone_translation_ofs, 12, &period_of, vec3),
+                read_global_channel_wrath(b, brec + lay.bone_rotation_ofs, 16, &period_of, quat),
+                read_global_channel_wrath(b, brec + lay.bone_scale_ofs, 12, &period_of, vec3),
+            )
+        } else {
+            (
+                read_global_channel(b, brec + lay.bone_translation_ofs, 12, &period_of, vec3),
+                read_global_channel(b, brec + lay.bone_rotation_ofs, 16, &period_of, quat),
+                read_global_channel(b, brec + lay.bone_scale_ofs, 12, &period_of, vec3),
+            )
+        };
         if translation.is_some() || rotation.is_some() || scale.is_some() {
             out.push(GlobalSeqBone {
                 bone: i as u16,
@@ -1192,6 +1418,168 @@ mod tests {
                 .is_empty(),
             "nor ribbons"
         );
+    }
+
+    /// The Wrath (3.3.5) Icecrown axe: one 3333 ms Stand on the accumulated band, the weapon
+    /// trail events cut from the nested per-sequence tracks, the ten root bones at their authored
+    /// pivots (bone 1 the spherical billboard), and no playable-animation lookup.
+    #[test]
+    fn the_wrath_axe_parses_its_sequence_and_skeleton() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let bytes = chain
+            .read_file("Item\\ObjectComponents\\Weapon\\Axe_2H_IcecrownRaid_D_01.m2")
+            .expect("read the Wrath axe");
+
+        let seqs = parse_m2_animations(&bytes);
+        assert_eq!(seqs.len(), 1, "one authored sequence");
+        let stand = &seqs[0];
+        assert_eq!(
+            (stand.anim_id, stand.seq_index),
+            (0, 0),
+            "Stand, file slot 0"
+        );
+        assert_eq!(
+            (stand.start_ms, stand.end_ms),
+            (0, 3333),
+            "the band is the accumulated length"
+        );
+        assert!((stand.duration - 3.333).abs() < 1e-6);
+        assert!(stand.looping, "flags 0x20: bit 0 clear loops");
+        assert!((stand.blend_time - 0.15).abs() < 1e-6, "BlendTime 150 ms");
+        assert_eq!(stand.frequency, 32767);
+        assert!(
+            stand.bones.is_empty(),
+            "no bone is keyed in this static weapon"
+        );
+        assert!((stand.bounds_radius - 0.984019).abs() < 1e-4);
+        assert!(
+            (stand.bounds_center[0] - 0.1101552).abs() < 1e-5
+                && (stand.bounds_center[1] - (-0.0016031)).abs() < 1e-5
+                && (stand.bounds_center[2] - (-0.0194001)).abs() < 1e-5,
+            "the box centre from the sequence record's min/max: {:?}",
+            stand.bounds_center
+        );
+
+        // Both trail events fire 3000 ms into the band, cut from the nested per-sequence
+        // timestamp arrays.
+        assert_eq!(stand.events.len(), 2, "the $WTT/$WTB trail pair");
+        assert_eq!(stand.events[0].ident, *b"$WTT");
+        assert_eq!(stand.events[0].bone, 8);
+        assert!((stand.events[0].time - 3.0).abs() < 1e-6);
+        assert_eq!(stand.events[1].ident, *b"$WTB");
+        assert_eq!(stand.events[1].bone, 9);
+        assert!((stand.events[1].time - 3.0).abs() < 1e-6);
+
+        let skel = parse_m2_skeleton(&bytes).expect("the skeleton parses");
+        assert_eq!(skel.bones.len(), 10);
+        assert!(
+            skel.bones.iter().all(|b| b.parent < 0),
+            "every bone is its own root"
+        );
+        assert_eq!(
+            skel.bones[1].billboard,
+            Some(crate::BillboardKind::Spherical),
+            "bone 1 flags 0x8"
+        );
+        assert!(
+            (skel.bones[0].pivot[0] - 0.129532).abs() < 1e-5
+                && (skel.bones[0].pivot[1] - (-0.001603)).abs() < 1e-5
+                && (skel.bones[0].pivot[2] - (-0.0194)).abs() < 1e-5,
+            "bone 0 rests at its authored pivot: {:?}",
+            skel.bones[0].pivot
+        );
+
+        assert!(
+            parse_m2_playable_animation_lookup(&bytes)
+                .expect("lookup parses")
+                .is_empty(),
+            "a Wrath file has no playable-animation lookup"
+        );
+        assert!(
+            parse_m2_global_sequence_bones(&bytes).is_empty(),
+            "no global sequences"
+        );
+    }
+
+    /// A synthetic v264 model: two sequences own a clock, so the bands accumulate (0–1000,
+    /// 1000–3000) and the bone's nested translation track rebases each per-sequence clip by the
+    /// band start before the cut.
+    #[test]
+    fn a_wrath_bone_track_rebases_each_sequence_clip_by_its_band() {
+        let mut b = vec![0u8; 0x700];
+        b[0..4].copy_from_slice(b"MD20");
+        b[4..8].copy_from_slice(&264u32.to_le_bytes());
+        // sequences: 2 @ 0x400 (stride 0x40); bones: 1 @ 0x500.
+        b[0x1c..0x20].copy_from_slice(&2u32.to_le_bytes());
+        b[0x20..0x24].copy_from_slice(&0x400u32.to_le_bytes());
+        b[0x2c..0x30].copy_from_slice(&1u32.to_le_bytes());
+        b[0x30..0x34].copy_from_slice(&0x500u32.to_le_bytes());
+
+        // seq0: Stand, 1000 ms, loops (flags bit 0 clear).
+        b[0x400..0x402].copy_from_slice(&0u16.to_le_bytes());
+        b[0x404..0x408].copy_from_slice(&1000u32.to_le_bytes());
+        // seq1: Walk, 2000 ms, does not loop (flags bit 0 set).
+        b[0x440..0x442].copy_from_slice(&4u16.to_le_bytes());
+        b[0x444..0x448].copy_from_slice(&2000u32.to_le_bytes());
+        b[0x44c..0x450].copy_from_slice(&1u32.to_le_bytes());
+
+        // bone0: key −1, no flags, parent −1; the translation track @ +0x10 holds its keys
+        // (interp 0 — a lerp would bleed the next band's key into the edge), a per-sequence
+        // track (gseq 0xffff) with one clip per sequence.
+        b[0x500..0x502].copy_from_slice(&0xffffu16.to_le_bytes());
+        b[0x508..0x50a].copy_from_slice(&0xffffu16.to_le_bytes());
+        let tr = 0x500 + 0x10;
+        b[tr..tr + 2].copy_from_slice(&0u16.to_le_bytes());
+        b[tr + 2..tr + 4].copy_from_slice(&0xffffu16.to_le_bytes());
+        b[tr + 4..tr + 8].copy_from_slice(&2u32.to_le_bytes());
+        b[tr + 8..tr + 12].copy_from_slice(&0x600u32.to_le_bytes());
+        b[tr + 0xc..tr + 0x10].copy_from_slice(&2u32.to_le_bytes());
+        b[tr + 0x10..tr + 0x14].copy_from_slice(&0x650u32.to_le_bytes());
+        // Timestamp outer array: seq0's clip (1 @ 0x640) = [500], seq1's (1 @ 0x644) = [1500].
+        b[0x600..0x604].copy_from_slice(&1u32.to_le_bytes());
+        b[0x604..0x608].copy_from_slice(&0x640u32.to_le_bytes());
+        b[0x608..0x60c].copy_from_slice(&1u32.to_le_bytes());
+        b[0x60c..0x610].copy_from_slice(&0x644u32.to_le_bytes());
+        b[0x640..0x644].copy_from_slice(&500u32.to_le_bytes());
+        b[0x644..0x648].copy_from_slice(&1500u32.to_le_bytes());
+        // Value outer array: seq0 (1 @ 0x690) = (1,0,0), seq1 (1 @ 0x69c) = (2,0,0).
+        b[0x650..0x654].copy_from_slice(&1u32.to_le_bytes());
+        b[0x654..0x658].copy_from_slice(&0x690u32.to_le_bytes());
+        b[0x658..0x65c].copy_from_slice(&1u32.to_le_bytes());
+        b[0x65c..0x660].copy_from_slice(&0x69cu32.to_le_bytes());
+        for (o, v) in [(0x690, 1.0f32), (0x69c, 2.0)] {
+            b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+
+        let seqs = parse_m2_animations(&b);
+        assert_eq!(seqs.len(), 2);
+        assert_eq!((seqs[0].anim_id, seqs[1].anim_id), (0, 4));
+        assert_eq!((seqs[0].start_ms, seqs[0].end_ms), (0, 1000));
+        assert_eq!(
+            (seqs[1].start_ms, seqs[1].end_ms),
+            (1000, 3000),
+            "the second band starts where the first length left off"
+        );
+        assert!(seqs[0].looping && !seqs[1].looping, "per-record flags");
+
+        let stand = &seqs[0];
+        assert_eq!(stand.bones.len(), 1);
+        assert_eq!(stand.bones[0].bone, 0);
+        let t = &stand.bones[0].translation;
+        assert_eq!(t.len(), 1, "seq0's clip is its one key");
+        assert!((t[0].0 - 0.5).abs() < 1e-6, "500 ms into the band");
+        assert!((t[0].1[0] - 1.0).abs() < 1e-6);
+
+        let walk = &seqs[1];
+        let t = &walk.bones[0].translation;
+        assert_eq!(t.len(), 1, "seq1's clip is its one key");
+        assert!(
+            (t[0].0 - 1.5).abs() < 1e-6,
+            "1500 ms rebased by the 1000 ms band start (got {})",
+            t[0].0
+        );
+        assert!((t[0].1[0] - 2.0).abs() < 1e-6);
     }
 }
 

@@ -159,7 +159,7 @@ mod tests {
         let bytes = chain
             .read_file("World\\generic\\activedoodads\\mageportals\\StormwindMagePortal01.m2")
             .expect("read StormwindMagePortal01.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         let animated: Vec<&ScalarAnim> = subs
             .iter()
             .filter_map(|s| s.alpha_anim.as_ref())
@@ -193,7 +193,7 @@ mod tests {
         let bytes = chain
             .read_file("World\\Kalimdor\\Tanaris\\ActiveDoodads\\TrollGate\\TanarisTrollGate.m2")
             .expect("read TanarisTrollGate.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         // File slots: 0 Closed, 1 Open, 2 Opened, 3 Destroy, 4 Close.
         let (closed, destroy) = (Some(0), Some(3));
         let alpha_of = |tex: &str, seq| -> Vec<f32> {
@@ -262,7 +262,7 @@ mod tests {
         let bytes = chain
             .read_file("Spells\\BattleShout_Cast_Base.m2")
             .expect("read BattleShout_Cast_Base.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         assert_eq!(subs.len(), 6, "six crescent batches");
         for (i, s) in subs.iter().enumerate() {
             let a = s.alpha_anim.as_ref().unwrap_or_else(|| {
@@ -308,7 +308,7 @@ mod tests {
         let bytes = chain
             .read_file("Creature\\VoidWalker\\VoidWalker.m2")
             .expect("read VoidWalker.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         // File slots (`benilla-extract m2seq`): 0 Stand (3333..6000 ms), 1 Walk, 2 Run, 5/6 the
         // Stand variations, 10 Death (anim 1, 43333..46333 ms).
         const STAND: usize = 0;
@@ -371,7 +371,7 @@ mod tests {
         let bytes = chain
             .read_file("Creature\\Banshee\\Banshee.m2")
             .expect("read Banshee.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         assert_eq!(subs.len(), 26, "the banshee's render batch list");
         // File slots (`m2seq`): 0 Stand (10000..13333 ms), 3 Walk, 4 Run, 12 Death.
         const LIVE: [usize; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -634,7 +634,7 @@ mod tests {
         let bytes = chain
             .read_file("Creature\\AirElemental\\AirElemental.m2")
             .expect("read AirElemental.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         // Slot 10 is anim id 1 (Death), one-shot, band 43333..46333: a period of exactly 3.0 s.
         const DEATH: usize = 10;
         let faded: Vec<usize> = subs

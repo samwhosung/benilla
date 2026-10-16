@@ -38,7 +38,7 @@ fn the_lava_bubble_keys_its_whole_uv_flipbook_in_variation_one() {
     assert!((peak(0) - 1.0).abs() < 1e-3, "slot 0 is a rest hold");
     assert!(peak(1) > 2.5, "slot 1 is the swell (peak {})", peak(1));
 
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
     assert_eq!(subs.len(), 5, "five bubbles, five batches");
     for (i, sub) in subs.iter().enumerate() {
         let set = sub

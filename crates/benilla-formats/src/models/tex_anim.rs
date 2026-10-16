@@ -207,7 +207,7 @@ mod tests {
         let bytes = chain
             .read_file(r"Interface\Cooldown\UI-Cooldown-Indicator.m2")
             .expect("read the cooldown indicator");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         let rot = subs[0]
             .uv_rot_seq
             .as_ref()
@@ -295,7 +295,7 @@ mod tests {
                 "World\\Azeroth\\Elwynn\\PassiveDoodads\\Waterfall\\ElwynnTallWaterfall01.m2",
             )
             .expect("read ElwynnTallWaterfall01.m2");
-        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = super::super::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         let anims: Vec<&UvAnim> = subs.iter().filter_map(|s| s.uv_anim.as_ref()).collect();
         assert_eq!(anims.len(), 2, "both waterfall batches carry UV loops");
         for a in &anims {

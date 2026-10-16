@@ -7,7 +7,7 @@ use crate::track::{
 };
 
 /// A 3-float vector (position / normal / pivot).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct C3 {
     pub x: f32,
     pub y: f32,

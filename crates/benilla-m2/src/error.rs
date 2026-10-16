@@ -4,6 +4,7 @@
 #[derive(Debug)]
 pub enum Error {
     NotMd20,
+    NotSkin,
     UnsupportedVersion(u32),
     Truncated,
 }
@@ -11,6 +12,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::NotMd20 => write!(f, "not an MD20 model"),
+            Error::NotSkin => write!(f, "not a SKIN profile"),
             Error::UnsupportedVersion(v) => {
                 write!(f, "unsupported M2 version {v} (expected 256..=263)")
             }

@@ -357,12 +357,27 @@ fn print_m2anim_summary(s: &M2AnimSummary, bytes: &[u8]) {
             d.tile_rows,
             d.tile_cols,
         );
-        let c = d.over_life.color;
-        println!(
-            "             color/alpha keys: [{:.2} {:.2} {:.2} a{:.2}] -> [{:.2} {:.2} {:.2} a{:.2}] -> [{:.2} {:.2} {:.2} a{:.2}]  size {:?}",
-            c[0][0], c[0][1], c[0][2], c[0][3], c[1][0], c[1][1], c[1][2], c[1][3], c[2][0],
-            c[2][1], c[2][2], c[2][3], d.over_life.scale,
-        );
+        match &d.over_life.keyed {
+            // Wrath (3.3.5): the over-life is keyed tracks over the lifespan, not the 3-key ramp.
+            Some(k) => println!(
+                "             keyed over-life: {} colour / {} alpha / {} size / {}+{} cell keys · scaleVary ({:.2},{:.2})",
+                k.color.len(),
+                k.alpha.len(),
+                k.scale.len(),
+                k.head_cells.len(),
+                k.tail_cells.len(),
+                k.scale_vary[0],
+                k.scale_vary[1],
+            ),
+            None => {
+                let c = d.over_life.color;
+                println!(
+                    "             color/alpha keys: [{:.2} {:.2} {:.2} a{:.2}] -> [{:.2} {:.2} {:.2} a{:.2}] -> [{:.2} {:.2} {:.2} a{:.2}]  size {:?}",
+                    c[0][0], c[0][1], c[0][2], c[0][3], c[1][0], c[1][1], c[1][2], c[1][3], c[2][0],
+                    c[2][1], c[2][2], c[2][3], d.over_life.scale,
+                );
+            }
+        }
     }
     println!("ribbon emitters:    {}", s.ribbon_emitter_count);
     // A keyed ribbon track prints its whole `(ms, value)` ramp; its first value alone can read 0.
@@ -745,7 +760,7 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
         .read_file(&name)
         .with_context(|| format!("reading '{name}' from chain"))?;
     let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-    let subs = benilla_formats::parse_m2_render_submeshes(&data, dir, &[])
+    let subs = benilla_formats::parse_m2_render_submeshes(&data, dir, &[], None)
         .with_context(|| format!("parsing M2 render submeshes '{name}'"))?;
     if let Ok(format) = benilla_m2::parse_m2(&mut std::io::Cursor::new(data.as_slice())) {
         let m = format.model();
@@ -1081,7 +1096,7 @@ pub fn m2alpha(chain: &mut Chain, internal_path: &str) -> Result<()> {
     // Our bake per render batch (a billboard batch may split per bone, lengthening the list);
     // disagreeing with the table above is a bake bug, not the art's.
     let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-    let subs = benilla_formats::parse_m2_render_submeshes(&data, dir, &[])
+    let subs = benilla_formats::parse_m2_render_submeshes(&data, dir, &[], None)
         .with_context(|| format!("parsing M2 render submeshes '{name}'"))?;
     println!("\nas BAKED, per render batch (min..max sampled across each band):");
     print!("{:>4} {:>5} {:>16}", "idx", "anim", "band(ms)");
@@ -1326,31 +1341,63 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
         );
 
         let ol = &e.over_life;
-        println!("     over-life (mid {:.3}):", ol.mid);
-        for (k, c) in ol.color.iter().enumerate() {
-            println!(
-                "       colour k{k}  r {:.3} g {:.3} b {:.3}  a {:.3}",
-                c[0], c[1], c[2], c[3]
-            );
+        match &ol.keyed {
+            // Wrath (3.3.5): keyed tracks over the particle's lifespan, ts in fix16 (32767 = death).
+            Some(k) => {
+                println!("     over-life (keyed, fix16 lifespan):");
+                for (t, c) in &k.color {
+                    println!(
+                        "       colour  {t:5}  r {:.3} g {:.3} b {:.3}",
+                        c[0], c[1], c[2]
+                    );
+                }
+                for (t, a) in &k.alpha {
+                    println!("       alpha   {t:5}  a {:.3}", a);
+                }
+                for (t, s) in &k.scale {
+                    println!("       size    {t:5}  ({:.4}, {:.4}) yd", s[0], s[1]);
+                }
+                let cells = |v: &[(u16, i16)]| {
+                    v.iter()
+                        .map(|&(t, c)| format!("{t}:{c}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                println!("       head cells  {}", cells(&k.head_cells));
+                println!("       tail cells  {}", cells(&k.tail_cells));
+                println!(
+                    "       scaleVary   ({:.3}, {:.3})",
+                    k.scale_vary[0], k.scale_vary[1]
+                );
+            }
+            None => {
+                println!("     over-life (mid {:.3}):", ol.mid);
+                for (k, c) in ol.color.iter().enumerate() {
+                    println!(
+                        "       colour k{k}  r {:.3} g {:.3} b {:.3}  a {:.3}",
+                        c[0], c[1], c[2], c[3]
+                    );
+                }
+                // Four decimals: UI models author sizes in thousandths, as the autocast shine's 0.0015.
+                println!(
+                    "       size    {:.4} -> {:.4} -> {:.4} yd (half-extent)",
+                    ol.scale[0], ol.scale[1], ol.scale[2]
+                );
+                println!(
+                    "       cells   head A {}->{} B {}->{} · tail A {}->{} B {}->{} · repeat {:.2}/{:.2}",
+                    ol.head_cells[0].begin,
+                    ol.head_cells[0].end,
+                    ol.head_cells[1].begin,
+                    ol.head_cells[1].end,
+                    ol.tail_cells[0].begin,
+                    ol.tail_cells[0].end,
+                    ol.tail_cells[1].begin,
+                    ol.tail_cells[1].end,
+                    ol.repeat[0],
+                    ol.repeat[1]
+                );
+            }
         }
-        // Four decimals: UI models author sizes in thousandths, as the autocast shine's 0.0015.
-        println!(
-            "       size    {:.4} -> {:.4} -> {:.4} yd (half-extent)",
-            ol.scale[0], ol.scale[1], ol.scale[2]
-        );
-        println!(
-            "       cells   head A {}->{} B {}->{} · tail A {}->{} B {}->{} · repeat {:.2}/{:.2}",
-            ol.head_cells[0].begin,
-            ol.head_cells[0].end,
-            ol.head_cells[1].begin,
-            ol.head_cells[1].end,
-            ol.tail_cells[0].begin,
-            ol.tail_cells[0].end,
-            ol.tail_cells[1].begin,
-            ol.tail_cells[1].end,
-            ol.repeat[0],
-            ol.repeat[1]
-        );
 
         let rate = e.timing.peak_rate();
         // A burst's count is not its peak rate: it fires on the rising edge of
@@ -1369,8 +1416,18 @@ pub fn m2part(chain: &mut Chain, internal_path: &str) -> Result<()> {
         } else {
             speed * life
         };
-        let size_lo = ol.scale.iter().copied().fold(f32::MAX, f32::min);
-        let size_hi = ol.scale.iter().copied().fold(f32::MIN, f32::max);
+        let (size_lo, size_hi) = match &ol.keyed {
+            // The keyed size keys' x halves bound the quad size.
+            Some(k) if !k.scale.is_empty() => {
+                let lo = k.scale.iter().map(|&(_, s)| s[0]).fold(f32::MAX, f32::min);
+                let hi = k.scale.iter().map(|&(_, s)| s[0]).fold(f32::MIN, f32::max);
+                (lo, hi)
+            }
+            _ => (
+                ol.scale.iter().copied().fold(f32::MAX, f32::min),
+                ol.scale.iter().copied().fold(f32::MIN, f32::max),
+            ),
+        };
         println!(
             "     derived: {} · reach ~{reach:.2} yd · size {size_lo:.3}..{size_hi:.3} yd · peak alpha {:.2}",
             if e.burst() {

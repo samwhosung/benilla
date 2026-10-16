@@ -3,6 +3,13 @@
 //! effect whose sequence 0 spans `[1000, 2600]` bursts at 1000 ms, its first instant. Parsing
 //! rebases them onto sequence 0's band, the one an effect or doodad plays, so seconds since spawn
 //! sample them directly; a model keying an emitter per sequence is sampled on sequence 0 alone.
+//!
+//! A Wrath (264) file carries 20-byte nested tracks (each sequence its own key clip) instead of
+//! the 28-byte flat ones: the clips are read through `benilla-m2`'s Wrath reader, which rebases
+//! clip `s` by that sequence's band start, and the combined absolute keys take the same band
+//! rebase a pre-Wrath track does.
+
+use benilla_m2::M2Layout;
 
 fn le_u16(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
@@ -149,12 +156,20 @@ pub(crate) fn rebase_keys_to_band<V: Copy>(keys: &mut Vec<(u32, V)>, start: u32,
 }
 
 /// The first sequence's absolute time band; a sequence-less model gets the whole timeline.
-pub(crate) fn seq0_band(bytes: &[u8]) -> (u32, u32) {
-    let (n_seq, o_seq) = (le_u32(bytes, 0x1c) as usize, le_u32(bytes, 0x20) as usize);
-    if n_seq > 0 && o_seq + 0x44 <= bytes.len() {
-        (le_u32(bytes, o_seq + 4), le_u32(bytes, o_seq + 8))
+/// Pre-Wrath records carry `start`/`end` on the shared timeline; a Wrath record owns a clock
+/// (`length` @+4), so band 0 is `[0, length0]`, as `band_starts` accumulates.
+pub(crate) fn seq0_band(bytes: &[u8], lay: &M2Layout) -> (u32, u32) {
+    let Some((n_seq, o_seq)) = lay.array_at(bytes, lay.sequences) else {
+        return (0, u32::MAX);
+    };
+    let (n_seq, o_seq) = (n_seq as usize, o_seq as usize);
+    if n_seq == 0 || o_seq + lay.sequence_stride > bytes.len() {
+        return (0, u32::MAX);
+    }
+    if lay.wrath {
+        (0, le_u32(bytes, o_seq + 4))
     } else {
-        (0, u32::MAX)
+        (le_u32(bytes, o_seq + 4), le_u32(bytes, o_seq + 8))
     }
 }
 
@@ -172,16 +187,74 @@ fn track_arrays(b: &[u8], track: usize) -> Option<(u16, usize, usize, usize)> {
     (n > 0 && tofs + n * 4 <= b.len()).then_some((gseq, n, tofs, vofs))
 }
 
+/// The first value of an M2Track, `elem` bytes, decoded by `read`, or `default`: the flat
+/// `values[0]` pre-Wrath, the first non-empty per-sequence clip's first value in Wrath.
+pub(crate) fn track_first<T: Copy>(
+    b: &[u8],
+    track: usize,
+    elem_size: usize,
+    default: T,
+    read: impl Fn(&[u8], usize) -> T,
+    lay: &M2Layout,
+) -> T {
+    if lay.wrath {
+        let band_starts = benilla_m2::band_starts_for(b, lay);
+        let t = benilla_m2::track_read_wrath(
+            b,
+            track,
+            elem_size,
+            |b, o| (o.saturating_add(elem_size) <= b.len()).then(|| read(b, o)),
+            &band_starts,
+        );
+        return t.keys.first().map(|&(_, v)| v).unwrap_or(default);
+    }
+    if track + 0x1c > b.len() {
+        return default;
+    }
+    let n = le_u32(b, track + 0x14);
+    let ofs = le_u32(b, track + 0x18) as usize;
+    if n == 0 || ofs + elem_size > b.len() {
+        return default;
+    }
+    read(b, ofs)
+}
+
 /// Read an M2Track's keys, `elem`-byte values decoded by `read`; sequence keys are rebased to
 /// `band`, global-sequence ones keep their clock, and an empty or truncated track is `default`.
+/// In a Wrath file the track is the 20-byte nested shape, read per `band_starts` (see the module
+/// note) and then given the same `band` rebase.
 pub(crate) fn track_keys_with<V: TrackValue>(
     b: &[u8],
     track: usize,
     default: V,
+    lay: &M2Layout,
     band: (u32, u32),
     elem: usize,
     read: impl Fn(&[u8], usize) -> V,
 ) -> ValueTrack<V> {
+    if lay.wrath {
+        let band_starts = benilla_m2::band_starts_for(b, lay);
+        // The nested reader passes value offsets it has not range-checked, so the adapter
+        // bounds-checks before `read` indexes.
+        let t = benilla_m2::track_read_wrath(
+            b,
+            track,
+            elem,
+            |b, o| (o.saturating_add(elem) <= b.len()).then(|| read(b, o)),
+            &band_starts,
+        );
+        if t.keys.is_empty() {
+            return ValueTrack::constant(default);
+        }
+        let mut keys = t.keys;
+        if t.gseq == 0xffff {
+            rebase_keys_to_band(&mut keys, band.0, band.1);
+        }
+        return ValueTrack {
+            keys,
+            interp: t.interp,
+        };
+    }
     let Some((gseq, n, tofs, vofs)) = track_arrays(b, track) else {
         return ValueTrack::constant(default);
     };
@@ -302,5 +375,74 @@ mod tests {
         let mut keys = vec![(0u32, 100.0f32), (500, -100.0), (667, -100.0)];
         rebase_keys_to_band(&mut keys, 0, 667);
         assert_eq!(keys, vec![(0, 100.0), (500, -100.0), (667, -100.0)]);
+    }
+
+    /// A minimal v264 file: two sequences (lengths 1000, 500 → band starts 0, 1000) and one
+    /// 20-byte nested f32 track with one key per clip.
+    fn wrath_fixture() -> (Vec<u8>, M2Layout) {
+        let mut b = vec![0u8; 0x640];
+        b[0..4].copy_from_slice(b"MD20");
+        b[4..8].copy_from_slice(&264u32.to_le_bytes());
+        // sequences @ 0x1c/0x20 → two 0x40 records at 0x400.
+        b[0x1c..0x20].copy_from_slice(&2u32.to_le_bytes());
+        b[0x20..0x24].copy_from_slice(&0x400u32.to_le_bytes());
+        b[0x400 + 4..0x400 + 8].copy_from_slice(&1000u32.to_le_bytes());
+        b[0x440 + 4..0x440 + 8].copy_from_slice(&500u32.to_le_bytes());
+        // Track @0x500: interp 1, gseq 0xffff, ts (2, 0x600), values (2, 0x610).
+        b[0x500..0x502].copy_from_slice(&1u16.to_le_bytes());
+        b[0x502..0x504].copy_from_slice(&0xffffu16.to_le_bytes());
+        b[0x504..0x508].copy_from_slice(&2u32.to_le_bytes());
+        b[0x508..0x50c].copy_from_slice(&0x600u32.to_le_bytes());
+        b[0x50c..0x510].copy_from_slice(&2u32.to_le_bytes());
+        b[0x510..0x514].copy_from_slice(&0x610u32.to_le_bytes());
+        // Outer arrays: clip 0 (1, 0x620)/(1, 0x630), clip 1 (1, 0x624)/(1, 0x634).
+        b[0x600..0x604].copy_from_slice(&1u32.to_le_bytes());
+        b[0x604..0x608].copy_from_slice(&0x620u32.to_le_bytes());
+        b[0x608..0x60c].copy_from_slice(&1u32.to_le_bytes());
+        b[0x60c..0x610].copy_from_slice(&0x624u32.to_le_bytes());
+        b[0x610..0x614].copy_from_slice(&1u32.to_le_bytes());
+        b[0x614..0x618].copy_from_slice(&0x630u32.to_le_bytes());
+        b[0x618..0x61c].copy_from_slice(&1u32.to_le_bytes());
+        b[0x61c..0x620].copy_from_slice(&0x634u32.to_le_bytes());
+        // Clip keys: (200 ms, 5.0) in seq 0, (100 ms, 7.0) in seq 1 (→ 1100 absolute).
+        b[0x620..0x624].copy_from_slice(&200u32.to_le_bytes());
+        b[0x624..0x628].copy_from_slice(&100u32.to_le_bytes());
+        b[0x630..0x634].copy_from_slice(&5.0f32.to_le_bytes());
+        b[0x634..0x638].copy_from_slice(&7.0f32.to_le_bytes());
+        let lay = M2Layout::of(&b).expect("a v264 layout");
+        (b, lay)
+    }
+
+    #[test]
+    fn wrath_keys_rebase_each_clip_by_its_band() {
+        let (b, lay) = wrath_fixture();
+        assert_eq!(benilla_m2::band_starts_for(&b, &lay), vec![0u32, 1000]);
+        assert_eq!(seq0_band(&b, &lay), (0, 1000), "band 0 is [0, length0]");
+        // The joined absolute keys (200, 1100) rebase onto band 0: 1100 closes the band at 1000.
+        let t = track_keys_with(&b, 0x500, -1.0, &lay, (0, 1000), 4, |b, o| {
+            f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+        });
+        assert_eq!(t.keys, vec![(200u32, 5.0f32), (1000, 7.0)]);
+        assert_eq!(t.interp, 1);
+        // The first value is the first clip's first key, not sequence order's.
+        let first = track_first(
+            &b,
+            0x500,
+            4,
+            -1.0,
+            |b, o| f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]),
+            &lay,
+        );
+        assert_eq!(first, 5.0);
+    }
+
+    #[test]
+    fn wrath_gseq_track_keeps_its_loop_clock() {
+        let (mut b, lay) = wrath_fixture();
+        b[0x502..0x504].copy_from_slice(&1u16.to_le_bytes()); // gseq 1
+        let t = track_keys_with(&b, 0x500, -1.0, &lay, (0, 1000), 4, |b, o| {
+            f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+        });
+        assert_eq!(t.keys, vec![(200u32, 5.0f32)], "clip 0 only, unshifted");
     }
 }

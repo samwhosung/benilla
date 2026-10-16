@@ -23,7 +23,7 @@ pub fn glueextent(chain: &mut Chain, batches: bool) -> Result<()> {
         let bytes = chain
             .read_file(&name)
             .with_context(|| format!("reading '{name}' from chain"))?;
-        let subs = parse_m2_render_submeshes(&bytes, "", &[])
+        let subs = parse_m2_render_submeshes(&bytes, "", &[], None)
             .with_context(|| format!("parsing M2 render submeshes '{name}'"))?;
         let Some(cam) = parse_m2_camera(&bytes, 0) else {
             println!("{token:<9} (no camera 0)");

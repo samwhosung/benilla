@@ -13,7 +13,8 @@ fn a_creature_scrolls_on_a_global_sequence() {
     let bytes = chain
         .read_file("Creature\\AirElemental\\AirElemental.m2")
         .expect("AirElemental is in the chain");
-    let subs = parse_m2_render_submeshes(&bytes, "Creature\\AirElemental", &[]).expect("parse");
+    let subs =
+        parse_m2_render_submeshes(&bytes, "Creature\\AirElemental", &[], None).expect("parse");
 
     let live: Vec<_> = subs
         .iter()
@@ -54,7 +55,7 @@ fn a_gameobject_batch_rotates_with_no_translation_at_all() {
     ] {
         let bytes = chain.read_file(path).expect("in the chain");
         let dir = path.rsplit_once('\\').expect("a directory").0;
-        let subs = parse_m2_render_submeshes(&bytes, dir, &[]).expect("parse");
+        let subs = parse_m2_render_submeshes(&bytes, dir, &[], None).expect("parse");
         let turning: Vec<_> = subs.iter().filter(|s| s.uv_rot_seq.is_some()).collect();
         assert_eq!(turning.len(), batches, "{path}: the rotating batches");
         for s in &turning {
@@ -79,7 +80,7 @@ fn a_gameobjects_slots_bake_different_loops() {
     let path = "World\\Lordaeron\\Plagueland\\PassiveDoodads\\BloodOfHeroes\\BloodOfHeroes.m2";
     let bytes = chain.read_file(path).expect("in the chain");
     let dir = path.rsplit_once('\\').expect("a directory").0;
-    let subs = parse_m2_render_submeshes(&bytes, dir, &[]).expect("parse");
+    let subs = parse_m2_render_submeshes(&bytes, dir, &[], None).expect("parse");
 
     let split: Vec<_> = subs.iter().filter(|s| s.uv_seq.is_some()).collect();
     assert_eq!(split.len(), 5, "the bubble sheets");
@@ -162,7 +163,7 @@ fn a_gameobjects_tint_is_keyed_in_a_later_slot_alone() {
     let bytes = chain
         .read_file("World\\Goober\\G_FreezingTrap.m2")
         .expect("in the chain");
-    let subs = parse_m2_render_submeshes(&bytes, "World\\Goober", &[]).expect("parse");
+    let subs = parse_m2_render_submeshes(&bytes, "World\\Goober", &[], None).expect("parse");
 
     let tinted: Vec<_> = subs.iter().filter(|s| s.rgb_seq.is_some()).collect();
     assert!(!tinted.is_empty(), "the glow card's tint is per-sequence");

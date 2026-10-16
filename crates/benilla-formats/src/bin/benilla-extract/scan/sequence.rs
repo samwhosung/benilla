@@ -408,7 +408,8 @@ pub fn idleslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
         }
         let dir = name.rsplit_once('\\').map_or("", |(d, _)| d);
-        let subs = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
+        let subs =
+            benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None).unwrap_or_default();
         let mut alpha = 0u32;
         for (i, s) in subs.iter().enumerate() {
             let Some(a) = &s.alpha_anim else { continue };

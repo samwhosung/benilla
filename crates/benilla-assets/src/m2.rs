@@ -239,8 +239,20 @@ impl AssetLoader for M2ModelLoader {
         reader.read_to_end(&mut bytes).await?;
         let to_io = |e: anyhow::Error| std::io::Error::other(format!("{e:#}"));
 
+        // A Wrath (3.3.5) model keeps its view geometry in an external `.skin` named after the
+        // model; read it through the asset source, as the WMO loader reads its group files.
+        let skin_file = if benilla_formats::m2_is_wrath(&bytes) {
+            let p = ctx.path().path().to_string_lossy().to_ascii_lowercase();
+            let stem = p.strip_suffix(".m2").unwrap_or(&p);
+            let read = ctx.read_asset_bytes(format!("mpq://{stem}00.skin")).await;
+            Some(read.map_err(|e| std::io::Error::other(format!("reading .skin: {e}")))?)
+        } else {
+            None
+        };
+
         // Skins fill at the spawn site, so no skin directory or list is passed.
-        let subs = parse_m2_render_submeshes(&bytes, "", &[]).map_err(to_io)?;
+        let subs =
+            parse_m2_render_submeshes(&bytes, "", &[], skin_file.as_deref()).map_err(to_io)?;
         let bounds = parse_m2_bounds(&bytes).ok();
         // One owner bound for every effect: the reference draws them all after the batches.
         let owner_reach = benilla_formats::m2_owner_reach(&subs);

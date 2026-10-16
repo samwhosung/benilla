@@ -80,11 +80,12 @@ fn seq_index(bytes: &[u8], anim_id: usize) -> Option<usize> {
     }
 }
 
-/// A sequence record's offset: stride `0x44` from MD20 `0x20`, its `CAaBox` min at `+0x24` and
-/// max at `+0x30`.
+/// A sequence record's offset: its version's stride ([`benilla_m2::M2Layout::sequence_stride`])
+/// from MD20 `0x20`; the `CAaBox` corners sit at the layout's `seq_box_min`/`seq_box_max`.
 fn seq_record(bytes: &[u8], idx: usize) -> Option<usize> {
+    let lay = benilla_m2::M2Layout::of(bytes)?;
     let anim_ofs = bytes.u32_at(0x20)? as usize;
-    anim_ofs.checked_add(idx * 0x44)
+    anim_ofs.checked_add(idx * lay.sequence_stride)
 }
 
 /// The Stand record: animation id 0 through [`seq_index`], else record 0; `None` only when the
@@ -96,21 +97,25 @@ fn stand_record(bytes: &[u8]) -> Option<usize> {
     seq_record(bytes, seq_index(bytes, 0).unwrap_or(0))
 }
 
-/// One sequence box's `max.z`, `rec+0x38`: the `out+0x20` that `0x711a20` returns.
+/// One sequence box's `max.z` (its max corner's Z, [`benilla_m2::M2Layout::seq_box_max`] + 8):
+/// the `out+0x20` that `0x711a20` returns.
 fn seq_max_z(bytes: &[u8], anim_id: usize) -> Option<f32> {
+    let lay = benilla_m2::M2Layout::of(bytes)?;
     let rec = seq_record(bytes, seq_index(bytes, anim_id)?)?;
-    bytes.f32_at(rec + 0x38)
+    bytes.f32_at(rec + lay.seq_box_max + 8)
 }
 
 /// The Stand box's `(dx, dy, dz)`, the input the reference's living-unit ring is sized from
 /// (`0x60aee0`); `None` without sequences. Z rides along because the chat bubble anchors on the
 /// same box, so the ring and the bubble never read different animations.
 fn stand_box(bytes: &[u8]) -> Option<(f32, f32, f32)> {
+    let lay = benilla_m2::M2Layout::of(bytes)?;
     let rec = stand_record(bytes)?;
     // The ring squares dx and dy, so an unsorted box is harmless.
-    let dx = bytes.f32_at(rec + 0x30)? - bytes.f32_at(rec + 0x24)?;
-    let dy = bytes.f32_at(rec + 0x34)? - bytes.f32_at(rec + 0x28)?;
-    let dz = bytes.f32_at(rec + 0x38)? - bytes.f32_at(rec + 0x2c)?;
+    let (mn, mx) = (lay.seq_box_min, lay.seq_box_max);
+    let dx = bytes.f32_at(rec + mx)? - bytes.f32_at(rec + mn)?;
+    let dy = bytes.f32_at(rec + mx + 4)? - bytes.f32_at(rec + mn + 4)?;
+    let dz = bytes.f32_at(rec + mx + 8)? - bytes.f32_at(rec + mn + 8)?;
     Some((dx, dy, dz))
 }
 
@@ -121,7 +126,11 @@ const SWIM_ANIM_ID: usize = 42;
 /// `0x2a` both present (`0x711960` at `0x50cc43`/`0x50cc4f`); here Stand resolves through
 /// [`stand_record`], the box the ring and the chat bubble read.
 fn swim_pivot_drop(bytes: &[u8]) -> f32 {
-    let Some(stand_z) = stand_record(bytes).and_then(|rec| bytes.f32_at(rec + 0x38)) else {
+    let Some(lay) = benilla_m2::M2Layout::of(bytes) else {
+        return 0.0;
+    };
+    let Some(stand_z) = stand_record(bytes).and_then(|rec| bytes.f32_at(rec + lay.seq_box_max + 8))
+    else {
         return 0.0;
     };
     let Some(swim_z) = seq_max_z(bytes, SWIM_ANIM_ID) else {
@@ -165,4 +174,42 @@ pub fn parse_m2_bounds(bytes: &[u8]) -> Result<M2Bounds> {
         stand_box_z: rz.max(0.0),
         swim_pivot_drop: swim_pivot_drop(bytes),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Wrath (3.3.5) Icecrown axe: its Stand box is the ring input, read at the Wrath
+    /// sequence stride (0x40) and box corners (+0x20/+0x2c). The header box is taller, so the
+    /// values prove the Stand record was read, not the header fallback.
+    #[test]
+    fn the_wrath_axe_rings_on_its_stand_box() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let bytes = chain
+            .read_file("Item\\ObjectComponents\\Weapon\\Axe_2H_IcecrownRaid_D_01.m2")
+            .expect("read the Wrath axe");
+
+        let b = parse_m2_bounds(&bytes).expect("the axe bounds parse");
+        // Header box: (−0.8722667, −0.4325361, −0.5609255) / (1.0925771, 0.4774745, 0.2925301).
+        assert!((b.bbox_min[1] - (-0.4325361)).abs() < 1e-5);
+        assert!((b.bbox_max[1] - 0.4774745).abs() < 1e-5);
+        assert!(
+            (b.sphere_radius - 1.1864882).abs() < 1e-5,
+            "the header sphere"
+        );
+        // Stand box: (−0.8722667, −0.1274454, −0.3241060) / (1.0925771, 0.1242391, 0.2853057).
+        assert!(
+            (b.ring_footprint - 0.995_213).abs() < 1e-5,
+            "the ring from the Stand box, not the header's: {}",
+            b.ring_footprint
+        );
+        assert!(
+            (b.stand_box_z - 0.6094117).abs() < 1e-5,
+            "the Stand box's dz: {}",
+            b.stand_box_z
+        );
+        assert_eq!(b.swim_pivot_drop, 0.0, "the axe has no Swim sequence");
+    }
 }

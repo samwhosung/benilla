@@ -2,6 +2,7 @@
 //! does not read), the WMO root's MOLT lights, and the M2 camera table.
 
 use benilla_bytes::ByteExt;
+use benilla_m2::M2Layout;
 
 /// An M2 light (the MD20 lights array, loaded by `0x70ebd0`), `position` relative to `bone` (`-1`
 /// for the origin). The reference commits a point light on a placed prop as a hardware `GL_LIGHT`
@@ -61,29 +62,38 @@ impl WmoLight {
     }
 }
 
-/// The first value of a 28-byte M2Track (values `count@0x14`, `ofs@0x18`).
-fn track_first_f32(bytes: &[u8], track: usize) -> Option<f32> {
-    let nval = bytes.u32_at(track + 0x14)? as usize;
-    let ofs = bytes.u32_at(track + 0x18)? as usize;
-    if nval == 0 {
-        return None;
+/// The offset of an M2Track's first value in file order, or none without values: pre-Wrath's flat
+/// `values[0]` (`count@0x14`, `ofs@0x18`); Wrath's per-sequence clips in order, the first
+/// non-empty one's first value (the values `M2Array` at `count@0xc`, `ofs@0x10`).
+fn track_first_ofs(bytes: &[u8], track: usize, lay: M2Layout) -> Option<usize> {
+    if !lay.wrath {
+        let nval = bytes.u32_at(track + 0x14)? as usize;
+        let ofs = bytes.u32_at(track + 0x18)? as usize;
+        return (nval > 0).then_some(ofs);
     }
-    bytes.f32_at(ofs)
+    let nval = bytes.u32_at(track + 0xc)? as usize;
+    let ovs = bytes.u32_at(track + 0x10)? as usize;
+    (0..nval).find_map(|s| {
+        let o = ovs + s * 8;
+        let count = bytes.u32_at(o)? as usize;
+        (count > 0)
+            .then(|| bytes.u32_at(o + 4))
+            .flatten()
+            .map(|o| o as usize)
+    })
 }
-fn track_first_u8(bytes: &[u8], track: usize) -> Option<u8> {
-    let nval = bytes.u32_at(track + 0x14)? as usize;
-    let ofs = bytes.u32_at(track + 0x18)? as usize;
-    if nval == 0 {
-        return None;
-    }
-    bytes.get(ofs).copied()
+
+/// The first value of a track's f32 channel.
+fn track_first_f32(bytes: &[u8], track: usize, lay: M2Layout) -> Option<f32> {
+    bytes.f32_at(track_first_ofs(bytes, track, lay)?)
 }
-fn track_first_vec3(bytes: &[u8], track: usize) -> Option<[f32; 3]> {
-    let nval = bytes.u32_at(track + 0x14)? as usize;
-    let ofs = bytes.u32_at(track + 0x18)? as usize;
-    if nval == 0 {
-        return None;
-    }
+/// The first value of a track's u8 channel (a light's visibility).
+fn track_first_u8(bytes: &[u8], track: usize, lay: M2Layout) -> Option<u8> {
+    bytes.get(track_first_ofs(bytes, track, lay)?).copied()
+}
+/// The first value of a track's C3RGB channel.
+fn track_first_vec3(bytes: &[u8], track: usize, lay: M2Layout) -> Option<[f32; 3]> {
+    let ofs = track_first_ofs(bytes, track, lay)?;
     Some([
         bytes.f32_at(ofs)?,
         bytes.f32_at(ofs + 4)?,
@@ -111,12 +121,9 @@ fn quat_rotate_z(q: [f32; 4]) -> [f32; 3] {
     ]
 }
 
-fn track_first_quat(bytes: &[u8], track: usize) -> Option<[f32; 4]> {
-    let nval = bytes.u32_at(track + 0x14)? as usize;
-    let ofs = bytes.u32_at(track + 0x18)? as usize;
-    if nval == 0 {
-        return None;
-    }
+/// The first value of a track's quaternion channel.
+fn track_first_quat(bytes: &[u8], track: usize, lay: M2Layout) -> Option<[f32; 4]> {
+    let ofs = track_first_ofs(bytes, track, lay)?;
     Some([
         bytes.f32_at(ofs)?,
         bytes.f32_at(ofs + 4)?,
@@ -126,10 +133,11 @@ fn track_first_quat(bytes: &[u8], track: usize) -> Option<[f32; 4]> {
 }
 
 /// A bone's model-space +Z at the track origin, its first rotation keys composed up the parent
-/// chain. Bone table `count@0x34`/`ofs@0x38`, stride `0x6c`: flags `u32@4` (`0x04` keeps the
-/// root's orientation), parent `i16@8`, rotation `@0x28`. Rotation animation is not applied.
-fn bone_z_axis(bytes: &[u8], bone: i16) -> [f32; 3] {
-    let (Some(count), Some(ofs)) = (bytes.u32_at(0x34), bytes.u32_at(0x38)) else {
+/// chain. The bone table and stride are [`M2Layout`]'s: flags `u32@4` (`0x04` keeps the root's
+/// orientation), parent `i16@8`, the rotation track at `bone_rotation_ofs`. Rotation animation is
+/// not applied.
+fn bone_z_axis(bytes: &[u8], bone: i16, lay: M2Layout) -> [f32; 3] {
+    let (Some(count), Some(ofs)) = (bytes.u32_at(lay.bones), bytes.u32_at(lay.bones + 4)) else {
         return [0.0, 0.0, 1.0];
     };
     let (count, ofs) = (count as usize, ofs as usize);
@@ -140,8 +148,8 @@ fn bone_z_axis(bytes: &[u8], bone: i16) -> [f32; 3] {
         if idx < 0 || idx as usize >= count {
             break;
         }
-        let rec = ofs + idx as usize * 0x6c;
-        if let Some(q) = track_first_quat(bytes, rec + 0x28) {
+        let rec = ofs + idx as usize * lay.bone_stride;
+        if let Some(q) = track_first_quat(bytes, rec + lay.bone_rotation_ofs, lay) {
             chain.push(q);
         }
         let flags = bytes.u32_at(rec + 4).unwrap_or(0);
@@ -158,43 +166,49 @@ fn bone_z_axis(bytes: &[u8], bone: i16) -> [f32; 3] {
 }
 
 /// One M2 light record at a bounds-checked `rec`, as the reference reads it (`0x718960`,
-/// `0x714260`): `type@0`, `bone@2`, `position@4`, then seven `0x1c` M2Tracks: ambient colour and
-/// intensity `@0x10`/`@0x2c`, diffuse `@0x48`/`@0x64`, attenuation `@0x80`/`@0x9c`, visibility
-/// `@0xb8`.
-fn read_m2_light(bytes: &[u8], rec: usize) -> Option<M2Light> {
+/// `0x714260`): `type@0`, `bone@2`, `position@4`, then seven M2Tracks spaced by the layout's
+/// `track_stride` from `@0x10`: ambient colour and intensity, diffuse, attenuation start and end,
+/// and visibility.
+fn read_m2_light(bytes: &[u8], rec: usize, lay: M2Layout) -> Option<M2Light> {
     let bone = bytes.u16_at(rec + 0x02)? as i16;
+    let track = |i: usize| rec + 0x10 + i * lay.track_stride;
     Some(M2Light {
         light_type: bytes.u16_at(rec)?,
         bone,
-        bone_z: bone_z_axis(bytes, bone),
+        bone_z: bone_z_axis(bytes, bone, lay),
         position: [
             bytes.f32_at(rec + 0x04)?,
             bytes.f32_at(rec + 0x08)?,
             bytes.f32_at(rec + 0x0c)?,
         ],
-        ambient_color: track_first_vec3(bytes, rec + 0x10).unwrap_or([1.0; 3]),
-        ambient_intensity: track_first_f32(bytes, rec + 0x2c).unwrap_or(0.0),
-        diffuse_color: track_first_vec3(bytes, rec + 0x48).unwrap_or([1.0; 3]),
-        diffuse_intensity: track_first_f32(bytes, rec + 0x64).unwrap_or(1.0),
-        attenuation_start: track_first_f32(bytes, rec + 0x80).unwrap_or(0.0),
-        attenuation_end: track_first_f32(bytes, rec + 0x9c).unwrap_or(0.0),
-        visibility_off: track_first_u8(bytes, rec + 0xb8) == Some(0),
+        ambient_color: track_first_vec3(bytes, track(0), lay).unwrap_or([1.0; 3]),
+        ambient_intensity: track_first_f32(bytes, track(1), lay).unwrap_or(0.0),
+        diffuse_color: track_first_vec3(bytes, track(2), lay).unwrap_or([1.0; 3]),
+        diffuse_intensity: track_first_f32(bytes, track(3), lay).unwrap_or(1.0),
+        attenuation_start: track_first_f32(bytes, track(4), lay).unwrap_or(0.0),
+        attenuation_end: track_first_f32(bytes, track(5), lay).unwrap_or(0.0),
+        visibility_off: track_first_u8(bytes, track(6), lay) == Some(0),
     })
 }
 
-/// The M2 lights array (MD20 `count@0x11c`, `ofs@0x120`, stride `0xd4`).
+/// The M2 lights array (`M2Layout::lights`, record stride `0x10` + seven `track_stride`s: `0xd4`
+/// pre-Wrath, `0x9c` in Wrath).
 pub fn parse_m2_lights(bytes: &[u8]) -> Vec<M2Light> {
-    let (Some(count), Some(ofs)) = (bytes.u32_at(0x11c), bytes.u32_at(0x120)) else {
+    let Some(lay) = M2Layout::of(bytes) else {
+        return Vec::new();
+    };
+    let (Some(count), Some(ofs)) = (bytes.u32_at(lay.lights), bytes.u32_at(lay.lights + 4)) else {
         return Vec::new();
     };
     let (count, ofs) = (count as usize, ofs as usize);
+    let stride = 0x10 + 7 * lay.track_stride;
     let mut out = Vec::with_capacity(count.min(256));
     for i in 0..count {
-        let rec = match ofs.checked_add(i * 0xd4) {
-            Some(r) if r + 0xd4 <= bytes.len() => r,
+        let rec = match ofs.checked_add(i * stride) {
+            Some(r) if r + stride <= bytes.len() => r,
             _ => break,
         };
-        match read_m2_light(bytes, rec) {
+        match read_m2_light(bytes, rec, lay) {
             Some(light) => out.push(light),
             None => break, // unreachable after the guard above
         }
@@ -335,15 +349,78 @@ mod tests {
     /// the chain gives the root's axis.
     #[test]
     fn bone_z_axis_composes_parent_then_local() {
+        let lay = M2Layout::from_version(256).expect("vanilla is supported");
         let b = two_bone_chain();
-        let root = bone_z_axis(&b, 0);
+        let root = bone_z_axis(&b, 0, lay);
         assert!((root[0]).abs() < 1e-6 && (root[1] + 1.0).abs() < 1e-6 && root[2].abs() < 1e-6);
-        let child = bone_z_axis(&b, 1);
+        let child = bone_z_axis(&b, 1, lay);
         for (c, r) in child.iter().zip(root) {
             assert!((c - r).abs() < 1e-6, "child {child:?} vs root {root:?}");
         }
         // No rotation keys anywhere: identity +Z.
-        assert_eq!(bone_z_axis(&vec![0u8; 0x400], 0), [0.0, 0.0, 1.0]);
+        assert_eq!(bone_z_axis(&vec![0u8; 0x400], 0, lay), [0.0, 0.0, 1.0]);
+    }
+
+    /// One Wrath (3.3.5) light: the array at `0x108`/`0x10c`, the `0x9c` record, and its seven
+    /// 20-byte nested tracks — the committed values are each track's first per-sequence value.
+    #[test]
+    fn a_wrath_light_reads_its_nested_tracks() {
+        let mut b = vec![0u8; 0x400];
+        let put_u16 =
+            |b: &mut Vec<u8>, at: usize, v: u16| b[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        let put_u32 =
+            |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        let put_f32 =
+            |b: &mut Vec<u8>, at: usize, v: f32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        put_u32(&mut b, 4, 264); // the version word
+        let rec = 0x200;
+        put_u32(&mut b, 0x108, 1); // lights count
+        put_u32(&mut b, 0x10c, rec as u32);
+        // The record: point light on the origin.
+        put_u16(&mut b, rec, 1); // light_type
+        put_u16(&mut b, rec + 2, 0xffff); // bone −1
+        put_f32(&mut b, rec + 4, 0.5);
+        put_f32(&mut b, rec + 8, 1.5);
+        put_f32(&mut b, rec + 0xc, -2.5);
+        // Seven tracks at `0x10 + 20·i`: the V block (nVal@0xc, ofsVal@0x10) points at one
+        // per-sequence clip, each a single value.
+        for i in 0..7 {
+            let t = rec + 0x10 + 20 * i;
+            put_u32(&mut b, t + 0xc, 1);
+            put_u32(&mut b, t + 0x10, 0x300 + 8 * i as u32);
+            put_u32(&mut b, 0x300 + 8 * i, 1);
+            put_u32(&mut b, 0x300 + 8 * i + 4, 0x380 + 16 * i as u32);
+        }
+        put_f32(&mut b, 0x380, 1.0);
+        put_f32(&mut b, 0x384, 0.5);
+        put_f32(&mut b, 0x388, 0.25);
+        put_f32(&mut b, 0x390, 2.0);
+        put_f32(&mut b, 0x3a0, 0.1);
+        put_f32(&mut b, 0x3a4, 0.2);
+        put_f32(&mut b, 0x3a8, 0.3);
+        put_f32(&mut b, 0x3b0, 4.0);
+        put_f32(&mut b, 0x3c0, 1.0);
+        put_f32(&mut b, 0x3d0, 3.0);
+        b[0x3e0] = 0; // visibility off
+
+        let lights = parse_m2_lights(&b);
+        assert_eq!(
+            lights.len(),
+            1,
+            "the record is in bounds at the Wrath stride"
+        );
+        let light = &lights[0];
+        assert_eq!(light.light_type, 1);
+        assert_eq!(light.bone, -1);
+        assert_eq!(light.position, [0.5, 1.5, -2.5]);
+        assert_eq!(light.bone_z, [0.0, 0.0, 1.0]);
+        assert_eq!(light.ambient_color, [1.0, 0.5, 0.25]);
+        assert_eq!(light.ambient_intensity, 2.0);
+        assert_eq!(light.diffuse_color, [0.1, 0.2, 0.3]);
+        assert_eq!(light.diffuse_intensity, 4.0);
+        assert_eq!(light.attenuation_start, 1.0);
+        assert_eq!(light.attenuation_end, 3.0);
+        assert!(light.visibility_off);
     }
 }
 

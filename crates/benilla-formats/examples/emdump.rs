@@ -8,7 +8,8 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let bytes = chain.read_file(&virt)?;
     let dir = virt.rsplit_once('\\').map_or("", |(d, _)| d);
-    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
+    let subs =
+        benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None).unwrap_or_default();
     // The renderer's own bound and rung, not a re-derivation of them.
     let reach = benilla_formats::m2_owner_reach(&subs);
     let rung = benilla_formats::owner_last_rung(reach);

@@ -54,7 +54,7 @@ pub fn alphascan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let seq_count = benilla_formats::parse_m2_animations(&bytes).len();
@@ -126,7 +126,7 @@ pub fn uvwrapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let mut lines = Vec::new();
@@ -207,7 +207,7 @@ pub fn texmodescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         for s in &subs {
@@ -274,7 +274,7 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             }
         }
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let mut lines = Vec::new();
@@ -621,7 +621,7 @@ pub fn uvslotscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             continue;
         };
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         scanned += 1;
@@ -1353,7 +1353,7 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         read += 1;
         let dir = key.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             missing += 1;
             unread.push(format!("{} (will not parse)", reach.path));
             continue;
@@ -2039,7 +2039,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             .map(|(d, _)| d)
             .unwrap_or("")
             .to_string();
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, &dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, &dir, &[], None) else {
             missing += 1;
             unread.push(format!("{path} (will not parse)"));
             continue;

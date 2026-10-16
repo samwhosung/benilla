@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let bytes = chain.read_file(&virt)?;
 
-    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[])?;
+    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None)?;
     let tris = occluders(&subs, false);
     let tris_all = occluders(&subs, true);
     let writing: Vec<usize> = subs

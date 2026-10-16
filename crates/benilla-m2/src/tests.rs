@@ -552,3 +552,310 @@ fn a_truncated_camera_record_is_dropped_not_half_read() {
     set_arr(&mut b, OFS_CAMERAS, 2, rec);
     assert_eq!(parse_cameras(&b).len(), 1);
 }
+
+// --- Wrath (264) fixtures: the narrower header, 88-byte bones, nested tracks ------------------
+// A v264 file is 20 bytes narrower than v256: no playable-animation lookup, a 4-byte skin count,
+// no texture flipbooks. Offsets below are the Wrath (not v256) ones.
+
+const WRATH_HEADER_LEN: usize = 0x110;
+const WRATH_SEQS: usize = 0x1c;
+const WRATH_BONES: usize = 0x2c;
+const WRATH_TRANSPARENCY: usize = 0x58;
+const WRATH_ATTACHMENTS: usize = 0xf0;
+const WRATH_EVENTS: usize = 0x100;
+
+fn wrath_header() -> Vec<u8> {
+    let mut b = vec![0u8; WRATH_HEADER_LEN];
+    b[0..4].copy_from_slice(b"MD20");
+    b[4..8].copy_from_slice(&264u32.to_le_bytes());
+    b
+}
+
+/// A Wrath bone: 88 bytes, the pivot `C3` at `0x4c` (a name CRC and 20-byte tracks shift it in).
+fn wrath_bone_record(pivot: [f32; 3]) -> Vec<u8> {
+    let mut b = vec![0u8; 88];
+    b[0x4c..0x50].copy_from_slice(&pivot[0].to_le_bytes());
+    b[0x50..0x54].copy_from_slice(&pivot[1].to_le_bytes());
+    b[0x54..0x58].copy_from_slice(&pivot[2].to_le_bytes());
+    b
+}
+
+/// A Wrath nested fix16 `M2Track` (20-byte header, then one outer/inner array pair per sequence)
+/// for a single sequence. Returns the track's file offset.
+fn wrath_fix16_track(b: &mut Vec<u8>, interp: u16, gseq: u16, keys: &[(u32, i16)]) -> u32 {
+    let head = b.len() as u32;
+    let n = keys.len() as u32;
+    let ts_out = head + 20;
+    let vs_out = head + 28;
+    let ts_in = head + 36;
+    let vs_in = ts_in + n * 4;
+    let mut h = vec![0u8; 20];
+    h[0..2].copy_from_slice(&interp.to_le_bytes());
+    h[2..4].copy_from_slice(&gseq.to_le_bytes());
+    h[4..8].copy_from_slice(&1u32.to_le_bytes());
+    h[8..12].copy_from_slice(&ts_out.to_le_bytes());
+    h[12..16].copy_from_slice(&1u32.to_le_bytes());
+    h[16..20].copy_from_slice(&vs_out.to_le_bytes());
+    b.extend_from_slice(&h);
+    b.extend_from_slice(&n.to_le_bytes());
+    b.extend_from_slice(&ts_in.to_le_bytes());
+    b.extend_from_slice(&n.to_le_bytes());
+    b.extend_from_slice(&vs_in.to_le_bytes());
+    for (ms, _) in keys {
+        b.extend_from_slice(&ms.to_le_bytes());
+    }
+    for (_, v) in keys {
+        b.extend_from_slice(&(*v as u16).to_le_bytes());
+    }
+    head
+}
+
+#[test]
+fn wrath_minimal_header_parses_empty_model() {
+    let b = wrath_header();
+    let fmt = parse(&b).expect("an all-zero Wrath header parses");
+    let m = fmt.model();
+    assert!(m.bones.is_empty());
+    assert!(m.vertices.is_empty());
+    assert!(
+        m.playable_animation_lookup.is_empty(),
+        "a Wrath file has no playable-animation lookup"
+    );
+}
+
+#[test]
+fn wrath_bone_parses_88byte_record_pivot_at_0x4c() {
+    let mut b = wrath_header();
+    let bones_ofs = b.len() as u32;
+    b.extend(wrath_bone_record([1.5, -2.5, 3.5]));
+    set_arr(&mut b, WRATH_BONES, 1, bones_ofs);
+    let fmt = parse(&b).expect("a Wrath bone parses");
+    let m = fmt.model();
+    assert_eq!(m.bones.len(), 1);
+    assert_eq!(
+        m.bones[0].pivot,
+        C3 {
+            x: 1.5,
+            y: -2.5,
+            z: 3.5
+        }
+    );
+}
+
+#[test]
+fn wrath_nested_fix16_track_flattens() {
+    let mut b = wrath_header();
+    let rec_ofs = wrath_fix16_track(&mut b, 1, 0xffff, &[(0, 0), (1000, 0x7fff)]);
+    set_arr(&mut b, WRATH_TRANSPARENCY, 1, rec_ofs);
+    let fmt = parse(&b).expect("a Wrath weight track parses");
+    let m = fmt.model();
+    assert_eq!(m.transparency_tracks.len(), 1);
+    let t = &m.transparency_tracks[0];
+    assert_eq!(t.interp, 1);
+    assert_eq!(t.keys.len(), 2);
+    let keys: Vec<f32> = t.keys.iter().map(|&(_, v)| v).collect();
+    assert!(
+        (keys[0] - 0.0).abs() < 1e-6,
+        "fix16 0 decodes to 0.0 (got {})",
+        keys[0]
+    );
+    assert!(
+        (keys[1] - 1.0).abs() < 1e-6,
+        "fix16 0x7fff decodes to 1.0 (got {})",
+        keys[1]
+    );
+}
+
+/// A two-sequence track: each sequence's relative keys are rebased onto the shared timeline by
+/// the accumulated band start, so sequence 1's key at relative 0 lands at absolute 1000.
+#[test]
+fn wrath_sequence_track_rebases_by_band_start() {
+    let mut b = wrath_header();
+    // Two sequences: durations 1000 and 500, so band_starts = [0, 1000].
+    let seq_ofs = b.len() as u32;
+    for dur in [1000u32, 500] {
+        let mut rec = vec![0u8; 0x40];
+        rec[4..8].copy_from_slice(&dur.to_le_bytes());
+        b.extend(rec);
+    }
+    set_arr(&mut b, WRATH_SEQS, 2, seq_ofs);
+    // One weight track, one clip per sequence, each a single fix16 key at relative ms 0.
+    let head = b.len() as u32;
+    let (outer_ts, outer_vs, inner_ts) = (head + 20, head + 36, head + 52);
+    let (ts0, ts1) = (inner_ts, inner_ts + 4);
+    let (vs0, vs1) = (inner_ts + 8, inner_ts + 10);
+    let mut h = vec![0u8; 20];
+    h[0..2].copy_from_slice(&1u16.to_le_bytes());
+    h[2..4].copy_from_slice(&0xffffu16.to_le_bytes());
+    h[4..8].copy_from_slice(&2u32.to_le_bytes());
+    h[8..12].copy_from_slice(&outer_ts.to_le_bytes());
+    h[12..16].copy_from_slice(&2u32.to_le_bytes());
+    h[16..20].copy_from_slice(&outer_vs.to_le_bytes());
+    b.extend_from_slice(&h);
+    for (cnt, off) in [(1u32, ts0), (1, ts1), (1, vs0), (1, vs1)] {
+        b.extend_from_slice(&cnt.to_le_bytes());
+        b.extend_from_slice(&off.to_le_bytes());
+    }
+    b.extend_from_slice(&0u32.to_le_bytes()); // inner timestamps: seq0 0, seq1 0
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&0x7fffu16.to_le_bytes()); // inner values: 1.0, 1.0
+    b.extend_from_slice(&0x7fffu16.to_le_bytes());
+    set_arr(&mut b, WRATH_TRANSPARENCY, 1, head);
+
+    let fmt = parse(&b).expect("a Wrath multi-sequence track parses");
+    let m = fmt.model();
+    let t = &m.transparency_tracks[0];
+    assert_eq!(t.keys, vec![(0u32, 1.0f32), (1000u32, 1.0f32)]);
+    assert_eq!(t.ranges, vec![(0u32, 1u32), (1u32, 2u32)]);
+}
+
+#[test]
+fn wrath_attachment_40_and_event_56_strides() {
+    let mut b = wrath_header();
+    let bones_ofs = b.len() as u32;
+    b.extend(wrath_bone_record([0.0; 3]));
+    set_arr(&mut b, WRATH_BONES, 1, bones_ofs);
+    // One attachment: 40 bytes, id@0, bone@4, position C3 @8.
+    let att_ofs = b.len() as u32;
+    let mut att = vec![0u8; 40];
+    att[0..4].copy_from_slice(&1u32.to_le_bytes());
+    att[4..8].copy_from_slice(&0u32.to_le_bytes());
+    for (i, c) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+        att[8 + i * 4..12 + i * 4].copy_from_slice(&c.to_le_bytes());
+    }
+    b.extend(att);
+    set_arr(&mut b, WRATH_ATTACHMENTS, 1, att_ofs);
+    // One event: 56 bytes, ident@0, bone@8, position C3 @12.
+    let ev_ofs = b.len() as u32;
+    let mut ev = vec![0u8; 56];
+    ev[0..4].copy_from_slice(b"$CSL");
+    ev[8..12].copy_from_slice(&0u32.to_le_bytes());
+    for (i, c) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+        ev[12 + i * 4..16 + i * 4].copy_from_slice(&c.to_le_bytes());
+    }
+    b.extend(ev);
+    set_arr(&mut b, WRATH_EVENTS, 1, ev_ofs);
+
+    let fmt = parse(&b).expect("a Wrath attachment + event parse");
+    let m = fmt.model();
+    assert_eq!(m.attachments.len(), 1, "the in-range attachment survives");
+    assert_eq!(m.attachments[0].id, 1);
+    assert_eq!(m.attachments[0].position, [1.0, 2.0, 3.0]);
+    assert_eq!(m.event_markers.len(), 1, "the in-range event survives");
+    assert_eq!(&m.event_markers[0].ident, b"$CSL");
+    assert_eq!(m.event_markers[0].position, [4.0, 5.0, 6.0]);
+}
+
+// --- Wrath external `*.skin` profiles ----------------------------------------------------------
+// A Wrath model keeps its view geometry in an external `.skin` file: a `SKIN` header, then the
+// vertex lookup (a `u16` into the base vertices), the triangle corners, the per-vertex bone
+// indices, the submeshes (48-byte `ssSubmeshes`) and the batches (24-byte `ssTextureUnits`).
+
+const WRATH_VERTICES: usize = 0x3c;
+
+/// A v264 model with `n` base vertices (zeroed), for a `.skin` to look into.
+fn wrath_model_with_vertices(n: usize) -> Vec<u8> {
+    let mut b = wrath_header();
+    let verts_ofs = b.len() as u32;
+    for _ in 0..n {
+        b.extend(vec![0u8; 48]);
+    }
+    set_arr(&mut b, WRATH_VERTICES, n as u32, verts_ofs);
+    b
+}
+
+/// A Wrath `.skin` file: an identity `u16` vertex lookup of `n_vert`, `n_idx` triangle corners,
+/// `n_vert` bone records, one submesh (id 5, the whole corner range) and one batch.
+fn skin_file(n_vert: usize, n_idx: usize) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(b"SKIN");
+    b.resize(0x30, 0); // the rest of the header (48 bytes), patched below
+    let (o_vert, o_idx, o_bone) = (0x30usize, 0x30 + n_vert * 2, 0x30 + n_vert * 2 + n_idx * 2);
+    let (o_sub, o_bat) = (o_bone + n_vert * 4, o_bone + n_vert * 4 + 48);
+    let mut arr = |ofs: usize, count: u32, offset: u32| {
+        b[ofs..ofs + 4].copy_from_slice(&count.to_le_bytes());
+        b[ofs + 4..ofs + 8].copy_from_slice(&offset.to_le_bytes());
+    };
+    arr(4, n_vert as u32, o_vert as u32);
+    arr(0x0c, n_idx as u32, o_idx as u32);
+    arr(0x14, n_vert as u32, o_bone as u32); // bone indices (present, not read by benilla)
+    arr(0x1c, 1, o_sub as u32);
+    arr(0x24, 1, o_bat as u32);
+    b[0x2c..0x30].copy_from_slice(&1u32.to_le_bytes()); // boneCountMax
+    for i in 0..n_vert {
+        b.extend_from_slice(&(i as u16).to_le_bytes()); // vertices: identity into the base list
+    }
+    for i in 0..n_idx {
+        b.extend_from_slice(&(i as u16).to_le_bytes()); // triangle corners: 0..n_idx
+    }
+    for _ in 0..n_vert {
+        b.extend_from_slice(&[0u8; 4]); // bone indices: every corner on bone 0
+    }
+    let mut sub = vec![0u8; 48];
+    sub[0..2].copy_from_slice(&5u16.to_le_bytes()); // skinSectionId
+    sub[8..10].copy_from_slice(&0u16.to_le_bytes()); // index_start
+    sub[10..12].copy_from_slice(&(n_idx as u16).to_le_bytes()); // index_count
+    b.extend_from_slice(&sub);
+    let mut bat = vec![0u8; 24];
+    bat[4..6].copy_from_slice(&0u16.to_le_bytes()); // skin_section_index
+    bat[0x0a..0x0c].copy_from_slice(&2u16.to_le_bytes()); // material_index
+    bat[0x10..0x12].copy_from_slice(&5u16.to_le_bytes()); // texture_combo_index
+    b.extend_from_slice(&bat);
+    b
+}
+
+#[test]
+fn wrath_skin_file_decodes_geometry_and_batches() {
+    let m2 = wrath_model_with_vertices(4);
+    let fmt = parse(&m2).expect("the Wrath model parses");
+    let skin = fmt
+        .model()
+        .parse_skin_file(&skin_file(4, 3))
+        .expect("the .skin decodes");
+    assert_eq!(*skin.indices(), vec![0, 1, 2, 3]);
+    assert_eq!(*skin.triangles(), vec![0, 1, 2]);
+    assert_eq!(skin.submeshes().len(), 1);
+    assert_eq!(skin.submeshes()[0].id, 5);
+    assert_eq!(skin.submeshes()[0].triangle_start, 0);
+    assert_eq!(skin.submeshes()[0].triangle_count, 3);
+    assert_eq!(skin.batches().len(), 1);
+    assert_eq!(skin.batches()[0].skin_section_index, 0);
+    assert_eq!(skin.batches()[0].material_index, 2);
+    assert_eq!(skin.batches()[0].texture_combo_index, 5);
+}
+
+#[test]
+fn wrath_skin_bad_magic_errs() {
+    let m2 = wrath_model_with_vertices(1);
+    let fmt = parse(&m2).expect("the Wrath model parses");
+    let mut bad = skin_file(1, 3);
+    bad[0] = b'X'; // not "SKIN"
+    assert!(matches!(
+        fmt.model().parse_skin_file(&bad),
+        Err(Error::NotSkin)
+    ));
+}
+
+#[test]
+fn wrath_skin_out_of_range_vertex_lookup_errs() {
+    // The model has two base vertices, but the profile's lookup names four (0..3): 2 and 3 are
+    // out of range and must be refused, not read past the end of the base list.
+    let m2 = wrath_model_with_vertices(2);
+    let fmt = parse(&m2).expect("the Wrath model parses");
+    assert!(matches!(
+        fmt.model().parse_skin_file(&skin_file(4, 3)),
+        Err(Error::Truncated)
+    ));
+}
+
+#[test]
+fn wrath_skin_truncated_file_errs() {
+    let m2 = wrath_model_with_vertices(4);
+    let fmt = parse(&m2).expect("the Wrath model parses");
+    let full = skin_file(4, 3);
+    // Cut the file inside the submesh/batch block: the record must fail, not read past the end.
+    assert!(matches!(
+        fmt.model().parse_skin_file(&full[..full.len() - 8]),
+        Err(Error::Truncated)
+    ));
+}

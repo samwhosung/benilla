@@ -569,6 +569,61 @@ mod tests {
         }
     }
 
+    /// The Wrath (3.3.5) Icecrown axe: its geometry is not in the M2 but in the external
+    /// `Axe_2H_IcecrownRaid_D_0100.skin`, which the loader must fetch and build from.
+    #[test]
+    fn loads_a_wrath_m2_through_the_pipeline() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        register_mpq_source(&mut app, &data).expect("register mpq source");
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<Mesh>();
+        app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.init_asset::<bevy::animation::AnimationClip>();
+        app.init_asset::<bevy::animation::graph::AnimationGraph>();
+        register_asset_loaders(&mut app);
+
+        let handle: Handle<M2Model> = app
+            .world()
+            .resource::<AssetServer>()
+            .load("mpq://Item/ObjectComponents/Weapon/Axe_2H_IcecrownRaid_D_01.m2");
+
+        let mut model = None;
+        for _ in 0..600 {
+            app.update();
+            if let Some(m) = app.world().resource::<Assets<M2Model>>().get(&handle) {
+                model = Some(m.clone());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let model =
+            model.expect("the Wrath axe should load via mpq:// + M2ModelLoader within 600 ticks");
+        assert_eq!(model.submeshes.len(), 5, "one submesh per skin batch");
+        assert!(
+            model.submeshes.iter().all(|s| s.texture.is_none()),
+            "the item's object skin fills at the spawn site, not here"
+        );
+        // The skin's four submesh vertex spans, in batch order.
+        let verts: Vec<usize> = model
+            .submeshes
+            .iter()
+            .map(|s| submesh_to_static_mesh(&s.geometry).count_vertices())
+            .collect();
+        assert_eq!(verts, vec![24, 957, 32, 4], "each batch's unique vertices");
+        for s in &model.submeshes {
+            let mesh = submesh_to_static_mesh(&s.geometry);
+            let skinned = submesh_to_skinned_mesh(&s.geometry);
+            assert_eq!(
+                skinned.count_vertices(),
+                mesh.count_vertices(),
+                "the skinned twin bakes the same geometry"
+            );
+        }
+    }
+
     #[test]
     fn loads_a_wmo_model_through_the_pipeline() {
         let data = benilla_formats::wow_data_or_skip!();

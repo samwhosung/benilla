@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
     let bytes = chain.read_file(&virt)?;
-    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[])?;
+    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None)?;
     println!("{virt} — {} batches", subs.len());
     let mut unlit = 0;
     for (i, s) in subs.iter().enumerate() {

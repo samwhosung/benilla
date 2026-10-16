@@ -3,7 +3,7 @@ name = "benilla-m2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "M2 (MD20) model reader for WoW 1.12.1 (build 5875)"
+description = "M2 (MD20) model reader for WoW 1.12.1 (build 5875) and Wrath of the Lich King 3.3.5 (MD20 versions 256–264)"
 
 [lints]
 workspace = true

@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
         let Ok(bytes) = chain.read_file(path) else {
             continue;
         };
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None) else {
             continue;
         };
         for s in subs {

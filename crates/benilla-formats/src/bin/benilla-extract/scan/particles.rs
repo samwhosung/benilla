@@ -661,7 +661,7 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         // The owner's rung at placement scale 1; a scaled placement multiplies the reach.
         let dir = name.rsplit_once('\\').map_or("", |(d, _)| d);
         let owner_subs =
-            benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
+            benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None).unwrap_or_default();
         let reach = benilla_formats::m2_owner_reach(&owner_subs);
         let rung = benilla_formats::owner_last_rung(reach);
         *rungs.entry(rung as u32).or_default() += 1;
@@ -670,7 +670,7 @@ pub fn shardcensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
                 let parsed = match chain.read_file(&geo) {
                     Ok(gb) => {
                         let gdir = geo.rsplit_once('\\').map_or("", |(d, _)| d);
-                        match benilla_formats::parse_m2_render_submeshes(&gb, gdir, &[]) {
+                        match benilla_formats::parse_m2_render_submeshes(&gb, gdir, &[], None) {
                             Ok(gsubs) => {
                                 let fams: Vec<(String, bool)> = gsubs.iter().map(&fam).collect();
                                 for (label, transparent) in &fams {
@@ -771,7 +771,8 @@ pub fn fxordercensus(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         // Batches in the distance-sorted transparent pass, which `additive` forces whatever the
         // blend (`model_material`).
         let dir = name.rsplit_once('\\').map_or("", |(d, _)| d);
-        let subs = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]).unwrap_or_default();
+        let subs =
+            benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None).unwrap_or_default();
         let occluders: Vec<&benilla_formats::RenderSubmesh> = subs
             .iter()
             .filter(|s| {

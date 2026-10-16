@@ -746,7 +746,7 @@ mod tests {
     fn measure(chain: &mut Chain, token: &str) -> (ArtExtent, f32, f32) {
         let name = format!("Interface\\Glues\\Models\\UI_{token}\\UI_{token}.m2");
         let bytes = chain.read_file(&name).expect("read scene");
-        let subs = crate::parse_m2_render_submeshes(&bytes, "", &[]).expect("parse");
+        let subs = crate::parse_m2_render_submeshes(&bytes, "", &[], None).expect("parse");
         let cam = crate::parse_m2_camera(&bytes, 0).expect("camera 0");
         let mut reader = CoverageReader::new(chain);
         let ext = glue_art_extent(&subs, &cam, |s| reader.coverage(s).expect("texture"));

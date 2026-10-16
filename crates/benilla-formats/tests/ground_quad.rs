@@ -11,7 +11,7 @@ fn battle_shout_crescents_detect_as_ground_quads() {
     let bytes = chain
         .read_file("Spells\\BattleShout_Cast_Base.m2")
         .expect("Battle Shout cast-base model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     assert_eq!(subs.len(), 6, "six crescent batches");
     let mut bones = Vec::new();
     for sub in &subs {
@@ -41,7 +41,7 @@ fn hovering_discs_detect_as_ground_quads() {
     let bytes = chain
         .read_file("spells\\consecration_impact_base.m2")
         .expect("Consecration impact-base model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     assert_eq!(subs.len(), 2, "glow + burn disc");
     let mut hovers: Vec<f32> = subs
         .iter()
@@ -62,7 +62,7 @@ fn hovering_discs_detect_as_ground_quads() {
     let bytes = chain
         .read_file("Spells\\Flamestrike_Impact_Base.m2")
         .expect("Flamestrike impact-base model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     let quads = subs.iter().filter(|s| s.ground_quad().is_some()).count();
     assert_eq!(
         quads, 2,
@@ -77,7 +77,7 @@ fn character_model_detects_no_ground_quads() {
     let bytes = chain
         .read_file("Character\\Human\\Male\\HumanMale.m2")
         .expect("human male model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     assert!(
         subs.iter().all(|s| s.ground_quad().is_none()),
         "no body batch reads as a ground quad"
@@ -95,7 +95,7 @@ fn ground_quads_carry_their_static_m2color_tint() {
     let bytes = chain
         .read_file("SPELLS\\Flare_State_Base.m2")
         .expect("Flare state-base model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     let quads: Vec<_> = subs.iter().filter_map(|s| s.ground_quad()).collect();
     assert_eq!(quads.len(), 2, "both washes are ground quads");
     for q in &quads {
@@ -109,7 +109,7 @@ fn ground_quads_carry_their_static_m2color_tint() {
     let bytes = chain
         .read_file("Spells\\BattleShout_Cast_Base.m2")
         .expect("Battle Shout cast-base model");
-    let subs = parse_m2_render_submeshes(&bytes, "", &[]).expect("submeshes");
+    let subs = parse_m2_render_submeshes(&bytes, "", &[], None).expect("submeshes");
     for sub in &subs {
         let q = sub.ground_quad().expect("crescent");
         assert!(sub.rgb_anim.is_some(), "the crescent's colour is a loop");

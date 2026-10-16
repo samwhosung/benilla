@@ -89,6 +89,77 @@ fn track_read<V>(
     }
 }
 
+/// Read one Wrath (264) `M2Track<V>`: `interp`@0, `gseq`@2, then `timestamps` and `values` each a
+/// `M2Array` of per-sequence `M2Array`s. A `gseq` track's one clip (`[0]`) is loop-relative and is
+/// kept as is; a sequence track's clip `s` is relative to sequence `s`, rebased by
+/// `band_starts[s]` onto the shared absolute timeline a pre-Wrath track carries. An out-of-range
+/// track reads as no keys, a tolerance real art needs. `read_val` is called at the value offsets
+/// as the reader finds them, so it must answer out-of-range with `None`.
+pub fn track_read_wrath<V>(
+    b: &[u8],
+    track_ofs: usize,
+    val_size: usize,
+    read_val: impl Fn(&[u8], usize) -> Option<V>,
+    band_starts: &[u32],
+) -> M2Track<V> {
+    let (Some(interp), Some(gseq)) = (b.u16_at(track_ofs), b.u16_at(track_ofs + 2)) else {
+        return M2Track::default();
+    };
+    let Some((tn, to)) = b.u32_at(track_ofs + 4).zip(b.u32_at(track_ofs + 8)) else {
+        return M2Track::default();
+    };
+    let Some((vn, vo)) = b.u32_at(track_ofs + 12).zip(b.u32_at(track_ofs + 16)) else {
+        return M2Track::default();
+    };
+    let (to, vo) = (to as usize, vo as usize);
+    let mut keys: Vec<(u32, V)> = Vec::new();
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    // Clip `s`'s `(count, offset)` pair from the outer arrays, or none past the end.
+    let clip = |s: usize| -> Option<(usize, usize, usize, usize)> {
+        Some((
+            b.u32_at(to + s * 8)? as usize,
+            b.u32_at(to + s * 8 + 4)? as usize,
+            b.u32_at(vo + s * 8)? as usize,
+            b.u32_at(vo + s * 8 + 4)? as usize,
+        ))
+    };
+    let append = |keys: &mut Vec<(u32, V)>,
+                  (tc, tco, vc, vco): (usize, usize, usize, usize),
+                  base: u32| {
+        let n = tc.min(vc);
+        for k in 0..n {
+            let Some((ts, v)) = b.u32_at(tco + k * 4).zip(read_val(b, vco + k * val_size)) else {
+                break;
+            };
+            keys.push((ts.wrapping_add(base), v));
+        }
+    };
+    if gseq != 0xffff {
+        // The global sequence's single clip, loop-relative: no rebase, no per-sequence window.
+        if tn > 0 {
+            if let Some(c) = clip(0) {
+                append(&mut keys, c, 0);
+            }
+        }
+    } else {
+        let nseq = (tn as usize).min(vn as usize);
+        for s in 0..nseq {
+            let Some(c) = clip(s) else {
+                continue;
+            };
+            let lo = keys.len() as u32;
+            append(&mut keys, c, *band_starts.get(s).unwrap_or(&0));
+            ranges.push((lo, keys.len() as u32));
+        }
+    }
+    M2Track {
+        interp,
+        gseq,
+        ranges,
+        keys,
+    }
+}
+
 fn rd_vec3(b: &[u8], o: usize) -> Option<[f32; 3]> {
     Some([b.f32_at(o)?, b.f32_at(o + 4)?, b.f32_at(o + 8)?])
 }
@@ -118,6 +189,72 @@ pub(crate) fn track_quat(b: &[u8], track_ofs: usize) -> M2QuatTrack {
             b.f32_at(o + 12)?,
         ])
     })
+}
+
+/// A Wrath `fix16` scalar track, `int16 / 32767`.
+pub(crate) fn track_fix16_wrath(b: &[u8], track_ofs: usize, band_starts: &[u32]) -> M2ScalarTrack {
+    track_read_wrath(
+        b,
+        track_ofs,
+        2,
+        |b, o| b.u16_at(o).map(|v| f32::from(v as i16) / 32767.0),
+        band_starts,
+    )
+}
+
+/// A Wrath `C3Vector` (3×f32) track, for a caller that needs the rebased keys outside
+/// [`crate::parse_m2`] (the benilla-formats bone-channel cuts).
+pub fn track_vec3_timed_wrath(b: &[u8], track_ofs: usize, band_starts: &[u32]) -> M2Vec3Track {
+    track_read_wrath(b, track_ofs, 12, rd_vec3, band_starts)
+}
+
+/// A Wrath quaternion track: 4×f32, for a caller that needs the rebased keys outside
+/// [`crate::parse_m2`] (the benilla-formats bone-channel cuts).
+pub fn track_quat_wrath(b: &[u8], track_ofs: usize, band_starts: &[u32]) -> M2QuatTrack {
+    track_read_wrath(
+        b,
+        track_ofs,
+        16,
+        |b, o| {
+            Some([
+                b.f32_at(o)?,
+                b.f32_at(o + 4)?,
+                b.f32_at(o + 8)?,
+                b.f32_at(o + 12)?,
+            ])
+        },
+        band_starts,
+    )
+}
+
+/// A Wrath cubic `C3Vector` track (key stride `0x24`): a camera position or target.
+pub(crate) fn track_spline_vec3_wrath(
+    b: &[u8],
+    track_ofs: usize,
+    band_starts: &[u32],
+) -> M2Vec3SplineTrack {
+    track_read_wrath(
+        b,
+        track_ofs,
+        0x24,
+        |b, o| rd_spline(b, o, 12, rd_vec3),
+        band_starts,
+    )
+}
+
+/// A Wrath cubic scalar track (key stride `0xc`): a camera roll.
+pub(crate) fn track_spline_f32_wrath(
+    b: &[u8],
+    track_ofs: usize,
+    band_starts: &[u32],
+) -> M2ScalarSplineTrack {
+    track_read_wrath(
+        b,
+        track_ofs,
+        0xc,
+        |b, o| rd_spline(b, o, 4, |b, o| b.f32_at(o)),
+        band_starts,
+    )
 }
 
 /// One key of a cubic track: the value, then the in and out tangents, each `sizeof(T)` apart. The

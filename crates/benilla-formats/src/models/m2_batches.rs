@@ -27,6 +27,20 @@ fn parent_dir(path: &str) -> &str {
     }
 }
 
+/// A Wrath model's view-0 geometry file: `model.m2` → `model00.skin`. The client names a model's
+/// views `<stem>00.skin`, `<stem>01.skin`, … for its `skin` count; benilla draws view 0.
+/// `m2_path` is the normalized [`model_path`] form (lowercase, `.m2`).
+pub fn wrath_skin_path(m2_path: &str) -> Option<String> {
+    let stem = m2_path.strip_suffix(".m2")?;
+    Some(format!("{stem}00.skin"))
+}
+
+/// Whether a raw M2 file is a Wrath (3.3.5) model, whose view geometry lives in external
+/// `*.skin` files rather than an embedded profile.
+pub fn m2_is_wrath(bytes: &[u8]) -> bool {
+    benilla_m2::M2Layout::of(bytes).is_some_and(|l| l.wrath)
+}
+
 /// A batch's `.blp`: `Monster1/2/3` come from the creature's skin variations
 /// (`<model-dir>\<name>.blp`), else the embedded filename.
 fn resolve_texture(
@@ -86,15 +100,25 @@ fn normalize_weights(w: [u8; 4]) -> [f32; 4] {
     ]
 }
 
-/// Bone `bone_idx`'s scale track (`+0x44`) as a global-sequence [`BoneScaleAnim`], at the offsets
-/// `0x714260` reads; `None` for a sequence track or fewer than two keys.
-fn parse_bone_scale_anim(bytes: &[u8], bone_idx: usize) -> Option<BoneScaleAnim> {
-    let bone_count = bytes.u32_at(0x34)? as usize;
-    let bones_ofs = bytes.u32_at(0x38)? as usize;
+/// Bone `bone_idx`'s scale track as a global-sequence [`BoneScaleAnim`], at the offsets
+/// `0x714260` reads; `None` for a sequence track or fewer than two keys. A Wrath file's nested
+/// per-sequence tracks are not read here, so a Wrath billboard scale stays `None`.
+fn parse_bone_scale_anim(
+    bytes: &[u8],
+    bone_idx: usize,
+    lay: &benilla_m2::M2Layout,
+) -> Option<BoneScaleAnim> {
+    if lay.wrath {
+        return None; // Wrath packs 20-byte nested tracks; this flat read is pre-Wrath's
+    }
+    let bone_count = bytes.u32_at(lay.bones)? as usize;
+    let bones_ofs = bytes.u32_at(lay.bones + 4)? as usize;
     if bone_idx >= bone_count {
         return None;
     }
-    let track = bones_ofs.checked_add(bone_idx * 0x6c)?.checked_add(0x44)?;
+    let track = bones_ofs
+        .checked_add(bone_idx * lay.bone_stride)?
+        .checked_add(lay.bone_scale_ofs)?;
     let interp = bytes.u16_at(track)? != 0;
     let gseq = bytes.u16_at(track + 0x02)?;
     if gseq == 0xffff {
@@ -107,8 +131,8 @@ fn parse_bone_scale_anim(bytes: &[u8], bone_idx: usize) -> Option<BoneScaleAnim>
     if nkeys <= 1 || nval < nkeys {
         return None; // static: nothing to animate
     }
-    let gseq_count = bytes.u32_at(0x14)? as usize;
-    let gseq_o = bytes.u32_at(0x18)? as usize;
+    let gseq_count = bytes.u32_at(lay.global_loops)? as usize;
+    let gseq_o = bytes.u32_at(lay.global_loops + 4)? as usize;
     if gseq as usize >= gseq_count {
         return None;
     }
@@ -133,21 +157,29 @@ fn parse_bone_scale_anim(bytes: &[u8], bone_idx: usize) -> Option<BoneScaleAnim>
     })
 }
 
-/// Bone `bone_idx`'s translation track (`+0x0c`) cut to one sequence's `band` as a loop (the
-/// questgiver bob: anim 0 on load, 190 raised, `0x6076c0`); `None` under two keys in the band.
+/// Bone `bone_idx`'s translation track (`+0x0c` pre-Wrath) cut to one sequence's `band` as a
+/// loop (the questgiver bob: anim 0 on load, 190 raised, `0x6076c0`); `None` under two keys in
+/// the band. A Wrath file's nested per-sequence tracks are not read here, so a Wrath billboard
+/// translation stays `None`.
 fn parse_bone_seq_translation(
     bytes: &[u8],
     bone_idx: usize,
     band: (u32, u32),
+    lay: &benilla_m2::M2Layout,
 ) -> Option<BoneScaleAnim> {
+    if lay.wrath {
+        return None; // Wrath packs 20-byte nested tracks; this flat read is pre-Wrath's
+    }
     let (start, end) = band;
     let duration_ms = end.checked_sub(start).filter(|d| *d > 0)?;
-    let bone_count = bytes.u32_at(0x34)? as usize;
-    let bones_ofs = bytes.u32_at(0x38)? as usize;
+    let bone_count = bytes.u32_at(lay.bones)? as usize;
+    let bones_ofs = bytes.u32_at(lay.bones + 4)? as usize;
     if bone_idx >= bone_count {
         return None;
     }
-    let track = bones_ofs.checked_add(bone_idx * 0x6c)?.checked_add(0x0c)?;
+    let track = bones_ofs
+        .checked_add(bone_idx * lay.bone_stride)?
+        .checked_add(lay.bone_translation_ofs)?;
     let interp = bytes.u16_at(track)? != 0;
     if bytes.u16_at(track + 0x02)? != 0xffff {
         return None; // a global-sequence loop
@@ -188,6 +220,8 @@ pub fn load_m2_mesh(chain: &mut Chain, raw_path: &str) -> Result<Vec<RenderSubme
 }
 
 /// [`load_m2_mesh`] with `Monster1/2/3` filled from `skins` (`CreatureDisplayInfo` variations).
+/// A Wrath (3.3.5) model additionally reads its view-0 geometry, [`wrath_skin_path`], from the
+/// chain; without it the model cannot draw, so the read is a hard error.
 pub fn load_m2_mesh_skinned(
     chain: &mut Chain,
     raw_path: &str,
@@ -198,7 +232,19 @@ pub fn load_m2_mesh_skinned(
     let bytes = chain
         .read_file(&path)
         .with_context(|| format!("reading M2 {path}"))?;
-    parse_m2_render_submeshes(&bytes, &dir, skins).with_context(|| format!("parsing M2 {path}"))
+    let skin_file = if m2_is_wrath(&bytes) {
+        let skin_path = wrath_skin_path(&path)
+            .with_context(|| format!("deriving the .skin name for {path}"))?;
+        Some(
+            chain
+                .read_file(&skin_path)
+                .with_context(|| format!("reading skin {skin_path}"))?,
+        )
+    } else {
+        None
+    };
+    parse_m2_render_submeshes(&bytes, &dir, skins, skin_file.as_deref())
+        .with_context(|| format!("parsing M2 {path}"))
 }
 
 /// [`crate::m2_bone_spins`] for a model read from the chain.
@@ -213,8 +259,13 @@ pub fn load_m2_bone_spins(
     Ok(crate::m2_bone_spins(&bytes))
 }
 
-/// The billboard bones the card split declines as not rigidly separable.
+/// The billboard bones the card split declines as not rigidly separable. Pre-Wrath only: a
+/// Wrath model's geometry lives in its `.skin`, which this raw walk does not take, so nothing
+/// on one is judged from the file alone.
 pub fn non_separable_billboard_bones(bytes: &[u8]) -> Vec<u16> {
+    if m2_is_wrath(bytes) {
+        return Vec::new();
+    }
     let Ok(format) = parse_m2(&mut Cursor::new(bytes)) else {
         return Vec::new();
     };
@@ -288,18 +339,48 @@ fn separable_billboard_bones(
 }
 
 /// An in-memory M2 as render submeshes; `dir` resolves texture paths, `skins` fill `Monster1/2/3`.
+/// A Wrath (3.3.5) model has no embedded skin: `skin_file` must be its view-0 `*.skin`
+/// ([`wrath_skin_path`]), and the call fails without one.
 pub fn parse_m2_render_submeshes(
     bytes: &[u8],
     dir: &str,
     skins: &[Option<String>],
+    skin_file: Option<&[u8]>,
 ) -> Result<Vec<RenderSubmesh>> {
     let format =
         parse_m2(&mut Cursor::new(bytes)).map_err(|e| anyhow::anyhow!("parsing M2: {e}"))?;
     let model = format.model();
-    let skin = model
-        .parse_embedded_skin(bytes, 0)
-        .map_err(|e| anyhow::anyhow!("embedded skin: {e}"))?;
+    // `parse_m2` refused every other version, so the layout exists.
+    let lay = benilla_m2::M2Layout::of(bytes).expect("parse_m2 validated the version");
+    // Pre-Wrath geometry is an embedded profile; Wrath's is the external `.skin` the caller read.
+    let skin = if lay.wrath {
+        let file = skin_file.ok_or_else(|| {
+            anyhow::anyhow!(
+                "a Wrath (3.3.5) M2 keeps its geometry in an external .skin; none was passed"
+            )
+        })?;
+        model
+            .parse_skin_file(file)
+            .map_err(|e| anyhow::anyhow!("skin file: {e}"))?
+    } else {
+        model
+            .parse_embedded_skin(bytes, 0)
+            .map_err(|e| anyhow::anyhow!("embedded skin: {e}"))?
+    };
+    Ok(build_render_submeshes(
+        model, bytes, dir, skins, &lay, &skin,
+    ))
+}
 
+/// The batch loop of [`parse_m2_render_submeshes`], over a resolved [`benilla_m2::Skin`].
+fn build_render_submeshes(
+    model: &benilla_m2::M2Model,
+    bytes: &[u8],
+    dir: &str,
+    skins: &[Option<String>],
+    lay: &benilla_m2::M2Layout,
+    skin: &benilla_m2::Skin,
+) -> Vec<RenderSubmesh> {
     let vertex = |g: u32| {
         let v = &model.vertices[g as usize];
         (
@@ -330,20 +411,43 @@ pub fn parse_m2_render_submeshes(
 
     // Every sequence's (anim id, absolute band, loops). The loop flag is the baked loop's clock
     // (`KeyAnim::wrap`): a one-shot such as Death must not wrap back to its opening alpha.
+    // The table sits at 0x1c in both versions; the record differs — 68 bytes with `start`/`end`
+    // pre-Wrath, 64 with a `duration` in Wrath, whose sequences own a clock, so their bands
+    // accumulate (as `benilla_m2` rebases their tracks).
     let seq_bands: Vec<(u16, (u32, u32), bool)> = {
-        let (n, o) = (le_u32(bytes, 0x1c) as usize, le_u32(bytes, 0x20) as usize);
-        (0..n)
-            .map_while(|i| {
-                let e = o + i * 0x44;
-                (e + 0x44 <= bytes.len()).then(|| {
-                    (
-                        le_u16(bytes, e),
-                        (le_u32(bytes, e + 0x04), le_u32(bytes, e + 0x08)),
-                        le_u32(bytes, e + 0x10) & 1 == 0,
-                    )
+        let (n, o) = (
+            le_u32(bytes, lay.sequences) as usize,
+            le_u32(bytes, lay.sequences + 4) as usize,
+        );
+        if lay.wrath {
+            let mut bands = Vec::with_capacity(n);
+            let mut acc = 0u32;
+            for i in 0..n {
+                let e = o + i * 0x40;
+                if e + 0x40 > bytes.len() {
+                    break;
+                }
+                let id = le_u16(bytes, e);
+                let dur = le_u32(bytes, e + 4);
+                let looping = le_u32(bytes, e + 0x0c) & 1 == 0;
+                bands.push((id, (acc, acc.saturating_add(dur)), looping));
+                acc = acc.saturating_add(dur);
+            }
+            bands
+        } else {
+            (0..n)
+                .map_while(|i| {
+                    let e = o + i * 0x44;
+                    (e + 0x44 <= bytes.len()).then(|| {
+                        (
+                            le_u16(bytes, e),
+                            (le_u32(bytes, e + 0x04), le_u32(bytes, e + 0x08)),
+                            le_u32(bytes, e + 0x10) & 1 == 0,
+                        )
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        }
     };
     // File slot, band and clock; the slot indexes key ranges, so this keeps file order.
     let seq_slots: Vec<SeqSlot> = seq_bands
@@ -488,12 +592,12 @@ pub fn parse_m2_render_submeshes(
                 bone: bone_idx as u16,
                 kind: BillboardKind::from_bone_flags(bone.flags.bits())?,
                 // The glow-card pulse: the bone's global-sequence scale track.
-                scale_anim: parse_bone_scale_anim(bytes, bone_idx),
+                scale_anim: parse_bone_scale_anim(bytes, bone_idx, lay),
                 // Per-sequence translation loops (the questgiver bob: anim 0 low, 190 raised).
                 seq_translations: seq_bands
                     .iter()
                     .filter_map(|&(id, band, _)| {
-                        Some((id, parse_bone_seq_translation(bytes, bone_idx, band)?))
+                        Some((id, parse_bone_seq_translation(bytes, bone_idx, band, lay)?))
                     })
                     .collect(),
             })
@@ -603,7 +707,7 @@ pub fn parse_m2_render_submeshes(
     ) {
         out.clear();
     }
-    Ok(out)
+    out
 }
 
 /// A flat render box whose every batch is opaque `WHITE1.BLP`: no GameObject model but the
@@ -738,6 +842,31 @@ pub fn m2_sequence_visible_textures(bytes: &[u8], anim_id: u16) -> Option<Vec<St
 mod tests {
     use super::*;
 
+    /// The Wrath skin name is the model name plus the zero-padded view 0.
+    #[test]
+    fn wrath_skin_names_the_view_zero_file() {
+        assert_eq!(
+            wrath_skin_path("item/objectcomponents/weapon/axe_2h_icecrownraid_d_01.m2").as_deref(),
+            Some("item/objectcomponents/weapon/axe_2h_icecrownraid_d_0100.skin")
+        );
+        assert_eq!(wrath_skin_path("character/human/male/humanmale"), None);
+    }
+
+    /// A Wrath M2 without its `.skin` cannot be rendered: the geometry is not in the file.
+    #[test]
+    fn a_wrath_m2_without_its_skin_is_refused() {
+        // A bare v264 header: every array empty, so only the skin dispatch can fail.
+        let mut b = vec![0u8; 0x110];
+        b[0..4].copy_from_slice(b"MD20");
+        b[4..8].copy_from_slice(&264u32.to_le_bytes());
+        let err = parse_m2_render_submeshes(&b, "", &[], None).unwrap_err();
+        assert!(
+            err.to_string().contains(".skin"),
+            "the error names the missing skin: {err}"
+        );
+        assert!(!m2_is_wrath(&[0u8; 4]), "a non-MD20 is not a Wrath model");
+    }
+
     /// A bucket never sorts under the exact rung, which its sibling quad cloud keeps.
     #[test]
     fn owner_rung_buckets_cover_every_reachable_rung() {
@@ -824,6 +953,59 @@ mod tests {
         assert_eq!(reflect.blend, ModelBlend::Mod2x);
         assert!(!reflect.additive, "Mod2x is a multiply, not an add");
         assert!(reflect.no_depth_write, "render flag 0x10");
+    }
+
+    /// `Axe_2H_IcecrownRaid_D_01.m2` is a Wrath (3.3.5) model: its geometry is the external
+    /// `Axe_2H_IcecrownRaid_D_0100.skin`, which `load_m2_mesh` reads and builds its five batches.
+    #[test]
+    fn the_wrath_axe_loads_its_external_skin() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let path = "Item\\ObjectComponents\\Weapon\\Axe_2H_IcecrownRaid_D_01.m2";
+        let subs = load_m2_mesh(&mut chain, path).expect("parse the Wrath axe");
+        assert_eq!(subs.len(), 5, "one submesh per skin batch");
+        // The five batches' vertex spans, deduped per batch, and their triangle counts. Two
+        // batches draw the 957-vertex blade submesh, each through its own material — the base
+        // coat and the frost overlay — so the blade's count appears twice.
+        let verts: Vec<usize> = subs.iter().map(|s| s.positions.len()).collect();
+        assert_eq!(
+            verts,
+            vec![24, 957, 957, 32, 4],
+            "each batch's unique vertices"
+        );
+        let tris: Vec<usize> = subs.iter().map(|s| s.indices.len() / 3).collect();
+        assert_eq!(tris, vec![24, 900, 900, 28, 2], "each batch's triangles");
+        // Every batch binds the item's object skin (texture type 2), filled at the spawn site.
+        assert!(
+            subs.iter()
+                .all(|s| s.char_slot == Some(CharSkinSlot::Object)),
+            "the axe textures through the item's object skin"
+        );
+        assert!(
+            subs.iter().all(|s| s.texture.is_none()),
+            "type 2 has no embedded path"
+        );
+        // The five materials, in file order: {0x04,1} {0x00,0} {0x10,2} {0x11,2} {0x11,2}.
+        let (a, b, c, d, e) = (&subs[0], &subs[1], &subs[2], &subs[3], &subs[4]);
+        assert_eq!(a.blend, ModelBlend::AlphaTest);
+        assert!(a.two_sided, "mat 0 flags 0x04");
+        assert_eq!(b.blend, ModelBlend::Opaque);
+        assert_eq!(c.blend, ModelBlend::Blend);
+        assert!(c.no_depth_write, "mat 2 flags 0x10");
+        assert_eq!(d.blend, ModelBlend::Blend);
+        assert!(d.no_depth_write && d.emissive, "mat 3 flags 0x11");
+        assert!(e.no_depth_write && e.emissive, "mat 4 flags 0x11");
+        // The joints bind through the base M2 vertices: the handle sits wholly on bone 0.
+        assert_eq!(subs[0].joints.len(), 24);
+        assert_eq!(subs[0].weights.len(), 24);
+        assert!(
+            subs[0].joints.iter().all(|j| j.iter().all(|&b| b == 0)),
+            "every handle vertex binds bone 0"
+        );
+        assert!(
+            subs[0].weights.iter().all(|w| w[0] == 1.0),
+            "…with full weight"
+        );
     }
 
     /// `LShoulder_Plate_PVPAlliance_A_01.m2`'s spikes ride billboard bones through 50/50 seam rings

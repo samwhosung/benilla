@@ -24,7 +24,7 @@ pub fn bbfacescan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let mut lines = Vec::new();
@@ -335,7 +335,7 @@ pub fn geosetscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let mut geosets: BTreeMap<u16, u32> = BTreeMap::new();
@@ -417,7 +417,7 @@ pub fn groundscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let total_batches = subs.len();
@@ -619,7 +619,7 @@ pub fn normalscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         };
         scanned += 1;
         let dir = name.rsplit_once('\\').map(|(d, _)| d).unwrap_or("");
-        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[]) else {
+        let Ok(subs) = benilla_formats::parse_m2_render_submeshes(&bytes, dir, &[], None) else {
             continue;
         };
         let (mut bad, mut total, mut touched, mut all_bad) = (0usize, 0usize, 0usize, 0usize);

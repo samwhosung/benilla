@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     let data = benilla_formats::wow_data().expect("no WoW install found (set $WOW_DATA)");
     let mut chain = benilla_formats::open_chain(&data)?;
     let bytes = chain.read_file(&virt)?;
-    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[])?;
+    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None)?;
     println!("sequence slot {slot} — {} batches", subs.len());
     for (i, s) in subs.iter().enumerate() {
         let Some(a) = s.alpha_anim.as_ref() else {

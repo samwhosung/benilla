@@ -18,7 +18,7 @@ fn the_swipe_claw_trail_is_nothing_but_its_uv_scroll() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = open_chain(&data).expect("open vanilla patch chain");
     let bytes = chain.read_file(SWIPE).expect("SwipeCaster is in the chain");
-    let subs = parse_m2_render_submeshes(&bytes, "Spells", &[]).expect("parse");
+    let subs = parse_m2_render_submeshes(&bytes, "Spells", &[], None).expect("parse");
 
     assert_eq!(subs.len(), 2, "the two claw-strip batches");
     for (i, s) in subs.iter().enumerate() {

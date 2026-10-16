@@ -162,7 +162,7 @@ fn main() -> anyhow::Result<()> {
     let mut chain = benilla_formats::open_chain(&data)?;
     let bytes = chain.read_file(&virt)?;
 
-    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[])?;
+    let subs = benilla_formats::parse_m2_render_submeshes(&bytes, "", &[], None)?;
     let skel = benilla_formats::parse_m2_skeleton(&bytes)?;
     let anims = benilla_formats::parse_m2_animations(&bytes);
     let anim = anims

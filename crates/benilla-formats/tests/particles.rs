@@ -184,6 +184,7 @@ fn cell_ramp_matches_the_reference_including_backwards() {
         head_cells: [CellRamp::new(0, 7), CellRamp::new(31, 16)],
         tail_cells: [CellRamp::new(3, 3), CellRamp::new(9, 4)],
         repeat: [1.0; 2],
+        keyed: None,
     };
     assert_eq!(ol.sample(0.0).head_cell, 0, "u=0 sits on segment A's begin");
     assert_eq!(ol.sample(1.0).head_cell, 16, "u=1 sits on segment B's end");
@@ -208,6 +209,7 @@ fn colour_and_size_ride_the_same_inset() {
         head_cells: [CellRamp::new(0, 0); 2],
         tail_cells: [CellRamp::new(0, 0); 2],
         repeat: [1.0; 2],
+        keyed: None,
     };
     // Segment A runs 0 to 100 over u in [0, 0.5].
     let start = ol.sample(0.0);

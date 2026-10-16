@@ -1,12 +1,14 @@
-//! Vanilla (MD20 v256) M2 particle emitters, read from raw bytes because `benilla-m2` skips them:
-//! fixed 0x1f8-byte records (array at MD20+0x13c/+0x140) at the reference loader's offsets
-//! (`0x70ebd0`). Rate and enabled bake one loop per sequence into [`EmitTiming`], since the
-//! reference samples both in the playing sequence's key window (`0x713d50`).
+//! M2 particle emitters, read from raw bytes because `benilla-m2` skips them. The file version
+//! sets the record layout through [`M2Layout`]: pre-Wrath (v256) the fixed 0x1f8-byte records
+//! (array at MD20+0x13c/+0x140) at the reference loader's offsets (`0x70ebd0`); Wrath (3.3.5)
+//! the restructured `sParticles`, 0x1dc bytes wide with keyed over-life tracks. Rate and enabled
+//! bake one loop per sequence into [`EmitTiming`], since the reference samples both in the
+//! playing sequence's key window (`0x713d50`).
 
 use std::io::Cursor;
 
 use anyhow::Result;
-use benilla_m2::{parse_m2, M2ScalarTrack};
+use benilla_m2::{parse_m2, M2Layout, M2ScalarTrack};
 
 use crate::emit_timing::{EmitParams, EmitTiming};
 use crate::models::SeqSlot;
@@ -79,8 +81,10 @@ impl CellRamp {
 
 /// The over-life ramps (+0x14c..) at normalized age `u = age / lifespan`: colour and size are
 /// 3-key ramps split at [`Self::mid`] into two linear segments, with a [`CellRamp`] per segment
-/// for the head and the tail (built at `0x70ebd0`, evaluated at `0x7b9b10`).
-#[derive(Debug, Clone, Copy)]
+/// for the head and the tail (built at `0x70ebd0`, evaluated at `0x7b9b10`). A Wrath emitter
+/// instead carries [`KeyedOverLife`] in [`Self::keyed`], whose tracks drive every output and
+/// leave the ramp fields inert.
+#[derive(Debug, Clone)]
 pub struct OverLife {
     /// Normalized age (+0x14c) splitting the segments; only `age > lifespan·mid` enters B.
     pub mid: f32,
@@ -94,6 +98,28 @@ pub struct OverLife {
     pub tail_cells: [CellRamp; 2],
     /// Flipbook repeats per segment (+0x16c/+0x172): unless 1.0, the cells cycle `fract(t·repeat)`.
     pub repeat: [f32; 2],
+    /// The Wrath (3.3.5) keyed over-life: when set, [`Self::sample`] reads it alone.
+    pub keyed: Option<KeyedOverLife>,
+}
+
+/// The Wrath (3.3.5) over-life: the restructured `sParticles` replaces the fixed 3-key ramp
+/// with five headless `sT`/`sV` tracks (+0x104..+0x15c), each a flat pair list whose timestamps
+/// are `sTimestamp` u16s — fix16 fractions of the particle's lifespan, 0 at birth, 32767 at
+/// death — and whose values are the output at that age.
+#[derive(Debug, Clone)]
+pub struct KeyedOverLife {
+    /// ColourTrack (+0x104): `(ts, RGB)` in 0..1 (the file's floats are 0..255).
+    pub color: Vec<(u16, [f32; 3])>,
+    /// AlphaTrack (+0x114): `(ts, opacity)` in 0..1 (the file's `int16`, 32767 = opaque).
+    pub alpha: Vec<(u16, f32)>,
+    /// ScaleTrack (+0x124): `(ts, (x, y))` in yards; `x` is the uniform size.
+    pub scale: Vec<(u16, [f32; 2])>,
+    /// HeadCellTrack (+0x13c): `(ts, cell)`, sampled by step.
+    pub head_cells: Vec<(u16, i16)>,
+    /// TailCellTrack (+0x14c): `(ts, cell)`, sampled by step.
+    pub tail_cells: Vec<(u16, i16)>,
+    /// ScaleVary (+0x134): the per-birth size spread; the renderer does not apply it yet.
+    pub scale_vary: [f32; 2],
 }
 
 /// One evaluation of the over-life ramps: the four outputs of the reference's `0x7b9b10`.
@@ -107,10 +133,82 @@ pub struct OverLifeSample {
     pub tail_cell: u16,
 }
 
+/// The normalized age of a fix16 `sTimestamp`: 0 at birth, 1 at 32767 (death).
+fn keyed_u(t: u16) -> f32 {
+    t as f32 / 32767.0
+}
+
+/// One WotLK keyed ramp at normalized age `u`: linear between keys, clamped at both ends,
+/// `empty` for no keys.
+fn keyed_lerp<V: Copy>(keys: &[(u16, V)], u: f32, empty: V, lerp: impl Fn(V, V, f32) -> V) -> V {
+    if keys.is_empty() {
+        return empty;
+    }
+    if u <= keyed_u(keys[0].0) {
+        return keys[0].1;
+    }
+    for w in keys.windows(2) {
+        let (ta, va) = (keyed_u(w[0].0), w[0].1);
+        let (tb, vb) = (keyed_u(w[1].0), w[1].1);
+        if u < tb {
+            return lerp(va, vb, (u - ta) / (tb - ta).max(1e-6));
+        }
+    }
+    keys.last().unwrap().1
+}
+
+/// The WotLK ColourTrack at normalized age `u`: each channel lerps between its own keys,
+/// clamped at both ends, white for no keys.
+fn keyed_color(keys: &[(u16, [f32; 3])], u: f32) -> [f32; 3] {
+    if keys.is_empty() {
+        return [1.0; 3];
+    }
+    if u <= keyed_u(keys[0].0) {
+        return keys[0].1;
+    }
+    for w in keys.windows(2) {
+        let (ta, va) = (keyed_u(w[0].0), w[0].1);
+        let (tb, vb) = (keyed_u(w[1].0), w[1].1);
+        if u < tb {
+            let t = (u - ta) / (tb - ta).max(1e-6);
+            return [
+                va[0] + (vb[0] - va[0]) * t,
+                va[1] + (vb[1] - va[1]) * t,
+                va[2] + (vb[2] - va[2]) * t,
+            ];
+        }
+    }
+    keys.last().unwrap().1
+}
+
+/// One WotLK cell track at normalized age `u`: the nearest-previous key, stepped (a cell index
+/// does not lerp), the first key before any, `empty` for no keys, the reference's mod-256 wrap.
+fn keyed_cell(keys: &[(u16, i16)], u: f32, empty: i16) -> u16 {
+    let v = keys
+        .iter()
+        .rev()
+        .find(|&&(t, _)| keyed_u(t) <= u)
+        .map_or(keys.first().map_or(empty, |&(_, v)| v), |&(_, v)| v);
+    ((v as i32) & 0xFF) as u16
+}
+
 impl OverLife {
     /// Sample every ramp at normalized age `u` (0..1).
     pub fn sample(&self, u: f32) -> OverLifeSample {
         let u = u.clamp(0.0, 1.0);
+        if let Some(k) = &self.keyed {
+            let color = keyed_color(&k.color, u);
+            let alpha = keyed_lerp(&k.alpha, u, 1.0, |a, b, t| a + (b - a) * t).clamp(0.0, 1.0);
+            let size = keyed_lerp(&k.scale, u, [1.0; 2], |a, b, t| {
+                [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+            })[0];
+            return OverLifeSample {
+                color: [color[0], color[1], color[2], alpha],
+                size,
+                head_cell: keyed_cell(&k.head_cells, u, 0),
+                tail_cell: keyed_cell(&k.tail_cells, u, 0),
+            };
+        }
         // Deviation: `mid` is clamped to [1e-3, 1] because a 0 divides by zero in the reference
         // (`0x7b9cf0`, walking NaN into the sampler); no shipped emitter authors one.
         let mid = self.mid.clamp(1e-3, 1.0);
@@ -403,6 +501,20 @@ fn le_vec3(b: &[u8], o: usize) -> [f32; 3] {
     [le_f32(b, o), le_f32(b, o + 4), le_f32(b, o + 8)]
 }
 
+/// An in-record `M2Array<char>` path at `e + cnt_off`, file-relative offsets, NUL-trimmed; `None`
+/// for a count below 2 (the loader's minimum) or a table the file cannot hold.
+fn m2_path(bytes: &[u8], e: usize, cnt_off: usize) -> Option<String> {
+    let n = le_u32(bytes, e + cnt_off) as usize;
+    let ofs = le_u32(bytes, e + cnt_off + 4) as usize;
+    if n < 2 || ofs + n > bytes.len() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&bytes[ofs..ofs + n])
+        .trim_end_matches('\0')
+        .to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 /// One raw 28-byte vanilla M2Track at `track`: absolute key times and the per-sequence `ranges`;
 /// `read` decodes one `elem`-byte value.
 fn read_raw_track(
@@ -499,6 +611,14 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Result<Vec<ParticleEmitterDef
     if bytes.len() < HDR_PTR + 4 || &bytes[..4] != b"MD20" {
         return Ok(Vec::new());
     }
+    // A version benilla does not support parses nothing rather than on the wrong layout; a Wrath
+    // file takes the restructured `sParticles` reader.
+    let Some(lay) = M2Layout::of(bytes) else {
+        return Ok(Vec::new());
+    };
+    if lay.wrath {
+        return Ok(parse_wrath_emitters(bytes, &lay, &textures));
+    }
     let count = le_u32(bytes, HDR_COUNT) as usize;
     let base = le_u32(bytes, HDR_PTR) as usize;
     if count == 0 || count > 256 || base + count * STRIDE > bytes.len() {
@@ -551,20 +671,8 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Result<Vec<ParticleEmitterDef
         let tex_index = le_u16(bytes, e + 0x16) as usize;
         let texture = textures.get(tex_index).cloned().flatten();
         let shape = shape_of(le_u16(bytes, e + 0x2a));
-        // The geometry and recursion model paths (`M2Array<char>`, file-relative offsets).
-        let model_path = |cnt_off: usize| -> Option<String> {
-            let n = le_u32(bytes, e + cnt_off) as usize;
-            let ofs = le_u32(bytes, e + cnt_off + 4) as usize;
-            if n < 2 || ofs + n > bytes.len() {
-                return None;
-            }
-            let s = String::from_utf8_lossy(&bytes[ofs..ofs + n])
-                .trim_end_matches('\0')
-                .to_string();
-            (!s.is_empty()).then_some(s)
-        };
-        let geometry_model = model_path(0x18);
-        let recursion_model = model_path(0x20);
+        let geometry_model = m2_path(bytes, e, 0x18);
+        let recursion_model = m2_path(bytes, e, 0x20);
         let spline = (shape == ParticleShape::Spline)
             .then(|| {
                 let q = le_u32(bytes, e + 0x1d4) as usize;
@@ -606,6 +714,7 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Result<Vec<ParticleEmitterDef
                 f32::from(le_u16(bytes, e + 0x16c)),
                 f32::from(le_u16(bytes, e + 0x172)),
             ],
+            keyed: None,
         };
         out.push(ParticleEmitterDef {
             flags: le_u32(bytes, e + 0x04),
@@ -660,6 +769,225 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Result<Vec<ParticleEmitterDef
         });
     }
     Ok(out)
+}
+
+/// One WotLK headless `sT`/`sV` over-life track, 16 bytes: two `(count, offset)` pairs, the
+/// timestamps a flat `u16` list (`sTimestamp`, fix16 fractions of the particle's lifespan) and
+/// the values a flat `elem`-byte list decoded by `read`; empty or truncated reads no keys.
+fn headless_track<V>(
+    b: &[u8],
+    track: usize,
+    elem: usize,
+    read: impl Fn(&[u8], usize) -> V,
+) -> Vec<(u16, V)> {
+    if track + 16 > b.len() {
+        return Vec::new();
+    }
+    let (tn, to) = (le_u32(b, track) as usize, le_u32(b, track + 4) as usize);
+    let (vn, vo) = (
+        le_u32(b, track + 8) as usize,
+        le_u32(b, track + 12) as usize,
+    );
+    let n = tn.min(vn);
+    if n == 0 || to + n * 2 > b.len() || vo + n * elem > b.len() {
+        return Vec::new();
+    }
+    let mut keys: Vec<(u16, V)> = (0..n)
+        .map(|i| (le_u16(b, to + i * 2), read(b, vo + i * elem)))
+        .collect();
+    keys.sort_by_key(|&(t, _)| t);
+    keys
+}
+
+/// The Wrath (3.3.5) emitters: the restructured `sParticles` at `lay.particle`,
+/// `lay.particle_stride` wide. The header takes a byte `Blending` @+0x28 and byte
+/// `Emitter_type` @+0x29 (pre-Wrath's u16 pair), a `Color_Replaceable` @+0x2a, `Particle_type`
+/// @+0x2c and `Head_or_Tail` @+0x2d; the ten emission tracks are the 20-byte nested shape at
+/// +0x34..+0xf0 with the WotLK-only `LifespanVary` @+0xac and `EmissionRateVary` @+0xc4 between
+/// them; the fixed 3-key over-life ramp is replaced by the keyed `sT`/`sV` tracks
+/// (+0x104..+0x14c, a `ScaleVary` C2 @+0x134); and `EnabledIn` rides @+0x1c8. The WotLK-only
+/// floats with no def slot — `LifespanVary`, `EmissionRateVary`, `BaseSpin` @+0x178,
+/// `BaseSpinVary` @+0x17c, `SpinVary` @+0x184, the Wind pair @+0x1a0, `Color_Replaceable`,
+/// `Particle_type` and the tile rotation @+0x2e — are not read. The flag helpers keep their
+/// 1.12-validated bit table: the WotLK template names a few bits differently (0x80 `ModelSpace`,
+/// 0x1 `Lit_ByLight`), and without the 3.3.5 client its remap is not resolvable.
+fn parse_wrath_emitters(
+    bytes: &[u8],
+    lay: &M2Layout,
+    textures: &[Option<String>],
+) -> Vec<ParticleEmitterDef> {
+    let Some((count, base)) = lay.array_at(bytes, lay.particle) else {
+        return Vec::new();
+    };
+    let (count, base) = (count as usize, base as usize);
+    if count == 0 || count > 256 || base.saturating_add(count * lay.particle_stride) > bytes.len() {
+        return Vec::new();
+    }
+    let band_starts = benilla_m2::band_starts_for(bytes, lay);
+    // File sequence slots: the accumulated Wrath bands (a record owns a clock, `length` @+4),
+    // looping by the pre-Wrath rule on the record's `flags` @+0x0c.
+    let mut seq_slots: Vec<SeqSlot> = {
+        let (n, o) = (
+            le_u32(bytes, lay.sequences) as usize,
+            le_u32(bytes, lay.sequences + 4) as usize,
+        );
+        let mut acc = 0u32;
+        let mut out = Vec::new();
+        for i in 0..n {
+            let s = o + i * lay.sequence_stride;
+            if s + lay.sequence_stride > bytes.len() {
+                break;
+            }
+            let end = acc.saturating_add(le_u32(bytes, s + 4));
+            out.push(SeqSlot {
+                index: i,
+                band: (acc, end),
+                looping: le_u32(bytes, s + 0x0c) & 1 == 0,
+            });
+            acc = end;
+        }
+        out
+    };
+    if seq_slots.is_empty() {
+        seq_slots.push(SeqSlot {
+            index: 0,
+            band: (0, u32::MAX),
+            looping: true,
+        });
+    }
+    let gseq: Vec<u32> = {
+        let (n, o) = (
+            le_u32(bytes, lay.global_loops) as usize,
+            le_u32(bytes, lay.global_loops + 4) as usize,
+        );
+        (0..n)
+            .map_while(|i| (o + i * 4 + 4 <= bytes.len()).then(|| le_u32(bytes, o + i * 4)))
+            .collect()
+    };
+    // One Wrath 20-byte nested scalar track, its per-sequence clips rebased onto the shared
+    // timeline by `band_starts`.
+    let scalar = |t: usize| {
+        benilla_m2::track_read_wrath(
+            bytes,
+            t,
+            4,
+            |b, o| {
+                b.get(o..o + 4)
+                    .map(|s| f32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+            },
+            &band_starts,
+        )
+    };
+
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let e = base + i * lay.particle_stride;
+        if e + lay.particle_stride > bytes.len() {
+            break;
+        }
+        let flags = le_u32(bytes, e + 0x04);
+        let tex_index = le_u16(bytes, e + 0x16) as usize;
+        let texture = textures.get(tex_index).cloned().flatten();
+        let shape = shape_of(u16::from(bytes[e + 0x29]));
+        let geometry_model = m2_path(bytes, e, 0x18);
+        let recursion_model = m2_path(bytes, e, 0x20);
+        let spline = (shape == ParticleShape::Spline)
+            .then(|| {
+                let q = le_u32(bytes, e + 0x1c0) as usize;
+                let ofs = le_u32(bytes, e + 0x1c4) as usize;
+                let n = 3 * (q / 3) + 1;
+                if q < 3 || ofs + n * 12 > bytes.len() {
+                    return None;
+                }
+                SplineData::new((0..n).map(|p| le_vec3(bytes, ofs + p * 12)).collect())
+            })
+            .flatten();
+        let tiles = match (le_u16(bytes, e + 0x30), le_u16(bytes, e + 0x32)) {
+            (r, c) if r.is_power_of_two() && c.is_power_of_two() => (r, c),
+            _ => (1, 1),
+        };
+        let over_life = OverLife {
+            mid: 0.0,
+            color: [[0.0; 4]; 3],
+            scale: [0.0; 3],
+            head_cells: [CellRamp::new(0, 0); 2],
+            tail_cells: [CellRamp::new(0, 0); 2],
+            repeat: [1.0; 2],
+            keyed: Some(KeyedOverLife {
+                // The file's RGB floats are 0..255; the ramp keys and the sample are 0..1.
+                color: headless_track(bytes, e + 0x104, 12, |b, o| {
+                    [
+                        le_f32(b, o) / 255.0,
+                        le_f32(b, o + 4) / 255.0,
+                        le_f32(b, o + 8) / 255.0,
+                    ]
+                }),
+                alpha: headless_track(bytes, e + 0x114, 2, |b, o| {
+                    f32::from(le_u16(b, o) as i16) / 32767.0
+                }),
+                scale: headless_track(bytes, e + 0x124, 8, |b, o| [le_f32(b, o), le_f32(b, o + 4)]),
+                head_cells: headless_track(bytes, e + 0x13c, 2, |b, o| le_u16(b, o) as i16),
+                tail_cells: headless_track(bytes, e + 0x14c, 2, |b, o| le_u16(b, o) as i16),
+                scale_vary: [le_f32(bytes, e + 0x134), le_f32(bytes, e + 0x138)],
+            }),
+        };
+        let rate = scalar(e + 0xb0);
+        // The gate bakes as f32, like the vanilla `b[o] != 0` read.
+        let enabled = benilla_m2::track_read_wrath(
+            bytes,
+            e + 0x1c8,
+            1,
+            |b, o| b.get(o).map(|v| f32::from(*v != 0)),
+            &band_starts,
+        );
+        out.push(ParticleEmitterDef {
+            flags,
+            position: le_vec3(bytes, e + 0x08),
+            bone: le_u16(bytes, e + 0x14),
+            shape,
+            spline,
+            geometry_model,
+            recursion_model,
+            blend: blend_of(bytes[e + 0x28]),
+            lit: lit_of(flags, bytes[e + 0x28]),
+            texture,
+            tile_rows: tiles.0,
+            tile_cols: tiles.1,
+            head_tail: bytes[e + 0x2d],
+            timing: EmitTiming::bake(&rate, &enabled, &seq_slots, &gseq),
+            params: EmitParams::bake(
+                [
+                    &scalar(e + 0x34), // speed
+                    &scalar(e + 0x48), // speedVar
+                    &scalar(e + 0x5c), // latitude
+                    &scalar(e + 0x70), // longitude
+                    &scalar(e + 0x84), // gravity
+                    &scalar(e + 0x98), // lifespan
+                    &scalar(e + 0xc8), // areaLength
+                    &scalar(e + 0xdc), // areaWidth
+                    &scalar(e + 0xf0), // zSource
+                ],
+                &seq_slots,
+                &gseq,
+            ),
+            drag: le_f32(bytes, e + 0x174),
+            tail_time: le_f32(bytes, e + 0x15c),
+            angular_velocity_min: le_vec3(bytes, e + 0x188),
+            angular_velocity_max: le_vec3(bytes, e + 0x194),
+            inherit_scale: le_f32(bytes, e + 0x170),
+            follow_speed1: le_f32(bytes, e + 0x1b0),
+            follow_scale1: le_f32(bytes, e + 0x1b4),
+            follow_speed2: le_f32(bytes, e + 0x1b8),
+            follow_scale2: le_f32(bytes, e + 0x1bc),
+            twinkle_speed: le_f32(bytes, e + 0x160),
+            twinkle_percent: le_f32(bytes, e + 0x164),
+            twinkle_min: le_f32(bytes, e + 0x168),
+            twinkle_max: le_f32(bytes, e + 0x16c),
+            spin: le_f32(bytes, e + 0x180),
+            over_life,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -821,6 +1149,110 @@ mod tests {
             );
             assert_eq!(s.eval(0.0), s.points[0], "t=0 is the first point");
         }
+    }
+
+    /// The Wrath (3.3.5) Icecrown axe: its one sphere emitter of frost sparkles, byte-verified
+    /// against the restructured `sParticles` record.
+    #[test]
+    fn the_wrath_axe_authors_a_frost_sparkle_emitter() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let bytes = chain
+            .read_file("Item\\ObjectComponents\\Weapon\\Axe_2H_IcecrownRaid_D_01.m2")
+            .expect("read the Wrath axe");
+        let defs = parse_m2_particle_emitters(&bytes).expect("parse emitters");
+        assert_eq!(defs.len(), 1);
+        let d = &defs[0];
+        assert_eq!(d.flags, 0x00020239, "the authored flag word");
+        assert_eq!(
+            d.shape,
+            ParticleShape::Sphere,
+            "the byte emitter type @+0x29"
+        );
+        assert_eq!(d.blend, ParticleBlend::Add, "the byte blend @+0x28");
+        assert_eq!(d.bone, 7);
+        assert_eq!(d.head_tail, 0, "the byte @+0x2d, not pre-Wrath's @+0x2c");
+        assert_eq!((d.tile_rows, d.tile_cols), (1, 1));
+        // The emission: 8/s of slow, wide, 1.57 s sparkles.
+        assert_eq!(d.timing.rate(None, 0.0, 0.0), 8.0);
+        assert!(d.timing.emitting(None, 0.0, 0.0), "the gate is always on");
+        let now = d.params.sample(None, 0.0, 0.0);
+        assert!((now.emission_speed - 0.0556).abs() < 1e-4);
+        assert!((now.speed_variation - 1.0).abs() < 1e-4);
+        assert!((now.vertical_range - std::f32::consts::PI).abs() < 1e-4);
+        assert!((now.horizontal_range - std::f32::consts::PI).abs() < 1e-4);
+        assert_eq!(now.gravity, 0.0);
+        assert!((now.lifespan - 1.57).abs() < 1e-4);
+        assert_eq!(now.area_length, 0.0);
+        assert_eq!(now.area_width, 0.0);
+        assert_eq!(now.z_source, 0.0);
+        // The WotLK tail block.
+        assert!((d.drag - 0.6).abs() < 1e-6);
+        assert!((d.tail_time - 0.1).abs() < 1e-6);
+        assert_eq!(
+            d.spin.to_bits(),
+            0x3f137207,
+            "the authored spin: 33°, in radians"
+        );
+        assert!((d.inherit_scale - 1.0).abs() < 1e-6);
+        assert!((d.twinkle_speed - 10.0).abs() < 1e-6);
+        assert!((d.twinkle_percent - 1.0).abs() < 1e-6);
+        assert!((d.twinkle_min - 1.0).abs() < 1e-6);
+        assert!((d.twinkle_max - 1.0).abs() < 1e-6);
+        assert!((d.follow_speed1 - 2.5).abs() < 1e-6);
+        assert!((d.follow_scale1 - 0.7).abs() < 1e-6);
+        assert!((d.follow_speed2 - 7.0).abs() < 1e-6);
+        assert!((d.follow_scale2 - 0.9).abs() < 1e-6);
+        // The keyed over-life: blue → cyan → white, a fade in and out, a growing quad.
+        let k = d
+            .over_life
+            .keyed
+            .as_ref()
+            .expect("the WotLK over-life is keyed, not a ramp");
+        // The file's colour floats are not exact integers (the green is authored
+        // 111.00000762…); the reader divides in f32, so the keys are these exact values.
+        let cbits = |c: [f32; 3]| [c[0].to_bits(), c[1].to_bits(), c[2].to_bits()];
+        assert_eq!(k.color[0].0, 0);
+        assert_eq!(
+            cbits(k.color[0].1),
+            [0x3eb8b8b9, 0x3ededee0, 0x3f800000],
+            "birth: 92, 111, 255 as authored"
+        );
+        assert_eq!(k.color[1].0, 16384);
+        assert_eq!(
+            cbits(k.color[1].1),
+            [0x3ee0e0e2, 0x3f7dfdff, 0x3f800000],
+            "mid: 112, 253, 255 as authored"
+        );
+        assert_eq!(k.color[2].0, 32767);
+        assert_eq!(cbits(k.color[2].1), [0x3f800000; 3], "death: white");
+        assert_eq!(k.alpha, vec![(0u16, 0.0), (16384, 1.0), (32767, 0.0)]);
+        assert!(k
+            .scale
+            .iter()
+            .zip([0.11111111f32, 0.16666667, 0.277_777_8])
+            .all(|((_, s), want)| (s[0] - want).abs() < 1e-6));
+        assert_eq!(
+            k.head_cells,
+            vec![(0u16, 0i16), (16384, 0), (16384, 0), (32767, 0)]
+        );
+        assert_eq!(
+            k.tail_cells,
+            vec![(0u16, 0i16), (16384, 0), (16384, 0), (32767, 0)]
+        );
+        // Sampling the keyed ramps: transparent at birth, fully opaque and mid-size at the
+        // 16384 key (≈ half life), white and gone at death.
+        let born = d.over_life.sample(0.0);
+        assert!((born.color[3] - 0.0).abs() < 1e-6, "transparent at birth");
+        assert!((born.color[0] - 92.0 / 255.0).abs() < 1e-6, "birth is blue");
+        assert!((born.size - 0.11111111).abs() < 1e-6);
+        let mid = d.over_life.sample(0.5);
+        assert!((mid.color[3] - 1.0).abs() < 1e-2, "opaque at the 16384 key");
+        assert!((mid.size - 0.16666667).abs() < 1e-2);
+        let dead = d.over_life.sample(1.0);
+        assert!((dead.color[0] - 1.0).abs() < 1e-6, "white at death");
+        assert!((dead.color[3] - 0.0).abs() < 1e-6, "…and transparent");
+        assert!((dead.size - 0.277_777_8).abs() < 1e-6);
     }
 
     /// Fireball (spell 133): the cast flash is on for its clip's first 200 ms and the impact plume
