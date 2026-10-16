@@ -41,8 +41,14 @@ const CAST_SLACK: Duration = Duration::from_secs(2);
 ///
 /// Cleared by the spell's `SMSG_CAST_RESULT`, success or failure (`0x6e7408` → `0x6e741a`), keyed
 /// on the spell id, or by [`local_self_cancel`]; `deadline` covers a lost result.
+///
+/// It also carries the pending record's caster word (`0xceac48 + 0x08`, `0xceac50`), the one gate
+/// on the cancel's events: see [`Self::fill_record`] and [`Self::take_caster_event`].
 #[derive(Resource, Default)]
-pub(crate) struct PendingCast(Option<PendingCastState>);
+pub(crate) struct PendingCast {
+    slot: Option<PendingCastState>,
+    caster_is_player: bool,
+}
 
 struct PendingCastState {
     spell_id: u32,
@@ -58,7 +64,7 @@ impl PendingCast {
     /// The outstanding cast's spell id, which `HandleCastResult 0x6e7330` (`0x6e7408`) and
     /// `IsCurrentAction`'s checked state key on.
     pub(crate) fn current(&self, now: Instant) -> Option<u32> {
-        self.0
+        self.slot
             .as_ref()
             .filter(|p| now < p.deadline)
             .map(|p| p.spell_id)
@@ -79,7 +85,7 @@ impl PendingCast {
         } else {
             SEND_PROVISIONAL
         };
-        self.0 = Some(PendingCastState {
+        self.slot = Some(PendingCastState {
             spell_id,
             deadline: now + window,
         });
@@ -106,7 +112,7 @@ impl PendingCast {
 
     /// Tighten the deadline to the server's real cast time once `SMSG_SPELL_START` names it.
     pub(crate) fn refine(&mut self, cast_time_ms: u32, now: Instant) {
-        if let Some(p) = &mut self.0 {
+        if let Some(p) = &mut self.slot {
             p.deadline = now + Duration::from_millis(u64::from(cast_time_ms)) + CAST_SLACK;
         }
     }
@@ -114,16 +120,31 @@ impl PendingCast {
     /// `SMSG_SPELL_DELAYED`: extend from the later of the deadline and now, so a lapsed deadline
     /// re-arms.
     pub(crate) fn delay(&mut self, delay_ms: u32, now: Instant) {
-        if let Some(p) = &mut self.0 {
+        if let Some(p) = &mut self.slot {
             p.deadline = p.deadline.max(now) + Duration::from_millis(u64::from(delay_ms));
         }
     }
 
     /// Clear on a resolution for our spell only: a proc's `SMSG_SPELL_GO` mid-cast must not.
     pub(crate) fn clear_if(&mut self, spell_id: u32) {
-        if self.0.as_ref().is_some_and(|p| p.spell_id == spell_id) {
-            self.0 = None;
+        if self.slot.as_ref().is_some_and(|p| p.spell_id == spell_id) {
+            self.slot = None;
         }
+    }
+
+    /// The attempt's record fill (`0x6e4fb1`, once every rung has passed and before the arm, so a
+    /// cursor spell and an arm refusal have it too), and the re-arm's (`0x6e748f`): the caster
+    /// word names the active player. Every player commit fills it, an item use without
+    /// `ITEM_FLAG_PLAYERCAST` and a queued strike included, though neither holds this slot.
+    pub(crate) fn fill_record(&mut self) {
+        self.caster_is_player = true;
+    }
+
+    /// The gate of `AbortCast 0x6e4940`'s events: `SPELLCAST_STOP`, `_FAILED` or `_INTERRUPTED`
+    /// fires only while the caster word is the active player's (`0x6e4a04`–`0x6e4a1e`), and firing
+    /// clears it (`0x6e4a5a`), so one record fires at most once whatever pops after it.
+    pub(crate) fn take_caster_event(&mut self) -> bool {
+        std::mem::take(&mut self.caster_is_player)
     }
 }
 
@@ -135,7 +156,7 @@ impl PendingCast {
 /// failing `SMSG_CAST_RESULT` and `SMSG_SPELL_FAILED_OTHER` vmangos sends when the melee slot
 /// dies. The reference clears it on a matching `SMSG_CAST_RESULT` alone (`0x6e7330`; its GO
 /// handler never touches `0xceca88`); vmangos sends the OK result just before the GO
-/// (`Spell.cpp:3681`, `Spell.cpp:3715`). A re-arm replaces it (the server's one
+/// (`Spell.cpp:3669`, then `3703` or `3771`). A re-arm replaces it (the server's one
 /// `CURRENT_MELEE_SPELL`). Re-pressing the queued spell bails with no red line (`0x6e4d43`); it
 /// un-queues through the StopAttack chain (`0x5ecac0`, `CancelQueuedCast 0x6e6f30`), which an
 /// auto-repeat press also runs (`0x6e5976`), or through Esc, which cancels it as the inflight
@@ -338,7 +359,8 @@ impl SelfCancel<'_, '_> {
     /// Cancel what `slot` holds and tear it down locally (`AbortCast 0x6e4940`): a cast or queued
     /// strike goes on the wire, the cursor's spell drops with no packet (`0x6e4955`). `first` is
     /// the bar edge the client's own event arms (STOP for the move and Esc cancels, FAILED for
-    /// `UseSoulstone`'s), and the echo's INTERRUPTED follows for a cast.
+    /// `UseSoulstone`'s), pushed only while the caster word holds
+    /// ([`PendingCast::take_caster_event`]), and the echo's INTERRUPTED follows for a cast.
     fn cancel_inflight(
         &mut self,
         slot: Inflight,
@@ -362,6 +384,9 @@ impl SelfCancel<'_, '_> {
         if *crate::net::CAST_TRACE {
             info!("cast-trace: LOCAL self-cancel — {slot:?} ({why})");
         }
+        // The pop puts what the push saved back in the slot; a cancel of that leftover finds the
+        // word cleared and fires nothing (`0x6e4a1e`).
+        let first = pending.take_caster_event().then_some(first);
         if !matches!(slot, Inflight::Targeting(_)) {
             let _ = net.0.send(ClientCommand::CancelCast { spell_id });
         }
@@ -370,13 +395,13 @@ impl SelfCancel<'_, '_> {
                 // The word drops, the event fires, and the pop restores what the cursor's push
                 // saved: a queued strike, which our own slot never left.
                 ground.cancel();
-                feed.0.push(first);
+                feed.0.extend(first);
             }
             Inflight::Cast(_) => {
                 pending.clear_if(spell_id);
                 // The client's own event arms the flash, INTERRUPTED paints red and holds, so the
                 // flash bursts after the hold; an interrupt by an enemy has no STOP and no burst.
-                feed.0.push(first);
+                feed.0.extend(first);
                 feed.0.push(CastBarEdge::Interrupted);
                 // `spell_failed_other`'s self reap, run early so the echo finds it done.
                 if let Some(e) = self_e {
@@ -397,7 +422,7 @@ impl SelfCancel<'_, '_> {
                 // Clearing the slot darkens the checked ring now. `AbortCast` fires its event
                 // here too, inert on a hidden bar; there is no INTERRUPTED.
                 queued_melee.clear_if(spell_id);
-                feed.0.push(first);
+                feed.0.extend(first);
             }
         }
     }
@@ -678,6 +703,11 @@ mod tests {
             (app, rx)
         }
 
+        /// The record fill (`0x6e4fb1`) every attempt makes before its push or its cursor.
+        fn fill_record(app: &mut App) {
+            app.world_mut().resource_mut::<PendingCast>().fill_record();
+        }
+
         /// The `Casting` an `SMSG_SPELL_START` echo leaves on the self player.
         fn mark_casting(app: &mut App, spell_id: u32) {
             let self_e = app.world().resource::<GuidIndex>().0[&10];
@@ -714,6 +744,7 @@ mod tests {
                     ..Default::default()
                 },
             )]));
+            fill_record(&mut app);
             app.world_mut()
                 .resource_mut::<PendingCast>()
                 .push(FIREBALL, None, Instant::now());
@@ -953,6 +984,7 @@ mod tests {
                 },
             )]));
             app.insert_non_send_resource(UiScript::new().unwrap());
+            fill_record(&mut app);
             app.world_mut()
                 .resource_mut::<QueuedMeleeSpell>()
                 .arm(HEROIC_STRIKE);
@@ -1018,6 +1050,7 @@ mod tests {
                      end)",
                 )
                 .unwrap();
+            fill_record(&mut app);
             app.world_mut()
                 .resource_mut::<crate::spell::targeting::SpellTargeting>()
                 .enter(FIREBALL, crate::spell::CastCommit::Spell, 0x40);
@@ -1109,7 +1142,8 @@ mod tests {
         }
 
         /// A cast nested over a queued strike (`PushPopNestedCast 0x6e4ad0`) dies on the first
-        /// Esc, the strike on the second; this pins the local order only.
+        /// Esc, the strike on the second, and only the first fires an event: one record, one
+        /// caster word.
         #[test]
         fn esc_takes_the_cast_first_and_the_strike_on_the_next_press() {
             let (mut app, rx) = harness(HashMap::new());
@@ -1117,6 +1151,7 @@ mod tests {
             app.world_mut()
                 .resource_mut::<QueuedMeleeSpell>()
                 .arm(HEROIC_STRIKE);
+            fill_record(&mut app);
             app.world_mut()
                 .resource_mut::<PendingCast>()
                 .push(FIREBALL, None, Instant::now());
@@ -1144,6 +1179,10 @@ mod tests {
                 Some(HEROIC_STRIKE),
                 "the strike is the SAVE underneath, untouched by the first press"
             );
+            assert!(matches!(
+                app.world().resource::<CastBarFeed>().0[..],
+                [CastBarEdge::Stop, CastBarEdge::Interrupted]
+            ));
 
             // Press 2: the pop put the strike back in the slot.
             app.world_mut().run_system_once(feed_cast_bar).unwrap();
@@ -1163,6 +1202,11 @@ mod tests {
                 })
             ));
             assert_eq!(app.world().resource::<QueuedMeleeSpell>().current(), None);
+            assert!(
+                app.world().resource::<CastBarFeed>().0.is_empty(),
+                "the first press's event cleared the caster word (`0x6e4a5a`), so the second \
+                 fires nothing (`0x6e4a1e`)"
+            );
         }
 
         /// `0x6e9b70` sends the cancel and fires no event, clearing nothing local.

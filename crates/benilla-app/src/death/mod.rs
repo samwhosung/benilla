@@ -784,11 +784,9 @@ mod tests {
     fn the_soulstone_cancels_the_cast_in_flight_before_its_use() {
         let (mut app, rx) = soulstone_app();
         let world = app.world_mut();
-        world.resource_mut::<crate::spell::PendingCast>().push(
-            FIREBALL,
-            None,
-            std::time::Instant::now(),
-        );
+        let mut pending = world.resource_mut::<crate::spell::PendingCast>();
+        pending.fill_record();
+        pending.push(FIREBALL, None, std::time::Instant::now());
         arm_repeat(&mut app);
         let _ = rx.try_iter().count();
         press_soulstone(&mut app);
@@ -835,6 +833,9 @@ mod tests {
     #[test]
     fn the_soulstone_drops_a_pending_targeting_spell() {
         let (mut app, rx) = soulstone_app();
+        app.world_mut()
+            .resource_mut::<crate::spell::PendingCast>()
+            .fill_record();
         app.world_mut()
             .resource_mut::<crate::spell::targeting::SpellTargeting>()
             .enter(FIREBALL, crate::spell::CastCommit::Spell, 0x0040);

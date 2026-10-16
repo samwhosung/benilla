@@ -18,7 +18,10 @@ use crate::ui_unit::UnitFeed;
 pub(crate) enum CastBarEdge {
     /// `SMSG_SPELL_START` with a nonzero cast time; an instant opens no bar, as in the reference.
     Start { spell_id: u32, cast_time_ms: u32 },
-    /// `SMSG_SPELL_GO`: the cast completed.
+    /// `SPELLCAST_STOP`: our cast's own `SMSG_CAST_RESULT` popped it, or a result came with nothing
+    /// in flight (`0x6e741a`, `0x6e74cb`), or a local cancel took it (`0x6e4940` with `cl` 0).
+    /// Every cast gets one, an instant, a channel and an item use too; on a timed cast vmangos
+    /// sends the result as the bar completes, just ahead of `SMSG_SPELL_GO`.
     Stop,
     /// `SMSG_CAST_RESULT` failure: the bar, if shown, reads "Failed".
     Failed,
