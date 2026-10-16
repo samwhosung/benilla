@@ -159,6 +159,7 @@ pub(crate) struct Reply<'w, 's> {
     casting: Query<'w, 's, &'static Casting>,
     cast_events: MessageWriter<'w, CastEvent>,
     play_seq: ResMut<'w, crate::creature_anim::PlaySeq>,
+    items: Option<Res<'w, crate::items::Items>>,
 }
 
 /// `HandleCastResult 0x6e7330`, the one handler that casts: a reply whose spell names a
@@ -198,6 +199,7 @@ fn on_cast_result(
             &mut ladder.cooldowns,
             &mut ladder.auto_repeat,
             ladder.spells.as_deref(),
+            r.items.as_deref(),
             &ladder.commands,
             r.play_seq.next(),
         );
@@ -589,15 +591,21 @@ fn cast_result(
     cooldowns: &mut Cooldowns,
     auto_repeat: &mut AutoRepeatActive,
     spells: Option<&Spells>,
+    items: Option<&crate::items::Items>,
     net: &crate::net::NetCommands,
     seq: u64,
 ) -> Option<u32> {
     debug!("net: cast result — spell {spell_id} success={success} reason={reason:?}");
-    // Is this the reply to our outstanding cast (`0x6e7408 cmp ecx,[0xceca88]`)? Read before either
-    // arm clears the guard: both clears are the reference's one `0x6e741a call 0x6e4940(0x1c)`.
+    // The slot pair as the handler finds it: the in-flight slot `0xceca88` holds the cast, else
+    // the queued strike, and the save `0xcecaa8` the strike a cast sits over (`0x6e5026`).
+    // Read before anything clears them.
     let now = Instant::now();
-    let in_flight =
-        pending.current(now) == Some(spell_id) || queued_melee.current() == Some(spell_id);
+    let top = pending.current(now).or(queued_melee.current());
+    let saved = pending.current(now).and(queued_melee.current());
+    // Is this the reply to our outstanding cast (`0x6e2201`, `0x6e7408`)?
+    let in_flight = top == Some(spell_id);
+    // Does the failure's report pop that slot (`0x6e2218`) before the handler compares again?
+    let mut report_pops = false;
     if !success {
         // `HandleCastFailed 0x6e1a00` clears the GCD armed at send (`0x6e1d83 → 0x6e1630`), and the
         // bit-25 revert below drops a parked record; the spell's own recovery starts at SPELL_GO,
@@ -607,9 +615,19 @@ fn cast_result(
         // `HandleSetSelectionOpcode` → `Spell::cancel` → `SendCastResult(INTERRUPTED)`); target
         // death arrives as [`cancel_auto_repeat`].
         // Reason 0x17 DONT_REPORT exits before the GCD clear and the display (`6e1ce1`/`6e1cf7` →
-        // `0x6e224f`). The in-flight clear below still runs, as the reference's `0x6e741a` does
-        // once `HandleCastFailed` returns: vmangos sends 0x17 for real aborts.
+        // `0x6e224f`), and so before the report's slot pop: the handler's own pop `0x6e741a`
+        // finds the spell still in flight. vmangos sends 0x17 for real aborts.
         let dont_report = reason == Some(0x17);
+        let spell = spells.and_then(|s| s.catalog.get(spell_id));
+        // The report runs for every failure, in flight or not; only the in-flight spell's pops.
+        let reaches_pop = crate::ui_action::report_reaches_pop(
+            reason.unwrap_or(0),
+            arg,
+            spell,
+            spells.map(|s| &s.forms),
+            |item| items.is_some_and(|i| i.template(item, 0, net).is_some()),
+        );
+        report_pops = in_flight && reaches_pop;
         if !dont_report {
             cooldowns.clear_gcd(spell_id, now);
             // The bit-25 revert (`6e73cc–6e73e6`): a non-0x3c failure of a cooldown-on-event spell
@@ -676,15 +694,22 @@ fn cast_result(
     // to our in-flight cast finishes its slot, then reads column 38 of its spell; non-zero and not
     // the running repeat, the client casts it at the null target guid. Every hunter shot names 75,
     // Auto Shot.
-    // - It fires on success as well as failure: `0x6e7356 cmp [ebp+0xf],0x2` / `0x6e735a jne`
-    //   sends a non-failure straight to the block the failure path reaches at `0x6e73eb`.
+    // - A success chains: `0x6e7356 cmp [ebp+0xf],0x2` / `0x6e735a jne` sends it past the
+    //   report straight to the slot block `0x6e73eb`.
+    // - A failure chains only if the slot still holds the spell after its report: the report
+    //   pops the in-flight slot (`0x6e2201` → `0x6e2218` → `0x6e4940` → `0x6e4ad0(0, 0)`, the
+    //   save into the slot), so `0x6e7408` misses and `0x6e74bc` skips the chain. It holds when
+    //   the report left before that pop (`report_reaches_pop`: reason 0x17, a form-less 0x56, an
+    //   uncached 0x5c or 0x78 item) or when the save held the same spell (`0x6e73ee` clears the
+    //   save after the report, so the popped-in copy matches).
     // - The slot clears first (`0x6e741a`), or the IsCasting rung (`0x6e4d97`, our `0x61`) would
     //   refuse the chain. vmangos sends `SMSG_CAST_RESULT` before `SMSG_SPELL_GO`
     //   (`Spell.cpp:3681`, `Spell.cpp:3715`), so the guard is still armed here.
     // - Equal to the running repeat means re-arm, not re-cast (`0x6e745b` → `0x6e745d`), so a
     //   second sting never resets the swing timer; with no record to refresh, we send nothing.
     // The chained spell is returned; `on_cast_result` hands it to the ladder in the same call.
-    if in_flight {
+    let slot_holds = in_flight && !(report_pops && saved != Some(spell_id));
+    if slot_holds {
         pending.clear_if(spell_id);
         if let Some(next) = spells
             .and_then(|s| s.catalog.get(spell_id))
@@ -2432,6 +2457,7 @@ mod tests {
                             &mut cooldowns,
                             &mut auto_repeat,
                             None,
+                            None,
                             &net,
                             1,
                         );
@@ -2756,9 +2782,12 @@ mod tests {
             "somebody else's Backstab is not our attack-start"
         );
     }
-    /// The `modalNextSpell` chain (`HandleCastResult 0x6e7330`, `0x6e7408`–`0x6e74aa`):
-    /// - a successful sting chains Auto Shot (`0x6e735a jne` to the chain block);
-    /// - a failed one does too (both converge at `0x6e73eb`);
+    /// The `modalNextSpell` chain (`HandleCastResult 0x6e7330`, `0x6e7408`-`0x6e74aa`):
+    /// - a successful sting chains Auto Shot (`0x6e735a jne` past the report to `0x6e73eb`);
+    /// - a failed one does not: its report pops the in-flight slot (`0x6e2218`), so `0x6e7408`
+    ///   misses; it chains only when the report left before that pop (reason 0x17, `0x6e1ce4`;
+    ///   a form-less 0x56, `0x6e20c6`; an uncached 0x5c or 0x78 item, `0x6e1eab`) or when the
+    ///   save held the same spell (`0x6e73ee`);
     /// - the in-flight guard clears first, or the IsCasting rung would refuse the chain;
     /// - Auto Shot already running sends nothing (`0x6e745b`'s equal branch);
     /// - a reply for a spell not in flight chains nothing (`0x6e7408`).
@@ -2769,8 +2798,16 @@ mod tests {
 
         const SERPENT_STING: u32 = 1978;
         const AUTO_SHOT: u32 = 75;
+        const HEROIC_STRIKE: u32 = 78;
+        const OUT_OF_RANGE: u8 = 0x59;
+        const DONT_REPORT: u8 = 0x17;
+        const ONLY_SHAPESHIFT: u8 = 0x56;
+        const REAGENTS: u8 = 0x5c;
+        const TOTEMS: u8 = 0x78;
+        const TIN_BAR: u32 = 4306;
 
-        let spells = || crate::ui_action::Spells {
+        // The sting row carries `stances`: the form bits its 0x56 report names.
+        let spells = |stances: u32| crate::ui_action::Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
                 [
                     (
@@ -2781,6 +2818,7 @@ mod tests {
                             attributes: 0x0001_0002,
                             attributes_ex2: 0x0002_0000,
                             modal_next_spell: AUTO_SHOT,
+                            stances,
                             ..Default::default()
                         },
                     ),
@@ -2799,22 +2837,56 @@ mod tests {
                 .into_iter()
                 .collect(),
             ),
-            forms: Default::default(),
+            forms: [(
+                1,
+                benilla_formats::ShapeshiftForm {
+                    name: "Cat Form".into(),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
             ranges: Default::default(),
             cast_times: Default::default(),
             durations: Default::default(),
             radii: Default::default(),
         };
 
-        // One CAST_RESULT for `spell_id`, with `in_flight` outstanding and `running` the live
-        // repeat. Returns (what the reply chains, whether the guard is still armed).
-        let fire = |spell_id: u32, success: bool, in_flight: Option<u32>, running: Option<u32>| {
+        /// What one `SMSG_CAST_RESULT` meets and carries.
+        #[derive(Clone, Copy)]
+        struct Case {
+            spell_id: u32,
+            /// `None` is a success, `Some` the failure's reason.
+            fail: Option<u8>,
+            arg: Option<u32>,
+            /// The cast guard and the queued strike on entry.
+            pending: Option<u32>,
+            queued: Option<u32>,
+            /// The live auto-repeat spell.
+            running: Option<u32>,
+            /// The sting's `Stances` mask.
+            stances: u32,
+            /// The item cache holds `TIN_BAR`.
+            cached: bool,
+        }
+        let reply = |spell_id: u32, fail: Option<u8>| Case {
+            spell_id,
+            fail,
+            arg: None,
+            pending: Some(spell_id),
+            queued: None,
+            running: None,
+            stances: 0,
+            cached: false,
+        };
+
+        // One CAST_RESULT. Returns what the reply chains, and the guard and the strike left.
+        let fire = |r: Case| {
             let mut app = App::new();
             app.add_message::<CastEvent>()
                 .init_resource::<GuidIndex>()
                 .init_resource::<SelfGuid>()
                 .init_resource::<CastErrors>()
-                .init_resource::<crate::ui_action::UiErrorKeys>()
                 .init_resource::<crate::ui_action::UiErrorKeys>()
                 .init_resource::<CastBarFeed>()
                 .init_resource::<PendingCast>()
@@ -2828,14 +2900,21 @@ mod tests {
                 .0
                 .insert(10, self_e);
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(10);
-            app.world_mut().resource_mut::<AutoRepeatActive>().0 = running;
-            if let Some(id) = in_flight {
+            app.world_mut().resource_mut::<AutoRepeatActive>().0 = r.running;
+            if let Some(id) = r.pending {
                 app.world_mut()
                     .resource_mut::<PendingCast>()
                     .push(id, None, Instant::now());
             }
+            if let Some(id) = r.queued {
+                app.world_mut().resource_mut::<QueuedMeleeSpell>().arm(id);
+            }
+            let mut items = crate::items::Items::default();
+            if r.cached {
+                items.insert_template(TIN_BAR, Some(crate::items::test_template("Tin Bar")));
+            }
             let (tx, _rx) = crossbeam_channel::unbounded();
-            let cat = spells();
+            let cat = spells(r.stances);
             let chained = app
                 .world_mut()
                 .run_system_once(
@@ -2852,10 +2931,10 @@ mod tests {
                           mut auto_repeat: ResMut<AutoRepeatActive>| {
                         let net = crate::net::NetCommands(tx.clone());
                         cast_result(
-                            spell_id,
-                            success,
-                            if success { None } else { Some(0x1b) },
-                            None,
+                            r.spell_id,
+                            r.fail.is_none(),
+                            r.fail,
+                            r.arg,
                             &mut commands,
                             &self_guid,
                             &index,
@@ -2868,48 +2947,159 @@ mod tests {
                             &mut cooldowns,
                             &mut auto_repeat,
                             Some(&cat),
+                            Some(&items),
                             &net,
                             1,
                         )
                     },
                 )
                 .unwrap();
-            let still_armed = app
+            let armed = app
                 .world()
                 .resource::<PendingCast>()
                 .in_flight(Instant::now());
-            (chained, still_armed)
+            let queued = app.world().resource::<QueuedMeleeSpell>().current();
+            (chained, armed, queued)
         };
+        let sting = |fail| reply(SERPENT_STING, fail);
 
         // The ordinary case: the sting lands, and Auto Shot follows by itself.
         assert_eq!(
-            fire(SERPENT_STING, true, Some(SERPENT_STING), None),
-            (Some(AUTO_SHOT), false),
+            fire(sting(None)),
+            (Some(AUTO_SHOT), false, None),
             "a successful sting chains Auto Shot, and clears the in-flight guard first"
-        );
-        // A failed one does too: both results converge on the same block.
-        assert_eq!(
-            fire(SERPENT_STING, false, Some(SERPENT_STING), None).0,
-            Some(AUTO_SHOT),
-            "a FAILED sting chains it as well (`0x6e735a jne` → the same `0x6e73eb`)"
         );
         // Already shooting: re-arm, never re-cast.
         assert_eq!(
-            fire(SERPENT_STING, true, Some(SERPENT_STING), Some(AUTO_SHOT)).0,
+            fire(Case {
+                running: Some(AUTO_SHOT),
+                ..sting(None)
+            })
+            .0,
             None,
             "Auto Shot already running: the equal branch sends nothing"
         );
         // Auto Shot's own replies terminate the chain.
         assert_eq!(
-            fire(AUTO_SHOT, true, Some(AUTO_SHOT), Some(AUTO_SHOT)).0,
+            fire(Case {
+                running: Some(AUTO_SHOT),
+                ..reply(AUTO_SHOT, None)
+            })
+            .0,
             None,
-            "Auto Shot's own column 38 is 0 — no second hop"
+            "Auto Shot's own column 38 is 0 - no second hop"
         );
         // Not our in-flight cast (a proc's result, a stale reply): not ours to chain from.
         assert_eq!(
-            fire(SERPENT_STING, true, Some(133), None).0,
+            fire(Case {
+                pending: Some(133),
+                ..sting(None)
+            })
+            .0,
             None,
             "a reply for a spell we do not have in flight chains nothing"
+        );
+
+        // A refused shot: the report pops the slot (`0x6e2218`), so `0x6e7408` misses.
+        assert_eq!(
+            fire(sting(Some(OUT_OF_RANGE))),
+            (None, false, None),
+            "a failed sting chains nothing, and the guard is open"
+        );
+        // Reason 0x17 leaves the report before the pop (`0x6e1ce4`, `0x6e1cfa`).
+        assert_eq!(
+            fire(sting(Some(DONT_REPORT))),
+            (Some(AUTO_SHOT), false, None),
+            "a DONT_REPORT failure still finds the sting in flight"
+        );
+        // The same with Auto Shot running: the equal branch re-arms, sends nothing.
+        assert_eq!(
+            fire(Case {
+                running: Some(AUTO_SHOT),
+                ..sting(Some(DONT_REPORT))
+            })
+            .0,
+            None
+        );
+
+        // 0x56 names the forms of `Stances`; with none named it leaves at `0x6e20c6`.
+        assert_eq!(
+            fire(sting(Some(ONLY_SHAPESHIFT))).0,
+            Some(AUTO_SHOT),
+            "a form-less ONLY_SHAPESHIFT report leaves before the pop"
+        );
+        assert_eq!(
+            fire(Case {
+                stances: 1,
+                ..sting(Some(ONLY_SHAPESHIFT))
+            })
+            .0,
+            None,
+            "a named form shows its line, and the pop follows"
+        );
+
+        // 0x5c and 0x78 read the item cache by the first word (`0x6e1e7f`): a miss leaves at
+        // `0x6e1eab`, a hit shows the line and pops.
+        for reason in [REAGENTS, TOTEMS] {
+            let named = Case {
+                arg: Some(TIN_BAR),
+                ..sting(Some(reason))
+            };
+            assert_eq!(
+                fire(named).0,
+                Some(AUTO_SHOT),
+                "reason {reason:#x} with the item uncached leaves before the pop"
+            );
+            assert_eq!(
+                fire(Case {
+                    cached: true,
+                    ..named
+                })
+                .0,
+                None,
+                "reason {reason:#x} with the item cached pops"
+            );
+            assert_eq!(
+                fire(Case {
+                    cached: true,
+                    arg: None,
+                    ..named
+                })
+                .0,
+                Some(AUTO_SHOT),
+                "reason {reason:#x} with no first word asks the cache for -1, a miss"
+            );
+        }
+
+        // A cast over a queued strike: the report's pop restores the strike into the slot. A
+        // different strike is not the spell; the same spell in the save is (`0x6e73ee` clears
+        // the save after the report, so `0x6e7408` finds it popped in).
+        assert_eq!(
+            fire(Case {
+                queued: Some(HEROIC_STRIKE),
+                ..sting(Some(OUT_OF_RANGE))
+            }),
+            (None, false, Some(HEROIC_STRIKE)),
+            "the strike under a failed shot comes back to the slot and is not the shot"
+        );
+        assert_eq!(
+            fire(Case {
+                queued: Some(SERPENT_STING),
+                ..sting(Some(OUT_OF_RANGE))
+            }),
+            (Some(AUTO_SHOT), false, None),
+            "the save holding the same spell is popped in, matches, and chains"
+        );
+        // A strike held under another cast is not the in-flight slot (`0x6e7408`).
+        assert_eq!(
+            fire(Case {
+                pending: Some(133),
+                queued: Some(SERPENT_STING),
+                ..sting(Some(OUT_OF_RANGE))
+            })
+            .0,
+            None,
+            "the save alone is not the in-flight slot"
         );
     }
 }

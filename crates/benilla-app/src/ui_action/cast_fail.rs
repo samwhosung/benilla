@@ -456,6 +456,43 @@ pub(super) fn cast_fail_text(
     Some(line(strip_tokens(&text)))
 }
 
+/// Whether the reporter `0x6e1a00` reaches its slot pop `0x6e2201`/`0x6e2218` for a player
+/// failure, the one thing the handler `0x6e7330` reads back from it (`0x6e7408`). It leaves
+/// through the epilogue `0x6e224f` before the pop in exactly these cases:
+/// - reason `0x17` (`0x6e1ce4`, `0x6e1cfa`), every spell;
+/// - `0x56` with no spell, no form or no name (`0x6e1ffd`, `0x6e2016`, `0x6e20c6`), the same
+///   [`Fill::Nothing`] the display takes;
+/// - `0x5c` and `0x78` when the item cache has no record for the first word (`0x6e1eab`; the
+///   miss asks, and the callback `0x6e29b0` redisplays without touching the cast).
+///
+/// `0x02` leaves at `0x6e212b`, `0x6e2134`, `0x6e216d` and `0x6e2176` for a power byte past 4 or
+/// an empty noun; a 1.12 player's power type is 0 to 4 and `MANA` to `HAPPINESS` all ship, so it
+/// never leaves. `0x84` leaves on a miss of its second word (`0x6e1efc`), which no 1.12 server
+/// sends (module note). Every other path, an empty or absent text included, runs on to the pop.
+///
+/// `item_cached` is the item cache's record test for an entry, asking the server on a miss as
+/// `GetRecord` does.
+pub(crate) fn report_reaches_pop(
+    reason: u8,
+    arg: Option<u32>,
+    spell: Option<&SpellDisplay>,
+    forms: Option<&HashMap<u32, ShapeshiftForm>>,
+    item_cached: impl FnOnce(u32) -> bool,
+) -> bool {
+    match reason {
+        0x17 => false,
+        0x56 => {
+            let args = FailArgs {
+                forms,
+                ..Default::default()
+            };
+            !matches!(args.fill(Caster::Player, reason, spell), Fill::Nothing)
+        }
+        0x5c | 0x78 => arg.is_some_and(item_cached),
+        _ => true,
+    }
+}
+
 /// Deviation: a declined arm's template loses its tokens ("Missing reagent: %s" reads "Missing
 /// reagent") where the reference shows the literal `%s`, because a raw token reads as broken.
 /// Applied to both buffers.
