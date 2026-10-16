@@ -34,7 +34,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
 - [benilla-lua](#benilla-lua): 3
-- [benilla-protocol](#benilla-protocol): 21
+- [benilla-protocol](#benilla-protocol): 20
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 112
 - [benilla-world](#benilla-world): 46
@@ -164,8 +164,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### net
 
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
-- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:399`](../crates/benilla-app/src/net/io.rs#L399))
-- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1169`](../crates/benilla-app/src/net/io.rs#L1169))
+- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:397`](../crates/benilla-app/src/net/io.rs#L397))
+- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1158`](../crates/benilla-app/src/net/io.rs#L1158))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:55`](../crates/benilla-app/src/net/motion/remote.rs#L55))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
@@ -412,7 +412,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference then re-reads the aspect (`0x492f13`), and on a change of 0.001 or more calls `0x491380`, which sets the reload trigger (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with it, because the window resizes freely and a reload on each resize would tear down every addon's state mid-play. ([`src/ui_script/extract/mod.rs:522`](../crates/benilla-app/src/ui_script/extract/mod.rs#L522))
 - The V-plate border is resampled sharp to the quad's physical size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by that size, so only a resize re-rasterises it. ([`src/ui_script/extract/mod.rs:1390`](../crates/benilla-app/src/ui_script/extract/mod.rs#L1390))
 - No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:14`](../crates/benilla-app/src/ui_script/glue.rs#L14))
-- The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1386`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1386))
+- The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1362`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1362))
 - The files are under `benilla-config/Logs/`, since the install is read-only. ([`src/ui_script/load_log.rs:5`](../crates/benilla-app/src/ui_script/load_log.rs#L5))
 - `FULLSCREEN_QUADS_RESEAT` re-sizes the full-screen quads, which the stock files size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would stop short of the new screen. ([`src/ui_script/manifest.rs:64`](../crates/benilla-app/src/ui_script/manifest.rs#L64))
 - No `FrameXML.toc` signature check, where `UI_Init` loads on a failed one and then quits (`0x401560(0xa)` at `0x48ff90`), because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/manifest.rs:161`](../crates/benilla-app/src/ui_script/manifest.rs#L161))
@@ -559,7 +559,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:671`](../crates/benilla-protocol/src/events.rs#L671))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:669`](../crates/benilla-protocol/src/events.rs#L669))
 
 #### examples
 
@@ -575,8 +575,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Zone and position are kept, not set to the viewer's zone and the object's position, because nothing in benilla reads them. ([`src/messages/group.rs:255`](../crates/benilla-protocol/src/messages/group.rs#L255))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- Benilla cannot run a Warden module, so the connect refuses such a server; `crate::WardenRequired` says why. ([`src/messages/opcode.rs:73`](../crates/benilla-protocol/src/messages/opcode.rs#L73))
-- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1003`](../crates/benilla-protocol/src/messages/opcode.rs#L1003))
+- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1002`](../crates/benilla-protocol/src/messages/opcode.rs#L1002))
 - The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:607`](../crates/benilla-protocol/src/messages/packet.rs#L607))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:295`](../crates/benilla-protocol/src/messages/parse.rs#L295))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:75`](../crates/benilla-protocol/src/messages/pet.rs#L75))
@@ -585,9 +584,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### world
 
 - The reference waits forever; a bound tells a server that died mid-queue from a long wait. ([`src/world/session.rs:17`](../crates/benilla-protocol/src/world/session.rs#L17))
-- Benilla cannot answer it. The answers come from a module, native Win32 x86 code the server sends, which the client maps, links and runs in its own process (`0x7a79d0`); the client itself parses none of the payload (`0x6ca5c0`). benilla runs no such code on any platform, so it has nothing that could answer. vmangos ships Warden off (`Warden.WinEnabled`, `Warden.OSXEnabled`) and kicks a client that leaves a request unanswered for 30 s (`Warden.cpp`), so the connect refuses rather than log in to be kicked. ([`src/world/session.rs:21`](../crates/benilla-protocol/src/world/session.rs#L21))
-- `0` when the body is too short, where the reference leaves its global as it was; this field lives per connection, with nothing earlier to keep. ([`src/world/session.rs:78`](../crates/benilla-protocol/src/world/session.rs#L78))
-- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:111`](../crates/benilla-protocol/src/world/session.rs#L111))
+- `0` when the body is too short, where the reference leaves its global as it was; this field lives per connection, with nothing earlier to keep. ([`src/world/session.rs:58`](../crates/benilla-protocol/src/world/session.rs#L58))
+- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:94`](../crates/benilla-protocol/src/world/session.rs#L94))
+- Benilla runs no Warden module and answers nothing, where the reference hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`). ([`src/world/session.rs:215`](../crates/benilla-protocol/src/world/session.rs#L215))
 ### benilla-srp
 
 #### (crate root)
