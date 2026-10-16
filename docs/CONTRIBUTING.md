@@ -106,7 +106,8 @@ out of scope is closed with the reason.
 - **A 1.12.1 install of your own.** `WOW_DATA=<its Data folder>`, or a `WoW` link at the repo
   root, which only a dev build sees: the player build looks for `Data/` or `WoW/Data/` beside
   the binary. benilla reads the install and never writes into it. `WOW_DATA=` (set, empty)
-  means "no install", which is how the no-install boot is tested on a machine that has one.
+  means "no install": the client refuses to start (an error dialog, or stderr alone in an
+  unattended run) and the no-install tests run on a machine that has one.
 - **Without the install, green is hollow.** Well over a thousand tests read the install and skip
   when it is absent, and a few dozen more read a corpus of vanilla addons
   (`BENILLA_ADDON_CORPUS=<a folder of addons>`, or a `wow-addons-vanilla` link at the root),
