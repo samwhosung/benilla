@@ -110,13 +110,7 @@ impl UiScript {
     /// each new one, then write each live bubble's level, alpha, visibility and seat.
     pub fn sync_chat_bubbles(&mut self, geometry: BubbleGeometry, states: &[BubbleState]) {
         let lua = self.lua();
-        // The font a new bubble takes: `FrameScript_GetText` on `NAMEPLATE_FONT` (`0x4b0b36` →
-        // `0x703bf0`), whose `_G[key]` arm (`0x703c12`) answers the global's string, else the
-        // shared "" a missing or non-string global gives, which sets no font.
-        let font = || match lua.globals().get::<mlua::Value>("NAMEPLATE_FONT") {
-            Ok(mlua::Value::String(s)) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
-            _ => None,
-        };
+        let font = || super::font::nameplate_font(lua);
         let visibility = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no bubbles: no addon walks an invented root.

@@ -1058,3 +1058,59 @@ fn a_slot_retired_and_retaken_in_one_sync_draws_at_once() {
     assert!(texts.iter().any(|t| t == "Bear"), "{texts:?}");
     assert!(s.take_errors().is_empty());
 }
+
+/// The name's and level's `GetFont` for the plate at child `n`, as `nil` or the path.
+fn plate_fonts(s: &mut UiScript, n: usize) -> (Option<String>, Option<String>) {
+    let read = |s: &mut UiScript, region: &str| {
+        s.eval::<Option<String>>(&format!(
+            "local _, _, name, level = ({{ WorldFrame:GetChildren() }})[{n}]:GetRegions() \
+             local r = {region} return (r:GetFont())"
+        ))
+        .unwrap()
+    };
+    (read(s, "name"), read(s, "level"))
+}
+
+/// The constructor looks `NAMEPLATE_FONT` up for each FontString (`0x7cb3f9`, `0x7cb49b` →
+/// `0x703bf0`) and only then, so a plate built after the global is set takes it, and a plate built
+/// before keeps its font when the global changes.
+#[test]
+fn a_new_plate_takes_the_nameplate_font_global_and_a_built_one_keeps_its_font() {
+    let mut s = vm();
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\ARIALN.TTF""#).unwrap();
+    drive(&mut s, &[plate("Wolf", 30.0, 40.0)]);
+    let arial = Some("Fonts\\ARIALN.TTF".to_string());
+    assert_eq!(plate_fonts(&mut s, 1), (arial.clone(), arial.clone()));
+
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\MORPHEUS.TTF""#).unwrap();
+    drive(
+        &mut s,
+        &[plate("Wolf", 30.0, 40.0), plate("Bear", 10.0, 90.0)],
+    );
+    let morph = Some("Fonts\\MORPHEUS.TTF".to_string());
+    assert_eq!(plate_fonts(&mut s, 1), (arial.clone(), arial));
+    assert_eq!(plate_fonts(&mut s, 2), (morph.clone(), morph));
+    assert!(s.take_errors().is_empty());
+}
+
+/// The lookup answers the global's text for a string or a number (`lua_isstring` `0x6f3510`,
+/// `lua_tostring` `0x6f3690`) and "" for anything else; `SetFont` rejects the empty path
+/// (`0x44d05c`), so such a plate's FontStrings get no font.
+#[test]
+fn a_missing_or_non_string_nameplate_font_leaves_the_plate_strings_without_a_font() {
+    for (setup, want) in [
+        ("", None),
+        ("NAMEPLATE_FONT = nil", None),
+        (r#"NAMEPLATE_FONT = """#, None),
+        ("NAMEPLATE_FONT = true", None),
+        ("NAMEPLATE_FONT = {}", None),
+        ("NAMEPLATE_FONT = function() end", None),
+        ("NAMEPLATE_FONT = 12", Some("12")),
+    ] {
+        let mut s = vm();
+        s.run(setup).unwrap();
+        drive(&mut s, &[plate("Wolf", 30.0, 40.0)]);
+        let want = want.map(str::to_string);
+        assert_eq!(plate_fonts(&mut s, 1), (want.clone(), want), "{setup:?}");
+    }
+}

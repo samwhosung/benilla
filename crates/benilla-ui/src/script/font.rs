@@ -456,6 +456,18 @@ fn copy_from(lua: &Lua, this: &Table, other: &Value, verb: &str) -> mlua::Result
     edit(lua, this, |fo| *fo = paint)
 }
 
+/// The font a new plate or chat bubble takes: `FrameScript_GetText` on `NAMEPLATE_FONT`
+/// (`0x703bf0`; plates `0x7cb3ee`/`0x7cb490`, bubbles `0x4b0b36`). Its `_G[key]` arm (`0x703c12` →
+/// `0x704350`) gates on `lua_isstring` (`0x6f3510`) and reads `lua_tostring` (`0x6f3690`), so a
+/// string or a number answers its text and any other value the shared "". `None` is that empty
+/// path, which `SetFont` rejects (`0x44d05c`, `0x44d040` answers 0) and leaves the FontString with
+/// no font.
+pub(super) fn nameplate_font(lua: &Lua) -> Option<String> {
+    let value = lua.globals().get::<Value>("NAMEPLATE_FONT").ok()?;
+    let text = lua.coerce_string(value).ok()??;
+    Some(text.to_string_lossy()).filter(|s| !s.is_empty())
+}
+
 /// `CreateFont(name)`: mint a font object, publish it as the global `name` and return it; addons
 /// use both. An existing name returns that object unchanged and unrepublished (`0x7839ab`).
 ///

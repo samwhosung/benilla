@@ -28,8 +28,6 @@ pub const SKULL_TEXTURE: &str = "Interface\\TargetingFrame\\UI-TargetingFrame-Sk
 pub const RAID_ICON_TEXTURE: &str = "Interface\\TargetingFrame\\UI-RaidTargetingIcons";
 /// The health bar's fill, which `GetStatusBarTexture()` returns.
 pub const BAR_FILL_TEXTURE: &str = "Interface\\TargetingFrame\\UI-TargetingFrame-BarFill";
-/// `NAMEPLATE_FONT`: Friz Quadrata.
-pub const PLATE_FONT: &str = "Fonts\\FRIZQT__.TTF";
 
 /// The plate's level; the bar's is one less, set absolutely (`0x7cb33e` → `0x76a4f0`). The draw
 /// walks levels outermost and each level's layers inside (`0x765920`), so the whole bar draws
@@ -255,13 +253,15 @@ impl UiScript {
     /// has its plate retired (hidden, never destroyed). An unchanged `geometry` costs nothing.
     pub fn sync_nameplates(&mut self, geometry: PlateGeometry, states: &[PlateState]) {
         let lua = self.lua();
+        // Read per new plate, never for a built one (`0x7cb3ee`, `0x7cb490`: the constructor).
+        let font = || super::font::nameplate_font(lua);
         let effects = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no plates: no addon walks an invented root.
             let Some(world) = model.arena.lookup("WorldFrame") else {
                 return;
             };
-            sync(&mut model, world, geometry, states)
+            sync(&mut model, world, geometry, states, &font)
         };
         apply_visibility(lua, effects.visibility);
         for (bar, value) in effects.values {
@@ -366,6 +366,7 @@ fn sync(
     world: FrameHandle,
     geometry: PlateGeometry,
     states: &[PlateState],
+    font: &dyn Fn() -> Option<String>,
 ) -> SyncEffects {
     let mut effects = SyncEffects::default();
     let relayout = model.nameplates.geometry != Some(geometry);
@@ -396,7 +397,7 @@ fn sync(
                 let free = (0..model.nameplates.plates.len())
                     .find(|i| model.nameplates.plates[*i].last.is_none());
                 let i = free.unwrap_or_else(|| {
-                    let plate = Plate::create(model, world);
+                    let plate = Plate::create(model, world, font);
                     model.nameplates.plates.push(plate);
                     model.nameplates.plates.len() - 1
                 });
@@ -424,7 +425,7 @@ fn sync(
 impl Plate {
     /// Build one plate: the Button, its six regions in the reference's order, and the health bar.
     /// Written once, so a region an addon blanks stays blank.
-    fn create(model: &mut Model, world: FrameHandle) -> Plate {
+    fn create(model: &mut Model, world: FrameHandle, font: &dyn Fn() -> Option<String>) -> Plate {
         // Anonymous, as the reference's name is zeroed (`0x76c50b`): plate addons reject a named
         // `WorldFrame` child.
         let frame = model.arena.create(FrameKind::Button, None, Some(world));
@@ -462,8 +463,10 @@ impl Plate {
             GLOW_TEXTURE,
             BlendMode::Add,
         );
-        let name = font_string(model, frame, JustifyV::Bottom);
-        let level = font_string(model, frame, JustifyV::Middle);
+        // Each FontString looks `NAMEPLATE_FONT` up itself, name then level (`0x7cb3f9`,
+        // `0x7cb49b`), at construction only.
+        let name = font_string(model, frame, JustifyV::Bottom, font());
+        let level = font_string(model, frame, JustifyV::Middle, font());
         let skull = texture(
             model,
             frame,
@@ -807,15 +810,21 @@ fn texture(
 }
 
 /// One of the plate's two FontStrings, OVERLAY as the ctor re-layers them (`0x7cb438`,
-/// `0x7cb4ea`). `justify_v` seats the name by its ink: our shaper's Friz line box is ascent-heavy
-/// and would drop it ~8 px below where the reference's metrics put it.
-fn font_string(model: &mut Model, frame: FrameHandle, justify_v: JustifyV) -> RegionHandle {
+/// `0x7cb4ea`), with the `NAMEPLATE_FONT` lookup's answer: `None` sets no font, as `SetFont`
+/// rejects the empty path (`0x44d05c`). `justify_v` seats the name by its ink: our shaper's Friz
+/// line box is ascent-heavy and would drop it ~8 px below where the reference's metrics put it.
+fn font_string(
+    model: &mut Model,
+    frame: FrameHandle,
+    justify_v: JustifyV,
+    font: Option<String>,
+) -> RegionHandle {
     let rh = model
         .arena
         .create_region(frame, RegionKind::FontString, DrawLayer::Overlay, 0)
         .expect("live plate");
     let data = model.region_data.entry(rh).or_default();
-    data.font_path = Some(PLATE_FONT.to_string());
+    data.font_path = font;
     data.font_explicit.face = true;
     data.justify.set_v(justify_v);
     rh
