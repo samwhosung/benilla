@@ -67,9 +67,10 @@ benilla builds and runs on macOS, Linux and Windows. You need:
 
 - **A 1.12.1 client (build 5875)** for the game data, in any locale. benilla only reads it, and
   shows its text in the client's language; development runs on English clients.
-- **A 1.12.1 server with Warden off.** [vmangos](https://github.com/vmangos/core) is what
-  development runs against, and it ships with Warden off; cMaNGOS and the other 1.12.1 cores speak
-  the same protocol.
+- **A 1.12.1 server.** [vmangos](https://github.com/vmangos/core) is what development runs
+  against; cMaNGOS and the other 1.12.1 cores speak the same protocol. benilla does not answer
+  Warden, so a server that enforces it disconnects the session after its timeout; vmangos ships
+  with Warden off.
 - **Stable Rust and a C compiler**, because the client's Lua is built from source: on macOS the
   Xcode command line tools, on Linux the ALSA and udev development packages and pkg-config, on
   Windows the MSVC build tools that the Rust installer sets up.
