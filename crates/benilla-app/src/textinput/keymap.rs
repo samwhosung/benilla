@@ -2,8 +2,9 @@
 //! host-side clipboard operation. The Windows/Linux table is the reference's key handler
 //! (`0x77b160`: Ctrl+arrows by word, Ctrl+HOME/END to the text's edge, Ctrl+A/C/X/V, the Emacs
 //! set Ctrl+B/F/D/W/U/K/P/N, Ctrl/Shift+Insert, Shift+Delete).
-//! Deviation: macOS takes the Cocoa text-field chords and Ctrl+Backspace/Delete delete a word,
-//! because editing follows each OS's own text fields.
+//! Deviation: macOS takes the Cocoa text-field chords for Cmd and Option, because editing follows
+//! each OS's own text fields. Ctrl is its own key there, and its letters and word deletes are the
+//! reference's.
 
 use benilla_ui::script::{EditAction, EditUnit};
 use bevy::input::keyboard::KeyCode;
@@ -35,25 +36,21 @@ pub(crate) enum Chord {
 /// What `key`, which the layout names `name`, means under `m`; `None` falls through to character
 /// input.
 pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> Option<Chord> {
-    // Ctrl (Cmd on a Mac) with the keys the layout names A, C, X and V: the reference's handler
-    // switches on the key's code (`0x77b1fb`), the name its bindings use, so on AZERTY select-all
-    // is the key labelled A. On the PC `!m.alt` excludes AltGr, which arrives as Ctrl+Alt and types
-    // letters on European layouts (Polish AltGr+A is `ą`); must agree with the char-input branch
-    // in `input.rs`.
-    let held = if mac { m.sup } else { m.ctrl && !m.alt };
-    if let (true, Some(KeyName::Char(letter))) = (held, name) {
-        match letter {
-            'A' => return Some(Chord::Edit(EditAction::SelectAll)),
-            'C' => return Some(Chord::Copy),
-            'X' => return Some(Chord::Cut),
-            'V' => return Some(Chord::Paste),
-            // The Emacs set is Ctrl's alone: Cmd+B on a Mac is not a caret move.
-            _ if !mac => {
-                if let Some(chord) = ctrl_letter_pc(letter, m) {
-                    return Some(chord);
-                }
+    // The keys the layout names A, C, X and V under Cmd on a Mac, and the reference's Ctrl set
+    // under Ctrl on both: the reference's handler switches on the key's code (`0x77b1fb`), the
+    // name its bindings use, so on AZERTY select-all is the key labelled A. `!m.alt` excludes
+    // AltGr on the PC, which arrives as Ctrl+Alt and types letters on European layouts (Polish
+    // AltGr+A is `ą`), and Option on a Mac likewise; Cmd+Ctrl is no Ctrl chord there. Must agree
+    // with the char-input branch in `input.rs`, which types nothing for a Ctrl or Cmd letter.
+    if let Some(KeyName::Char(letter)) = name {
+        if mac && m.sup {
+            if let Some(chord) = clipboard_letter(letter) {
+                return Some(chord);
             }
-            _ => {}
+        } else if m.ctrl && !m.alt {
+            if let Some(chord) = clipboard_letter(letter).or_else(|| ctrl_letter(letter, m)) {
+                return Some(chord);
+            }
         }
     }
     if mac {
@@ -63,10 +60,21 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
     }
 }
 
-/// The PC's Emacs-style Ctrl+letter arms, the rest of the jump table at `0x77b69c` (letters
+/// Select-all and the clipboard: A, C, X and V of the jump table at `0x77b69c`.
+fn clipboard_letter(letter: char) -> Option<Chord> {
+    match letter {
+        'A' => Some(Chord::Edit(EditAction::SelectAll)),
+        'C' => Some(Chord::Copy),
+        'X' => Some(Chord::Cut),
+        'V' => Some(Chord::Paste),
+        _ => None,
+    }
+}
+
+/// The Emacs-style Ctrl+letter arms, the rest of the jump table at `0x77b69c` (letters
 /// `0x77b6cc`; every other letter does nothing, `0x77b35e`). Each arm tests Ctrl alone
 /// (`0x41f8f0(1)`), so Shift reaches only B and F, as the extend flag of the arrows' own helpers.
-fn ctrl_letter_pc(letter: char, m: Mods) -> Option<Chord> {
+fn ctrl_letter(letter: char, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Word};
     let edit = |action| Some(Chord::Edit(action));
     match letter {
@@ -100,7 +108,10 @@ fn ctrl_letter_pc(letter: char, m: Mods) -> Option<Chord> {
 
 /// macOS, the Cocoa text-field chords: Option+Left/Right is a word and Cmd+Left/Right the line's
 /// edge; Cmd+Up/Down and Shift+Up/Down go to the text's edge, and Up/Down, plain or with Option,
-/// move a row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left unbound.
+/// move a row, or recall history in a single-line box. Ctrl is the reference's: its letters are in
+/// [`chord`], and Ctrl+Backspace/Delete delete a word (`0x77c3f0`, `0x77c310`). Ctrl+Left/Right
+/// (Spaces) and Ctrl+Up/Down (Mission Control) are the OS's: the first stay a character step and
+/// the second unbound.
 fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Line, Row, Word};
     let mv = |unit, back| {
@@ -141,7 +152,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
         KeyCode::Backspace => {
             if m.sup {
                 del(Edge, true)
-            } else if m.alt {
+            } else if m.alt || m.ctrl {
                 del(Word, true)
             } else {
                 del(Char, true)
@@ -150,7 +161,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
         KeyCode::Delete => {
             if m.sup {
                 del(Edge, false)
-            } else if m.alt {
+            } else if m.alt || m.ctrl {
                 del(Word, false)
             } else {
                 del(Char, false)
@@ -160,7 +171,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
     }
 }
 
-/// Windows/Linux: the reference's chords (`0x77b160`); its Ctrl+letter arms are [`ctrl_letter_pc`].
+/// Windows/Linux: the reference's chords (`0x77b160`); its Ctrl+letter arms are [`ctrl_letter`].
 fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Line, Row, Word};
     let mv = |unit, back| {
@@ -365,7 +376,11 @@ mod tests {
             chord(KeyCode::KeyV, us(KeyCode::KeyV), SUP, true),
             Some(Chord::Paste)
         );
-        assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), CTRL, true), None);
+        assert_eq!(
+            edit(chord(KeyCode::KeyA, us(KeyCode::KeyA), CTRL, true)),
+            SelectAll,
+            "Ctrl is the reference's on a Mac too"
+        );
         assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), NONE, true), None);
     }
 
@@ -708,10 +723,50 @@ mod tests {
         );
     }
 
-    /// macOS keeps Cocoa's Emacs set unbound: Ctrl+letter is dead, and Cmd+letter outside the
-    /// clipboard chords is no caret move.
+    /// On a Mac Ctrl is its own key, and its letters are the reference's, the PC's table whole;
+    /// the Cmd letters stay the clipboard four, and Ctrl+Up/Down stay unbound.
     #[test]
-    fn mac_leaves_the_emacs_set_unbound() {
+    fn mac_takes_the_references_ctrl_set() {
+        let ctrl_shift = Mods {
+            shift: true,
+            ..CTRL
+        };
+        let keys = [
+            KeyCode::KeyA,
+            KeyCode::KeyB,
+            KeyCode::KeyC,
+            KeyCode::KeyD,
+            KeyCode::KeyF,
+            KeyCode::KeyK,
+            KeyCode::KeyN,
+            KeyCode::KeyP,
+            KeyCode::KeyU,
+            KeyCode::KeyV,
+            KeyCode::KeyW,
+            KeyCode::KeyX,
+        ];
+        for key in keys {
+            let on_pc = chord(key, us(key), CTRL, false);
+            assert!(on_pc.is_some(), "Ctrl+{key:?} on the PC");
+            for m in [CTRL, ctrl_shift] {
+                assert_eq!(
+                    chord(key, us(key), m, true),
+                    chord(key, us(key), m, false),
+                    "Ctrl+{key:?}"
+                );
+            }
+            // Option makes it a different chord, and Cmd+Ctrl none of Ctrl's.
+            let ctrl_alt = Mods { alt: true, ..CTRL };
+            let cmd_ctrl = Mods { sup: true, ..CTRL };
+            assert_eq!(
+                chord(key, us(key), ctrl_alt, true),
+                None,
+                "Ctrl+Opt+{key:?}"
+            );
+            let cmd = chord(key, us(key), cmd_ctrl, true);
+            assert_eq!(cmd, chord(key, us(key), SUP, true), "Cmd+Ctrl+{key:?}");
+        }
+        // Cmd keeps the clipboard four only.
         for key in [
             KeyCode::KeyB,
             KeyCode::KeyD,
@@ -722,9 +777,30 @@ mod tests {
             KeyCode::KeyU,
             KeyCode::KeyW,
         ] {
-            assert_eq!(chord(key, us(key), CTRL, true), None, "Ctrl+{key:?}");
             assert_eq!(chord(key, us(key), SUP, true), None, "Cmd+{key:?}");
         }
+        for key in [KeyCode::ArrowUp, KeyCode::ArrowDown] {
+            assert_eq!(chord(key, us(key), CTRL, true), None, "Ctrl+{key:?}");
+        }
+        // Ctrl+Backspace and Ctrl+Delete delete a word, as on the PC; Cmd and Option keep theirs.
+        for (key, back) in [(KeyCode::Backspace, true), (KeyCode::Delete, false)] {
+            let word = EditAction::Delete {
+                unit: EditUnit::Word,
+                back,
+            };
+            assert_eq!(edit(chord(key, us(key), CTRL, true)), word, "Ctrl+{key:?}");
+            assert_eq!(edit(chord(key, us(key), ALT, true)), word, "Option+{key:?}");
+            assert_eq!(
+                edit(chord(key, us(key), SUP, true)),
+                EditAction::Delete {
+                    unit: EditUnit::Edge,
+                    back
+                },
+                "Cmd+{key:?}"
+            );
+        }
+        // A letter outside the table types nothing and does nothing, as on the PC.
+        assert_eq!(chord(KeyCode::KeyE, us(KeyCode::KeyE), CTRL, true), None);
     }
 
     /// Delete's Shift branch is tested before Ctrl (`0x77b56e`), so Ctrl+Shift+Delete cuts; Ctrl

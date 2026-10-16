@@ -1185,9 +1185,9 @@ fn copy_cut_and_the_password_placeholder() {
     assert_eq!(s.eval::<String>("return P:GetText()").unwrap(), "");
 }
 
-/// Word and edge deletes, the host's OS-native chords with no 1.12 counterpart: a word delete
-/// takes the adjacent alphanumeric run and the separators toward it, an edge delete clears to the
-/// line's end, and either deletes a live selection instead.
+/// Word deletes (`0x77c3f0`, `0x77c310`) take the spaces next to the caret and the non-space run
+/// beside them; the Mac's edge delete (Cmd+Backspace) clears to the text's edge; either deletes a
+/// live selection instead.
 #[test]
 fn word_and_edge_deletes() {
     let mut s = script();

@@ -811,9 +811,9 @@ impl EditBoxState {
         if extend {
             self.extend_to(target);
         } else if self.sel_start != self.sel_end {
-            // Deviation: a plain Left or Right with a selection collapses it to that edge, as
-            // every OS's own text fields do; the reference clears the selection and steps once
-            // from the caret (`0x77c6b0` from `0x77c70b`).
+            // Deviation: a plain Left or Right (or Ctrl+B or F) with a selection collapses it to
+            // that edge, as every OS's own text fields do; the reference clears the selection and
+            // steps once from the caret (`0x77c6b0` from `0x77c70b`).
             self.cursor = if right { self.sel_end } else { self.sel_start };
             self.collapse();
         } else {
@@ -830,8 +830,8 @@ impl EditBoxState {
     /// non-spaces at the caret, then over the spaces, and so ends at the next word's start. Left
     /// (`0x77c8c0`) steps back over the spaces before the caret, then over the non-spaces.
     ///
-    /// The client decodes Left's character from the single byte `caret - 1` (`0x77c8da`), so a
-    /// multi-byte space reads as a non-space there; that is not copied, the whole character is read.
+    /// Deviation: Left reads the whole character before the caret, not the lone byte `caret - 1`
+    /// the client reads (`0x77c8da`), which takes a multi-byte space for a non-space.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
         // Right crosses non-spaces, then spaces; left spaces, then non-spaces.
         let first_is_space = !right;
@@ -1118,13 +1118,14 @@ fn colour_carry(display: &str, from: usize) -> Option<&str> {
         .and_then(|p| display.get(p..p + 10))
 }
 
-/// The char boundary at or below `i`.
 /// The client's `_iswspace` (`0x74006f`) on a character of the box's UTF-8 text, which `sgetu8`
 /// (`0x41aab0`) decodes to a code point and `_iswctype` (`0x7458e4`) reads as a 16-bit unit. Below
 /// U+0100 that is the C table, which marks only TAB to CR and the space: NEL and NBSP are not
 /// spaces. From U+0100 it is the system's `GetStringTypeW` space type: the Unicode spaces, but not
-/// the zero-width ones. A code point past the 16-bit range is no space here; the client would read
-/// its low 16 bits.
+/// the zero-width ones.
+///
+/// Deviation: a code point past U+FFFF is no space, where the client tests its low 16 bits, so
+/// U+10020 counts as a space there.
 fn is_space(c: char) -> bool {
     matches!(
         u32::from(c),
@@ -1132,6 +1133,7 @@ fn is_space(c: char) -> bool {
     )
 }
 
+/// The char boundary at or below `i`.
 fn snap_down(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
     while i > 0 && !s.is_char_boundary(i) {

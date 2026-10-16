@@ -20,8 +20,9 @@
 //! and [`seam`]; the OS clipboard is host-side, [`paste`] in and `UiScript::editbox_copy` or
 //! `editbox_cut` out. The host's per-OS keymap sends editing keys as [`EditAction`]s ([`action`]).
 //!
-//! Deviation: word and edge deletes (`Delete{Word,Edge}`), which 1.12 does not have, exist because
-//! the host's OS-native chords (Option/Cmd+Backspace, Ctrl+Backspace/Delete) expect them.
+//! The word deletes are the reference's (`0x77c3f0`, `0x77c310`), and Ctrl+U/K delete to the text's
+//! edges (`0x77c4a0`, `0x77c4d0`). `Delete{Edge}` is the Mac's Cmd+Backspace/Delete, whose chords
+//! are the keymap's.
 
 use mlua::{Lua, Table};
 
