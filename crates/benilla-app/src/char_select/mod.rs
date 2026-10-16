@@ -1,6 +1,7 @@
-//! Character select: the roster pick policy and the `CharacterSelect.xml` glue screen. The parked IO thread emits the roster ([`CharListMessage`]),
-//! answered by the pending pick (reconnect), `WOW_CHAR`, or a choice on the screen, which opens on
-//! the character last entered as (`lastCharacterIndex`).
+//! Character select: the roster pick policy and the `CharacterSelect.xml` glue screen. The parked
+//! IO thread emits the roster ([`CharListMessage`]), answered by the pending pick (reconnect),
+//! `WOW_CHAR`, or a choice on the screen, which opens on the character last entered as
+//! (`lastCharacterIndex`).
 
 mod addons;
 #[cfg(test)]
