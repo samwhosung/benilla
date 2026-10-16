@@ -312,7 +312,7 @@ impl Billing {
     /// A recurring subscription: the play-time warning never arms (`0x48f654`), and the glue's
     /// `GetBillingTimeRemaining` answers 0 (`0x46dc0a`). vmangos `BILLING_FLAG_RECURRING`.
     pub const RECURRING: u8 = 0x02;
-    /// An internet-cafe plan: its warning is `IGR_BILLING_NAG_DIALOG`, not the minutes
+    /// An Internet Gaming Room (IGR) plan: its warning is `IGR_BILLING_NAG_DIALOG`, not the minutes
     /// (`0x4956cb`). vmangos `BILLING_FLAG_IGR`.
     pub const IGR: u8 = 0x08;
 }

@@ -2,7 +2,7 @@
 //! (`CGGameUI::InitializeGame`, `0x48f636`-`0x48f679`), and each frame of the in-game interface
 //! polls it (`CGGameUI::Update`, `0x495679`-`0x495826`): `BILLING_NAG_DIALOG` with the minutes left
 //! once they are 30 or fewer, and, while they are, a `BILLING_NAG_WARNING` system line on the second
-//! frame and then at each 5-minute mark, each minute from 5. An internet-cafe plan gets
+//! frame and then at each 5-minute mark, each minute from 5. An Internet Gaming Room (IGR) plan gets
 //! `IGR_BILLING_NAG_DIALOG` once, at 600 or fewer, and no line.
 
 use benilla_protocol::messages::Billing;
@@ -299,9 +299,9 @@ mod tests {
         assert_ne!(w.deadline, 0, "72 hours exactly arms");
     }
 
-    /// An internet-cafe plan: its own dialog once, at 600 minutes or fewer, and no lines.
+    /// An Internet Gaming Room (IGR) plan: its own dialog once, at 600 minutes or fewer, and no lines.
     #[test]
-    fn an_internet_cafe_plan_gets_its_dialog_once() {
+    fn an_igr_plan_gets_its_dialog_once() {
         let mut w = PlayTimeWarning::default();
         w.arm(billing(602, Billing::IGR), 0);
         let seen = run(&mut w, 1, 602 * MINUTE_MS + 1_000, 997, Billing::IGR);
