@@ -164,6 +164,11 @@ impl Loader<'_> {
                 // the ctor's CENTER (`0x212`); the justify still reaches the paint (`0x784111`).
                 self.call_region(&region, "ClearAllPoints", (), dbg);
                 self.apply_region_layout(bt, &region, self_name, dbg, font_attrs);
+                // `<ButtonText>` reads its own `inherits=` and `font=` as any FontString does
+                // (`0x6f2780` → `0x770f40`); `<NormalText>` skips them (`0x778b7b`).
+                if font_attrs == FontAttrs::Own {
+                    self.apply_fontstring_font(bt, &region, dbg);
+                }
                 self.apply_wrap_attrs(bt, &region, dbg);
                 if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region) {
                     self.report.fault(format!("{dbg}: implicit anchor: {e}"));
