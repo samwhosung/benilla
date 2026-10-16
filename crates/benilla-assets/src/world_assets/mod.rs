@@ -217,7 +217,7 @@ impl LooseFiles {
         if open == LooseOpen::BareNameFirst {
             let bare = path.rsplit('\\').next().unwrap_or(path);
             if let Some(file) = install.as_ref().and_then(|ix| ix.get(bare)) {
-                return Some(file.clone());
+                return Some(file);
             }
         }
         let norm = normalize_path(path);
@@ -228,7 +228,7 @@ impl LooseFiles {
                 .and_then(|root| loose_addon_file(root, &norm))
                 .map(LooseFile::Plain);
         }
-        install.as_ref().and_then(|ix| ix.get(&norm)).cloned()
+        install.as_ref().and_then(|ix| ix.get(&norm))
     }
 }
 

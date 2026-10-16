@@ -2,10 +2,10 @@
 //! an open that sets the loose flag asks before the archive chain (`0x647e60`; benilla-re
 //! `storm/mount`, "Loose files" to "Which opens ask the index").
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock, RwLock};
 
 use crate::wow_data;
 
@@ -24,10 +24,87 @@ pub enum LooseOpen {
 }
 
 /// The index: a file's path below the folder walked, compared without ASCII case (`SStrCmpI`), to
-/// what opens it; a key's first entry stays (`0x646d66`).
+/// what opens it; a key's first entry stays (`0x646d66`). A key is answered by listing only the
+/// folders along it, each once, in the walk's order, so it answers as the whole walk would and an
+/// install folder that holds or links a large tree costs only what is asked of it.
+///
+/// Deviation: a folder is listed the first time a key reaches it, where the reference lists every
+/// folder at the first open (`0x646ea0`), so a file added to a folder no key has reached is found
+/// before the index empties; the whole walk takes minutes and gigabytes where the install folder
+/// holds or links a large tree, as a Wine prefix's `z:` drive links `/`.
 #[derive(Debug, Default)]
 pub struct LooseIndex {
-    files: HashMap<String, LooseFile>,
+    /// The base folder's walk, then `Data\`'s.
+    walks: Vec<Walk>,
+    /// The data folder by its canonical path, which the base walk leaves to the second.
+    data_canon: Option<PathBuf>,
+    /// Every key asked, with its answer.
+    answers: Mutex<HashMap<String, Option<LooseFile>>>,
+    /// How many folders have been listed.
+    listed: AtomicUsize,
+}
+
+/// One folder walked, `0x646910`'s root, and its folders' listings, each read once.
+#[derive(Debug)]
+struct Walk {
+    root: PathBuf,
+    /// The base folder's walk, which also skips [`MOVED_ASIDE`] and the data folder.
+    base: bool,
+    folders: Mutex<HashMap<PathBuf, Arc<Listing>>>,
+}
+
+/// A folder's entries but `.` and `..`, in name order: listing order decides only between names
+/// equal but for case, and sorted it is the same on every host.
+#[derive(Debug, Default)]
+struct Listing {
+    entries: Vec<Entry>,
+    /// Whether a name holds a backslash, as one can on a host whose separator is `/`.
+    backslash: bool,
+}
+
+/// One entry of a listed folder.
+#[derive(Debug)]
+struct Entry {
+    name: String,
+    /// `name` with ASCII case folded, as a key is.
+    folded: String,
+    /// What `stat`, which follows a link, says it is (`0x646a04`), read when a key could pass
+    /// through it.
+    kind: OnceLock<Kind>,
+    /// A folder's canonical path, read when the base walk asks whether it is the data folder.
+    canon: OnceLock<PathBuf>,
+}
+
+/// An entry by the `st_mode` bits `0x646910` tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// `0x4000` (`0x646a14`): walked.
+    Folder,
+    /// `0x8000` (`0x646a6a`): entered.
+    File,
+    /// Neither, or a `stat` that fails: passed over.
+    Other,
+}
+
+impl Entry {
+    fn kind(&self, full: &Path) -> Kind {
+        *self.kind.get_or_init(|| match std::fs::metadata(full) {
+            Ok(meta) if meta.is_dir() => Kind::Folder,
+            Ok(meta) if meta.is_file() => Kind::File,
+            _ => Kind::Other,
+        })
+    }
+
+    fn canon(&self, full: &Path) -> &Path {
+        self.canon
+            .get_or_init(|| std::fs::canonicalize(full).unwrap_or_else(|_| full.to_path_buf()))
+    }
+}
+
+/// A lock, taken whether or not a holder panicked: every value behind one is whole between
+/// statements.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// What an index entry opens, by the kind `0x646910` stores (`+0x1c`) and `SFile::OpenEx`
@@ -89,114 +166,179 @@ fn key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
+/// The part of a file's name its key ends with: less a last extension `.MPQ` (any case) for kind
+/// 2 (`0x646bc7`, `0x646bd4`), whole for kind 0, and `None` for a `.bz` file, kind 1 (`0x646aab`,
+/// `0x647894`), which is left out: the reference does not say how its body decodes.
+fn file_key(name: &str) -> Option<&str> {
+    match name.rsplit_once('.') {
+        Some((_, ext)) if ext.eq_ignore_ascii_case("bz") => None,
+        Some((stem, ext)) if ext.eq_ignore_ascii_case("mpq") => Some(stem),
+        _ => Some(name),
+    }
+}
+
+/// What a file entered by its path below the walked folder opens: a `.MPQ` the archive, read
+/// for the key's part after its last backslash (kind 2), any other file itself (kind 0).
+fn loose_file(rel: &str, full: PathBuf) -> LooseFile {
+    match rel.rsplit_once('.') {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case("mpq") => LooseFile::Archive {
+            archive: full,
+            member: stem.rsplit('\\').next().unwrap_or(stem).to_string(),
+        },
+        _ => LooseFile::Plain(full),
+    }
+}
+
+/// `dir`'s [`Listing`].
+fn list(dir: &Path) -> Listing {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Listing::default();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter(|n| n != "." && n != "..")
+        .collect();
+    names.sort_by_cached_key(|n| (n.to_ascii_lowercase(), n.clone()));
+    Listing {
+        backslash: names.iter().any(|n| n.contains('\\')),
+        entries: names
+            .into_iter()
+            .map(|name| Entry {
+                folded: name.to_ascii_lowercase(),
+                name,
+                kind: OnceLock::new(),
+                canon: OnceLock::new(),
+            })
+            .collect(),
+    }
+}
+
+impl Listing {
+    /// The entries that could be entered as `rest` or hold it, in name order: those named its
+    /// first component, then a `.MPQ` named it whole. A name holding a backslash may match more
+    /// of `rest`, so a folder with one offers every entry.
+    fn candidates(&self, rest: &str) -> impl Iterator<Item = &Entry> {
+        if self.backslash {
+            return self.entries.iter().chain(&[]);
+        }
+        let named = |name: &str| {
+            let from = self.entries.partition_point(|e| e.folded.as_str() < name);
+            let len = self.entries[from..]
+                .iter()
+                .take_while(|e| e.folded == name)
+                .count();
+            &self.entries[from..from + len]
+        };
+        let first = rest.split('\\').next().unwrap_or(rest);
+        let archive = if first.len() == rest.len() {
+            named(&format!("{rest}.mpq"))
+        } else {
+            &[]
+        };
+        named(first).iter().chain(archive)
+    }
+}
+
 impl LooseIndex {
-    /// The index of `base` and then `data`, built as `0x646ea0` builds it from the base path
+    /// The index of `base` and then `data`, as `0x646ea0` builds it from the base path
     /// (`0xc52418`) and that path's `Data\`: both walked depth first, the base folder's entries
     /// entered before `data`'s.
     pub fn build(base: Option<&Path>, data: &Path) -> LooseIndex {
-        let mut index = LooseIndex::default();
-        let data_canon = std::fs::canonicalize(data).ok();
-        if let Some(base) = base {
-            let mut seen = HashSet::new();
-            index.walk(base, "", &mut seen, &|rel, canon| {
-                // The data folder is the second walk's, whatever `$WOW_DATA` names it.
-                MOVED_ASIDE.iter().any(|m| m.eq_ignore_ascii_case(rel))
-                    || data_canon.as_deref().is_some_and(|d| d == canon)
-            });
+        let walk = |root: &Path, base| Walk {
+            root: root.to_path_buf(),
+            base,
+            folders: Mutex::default(),
+        };
+        LooseIndex {
+            walks: base
+                .map(|b| walk(b, true))
+                .into_iter()
+                .chain([walk(data, false)])
+                .collect(),
+            data_canon: std::fs::canonicalize(data).ok(),
+            ..LooseIndex::default()
         }
-        let mut seen = HashSet::new();
-        index.walk(data, "", &mut seen, &|_, _| false);
-        index
     }
 
-    /// `0x646910(root, prefix)`: every entry of `root\prefix` but `.` and `..`, in name order. A
-    /// folder is skipped when its path below the root is a prefix of [`DATA_DIR`], is one of
-    /// [`NEVER_INDEXED`] or `skip` says so, and walked otherwise, once per walk even through a
-    /// link back up the tree; a regular file is entered.
-    fn walk(
-        &mut self,
-        root: &Path,
-        prefix: &str,
-        seen: &mut HashSet<PathBuf>,
-        skip: &dyn Fn(&str, &Path) -> bool,
-    ) {
-        let dir = if prefix.is_empty() {
-            root.to_path_buf()
-        } else {
-            root.join(prefix.replace('\\', std::path::MAIN_SEPARATOR_STR))
-        };
-        let Ok(canon) = std::fs::canonicalize(&dir) else {
-            return;
-        };
-        if !seen.insert(canon) {
-            return;
+    /// The entry whose key equals `name` without ASCII case: the first the walks enter.
+    pub fn get(&self, name: &str) -> Option<LooseFile> {
+        let key = key(name);
+        if let Some(answer) = lock(&self.answers).get(&key) {
+            return answer.clone();
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        let mut names: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-            .collect();
-        // Listing order decides only between names equal but for case; sorted, it is the same on
-        // every host.
-        names.sort_by_cached_key(|n| (n.to_ascii_lowercase(), n.clone()));
-        for name in names {
-            if name == "." || name == ".." {
+        let answer = self
+            .walks
+            .iter()
+            .find_map(|walk| self.find(walk, &walk.root, "", &key));
+        lock(&self.answers).entry(key).or_insert(answer).clone()
+    }
+
+    /// `0x646910(root, prefix)` asked for one key, `rest` being its part below `dir` (`rel` below
+    /// the root): `dir`'s entries in name order, a folder walked when `rest` goes on inside it
+    /// and it is not skipped, a regular file the answer when it is entered as `rest`. The walk
+    /// follows a link as `stat` does and keeps no record of the folders it has been in, as the
+    /// reference's recursion (`0x646a58`) keeps none; a key's length bounds the descent.
+    fn find(&self, walk: &Walk, dir: &Path, rel: &str, rest: &str) -> Option<LooseFile> {
+        for entry in self.listing(walk, dir).candidates(rest) {
+            let inside = rest
+                .strip_prefix(entry.folded.as_str())
+                .and_then(|r| r.strip_prefix('\\'));
+            let entered = file_key(&entry.folded) == Some(rest);
+            if inside.is_none() && !entered {
                 continue;
             }
-            let rel = if prefix.is_empty() {
-                name.clone()
+            let full = dir.join(&entry.name);
+            let rel = if rel.is_empty() {
+                entry.name.clone()
             } else {
-                format!("{prefix}\\{name}")
+                format!("{rel}\\{}", entry.name)
             };
-            let full = dir.join(&name);
-            // `stat`, which follows a link, as `0x646a04` does.
-            let Ok(meta) = std::fs::metadata(&full) else {
-                continue;
-            };
-            if meta.is_dir() {
-                let canon = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
-                if DATA_DIR.starts_with(rel.as_str())
-                    || NEVER_INDEXED.iter().any(|n| n.eq_ignore_ascii_case(&rel))
-                    || skip(&rel, &canon)
-                {
-                    continue;
+            match (entry.kind(&full), inside) {
+                (Kind::Folder, Some(inside)) if !self.skips(walk, &rel, entry, &full) => {
+                    if let Some(hit) = self.find(walk, &full, &rel, inside) {
+                        return Some(hit);
+                    }
                 }
-                self.walk(root, &rel, seen, skip);
-            } else if meta.is_file() {
-                self.insert(&rel, full);
+                (Kind::File, _) if entered => return Some(loose_file(&rel, full)),
+                _ => {}
             }
         }
+        None
     }
 
-    /// Enter one file by its path below the walked folder. A last extension `.MPQ` (any case) is
-    /// cut from the key and makes kind 2 (`0x646bc7`, `0x646bd4`); any other file is kind 0.
-    fn insert(&mut self, rel: &str, full: PathBuf) {
-        let (key_rel, file) = match rel.rsplit_once('.') {
-            // Kind 1, a `.bz` file opened past a `BZ00` header (`0x646aab`, `0x647894`): the
-            // reference does not say how its body decodes, so it is left out of the index.
-            Some((_, ext)) if ext.eq_ignore_ascii_case("bz") => return,
-            Some((stem, ext)) if ext.eq_ignore_ascii_case("mpq") => {
-                let member = stem.rsplit('\\').next().unwrap_or(stem).to_string();
-                let archive = full;
-                (stem, LooseFile::Archive { archive, member })
-            }
-            _ => (rel, LooseFile::Plain(full)),
-        };
-        self.files.entry(key(key_rel)).or_insert(file);
+    /// Whether a walk passes over the folder at `rel`: a prefix of [`DATA_DIR`], one of
+    /// [`NEVER_INDEXED`], and in the base walk one of [`MOVED_ASIDE`] or the data folder, which
+    /// is the second walk's whatever `$WOW_DATA` names it.
+    fn skips(&self, walk: &Walk, rel: &str, entry: &Entry, full: &Path) -> bool {
+        DATA_DIR.starts_with(rel)
+            || NEVER_INDEXED.iter().any(|n| n.eq_ignore_ascii_case(rel))
+            || (walk.base
+                && (MOVED_ASIDE.iter().any(|m| m.eq_ignore_ascii_case(rel))
+                    || self
+                        .data_canon
+                        .as_deref()
+                        .is_some_and(|d| d == entry.canon(full))))
     }
 
-    /// The entry whose key equals `name` without ASCII case.
-    pub fn get(&self, name: &str) -> Option<&LooseFile> {
-        self.files.get(&key(name))
+    /// `dir`'s entries, listed the first time a key reaches it.
+    fn listing(&self, walk: &Walk, dir: &Path) -> Arc<Listing> {
+        if let Some(listing) = lock(&walk.folders).get(dir) {
+            return listing.clone();
+        }
+        let listing = Arc::new(list(dir));
+        self.listed.fetch_add(1, Ordering::Relaxed);
+        lock(&walk.folders)
+            .entry(dir.to_path_buf())
+            .or_insert(listing)
+            .clone()
     }
 
     /// The entry that answers an open of `name` with `open`, `0x647e60`'s probes: with
     /// [`LooseOpen::BareNameFirst`] the part after the last backslash, then for either loose open
     /// the whole name. `None` sends the open to the archives; a hit is the open's one answer,
     /// and a file that then fails to read is a miss with no turn to the archives (`0x647865`).
-    pub fn resolve(&self, name: &str, open: LooseOpen) -> Option<&LooseFile> {
+    pub fn resolve(&self, name: &str, open: LooseOpen) -> Option<LooseFile> {
         match open {
             LooseOpen::Archives => None,
             LooseOpen::Index => self.get(name),
@@ -207,20 +349,16 @@ impl LooseIndex {
         }
     }
 
-    /// The number of keys.
-    pub fn len(&self) -> usize {
-        self.files.len()
-    }
-
-    /// Whether no file was entered.
-    pub fn is_empty(&self) -> bool {
-        self.files.is_empty()
+    /// How many folders the index has listed: those along the keys asked of it.
+    pub fn folders_listed(&self) -> usize {
+        self.listed.load(Ordering::Relaxed)
     }
 }
 
 /// An index with its lifetime: built by the first open that asks (`0x647ebc` calls `0x646ea0`
 /// when the built byte `0xc5251c` is clear), emptied by [`Self::clear`] as `0x646fc0` empties it,
-/// and built again by the next open, so a file added in between is found only after a clear.
+/// and built again by the next open, so a file added in between to a folder the index has listed
+/// is found only after a clear.
 pub struct LooseIndexCell {
     build: Box<dyn Fn() -> LooseIndex + Send + Sync>,
     slot: RwLock<Option<Arc<LooseIndex>>>,
@@ -337,7 +475,7 @@ mod tests {
         }
     }
 
-    fn body(file: Option<&LooseFile>) -> Option<String> {
+    fn body(file: Option<LooseFile>) -> Option<String> {
         file.map(|f| String::from_utf8(f.read().unwrap()).unwrap())
     }
 
@@ -364,7 +502,7 @@ mod tests {
         assert_eq!(body(ix.get("EULA.html")).as_deref(), Some("eula"));
         // The base walk skips `Data`, so a `Data\` file is never keyed by its `Data\` path.
         assert_eq!(ix.get("Data\\eula.html"), None);
-        assert_eq!(ix.len(), 3);
+        assert_eq!(ix.get("Data\\Fonts\\FRIZQT__.TTF"), None);
     }
 
     /// The font open's bare-name probe finds a face loose in the install folder or `Data\` under
@@ -415,24 +553,26 @@ mod tests {
         assert_eq!(ix.get("Interface\\AddOns\\Atlas\\Atlas.toc"), None);
         assert_eq!(
             ix.get("patch-3"),
-            Some(&LooseFile::Archive {
+            Some(LooseFile::Archive {
                 archive: t.0.join("Data").join("patch-3.MPQ"),
                 member: "patch-3".to_string(),
             })
         );
         assert_eq!(ix.get("Textures\\Foo.blp"), None);
+        assert_eq!(ix.get("Textures\\Foo.blp.bz"), None);
+        assert_eq!(ix.get("Data\\patch-3"), None);
         assert_eq!(
             body(ix.get("Interface\\GlueXML\\GlueStrings.lua")).as_deref(),
             Some("data glue")
         );
-        assert_eq!(ix.len(), 2);
     }
 
-    /// A link back up the tree is walked once, and a `$WOW_DATA` folder not named `Data` is the
-    /// second walk's only.
+    /// A link is followed as `stat` follows it, one back up the tree included, since the
+    /// reference's walk keeps no record of the folders it has been in (`0x646a58`); a `$WOW_DATA`
+    /// folder not named `Data` is the second walk's only, by whatever path the base walk meets it.
     #[cfg(unix)]
     #[test]
-    fn a_link_loop_ends_and_the_data_folder_is_walked_once() {
+    fn a_link_is_followed_and_the_data_folder_is_the_second_walks() {
         let t = Tree::new("loop");
         t.file("WTF/Config.wtf", "cfg");
         t.file("MyData/Credits.html", "credits");
@@ -440,9 +580,60 @@ mod tests {
         let ix = LooseIndex::build(Some(&t.0), &t.0.join("MyData"));
         assert_eq!(body(ix.get("WTF\\Config.wtf")).as_deref(), Some("cfg"));
         assert_eq!(body(ix.get("Credits.html")).as_deref(), Some("credits"));
-        assert_eq!(ix.get("WoW\\WTF\\Config.wtf"), None);
+        assert_eq!(body(ix.get("WoW\\WTF\\Config.wtf")).as_deref(), Some("cfg"));
+        assert_eq!(
+            body(ix.get("WoW\\WoW\\WTF\\Config.wtf")).as_deref(),
+            Some("cfg")
+        );
         assert_eq!(ix.get("MyData\\Credits.html"), None);
-        assert_eq!(ix.len(), 2);
+        assert_eq!(ix.get("WoW\\MyData\\Credits.html"), None);
+    }
+
+    /// A link that sorts ahead of the folder it names hides none of that folder's files: the walk
+    /// enters both, as the reference's recursion (`0x646a58`) does.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_ahead_of_its_folder_hides_nothing() {
+        let t = Tree::new("alias");
+        t.file("Interface/Glues/Logo.blp", "logo");
+        std::os::unix::fs::symlink(t.0.join("Interface"), t.0.join("Aliased")).unwrap();
+        let ix = LooseIndex::build(Some(&t.0), &t.0.join("Data"));
+        assert_eq!(
+            body(ix.get("Interface\\Glues\\Logo.blp")).as_deref(),
+            Some("logo")
+        );
+        assert_eq!(
+            body(ix.get("Aliased\\Glues\\Logo.blp")).as_deref(),
+            Some("logo")
+        );
+    }
+
+    /// A key lists only the folders along it. An install folder holding a Wine prefix, whose `z:`
+    /// drive links a folder above the install, answers without walking the tree the link reaches,
+    /// whose whole walk takes minutes and gigabytes when the link is the root of the disk.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_lists_only_the_folders_along_it() {
+        let t = Tree::new("prefix");
+        t.file("Fonts/FRIZQT__.TTF", "font");
+        t.file("Data/Sound/Hit.wav", "hit");
+        for i in 0..200 {
+            t.file(&format!("prefix/drive_c/f{i}/x.txt"), "x");
+        }
+        std::fs::create_dir_all(t.0.join("prefix/dosdevices")).unwrap();
+        std::os::unix::fs::symlink(&t.0, t.0.join("prefix/dosdevices/z:")).unwrap();
+        std::os::unix::fs::symlink("../drive_c", t.0.join("prefix/dosdevices/c:")).unwrap();
+        let ix = LooseIndex::build(Some(&t.0), &t.0.join("Data"));
+        assert_eq!(body(ix.get("Fonts\\FRIZQT__.TTF")).as_deref(), Some("font"));
+        assert_eq!(ix.folders_listed(), 2, "the install folder and Fonts");
+        assert_eq!(body(ix.get("Sound\\Hit.wav")).as_deref(), Some("hit"));
+        assert_eq!(ix.get("Sound\\Miss.wav"), None);
+        assert_eq!(ix.folders_listed(), 4, "and Data and Data\\Sound, once");
+        assert_eq!(
+            body(ix.get("prefix\\dosdevices\\c:\\f7\\x.txt")).as_deref(),
+            Some("x")
+        );
+        assert_eq!(ix.folders_listed(), 8, "and the four along the link");
     }
 
     /// A file added after the index is built is not found until the index is emptied, and is
@@ -453,7 +644,7 @@ mod tests {
         t.file("Data/eula.html", "eula");
         let root = t.0.clone();
         let cell = LooseIndexCell::new(move || LooseIndex::build(Some(&root), &root.join("Data")));
-        assert_eq!(cell.get().len(), 1);
+        assert_eq!(body(cell.get().get("eula.html")).as_deref(), Some("eula"));
         t.file("Fonts/FRIZQT__.TTF", "added");
         assert_eq!(
             cell.get().get("Fonts\\FRIZQT__.TTF"),
