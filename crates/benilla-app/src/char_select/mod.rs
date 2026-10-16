@@ -9,6 +9,7 @@ pub(crate) use addons::okay_after_clicks;
 mod dialog;
 mod input;
 mod refresh;
+mod roundtrip;
 mod screen;
 
 use benilla_protocol::{CharAction, Character};
@@ -98,7 +99,10 @@ impl Plugin for CharSelectPlugin {
             .add_systems(
                 Update,
                 (
-                    debug_glue_roundtrip,
+                    // After the UI tick: the stock arm reads the frames it built and presses its verbs.
+                    roundtrip::debug_glue_roundtrip
+                        .run_if(roundtrip::enabled)
+                        .after(crate::ui_script::UiInput),
                     debug_logout_smoke.after(crate::player::ControlRestore),
                 ),
             )
@@ -602,47 +606,6 @@ pub(crate) fn char_delete_refusal_text(strings: &GlueStrings, code: u8) -> Optio
         _ => ("CHAR_DELETE_FAILED", "Character deletion failed"),
     };
     Some(strings.text(key, fallback))
-}
-
-/// Glue-flow smoke (`WOW_GLUE_ROUNDTRIP=1`): once a roster is up, go to CharCreate, Back to
-/// CharSelect, and exit. Ungated, since it crosses states.
-fn debug_glue_roundtrip(
-    roster: Res<Roster>,
-    state: Res<State<ClientState>>,
-    mut next: ResMut<NextState<ClientState>>,
-    time: Res<Time>,
-    mut exit: MessageWriter<AppExit>,
-    mut phase: Local<u8>,
-    mut mark: Local<f32>,
-) {
-    if std::env::var("WOW_GLUE_ROUNDTRIP").is_err() {
-        return;
-    }
-    let now = time.elapsed_secs();
-    match *phase {
-        0 if !roster.chars.is_empty() && *state.get() == ClientState::CharSelect => {
-            info!(
-                "glue-roundtrip: initial roster = {} char(s) → entering CharCreate",
-                roster.chars.len()
-            );
-            next.set(ClientState::CharCreate);
-            (*phase, *mark) = (1, now);
-        }
-        1 if *state.get() == ClientState::CharCreate && now - *mark > 1.5 => {
-            info!("glue-roundtrip: in CharCreate → Back to CharSelect");
-            next.set(ClientState::CharSelect);
-            (*phase, *mark) = (2, now);
-        }
-        2 if *state.get() == ClientState::CharSelect && now - *mark > 1.5 => {
-            info!(
-                "glue-roundtrip: back at CharSelect, roster = {} char(s) — done",
-                roster.chars.len()
-            );
-            exit.write(AppExit::Success);
-            *phase = 3;
-        }
-        _ => {}
-    }
 }
 
 /// The logout smoke (`WOW_LOGOUT_SMOKE=1`, with `WOW_CHAR`): once in the world, `/logout`, return

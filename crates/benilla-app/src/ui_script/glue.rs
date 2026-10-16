@@ -51,6 +51,51 @@ impl GlueStock {
     }
 }
 
+/// The stock glue screens as a dev instrument reaches them, so no instrument names the VM: the
+/// switch, and through [`StockVm`] the glue VM's frames and verbs.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct StockGlueProbe<'w> {
+    stock: Option<Res<'w, GlueStock>>,
+    script: Option<NonSend<'w, UiScript>>,
+}
+
+impl StockGlueProbe<'_> {
+    /// The glue VM, `None` with the switch off. With it on and the glue VM not standing (the
+    /// world's VM, or a build that failed), a [`StockVm`] that shows nothing and presses nothing.
+    pub(crate) fn vm(&self) -> Option<StockVm<'_>> {
+        self.stock.as_deref().is_some_and(|s| s.0).then(|| {
+            StockVm(
+                self.script
+                    .as_deref()
+                    .filter(|s| s.vm_kind() == benilla_ui::script::VmKind::Glue),
+            )
+        })
+    }
+}
+
+/// The glue VM an instrument reads and presses.
+#[derive(Clone, Copy)]
+pub(crate) struct StockVm<'a>(Option<&'a UiScript>);
+
+impl StockVm<'_> {
+    /// The glue VM is standing.
+    pub(crate) fn is_up(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// `IsVisible()` of the frame with this global name; false with no VM.
+    pub(crate) fn frame_visible(&self, name: &str) -> bool {
+        self.0.is_some_and(|s| s.frame_visible(name))
+    }
+
+    /// Run a Lua chunk, the way a button's handler calls a stock function; a raise is logged.
+    pub(crate) fn press(&self, chunk: &str) {
+        if let Some(Err(e)) = self.0.map(|s| s.run(chunk)) {
+            error!("glue probe: {chunk} raised: {e}");
+        }
+    }
+}
+
 /// Run condition: the stock glue screens are up, the switch on and no character in the world.
 pub(crate) fn glue_ui_up(
     stock: Option<Res<GlueStock>>,

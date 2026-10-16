@@ -367,7 +367,9 @@ impl Plugin for RealmSelectPlugin {
                     // Ungated by state: the dialog stands over login and character select alike.
                     screen::drive_screen,
                     // Input before the row refresh, so a click shows on the frame it landed.
-                    smoke::debug_realm_smoke,
+                    smoke::debug_realm_smoke
+                        .run_if(smoke::enabled)
+                        .after(crate::ui_script::UiInput),
                     (
                         (input::clicks, input::keys)
                             .chain()
