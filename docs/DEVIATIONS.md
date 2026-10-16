@@ -29,10 +29,11 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 227
+- [benilla-app](#benilla-app): 228
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
+- [benilla-lua](#benilla-lua): 3
 - [benilla-protocol](#benilla-protocol): 21
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 111
@@ -374,6 +375,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_loot_roll
 
 - A negative answer, or none within `TEMPLATE_HOLD_MAX_MS`, opens the frame unresolved, because a frame that never opens cannot even be passed on; the reference's callback fires on success only. ([`src/ui_loot_roll.rs:8`](../crates/benilla-app/src/ui_loot_roll.rs#L8))
+- The open count is the number of rolls announced and not closed. The reference keeps a counter that its server-close paths decrement for any roll whose closed byte is clear (`0x61b6f8`, `0x61bc17`), a deferred roll that never counted up included, so it under-counts and lets a fifth frame open; here a deferred roll's close changes nothing. ([`src/ui_loot_roll.rs:18`](../crates/benilla-app/src/ui_loot_roll.rs#L18))
 
 #### ui_macro
 
@@ -551,6 +553,19 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### tga
 
 - Grayscale types 3 and 11 decode where the reference refuses them, because no shipped or addon file is one and removing working code would buy nothing. ([`src/tga.rs:6`](../crates/benilla-formats/src/tga.rs#L6))
+### benilla-lua
+
+#### api
+
+- The C build grows a string while `realloc` succeeds, and a failure is the catchable `not enough memory`; Rust's allocator aborts the process instead, and Linux grants far more than it can fill, so past this bound the libraries raise C's message. ([`src/api.rs:51`](../crates/benilla-lua/src/api.rs#L51))
+
+#### heap
+
+- C Lua has no such bound; past it the string is `not enough memory`, as C's would be when memory runs out. ([`src/heap.rs:623`](../crates/benilla-lua/src/heap.rs#L623))
+
+#### lib_string
+
+- 5.1's `match` recurses without a bound and overflows the C stack (near 32000 levels on 8 MB); this raises 5.2's `pattern too complex` instead. ([`src/lib_string.rs:477`](../crates/benilla-lua/src/lib_string.rs#L477))
 ### benilla-protocol
 
 #### auth
@@ -655,9 +670,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The getter reads `CVAR_WORLD_DETAIL`, where the reference's reads only `smallCull` (`0x488d77`), because benilla's stop follows the knob that draws: a console `frillDensity` write moves the ground clutter and `WorldDetail` with it, and no renderer reads `smallCull` (its callback's `[0x868620]` has no reader). ([`src/script/cvars.rs:902`](../crates/benilla-ui/src/script/cvars.rs#L902))
 - The promotion's IME legs (`0x77d417`–`0x77d431`) and the IME writer's `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: benilla has no IME composition. ([`src/script/editbox/flush.rs:28`](../crates/benilla-ui/src/script/editbox/flush.rs#L28))
 - The nameplate glow is shown but never drawn, because its additive rim reads as hard edge lines in our linear-blending pipeline; the lit plate brightens its bar instead. ([`src/script/extract.rs:264`](../crates/benilla-ui/src/script/extract.rs#L264))
-- A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:362`](../crates/benilla-ui/src/script/glue_core.rs#L362))
-- Benilla keeps that decode and then encodes it again, every byte outside the URL characters `URL_SAFE` as `%XY` (a decoded `%` too), because the opener on some platforms is a shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte reaches it. ([`src/script/glue_core.rs:406`](../crates/benilla-ui/src/script/glue_core.rs#L406))
-- Past `NAME_TRIES` names the answer is nil, where the reference keeps trying, forever when the generator has learned nothing. ([`src/script/glue_create.rs:966`](../crates/benilla-ui/src/script/glue_create.rs#L966))
+- A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:363`](../crates/benilla-ui/src/script/glue_core.rs#L363))
+- Benilla keeps that decode and then encodes it again, every byte outside the URL characters `URL_SAFE` as `%XY` (a decoded `%` too), because the opener on some platforms is a shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte reaches it. ([`src/script/glue_core.rs:407`](../crates/benilla-ui/src/script/glue_core.rs#L407))
+- Past `NAME_TRIES` names the answer is nil, where the reference keeps trying, forever when the generator has learned nothing. ([`src/script/glue_create.rs:968`](../crates/benilla-ui/src/script/glue_create.rs#L968))
 - With no Region rows the reference reads a NULL category (`0x46e5b8`, `0x46f26a`) and faults; benilla lists every realm under one category, so a client whose `Wow.ini` names another Region still reaches a realm. ([`src/script/glue_realm.rs:195`](../crates/benilla-ui/src/script/glue_realm.rs#L195))
 - Equal nonzero counts tie here, where the reference answers +1 both ways (its name tie-break at `0x46e841` is clobbered by `0x46e846`), because a comparator that is not a total order has no defined sort. ([`src/script/glue_realm.rs:260`](../crates/benilla-ui/src/script/glue_realm.rs#L260))
 - A span count that no longer matches the live set always rebuilds, so a state this model does not flag (a ring wiped by `SetMaxLines`, a hidden frame) leaves no stale button. ([`src/script/hyperlink.rs:161`](../crates/benilla-ui/src/script/hyperlink.rs#L161))
@@ -667,9 +682,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:292`](../crates/benilla-ui/src/script/keybind.rs#L292))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
 - 5.0 has no bound, but a remembered size is whatever an addon wrote, and a Rust loop over two billion slots is beyond the VM's instruction budget: a hung client. ([`src/script/lua50/table_size.rs:32`](../crates/benilla-ui/src/script/lua50/table_size.rs#L32))
-- A longer one sorts only the border, where 5.0 compares nils and raises: it departs from an error path, not from a mechanism. ([`src/script/lua50/table_size.rs:194`](../crates/benilla-ui/src/script/lua50/table_size.rs#L194))
-- The reference ignores every argument after the table; `i`/`j` stay because the positional-`format` shim passes a range to carry embedded nils. ([`src/script/lua50/table_size.rs:220`](../crates/benilla-ui/src/script/lua50/table_size.rs#L220))
-- A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:282`](../crates/benilla-ui/src/script/model.rs#L282))
+- A longer one sorts only the border, where 5.0 compares nils and raises: it departs from an error path, not from a mechanism. ([`src/script/lua50/table_size.rs:196`](../crates/benilla-ui/src/script/lua50/table_size.rs#L196))
+- The reference ignores every argument after the table; `i`/`j` stay because the positional-`format` shim passes a range to carry embedded nils. ([`src/script/lua50/table_size.rs:222`](../crates/benilla-ui/src/script/lua50/table_size.rs#L222))
+- A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:284`](../crates/benilla-ui/src/script/model.rs#L284))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:335`](../crates/benilla-ui/src/script/modelframe.rs#L335))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:394`](../crates/benilla-ui/src/script/nameplate.rs#L394))
