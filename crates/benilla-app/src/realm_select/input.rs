@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::bindings::WheelNotches;
 use crate::client_state::ClientState;
-use crate::login::GlueLogin;
+use crate::glue_session::login::GlueLogin;
 use crate::net::RealmChoice;
 use crate::sound::GlueSound;
 

@@ -2069,7 +2069,7 @@ fn stock_app() -> (
     let mut app = App::new();
     app.init_resource::<Time>()
         .init_non_send_resource::<SharedGlueMgr>()
-        .init_resource::<crate::login::LoginIntent>()
+        .init_resource::<crate::glue_session::login::LoginIntent>()
         .insert_resource(crate::realmlist::Realmlist::unpinned(
             crate::realmlist::DEFAULT_REALMLIST,
         ))
@@ -2101,7 +2101,7 @@ fn stock_app() -> (
             (
                 drive_glue_mgr,
                 super::super::glue_scene::feed_stock_glue_preview,
-                crate::login::answer_glue,
+                crate::glue_session::login::answer_glue,
             )
                 .chain(),
         );
@@ -2521,7 +2521,7 @@ fn live_app_with(
     let mut app = App::new();
     app.init_resource::<Time>()
         .init_non_send_resource::<SharedGlueMgr>()
-        .init_resource::<crate::login::LoginIntent>()
+        .init_resource::<crate::glue_session::login::LoginIntent>()
         .insert_resource(crate::realmlist::Realmlist::unpinned(&realmd.addr))
         .insert_resource(LoginSubmit(cycles.login.clone()))
         .insert_resource(LoginAbandon(cycles.abandon.clone()))
@@ -2578,7 +2578,7 @@ fn live_app_with(
                 pump,
                 drive_glue_mgr,
                 super::super::glue_scene::feed_stock_glue_preview,
-                crate::login::answer_glue,
+                crate::glue_session::login::answer_glue,
             )
                 .chain(),
         );

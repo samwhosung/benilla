@@ -628,6 +628,50 @@ pub(crate) mod schedule_tests {
         }
     }
 
+    /// Under `WOW_GLUE_STOCK=1` the login engine runs without the native screens' dialog: no
+    /// login or glue-session system writes the hidden `GlueDialog` there. The engine tells a
+    /// screen what it decided (`LoginNotice`), and the native login screen shows it.
+    #[test]
+    fn the_login_engine_writes_no_native_dialog_under_the_stock_screens() {
+        use crate::client_state::ClientState;
+        let mut app = headless_client();
+        let mut writers = resource_writers::<crate::glue::dialog::GlueDialog>(&mut app, Update);
+        for state in [
+            ClientState::Login,
+            ClientState::CharSelect,
+            ClientState::InWorld,
+        ] {
+            writers.extend(resource_writers::<crate::glue::dialog::GlueDialog>(
+                &mut app,
+                OnEnter(state),
+            ));
+            writers.extend(resource_writers::<crate::glue::dialog::GlueDialog>(
+                &mut app,
+                OnExit(state),
+            ));
+        }
+        if !writers.iter().any(|(n, _)| n.contains("benilla_app::")) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let ungated: Vec<&str> = writers
+            .iter()
+            .filter(|(name, _)| {
+                ["benilla_app::login::", "benilla_app::glue_session::"]
+                    .iter()
+                    .any(|m| name.starts_with(m))
+            })
+            .filter(|(_, conds)| !conds.iter().any(|c| c.ends_with("::native_glue")))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            ungated.is_empty(),
+            "login systems that write the native dialog under the stock screens: {ungated:?}"
+        );
+    }
+
     /// One row of the class table: the type's name for the message, and its `TypeId`.
     type ClassRow = (&'static str, fn() -> TypeId);
 

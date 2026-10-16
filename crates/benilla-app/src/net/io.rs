@@ -15,7 +15,7 @@
 //! A logout or a later `SMSG_CHARACTER_LOGIN_FAILED` ends the world session, announced as a
 //! [`SessionEvent::Disconnected`] with [`SessionEnd::LoggedOut`], and parks at character select
 //! again on the same link. A stream failure emits it with [`SessionEnd::Lost`] and re-parks for
-//! credentials. All policy lives in [`crate::login`] and [`crate::char_select`]; this thread only
+//! credentials. All policy lives in [`crate::glue_session`]; this thread only
 //! sequences and never sleeps.
 //!
 //! One long-lived write thread drains [`ClientCommand`](super::ClientCommand)s; each world entry

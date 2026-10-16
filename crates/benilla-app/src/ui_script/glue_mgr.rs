@@ -1,6 +1,6 @@
 //! The glue manager, `CGlueMgr` host side, under `WOW_GLUE_STOCK=1`: the screen-state machine of
 //! `CGlueMgr::Update` (`0x46b930`, `screenState` at `0xb41da0`) over the native login engine. The
-//! IO thread's parks and [`crate::login`]'s policy still do the network; this maps their messages
+//! IO thread's parks and [`crate::glue_session::login`]'s policy still do the network; this maps their messages
 //! onto the reference's screen states and fires the glue events the stock GlueXML answers: the
 //! status dialog (`OPEN_STATUS_DIALOG`, `UPDATE_STATUS_DIALOG`, `CLOSE_STATUS_DIALOG`),
 //! `SET_GLUE_SCREEN` and `DISCONNECTED_FROM_SERVER`. Its verbs run inside their Lua call, as the
@@ -164,9 +164,9 @@ use benilla_ui::script::{
     GLUE_STATUS_KEYS,
 };
 
+use crate::glue_session::login::GlueLogin;
+use crate::glue_session::queue::QueueEstimate;
 use crate::glue_session::realm::RunModeRealm;
-use crate::login::queue::QueueEstimate;
-use crate::login::GlueLogin;
 use crate::net::{
     AddonInfoMessage, AddonInfoReply, CharActionResultMessage, CharListMessage, CharRenameMessage,
     CharRequest, CharacterLoginFailedMessage, DisconnectedMessage, LoginFailedMessage,
@@ -1895,7 +1895,9 @@ pub(crate) fn drive_glue_mgr(
             }
             for request in s.take_glue_requests() {
                 match request {
-                    GlueRequest::SetSavedAccountName(name) => crate::login::save_account(&name),
+                    GlueRequest::SetSavedAccountName(name) => {
+                        crate::glue_session::login::save_account(&name)
+                    }
                     GlueRequest::PlayGlueMusic(file) => {
                         asks.music.write(crate::sound::GlueMusicRequest::Play(file));
                     }
@@ -2052,7 +2054,9 @@ pub(crate) fn drive_glue_mgr(
             if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
                 mgr.outbox.push(Outgoing::Open {
                     which: "BENILLA_REALMLIST",
-                    text: Some(Text::Raw(crate::login::REALMLIST_BAD.to_string())),
+                    text: Some(Text::Raw(
+                        crate::glue_session::login::REALMLIST_BAD.to_string(),
+                    )),
                     data: Some(typed),
                 });
             }
@@ -2113,7 +2117,7 @@ fn seat_glue(
     mgr.state = ScreenState::Idle;
     mgr.cells = LoginCells::default();
     mgr.auth_final = false;
-    s.set_glue_saved_account(&crate::login::load_saved_account());
+    s.set_glue_saved_account(&crate::glue_session::login::load_saved_account());
     s.set_glue_realm_cells(mgr.realm_cells);
     s.set_glue_select_cells(mgr.select_cells);
     super::addons::seat_glue_addons(s, addon_reply);

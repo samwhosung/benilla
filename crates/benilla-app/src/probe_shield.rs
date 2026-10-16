@@ -21,7 +21,7 @@
 
 use bevy::prelude::*;
 
-use crate::login::LoginIntent;
+use crate::glue_session::login::LoginIntent;
 use crate::names::NameCache;
 use crate::net::{EnteredWorldMessage, ObjectStore, SelfGuid, SelfPlayer, ServerSaidMessage};
 

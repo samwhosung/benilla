@@ -450,7 +450,7 @@ fn login_stage(stage: benilla_protocol::LoginStage, out: &mut MessageWriter<Logi
 }
 
 /// A login failed before the roster; the IO thread is back at its pre-logon park and
-/// [`crate::login`] decides what follows.
+/// [`crate::glue_session::login`] decides what follows.
 fn login_failed(
     refusal: Option<benilla_protocol::LoginRefusal>,
     reason: String,

@@ -4,7 +4,9 @@
 //! stand.
 
 pub(crate) mod edges;
+pub(crate) mod login;
 pub(crate) mod logout_smoke;
+pub(crate) mod queue;
 pub(crate) mod realm;
 pub(crate) mod roster;
 
@@ -16,6 +18,7 @@ pub(crate) struct GlueSessionPlugin;
 impl Plugin for GlueSessionPlugin {
     fn build(&self, app: &mut App) {
         realm::build(app);
+        login::build(app);
         app.init_resource::<roster::Roster>()
             .add_systems(
                 Update,

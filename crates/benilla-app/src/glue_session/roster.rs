@@ -235,7 +235,7 @@ pub(super) fn apply_roster_policy(
             None => std::env::var("WOW_CHAR").ok().or_else(|| {
                 std::env::var("WOW_LOGIN_SMOKE")
                     .ok()
-                    .and_then(|s| crate::login::smoke_character(&s))
+                    .and_then(|s| super::login::smoke_character(&s))
             }),
         };
     }

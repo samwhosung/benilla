@@ -104,7 +104,7 @@ pub(crate) struct GlueDialog {
     /// `GlueDialogEditBox`, rebuilt on every open so a cancelled edit leaves nothing behind.
     pub(crate) edit: EditBoxState,
     /// The queue's sample ring and realm, live while [`DialogKind::Queued`] is up.
-    pub(crate) queue: crate::login::queue::QueueEstimate,
+    pub(crate) queue: crate::glue_session::queue::QueueEstimate,
     pub(crate) queue_realm: Option<String>,
     spawned: Option<DialogKind>,
     /// The glue scale the spawned tree was built at; a resize rebuilds it.
@@ -131,7 +131,7 @@ impl GlueDialog {
     /// `realm` feeds the `_NAME` text variants.
     pub(crate) fn open_queued(&mut self, realm: Option<String>) {
         self.kind = Some(DialogKind::Queued);
-        self.queue = crate::login::queue::QueueEstimate::default();
+        self.queue = crate::glue_session::queue::QueueEstimate::default();
         self.queue_realm = realm;
         self.set_text("");
     }

@@ -416,6 +416,28 @@ impl Plugin for UiScriptPlugin {
                 arbitrate_pointer_over_ui
                     .after(UiInput)
                     .before(WorldStage::Input),
+            )
+            .add_message::<server_alert::LaunchUrl>()
+            .add_message::<server_alert::LaunchAddonUrl>()
+            // The stock glue screens' frame, ahead of the login engine, so the manager's asks reach
+            // it in the frame whose Lua made them.
+            .add_systems(
+                Update,
+                (
+                    // After the tick whose Lua called its verbs.
+                    glue_mgr::drive_glue_mgr
+                        .after(UiInput)
+                        .after(crate::realm_select::RealmSelectSet),
+                    // Off the roster and the screen the manager and the tick just moved.
+                    glue_scene::feed_stock_glue_preview.in_set(crate::portrait::GluePreviewFeed),
+                    // Each reads only its message, so no state orders it but the sets.
+                    server_alert::open_launched.after(WorldStage::Stream),
+                    server_alert::open_addon_launched.after(WorldStage::Stream),
+                )
+                    .chain()
+                    .run_if(glue::stock_glue)
+                    .before(crate::glue_session::login::LoginPolicy)
+                    .after(WorldStage::Net),
             );
 
         // A UI capture's synthetic unit snapshots, after the real feed so they win.

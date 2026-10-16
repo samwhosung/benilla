@@ -63,8 +63,8 @@ pub(crate) fn unattended() -> bool {
 
 /// A run stuck on a dialog: `true` (exit) only when the run is [`unattended`], logging the `FATAL`
 /// marker a leg runner greps for; otherwise the dialog stays up, with a hint when the credentials
-/// came from the environment. The call sites in [`crate::login`] and [`crate::char_select`] share
-/// it so the verdict and the marker cannot drift apart.
+/// came from the environment. Its call sites share it so the verdict and the marker cannot drift
+/// apart.
 pub(crate) fn fatal_when_driverless(why: &str) -> bool {
     if unattended() {
         error!("login: FATAL — {why}; exiting");
@@ -141,7 +141,7 @@ pub(crate) fn dev_source_dir() -> Option<&'static std::path::Path> {
     }
 }
 
-/// The pre-connect account guard on the env fast path ([`crate::login`]): `Err(explanation)` when
+/// The pre-connect account guard on the env fast path ([`crate::glue_session::login`]): `Err(explanation)` when
 /// this checkout declares an account ([`declared_identity`]) and the login is for another, because
 /// a login kicks whoever holds the account. Inert without a declaration. `WOW_ALLOW_ACCOUNT=1`
 /// turns the refusal into a warning.
