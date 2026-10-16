@@ -18,7 +18,8 @@ use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
 use super::ProbeClock;
-use crate::entities::{FallbackCube, HeldAttached, VisualAttached, ATTACH_SLOT_NAMES};
+use crate::entities::equipment::ATTACH_SLOT_NAMES;
+use crate::entities::{FallbackCube, HeldAttached, VisualAttached};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, SelfPlayer};
 use crate::target::hover::pick_model_roots;

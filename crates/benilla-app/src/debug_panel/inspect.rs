@@ -69,7 +69,7 @@ type MotionReadout = (
     Option<&'static crate::net::RemoteMotion>,
     Option<&'static crate::net::UnitMoveModes>,
     // The ground clamp's memo, for the card's `ground` line.
-    Option<&'static crate::net::GroundClamped>,
+    Option<&'static crate::net::motion::spline::GroundClamped>,
     // Where the unit stands now, which the `ground` line reads the terrain against.
     &'static Transform,
 );
@@ -533,7 +533,7 @@ pub(super) fn inspect_ui(
                 None => moving,
             }
         });
-    // The ground clamp's memo ([`crate::net::GroundClamped`]): `z` is drawn, `seat` the server's
+    // The ground clamp's memo ([`crate::net::motion::spline::GroundClamped`]): `z` is drawn, `seat` the server's
     // last pose, `drop` = `seat - z` the clamp's correction, `terrain` the MCNK height. `walk` is
     // the swept step on a server path and `idle` the settle from the seat; an idle miss stays at
     // the seat, a walk miss descends.

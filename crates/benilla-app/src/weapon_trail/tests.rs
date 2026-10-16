@@ -234,7 +234,8 @@ fn only_whirlwind_outruns_the_ring() {
 // The latch: armed by the kit, consumed by the unit's next animation, one slot per unit.
 
 use crate::creature_anim::AnimDriver;
-use crate::entities::{HeldAttached, ATTACH_SLOT_NAMES};
+use crate::entities::equipment::ATTACH_SLOT_NAMES;
+use crate::entities::HeldAttached;
 
 /// A unit holding a trail-capable weapon in each hand, plus the app that fires them.
 fn latch_app() -> (App, Entity, [Entity; 2]) {

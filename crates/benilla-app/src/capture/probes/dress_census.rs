@@ -14,7 +14,8 @@ use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
 use super::ProbeClock;
-use crate::entities::{Equipment, HeldAttached, ATTACH_SLOT_NAMES};
+use crate::entities::equipment::ATTACH_SLOT_NAMES;
+use crate::entities::{Equipment, HeldAttached};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
 
@@ -61,7 +62,7 @@ fn fire_dress_census(
     names: Res<NameCache>,
     body: Query<(Entity, &Transform), With<SelfPlayer>>,
     // The self body's parts, one `DRESS_PART` line each.
-    body_parts: crate::entities::BodyPartsDesc,
+    body_parts: crate::entities::attach::BodyPartsDesc,
     entities: Query<DressQuery>,
     // `parts=`/`mats=`: mesh parts under the unit and the distinct materials they bind.
     children: Query<&Children>,

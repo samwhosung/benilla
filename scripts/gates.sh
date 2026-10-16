@@ -2,9 +2,9 @@
 # The land gate chain: every gate in order, stopping at the first failure.
 #
 # fmt, clippy, reference, test, test-no-install, vm-parity, doc-links, message-catalog,
-# pass-span-lint, player-tests, enforcer, enforcer-no-install. A failure prints the gate's log tail
-# and exits nonzero; a green run stamps the tree, which then re-greens without running.
-# GATES_FORCE=1 runs the chain anyway,
+# pass-span-lint, player-clippy, player-tests, enforcer, enforcer-no-install. A failure prints the
+# gate's log tail and exits nonzero; a green run stamps the tree, which then re-greens without
+# running. GATES_FORCE=1 runs the chain anyway,
 # WOW_DATA picks the install (set and empty: none) and TMPDIR holds the scratch files; the script
 # sets BENILLA_REQUIRE_DATA, BENILLA_ADDON_CORPUS, BENILLA_SKIP_LOG and WOW_WORLDVIEW_CHECK for
 # its gates. BENILLA_RE names the benilla-re checkout the reference gate compares `reference/` with.
@@ -169,6 +169,12 @@ run message-catalog scripts/gen-message-catalog.py --check
 # pass-span-lint: refuses a second `pass_span` on a render pass whose span is still open, a fatal
 # wgpu validation error on Vulkan and a silent no-op on Metal and DX12, which no macOS run sees.
 run pass-span-lint scripts/pass-span-lint.py
+
+# player-clippy: the player build's own lints, which no other gate sees. `clippy` runs the dev
+# feature set and player-tests compiles under `cfg(test)`, where test code uses imports and items
+# the shipped library does not; this lints the shipped library and the launcher, with no
+# `--all-targets`, so a warning confined to the player graph fails here.
+run player-clippy cargo clippy -p benilla -p benilla-app --no-default-features -- -D warnings
 
 # player-tests: the player build, `benilla-app` without `dev`, which compiles out the debug panel,
 # perf HUD, inspector, capture harness and probes, so it fails when any other code names one of

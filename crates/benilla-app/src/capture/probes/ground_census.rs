@@ -16,11 +16,9 @@ use bevy::prelude::*;
 
 use super::ProbeClock;
 use crate::names::NameCache;
+use crate::net::motion::spline::{ground_derived, GroundClamped};
 use crate::net::NetCommands;
-use crate::net::{
-    ground_derived, CreatureSwimming, Embodied, GroundClamped, Guid, NetEntity, RemoteMotion,
-    SelfPlayer, Spline,
-};
+use crate::net::{CreatureSwimming, Embodied, Guid, NetEntity, RemoteMotion, SelfPlayer, Spline};
 
 /// A drop past this (yd) counts as sunk: clear of the clamp's small corrections, under a storey.
 const SUNK_YD: f32 = 0.5;

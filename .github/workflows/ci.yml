@@ -60,5 +60,7 @@ jobs:
         run: scripts/sync-reference.py benilla-re --check
       - name: pass-span-lint
         run: scripts/pass-span-lint.py
+      - name: player-clippy
+        run: cargo clippy -p benilla -p benilla-app --no-default-features -- -D warnings
       - name: player-tests
         run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib

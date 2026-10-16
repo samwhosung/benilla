@@ -11,7 +11,7 @@ mod facing;
 mod modes;
 mod relay;
 mod remote;
-mod spline;
+pub(crate) mod spline;
 #[cfg(test)]
 mod tests;
 
@@ -26,12 +26,12 @@ pub(crate) use remote::jump_seed;
 pub(crate) use remote::RemoteMotion;
 pub(in crate::net) use remote::{apply_move, arrival_snap, trace_relay, RelayOutcome};
 pub(super) use remote::{drain_pending_moves, extrapolate_remote_units};
+pub(crate) use spline::grounded_y;
 pub(super) use spline::{
     create_spline, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,
     sample_splines, trace_create_spline, trace_move_snap,
 };
-pub(crate) use spline::{ground_derived, grounded_y};
-pub(crate) use spline::{CreatureSwimming, GroundClamped, Spline, SplineStopped};
+pub(crate) use spline::{CreatureSwimming, Spline, SplineStopped};
 
 /// The Bevy rotation of a wire yaw (radians about WoW +Z): a Bevy +Y yaw with no 180° offset,
 /// unlike doodad and WMO placement.

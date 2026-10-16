@@ -112,6 +112,10 @@ run() {
 
 run fmt cargo fmt --all -- --check
 run clippy cargo clippy $pflags --all-targets -- -D warnings
+# The player build (no `dev` feature) is linted on its own: the run above sees only the dev set.
+case " $pkgs " in *" benilla-app "* | *" benilla "*)
+    run player-clippy cargo clippy -p benilla -p benilla-app --no-default-features -- -D warnings ;;
+esac
 # --no-fail-fast: one red test binary does not hide the failures in the ones after it.
 run test env BENILLA_SKIP_LOG="$skips" cargo test --no-fail-fast $pflags
 # Data-gated tests skip without the install or the addon corpus and libtest swallows their line,

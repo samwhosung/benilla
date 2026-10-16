@@ -25,7 +25,7 @@ use display::{
 };
 
 /// Attaching a visual to each net entity: skeleton, animation, character geosets and skin, fade.
-mod attach;
+pub(crate) mod attach;
 use attach::{attach_entity_visuals, build_dressup_preview, build_glue_pet, build_glue_preview};
 
 /// Composited body skins by look, built off the main thread.
@@ -37,7 +37,7 @@ mod carried_light;
 use carried_light::spawn_carried_lights;
 
 /// Equipment from the descriptor and `ItemDisplayInfo`: armour, held items, helm and shoulders.
-mod equipment;
+pub(crate) mod equipment;
 use equipment::{attach_held_items, resolve_corpse_equipment, resolve_equipment};
 
 /// Item and enchant glows, hung on the item's own attachment points.
@@ -86,11 +86,10 @@ mod chain_beam;
 pub(crate) use chain_beam::ChainHops;
 use chain_beam::{simulate_chain_beams, spawn_chain_beams};
 // `equip_slot` is the one InventoryType → slot table; the dressing room places items by it.
-pub(crate) use attach::{equip_slot, BodyPartsDesc};
+pub(crate) use attach::equip_slot;
 pub(crate) use equipment::ItemDisplays;
+pub(crate) use equipment::{attach_id, DressKey, HeldAttached};
 pub(crate) use equipment::{BoneAttach, Equipment};
-// For the `WOW_DRESS_CENSUS` instrument: what a body wears against what it resolved.
-pub(crate) use equipment::{attach_id, DressKey, HeldAttached, ATTACH_SLOT_NAMES};
 // Only the tests that build a `DressKey` name this type.
 #[cfg(test)]
 pub(crate) use equipment::ItemModelKind;
