@@ -363,7 +363,8 @@ fn anchor_for(prev_block: Option<u32>, frame_id: u32, point: Point, next_y: f32)
 
 /// Apply the `font=`, `<FontHeight>` and `outline=` an XML `<FontString>` or `<FontStringHeaderN>`
 /// child supplies, any of them absent. The reference applies these in C++ (`CSimpleFont::LoadXML`
-/// `0x783c30`, from `0x78a1fe`), not through `SetFont`, which requires both path and height.
+/// `0x783c30`, from `0x78a1fe`), not through `SetFont`, which requires both path and height. The
+/// loader hands a file only with a height above 0 (`0x783d6d`), so `height` is `Some` there.
 pub(crate) fn apply_element_font_parts(
     lua: &Lua,
     this: &Table,

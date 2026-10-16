@@ -43,16 +43,19 @@ const XML: &str = r#"<Ui>
       <Layers><Layer level="ARTWORK">
         <FontString name="WrapPlain" text="plain" font="Fonts\FRIZQT__.TTF">
           <Size><AbsDimension x="100" y="12"/></Size>
+          <FontHeight val="12"/>
           <Anchors><Anchor point="TOPLEFT"/></Anchors>
         </FontString>
         <FontString name="WrapFlagged" text="flagged" font="Fonts\FRIZQT__.TTF"
                     nonspacewrap="true" maxLines="3">
           <Size><AbsDimension x="100" y="12"/></Size>
+          <FontHeight val="12"/>
           <Anchors><Anchor point="TOPRIGHT"/></Anchors>
         </FontString>
         <FontString name="WrapOff" text="off" font="Fonts\FRIZQT__.TTF" nonspacewrap="false"
                     maxLines="1x">
           <Size><AbsDimension x="100" y="12"/></Size>
+          <FontHeight val="12"/>
           <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
         </FontString>
       </Layer></Layers>

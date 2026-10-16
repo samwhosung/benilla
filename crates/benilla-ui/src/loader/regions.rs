@@ -198,6 +198,15 @@ impl Loader<'_> {
         }
     }
 
+    /// `"<kind> <name>: Missing font height in <tag> element"` at severity 1 into the document's
+    /// record: `0x878e10` for a FontString (`0x77117d`), `0x87a4f0` for a Font or a SimpleHTML
+    /// element font (`0x783d9a`), with the object's name or `<unnamed>` (`0x84c7f0`) and the node's tag.
+    pub(super) fn report_missing_font_height(&mut self, kind: &str, name: &str, tag: &str) {
+        let line = format!("{kind} {name}: Missing font height in {tag} element");
+        self.report.status.report(status::WARNING, line.clone());
+        self.report.warnings.push(line);
+    }
+
     /// A FontString's `nonspacewrap` and `maxLines` (`0x77103f`-`0x7710cd`), which the loader reads
     /// ahead of the font attributes, so a Button's `<NormalText>` takes them too. A boolean goes
     /// through the string-to-bool `0x6f1b30`; `maxLines` through `0x64ade0`, its leading digits
@@ -450,17 +459,31 @@ impl Loader<'_> {
                 }
             }
             Some(path) => {
-                // Applied directly, not through the Lua `SetFont`, which requires a height
-                // (`0x87c69c`) where XML may omit it.
+                // A file needs a first `<FontHeight>` above 0 (`0x77112f`-`0x771154`); else the
+                // load reports `0x878e10` (`0x77117d`) and returns (`0x771191`), before `outline=`
+                // and with the string's font unset.
                 let height = children_named(region, "FontHeight")
                     .next()
-                    .and_then(abs_value);
+                    .and_then(abs_value)
+                    .filter(|h| *h > 0.0);
+                let Some(height) = height else {
+                    let name = wrapper
+                        .call_method::<Option<String>>("GetName", ())
+                        .ok()
+                        .flatten();
+                    self.report_missing_font_height(
+                        "FontString",
+                        name.as_deref().unwrap_or("<unnamed>"),
+                        &region.tag,
+                    );
+                    return;
+                };
                 let outline = region.attr("outline").map(str::to_string);
                 if let Err(e) = crate::script::apply_font_parts(
                     self.lua,
                     wrapper,
                     Some(path.to_string()),
-                    height,
+                    Some(height),
                     outline,
                 ) {
                     self.report.fault(format!("{dbg}: region font attrs: {e}"));

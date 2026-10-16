@@ -2202,6 +2202,53 @@ mod loader_tests {
         assert_eq!(s.eval::<i64>("return Gone:GetNumRegions()").unwrap(), 0);
     }
 
+    /// A `<SimpleHTML>` element font is loaded by `CSimpleFont::LoadXML` (`0x78a26e` → `0x783c30`),
+    /// whose file needs a height above 0 (`0x783d6d`-`0x783d78`): else it reports
+    /// `Font %s: Missing font height in %s element` (`0x87a4f0`) and returns (`0x783dae`) before
+    /// the element's `<Color>`, so that element keeps no font and its default colour.
+    #[test]
+    fn a_simplehtml_element_font_file_without_a_height_is_refused() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <SimpleHTML name="Page">
+                    <FontString font="Fonts\MORPHEUS.TTF"><Color r="1" g="0" b="0"/></FontString>
+                    <FontStringHeader1 font="Fonts\SKURRI.TTF">
+                        <FontHeight val="24"/><Color r="0" g="1" b="0"/>
+                    </FontStringHeader1>
+                </SimpleHTML>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(
+            report.warnings,
+            ["Font <unnamed>: Missing font height in FontString element"]
+        );
+        assert_eq!(
+            s.eval::<Option<String>>("return (Page:GetFont())").unwrap(),
+            None
+        );
+        assert_eq!(
+            s.eval::<(String, f32)>("local p, h = Page:GetFont(\"H1\"); return p, h")
+                .unwrap(),
+            ("Fonts\\SKURRI.TTF".to_string(), 24.0)
+        );
+        let green = s
+            .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"H1\")")
+            .unwrap();
+        assert_eq!(green, (0.0, 1.0, 0.0, 1.0));
+        let p = s
+            .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor()")
+            .unwrap();
+        assert_ne!(
+            p,
+            (1.0, 0.0, 0.0, 1.0),
+            "the refused element's Color is not read"
+        );
+    }
+
     /// A direct-child `<FontString>` declares `elementFont[0]` and `<FontStringHeader1>`
     /// `elementFont[1]`, neither a region, and `hyperlinkFormat=` lands at `+0x360`; stock
     /// `ItemTextFrame.xml:214` uses the first.

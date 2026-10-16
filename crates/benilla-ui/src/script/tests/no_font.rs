@@ -230,3 +230,84 @@ fn a_button_label_takes_the_buttons_font_and_its_own_font_attribute() {
     s.run(r#"TabBtn:SetText("Tab")"#).unwrap();
     assert!(draws(&mut s, "Tab"));
 }
+
+/// An XML `font=` that names a file needs a first `<FontHeight>` above 0 (`0x77112f`-`0x771154`).
+/// Else the loader reports `FontString %s: Missing font height in %s element` (`0x878e10`) at
+/// severity 1 and returns (`0x771191`) before it sets the font, so the string has none.
+#[test]
+fn an_xml_font_file_without_a_positive_height_leaves_the_string_fontless() {
+    let s = vm();
+    let doc = crate::framexml::parse(
+        r#"<Ui><Frame name="XmlHost" setAllPoints="true"><Layers><Layer level="ARTWORK">
+            <FontString name="NoHeight" font="Fonts\FRIZQT__.TTF" outline="NORMAL" text="a"/>
+            <FontString name="ZeroHeight" font="Fonts\FRIZQT__.TTF">
+                <FontHeight><AbsValue val="0"/></FontHeight>
+            </FontString>
+            <FontString name="NegHeight" font="Fonts\FRIZQT__.TTF">
+                <FontHeight><AbsValue val="-4"/></FontHeight>
+            </FontString>
+            <FontString font="Fonts\FRIZQT__.TTF"/>
+            <FontString name="Sized" font="Fonts\FRIZQT__.TTF" outline="NORMAL">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </FontString>
+        </Layer></Layers></Frame></Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    for name in ["NoHeight", "ZeroHeight", "NegHeight", "<unnamed>"] {
+        let line = format!("FontString {name}: Missing font height in FontString element");
+        assert!(
+            report.warnings.contains(&line),
+            "{line}: {:?}",
+            report.warnings
+        );
+        assert!(
+            report.status.lines().contains(&line),
+            "{line} in the status"
+        );
+    }
+    assert_eq!(report.warnings.len(), 4, "{:?}", report.warnings);
+
+    for name in ["NoHeight", "ZeroHeight", "NegHeight"] {
+        assert!(
+            s.eval::<Option<String>>(&format!("return (({name}):GetFont())"))
+                .unwrap()
+                .is_none(),
+            "{name} has no font"
+        );
+        let err = s
+            .run(&format!(r#"{name}:SetText("x")"#))
+            .expect_err("a string with no font raises");
+        assert!(
+            err.to_string()
+                .contains(&format!("{name}:SetText(): Font not set")),
+            "{err}"
+        );
+    }
+
+    // A positive height still sets the font, outline and all.
+    assert_eq!(
+        s.eval::<(String, f32, String)>("return Sized:GetFont()")
+            .unwrap(),
+        ("Fonts\\FRIZQT__.TTF".to_string(), 12.0, "".to_string())
+    );
+    s.run(r#"Sized:SetText("ok")"#).unwrap();
+}
+
+/// A `<ButtonText>` is the same loader (`0x7789d0` → `0x770f40`), and names itself by its tag.
+#[test]
+fn a_button_text_font_file_without_a_height_reports_and_stays_fontless() {
+    let s = vm();
+    let doc = crate::framexml::parse(
+        r#"<Ui><Button name="Plain"><ButtonText name="PlainText" font="Fonts\FRIZQT__.TTF"/></Button></Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(
+        report.warnings,
+        ["FontString PlainText: Missing font height in ButtonText element"]
+    );
+    assert!(s.run(r#"PlainText:SetText("x")"#).is_err());
+}
