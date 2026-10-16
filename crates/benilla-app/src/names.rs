@@ -118,6 +118,9 @@ impl NameKey {
     /// one, the unit is not streamed: an unstreamed creature takes its entry from guid bits
     /// 24-47 (`guid::entry`), and a `HIGHGUID_PET` guid's slot is taken as the pet number, right
     /// only for a permanent pet.
+    ///
+    /// Deviation: the combat-log namer keys an unstreamed creature by guid bits 32-47
+    /// (`0x6265c4`), which on the servers in use (entry at bits 24-47) names it wrongly.
     fn of(guid_val: u64, unit: Option<&ObjectFields>) -> Option<Self> {
         if guid::is_player(guid_val) {
             return Some(Self::Player(guid_val));
