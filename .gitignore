@@ -14,9 +14,10 @@
 
 # --- benilla's own local state ---
 # The one folder benilla persists into: config.toml, macros/, bindings/, saved-variables.lua,
-# camera/. A dev build resolves it to the main checkout (so linked worktrees share one); a
-# release build puts it beside the binary — which is why it is not called `benilla/`: that name
-# collides with the binary of the same name. Machine-local by definition — `crate::local_state`
+# camera/. A dev build resolves it to the main checkout (so linked worktrees share one, bar a
+# worktree with a .probe-identity, which keeps its own); a release build puts it beside the
+# binary — which is why it is not called `benilla/`: that name collides with the binary of the
+# same name. Machine-local by definition — `crate::local_state`
 # is the only thing in the tree that may write it.
 /benilla-config
 

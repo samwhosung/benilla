@@ -8,7 +8,9 @@
 //!    under the system temp folder, so a probe neither reads the player's settings nor writes back
 //!    over them.
 //! 3. `<project folder>/benilla-config/`, dev builds only ([`benilla_formats::project_folder`], the
-//!    launcher's): a shipped binary must not carry the build machine's source tree.
+//!    launcher's): a shipped binary must not carry the build machine's source tree. A linked
+//!    worktree resolves to its primary checkout's folder, unless it declares its own probe account
+//!    ([`shared_root`]).
 //! 4. `<exe dir>/benilla-config/`.
 //!
 //! With `$WOW_CAPTURE` set every path resolves to `None`: a capture neither reads nor writes
@@ -77,11 +79,13 @@ fn dev_project_root() -> Option<PathBuf> {
 }
 
 /// `here`, or for a linked worktree its primary checkout, whichever worktree built the binary, so
-/// every worktree shares one settings folder. Anything unexpected keeps `here`.
+/// a developer's worktrees share one settings folder. A worktree that declares an account of its
+/// own in `.probe-identity` is a probe's checkout and keeps its own folder, so no run from it,
+/// attended or not, reads or writes the player's settings. Anything unexpected keeps `here`.
 fn shared_root(here: &Path) -> PathBuf {
     let dot_git = here.join(".git");
     // A linked worktree: `.git` is a file pointing at `<primary>/.git/worktrees/<name>`.
-    if dot_git.is_file() {
+    if dot_git.is_file() && !here.join(".probe-identity").exists() {
         if let Some(gitdir) = std::fs::read_to_string(&dot_git).ok().and_then(|s| {
             s.trim()
                 .strip_prefix("gitdir:")
@@ -717,7 +721,7 @@ mod tests {
     }
 
     /// A player build resolves beside the binary; a dev build to the primary checkout, even from a
-    /// linked worktree (whose `.git` is a file).
+    /// linked worktree (whose `.git` is a file), unless that worktree declares a probe account.
     #[test]
     fn the_state_folder_lands_where_the_build_says() {
         let _l = ENV_LOCK
@@ -739,7 +743,7 @@ mod tests {
             return;
         };
 
-        if here.join(".git").is_file() {
+        if here.join(".git").is_file() && !here.join(".probe-identity").exists() {
             assert_ne!(
                 h,
                 here.join(STATE_DIR),
@@ -756,7 +760,8 @@ mod tests {
     }
 
     /// A project folder that is a linked worktree keeps its state in the primary checkout, so every
-    /// worktree shares one; any other folder, a crate on top of benilla's included, keeps its own.
+    /// worktree shares one, unless it declares a probe account; any other folder, a crate on top of
+    /// benilla's included, keeps its own.
     #[test]
     fn the_state_root_is_the_folder_or_its_primary_checkout() {
         let tmp = std::env::temp_dir().join(format!("benilla-root-{}", std::process::id()));
@@ -769,6 +774,19 @@ mod tests {
         std::fs::write(slot.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
         assert_eq!(shared_root(&slot), primary);
         assert_eq!(shared_root(&primary), primary);
+        // A worktree that logs in as its own account never shares the player's settings.
+        std::fs::write(
+            slot.join(".probe-identity"),
+            "WOW_USER=probe3\nWOW_PASS=unused\nWOW_CHAR=Probethree\n",
+        )
+        .unwrap();
+        assert_eq!(shared_root(&slot), slot);
+        std::fs::write(primary.join(".probe-identity"), "WOW_USER=probe0\n").unwrap();
+        assert_eq!(
+            shared_root(&primary),
+            primary,
+            "the primary keeps its own either way"
+        );
         let hello_mod = tmp.join("hello-mod");
         std::fs::create_dir_all(hello_mod.join(".git")).unwrap();
         assert_eq!(shared_root(&hello_mod), hello_mod);
