@@ -5,6 +5,10 @@
 //! - A zone id change fires `ZONE_CHANGED_NEW_AREA` alone; else a text change fires
 //!   `ZONE_CHANGED_INDOORS` or `ZONE_CHANGED` by the indoor bit. The first world-enter is a zone
 //!   id change from the zeroed cache.
+//! - The leaf is the area query's answer (`0x6703a0`): on a map whose WDT holds one global WMO,
+//!   `Map.dbc` field 19 for every entity; elsewhere the down-ray's WMO row, else the terrain. The
+//!   indoor naming below still applies on such a map, as `0x67e510` takes the indoor arm by the
+//!   indoor bit alone.
 //! - The zone is the leaf's single-hop parent (AreaTable field 2, itself when 0).
 //! - The indoor bit is the faces-only down-ray (`0x6a87f0`): the surface below is a WMO face whose
 //!   group lacks MOGP `0x8` EXTERIOR.

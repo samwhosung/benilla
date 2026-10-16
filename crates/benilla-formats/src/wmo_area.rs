@@ -25,8 +25,9 @@ pub struct WmoArea {
     pub zone_music: u32,
     /// `ZoneIntroMusicTable.dbc` id, the entry fanfare.
     pub intro_sound: u32,
-    /// The `AreaTable.dbc` area this group counts as (0 = none), read by the area resolver
-    /// `0x670250` when the down-ray keeps the WMO over the terrain: Ironforge reports its own area.
+    /// The `AreaTable.dbc` area this group counts as (0 = none), read by the area query
+    /// `0x6703a0` (`0x670437`) when the down-ray keeps the WMO over the terrain: Ironforge reports
+    /// its own area.
     pub area_table_id: u32,
     /// The interior's display name in the locale's column, empty for an unnamed row.
     pub name: String,
@@ -41,6 +42,20 @@ pub struct WmoAreaCatalog {
 }
 
 impl WmoAreaCatalog {
+    /// A catalog of `(WMOID, NameSetID, WMOGroupID, row)` rows, `u32::MAX` the whole-WMO row, for
+    /// tests that run without an install.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, u32, u32, WmoArea)>) -> Self {
+        let (mut groups, mut defaults) = (HashMap::new(), HashMap::new());
+        for (wmo_id, name_set, group, area) in rows {
+            if group == u32::MAX {
+                defaults.insert((wmo_id, name_set), area);
+            } else {
+                groups.insert((wmo_id, name_set, group), area);
+            }
+        }
+        Self { groups, defaults }
+    }
+
     /// The hit group's own row by exact key, the zone-text chain's second query (`0x69d8f0`, one
     /// bsearch at `0x7ccd30` with no name-set retry, default fallback or overlay): its name, if
     /// any, refills the subzone slot.

@@ -10,7 +10,8 @@
 //!   counts only within the 0.1 yd snap of its plane (`0x7c22b0`), and a crossing within about
 //!   1e-4 of the nearest face hit still wins (`0x80c4f4`).
 //! - The terrain race: the WMO hit is dropped only when terrain on the same segment is strictly
-//!   nearer (`0x6822a2`; `GetAreaID` `0x670250` arbitrates alike at `0x670345`). Terrain above the
+//!   nearer (`0x6822a2`; the unreached point query `0x670250` arbitrates alike at `0x670345`, and
+//!   the live entity query `0x6703a0` attaches by the same ray, `0x6a8a20`). Terrain above the
 //!   eye is off the segment, so a tunnel under a hill stays inside.
 //!
 //! The verdict is the in-group plus, for a portal win, the across-group: the containing-group set

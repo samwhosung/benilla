@@ -28,6 +28,9 @@ pub struct MapCatalog {
     instance_types: HashMap<u32, u32>,
     /// The battleground columns of every row, since the client resolves map 0's too.
     battleground: HashMap<u32, MapBattlegroundColumns>,
+    /// Field 19 (`+0x4c`), the `AreaTable` id of a map built as one WMO, of every row; 0 on the
+    /// ordinary maps (`0x6703d1`).
+    area_table_ids: HashMap<u32, u32>,
 }
 
 /// The `Map.dbc` columns the battleground verbs read by row offset (`GetBattlefieldInfo`
@@ -71,6 +74,23 @@ impl MapBattlegroundColumns {
 }
 
 impl MapCatalog {
+    /// A catalog of `(id, directory, AreaTableID)` rows, for tests that run without an install.
+    pub fn from_rows<'a>(rows: impl IntoIterator<Item = (u32, &'a str, u32)>) -> Self {
+        let mut c = Self {
+            dirs: HashMap::new(),
+            names: HashMap::new(),
+            loading_screens: HashMap::new(),
+            instance_types: HashMap::new(),
+            battleground: HashMap::new(),
+            area_table_ids: HashMap::new(),
+        };
+        for (id, dir, area) in rows {
+            c.dirs.insert(id, dir.to_string());
+            c.area_table_ids.insert(id, area);
+        }
+        c
+    }
+
     /// The MPQ directory name (`Directory`) for `map_id`, as `MapTiles::load(chain, dir)` takes it.
     pub fn directory(&self, map_id: u32) -> Option<&str> {
         self.dirs.get(&map_id).map(String::as_str)
@@ -102,6 +122,13 @@ impl MapCatalog {
         self.battleground.get(&map_id)
     }
 
+    /// Field 19 (`+0x4c`) for `map_id`: the area the whole map answers when its WDT holds one
+    /// global WMO (`0x6703a0` reads it at `0x6703d1`, and a 0 fails the query). `None` only for an
+    /// id with no row; the ordinary maps carry 0.
+    pub fn area_table_id(&self, map_id: u32) -> Option<u32> {
+        self.area_table_ids.get(&map_id).copied()
+    }
+
     pub fn len(&self) -> usize {
         self.dirs.len()
     }
@@ -121,6 +148,7 @@ const MAX_PLAYERS_FIELD: usize = 15;
 const FIELD_16: usize = 16;
 const FIELD_17: usize = 17;
 const FIELD_18: usize = 18;
+const AREA_TABLE_FIELD: usize = 19;
 const DESCRIPTION_0_FIELD: usize = 20;
 const DESCRIPTION_1_FIELD: usize = 29;
 const BRACKET_SPAN_FIELD: usize = 39;
@@ -148,6 +176,7 @@ fn map_schema() -> Schema {
             LOADING_SCREEN_FIELD => {
                 s.add_field(SchemaField::new("LoadingScreenID", FieldType::UInt32))
             }
+            AREA_TABLE_FIELD => s.add_field(SchemaField::new("AreaTableID", FieldType::UInt32)),
             _ => s.add_field(SchemaField::new(format!("_pad{i}"), FieldType::UInt32)),
         }
     }
@@ -166,6 +195,7 @@ pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
     let mut loading_screens = HashMap::new();
     let mut instance_types = HashMap::with_capacity(rs.records().len());
     let mut battleground = HashMap::with_capacity(rs.records().len());
+    let mut area_table_ids = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
         battleground.insert(
@@ -186,6 +216,7 @@ pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
                 minimap_icon_scale: f32_at(r, MINIMAP_ICON_SCALE_FIELD).unwrap_or(1.0),
             },
         );
+        area_table_ids.insert(id, u32_at(r, AREA_TABLE_FIELD).unwrap_or(0));
         if let Some(dir) = str_at(&rs, r, 1) {
             dirs.insert(id, dir);
         }
@@ -206,6 +237,7 @@ pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
         loading_screens,
         instance_types,
         battleground,
+        area_table_ids,
     })
 }
 
@@ -254,5 +286,33 @@ mod tests {
             catalog.battleground(0).is_some(),
             "every row carries the columns — the client resolves map 0's when nothing was listed"
         );
+    }
+
+    /// Field 19 (`+0x4c`) is a one-object map's whole area (`0x6703d1`); a continent carries 0.
+    /// The query reads it only where the WDT sets `MPHD` bit 0, and Zul'Gurub and Blackwing Lair
+    /// carry the field without the flag.
+    #[test]
+    fn field_19_is_the_area_of_a_map_built_as_one_object() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let catalog = load_map_catalog(&mut chain).expect("Map.dbc");
+        assert_eq!(catalog.area_table_id(43), Some(718), "Wailing Caverns");
+        assert_eq!(catalog.area_table_id(230), Some(1584), "Blackrock Depths");
+        assert_eq!(catalog.area_table_id(0), Some(0), "Eastern Kingdoms");
+        assert_eq!(catalog.area_table_id(1), Some(0), "Kalimdor");
+        assert_eq!(catalog.area_table_id(9999), None);
+        let mut flag = |map: u32| {
+            let dir = catalog.directory(map).expect("row").to_string();
+            let bytes = chain
+                .read_file(&format!("World\\Maps\\{dir}\\{dir}.wdt"))
+                .expect("wdt");
+            crate::WdtReader::new(std::io::Cursor::new(bytes), crate::WowVersion::Classic)
+                .read()
+                .expect("parses")
+                .is_one_object()
+        };
+        assert!(flag(43), "Wailing Caverns");
+        assert!(!flag(0) && !flag(1));
+        assert!(!flag(309), "Zul'Gurub has a field 19 and terrain");
     }
 }
