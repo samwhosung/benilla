@@ -43,7 +43,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### area
 
-- The indoor dedup keys `(WMOID, MOGP uniqueID)`, not the client's raw per-WMO group index, because the raw index can alias across adjacent buildings. ([`src/area.rs:26`](../crates/benilla-app/src/area.rs#L26))
+- The indoor dedup keys `(WMOID, MOGP uniqueID)`, not the client's raw per-WMO group index, because the raw index can alias across adjacent buildings. ([`src/area.rs:30`](../crates/benilla-app/src/area.rs#L30))
 
 #### assets/ui
 
@@ -798,7 +798,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### terrain_stream
 
-- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:617`](../crates/benilla-world/src/terrain_stream.rs#L617))
+- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:630`](../crates/benilla-world/src/terrain_stream.rs#L630))
 - Tagged per submesh, where the reference tests the whole object, because a placement has no root entity to carry the bound. ([`src/terrain_stream/spawn/mod.rs:229`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L229))
 - The box, where the reference tests its circumsphere (`0x683700` → `0x682ef0` → `0x686b80` on the `[rec+0x5c]` centre and `[rec+0x68]` radius × scale), because Bevy culls by box and the box is tighter. ([`src/terrain_stream/spawn/mod.rs:896`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L896))
 - Whole tiles, because benilla loads, spawns and releases ADT tiles, not chunks: a tile is wanted when any of its chunks lies in the outer window, so the resident edge is a tile line where the reference's is a chunk line. ([`src/terrain_stream/window.rs:7`](../crates/benilla-world/src/terrain_stream/window.rs#L7))
@@ -827,7 +827,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### wmo_portal
 
-- When legs A and B both miss and no terrain lies at or below the eye, Leg C runs the same race over the camera-only faces (DETAIL without NOCAMCOLLIDE), because the 1.12 client blanks the whole building from a pocket floored only with DETAIL faces, as at the Deadmines entrance. ([`src/wmo_portal/seed.rs:20`](../crates/benilla-world/src/wmo_portal/seed.rs#L20))
+- When legs A and B both miss and no terrain lies at or below the eye, Leg C runs the same race over the camera-only faces (DETAIL without NOCAMCOLLIDE), because the 1.12 client blanks the whole building from a pocket floored only with DETAIL faces, as at the Deadmines entrance. ([`src/wmo_portal/seed.rs:21`](../crates/benilla-world/src/wmo_portal/seed.rs#L21))
 
 #### zfill
 
