@@ -226,6 +226,10 @@ pub struct M2Model {
     pub texture_unit_lookup: Vec<u16>,
     /// The texture transforms, reached through [`Self::texture_transform_lookup`].
     pub texture_transforms: Vec<M2TextureTransform>,
+    /// The texture combiner presets (header `0x144`, u16), read in version 0x101 alone: there a
+    /// stage `k` combines by entry `k`, whatever its batch (`0x70b7c2`); see
+    /// [`Self::stage_combine`]. Empty in version 0x100.
+    pub texture_combiners: Vec<u16>,
     /// The texture-animation lookup (header `0xac`, u16): `texture_transform_combo_index`
     /// (`0x70b897`) to [`Self::texture_transforms`], `0xffff` for none.
     pub texture_transform_lookup: Vec<u16>,
@@ -266,6 +270,26 @@ impl M2Model {
     pub fn stage_is_env_mapped(&self, batch: &crate::SkinBatch, stage: u16) -> bool {
         let idx = batch.texture_coord_combo_index as usize + stage as usize;
         self.texture_unit_lookup.get(idx).is_none_or(|&v| v > 2)
+    }
+
+    /// The combine preset (0 to 5, gx render states `0x1f + k`) stage `stage` of `batch` binds
+    /// (`0x70b7bf`-`0x70b7e1`): version 0x101 reads [`Self::texture_combiners`] at the stage, every
+    /// other version the batch material's blend through `0x811f8c` = (0, 1, 1, 1, 1, 5, 5). Where
+    /// the reference would read past either table, preset 1, the gx stage default (`0x593e60`).
+    pub fn stage_combine(&self, batch: &crate::SkinBatch, stage: u16) -> u8 {
+        const BLEND_PRESET: [u8; 7] = [0, 1, 1, 1, 1, 5, 5];
+        let preset = if self.version == 0x101 {
+            self.texture_combiners.get(stage as usize).copied()
+        } else {
+            self.materials
+                .get(batch.material_index as usize)
+                .and_then(|m| BLEND_PRESET.get(m.blend_mode.bits() as usize))
+                .map(|&p| u16::from(p))
+        };
+        preset
+            .and_then(|p| u8::try_from(p).ok())
+            .filter(|&p| p <= 5)
+            .unwrap_or(1)
     }
 
     /// Whether the model authors `AnimationData.dbc` id `anim_id`: the reference's `0x711960`, a

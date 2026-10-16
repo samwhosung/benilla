@@ -442,6 +442,11 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
             transparency_tracks,
             transparency_lookup,
             texture_unit_lookup,
+            texture_combiners: if version == 0x101 {
+                parse_texture_combiners(b)
+            } else {
+                Vec::new()
+            },
             texture_transforms,
             texture_transform_lookup,
             global_sequences,
@@ -519,6 +524,24 @@ pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
 /// Parse the MD20 CameraLookup (header `0x12c`, `u16` each); see [`M2Model::camera_lookup`].
 pub fn parse_camera_lookup(b: &[u8]) -> Vec<u16> {
     let (Some(count), Some(ofs)) = (b.u32_at(0x12c), b.u32_at(0x130)) else {
+        return Vec::new();
+    };
+    let avail = b.len().saturating_sub(ofs as usize);
+    let mut out = Vec::with_capacity(capped(count as usize, 2, avail));
+    for i in 0..count as usize {
+        let Some(v) = b.u16_at(ofs as usize + i * 2) else {
+            break;
+        };
+        out.push(v);
+    }
+    out
+}
+
+/// Parse the version-0x101 texture combiner presets (header `0x144`, `u16` each), the array the
+/// reference's fixup takes as the 0x101 header's tail (`0x71d284`); see
+/// [`M2Model::texture_combiners`]. A short header or table yields what fits.
+pub fn parse_texture_combiners(b: &[u8]) -> Vec<u16> {
+    let (Some(count), Some(ofs)) = (b.u32_at(0x144), b.u32_at(0x148)) else {
         return Vec::new();
     };
     let avail = b.len().saturating_sub(ofs as usize);

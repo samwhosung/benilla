@@ -170,6 +170,68 @@ fn transparency_lookup_reads_0xa4_not_the_texture_unit_lookup_at_0x9c() {
     assert_eq!(m.texture_transform_lookup, vec![0xffff]);
 }
 
+/// A batch on material 0 for [`M2Model::stage_combine`]; only `material_index` is read.
+fn combine_batch() -> SkinBatch {
+    SkinBatch {
+        flags: 0,
+        shader_id: 0,
+        skin_section_index: 0,
+        texture_combo_index: 0,
+        texture_coord_combo_index: 0,
+        material_index: 0,
+        color_index: 0xffff,
+        weight_combo_index: 0,
+        texture_count: 2,
+        texture_transform_combo_index: 0,
+    }
+}
+
+/// Version 0x101 combines stage `k` by the header's `0x144` array at `k` (`0x70b7cb`), the five
+/// stock 0x101 models' `[1, 1, 1, 1, 1]`; version 0x100 by the blend through `0x811f8c`.
+#[test]
+fn stage_combine_reads_the_0x101_array_by_stage_and_0x100_the_blend_table() {
+    // A 0x101 header reaches 0x154; material 0 is blend 0, which 0x100 would map to preset 0.
+    let mut b = header();
+    b.resize(0x154, 0);
+    b[4..8].copy_from_slice(&257u32.to_le_bytes());
+    let mat_ofs = b.len() as u32;
+    b.extend(0u16.to_le_bytes()); // flags
+    b.extend(0u16.to_le_bytes()); // blend 0
+    set_arr(&mut b, 0x84, 1, mat_ofs);
+    let comb_ofs = b.len() as u32;
+    for v in [4u16, 3] {
+        b.extend(v.to_le_bytes());
+    }
+    set_arr(&mut b, 0x144, 2, comb_ofs);
+    let fmt = parse(&b).expect("a v257 header with combiners parses");
+    let m = fmt.model();
+    assert_eq!(m.texture_combiners, vec![4, 3]);
+    assert_eq!(
+        m.stage_combine(&combine_batch(), 0),
+        4,
+        "entry 0, not the blend's 0"
+    );
+    assert_eq!(m.stage_combine(&combine_batch(), 1), 3, "entry 1");
+    assert_eq!(
+        m.stage_combine(&combine_batch(), 2),
+        1,
+        "past the array: the gx default"
+    );
+
+    // The same bytes as version 0x100: the array is not the header's, and blend 0 is preset 0.
+    b[4..8].copy_from_slice(&256u32.to_le_bytes());
+    let fmt = parse(&b).expect("the v256 twin parses");
+    let m = fmt.model();
+    assert!(m.texture_combiners.is_empty());
+    assert_eq!(m.stage_combine(&combine_batch(), 1), 0);
+    // Blend 5 (Mod) is preset 5 on every stage.
+    let blend_at = mat_ofs as usize + 2;
+    b[blend_at..blend_at + 2].copy_from_slice(&5u16.to_le_bytes());
+    let fmt = parse(&b).expect("the Mod twin parses");
+    assert_eq!(fmt.model().stage_combine(&combine_batch(), 0), 5);
+    assert_eq!(fmt.model().stage_combine(&combine_batch(), 1), 5);
+}
+
 #[test]
 fn playable_animation_lookup_decodes_low16_high16() {
     let mut b = header();
