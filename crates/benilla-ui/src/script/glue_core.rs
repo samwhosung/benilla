@@ -594,6 +594,12 @@ impl super::UiScript {
         self.model_ref().glue.screen.clone()
     }
 
+    /// Seed the current glue screen's name. The buffer is the client's (`[0xb41478]`), which a
+    /// glue rebuild (`0x46a7b0`) leaves as it was, so the host carries it into the new VM.
+    pub fn set_glue_screen_name(&mut self, name: &str) {
+        self.model_mut().glue.screen = name.to_string();
+    }
+
     /// A string global's text, `GetGlobalString`'s answer (`0x703bf0` with no gender and no
     /// ordinal takes `0x704350`): the global's string (a number stringified), else the empty
     /// string (`0x882748`).

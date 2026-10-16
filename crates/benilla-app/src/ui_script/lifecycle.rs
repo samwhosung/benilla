@@ -14,17 +14,17 @@ use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboar
 use crate::ui_script::addons;
 
 pub(crate) fn setup_script(world: &mut World) {
-    install_glue_side_vm(world, super::glue::GlueScreen::Login);
+    install_glue_side_vm(world, super::glue::GlueScreen::Login.key());
 }
 
 /// Install the VM the world holds outside the world: the stock glue screens' under
-/// [`super::glue::GlueStock`], put up on `screen`, else a boot VM.
+/// [`super::glue::GlueStock`], put up on the screen named `screen`, else a boot VM.
 ///
 /// The IO thread's roster policy follows the VM that is up: the screen asks for its roster only
 /// when the stock glue VM was built and its character select screen loaded, so a run whose stock VM failed to build (logged as an error
 /// by [`new_vm`]) falls back to the park's own enumeration instead of waiting on a screen that
 /// never asks.
-fn install_glue_side_vm(world: &mut World, screen: super::glue::GlueScreen) {
+pub(super) fn install_glue_side_vm(world: &mut World, screen: &str) {
     let stock_asked = world
         .get_resource::<super::glue::GlueStock>()
         .is_some_and(|s| s.0);
@@ -68,10 +68,12 @@ pub(crate) fn strings_vm(world: &mut World) -> Option<UiScript> {
 /// builder `0x46a7b0` then `SET_GLUE_SCREEN` (`0x402b65` at startup, `0x402090` back from the
 /// world). It holds what the glue state holds and nothing of the boot VM's: no `GlobalStrings.lua`,
 /// no emote tokens.
-fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
+fn install_glue_vm(world: &mut World, screen: &str) -> bool {
     let Some(mut script) = new_vm(world, UiScript::new_glue) else {
         return false;
     };
+    // The build's size and aspect, and its clear of a pending rebuild (`0x46a7e0`, `0x46a81c`).
+    super::glue::glue_built(world);
     seat_raster_seam_for_load(world, &mut script);
     // The CVar table before the load and the first screen, as the in-game build seeds its own:
     // this VM is born before `cvars::sync_cvars`'s per-VM seed, and the character screen's
@@ -86,11 +88,14 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
     start_server_alert(world, &script);
     // What the glue carries across its rebuild, in place before the screen's `OnShow` reads it.
     super::glue_mgr::seat_glue_build(world, &mut script);
-    super::glue::set_glue_screen(&mut script, screen);
+    // `SetCurrentScreen`'s buffer is the client's (`[0xb41478]`) and outlives the Lua state: a
+    // rebuild signals what it holds (`0x46b9a2`), and the screen's handler writes the same name.
+    script.set_glue_screen_name(screen);
+    super::glue::signal_glue_screen(&mut script, screen);
     info!(
         "ui_script: stock glue up in {:.0} ms on \"{}\" ({} load failure(s))",
         start.elapsed().as_secs_f32() * 1000.0,
-        screen.key(),
+        screen,
         failures.len()
     );
     // Up means the screen that asks for the roster exists: the stock files loaded far enough to
@@ -837,7 +842,7 @@ pub(crate) fn end_ui_session(world: &mut World) {
         Some(crate::char_select::ClientState::CharSelect) => super::glue::GlueScreen::CharSelect,
         _ => super::glue::GlueScreen::Login,
     };
-    install_glue_side_vm(world, screen);
+    install_glue_side_vm(world, screen.key());
 }
 
 /// [`end_ui_session`] up to the new VM: the shutdown tail, the folds and the host values reset.
@@ -909,7 +914,7 @@ pub(crate) struct ReloadUiPending(pub(crate) bool);
 /// cascade itself (`0x490168`), firing the `PLAYER_LOGIN` it armed and `PLAYER_ENTERING_WORLD`;
 /// ours fire from [`crate::ui_unit`]'s feed on the new VM's first `Update`, once it has re-seated
 /// the player. In-world only, as the reference's gate (`0x494a50(0xa)`) is; elsewhere the request
-/// is dropped.
+/// is dropped, and the glue's own rebuild is [`super::glue::run_pending_glue_rebuild`]'s.
 pub(crate) fn run_pending_reload(world: &mut World) {
     if !std::mem::take(&mut world.resource_mut::<ReloadUiPending>().0) {
         return;

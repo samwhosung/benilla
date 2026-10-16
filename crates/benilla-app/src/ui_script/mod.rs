@@ -279,8 +279,13 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<UiSca
     }
 }
 
-/// `/console reloadUI`: the same deferred rebuild `ReloadUI()` and `/reload` queue.
+/// `/console reloadUI` (`0x4035f0`): a glue rebuild asked for whatever the state
+/// ([`glue::run_pending_glue_rebuild`] spends it), then the same deferred rebuild `ReloadUI()` and
+/// `/reload` queue, which the world alone honours.
 fn console_reload_ui(world: &mut World, _args: &str) -> Vec<String> {
+    if let Some(mut rebuild) = world.get_resource_mut::<glue::GlueRebuild>() {
+        rebuild.request();
+    }
     match world.get_non_send_resource_mut::<UiScript>() {
         Some(mut script) => {
             script.queue_session_request(benilla_ui::script::SessionRequest::ReloadUi);
@@ -345,10 +350,21 @@ impl Plugin for UiScriptPlugin {
             // A queued `ReloadUI()` runs in `PreUpdate`, a frame after its drain (the reference's
             // deferral, `0x495590`) and before every `Update` seed or feed.
             .init_resource::<ReloadUiPending>()
+            .init_resource::<glue::GlueRebuild>()
             // Both are exclusive edges on the VM and must not interleave.
             .add_systems(
                 PreUpdate,
-                (run_pending_reload, lifecycle::run_pending_entry_load).chain(),
+                (
+                    run_pending_reload,
+                    // The glue's `ConsoleExec` lines the last frame left and its top's size
+                    // callback, then the rebuild either asked for.
+                    (glue::drain_glue_console, glue::watch_glue_aspect)
+                        .chain()
+                        .run_if(glue::glue_ui_up),
+                    glue::run_pending_glue_rebuild,
+                    lifecycle::run_pending_entry_load,
+                )
+                    .chain(),
             )
             // The three UI phases in order: feeds after the net drain, the tick, then the paint.
             .configure_sets(
