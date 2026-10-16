@@ -148,6 +148,13 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
             EditUnit::Line | EditUnit::Row => {}
         },
         EditAction::SelectAll => highlight_text(lua, h, 0, -1),
+        EditAction::DeleteToEdge { back } => {
+            if with_eb(lua, h, |eb| eb.delete_to_edge(back)) == Some(true) {
+                sync_text_region(lua, h);
+            }
+        }
+        // In any box, a multi-line one included (`0x77d030`, `0x77cfd0`).
+        EditAction::History { older } => history_step_key(lua, h, older),
     }
     true
 }
@@ -336,8 +343,8 @@ fn set_text(lua: &Lua, h: FrameHandle, s: &str) {
     }
 }
 
-/// Word and edge deletes (no 1.12 counterpart): the selection if any, else the cursor to
-/// `target_of(eb)`.
+/// Word deletes (Ctrl+Backspace and Ctrl+W, `0x77c3f0`) and the Mac's edge delete: the selection
+/// if any, else the cursor to `target_of(eb)`.
 fn delete_span(lua: &Lua, h: FrameHandle, target_of: impl FnOnce(&EditBoxState) -> usize) {
     let changed = with_eb(lua, h, |eb| {
         let t = target_of(eb);

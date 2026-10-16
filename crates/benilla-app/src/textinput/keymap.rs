@@ -1,7 +1,7 @@
 //! The per-OS text-editing keymap: a keypress and modifiers to an engine [`EditAction`] or a
 //! host-side clipboard operation. The Windows/Linux table is the reference's key handler
-//! (`0x77b160`: Ctrl+arrows by word, Ctrl+HOME/END to the text's edge, Ctrl+A/C/X/V,
-//! Ctrl/Shift+Insert, Shift+Delete).
+//! (`0x77b160`: Ctrl+arrows by word, Ctrl+HOME/END to the text's edge, Ctrl+A/C/X/V, the Emacs
+//! set Ctrl+B/F/D/W/U/K/P/N, Ctrl/Shift+Insert, Shift+Delete).
 //! Deviation: macOS takes the Cocoa text-field chords and Ctrl+Backspace/Delete delete a word,
 //! because editing follows each OS's own text fields.
 
@@ -47,6 +47,12 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
             'C' => return Some(Chord::Copy),
             'X' => return Some(Chord::Cut),
             'V' => return Some(Chord::Paste),
+            // The Emacs set is Ctrl's alone: Cmd+B on a Mac is not a caret move.
+            _ if !mac => {
+                if let Some(chord) = ctrl_letter_pc(letter, m) {
+                    return Some(chord);
+                }
+            }
             _ => {}
         }
     }
@@ -54,6 +60,41 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
         chord_mac(key, m)
     } else {
         chord_pc(key, m)
+    }
+}
+
+/// The PC's Emacs-style Ctrl+letter arms, the rest of the jump table at `0x77b69c` (letters
+/// `0x77b6cc`; every other letter does nothing, `0x77b35e`). Each arm tests Ctrl alone
+/// (`0x41f8f0(1)`), so Shift reaches only B and F, as the extend flag of the arrows' own helpers.
+fn ctrl_letter_pc(letter: char, m: Mods) -> Option<Chord> {
+    use EditUnit::{Char, Word};
+    let edit = |action| Some(Chord::Edit(action));
+    match letter {
+        // Back and forward a character (`0x77c870`, `0x77c750`).
+        'B' | 'F' => edit(EditAction::Move {
+            unit: Char,
+            back: letter == 'B',
+            extend: m.shift,
+        }),
+        // The selection or the character after the caret (`0x77c2e0`), as Delete does.
+        'D' => edit(EditAction::Delete {
+            unit: Char,
+            back: false,
+        }),
+        // The selection or the spaces and the word before the caret (`0x77c3f0`), as Ctrl+Backspace.
+        'W' => edit(EditAction::Delete {
+            unit: Word,
+            back: true,
+        }),
+        // To the text's start and end (`0x77c4a0`, `0x77c4d0`).
+        'U' | 'K' => edit(EditAction::DeleteToEdge {
+            back: letter == 'U',
+        }),
+        // The history line before and after (`0x77d030`, `0x77cfd0`), multi-line boxes included.
+        'P' | 'N' => edit(EditAction::History {
+            older: letter == 'P',
+        }),
+        _ => None,
     }
 }
 
@@ -119,7 +160,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
     }
 }
 
-/// Windows/Linux: the reference's chords (`0x77b160`) plus the Ctrl word deletes.
+/// Windows/Linux: the reference's chords (`0x77b160`); its Ctrl+letter arms are [`ctrl_letter_pc`].
 fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Line, Row, Word};
     let mv = |unit, back| {
@@ -145,7 +186,6 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
         KeyCode::ArrowUp | KeyCode::ArrowDown if !m.sup => mv(Row, key == KeyCode::ArrowUp),
         // HOME/END stop at a newline; Ctrl goes to the text's edge (`0x77b49e`, `0x77b4de`).
         KeyCode::Home | KeyCode::End => mv(if m.ctrl { Edge } else { Line }, key == KeyCode::Home),
-        // Shift+Delete cuts, as the reference does (`0x77b160`).
         KeyCode::Backspace => {
             if m.ctrl {
                 del(Word, true)
@@ -153,8 +193,9 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
                 del(Char, true)
             }
         }
+        // Shift is tested before Ctrl (`0x77b56e`), so Ctrl+Shift+Delete cuts too.
         KeyCode::Delete => {
-            if m.shift && !m.ctrl {
+            if m.shift {
                 Some(Chord::Cut)
             } else if m.ctrl {
                 del(Word, false)
@@ -545,11 +586,24 @@ mod tests {
             alt: true,
             ..NONE
         };
-        for key in [KeyCode::KeyA, KeyCode::KeyC, KeyCode::KeyX, KeyCode::KeyV] {
+        for key in [
+            KeyCode::KeyA,
+            KeyCode::KeyC,
+            KeyCode::KeyX,
+            KeyCode::KeyV,
+            KeyCode::KeyB,
+            KeyCode::KeyD,
+            KeyCode::KeyF,
+            KeyCode::KeyK,
+            KeyCode::KeyN,
+            KeyCode::KeyP,
+            KeyCode::KeyU,
+            KeyCode::KeyW,
+        ] {
             assert_eq!(
                 chord(key, us(key), ALTGR, false),
                 None,
-                "AltGr+{key:?} must reach character input, not act as a clipboard chord"
+                "AltGr+{key:?} must reach character input, not act as a chord"
             );
         }
         assert_eq!(
@@ -590,5 +644,230 @@ mod tests {
                 "the key labelled Q (mac: {mac})"
             );
         }
+    }
+
+    /// The PC's Emacs arms (`0x77b69c`, letters `0x77b6cc`): B and F step a character (Shift
+    /// extends), D deletes forward, W a word back, U and K to the text's edges, P and N recall
+    /// the history before and after. Every other letter does nothing.
+    #[test]
+    fn pc_ctrl_letters_are_the_references_emacs_set() {
+        use EditAction::*;
+        use EditUnit::*;
+        let key_of = |c: char| match c {
+            'B' => KeyCode::KeyB,
+            'D' => KeyCode::KeyD,
+            'F' => KeyCode::KeyF,
+            'K' => KeyCode::KeyK,
+            'N' => KeyCode::KeyN,
+            'P' => KeyCode::KeyP,
+            'U' => KeyCode::KeyU,
+            'W' => KeyCode::KeyW,
+            _ => unreachable!(),
+        };
+        let want = |c: char, shift: bool| match c {
+            'B' | 'F' => Move {
+                unit: Char,
+                back: c == 'B',
+                extend: shift,
+            },
+            'D' => Delete {
+                unit: Char,
+                back: false,
+            },
+            'W' => Delete {
+                unit: Word,
+                back: true,
+            },
+            'U' | 'K' => DeleteToEdge { back: c == 'U' },
+            'P' | 'N' => History { older: c == 'P' },
+            _ => unreachable!(),
+        };
+        for c in ['B', 'D', 'F', 'K', 'N', 'P', 'U', 'W'] {
+            let key = key_of(c);
+            for shift in [false, true] {
+                let m = Mods { shift, ..CTRL };
+                assert_eq!(
+                    edit(chord(key, us(key), m, false)),
+                    want(c, shift),
+                    "Ctrl+{c}"
+                );
+            }
+            assert_eq!(chord(key, us(key), NONE, false), None, "{c} alone types");
+        }
+        for key in [KeyCode::KeyE, KeyCode::KeyZ, KeyCode::KeyH, KeyCode::KeyT] {
+            assert_eq!(chord(key, us(key), CTRL, false), None, "{key:?}");
+        }
+        // The arms are keyed by the layout's name: on AZERTY the key labelled W is the Z key.
+        assert_eq!(
+            edit(chord(KeyCode::KeyZ, Some(KeyName::Char('W')), CTRL, false)),
+            want('W', false)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyW, Some(KeyName::Char('Z')), CTRL, false),
+            None
+        );
+    }
+
+    /// macOS keeps Cocoa's Emacs set unbound: Ctrl+letter is dead, and Cmd+letter outside the
+    /// clipboard chords is no caret move.
+    #[test]
+    fn mac_leaves_the_emacs_set_unbound() {
+        for key in [
+            KeyCode::KeyB,
+            KeyCode::KeyD,
+            KeyCode::KeyF,
+            KeyCode::KeyK,
+            KeyCode::KeyN,
+            KeyCode::KeyP,
+            KeyCode::KeyU,
+            KeyCode::KeyW,
+        ] {
+            assert_eq!(chord(key, us(key), CTRL, true), None, "Ctrl+{key:?}");
+            assert_eq!(chord(key, us(key), SUP, true), None, "Cmd+{key:?}");
+        }
+    }
+
+    /// Delete's Shift branch is tested before Ctrl (`0x77b56e`), so Ctrl+Shift+Delete cuts; Ctrl
+    /// alone deletes a word.
+    #[test]
+    fn ctrl_shift_delete_cuts() {
+        let ctrl_shift = Mods {
+            shift: true,
+            ..CTRL
+        };
+        for m in [SHIFT, ctrl_shift] {
+            assert_eq!(
+                chord(KeyCode::Delete, us(KeyCode::Delete), m, false),
+                Some(Chord::Cut)
+            );
+        }
+        assert_eq!(
+            edit(chord(KeyCode::Delete, us(KeyCode::Delete), CTRL, false)),
+            EditAction::Delete {
+                unit: EditUnit::Word,
+                back: false
+            }
+        );
+    }
+
+    /// A box holding `text` with the caret at `cursor`, nothing selected.
+    fn boxed(text: &str, cursor: usize, multi_line: bool) -> benilla_ui::widget::EditBoxState {
+        let mut eb = benilla_ui::widget::EditBoxState {
+            text: text.into(),
+            cursor,
+            multi_line,
+            ..Default::default()
+        };
+        eb.collapse();
+        eb
+    }
+
+    /// Press `key` with Ctrl (and Shift when `shift`) on a box, through the PC table.
+    fn press(eb: &mut benilla_ui::widget::EditBoxState, key: KeyCode, shift: bool) {
+        let m = Mods { shift, ..CTRL };
+        eb.apply(edit(chord(key, us(key), m, false)));
+    }
+
+    #[test]
+    fn ctrl_b_and_f_step_a_character_and_shift_extends() {
+        let mut eb = boxed("h\u{e9}llo", 3, false); // after the two-byte é
+        press(&mut eb, KeyCode::KeyB, false);
+        assert_eq!(eb.cursor, 1);
+        press(&mut eb, KeyCode::KeyF, false);
+        assert_eq!(eb.cursor, 3);
+        press(&mut eb, KeyCode::KeyB, true);
+        assert_eq!((eb.cursor, eb.sel_start, eb.sel_end), (1, 1, 3));
+    }
+
+    #[test]
+    fn ctrl_d_deletes_the_selection_or_the_character_after() {
+        let mut eb = boxed("abc", 1, false);
+        press(&mut eb, KeyCode::KeyD, false);
+        assert_eq!((eb.text.as_str(), eb.cursor), ("ac", 1));
+        eb.highlight_text(0, 1); // "a", the caret stays at 1
+        press(&mut eb, KeyCode::KeyD, false);
+        assert_eq!(eb.text, "c");
+    }
+
+    #[test]
+    fn ctrl_w_deletes_the_spaces_and_the_word_before_the_caret() {
+        let mut eb = boxed("one two  ", 9, false);
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "one ");
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "");
+    }
+
+    /// U and K reach the whole text's edges, newlines included, and ignore a selection: they
+    /// delete the span between the caret and the edge (`0x77c4a0`, `0x77c4d0`).
+    #[test]
+    fn ctrl_u_and_k_delete_to_the_texts_edges_whatever_is_selected() {
+        let mut eb = boxed("ab\ncd", 4, true); // "ab\nc|d"
+        press(&mut eb, KeyCode::KeyU, false);
+        assert_eq!((eb.text.as_str(), eb.cursor), ("d", 0));
+
+        let mut eb = boxed("ab\ncd", 1, true); // "a|b\ncd"
+        press(&mut eb, KeyCode::KeyK, false);
+        assert_eq!(eb.text, "a");
+
+        let mut eb = boxed("abcdef", 2, false);
+        eb.highlight_text(4, -1); // "ef", away from the caret
+        press(&mut eb, KeyCode::KeyU, false);
+        assert_eq!(eb.text, "cdef", "the selection is not what U deletes");
+        assert_eq!(eb.sel_start, eb.sel_end, "and the delete clears it");
+
+        let mut eb = boxed("abcdef", 4, false);
+        eb.highlight_text(0, 2);
+        press(&mut eb, KeyCode::KeyK, false);
+        assert_eq!(eb.text, "abcd");
+    }
+
+    /// At the edge there is nothing to delete, and the selection stands (the reference's count
+    /// is zero, so `0x77c280` is not called).
+    #[test]
+    fn ctrl_u_and_k_at_the_edge_change_nothing() {
+        let mut eb = boxed("abc", 0, false);
+        eb.highlight_text(0, -1);
+        press(&mut eb, KeyCode::KeyU, false);
+        assert_eq!((eb.text.as_str(), eb.sel_start, eb.sel_end), ("abc", 0, 3));
+        eb.cursor = 3;
+        press(&mut eb, KeyCode::KeyK, false);
+        assert_eq!((eb.text.as_str(), eb.sel_start, eb.sel_end), ("abc", 0, 3));
+    }
+
+    /// Ctrl+P and Ctrl+N recall history in a multi-line box too, where Up and Down move a row.
+    #[test]
+    fn ctrl_p_and_n_recall_history_in_a_multi_line_box() {
+        use benilla_ui::script::UiScript;
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"
+            E = CreateFrame("EditBox", "E")
+            E:SetMultiLine(true)
+            E:SetHistoryLines(5)
+            E:AddHistoryLine("first")
+            E:AddHistoryLine("second")
+            "#,
+        )
+        .unwrap();
+        assert!(s.focus_editbox("E"));
+        let text = |s: &UiScript| s.eval::<String>("return E:GetText()").unwrap();
+        let ctrl = |s: &mut UiScript, key| {
+            s.editbox_action(edit(chord(key, us(key), CTRL, false)));
+        };
+        ctrl(&mut s, KeyCode::KeyP);
+        assert_eq!(text(&s), "second");
+        ctrl(&mut s, KeyCode::KeyP);
+        assert_eq!(text(&s), "first");
+        ctrl(&mut s, KeyCode::KeyN);
+        assert_eq!(text(&s), "second");
+        // Up in the same box moves a row and leaves the text alone.
+        s.editbox_action(edit(chord(
+            KeyCode::ArrowUp,
+            us(KeyCode::ArrowUp),
+            NONE,
+            false,
+        )));
+        assert_eq!(text(&s), "second");
     }
 }

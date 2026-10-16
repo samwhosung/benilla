@@ -33,6 +33,14 @@ pub enum EditAction {
     Delete { unit: EditUnit, back: bool },
     /// Ctrl+A: select all (`HighlightText(0, -1)`), the caret left where it is.
     SelectAll,
+    /// Ctrl+U (`back`) and Ctrl+K: delete from the caret to the text's start or end, the whole
+    /// text in a multi-line box too, and the selection ignored: they count the letters between
+    /// the caret and the edge and delete that many (`0x77c4a0`, `0x77c4d0`), where Backspace
+    /// and Delete first delete a selection.
+    DeleteToEdge { back: bool },
+    /// Ctrl+P (`older`) and Ctrl+N: recall the history line before or after the position
+    /// (`0x77d030`, `0x77cfd0`) in any box, where Up and Down do so only in a single-line one.
+    History { older: bool },
 }
 
 /// A `CSimpleEditBox`'s runtime state; `E+` offsets are from its `CScriptObject` `this`. Byte
@@ -583,6 +591,9 @@ impl EditBoxState {
                 self.highlight_text(0, -1);
                 EditOutcome::default()
             }
+            EditAction::DeleteToEdge { back } => EditOutcome::changed(self.delete_to_edge(back)),
+            // The caller recalls history through `SetText`, so `OnTextSet` fires.
+            EditAction::History { .. } => EditOutcome::default(),
         }
     }
 
@@ -756,6 +767,24 @@ impl EditBoxState {
             self.reset_blink();
         }
         did
+    }
+
+    /// Ctrl+U / Ctrl+K: the span between the caret and the text's start (`back`) or end, deleted
+    /// whatever the selection holds (`0x77c4a0`, `0x77c4d0`); nothing, and the selection kept,
+    /// when the caret is already there.
+    pub fn delete_to_edge(&mut self, back: bool) -> bool {
+        self.end_history_browse();
+        let (a, b) = if back {
+            (0, self.cursor)
+        } else {
+            (self.cursor, self.text.len())
+        };
+        if a == b {
+            return false;
+        }
+        self.delete_span(a..b);
+        self.reset_blink();
+        true
     }
 
     /// Left or Right one step, `extend` dragging the selection ([`Self::extend_to`]). Bit 2 and
