@@ -35,7 +35,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-formats](#benilla-formats): 17
 - [benilla-protocol](#benilla-protocol): 21
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 110
+- [benilla-ui](#benilla-ui): 111
 - [benilla-world](#benilla-world): 46
 
 ### benilla-app
@@ -286,7 +286,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### textinput
 
-- macOS takes the Cocoa text-field chords and Ctrl+Backspace/Delete delete a word, because editing follows each OS's own text fields. ([`src/textinput/keymap.rs:5`](../crates/benilla-app/src/textinput/keymap.rs#L5))
+- macOS takes the Cocoa text-field chords for Cmd and Option, because editing follows each OS's own text fields. ([`src/textinput/keymap.rs:5`](../crates/benilla-app/src/textinput/keymap.rs#L5))
 
 #### ui_action
 
@@ -653,7 +653,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Always empty, because a refresh rate is only selectable through an exclusive mode-set and benilla has none. ([`src/script/cvars.rs:746`](../crates/benilla-ui/src/script/cvars.rs#L746))
 - 1.12 has no such CVar; it exists because our Graphics page needs somewhere to keep the stop, and takes the API's name. ([`src/script/cvars.rs:874`](../crates/benilla-ui/src/script/cvars.rs#L874))
 - The getter reads `CVAR_WORLD_DETAIL`, where the reference's reads only `smallCull` (`0x488d77`), because benilla's stop follows the knob that draws: a console `frillDensity` write moves the ground clutter and `WorldDetail` with it, and no renderer reads `smallCull` (its callback's `[0x868620]` has no reader). ([`src/script/cvars.rs:902`](../crates/benilla-ui/src/script/cvars.rs#L902))
-- Word and edge deletes (`Delete{Word,Edge}`), which 1.12 does not have, exist because the host's OS-native chords (Option/Cmd+Backspace, Ctrl+Backspace/Delete) expect them. ([`src/script/editbox.rs:23`](../crates/benilla-ui/src/script/editbox.rs#L23))
 - The promotion's IME legs (`0x77d417`–`0x77d431`) and the IME writer's `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: benilla has no IME composition. ([`src/script/editbox/flush.rs:28`](../crates/benilla-ui/src/script/editbox/flush.rs#L28))
 - The nameplate glow is shown but never drawn, because its additive rim reads as hard edge lines in our linear-blending pipeline; the lit plate brightens its bar instead. ([`src/script/extract.rs:264`](../crates/benilla-ui/src/script/extract.rs#L264))
 - A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:362`](../crates/benilla-ui/src/script/glue_core.rs#L362))
@@ -713,10 +712,12 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### widget
 
-- The history browses as a shell's does, a small everyday gain: the first UP stashes the line being typed and DOWN past the newest line brings it back, UP holds at the oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an empty line is not kept. ([`src/widget/kinds/editbox.rs:236`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L236))
-- A plain Left or Right with a selection collapses it to that edge, as every OS's own text fields do; the reference clears the selection and steps once from the caret (`0x77c6b0` from `0x77c70b`). ([`src/widget/kinds/editbox.rs:777`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L777))
-- On the last row a walk may end at the text's end, because the end starts no row; the reference steps back from it as from a row's start (its line table ends with the text's length, `0x77d6ef`), so DOWN onto a short last line stops before its last letter. ([`src/widget/kinds/editbox.rs:834`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L834))
-- The drag selects from its anchor, as every OS's own text fields do, where the reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). ([`src/widget/kinds/editbox.rs:942`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L942))
+- The history browses as a shell's does, a small everyday gain: the first UP stashes the line being typed and DOWN past the newest line brings it back, UP holds at the oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an empty line is not kept. ([`src/widget/kinds/editbox.rs:245`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L245))
+- A plain Left or Right (or Ctrl+B or F) with a selection collapses it to that edge, as every OS's own text fields do; the reference clears the selection and steps once from the caret (`0x77c6b0` from `0x77c70b`). ([`src/widget/kinds/editbox.rs:814`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L814))
+- Left reads the whole character before the caret, not the lone byte `caret - 1` the client reads (`0x77c8da`), which takes a multi-byte space for a non-space. ([`src/widget/kinds/editbox.rs:833`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L833))
+- On the last row a walk may end at the text's end, because the end starts no row; the reference steps back from it as from a row's start (its line table ends with the text's length, `0x77d6ef`), so DOWN onto a short last line stops before its last letter. ([`src/widget/kinds/editbox.rs:884`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L884))
+- The drag selects from its anchor, as every OS's own text fields do, where the reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). ([`src/widget/kinds/editbox.rs:997`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L997))
+- A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1127`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1127))
 - The reference has one field, the font's, but our font is read off the first `<FontString>` region (`message_frame_font`), which a `CreateFrame` frame lacks; so that FontString's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:33`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L33))
 - Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:331`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L331))
 - `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:859`](../crates/benilla-ui/src/widget/kinds/mod.rs#L859))
