@@ -46,10 +46,23 @@ const FILL_MAX_WIDTH: f32 = 0.525; // halfW; fill width = progress · FILL_MAX_W
 /// `a = 0.75 · width/height` is 1.0 at 4:3 and the fit below turns on it.
 const ASPECT_TO_FIT: f32 = 0.75;
 
-/// `a = [0x832a4c]`, the window's aspect relative to 4:3 (`0x41ad10`, read by `0x406a60` at
-/// `0x406ac4` and by the tip at `0x4066b9`). A window with no size reads as 4:3.
-pub(crate) fn scaled_aspect(window: Vec2) -> f32 {
-    if window.x > 0.0 && window.y > 0.0 {
+/// Whether the `widescreen` CVar is on: its default, and anything but an applied 0.
+pub(crate) fn widescreen(cvars: Option<&crate::cvars::Cvars>) -> bool {
+    cvars.and_then(|c| c.flag("widescreen")) != Some(false)
+}
+
+/// `a = [0x832a4c]`, the display aspect relative to 4:3 (`0x41ad10`, read by `0x406a60` at
+/// `0x406ac4` and by the tip at `0x40668c` and `0x4066b9`). A window with no size reads as 4:3.
+///
+/// Both setters (the glue's `0x46ab40` through `0x46a828`, the interface's `0x4901e0` through
+/// `0x48fe2b`) pass `gxResolution`'s width over height only while `widescreen` is on, else 4/3,
+/// and `RN24(0.75 · f32(4/3))` is exactly 1.0: with it off the picture fills the window (the
+/// `0x406b02` path) and the tip's wrap is `515·W/1024`.
+///
+/// Deviation: the live window's aspect stands in for `gxResolution`'s, as in `portrait`'s
+/// `GxAspect` (fullscreen is the monitor's own size with no mode list, where the two agree).
+pub(crate) fn scaled_aspect(window: Vec2, widescreen: bool) -> f32 {
+    if widescreen && window.x > 0.0 && window.y > 0.0 {
         window.x / window.y * ASPECT_TO_FIT
     } else {
         1.0
@@ -71,8 +84,8 @@ pub(crate) struct FitRect {
 /// `0x406b02`) it is `a` of the height, centred; at exactly 4:3, or with no usable aspect, the
 /// whole window (`0x406b02` keeps the defaults for `a == 1` and a NaN). The edges are fractions of
 /// the window, `(1 − extent) · 0.5` from the near side.
-pub(crate) fn fit_rect(window: Vec2) -> FitRect {
-    let a = scaled_aspect(window);
+pub(crate) fn fit_rect(window: Vec2, widescreen: bool) -> FitRect {
+    let a = scaled_aspect(window, widescreen);
     let (mut left, mut bottom, mut across, mut up) = (0.0, 0.0, 1.0, 1.0);
     if a > 1.0 {
         across = 1.0 / a;
@@ -336,7 +349,7 @@ fn setup_loading_screen(
     world_assets: Option<ResMut<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // The black pillarbox root spawns unconditionally: `covering()` consumers act as covered while
+    // The black root, the bands of a pillarbox or letterbox, spawns unconditionally: `covering()` consumers act as covered while
     // the screen is active, so missing art must still leave a black cover.
     let root = commands
         .spawn((
@@ -455,11 +468,15 @@ fn setup_loading_screen(
 pub(crate) fn fit_loading_area(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut area: Query<&mut Node, With<LoadingArea>>,
+    cvars: Option<Res<crate::cvars::Cvars>>,
 ) {
     let (Some(window), Ok(mut node)) = (windows.iter().next(), area.single_mut()) else {
         return;
     };
-    let fit = fit_rect(Vec2::new(window.width(), window.height()));
+    let fit = fit_rect(
+        Vec2::new(window.width(), window.height()),
+        widescreen(cvars.as_deref()),
+    );
     let (width, height) = (Val::Px(fit.width), Val::Px(fit.height));
     if node.width != width || node.height != height {
         node.width = width;
@@ -731,7 +748,7 @@ mod tests {
     use super::*;
 
     fn fit(w: f32, h: f32) -> [f32; 4] {
-        let r = fit_rect(Vec2::new(w, h));
+        let r = fit_rect(Vec2::new(w, h), true);
         [r.x, r.y, r.width, r.height]
     }
 
@@ -754,6 +771,45 @@ mod tests {
         // 4:3: the window.
         close(fit(1024.0, 768.0), [0.0, 0.0, 1024.0, 768.0]);
         close(fit(800.0, 600.0), [0.0, 0.0, 800.0, 600.0]);
+    }
+
+    /// `widescreen` off is a 4/3 aspect (`0x46ab40`, `0x4901e0`): `a` is exactly 1.0 and the picture
+    /// fills the window, at any window shape.
+    #[test]
+    fn widescreen_off_fills_the_window() {
+        for (w, h) in [(1920.0, 1080.0), (1280.0, 1024.0), (600.0, 1000.0)] {
+            let r = fit_rect(Vec2::new(w, h), false);
+            assert_eq!(scaled_aspect(Vec2::new(w, h), false), 1.0);
+            close([r.x, r.y, r.width, r.height], [0.0, 0.0, w, h]);
+        }
+        assert!(
+            widescreen(Some(&crate::cvars::Cvars::default())),
+            "the default is on"
+        );
+        assert!(widescreen(None));
+        assert!(!widescreen(Some(&crate::cvars::Cvars::with_value(
+            "widescreen",
+            "0"
+        ))));
+    }
+
+    /// The system reads the CVar: a tall window, `widescreen` off, is not letterboxed.
+    #[test]
+    fn the_content_area_honours_widescreen_off() {
+        let mut app = App::new();
+        app.insert_resource(crate::cvars::Cvars::with_value("widescreen", "0"));
+        app.world_mut().spawn((
+            Window {
+                resolution: (1280_u32, 1024_u32).into(),
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let area = app.world_mut().spawn((LoadingArea, Node::default())).id();
+        app.add_systems(Update, fit_loading_area);
+        app.update();
+        let n = app.world().get::<Node>(area).unwrap();
+        assert_eq!((n.width, n.height), (Val::Px(1280.0), Val::Px(1024.0)));
     }
 
     /// A window with no size has no aspect; it reads as 4:3 and fits to nothing, never a NaN.
