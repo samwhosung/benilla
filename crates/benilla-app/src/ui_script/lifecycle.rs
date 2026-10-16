@@ -386,6 +386,9 @@ enum LoadSeat {
 /// state edge because the initial transition runs after `PostStartup`: a capture booting straight
 /// into `InWorld` still loads after [`benilla_assets::AssetSet::Open`].
 pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
+    // Before the load, as `0x48f590` runs before `0x48fbf0`: an addon's file scope sets the mask
+    // after it, and a `/reload` never takes this step.
+    crate::minimap::restore_default_mask(world);
     load_ingame_ui_seated(world, LoadSeat::Roster);
 }
 

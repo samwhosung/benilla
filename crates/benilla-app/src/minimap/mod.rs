@@ -207,10 +207,14 @@ pub(crate) struct MinimapSlot {
 }
 
 /// The loaded minimap fixtures; absent, the map draws nothing and its XML children still render.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct MinimapAssets {
     translate: MinimapTranslate,
+    /// The disc's mask, the reference's one process-wide texture (`0xbc7968`): the default until
+    /// `Minimap:SetMaskTexture` replaces it, and no VM owns it, so a new VM inherits it.
     mask: Option<Handle<Image>>,
+    /// `Textures\MinimapMask`, which every world entry loads into [`Self::mask`] (`0x4ed810`).
+    default_mask: Option<Handle<Image>>,
     arrow: Option<Handle<Image>>,
     /// The POI atlas (`Interface\Minimap\POIIcons`), for the corpse skull.
     poi: Option<Handle<Image>>,
@@ -285,6 +289,7 @@ fn setup_minimap(
             };
             commands.insert_resource(MinimapAssets {
                 translate,
+                default_mask: mask.clone(),
                 mask,
                 arrow,
                 poi,
@@ -804,8 +809,23 @@ fn feed_minimap_inside(
     }
 }
 
+/// A world entry puts the default mask back before the interface loads: `CGGameUI::InitializeGame`
+/// (`0x48f480`, from `0x401570`, the glue's enter-world step at `0x46c236`) calls `0x4ed810` at
+/// `0x48f590`, which loads `Textures\MinimapMask` over the process-wide mask `0xbc7968`. So an
+/// addon's mask lasts to the next logout (`ClientDestroyGame` `0x401ee0` runs `ShutdownGame`, which
+/// releases it at `0x49118c`). A `ReloadUI` (`0x490bd0`, `0x48fbf0`) and a worldport (`0x401bc0`)
+/// reach neither, and keep it; an addon that sets its mask while it loads wins, being applied
+/// after this ([`feed_minimap_mask`]).
+pub(crate) fn restore_default_mask(world: &mut World) {
+    if let Some(mut assets) = world.get_resource_mut::<MinimapAssets>() {
+        assets.mask = assets.default_mask.clone();
+    }
+}
+
 /// Swap the disc's mask for the one `Minimap:SetMaskTexture` names (a 1.12 method). Memoised on the
-/// path and re-read with a fresh VM; a path that fails to load keeps the current mask and warns.
+/// path per VM, so a new VM whose Minimap has set nothing leaves the process-wide mask as it is
+/// ([`restore_default_mask`] owns the world-entry reset); a path that fails to load keeps the
+/// current mask and warns.
 fn feed_minimap_mask(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     assets: Option<ResMut<MinimapAssets>>,
@@ -926,6 +946,27 @@ impl Plugin for MinimapPlugin {
                 ),
             );
     }
+}
+
+/// The mask state for the lifecycle tests, which have no install to load a texture from: a
+/// [`MinimapAssets`] whose default and current masks are the given handles.
+#[cfg(test)]
+pub(crate) fn seat_mask_for_test(
+    world: &mut World,
+    default_mask: Handle<Image>,
+    current: Handle<Image>,
+) {
+    world.insert_resource(MinimapAssets {
+        default_mask: Some(default_mask),
+        mask: Some(current),
+        ..default()
+    });
+}
+
+/// The mask now drawn.
+#[cfg(test)]
+pub(crate) fn mask_for_test(world: &World) -> Option<Handle<Image>> {
+    world.resource::<MinimapAssets>().mask.clone()
 }
 
 #[cfg(test)]

@@ -2136,6 +2136,72 @@ fn a_reload_fires_player_login_once_against_the_live_player() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+// ───────────────────── The minimap mask is the process's, not the VM's ─────────────────────
+
+/// The default mask and an addon's, as [`crate::minimap::seat_mask_for_test`] takes them.
+const DEFAULT_MASK: Handle<Image> =
+    bevy::asset::uuid_handle!("d0000000-0000-4000-8000-0000000000a1");
+const ADDON_MASK: Handle<Image> = bevy::asset::uuid_handle!("d0000000-0000-4000-8000-0000000000a2");
+
+/// The mask is one process-wide texture (`0xbc7968`), which `0x4ed810` loads with the default at
+/// `0x48f590`, inside `InitializeGame` (`0x48f480`) at every world entry (`0x401570`); an addon's
+/// lasts to the next entry. A relog enters again, and the circle is back whatever the new VM's
+/// Minimap says.
+#[test]
+fn a_relog_restores_the_default_minimap_mask() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("mask-relog");
+    let mut world = booted_world();
+    crate::minimap::seat_mask_for_test(&mut world, DEFAULT_MASK, DEFAULT_MASK);
+
+    log_in_as(&mut world, "Onehunter", 1);
+    // What the mask feed does for an addon's `Minimap:SetMaskTexture`.
+    crate::minimap::seat_mask_for_test(&mut world, DEFAULT_MASK, ADDON_MASK);
+    super::end_ui_session(&mut world);
+    assert_eq!(
+        crate::minimap::mask_for_test(&world),
+        Some(ADDON_MASK),
+        "logging out leaves the texture where it was until the next entry"
+    );
+
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(
+        crate::minimap::mask_for_test(&world),
+        Some(DEFAULT_MASK),
+        "the next world entry loads the default over the addon's mask"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `ReloadUI` runs the shutdown `0x490bd0` and the initializer `0x48fbf0` (`0x495664`,
+/// `0x495669`), neither of which reaches `0x4ed810`, so the mask an addon set stays.
+#[test]
+fn a_reload_keeps_the_minimap_mask_an_addon_set() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("mask-reload");
+    let mut world = booted_world();
+    crate::minimap::seat_mask_for_test(&mut world, DEFAULT_MASK, DEFAULT_MASK);
+
+    log_in_as(&mut world, "Onehunter", 1);
+    crate::minimap::seat_mask_for_test(&mut world, DEFAULT_MASK, ADDON_MASK);
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+
+    assert_eq!(
+        crate::minimap::mask_for_test(&world),
+        Some(ADDON_MASK),
+        "a /reload does not load the default mask again"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ───────────────────── Addons load against the XML's buff anchors ─────────────────────
 
 /// Records, at file scope and in `ADDON_LOADED`, what `BuffButton8` is anchored to.

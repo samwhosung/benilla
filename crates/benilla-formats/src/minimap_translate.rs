@@ -14,6 +14,7 @@ use crate::Chain;
 const MD5_TRANSLATE: &str = "textures\\Minimap\\md5translate.trs";
 
 /// The parsed `md5translate.trs`: every left-hand path (lowercased) to its hashed `.blp` filename.
+#[derive(Default)]
 pub struct MinimapTranslate {
     entries: HashMap<String, String>,
 }
