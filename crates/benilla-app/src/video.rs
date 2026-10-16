@@ -599,7 +599,7 @@ fn display_session() -> String {
 
 /// Push vsync to the window only when the setting moves or a `RestartGx()` asks: the capture
 /// probes write `present_mode` directly, and their override must stick.
-fn apply_present_mode(
+pub(crate) fn apply_present_mode(
     cfg: Res<VideoConfig>,
     restarts: Res<GxRestarts>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
@@ -627,7 +627,7 @@ fn apply_present_mode(
 /// Push the display mode to the window, gated as [`apply_present_mode`] is. The guard matches the
 /// variant, not the monitor: birth uses `Primary` and a live toggle `Current`, so a `!=` compare
 /// would re-assert fullscreen on every launch.
-fn apply_window_mode(
+pub(crate) fn apply_window_mode(
     cfg: Res<VideoConfig>,
     restarts: Res<GxRestarts>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,

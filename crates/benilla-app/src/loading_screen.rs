@@ -315,12 +315,15 @@ impl Plugin for LoadingScreenPlugin {
             // In `WorldStage::Present`, after Input and Stream: a worldport snaps in Input and the
             // streamer refocuses in Stream, so the cover lands on the same frame, never a flash.
             .add_systems(Update, drive_loading_screen.in_set(WorldStage::Present))
-            // After the drive, which sets the visibility the same nodes carry.
+            // After the drive, which sets the visibility the same nodes carry, and after the
+            // window's mode is applied, so the size it reads is this frame's.
             .add_systems(
                 Update,
                 fit_loading_area
                     .in_set(WorldStage::Present)
-                    .after(drive_loading_screen),
+                    .after(drive_loading_screen)
+                    .after(crate::video::apply_window_mode)
+                    .after(crate::video::apply_present_mode),
             );
         // The cover's input rule, registered here so the two cannot be registered apart.
         input::build(app);
