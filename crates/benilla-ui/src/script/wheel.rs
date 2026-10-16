@@ -23,9 +23,10 @@ pub enum WheelWalk {
     /// A frame's `OnMouseWheel` took the notch (`0x76c1c1`).
     Frame,
     /// Nothing took it before the world frame, whose slot runs the wheel binding (`0x483d53`);
-    /// the host runs it.
+    /// the host runs it and the walk stops here.
     World,
-    /// No frame took it and the world frame is not under it (none exists, as on the glue screens).
+    /// No frame took it: the world frame is not under the cursor (none exists, as on the glue
+    /// screens) or its chord has no binding (`0x483d87`) and nothing behind it took the notch.
     Declined,
 }
 
@@ -44,12 +45,25 @@ fn walk_order(model: &Model) -> Vec<FrameHandle> {
 }
 
 impl UiScript {
+    /// [`Self::mouse_wheel_bound`] for a world frame whose chord has a binding.
+    pub fn mouse_wheel(&mut self, x: f32, y: f32, delta: f32) -> WheelWalk {
+        self.mouse_wheel_bound(x, y, delta, true)
+    }
+
     /// One wheel notch at the cursor `(x, y)` (UI units, y up): the sweep `0x7664f0`. A frame with
     /// an `OnMouseWheel` script runs it with `arg1` the sign of `delta`, `1` for zero or more and
     /// `-1` below (`0x76c1a9`), and ends the sweep. The world frame ends it with
     /// [`WheelWalk::World`] unless it has such a script too; a zero `delta` ends it there with no
-    /// binding (`0x483d47`).
-    pub fn mouse_wheel(&mut self, x: f32, y: f32, delta: f32) -> WheelWalk {
+    /// binding (`0x483d47`). `world_binds` says whether the notch's chord has a binding: the
+    /// world slot answers the sum of its two `ExecuteBinding` results (`0x483d87`), so with none
+    /// it answers 0 and the walk goes on to the wheel frames behind the world frame.
+    pub fn mouse_wheel_bound(
+        &mut self,
+        x: f32,
+        y: f32,
+        delta: f32,
+        world_binds: bool,
+    ) -> WheelWalk {
         let order = walk_order(&self.model_ref());
         for fh in order {
             let (id, world) = {
@@ -80,11 +94,12 @@ impl UiScript {
                 return WheelWalk::Frame;
             }
             if world {
-                return if delta == 0.0 {
-                    WheelWalk::Frame
-                } else {
-                    WheelWalk::World
-                };
+                if delta == 0.0 {
+                    return WheelWalk::Frame;
+                }
+                if world_binds {
+                    return WheelWalk::World;
+                }
             }
         }
         WheelWalk::Declined

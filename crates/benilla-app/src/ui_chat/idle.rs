@@ -46,7 +46,8 @@ const AUTO_LOGOUT_AFTER: Duration = Duration::from_millis(1_800_000);
 /// Holding a key is idle: auto-repeat is category 0xa (`0x424810`), whose handler `0x766070` has
 /// no store, so running with W held reaches the auto-AFK. A zero move does not stamp (`0x7660d0`).
 /// Only the vertical wheel stamps: the store sits in the handler of `WM_MOUSEWHEEL`, and
-/// `WM_MOUSEHWHEEL` never reaches the input queue (`0x42d35c`), so a sideways scroll is idle.
+/// `WM_MOUSEHWHEEL` never reaches the input queue (`0x42d35c`), so a sideways scroll is idle,
+/// except Shift plus the wheel where the OS made it sideways ([`crate::bindings::notch_travel`]).
 ///
 /// The store sits ahead of dispatch, so a keystroke the chat edit box consumes still stamps: this
 /// reads the raw messages, not [`crate::bindings::BindingsState`], outside the in-world gate.
@@ -57,12 +58,18 @@ pub(crate) fn stamp_input(
     mut buttons: MessageReader<MouseButtonInput>,
     mut wheel: MessageReader<MouseWheel>,
     motion: Res<AccumulatedMouseMotion>,
+    held: Res<ButtonInput<KeyCode>>,
 ) {
+    let shift = held.pressed(KeyCode::ShiftLeft) || held.pressed(KeyCode::ShiftRight);
     // `count()` and a bitwise `|` drain every reader, or unread messages warm the clock next frame.
     // `repeat` is category 0xa, which has no store; `Released` never carries the flag.
     let any = (keys.read().filter(|k| !k.repeat).count() != 0)
         | (buttons.read().count() != 0)
-        | (wheel.read().filter(|w| w.y != 0.0).count() != 0)
+        | (wheel
+            .read()
+            .filter(|w| crate::bindings::notch_travel(w.x, w.y, shift) != 0.0)
+            .count()
+            != 0)
         | (motion.delta != Vec2::ZERO);
     if any {
         last.0 = time.elapsed();
@@ -395,6 +402,7 @@ mod tests {
             app.init_resource::<Time<Real>>()
                 .init_resource::<LastInput>()
                 .init_resource::<AccumulatedMouseMotion>()
+                .init_resource::<ButtonInput<KeyCode>>()
                 .add_message::<KeyboardInput>()
                 .add_message::<MouseButtonInput>()
                 .add_message::<MouseWheel>();

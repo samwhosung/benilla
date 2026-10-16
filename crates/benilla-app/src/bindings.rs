@@ -46,7 +46,7 @@ pub(crate) use script_input::Input;
 /// The chord-to-command map, rebuilt whenever the engine table's generation moves. Probe it
 /// through [`BindingDispatch::resolve`]: the lookup is two probes.
 #[derive(Resource, Default)]
-struct BindingDispatch {
+pub(crate) struct BindingDispatch {
     map: std::collections::HashMap<Chord, String>,
     /// The engine table's generation this map was built from, keyed per VM: a fresh VM restarts
     /// its counter at 0.
@@ -336,6 +336,60 @@ pub(crate) fn wheel_lines(unit: MouseScrollUnit, dy: f32) -> f32 {
     }
 }
 
+/// Whether the OS turns Shift plus the vertical wheel into a horizontal scroll before the window
+/// sees it: macOS does, Windows (`WM_MOUSEWHEEL` with `MK_SHIFT` in its key flags) does not.
+pub(crate) const OS_REMAPS_SHIFT_WHEEL: bool = cfg!(target_os = "macos");
+
+/// The vertical travel of a scroll: `y`, except that where the OS remapped Shift plus the wheel to
+/// a horizontal-only scroll (`remapped`), that scroll is the wheel notch it came from. It undoes
+/// the OS's remap so the reference's `WM_MOUSEWHEEL` arrives as it would on Windows (`0x42d54f`),
+/// SHIFT-MOUSEWHEELUP and DOWN stay bindable and Shift plus the wheel still counts as input.
+pub(crate) fn notch_travel_with(x: f32, y: f32, shift: bool, remapped: bool) -> f32 {
+    if remapped && shift && y == 0.0 {
+        x
+    } else {
+        y
+    }
+}
+
+/// [`notch_travel_with`] on this platform.
+pub(crate) fn notch_travel(x: f32, y: f32, shift: bool) -> f32 {
+    notch_travel_with(x, y, shift, OS_REMAPS_SHIFT_WHEEL)
+}
+
+/// The chord a wheel notch runs: the held modifiers and the direction. `None` while Super is held,
+/// where the notch runs no binding.
+fn wheel_chord(keys: &ButtonInput<KeyCode>, up: bool) -> Option<Chord> {
+    let held = |a, b| keys.pressed(a) || keys.pressed(b);
+    if held(KeyCode::SuperLeft, KeyCode::SuperRight) {
+        return None;
+    }
+    Some(Chord {
+        alt: held(KeyCode::AltLeft, KeyCode::AltRight),
+        ctrl: held(KeyCode::ControlLeft, KeyCode::ControlRight),
+        shift: held(KeyCode::ShiftLeft, KeyCode::ShiftRight),
+        key: if up {
+            BindKey::WheelUp
+        } else {
+            BindKey::WheelDown
+        },
+    })
+}
+
+/// Whether the world frame's wheel slot takes a notch: it runs the notch's chord and answers the
+/// sum of the two `ExecuteBinding` results (`0x483d87`), which is 0 for a chord with no binding.
+pub(crate) fn world_takes_wheel(
+    dispatch: Option<&BindingDispatch>,
+    keys: &ButtonInput<KeyCode>,
+    up: bool,
+) -> bool {
+    match (dispatch, wheel_chord(keys, up)) {
+        (Some(dispatch), Some(chord)) => dispatch.resolve(chord, false).is_some(),
+        (None, _) => true,
+        (Some(_), None) => false,
+    }
+}
+
 /// Whole notches out of a stream of line deltas, carrying the fraction between frames.
 ///
 /// For consumers that act per notch off the sign alone: the UI's `OnMouseWheel` (stock
@@ -562,22 +616,13 @@ fn latch_and_dispatch(
     // (`0x483d82`) per wheel message. A `runOnUp` command runs both halves; a plain one's up leg is
     // the `RunCommand` (`0x4b7bf1`) no-op. `WorldWheel` holds the notches no frame took.
     let steps = world_wheel.0;
-    if steps != 0 && !sup {
-        let key = if steps > 0 {
-            BindKey::WheelUp
-        } else {
-            BindKey::WheelDown
-        };
-        let chord = Chord {
-            alt,
-            ctrl,
-            shift,
-            key,
-        };
-        if let Some(command) = dispatch.resolve(chord, false) {
-            for _ in 0..steps.unsigned_abs() {
-                press(&mut state, &mut script, command, Held::Wheel);
-                release(&mut state, &mut script, Held::Wheel);
+    if steps != 0 {
+        if let Some(chord) = wheel_chord(&keys, steps > 0) {
+            if let Some(command) = dispatch.resolve(chord, false) {
+                for _ in 0..steps.unsigned_abs() {
+                    press(&mut state, &mut script, command, Held::Wheel);
+                    release(&mut state, &mut script, Held::Wheel);
+                }
             }
         }
     }
@@ -1148,11 +1193,8 @@ mod tests {
     /// `0x483d20`); over a frame that has one, the frame scrolls and the camera does not.
     #[test]
     fn a_notch_zooms_the_camera_over_a_button_and_not_over_a_scroll_pane() {
-        use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
-        let notch = AccumulatedMouseScroll {
-            unit: MouseScrollUnit::Line,
-            delta: Vec2::new(0.0, 1.0),
-        };
+        use bevy::input::mouse::MouseScrollUnit;
+        let notch = (MouseScrollUnit::Line, 1.0);
         let mut s = core_script();
         s.set_screen_size(1024.0, 768.0);
         s.run(
@@ -1170,8 +1212,20 @@ mod tests {
         .expect("frames");
         s.resolve();
         let mut notches = WheelNotches::default();
-        let over_button = crate::ui_script::feed_wheel(&mut s, &mut notches, 120.0, 120.0, &notch);
-        let over_pane = crate::ui_script::feed_wheel(&mut s, &mut notches, 650.0, 150.0, &notch);
+        let over_button = crate::ui_script::feed_wheel(
+            &mut s,
+            &mut notches,
+            Vec2::new(120.0, 120.0),
+            notch,
+            |_| true,
+        );
+        let over_pane = crate::ui_script::feed_wheel(
+            &mut s,
+            &mut notches,
+            Vec2::new(650.0, 150.0),
+            notch,
+            |_| true,
+        );
         let mut app = vm_harness(s);
 
         wheel(&mut app, over_pane);
@@ -1189,6 +1243,55 @@ mod tests {
             "a button has no OnMouseWheel: the notch is the camera's"
         );
         assert_eq!(lua_count(&app, "SCROLLED"), 1);
+    }
+
+    /// Where the OS turned Shift plus the wheel sideways, a horizontal-only scroll with Shift held
+    /// is the vertical notch it came from; nowhere else is a sideways scroll a notch.
+    #[test]
+    fn a_remapped_shift_wheel_is_the_vertical_notch() {
+        assert_eq!(notch_travel_with(-1.0, 0.0, true, true), -1.0);
+        assert_eq!(notch_travel_with(2.0, 0.0, true, true), 2.0);
+        assert_eq!(
+            notch_travel_with(2.0, 0.0, false, true),
+            0.0,
+            "no Shift: sideways"
+        );
+        assert_eq!(
+            notch_travel_with(2.0, 0.0, true, false),
+            0.0,
+            "no remap: sideways"
+        );
+        assert_eq!(
+            notch_travel_with(2.0, 3.0, true, true),
+            3.0,
+            "a vertical part wins"
+        );
+        assert_eq!(notch_travel_with(0.0, -1.0, true, true), -1.0);
+    }
+
+    /// The world slot takes a notch only when its chord has a binding (`0x483d87`); Super holds
+    /// the notch back.
+    #[test]
+    fn the_world_takes_a_notch_only_for_a_bound_chord() {
+        let mut app = harness();
+        app.update();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        let dispatch = app.world().resource::<BindingDispatch>();
+        assert!(world_takes_wheel(Some(dispatch), &keys, true));
+        assert!(world_takes_wheel(Some(dispatch), &keys, false));
+        // SHIFT-MOUSEWHEELUP has no binding; the unmodified chord's retry is the leftmost
+        // modifier dropped, so it falls back to the bound plain chord.
+        keys.press(KeyCode::ShiftLeft);
+        assert!(world_takes_wheel(Some(dispatch), &keys, true));
+        keys.press(KeyCode::SuperLeft);
+        assert!(!world_takes_wheel(Some(dispatch), &keys, true));
+        assert!(world_takes_wheel(None, &keys, true), "no table, no say");
+        let empty = BindingDispatch::default();
+        assert!(!world_takes_wheel(
+            Some(&empty),
+            &ButtonInput::default(),
+            true
+        ));
     }
 
     /// A notch is a press and its release (`0x483d6f`, `0x483d82`), so a `runOnUp` binding on the

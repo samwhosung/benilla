@@ -653,10 +653,10 @@ fn the_action_bar_abbreviation_is_the_refs_own_getbindingtext() {
         .unwrap());
 }
 
-/// A spin bubbles up the parent chain, so the wheel handler sits on the mouse-enabled page body,
-/// which also catches a spin over a row's name. The bar sits in the gutter inside the body.
+/// The wheel handler sits on the page body, which takes the wheel itself and so catches a spin
+/// over a row's name (no parent walk). The bar sits in the gutter inside the body.
 #[test]
-fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
+fn the_body_takes_a_spin_over_a_row_and_the_bar_rides_the_gutter() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     on_page(&mut s);

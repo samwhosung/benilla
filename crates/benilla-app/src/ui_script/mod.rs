@@ -372,6 +372,9 @@ impl Plugin for UiScriptPlugin {
                     input::feed_ui_input.run_if(
                         in_state(crate::char_select::ClientState::InWorld).or(glue::glue_ui_up),
                     ),
+                    input::feed_ui_wheel.run_if(
+                        in_state(crate::char_select::ClientState::InWorld).or(glue::glue_ui_up),
+                    ),
                     // Off the walk that just ran, for the pick and the arbiter after the pass.
                     crate::vplates::seed_plate_hover,
                 )

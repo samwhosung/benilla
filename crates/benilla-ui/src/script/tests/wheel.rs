@@ -243,3 +243,45 @@ fn an_xml_on_mouse_wheel_script_joins_the_walk_and_the_scrolling_kinds_are_born_
     assert_eq!(s.mouse_wheel(550.0, 250.0, 1.0), WheelWalk::World);
     assert_eq!(fired(&s), "XmlPane:1");
 }
+
+#[test]
+fn a_world_frame_with_no_binding_passes_the_notch_to_a_wheel_frame_behind_it() {
+    let mut s = with_world();
+    s.run(
+        r#"
+        Takes(Pane("Behind", 300, 200, 100, 100))
+        "#,
+    )
+    .unwrap();
+    // Lua cannot name the WORLD stratum; put the frame there, entered after the world frame.
+    {
+        let mut model = s.model_mut();
+        let behind = model
+            .arena
+            .iter_frames()
+            .find(|(_, f)| f.name.as_deref() == Some("Behind"))
+            .map(|(h, _)| h)
+            .unwrap();
+        model.arena.frame_mut(behind).unwrap().strata = crate::order::Strata::World;
+    }
+    s.resolve();
+    assert_eq!(
+        s.mouse_wheel_bound(350.0, 250.0, 1.0, true),
+        WheelWalk::World
+    );
+    assert_eq!(
+        fired(&s),
+        "",
+        "a bound chord ends the walk at the world frame"
+    );
+    assert_eq!(
+        s.mouse_wheel_bound(350.0, 250.0, 1.0, false),
+        WheelWalk::Frame
+    );
+    assert_eq!(fired(&s), "Behind:1");
+    assert_eq!(
+        s.mouse_wheel_bound(50.0, 50.0, 1.0, false),
+        WheelWalk::Declined,
+        "nothing behind it under the cursor"
+    );
+}

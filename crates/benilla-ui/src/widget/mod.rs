@@ -185,7 +185,8 @@ pub struct Frame {
     pub mouse_enabled: bool,
     /// `EnableMouseWheel`, or an `<OnMouseWheel>` script at XML load (`0x76a044`): the mask's
     /// wheel bit (3), membership in the wheel walk. A frame with the script but not the bit is
-    /// transparent to the wheel. Only the WorldFrame's ctor sets it (`0x481b1f`).
+    /// transparent to the wheel. Born set only for the WorldFrame (`0x481b1f`); `EnableMouseWheel`
+    /// and an XML `<OnMouseWheel>` set it later.
     pub mouse_wheel_enabled: bool,
     /// The input mask's char bit (0): membership in the char walk ([`crate::script::keyboard`]),
     /// `0x76af00(0)`. `EnableKeyboard` (`0x776ec0`), XML `enableKeyboard` or a key script at XML
