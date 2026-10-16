@@ -507,10 +507,10 @@ fn bg_probe(
         Phase::Scanning { since: sent_at } => {
             let here = player.pos;
             // By entry, not nearness: all three stand in one alcove.
-            let master = units.iter().find(|(guid, kind, store, tf)| {
+            let master = units.iter().find(|(_, kind, store, tf)| {
                 kind.kind == benilla_protocol::EntityKind::Unit
                     && store.0.unit_npc_flags() & npc_flags::BATTLEMASTER != 0
-                    && benilla_protocol::guid::entry(guid.0) == Some(arena.npc_entry)
+                    && store.0.object_entry() == Some(arena.npc_entry)
                     && tf.translation.distance(here) < NEAR_YD
             });
             if let Some((guid, ..)) = master {
@@ -735,16 +735,16 @@ fn bg_probe(
                 finish(&mut probe, &net);
                 return;
             };
-            let found = units.iter().find(|(guid, kind, _, tf)| {
+            let found = units.iter().find(|(_, kind, store, tf)| {
                 kind.kind == benilla_protocol::EntityKind::GameObject
-                    && benilla_protocol::guid::entry(guid.0) == Some(entry)
+                    && store.0.object_entry() == Some(entry)
                     && tf.translation.distance(player.pos) < 15.0
             });
             match found {
-                Some((guid, _, _, tf)) => {
+                Some((guid, _, store, tf)) => {
                     // A flag stand has no lock, so a click's `resolve_go_action` sends
                     // `CMSG_GAMEOBJ_USE`, as here; the lock is logged, not assumed.
-                    let lock = go_templates.get(guid.0).map_or(u32::MAX, |t| t.lock_id);
+                    let lock = go_templates.of(&store.0).map_or(u32::MAX, |t| t.lock_id);
                     info!(
                         "PROBE bg: FLAG {entry} streamed at {:.1} yd, lock_id={lock} — CMSG_GAMEOBJ_USE",
                         tf.translation.distance(player.pos)
@@ -987,9 +987,9 @@ fn census(
             K::Player => pl += 1,
             K::GameObject => {
                 go += 1;
-                if let Some(e) = benilla_protocol::guid::entry(guid.0) {
+                if let Some(e) = store.0.object_entry() {
                     // With its name from the `GAMEOBJECT_QUERY` cache, already filled per stream.
-                    go_entries.push((e, go_templates.get(guid.0).map(|t| t.name.clone())));
+                    go_entries.push((e, go_templates.of(&store.0).map(|t| t.name.clone())));
                 }
             }
             K::DynamicObject => dy += 1,

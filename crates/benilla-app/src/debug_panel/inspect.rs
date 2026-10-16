@@ -348,7 +348,7 @@ pub(super) fn inspect_ui(
                     self_store, go_guid,
                 ),
                 meeting_stone_queued: crate::target::cursor_mode::meeting_stone_queued(
-                    go_guid.and_then(|g| Some(go_templates.get(g)?.meeting_stone?.area)),
+                    go_templates.of(&s.0).and_then(|t| Some(t.meeting_stone?.area)),
                     queued_area,
                 ),
             };
@@ -364,7 +364,7 @@ pub(super) fn inspect_ui(
             //  · `hover ✓`, `shown ✗`: the publish lost to occlusion, a nearer unit or UI.
             //  · `shown ✓` and no tooltip: the fault is in [`crate::ui_tooltip`].
             // `tmpl —` is the ask-once template query not answered yet.
-            let tmpl = go_guid.and_then(|g| go_templates.get(g));
+            let tmpl = go_templates.of(&s.0);
             let hover_gate = crate::target::cursor_mode::mouseover_eligible(
                 s.0.gameobject_type_id(),
                 flags,
@@ -388,9 +388,8 @@ pub(super) fn inspect_ui(
             // `page ?` means the query has not answered yet.
             let page_text = if s.0.gameobject_type_id() == crate::target::cursor_mode::GO_TYPE_TEXT
             {
-                let go_guid = net_entity.and_then(|p| guids.get(p).ok()).map(|g| g.0);
-                match go_guid
-                    .and_then(|g| go_templates.get(g))
+                match go_templates
+                    .of(&s.0)
                     .map(|t| t.text_page.map_or(0, |p| p.page_id))
                 {
                     None => " · page ?".to_string(),
@@ -464,10 +463,10 @@ pub(super) fn inspect_ui(
                     }
                 })
                 .unwrap_or("?");
-        let ctype = net_entity
-            .and_then(|p| guids.get(p).ok())
-            .and_then(|g| benilla_protocol::guid::entry(g.0))
-            .and_then(|e| names.creature_type(e));
+        let ctype =
+            s.0.object_entry()
+                .filter(|&e| e != 0)
+                .and_then(|e| names.creature_type(e));
         let ctype = ctype.map_or_else(|| "type ?".to_string(), |t| format!("type {t}"));
         let verdict = match net_entity {
             Some(p) if plates.contains(&p) => "plate ✓".to_string(),

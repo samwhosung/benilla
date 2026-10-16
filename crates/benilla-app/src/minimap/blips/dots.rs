@@ -213,11 +213,11 @@ pub(in crate::minimap) fn emit_tracking_dots(
     // to `0x5ed2b0` and never reaches the status-7 compare.
     if tracking.resources != 0 {
         if let Some(locks) = locks {
-            for (guid, net, tf, _) in candidates.iter() {
+            for (guid, net, tf, store) in candidates.iter() {
                 if net.kind != EntityKind::GameObject {
                     continue;
                 }
-                let Some(t) = templates.get(guid.0) else {
+                let Some(t) = store.and_then(|s| templates.of(&s.0)) else {
                     continue; // template not answered yet
                 };
                 if tracked_resource(tracking.resources, t.lock_id, locks) {

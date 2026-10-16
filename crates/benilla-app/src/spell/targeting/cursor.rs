@@ -199,11 +199,15 @@ fn object_arm(
     range: Option<RangeCall>,
     me: Option<Vec3>,
 ) -> bool {
-    let (Some(entity), Some(guid)) = (hovered_object.target, hovered_object.guid) else {
+    let Some(entity) = hovered_object.target else {
         return false;
     };
     // `0x5f8260`'s lookups: the template, then its `Lock.dbc` row. A template in flight is grey.
-    let Some(tmpl) = lock_inputs.templates.get(guid) else {
+    let Some(tmpl) = stores
+        .get(entity)
+        .ok()
+        .and_then(|(s, ..)| lock_inputs.templates.of(&s.0))
+    else {
         return false;
     };
     let lock_id = tmpl.lock_id;
@@ -738,7 +742,10 @@ mod tests {
             world.insert_resource(templates);
             world.spawn((SelfPlayer, Transform::default(), fx::caster(1.5)));
             let chest = world
-                .spawn(Transform::from_translation(Vec3::new(d, 0.0, 0.0)))
+                .spawn((
+                    Transform::from_translation(Vec3::new(d, 0.0, 0.0)),
+                    crate::net::ObjectStore(crate::go_templates::test_fields(7)),
+                ))
                 .id();
             world.insert_resource(crate::target::HoveredObject {
                 target: Some(chest),

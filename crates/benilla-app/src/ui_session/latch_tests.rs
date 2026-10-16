@@ -61,11 +61,14 @@ fn event(window: W) -> &'static str {
     }
 }
 
-/// The windows on the latch with their cells, a wire, and a VM that records their closes. Every
-/// unit guid's entry is 0, which a type-9 template makes a book, so any NPC here can be read.
+/// The windows on the latch with their cells, a wire, and a VM that records their closes. A
+/// type-9 template for [`BOOK_ENTRY`] makes a book of any guid that [`open`] streams as that
+/// entry's GameObject, so any NPC here can be read.
 pub(super) fn harness() -> App {
     harness_with_wire().0
 }
+
+const BOOK_ENTRY: u32 = 1;
 
 fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCommand>) {
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -73,7 +76,7 @@ fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCo
     let mut books = crate::go_templates::GameObjectTemplates::default();
     let mut data = [0i32; 24];
     data[0] = 1;
-    books.insert(0, 9, "Book".into(), &data);
+    books.insert(BOOK_ENTRY, 9, "Book".into(), &data);
     app.insert_resource(NetCommands(tx))
         .add_message::<LatchVocal>()
         .insert_resource(books)
@@ -148,6 +151,19 @@ fn greeting(npc: u64) -> QuestView {
     })
 }
 
+/// A read of `npc` as a book: the reader finds the template through the object's own descriptor,
+/// so the guid is streamed as a GameObject of [`BOOK_ENTRY`] first.
+fn read_book(world: &mut World, npc: u64) {
+    if !world
+        .resource::<crate::net::GuidIndex>()
+        .0
+        .contains_key(&npc)
+    {
+        crate::items::test_spawn_object(world, npc, crate::go_templates::test_fields(BOOK_ENTRY));
+    }
+    crate::ui_item_text::read_now(world, npc);
+}
+
 /// Each window's open as its packet handler or click runs it, on `npc`.
 pub(super) fn open(app: &mut App, window: W, npc: u64) {
     let world = app.world_mut();
@@ -156,7 +172,21 @@ pub(super) fn open(app: &mut App, window: W, npc: u64) {
             world.resource_mut::<TradeSession>().begin(npc);
             crate::ui_trade::open_window(world);
         }
-        W::ItemText => crate::ui_item_text::read_now(world, npc),
+        W::ItemText => {
+            // The reader finds the template through the object's own descriptor.
+            if !world
+                .resource::<crate::net::GuidIndex>()
+                .0
+                .contains_key(&npc)
+            {
+                crate::items::test_spawn_object(
+                    world,
+                    npc,
+                    crate::go_templates::test_fields(BOOK_ENTRY),
+                );
+            }
+            crate::ui_item_text::read_now(world, npc)
+        }
         W::Merchant => crate::ui_merchant::open_merchant(world, npc, Vec::new()),
         W::Bank => crate::ui_bank::open_bank(world, npc),
         W::Gossip => crate::ui_gossip::open_menu(world, npc, 0, Vec::new(), Vec::new()),
@@ -463,7 +493,7 @@ fn a_book_over_a_trade_cancels_it_before_the_begin() {
         .resource_mut::<TradeSession>()
         .begin(PARTNER);
     crate::ui_trade::open_window(app.world_mut());
-    crate::ui_item_text::read_now(app.world_mut(), NPC);
+    read_book(app.world_mut(), NPC);
     assert_eq!(seen_in(&app), ["TRADE_CLOSED", "ITEM_TEXT_BEGIN"]);
     let sent: Vec<ClientCommand> = rx.try_iter().collect();
     assert!(
@@ -480,7 +510,7 @@ fn a_book_over_a_trade_cancels_it_before_the_begin() {
 fn a_book_and_an_npc_window_close_each_other() {
     let mut app = harness();
     crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
-    crate::ui_item_text::read_now(app.world_mut(), NPC);
+    read_book(app.world_mut(), NPC);
     assert_eq!(seen_in(&app), ["MERCHANT_CLOSED"]);
     assert_eq!(latch(&app), Some(NPC));
 

@@ -605,7 +605,7 @@ pub(super) fn classify(
             Some(self_store),
         );
         // Read before the gate: MEETINGSTONE's override is a template slot.
-        let tmpl = hovered_object.guid.and_then(|g| go_inputs.templates.get(g));
+        let tmpl = go_inputs.templates.of(&store.0);
         let overrides = GoOverrides {
             channel_owned: fishing_channel_owned(Some(self_store), hovered_object.guid),
             meeting_stone_queued: meeting_stone_queued(

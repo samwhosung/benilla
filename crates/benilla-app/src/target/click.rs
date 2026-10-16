@@ -372,7 +372,9 @@ impl Dispatch<'_, '_> {
         // all-empty row counts, unlike `LockCatalog::is_locked`); a locked object is refused by
         // its opener cast. Only MAILBOX is exempt (`0x5f31bb`). Silent: the key has no text or
         // sound, and `0x4945b0` drops the empty string.
-        let lock_id = self.go_inputs.templates.get(guid).map_or(0, |t| t.lock_id);
+        let lock_id = go
+            .and_then(|(s, _)| self.go_inputs.templates.of(&s.0))
+            .map_or(0, |t| t.lock_id);
         let has_lock_row = lock_id != 0
             && self
                 .go_inputs
@@ -1128,7 +1130,7 @@ pub(crate) fn resolve_go_action(
     me_store: Option<&ObjectStore>,
     net: &NetCommands,
 ) -> GoAction {
-    let Some(tmpl) = inputs.templates.get(guid) else {
+    let Some(tmpl) = inputs.templates.of_guid(&inputs.objects, guid) else {
         return GoAction::Use;
     };
     let Some(locks) = inputs.locks.as_deref() else {

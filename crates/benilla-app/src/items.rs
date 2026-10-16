@@ -607,6 +607,14 @@ pub(crate) fn test_spawn_item(
     e
 }
 
+/// Any streamed object, straight into a test world: its guid indexed and its descriptor stored.
+#[cfg(test)]
+pub(crate) fn test_spawn_object(world: &mut World, guid: u64, fields: ObjectFields) -> Entity {
+    let e = world.spawn((Guid(guid), ObjectStore(fields))).id();
+    world.resource_mut::<GuidIndex>().0.insert(guid, e);
+    e
+}
+
 /// `EQUIPMENT_SLOT_MAINHAND` / `_OFFHAND` (vmangos `EquipmentSlots`).
 pub(crate) const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 pub(crate) const EQUIPMENT_SLOT_OFFHAND: u8 = 16;

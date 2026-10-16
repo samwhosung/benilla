@@ -224,7 +224,12 @@ fn stone_probe(
                 probe.phase = Phase::Done;
                 return;
             };
-            if let Some(t) = templates.get(guid).and_then(|t| t.meeting_stone) {
+            let stone_template = objects
+                .iter()
+                .find(|(g, ..)| g.0 == guid)
+                .and_then(|(_, _, store, _)| templates.of(&store.0))
+                .and_then(|t| t.meeting_stone);
+            if let Some(t) = stone_template {
                 info!(
                     "PROBE_STONE: template answered — levels {}..={}, area {}",
                     t.min_level, t.max_level, t.area

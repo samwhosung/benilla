@@ -585,6 +585,11 @@ impl TestObjects {
         crate::items::test_spawn_item(&mut self.world, guid, fields, false);
     }
 
+    /// Any other object in the index, with its descriptor.
+    pub(crate) fn spawn_object(&mut self, guid: u64, fields: ObjectFields) {
+        crate::items::test_spawn_object(&mut self.world, guid, fields);
+    }
+
     /// The same for a container instance (`TYPEMASK_CONTAINER`).
     pub(crate) fn spawn_container(&mut self, guid: u64, fields: ObjectFields) {
         crate::items::test_spawn_item(&mut self.world, guid, fields, true);
