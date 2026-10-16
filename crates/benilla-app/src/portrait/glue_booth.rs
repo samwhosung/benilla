@@ -2340,7 +2340,7 @@ mod tests {
             .add_systems(Update, sync_glue_ffx);
         let mut ghost = benilla_protocol::Character {
             flags: benilla_protocol::CHARACTER_FLAG_GHOST,
-            ..crate::char_select::test_character(1, "Boo")
+            ..crate::glue_session::roster::test_character(1, "Boo")
         };
         let set = |app: &mut App, look: Option<GlueLook>, show: bool| {
             {
@@ -2966,9 +2966,9 @@ mod tests {
     fn another_select_record_is_another_model() {
         let (mut app, root) = booth_app();
         let record = |guid| {
-            GlueLook::Select(SelectLook::from(&crate::char_select::test_character(
-                guid, "Rec",
-            )))
+            GlueLook::Select(SelectLook::from(
+                &crate::glue_session::roster::test_character(guid, "Rec"),
+            ))
         };
         bake(
             &mut app,

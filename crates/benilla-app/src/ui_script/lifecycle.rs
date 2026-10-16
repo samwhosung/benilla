@@ -408,12 +408,12 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     };
     // The character whose AddOn enable state gates which addons run.
     let identity = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .and_then(crate::ui_macro::identity);
     // The realm's character list is the enable store's node set: the reference keeps one
     // `ADDONSTATELIST` node per character, and an addon this one never set resolves from the rest.
     let roster: Vec<String> = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .map(|r| r.chars.iter().map(|c| c.name.clone()).collect())
         .unwrap_or_default();
     // The addon array before any addon file runs: `SMSG_ADDON_INFO` lands during the handshake, so
@@ -439,7 +439,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // The realm before the load, since addons read `GetRealmName()` at file scope; the roster
     // carries the realm-list entry this session connected to.
     let realm = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .and_then(|r| r.realm.as_ref().map(|r| r.name.clone()))
         .unwrap_or_default();
     script.set_realm_name(&realm);
@@ -456,7 +456,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // the unit: the live player on a `/reload`, else the roster's stand-in until the descriptor
     // streams in.
     if let Some(record) = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .and_then(|roster| record_from_roster(roster, crate::ui_unit::world_unit_names(world)))
     {
         script.set_player_record(record);
@@ -470,12 +470,11 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             script.set_player_xp(live.xp.0, live.xp.1);
         }
         None => {
-            if let Some(seat) =
-                world
-                    .get_resource::<crate::char_select::Roster>()
-                    .and_then(|roster| {
-                        seat_from_roster(roster, crate::ui_unit::world_unit_names(world))
-                    })
+            if let Some(seat) = world
+                .get_resource::<crate::glue_session::roster::Roster>()
+                .and_then(|roster| {
+                    seat_from_roster(roster, crate::ui_unit::world_unit_names(world))
+                })
             {
                 script.set_unit("player", Some(seat));
             }
@@ -621,7 +620,7 @@ fn roster_sex(gender: u8) -> u8 {
 /// one at `+0x108`, but its accessor (`0x5abe00`) has no caller, so `UnitLevel("player")` reads
 /// the descriptor.
 pub(crate) fn record_from_roster(
-    roster: &crate::char_select::Roster,
+    roster: &crate::glue_session::roster::Roster,
     names: crate::ui_unit::UnitNames<'_>,
 ) -> Option<benilla_ui::script::PlayerRecord> {
     let row = roster.pending_row()?;
@@ -641,7 +640,7 @@ pub(crate) fn record_from_roster(
 /// scope reads, the faction group chief among it. Health and power stay zero, the descriptor's
 /// to say.
 pub(crate) fn seat_from_roster(
-    roster: &crate::char_select::Roster,
+    roster: &crate::glue_session::roster::Roster,
     names: crate::ui_unit::UnitNames<'_>,
 ) -> Option<benilla_ui::script::UnitState> {
     let row = roster.pending_row()?;
@@ -1120,10 +1119,10 @@ mod tests {
     /// table's names at the install's locale, and the tokens beside them.
     #[test]
     fn the_roster_seat_and_record_name_race_and_class_from_the_tables() {
-        let mut c = crate::char_select::test_character(7, "Harness");
+        let mut c = crate::glue_session::roster::test_character(7, "Harness");
         c.race = 4; // Night Elf
         c.class = 5; // Priest
-        let roster = crate::char_select::Roster::with_pending_pick(vec![c], 7);
+        let roster = crate::glue_session::roster::Roster::with_pending_pick(vec![c], 7);
         let korean = crate::ui_unit::TestNames::korean();
         let seat = seat_from_roster(&roster, korean.names()).expect("a pick seats");
         assert_eq!(seat.race.as_deref(), Some("나이트 엘프"));

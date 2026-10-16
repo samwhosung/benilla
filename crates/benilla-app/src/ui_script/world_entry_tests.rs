@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::char_select::Roster;
+use crate::glue_session::roster::Roster;
 use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
 /// The corpus idiom: the character's name read once at file scope. `SwitchProbeLoads` counts

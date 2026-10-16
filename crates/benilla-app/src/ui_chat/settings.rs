@@ -395,7 +395,7 @@ fn shortcut_rows(channels: &super::edit::ChannelState) -> Vec<(u32, String)> {
 /// printed with no explicit colour, an addon's login `Print` among them.
 pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
     let Some(id) = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .and_then(crate::ui_macro::identity)
     else {
         return;
@@ -1079,8 +1079,8 @@ mod tests {
     }
 
     /// A roster with one character picked, which keys the chat cache path.
-    fn probe_roster(name: &str) -> crate::char_select::Roster {
-        crate::char_select::Roster::with_pending_pick(
+    fn probe_roster(name: &str) -> crate::glue_session::roster::Roster {
+        crate::glue_session::roster::Roster::with_pending_pick(
             vec![benilla_protocol::Character {
                 guid: 1,
                 name: name.into(),

@@ -90,7 +90,7 @@ fn load_icon_catalog(
 }
 
 /// `(realm, character)` off the roster's login pick, keying the per-character files.
-pub(crate) fn identity(roster: &crate::char_select::Roster) -> Option<(String, String)> {
+pub(crate) fn identity(roster: &crate::glue_session::roster::Roster) -> Option<(String, String)> {
     let guid = roster.pending_pick?;
     let name = roster.chars.iter().find(|c| c.guid == guid)?.name.clone();
     let realm = roster
@@ -104,7 +104,7 @@ pub(crate) fn identity(roster: &crate::char_select::Roster) -> Option<(String, S
 /// Seed the engine's macro table from disk, once per character per VM.
 fn load_macros(
     script: Option<NonSendMut<UiScript>>,
-    roster: Res<crate::char_select::Roster>,
+    roster: Res<crate::glue_session::roster::Roster>,
     mut files: ResMut<MacroFiles>,
 ) {
     let Some(mut script) = script else { return };

@@ -206,7 +206,7 @@ fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
 /// user-placed frames on every later pass (`UIParent.lua:1692`).
 pub(crate) fn load_layout(
     script: Option<NonSendMut<UiScript>>,
-    roster: Res<crate::char_select::Roster>,
+    roster: Res<crate::glue_session::roster::Roster>,
     mut file: ResMut<LayoutFile>,
 ) {
     let Some(mut script) = script else { return };

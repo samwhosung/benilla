@@ -238,7 +238,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     // The character's own set: its file existing makes it the active set, the reference's rule.
     // No roster identity (a rigged or capture run) leaves set 2 unseeded.
     let id = world
-        .get_resource::<crate::char_select::Roster>()
+        .get_resource::<crate::glue_session::roster::Roster>()
         .and_then(crate::ui_macro::identity);
     let character = id
         .as_ref()

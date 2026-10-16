@@ -54,13 +54,13 @@ pub(super) fn publish_viewer(
 pub(super) fn publish_view_focus(
     mut focus: ResMut<ViewFocus>,
     mut player: Option<ResMut<Player>>,
-    roster: Option<Res<crate::char_select::Roster>>,
+    roster: Option<Res<crate::glue_session::roster::Roster>>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
     mut was_flying: Local<bool>,
 ) {
     let entry = roster
         .as_deref()
-        .and_then(crate::char_select::Roster::pending_entry);
+        .and_then(crate::glue_session::roster::Roster::pending_entry);
     // A cinematic flies the eye away from the body (a Tauren intro opens 1741 yd out), so the
     // stream follows the camera, as in free-fly.
     let flying = cinematic.as_deref().is_some_and(|c| c.is_playing());

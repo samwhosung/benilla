@@ -439,7 +439,7 @@ fn the_world_connect_shows_each_completion() {
 fn the_authentication_puts_the_character_screen_up() {
     let mut m = fresh();
     m.state = ScreenState::Connect;
-    let alpha = || vec![crate::char_select::test_character(7, "Alpha")];
+    let alpha = || vec![crate::glue_session::roster::test_character(7, "Alpha")];
     m.on_roster(alpha(), RosterCause::Asked, 0);
     m.on_roster(alpha(), RosterCause::Park, 0);
     m.tick();
@@ -502,7 +502,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         // Rosters nothing asked for are not this screen's.
         for cause in [RosterCause::Park, RosterCause::Changed] {
             m.on_roster(
-                vec![crate::char_select::test_character(1, "Stray")],
+                vec![crate::glue_session::roster::test_character(1, "Stray")],
                 cause,
                 0,
             );
@@ -512,7 +512,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         assert!(m.outbox.is_empty());
         assert!(m.roster.iter().all(|c| c.name != "Stray"));
         m.on_roster(
-            vec![crate::char_select::test_character(id, name)],
+            vec![crate::glue_session::roster::test_character(id, name)],
             RosterCause::Asked,
             0,
         );
@@ -532,7 +532,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
 /// completes nothing.
 #[test]
 fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
-    let late = || vec![crate::char_select::test_character(9, "Late")];
+    let late = || vec![crate::glue_session::roster::test_character(9, "Late")];
     let mut m = fresh();
     m.connected = true;
     m.get_character_list();
@@ -1726,12 +1726,13 @@ fn enter_world_runs_its_arms_in_the_call() {
         assert_eq!(shared.get().state, ScreenState::Idle);
     }
     // `lastCharacterIndex` is written in the call (`0x46b5fa`): the selection's 0-based index.
-    s.register_cvars([(crate::char_select::CVAR_LAST_CHARACTER, "0")]);
+    s.register_cvars([(crate::glue_session::roster::CVAR_LAST_CHARACTER, "0")]);
     s.load_glue_roster(vec![record(2, 0), record(3, 0)]);
     s.run("SelectCharacter(2)").unwrap();
     assert!(heard_in(&s, "EnterWorld()").is_empty());
     assert_eq!(
-        s.cvar(crate::char_select::CVAR_LAST_CHARACTER).as_deref(),
+        s.cvar(crate::glue_session::roster::CVAR_LAST_CHARACTER)
+            .as_deref(),
         Some("1"),
         "no frame has run"
     );
@@ -2867,7 +2868,7 @@ fn a_scripted_run_reaches_the_character_screen_with_no_realm_name() {
 /// Three characters: a living night elf druid in Teldrassil, a ghost human warrior in Elwynn, and
 /// a gnome mage in a zone `AreaTable` has no row for.
 fn roster3() -> Vec<benilla_protocol::Character> {
-    let mut alpha = crate::char_select::test_character(0x11, "Alpha");
+    let mut alpha = crate::glue_session::roster::test_character(0x11, "Alpha");
     (
         alpha.race,
         alpha.class,
@@ -2875,10 +2876,10 @@ fn roster3() -> Vec<benilla_protocol::Character> {
         alpha.level,
         alpha.zone,
     ) = (4, 11, 1, 12, 141);
-    let mut bravo = crate::char_select::test_character(0x12, "Bravo");
+    let mut bravo = crate::glue_session::roster::test_character(0x12, "Bravo");
     (bravo.race, bravo.class, bravo.level, bravo.zone) = (1, 1, 60, 12);
     bravo.flags = benilla_protocol::CHARACTER_FLAG_GHOST;
-    let mut charlie = crate::char_select::test_character(0x13, "Charlie");
+    let mut charlie = crate::glue_session::roster::test_character(0x13, "Charlie");
     (charlie.race, charlie.class, charlie.level, charlie.zone) = (7, 8, 3, 9999);
     vec![alpha, bravo, charlie]
 }
@@ -3125,7 +3126,7 @@ fn the_stock_select_stands_the_selected_character_at_the_cells_facing() {
     use crate::portrait::{GlueLook, GlueScene, SelectLook};
     let _ = benilla_formats::wow_data_or_skip!();
     let mut roster = roster3();
-    let mut dwarf = crate::char_select::test_character(0x14, "Delta");
+    let mut dwarf = crate::glue_session::roster::test_character(0x14, "Delta");
     (dwarf.race, dwarf.zone) = (3, 12);
     roster.push(dwarf);
     let (mut app, _realmd, _world) = char_select_app(&roster, "1", false);
@@ -3191,7 +3192,7 @@ fn the_stock_select_fogs_the_empty_roster_and_keeps_the_last_stage() {
     let fog = p.fog.expect("the empty roster's scene is fogged");
     assert_eq!((fog.near, fog.far), (0.0, 270.0));
 
-    let mut tauren = crate::char_select::test_character(0x41, "Moo");
+    let mut tauren = crate::glue_session::roster::test_character(0x41, "Moo");
     (tauren.race, tauren.zone) = (6, 12);
     let (mut app, _realmd, world) = char_select_app(&[tauren], "0", true);
     until(&mut app, "the roster load", |app| {
@@ -3233,7 +3234,7 @@ fn the_roster_names_come_from_the_dbc_rows() {
         classes: Some(&classes),
         creatures: Some(&creatures),
     };
-    let mut c = crate::char_select::test_character(1, "Alpha");
+    let mut c = crate::glue_session::roster::test_character(1, "Alpha");
     (c.race, c.class, c.gender) = (5, 9, 1);
     let g = glue_character(&c, &names);
     assert_eq!(
@@ -3299,9 +3300,9 @@ fn the_roster_names_come_from_the_dbc_rows() {
 #[test]
 fn showing_the_screen_then_changing_realm_asks_the_old_link_once() {
     let _ = benilla_formats::wow_data_or_skip!();
-    let mut alpha = crate::char_select::test_character(0x21, "Oldrealm");
+    let mut alpha = crate::glue_session::roster::test_character(0x21, "Oldrealm");
     alpha.zone = 12;
-    let mut bravo = crate::char_select::test_character(0x31, "Newrealm");
+    let mut bravo = crate::glue_session::roster::test_character(0x31, "Newrealm");
     bravo.zone = 12;
     let (alpha, bravo) = (vec![alpha], vec![bravo]);
     for round in 0..8 {
@@ -3360,12 +3361,12 @@ fn showing_the_screen_then_changing_realm_asks_the_old_link_once() {
 #[test]
 fn a_roster_reply_after_the_dialogs_cancel_is_dropped() {
     let _ = benilla_formats::wow_data_or_skip!();
-    let before = vec![crate::char_select::test_character(0x41, "Before")];
+    let before = vec![crate::glue_session::roster::test_character(0x41, "Before")];
     let (mut app, _realmd, world) = char_select_app(&before, "0", true);
     until(&mut app, "the roster", |app| {
         seen(app, "CHARACTER_LIST_UPDATE") >= 2 && mgr(app).state == ScreenState::Idle
     });
-    world.set_roster(&[crate::char_select::test_character(0x42, "Later")]);
+    world.set_roster(&[crate::glue_session::roster::test_character(0x42, "Later")]);
     world.delay_rosters(std::time::Duration::from_millis(400));
     vm(&app).run("GetCharacterListUpdate()").unwrap();
     app.update();
@@ -4027,9 +4028,11 @@ fn the_stock_rename_renames_the_row_and_moves_its_files() {
     roster[1].flags |= benilla_protocol::CHARACTER_FLAG_RENAME;
     let (mut app, _realmd, world) =
         select_screen(&roster, Some(&|w| w.set_addon_info(&[2; 12], false)));
-    // The select screen's roster, Bravo picked: the in-world files are named from it.
+    // The session's roster, Bravo picked: the in-world files are named from it.
     app.world_mut()
-        .insert_resource(crate::char_select::Roster::with_pending_pick(roster, 0x12));
+        .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            roster, 0x12,
+        ));
     let enable = |app: &App, who: &str| {
         vm(app)
             .eval::<f64>(&format!("return GetAddOnEnableState('{who}', 1)"))
@@ -4100,7 +4103,9 @@ fn the_stock_rename_renames_the_row_and_moves_its_files() {
     });
     assert_eq!(kept, Some(("Newbie".to_string(), 0)));
     // The world entry names its files by the new name.
-    let picked = app.world().resource::<crate::char_select::Roster>();
+    let picked = app
+        .world()
+        .resource::<crate::glue_session::roster::Roster>();
     assert_eq!(
         crate::ui_macro::identity(picked).map(|(_, name)| name),
         Some("Newbie".to_string())
@@ -4146,7 +4151,7 @@ fn a_refused_stock_rename_asks_again() {
 // ── The world entry under the stock select ──
 
 /// [`select_screen`] over `roster3`'s account with the session's state machine running: the
-/// select screen's edges ([`crate::char_select::session_edges`]), the world entry's VM edges
+/// session's edges ([`crate::glue_session::edges::session_edges`]), the world entry's VM edges
 /// (`OnEnter(InWorld)` takes the glue VM out of the world, `OnExit(InWorld)` builds the stock glue
 /// again on the screen the exit enters), and the CVar registry with its sync, saved under the
 /// current `BENILLA_HOME`. With `refuse` the server refuses every character login.
@@ -4166,8 +4171,8 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
         w.remove_resource::<NextState<ClientState>>();
         w.insert_resource(cvars);
         w.insert_resource(super::super::glue::GlueStock(true));
-        // The roster the IO thread already published, as the select screen's edges took it.
-        w.insert_resource(crate::char_select::Roster::with_chars(roster3()));
+        // The roster the IO thread already published, as the session's edges took it.
+        w.insert_resource(crate::glue_session::roster::Roster::with_chars(roster3()));
         w.init_resource::<crate::glue::dialog::GlueDialog>();
     }
     app.add_plugins(bevy::state::app::StatesPlugin)
@@ -4183,7 +4188,7 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
         .add_systems(
             Update,
             (
-                crate::char_select::session_edges()
+                crate::glue_session::edges::session_edges()
                     .after(pump)
                     .before(drive_glue_mgr),
                 crate::cvars::sync_cvars.after(drive_glue_mgr),
@@ -4249,11 +4254,11 @@ fn the_stock_enter_world_logs_in_and_the_glue_leaves_with_the_screen() {
     assert_eq!(
         app.world()
             .resource::<crate::cvars::Cvars>()
-            .get(crate::char_select::CVAR_LAST_CHARACTER),
+            .get(crate::glue_session::roster::CVAR_LAST_CHARACTER),
         Some("1")
     );
     assert_eq!(
-        saved_cvar(&home, crate::char_select::CVAR_LAST_CHARACTER).as_deref(),
+        saved_cvar(&home, crate::glue_session::roster::CVAR_LAST_CHARACTER).as_deref(),
         Some("1"),
         "saved in the call, not a quiet second later"
     );
@@ -4266,7 +4271,7 @@ fn the_stock_enter_world_logs_in_and_the_glue_leaves_with_the_screen() {
     );
     assert_eq!(
         app.world()
-            .resource::<crate::char_select::Roster>()
+            .resource::<crate::glue_session::roster::Roster>()
             .pending_row()
             .map(|c| c.name.as_str()),
         Some("Bravo"),
@@ -4493,7 +4498,7 @@ fn a_refusal_in_the_entrys_drain_keeps_the_stock_select() {
     assert_eq!(vm(&app).session(), session, "the glue never left");
     assert!(
         app.world()
-            .resource::<crate::char_select::Roster>()
+            .resource::<crate::glue_session::roster::Roster>()
             .pending_row()
             .is_none(),
         "the pick went with the refusal"

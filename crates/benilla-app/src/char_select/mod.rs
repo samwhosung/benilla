@@ -1,7 +1,6 @@
-//! Character select: the roster pick policy and the `CharacterSelect.xml` glue screen. The parked
-//! IO thread emits the roster ([`CharListMessage`]), answered by the pending pick (reconnect),
-//! `WOW_CHAR`, or a choice on the screen, which opens on the character last entered as
-//! (`lastCharacterIndex`).
+//! Character select, the native `CharacterSelect.xml` screen: its look, its input, its dialogs and
+//! its instruments. The roster it shows, the pick and the session's edges are
+//! [`crate::glue_session`]'s, which serve the stock screens too.
 
 mod addons;
 #[cfg(test)]
@@ -12,24 +11,21 @@ mod refresh;
 mod roundtrip;
 mod screen;
 
-use benilla_protocol::{CharAction, Character};
+use benilla_protocol::CharAction;
 use bevy::prelude::*;
 
 use crate::client_state::ClientState;
+use crate::glue_session::roster::{send_pick, Roster};
 use crate::glue_strings::GlueStrings;
 
-use crate::net::{
-    CharActionResultMessage, CharListMessage, CharPick, CharRequest, CharacterLoginFailedMessage,
-    EnteredWorldMessage, LoggedOutMessage,
-};
+use crate::net::{CharActionResultMessage, CharPick, CharacterLoginFailedMessage};
 
-/// The character-select subsystem: the roster's policy and the select screen.
+/// The native character-select screen.
 pub(crate) struct CharSelectPlugin;
 
 impl Plugin for CharSelectPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Roster>()
-            .init_resource::<dialog::DeleteDialog>()
+        app.init_resource::<dialog::DeleteDialog>()
             .init_resource::<addons::AddonsPanel>()
             .init_resource::<refresh::SelectBackground>()
             .add_systems(
@@ -53,18 +49,15 @@ impl Plugin for CharSelectPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    // After the UI tick: the stock arm reads the frames it built and presses its verbs.
-                    roundtrip::debug_glue_roundtrip
-                        .run_if(roundtrip::enabled)
-                        .after(crate::ui_script::UiInput),
-                    debug_logout_smoke.after(crate::player::ControlRestore),
-                ),
+                // After the UI tick: the stock arm reads the frames it built and presses its verbs.
+                roundtrip::debug_glue_roundtrip
+                    .run_if(roundtrip::enabled)
+                    .after(crate::ui_script::UiInput),
             )
             .add_systems(
                 Update,
                 (
-                    session_edges(),
+                    refusal_dialog(),
                     (
                         screen::materialize_screen,
                         input::select_input.run_if(crate::ui_script::glue::native_glue),
@@ -95,6 +88,8 @@ impl Plugin for CharSelectPlugin {
                         .run_if(in_state(ClientState::CharSelect)),
                 )
                     .chain()
+                    // The session's edges first: the state and the pick a screen shows.
+                    .after(crate::glue_session::edges::SessionEdges)
                     .after(benilla_world::schedule::WorldStage::Net),
             )
             // After the cover's stage, so the raise it reads is this frame's.
@@ -107,370 +102,25 @@ impl Plugin for CharSelectPlugin {
     }
 }
 
-/// The session's edges, in every state: the reconnect auto-answer and the logout edge arrive
-/// `InWorld`. A logout or a refused login clears the pick before the roster policy reads it: the
-/// roster comes right behind them on the kept link, often in the same drain, and must be shown,
-/// not answered with the pick just left. The refusal and `back_on_disconnect` run after the entry:
-/// the entry is announced with `CMSG_PLAYER_LOGIN`, so a refusal or a session that died during
-/// entry queues both edges into one frame, and the later word must win (`0x5aad70` leaves the
-/// player on the select screen).
-pub(crate) fn session_edges(
-) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
-    (
-        back_on_logout,
-        enter_on_connected,
-        back_on_login_refused,
-        apply_roster_policy,
-        back_on_disconnect,
-        // Last and ungated: it mirrors the pick the frame ended with, and world entry is reached
-        // from the create screen too.
-        persist_last_character,
-    )
-        .chain()
+/// The native screens' half of a refused login, in any state: the refusal arrives in the world,
+/// and the edge that takes the session back to select is [`crate::glue_session::edges`]'s.
+fn refusal_dialog() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    open_login_refusal
+        .run_if(crate::ui_script::glue::native_glue)
         .into_configs()
 }
 
-// ── The roster and pick policy ──────────────────────────────────────────────────────────────────
-
-/// The account roster and the pick policy's memory.
-#[derive(Resource, Default)]
-pub(crate) struct Roster {
-    pub(super) chars: Vec<Character>,
-    /// The selected row, `CharacterSelect.selectedIndex` 0-based. Written only through
-    /// [`Roster::select`].
-    selected: Option<usize>,
-    /// Bumped by every [`Roster::select`], changed row or not: the reference's `SelectCharacter`
-    /// zeroes the facing unconditionally (`0x472950` writes `0xb4217c` above its already-built
-    /// check), so a roster refresh re-selecting the same index re-squares too. Only a row click is
-    /// gated, in the stock Lua ([`Roster::click_row`]).
-    pub(super) select_seq: u64,
-    /// The guid picked; kept in-world so a reconnect's roster is answered with it, cleared by a
-    /// logout so the roster is shown.
-    pub(super) pending_pick: Option<u64>,
-    /// `WOW_CHAR`: auto-pick this name on the first roster only.
-    env_char: Option<String>,
-    /// A just-created character's name, whose row gets selected (the reference's
-    /// `SELECT_LAST_CHARACTER`, keyed by name to survive the create/enum race).
-    just_created: Option<String>,
-    /// The realm-list entry this session connected to, refreshed with each roster.
-    pub(super) realm: Option<benilla_protocol::RealmInfo>,
-    env_read: bool,
-}
-
-impl Roster {
-    /// A rename the server accepted, applied to the record with `guid` as the glue's applier
-    /// renames its own (`0x4725f0`): the new name and the rename flag clear. The in-world files
-    /// are named from this roster ([`crate::ui_macro::identity`]).
-    pub(crate) fn rename(&mut self, guid: u64, name: &str) {
-        if let Some(c) = self.chars.iter_mut().find(|c| c.guid == guid) {
-            c.name = name.to_string();
-            c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
-        }
-    }
-
-    /// A roster the screen holds with no pick, for tests outside this module.
-    #[cfg(test)]
-    pub(crate) fn with_chars(chars: Vec<Character>) -> Self {
-        Self {
-            chars,
-            ..Self::default()
-        }
-    }
-
-    /// A roster with a pick in flight, for tests outside this module.
-    #[cfg(test)]
-    pub(crate) fn with_pending_pick(chars: Vec<Character>, guid: u64) -> Self {
-        Self {
-            chars,
-            pending_pick: Some(guid),
-            ..Self::default()
-        }
-    }
-
-    /// Note a character the create screen just made, and select its row now: `net::io` emits the
-    /// fresh roster before the create result, so no later roster comes. If the row is not in hand
-    /// yet, the arm stays for [`apply_roster_policy`].
-    pub(crate) fn note_created(&mut self, name: String) {
-        self.just_created = Some(name);
-        self.select_created_by_name();
-    }
-
-    /// Select the armed just-created row by name, disarming only on a hit. Case-insensitive:
-    /// vmangos's `normalizePlayerName` turns a typed `ZZBULL` into `Zzbull`.
-    fn select_created_by_name(&mut self) {
-        let Some(name) = self.just_created.as_deref() else {
-            return;
-        };
-        if let Some(row) = self
-            .chars
-            .iter()
-            .position(|c| c.name.eq_ignore_ascii_case(name))
-        {
-            self.select(Some(row));
-            self.just_created = None;
-        }
-    }
-
-    /// Select a row, the reference's `SelectCharacter`; every selection goes through here so the
-    /// facing reset is never skipped.
-    pub(super) fn select(&mut self, row: Option<usize>) {
-        self.selected = row;
-        self.select_seq = self.select_seq.wrapping_add(1);
-    }
-
-    /// A click on a row: `CharacterSelectButton_OnClick` selects only when `id` differs from
-    /// `selectedIndex` (`CharacterSelect.lua:305-310`, and `OnDoubleClick` at 312-318), so clicking
-    /// the current row keeps its dragged facing.
-    pub(super) fn click_row(&mut self, row: usize) {
-        if self.selected != Some(row) {
-            self.select(Some(row));
-        }
-    }
-
-    pub(super) fn selected(&self) -> Option<usize> {
-        self.selected
-    }
-
-    pub(super) fn selected_char(&self) -> Option<&Character> {
-        self.selected.and_then(|i| self.chars.get(i))
-    }
-
-    /// The pending pick's map, for the loading screen's art before `SMSG_LOGIN_VERIFY_WORLD`.
-    pub(crate) fn pending_map(&self) -> Option<u32> {
-        self.pending_row().map(|c| c.map)
-    }
-
-    /// The pending pick's level: the reference suppresses the loading tip when it arrived as 0 in
-    /// `SMSG_CHAR_ENUM` (`0x5b42a0` sets `[selChar+0x10a]`); vmangos always sends a real level.
-    pub(crate) fn pending_level(&self) -> Option<u8> {
-        self.pending_row().map(|c| c.level)
-    }
-
-    /// The picked character's `(map, wow xyz)`, a round trip before `SMSG_LOGIN_VERIFY_WORLD`; the
-    /// streamers aim at it during world entry.
-    pub(crate) fn pending_entry(&self) -> Option<(u32, [f32; 3])> {
-        self.pending_row()
-            .map(|c| (c.map, [c.position.x, c.position.y, c.position.z]))
-    }
-
-    /// The roster row for the pick in flight: the only description of the character until the
-    /// self descriptor streams in, so the in-game UI seats `UnitName("player")` from it.
-    pub(crate) fn pending_row(&self) -> Option<&Character> {
-        self.pending_pick
-            .and_then(|g| self.chars.iter().find(|c| c.guid == g))
-    }
-
-    /// The roster position of the pick in flight, by guid rather than the live selection: what
-    /// the reference persists as `lastCharacterIndex` at Enter World.
-    pub(super) fn pending_index(&self) -> Option<usize> {
-        let guid = self.pending_pick?;
-        self.chars.iter().position(|c| c.guid == guid)
-    }
-}
-
-// ── The remembered character (`lastCharacterIndex`) ───────────────────────────────
-
-/// The 1.12 CVar the select screen remembers by: registered at `0x402d93` (name `0x82e8f8`,
-/// default `"0"`, pointer at `[0x882674]`), written engine-side, named by no GlueXML.
-pub(crate) const CVAR_LAST_CHARACTER: &str = "lastCharacterIndex";
-
-/// The stored index is 0-based, `"0"` the first character: the engine's selection cell
-/// `[0x83856c]` printed with `"%d"` (`0x473470` decrements the Lua's 1-based row).
-/// `CVar::SaveConfig` (`0x63d980`) skips a value equal to the default, so row 0 writes no line.
-fn last_character_value(row: usize) -> String {
-    row.to_string()
-}
-
-/// The stored value as a row; out of range is the caller's, since the reference does not clamp.
-fn last_character_row(value: &str) -> Option<usize> {
-    value.trim().parse::<usize>().ok()
-}
-
-/// The remembered row for a roster of `len`: out of range falls back to the first row, not the
-/// nearest (`CGlueMgr::SetSelectedCharacter`, `0x472740`).
-fn remembered_row(cvars: &crate::cvars::Cvars, len: usize) -> usize {
-    cvars
-        .get(CVAR_LAST_CHARACTER)
-        .and_then(last_character_row)
-        .filter(|&row| row < len)
-        .unwrap_or(0)
-}
-
-/// Mirror the character entering the world into [`CVAR_LAST_CHARACTER`], at Enter World, not on
-/// a click: `CGlueMgr::EnterWorld` (`0x46b500`) writes the CVar at `0x46b5fa`. The reference
-/// flushes `Config.wtf` in the same call (`0x46b6f6`); this reaches disk on exit with every CVar.
-fn persist_last_character(
-    roster: Res<Roster>,
-    mut cvars: ResMut<crate::cvars::Cvars>,
-    // The registry outlives every VM, so a row written once stays written.
-    mut mirrored: Local<Option<usize>>,
-) {
-    let Some(row) = roster.pending_index() else {
-        return;
-    };
-    if *mirrored == Some(row) {
-        return;
-    }
-    cvars.set(CVAR_LAST_CHARACTER, &last_character_value(row));
-    *mirrored = Some(row);
-}
-
-/// Ask the parked IO thread to log in as `guid` and remember it as pending; the probe rig picks
-/// through here too, so a reconnect re-answers with its character.
-pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64) {
-    roster.pending_pick = Some(guid);
-    let _ = pick.0.send(CharRequest::Enter(guid));
-}
-
-/// Drain each [`CharListMessage`] into the roster, then answer it with the pending pick
-/// (reconnect), the `WOW_CHAR` fast path (first roster only), or nothing, leaving the screen up.
-fn apply_roster_policy(
-    mut msgs: MessageReader<CharListMessage>,
-    mut roster: ResMut<Roster>,
-    pick: Res<CharPick>,
-    // The remembered row, read off the registry, the store that outlives every VM.
-    cvars: Res<crate::cvars::Cvars>,
-    // Present only when a rig drives the run and picks its own character.
-    rig: Option<Res<crate::run_mode::RigCharacter>>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    if !roster.env_read {
-        roster.env_read = true;
-        // `WOW_RIG` outranks `WOW_CHAR`: the rig may have to create its character first, which
-        // this one-shot fast path cannot wait for.
-        roster.env_char = match rig.as_deref() {
-            Some(crate::run_mode::RigCharacter(name)) => {
-                if let Ok(ignored) = std::env::var("WOW_CHAR") {
-                    warn!("char select: WOW_RIG names {name} — ignoring WOW_CHAR={ignored}");
-                }
-                None
-            }
-            // `WOW_CHAR`, or the login smoke's optional third field.
-            None => std::env::var("WOW_CHAR").ok().or_else(|| {
-                std::env::var("WOW_LOGIN_SMOKE")
-                    .ok()
-                    .and_then(|s| crate::login::smoke_character(&s))
-            }),
-        };
-    }
-    for msg in msgs.read() {
-        roster.chars = msg.characters.clone();
-        roster.realm = msg.realm.clone();
-        // A still-armed create selects by name, else the last row: the reference's
-        // `SELECT_LAST_CHARACTER` is `SelectCharacter(numChars)`, and vmangos enumerates
-        // `ORDER BY create_time, guid`. It outranks the remembered row: the reference pushes the
-        // CVar's row (`0x472563`) before `CHARACTER_LIST_UPDATE`, whose `selectLast` overwrites it.
-        let created = roster.just_created.is_some();
-        if created {
-            roster.select_created_by_name();
-            if let Some(name) = roster.just_created.take() {
-                warn!(
-                    "char select: created {name:?} is not on the fresh roster — selecting the last row"
-                );
-                let last = roster.chars.len().checked_sub(1);
-                roster.select(last);
-            }
-        }
-        if roster.chars.is_empty() {
-            roster.select(None);
-        } else if !created {
-            // Re-applied on every roster: the reference reads the CVar in the list rebuild
-            // (`0x4724d0` to `0x472740`), not once at startup.
-            let row = remembered_row(&cvars, roster.chars.len());
-            let who = roster.chars[row].name.clone();
-            info!("char select: {CVAR_LAST_CHARACTER} selects row {row} ({who})");
-            roster.select(Some(row));
-        }
-        // `WOW_CHARSELECT_PICK=<name>` selects that row and stays on the screen.
-        if let Ok(name) = std::env::var("WOW_CHARSELECT_PICK") {
-            match roster
-                .chars
-                .iter()
-                .position(|c| c.name.eq_ignore_ascii_case(&name))
-            {
-                Some(row) => {
-                    info!("char select: WOW_CHARSELECT_PICK={name} — selecting row {row}");
-                    roster.select(Some(row));
-                }
-                None => warn!("char select: WOW_CHARSELECT_PICK={name} not on this account"),
-            }
-        }
-        if let Some(guid) = roster.pending_pick {
-            // A reconnect, or a pick that raced a dying socket: re-answer without the screen.
-            send_pick(&mut roster, &pick, guid);
-        } else if let Some(name) = roster.env_char.take() {
-            match roster
-                .chars
-                .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&name))
-            {
-                Some(c) => {
-                    let guid = c.guid;
-                    info!("char select: WOW_CHAR={name} — fast path");
-                    send_pick(&mut roster, &pick, guid);
-                }
-                None => {
-                    warn!("char select: WOW_CHAR={name} not on this account — showing roster");
-                    // A driverless run cannot pick another row, so it fails rather than idles.
-                    if std::env::var_os("WOW_LOGIN_SMOKE").is_none()
-                        && crate::run_mode::fatal_when_driverless(&format!(
-                            "WOW_CHAR={name} is not on this account"
-                        ))
-                    {
-                        exit.write(AppExit::error());
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// `Connected` ([`EnteredWorldMessage`]): the world owns the session.
-fn enter_on_connected(
-    mut msgs: MessageReader<EnteredWorldMessage>,
-    mut next: ResMut<NextState<ClientState>>,
-) {
-    if msgs.read().next().is_some() {
-        next.set(ClientState::InWorld);
-    }
-}
-
-/// The session died: back to the login screen, as `GlueParent.lua`'s `DISCONNECTED_FROM_SERVER`
-/// does. Chained after [`enter_on_connected`]: a stream dying during entry drains `Connected` and
-/// `Disconnected` in one frame, and the dead session must be the last word.
-fn back_on_disconnect(
-    mut msgs: MessageReader<crate::net::DisconnectedMessage>,
-    mut roster: ResMut<Roster>,
-    mut next: ResMut<NextState<ClientState>>,
-) {
-    if !msgs.read().any(|m| m.session_over) {
-        return;
-    }
-    // With no reconnect coming, a kept pick would auto-answer the next roster.
-    roster.pending_pick = None;
-    next.set(ClientState::Login);
-}
-
-/// `SMSG_CHARACTER_LOGIN_FAILED`: back to select with the refusal in the glue dialog. The IO
-/// thread announces the entry with the pick, so this undoes a half-built one. The pick must be
-/// cleared, or the roster behind the refusal is auto-answered and the refused login loops. Under
-/// the stock glue the refusal's dialog is its glue manager's (state 9), not this one.
-fn back_on_login_refused(
+/// `SMSG_CHARACTER_LOGIN_FAILED` in the glue dialog: a refusal the player cannot see is a
+/// select screen that does nothing. Under the stock glue the words are its glue manager's
+/// (state 9), so [`refusal_dialog`] runs this on the native screens only.
+fn open_login_refusal(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
-    mut roster: ResMut<Roster>,
-    mut next: ResMut<NextState<ClientState>>,
     mut dialog: ResMut<crate::glue::dialog::GlueDialog>,
     strings: Option<Res<GlueStrings>>,
-    stock: Option<Res<crate::ui_script::glue::GlueStock>>,
 ) {
     let Some(msg) = msgs.read().last().copied() else {
         return;
     };
-    roster.pending_pick = None;
-    next.set(ClientState::CharSelect);
-    if stock.is_some_and(|s| s.0) {
-        return;
-    }
     let empty = GlueStrings::default();
     let strings = strings.as_deref().unwrap_or(&empty);
     dialog.open_error(char_login_refusal_text(strings, msg.result));
@@ -504,18 +154,6 @@ pub(crate) fn char_login_refusal_text(strings: &GlueStrings, result: u8) -> &str
         _ => ("CHAR_LOGIN_FAILED", "Login failed"),
     };
     strings.text(key, fallback)
-}
-
-/// A confirmed `/logout`: back to select, the pick cleared so the next roster is shown.
-fn back_on_logout(
-    mut msgs: MessageReader<LoggedOutMessage>,
-    mut roster: ResMut<Roster>,
-    mut next: ResMut<NextState<ClientState>>,
-) {
-    if msgs.read().next().is_some() {
-        roster.pending_pick = None;
-        next.set(ClientState::CharSelect);
-    }
 }
 
 /// Surface a refused delete in the glue dialog (vmangos refuses a guild master). The reference's
@@ -561,115 +199,6 @@ pub(crate) fn char_delete_refusal_text(strings: &GlueStrings, code: u8) -> Optio
         _ => ("CHAR_DELETE_FAILED", "Character deletion failed"),
     };
     Some(strings.text(key, fallback))
-}
-
-/// The logout smoke (`WOW_LOGOUT_SMOKE=1`, with `WOW_CHAR`): once in the world, `/logout`, return
-/// to CharSelect, wait for the roster the logout brings on the link the world was entered by,
-/// enter the world again and close the window. The second entry streams a map
-/// `terrain_stream::release_world` tore down. It ends by a window close, not an `AppExit`, since
-/// only the close reaches the shutdown tail that saves variables and addon files.
-fn debug_logout_smoke(
-    state: Res<State<ClientState>>,
-    player: Res<crate::player::Player>,
-    commands: Res<crate::net::NetCommands>,
-    mut roster: ResMut<Roster>,
-    pick: Res<CharPick>,
-    streamer: Res<benilla_world::terrain_stream::TerrainStreamer>,
-    time: Res<Time>,
-    mut exit: MessageWriter<AppExit>,
-    mut close: MessageWriter<bevy::window::WindowCloseRequested>,
-    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    mut lists: MessageReader<CharListMessage>,
-    // The world session's number at the entry, and whether a roster has come since the logout.
-    mut link: Local<Option<u64>>,
-    mut relisted: Local<bool>,
-    mut phase: Local<u8>,
-    mut mark: Local<f32>,
-) {
-    if std::env::var("WOW_LOGOUT_SMOKE").is_err() {
-        return;
-    }
-    for list in lists.read() {
-        if *phase < 2 {
-            *link = Some(list.epoch);
-        } else if !*relisted {
-            *relisted = true;
-            if Some(list.epoch) == *link {
-                info!(
-                    "logout-smoke: roster after the logout on the same link — {} char(s)",
-                    list.characters.len()
-                );
-            } else {
-                error!(
-                    "logout-smoke: FAILED — the roster after the logout came on world session {} \
-                     where the world was entered on {:?}",
-                    list.epoch, *link
-                );
-            }
-        }
-    }
-    let now = time.elapsed_secs();
-    match *phase {
-        0 if *state.get() == ClientState::InWorld && player.active => {
-            info!("logout-smoke: seated in world — lingering");
-            (*phase, *mark) = (1, now);
-        }
-        1 if now - *mark > 3.0 => {
-            info!("logout-smoke: requesting logout");
-            let _ = commands.0.send(crate::net::ClientCommand::Logout);
-            *phase = 2;
-        }
-        2 if *state.get() == ClientState::CharSelect => {
-            info!("logout-smoke: back at character select — lingering");
-            (*phase, *mark) = (3, now);
-        }
-        // Residency is read here, not on arrival: `release_world` runs about 150 ms after the
-        // state edge, on the world-live falling edge.
-        // The roster the logout brings, not the one that survived it, decides the re-entry.
-        3 if now - *mark > 4.0 && *relisted => {
-            match roster.chars.first().map(|c| (c.guid, c.name.clone())) {
-                Some((guid, name)) => {
-                    info!(
-                        "logout-smoke: {} tiles resident after the release (must be 0)",
-                        streamer.residency().1
-                    );
-                    info!("logout-smoke: re-entering the world as {name}");
-                    send_pick(&mut roster, &pick, guid);
-                    (*phase, *mark) = (4, now);
-                }
-                None => {
-                    warn!("logout-smoke: empty roster — cannot test re-entry");
-                    *phase = 5;
-                }
-            }
-        }
-        4 if *state.get() == ClientState::InWorld && player.active && now - *mark > 3.0 => {
-            // The suppressor reading catches a character that re-entered unable to move;
-            // `scripts/smoke.sh` fails on anything but `none`. A GM account's logout is instant,
-            // not rooted, so it does not exercise the rooted path.
-            info!(
-                "logout-smoke: re-entered — {} tiles resident, suppressors: {}, done",
-                streamer.residency().1,
-                player.movement_suppressors()
-            );
-            *phase = 5;
-        }
-        5 => {
-            info!("logout-smoke: done");
-            // Close the window as a player does; a headless run has none and exits directly.
-            match windows.single() {
-                Ok(window) => {
-                    close.write(bevy::window::WindowCloseRequested { window });
-                }
-                Err(_) => {
-                    warn!("logout-smoke: no primary window — exiting by AppExit instead");
-                    exit.write(AppExit::Success);
-                }
-            }
-            *phase = 6;
-        }
-        _ => {}
-    }
 }
 
 /// The select walk (`WOW_CHARSELECT_WALK=<period_s>[:<enter_after_s>]`): select each row in turn,
@@ -876,49 +405,6 @@ pub(crate) fn class_name<'a>(names: crate::ui_unit::UnitNames<'a>, class: u8) ->
     names.class(class).map_or("?", |(name, _)| name)
 }
 
-/// A `Character` with only its identity filled in.
-#[cfg(test)]
-pub(crate) fn test_character(guid: u64, name: &str) -> Character {
-    Character {
-        guid,
-        name: name.to_string(),
-        race: 1,
-        class: 1,
-        gender: 0,
-        skin: 0,
-        face: 0,
-        hair_style: 0,
-        hair_color: 0,
-        facial_hair: 0,
-        level: 1,
-        zone: 0,
-        map: 0,
-        position: benilla_protocol::wire::Vector3d {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        },
-        flags: 0,
-        equipment: [benilla_protocol::CharEnumItem::default(); 19],
-        pet_display_id: 0,
-        pet_level: 0,
-        pet_family: 0,
-    }
-}
-
-/// The roster policy and its CVar mirror without the screen, for tests over a real CVar host.
-#[cfg(test)]
-pub(crate) fn add_test_systems(app: &mut App, pick: crossbeam_channel::Sender<CharRequest>) {
-    app.insert_state(ClientState::CharSelect)
-        .init_resource::<Roster>()
-        .insert_resource(CharPick(pick.into()))
-        .add_message::<CharListMessage>()
-        .add_systems(
-            Update,
-            (apply_roster_policy, persist_last_character).chain(),
-        );
-}
-
 #[cfg(test)]
 mod tests {
     /// The screens' race and class words are the tables' at the install's locale; an id with no
@@ -935,207 +421,30 @@ mod tests {
 
     use super::*;
 
-    use super::test_character as character;
-
-    /// A socket dying mid-entry (a displacement kick) drains `Connected` and `Disconnected` in one
-    /// frame; the ordering alone makes the disconnect win.
+    /// A refused login opens its words in the native glue dialog, and under the stock glue opens
+    /// none: the stock screen's own (its glue manager's state 9) says why.
     #[test]
-    fn a_session_lost_during_entry_beats_the_entry() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::CharSelect)
-            .init_resource::<Roster>()
-            .init_resource::<crate::ui_script::PlayerUiHover>()
-            .init_resource::<crate::ui_script::UiKeyboardCapture>()
-            .add_message::<EnteredWorldMessage>()
-            .add_message::<crate::net::DisconnectedMessage>()
-            .add_systems(Update, (enter_on_connected, back_on_disconnect).chain());
-        app.world_mut().resource_mut::<Roster>().pending_pick = Some(7);
-
-        app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
-            tutorial_flags: None,
-        });
-        app.world_mut()
-            .write_message(crate::net::DisconnectedMessage {
-                reason: "disconnected: world stream closed: failed to fill whole buffer".into(),
-                end: benilla_protocol::SessionEnd::Lost,
-                session_over: true,
-            });
-        app.update();
-        app.update(); // `StateTransition` applies the pending state at the next frame
-
-        assert_eq!(
-            *app.world().resource::<State<ClientState>>().get(),
-            ClientState::Login,
-            "the dead session must be the last word — the reference's DISCONNECTED_FROM_SERVER \
-             puts the client back on the account screen, not into a world with no session",
-        );
-        assert_eq!(
-            app.world().resource::<Roster>().pending_pick,
-            None,
-            "and the reconnect's pending pick goes with it, or the next roster walks straight \
-             back into the world the player was just thrown out of",
-        );
-    }
-
-    /// A teardown whose session is not over (a logout, or a reconnect) still enters the world.
-    #[test]
-    fn a_teardown_that_is_not_the_end_leaves_the_entry_alone() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::CharSelect)
-            .init_resource::<Roster>()
-            .init_resource::<crate::ui_script::PlayerUiHover>()
-            .init_resource::<crate::ui_script::UiKeyboardCapture>()
-            .add_message::<EnteredWorldMessage>()
-            .add_message::<crate::net::DisconnectedMessage>()
-            .add_systems(Update, (enter_on_connected, back_on_disconnect).chain());
-
-        app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
-            tutorial_flags: None,
-        });
-        app.world_mut()
-            .write_message(crate::net::DisconnectedMessage {
-                reason: "logged out".into(),
-                end: benilla_protocol::SessionEnd::LoggedOut,
-                session_over: false,
-            });
-        app.update();
-        app.update();
-
-        assert_eq!(
-            *app.world().resource::<State<ClientState>>().get(),
-            ClientState::InWorld,
-        );
-    }
-
-    /// `Connected` is emitted with `CMSG_PLAYER_LOGIN`, and vmangos refuses before touching the
-    /// database, so the refusal lands in the same drain and must be the last word.
-    #[test]
-    fn a_refused_login_beats_the_entry_it_revokes() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::CharSelect)
-            .insert_resource(Roster::with_pending_pick(vec![character(7, "Seven")], 7))
-            .insert_resource(CharPick(tx.into()))
-            .init_resource::<crate::cvars::Cvars>()
-            .init_resource::<crate::glue::dialog::GlueDialog>()
-            .add_message::<CharListMessage>()
-            .add_message::<EnteredWorldMessage>()
-            .add_message::<LoggedOutMessage>()
-            .add_message::<CharacterLoginFailedMessage>()
-            .add_message::<crate::net::DisconnectedMessage>()
-            // The production chain, in its own order.
-            .add_systems(Update, session_edges());
-        app.world_mut().resource_mut::<Roster>().env_read = true;
-
-        app.world_mut().write_message(EnteredWorldMessage {
-            billing_time_rested: 0,
-            tutorial_flags: None,
-        });
-        app.world_mut()
-            .write_message(CharacterLoginFailedMessage { result: 0x01 });
-        app.update();
-        app.update(); // `StateTransition` applies the pending state at the next frame
-
-        assert_eq!(
-            *app.world().resource::<State<ClientState>>().get(),
-            ClientState::CharSelect,
-            "the refusal must win — the reference leaves the player on the select screen it \
-             never actually took them off",
-        );
-        assert_eq!(
-            app.world().resource::<Roster>().pending_pick,
-            None,
-            "and the pick goes with it: the relist behind the refusal is auto-answered with \
-             `pending_pick`, so keeping it would re-enter the character just refused, forever",
-        );
-        assert!(rx.try_recv().is_err(), "nothing picked again");
-        // No GlueStrings here, so the fallback literal; the shipped one is checked below.
-        assert_eq!(
-            app.world()
-                .resource::<crate::glue::dialog::GlueDialog>()
-                .text,
-            "World server is down",
-            "a refusal the player cannot see is the bug this whole path exists to end",
-        );
-    }
-
-    /// Under the stock glue a refusal still leaves for select and drops the pick, but opens no
-    /// native dialog: the stock screen's own (its glue manager's state 9) says why.
-    #[test]
-    fn a_refusal_under_the_stock_glue_opens_no_native_dialog() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::InWorld)
-            .insert_resource(Roster::with_pending_pick(vec![character(7, "Seven")], 7))
-            .insert_resource(crate::ui_script::glue::GlueStock(true))
-            .init_resource::<crate::glue::dialog::GlueDialog>()
-            .add_message::<CharacterLoginFailedMessage>()
-            .add_systems(Update, back_on_login_refused);
-        app.world_mut()
-            .write_message(CharacterLoginFailedMessage { result: 0x01 });
-        app.update();
-        app.update();
-        assert_eq!(
-            *app.world().resource::<State<ClientState>>().get(),
-            ClientState::CharSelect
-        );
-        assert_eq!(app.world().resource::<Roster>().pending_pick, None);
-        let dialog = app.world().resource::<crate::glue::dialog::GlueDialog>();
-        assert!(dialog.kind.is_none() && dialog.text.is_empty());
-    }
-
-    /// A logout, or a refused login, and the roster the kept link sends right behind it can land
-    /// in one drain: the pick the world was entered with goes first, so the roster is shown and
-    /// not answered with that pick again.
-    #[test]
-    fn a_return_and_its_roster_in_one_drain_show_the_roster() {
-        for refused in [false, true] {
-            let (tx, rx) = crossbeam_channel::unbounded();
+    fn a_refusal_opens_the_native_dialog_only_off_the_stock_glue() {
+        for stock in [false, true] {
             let mut app = App::new();
-            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-                .insert_state(ClientState::InWorld)
-                .insert_resource(Roster::with_pending_pick(vec![character(7, "Seven")], 7))
-                .insert_resource(CharPick(tx.into()))
-                .init_resource::<crate::cvars::Cvars>()
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(crate::ui_script::glue::GlueStock(stock))
                 .init_resource::<crate::glue::dialog::GlueDialog>()
-                .add_message::<CharListMessage>()
-                .add_message::<EnteredWorldMessage>()
-                .add_message::<LoggedOutMessage>()
                 .add_message::<CharacterLoginFailedMessage>()
-                .add_message::<crate::net::DisconnectedMessage>()
-                .add_systems(Update, session_edges());
-            app.world_mut().resource_mut::<Roster>().env_read = true;
-            if refused {
-                app.world_mut()
-                    .write_message(CharacterLoginFailedMessage { result: 0x01 });
+                .add_systems(Update, refusal_dialog());
+            app.world_mut()
+                .write_message(CharacterLoginFailedMessage { result: 0x01 });
+            app.update();
+            let dialog = app.world().resource::<crate::glue::dialog::GlueDialog>();
+            if stock {
+                assert!(dialog.kind.is_none() && dialog.text.is_empty());
             } else {
-                app.world_mut().write_message(LoggedOutMessage);
+                // No GlueStrings here, so the fallback literal; the shipped one is checked below.
+                assert_eq!(
+                    dialog.text, "World server is down",
+                    "a refusal the player cannot see is the bug this whole path exists to end",
+                );
             }
-            app.world_mut().write_message(CharListMessage {
-                characters: vec![character(7, "Seven")],
-                realm: None,
-                cause: benilla_protocol::RosterCause::Park,
-                epoch: 1,
-                generation: 0,
-            });
-            app.update();
-            app.update();
-
-            assert_eq!(
-                *app.world().resource::<State<ClientState>>().get(),
-                ClientState::CharSelect,
-                "refused: {refused}"
-            );
-            assert!(
-                rx.try_recv().is_err(),
-                "refused: {refused} — the roster was answered with the pick just left"
-            );
-            assert_eq!(app.world().resource::<Roster>().pending_pick, None);
         }
     }
 
@@ -1235,278 +544,5 @@ mod tests {
         ] {
             assert!(map.contains_key(key), "{key} is not in the shipped table");
         }
-    }
-
-    /// A created character is selected against the roster already in hand: `net::io` emits the
-    /// fresh roster before the create result.
-    #[test]
-    fn a_created_character_is_selected_from_the_roster_in_hand() {
-        let mut roster = Roster {
-            chars: vec![
-                character(1, "Kerwind"),
-                character(2, "Xero"),
-                character(3, "Zzbullone"), // appended by the re-enum
-            ],
-            selected: Some(0),
-            ..default()
-        };
-        roster.note_created("Zzbullone".to_string());
-        assert_eq!(roster.selected, Some(2), "the new row must be selected");
-        assert!(roster.just_created.is_none(), "and the arm consumed");
-    }
-
-    /// The name key is case-insensitive: vmangos's `normalizePlayerName` recases a created name.
-    #[test]
-    fn the_created_name_matches_the_servers_normalized_spelling() {
-        let mut roster = Roster {
-            chars: vec![character(1, "Kerwind"), character(2, "Zzbullone")],
-            selected: Some(0),
-            ..default()
-        };
-        roster.note_created("ZZBULLONE".to_string()); // as typed
-        assert_eq!(roster.selected, Some(1));
-    }
-
-    // ── The remembered character (`lastCharacterIndex`) ───────────────────────────
-
-    /// Run [`apply_roster_policy`] over one roster with `stored` as `lastCharacterIndex` (`None`
-    /// for never set); returns the row the screen opens on.
-    fn roster_policy_over(
-        stored: Option<&str>,
-        names: &[&str],
-        preselected: Option<usize>,
-    ) -> Option<usize> {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Roster>()
-            .insert_resource(CharPick(tx.into()))
-            .insert_resource(match stored {
-                Some(v) => crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, v),
-                None => crate::cvars::Cvars::default(),
-            })
-            .add_message::<CharListMessage>()
-            .add_message::<AppExit>()
-            .add_systems(Update, apply_roster_policy);
-        if let Some(row) = preselected {
-            app.world_mut().resource_mut::<Roster>().select(Some(row));
-        }
-        app.world_mut().write_message(CharListMessage {
-            characters: names
-                .iter()
-                .enumerate()
-                .map(|(i, n)| character(i as u64 + 1, n))
-                .collect(),
-            realm: None,
-            cause: benilla_protocol::RosterCause::Park,
-            epoch: 0,
-            generation: 0,
-        });
-        app.update();
-        app.world().resource::<Roster>().selected()
-    }
-
-    /// The screen opens on the character last logged in as; the stored value is 0-based.
-    #[test]
-    fn the_roster_opens_on_the_remembered_character() {
-        assert_eq!(
-            roster_policy_over(
-                Some("2"),
-                &["Kerwind", "Xero", "Zzbullone", "Wartwof"],
-                None
-            ),
-            Some(2),
-            "a config.toml remembering the third character must select it, not row one",
-        );
-    }
-
-    /// Nothing stored and `"0"`, the registered default and the first character, both land on
-    /// row 0.
-    #[test]
-    fn nothing_remembered_and_a_stored_zero_are_both_the_first_row() {
-        assert_eq!(
-            roster_policy_over(None, &["Kerwind", "Xero"], None),
-            Some(0)
-        );
-        assert_eq!(
-            roster_policy_over(Some("0"), &["Kerwind", "Xero"], None),
-            Some(0),
-        );
-    }
-
-    /// An out-of-range index goes to the first row, not the nearest (`0x472740`).
-    #[test]
-    fn a_remembered_row_past_the_end_falls_back_to_the_first() {
-        assert_eq!(
-            roster_policy_over(Some("9"), &["Kerwind", "Xero"], None),
-            Some(0),
-            "the reference clamps to 0, not to the last row — `(idx >= count) ? 0 : idx`",
-        );
-    }
-
-    /// A corrupt value selects the first row.
-    #[test]
-    fn an_unparseable_remembered_value_is_the_first_row() {
-        assert_eq!(
-            roster_policy_over(Some("Kerwind"), &["Kerwind", "Xero"], None),
-            Some(0),
-        );
-    }
-
-    /// Every roster re-applies the stored row (the reference reads it in the list rebuild,
-    /// `0x4724d0`), so a selection never entered as does not survive a re-enum.
-    #[test]
-    fn a_re_enumerated_roster_returns_to_the_remembered_character() {
-        assert_eq!(
-            roster_policy_over(Some("0"), &["Kerwind", "Xero", "Zzbullone"], Some(2)),
-            Some(0),
-            "row 2 was only ever clicked; the roster rebuild goes back to the remembered row 0",
-        );
-    }
-
-    /// Clicking the current row keeps the dragged facing (`CharacterSelectButton_OnClick` gates on
-    /// `id ~= selectedIndex`); the facing reset rides `select_seq`.
-    #[test]
-    fn re_clicking_the_selected_row_keeps_the_facing() {
-        let mut roster = Roster {
-            chars: vec![character(1, "Kerwind"), character(2, "Xero")],
-            ..Roster::default()
-        };
-        roster.click_row(0);
-        let squared = roster.select_seq;
-        roster.click_row(0);
-        assert_eq!(
-            roster.select_seq, squared,
-            "a click on the row already selected must not re-select — the dragged angle survives",
-        );
-        roster.click_row(1);
-        assert_eq!(
-            roster.select_seq,
-            squared + 1,
-            "…while a click on a DIFFERENT row selects, and squares the character it brings up",
-        );
-    }
-
-    /// A just-created character outranks the remembered row: `UpdateCharacterList`'s deferred
-    /// `selectLast` overwrites the restored index.
-    #[test]
-    fn a_created_character_outranks_the_remembered_one() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Roster>()
-            .insert_resource(CharPick(tx.into()))
-            .insert_resource(crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, "0"))
-            .add_message::<CharListMessage>()
-            .add_message::<AppExit>()
-            .add_systems(Update, apply_roster_policy);
-        // The create result lands before the fresh roster, the order `apply_roster_policy` answers.
-        app.world_mut()
-            .resource_mut::<Roster>()
-            .note_created("Zzbullone".into());
-        app.world_mut().write_message(CharListMessage {
-            characters: vec![
-                character(1, "Kerwind"),
-                character(2, "Xero"),
-                character(3, "Zzbullone"),
-            ],
-            realm: None,
-            cause: benilla_protocol::RosterCause::Park,
-            epoch: 0,
-            generation: 0,
-        });
-        app.update();
-        assert_eq!(
-            app.world().resource::<Roster>().selected(),
-            Some(2),
-            "SELECT_LAST_CHARACTER outranks the remembered row 0",
-        );
-    }
-
-    /// The stored value is 0-based.
-    #[test]
-    fn the_stored_index_is_zero_based_and_round_trips() {
-        for row in [0usize, 1, 4, 9] {
-            assert_eq!(last_character_row(&last_character_value(row)), Some(row));
-        }
-        assert_eq!(
-            last_character_value(0),
-            "0",
-            "row 0 IS the registrar default"
-        );
-        assert_eq!(
-            last_character_row("0"),
-            Some(0),
-            "0 is the first row, not 'none'"
-        );
-        assert_eq!(last_character_row(""), None);
-    }
-
-    /// The write is at Enter World, not at selection (`0x46b500`).
-    #[test]
-    fn only_entering_the_world_writes_the_cvar() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Roster>()
-            .init_resource::<crate::cvars::Cvars>()
-            .insert_resource(CharPick(tx.into()))
-            .add_systems(Update, persist_last_character);
-        {
-            let mut roster = app.world_mut().resource_mut::<Roster>();
-            roster.chars = vec![
-                character(1, "Kerwind"),
-                character(2, "Xero"),
-                character(3, "Zz"),
-            ];
-            roster.select(Some(2));
-            roster.select(Some(1));
-        }
-        app.update();
-        assert!(
-            !app.world().resource::<crate::cvars::Cvars>().has_events(),
-            "a selection alone must NOT be remembered — the reference writes nothing here",
-        );
-
-        app.world_mut().resource_mut::<Roster>().pending_pick = Some(2);
-        app.update();
-        let moved: Vec<(String, String)> = app
-            .world_mut()
-            .resource_mut::<crate::cvars::Cvars>()
-            .take_events()
-            .into_iter()
-            .map(|e| (e.name, e.new))
-            .collect();
-        assert_eq!(
-            moved,
-            vec![(CVAR_LAST_CHARACTER.to_string(), "1".to_string())],
-            "guid 2 sits at row 1, and the row is what the registry took",
-        );
-        // Steady frames stay quiet; the next VM is seeded from the registry.
-        app.update();
-        let cvars = app.world().resource::<crate::cvars::Cvars>();
-        assert!(!cvars.has_events());
-        assert!(cvars
-            .vm_seed()
-            .iter()
-            .any(|r| r.name == CVAR_LAST_CHARACTER && r.value == "1"));
-    }
-
-    /// Result first, roster after: the arm is answered by the roster policy, and a name not found
-    /// falls back to the last row (`SELECT_LAST_CHARACTER`).
-    #[test]
-    fn an_unanswerable_create_stays_armed() {
-        let mut roster = Roster {
-            chars: vec![character(1, "Kerwind")],
-            selected: Some(0),
-            ..default()
-        };
-        roster.note_created("Zzbulltwo".to_string());
-        assert_eq!(
-            roster.just_created.as_deref(),
-            Some("Zzbulltwo"),
-            "no row to select yet — the arm must survive for the roster policy"
-        );
-        assert_eq!(roster.selected, Some(0), "and nothing is mis-selected");
     }
 }

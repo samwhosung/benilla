@@ -9,8 +9,9 @@ use crate::glue_strings::GlueStrings;
 use crate::net::NetStatus;
 use crate::portrait::{GlueLook, GluePreview, GlueScene, SelectLook};
 
+use super::class_name;
 use super::screen::{RealmBanner, RowText, SelectAction, SelectedName, MAX_ROWS};
-use super::{class_name, Roster};
+use crate::glue_session::roster::Roster;
 
 /// Refill the rows, the selected name and the realm banner when the roster changes or the screen
 /// was just spawned (a return from the create screen finds the roster unchanged).
@@ -240,7 +241,7 @@ mod tests {
     /// sets its stage, unfogged, and that stage stays when the roster empties; the glue rebuild at
     /// world entry restores OnLoad's.
     fn tauren_again() -> benilla_protocol::Character {
-        let mut c = crate::char_select::test_character(1, "Moo");
+        let mut c = crate::glue_session::roster::test_character(1, "Moo");
         c.race = 6;
         c
     }
@@ -259,7 +260,7 @@ mod tests {
         app.update();
         assert_eq!(shown(&app), (Some(GlueScene::Orc), Some(270.0), false));
 
-        let mut tauren = crate::char_select::test_character(1, "Moo");
+        let mut tauren = crate::glue_session::roster::test_character(1, "Moo");
         tauren.race = 6;
         {
             let mut roster = app.world_mut().resource_mut::<Roster>();
@@ -271,9 +272,9 @@ mod tests {
 
         // A gnome after a dwarf: the same stage, set again, starts over (`0x76cce0`).
         let stage = |app: &App| app.world().resource::<GluePreview>().stage;
-        let mut dwarf = crate::char_select::test_character(2, "Stone");
+        let mut dwarf = crate::glue_session::roster::test_character(2, "Stone");
         dwarf.race = 3;
-        let mut gnome = crate::char_select::test_character(3, "Cog");
+        let mut gnome = crate::glue_session::roster::test_character(3, "Cog");
         gnome.race = 7;
         let first = stage(&app);
         for (c, row) in [(dwarf, 0), (gnome, 1)] {

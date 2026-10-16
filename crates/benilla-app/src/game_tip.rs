@@ -254,7 +254,7 @@ fn drive_game_tip(
     mut screen: ResMut<crate::loading_screen::LoadingScreen>,
     mut tips: ResMut<GameTips>,
     mut setting: ResMut<GameTipSetting>,
-    roster: Option<Res<crate::char_select::Roster>>,
+    roster: Option<Res<crate::glue_session::roster::Roster>>,
     mut node: Query<
         (
             Entity,

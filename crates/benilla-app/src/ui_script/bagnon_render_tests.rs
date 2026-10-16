@@ -75,7 +75,7 @@ enum Seat {
 }
 
 /// A roster with a pending pick, for [`super::seat_from_roster`] itself to seat.
-fn roster() -> crate::char_select::Roster {
+fn roster() -> crate::glue_session::roster::Roster {
     let row = benilla_protocol::Character {
         guid: 7,
         name: "Harness".into(),
@@ -101,7 +101,7 @@ fn roster() -> crate::char_select::Roster {
         pet_level: 0,
         pet_family: 0,
     };
-    crate::char_select::Roster::with_pending_pick(vec![row], 7)
+    crate::glue_session::roster::Roster::with_pending_pick(vec![row], 7)
 }
 
 /// The `"player"` snapshot the self descriptor builds, as `ui_unit::feed_units` pushes it: the
@@ -463,8 +463,11 @@ fn the_roster_seat_names_the_character_the_addons_will_meet() {
     assert_eq!((seat.health, seat.max_health), (0, 0));
 
     assert!(
-        super::seat_from_roster(&crate::char_select::Roster::default(), Default::default(),)
-            .is_none(),
+        super::seat_from_roster(
+            &crate::glue_session::roster::Roster::default(),
+            Default::default(),
+        )
+        .is_none(),
         "no pick, no seat — a capture must load exactly as it did before"
     );
 }

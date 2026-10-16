@@ -642,7 +642,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                                 let b = &body[end + 1..];
                                 for roster in roster_bodies.lock().unwrap().iter_mut() {
                                     let guid = roster.iter().map(|c| c.guid).max().unwrap_or(0) + 1;
-                                    let mut c = crate::char_select::test_character(guid, &name);
+                                    let mut c =
+                                        crate::glue_session::roster::test_character(guid, &name);
                                     (c.race, c.class, c.gender, c.skin, c.face) =
                                         (b[0], b[1], b[2], b[3], b[4]);
                                     (c.hair_style, c.hair_color, c.facial_hair) =

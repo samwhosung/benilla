@@ -2305,12 +2305,12 @@ mod tests {
     }
 
     /// The last character entered survives a quit: two launches over one `benilla-config/` with the
-    /// real [`CvarPlugin`] and [`crate::char_select`] systems, so the screen's host write must
-    /// reach the file through the registry's dirty/compose path.
+    /// real [`CvarPlugin`] and [`crate::glue_session::roster`] systems, so the screen's host write
+    /// must reach the file through the registry's dirty/compose path.
     #[test]
     fn entering_the_world_survives_the_quit_and_comes_back_selected() {
-        use crate::char_select::Roster;
         use crate::client_state::ClientState;
+        use crate::glue_session::roster::Roster;
         use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
         let _l = ENV_LOCK
             .lock()
@@ -2326,7 +2326,7 @@ mod tests {
         let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
         let roster = || {
             (1..=4)
-                .map(|g| crate::char_select::test_character(g, &format!("Char{g}")))
+                .map(|g| crate::glue_session::roster::test_character(g, &format!("Char{g}")))
                 .collect::<Vec<_>>()
         };
 
@@ -2334,7 +2334,7 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = cvar_app();
         app.add_plugins(bevy::state::app::StatesPlugin);
-        crate::char_select::add_test_systems(&mut app, tx);
+        crate::glue_session::roster::add_test_systems(&mut app, tx);
         app.update(); // Startup loads the (absent) file; the first Update seeds the VM table
         app.world_mut().write_message(crate::net::CharListMessage {
             characters: roster(),
@@ -2364,7 +2364,7 @@ mod tests {
         let (tx, _rx2) = crossbeam_channel::unbounded();
         let mut app = cvar_app();
         app.add_plugins(bevy::state::app::StatesPlugin);
-        crate::char_select::add_test_systems(&mut app, tx);
+        crate::glue_session::roster::add_test_systems(&mut app, tx);
         app.update();
         app.world_mut().write_message(crate::net::CharListMessage {
             characters: roster(),

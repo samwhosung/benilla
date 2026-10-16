@@ -12,7 +12,8 @@ use crate::sound::GlueSound;
 
 use super::dialog::DeleteDialog;
 use super::screen::SelectAction;
-use super::{class_name, send_pick, ClientState, Roster};
+use super::{class_name, ClientState};
+use crate::glue_session::roster::{send_pick, Roster};
 
 use crate::glue::{drag_yaw, ROTATE_RATE};
 

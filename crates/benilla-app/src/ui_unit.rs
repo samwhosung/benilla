@@ -291,7 +291,7 @@ fn load_default_languages(
 pub(crate) fn seed_default_language(world: &mut World, script: &mut UiScript) {
     let (Some(langs), Some(roster)) = (
         world.get_resource::<DefaultLanguagesRes>(),
-        world.get_resource::<crate::char_select::Roster>(),
+        world.get_resource::<crate::glue_session::roster::Roster>(),
     ) else {
         return;
     };

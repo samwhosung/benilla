@@ -537,7 +537,7 @@ fn only_the_native_policy_re_enumerates_after_a_create() {
 #[test]
 fn the_park_serves_a_rename_and_follows_it() {
     let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
-    let mut bravo = crate::char_select::test_character(GUID, "Bravo");
+    let mut bravo = crate::glue_session::roster::test_character(GUID, "Bravo");
     bravo.flags = benilla_protocol::CHARACTER_FLAG_RENAME;
     world.set_roster(&[bravo]);
     let cycles = fake::spawn_cycles_asking();

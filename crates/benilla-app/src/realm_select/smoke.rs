@@ -15,8 +15,8 @@
 
 use bevy::prelude::*;
 
-use crate::char_select::Roster;
 use crate::client_state::ClientState;
+use crate::glue_session::roster::Roster;
 use crate::net::{CharListMessage, RealmChoice};
 use crate::ui_script::glue::{StockGlueProbe, StockVm};
 

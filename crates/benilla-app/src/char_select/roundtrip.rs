@@ -8,7 +8,8 @@
 
 use bevy::prelude::*;
 
-use super::{ClientState, Roster};
+use super::ClientState;
+use crate::glue_session::roster::Roster;
 use crate::net::CharListMessage;
 use crate::ui_script::glue::StockGlueProbe;
 

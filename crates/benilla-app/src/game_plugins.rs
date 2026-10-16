@@ -855,7 +855,10 @@ pub(crate) mod schedule_tests {
     ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
-    ///   `own_control_lost` only, and the loader writes the saved camera pose.
+    ///   `own_control_lost` only, and the loader writes the saved camera pose;
+    /// - the native refused-login dialog (`char_select::open_login_refusal`), split off the
+    ///   session's refusal edge, against the exclusive `terrain_stream::finish_colliders`, as the
+    ///   edge itself already pairs: it writes only `GlueDialog`, which no collider attach reads.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
@@ -1181,7 +1184,7 @@ pub(crate) mod schedule_tests {
             "::tutorial::watch_self",
             "::ui_trade::answer_trade_request",
             "::poi_marker::expire_marker",
-            "::char_select::debug_logout_smoke",
+            "::glue_session::logout_smoke::debug_logout_smoke",
         ] {
             assert!(
                 after_restore.contains(&one(reader)),

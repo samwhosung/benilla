@@ -119,13 +119,14 @@
 //!    takes the selection's index (`0x46b5fa`), the CVars are saved (`0x46b6f6`) and the state
 //!    goes to 8 (`0x46b711`). The record byte the call sets on the way (`+0x118`, `0x46b54a`) is
 //!    read nowhere.
-//! 2. The rest is the world entry the native screens make too ([`crate::char_select::send_pick`]):
-//!    the loading screen and its tip off the picked record (`0x406640`, `0x46b614`-`0x46b6e3`),
-//!    the realmd link closed (`0x46b70c`), the glue torn down (`0x46ac90`, the VM leaving with the
-//!    character screen) and `CMSG_PLAYER_LOGIN` (`0x46c272`), sent here as the call returns rather
-//!    than once the world has loaded (the `Deviation:` in [`crate::net::io`]). State 8 has no frame
-//!    arm here and ends with the glue, as the entry's second phase ends it (`0x46c252`); its dialog
-//!    button cancels to state 0 (`0x46b776`).
+//! 2. The rest is the world entry the native screens make too, the session's pick
+//!    ([`crate::glue_session::roster::send_pick`]): the loading screen and its tip off the picked
+//!    record (`0x406640`, `0x46b614`-`0x46b6e3`), the realmd link closed (`0x46b70c`), the glue
+//!    torn down (`0x46ac90`, the VM leaving with the character screen) and `CMSG_PLAYER_LOGIN`
+//!    (`0x46c272`), sent here as the call returns rather than once the world has loaded (the
+//!    `Deviation:` in [`crate::net::io`]). State 8 has no frame arm here and ends with the glue, as
+//!    the entry's second phase ends it (`0x46c252`); its dialog button cancels to state 0
+//!    (`0x46b776`).
 //! 3. `SMSG_CHARACTER_LOGIN_FAILED` (`0x5aad70`) tears the world down and rebuilds the glue
 //!    (`0x401ee0`), setting state 9 before the `charselect` screen goes up (`0x402075`), so the
 //!    screen's `GetCharacterListUpdate` asks nothing (`0x46b880`'s first test); the login operation
@@ -1017,7 +1018,7 @@ impl GlueMgr {
         }
         // `0x46b5fa`: the CVar in the call; the save (`0x46b6f6`) is the frame's.
         self.outbox.push(Outgoing::Cvar {
-            name: crate::char_select::CVAR_LAST_CHARACTER,
+            name: crate::glue_session::roster::CVAR_LAST_CHARACTER,
             value: index.to_string(),
         });
         self.last_character = Some(index);
@@ -1779,9 +1780,9 @@ pub(crate) struct GlueAsks<'w> {
     launch_addon: MessageWriter<'w, super::server_alert::LaunchAddonUrl>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
-    /// The select screen's roster, which names the in-world files: a rename renames it too, and
+    /// The session's roster, which names the in-world files: a rename renames it too, and
     /// the world entry's pick is its pending one.
-    roster: Option<ResMut<'w, crate::char_select::Roster>>,
+    roster: Option<ResMut<'w, crate::glue_session::roster::Roster>>,
     pick: Option<Res<'w, crate::net::CharPick>>,
     /// The engine-side CVar table `EnterWorld` writes and saves.
     cvars: Option<ResMut<'w, crate::cvars::Cvars>>,
@@ -1920,7 +1921,10 @@ pub(crate) fn drive_glue_mgr(
         // engine's table, then `SaveConfig` (`0x46b6f6`).
         if let Some(index) = mgr.last_character.take() {
             if let Some(cvars) = asks.cvars.as_deref_mut() {
-                cvars.set(crate::char_select::CVAR_LAST_CHARACTER, &index.to_string());
+                cvars.set(
+                    crate::glue_session::roster::CVAR_LAST_CHARACTER,
+                    &index.to_string(),
+                );
                 cvars.save();
             }
         }
@@ -2079,7 +2083,7 @@ fn pump(
     realmlist: Option<&crate::realmlist::Realmlist>,
     now_ms: u32,
     names: &RosterNames,
-    roster: Option<&mut crate::char_select::Roster>,
+    roster: Option<&mut crate::glue_session::roster::Roster>,
 ) {
     match script {
         Some(s) => {
@@ -2148,7 +2152,7 @@ pub(crate) fn seat_glue_build(world: &mut World, script: &mut UiScript) {
 
 /// Send the asks the manager holds: the login engine's, and the park requests in the order they
 /// were made, the realm requests stamped with the abandon generation as they go and the world
-/// entry's pick through the native screens' own ([`crate::char_select::send_pick`]).
+/// entry's pick through the session's ([`crate::glue_session::roster::send_pick`]).
 fn send_asks(mgr: &mut GlueMgr, asks: &mut GlueAsks) {
     let (logins, park_asks) = mgr.take_asks();
     for ask in logins {
@@ -2163,7 +2167,7 @@ fn send_asks(mgr: &mut GlueMgr, asks: &mut GlueAsks) {
                     if let (Some(roster), Some(pick)) =
                         (asks.roster.as_deref_mut(), asks.pick.as_deref())
                     {
-                        crate::char_select::send_pick(roster, pick, *guid);
+                        crate::glue_session::roster::send_pick(roster, pick, *guid);
                     }
                     continue;
                 }
@@ -2261,7 +2265,7 @@ fn flush(
     script: &mut UiScript,
     now_ms: u32,
     names: &RosterNames,
-    mut roster: Option<&mut crate::char_select::Roster>,
+    mut roster: Option<&mut crate::glue_session::roster::Roster>,
 ) {
     // Steps run as the walk reaches them; what an entry raises goes ahead of the rest.
     loop {
@@ -2277,7 +2281,7 @@ fn flush_one(
     script: &mut UiScript,
     now_ms: u32,
     names: &RosterNames,
-    roster: Option<&mut crate::char_select::Roster>,
+    roster: Option<&mut crate::glue_session::roster::Roster>,
     out: Outgoing,
 ) {
     let out = match out.into_signal() {

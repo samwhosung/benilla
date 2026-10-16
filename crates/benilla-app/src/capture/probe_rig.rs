@@ -34,7 +34,7 @@ use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
 
 use super::probes::ProbeClock;
-use crate::char_select::{send_pick, Roster};
+use crate::glue_session::roster::{send_pick, Roster};
 use crate::net::{
     CharActionResultMessage, CharListMessage, CharPick, CharRequest, EnteredWorldMessage,
     ObjectStore, SelfPlayer,

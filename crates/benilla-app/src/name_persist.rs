@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
-use crate::char_select::Roster;
+use crate::glue_session::roster::Roster;
 use crate::names::NameCache;
 
 /// Seconds between writes: answers arrive in bursts on zone-in, and a crash costs only re-asking.

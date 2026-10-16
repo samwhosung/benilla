@@ -2457,7 +2457,7 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
     world.init_resource::<super::settings::ChatWindowFile>();
     crate::ui_script::setup_script(&mut world);
 
-    world.insert_resource(crate::char_select::Roster::with_pending_pick(
+    world.insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
         vec![benilla_protocol::Character {
             guid: 1,
             name: "Probeorder".into(),

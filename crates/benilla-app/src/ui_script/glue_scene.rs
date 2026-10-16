@@ -219,7 +219,7 @@ mod tests {
             near: 0.0,
             far: 1200.0,
         };
-        let c = crate::char_select::test_character(7, "Seven");
+        let c = crate::glue_session::roster::test_character(7, "Seven");
         let (scene, look, yaw, got) = stock_preview(
             Some(&pane(
                 "Interface\\Glues\\Models\\UI_MainMenu\\UI_MainMenu.mdx",
@@ -278,7 +278,7 @@ mod tests {
         };
         let mut p = pane("Interface\\Glues\\Models\\UI_Orc\\UI_Orc.mdx", false, None);
         p.create = true;
-        let c = crate::char_select::test_character(7, "Seven");
+        let c = crate::glue_session::roster::test_character(7, "Seven");
         let (scene, look, yaw, _) = stock_preview(
             Some(&p),
             Some(&c),

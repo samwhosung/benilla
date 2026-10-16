@@ -287,7 +287,7 @@ pub(crate) struct RealmPvp(bool);
 /// Latch [`RealmPvp`] from the realm this session entered the world on.
 fn latch_realm_pvp(
     mut latch: ResMut<RealmPvp>,
-    roster: Option<Res<crate::char_select::Roster>>,
+    roster: Option<Res<crate::glue_session::roster::Roster>>,
     tables: Option<Res<crate::glue_session::realm::RealmTables>>,
 ) {
     let realm_type = roster.and_then(|r| r.realm.as_ref().map(|realm| realm.realm_type));

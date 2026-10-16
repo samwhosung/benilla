@@ -431,7 +431,7 @@ fn drive_loading_screen(
         MessageReader<crate::net::DisconnectedMessage>,
         MessageReader<crate::net::CharacterLoginFailedMessage>,
         Option<Res<crate::net::PendingTransfer>>,
-        Option<Res<crate::char_select::Roster>>,
+        Option<Res<crate::glue_session::roster::Roster>>,
     ),
 ) {
     let (

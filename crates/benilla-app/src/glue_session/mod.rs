@@ -3,7 +3,10 @@
 //! the run's own policy, never a screen's look or input. Nothing here is gated on which screens
 //! stand.
 
+pub(crate) mod edges;
+mod logout_smoke;
 pub(crate) mod realm;
+pub(crate) mod roster;
 
 use bevy::prelude::*;
 
@@ -13,5 +16,16 @@ pub(crate) struct GlueSessionPlugin;
 impl Plugin for GlueSessionPlugin {
     fn build(&self, app: &mut App) {
         realm::build(app);
+        app.init_resource::<roster::Roster>()
+            .add_systems(
+                Update,
+                edges::session_edges()
+                    .in_set(edges::SessionEdges)
+                    .after(benilla_world::schedule::WorldStage::Net),
+            )
+            .add_systems(
+                Update,
+                logout_smoke::debug_logout_smoke.after(crate::player::ControlRestore),
+            );
     }
 }
