@@ -1,13 +1,12 @@
 //! The world handshake over a real socket against a fake server: packets may precede
-//! `SMSG_AUTH_RESPONSE`. Deviation: `SMSG_WARDEN_DATA` refuses the login, because benilla cannot
-//! run a Warden module (`WardenRequired` says why) and the server kicks a silent client 30 s later.
+//! `SMSG_AUTH_RESPONSE`, `SMSG_WARDEN_DATA` among them, which benilla reads past unanswered.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 
 use benilla_protocol::messages::opcode;
-use benilla_protocol::{messages, WardenRequired, WorldSession};
+use benilla_protocol::{messages, WorldSession};
 use benilla_srp::vanilla_header::HeaderCrypto;
 use benilla_srp::SESSION_KEY_LENGTH;
 
@@ -83,16 +82,13 @@ fn packets_ahead_of_the_auth_response_are_skipped() {
     assert!(WorldSession::connect(&addr, "one", SESSION_KEY).is_ok());
 }
 
+/// A Warden request ahead of the auth response is read past, unanswered, and the connect
+/// completes; the session remembers it was asked.
 #[test]
-fn a_warden_server_is_refused_at_the_handshake() {
+fn warden_data_ahead_of_the_auth_response_is_read_past() {
     let addr = fake_server(vec![(opcode::SMSG_WARDEN_DATA, vec![0u8; 16])]);
-    let Err(err) = WorldSession::connect(&addr, "one", SESSION_KEY) else {
-        panic!("a Warden server must not yield a session");
-    };
-    assert!(
-        err.downcast_ref::<WardenRequired>().is_some(),
-        "expected WardenRequired, got: {err:#}"
-    );
+    let session = WorldSession::connect(&addr, "one", SESSION_KEY).expect("the connect completes");
+    assert!(session.warden_asked());
 }
 
 /// Every packet the observer saw, with the thread that wrote it: the tests of this file share one

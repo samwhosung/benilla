@@ -132,11 +132,8 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
             e.login_queued.write(LoginQueuedMessage { position, realm });
         }
         SessionEvent::LoginFailed {
-            refusal,
-            reason,
-            terminal,
-            ..
-        } => login_failed(refusal, reason, terminal, &mut e.login_failures),
+            refusal, reason, ..
+        } => login_failed(refusal, reason, &mut e.login_failures),
         SessionEvent::RealmList { realms, failed } => {
             e.realm_lists.write(RealmListMessage { realms, failed });
         }
@@ -453,14 +450,9 @@ fn login_stage(stage: benilla_protocol::LoginStage, out: &mut MessageWriter<Logi
 fn login_failed(
     refusal: Option<benilla_protocol::LoginRefusal>,
     reason: String,
-    terminal: bool,
     out: &mut MessageWriter<LoginFailedMessage>,
 ) {
-    out.write(LoginFailedMessage {
-        refusal,
-        reason,
-        terminal,
-    });
+    out.write(LoginFailedMessage { refusal, reason });
 }
 
 /// `SMSG_CHAR_CREATE`/`SMSG_CHAR_DELETE`: the glue screen turns the code into its string.

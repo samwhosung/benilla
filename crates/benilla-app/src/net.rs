@@ -2288,13 +2288,11 @@ impl DisconnectedMessage {
 }
 
 /// A login attempt failed before the roster; the IO thread is back at its pre-logon park.
-/// `terminal` is a failure retrying cannot fix (the server requires Warden, say): never resubmit.
 #[derive(Message, Clone)]
 pub(crate) struct LoginFailedMessage {
     /// Which server refused us, with which byte; `None` on a transport failure.
     pub(crate) refusal: Option<benilla_protocol::LoginRefusal>,
     pub(crate) reason: String,
-    pub(crate) terminal: bool,
 }
 
 /// A same-map teleport of our player: snap, then ack. Read by the controller in `Input`.

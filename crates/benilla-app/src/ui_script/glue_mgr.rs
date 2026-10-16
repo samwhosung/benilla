@@ -369,8 +369,6 @@ struct Operation {
     status: u8,
     done: bool,
     ok: bool,
-    /// The text of a failure the reference has no status for, shown in place of the status's.
-    raw: Option<String>,
     /// A connect or a query whose realm list reply has not come (`0x5abb90` dispatches the reply
     /// on the operation pending).
     awaiting_list: bool,
@@ -394,13 +392,7 @@ impl Operation {
 
     /// `GetStatus`'s text: the status's key once completed, none while it runs (`0x5aaa35`).
     fn text(&self) -> Option<Text> {
-        if !self.done {
-            return None;
-        }
-        Some(match &self.raw {
-            Some(t) => Text::Raw(t.clone()),
-            None => status_text(self.status).0,
-        })
+        self.done.then(|| status_text(self.status).0)
     }
 }
 
@@ -1295,28 +1287,15 @@ impl GlueMgr {
                     self.cells.result = result;
                 }
             }
-            // The character list query's reply never came: the server refused the roster to a
-            // client without Warden (the park's `char_enum`), the one failure it reports. The
-            // query completes failed with the words, and the link is gone.
-            ScreenState::CharList if self.op.kind != OpKind::CharList || self.op.done => {}
-            ScreenState::Connect | ScreenState::CharList => {
-                if self.state == ScreenState::CharList {
-                    self.connected = false;
-                }
+            ScreenState::Connect => {
                 let status = match msg.refusal {
                     Some(LoginRefusal::World(code)) => code,
                     Some(LoginRefusal::Logon(_) | LoginRefusal::LogonProof(_)) => {
                         STATUS_RESPONSE_FAILURE
                     }
-                    None if msg.terminal => STATUS_RESPONSE_FAILURE,
                     None => STATUS_FAILED_TO_CONNECT,
                 };
                 self.op.complete(false, status);
-                // A server refusing a client without Warden has no reference status: its own
-                // words.
-                if msg.terminal && msg.refusal.is_none() {
-                    self.op.raw = Some(msg.reason.clone());
-                }
             }
             _ => {}
         }
@@ -1328,10 +1307,7 @@ impl GlueMgr {
     fn world_failed(&mut self, op: &Operation) {
         let status = op.status;
         if status != STATUS_CANCELLED {
-            let (text, code) = match op.text() {
-                Some(Text::Raw(t)) => (Text::Raw(t), None),
-                _ => status_text(status),
-            };
+            let (text, code) = status_text(status);
             match code.and_then(|c| URL_STATUSES.iter().find(|(s, _)| *s == c)) {
                 Some((_, url)) => self.outbox.push(Outgoing::Open {
                     which: "OKAY_WITH_URL",

@@ -37,11 +37,10 @@ fn open(which: &'static str, key: Option<&'static str>) -> Outgoing {
     }
 }
 
-fn failed(refusal: Option<LoginRefusal>, terminal: bool) -> LoginFailedMessage {
+fn failed(refusal: Option<LoginRefusal>) -> LoginFailedMessage {
     LoginFailedMessage {
         refusal,
         reason: "test".into(),
-        terminal,
     }
 }
 
@@ -91,7 +90,7 @@ fn a_proof_0x0a_changes_no_dialog() {
     m.tick();
     settle(&mut m);
     m.outbox.clear();
-    m.on_failed(&failed(Some(LoginRefusal::LogonProof(0x0a)), false));
+    m.on_failed(&failed(Some(LoginRefusal::LogonProof(0x0a))));
     m.tick();
     settle(&mut m);
     assert!(m.outbox.is_empty(), "{:?}", m.outbox);
@@ -181,7 +180,7 @@ fn a_logon_refusal_opens_its_result_and_ends_the_logon() {
         m.login("a".into(), "b".into());
         settle(&mut m);
         m.outbox.clear();
-        m.on_failed(&failed(refusal, false));
+        m.on_failed(&failed(refusal));
         m.tick();
         settle(&mut m);
         assert_eq!(m.outbox, [open(which, Some(key))], "{refusal:?}");
@@ -305,7 +304,7 @@ fn a_world_refusal_opens_its_status_and_url() {
         button: None,
     };
     let mut m = connected();
-    m.on_failed(&failed(Some(LoginRefusal::World(0x1c)), false));
+    m.on_failed(&failed(Some(LoginRefusal::World(0x1c))));
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -325,7 +324,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     assert_eq!(m.state, ScreenState::Idle);
 
     let mut m = connected();
-    m.on_failed(&failed(Some(LoginRefusal::World(0x0d)), false));
+    m.on_failed(&failed(Some(LoginRefusal::World(0x0d))));
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -341,7 +340,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     );
 
     let mut m = connected();
-    m.on_failed(&failed(None, false));
+    m.on_failed(&failed(None));
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -362,7 +361,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     // With no realm held the arm asks for the list (`0x46c06e` → `0x46b8d0` with 1).
     let mut m = connected();
     m.holder.clear();
-    m.on_failed(&failed(None, false));
+    m.on_failed(&failed(None));
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -611,39 +610,6 @@ fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     assert!(m.roster.is_empty() && !m.op.done);
     m.on_roster(late(), RosterCause::Asked, 5);
     assert!(m.op.done && m.op.ok);
-}
-
-/// A server that wants Warden refuses the roster ask with its words (a terminal login failure):
-/// the query completes failed and the next tick opens `OKAY` with them (`0x46c173`), where state 3
-/// would otherwise stand on its `CANCEL` dialog for ever. The link is gone.
-#[test]
-fn a_terminal_failure_fails_the_character_list_query_with_its_words() {
-    let mut m = fresh();
-    m.connected = true;
-    m.get_character_list();
-    settle(&mut m);
-    m.park_out.clear();
-    m.outbox.clear();
-    m.on_failed(&failed(None, true));
-    m.tick();
-    settle(&mut m);
-    let words = || Text::Raw("test".into());
-    assert_eq!(
-        m.outbox,
-        [
-            Outgoing::Update {
-                text: words(),
-                button: None,
-            },
-            Outgoing::Open {
-                which: "OKAY",
-                text: Some(words()),
-                data: None,
-            },
-        ]
-    );
-    assert_eq!(m.state, ScreenState::Idle);
-    assert!(!m.connected);
 }
 
 /// A roster ask that failed on the stream completes the query `CHAR_LIST_FAILED`
@@ -1366,7 +1332,7 @@ fn a_world_status_past_the_table_reads_its_number() {
         let mut m = fresh();
         m.state = ScreenState::Connect;
         m.holder = vec![realm("Fake")];
-        m.on_failed(&failed(Some(LoginRefusal::World(code)), false));
+        m.on_failed(&failed(Some(LoginRefusal::World(code))));
         m.tick();
         settle(&mut m);
         m.outbox
@@ -1944,7 +1910,7 @@ fn a_failed_logons_dialog_is_pressed_in_state_1() {
         m.settle();
         m.outbox.clear();
         m.login_out.clear();
-        m.on_failed(&failed(Some(LoginRefusal::Logon(0x04)), false));
+        m.on_failed(&failed(Some(LoginRefusal::Logon(0x04))));
     }
     frame(&shared, &mut s);
     let m = shared.get();
@@ -2230,7 +2196,7 @@ fn the_stock_login_reaches_the_login_engine_and_shows_its_status() {
     assert_eq!(dialog(&app), Some(("CANCEL".into(), connecting)));
 
     app.world_mut()
-        .write_message(failed(Some(LoginRefusal::Logon(0x04)), false));
+        .write_message(failed(Some(LoginRefusal::Logon(0x04))));
     app.update();
     let unknown = vm(&app).global_text("LOGIN_UNKNOWN_ACCOUNT");
     assert!(!unknown.is_empty());
@@ -2433,16 +2399,9 @@ fn pump(
                 lists.write(RealmListMessage { realms, failed });
             }
             E::LoginFailed {
-                refusal,
-                reason,
-                terminal,
-                ..
+                refusal, reason, ..
             } => {
-                failures.write(LoginFailedMessage {
-                    refusal,
-                    reason,
-                    terminal,
-                });
+                failures.write(LoginFailedMessage { refusal, reason });
             }
             E::CharacterList {
                 characters,

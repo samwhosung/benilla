@@ -164,12 +164,10 @@ pub enum SessionEvent {
         position: Option<u32>,
         realm: Option<String>,
     },
-    /// A login failed before the roster; `refusal` is `None` for a transport failure. A `terminal`
-    /// one ([`crate::WardenRequired`]) no retry can fix: show `reason` and stop.
+    /// A login failed before the roster; `refusal` is `None` for a transport failure.
     LoginFailed {
         refusal: Option<LoginRefusal>,
         reason: String,
-        terminal: bool,
         /// `Some` only when the socket never opened: which dial failure, and the address.
         dial: Option<crate::DialFailure>,
     },

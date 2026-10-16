@@ -401,34 +401,85 @@ fn a_world_session_has_one_epoch_and_a_realm_change_a_new_one() {
     assert_ne!(seen[0], seen[1], "a new session has a new epoch");
 }
 
-/// A server that wants Warden answers the select screen's first ask with `SMSG_WARDEN_DATA`: the
-/// login fails for good with the server's words, not as a lost stream.
+/// `CMSG_WARDEN_DATA`, the answer the reference's Warden module sends (`0x6ca6a0`).
+const CMSG_WARDEN_DATA: u16 = 0x02E7;
+
+/// A server with Warden on asks behind the authentication answer and serves the roster and the
+/// world entry without waiting for the answer (vmangos, `World.cpp:333-338`): benilla reads the
+/// request past, answers nothing, and the login goes on to select and into the world.
 #[test]
-fn a_warden_demand_at_the_asked_roster_is_a_terminal_login_failure() {
+fn a_warden_request_is_read_past_and_the_login_goes_on() {
     let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
-    world.demand_warden();
+    world.ask_warden();
+    world.set_roster(&[crate::glue_session::roster::test_character(GUID, "Alpha")]);
     let cycles = fake::spawn_cycles();
     fake::login(&cycles, &realmd.addr);
     let (realms, _) = next_list(&cycles.events);
-    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    let epoch = dial(&cycles, realms[0].clone());
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::CharacterList {
+            characters,
+            epoch: listed,
+            ..
+        } => {
+            assert_eq!(listed, epoch);
+            assert_eq!(characters.len(), 1, "the roster past the Warden request");
+        }
+        other => panic!("expected the roster, got {other:?}"),
+    }
+    cycles.pick.send(CharRequest::Enter(GUID)).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::Connected { self_guid, .. } => assert_eq!(self_guid, GUID),
+        other => panic!("expected the world entry, got {other:?}"),
+    }
+    wait_until(
+        || {
+            world
+                .sent
+                .lock()
+                .unwrap()
+                .contains(&opcode::CMSG_PLAYER_LOGIN)
+        },
+        "the entry goes out",
+    );
+    assert!(
+        !world.sent.lock().unwrap().contains(&CMSG_WARDEN_DATA),
+        "benilla never answers Warden"
+    );
+    assert_eq!(world.open(), 1, "the world link is kept");
+}
+
+/// The kick of a server whose Warden clock ran out (`Warden.cpp:686-691`, `KickSession` closing
+/// the socket, `WorldSession.cpp:873-876`) is a bare close, which ends the world session as any
+/// lost link does: `Disconnected` with `SessionEnd::Lost`.
+#[test]
+fn a_kick_after_an_unanswered_warden_request_is_a_lost_link() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.ask_warden();
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    dial(&cycles, realms[0].clone());
+    // The roster ask reads the request at select, ahead of its answer.
+    ask_roster(&cycles);
+    cycles.pick.send(CharRequest::Enter(GUID)).unwrap();
     assert!(matches!(
         next_event(&cycles.events),
-        SessionEvent::WorldAuthenticated { .. }
+        SessionEvent::Connected { .. }
     ));
-    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    world.drop_links();
     loop {
-        match cycles.events.recv_timeout(WAIT).expect("went quiet") {
-            SessionEvent::LoginFailed { terminal, .. } => {
-                assert!(terminal);
+        match next_event(&cycles.events) {
+            SessionEvent::Disconnected { end, .. } => {
+                assert_eq!(end, benilla_protocol::SessionEnd::Lost);
                 break;
             }
-            SessionEvent::LoginStage { .. } => {}
-            other => panic!("expected the terminal login failure, got {other:?}"),
+            SessionEvent::PacketDropped { .. } => {}
+            other => panic!("expected the loss, got {other:?}"),
         }
     }
-    // The world socket is closed and the realmd link kept, as after any failed world dial.
-    wait_until(|| world.open() == 0, "the world socket closes");
-    assert_eq!(realmd.open(), 1, "the realmd link is kept");
+    assert!(!world.sent.lock().unwrap().contains(&CMSG_WARDEN_DATA));
 }
 
 /// A roster ask that fails on the stream (the server cut the connection) tells the screen its

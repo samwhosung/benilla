@@ -278,20 +278,6 @@ pub(crate) fn drive_policy(
         // it says a person typed this attempt; only an untyped attempt may end the run.
         let typed = attempt.intent.announced;
         let may_end_the_run = !typed;
-        if msg.terminal {
-            // No resubmit can change it: show the server's words and drop the credentials.
-            warn!("login: {}", msg.reason);
-            attempt.intent.clear();
-            if may_end_the_run
-                && crate::run_mode::fatal_when_driverless(&format!(
-                    "terminal login failure with nobody at the keyboard ({})",
-                    msg.reason
-                ))
-            {
-                exit.write(AppExit::error());
-            }
-            continue;
-        }
         match msg.refusal {
             Some(refusal) => {
                 // A refusal from either server: shown even on the silent path, never retried.
@@ -678,7 +664,6 @@ mod tests {
         app.world_mut().write_message(LoginFailedMessage {
             refusal: None,
             reason: "connection refused".into(),
-            terminal: false,
         });
         // The arm's cancel and its dialog's press, as the glue manager asks them.
         app.world_mut().write_message(GlueLogin::CloseLink);
@@ -779,7 +764,6 @@ mod tests {
         app.world_mut().write_message(LoginFailedMessage {
             refusal: Some(benilla_protocol::LoginRefusal::Logon(0x05)),
             reason: "server rejected logon: result 0x05".into(),
-            terminal: false,
         });
         app.update();
         assert!(
