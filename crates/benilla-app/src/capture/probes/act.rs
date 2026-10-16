@@ -365,10 +365,10 @@ fn fire_probe_lua(
     }
 }
 
-/// `WOW_PROBE_GLUE_LUA="<chunk>"`: under `WOW_GLUE_STOCK=1`, runs the chunk once in the stock
-/// glue VM `WOW_PROBE_GLUE_LUA_AT` seconds (default 10) into the run, to press the login screen's
-/// buttons headlessly; `WOW_PROBE_GLUE_SHOT=<path>` then saves one PNG
-/// `WOW_PROBE_GLUE_SHOT_AFTER` seconds (default 1) later. The chunk is never logged: it may carry
+/// `WOW_PROBE_GLUE_LUA="<chunk>"`: runs the chunk once in the stock glue VM
+/// `WOW_PROBE_GLUE_LUA_AT` seconds (default 10) into the run, to press the login screen's buttons
+/// headlessly; `WOW_PROBE_GLUE_SHOT=<path>` then saves one PNG `WOW_PROBE_GLUE_SHOT_AFTER` seconds
+/// (default 1) later. The chunk is never logged: it may carry
 /// a typed password.
 pub(crate) struct ProbeGlueLuaPlugin;
 

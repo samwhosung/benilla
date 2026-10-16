@@ -74,7 +74,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     },
     ProbeVar {
         name: "WOW_PROBE_GLUE_LUA",
-        purpose: "\"<chunk>\" — under WOW_GLUE_STOCK=1, run a Lua chunk once in the stock glue VM (press the login screen's buttons headlessly)",
+        purpose: "\"<chunk>\" — run a Lua chunk once in the stock glue VM (press the login screen's buttons headlessly)",
         wall_clock: true,
     },
     ProbeVar {

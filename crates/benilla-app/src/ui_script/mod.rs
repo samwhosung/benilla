@@ -16,7 +16,7 @@ use benilla_world::schedule::WorldStage;
 pub(crate) mod addons;
 mod content;
 pub(crate) mod extract;
-/// The stock glue screens behind `WOW_GLUE_STOCK=1`.
+/// The stock glue screens, and the switch to the native ones.
 pub(crate) mod glue;
 /// The stock create screen's catalog off the host's DBC catalogs.
 pub(crate) mod glue_create;

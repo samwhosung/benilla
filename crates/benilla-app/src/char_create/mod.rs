@@ -37,7 +37,7 @@ const HORDE: [u8; 4] = [2, 5, 6, 8]; // Orc, Scourge, Tauren, Troll
 const INITIAL_FACING: f32 = -15.0 * std::f32::consts::PI / 180.0;
 
 /// The character-creation screen and its selection state, on the native screens alone: under
-/// `WOW_GLUE_STOCK=1` the stock `CharacterCreate` is a glue screen of the glue VM, and the app
+/// the stock screens the stock `CharacterCreate` is a glue screen of the glue VM, and the app
 /// never enters [`ClientState::CharCreate`].
 pub(crate) struct CharCreatePlugin;
 

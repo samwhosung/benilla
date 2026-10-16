@@ -32,7 +32,7 @@ const GLUE_MUSIC_FADE_OUT_MS: u64 = 3000;
 pub(crate) struct GlueSound(pub(crate) &'static str);
 
 /// The stock glue screens' music verbs, which drive the theme in place of the native screens'
-/// start-on-entry under `WOW_GLUE_STOCK=1`.
+/// start-on-entry.
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GlueMusicRequest {
     /// `PlayGlueMusic(file)` (`0x45aeb0`): the same file still streaming plays on; another stops

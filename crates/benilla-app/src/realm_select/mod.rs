@@ -20,7 +20,7 @@
 //! is dialled again for a query after it (`0x5b2200`), and names no screen; only `ConnectToRealm` (`0x46b210`) drops the world connection, once a realm is
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
 //!
-//! Under `WOW_GLUE_STOCK=1` the stock `RealmList` and its verbs take the list instead
+//! Under the stock screens the stock `RealmList` and its verbs take the list instead
 //! ([`crate::ui_script::glue_mgr`]), and none of this runs; the stock connect takes the same
 //! [`RunModeRealm`].
 

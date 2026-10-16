@@ -11,16 +11,30 @@ use crate::ui_script::glue::{StockGlueProbe, StockVm};
 
 // ── The roster and pick policy ──────────────────────────────────────────────────────────────────
 
-/// The run's own pick (`WOW_CHAR`, `WOW_RIG`) on the stock screens, by guid, until their select
-/// screen stands to take it ([`enter_run_pick`]).
+/// What the run's own pick presses on the stock select screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PickAct {
+    /// Select the row and stay on the screen (`WOW_CHARSELECT_PICK`).
+    Select,
+    /// Select the row and press Enter World (`WOW_CHAR`).
+    Enter,
+}
+
+/// The run's own pick on the stock screens, by guid, until their select screen stands to take it
+/// ([`enter_run_pick`]).
 #[derive(Resource, Default)]
-pub(crate) struct RunPick(Option<u64>);
+pub(crate) struct RunPick(Option<(u64, PickAct)>);
 
 #[cfg(test)]
 impl RunPick {
-    /// The pick armed for `guid`, as the roster policy arms it on the stock screens.
+    /// The entry armed for `guid`, as the roster policy arms `WOW_CHAR` on the stock screens.
     pub(crate) fn armed(guid: u64) -> Self {
-        RunPick(Some(guid))
+        RunPick(Some((guid, PickAct::Enter)))
+    }
+
+    /// The selection armed for `guid`, as the roster policy arms `WOW_CHARSELECT_PICK`.
+    pub(crate) fn selecting(guid: u64) -> Self {
+        RunPick(Some((guid, PickAct::Select)))
     }
 }
 
@@ -238,6 +252,7 @@ pub(super) fn apply_roster_policy(
     rig: Option<Res<crate::run_mode::RigCharacter>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let stock = crate::ui_script::glue::is_stock(stock.as_deref());
     if !roster.env_read {
         roster.env_read = true;
         // `WOW_RIG` outranks `WOW_CHAR`: the rig may have to create its character first, which
@@ -285,7 +300,8 @@ pub(super) fn apply_roster_policy(
             info!("char select: {CVAR_LAST_CHARACTER} selects row {row} ({who})");
             roster.select(Some(row));
         }
-        // `WOW_CHARSELECT_PICK=<name>` selects that row and stays on the screen.
+        // `WOW_CHARSELECT_PICK=<name>` selects that row and stays on the screen: on the stock
+        // screens through their own selection, once they hold this roster.
         if let Ok(name) = std::env::var("WOW_CHARSELECT_PICK") {
             match roster
                 .chars
@@ -294,7 +310,11 @@ pub(super) fn apply_roster_policy(
             {
                 Some(row) => {
                     info!("char select: WOW_CHARSELECT_PICK={name} — selecting row {row}");
-                    roster.select(Some(row));
+                    if stock {
+                        run_pick.0 = Some((roster.chars[row].guid, PickAct::Select));
+                    } else {
+                        roster.select(Some(row));
+                    }
                 }
                 None => warn!("char select: WOW_CHARSELECT_PICK={name} not on this account"),
             }
@@ -310,9 +330,9 @@ pub(super) fn apply_roster_policy(
             {
                 Some(c) => {
                     let guid = c.guid;
-                    if stock.as_deref().is_some_and(|s| s.0) {
+                    if stock {
                         info!("char select: WOW_CHAR={name} — fast path, by Enter World");
-                        run_pick.0 = Some(guid);
+                        run_pick.0 = Some((guid, PickAct::Enter));
                     } else {
                         info!("char select: WOW_CHAR={name} — fast path");
                         send_pick(&mut roster, &pick, guid);
@@ -345,15 +365,22 @@ pub(crate) fn press_enter_world(vm: StockVm, row: usize) {
     ));
 }
 
+/// Select `row` (0-based) on the stock select screen, as a click on it does
+/// (`CharacterSelectButton_OnClick` → `CharacterSelect_SelectCharacter`), whose `SelectCharacter`
+/// reaches the engine's selection (`0x473470`).
+fn press_select(vm: StockVm, row: usize) {
+    vm.press(&format!("CharacterSelect_SelectCharacter({})", row + 1));
+}
+
 /// The run's own pick on the stock screens ([`RunPick`]): once their select screen stands with the
-/// roster loaded into it (`0x4724d0`), the row is pressed into the world through the screen's
-/// Enter World ([`press_enter_world`]), never sent past it.
+/// roster loaded into it (`0x4724d0`), the row is selected ([`press_select`]) or pressed into the
+/// world through the screen's Enter World ([`press_enter_world`]), never sent past it.
 pub(crate) fn enter_run_pick(
     roster: Res<Roster>,
     mut run_pick: ResMut<RunPick>,
     stock: StockGlueProbe,
 ) {
-    let Some(guid) = run_pick.0 else {
+    let Some((guid, act)) = run_pick.0 else {
         return;
     };
     let Some(vm) = stock.vm().filter(|vm| vm.frame_visible("CharacterSelect")) else {
@@ -368,7 +395,10 @@ pub(crate) fn enter_run_pick(
         return;
     }
     run_pick.0 = None;
-    press_enter_world(vm, row);
+    match act {
+        PickAct::Select => press_select(vm, row),
+        PickAct::Enter => press_enter_world(vm, row),
+    }
 }
 
 /// A `Character` with only its identity filled in.

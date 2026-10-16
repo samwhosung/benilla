@@ -1,4 +1,4 @@
-//! The glue manager, `CGlueMgr` host side, under `WOW_GLUE_STOCK=1`: the screen-state machine of
+//! The glue manager, `CGlueMgr` host side, under the stock glue screens: the screen-state machine of
 //! `CGlueMgr::Update` (`0x46b930`, `screenState` at `0xb41da0`) over the login engine. The IO
 //! thread's parks and [`crate::glue_session::login`]'s policy still do the network; this maps their
 //! messages onto the reference's screen states and fires the glue events the stock GlueXML answers:
@@ -1815,7 +1815,7 @@ pub(crate) fn read_agreements(cvars: &crate::cvars::Cvars) -> [NoticeState; 4] {
 /// The glue manager's frame: the login engine's news, the per-frame arms, then the events into the
 /// glue VM and its slots seeded. The verbs ran in their own calls ([`GlueHost`]); what is left of
 /// them here is the effects they leave for the frame and the calls a VM made before it was seated.
-/// Runs under `WOW_GLUE_STOCK=1` only.
+/// Runs under the stock screens only.
 ///
 /// No borrow of the manager is held across a call into the VM that can run a handler.
 #[allow(clippy::too_many_arguments)]

@@ -582,8 +582,8 @@ pub(crate) mod schedule_tests {
             })
     }
 
-    /// The glue booth has one feeder per switch: under `WOW_GLUE_STOCK=1` only the glue VM's
-    /// writes `GluePreview`, and off it only the native screens' do. A writer of neither kind is
+    /// The glue booth has one feeder per switch: under the stock screens only the glue VM's
+    /// writes `GluePreview`, and under the native ones only the native screens' do. A writer of neither kind is
     /// named here with why it cannot run against the other.
     #[test]
     fn the_glue_preview_has_one_feeder_per_switch() {
@@ -740,7 +740,7 @@ pub(crate) mod schedule_tests {
         out
     }
 
-    /// Under `WOW_GLUE_STOCK=1` nothing of the native glue screens runs, in any schedule: every
+    /// Under the stock screens nothing of the native glue screens runs, in any schedule: every
     /// system of their modules, and every system that writes their dialog or reads, writes or
     /// filters for their trees or state, carries the `native_glue` gate. What the stock screens
     /// need of the session lives in `glue_session`, which tells a native screen what it decided by
@@ -1453,7 +1453,7 @@ pub(crate) mod schedule_tests {
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));
     }
 
-    /// The `Startup` VM, the stock glue's under `WOW_GLUE_STOCK=1`, is built after the glyph cache:
+    /// The `Startup` VM, the stock glue's, is built after the glyph cache:
     /// its first screen sizes frames by measured text in the show (`TOSFrameHeader` off
     /// `TOSFrameTitle:GetWidth()`, `AccountLogin.lua`), which with no cache measures 0.
     #[test]

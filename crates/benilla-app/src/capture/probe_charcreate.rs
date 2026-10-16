@@ -3,7 +3,8 @@
 //! [`CharRequest::Create`], logs the `SMSG_CHAR_CREATE` result byte, then deletes the new
 //! character and logs that result too, unless `WOW_PROBE_CHARCREATE_KEEP=1`. Run it without
 //! `WOW_CHAR`, which would enter the world; the switches are `docs/CONTRIBUTING.md`, "Running it
-//! unattended".
+//! unattended". It reads the park's own rosters, so it puts the native glue screens up
+//! (`ui_script::glue::NATIVE_INSTRUMENTS`).
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
@@ -21,9 +22,6 @@ impl Plugin for ProbeCharCreatePlugin {
         else {
             return; // inert without a valid env spec
         };
-        if super::refuse_under_stock(app, "WOW_PROBE_CHARCREATE") {
-            return;
-        }
         let keep = std::env::var("WOW_PROBE_CHARCREATE_KEEP").as_deref() == Ok("1");
         app.insert_resource(CharCreateProbe {
             req,

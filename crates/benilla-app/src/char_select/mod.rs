@@ -14,13 +14,13 @@ use benilla_protocol::CharAction;
 use bevy::prelude::*;
 
 use crate::client_state::ClientState;
-use crate::glue_session::roster::{send_pick, Roster};
+use crate::glue_session::roster::Roster;
 use crate::glue_strings::GlueStrings;
 
-use crate::net::{CharActionResultMessage, CharPick, CharacterLoginFailedMessage};
+use crate::net::{CharActionResultMessage, CharacterLoginFailedMessage};
 
 /// The native character-select screen. All of it runs on the native screens alone: under
-/// `WOW_GLUE_STOCK=1` the stock `CharacterSelect` stands in its place, and the session it shows is
+/// the stock screens the stock `CharacterSelect` stands in its place, and the session it shows is
 /// [`crate::glue_session`]'s.
 pub(crate) struct CharSelectPlugin;
 
@@ -62,7 +62,6 @@ impl Plugin for CharSelectPlugin {
                         // The one `GlueDialog`: here, the refused login and the refused delete.
                         crate::glue::dialog::drive_glue_dialog,
                         debug_select_addons,
-                        debug_select_walk,
                         addons::drive_addons_panel,
                         refresh::refresh_list,
                         refresh::refresh_banner_and_buttons,
@@ -183,72 +182,6 @@ pub(crate) fn char_delete_refusal_text(strings: &GlueStrings, code: u8) -> Optio
         _ => ("CHAR_DELETE_FAILED", "Character deletion failed"),
     };
     Some(strings.text(key, fallback))
-}
-
-/// The select walk (`WOW_CHARSELECT_WALK=<period_s>[:<enter_after_s>]`): select each row in turn,
-/// one per `period_s`, logging each step with its time; with `enter_after_s`, press Enter World
-/// that long after the last step.
-fn debug_select_walk(
-    mut roster: ResMut<Roster>,
-    pick: Res<CharPick>,
-    time: Res<Time>,
-    mut plan: Local<Option<(f32, Option<f32>)>>,
-    mut next_at: Local<Option<f32>>,
-    mut row: Local<usize>,
-    mut done: Local<bool>,
-) {
-    if *done {
-        return;
-    }
-    let (period, enter_after) = *plan.get_or_insert_with(|| {
-        let Ok(spec) = std::env::var("WOW_CHARSELECT_WALK") else {
-            return (f32::INFINITY, None);
-        };
-        let (p, e) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
-        (
-            p.trim().parse::<f32>().unwrap_or(3.0),
-            e.trim().parse::<f32>().ok(),
-        )
-    });
-    if !period.is_finite() {
-        *done = true;
-        return;
-    }
-    if roster.chars.is_empty() {
-        return;
-    }
-    let now = time.elapsed_secs();
-    let at = *next_at.get_or_insert(now + period);
-    if now < at {
-        return;
-    }
-    if *row < roster.chars.len() {
-        let i = *row;
-        *row += 1;
-        let c = &roster.chars[i];
-        info!(
-            "char select: WALK t={now:.3} → row {i} ({}, race {}, class {})",
-            c.name, c.race, c.class
-        );
-        roster.select(Some(i));
-        // The last row waits `enter_after`, so the entry starts from a settled screen.
-        *next_at = Some(
-            now + if *row == roster.chars.len() {
-                enter_after.unwrap_or(period)
-            } else {
-                period
-            },
-        );
-        return;
-    }
-    *done = true;
-    if enter_after.is_none() {
-        return;
-    }
-    if let Some((guid, name)) = roster.selected_char().map(|c| (c.guid, c.name.clone())) {
-        info!("char select: WALK t={now:.3} → ENTER WORLD as {name}");
-        send_pick(&mut roster, &pick, guid);
-    }
 }
 
 /// When the select screen came up, present only while it is; the screen's timed instruments

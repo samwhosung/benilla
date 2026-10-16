@@ -1,5 +1,5 @@
 //! The UI session's lifecycle, all edges and nothing per-frame: `Startup` installs a boot VM
-//! (strings and emote tokens), or the stock glue screens' VM under `WOW_GLUE_STOCK=1`; world entry
+//! (strings and emote tokens) under the native screens, else the stock glue screens' VM; world entry
 //! builds a fresh VM and loads the in-game UI and every addon onto it; leaving the world runs the
 //! reference's shutdown tail and installs the glue-side VM again; `ReloadUI()` is the two edges
 //! back to back without leaving the world.
@@ -25,9 +25,7 @@ pub(crate) fn setup_script(world: &mut World) {
 /// by [`new_vm`]) falls back to the park's own enumeration instead of waiting on a screen that
 /// never asks.
 pub(super) fn install_glue_side_vm(world: &mut World, screen: &str) {
-    let stock_asked = world
-        .get_resource::<super::glue::GlueStock>()
-        .is_some_and(|s| s.0);
+    let stock_asked = super::glue::is_stock(world.get_resource::<super::glue::GlueStock>());
     let stock_up = if stock_asked {
         install_glue_vm(world, screen)
     } else {
@@ -35,7 +33,7 @@ pub(super) fn install_glue_side_vm(world: &mut World, screen: &str) {
         false
     };
     if stock_asked && !stock_up {
-        error!("ui_script: WOW_GLUE_STOCK=1 but the stock glue VM did not come up with its character select screen; the roster is fetched at the park");
+        error!("ui_script: the stock glue VM did not come up with its character select screen; the roster is fetched at the park");
     }
     if let Some(policy) = world.get_resource::<crate::net::RosterPolicy>() {
         policy
@@ -1331,7 +1329,7 @@ mod tests {
         );
     }
 
-    /// Under `WOW_GLUE_STOCK=1` the world holds the glue VM where it holds a boot VM, at startup
+    /// Under the stock screens the world holds the glue VM where it holds a boot VM, at startup
     /// on the login screen (`0x402b65`) and back from the world on the screen the exit enters
     /// (`0x402090`); a `ReloadUI()` never builds the glue.
     #[test]

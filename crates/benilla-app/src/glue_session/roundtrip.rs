@@ -3,9 +3,9 @@
 //! runs over either glue screen set.
 //!
 //! "Roster has arrived" counts the roster, not its characters: an account with none reaches select
-//! all the same. Under `WOW_GLUE_STOCK=1` the stock screens are driven through their own verbs in
-//! the glue VM (`SetGlueScreen("charcreate")`, `CharacterCreate_Back`) and their frames are read,
-//! since the app's [`ClientState`] does not follow the stock create screen.
+//! all the same. The stock screens are driven through their own verbs in the glue VM
+//! (`SetGlueScreen("charcreate")`, `CharacterCreate_Back`) and their frames are read, since the
+//! app's [`ClientState`] does not follow the stock create screen.
 
 use bevy::prelude::*;
 
@@ -218,11 +218,12 @@ mod tests {
     }
 
     /// The system counts the roster message, not the characters in it: an empty one at select
-    /// sends the app to create.
+    /// sends the app to create, on the native screens, whose arm moves the state.
     #[test]
     fn the_system_takes_an_empty_roster_message_for_arrival() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_resource(crate::ui_script::glue::GlueStock(false))
             .insert_state(ClientState::CharSelect)
             .init_resource::<Roster>()
             .add_message::<CharListMessage>()

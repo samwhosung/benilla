@@ -421,7 +421,7 @@ fn to_select_on_roster(
     // behind the screen's back is abandoned.
     let now = LoginAbandon::now(abandon.as_deref());
     let (mut edge, mut stale) = (false, false);
-    let generations: Vec<u64> = if stock.is_some_and(|s| s.0) {
+    let generations: Vec<u64> = if crate::ui_script::glue::is_stock(stock.as_deref()) {
         msgs.read().for_each(drop);
         auths.read().map(|m| m.generation).collect()
     } else {

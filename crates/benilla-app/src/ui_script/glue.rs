@@ -1,7 +1,8 @@
-//! The stock glue screens, behind `WOW_GLUE_STOCK=1` in a dev build: the player's own
-//! `GlueXML.toc` off the patch chain, run into a glue VM ([`UiScript::new_glue`]) that stands in
-//! the world while no character is in it, where the boot VM otherwise stands. The native screens
-//! stay the default and, under the switch, keep driving the network unseen.
+//! The stock glue screens: the player's own `GlueXML.toc` off the patch chain, run into a glue VM
+//! ([`UiScript::new_glue`]) that stands in the world while no character is in it, where the boot VM
+//! otherwise stands. They are the glue screens of every run but a dev build's
+//! `WOW_GLUE_NATIVE=1` ([`GlueStock::from_env`]), which puts up the native screens until they are
+//! deleted.
 //!
 //! The reference's glue builder (`0x46a7b0`) resets the Lua state on a rebuild (`0x46a87b`; the
 //! cold first build, `0x46a505`, passes 0 and skips it), registers the glue functions
@@ -33,26 +34,85 @@ use benilla_ui::script::{ScriptValue, UiScript};
 
 use super::reference_ui;
 
-/// The switch's variable.
-const SWITCH: &str = "WOW_GLUE_STOCK";
+/// The dev switch that puts the native glue screens up instead of the stock ones.
+const NATIVE_SWITCH: &str = "WOW_GLUE_NATIVE";
 
-/// Whether this run puts the stock glue screens up, read once at plugin build: a dev build with
-/// `WOW_GLUE_STOCK=1`. A player build never does.
-#[derive(Resource, Default, Clone, Copy)]
+/// The instruments outside the native screens' modules that still drive them, which a dev run
+/// that names one puts up: the rig and the create probe (`capture::probe_rig`,
+/// `capture::probe_charcreate`) create, delete and pick through the park's own enumerations, which
+/// the stock screen replaces with its own ask, and the glue captures (`WOW_CAPTURE=glue-…`,
+/// `capture::scenarios::GLUE_SCENARIOS`) photograph and feed the native screens.
+const NATIVE_INSTRUMENTS: [&str; 2] = ["WOW_RIG", "WOW_PROBE_CHARCREATE"];
+
+/// The native screens' own instruments, inert under the stock screens: named in a warning when a
+/// run sets one without [`NATIVE_SWITCH`].
+const NATIVE_ONLY: [&str; 10] = [
+    "WOW_LOGIN_SMOKE",
+    "WOW_CHARSELECT_DIALOG",
+    "WOW_CHARSELECT_ADDONS",
+    "WOW_CHARSELECT_SHOT_OUT",
+    "WOW_CHARSELECT_SHOT_AT",
+    "WOW_CHARCREATE_NAME",
+    "WOW_CHARCREATE_SHOT",
+    "WOW_CHARCREATE_PICK",
+    "WOW_CHARCREATE_DIALS",
+    "WOW_CHARCREATE_SHOT_OUT",
+];
+
+/// Whether this run puts the stock glue screens up, read once at plugin build. Absent, as in a
+/// test's partial app, it reads as stock, the default ([`is_stock`]).
+#[derive(Resource, Clone, Copy)]
 pub(crate) struct GlueStock(pub(crate) bool);
 
-impl GlueStock {
-    /// The switch as this process has it.
-    pub(crate) fn from_env() -> Self {
-        Self(
-            crate::run_mode::dev_affordances()
-                && std::env::var(SWITCH).ok().as_deref() == Some("1"),
-        )
+impl Default for GlueStock {
+    fn default() -> Self {
+        Self(true)
     }
 }
 
-/// The stock glue screens as a dev instrument reaches them, so no instrument names the VM: the
-/// switch, and through [`StockVm`] the glue VM's frames and verbs.
+impl GlueStock {
+    /// The switch as this process has it: stock, except in a dev build whose environment asks for
+    /// the native screens ([`native_asked`]). A player build always stands on the stock screens.
+    pub(crate) fn from_env() -> Self {
+        if !crate::run_mode::dev_affordances() {
+            return Self(true);
+        }
+        let var = |k: &str| std::env::var(k).ok();
+        let asked = native_asked(var);
+        match &asked {
+            Some(why) => info!("glue: {why}: the native glue screens stand this run"),
+            None => {
+                for k in NATIVE_ONLY.into_iter().filter(|k| var(k).is_some()) {
+                    warn!("glue: {k} drives the native glue screens and does nothing under the stock ones; set {NATIVE_SWITCH}=1 for it");
+                }
+            }
+        }
+        Self(asked.is_none())
+    }
+}
+
+/// What in a dev run's environment asks for the native screens, if anything: the switch, or an
+/// instrument that still drives them ([`NATIVE_INSTRUMENTS`], a glue capture).
+fn native_asked(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    if var(NATIVE_SWITCH).as_deref() == Some("1") {
+        return Some(format!("{NATIVE_SWITCH}=1"));
+    }
+    if let Some(name) = var("WOW_CAPTURE").filter(|n| n.starts_with("glue-")) {
+        return Some(format!("WOW_CAPTURE={name} photographs the native screens"));
+    }
+    NATIVE_INSTRUMENTS
+        .into_iter()
+        .find(|k| var(k).is_some())
+        .map(|k| format!("{k} drives the native screens' roster"))
+}
+
+/// The stock screens stand: the resource says so, or is absent and the default holds.
+pub(crate) fn is_stock(stock: Option<&GlueStock>) -> bool {
+    stock.is_none_or(|s| s.0)
+}
+
+/// The stock glue screens as a dev instrument reaches them, so no instrument names the VM: which
+/// screens stand, and through [`StockVm`] the glue VM's frames and verbs.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StockGlueProbe<'w> {
     stock: Option<Res<'w, GlueStock>>,
@@ -60,10 +120,11 @@ pub(crate) struct StockGlueProbe<'w> {
 }
 
 impl StockGlueProbe<'_> {
-    /// The glue VM, `None` with the switch off. With it on and the glue VM not standing (the
-    /// world's VM, or a build that failed), a [`StockVm`] that shows nothing and presses nothing.
+    /// The glue VM, `None` under the native screens. With the stock screens and the glue VM not
+    /// standing (the world's VM, or a build that failed), a [`StockVm`] that shows nothing and
+    /// presses nothing.
     pub(crate) fn vm(&self) -> Option<StockVm<'_>> {
-        self.stock.as_deref().is_some_and(|s| s.0).then(|| {
+        is_stock(self.stock.as_deref()).then(|| {
             StockVm(
                 self.script
                     .as_deref()
@@ -114,23 +175,24 @@ impl StockVm<'_> {
     }
 }
 
-/// Run condition: the stock glue screens are up, the switch on and no character in the world.
+/// Run condition: the stock glue screens are up, they stand this run and no character is in the
+/// world.
 pub(crate) fn glue_ui_up(
     stock: Option<Res<GlueStock>>,
     state: Option<Res<State<crate::client_state::ClientState>>>,
 ) -> bool {
-    stock.is_some_and(|s| s.0)
+    is_stock(stock.as_deref())
         && state.is_none_or(|s| *s.get() != crate::client_state::ClientState::InWorld)
 }
 
-/// Run condition: the switch is on, whether or not a character is in the world.
+/// Run condition: the stock screens stand this run, whether or not a character is in the world.
 pub(crate) fn stock_glue(stock: Option<Res<GlueStock>>) -> bool {
-    stock.is_some_and(|s| s.0)
+    is_stock(stock.as_deref())
 }
 
-/// Run condition: the native glue screens draw and take input, the switch off.
+/// Run condition: the native glue screens draw and take input, a dev run having asked for them.
 pub(crate) fn native_glue(stock: Option<Res<GlueStock>>) -> bool {
-    !stock.is_some_and(|s| s.0)
+    !is_stock(stock.as_deref())
 }
 
 /// The glue screen `SET_GLUE_SCREEN` names, `GlueParent.lua`'s `GlueScreenInfo` key.
@@ -439,6 +501,30 @@ mod tests {
             None
         );
         assert_eq!(nil_call("x.lua:1: bad argument #1"), None);
+    }
+
+    /// The stock screens stand unless a dev run asks for the native ones, by the switch or by an
+    /// instrument that still drives them; any other value of the switch leaves the stock screens up.
+    #[test]
+    fn the_native_screens_stand_only_when_a_dev_run_asks() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(native_asked(env(&[])), None);
+        assert_eq!(native_asked(env(&[("WOW_GLUE_NATIVE", "0")])), None);
+        assert!(native_asked(env(&[("WOW_GLUE_NATIVE", "1")])).is_some());
+        assert!(native_asked(env(&[("WOW_RIG", "60")])).is_some());
+        assert!(native_asked(env(&[("WOW_PROBE_CHARCREATE", "Zz")])).is_some());
+        assert!(native_asked(env(&[("WOW_CAPTURE", "glue-login")])).is_some());
+        assert_eq!(native_asked(env(&[("WOW_CAPTURE", "water-noon")])), None);
+        assert!(is_stock(None), "absent, the default holds");
+        assert!(is_stock(Some(&GlueStock::default())));
+        assert!(!is_stock(Some(&GlueStock(false))));
     }
 
     /// The stock GlueXML loads into the glue VM, `FRAMES_LOADED` fires and the login screen goes

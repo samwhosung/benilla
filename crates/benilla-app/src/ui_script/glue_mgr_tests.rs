@@ -4194,7 +4194,6 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
         // The roster the IO thread already published, as the session's edges took it.
         w.insert_resource(crate::glue_session::roster::Roster::with_chars(roster3()));
         w.init_resource::<crate::glue_session::roster::RunPick>();
-        w.init_resource::<crate::glue::dialog::GlueDialog>();
     }
     app.add_plugins(bevy::state::app::StatesPlugin)
         .insert_state(ClientState::CharSelect)
@@ -4382,6 +4381,40 @@ fn the_runs_own_stock_pick_goes_through_enter_world() {
         [0x12u64.to_le_bytes().to_vec()],
         "the armed row, Bravo"
     );
+}
+
+/// The run's own selection (`WOW_CHARSELECT_PICK`) on the stock screens is the screen's own: once
+/// it has its roster, the row is selected as a click selects it, and the screen stays up.
+#[test]
+fn the_runs_own_stock_selection_selects_on_the_screen() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("run-select");
+    let (mut app, world) = entry_app(false);
+    app.world_mut()
+        .insert_resource(crate::glue_session::roster::RunPick::selecting(0x12));
+    app.add_systems(
+        Update,
+        crate::glue_session::roster::enter_run_pick.after(drive_glue_mgr),
+    );
+    app.update();
+    assert_eq!(
+        vm(&app)
+            .eval::<i64>("return CharacterSelect.selectedIndex")
+            .unwrap(),
+        2,
+        "the armed row, Bravo"
+    );
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_ne!(mgr(&app).state, ScreenState::EnterWorld);
+    assert_eq!(client_state(&app), ClientState::CharSelect);
+    assert!(world
+        .bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN)
+        .is_empty());
 }
 
 /// A refused login (vmangos's result 1) that lands once the client is in the world comes back to

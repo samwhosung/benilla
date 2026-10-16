@@ -115,31 +115,6 @@ pub(crate) use probes::{
     ProbeGlueLuaPlugin, ProbeHoverPlugin, ProbeKeyPlugin, ProbeLuaPlugin, ProbeResizePlugin,
     RevealAuditPlugin, SchedCensusPlugin, StallPlugin, TrailCensusPlugin, UnitVisualsPlugin,
 };
-/// A probe that reads the native screens' rosters (the park's own, and the one re-sent after a
-/// create or delete) cannot run under `WOW_GLUE_STOCK=1`, where the screen asks for its own and the
-/// probe would sit until its timeout. Refuse it where it is requested: an error at plugin build,
-/// and the exit of a driverless run ([`crate::run_mode::fatal_when_driverless`]), at the first
-/// frame. `true` means the probe must not install.
-pub(crate) fn refuse_under_stock(app: &mut App, probe: &'static str) -> bool {
-    refuse_if_stock(app, probe, crate::ui_script::glue::GlueStock::from_env().0)
-}
-
-fn refuse_if_stock(app: &mut App, probe: &'static str, stock: bool) -> bool {
-    if !stock {
-        return false;
-    }
-    error!(
-        "probe: {probe} reads the native screens' rosters and cannot run under WOW_GLUE_STOCK=1; \
-         unset one of them"
-    );
-    if crate::run_mode::fatal_when_driverless(&format!("{probe} under WOW_GLUE_STOCK=1")) {
-        app.add_systems(Startup, |mut exit: MessageWriter<AppExit>| {
-            exit.write(AppExit::error());
-        });
-    }
-    true
-}
-
 pub(crate) use scenarios::ui_opted_in;
 use scenarios::GlueScreen;
 use scenarios::{
@@ -1079,14 +1054,14 @@ fn drive_capture(
 }
 
 #[cfg(test)]
-mod refuse_tests {
-    use super::*;
-
-    /// A native-only probe installs under the native screens and is refused under the stock ones.
+mod glue_capture_tests {
+    /// `ui_script::glue` puts the native screens up for a glue capture by its name's `glue-`
+    /// prefix, so every glue capture carries it and no other capture does.
     #[test]
-    fn a_native_only_probe_is_refused_under_the_stock_screens() {
-        let mut app = App::new();
-        assert!(!refuse_if_stock(&mut app, "WOW_RIG", false));
-        assert!(refuse_if_stock(&mut app, "WOW_RIG", true));
+    fn the_glue_captures_and_only_they_are_named_glue() {
+        assert!(super::GLUE_SCENARIOS
+            .iter()
+            .all(|g| g.name.starts_with("glue-")));
+        assert!(!super::SCENARIOS.iter().any(|s| s.name.starts_with("glue-")));
     }
 }

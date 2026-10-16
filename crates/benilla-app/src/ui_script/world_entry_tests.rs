@@ -80,12 +80,26 @@ fn hermetic_addon(
     (tmp, capture, benilla_home)
 }
 
-/// The world after `Startup` ([`super::setup_script`]): a boot VM, no frames.
+/// The world after `Startup` ([`super::setup_script`]): the stock glue VM at the login screen.
 fn booted_world() -> World {
+    booted_world_on(None)
+}
+
+/// The world after `Startup` under the native screens: a boot VM, no frames, standing at the
+/// character screen as no stock VM does (a `SetCVar`, a frame of in-game events). Goes with the
+/// native screens.
+fn native_booted_world() -> World {
+    booted_world_on(Some(crate::ui_script::glue::GlueStock(false)))
+}
+
+fn booted_world_on(switch: Option<crate::ui_script::glue::GlueStock>) -> World {
     let mut world = World::new();
     world.init_resource::<super::AddOnIdentity>();
     world.init_resource::<crate::minimap::MinimapZoom>();
     world.init_resource::<super::ReloadUiPending>();
+    if let Some(switch) = switch {
+        world.insert_resource(switch);
+    }
     super::setup_script(&mut world);
     world
 }
@@ -285,7 +299,7 @@ fn the_realm_cvars_are_read_only_to_lua_only_in_the_world() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_probe("readonly");
-    let mut world = booted_world();
+    let mut world = native_booted_world();
     world.init_resource::<super::LeavingWorldArmed>();
     let set = |world: &World, chunk: &str| {
         let s = world.non_send_resource::<benilla_ui::script::UiScript>();
@@ -331,7 +345,7 @@ fn a_shutdown_with_no_world_fires_logout_without_leaving_world() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_probe("quitsplit");
-    let mut world = booted_world();
+    let mut world = native_booted_world();
     let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("a boot VM is live at the character screen");
@@ -1121,6 +1135,8 @@ fn unit_feed_app() -> (App, crossbeam_channel::Receiver<crate::net::ClientComman
     app.init_resource::<crate::ui_guild::GuildState>();
     app.add_message::<crate::creature_anim::SwingImpact>();
     app.add_message::<crate::net::WorldEnterCascadeMessage>();
+    // The boot VM, which takes the probe's in-game events before the entry load.
+    app.insert_resource(crate::ui_script::glue::GlueStock(false));
     super::setup_script(app.world_mut());
     (app, rx)
 }

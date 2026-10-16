@@ -29,6 +29,9 @@
 //! the world DB. Applying gear unequips all 19 slots before it equips
 //! (`ObjectMgr.cpp:12079-12117`), so re-dressing a body leaves the old set in its bags or mailed;
 //! a fresh rig-named character starts with empty bags.
+//!
+//! The rig picks, creates and deletes through the park's own rosters, so a rig run puts the
+//! native glue screens up (`ui_script::glue::NATIVE_INSTRUMENTS`).
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
@@ -73,9 +76,6 @@ impl Plugin for ProbeRigPlugin {
         else {
             return; // inert without a parseable spec (parse() has already said why)
         };
-        if super::refuse_under_stock(app, "WOW_RIG") {
-            return;
-        }
         info!("rig: {}", spec.describe());
         // Publish the claim on the character pick, so the roster knows the pick is spoken for.
         if let Some(name) = rig_char_name(&spec) {
