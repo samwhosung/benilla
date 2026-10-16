@@ -64,8 +64,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - No partner write of cameraPitchSmoothSpeed, which has no reader: the follow here has one rate. ([`assets/ui/OptionsFrame.xml:1699`](../crates/benilla-app/assets/ui/OptionsFrame.xml#L1699))
 - Modern Classic's two-entry Display Mode, as there is no exclusive fullscreen; gxWindow "0" is the borderless window. ([`assets/ui/OptionsFrame.xml:1985`](../crates/benilla-app/assets/ui/OptionsFrame.xml#L1985))
 - Our own row (the reference draws to the backbuffer), and no Multisampling, which misses alpha-tested cutouts. ([`assets/ui/OptionsFrame.xml:2014`](../crates/benilla-app/assets/ui/OptionsFrame.xml#L2014))
-- 1.12 has no `/reload` (later clients added it; 1.12 reloads through `/console reloadui`); kept so a player can reload the interface after toggling addons. ([`assets/ui/ScriptLogFrame.xml:382`](../crates/benilla-app/assets/ui/ScriptLogFrame.xml#L382))
-- A three-slice where the reference overlaps two quads, since two quads reach only 362 units and a page here is 563 tall. ([`assets/ui/ScrollTemplates.xml:205`](../crates/benilla-app/assets/ui/ScrollTemplates.xml#L205))
+- 1.12 has no `/reload` (later clients added it; 1.12 reloads through `/console reloadui`); kept so a player can reload the interface after toggling addons. ([`assets/ui/ScriptLogFrame.xml:381`](../crates/benilla-app/assets/ui/ScriptLogFrame.xml#L381))
+- A three-slice where the reference overlaps two quads, since two quads reach only 362 units and a page here is 563 tall. ([`assets/ui/ScrollTemplates.xml:188`](../crates/benilla-app/assets/ui/ScrollTemplates.xml#L188))
 - The pet page's autocast widgets take the pet bar button's proportions, so the shine and the corner brackets sit on the button's edge and share its centre. ([`assets/ui/SpellBookAdapters.xml:3`](../crates/benilla-app/assets/ui/SpellBookAdapters.xml#L3))
 
 #### aura_visual
