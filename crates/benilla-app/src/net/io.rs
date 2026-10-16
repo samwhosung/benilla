@@ -161,6 +161,9 @@ impl PingClock {
 /// Cap on send warnings per connection, so a movement stream during an outage cannot flood the log.
 const SEND_WARN_CAP: u32 = 8;
 
+/// How often the character park looks at the world socket for a server that dropped it.
+const PARK_LINK_CHECK: Duration = Duration::from_millis(500);
+
 /// What one wake-up at the character park asked for, so every jump out is made outside `select!`.
 enum Parked {
     /// `CMSG_PLAYER_LOGIN` with this guid.
@@ -173,7 +176,7 @@ enum Parked {
     Listed,
     /// The server refused the roster to a client without Warden: the login fails for good.
     Refused(String),
-    /// Stay parked: a realm-list refresh, or a Cancel over this screen.
+    /// Stay parked: a realm-list refresh, a Cancel over this screen, or a tick that found the link up.
     StayPut,
     /// Drop the parked world session and dial this realm under the abandon generation its ask
     /// carried.
@@ -731,9 +734,10 @@ fn world(
         let mut fresh_link = true;
         loop {
             // Park at character select until the app answers. Create and delete are serviced in place.
-            // If the server kicked the parked socket meanwhile, the login below fails, the cycle
-            // restarts and the app re-sends its pick, so the park needs no keepalive.
+            // The reference keeps servicing the connection here, and a drop is the disconnect
+            // handler (`0x46c540`) at once, so the park looks at the socket every tick.
             bevy::log::info!("net: parked at character select");
+            let link_check = crossbeam_channel::tick(PARK_LINK_CHECK);
             let guid = loop {
                 // The realm list's requests and the character screen's share one channel, in the
                 // order they were made: `RealmList.xml` is a `frameStrata="DIALOG"` frame, so Change
@@ -799,6 +803,15 @@ fn world(
                         },
                     },
                     recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
+                    recv(link_check) -> _ => match session.poll_link() {
+                        Ok(()) => Parked::StayPut,
+                        Err(e) => match e.downcast_ref::<WardenRequired>() {
+                            Some(w) => Parked::Refused(w.to_string()),
+                            // The server dropped the link: the session ends as a stream failure
+                            // does, `DISCONNECTED_FROM_SERVER` and the login screen.
+                            None => return Err(e),
+                        },
+                    },
                 };
                 let (action, code) = match answer {
                     Parked::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),

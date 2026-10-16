@@ -362,6 +362,8 @@ pub(crate) struct World {
     /// answer (vmangos builds it in the auth handler, so it leads: `WorldSocket.cpp:447`).
     addon_info: AddonReply,
     open: Arc<AtomicUsize>,
+    /// Every session's socket, for [`World::drop_links`].
+    links: Arc<Mutex<Vec<TcpStream>>>,
 }
 
 impl World {
@@ -406,6 +408,14 @@ impl World {
     /// Have the server demand Warden in place of the roster from now on.
     pub(crate) fn demand_warden(&self) {
         self.warden.store(true, Ordering::SeqCst);
+    }
+
+    /// Close every session's socket from the server's side, as vmangos does for a session idle at
+    /// character select (`CharacterScreenMaxIdleTime`).
+    pub(crate) fn drop_links(&self) {
+        for s in self.links.lock().unwrap().drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
     }
 
     /// Have the server cut the connection on the next roster ask.
@@ -552,6 +562,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let addon_reply = Arc::clone(&addon_info);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
+    let links = Arc::new(Mutex::new(Vec::<TcpStream>::new()));
+    let link_log = Arc::clone(&links);
     thread::spawn(move || {
         let mut last: Option<Key> = None;
         for stream in listener.incoming() {
@@ -576,6 +588,10 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let Some(key) = last else {
                 return;
             };
+            // Held before the client can see the session open, so a drop never misses it.
+            if let Ok(link) = s.try_clone() {
+                link_log.lock().unwrap().push(link);
+            }
             let mut crypto = HeaderCrypto::from_session_key(key);
             let reply = addon_reply.lock().unwrap().clone();
             if let Some((body, false)) = &reply {
@@ -735,6 +751,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         trail,
         addon_info,
         open,
+        links,
     }
 }
 

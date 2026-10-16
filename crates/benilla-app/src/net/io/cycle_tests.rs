@@ -456,6 +456,25 @@ fn a_roster_ask_cut_on_the_stream_reports_its_failure_then_the_loss() {
     ));
 }
 
+/// The reference keeps servicing the connection at character select, and a server that drops it
+/// (vmangos, after `CharacterScreenMaxIdleTime`) runs the disconnect handler (`0x46c540`) at once:
+/// the park ends the session as a stream failure with no request from the app.
+#[test]
+fn a_link_dropped_while_parked_at_select_ends_the_session() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    dial(&cycles, realms[0].clone());
+    world.drop_links();
+    match next_event(&cycles.events) {
+        SessionEvent::Disconnected { end, .. } => {
+            assert_eq!(end, benilla_protocol::SessionEnd::Lost)
+        }
+        other => panic!("expected the loss, got {other:?}"),
+    }
+}
+
 /// A create's result goes to the screen alone: the screen asks for the changed roster itself
 /// (`0x46c1a7`), so the IO thread enumerates nothing behind it.
 #[test]

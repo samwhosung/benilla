@@ -276,18 +276,55 @@ impl WorldSession {
                     self.link.roster_races = characters.iter().map(|c| (c.guid, c.race)).collect();
                     return Ok(characters);
                 }
-                // Warden can arm on either side of SMSG_AUTH_RESPONSE, so this step refuses it too.
-                ServerPacket::Other {
-                    opcode: opcode::SMSG_WARDEN_DATA,
-                } => return Err(WardenRequired.into()),
-                // Kept for the world entry when the server sends it this early.
-                ServerPacket::TutorialFlags(flags) => {
-                    self.tutorial_flags = Some(flags.bytes);
-                    continue;
-                }
-                // The server interleaves account-data / cache packets here; skip them.
-                _ => continue,
+                other => self.note_stray(other)?,
             }
+        }
+    }
+
+    /// Look at the link while character select waits for the app: the reference keeps servicing
+    /// the connection there, and a drop ends the session (`CGlueMgr::NetDisconnectHandler`,
+    /// `0x46c540`). A closed or failed socket is an error, a packet sent unasked is read as a
+    /// stray, a quiet link is `Ok`. Nothing is sent, and a read waits only on a packet begun.
+    pub fn poll_link(&mut self) -> Result<()> {
+        self.stream
+            .set_nonblocking(true)
+            .context("polling the world socket")?;
+        let peeked = self.stream.peek(&mut [0u8; 1]);
+        self.stream
+            .set_nonblocking(false)
+            .context("restoring the world socket")?;
+        match peeked {
+            Ok(0) => bail!("world stream closed: the server ended the connection"),
+            Ok(_) => match self.recv_parsed()? {
+                Some(packet) => self.note_stray(packet),
+                None => Ok(()),
+            },
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(anyhow!("world stream closed: {e}")),
+        }
+    }
+
+    /// A packet at character select that is not the answer being waited for. Warden can arm on
+    /// either side of SMSG_AUTH_RESPONSE, so this step refuses it too; the tutorial bank is kept
+    /// for the world entry when the server sends it this early; the account-data / cache packets
+    /// the server interleaves here are skipped.
+    fn note_stray(&mut self, packet: ServerPacket) -> Result<()> {
+        match packet {
+            ServerPacket::Other {
+                opcode: opcode::SMSG_WARDEN_DATA,
+            } => Err(WardenRequired.into()),
+            ServerPacket::TutorialFlags(flags) => {
+                self.tutorial_flags = Some(flags.bytes);
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
