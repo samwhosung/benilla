@@ -7,13 +7,13 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use benilla_ui::script::{KeyWalk, UiScript};
+use benilla_ui::script::{KeyWalk, UiScript, WheelWalk};
 
 use super::{
     CursorPayloadHeld, PlayerUiClickConsumed, PlayerUiHover, PlayerUiPressConsumed,
     UiKeyboardCapture,
 };
-use crate::bindings::WheelNotches;
+use crate::bindings::{WheelNotches, WorldWheel};
 use crate::textinput::{self, keymap, HostClipboard};
 
 /// The pointer-side state [`feed_ui_input`] reads and writes. The world pick reads last frame's
@@ -61,21 +61,28 @@ const UI_MOUSE_BUTTONS: [(MouseButton, &str); 5] = [
     (MouseButton::Back, "Button5"),
 ];
 
-/// One `OnMouseWheel` call per whole notch, `arg1 = ±1`, the fraction carried in `notches`: a
+/// One wheel sweep per whole notch (`0x7664f0`), `arg1 = ±1`, the fraction carried in `notches`: a
 /// trackpad gesture arrives as a `Pixel` trickle, and the stock handlers act on the sign alone
 /// (`ScrollFrameTemplate_OnMouseWheel` scrolls half a pane per call, `UIPanelTemplates.lua:150`).
-fn feed_wheel(
+/// Only the vertical travel is a notch: the horizontal wheel never reaches the client (`WM_MOUSEHWHEEL`
+/// takes the window procedure's default arm). Returns the signed notches that no frame took, which
+/// are the world frame's: its slot runs the wheel binding (`0x483d20`).
+pub(crate) fn feed_wheel(
     script: &mut UiScript,
     notches: &mut WheelNotches,
     x: f32,
     y: f32,
     scroll: &AccumulatedMouseScroll,
-) {
+) -> i32 {
     let whole = notches.feed(crate::bindings::wheel_lines(scroll.unit, scroll.delta.y));
-    let step = whole.signum() as f32;
+    let step = whole.signum();
+    let mut to_world = 0;
     for _ in 0..whole.unsigned_abs() {
-        script.mouse_wheel(x, y, step);
+        if script.mouse_wheel(x, y, step as f32) == WheelWalk::World {
+            to_world += step;
+        }
     }
+    to_world
 }
 
 /// Feeds cursor, buttons, wheel and keys into the UI engine, publishing [`PlayerUiHover`] (the
@@ -87,7 +94,11 @@ pub(super) fn feed_ui_input(
     window: Query<(&Window, Option<&bevy::window::RawHandleWrapper>), With<PrimaryWindow>>,
     buttons: Res<ButtonInput<MouseButton>>,
     // The wheel travel and its carried notch fraction, one param for clippy's argument ceiling.
-    (scroll, mut notches): (Res<AccumulatedMouseScroll>, ResMut<WheelNotches>),
+    (scroll, mut notches, mut world_wheel): (
+        Res<AccumulatedMouseScroll>,
+        ResMut<WheelNotches>,
+        ResMut<WorldWheel>,
+    ),
     mut pointer: PointerFeed,
     // One param for clippy's argument ceiling, with the pasteboard the clipboard chords use.
     mut kbd: (
@@ -110,6 +121,10 @@ pub(super) fn feed_ui_input(
         .as_ref()
         .is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let world_pick = pointer.world_pick();
+    // The notches the world frame takes this frame, which the bindings pass runs; a frame that
+    // sweeps nothing (no VM, no cursor, a probe's pointer) hands the whole travel to the world.
+    world_wheel.0 = 0;
+    let mut swept = false;
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
     // would disarm the probe's gesture between its press and release.
@@ -205,7 +220,8 @@ pub(super) fn feed_ui_input(
                 script.mouse_button(x, y, name, false);
             }
         }
-        feed_wheel(&mut script, &mut notches, x, y, &scroll);
+        world_wheel.0 = feed_wheel(&mut script, &mut notches, x, y, &scroll);
+        swept = true;
     } else if !synthetic {
         // The OS pointer left: leave the hovered frame once, and disarm any press or drag every
         // frame, since no release ends it and a stale gesture would fire on re-entry.
@@ -213,6 +229,9 @@ pub(super) fn feed_ui_input(
             script.pointer_left_hover();
         }
         script.pointer_left_window();
+    }
+    if !swept {
+        world_wheel.0 = notches.feed(crate::bindings::wheel_lines(scroll.unit, scroll.delta.y));
     }
 
     // ── Keyboard capture gate ── read after the mouse feed (a click may have just focused a box)
@@ -469,6 +488,60 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// A world frame over the screen, a button with the mouse and no wheel, and a pane that takes
+    /// the wheel on the right: the three places a notch can land.
+    fn world_with_a_button_and_a_pane() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.run(
+            r#"
+            local w = CreateFrame("WorldFrame", "WorldFrame")
+            w:SetPoint("BOTTOMLEFT", 0, 0) w:SetWidth(1024) w:SetHeight(768)
+            local b = CreateFrame("Button", "ActionButton")
+            b:SetPoint("BOTTOMLEFT", 100, 100) b:SetWidth(40) b:SetHeight(40)
+            local p = CreateFrame("Frame", "Pane")
+            p:SetPoint("BOTTOMLEFT", 600, 100) p:SetWidth(100) p:SetHeight(100)
+            p:EnableMouseWheel(true)
+            p:SetScript("OnMouseWheel", function() WheelCalls = (WheelCalls or 0) + 1 end)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s
+    }
+
+    /// A notch over a button with no `OnMouseWheel` is the world's (`0x76c1cb`, `0x483d20`); over
+    /// a pane that has one it is the pane's and the world gets none (`0x76659a`).
+    #[test]
+    fn a_notch_reaches_the_world_unless_a_frame_with_a_handler_takes_it() {
+        let mut s = world_with_a_button_and_a_pane();
+        let mut notches = WheelNotches::default();
+        let up = frame_of(MouseScrollUnit::Line, 1.0);
+        let down = frame_of(MouseScrollUnit::Line, -2.0);
+        assert_eq!(feed_wheel(&mut s, &mut notches, 120.0, 120.0, &up), 1);
+        assert_eq!(feed_wheel(&mut s, &mut notches, 120.0, 120.0, &down), -2);
+        assert_eq!(calls(&s).0, 0, "the button has no handler");
+        assert_eq!(feed_wheel(&mut s, &mut notches, 650.0, 150.0, &up), 0);
+        assert_eq!(calls(&s).0, 1, "the pane's handler took it");
+        assert_eq!(feed_wheel(&mut s, &mut notches, 900.0, 600.0, &up), 1);
+    }
+
+    /// The horizontal wheel is not a notch: `WM_MOUSEHWHEEL` never reaches the client's wheel
+    /// walk, so it neither runs a handler nor zooms.
+    #[test]
+    fn a_horizontal_only_scroll_is_no_notch() {
+        let mut s = world_with_a_button_and_a_pane();
+        let mut notches = WheelNotches::default();
+        for (x, y) in [(120.0, 120.0), (650.0, 150.0)] {
+            let sideways = AccumulatedMouseScroll {
+                unit: MouseScrollUnit::Line,
+                delta: Vec2::new(3.0, 0.0),
+            };
+            assert_eq!(feed_wheel(&mut s, &mut notches, x, y, &sideways), 0);
+        }
+        assert_eq!(calls(&s).0, 0);
     }
 
     #[test]

@@ -28,6 +28,9 @@ mod input;
 pub(crate) mod server_alert;
 #[cfg(test)]
 pub(crate) use input::feed_keys;
+// Test-only: the bindings tests run the UI's wheel sweep ahead of the dispatch pass.
+#[cfg(test)]
+pub(crate) use input::feed_wheel;
 #[cfg(test)]
 pub(crate) mod layer_tests;
 mod load_log;
@@ -161,12 +164,6 @@ pub(crate) struct UiPassState {
     pub(crate) solves_before: u64,
     pub(crate) derives_before: u64,
 }
-
-/// UI chrome under the pointer: [`PointerOverUi`] minus the nameplates, which take the mouse but
-/// not the wheel. The reference has no such bit: a wheel notch walks the strata and falls through
-/// any frame without `OnMouseWheel` to `CGWorldFrame`.
-#[derive(Resource, Default)]
-pub(crate) struct PointerOverUiPanel(pub(crate) bool);
 
 /// The player-UI feed phase, after [`WorldStage::Net`] and ungated (`UnitFeed` is the gated
 /// sub-phase): every push this frame's tick must see, as in the reference's frame, where packet
@@ -306,6 +303,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
             .init_resource::<crate::bindings::WheelNotches>()
+            .init_resource::<crate::bindings::WorldWheel>()
             .init_resource::<UiCostWanted>()
             .init_resource::<PointerOverUi>()
             .init_resource::<SyntheticPointer>()
@@ -367,7 +365,6 @@ impl Plugin for UiScriptPlugin {
             // The input pass hit-tests the rects the tick just resolved, and runs in-world only or
             // on the stock glue screens.
             .init_resource::<UiPassState>()
-            .init_resource::<PointerOverUiPanel>()
             .add_systems(
                 Update,
                 (
@@ -421,14 +418,10 @@ fn capture_ui_active(capture: Option<Res<crate::run_mode::CaptureMode>>) -> bool
 fn arbitrate_pointer_over_ui(
     egui: Option<Res<EguiPointerOver>>,
     hover: Res<PlayerUiHover>,
-    plate_hover: Res<crate::vplates::PlateHover>,
     mut over: ResMut<PointerOverUi>,
-    mut panel: ResMut<PointerOverUiPanel>,
 ) {
     // No cinematic term: the hit test finds the full-screen, mouse-enabled `CinematicFrame`.
     over.0 = egui.is_some_and(|e| e.0) || hover.0.is_some();
-    // Chrome excludes the plates, whose hover is this frame's walk's.
-    panel.0 = over.0 && plate_hover.0.is_none();
 }
 
 /// The session lifecycle: the VM's birth, identity, death and reload.
@@ -1093,73 +1086,29 @@ mod seam_scale_tests {
 mod pointer_arbiter_tests {
     use super::*;
 
-    /// A world to run the arbiter in: its inputs and its two outputs, nothing else.
+    /// A world to run the arbiter in: its inputs and its output, nothing else.
     fn app() -> App {
         let mut app = App::new();
         app.init_resource::<PlayerUiHover>()
-            .init_resource::<crate::vplates::PlateHover>()
             .init_resource::<PointerOverUi>()
-            .init_resource::<PointerOverUiPanel>()
             .add_systems(Update, arbitrate_pointer_over_ui);
         app
     }
 
+    /// The camera reads this flag (`0x7662c0` gives a mouse-down to exactly one frame, a plate
+    /// included); the wheel does not (`ui_script::input`'s sweep).
     #[test]
-    fn a_hovered_plate_is_ui_but_not_chrome() {
-        let mut app = app();
-        let plate = app.world_mut().spawn_empty().id();
-        app.world_mut().resource_mut::<PlayerUiHover>().0 = Some(7);
-        app.world_mut()
-            .resource_mut::<crate::vplates::PlateHover>()
-            .0 = Some(plate);
-        app.update();
-        assert!(
-            app.world().resource::<PointerOverUi>().0,
-            "the plate takes the pointer"
-        );
-        assert!(
-            !app.world().resource::<PointerOverUiPanel>().0,
-            "…and the WHEEL looks straight through it"
-        );
-    }
-
-    /// The camera reads the raw flag (`0x7662c0` gives a mouse-down to exactly one frame, the
-    /// plate); the wheel reads chrome, walking past a frame that only takes the mouse.
-    #[test]
-    fn the_camera_yields_to_a_plate_and_the_wheel_does_not() {
-        let mut app = app();
-        let plate = app.world_mut().spawn_empty().id();
-        app.world_mut().resource_mut::<PlayerUiHover>().0 = Some(7);
-        app.world_mut()
-            .resource_mut::<crate::vplates::PlateHover>()
-            .0 = Some(plate);
-        app.update();
-        // `latch_world_mouse` reads this one: the press is not the world's, so no look starts.
-        assert!(
-            app.world().resource::<PointerOverUi>().0,
-            "the camera must yield the press to the plate"
-        );
-        // …and `bindings`' wheel branch reads this one.
-        assert!(
-            !app.world().resource::<PointerOverUiPanel>().0,
-            "the wheel must still reach the world over a plate"
-        );
-    }
-
-    #[test]
-    fn a_hovered_panel_is_both() {
+    fn a_hovered_frame_is_ui() {
         let mut app = app();
         app.world_mut().resource_mut::<PlayerUiHover>().0 = Some(7);
         app.update();
         assert!(app.world().resource::<PointerOverUi>().0);
-        assert!(app.world().resource::<PointerOverUiPanel>().0);
     }
 
     #[test]
-    fn no_hover_is_neither() {
+    fn no_hover_is_not() {
         let mut app = app();
         app.update();
         assert!(!app.world().resource::<PointerOverUi>().0);
-        assert!(!app.world().resource::<PointerOverUiPanel>().0);
     }
 }

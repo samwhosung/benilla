@@ -287,7 +287,7 @@ fn hit_rect_insets_default_to_zero() {
 }
 
 #[test]
-fn the_mouse_wheel_flag_round_trips_and_the_scrolling_kinds_are_born_enabled() {
+fn the_mouse_wheel_flag_round_trips_and_only_the_world_frame_is_born_enabled() {
     let s = script();
     s.run(
         r#"
@@ -298,15 +298,15 @@ fn the_mouse_wheel_flag_round_trips_and_the_scrolling_kinds_are_born_enabled() {
     )
     .unwrap();
 
-    // A plain frame is born wheel-disabled, as in the reference; the two scrolling kinds' own
-    // constructors enable it.
-    assert!(!s
-        .eval::<bool>("return Plain:IsMouseWheelEnabled()")
-        .unwrap());
-    assert!(s
-        .eval::<bool>("return Scroll:IsMouseWheelEnabled()")
-        .unwrap());
-    assert!(s.eval::<bool>("return Msg:IsMouseWheelEnabled()").unwrap());
+    // Every frame is born wheel-disabled, the scrolling kinds included: their constructors enable
+    // nothing (`0x786a40`, `0x787670`), and only the world frame's does (`0x481b1f`).
+    for f in ["Plain", "Scroll", "Msg"] {
+        assert!(
+            !s.eval::<bool>(&format!("return {f}:IsMouseWheelEnabled()"))
+                .unwrap(),
+            "{f}"
+        );
+    }
 
     s.run("Plain:EnableMouseWheel(true)").unwrap();
     assert!(s

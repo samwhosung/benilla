@@ -503,11 +503,19 @@ impl WidgetArena {
             .is_some_and(|f| f.char_enabled || f.key_enabled)
     }
 
-    /// `EnableMouseWheel`, the wheel's own bit, separate from the mouse's.
+    /// `EnableMouseWheel`, the wheel's own bit, separate from the mouse's. A bit newly set on a
+    /// visible frame enters the wheel list now (`0x76af00`), behind the equal levels there.
     pub fn set_mouse_wheel_enabled(&mut self, h: FrameHandle, enabled: bool) {
+        let stamp = self.next_kb_stamp;
+        let mut joined = false;
         if let Some(f) = self.frame_mut(h) {
+            joined = enabled && !f.mouse_wheel_enabled && f.effective_visible;
             f.mouse_wheel_enabled = enabled;
+            if joined {
+                f.wheel_stamp = stamp;
+            }
         }
+        self.next_kb_stamp += u64::from(joined);
     }
 
     pub fn is_mouse_wheel_enabled(&self, h: FrameHandle) -> bool {
