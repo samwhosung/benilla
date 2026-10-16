@@ -412,7 +412,7 @@ pub(super) fn feed_item_stats(
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     // The caster the `$`-tokens read: its spell modifiers and its skills.
-    (spell_mods, self_q, locks): CasterReads,
+    (spell_mods, self_q): CasterReads,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
     home_bind: Option<Res<crate::net::HomeBind>>,
@@ -489,7 +489,7 @@ pub(super) fn feed_item_stats(
                 } else {
                     mod_sensitive.remove(&id);
                 }
-                let mut view = template_view(
+                let view = template_view(
                     &t,
                     spell_res,
                     Some(&spell_mods),
@@ -503,9 +503,6 @@ pub(super) fn feed_item_stats(
                     icons.as_deref(),
                     &get,
                 );
-                // A lock id with no `Lock.dbc` row is no lock to the builder (`0x52bd6b`..
-                // `0x52bda9`); with the catalog unloaded the id stands.
-                view.lock_id = known_lock_id(view.lock_id, locks.as_deref().map(|l| &l.0));
                 Some((id, view))
             })
             .collect()
@@ -515,23 +512,11 @@ pub(super) fn feed_item_stats(
     }
 }
 
-/// What the `$`-tokens read of the caster, and the `Lock.dbc` the LOCKED line needs a row from
-/// (`0x52bd6b`).
+/// What the `$`-tokens read of the caster.
 type CasterReads<'w, 's> = (
     Res<'w, crate::spell::SpellModifiers>,
     Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
-    Option<Res<'w, crate::go_templates::Locks>>,
 );
-
-/// The template's lock id when `Lock.dbc` holds its row, else 0: the builder's LOCKED line starts
-/// from that row (`0x52bd57`..`0x52bd76`), and a missing one is no lock. With the catalog not
-/// loaded the id stands.
-fn known_lock_id(lock_id: u32, locks: Option<&benilla_formats::LockCatalog>) -> u32 {
-    match locks {
-        Some(l) if l.slots(lock_id).is_none() => 0,
-        _ => lock_id,
-    }
-}
 
 /// The player state the tooltip's red requirement lines check: level, class, race, skills,
 /// proficiencies (`SMSG_SET_PROFICIENCY`) and reputation ranks (the DBC base plus the
@@ -708,6 +693,7 @@ fn resolve_slot(
             rolls.enchants,
         ),
     );
+    let gift_creator = crate::items::gift_creator_name(fields, names, commands);
     // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
     let occupied_seats = fields.is_container().then(|| {
         let n = fields.container_num_slots().unwrap_or(0).min(36) as u8;
@@ -732,6 +718,7 @@ fn resolve_slot(
             count,
             readable,
             creator,
+            gift_creator,
             flags,
             already_bound,
             occupied_seats,
@@ -778,6 +765,7 @@ fn resolve_slot(
         guid,
         readable,
         creator,
+        gift_creator,
         flags,
         already_bound,
         occupied_seats,
@@ -1483,23 +1471,6 @@ mod tests {
         apply_container_source, charges_count, resolve_slot, ContainerSlot, FeedMemory, SlotGuids,
         BANK_CONTAINER, BANK_SLOTS,
     };
-
-    /// A lock id with no `Lock.dbc` row is no lock to the item builder (`0x52bd6b`..`0x52bda9`).
-    #[test]
-    fn a_lock_id_without_a_row_is_no_lock() {
-        use benilla_formats::{LockCatalog, LockSlot, LOCK_KEY_ITEM};
-        let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
-        slots[0].key_type = LOCK_KEY_ITEM;
-        let catalog = LockCatalog::from_rows([(7, slots)]);
-        assert_eq!(super::known_lock_id(7, Some(&catalog)), 7);
-        assert_eq!(super::known_lock_id(8, Some(&catalog)), 0);
-        assert_eq!(
-            super::known_lock_id(8, None),
-            8,
-            "no catalog, the id stands"
-        );
-        assert_eq!(super::known_lock_id(0, Some(&catalog)), 0);
-    }
 
     /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
     /// the five spell slots whose id names a `Spell.dbc` row with their charges, in slot order.

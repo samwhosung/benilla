@@ -1,6 +1,6 @@
-//! The inputs of the item tooltip's lock check (`0x5da5e0`): `Lock.dbc` pushed whole once, and what
-//! the active player opens locks with, pushed on change. The walk and the colour are the engine's
-//! ([`benilla_ui::script::check_lock`]).
+//! The inputs of the item tooltip's lock check (`0x5da5e0`): `Lock.dbc` and `LockType.dbc`'s names
+//! pushed whole once, and what the active player opens locks with, pushed on change. The walk and
+//! the colour are the engine's ([`benilla_ui::script::check_lock`]).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -11,10 +11,12 @@ use benilla_ui::script::{LockOpener, LockOpeners, LockSlotView, UiScript};
 
 use crate::ui_script::gate;
 
-/// Pushes every `Lock.dbc` row once per VM, empty slots dropped: the walk skips a type 0 slot.
+/// Pushes every `Lock.dbc` row and `LockType.dbc` name once per VM. Both load together; without
+/// `LockType.dbc` every lock kind reads `UNKNOWN`, as a missing row does.
 pub(super) fn feed_lock_rows(
     script: Option<NonSendMut<UiScript>>,
     locks: Option<Res<crate::go_templates::Locks>>,
+    lock_types: Option<Res<crate::go_templates::LockTypes>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
     let Some(mut script) = script else {
@@ -28,18 +30,24 @@ pub(super) fn feed_lock_rows(
     };
     let rows = row_views(&locks.0);
     script.set_lock_rows(rows);
+    script.set_lock_type_names(
+        lock_types
+            .iter()
+            .flat_map(|t| t.0.names())
+            .map(|(id, name)| (id, name.to_string()))
+            .collect(),
+    );
     *pushed.get(&script) = true;
 }
 
-/// Every row as the walk reads it, empty slots dropped (a type 0 slot is skipped) and the rest in
-/// slot order.
+/// Every row as the reference holds it, all eight slots in order: the walk skips a type 0 slot,
+/// and the line under `LOCKED` reads the first slot's type whatever it is (`0x52be5d`).
 fn row_views(catalog: &LockCatalog) -> HashMap<u32, Vec<LockSlotView>> {
     catalog
         .rows()
         .map(|(id, slots)| {
             let slots = slots
                 .iter()
-                .filter(|s| s.key_type != benilla_formats::LOCK_KEY_NONE)
                 .map(|s| LockSlotView {
                     key_type: s.key_type,
                     index: s.index,
@@ -181,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rows_empty_slots_are_dropped_and_the_rest_keep_their_order() {
+    fn a_row_keeps_all_its_slots_in_place() {
         let mut slots = [LockSlot::default(); MAX_LOCK_SLOTS];
         slots[1] = LockSlot {
             key_type: 1,
@@ -199,21 +207,28 @@ mod tests {
             (7, slots),
             (8, [LockSlot::default(); MAX_LOCK_SLOTS]),
         ]));
+        assert_eq!(rows[&7].len(), MAX_LOCK_SLOTS);
+        assert_eq!(rows[&7][0], LockSlotView::default(), "slot 0 stays empty");
         assert_eq!(
-            rows[&7],
-            [
-                LockSlotView {
-                    key_type: 1,
-                    index: 5060,
-                    skill: 0
-                },
-                LockSlotView {
-                    key_type: 2,
-                    index: 1,
-                    skill: 25
-                }
-            ]
+            rows[&7][1],
+            LockSlotView {
+                key_type: 1,
+                index: 5060,
+                skill: 0
+            }
         );
-        assert!(rows[&8].is_empty(), "a row of empty slots stays a row");
+        assert_eq!(
+            rows[&7][3],
+            LockSlotView {
+                key_type: 2,
+                index: 1,
+                skill: 25
+            }
+        );
+        assert_eq!(
+            rows[&8].len(),
+            MAX_LOCK_SLOTS,
+            "a row of empty slots stays a row"
+        );
     }
 }

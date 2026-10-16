@@ -580,6 +580,7 @@ fn instance_tail_creator_and_readable() {
             ..Default::default()
         },
     );
+    s.set_lock_rows(HashMap::from([(7, Vec::new())]));
     s.set_item_template(
         2589,
         ItemTemplateView {
@@ -687,6 +688,86 @@ fn instance_tail_creator_and_readable() {
         vec!["Small Barnacled Clam"],
         "a running cooldown suppresses ITEM_OPENABLE — the two lines are exclusive here"
     );
+    assert!(s.take_errors().is_empty());
+}
+
+/// A wrapped item (`ITEM_FIELD_FLAGS & 0x8`, `0x52b789`) takes the gift arm (`0x52e1b9`): it names
+/// its giver off `ITEM_FIELD_GIFTCREATOR` in white (`0x52e2cb`) and never prints the creator's
+/// line. A giver not yet resolved adds nothing, and an unwrapped item ignores the field.
+#[test]
+fn a_wrapped_item_names_its_giver_and_hides_the_creator_line() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(r#"ITEM_WRAPPED_BY = "[WRAPPED_BY %s]""#).unwrap();
+    s.set_item_template(
+        5042,
+        ItemTemplateView {
+            name: "Gift".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    let slot = |flags: u32, creator: Option<&str>, gift: Option<&str>| ContainerSlot {
+        item_id: 5042,
+        count: 1,
+        quality: Some(1),
+        creator: creator.map(str::to_string),
+        gift_creator: gift.map(str::to_string),
+        flags,
+        ..Default::default()
+    };
+    let mut slots = HashMap::new();
+    slots.insert(1, slot(0x8, Some("Geoffrey"), Some("Santa"))); // wrapped, giver known
+    slots.insert(2, slot(0x8, Some("Geoffrey"), None)); // wrapped, giver zero or in flight
+    slots.insert(3, slot(0, Some("Geoffrey"), Some("Santa"))); // unwrapped keeps its creator
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 3,
+            slots,
+        }),
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "SlotG"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT"); TT:SetBagItem(0, 1)
+    "#,
+    )
+    .unwrap();
+    let lines = lines_of(&mut s);
+    let texts: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(texts, vec!["Gift", "[WRAPPED_BY Santa]"]);
+    assert_eq!(lines[1].1, [1.0; 4], "ITEM_WRAPPED_BY is white");
+    for (n, want) in [
+        (2, vec!["Gift"]),
+        (3, vec!["Gift", "|cff00ff00[CREATED_BY Geoffrey]|r"]),
+    ] {
+        s.run(&format!(
+            r#"TT:SetOwner(getglobal("SlotG"), "ANCHOR_RIGHT"); TT:SetBagItem(0, {n})"#
+        ))
+        .unwrap();
+        let texts: Vec<String> = lines_of(&mut s).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(texts, want, "slot {n}");
+    }
+
+    // A worn wrapped item reaches the same arm through the doll's view.
+    let mut inv: InventorySlots = Default::default();
+    inv[16] = Some(InvSlotView {
+        item_id: 5042,
+        name: Some("Gift".into()),
+        quality: 1,
+        flags: 0x8,
+        creator: Some("Geoffrey".into()),
+        gift_creator: Some("Santa".into()),
+        ..Default::default()
+    });
+    s.set_inventory_slots(inv);
+    s.run(r#"TT:SetOwner(getglobal("SlotG"), "ANCHOR_RIGHT"); TT:SetInventoryItem("player", 16)"#)
+        .unwrap();
+    let texts: Vec<String> = lines_of(&mut s).into_iter().map(|(t, _)| t).collect();
+    assert_eq!(texts, vec!["Gift", "[WRAPPED_BY Santa]"]);
     assert!(s.take_errors().is_empty());
 }
 

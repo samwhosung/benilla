@@ -222,6 +222,22 @@ pub(crate) fn enchant_lines(
     lines
 }
 
+/// The name behind a wrapped item's `ITEM_WRAPPED_BY` line: only an item carrying WRAPPED `0x8`
+/// takes the gift arm (`0x52b789`, `0x52e1b9`), which reads `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`)
+/// and asks the name cache (`0x52e29d`). A zero guid, an unwrapped item or a name not yet
+/// answered gives `None`, and only the first two ask nothing.
+pub(crate) fn gift_creator_name(
+    fields: &ObjectFields,
+    names: &crate::names::NameCache,
+    commands: &NetCommands,
+) -> Option<String> {
+    if fields.item_flags()? & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED == 0 {
+        return None;
+    }
+    let giver = fields.item_gift_creator()?;
+    names.resolve_player(giver, commands).map(str::to_string)
+}
+
 /// `0x5da2c0`: already bound when `ITEM_FIELD_FLAGS & 1` is set or a live enchant slot names a
 /// binding `SpellItemEnchantment` row (`0x5da300` to `0x5da320`). The enchant cursor's bind
 /// question (gate `0x495d60`) and the tooltip's Soulbound line both read it. It reads the raw
@@ -1071,6 +1087,35 @@ mod tests {
     /// One item object with the given `ITEM_FIELD_FLAGS` and enchant slot 0.
     fn item(flags: u32, slot0: u32) -> ObjectFields {
         ObjectFields::from_pairs(&[(21, flags), (22, slot0)])
+    }
+
+    /// The gift arm (`0x52e1b9`) asks the name cache for the gift creator of a wrapped item and no
+    /// other: an unwrapped item, a zero guid and a name still in flight add no name.
+    #[test]
+    fn only_a_wrapped_item_names_its_gift_creator() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let cmds = NetCommands(tx);
+        let mut names = crate::names::NameCache::default();
+        let giver =
+            |flags: u32, guid: u32| ObjectFields::from_pairs(&[(21, flags), (12, guid), (13, 0)]);
+        // Unwrapped, even with a guid set: no ask, no name.
+        assert_eq!(gift_creator_name(&giver(0, 5), &names, &cmds), None);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        // Wrapped, no giver: nothing to ask.
+        assert_eq!(gift_creator_name(&giver(0x8, 0), &names, &cmds), None);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        // Wrapped, the name in flight: asked once, no name yet.
+        assert_eq!(gift_creator_name(&giver(0x8, 5), &names, &cmds), None);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::NameQuery { guid: 5 })
+        ));
+        // Answered.
+        names.insert_player(5, "Santa".to_string(), None);
+        assert_eq!(
+            gift_creator_name(&giver(0x8, 5), &names, &cmds).as_deref(),
+            Some("Santa")
+        );
     }
 
     /// `0x5da2c0`: the Firestone shape binds and prints no line, so a predicate read off

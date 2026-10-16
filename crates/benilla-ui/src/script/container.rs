@@ -72,6 +72,9 @@ pub struct ContainerSlot {
     pub readable: bool,
     /// The `ITEM_FIELD_CREATOR` name for the "Written by" or "<Made by>" line, once resolved.
     pub creator: Option<String>,
+    /// The `ITEM_FIELD_GIFTCREATOR` name for a wrapped item's `ITEM_WRAPPED_BY` line, once
+    /// resolved; only a wrapped item asks for it, as the gift arm does (`0x52e29d`).
+    pub gift_creator: Option<String>,
     /// `ITEM_FIELD_FLAGS`; the tooltip reads UNLOCKED `0x4` and WRAPPED `0x8`.
     pub flags: u32,
     /// Bound at runtime (`0x5da2c0`): `ITEM_FIELD_FLAGS & 1`, or an enchant whose
@@ -1059,6 +1062,7 @@ mod tests {
                 spell_0: false,
                 readable: false,
                 creator: None,
+                gift_creator: None,
                 flags: 0,
                 enchants: Vec::new(),
             },
@@ -1757,6 +1761,7 @@ mod tests {
                 spell_0: false,
                 readable: false,
                 creator: None,
+                gift_creator: None,
                 flags: 0,
                 enchants: Vec::new(),
             },

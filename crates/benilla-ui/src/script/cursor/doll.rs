@@ -375,6 +375,7 @@ mod tests {
             guid: 0x10c,
             equip_slots: vec![1],
             creator: None,
+            gift_creator: None,
             enchants: Vec::new(),
             spell_0: false,
         });
@@ -399,6 +400,7 @@ mod tests {
             guid: 0x10d,
             equip_slots: vec![11, 12], // either finger: the doll-to-doll swap
             creator: None,
+            gift_creator: None,
             enchants: Vec::new(),
             spell_0: false,
         });
@@ -423,6 +425,7 @@ mod tests {
             guid: 0x10e,
             equip_slots: vec![19],
             creator: None,
+            gift_creator: None,
             enchants: Vec::new(),
             spell_0: false,
         });
@@ -456,6 +459,7 @@ mod tests {
                 cooldown: None,
                 readable: false,
                 creator: None,
+                gift_creator: None,
                 flags: 0,
                 enchants: Vec::new(),
                 spell_0: false,
@@ -615,6 +619,7 @@ mod tests {
             guid: 0x110,
             equip_slots: vec![20, 21, 22, 23],
             creator: None,
+            gift_creator: None,
             enchants: Vec::new(),
             spell_0: false,
         });
@@ -660,6 +665,7 @@ mod tests {
                 cooldown: None,
                 readable: false,
                 creator: None,
+                gift_creator: None,
                 flags: 0,
                 enchants: Vec::new(),
                 spell_0: false,

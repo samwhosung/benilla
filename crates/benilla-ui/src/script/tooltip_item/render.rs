@@ -25,6 +25,9 @@ pub(in crate::script) struct ItemInstance {
     /// The resolved `ITEM_FIELD_CREATOR` name (the reference's `0x55f080`); `None` while it is
     /// unresolved, which prints no line either (`0x52e209`).
     pub creator: Option<String>,
+    /// The resolved `ITEM_FIELD_GIFTCREATOR` name (`0x55f080` at `0x52e29d`) of a wrapped item;
+    /// `None` while it is unresolved or the field is 0, which prints no line (`0x52e2a4`).
+    pub gift_creator: Option<String>,
     /// `ITEM_FIELD_ITEM_TEXT_ID` ≠ 0, a letter's copy: the creator line reads WRITTEN_BY
     /// (`0x52e223`) and READABLE shows (`0x52e348`).
     pub has_text: bool,
@@ -86,8 +89,7 @@ pub(super) struct BuilderFlags {
 /// (`0x52ce0d`). The
 /// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. The LOCKED line
 /// sets it on every lock path (`0x52bfa6`, after `0x52be58`, whether or not a `LOCKED_WITH_*`
-/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`). Not built: ITEM_WRAPPED_BY and the
-/// `LOCKED_WITH_*` sub-line.
+/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`).
 pub(super) fn render_view_flagged(
     lua: &Lua,
     this: &Table,
@@ -199,22 +201,17 @@ pub(super) fn render_view_flagged(
         if v.start_quest != 0 {
             keyed("ITEM_STARTS_QUEST", &[], WHITE, false)?;
         }
-        // LOCKED (`0x52bdde`..`0x52be58`), for a lock row the template or the block names
-        // (`0x52bd57`..`0x52bda9`) and a source that passes the gate (`0x52bdb3`..`0x52bdd8`): an
-        // item object lacking UNLOCKED `0x4`, or a block with a lock id of its own. A template
-        // source has neither, so it draws no LOCKED. Every lock path then sets the builder's
-        // return value (`0x52bfa6`).
-        let block_lock = inst.map_or(0, |i| i.block_lock_id);
-        let has_row = v.lock_id != 0 || block_lock != 0;
-        let passes = block_lock != 0 || inst.is_some_and(|i| i.object && i.flags & 0x4 == 0);
-        if has_row && passes {
-            // The record's row first, else the block's (`0x52bd57`, `0x52bd78`).
-            let row = if v.lock_id != 0 {
-                v.lock_id
-            } else {
-                block_lock
-            };
-            keyed("LOCKED", &[], lock_color(lua, row, v.item_level), false)?;
+        // LOCKED (`0x52bdde`..`0x52be58`) and the line under it. The lock row is the record's own,
+        // else the block's (`0x52bd57`..`0x52bda9`): a row the store lacks falls through to the
+        // block, and with neither there is no lock. The source must pass the gate (`0x52bdb3`..
+        // `0x52bdd8`): an item object lacking UNLOCKED `0x4`, or a block with a lock id of its
+        // own. A template source has neither, so it draws no LOCKED. Every lock path then sets
+        // the builder's return value (`0x52bfa6`).
+        if let Some(lock) = lock_lines(lua, v, inst) {
+            keyed("LOCKED", &[], lock.color, false)?;
+            if let Some(sub) = &lock.sub {
+                keyed(sub.key, &[Arg::S(&sub.arg)], sub.color, false)?;
+            }
             live = true;
         }
     }
@@ -662,19 +659,23 @@ pub(super) fn render_view_flagged(
     // source (`None`) stops, so a link, loot, mail or auction hover, which has an instance but no
     // object, still reaches READABLE.
     let Some(inst) = inst else { return Ok(live) };
-    // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`: ITEM_WRITTEN_BY for a letter, else
-    // ITEM_CREATED_BY, green by its own `|cff00ff00`. A wrapped instance (`0x8`, gate `0x52b7b0`)
-    // takes ITEM_WRAPPED_BY off `ITEM_FIELD_GIFTCREATOR` in the reference; that is not built, so a
-    // wrapped instance prints no creator line.
-    if inst.flags & 0x8 == 0 {
-        if let Some(name) = &inst.creator {
-            let key = if inst.has_text {
-                "ITEM_WRITTEN_BY"
-            } else {
-                "ITEM_CREATED_BY"
-            };
-            keyed(key, &[Arg::S(name)], WHITE, false)?;
+    // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`. The arm is picked once, at
+    // `0x52b78f`..`0x52b7b0`: an item object with WRAPPED `0x8` (`0x52b789`) takes the gift arm,
+    // and so does a block whose `+0x42c` is set. This reads the object's flag; no block source
+    // here carries the wrapped word. The gift arm adds ITEM_WRAPPED_BY off
+    // `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`) and never the creator's line. Any other source adds
+    // ITEM_WRITTEN_BY for a letter, else ITEM_CREATED_BY, green by its own `|cff00ff00`.
+    if inst.flags & 0x8 != 0 {
+        if let Some(name) = &inst.gift_creator {
+            keyed("ITEM_WRAPPED_BY", &[Arg::S(name)], WHITE, false)?;
         }
+    } else if let Some(name) = &inst.creator {
+        let key = if inst.has_text {
+            "ITEM_WRITTEN_BY"
+        } else {
+            "ITEM_CREATED_BY"
+        };
+        keyed(key, &[Arg::S(name)], WHITE, false)?;
     }
     // One green line, OPENABLE winning (`0x52e2f2..0x52e35d`). Openable: a p6=0 source and either
     // the loot flag `0x4` behind its lock gate (a lock needs UNLOCKED) or a wrapped gift (`0x200`
@@ -691,21 +692,83 @@ pub(super) fn render_view_flagged(
     Ok(live)
 }
 
-/// The colour of `LOCKED` for lock row `row` of an item of `item_level` (`0x52bdde`..`0x52be3d`):
-/// red unless the lock check `0x5da5e0` finds an opener, then the margin ramp `0x529fa0` for a
-/// known spell, else the green `0xc0d420` for a held key or a lock with no key or skill slot. A
-/// row the app never pushed (no `Lock.dbc`) has nothing to open it, so it stays red.
-fn lock_color(lua: &Lua, row: u32, item_level: u32) -> [f32; 4] {
+/// What the lock block draws: `LOCKED`'s colour and the line under it.
+struct LockLines {
+    color: [f32; 4],
+    sub: Option<LockSubLine>,
+}
+
+/// The line under `LOCKED`, `key` filled with `arg`.
+struct LockSubLine {
+    key: &'static str,
+    arg: String,
+    color: [f32; 4],
+}
+
+/// The lock block of the item builder (`0x52bd57`..`0x52bfa6`), `None` when it draws nothing.
+///
+/// `LOCKED`'s colour is red unless the lock check `0x5da5e0` finds an opener, then the margin ramp
+/// `0x529fa0` for a known spell, else the green `0xc0d420` for a held key or a lock with no key or
+/// skill slot (`0x52bdde`..`0x52be3d`). The first slot's type then picks the line under it
+/// (`0x52be5d`):
+/// - a key (1) names the key item from the item cache, in white, and nothing on a miss
+///   (`0x52bf30`..`0x52bfa1`); a miss asks for the template, and the hover's repaint draws it;
+/// - a skill (2) walks the lock a second time (`0x52be98`) and names the lock type in the ramp's
+///   colour for the last open-lock spell it tried, even one whose skill falls short; no known
+///   opener of the type adds nothing (`0x52bea2`);
+/// - anything else adds nothing.
+fn lock_lines(lua: &Lua, v: &ItemTemplateView, inst: Option<&ItemInstance>) -> Option<LockLines> {
+    use crate::script::lock_check::walk_lock;
     use crate::script::{check_lock, LockCheck};
-    let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let Some(slots) = model.lock_rows.get(&row) else {
-        return RED;
+    let mut guard = lua.app_data_mut::<Model>().expect("model app_data");
+    let model = &mut *guard;
+    let block_lock = inst.map_or(0, |i| i.block_lock_id);
+    let row = if model.lock_rows.contains_key(&v.lock_id) {
+        v.lock_id
+    } else if block_lock != 0 && model.lock_rows.contains_key(&block_lock) {
+        block_lock
+    } else {
+        return None;
     };
-    match check_lock(slots, item_level, model.lock_openers.as_ref()) {
+    let passes = block_lock != 0 || inst.is_some_and(|i| i.object && i.flags & 0x4 == 0);
+    if !passes {
+        return None;
+    }
+    let slots = &model.lock_rows[&row];
+    let openers = model.lock_openers.as_ref();
+    let color = match check_lock(slots, v.item_level, openers) {
         LockCheck::Closed => RED,
         LockCheck::Open => LOCK_GREEN,
         LockCheck::Skill { required, points } => skill_color(required, points),
-    }
+    };
+    let sub =
+        match slots.first() {
+            Some(first) if first.key_type == 1 => {
+                let entry = first.index;
+                let name = model.item_templates.get(&entry).map(|t| t.name.clone());
+                if name.is_none() && entry != 0 {
+                    model.item_stat_asks.insert(entry);
+                }
+                name.map(|arg| LockSubLine {
+                    key: "LOCKED_WITH_ITEM",
+                    arg,
+                    color: WHITE,
+                })
+            }
+            Some(first) if first.key_type == 2 => walk_lock(slots, v.item_level, openers)
+                .spell
+                .map(|t| LockSubLine {
+                    key: "LOCKED_WITH_SPELL_KNOWN",
+                    arg: model
+                        .lock_type_names
+                        .get(&first.index)
+                        .cloned()
+                        .unwrap_or_else(|| "UNKNOWN".to_string()),
+                    color: skill_color(t.required, t.points),
+                }),
+            _ => None,
+        };
+    Some(LockLines { color, sub })
 }
 
 /// [`render_view_flagged`] for a caller that does not answer the flag.

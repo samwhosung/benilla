@@ -1,8 +1,10 @@
 //! The item tooltip's lock check, the reference's `0x5da5e0`: whether the active player can open
-//! an item's lock, and by what. It colours the `LOCKED` line (`0x52be0c`..`0x52be3d`).
+//! an item's lock, and by what. It colours the `LOCKED` line (`0x52be0c`..`0x52be3d`) and decides
+//! the `LOCKED_WITH_SPELL_KNOWN` line under it (`0x52be98`).
 //!
-//! The engine reads no DBCs, so the app pushes the `Lock.dbc` rows ([`LockSlotView`]) once and the
-//! player's means of opening ([`LockOpeners`]) on change; the walk is here.
+//! The engine reads no DBCs, so the app pushes the `Lock.dbc` rows ([`LockSlotView`]) once, the
+//! `LockType.dbc` names once and the player's means of opening ([`LockOpeners`]) on change; the
+//! walk is here.
 
 use std::collections::HashSet;
 
@@ -10,7 +12,8 @@ use super::UiScript;
 
 /// One `Lock.dbc` slot as `0x5da5e0` reads it: the key type at `lock+0x4`, the index at `+0x24` and
 /// the skill at `+0x44`, each 8 wide. Its action column (`+0x64`) is not read: unlike the game
-/// object walk (`0x5f83d0`), an item's lock has no state to gate a slot on.
+/// object walk (`0x5f83d0`), an item's lock has no state to gate a slot on. A row keeps its empty
+/// slots, since the sub-line under `LOCKED` reads the first slot's type whatever it is (`0x52be5d`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockSlotView {
     /// 0 empty, 1 a key item, 2 a skill.
@@ -54,58 +57,111 @@ pub enum LockCheck {
     Open,
 }
 
+/// What `0x5da5e0` reports through its out parameters and return value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::script) struct LockWalk {
+    /// The return value is nonzero (`0x5da64e`, `0x5da725`): the lock has a key or skill slot and
+    /// none opened it.
+    pub closed: bool,
+    /// A held key opened it: the walk set the item out parameter (`0x5da78f`).
+    pub key_held: bool,
+    /// The spell out parameters (`*a1` nonzero, `*a2` points, `*a3` required, `0x5da6cc`..
+    /// `0x5da6f4`) of the last known open-lock spell the walk tried on a skill slot of its lock
+    /// type, whether or not its skill reached the requirement. A held key overwrites `*a1`
+    /// with the key's use spell (`0x5da781`), which a key never has, so it clears this.
+    pub spell: Option<SpellTry>,
+}
+
+/// One open-lock spell tried against one skill slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::script) struct SpellTry {
+    /// The slot's requirement.
+    pub required: i32,
+    /// The spell's skill for the player.
+    pub points: i32,
+}
+
 /// `0x5da5e0(lock, level)`. `level` is the item record's `+0x38`, the fallback behind a slot whose
-/// skill is 0. `openers` is `None` with no active player, which opens everything.
+/// skill is 0. `openers` is `None` with no active player, which opens everything and tells
+/// nothing (`0x5da60b`).
 ///
 /// Walks the slots in order: a skill slot (type 2) scans the known spells for an open-lock effect
 /// whose misc value is its index and whose points reach its requirement (`0x5da6f8 jge`); a key
 /// slot (type 1) looks for the item. The first to succeed ends the walk. A slot of any other type
 /// is skipped. A type 1 or 2 slot makes the lock closed unless one succeeds (`0x5da64e`,
 /// `0x5da725`).
-pub fn check_lock(slots: &[LockSlotView], level: u32, openers: Option<&LockOpeners>) -> LockCheck {
+pub(in crate::script) fn walk_lock(
+    slots: &[LockSlotView],
+    level: u32,
+    openers: Option<&LockOpeners>,
+) -> LockWalk {
     let Some(openers) = openers else {
-        return LockCheck::Open;
+        return LockWalk::default();
     };
-    let mut closed = false;
+    let mut walk = LockWalk::default();
     for slot in slots {
         match slot.key_type {
             2 => {
-                closed = true;
+                walk.closed = true;
                 let required = if slot.skill != 0 {
                     slot.skill as i32
                 } else {
                     level.wrapping_mul(5) as i32
                 };
                 for spell in &openers.spells {
-                    if spell.lock_type == slot.index && spell.points >= required {
-                        return LockCheck::Skill {
+                    if spell.lock_type == slot.index {
+                        walk.spell = Some(SpellTry {
                             required,
                             points: spell.points,
-                        };
+                        });
+                        if spell.points >= required {
+                            walk.closed = false;
+                            return walk;
+                        }
                     }
                 }
             }
             1 => {
-                closed = true;
+                walk.closed = true;
                 if openers.held.contains(&slot.index) {
-                    return LockCheck::Open;
+                    return LockWalk {
+                        closed: false,
+                        key_held: true,
+                        spell: None,
+                    };
                 }
             }
             _ => {}
         }
     }
-    if closed {
-        LockCheck::Closed
-    } else {
-        LockCheck::Open
+    walk
+}
+
+/// `0x5da5e0` read the way the `LOCKED` line's colour reads it (`0x52be11`..`0x52be3d`).
+pub fn check_lock(slots: &[LockSlotView], level: u32, openers: Option<&LockOpeners>) -> LockCheck {
+    let walk = walk_lock(slots, level, openers);
+    match (walk.closed, walk.key_held, walk.spell) {
+        (true, _, _) => LockCheck::Closed,
+        (false, false, Some(SpellTry { required, points })) => {
+            LockCheck::Skill { required, points }
+        }
+        _ => LockCheck::Open,
     }
 }
 
 impl UiScript {
     /// Pushes `Lock.dbc` whole, by lock id, once at load: a clicked tooltip cannot repaint on a late
-    /// answer. The reference reads its loaded store (`0xc0dae4`).
+    /// answer. The reference reads its loaded store (`0xc0dae4`), and a lock id without a row is no
+    /// lock to the item builder (`0x52bd74`).
     pub fn set_lock_rows(&mut self, rows: std::collections::HashMap<u32, Vec<LockSlotView>>) {
         self.model_mut().lock_rows = rows;
+    }
+
+    /// Pushes `LockType.dbc`'s names, by index, once at load: the `LOCKED_WITH_SPELL_KNOWN` line
+    /// names the lock kind off the store `0xc0dad0` (`0x52bef4`); an index without a row reads
+    /// `UNKNOWN` (`0x52bf00`).
+    pub fn set_lock_type_names(&mut self, names: std::collections::HashMap<u32, String>) {
+        self.model_mut().lock_type_names = names;
     }
 
     /// Pushes what the active player opens locks with, on change. Never pushed, there is no active

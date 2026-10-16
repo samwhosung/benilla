@@ -36,6 +36,11 @@ impl ObjectFields {
     pub fn item_creator(&self) -> Option<u64> {
         self.get_guid(10).filter(|&g| g != 0)
     }
+    /// `ITEM_FIELD_GIFTCREATOR` (field 12, `[item+0x114]+0x18` at `0x52e32a`): who wrapped the
+    /// item, read only while it carries the WRAPPED flag.
+    pub fn item_gift_creator(&self) -> Option<u64> {
+        self.get_guid(12).filter(|&g| g != 0)
+    }
     /// `ITEM_FIELD_ITEM_TEXT_ID` (field 45, owner only): a mailed letter copy's text; nonzero
     /// makes a right-click read it (`CMSG_ITEM_TEXT_QUERY`) instead of using the item.
     pub fn item_text_id(&self) -> Option<u32> {

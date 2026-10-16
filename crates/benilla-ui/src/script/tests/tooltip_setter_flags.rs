@@ -339,6 +339,10 @@ fn live_objects_and_blocks_reach_the_flag() {
     let mut s = fixture();
     s.run(r#"ITEM_DURATION_HOURS = "[DURATION %d h]" LOCKED = "[LOCKED]""#)
         .unwrap();
+    s.set_lock_rows(std::collections::HashMap::from([
+        (7, Vec::new()),
+        (9, Vec::new()),
+    ]));
     s.set_item_template(
         8300,
         ItemTemplateView {

@@ -993,9 +993,11 @@ pub(crate) struct Model {
     pub(crate) player_req: PlayerReqState,
     /// `Lock.dbc` by lock id, pushed whole at startup, and what the active player opens locks with
     /// (`None` before the first push: no active player). The item tooltip's `LOCKED` colour walks
-    /// them ([`super::lock_check::check_lock`]).
+    /// them ([`super::lock_check::check_lock`]); `LockType.dbc`'s names by index name its
+    /// `LOCKED_WITH_SPELL_KNOWN` line.
     pub(crate) lock_rows: HashMap<u32, Vec<super::LockSlotView>>,
     pub(crate) lock_openers: Option<super::LockOpeners>,
+    pub(crate) lock_type_names: HashMap<u32, String>,
     /// Spell id to its tooltip view, and the misses asked for.
     pub(crate) spell_tooltips: HashMap<u32, super::SpellTooltipView>,
     pub(crate) spell_tooltip_asks: HashSet<u32>,
@@ -1684,6 +1686,7 @@ impl Model {
             player_req: PlayerReqState::default(),
             lock_rows: HashMap::new(),
             lock_openers: None,
+            lock_type_names: HashMap::new(),
             spell_tooltips: HashMap::new(),
             spell_tooltip_asks: HashSet::new(),
             pet_spell_tooltips: HashMap::new(),

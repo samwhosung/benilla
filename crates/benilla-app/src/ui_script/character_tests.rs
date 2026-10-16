@@ -72,6 +72,7 @@ fn inventory_with_head_item() -> InventorySlots {
         guid: 0x70e,
         equip_slots: vec![1],
         creator: None,
+        gift_creator: None,
         enchants: Vec::new(),
         spell_0: false,
     });
@@ -106,6 +107,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
             cooldown: None,
             readable: false,
             creator: None,
+            gift_creator: None,
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,

@@ -39,6 +39,11 @@ impl LockTypeCatalog {
         self.names.get(&lock_type_id).map(String::as_str)
     }
 
+    /// Every row's `Name`, by `LockType` index.
+    pub fn names(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.names.iter().map(|(&id, name)| (id, name.as_str()))
+    }
+
     pub fn len(&self) -> usize {
         self.cursors.len()
     }
