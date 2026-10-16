@@ -3,7 +3,7 @@ use mlua::{ObjectLike, Table};
 use crate::framexml::{self, Element};
 use crate::status;
 
-use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, tex_coords_wrap, Loader};
+use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
@@ -31,7 +31,8 @@ impl Loader<'_> {
             for region in &layer.children {
                 // `inherits=` may name a region template, in the frames' one registry
                 // (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
-                let region = &self.expand_region(region);
+                let raw = region;
+                let region = &self.expand_region(raw);
                 let is_texture = region.tag.eq_ignore_ascii_case("Texture");
                 let is_fontstring = region.tag.eq_ignore_ascii_case("FontString");
                 if !is_texture && !is_fontstring {
@@ -41,7 +42,7 @@ impl Loader<'_> {
                     ));
                     continue;
                 }
-                self.build_region(region, wrapper, parent_name, &level, is_texture, dbg);
+                self.build_region(raw, region, wrapper, parent_name, &level, is_texture, dbg);
             }
         }
     }
@@ -59,7 +60,7 @@ impl Loader<'_> {
         dbg: &str,
     ) -> Option<Table> {
         let expanded = self.expand_region(raw);
-        self.build_region(&expanded, wrapper, parent_name, level, true, dbg)
+        self.build_region(raw, &expanded, wrapper, parent_name, level, true, dbg)
     }
 
     /// One `<Layer>` region on `wrapper`, created on `level` and loaded: its name (`$parent`
@@ -68,6 +69,7 @@ impl Loader<'_> {
     /// `0x771480`); an anchored region is left alone. `None` when the creation raised.
     fn build_region(
         &mut self,
+        raw: &Element,
         region: &Element,
         wrapper: &Table,
         parent_name: &str,
@@ -107,7 +109,12 @@ impl Loader<'_> {
             // Before the visual pass, so an explicit `<Color>` beats the font object's.
             self.apply_fontstring_font(region, &region_wrapper, dbg);
         }
-        self.apply_region_visual(region, &region_wrapper, is_texture, dbg);
+        let loads = if is_texture {
+            self.texture_file_loads(raw)
+        } else {
+            Vec::new()
+        };
+        self.apply_region_visual(region, &region_wrapper, is_texture, &loads, dbg);
         if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
             self.report.fault(format!("{dbg}: implicit anchor: {e}"));
         }
@@ -168,7 +175,7 @@ impl Loader<'_> {
             };
             self.apply_region_layout(region, &region_wrapper, parent_name, dbg, FontAttrs::Own);
             self.apply_fontstring_font(region, &region_wrapper, dbg);
-            self.apply_region_visual(region, &region_wrapper, false, dbg);
+            self.apply_region_visual(region, &region_wrapper, false, &[], dbg);
             // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
             if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
                 self.report.fault(format!("{dbg}: implicit anchor: {e}"));
@@ -288,20 +295,23 @@ impl Loader<'_> {
         region: &Element,
         region_wrapper: &Table,
         is_texture: bool,
+        file_loads: &[(String, bool)],
         dbg: &str,
     ) {
         let color = children_named(region, "Color").next().map(color_of);
         if is_texture {
-            if let Some(file) = region.attr("file") {
+            if !file_loads.is_empty() {
                 // A `<Color>` beside `file=` is discarded, not a tint: `0x76fe20` applies it in its
                 // child loop, then the file, read after (`0x770102`), overwrites the same slot.
-                // The wrap flag follows the element's own `<TexCoords>`, fixed here: a later
-                // `SetTexCoord` leaves it, and `SetTexture` loads with it off (`0x77012d`).
-                let wrap = tex_coords_wrap(region);
-                if let Err(e) =
-                    crate::script::load_texture_file(self.lua, region_wrapper, file, wrap)
-                {
-                    self.report.fault(format!("{dbg}: region SetTexture: {e}"));
+                // Each `inherits` level loads its own file with the wrap flag of its own
+                // `<TexCoords>`, fixed here: a later `SetTexCoord` leaves it, and `SetTexture`
+                // loads with it off (`0x77012d`).
+                for (file, wrap) in file_loads {
+                    if let Err(e) =
+                        crate::script::load_texture_file(self.lua, region_wrapper, file, *wrap)
+                    {
+                        self.report.fault(format!("{dbg}: region SetTexture: {e}"));
+                    }
                 }
             } else if let Some(c) = color {
                 // No file: a solid fill, an 8×8 texture in the reference, so its alpha multiplies

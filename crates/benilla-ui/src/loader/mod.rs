@@ -516,6 +516,22 @@ impl Loader<'_> {
         out
     }
 
+    /// The `file=` loads of a texture region, in the order the reference runs them
+    /// (`0x76fe20`): each `inherits` level's own file with the wrap flag of that level's own
+    /// `<TexCoords>` (the flag is a local of the level's load, zeroed before its children,
+    /// `0x76fec6`), the template first. A level without a `file=` loads nothing.
+    pub(super) fn texture_file_loads(&self, raw: &Element) -> Vec<(String, bool)> {
+        let model = self.model();
+        let templates = model.framexml_templates.borrow();
+        framexml::inherit_chain(raw, &*templates)
+            .into_iter()
+            .filter_map(|level| {
+                let file = level.attr("file").filter(|f| !f.is_empty())?;
+                Some((file.to_string(), tex_coords_wrap(level)))
+            })
+            .collect()
+    }
+
     /// [`Loader::expand`] for a region, only when `inherits=` names a registered element template:
     /// a FontString's `inherits=` usually names a font object, which passes through unwarned.
     pub(super) fn expand_region(&mut self, el: &Element) -> Element {

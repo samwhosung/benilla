@@ -101,6 +101,38 @@ fn content_kind(c: &QuadContent) -> &'static str {
     }
 }
 
+/// Where a UI sprite comes from: the store's clamped and repeating images of one file.
+trait SpriteSource {
+    fn clamped(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>>;
+    fn wrapped(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>>;
+}
+
+impl SpriteSource for WorldAssets {
+    fn clamped(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+        self.sprite_texture(path, images)
+    }
+
+    fn wrapped(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+        self.sprite_texture_wrapped(path, images)
+    }
+}
+
+/// The image a texture quad samples: the repeating one when its file loaded with the wrap flag,
+/// else the clamped one (`0x770200`'s second argument, bits 3 and 4 of the flags word), whatever
+/// its coordinates say.
+fn sprite_for_wrap(
+    source: &mut impl SpriteSource,
+    path: &str,
+    wrap: bool,
+    images: &mut Assets<Image>,
+) -> Option<Handle<Image>> {
+    if wrap {
+        source.wrapped(path, images)
+    } else {
+        source.clamped(path, images)
+    }
+}
+
 /// The [`UiQuad::uv_clamp`] window of an atlas crop, inset half a texel so a magnified cell does
 /// not filter in its neighbour (in `ChatBubble-Backdrop`, a white alpha-0 column: a pale line
 /// through the speech bubble). An axis past the texture is left alone (repeating, each period
@@ -1372,10 +1404,8 @@ fn convert_entry(
                     } else if circular {
                         // The circle-masked variant (`SetPortraitToTexture`).
                         a.portrait_texture(p, images)
-                    } else if wrap {
-                        a.sprite_texture_wrapped(p, images)
                     } else {
-                        a.sprite_texture(p, images)
+                        sprite_for_wrap(&mut **a, p, wrap, images)
                     };
                     if resolved.is_none() {
                         return;
@@ -2458,5 +2488,35 @@ mod extract_gate_tests {
             0,
             "a moved raster environment forbids splicing"
         );
+    }
+}
+
+/// [`sprite_for_wrap`]: the load-time flag alone picks the sampler.
+#[cfg(test)]
+mod sprite_wrap_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Calls(Vec<&'static str>);
+
+    impl SpriteSource for Calls {
+        fn clamped(&mut self, _: &str, _: &mut Assets<Image>) -> Option<Handle<Image>> {
+            self.0.push("clamped");
+            None
+        }
+
+        fn wrapped(&mut self, _: &str, _: &mut Assets<Image>) -> Option<Handle<Image>> {
+            self.0.push("wrapped");
+            None
+        }
+    }
+
+    #[test]
+    fn a_wrapped_file_repeats_and_any_other_clamps() {
+        let mut images = Assets::<Image>::default();
+        let mut calls = Calls::default();
+        sprite_for_wrap(&mut calls, "Interface\\A", true, &mut images);
+        sprite_for_wrap(&mut calls, "Interface\\B", false, &mut images);
+        assert_eq!(calls.0, ["wrapped", "clamped"]);
     }
 }

@@ -3116,10 +3116,16 @@ mod texture_wrap_tests {
     /// A host holding one frame whose XML textures are `layers`, plus a Button with a
     /// `<NormalTexture>` from `normal`.
     fn host(layers: &str, normal: &str) -> UiScript {
+        host_with("", layers, normal)
+    }
+
+    /// [`host`] with `templates` (top-level `virtual` elements) ahead of the frame.
+    fn host_with(templates: &str, layers: &str, normal: &str) -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_screen_size(800.0, 600.0);
         let doc = framexml::parse(&format!(
             r#"<Ui>
+                {templates}
                 <Frame name="WrapHost">
                     <Size><AbsDimension x="100" y="100"/></Size>
                     <Anchors><Anchor point="CENTER"/></Anchors>
@@ -3302,5 +3308,45 @@ mod texture_wrap_tests {
         s.run(r#"WrapBtn:SetNormalTexture("Interface\\BtnOther")"#)
             .unwrap();
         assert!(!wrap_of(&mut s, "BtnOther"));
+    }
+
+    /// A template loads through its own recursive load with its own flag, and the flag is zeroed
+    /// before the instance's children (`0x76fe5b`, `0x76fec6`): the instance's file takes the wrap
+    /// of the instance's own `<TexCoords>` alone, and a template's file keeps its own.
+    #[test]
+    fn a_template_level_loads_with_its_own_wrap_flag() {
+        let templates = r#"
+            <Texture name="TplBare" virtual="true">
+                <TexCoords left="0" right="3" top="0" bottom="1"/>
+            </Texture>
+            <Texture name="TplFile" virtual="true" file="Interface\TplFile">
+                <TexCoords left="0" right="3" top="0" bottom="1"/>
+            </Texture>
+            <Texture name="TplPlain" virtual="true" file="Interface\TplPlain"/>
+            <Texture name="TplShared" virtual="true" file="Interface\Shared">
+                <TexCoords left="0" right="3" top="0" bottom="1"/>
+            </Texture>"#;
+        let a = r#"<Anchors><Anchor point="TOPLEFT"/></Anchors>"#;
+        let layers = format!(
+            r#"<Texture name="OwnOnly" inherits="TplBare" file="Interface\OwnOnly">{a}</Texture>
+               <Texture name="OwnOut" inherits="TplPlain" file="Interface\OwnOut">{a}
+                   <TexCoords left="0" right="2" top="0" bottom="1"/></Texture>
+               <Texture name="FromTpl" inherits="TplFile">{a}</Texture>
+               <Texture name="Other" inherits="TplFile" file="Interface\Other">{a}</Texture>
+               <Texture name="Same" inherits="TplShared" file="interface\SHARED.blp">{a}</Texture>"#
+        );
+        let mut s = host_with(templates, &layers, "");
+        // The template has out-of-range edges, the instance only a file: the instance clamps.
+        assert!(!wrap_of(&mut s, "OwnOnly"));
+        // The instance's own out-of-range edges repeat its file, whatever the template says.
+        assert!(wrap_of(&mut s, "OwnOut"));
+        s.run("OwnOnly:SetTexCoord(0, 1, 0, 1)").unwrap();
+        // The template's file keeps the flag of the template's own edges.
+        assert!(wrap_of(&mut s, "TplFile"));
+        // An instance file of another name loads again, with the instance's flag.
+        assert!(!wrap_of(&mut s, "Other"));
+        // The same file under another spelling is the no-op of `0x770225`: the template's flag
+        // stays.
+        assert!(wrap_of(&mut s, "Shared"));
     }
 }

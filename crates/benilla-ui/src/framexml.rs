@@ -493,6 +493,34 @@ fn expand_inner(
     }
 }
 
+/// The elements `element`'s load runs, in the order the reference runs them: each level's
+/// `inherits` template is loaded through its own recursive load first (`0x76fe5b`), then the
+/// level's own body. [`expand`] flattens the same chain into one element, losing the boundaries
+/// that per-level state (a texture's wrap flag, `0x76fec6`) follows.
+pub fn inherit_chain<'a>(element: &'a Element, templates: &'a dyn Inheritable) -> Vec<&'a Element> {
+    fn walk<'a>(
+        el: &'a Element,
+        templates: &'a dyn Inheritable,
+        active: &mut Vec<String>,
+        out: &mut Vec<&'a Element>,
+    ) {
+        if let Some(name) = el.attr("inherits").filter(|n| !n.is_empty()) {
+            let key = name.to_ascii_lowercase();
+            if !active.contains(&key) {
+                if let Some(template) = templates.find(name) {
+                    active.push(key);
+                    walk(template, templates, active, out);
+                    active.pop();
+                }
+            }
+        }
+        out.push(el);
+    }
+    let mut out = Vec::new();
+    walk(element, templates, &mut Vec::new(), &mut out);
+    out
+}
+
 /// [`expand`]'s merge; `over`'s tag wins, and its body when it has one. `base`'s `name` and `id`
 /// are dropped: they belong to the node they are written on.
 fn merge(base: &Element, over: &Element) -> Element {
