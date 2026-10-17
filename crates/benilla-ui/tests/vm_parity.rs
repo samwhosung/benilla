@@ -321,12 +321,8 @@ b]])"#),
         return S(E(function() return a <= b end), E(function() return b >= a end), a < b)"#),
     ("varargs_arg", r#"local function f(...) return arg.n, arg[1], arg[3] end
         return S(E(f, 1, nil, 3), E(function(a, ...) return a, arg.n end, 9))"#),
-    // Not the client's order: the script host builds these tables from 5.1's registrations and
-    // deletes what 1.12 lacks, where the client's `luaL_openlib` (`0x6f4dc0`) fills an empty table
-    // from its own arrays, which gives `string: sub gfind rep gsub char dump find upper len
-    // format byte lower | table: setn insert getn foreachi foreach sort remove concat | math: log
-    // atan ldexp deg tan cos pi random randomseed frexp ceil floor rad max sqrt pow asin min mod
-    // exp log10 atan2 acos sin abs`, and `bit` as here.
+    // The client's order, run in its code: `luaL_openlib` (`0x6f4dc0`) fills each table from empty
+    // in its array's order.
     ("pairs_libraries", r#"local o = {}
         for _, lib in ipairs({"string", "table", "math", "bit"}) do
           local ks = {} for k in pairs(_G[lib]) do table.insert(ks, k) end

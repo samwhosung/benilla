@@ -30,13 +30,8 @@ pub fn lua_message(e: &mlua::Error) -> String {
 pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // Set to nil explicitly, whatever mlua's safe stdlib already leaves out.
-    for name in [
-        "io", "os", "package", "require", "dofile", "loadfile", "load", "module", "newproxy",
-        "debug",
-    ] {
-        g.set(name, Value::Nil)?;
-    }
+    // The state opens without `io`, `os`, `package`, `require`, `dofile`, `loadfile`, `load`,
+    // `module`, `newproxy` or `debug`, and none is set to nil here: that would make the key.
 
     // debugstack([start [, count1 [, count2]]]): the reference's traceback, frames only, in Lua
     // 5.0's wording. There is no `stack traceback:` header and line 1 is the caller's frame:
@@ -266,12 +261,13 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
             if body == "*t" {
                 let c = crate::civil::from_unix(secs);
                 let t = lua.create_table()?;
-                t.set("year", c.year)?;
-                t.set("month", c.month)?;
-                t.set("day", c.day)?;
-                t.set("hour", c.hour)?;
-                t.set("min", c.min)?;
+                // The client's `date` (`0x7033a0`) sets them in this order (`0x703452`..`0x7034e2`).
                 t.set("sec", c.sec)?;
+                t.set("min", c.min)?;
+                t.set("hour", c.hour)?;
+                t.set("day", c.day)?;
+                t.set("month", c.month)?;
+                t.set("year", c.year)?;
                 // Lua counts weekdays 1..7 from Sunday; ours is the 0-based index into `DAYS`.
                 t.set("wday", c.weekday + 1)?;
                 // Already 1-based, as in Lua.

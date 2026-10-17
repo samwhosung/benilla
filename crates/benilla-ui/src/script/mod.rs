@@ -565,13 +565,9 @@ pub fn addon_chunk_name(folder: &str, file: &str) -> String {
     format!("@Interface\\AddOns\\{folder}\\{}", file.replace('/', "\\"))
 }
 
-/// What both FrameScript states hold: FrameScript's Lua init (`0x7039e0`), the bare state the glue
-/// builder starts from (left by startup `0x402aee` on its first build, re-run by its reset
-/// `0x703b80` on a later one) and `UI_Init` rebuilds through its own, and the three registrars
-/// the glue registrar `0x46abb0` shares with `UI_Init`: `0x51bb20` (the clock, `ConsoleExec` and
-/// the file trio), `0x706350` (the frame factory globals and the 17 widget method tables) and
-/// `0x4587f0` (sound).
-fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
+/// The state as `0x7039e0` leaves it: benilla-lua's client-shaped opening with the host's base
+/// functions, the dialect and the stdlib layer set over it, which replace values and add no key.
+fn open_state(vm: VmKind) -> mlua::Result<Lua> {
     let lua = Lua::new();
     // `InitLua` sets the collector's threshold to 256 KB right after `lua_open`
     // (`lua_setgcthreshold(L, 0x100)`, `0x7039f2`). Nothing `Lua::new` opens checks the collector,
@@ -590,6 +586,18 @@ fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     lua50::install(&lua)?;
     taint::install(&lua)?;
     stdlib::install(&lua)?;
+
+    Ok(lua)
+}
+
+/// What both FrameScript states hold: FrameScript's Lua init (`0x7039e0`), the bare state the glue
+/// builder starts from (left by startup `0x402aee` on its first build, re-run by its reset
+/// `0x703b80` on a later one) and `UI_Init` rebuilds through its own, and the three registrars
+/// the glue registrar `0x46abb0` shares with `UI_Init`: `0x51bb20` (the clock, `ConsoleExec` and
+/// the file trio), `0x706350` (the frame factory globals and the 17 widget method tables) and
+/// `0x4587f0` (sound).
+fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
+    let lua = open_state(vm)?;
 
     // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime` and `ConsoleExec`. `ReadFile`,
     // `DeleteFile` and `AppendToFile` are not built.

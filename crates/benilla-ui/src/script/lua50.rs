@@ -1,4 +1,4 @@
-//! The Lua 5.0 dialect: the 5.1 VM's libraries reshaped to answer as the 1.12 client's Lua 5.0.
+//! The Lua 5.0 dialect: what the script host sets over the client-shaped state benilla-lua opens.
 //!
 //! The reference embeds Lua 5.0 (`$Lua: Lua 5.0` at `0x811b30`), and `InitLua 0x7039e0` opens
 //! five libraries: base (`0x811e28`, 36 entries), `string` (`0x822d88`, 12), `table`
@@ -10,45 +10,20 @@
 //! only through a table, and a verb whose arity matters (`GetPoint()` against `GetPoint(nil)`)
 //! stays in Rust.
 
-use mlua::{Lua, Table, Value};
-
-/// The Lua 5.1 library members 5.0 lacks, removed so an addon's feature test
-/// (`string.gmatch or string.gfind`) takes the branch 1.12 gives it.
-const REMOVED: &[(&str, &[&str])] = &[
-    // 5.0 has `gfind`, and no `gmatch`, `match` or `reverse`.
-    ("string", &["gmatch", "match", "reverse"]),
-    // 5.0's eight are concat, foreach, foreachi, getn, setn, sort, insert and remove.
-    ("table", &["maxn"]),
-    // 5.0's `mod` is 5.1's `fmod` (and a bare global in 1.12); 5.0 has no `modf`, `huge` or
-    // hyperbolics.
-    ("math", &["fmod", "modf", "huge", "cosh", "sinh", "tanh"]),
-];
+use mlua::Lua;
 
 /// Lua 5.0's remembered table size and the `n`-based table library that reads and updates it,
 /// which are benilla-lua's own natives.
 #[cfg(test)]
 mod table_size;
 
-/// Install the dialect. Runs before the WoW stdlib layer, so its aliases bind the 5.0-shaped
-/// functions rather than the 5.1 ones they replace.
+/// Install the dialect. Runs before the WoW stdlib layer, so its aliases bind these functions.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // ── 1 · the 5.1-only members go ───────────────────────────────────────────────────────────
-    for (lib, names) in REMOVED {
-        let Ok(t) = g.get::<Table>(*lib) else {
-            continue;
-        };
-        for name in *names {
-            t.set(*name, Value::Nil)?;
-        }
-    }
-    // `InitLua` never opens `coroutine`.
-    g.set("coroutine", Value::Nil)?;
-
-    // `select` is 5.1's base library and has no row in 1.12's `_G`. A vararg function counts its
-    // arguments with `arg.n`, and host code asks `UiScript::arity`.
-    g.set("select", Value::Nil)?;
+    // The state opens as the client's (`benilla_lua::new_state`): no 5.1 member, `coroutine`,
+    // `select`, `print` or `_VERSION` is in it, and none is set to nil here, which would make
+    // the key (5.0's `luaH_set` makes one even for nil) and move the layout.
 
     // 1.12's string type has no metatable, so `("x"):upper()` raises `attempt to index a string
     // value`. There it cannot carry one: `luaT_gettmbyobj 0x6f7bd0` finds metamethods only on
@@ -57,25 +32,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // rejects a non-table in both.
     lua.set_type_metatable::<mlua::String>(None);
 
-    // ── 2 · the 5.0 compat globals ────────────────────────────────────────────────────────────
-    // The client's compat chunk (`0x8722e8`) publishes these three bare, and no bare `setn`
-    // (`reference/lua_globals.tsv`).
-    let table: Table = g.get("table")?;
-    for name in ["sort", "foreach", "foreachi"] {
-        if let Ok(f) = table.get::<Value>(name) {
-            if !matches!(f, Value::Nil) {
-                g.set(name, f)?;
-            }
-        }
-    }
-    // Bound here, not left to the stdlib layer, so the bare `getn` is `table.getn` itself.
-    g.set("getn", table.get::<Value>("getn")?)?;
-
-    // ── 3 · the base library's own shape ──────────────────────────────────────────────────────
-    // `print` and `_VERSION` are neither in the base array (`0x811e28`) nor in 1.12's `_G`.
-    g.set("print", Value::Nil)?;
-    g.set("_VERSION", Value::Nil)?;
-
     // `__pow` is a 1.12 global, `luaopen_math`'s `math_pow` (`0x7fb4c4`), which `^` on two
     // numbers calls (`0x6f9b52`).
     g.set(
@@ -83,19 +39,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_native("__pow", mlua::benilla_lua::math_pow())?,
     )?;
 
-    install_bit(lua)?;
-
     Ok(())
-}
-
-/// The `bit` library 1.12 opens (`0x7fadc0`, array `0x822c18`): benilla-lua's natives for its
-/// eight functions, in the array's order.
-fn install_bit(lua: &Lua) -> mlua::Result<()> {
-    let bit = lua.create_table()?;
-    for (name, f) in mlua::benilla_lua::bit_library() {
-        bit.set(name, lua.create_native(name, f)?)?;
-    }
-    lua.globals().set("bit", bit)
 }
 
 #[cfg(test)]
