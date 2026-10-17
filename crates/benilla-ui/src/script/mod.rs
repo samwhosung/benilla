@@ -1407,7 +1407,7 @@ impl UiScript {
         diagnostics::record_load_failure(&self.lua, log);
         self.model_mut()
             .pending_error_dispatch
-            .push(handler.to_string());
+            .push(model::HandlerArg::Text(handler.to_string()));
     }
 
     /// Hand each queued script error to the Lua error handler, as the reference's catch closure
@@ -1424,8 +1424,8 @@ impl UiScript {
         let Some(handler) = stdlib::error_handler(&self.lua) else {
             return;
         };
-        for msg in pending {
-            if let Err(e) = handler.call::<()>(msg) {
+        for arg in pending {
+            if let Err(e) = arg.value(&self.lua).and_then(|v| handler.call::<()>(v)) {
                 self.model_mut()
                     .errors
                     .push(format!("error handler itself failed: {e}"));

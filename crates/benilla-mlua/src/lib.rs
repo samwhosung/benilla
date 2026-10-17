@@ -247,9 +247,12 @@ fn raise(lua: &Lua, nargs: usize, e: Error) -> LuaError {
         Error::LuaValue {
             message,
             value: None,
-        }
-        | Error::SyntaxError { message, .. } => {
+        } => {
             let msg = vm.str(message.as_bytes());
+            vm.throw(msg)
+        }
+        Error::SyntaxError { raw, .. } => {
+            let msg = vm.str(&raw);
             vm.throw(msg)
         }
         // 5.0's memory error carries no position.
@@ -338,6 +341,21 @@ impl ErrorValue {
 }
 
 impl Error {
+    /// The error as Lua sees it, as bytes: a string or number value it carries as written, a
+    /// syntax error as the compiler wrote it, else [`Error`]'s message text.
+    pub fn lua_bytes(&self, lua: &Lua) -> Vec<u8> {
+        match self {
+            Error::SyntaxError { raw, .. } => raw.clone(),
+            Error::CallbackError { cause, .. } | Error::WithContext { cause, .. } => {
+                cause.lua_bytes(lua)
+            }
+            _ => match self.lua_value(lua) {
+                Some(Value::String(s)) => s.as_bytes().to_vec(),
+                _ => self.lua_message().into_bytes(),
+            },
+        }
+    }
+
     /// The Lua value this error carries, when it came out of Lua: [`ErrorValue::get`].
     pub fn lua_value(&self, lua: &Lua) -> Option<Value> {
         match self {
@@ -2099,6 +2117,7 @@ impl<'a> Chunk<'a> {
                 _ => "attempt to load a binary chunk".into(),
             };
             return Err(Error::SyntaxError {
+                raw: std::string::String::as_bytes(&message).to_vec(),
                 message,
                 incomplete_input: false,
             });
@@ -2109,6 +2128,7 @@ impl<'a> Chunk<'a> {
         let f = lua.vm().load(src, name).map_err(|e| Error::SyntaxError {
             message: e.to_string(),
             incomplete_input: e.0.ends_with(b"near `<eof>'"),
+            raw: e.0,
         })?;
         let f = Function(lua.make_ref(f));
         if let Some(env) = &self.env {

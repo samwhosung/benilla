@@ -722,8 +722,16 @@ impl Vm {
     #[cold]
     #[inline(never)]
     pub fn rt_error(&mut self, msg: &str) -> LuaError {
+        self.rt_error_bytes(msg.as_bytes())
+    }
+
+    /// [`Vm::rt_error`] of bytes, as the client's C strings are: a name or text that is not
+    /// UTF-8 goes through as written.
+    #[cold]
+    #[inline(never)]
+    pub fn rt_error_bytes(&mut self, msg: &[u8]) -> LuaError {
         let mut out = self.where_(0);
-        out.extend_from_slice(msg.as_bytes());
+        out.extend_from_slice(msg);
         let v = self.str(&out);
         self.throw(v)
     }
@@ -731,8 +739,13 @@ impl Vm {
     /// `luaL_error`: the message with the position of the Lua function `level` frames up
     /// (`luaL_where(L, 1)` from a native names its caller).
     pub fn error_at(&mut self, level: usize, msg: &str) -> LuaError {
+        self.error_at_bytes(level, msg.as_bytes())
+    }
+
+    /// [`Vm::error_at`] of bytes, which need not be UTF-8.
+    pub fn error_at_bytes(&mut self, level: usize, msg: &[u8]) -> LuaError {
         let mut out = self.where_(level);
-        out.extend_from_slice(msg.as_bytes());
+        out.extend_from_slice(msg);
         let v = self.str(&out);
         self.throw(v)
     }
@@ -843,13 +856,15 @@ impl Vm {
         // A register names a value only in a running Lua frame; the host indexes with none.
         let named = reg.and_then(|r| self.objname(self.frames.len().checked_sub(1)?, r));
         let msg = match named {
-            Some((kind, name)) => format!(
-                "attempt to {op} {kind} `{}' (a {t} value)",
-                String::from_utf8_lossy(&name)
-            ),
-            None => format!("attempt to {op} a {t} value"),
+            Some((kind, name)) => [
+                format!("attempt to {op} {kind} `").as_bytes(),
+                &name,
+                format!("' (a {t} value)").as_bytes(),
+            ]
+            .concat(),
+            None => format!("attempt to {op} a {t} value").into_bytes(),
         };
-        self.rt_error(&msg)
+        self.rt_error_bytes(&msg)
     }
 
     #[cold]
@@ -2030,27 +2045,28 @@ impl Vm {
         }
     }
 
-    /// `luaL_argerror`: `bad argument #n to 'name' (msg)`, with a method's `self` not counted.
+    /// `luaL_argerror` (`0x6f4810`): `bad argument #n to `name' (msg)`, with a method's `self` not
+    /// counted, the name's bytes as the caller wrote them.
     pub fn arg_error(&mut self, narg: usize, msg: &str) -> LuaError {
+        let msg = msg.as_bytes();
         let named = self.called_name();
         let mut narg = narg;
-        let name = match &named {
+        let name: Vec<u8> = match named {
             Some((kind, n)) => {
-                if *kind == "method" {
+                if kind == "method" {
                     narg -= 1;
                     if narg == 0 {
-                        let m = format!(
-                            "calling `{}' on bad self ({msg})",
-                            String::from_utf8_lossy(n)
-                        );
-                        return self.error_at(1, &m);
+                        let m = [b"calling `", &n[..], b"' on bad self (", msg, b")"].concat();
+                        return self.error_at_bytes(1, &m);
                     }
                 }
-                String::from_utf8_lossy(n).into_owned()
+                n
             }
-            None => "?".to_string(),
+            None => b"?".to_vec(),
         };
-        self.error_at(1, &format!("bad argument #{narg} to `{name}' ({msg})"))
+        let head = format!("bad argument #{narg} to `");
+        let m = [head.as_bytes(), &name, b"' (", msg, b")"].concat();
+        self.error_at_bytes(1, &m)
     }
 
     /// `luaL_typerror`: `<expected> expected, got <type>`; an absent argument is "no value".

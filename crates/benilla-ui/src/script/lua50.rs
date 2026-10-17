@@ -990,6 +990,72 @@ mod error_quoting_tests {
         );
     }
 
+    /// Error text is bytes, as the client's C strings are: `assert`'s message goes through
+    /// `luaL_error("%s")` (`0x7031d0`), byte for byte up to a NUL, and `luaL_argerror`
+    /// (`0x6f4810`) and the type errors name a function, field or chunk with its raw bytes.
+    #[test]
+    fn error_text_keeps_its_bytes() {
+        let s = UiScript::new().unwrap();
+        let caught = |body: &str| -> String {
+            s.eval::<String>(&format!(
+                "local ok, e = pcall(function() {body} end) \
+                 local o = {{}} for i = 1, string.len(e) do o[i] = string.byte(e, i) end \
+                 return table.concat(o, ' ')"
+            ))
+            .unwrap()
+        };
+        let ends = |body: &str, want: &[u8]| {
+            let got: Vec<u8> = caught(body)
+                .split(' ')
+                .map(|b| b.parse::<u8>().unwrap())
+                .collect();
+            assert!(got.ends_with(want), "{body}: {got:?}");
+        };
+        ends("assert(false, '\\233')", b":1: \xe9");
+        ends("assert(false, 'a\\0b')", b":1: a");
+        // A function stored under a Latin-1 name, then called with a bad argument and as a
+        // non-function.
+        ends(
+            "_G['\\233'] = string.rep _G['\\233']()",
+            b"bad argument #1 to `\xe9' (string expected, got no value)",
+        );
+        ends(
+            "local t = {} t['\\233'] = 1 t['\\233']()",
+            b"attempt to call field `\xe9' (a number value)",
+        );
+        // A chunk named by its own source keeps its bytes, through `RunScript` too.
+        ends(
+            "local f, e = loadstring('return \\233 +') error(e, 0)",
+            b"[string \"return \xe9 +\"]:1: unexpected symbol near `\xe9'",
+        );
+    }
+
+    /// The error handler is called with the value raised, as `lua_pcall` hands its error
+    /// function the value (`0x703b40`): a table as itself, a message with its bytes.
+    #[test]
+    fn the_error_handler_hears_the_value_raised() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            "caught = {} seterrorhandler(function(e) table.insert(caught, e) end) \
+             E = {} local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_ALIVE') \
+             f:SetScript('OnEvent', function() error(E) end) \
+             local g = CreateFrame('Frame') g:RegisterEvent('PLAYER_ALIVE') \
+             g:SetScript('OnEvent', function() error('\\233', 0) end)",
+        )
+        .unwrap();
+        s.fire_event("PLAYER_ALIVE", vec![]);
+        s.run("RunScript('return \\233 +')").unwrap();
+        s.dispatch_script_errors_to_handler();
+        // `RunScript`'s chunk is named by its source's bytes (`0x48b9bb`).
+        assert!(s
+            .eval::<bool>(
+                "return caught[3] == '[string \"return \\233 +\"]:1: unexpected symbol near `\\233\\''"
+            )
+            .unwrap());
+        assert!(s.eval::<bool>("return caught[1] == E").unwrap());
+        assert!(s.eval::<bool>("return caught[2] == '\\233'").unwrap());
+    }
+
     /// A Lua error that comes back through a Rust callback goes on as it was raised: the value
     /// itself, as `lua_error` raises what a protected call left, never its text again, and never
     /// with a second position.

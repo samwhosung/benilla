@@ -11,6 +11,8 @@ pub enum Error {
     SyntaxError {
         message: String,
         incomplete_input: bool,
+        /// The message's bytes, as the compiler wrote them: `message` is their lossy text.
+        raw: Vec<u8>,
     },
     RuntimeError(String),
     /// A Lua error value, raised in Lua as it is, with no position: one a call into Lua answered

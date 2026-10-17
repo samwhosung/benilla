@@ -85,7 +85,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
                 // `0x7032d2`).
                 Err(e) => Ok((
                     Value::Nil,
-                    Value::String(lua.create_string(lua_message(&e))?),
+                    Value::String(lua.create_string(e.lua_bytes(lua))?),
                 )),
             }
         },

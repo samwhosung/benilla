@@ -308,8 +308,10 @@ fn assert(vm: &mut Vm, nargs: usize) -> R<usize> {
     let v = vm.check_any(nargs, 1)?;
     if !v.truthy() {
         let msg = vm.opt_str(nargs, 2, b"assertion failed!")?;
-        let m = String::from_utf8_lossy(vm.heap.str(msg)).into_owned();
-        return Err(vm.error_at(1, &m));
+        // `luaL_error(L, "%s", msg)` (`0x7031d0`): the bytes, up to a NUL.
+        let m = vm.heap.str(msg);
+        let m = m[..m.iter().position(|&b| b == 0).unwrap_or(m.len())].to_vec();
+        return Err(vm.error_at_bytes(1, &m));
     }
     Ok(vm.ret1(v))
 }

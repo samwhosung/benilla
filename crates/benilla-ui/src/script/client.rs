@@ -168,7 +168,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             // The chunk name is the source bytes as given (1).
-            let name = String::from_utf8_lossy(&raw).into_owned();
+            let name = raw.to_vec();
             // The chunk and every call it makes run under `[0x83de24]` (`0x48b9bb`), the macro
             // context the protected-action gate refuses ([`super::taint`]).
             let ran = lua
@@ -184,7 +184,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let bare = super::stdlib::lua_message(&e);
                 lua.app_data_mut::<crate::script::Model>()
                     .expect("model")
-                    .record_script_error(bare.clone(), bare);
+                    .record_error(bare, super::model::HandlerArg::Error(e));
             }
             Ok(())
         })?,

@@ -84,6 +84,27 @@ pub(crate) fn node_deferred(
     }
 }
 
+/// What the Lua error handler is called with for one caught error: the value an error carries,
+/// its bytes as Lua wrote them, or a host's own text.
+#[derive(Clone, Debug)]
+pub(crate) enum HandlerArg {
+    Text(String),
+    Error(mlua::Error),
+}
+
+impl HandlerArg {
+    /// The one argument, in `lua`.
+    pub(crate) fn value(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
+        Ok(match self {
+            HandlerArg::Text(t) => mlua::Value::String(lua.create_string(t)?),
+            HandlerArg::Error(e) => match e.lua_value(lua) {
+                Some(v) => v,
+                None => mlua::Value::String(lua.create_string(e.lua_bytes(lua))?),
+            },
+        })
+    }
+}
+
 /// The Rust-side model behind the Lua VM, in `lua.app_data`. It holds no Lua handles, each of
 /// which is a collector root.
 #[derive(Clone)]
@@ -332,7 +353,7 @@ pub(crate) struct Model {
     pub(crate) errors: Vec<String>,
     /// Errors owed to `geterrorhandler()`, which the reference calls on each caught error; one the
     /// handler itself raises skips this queue, which stops the recursion.
-    pub(crate) pending_error_dispatch: Vec<String>,
+    pub(crate) pending_error_dispatch: Vec<HandlerArg>,
     /// The session's retained diagnostic log, deduplicated and bounded; `errors` drains each frame.
     pub(crate) diagnostics: super::diagnostics::DiagnosticLog,
     /// Non-fatal warnings for the host, such as a dropped `inherits=` template.
@@ -1258,6 +1279,11 @@ impl Model {
     /// handler is called with. An error raised by the handler itself goes to `errors` directly,
     /// which stops the recursion.
     pub(crate) fn record_script_error(&mut self, log: String, handler: String) {
+        self.record_error(log, HandlerArg::Text(handler));
+    }
+
+    /// A script error whose log row is `log` and whose handler hears `handler`.
+    pub(crate) fn record_error(&mut self, log: String, handler: HandlerArg) {
         self.diagnostics
             .record(super::diagnostics::DiagnosticKind::Error, &log);
         self.pending_error_dispatch.push(handler);
@@ -1265,9 +1291,10 @@ impl Model {
     }
 
     /// [`Self::record_script_error`] for an error mlua caught: the log keeps mlua's `Display` (its
-    /// word and traceback), the handler gets the bare Lua message `lua_pcall` leaves (`0x703b40`).
+    /// word and traceback), the handler gets the error value itself, as `lua_pcall` hands its
+    /// error function the value raised (`0x703b40`).
     pub(crate) fn record_lua_error(&mut self, e: &mlua::Error) {
-        self.record_script_error(e.to_string(), super::stdlib::lua_message(e));
+        self.record_error(e.to_string(), HandlerArg::Error(e.clone()));
     }
 
     /// Records a non-fatal warning for the host's terminal and the retained diagnostic log.

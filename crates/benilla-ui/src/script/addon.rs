@@ -900,7 +900,9 @@ fn log_error(lua: &Lua, msg: &str, handler: &str) {
     let msg = format!("LoadAddOn: {msg}");
     super::diagnostics::record_load_failure(lua, &msg);
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    model.pending_error_dispatch.push(handler.to_string());
+    model
+        .pending_error_dispatch
+        .push(super::model::HandlerArg::Text(handler.to_string()));
     model.errors.push(msg);
 }
 
