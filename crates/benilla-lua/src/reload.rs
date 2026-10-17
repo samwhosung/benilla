@@ -47,7 +47,7 @@ impl Vm {
     /// closures of the same function. A syntax error leaves everything as it was.
     #[allow(clippy::mutable_key_type)] // as `walk`
     pub fn hot_reload(&mut self, chunkname: &[u8], src: &[u8]) -> Result<Report, SyntaxError> {
-        let root = crate::compile::compile(src, chunkname, &mut self.heap, 0)?;
+        let root = crate::compile::compile(src, chunkname, &mut self.heap)?;
         // A constant the compiler could not make: `not enough memory`, as `Vm::load` answers.
         if self.heap.take_oom() {
             return Err(SyntaxError(b"not enough memory".to_vec()));

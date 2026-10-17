@@ -546,7 +546,7 @@ impl Vm {
 
     /// Compile a chunk into a function over the globals.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Value, crate::SyntaxError> {
-        let proto = crate::compile::compile(src, chunkname, &mut self.heap, self.c_depth)?;
+        let proto = crate::compile::compile(src, chunkname, &mut self.heap)?;
         self.heap.charge(proto.tree_bytes());
         // A constant the compiler could not make: 5.1's `LUA_ERRMEM`.
         if self.heap.oom {

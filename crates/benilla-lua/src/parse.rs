@@ -23,9 +23,6 @@ const MAXLISTITEMS: u32 = 0x3ffff;
 /// The client's `LUA_MAXPARSERLEVEL`, 5.0's 200 (`0x6fcc99`, `0x6fd180`): nested syntax levels,
 /// counted from 0 in each chunk (`0x6fc9d0`).
 const MAXPARSERLEVEL: u32 = 200;
-/// 5.1's `LUAI_MAXCCALLS`, which caps the targets of one assignment by the host calls and syntax
-/// levels below it.
-const MAXCCALLS: u32 = 200;
 /// 5.1's `UNARY_PRIORITY`.
 const UNARY_PRIORITY: u8 = 8;
 
@@ -34,8 +31,6 @@ pub(crate) struct Parser<'a> {
     /// The function being compiled and those enclosing it, innermost last.
     pub(crate) fs: Vec<FuncState>,
     pub(crate) heap: &'a mut Heap,
-    /// The caller's host-call depth, 5.1's `L->nCcalls` at the parse.
-    ccalls: u32,
     /// 5.0's `nestlevel`: the syntax levels open in this chunk.
     nestlevel: u32,
     /// The name of the single target the next expression is assigned to, for the key of a
@@ -67,13 +62,12 @@ struct ConsControl {
 
 /// `luaY_parser`: a chunk compiled into its main function, which is vararg but declares no
 /// `arg` (only `parlist` does), so `arg` at chunk level is a global.
-pub(crate) fn parse(src: &[u8], chunkname: &[u8], heap: &mut Heap, ccalls: u32) -> R<Rc<Proto>> {
+pub(crate) fn parse(src: &[u8], chunkname: &[u8], heap: &mut Heap) -> R<Rc<Proto>> {
     let lx = Lexer::new(src, chunkname)?;
     let mut p = Parser {
         lx,
         fs: Vec::new(),
         heap,
-        ccalls,
         nestlevel: 0,
         name_hint: None,
     };
@@ -419,7 +413,9 @@ impl<'a> Parser<'a> {
         self.pushclosure(p)
     }
 
-    /// `parlist`. `...` declares the local `arg` (`LUA_COMPAT_VARARG`).
+    /// `parlist`, then the client's `code_params` (`0x6fdab0`): the count is checked once
+    /// `self` and the named parameters are in scope (`0x6fdacb`), and only then is `...`'s local
+    /// `arg` made (`0x6fdaeb`).
     fn parlist(&mut self) -> R<()> {
         let mut nparams = 0;
         if self.tok() != Tok::Char(b')') {
@@ -432,8 +428,6 @@ impl<'a> Parser<'a> {
                     }
                     Tok::Dots => {
                         self.next()?;
-                        self.new_localvar(b"arg", nparams)?;
-                        nparams += 1;
                         self.fs().vararg = true;
                     }
                     _ => return Err(self.lx.error("<name> or `...' expected")),
@@ -444,15 +438,15 @@ impl<'a> Parser<'a> {
             }
         }
         self.adjustlocalvars(nparams);
-        // The client's `code_params` (`0x6fdab0`) checks the count after `self` and the named
-        // parameters are in scope, before it makes `arg`.
-        let named = (self.fsr().nactvar - self.fsr().vararg as u8) as usize;
-        if named > MAXPARAMS {
+        if self.fsr().nactvar as usize > MAXPARAMS {
             return Err(self.errorlimit(MAXPARAMS, "parameters"));
         }
-        let fs = self.fs();
-        fs.nparams = fs.nactvar - fs.vararg as u8;
-        let n = fs.nactvar as u32;
+        self.fs().nparams = self.fsr().nactvar;
+        if self.fsr().vararg {
+            self.new_localvar(b"arg", 0)?;
+            self.adjustlocalvars(1);
+        }
+        let n = self.fsr().nactvar as u32;
         self.reserveregs(n)
     }
 
@@ -850,11 +844,6 @@ impl<'a> Parser<'a> {
             let nv = self.primaryexp()?;
             if let Kind::Local(r) = nv.k {
                 self.check_conflict(&mut lhs, r)?;
-            }
-            let nvars = lhs.len();
-            let limit = MAXCCALLS.saturating_sub(self.ccalls + self.nestlevel) as usize;
-            if nvars > limit {
-                return Err(self.errorlimit(limit, "variables in assignment"));
             }
             lhs.push(nv);
         }

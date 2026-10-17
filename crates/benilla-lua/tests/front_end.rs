@@ -280,7 +280,7 @@ fn every_chunk_compiles_as_the_c_build_compiled_it() {
             continue;
         };
         let chunkname = format!("@{}", c.name);
-        let p = benilla_lua::compile(&c.bytes, chunkname.as_bytes(), &mut heap, 0).unwrap();
+        let p = benilla_lua::compile(&c.bytes, chunkname.as_bytes(), &mut heap).unwrap();
         checked += 1;
         let got = fnv64(format!("{:?}", shape(&p, &heap)).as_bytes());
         if got != want {

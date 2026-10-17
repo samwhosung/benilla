@@ -593,7 +593,7 @@ mod tests {
 
     fn compiled(src: &str) -> Proto {
         let mut heap = crate::heap::Heap::default();
-        let p = crate::compile::compile(src.as_bytes(), b"=t", &mut heap, 0).unwrap();
+        let p = crate::compile::compile(src.as_bytes(), b"=t", &mut heap).unwrap();
         (*p).clone()
     }
 

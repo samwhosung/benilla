@@ -36,7 +36,7 @@ fn peak_compiling(src: &str) -> usize {
     let mut heap = benilla_lua::heap::Heap::default();
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
-    let p = benilla_lua::compile(src.as_bytes(), b"=t", &mut heap, 0);
+    let p = benilla_lua::compile(src.as_bytes(), b"=t", &mut heap);
     assert!(p.is_ok(), "{:?}", p.err());
     PEAK.load(Relaxed) - base
 }

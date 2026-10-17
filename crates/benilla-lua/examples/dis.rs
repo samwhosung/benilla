@@ -15,6 +15,6 @@ fn dump(p: &benilla_lua::proto::Proto, depth: usize) {
 fn main() {
     let src = std::env::args().nth(1).unwrap();
     let mut heap = benilla_lua::heap::Heap::default();
-    let p = benilla_lua::compile(src.as_bytes(), b"=dis", &mut heap, 0).unwrap();
+    let p = benilla_lua::compile(src.as_bytes(), b"=dis", &mut heap).unwrap();
     dump(&p, 0);
 }

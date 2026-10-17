@@ -31,10 +31,10 @@ const MAXARG_C: u32 = (1 << 9) - 1;
 /// `SHRT_MAX`, `registerlocalvar`'s limit on local declarations per function.
 const MAX_LOCVARS: usize = 32767;
 
-/// Compile a chunk into its main function. `ccalls` is the caller's nesting of host calls, which
-/// 5.1 counts toward the parser's level limit (`L->nCcalls`).
-pub fn compile(src: &[u8], chunkname: &[u8], heap: &mut Heap, ccalls: u32) -> R<Rc<Proto>> {
-    crate::parse::parse(src, chunkname, heap, ccalls)
+/// Compile a chunk into its main function. Its limits are its own: the host calls it runs
+/// under count toward none (the client's per-chunk `nestlevel`, `0x6fc9d0`).
+pub fn compile(src: &[u8], chunkname: &[u8], heap: &mut Heap) -> R<Rc<Proto>> {
+    crate::parse::parse(src, chunkname, heap)
 }
 
 /// 5.1's `luaO_int2fb`: a size as a "floating point byte", `eeeeexxx`, rounded up.

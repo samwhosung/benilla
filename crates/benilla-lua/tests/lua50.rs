@@ -262,3 +262,29 @@ fn a_generator_is_not_named_by_its_loop() {
         "<raised> t:1: bad argument #1 to `?' (table expected, got number)"
     );
 }
+
+/// `code_params` (`0x6fdab0`) checks the parameters before it makes `...`'s `arg`; an assignment
+/// has no limit of its own, only the registers' (`luaK_checkstack`, `0x700a63`): 249 targets of
+/// one value fit, 250 do not.
+#[test]
+fn parameters_and_assignments_fail_where_the_client_does() {
+    let names = |n: usize| {
+        (1..=n)
+            .map(|i| format!("p{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    assert_eq!(
+        compile_error(&format!("function f({}, ...) end", names(200))),
+        "t:1: too many parameters (limit=100) near `)'"
+    );
+    assert_eq!(
+        compile_error(&format!("function f({}, ...) end", names(100))),
+        "ok"
+    );
+    assert_eq!(compile_error(&format!("{} = 1", names(249))), "ok");
+    assert_eq!(
+        compile_error(&format!("{} = 1", names(250))),
+        "t:1: function or expression too complex near `<eof>'"
+    );
+}

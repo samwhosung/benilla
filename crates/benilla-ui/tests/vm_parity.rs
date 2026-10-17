@@ -360,7 +360,8 @@ b]])"#),
           L("local x = 1 return " .. string.rep("(x+", 150) .. "x" .. string.rep(")", 150)),
           L("local x = 1 return " .. string.rep("(x+", 245) .. "x" .. string.rep(")", 245)),
           L("return " .. string.rep("1 .. ", 190) .. "1"))"#),
-    // A generic `for` has two hidden locals and its names (`forlist`, `0x6fe540`).
+    // A generic `for` has two hidden locals and its names (`forlist`, `0x6fe540`); the
+    // parameters are counted before `...` makes `arg` (`code_params`, `0x6fdab0`).
     ("fix-front_local_limits", r#"local function L(src) local f, e = loadstring(src) if f then return "ok" end return e end
         local function names(p, n) local o = {} for i = 1, n do o[i] = p .. i end return table.concat(o, ",") end
         return S(L("local " .. names("a", 200)), L("local " .. names("a", 201)),
@@ -374,6 +375,8 @@ b]])"#),
         return S(L("local " .. names(32) .. "\nreturn function() return " .. names(32) .. " end"),
           L("local " .. names(33) .. "\nreturn function() return " .. names(33) .. " end"),
           L("local " .. names(33) .. " return function() return function() return " .. names(33) .. " end end"))"#),
+    // Syntax levels are counted per chunk (`0x6fc9d0`); an assignment has no limit of its own
+    // but the registers' (`luaK_checkstack`, `0x700a63`).
     ("fix-front_syntax_levels", r#"local function first_failing(make)
           for n = 1, 400 do
             local f, e = loadstring(make(n))
