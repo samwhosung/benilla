@@ -1,9 +1,10 @@
-//! The table library. In the script host's state (`native`), `getn` and `sort` are 5.1.5's:
-//! they read `lua_objlen` ([`crate::table::Table::length`]) as the C build does, and the host's
-//! own layer wraps them. [`open`] gives the 1.12 state 5.0's `n`-based `getn`. The other
-//! functions are 5.0's, `n`-based through `luaL_getn`/`luaL_setn`, and the script host replaces
-//! each of them. `sort` is `ltablib.c`'s quicksort step for step, so an inconsistent comparator
-//! does what it does there.
+//! The table library: 1.12.1's, Lua 5.0's `ltablib.c` as the client registers it (`0x822d40`),
+//! in the script host's state and in [`open`]'s alike. It is `n`-based end to end: `getn`,
+//! `insert`, `remove`, `concat`, `sort` and `foreachi` read the size through `luaL_getn` and
+//! `setn`, `insert` and `remove` write it through `luaL_setn` ([`getn`], [`setn`]). A callback
+//! (`foreachi`, `foreach`, `sort`'s comparator) is called as `lua_call` calls it: unprotected, one
+//! host level deep. `sort` is `ltablib.c`'s quicksort step for step, so an inconsistent
+//! comparator does what it does there.
 use crate::api::R;
 use crate::lib_base::{getn, setn};
 use crate::value::{TableRef, Value, V};
@@ -15,7 +16,7 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
         "concat" => concat,
         "foreach" => foreach,
         "foreachi" => foreachi,
-        "getn" => getn_51,
+        "getn" => getn_,
         "setn" => setn_,
         "sort" => sort,
         "insert" => insert,
@@ -44,19 +45,19 @@ pub fn open(vm: &mut Vm) {
     vm.set_global("table", Value::Table(t));
 }
 
+/// The most elements one `insert` or `remove` may shift. Deviation: the client's loops have no
+/// bound (`0x7fb728`, `0x7fb7e0`), but a remembered size is whatever an addon wrote, and a loop
+/// over two billion slots outruns the instruction budget, a hung client.
+const MAX_SHIFT: i64 = 1_000_000;
+
+/// `luaB_getn` (`0x7fb630`).
 fn getn_(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let n = getn(vm, t);
     Ok(vm.ret1(Value::Num(n as f64)))
 }
 
-/// 5.1's `getn`: `luaL_getn`, which is `lua_objlen` without `LUA_COMPAT_GETN`.
-fn getn_51(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let t = vm.check_table(nargs, 1)?;
-    let n = vm.heap.table(t).length();
-    Ok(vm.ret1(Value::Num(n as f64)))
-}
-
+/// `luaB_setn` (`0x7fb670`).
 fn setn_(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let n = vm.check_int(nargs, 2)?;
@@ -78,10 +79,11 @@ fn rawseti(vm: &mut Vm, t: TableRef, i: i64, v: Value) {
     }
 }
 
+/// `luaB_foreachi` (`0x7fb4e0`): `f(i, t[i])` for `i` in `1..getn`, the first non-nil answer.
 fn foreachi(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
-    let f = vm.check_function(nargs, 2)?;
     let n = getn(vm, t);
+    let f = vm.check_function(nargs, 2)?;
     for i in 1..=n {
         let v = rawgeti(vm, t, i as i64);
         let r = vm.call_value(f, &[Value::Num(i as f64), v], 1)?;
@@ -92,6 +94,7 @@ fn foreachi(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(0)
 }
 
+/// `luaB_foreach` (`0x7fb590`): `f(k, v)` over `next`, the first non-nil answer.
 fn foreach(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let f = vm.check_function(nargs, 2)?;
@@ -114,7 +117,8 @@ fn foreach(vm: &mut Vm, nargs: usize) -> R<usize> {
     }
 }
 
-/// 5.0's `tinsert`: two arguments append; three insert at the position, growing the size to it.
+/// `luaB_tinsert` (`0x7fb6b0`): two arguments append; any other count is the position form
+/// (`cmp ebx,2` at `0x7fb6e0`), which grows the size to the position.
 fn insert(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let mut n = getn(vm, t) as i64 + 1;
@@ -127,6 +131,9 @@ fn insert(vm: &mut Vm, nargs: usize) -> R<usize> {
         }
         (pos, vm.arg(nargs, 2))
     };
+    if n.saturating_sub(pos) > MAX_SHIFT {
+        return Err(vm.error_at(1, "table too big to insert into"));
+    }
     setn(vm, t, n.max(0) as usize);
     n -= 1;
     while n >= pos {
@@ -138,12 +145,17 @@ fn insert(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(0)
 }
 
+/// `luaB_tremove` (`0x7fb770`): its position read before the empty test, so a bad one raises
+/// on an empty table too.
 fn remove(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let n = getn(vm, t) as i64;
     let mut pos = vm.opt_int(nargs, 2, n as i32)? as i64;
     if n <= 0 {
         return Ok(0);
+    }
+    if n.saturating_sub(pos) > MAX_SHIFT {
+        return Err(vm.error_at(1, "table too big to remove from"));
     }
     setn(vm, t, (n - 1) as usize);
     let out = rawgeti(vm, t, pos);
@@ -156,52 +168,39 @@ fn remove(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(vm.ret1(out))
 }
 
-/// 5.1's `tconcat`: items `i` (1) to `j` (`getn`), each a string or a number.
+/// `str_concat` (`0x7fb830`): items `i` (1) to `j` joined by the separator's bytes, each a string
+/// or a number. Its arguments are read 2, 3, 4, then the table (`0x7fb84c`..`0x7fb88e`); a `j`
+/// of 0, its default, is `getn` (`0x7fb893`).
 fn concat(vm: &mut Vm, nargs: usize) -> R<usize> {
     let sep = vm.opt_str(nargs, 2, b"")?;
+    let first = vm.opt_int(nargs, 3, 1)?;
+    let mut last = vm.opt_int(nargs, 4, 0)?;
     let t = vm.check_table(nargs, 1)?;
-    let mut i = vm.opt_int(nargs, 3, 1)?;
-    let last = if vm.arg(nargs, 3).is_nil() {
-        getn(vm, t) as i32
-    } else {
-        vm.check_int(nargs, 4)?
-    };
+    if last == 0 {
+        last = getn(vm, t) as i32;
+    }
     let sep = vm.heap.str(sep).to_vec();
     let mut out = Vec::new();
-    // `addfield`.
-    let add = |vm: &mut Vm, out: &mut Vec<u8>, i: i32| -> R<()> {
-        let v = rawgeti(vm, t, i as i64);
-        match matches!(v.unpack(), V::Str(_) | V::Num(_))
+    for i in i64::from(first)..=i64::from(last) {
+        let v = rawgeti(vm, t, i);
+        // `luaL_argcheck(L, lua_isstring(L, -1), 1, ...)`, text `0x8821f0`.
+        let Some(s) = matches!(v.unpack(), V::Str(_) | V::Num(_))
             .then(|| vm.tostr(v))
             .flatten()
-        {
-            Some(s) => {
-                vm.reserve(out, vm.heap.str(s).len())?;
-                out.extend_from_slice(vm.heap.str(s));
-                Ok(())
-            }
-            None => {
-                let msg = format!(
-                    "invalid value ({}) at index {i} in table for `concat'",
-                    v.type_name()
-                );
-                Err(vm.error_at(1, &msg))
-            }
+        else {
+            return Err(vm.arg_error(1, "table contains non-strings"));
+        };
+        vm.reserve(&mut out, vm.heap.str(s).len())?;
+        out.extend_from_slice(vm.heap.str(s));
+        if i != i64::from(last) {
+            vm.reserve(&mut out, sep.len())?;
+            out.extend_from_slice(&sep);
         }
-    };
-    while i < last {
-        add(vm, &mut out, i)?;
-        vm.reserve(&mut out, sep.len())?;
-        out.extend_from_slice(&sep);
-        i += 1;
-    }
-    if i == last {
-        add(vm, &mut out, i)?;
     }
     Ok(vm.ret_str(&out))
 }
 
-/// `sort_comp`: the comparator, or `lua_lessthan`.
+/// `sort_comp` (`0x7fbc50`): the comparator through `lua_call`, or `lua_lessthan`.
 #[inline]
 fn comp(vm: &mut Vm, f: Value, a: Value, b: Value) -> R<bool> {
     if f.is_nil() {
@@ -215,7 +214,7 @@ fn comp(vm: &mut Vm, f: Value, a: Value, b: Value) -> R<bool> {
     }
 }
 
-/// 5.1's `auxsort`, step for step, so a comparator's call order is the client's.
+/// `auxsort` (`0x7fb990`), step for step, so a comparator's call order is the client's.
 fn auxsort(vm: &mut Vm, t: TableRef, f: Value, mut l: i64, mut u: i64) -> R<()> {
     while l < u {
         let al = rawgeti(vm, t, l);
@@ -297,10 +296,11 @@ fn auxsort(vm: &mut Vm, t: TableRef, f: Value, mut l: i64, mut u: i64) -> R<()> 
     Ok(())
 }
 
-/// 5.1's `sort`: `1..lua_objlen(t)`, whatever `t.n` says.
+/// `luaB_sort` (`0x7fb920`): `1..getn`, so a remembered size past the elements compares their
+/// nils; a comparator is checked only when one is given (`0x7fb95b`).
 fn sort(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
-    let n = vm.heap.table(t).length() as i64;
+    let n = getn(vm, t) as i64;
     let f = vm.arg(nargs, 1);
     if !f.is_nil() {
         vm.check_function(nargs, 2)?;

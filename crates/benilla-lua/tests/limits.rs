@@ -83,24 +83,30 @@ fn a_deep_match_is_pattern_too_complex() {
     );
 }
 
-/// A native pushes at most `LUAI_MAXCSTACK` values, its arguments counted, as 5.1's
-/// `lua_checkstack` allows: `unpack` raises `too many results to unpack`.
+/// `unpack` checks against the client's own bound, 5.0's 2048 (`0x6f2f43`), its one argument
+/// counted, and raises its text (`0x872bc4`).
 #[test]
 fn results_beyond_the_c_stack_raise() {
     let src = r#"local t = {} for i = 1, 9000 do t[i] = i end
         local ok1, e1 = pcall(unpack, t)
-        local ok2, e2 = pcall(function() return unpack(t, 1, 7998) end)
-        local n3 = table.getn({unpack(t, 1, 7997)})
+        local u = {} for i = 1, 2048 do u[i] = i end
+        local ok2, e2 = pcall(function() return unpack(u) end)
+        u[2048] = nil
+        local n3 = table.getn({unpack(u)})
         return ok1, e1, ok2, e2, n3"#;
     let got = run(src).unwrap();
     assert_eq!(
         &got[..2],
-        ["false", "too many results to unpack"],
+        ["false", "stack overflow (table too big to unpack)"],
         "{got:?}"
     );
+    // One argument in use: 2048 more pass 2048.
     assert_eq!(got[2], "false", "{got:?}");
-    assert!(got[3].ends_with("too many results to unpack"), "{got:?}");
-    assert_eq!(got[4], "7997");
+    assert_eq!(
+        got[3], "t:4: stack overflow (table too big to unpack)",
+        "{got:?}"
+    );
+    assert_eq!(got[4], "2047");
 }
 
 /// Past the ids a string value can name, a new string is `not enough memory`, raised where it

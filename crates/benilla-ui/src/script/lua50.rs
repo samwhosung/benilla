@@ -24,7 +24,9 @@ const REMOVED: &[(&str, &[&str])] = &[
     ("math", &["fmod", "modf", "huge", "cosh", "sinh", "tanh"]),
 ];
 
-/// Lua 5.0's remembered table size and the `n`-based table library that reads and updates it.
+/// Lua 5.0's remembered table size and the `n`-based table library that reads and updates it,
+/// which are benilla-lua's own natives.
+#[cfg(test)]
 mod table_size;
 
 /// Install the dialect. Runs before the WoW stdlib layer, so its aliases bind the 5.0-shaped
@@ -32,10 +34,7 @@ mod table_size;
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // ── 1 · the `n`-based table library ───────────────────────────────────────────────────────
-    table_size::install(lua)?;
-
-    // ── 2 · the 5.1-only members go ───────────────────────────────────────────────────────────
+    // ── 1 · the 5.1-only members go ───────────────────────────────────────────────────────────
     for (lib, names) in REMOVED {
         let Ok(t) = g.get::<Table>(*lib) else {
             continue;
@@ -58,7 +57,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // rejects a non-table in both.
     lua.set_type_metatable::<mlua::String>(None);
 
-    // ── 3 · the 5.0 compat globals ────────────────────────────────────────────────────────────
+    // ── 2 · the 5.0 compat globals ────────────────────────────────────────────────────────────
     // The client's compat chunk (`0x8722e8`) publishes these three bare, and no bare `setn`
     // (`reference/lua_globals.tsv`).
     let table: Table = g.get("table")?;
@@ -72,7 +71,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // Bound here, not left to the stdlib layer, so the bare `getn` is `table.getn` itself.
     g.set("getn", table.get::<Value>("getn")?)?;
 
-    // ── 4 · the base library's own shape ──────────────────────────────────────────────────────
+    // ── 3 · the base library's own shape ──────────────────────────────────────────────────────
     // `print` and `_VERSION` are neither in the base array (`0x811e28`) nor in 1.12's `_G`.
     g.set("print", Value::Nil)?;
     g.set("_VERSION", Value::Nil)?;

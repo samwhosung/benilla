@@ -116,6 +116,8 @@ const CASES: &[(&str, &str)] = &[
     ("setn", "local t = {} table.setn(t, 5) local u = {n = 1} table.setn(u, 3) return S(getn(t), u.n, t.n)"),
     ("insert_remove", "local t = {} tinsert(t, 'a') tinsert(t, 'c') tinsert(t, 2, 'b') local r = tremove(t, 1) return S(r, t[1], t[2], t[3], getn(t), tremove({}))"),
     ("concat_tbl", "return S(table.concat({1, 2, 3}, ', '), table.concat({'a', 'b'}), table.concat({1, 2, 3}, '-', 2, 3))"),
+    // The client's `str_concat` fails argument 1's check (`0x7fb8d1`, text `0x8821f0`) through
+    // `luaL_error`, at the caller's line.
     ("concat_err_2", "return E(function() return table.concat({1, {}, 3}) end)"),
     ("sort", "local t = {5, 2, 8, 1, 9, 3} table.sort(t) local u = {'b', 'a', 'c'} sort(u, function(a, b) return a > b end) return table.concat(t, ',') .. '|' .. table.concat(u, ',')"),
     ("sort_many", "local t = {} for i = 1, 100 do t[i] = math.mod(i * 37, 101) end table.sort(t) local ok = true for i = 2, 100 do if t[i-1] > t[i] then ok = false end end return S(ok, t[1], t[100])"),
@@ -457,6 +459,8 @@ b]])"#),
     ("fix-libs hex_float", r#"local f = function(x) return string.format("%.17g", x or -1) end
         return S(f(tonumber("0x1p-1074")), f(tonumber("0x1000000000000p-1070")), f(tonumber("0x1p1023")), f(tonumber("0x1p1024")), f(tonumber("0x.1p-1070")), f(tonumber("0x1p-1075")), f(tonumber("0x3p-1075")), f(tonumber("0x1.8p-1074")), f(tonumber("0x1fffffffffffffp-1126")), f(tonumber("0x123456789abcdef0123p-1100")), f(tonumber("0x1p-1080")), E(function() return f("0x1p-1074" + 0) end))"#),
     ("fix-libs str_nul", r#"return S(tonumber("1\0"), tonumber("12\0 "), tonumber("1\0x"), E(function() return "1\0" + 1 end), E(function() return "0x10\0" + 0 end), tonumber("\0"), tonumber(" 5\0abc"), tonumber("ff\0", 16), tonumber("0x1\0"), tonumber("\0 1"), tonumber("1e\0"), tonumber("1 \0 x"))"#),
+    // The client's `sort` (`0x7fb920`) sorts `1..getn`: `f`'s `arg.n` of 3 takes in its nil,
+    // which `lua_lessthan` cannot compare.
     ("fix-libs sort_objlen", r#"local function f(...) table.sort(arg) return arg[1], arg[2], arg[3] end
         local t = {3, 1, 2, n = 5} local ok = pcall(table.sort, t)
         local a = {3, 1, nil, 2} local oka = pcall(table.sort, a)
@@ -555,6 +559,8 @@ b]])"#),
     ("fix-vm tm_unm_args", r#"local u = setmetatable({}, {__unm = function(a, b) return S(a == b, rawequal(a, b)) end})
         return -u"#),
     // ── fix-vm: a callback's arguments and results share `LUAI_MAXCSTACK` slots ──
+    // `unpack` is the client's (`0x7030a0`): its `luaL_checkstack` refuses each of these past
+    // 2048 slots (`0x6f2f43`) with the text at `0x872bc4`, raised at the caller's line.
     ("fix-vm callback_results", r#"local t = {} for i = 1, 8000 do t[i] = i end
         local function n(...) return arg.n end
         -- The C build's first callback with many results fails earlier, an mlua artifact; warm it.
@@ -671,6 +677,7 @@ b]])"#),
         return table.concat(o, " | ")"#),
     // ── fix-libs: library errors the cases above leave out ──
     // The message's first line: the C build's carries a Rust-side traceback after it.
+    // `auxsort` raises through `luaL_error` (`0x7fb990`), at the line that called `sort`.
     ("fix-libs sort_invalid_order", r#"local function M(f, ...) local ok, e = pcall(f, unpack(arg)) if ok then return "ok" end
           local _, _, m = string.find(tostring(e), "^([^\n]*)") return m end
         local t = {} for i = 1, 50 do t[i] = math.mod(i * 7, 13) end
@@ -742,6 +749,10 @@ const SWEEP_FNS: &[&str] = &[
     "string.match",
     "string.gmatch",
     "string.reverse",
+    // The table library and `unpack` are the client's: `luaL_checktype`, `luaL_checknumber` and
+    // `luaL_argerror`'s messages (`0x6f4b50`, `0x6f4c80`, `0x6f4810`), in the order each reads
+    // its arguments (`str_concat` 2, 3, 4, then 1), and `tinsert`'s position form for any count
+    // but 2 (`0x7fb6e0`).
     "table.concat",
     "table.getn",
     "table.setn",
@@ -805,6 +816,7 @@ const SWEEP_FNS: &[&str] = &[
     "strrep",
     "format",
     "gsub",
+    // The table library's own functions, so its messages, as above.
     "tinsert",
     "tremove",
     "getn",

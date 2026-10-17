@@ -1,422 +1,335 @@
-//! Lua 5.0's remembered table size, and the table library that reads it.
+//! Lua 5.0's remembered table size and the `n`-based table library, as the script host answers
+//! them: benilla-lua's natives for the client's `ltablib.c` (`0x822d40`) and base `unpack`
+//! (`0x7030a0`).
 //!
 //! `luaL_setn` (`0x6f4ea0`) writes `t.n` only when a non-negative numeric `t.n` exists, else it
-//! stores the size in a weak-keyed registry table (`getsizes` `0x6f4fc0`, slot 2) no walk can see.
-//! `luaL_getn` (`0x6f5050`) reads `t.n`, then that table, then counts `rawgeti` from 1 to the
-//! first nil. `luaL_getn` serves `table.getn`, `insert`, `remove`, `concat`, `sort`, `foreachi`
-//! and base `unpack`; `luaL_setn` serves `table.setn`, `insert` and `remove`: the library is
-//! `n`-based end to end, where 5.1's is `#`-based.
-//!
-//! The side store must stay invisible: a stray `n` key breaks mixin walks such as `AceOO-2.0`'s,
-//! which error on any field the target already has.
+//! stores the size where no walk can see it (`getsizes` `0x6f4fc0`). `luaL_getn` (`0x6f5050`)
+//! reads `t.n`, then that store, then counts `rawgeti` from 1 to the first nil. The store must
+//! stay invisible: a stray `n` key breaks mixin walks such as `AceOO-2.0`'s, which error on any
+//! field the target already has.
 
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use crate::script::UiScript;
 
-/// The side store's registry name; 5.0 uses slot 2, and either way no addon can reach it.
-const SIZES: &str = "benilla.lua50.sizes";
+/// Mik's Scrolling Battle Text 4.43's capture tables: wipe, `setn(t, 0)`, then insert.
+#[test]
+fn a_wipe_then_setn_zero_then_insert_is_countable_again() {
+    let s = UiScript::new().unwrap();
+    assert_eq!(
+        s.eval::<i64>(
+            r#"
+            local t = { "stale", "stale" }
+            for k in pairs(t) do t[k] = nil end
+            table.setn(t, 0)
+            table.insert(t, "Kobold Vermin")
+            table.insert(t, "12")
+            return table.getn(t)
+            "#
+        )
+        .unwrap(),
+        2,
+        "insert must update the remembered size, or getn answers the wiped 0 forever"
+    );
+}
 
-/// `checkint` (`0x6f4f80`): a stored size counts only if numeric and non-negative. The reference
-/// also takes a numeric string through `lua_tonumber`; this does not.
-fn as_size(v: &Value) -> Option<i64> {
-    match v {
-        Value::Integer(i) => (*i >= 0).then_some(*i),
-        #[allow(clippy::cast_possible_truncation)]
-        Value::Number(n) => {
-            let i = *n as i64;
-            (i >= 0).then_some(i)
-        }
-        _ => None,
+#[test]
+fn the_remembered_size_round_trips_and_never_appears_as_a_key() {
+    let s = UiScript::new().unwrap();
+    assert_eq!(s.eval::<i64>("return table.getn({1,2,3})").unwrap(), 3);
+    assert_eq!(
+        s.eval::<i64>("local t = {1,2,3} table.setn(t, 7) return table.getn(t)")
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        s.eval::<i64>(
+            "local t = {1,2,3} table.setn(t, 0) \
+             local c = 0 for k in pairs(t) do c = c + 1 end return c"
+        )
+        .unwrap(),
+        3,
+        "a remembered size must not appear as a key"
+    );
+    // A table with a numeric `n` keeps using it: 5.0's first branch, which `arg.n` relies on.
+    assert_eq!(
+        s.eval::<i64>("local t = {1,2,3, n=3} table.setn(t, 7) return t.n")
+            .unwrap(),
+        7
+    );
+    // A negative `n` fails `checkint` and selects the side store (`0x6f4ee4`'s `jl`).
+    assert_eq!(
+        s.eval::<i64>("local t = {1,2, n=-1} table.setn(t, 5) return table.getn(t) + t.n")
+            .unwrap(),
+        4
+    );
+}
+
+#[test]
+fn the_fallback_count_stops_at_the_first_hole() {
+    let s = UiScript::new().unwrap();
+    assert_eq!(
+        s.eval::<i64>("local t = {} t[1] = 'a' t[3] = 'c' return table.getn(t)")
+            .unwrap(),
+        1
+    );
+    assert_eq!(s.eval::<i64>("return table.getn({})").unwrap(), 0);
+}
+
+#[test]
+fn insert_and_remove_maintain_the_size_the_way_the_reference_does() {
+    let s = UiScript::new().unwrap();
+    // A position past the remembered size grows it (`if (pos > n) n = pos`).
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {} table.insert(t, 3, 'c') \
+             return table.getn(t) .. ':' .. tostring(t[3])"
+        )
+        .unwrap(),
+        "3:c"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {'a','c'} table.insert(t, 2, 'b') \
+             return table.concat(t, '') .. ':' .. table.getn(t)"
+        )
+        .unwrap(),
+        "abc:3"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {'a','b','c'} local got = table.remove(t, 1) \
+             return got .. table.concat(t, '') .. ':' .. table.getn(t)"
+        )
+        .unwrap(),
+        "abc:2"
+    );
+    // At size 0, no value and no change (`if (n <= 0) return 0`).
+    assert_eq!(
+        s.eval::<i64>(
+            "local t = {1,2,3} table.setn(t, 0) \
+             local got = table.remove(t) \
+             if got ~= nil then return -1 end return table.getn(t) + t[1]"
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn concat_sort_foreachi_and_unpack_all_read_the_remembered_size() {
+    let s = UiScript::new().unwrap();
+    assert_eq!(
+        s.eval::<String>("local t = {'a','b','c'} table.setn(t, 2) return table.concat(t, '')")
+            .unwrap(),
+        "ab"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {'c','a','z','y'} table.setn(t, 2) table.sort(t) \
+             return table.concat(t, '', 1, 4)"
+        )
+        .unwrap(),
+        "aczy"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {'a','b','c'} table.setn(t, 2) local out = '' \
+             table.foreachi(t, function(i, v) out = out .. v end) return out"
+        )
+        .unwrap(),
+        "ab"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {'a','b','c'} table.setn(t, 2) \
+             local x, y, z = unpack(t) return tostring(x) .. tostring(y) .. tostring(z)"
+        )
+        .unwrap(),
+        "abnil"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "local t = {} t[1] = 'a' t[3] = 'c' \
+             local x, y, z = unpack(t, 1, 3) \
+             return tostring(x) .. tostring(y) .. tostring(z)"
+        )
+        .unwrap(),
+        "anilc"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat({'a','b','c'}, '')")
+            .unwrap(),
+        "abc"
+    );
+    assert_eq!(
+        s.eval::<String>("local t = {'c','b','a'} table.sort(t) return table.concat(t, '')")
+            .unwrap(),
+        "abc"
+    );
+}
+
+/// `getn`, `tinsert` and `tremove`, bound by the stdlib layer after this one, are these bodies.
+#[test]
+fn the_bare_aliases_bind_the_5_0_bodies() {
+    let s = UiScript::new().unwrap();
+    assert!(s.eval::<bool>("return getn == table.getn").unwrap());
+    assert!(s.eval::<bool>("return tinsert == table.insert").unwrap());
+    assert!(s.eval::<bool>("return tremove == table.remove").unwrap());
+    assert_eq!(
+        s.eval::<i64>("local t = {1,2,3} table.setn(t, 0) tinsert(t, 9) return t[1]")
+            .unwrap(),
+        9
+    );
+}
+
+/// `foreachi` (`0x7fb4e0`, its `lua_call` at `0x7fb552`) and `sort_comp` (`0x7fbc50`, `0x7fbc93`)
+/// call the function unprotected: an error inside goes on as it was raised, its value intact.
+#[test]
+fn a_callbacks_error_goes_on_as_it_was_raised() {
+    let s = UiScript::new().unwrap();
+    for call in [
+        "table.foreachi({1}, function() error(E, 0) end)",
+        "table.foreach({1}, function() error(E, 0) end)",
+        "table.sort({1, 2}, function() error(E, 0) end)",
+    ] {
+        assert!(
+            s.eval::<bool>(&format!(
+                "E = {{}} local ok, e = pcall(function() {call} end) return e == E"
+            ))
+            .unwrap(),
+            "{call}: the table raised must be the value caught"
+        );
+        // A message's bytes, which no UTF-8 copy may change.
+        assert!(
+            s.eval::<bool>(&format!(
+                "E = '\\233' local ok, e = pcall(function() {call} end) return e == E"
+            ))
+            .unwrap(),
+            "{call}: the message's bytes must survive"
+        );
+        // An `xpcall` handler runs once, at the raise.
+        assert_eq!(
+            s.eval::<i64>(&format!(
+                "E = {{}} local n = 0 \
+                 xpcall(function() {call} end, function(e) n = n + 1 return e end) return n"
+            ))
+            .unwrap(),
+            1,
+            "{call}"
+        );
     }
 }
 
-/// The most elements one `insert`/`remove`/`unpack` may shift or push. Deviation: 5.0 has no
-/// bound, but a remembered size is whatever an addon wrote, and a Rust loop over two billion slots
-/// is beyond the VM's instruction budget: a hung client.
-const MAX_SHIFT: i64 = 1_000_000;
-
-/// `luaL_getn` (`0x6f5050`); its count to the first nil is not the `#` border on a holed table.
-fn get_n(sizes: &Table, t: &Table) -> mlua::Result<i64> {
-    if let Some(n) = as_size(&t.raw_get::<Value>("n")?) {
-        return Ok(n);
-    }
-    if let Some(n) = as_size(&sizes.raw_get::<Value>(t.clone())?) {
-        return Ok(n);
-    }
-    let mut i = 1i64;
-    while !matches!(t.raw_get::<Value>(i)?, Value::Nil) {
-        i += 1;
-    }
-    Ok(i - 1)
+/// `sort_comp` calls the comparator through `lua_call` (`0x7fbc93`), one of the 200 C levels
+/// `luaD_call` counts (`0x6f65a6`..`0x6f65ae`); `table.sort` called from Lua counts none. So
+/// sorts nested through their comparators go as deep as any other callback, `gsub`'s.
+#[test]
+fn a_nested_sort_costs_one_host_level_per_comparator() {
+    let s = UiScript::new().unwrap();
+    let depth = |nest: &str| -> i64 {
+        s.eval::<i64>(&format!(
+            "local d = 0 local f f = function() d = d + 1 {nest} return true end \
+             local ok, e = pcall(f) return d"
+        ))
+        .unwrap()
+    };
+    let sort = depth("table.sort({1, 2}, f)");
+    let gsub = depth("string.gsub('a', 'a', f)");
+    assert!(sort > 150, "{sort} sorts nested");
+    assert_eq!(
+        sort, gsub,
+        "a comparator call is one level, as a gsub callback is"
+    );
 }
 
-/// `luaL_setn` (`0x6f4ea0`): into `t.n` when the table has one, else the side store.
-fn set_n(sizes: &Table, t: &Table, n: i64) -> mlua::Result<()> {
-    if as_size(&t.raw_get::<Value>("n")?).is_some() {
-        t.raw_set("n", n)
-    } else {
-        sizes.raw_set(t.clone(), n)
-    }
+/// `table.concat`'s separator is `luaL_optlstring`'s (`0x7fb84c`): any bytes.
+#[test]
+fn concat_joins_with_the_separators_bytes() {
+    let s = UiScript::new().unwrap();
+    assert!(s
+        .eval::<bool>(r#"return table.concat({"a", "b"}, "\233") == "a\233b""#)
+        .unwrap());
+    assert!(s
+        .eval::<bool>(r#"return table.concat({"a", "b", "c"}, "\0|") == "a\0|b\0|c""#)
+        .unwrap());
 }
 
-/// Install the `n`-based table library over the VM's 5.1 one. `concat` and `sort` wrap its bodies
-/// for their error messages and algorithm (Rust's `sort_by` panics on an inconsistent comparator).
-pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    let g = lua.globals();
-    let store = lua.create_table()?;
-    let meta = lua.create_table()?;
-    // Weak keys, as 5.0's `getsizes` builds it: a table nobody else holds stays collectable.
-    meta.set("__mode", "k")?;
-    store.set_metatable(Some(meta))?;
-    // Held by the registry for the VM's life; each closure below captures it.
-    lua.set_named_registry_value(SIZES, store.clone())?;
-    let sizes = store;
-
-    let t: Table = g.get("table")?;
-    // 5.1's own `getn`, `lua_objlen`: the `#t` its `sort` reads, kept before 5.0's replaces it.
-    let objlen: Function = t.get("getn")?;
-
-    let getn_sizes = sizes.clone();
-    t.set(
-        "getn",
-        lua.create_function(move |_, t: Table| get_n(&getn_sizes, &t))?,
-    )?;
-    // `table.setn` (`0x7fb670`): no results.
-    let setn_sizes = sizes.clone();
-    t.set(
-        "setn",
-        lua.create_function(move |_, (t, n): (Table, i64)| set_n(&setn_sizes, &t, n))?,
-    )?;
-
-    // `table.insert` (`0x7fb6a0`): `n = getn(t) + 1`, raised to a later position; `setn` first,
-    // then shift up from `n` down to `pos`, then store.
-    let insert_sizes = sizes.clone();
-    t.set(
-        "insert",
-        lua.create_function(move |_, args: MultiValue| {
-            let argc = args.len();
-            let mut it = args.into_iter();
-            let Some(Value::Table(t)) = it.next() else {
-                return Err(mlua::Error::runtime(
-                    "bad argument #1 to 'insert' (table expected)",
-                ));
-            };
-            let mut n = get_n(&insert_sizes, &t)? + 1;
-            // The 2-vs-3 argument split is `lua_gettop`, so an explicit trailing nil counts:
-            // `insert(t, 4, nil)` writes nil at 4, it does not append the 4.
-            let (pos, v) = if argc <= 2 {
-                (n, it.next().unwrap_or(Value::Nil))
-            } else {
-                let pos = match it.next() {
-                    Some(Value::Integer(i)) => i,
-                    #[allow(clippy::cast_possible_truncation)]
-                    Some(Value::Number(x)) => x as i64,
-                    _ => {
-                        return Err(mlua::Error::runtime(
-                            "bad argument #2 to 'insert' (number expected)",
-                        ))
-                    }
-                };
-                if pos > n {
-                    n = pos;
-                }
-                (pos, it.next().unwrap_or(Value::Nil))
-            };
-            if n.saturating_sub(pos) > MAX_SHIFT {
-                return Err(mlua::Error::runtime("table too big to insert into"));
-            }
-            set_n(&insert_sizes, &t, n)?;
-            while n > pos {
-                let above: Value = t.raw_get(n - 1)?;
-                t.raw_set(n, above)?;
-                n -= 1;
-            }
-            t.raw_set(pos, v)
-        })?,
-    )?;
-
-    // `table.remove` (`0x7fb750`): at a size of 0 or less, no value and no change; else
-    // `setn(n - 1)`, take `t[pos]`, close the gap, nil the tail.
-    let remove_sizes = sizes.clone();
-    t.set(
-        "remove",
-        lua.create_function(move |_, (t, pos): (Table, Option<i64>)| {
-            let n = get_n(&remove_sizes, &t)?;
-            let pos = pos.unwrap_or(n);
-            if n <= 0 {
-                return Ok(MultiValue::new());
-            }
-            if n.saturating_sub(pos) > MAX_SHIFT {
-                return Err(mlua::Error::runtime("table too big to remove from"));
-            }
-            set_n(&remove_sizes, &t, n - 1)?;
-            let taken: Value = t.raw_get(pos)?;
-            for i in pos..n {
-                let next: Value = t.raw_get(i + 1)?;
-                t.raw_set(i, next)?;
-            }
-            t.raw_set(n, Value::Nil)?;
-            Ok(MultiValue::from_vec(vec![taken]))
-        })?,
-    )?;
-
-    // `table.foreachi` (`0x7fb4e0`): `1..getn`, returning the first non-nil result.
-    let foreachi_sizes = sizes.clone();
-    t.set(
-        "foreachi",
-        lua.create_function(move |_, (t, f): (Table, Function)| {
-            let n = get_n(&foreachi_sizes, &t)?;
-            for i in 1..=n {
-                let v: Value = t.raw_get(i)?;
-                let r: Value = f.call((i, v))?;
-                if !matches!(r, Value::Nil) {
-                    return Ok(MultiValue::from_vec(vec![r]));
-                }
-            }
-            Ok(MultiValue::new())
-        })?,
-    )?;
-
-    // `table.concat` (`0x7fb860`): `j` defaults to getn; the rest is 5.1's body.
-    let concat_sizes = sizes.clone();
-    let concat: Function = t.get("concat")?;
-    t.set(
-        "concat",
-        lua.create_function(
-            move |_, (t, sep, i, j): (Table, Option<String>, Option<i64>, Option<i64>)| {
-                let j = match j {
-                    Some(j) => j,
-                    None => get_n(&concat_sizes, &t)?,
-                };
-                concat.call::<Value>((t, sep.unwrap_or_default(), i.unwrap_or(1), j))
-            },
-        )?,
-    )?;
-
-    // `table.sort` (`0x7fb900`) sorts `1..getn`, 5.1's `1..#t`: a shorter remembered size lifts
-    // the tail out around 5.1's sort. Deviation: a longer one sorts only the border, where 5.0
-    // compares nils and raises: it departs from an error path, not from a mechanism.
-    let sort_sizes = sizes.clone();
-    let sort: Function = t.get("sort")?;
-    t.set(
-        "sort",
-        lua.create_function(move |_, (t, cmp): (Table, Option<Function>)| {
-            let n = get_n(&sort_sizes, &t)?;
-            let border = objlen.call::<i64>(t.clone())?;
-            if n >= border {
-                return sort.call::<()>((t, cmp));
-            }
-            let tail: Vec<Value> = ((n + 1)..=border)
-                .map(|i| t.raw_get::<Value>(i))
-                .collect::<mlua::Result<_>>()?;
-            for i in (n + 1)..=border {
-                t.raw_set(i, Value::Nil)?;
-            }
-            let sorted = sort.call::<()>((t.clone(), cmp));
-            for (k, v) in tail.into_iter().enumerate() {
-                t.raw_set(n + 1 + i64::try_from(k).unwrap_or(0), v)?;
-            }
-            sorted
-        })?,
-    )?;
-
-    // Base `unpack` (`0x703080`): `1..getn(t)` by `rawgeti`. Deviation: the reference ignores
-    // every argument after the table; `i`/`j` stay because the positional-`format` shim passes
-    // a range to carry embedded nils.
-    g.set(
-        "unpack",
-        lua.create_function(move |_, (t, i, j): (Table, Option<i64>, Option<i64>)| {
-            let i = i.unwrap_or(1);
-            let j = match j {
-                Some(j) => j,
-                None => get_n(&sizes, &t)?,
-            };
-            // The reference's `luaL_checkstack(n, "table too big to unpack")`, at `MAX_SHIFT`.
-            if j.saturating_sub(i) >= MAX_SHIFT {
-                return Err(mlua::Error::runtime("too many results to unpack"));
-            }
-            let mut out = Vec::new();
-            for k in i..=j {
-                out.push(t.raw_get::<Value>(k)?);
-            }
-            Ok(MultiValue::from_vec(out))
-        })?,
-    )?;
-
-    Ok(())
+/// `tinsert` (`0x7fb6b0`) takes the position form for any argument count but 2 (`0x7fb6e0`), so
+/// one argument reads a position that is not there.
+#[test]
+fn insert_with_no_value_reads_a_missing_position() {
+    let s = UiScript::new().unwrap();
+    let e: String = s
+        .eval(
+            "local t = {} local ok, e = pcall(function() table.insert(t) end) \
+             return e .. ' ' .. table.getn(t)",
+        )
+        .unwrap();
+    assert!(
+        e.ends_with(":1: bad argument #2 to `insert' (number expected, got no value) 0"),
+        "the table must not grow: {e}"
+    );
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::script::UiScript;
+/// `str_concat` (`0x7fb830`): an element neither string nor number fails argument 1's
+/// `luaL_argcheck` (`0x7fb8d1`, text `0x8821f0`); an end of 0 is `getn` (`0x7fb893`); the
+/// arguments are read 2, 3, 4, then the table.
+#[test]
+fn concat_checks_its_arguments_as_the_client_does() {
+    let s = UiScript::new().unwrap();
+    let raised = |call: &str| -> String {
+        s.eval::<String>(&format!(
+            "local ok, e = pcall(function() return {call} end) return tostring(e)"
+        ))
+        .unwrap()
+    };
+    assert!(
+        raised("table.concat({1, {}, 3})")
+            .ends_with(":1: bad argument #1 to `concat' (table contains non-strings)"),
+        "{}",
+        raised("table.concat({1, {}, 3})")
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat({'a', 'b', 'c'}, ',', 1, 0)")
+            .unwrap(),
+        "a,b,c"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat({'a', 'b', 'c'}, ',', 2)")
+            .unwrap(),
+        "b,c"
+    );
+    assert!(
+        raised("table.concat(nil, {})")
+            .ends_with("bad argument #2 to `concat' (string expected, got table)"),
+        "{}",
+        raised("table.concat(nil, {})")
+    );
+}
 
-    /// Mik's Scrolling Battle Text 4.43's capture tables: wipe, `setn(t, 0)`, then insert.
-    #[test]
-    fn a_wipe_then_setn_zero_then_insert_is_countable_again() {
-        let s = UiScript::new().unwrap();
-        assert_eq!(
-            s.eval::<i64>(
-                r#"
-                local t = { "stale", "stale" }
-                for k in pairs(t) do t[k] = nil end
-                table.setn(t, 0)
-                table.insert(t, "Kobold Vermin")
-                table.insert(t, "12")
-                return table.getn(t)
-                "#
-            )
-            .unwrap(),
-            2,
-            "insert must update the remembered size, or getn answers the wiped 0 forever"
-        );
-    }
-
-    #[test]
-    fn the_remembered_size_round_trips_and_never_appears_as_a_key() {
-        let s = UiScript::new().unwrap();
-        assert_eq!(s.eval::<i64>("return table.getn({1,2,3})").unwrap(), 3);
-        assert_eq!(
-            s.eval::<i64>("local t = {1,2,3} table.setn(t, 7) return table.getn(t)")
-                .unwrap(),
-            7
-        );
-        assert_eq!(
-            s.eval::<i64>(
-                "local t = {1,2,3} table.setn(t, 0) \
-                 local c = 0 for k in pairs(t) do c = c + 1 end return c"
-            )
-            .unwrap(),
-            3,
-            "a remembered size must not appear as a key"
-        );
-        // A table with a numeric `n` keeps using it: 5.0's first branch, which `arg.n` relies on.
-        assert_eq!(
-            s.eval::<i64>("local t = {1,2,3, n=3} table.setn(t, 7) return t.n")
-                .unwrap(),
-            7
-        );
-        // A negative `n` fails `checkint` and selects the side store (`0x6f4ee4`'s `jl`).
-        assert_eq!(
-            s.eval::<i64>("local t = {1,2, n=-1} table.setn(t, 5) return table.getn(t) + t.n")
-                .unwrap(),
-            4
-        );
-    }
-
-    #[test]
-    fn the_fallback_count_stops_at_the_first_hole() {
-        let s = UiScript::new().unwrap();
-        assert_eq!(
-            s.eval::<i64>("local t = {} t[1] = 'a' t[3] = 'c' return table.getn(t)")
-                .unwrap(),
-            1
-        );
-        assert_eq!(s.eval::<i64>("return table.getn({})").unwrap(), 0);
-    }
-
-    #[test]
-    fn insert_and_remove_maintain_the_size_the_way_the_reference_does() {
-        let s = UiScript::new().unwrap();
-        // A position past the remembered size grows it (`if (pos > n) n = pos`).
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {} table.insert(t, 3, 'c') \
-                 return table.getn(t) .. ':' .. tostring(t[3])"
-            )
-            .unwrap(),
-            "3:c"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {'a','c'} table.insert(t, 2, 'b') \
-                 return table.concat(t, '') .. ':' .. table.getn(t)"
-            )
-            .unwrap(),
-            "abc:3"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {'a','b','c'} local got = table.remove(t, 1) \
-                 return got .. table.concat(t, '') .. ':' .. table.getn(t)"
-            )
-            .unwrap(),
-            "abc:2"
-        );
-        // At size 0, no value and no change (`if (n <= 0) return 0`).
-        assert_eq!(
-            s.eval::<i64>(
-                "local t = {1,2,3} table.setn(t, 0) \
-                 local got = table.remove(t) \
-                 if got ~= nil then return -1 end return table.getn(t) + t[1]"
-            )
-            .unwrap(),
-            1
-        );
-    }
-
-    #[test]
-    fn concat_sort_foreachi_and_unpack_all_read_the_remembered_size() {
-        let s = UiScript::new().unwrap();
-        assert_eq!(
-            s.eval::<String>("local t = {'a','b','c'} table.setn(t, 2) return table.concat(t, '')")
-                .unwrap(),
-            "ab"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {'c','a','z','y'} table.setn(t, 2) table.sort(t) \
-                 return table.concat(t, '', 1, 4)"
-            )
-            .unwrap(),
-            "aczy"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {'a','b','c'} table.setn(t, 2) local out = '' \
-                 table.foreachi(t, function(i, v) out = out .. v end) return out"
-            )
-            .unwrap(),
-            "ab"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {'a','b','c'} table.setn(t, 2) \
-                 local x, y, z = unpack(t) return tostring(x) .. tostring(y) .. tostring(z)"
-            )
-            .unwrap(),
-            "abnil"
-        );
-        assert_eq!(
-            s.eval::<String>(
-                "local t = {} t[1] = 'a' t[3] = 'c' \
-                 local x, y, z = unpack(t, 1, 3) \
-                 return tostring(x) .. tostring(y) .. tostring(z)"
-            )
-            .unwrap(),
-            "anilc"
-        );
-        assert_eq!(
-            s.eval::<String>("return table.concat({'a','b','c'}, '')")
-                .unwrap(),
-            "abc"
-        );
-        assert_eq!(
-            s.eval::<String>("local t = {'c','b','a'} table.sort(t) return table.concat(t, '')")
-                .unwrap(),
-            "abc"
-        );
-    }
-
-    /// `getn`, `tinsert` and `tremove`, bound by the stdlib layer after this one, are these bodies.
-    #[test]
-    fn the_bare_aliases_bind_the_5_0_bodies() {
-        let s = UiScript::new().unwrap();
-        assert!(s.eval::<bool>("return getn == table.getn").unwrap());
-        assert!(s.eval::<bool>("return tinsert == table.insert").unwrap());
-        assert!(s.eval::<bool>("return tremove == table.remove").unwrap());
-        assert_eq!(
-            s.eval::<i64>("local t = {1,2,3} table.setn(t, 0) tinsert(t, 9) return t[1]")
-                .unwrap(),
-            9
-        );
-    }
+/// `unpack` (`0x7030a0`) asks `luaL_checkstack` for its count (`0x7030c8`), and the client's
+/// `lua_checkstack` (`0x6f2f30`) refuses once the slots in use, its argument among them, plus
+/// that count pass 2048 (`0x6f2f43`): a table of 2047 unpacks, one of 2048 raises the client's
+/// text (`0x8716b0`, `0x872bc4`) at its caller's line.
+#[test]
+fn unpack_refuses_past_the_clients_2048_slots() {
+    let s = UiScript::new().unwrap();
+    let unpack = |n: usize| -> String {
+        s.eval::<String>(&format!(
+            "local t = {{}} for i = 1, {n} do t[i] = i end \
+             local ok, e = pcall(function() return table.getn({{unpack(t)}}) end) \
+             return tostring(e)"
+        ))
+        .unwrap()
+    };
+    assert_eq!(unpack(2047), "2047");
+    assert!(
+        unpack(2048).ends_with(":1: stack overflow (table too big to unpack)"),
+        "{}",
+        unpack(2048)
+    );
+    // A remembered size counts as the elements do.
+    assert!(s
+        .eval::<String>("local t = {} table.setn(t, 5000) local ok, e = pcall(unpack, t) return e")
+        .unwrap()
+        .ends_with("stack overflow (table too big to unpack)"));
 }
