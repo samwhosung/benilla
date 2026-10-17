@@ -106,6 +106,8 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                 script.fire_event(global, vec![]);
             }
         }
+        // The quest log's watcher, which no engine verb answers yet.
+        FieldNotice::QuestLog => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

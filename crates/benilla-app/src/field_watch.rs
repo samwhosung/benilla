@@ -51,6 +51,10 @@ pub(crate) enum FieldNotice {
     /// A callback's `FrameScript_SignalEvent(id)` (`0x703e50`): the event with no arguments, for
     /// every listener, whatever unit raised it.
     Global { id: u16 },
+    /// The quest log's watcher `0x4de4d0` on the active player, registered at world entry on the
+    /// 0xf0 bytes at the player section's `+0x28` (`0x4de43b`-`0x4de456`): the rebuild and its
+    /// `QUEST_LOG_UPDATE`.
+    QuestLog,
     /// `0x5ee990`'s PvP-preference arm on the active player (`0x5eeaff`): the toast `0x1b5` when
     /// the bit is now set, else `0x1b6` (`0x496720`), then `PVP_TOGGLE_ON_VERBOSE` or
     /// `PVP_TOGGLE_OFF_VERBOSE` (`0x8606e0`, `0x8606c8`) as a chat line of type `0xa`
@@ -482,6 +486,10 @@ pub(crate) fn values(
     if kind == ObjectType::Player && around.me == Some(guid) {
         if let Some(at) = at(UNIT_SECTION, CHARMED_BY, List::Object) {
             pass.reaction(at, guid, fields, around);
+        }
+        // Registered at world entry (`0x4de430`), after the bridge's watch on the same range.
+        if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
+            pass.push(at, FieldNotice::QuestLog);
         }
         let rest = PLAYER_SECTION + REST_STATE / 4;
         if let Some((old, new)) = block.edge(rest) {
@@ -988,6 +996,24 @@ mod tests {
         );
         // Field 258, past the 60 dwords, is outside it.
         assert!(block(&mut other, Some(ME), OTHER, &[(258, 1)]).is_empty());
+    }
+
+    /// The active player's log carries the quest log's own watcher (`0x4de430`, registered after
+    /// the bridge's on the same 0xf0 bytes): one run a block, however many slots moved, and none
+    /// for an equal rewrite.
+    #[test]
+    fn the_active_players_quest_log_watcher_runs_once_per_block() {
+        let mut me = player();
+        assert_eq!(
+            block(
+                &mut me,
+                Some(ME),
+                ME,
+                &[(198, 5), (199, 3), (201, 7), (257, 1)]
+            ),
+            [bridge(ME, 522), FieldNotice::QuestLog]
+        );
+        assert!(block(&mut me, Some(ME), ME, &[(198, 5), (201, 7)]).is_empty());
     }
 
     /// The pet number signals the classification; an entry change names the unit only when the
