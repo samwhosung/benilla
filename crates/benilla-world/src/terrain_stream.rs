@@ -72,6 +72,9 @@ pub struct TerrainStreamer {
     focus: (i32, i32),
     /// The window's `(inner, outer)` half-widths last frame, logged once per change.
     reach: Option<(i32, i32)>,
+    /// The window last streamed around, focus chunk included: the idle skip's key
+    /// ([`Self::streamed`]).
+    window: Option<StreamWindow>,
     /// The map's WDT tile index: ADT requests wait for it and consult its `MAIN` grid.
     wdt: Option<Handle<WdtIndex>>,
     /// The WDT failed to load: stream every tile ungated rather than show no world.
@@ -114,6 +117,13 @@ impl TerrainStreamer {
     /// set; false until that WDT has loaded.
     pub(crate) fn is_one_object_map(&self, dir: &str) -> bool {
         self.one_object && self.map_dir.as_deref() == Some(dir)
+    }
+
+    /// Whether `window` is the one last streamed around. The wanted and inner sets move with the
+    /// focus chunk, so a step within a tile is a change: keyed on the tile, a body crossing a tile
+    /// would find the next row never requested.
+    fn streamed(&self, window: &StreamWindow) -> bool {
+        self.window.as_ref() == Some(window)
     }
 
     /// `(spawned, requested)` tiles for the debug panel: furnished, and all in the window.
@@ -614,7 +624,7 @@ fn stream_terrain(
     let center = focus.resolve(camera.single().ok().map(|c| c.translation));
     let window = StreamWindow::at(view.farclip, center[0], center[1]);
     let (cx, cy) = window.focus_tile();
-    let same_window = state.focus == (cx, cy) && state.reach == Some((window.inner, window.outer));
+    let same_window = state.streamed(&window);
     // Skip an unchanged frame only in a paced, complete, presentable world, since the tail it
     // bypasses releases a load; even then the undrawn count stays fresh, so a rebake un-skips it.
     if same_window
@@ -632,6 +642,7 @@ fn stream_terrain(
         return;
     }
     state.focus = (cx, cy);
+    state.window = Some(window);
     if state.reach != Some((window.inner, window.outer)) {
         state.reach = Some((window.inner, window.outer));
         info!(
@@ -1169,6 +1180,8 @@ fn drop_streamed_world(
         }
     }
     state.inner.clear();
+    state.window = None;
+    state.settled = false;
     if std::mem::take(&mut state.global_wmo) {
         release_placement(commands, placements, GLOBAL_WMO_UID, activity);
     }
@@ -1709,6 +1722,25 @@ mod inner_hold_tests {
             "a held inner tile is loaded by the end of the frame that requested it"
         );
         assert!(app.world().resource::<StreamActivity>().wait_ms > 0.0);
+    }
+
+    /// The idle skip follows the focus chunk: one chunk's step inside a tile is a new window, so
+    /// the row ahead is requested and held before the body reaches it.
+    #[test]
+    fn a_step_within_a_tile_is_a_new_window() {
+        let at = |wow_x: f32| StreamWindow::at(177.0, wow_x, -3752.2);
+        // Shimmering Flats, tile row 42 (x −5333.3 to −5866.7), heading south.
+        let (here, ahead) = (at(-5560.0), at(-5560.0 - benilla_formats::CHUNK_SIZE));
+        assert_eq!(here.focus_tile(), ahead.focus_tile());
+        let state = TerrainStreamer {
+            window: Some(here),
+            ..Default::default()
+        };
+        assert!(state.streamed(&here));
+        assert!(
+            !state.streamed(&ahead),
+            "a chunk's step moves the window, though the focus tile is the same"
+        );
     }
 
     /// A flat chunk with one drawn triangle, enough for a cell mesh.
