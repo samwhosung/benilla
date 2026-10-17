@@ -671,6 +671,12 @@ impl UiFontAtlas {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The DPI the engine lays out at, which follows the window's at the frame boundary
+    /// (`gpu::publish_sheet`): a holder of laid-out glyphs re-lays them when it moves.
+    pub(crate) fn dpi(&self) -> f32 {
+        self.lock().dpi
+    }
+
     /// The shared engine, for the VM's measurer.
     pub(crate) fn engine(&self) -> Arc<Mutex<TextEngine>> {
         Arc::clone(&self.engine)
@@ -758,6 +764,11 @@ pub(super) const TEST_FACES: &[&str] = CLIENT_FONTS;
 
 #[cfg(test)]
 impl UiFontAtlas {
+    /// A glyph-sheet texel's alpha as this frame queued it ([`Sheet::pending_alpha`]).
+    pub(crate) fn pending_alpha_for_test(&self, x: u32, y: u32) -> Option<u8> {
+        self.lock().sheet.pending_alpha(x, y)
+    }
+
     /// [`test_engine`] as the app holds it, for a host test that draws text; `None` as there.
     pub(crate) fn for_test(dpi: f32) -> Option<Self> {
         Some(UiFontAtlas {

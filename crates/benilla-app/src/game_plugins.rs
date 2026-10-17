@@ -836,12 +836,17 @@ pub(crate) mod schedule_tests {
     ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
-    ///   `own_control_lost` only, and the loader writes the saved camera pose.
+    ///   `own_control_lost` only, and the loader writes the saved camera pose;
+    /// - the loading screen's tip layout (`game_tip::paint_game_tip`) against the font engine's
+    ///   other users (`ui_script::extract::paint_script`, `nameplates::drive_nameplates`,
+    ///   `combat_text::float_combat_text`) over `UiFontAtlas`: each only fills the glyph cache,
+    ///   and a cell's place in the sheet moves nothing until the frame boundary's reset, which
+    ///   the tip watches through the sheet generation.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_347;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_350;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

@@ -181,6 +181,16 @@ impl Sheet {
         self.row_h = 0;
     }
 
+    /// A queued texel's alpha, the last upload covering it winning, as the GPU write order does;
+    /// `None` once the frame boundary has taken it, or where no cell was written.
+    #[cfg(test)]
+    pub(super) fn pending_alpha(&self, x: u32, y: u32) -> Option<u8> {
+        self.uploads.iter().rev().find_map(|u| {
+            let inside = x >= u.x && x < u.x + u.w && y >= u.y && y < u.y + u.h;
+            inside.then(|| u.rgba[(((y - u.y) * u.w + (x - u.x)) * 4 + 3) as usize])
+        })
+    }
+
     /// `(texels committed, texels available)`, committed counting whole shelves with their padding
     /// and slack.
     pub(super) fn occupancy(&self) -> (u64, u64) {

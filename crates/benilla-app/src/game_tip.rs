@@ -22,7 +22,7 @@
 //! 0.005 follow) is a fraction of the window's width, where `a = [0x832a4c]` is aspect × 0.75
 //! (`0x41ad10`, read at `0x40668c`), the font is 0.018 of its height, and the position is
 //! `(0.5 − s·0.5, 0.1 + yoff)` of the window, left-justified, `yoff` being the letterbox band
-//! `(1 − a)·0.5` below 4:3 (`0x4066b9`) and zero otherwise; `0xd7c8c8c8` ARGB with an opaque black
+//! `(1 − a)·0.5` below 4:3 (`0x4066b9`) and zero otherwise; `0xd7c8c8c8` ARGB with a black
 //! shadow at `(+0.001, −0.001)` of the window. `s·W` is `515·H/768` at every aspect:
 //!
 //! ```text
@@ -32,39 +32,54 @@
 //!
 //! [`placement`] is that, relative to the fitted content area it is a child of.
 //!
-//! The face is the locale's (`0x406663`-`0x406678`, table `0x82f018` by `[0xc0e080]`): koKR's
-//! `2002.TTF`, zhCN's and zhTW's `FZLBJW.TTF`, `FRIZQT__.TTF` for the other five ([`tip_font`]).
+//! The string goes through the client's font engine (`0x5c1c30`), so it is laid out and drawn by
+//! [`crate::ui_text`], the engine every FontString uses: whole-pixel raster sizes, the step law
+//! and the `|c…|r` escapes (`0x5c28af`, flags bit `0x800` clear) that colour the DBC's
+//! `|cffffd100Tip:|r ` prefix. Its glyph cells are drawn as `bevy_ui` image nodes, because the
+//! loading screen they sit inside is `bevy_ui`.
 //!
-//! The `|cffffd100Tip:|r ` prefix and trailing `\r\n` are in the DBC data and the escapes are
-//! interpreted (`0x5c28af`, flags bit `0x800` clear), so the line goes through
-//! [`benilla_ui::markup`].
+//! The face is the locale's (`0x406663`-`0x406678`, table `0x82f018` by `[0xc0e080]`): koKR's
+//! `2002.TTF`, zhCN's and zhTW's `FZLBJW.TTF`, `FRIZQT__.TTF` for the other five ([`tip_font_path`]).
 
-use benilla_ui::markup::{self, TokenKind};
-use bevy::ecs::system::EntityCommands;
+use benilla_ui::script::{JustifyH, JustifyV, Outline};
 use bevy::prelude::*;
 
 use benilla_formats::GameTipsCatalog;
+
+use crate::ui_pass::UiQuad;
+use crate::ui_text::{glyph_texels, UiFontAtlas};
+use crate::ui_text::{layout_text_quads, shadow_offset_px, FontSpec, Justify, TextSeat};
 
 /// `s` at `a = 1`: the wrap width only, as a fraction of the window's width (the box width the
 /// call at `0x40679c` passes; the font size is [`TIP_FONT_FRACTION`]). Not a FrameXML length:
 /// `0x41ae40` divides `G44` back out, so the FrameXML-unit helper would be off by 1.25 at 4:3.
 const TIP_SCALE: f32 = 515.0 / 1024.0;
 
-/// The baseline as a fraction of the window's height above the window's bottom, under the font
-/// engine's pixel ortho (`0x5c70b0`), before `yoff`. `0x4066ee` builds it as `0.05·0.5 + 0.075`,
-/// the progress bar's top edge in the viewport at 4:3, so the block sits on the bar there.
+/// The box's bottom as a fraction of the window's height above the window's bottom, under the
+/// font engine's pixel ortho (`0x5c70b0`), before `yoff`. `0x4066ee` builds it as
+/// `0.05·0.5 + 0.075`, the progress bar's top edge in the viewport at 4:3, so the block sits on
+/// the bar there; the string is bottom-justified in it (`0x406778` pushes 2).
 const TIP_BOTTOM: f32 = 0.1;
 
 /// The font height as a fraction of the window's height. In `0x406659`'s `0.018 · [0x832a48]` the
 /// slot is a unit conversion, not part of the size: `0x41ad10` writes it as height/diagonal and
 /// `[0x832a44]` as width/diagonal, the diagonal-normalized units `0x44d040` works in (`0x41ae70`
 /// and `0x41ae60` multiply by each). Applying its shipped `.data` value, 0.6, would shrink the
-/// line.
+/// line. The string itself is created at a bare 0.018 (`0x40678e`).
 const TIP_FONT_FRACTION: f32 = 0.018;
 
-/// The body colour `0xd7c8c8c8` (ARGB) and its shadow offset, 0.001 of the window's width and of
-/// its height (`0x5c7010`, `0x5c6fa0`).
-const TIP_COLOR: Color = Color::srgba(200.0 / 255.0, 200.0 / 255.0, 200.0 / 255.0, 215.0 / 255.0);
+/// The line spacing as a fraction of the window's height, in the string's own units, as its
+/// height is (`0x40677f` pushes 0.005).
+const TIP_SPACING_FRACTION: f32 = 0.005;
+
+/// The body colour `0xd7c8c8c8` (ARGB), client-space sRGB.
+const TIP_COLOR: [f32; 4] = [200.0 / 255.0, 200.0 / 255.0, 200.0 / 255.0, 215.0 / 255.0];
+
+/// The shadow: `0xff000000` (`0x4067ae`), whose alpha `0x5cd650` lowers to the body's `0xd7`
+/// (`0x5cd65b`-`0x5cd667`: `+0x33 = min(shadow alpha, [+0x2f])`).
+const TIP_SHADOW_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 215.0 / 255.0];
+
+/// The shadow offset, 0.001 of the window's width and of its height (`0x4067b5`, `0x4067bc`).
 const TIP_SHADOW_OFFSET: f32 = 0.001;
 
 /// The `showGameTips` switch and the `gameTip` cursor. `next` is an `i64` because the CVar can hold
@@ -116,45 +131,9 @@ impl GameTips {
     }
 }
 
-/// The tip as coloured runs: `|cAARRGGBB…|r` honoured against `base`, which `|r` restores
-/// (`0x5cce99` restores `FontString+0x2c`), and the trailing `\r\n` dropped.
-pub(crate) fn spans(tip: &str, base: Color) -> Vec<(String, Color)> {
-    let mut out: Vec<(String, Color)> = Vec::new();
-    let mut colour = base;
-    let mut at = 0;
-    let mut run = String::new();
-    let flush = |run: &mut String, colour: Color, out: &mut Vec<(String, Color)>| {
-        if !run.is_empty() {
-            out.push((std::mem::take(run), colour));
-        }
-    };
-    while let Some(token) = markup::token_at(tip, at) {
-        at += token.byte_len;
-        match token.kind {
-            TokenKind::Color(rgba) => {
-                flush(&mut run, colour, &mut out);
-                colour = Color::srgb_u8(rgba.r(), rgba.g(), rgba.b());
-            }
-            TokenKind::ColorReset => {
-                flush(&mut run, colour, &mut out);
-                colour = base;
-            }
-            TokenKind::LineBreak => run.push('\n'),
-            TokenKind::EscapedPipe => run.push('|'),
-            TokenKind::Char(c) => run.push(c),
-            // No shipped tip has a hyperlink; one would draw its text and lose only the click.
-            TokenKind::LinkOpen { .. } | TokenKind::LinkClose => {}
-        }
-    }
-    flush(&mut run, colour, &mut out);
-    // The data's trailing `\r\n` (two on one tip) would draw as blank lines and lift the block.
-    if let Some((last, _)) = out.last_mut() {
-        while last.ends_with('\n') {
-            last.pop();
-        }
-    }
-    out.retain(|(t, _)| !t.is_empty());
-    out
+/// The string the engine draws: `0x406758`-`0x406766` copy the tip with its trailing CR and LF cut.
+fn tip_text(tip: &str) -> &str {
+    tip.trim_end_matches(['\r', '\n'])
 }
 
 /// The tip's box and type, in logical pixels, relative to the loading screen's content area.
@@ -163,7 +142,10 @@ pub(crate) struct TipPlacement {
     pub(crate) bottom: f32,
     /// The wrap width.
     pub(crate) width: f32,
+    /// The box height, 1.0 of the window: the bottom-justified block grows up from `bottom`.
+    pub(crate) height: f32,
     pub(crate) font_size: f32,
+    pub(crate) spacing: f32,
     /// The reference's `(+x, −y)`; Bevy's y grows down, so the sign already matches.
     pub(crate) shadow: Vec2,
 }
@@ -183,9 +165,101 @@ pub(crate) fn placement(window: Vec2, widescreen: bool) -> TipPlacement {
         left: from_window_left - area.x,
         bottom: from_window_bottom - area_bottom,
         width: s * window.x,
+        height: window.y,
         font_size: window.y * TIP_FONT_FRACTION,
+        spacing: window.y * TIP_SPACING_FRACTION,
         shadow: Vec2::new(window.x * TIP_SHADOW_OFFSET, window.y * TIP_SHADOW_OFFSET),
     }
+}
+
+/// The tip as the font engine lays it out, in its node's own px: the box's bottom-left corner at
+/// the origin, y down.
+pub(crate) struct TipGlyphs {
+    pub(crate) shadow: Vec<UiQuad>,
+    pub(crate) fill: Vec<UiQuad>,
+}
+
+/// Lays the tip out as `0x5c1c30` creates it, at `p`'s size and spacing, bottom- and
+/// left-justified (`0x406778`/`0x406776` push 2 and 0) in `p`'s box, with the shadow `0x5c27a0`
+/// sets, in the locale's face.
+pub(crate) fn tip_glyphs(
+    atlas: &UiFontAtlas,
+    tip: &str,
+    p: &TipPlacement,
+    locale: usize,
+) -> TipGlyphs {
+    let text = tip_text(tip);
+    let spec = FontSpec {
+        path: Some(tip_font_path(locale)),
+        height: Some(p.font_size),
+        outline: Outline::None,
+        spacing: p.spacing,
+        // A set shadow seeds each row's pen (`0x5cddb1`); the layout is built at the first draw
+        // (`0x5cd6a0`), after `0x5c27a0` has set it.
+        shadow_x: p.shadow.x,
+        alpha_gradient: None,
+        non_space_wrap: false,
+        max_lines: 0,
+    };
+    let justify = Justify {
+        h: JustifyH::Left,
+        v: JustifyV::Bottom,
+    };
+    let rect = Rect::new(0.0, -p.height, p.width, 0.0);
+    let (dx, dy) = (shadow_offset_px(p.shadow.x), shadow_offset_px(p.shadow.y));
+    let shadow_rect = Rect::new(
+        rect.min.x + dx,
+        rect.min.y + dy,
+        rect.max.x + dx,
+        rect.max.y + dy,
+    );
+    let mut e = atlas.lock();
+    let mut shadow = layout_text_quads(
+        &mut e,
+        text,
+        shadow_rect,
+        TIP_SHADOW_COLOR,
+        justify,
+        0,
+        spec,
+        TextSeat::Exact,
+    );
+    // Markup tints ride the fill only.
+    for q in &mut shadow {
+        q.color = TIP_SHADOW_COLOR;
+    }
+    let fill = layout_text_quads(
+        &mut e,
+        text,
+        rect,
+        TIP_COLOR,
+        justify,
+        0,
+        spec,
+        TextSeat::Exact,
+    );
+    TipGlyphs { shadow, fill }
+}
+
+/// One laid-out glyph as a `bevy_ui` node: its engine cell, drawn one to one at its rect.
+fn glyph_node(q: &UiQuad) -> impl Bundle {
+    let [r, g, b, a] = q.color;
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(q.rect.min.x),
+            top: Val::Px(q.rect.min.y),
+            width: Val::Px(q.rect.width()),
+            height: Val::Px(q.rect.height()),
+            ..default()
+        },
+        ImageNode {
+            image: q.texture.clone().unwrap_or_default(),
+            color: Color::srgba(r, g, b, a),
+            rect: Some(glyph_texels(&q.uv)),
+            ..default()
+        },
+    )
 }
 
 /// The window's logical size, 1024 x 768 when there is none (a headless run).
@@ -195,67 +269,73 @@ fn window_size(windows: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> V
     })
 }
 
-/// Writes `p` to the tip node, and the font size to every run, only where it differs.
-fn apply(p: &TipPlacement, node: &mut Node, font: &mut TextFont, shadow: &mut TextShadow) {
+/// Writes `p`'s box to the tip node, only where it differs.
+fn apply(p: &TipPlacement, node: &mut Node) {
     let (left, bottom, width) = (Val::Px(p.left), Val::Px(p.bottom), Val::Px(p.width));
     if node.left != left || node.bottom != bottom || node.width != width {
         node.left = left;
         node.bottom = bottom;
         node.width = width;
     }
-    if font.font_size != p.font_size {
-        font.font_size = p.font_size;
-    }
-    if shadow.offset != p.shadow {
-        shadow.offset = p.shadow;
-    }
+}
+
+/// What the tip's glyphs were laid out for: the window, the `widescreen` fit, the engine's DPI and
+/// sheet generation, whether it exists, and the string.
+#[derive(Default)]
+struct Laid {
+    key: (Vec2, bool, f32, u64, bool),
+    tip: Option<String>,
 }
 
 /// Per frame: the tip follows the window, as the reference's font engine does when the viewport
-/// changes (`0x5c2b50` re-lays every font). The runs' own `TextFont`s follow the root's size.
-fn fit_game_tip(
+/// changes (`0x5c2b50` re-lays every font), and a sheet reset, which moves its cells.
+fn paint_game_tip(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut tip: Query<
-        (&mut Node, &mut TextFont, &mut TextShadow, Option<&Children>),
-        With<crate::loading_screen::LoadingTip>,
-    >,
-    mut runs: Query<&mut TextFont, (With<TextSpan>, Without<crate::loading_screen::LoadingTip>)>,
     cvars: Option<Res<crate::cvars::Cvars>>,
+    tips: Res<GameTips>,
+    atlas: Option<Res<UiFontAtlas>>,
+    mut tip: Query<(Entity, &mut Node), With<crate::loading_screen::LoadingTip>>,
+    mut laid: Local<Laid>,
+    mut commands: Commands,
 ) {
-    let Ok((mut node, mut font, mut shadow, children)) = tip.single_mut() else {
+    let Ok((entity, mut node)) = tip.single_mut() else {
         return;
     };
-    let p = placement(
-        window_size(&windows),
-        crate::loading_screen::widescreen(cvars.as_deref()),
+    let window = window_size(&windows);
+    let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
+    let key = (
+        window,
+        widescreen,
+        atlas.as_ref().map_or(0.0, |a| a.dpi()),
+        atlas.as_ref().map_or(0, |a| a.generation),
+        atlas.is_some(),
     );
-    apply(&p, &mut node, &mut font, &mut shadow);
-    for run in children.into_iter().flatten() {
-        if let Ok(mut f) = runs.get_mut(*run) {
-            if f.font_size != p.font_size {
-                f.font_size = p.font_size;
-            }
-        }
+    if laid.key == key && laid.tip.as_deref() == tips.shown() {
+        return;
     }
+    let p = placement(window, widescreen);
+    apply(&p, &mut node);
+    let mut e = commands.entity(entity);
+    e.despawn_related::<Children>();
+    if let (Some(shown), Some(atlas)) = (tips.shown(), atlas.as_deref()) {
+        let glyphs = tip_glyphs(atlas, shown, &p, crate::ui_script::client_locale().index());
+        // The shadow first, so the fill paints over it.
+        e.with_children(|c| {
+            for q in glyphs.shadow.iter().chain(&glyphs.fill) {
+                c.spawn(glyph_node(q));
+            }
+        });
+    }
+    *laid = Laid {
+        key,
+        tip: tips.shown().map(str::to_owned),
+    };
 }
 
-/// The body colour the tip's `|r` restores.
-pub(crate) const fn base_color() -> Color {
-    TIP_COLOR
-}
-
-/// The tip node's components: the loading screen spawns them and [`drive_game_tip`] queries them,
-/// so one definition keeps the two in step.
+/// The tip node: the box [`paint_game_tip`] places and fills with glyph nodes. The loading screen
+/// spawns it and [`drive_game_tip`] queries it, so one definition keeps the two in step.
 pub(crate) fn tip_bundle() -> impl Bundle {
     (
-        Text::new(String::new()),
-        TextLayout {
-            linebreak: LineBreak::WordBoundary,
-            justify: Justify::Left,
-        },
-        TextFont::default(),
-        TextColor(TIP_COLOR),
-        TextShadow::default(),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Percent(0.0),
@@ -295,7 +375,7 @@ impl Plugin for GameTipPlugin {
                 Update,
                 (
                     drive_game_tip.after(benilla_world::schedule::WorldStage::Present),
-                    fit_game_tip
+                    paint_game_tip
                         .after(drive_game_tip)
                         .after(crate::loading_screen::fit_loading_area),
                 ),
@@ -303,36 +383,14 @@ impl Plugin for GameTipPlugin {
     }
 }
 
-/// Hides the tip node, drops its spans and re-inserts an empty `Text`. The re-insert matters:
-/// despawning a `Text` root's last `TextSpan` removes `Children` rather than changing it, bevy
-/// 0.18's `detect_text_needs_rerender` misses a removal, and the next resize re-lays-out a stale
-/// buffer and panics in `bevy_text`. [`crate::text_reshape`] guards the same hole app-wide.
-fn empty_tip(e: &mut EntityCommands, vis: &mut Visibility) {
-    *vis = Visibility::Hidden;
-    e.despawn_related::<Children>();
-    e.insert(Text::new(String::new()));
-}
-
-/// Takes the raise's tip edge, then paints what the screen shows: the reference picks the row in
-/// `EnterWorld`, lays it out once per raise and draws it every frame.
+/// Takes the raise's tip edge and shows or hides the line; [`paint_game_tip`] lays it out. The
+/// reference picks the row in `EnterWorld`, lays it out once per raise and draws it every frame.
 fn drive_game_tip(
     mut screen: ResMut<crate::loading_screen::LoadingScreen>,
     mut tips: ResMut<GameTips>,
     mut setting: ResMut<GameTipSetting>,
     roster: Option<Res<crate::glue_session::roster::Roster>>,
-    mut node: Query<
-        (
-            Entity,
-            &mut Node,
-            &mut TextFont,
-            &mut TextShadow,
-            &mut Visibility,
-        ),
-        With<crate::loading_screen::LoadingTip>,
-    >,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    assets: Res<AssetServer>,
-    mut commands: Commands,
+    mut node: Query<&mut Visibility, With<crate::loading_screen::LoadingTip>>,
     // The cursor persists through the registry, which composes the file and feeds the VM's mirror.
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
@@ -354,62 +412,31 @@ fn drive_game_tip(
         }
     };
     if let Some(next) = next {
-        // Only a shown tip moves the cursor, at the pick, even if the paint below fails.
+        // Only a shown tip moves the cursor, at the pick, even if nothing draws.
         setting.next = i64::from(next);
         cvars.set("gameTip", &next.to_string());
     }
 
-    // Laid out once per raise, not per frame, as the reference does.
-    let Ok((entity, mut n, mut font, mut shadow, mut vis)) = node.single_mut() else {
+    let Ok(mut vis) = node.single_mut() else {
         // `setup_loading_screen` spawns this node, so a miss is a structural bug: the bundle no
         // longer matches this query.
         warn!("loading screen: the tip node is missing — no tip can draw");
         return;
     };
-    let Some(tip) = tips.shown() else {
-        empty_tip(&mut commands.entity(entity), &mut vis);
-        return;
+    *vis = if tips.shown().is_some() {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
     };
-    // The runs below clone this font, so it carries the size they start with; [`fit_game_tip`]
-    // keeps the size and the box on the window from here.
-    apply(
-        &placement(
-            window_size(&windows),
-            crate::loading_screen::widescreen(Some(&cvars)),
-        ),
-        &mut n,
-        &mut font,
-        &mut shadow,
-    );
-    font.font = tip_font(&assets, crate::ui_script::client_locale().index());
-    shadow.color = Color::BLACK;
-    *vis = Visibility::Inherited;
-
-    // The coloured runs: the first is the `Text` root's own, the rest are `TextSpan` children.
-    let runs = spans(tip, base_color());
-    let painted = !runs.is_empty();
-    let mut e = commands.entity(entity);
-    match runs.split_first() {
-        Some(((head, head_color), rest)) => {
-            e.despawn_related::<Children>();
-            e.insert((Text::new(head.clone()), TextColor(*head_color)));
-            let (rest, tf) = (rest.to_vec(), font.clone());
-            e.with_children(|c| {
-                for (text, color) in rest {
-                    c.spawn((TextSpan::new(text), tf.clone(), TextColor(color)));
-                }
-            });
+    // Logged only for a line with something to draw, not merely picked.
+    if let (Some(next), Some(tip)) = (next, tips.shown()) {
+        if !tip_text(tip).is_empty() {
+            info!(
+                "loading screen: tip {} of {} on screen",
+                next - 1,
+                tips.catalog.len()
+            );
         }
-        None => empty_tip(&mut e, &mut vis),
-    }
-
-    // Logged only once the line is painted, not merely picked.
-    if let (Some(next), true) = (next, painted) {
-        info!(
-            "loading screen: tip {} of {} on screen",
-            next - 1,
-            tips.catalog.len()
-        );
     }
 }
 
@@ -457,19 +484,15 @@ pub(crate) fn clear(tips: &mut GameTips) {
     tips.shown = None;
 }
 
-/// The tip's face by locale index: the table `0x82f018` (`s_loadingFontPaths`), koKR (1) `2002.TTF`,
-/// zhCN (4) and zhTW (5) `FZLBJW.TTF`, every other `FRIZQT__.TTF`.
+/// The tip's face by locale index, the font engine's path for it: the table `0x82f018`
+/// (`s_loadingFontPaths`), koKR (1) `2002.TTF`, zhCN (4) and zhTW (5) `FZLBJW.TTF`, every other
+/// `FRIZQT__.TTF`.
 fn tip_font_path(locale: usize) -> &'static str {
     match locale {
-        1 => "mpq://Fonts/2002.ttf",
-        4 | 5 => "mpq://Fonts/FZLBJW.ttf",
-        _ => "mpq://Fonts/FRIZQT__.ttf",
+        1 => "Fonts\\2002.TTF",
+        4 | 5 => "Fonts\\FZLBJW.TTF",
+        _ => "Fonts\\FRIZQT__.TTF",
     }
-}
-
-/// The tip's font, loaded off the patch chain.
-fn tip_font(assets: &AssetServer, locale: usize) -> Handle<Font> {
-    assets.load(tip_font_path(locale))
 }
 
 #[cfg(test)]
@@ -486,13 +509,13 @@ mod tests {
         for (locale, face) in want.into_iter().enumerate() {
             assert_eq!(
                 tip_font_path(locale),
-                format!("mpq://Fonts/{face}.ttf"),
+                format!("Fonts\\{face}.TTF"),
                 "locale {locale}"
             );
         }
         // The index is clamped to the table by `Locale`, so none past it reaches here; the
         // default arm is the Latin face.
-        assert_eq!(tip_font_path(99), "mpq://Fonts/FRIZQT__.ttf");
+        assert_eq!(tip_font_path(99), "Fonts\\FRIZQT__.TTF");
     }
 
     fn tips(rows: &[&str]) -> GameTips {
@@ -547,18 +570,6 @@ mod tests {
         assert_eq!(t.shown(), None);
     }
 
-    /// The gold "Tip:" is its own run, and the trailing `\r\n` goes.
-    #[test]
-    fn the_gold_tip_prefix_is_markup_and_the_trailing_newlines_go() {
-        let base = base_color();
-        let runs = spans("|cffffd100Tip:|r Nearby questgivers.\r\n", base);
-        assert_eq!(runs.len(), 2, "two runs: {runs:?}");
-        assert_eq!(runs[0].0, "Tip:");
-        assert_eq!(runs[0].1, Color::srgb_u8(0xff, 0xd1, 0x00));
-        assert_eq!(runs[1].0, " Nearby questgivers.");
-        assert_eq!(runs[1].1, base);
-    }
-
     fn near(got: f32, want: f32) -> bool {
         (got - want).abs() < 0.01
     }
@@ -571,6 +582,8 @@ mod tests {
         assert!(near(p.left, (1024.0 - 515.0) / 2.0), "centred column");
         assert!(near(p.bottom, 76.8), "0.1 of the height");
         assert!(near(p.font_size, 13.824), "0.018 of the height");
+        assert!(near(p.spacing, 3.84), "0.005 of the height");
+        assert!(near(p.height, 768.0), "a box the window tall");
         assert!(near(p.shadow.x, 1.024) && near(p.shadow.y, 0.768));
     }
 
@@ -610,27 +623,111 @@ mod tests {
         assert!(near(p.shadow.x, 1.28) && near(p.shadow.y, 1.024));
     }
 
-    /// The real node and system with one tip, plus the text stack and `detect_text_needs_rerender`,
-    /// so what the paint and the dismiss do to the `ComputedTextBlock` is observable.
-    fn tip_app() -> (App, Entity) {
+    const TIP: &str = "|cffffd100Tip:|r Talk to the innkeeper.\r\n";
+
+    /// The glyphs the tip's characters draw: every one but the spaces.
+    const TIP_GLYPHS: usize = "Tip:Talktotheinnkeeper.".len();
+
+    /// The font engine at DPI 1 over the install's faces.
+    fn engine_atlas() -> UiFontAtlas {
+        UiFontAtlas::for_test(1.0).expect("the client faces open")
+    }
+
+    /// The engine lays the line out: the gold `Tip:` from the DBC's escape, the body in
+    /// `0xd7c8c8c8`, the trailing CR LF cut, the block bottom-justified on the box's bottom, and
+    /// the shadow the same glyphs a whole pixel right and down at the body's alpha.
+    #[test]
+    fn the_tip_is_the_font_engines_layout_of_the_dbc_line() {
+        benilla_formats::wow_data_or_skip!();
+        let atlas = engine_atlas();
+        let p = placement(Vec2::new(1024.0, 768.0), true);
+        let g = tip_glyphs(&atlas, TIP, &p, 0);
+        assert_eq!(g.fill.len(), TIP_GLYPHS, "one quad per inked character");
+        assert_eq!(g.shadow.len(), g.fill.len());
+        let gold = [1.0, f32::from(0xd1u8) / 255.0, 0.0];
+        for (i, q) in g.fill.iter().enumerate() {
+            let want = if i < 4 { gold } else { [TIP_COLOR[0]; 3] };
+            assert_eq!(q.color[..3], want, "glyph {i}'s colour");
+            assert_eq!(
+                q.texture,
+                Some(atlas.image()),
+                "glyph {i} is an engine cell"
+            );
+        }
+        assert!(g.fill[4..].iter().all(|q| q.color == TIP_COLOR));
+        for (s, f) in g.shadow.iter().zip(&g.fill) {
+            assert_eq!(s.color, TIP_SHADOW_COLOR);
+            assert_eq!(
+                s.rect.min,
+                f.rect.min + Vec2::ONE,
+                "a whole pixel right and down"
+            );
+        }
+        // One 14 px line on the box's bottom, with one CR LF or the two one shipped tip ends in:
+        // no blank line lifts it.
+        for tip in [TIP, "|cffffd100Tip:|r Talk to the innkeeper.\r\n\r\n"] {
+            let g = tip_glyphs(&atlas, tip, &p, 0);
+            let bottom = g.fill.iter().map(|q| q.rect.max.y).fold(f32::MIN, f32::max);
+            let top = g.fill.iter().map(|q| q.rect.min.y).fold(f32::MAX, f32::min);
+            assert!(
+                (-2.0..=0.0).contains(&bottom),
+                "{tip:?} sits on the box: {bottom}"
+            );
+            assert!(top > -16.0, "{tip:?} is one line tall: {top}");
+        }
+    }
+
+    /// The reported "Tlp": the tip's `i` keeps an inkless row between its dot and its stem at every
+    /// common window height, a 1080-tall window's 19 px among them.
+    #[test]
+    fn the_tips_i_keeps_its_dot() {
+        benilla_formats::wow_data_or_skip!();
+        for h in [768.0f32, 900.0, 1024.0, 1080.0, 1200.0, 1440.0] {
+            let atlas = engine_atlas();
+            let p = placement(Vec2::new(h * 16.0 / 9.0, h), true);
+            let g = tip_glyphs(&atlas, TIP, &p, 0);
+            // `T`, `i`.
+            let cell = crate::ui_text::glyph_texels(&g.fill[1].uv);
+            let rows: Vec<u8> = (cell.min.y as u32..cell.max.y as u32)
+                .map(|y| {
+                    (cell.min.x as u32..cell.max.x as u32)
+                        .filter_map(|x| atlas.pending_alpha_for_test(x, y))
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect();
+            let dot = rows.iter().position(|&a| a >= 128).expect("the i has ink");
+            let gap = rows[dot..].iter().position(|&a| a < 128).map(|i| i + dot);
+            let stem = gap.and_then(|g| rows[g..].iter().position(|&a| a >= 128));
+            assert!(
+                stem.is_some(),
+                "window {h}: the i's dot runs into its stem, row maxima {rows:?}"
+            );
+        }
+    }
+
+    /// The real nodes and systems with one tip, with the font engine or without it.
+    fn tip_app(atlas: Option<UiFontAtlas>) -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
-        crate::text_reshape::harness::add_text_plugins(&mut app);
-        app.add_systems(PostUpdate, bevy::text::detect_text_needs_rerender::<Text>);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<crate::cvars::Cvars>();
         app.init_resource::<GameTipSetting>();
         app.insert_resource(GameTips {
-            catalog: GameTipsCatalog::from_tips(vec![
-                "|cffffd100Tip:|r Talk to the innkeeper.\r\n".to_string(),
-            ]),
+            catalog: GameTipsCatalog::from_tips(vec![TIP.to_string()]),
             shown: None,
         });
+        if let Some(atlas) = atlas {
+            app.insert_resource(atlas);
+        }
         app.init_resource::<crate::loading_screen::LoadingScreen>();
         let tip = app
             .world_mut()
             .spawn((crate::loading_screen::LoadingTip, tip_bundle()))
             .id();
-        app.add_systems(Update, (drive_game_tip, fit_game_tip.after(drive_game_tip)));
+        app.add_systems(
+            Update,
+            (drive_game_tip, paint_game_tip.after(drive_game_tip)),
+        );
         (app, tip)
     }
 
@@ -640,11 +737,17 @@ mod tests {
             .tip_edge = Some(edge);
     }
 
+    fn glyph_nodes(app: &App, tip: Entity) -> Vec<Entity> {
+        app.world()
+            .get::<Children>(tip)
+            .map_or_else(Vec::new, |c| c.to_vec())
+    }
+
     /// A pick reaches the node the loading screen spawns, not only the cursor: the bundle must
-    /// match [`drive_game_tip`]'s query.
+    /// match [`drive_game_tip`]'s query, and the box lands on the reference's numbers.
     #[test]
-    fn a_pick_paints_the_node_the_loading_screen_spawns() {
-        let (mut app, tip) = tip_app();
+    fn a_pick_shows_the_node_the_loading_screen_spawns() {
+        let (mut app, tip) = tip_app(None);
         set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
         app.update();
 
@@ -654,37 +757,58 @@ mod tests {
             Some(&Visibility::Inherited),
             "the tip node never came out of hiding"
         );
-        assert_eq!(
-            w.get::<Text>(tip).map(|t| t.0.as_str()),
-            Some("Tip:"),
-            "the gold prefix is the root run"
-        );
-        let kids = w
-            .get::<Children>(tip)
-            .expect("the body sentence is a TextSpan child");
-        assert_eq!(kids.len(), 1, "one run after the prefix");
-        assert_eq!(
-            w.get::<TextSpan>(kids[0]).map(|t| t.0.as_str()),
-            Some(" Talk to the innkeeper.")
-        );
-        // The paint's geometry puts the line above the bar, off the bundle's corner.
         let node = w.get::<Node>(tip).expect("Node");
         let p = placement(Vec2::new(1024.0, 768.0), true);
+        assert_eq!(node.left, Val::Px(p.left));
         assert_eq!(node.bottom, Val::Px(p.bottom));
         assert_eq!(node.width, Val::Px(p.width));
-        assert!(
-            w.get::<TextFont>(tip).is_some_and(|f| f.font_size > 0.0),
-            "the font height is resolved from the window"
-        );
         // The cursor moved with it: `gameTip` holds the next row.
         assert_eq!(w.resource::<GameTipSetting>().next, 1);
     }
 
-    /// The tip follows the window while the screen is up: a resize refits the box and the size of
-    /// the root and of every run, which a once-per-raise layout left at the raise's values.
+    /// The pick draws the line as the font engine's cells, one node per glyph, each the engine's
+    /// own cell one to one; nothing is re-laid while nothing changes, and the dismiss takes the
+    /// glyphs down.
     #[test]
-    fn a_resize_refits_the_box_and_every_runs_size() {
-        let (mut app, tip) = tip_app();
+    fn a_pick_draws_the_tip_in_the_font_engines_glyphs() {
+        benilla_formats::wow_data_or_skip!();
+        let (mut app, tip) = tip_app(Some(engine_atlas()));
+        set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
+        app.update();
+
+        let sheet = app.world().resource::<UiFontAtlas>().image();
+        let nodes = glyph_nodes(&app, tip);
+        assert_eq!(nodes.len(), 2 * TIP_GLYPHS, "a shadow and a fill per glyph");
+        for &n in &nodes {
+            let img = app.world().get::<ImageNode>(n).expect("an image node");
+            assert_eq!(img.image, sheet, "drawn from the engine's glyph sheet");
+            let texels = img.rect.expect("a cell of the sheet");
+            let node = app.world().get::<Node>(n).expect("Node");
+            assert_eq!(node.width, Val::Px(texels.width()), "one to one at DPI 1");
+            assert_eq!(node.height, Val::Px(texels.height()));
+        }
+
+        app.update();
+        assert_eq!(
+            glyph_nodes(&app, tip),
+            nodes,
+            "an unchanged frame lays nothing out"
+        );
+
+        set_edge(&mut app, crate::loading_screen::TipEdge::Clear);
+        app.update();
+        assert!(
+            glyph_nodes(&app, tip).is_empty(),
+            "the glyphs die with the tip"
+        );
+    }
+
+    /// The tip follows the window while the screen is up: a resize refits the box and lays the
+    /// glyphs out again at the new size, which a once-per-raise layout left at the raise's.
+    #[test]
+    fn a_resize_relays_the_box_and_the_glyphs() {
+        benilla_formats::wow_data_or_skip!();
+        let (mut app, tip) = tip_app(Some(engine_atlas()));
         let window = app
             .world_mut()
             .spawn((
@@ -697,39 +821,41 @@ mod tests {
             .id();
         set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
         app.update();
-        let want = placement(Vec2::new(1280.0, 1024.0), true);
-        let size_of_runs = |app: &App| {
-            let w = app.world();
-            let kids = w.get::<Children>(tip).expect("a run after the prefix");
-            let mut sizes = vec![w.get::<TextFont>(tip).expect("root").font_size];
-            sizes.extend(
-                kids.iter()
-                    .filter_map(|k| w.get::<TextFont>(k))
-                    .map(|f| f.font_size),
-            );
-            sizes
+        let tallest = |app: &App| {
+            glyph_nodes(app, tip)
+                .iter()
+                .filter_map(|&n| match app.world().get::<Node>(n)?.height {
+                    Val::Px(h) => Some(h),
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max)
         };
-        assert_eq!(size_of_runs(&app), vec![want.font_size; 2]);
+        let before = tallest(&app);
 
-        // Resized tall, with no new raise.
+        // Resized, with no new raise.
         app.world_mut()
             .get_mut::<Window>(window)
             .unwrap()
             .resolution
-            .set(600.0, 1000.0);
+            .set(1920.0, 1440.0);
         app.update();
-        let want = placement(Vec2::new(600.0, 1000.0), true);
-        assert_eq!(size_of_runs(&app), vec![want.font_size; 2]);
+        let want = placement(Vec2::new(1920.0, 1440.0), true);
         let node = app.world().get::<Node>(tip).unwrap();
         assert_eq!(node.width, Val::Px(want.width));
         assert_eq!(node.bottom, Val::Px(want.bottom));
+        assert_eq!(glyph_nodes(&app, tip).len(), 2 * TIP_GLYPHS);
+        assert!(
+            tallest(&app) > before,
+            "26 px glyphs, not the 18 px ones: {} vs {before}",
+            tallest(&app)
+        );
     }
 
     /// A raise with no edge on a live screen keeps the line and the cursor; only the dismiss takes
     /// it down. [`crate::loading_screen`]'s test covers which edges are emitted.
     #[test]
     fn the_tip_outlives_a_second_raise_and_dies_with_the_screen() {
-        let (mut app, tip) = tip_app();
+        let (mut app, tip) = tip_app(None);
         set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
         app.update();
         assert_eq!(
@@ -745,10 +871,7 @@ mod tests {
             Some(&Visibility::Inherited),
             "a raise with no edge must leave the line where it is"
         );
-        assert_eq!(
-            app.world().get::<Text>(tip).map(|t| t.0.as_str()),
-            Some("Tip:")
-        );
+        assert_eq!(app.world().resource::<GameTips>().shown(), Some(TIP));
         assert_eq!(
             app.world().resource::<GameTipSetting>().next,
             1,
@@ -763,44 +886,6 @@ mod tests {
             Some(&Visibility::Hidden),
             "the pending tip dies with the screen"
         );
-        assert!(app
-            .world()
-            .get::<Children>(tip)
-            .is_none_or(|c| c.is_empty()));
-    }
-
-    /// After the dismiss the root holds no text and the block is marked for a re-shape, so a later
-    /// resize cannot index a despawned run (the loading screen's root is hidden, never despawned).
-    /// [`crate::text_reshape`] shows the re-shape is what stops the panic.
-    #[test]
-    fn the_dismiss_leaves_the_node_reshapeable() {
-        let (mut app, tip) = tip_app();
-        set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
-        app.update();
-        // A painted frame's state: a two-run block, shaped, nothing pending.
-        crate::text_reshape::harness::shape(&mut app, tip);
-        assert_eq!(
-            app.world()
-                .get::<bevy::text::ComputedTextBlock>(tip)
-                .map(|b| b.entities().len()),
-            Some(2),
-            "the gold prefix and the sentence are two runs"
-        );
-
-        set_edge(&mut app, crate::loading_screen::TipEdge::Clear);
-        app.update();
-
-        assert_eq!(
-            app.world().get::<Text>(tip).map(|t| t.0.as_str()),
-            Some(""),
-            "the dismissed tip holds no sentence — a hidden node with stale text is the bug"
-        );
-        assert!(
-            app.world()
-                .get::<bevy::text::ComputedTextBlock>(tip)
-                .expect("the block")
-                .needs_rerender(),
-            "and the block is marked for the re-shape a later resize would otherwise skip"
-        );
+        assert_eq!(app.world().resource::<GameTips>().shown(), None);
     }
 }
