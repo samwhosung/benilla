@@ -60,7 +60,8 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Text-only `loadstring`: a binary chunk is rejected. The BOM strip and `#`-line skip apply,
+    // `loadstring` compiles every chunk as source, so a binary one fails at its `\27` like text
+    // (`0x6f6a15`). The BOM strip and `#`-line skip apply,
     // as in the reference they live inside `luaL_loadbuffer`/`luaX_setinput`.
     let loadstring = lua.create_function(
         |lua, (src, chunkname): (mlua::String, Option<mlua::String>)| {

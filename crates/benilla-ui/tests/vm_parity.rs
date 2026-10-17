@@ -717,7 +717,8 @@ b]])"#),
         local o = {}
         for i = 1, 3 do n = 0 local ok, e = pcall(f) table.insert(o, n .. ":" .. tostring(e)) end
         return table.concat(o, " ")"#),
-    // ── r2-vm: the script host's loadstring refuses a binary chunk with mlua's text ──
+    // ── r2-vm: a binary chunk is lexed as source (`luaD_protectedparser` zeroes the binary
+    // flag, `0x6f6a15`), so its `\27` is an `invalid control char` (`0x6ffabb`) ──
     ("r2-vm loadstring_binary", r#"return S(loadstring("\27Lua\81\0", "=bin"), loadstring("\27Lua"))"#),
 ];
 

@@ -753,7 +753,6 @@ impl Lua {
                 .name()
                 .unwrap_or_else(|| format!("@{}:{}", at.file(), at.line()))
                 .into_bytes(),
-            mode: None,
             env: None,
         }
     }
@@ -2103,7 +2102,6 @@ pub struct Chunk<'a> {
     source: Vec<u8>,
     /// The chunk name as `lua_load` takes it: bytes, which need not be UTF-8.
     name: Vec<u8>,
-    mode: Option<ChunkMode>,
     env: Option<Table>,
 }
 
@@ -2117,8 +2115,10 @@ impl<'a> Chunk<'a> {
         &self.name
     }
 
-    pub fn set_mode(mut self, mode: ChunkMode) -> Self {
-        self.mode = Some(mode);
+    /// mlua's mode, which changes nothing here: the client compiles every chunk as source
+    /// (`luaD_protectedparser` zeroes the binary flag, `0x6f6a15`), so a binary one meets the
+    /// lexer like text.
+    pub fn set_mode(self, _mode: ChunkMode) -> Self {
         self
     }
 
@@ -2128,19 +2128,6 @@ impl<'a> Chunk<'a> {
     }
 
     fn compile(&self, src: &[u8]) -> Result<Function> {
-        if src.first() == Some(&0x1b) {
-            // mlua-sys's `luaL_loadbufferx` text, for the mode in effect; with no mode set, a
-            // binary chunk would load on the C build, which this VM cannot.
-            let message = match self.mode {
-                Some(ChunkMode::Text) => "attempt to load a binary chunk (mode is 't')".into(),
-                _ => "attempt to load a binary chunk".into(),
-            };
-            return Err(Error::SyntaxError {
-                raw: std::string::String::as_bytes(&message).to_vec(),
-                message,
-                incomplete_input: false,
-            });
-        }
         // `lua_load` takes the name as a C string: it ends at its first NUL.
         let name = self.name.split(|&b| b == 0).next().unwrap_or_default();
         let lua = self.lua;

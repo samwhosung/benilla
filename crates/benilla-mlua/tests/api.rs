@@ -147,3 +147,20 @@ fn a_table_from_an_iterator_is_sized_for_it() {
         );
     });
 }
+
+/// Every chunk compiles as source, whatever its mode (`luaD_protectedparser` zeroes the binary
+/// flag, `0x6f6a15`): a binary chunk meets the lexer's control-byte error (`0x6ffabb`).
+#[test]
+fn a_binary_chunk_is_lexed_as_source() {
+    let lua = Lua::new();
+    for mode in [None, Some(benilla_mlua::ChunkMode::Text)] {
+        let mut chunk = lua.load(&b"\x1bLuaP\x01\x04"[..]).set_name("=bin");
+        if let Some(m) = mode {
+            chunk = chunk.set_mode(m);
+        }
+        let Err(benilla_mlua::Error::SyntaxError { message, .. }) = chunk.into_function() else {
+            panic!("a binary chunk compiled");
+        };
+        assert_eq!(message, "bin:1: invalid control char near `char(27)'");
+    }
+}
