@@ -475,10 +475,12 @@ fn bind_target_unit(
 
 /// `BindTarget`'s merge (`6e602c`–`6e60d7`): a bind whose mask is in `0x8202`, a unit or a corpse,
 /// runs the range test `0x6e47b0` (`6e6063`). Out of range raises "Out of range." or "Target too
-/// close" and binds nothing; otherwise the emptied word commits (`SendCast 0x6e54f0`). The
-/// reference's range failure also aborts the cast (`6e6089`), which sends CMSG_CANCEL_CAST and
-/// strands the cursor (`6e5b93`) until a cancel: a bug, not copied; targeting stays armed and
-/// working.
+/// close" and binds nothing; otherwise the emptied word commits (`SendCast 0x6e54f0`).
+///
+/// Deviation: a range failure leaves targeting armed and working. The reference's report
+/// (`0x6e6089`) also cancels the cast (`0x6e2218` → `0x6e4940`), clearing its caster, and then
+/// restores the pre-click word, so every later click fails the caster test (`0x6e5b93`) and the
+/// cursor is stranded until a cancel; that is a defect, and staying armed is what a player can use.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
