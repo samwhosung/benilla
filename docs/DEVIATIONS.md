@@ -33,10 +33,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
-- [benilla-lua](#benilla-lua): 4
+- [benilla-lua](#benilla-lua): 5
 - [benilla-protocol](#benilla-protocol): 20
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 111
+- [benilla-ui](#benilla-ui): 108
 - [benilla-world](#benilla-world): 46
 
 ### benilla-app
@@ -548,6 +548,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The decoder reads a NUL as no bytes (`0x7fbeda`), so the client's loop never passes one and the call never returns; here the result ends there. ([`src/lib_string.rs:114`](../crates/benilla-lua/src/lib_string.rs#L114))
 - 5.1's `match` recurses without a bound and overflows the C stack (near 32000 levels on 8 MB); this raises 5.2's `pattern too complex` instead. ([`src/lib_string.rs:533`](../crates/benilla-lua/src/lib_string.rs#L533))
+
+#### lib_table
+
+- The client's loops have no bound (`0x7fb728`, `0x7fb7e0`), but a remembered size is whatever an addon wrote, and the instruction-budget hook never sees a native's loop, so one over two billion slots would hang the client. ([`src/lib_table.rs:48`](../crates/benilla-lua/src/lib_table.rs#L48))
 ### benilla-protocol
 
 #### auth
@@ -661,10 +665,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Nil for a display row with no icon, where the reference answers the unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either. ([`src/script/item_stats.rs:481`](../crates/benilla-ui/src/script/item_stats.rs#L481))
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:292`](../crates/benilla-ui/src/script/keybind.rs#L292))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
-- 5.0 has no bound, but a remembered size is whatever an addon wrote, and a Rust loop over two billion slots is beyond the VM's instruction budget: a hung client. ([`src/script/lua50/table_size.rs:32`](../crates/benilla-ui/src/script/lua50/table_size.rs#L32))
-- A longer one sorts only the border, where 5.0 compares nils and raises: it departs from an error path, not from a mechanism. ([`src/script/lua50/table_size.rs:196`](../crates/benilla-ui/src/script/lua50/table_size.rs#L196))
-- The reference ignores every argument after the table; `i`/`j` stay because the positional-`format` shim passes a range to carry embedded nils. ([`src/script/lua50/table_size.rs:222`](../crates/benilla-ui/src/script/lua50/table_size.rs#L222))
-- A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:284`](../crates/benilla-ui/src/script/model.rs#L284))
+- A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:305`](../crates/benilla-ui/src/script/model.rs#L305))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:335`](../crates/benilla-ui/src/script/modelframe.rs#L335))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:429`](../crates/benilla-ui/src/script/nameplate.rs#L429))
@@ -683,7 +684,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference prints these to the console; here they are host warnings, because a malformed page is bad content, not a script error. ([`src/script/simplehtml/mod.rs:192`](../crates/benilla-ui/src/script/simplehtml/mod.rs#L192))
 - Only `%s` and `%%` are expanded and other specs copied, because the real `printf` would read the string pointers as other types. ([`src/script/simplehtml/parse.rs:244`](../crates/benilla-ui/src/script/simplehtml/parse.rs#L244))
 - Skipped because it is no command; the reference raises. ([`src/script/slash.rs:64`](../crates/benilla-ui/src/script/slash.rs#L64))
-- The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:62`](../crates/benilla-ui/src/script/sound.rs#L62))
+- The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:9`](../crates/benilla-ui/src/script/spellbook.rs#L9))
 - `date` formats UTC where the reference uses local time, because the tree has no timezone database. ([`src/script/stdlib.rs:281`](../crates/benilla-ui/src/script/stdlib.rs#L281))
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:103`](../crates/benilla-ui/src/script/tabard.rs#L103))
