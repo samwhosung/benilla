@@ -560,7 +560,7 @@ impl TextEngine {
         if let Some(sfnt) = mono_sfnt {
             let Some(glyph) = sfnt
                 .outline(g.glyph_id, ppem)
-                .and_then(|o| mono::rasterize(&o))
+                .and_then(|o| mono::rasterize(&o, ppem))
             else {
                 self.cells.insert(key, None);
                 return;
@@ -1522,7 +1522,7 @@ mod ppem_tests {
 
         // The glyph and its 8-neighbours, off the same 1-bit raster.
         let sfnt = e.faces[face].sfnt.clone().expect("Arial Narrow's tables");
-        let g = mono::rasterize(&sfnt.outline(gid, 15).expect("outline")).expect("ink");
+        let g = mono::rasterize(&sfnt.outline(gid, 15).expect("outline"), 15).expect("ink");
         assert_eq!(
             (w, h),
             (g.w + 4, g.h + 4),

@@ -163,13 +163,13 @@ fn profiles(contours: &[Vec<Piece>]) -> Vec<Profile> {
 
 /// One pass over `lines` sample lines of `len` pixels each. Each line pairs its rising crossings
 /// with its falling ones in order; a span wider than a pixel fills the centres it holds (when
-/// `fill`), one at most a pixel wide is resolved after the line's spans by the drop-out rule.
-/// `at(line, pos)` indexes `bits`.
+/// `fill` is the span tolerance, the row pass), one at most a pixel wide is resolved after the
+/// line's spans by the drop-out rule. `at(line, pos)` indexes `bits`.
 fn sweep(
     profiles: &[Profile],
     lines: i64,
     len: i64,
-    fill: bool,
+    fill: Option<f64>,
     bits: &mut [u8],
     at: impl Fn(i64, i64) -> usize,
 ) {
@@ -197,10 +197,11 @@ fn sweep(
             let (u1, u2) = (x1 - 0.5, x2 - 0.5);
             if x2 - x1 <= 1.0 && u2.ceil() - u1.floor() == 1.0 {
                 drops.push((u1, u2, a, b));
-            } else if fill {
+            } else if let Some(jitter) = fill {
                 let e1 = u1.ceil() as i64;
-                // A span a pixel wide or less fills one pixel even when both ends sit on centres.
-                let e2 = if x2 - x1 <= 1.0 {
+                // A span within a pixel and the jitter fills one pixel even when both ends sit on
+                // centres (`0x7dac90`, `0x7dacb2`-`0x7dacbd`).
+                let e2 = if x2 - x1 <= 1.0 + jitter {
                     e1
                 } else {
                     u2.floor() as i64
@@ -230,8 +231,19 @@ fn sweep(
     }
 }
 
-/// Rasterize an outline (26.6, y up, from the pen); `None` for one with no area to cover.
-pub(super) fn rasterize(o: &Outline26) -> Option<MonoGlyph> {
+/// The span procedure's jitter in px: 24/1024 at high precision, which a size under 24 px sets,
+/// else 2/64 (`0x7dabe0`; the size test `0x7d34b4`-`0x7d34bb`, read at `0x7daae4`).
+fn jitter(ppem: u16) -> f64 {
+    if ppem < 24 {
+        24.0 / 1024.0
+    } else {
+        2.0 / 64.0
+    }
+}
+
+/// Rasterize an outline (26.6, y up, from the pen) at `ppem`; `None` for one with no area to
+/// cover.
+pub(super) fn rasterize(o: &Outline26, ppem: u16) -> Option<MonoGlyph> {
     let n = o.pts.len();
     if n == 0 || o.on.len() != n {
         return None;
@@ -272,13 +284,20 @@ pub(super) fn rasterize(o: &Outline26) -> Option<MonoGlyph> {
     let mut bits = vec![0u8; wi * hi];
     // Rows bottom-up, stored top-down.
     let row_at = |k: i64, pos: i64| (hi - 1 - k as usize) * wi + pos as usize;
-    sweep(&profiles(&contours), h, w, true, &mut bits, row_at);
+    sweep(
+        &profiles(&contours),
+        h,
+        w,
+        Some(jitter(ppem)),
+        &mut bits,
+        row_at,
+    );
     let transposed: Vec<Vec<Piece>> = contours
         .iter()
         .map(|c| c.iter().map(|p| p.transposed()).collect())
         .collect();
     let col_at = |k: i64, pos: i64| (hi - 1 - pos as usize) * wi + k as usize;
-    sweep(&profiles(&transposed), w, h, false, &mut bits, col_at);
+    sweep(&profiles(&transposed), w, h, None, &mut bits, col_at);
     Some(MonoGlyph {
         w: w as u32,
         h: h as u32,
@@ -362,12 +381,10 @@ mod tests {
     #[test]
     fn a_pixel_is_set_when_its_centre_is_inside() {
         // Clockwise, y up. Centres at 0.5 and 1.5 inside [0.25, 1.75] by x, only 0.5 by y.
-        let g = rasterize(&poly(&[&[
-            (0.25, 0.25),
-            (0.25, 1.0),
-            (1.75, 1.0),
-            (1.75, 0.25),
-        ]]))
+        let g = rasterize(
+            &poly(&[&[(0.25, 0.25), (0.25, 1.0), (1.75, 1.0), (1.75, 0.25)]]),
+            12,
+        )
         .unwrap();
         assert_eq!(
             (g.w, g.h, g.left, g.top),
@@ -380,10 +397,13 @@ mod tests {
     #[test]
     fn a_counter_stays_open() {
         // A 4 × 4 square with a 2 × 2 hole, the hole counter-clockwise.
-        let g = rasterize(&poly(&[
-            &[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0)],
-            &[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)],
-        ]))
+        let g = rasterize(
+            &poly(&[
+                &[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0)],
+                &[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)],
+            ]),
+            12,
+        )
         .unwrap();
         assert_eq!(rows(&g), ["@@@@", "@..@", "@..@", "@@@@"]);
     }
@@ -393,7 +413,11 @@ mod tests {
         // A bar 0.3 px wide between the centres 1.5 and 2.5, five rows tall: each row's span holds
         // no centre and sets the pixel on its left; the top and bottom rows are the stub's tips,
         // where its two edges join along the bar's ends, and stay empty.
-        let g = rasterize(&poly(&[&[(1.6, 0.0), (1.6, 5.0), (1.9, 5.0), (1.9, 0.0)]])).unwrap();
+        let g = rasterize(
+            &poly(&[&[(1.6, 0.0), (1.6, 5.0), (1.9, 5.0), (1.9, 0.0)]]),
+            12,
+        )
+        .unwrap();
         assert_eq!(g.left, 1);
         assert_eq!(rows(&g), [".", "@", "@", "@", "."]);
     }
@@ -403,18 +427,34 @@ mod tests {
         // A 6 px bar 0.3 px tall between the row centres 0.5 and 1.5, joined to a full-height post
         // at its left so its ends are no stub tips: the row pass sets nothing in it, the column
         // pass sets the lower row.
-        let g = rasterize(&poly(&[&[
-            (0.0, 0.0),
-            (0.0, 2.0),
-            (1.0, 2.0),
-            (1.0, 0.9),
-            (6.0, 0.9),
-            (6.0, 0.6),
-            (1.0, 0.6),
-            (1.0, 0.0),
-        ]]))
+        let g = rasterize(
+            &poly(&[&[
+                (0.0, 0.0),
+                (0.0, 2.0),
+                (1.0, 2.0),
+                (1.0, 0.9),
+                (6.0, 0.9),
+                (6.0, 0.6),
+                (1.0, 0.6),
+                (1.0, 0.0),
+            ]]),
+            12,
+        )
         .unwrap();
         assert_eq!(rows(&g), ["@.....", "@@@@@."]);
+    }
+
+    #[test]
+    fn a_span_just_over_a_pixel_fills_one_within_the_jitter() {
+        let bar = |x1: f64, x2: f64| poly(&[&[(x1, 0.0), (x1, 1.0), (x2, 1.0), (x2, 0.0)]]);
+        // 65/64 px wide, both centres 0.5 and 1.5 inside: under the 24/1024 px jitter, one pixel.
+        let g = rasterize(&bar(0.5, 97.0 / 64.0), 12).unwrap();
+        assert_eq!(rows(&g), ["@."]);
+        // 66/64 px: past the high-precision jitter both centres fill; within 2/64 at 24 px, one.
+        let g = rasterize(&bar(31.0 / 64.0, 97.0 / 64.0), 12).unwrap();
+        assert_eq!(rows(&g), ["@@"]);
+        let g = rasterize(&bar(31.0 / 64.0, 97.0 / 64.0), 24).unwrap();
+        assert_eq!(rows(&g), ["@."]);
     }
 
     /// The hotkey numerals of 1.12.1's action bar, `NumberFontNormalSmallGray` (Arial Narrow,
@@ -451,7 +491,7 @@ mod tests {
             e.ensure_metrics(face, 15, &ch.to_string());
             let gid = e.char_cell(face, 15, ch).expect("shaped").glyphs[0].glyph_id;
             let sfnt = e.faces[face].sfnt.clone().expect("Arial Narrow's tables");
-            let g = rasterize(&sfnt.outline(gid, 15).expect("outline")).expect("ink");
+            let g = rasterize(&sfnt.outline(gid, 15).expect("outline"), 15).expect("ink");
             assert_eq!(rows(&g), want, "{ch:?}");
         }
     }

@@ -1440,3 +1440,49 @@ fn set_checked_reads_its_argument_as_get_bool_or_default() {
         );
     }
 }
+
+/// `Button:SetFont` writes the whole flags word (`0x780880` → `0x79f210`, `0x79f334`): no flags
+/// clears the monochrome bit the label's font object holds, and `MONOCHROME` sets it.
+#[test]
+fn button_set_font_writes_the_monochrome_bit_over_its_font_object() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.register_font_object(
+        "MonoFont",
+        FontObject {
+            font: Some("Fonts\\ARIALN.TTF".into()),
+            height: Some(12.0),
+            monochrome: true,
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        b = CreateFrame("Button", "MonoBtn")
+        b:SetPoint("CENTER", 0, 0); b:SetWidth(100); b:SetHeight(20)
+        b:SetText("Label")
+        b:SetTextFontObject("MonoFont")
+    "#,
+    )
+    .unwrap();
+    let mono = |s: &mut crate::script::UiScript| {
+        s.resolve();
+        s.extract()
+            .into_iter()
+            .find_map(|q| match q.content {
+                QuadContent::Text {
+                    text: Some(t),
+                    monochrome,
+                    ..
+                } if t == "Label" => Some(monochrome),
+                _ => None,
+            })
+            .expect("label text quad")
+    };
+    assert!(mono(&mut s), "the font object's bit");
+    s.run(r#"b:SetFont("Fonts\\ARIALN.TTF", 12, "")"#).unwrap();
+    assert!(!mono(&mut s), "no flags clears it");
+    s.run(r#"b:SetFont("Fonts\\ARIALN.TTF", 12, "MONOCHROME")"#)
+        .unwrap();
+    assert!(mono(&mut s), "MONOCHROME sets it");
+}

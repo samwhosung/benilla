@@ -320,6 +320,7 @@ impl UiScript {
                         }
                         if !data.font_explicit.outline {
                             data.outline = super::Outline::flags(&bf.flags);
+                            data.monochrome = bf.monochrome;
                         }
                     }
                     // The state colour repaints the label outright, even over its own colour.

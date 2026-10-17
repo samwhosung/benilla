@@ -817,6 +817,8 @@ pub struct ButtonFont {
     /// The normalized outline, `""`, `"OUTLINE"` or `"THICKOUTLINE"`, as `GetFont` answers it; an
     /// omitted `flags` clears it, where the reference's handling is untraced.
     pub flags: String,
+    /// The flags word's monochrome bit, written with the outline (`0x79f334`).
+    pub monochrome: bool,
 }
 
 /// A button's state, `[CSimpleButton+0x328]`: 0 DISABLED, 1 NORMAL, 2 PUSHED, also the index into
