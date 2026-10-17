@@ -902,7 +902,8 @@ impl Lua {
 
     /// Run `callback` once for every `triggers.every_nth_instruction` instructions, counted as
     /// 5.1 counts them, at the next loop back edge, call or return rather than the exact
-    /// instruction (`benilla_lua::vm::Hook`).
+    /// instruction (`benilla_lua::vm::Hook`). An error it answers is no Lua error, as mlua's is:
+    /// it aborts the run to the host, past every protected call (`Vm::abort`).
     pub fn set_hook<F>(&self, triggers: HookTriggers, callback: F) -> Result<()>
     where
         F: Fn(&Lua, &Debug) -> Result<VmState> + 'static,
@@ -919,11 +920,7 @@ impl Lua {
                     }));
                     let out = match r {
                         Ok(Ok(_)) => Ok(()),
-                        Ok(Err(e)) => {
-                            let vm = lua.vm();
-                            let msg = vm.str(e.lua_message().as_bytes());
-                            Err(vm.throw(msg))
-                        }
+                        Ok(Err(e)) => Err(lua.vm().abort(e.lua_message().as_bytes())),
                         Err(payload) => Err(raise_panic(lua.vm(), payload)),
                     };
                     out

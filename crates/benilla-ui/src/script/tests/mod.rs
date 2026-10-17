@@ -122,6 +122,21 @@ fn an_instruction_budget_turns_a_runaway_loop_into_an_error() {
     assert_eq!(t.eval::<i64>("return BudgetOk").unwrap(), 500_500);
 }
 
+/// The budget's raise reaches the host past every `pcall` and `xpcall`, and runs no handler: a
+/// loop under a protected call is stopped too.
+#[test]
+fn an_instruction_budget_is_caught_by_no_protected_call() {
+    for src in [
+        "while true do pcall(function() while true do end end) end",
+        "xpcall(function() while true do end end, function() while true do end end)",
+    ] {
+        let s = crate::script::UiScript::new().unwrap();
+        s.set_instruction_budget(5_000_000);
+        let err = s.run(src).expect_err(src).to_string();
+        assert!(err.contains("instruction budget exhausted"), "{src}: {err}");
+    }
+}
+
 /// The budget counts Lua that a library function calls, as 5.1's count hook does: a `gsub`
 /// replacement over three million characters runs four instructions a call on either VM
 /// (`GETGLOBAL`, `ADD`, `SETGLOBAL`, `RETURN`), and a runaway one is stopped.

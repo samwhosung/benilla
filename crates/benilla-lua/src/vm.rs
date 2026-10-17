@@ -173,6 +173,8 @@ pub struct Vm {
     /// The hook is running: 5.1's `luaD_hook` clears `allowhook` around the hook, so code the
     /// hook runs does not count toward, or run, the hook again.
     in_hook: bool,
+    /// The message of an abort unwinding to the host ([`Vm::abort`]).
+    abort: Option<Rc<[u8]>>,
     /// Time charged to each chunk while profiling (`set_profiling`).
     pub profile: Option<Box<Profile>>,
     /// The embedding host's handle to its own state, which a host closure reads at each call
@@ -424,6 +426,7 @@ impl Vm {
             hook: None,
             hooked: false,
             in_hook: false,
+            abort: None,
             profile: None,
             host: None,
             reentry: None,
@@ -672,6 +675,11 @@ impl Vm {
         let mut restored = Ok(());
         for (i, &(k, _)) in globals.iter().enumerate() {
             let old = self.stack[base + n + i];
+            if self.abort.is_some() {
+                // An abort raises again in any Lua `__newindex`: put the value back raw.
+                let _ = self.heap.table_mut(self.globals).set(Value::Str(k), old);
+                continue;
+            }
             let r = self.protected(|vm| vm.setindex(g, Value::Str(k), old, None));
             restored = restored.and(r);
         }
@@ -697,6 +705,9 @@ impl Vm {
     /// Raise `v`: the innermost protected call's handler runs here, before the stack unwinds, as
     /// 5.0's `luaD_throw` runs `errfunc` at the raise.
     pub fn throw(&mut self, v: Value) -> LuaError {
+        if self.abort.is_some() {
+            return self.abort_error();
+        }
         let Some(Some(h)) = self.handlers.last().copied() else {
             return LuaError { value: v };
         };
@@ -1376,9 +1387,19 @@ impl Vm {
             return self.call_at_inner(func_idx, nargs, nres);
         }
         self.clear_below = 0;
-        let r = self.unwind_guard(|vm| vm.call_at_inner(func_idx, nargs, nres));
+        if self.abort.take().is_some() {
+            // One a panic carried past the host's last call.
+            self.hooked = self.hook.is_some() || self.profile.is_some();
+        }
+        let mut r = self.unwind_guard(|vm| vm.call_at_inner(func_idx, nargs, nres));
         if let Some(p) = self.profile.as_mut() {
             p.close();
+        }
+        // An abort ends here, at the host, even where a native caught it.
+        if let Some(msg) = self.abort.take() {
+            self.hooked = self.hook.is_some() || self.profile.is_some();
+            let v = self.str(&msg);
+            r = Err(LuaError { value: v });
         }
         r
     }
@@ -1870,7 +1891,26 @@ impl Vm {
 
     pub fn remove_hook(&mut self) {
         self.hook = None;
-        self.hooked = self.profile.is_some();
+        self.hooked = self.profile.is_some() || self.abort.is_some();
+    }
+
+    /// Raise `msg` past every protected call, to the host's call into the VM: no error handler
+    /// runs, and until that call returns every raise is this one and every loop back edge, call
+    /// and return raises it again. A `pcall` that catches it lets its caller run only to the next
+    /// of those, so the unwinding ends. A host's guard against a script that never ends.
+    pub fn abort(&mut self, msg: &[u8]) -> LuaError {
+        self.abort = Some(msg.into());
+        self.hooked = true;
+        self.abort_error()
+    }
+
+    /// The abort in flight, raised again.
+    #[cold]
+    #[inline(never)]
+    fn abort_error(&mut self) -> LuaError {
+        let msg = self.abort.clone().expect("an abort");
+        let v = self.str(&msg);
+        LuaError { value: v }
     }
 
     /// Start or stop charging time to chunks; starting keeps what was charged so far.
@@ -1880,7 +1920,7 @@ impl Vm {
         } else {
             self.profile = None;
         }
-        self.hooked = self.hook.is_some() || self.profile.is_some();
+        self.hooked = self.hook.is_some() || self.profile.is_some() || self.abort.is_some();
     }
 
     /// The running chunk changed: close the segment and open one for it.
@@ -1907,6 +1947,9 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn hook_count(&mut self, n: u64) -> Result<(), LuaError> {
+        if self.abort.is_some() {
+            return Err(self.abort_error());
+        }
         if self.in_hook {
             return Ok(());
         }

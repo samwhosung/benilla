@@ -281,3 +281,73 @@ fn the_count_is_the_c_builds() {
         assert_eq!(instructions(src), c, "{src}");
     }
 }
+
+/// A hook that aborts once it has run `limit` times ([`Vm::abort`]).
+fn abort_budget(vm: &mut Vm, limit: u32) {
+    let seen = Rc::new(Cell::new(0));
+    vm.set_hook(
+        1000,
+        Rc::new(move |vm: &mut Vm| {
+            seen.set(seen.get() + 1);
+            if seen.get() >= limit {
+                return Err(vm.abort(b"budget"));
+            }
+            Ok(())
+        }),
+    );
+}
+
+/// An abort unwinds past every `pcall` and `xpcall` to the host, runs no handler, and ends
+/// there: the next run is ordinary.
+#[test]
+fn an_abort_is_caught_by_no_protected_call() {
+    small_stack(|| {
+        let mut vm = benilla_lua::new_state();
+        let cases = [
+            "while true do pcall(function() while true do end end) end",
+            "while true do local ok, e = pcall(function() while true do end end) error(e) end",
+            "handled = nil xpcall(function() while true do end end, function() handled = true \
+             while true do end end)",
+            "xpcall(function() error('x') end, function() while true do end end)",
+            "local function f() return pcall(f) end while true do f() end",
+        ];
+        for src in cases {
+            abort_budget(&mut vm, 10);
+            assert_eq!(run(&mut vm, src), "<raised> budget", "{src}");
+        }
+        vm.remove_hook();
+        assert_eq!(run(&mut vm, "return handled"), "nil");
+        assert_eq!(
+            run(&mut vm, "local ok, e = pcall(error, 'e') return e"),
+            "e",
+            "a later error is caught as ever"
+        );
+    });
+}
+
+/// A handler fired from inside Lua while an abort unwinds still gets its globals put back, raw
+/// past a Lua `__newindex` that would raise the abort again.
+#[test]
+fn an_abort_leaves_the_handler_globals_restored() {
+    fn fire(vm: &mut Vm, _nargs: usize) -> Result<usize, benilla_lua::LuaError> {
+        let f = vm.get_global("Handler");
+        let this = vm.str(b"this");
+        let v = vm.str(b"inner");
+        let r = vm.call_with_globals(f, &[(this.as_str().unwrap(), v)]);
+        Ok(vm.ret1(benilla_lua::Value::Bool(r.is_ok())))
+    }
+    small_stack(|| {
+        let mut vm = benilla_lua::new_state();
+        vm.register("Fire", fire);
+        run(
+            &mut vm,
+            "local store = {this = 'outer'} Handler = function() while true do end end \
+             setmetatable(_G, {__index = store, \
+               __newindex = function(t, k, v) k = tostring(k) store[k] = v end})",
+        );
+        abort_budget(&mut vm, 10);
+        assert_eq!(run(&mut vm, "Fire() return 1"), "<raised> budget");
+        vm.remove_hook();
+        assert_eq!(run(&mut vm, "return this"), "outer");
+    });
+}
