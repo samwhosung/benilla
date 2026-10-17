@@ -428,8 +428,6 @@ fn quest_giver_failed(
             let title = t.title.clone();
             giver_failed_lines(&title, reason, latched, quest);
         }
-        // A known refusal answers no callback, as the deferred item adds hold it (`0x5dd180`).
-        None if quest_log.template_answered_unknown(quest_id) => {}
         None => quest_log.giver_failures.push(quest_id),
     }
 }

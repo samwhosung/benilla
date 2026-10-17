@@ -635,16 +635,25 @@ pub(crate) struct WallClockSample {
     received: Instant,
     /// The responses of the session so far, this one included.
     count: u64,
+    /// Whether the local clock read the server's second exactly, where the reference's offset
+    /// `G = local - server` would be 0 and is stored as 1 (`0x4def00`, `0x4def02`).
+    zero_offset: bool,
 }
 
 impl ServerWallClock {
     /// Take a fresh sample; it reads about RTT/2 behind, below a countdown's one-second grain.
-    pub(crate) fn sample(&mut self, unix_time: u32) {
+    pub(crate) fn sample(&mut self, unix_time: u32, local_unix: i64) {
         self.0 = Some(WallClockSample {
             base_unix: unix_time,
             received: Instant::now(),
             count: self.samples() + 1,
+            zero_offset: local_unix == i64::from(unix_time),
         });
+    }
+
+    /// Whether the last sample found the local clock on the server's second (`0x4def02`).
+    pub(crate) fn zero_offset(&self) -> bool {
+        self.0.is_some_and(|s| s.zero_offset)
     }
 
     /// The responses sampled so far.

@@ -134,6 +134,9 @@ pub(crate) struct QuestLogRow {
     pub(crate) is_header: bool,
     /// A header's name.
     pub(crate) header: String,
+    /// A header's `ZoneOrSort`, which the reference's row keeps where a quest row keeps its id
+    /// (`0x4de713`), so the by-id scans can stop on it (`0x4df4c2`, `0x4df562`).
+    pub(crate) zone_or_sort: i32,
     /// A collapsed header, whose quests the fold leaves out of the visible rows.
     pub(crate) collapsed: bool,
 }
@@ -245,7 +248,7 @@ fn rebuild(model: &mut Model) -> bool {
         }
     });
     let mut rows = Vec::with_capacity(quests.len() + groups.len());
-    for (_, name, mut members) in groups {
+    for (zone_or_sort, name, mut members) in groups {
         members.sort_by_cached_key(|&i| {
             let (slot, _, r) = quests[i];
             (r.level, r.title.to_lowercase(), slot)
@@ -253,6 +256,7 @@ fn rebuild(model: &mut Model) -> bool {
         rows.push(QuestLogRow {
             is_header: true,
             header: name.to_string(),
+            zone_or_sort,
             ..Default::default()
         });
         rows.extend(members.into_iter().map(|i| QuestLogRow {
@@ -307,10 +311,23 @@ fn latch_expiry(model: &mut Model, quest_id: u32, slot: u8) -> bool {
 }
 
 impl QuestLogStore {
-    /// `0x4df4b0(quest)`: whether the quest's row holds the latch.
+    /// `0x4df480` on the quest's own row: whether it holds the latch.
     fn is_latched(&self, quest_id: u32) -> bool {
         self.latched.contains(&quest_id)
     }
+}
+
+/// The by-id scans of `0x4df4b0` and `0x4df550` (`0x4df4c2`, `0x4df562`): the first row whose
+/// first dword is `id`, which on a header is its zone id (`0x4de713`), so a header whose zone id
+/// equals a quest's id can stand before that quest's row and answer for it.
+fn first_row_for(model: &Model, id: u32) -> Option<&QuestLogRow> {
+    model.quest_log.entries.iter().find(|e| {
+        if e.is_header {
+            e.zone_or_sort as u32 == id
+        } else {
+            e.quest_id == id
+        }
+    })
 }
 
 /// The rows off every row and the collapse set, as the rebuild `0x4dea50` orders them: the
@@ -667,24 +684,33 @@ impl super::UiScript {
     }
 
     /// `0x4df4b0(quest)`: whether the quest's row holds the expiry latch, which the quest-update
-    /// packets read as done (`0x5e5b6c`, `0x5e5c16`).
+    /// packets read as done (`0x5e5b6c`, `0x5e5c16`). A header found first answers no
+    /// (`0x4df4dd`).
     pub fn quest_log_latched(&self, quest_id: u32) -> bool {
-        self.model_ref().quest_store.is_latched(quest_id)
+        let model = self.model_ref();
+        first_row_for(&model, quest_id)
+            .is_some_and(|row| !row.is_header && model.quest_store.is_latched(row.quest_id))
     }
 
-    /// `0x4df550(quest)`, `SMSG_QUESTUPDATE_FAILEDTIMER`'s (`0x5e5cd9`): the quest's row latches
-    /// unless it can be turned in. Whether it latched.
+    /// `0x4df550(quest)`, `SMSG_QUESTUPDATE_FAILEDTIMER`'s (`0x5e5cd9`): the first row the id
+    /// finds latches unless it can be turned in. A header found first fails the turn-in test
+    /// (`0x4df5b7`), so it takes the latch, which no reader sees (`0x4df493`), and the quest's own
+    /// row does not. Whether it latched.
     pub fn quest_log_latch_quest(&mut self, quest_id: u32) -> bool {
         let mut model = self.model_mut();
-        let Some(slot) = model
-            .quest_log
-            .entries
-            .iter()
-            .find(|e| !e.is_header && e.quest_id == quest_id)
-            .map(|e| e.slot)
+        let Some((is_header, slot)) =
+            first_row_for(&model, quest_id).map(|e| (e.is_header, e.slot))
         else {
             return false;
         };
+        if is_header {
+            // `0x4df50d`, then the givers' refresh with a player (`0x4df531`).
+            let store = &mut model.quest_store;
+            if store.player {
+                store.giver_refreshes += 1;
+            }
+            return true;
+        }
         latch_expiry(&mut model, quest_id, slot)
     }
 
@@ -897,6 +923,12 @@ impl super::UiScript {
         self.model_mut().server_unix_time = Some(unix_secs);
     }
 
+    /// Whether the last sync found the local and server clocks equal to the whole second, which
+    /// the reference stores as `G = 1` (`0x4def02`): its countdowns then read one second more.
+    pub fn set_clock_sync_zero(&mut self, zero: bool) {
+        self.model_mut().clock_sync_zero = zero;
+    }
+
     /// Push the local clock in unix seconds each frame, `time(NULL)` (`0x429580`). Before the first
     /// sync the reference's offset `G` is 0 (`0x4de3d3`), so the log's rebuild and the timer
     /// verbs count a deadline down by this clock (`0x4de6b6`, `0x4e14b9`, `0x4e16c9`).
@@ -905,9 +937,15 @@ impl super::UiScript {
     }
 }
 
-/// The clock a countdown reads: the server's once synced, the local one before (`G == 0`).
+/// The clock a countdown reads: the server's once synced, the local one before (`G == 0`). A
+/// sync that finds the two clocks equal to the second stores `G = 1`, not 0 (`0x4def00`,
+/// `0x4def02`), so its countdowns read one second more.
 fn countdown_now(model: &Model) -> Option<f64> {
-    model.server_unix_time.or(model.local_unix_time)
+    match model.server_unix_time {
+        Some(server) if model.clock_sync_zero => Some(server - 1.0),
+        Some(server) => Some(server),
+        None => model.local_unix_time,
+    }
 }
 
 /// The slot the selection's verbs read: the selected quest's (`0x4df050`), or slot 0 when no row
@@ -1426,9 +1464,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetQuestLogTimeLeft",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let synced = model.server_unix_time.is_some();
             let left = selected_slot(&model)
-                .filter(|_| model.quest_store.player)
-                .and_then(|slot| seconds_left(slot, model.server_unix_time));
+                .filter(|_| model.quest_store.player && synced)
+                .and_then(|slot| seconds_left(slot, countdown_now(&model)));
             Ok(match left {
                 // Clamped where the lists drop the row, as in the reference.
                 Some(s) => Value::Integer(s.max(0)),
@@ -2225,6 +2264,49 @@ mod tests {
         s.set_server_unix_time(1000.0);
         assert!(timers(&s).is_empty());
         assert!(s.quest_log_latched(50));
+    }
+
+    /// A sync that finds the clocks equal to the second stores `G = 1` (`0x4def02`): the
+    /// countdowns read `deadline - time(NULL)`, a second more, and the deadline's own second
+    /// still reads 0.
+    #[test]
+    fn a_zero_difference_sync_reads_a_second_more() {
+        let mut s = timed(1000);
+        s.set_server_unix_time(999.5);
+        s.set_clock_sync_zero(true);
+        assert_eq!(timers(&s), [1]);
+        s.run("SelectQuestLogEntry(2)").unwrap();
+        assert_eq!(s.eval::<i64>("return GetQuestLogTimeLeft()").unwrap(), 1);
+        s.set_server_unix_time(1000.0);
+        assert_eq!(timers(&s), [0]);
+        assert!(!s.quest_log_latched(50));
+        s.set_server_unix_time(1001.0);
+        assert!(timers(&s).is_empty());
+        assert!(s.quest_log_latched(50));
+    }
+
+    /// The by-id scans stop on a header whose zone id is the quest's id (`0x4de713`): the
+    /// failed-timer latch takes the header, refreshing the givers (`0x4df531`) and leaving the
+    /// quest's row unlatched, and the by-id latch read answers no for the header (`0x4df4dd`)
+    /// even once the quest's own row is latched by its timer.
+    #[test]
+    fn a_header_with_the_quests_id_takes_its_by_id_latch() {
+        let mut hunt = record("Hunt", 1, 12, "Elwynn Forest");
+        hunt.objectives[0] = kill(40, 3);
+        let mut slot = slot(12, 0, 0);
+        slot.timer = 2000;
+        let mut s = UiScript::new().unwrap();
+        s.set_server_unix_time(1500.0);
+        seat(&mut s, &[(12, hunt, slot)]);
+        s.take_quest_giver_refreshes();
+        assert!(s.quest_log_latch_quest(12), "the header latches");
+        assert_eq!(s.take_quest_giver_refreshes(), 1);
+        assert_eq!(is_complete(&s), None, "the quest's row is not latched");
+        assert!(!s.quest_log_latched(12));
+        s.set_server_unix_time(2500.0);
+        assert!(timers(&s).is_empty());
+        assert_eq!(is_complete(&s), Some(-1), "its timer latches its own row");
+        assert!(!s.quest_log_latched(12), "the header answers first");
     }
 
     /// Before the first time sync `G` is 0 (`0x4de3d3`) and the countdowns read the local clock:

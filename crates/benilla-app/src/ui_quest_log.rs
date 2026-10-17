@@ -550,6 +550,7 @@ fn feed_server_clock(
         return;
     };
     script.set_server_unix_time(now);
+    script.set_clock_sync_zero(clock.zero_offset());
     for _ in 0..synced {
         script.quest_log_clock_synced();
     }
@@ -1850,7 +1851,7 @@ mod tests {
         let sample = |app: &mut App, t| {
             app.world_mut()
                 .resource_mut::<crate::net::ServerWallClock>()
-                .sample(t);
+                .sample(t, 0);
         };
         sample(&mut app, 1_000_000);
         app.update();
@@ -1864,6 +1865,37 @@ mod tests {
         sample(&mut app, 1_003_601);
         app.update();
         assert_eq!(seen(&mut app), [QLU, QLU]);
+    }
+
+    /// A sample whose local second is the server's is the reference's zero offset, which it
+    /// stores as 1 (`0x4def02`); the feed tells the VM, and a later skewed sample clears it.
+    #[test]
+    fn a_zero_offset_sync_reaches_the_vm() {
+        let mut app = App::new();
+        app.init_resource::<crate::net::ServerWallClock>()
+            .insert_non_send_resource(Rig::vm())
+            .add_systems(Update, feed_server_clock);
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let mut q = fixture::quest(7, "Deliver the Message", 1);
+        q.record.objectives[0] = fixture::kill(40, 3);
+        q.slot.timer = 4_000_000_000;
+        fixture::seat(&mut script, &[q]);
+        let left = |app: &mut App, server: u32, local: i64| {
+            app.world_mut()
+                .resource_mut::<crate::net::ServerWallClock>()
+                .sample(server, local);
+            app.update();
+            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.eval::<i64>("return GetQuestTimers()").unwrap()
+        };
+        let skewed = left(&mut app, 1_000_000, 1_000_005);
+        let zero = left(&mut app, 1_000_000, 1_000_000);
+        assert!(app
+            .world()
+            .resource::<crate::net::ServerWallClock>()
+            .zero_offset());
+        assert_eq!(zero, skewed + 1, "a second more");
+        assert_eq!(left(&mut app, 1_000_000, 999_999), skewed);
     }
 
     /// A standing packet that moved a rank signals once (`0x4d58f3` into `0x4de52f`).

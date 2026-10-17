@@ -1072,6 +1072,9 @@ pub(crate) struct Model {
     /// The local clock in Unix seconds, the reference's `time(NULL)` (`0x429580`): before the
     /// sync its `G` is 0 (`0x4de3d3`), and the countdowns read this instead.
     pub(crate) local_unix_time: Option<f64>,
+    /// The last sync found the clocks equal to the second, and the reference's `G` is 1, not 0
+    /// (`0x4def02`).
+    pub(crate) clock_sync_zero: bool,
     /// Catalog chat lines a verb fired as `CHAT_MSG_SYSTEM`, by key, for the app's log files and
     /// sound.
     pub(crate) shown_chat_lines: Vec<(&'static str, String)>,
@@ -1768,6 +1771,7 @@ impl Model {
             quest_log_watched: Vec::new(),
             server_unix_time: None,
             local_unix_time: None,
+            clock_sync_zero: false,
             shown_chat_lines: Vec::new(),
             worldmap: super::worldmap::WorldMapState::default(),
             nameplates: super::nameplate::NamePlates::default(),
