@@ -22,6 +22,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().tutorial_flag_requests)
     }
 
+    /// `TriggerTutorial(id, 0)` asks the engine made since the last drain, as 0-based ids, for the
+    /// app's fire-once bank.
+    pub fn take_tutorial_triggers(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().tutorial_triggers)
+    }
+
     /// `ClearTutorials()` calls since the last drain.
     pub fn take_tutorial_clears(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().tutorial_clears)

@@ -154,6 +154,36 @@ fn set_lock_bit(model: &mut Model, guid: u64, locked: bool) {
     }
 }
 
+/// The ten `arg1..arg10` of a `CHAT_MSG_SYSTEM` line with no sender: the text, five empty
+/// strings, two zeros, an empty string and a zero, the shape the app's chat feed gives its own
+/// system lines.
+pub fn system_chat_args(text: String) -> Vec<ScriptValue> {
+    let empty = || ScriptValue::Str(String::new());
+    vec![
+        ScriptValue::Str(text),
+        empty(),
+        empty(),
+        empty(),
+        empty(),
+        empty(),
+        ScriptValue::Int(0),
+        ScriptValue::Int(0),
+        empty(),
+        ScriptValue::Int(0),
+    ]
+}
+
+/// `0x496720` on a chat-kind catalog row from inside a verb: the line reaches the chat frames at
+/// once, as `CHAT_MSG_SYSTEM` (`0x496842` into `0x49a870`, whose event is `0x49ac9a`), and waits
+/// with its key for the app's log files and the row's sound ([`UiScript::take_shown_chat_lines`]).
+pub(crate) fn show_chat_line_into(lua: &Lua, key: &'static str, text: String) {
+    fire_event_into(lua, "CHAT_MSG_SYSTEM", system_chat_args(text.clone()));
+    lua.app_data_mut::<Model>()
+        .expect("model app_data set")
+        .shown_chat_lines
+        .push((key, text));
+}
+
 /// [`UiScript::fire_event`] for a caller holding `&Lua`, such as a Lua binding.
 pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
     let model_mut = || lua.app_data_mut::<Model>().expect("model app_data set");
@@ -194,6 +224,12 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 }
 
 impl super::UiScript {
+    /// The catalog lines a verb showed in chat since the last call, by message key, for the log
+    /// files and the sound the app keeps.
+    pub fn take_shown_chat_lines(&mut self) -> Vec<(&'static str, String)> {
+        std::mem::take(&mut self.model_mut().shown_chat_lines)
+    }
+
     /// Advance a frame: the `GetTime()` clock and queued events, then the pump `0x765650` and the
     /// draw pass `0x7657d0`, in that order (`0x764340`, `0x764347`). The pump drains the layout
     /// queue (`0x768ed0`, at `0x7656ba`), whose rect applications fire `OnSizeChanged`; runs the

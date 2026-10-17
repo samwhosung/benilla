@@ -146,16 +146,6 @@ impl QuestGiver {
         self.statuses.get(&npc).copied()
     }
 
-    /// The open panel's title if it shows `quest_id`: the `%s` of a refusal naming the quest.
-    pub(crate) fn view_title(&self, quest_id: u32) -> Option<String> {
-        match self.view.as_ref()? {
-            QuestView::Detail(d) if d.quest_id == quest_id => Some(d.title.clone()),
-            QuestView::Progress(p) if p.quest_id == quest_id => Some(p.title.clone()),
-            QuestView::Reward(o) if o.quest_id == quest_id => Some(o.title.clone()),
-            _ => None,
-        }
-    }
-
     /// Queue a message for [`feed_quest`]; its key's catalog row picks the surface.
     pub(crate) fn push_message(&mut self, msg: UiError) {
         self.messages.push(msg);
@@ -1024,29 +1014,6 @@ mod tests {
         for reason in [0, 1, 5, 16, 18, 49, 51] {
             assert_eq!(questgiver_failed_key(reason), "ERR_QUEST_FAILED_S");
         }
-    }
-
-    #[test]
-    fn view_title_answers_only_for_the_open_quest() {
-        let mut giver = QuestGiver::default();
-        assert_eq!(giver.view_title(100), None);
-        giver.open(
-            0x42,
-            QuestView::Detail(QuestDetails {
-                npc: 0x42,
-                quest_id: 100,
-                title: "A Threat Within".into(),
-                details: String::new(),
-                objectives: String::new(),
-                auto_finish: 0,
-                choices: vec![],
-                rewards: vec![],
-                money: 0,
-                reward_spell: 0,
-            }),
-        );
-        assert_eq!(giver.view_title(100).as_deref(), Some("A Threat Within"));
-        assert_eq!(giver.view_title(101), None);
     }
 
     /// Reads the install's `GlobalStrings.lua`; skips without it.

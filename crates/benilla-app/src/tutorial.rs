@@ -267,7 +267,7 @@ const KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 0x51..=0x70;
 /// Before the script tick: the sites' asks, the descriptor edges, the timers, the cue and the
 /// event, and the acknowledged bank's push to whichever VM is live.
 fn feed_tutorials(
-    script: Option<NonSendMut<UiScript>>,
+    mut script: Option<NonSendMut<UiScript>>,
     mut tutorials: ResMut<Tutorials>,
     mut asks: MessageReader<TutorialEvent>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -280,6 +280,12 @@ fn feed_tutorials(
         match *ask {
             TutorialEvent::Trigger { id, delay_ms } => tutorials.trigger(id, delay_ms, now),
             TutorialEvent::Acknowledge { id } => tutorials.acknowledge(id),
+        }
+    }
+    // The engine's sites: Quest Completion, a turn-in test that passed (`0x4df792`).
+    if let Some(script) = script.as_mut() {
+        for id in script.take_tutorial_triggers() {
+            tutorials.trigger(id, 0, now);
         }
     }
 
@@ -787,6 +793,47 @@ mod tests {
     }
 
     /// The login's own tutorials wait for an interface, on the real plugin's registration:
+    /// The engine's ask, a passing turn-in test's Quest Completion (`0x4df792`), goes through the
+    /// fire-once bank to `TUTORIAL_TRIGGER(34)`.
+    #[test]
+    fn a_completable_quest_triggers_the_quest_completion_tutorial() {
+        let mut app = App::new();
+        app.init_resource::<Tutorials>()
+            .init_resource::<crate::items::Items>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_message::<TutorialEvent>()
+            .add_systems(Update, feed_tutorials);
+        let mut script = UiScript::new().unwrap();
+        let mut q = crate::ui_quest_log::fixture::quest(7, "Deliver the Message", 1);
+        q.record.objectives[0] = crate::ui_quest_log::fixture::kill(40, 3);
+        q.slot.counters[0] = 3;
+        crate::ui_quest_log::fixture::seat(&mut script, &[q]);
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("TUTORIAL_TRIGGER")
+                f:SetScript("OnEvent", function() table.insert(SEEN, arg1) end)
+                local _, _, _, _, _, c = GetQuestLogTitle(2)
+                assert(c == 1)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .resource_mut::<Tutorials>()
+            .apply_flags(&[0u8; 32]);
+        app.update();
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.resolve();
+        assert_eq!(
+            s.eval::<Vec<i64>>("return SEEN").unwrap(),
+            [34],
+            "the engine's 0x21, published as `TUTORIAL_TITLE34`"
+        );
+    }
+
     /// `TUTORIAL_TRIGGER` is fired once, so one published to a frameless VM is gone for the
     /// session.
     #[test]

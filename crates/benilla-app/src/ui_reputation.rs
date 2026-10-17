@@ -275,6 +275,7 @@ pub(crate) fn feed_reputation(
         return;
     }
     *last_inputs = Some(inputs);
+    script.set_faction_standings(faction_standings(catalog, &reputations, race, class));
 
     let mut entries = Vec::new();
     for (faction_id, info) in catalog.reputation_factions() {
@@ -301,6 +302,26 @@ pub(crate) fn feed_reputation(
     for _ in 0..bare {
         script.fire_event("UPDATE_FACTION", vec![]);
     }
+}
+
+/// Every faction with a reputation index under 64 (`0x4d6379`) at the base for `race`/`class` plus
+/// its wire slot (`0x4d6370`). The base table is zeroed at login (`0x4d5426`) and written only
+/// for a fitting column (`0x4d553c`), so a faction the pane does not list still has its wire
+/// standing here.
+pub(crate) fn faction_standings(
+    catalog: &benilla_formats::FactionCatalog,
+    reputations: &Reputations,
+    race: u8,
+    class: u8,
+) -> std::collections::HashMap<u32, i32> {
+    catalog
+        .reputation_factions()
+        .filter_map(|(faction_id, info)| {
+            let index = usize::try_from(info.rep_index).ok().filter(|&i| i < 64)?;
+            let wire = reputations.slots.get(index).map_or(0, |&(_, w)| w);
+            Some((faction_id, info.base_for(race, class) + wire))
+        })
+        .collect()
 }
 
 /// How many bare `UPDATE_FACTION` signals a transition makes. The standing, flag and rebuild
@@ -621,6 +642,31 @@ mod tests {
             })
             .count();
         assert_eq!(visible_parents, 1, "only Alliance carries VISIBLE as well");
+    }
+
+    /// A human druid has no Cenarion Circle column (609, `0x4d5555`): the pane lists no row, and
+    /// the turn-in test still reads the wire standing on a base of 0 (`0x4d553c`). Skips without
+    /// client data.
+    #[test]
+    fn real_a_faction_with_no_fitting_column_stands_at_its_wire_standing() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let cat = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
+        let cc = cat.reputation_faction(609).expect("Cenarion Circle");
+        let index = usize::try_from(cc.rep_index).unwrap();
+        let mut slots = vec![(0u8, 0i32); 64];
+        slots[index] = (0, 500);
+        let reps = Reputations::from_slots(slots);
+        assert!(reputation_row(609, cc, &cat, 0, 500, 1, 11).is_none());
+        let human_druid = faction_standings(&cat, &reps, 1, 11);
+        assert_eq!(human_druid.get(&609), Some(&500));
+        // A Night Elf druid's column is 2000.
+        assert_eq!(faction_standings(&cat, &reps, 4, 11).get(&609), Some(&2500));
+        assert_eq!(
+            human_druid.get(&72),
+            Some(&4000),
+            "Stormwind, a listed faction"
+        );
     }
 
     /// A human warrior (race 1, class 1) and Stormwind's slot on the real DBC: base 4000, Friendly.

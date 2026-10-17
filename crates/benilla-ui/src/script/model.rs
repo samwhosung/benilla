@@ -680,6 +680,8 @@ pub(crate) struct Model {
     pub(crate) tutorial_bank: Option<Vec<u8>>,
     /// `FlagTutorial(n)` calls, 0-based and in range.
     pub(crate) tutorial_flag_requests: Vec<u32>,
+    /// `TriggerTutorial(id, 0)` asks the engine made (the quest log's turn-in test), 0-based.
+    pub(crate) tutorial_triggers: Vec<u32>,
     pub(crate) tutorial_clears: u32,
     pub(crate) tutorial_resets: u32,
 
@@ -1067,6 +1069,12 @@ pub(crate) struct Model {
     /// The server's clock in Unix seconds, `None` before `SMSG_QUERY_TIME_RESPONSE`. A quest
     /// deadline is a stamp in it, and `GetQuestTimers` subtracts per call, as the reference does.
     pub(crate) server_unix_time: Option<f64>,
+    /// The local clock in Unix seconds, the reference's `time(NULL)` (`0x429580`): before the
+    /// sync its `G` is 0 (`0x4de3d3`), and the countdowns read this instead.
+    pub(crate) local_unix_time: Option<f64>,
+    /// Catalog chat lines a verb fired as `CHAT_MSG_SYSTEM`, by key, for the app's log files and
+    /// sound.
+    pub(crate) shown_chat_lines: Vec<(&'static str, String)>,
     /// `GetMoney()` in copper, from `PLAYER_FIELD_COINAGE`.
     pub(crate) money: u64,
 
@@ -1166,6 +1174,10 @@ pub(crate) struct Model {
     pub(crate) reputation_selected: Option<u32>,
     /// Reputation calls queued, applied locally first because none of the three sends is acked.
     pub(crate) reputation_sends: Vec<reputation::ReputationSend>,
+    /// Every faction with a reputation index under 64, by `Faction.dbc` id: the base for the
+    /// player's race and class plus the wire standing (`0x4d6370`). Unlike the pane's rows, a
+    /// faction no race/class column fits is here at base 0 (`0x4d5426`, `0x4d553c`).
+    pub(crate) faction_standings: HashMap<u32, i32>,
 
     /// Lines for the app's slash-command parser: a probe's, or a host `SlashCmdList` row's.
     pub(crate) chat_input: Vec<String>,
@@ -1569,6 +1581,7 @@ impl Model {
             meeting_stone_status_text: None,
             tutorial_bank: None,
             tutorial_flag_requests: Vec::new(),
+            tutorial_triggers: Vec::new(),
             tutorial_clears: 0,
             tutorial_resets: 0,
             shapeshift_forms: Vec::new(),
@@ -1754,6 +1767,8 @@ impl Model {
             quest_log_selection_seed: None,
             quest_log_watched: Vec::new(),
             server_unix_time: None,
+            local_unix_time: None,
+            shown_chat_lines: Vec::new(),
             worldmap: super::worldmap::WorldMapState::default(),
             nameplates: super::nameplate::NamePlates::default(),
             chat_bubbles: super::chat_bubble::ChatBubbles::default(),
@@ -1836,6 +1851,7 @@ impl Model {
             reputation_collapsed: HashSet::new(),
             reputation_selected: None,
             reputation_sends: Vec::new(),
+            faction_standings: HashMap::new(),
         }
     }
 

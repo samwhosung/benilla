@@ -172,6 +172,7 @@ mod summon;
 mod talent;
 mod taxi;
 mod tick;
+pub use tick::system_chat_args;
 mod tooltip;
 mod tooltip_item;
 mod tooltip_spell;

@@ -59,6 +59,9 @@ pub(crate) use edit::ChannelState;
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
 pub(crate) use feed::ChatLog;
+/// Test-only: the quest log's rig tees the lines its timers show.
+#[cfg(test)]
+pub(crate) use frames::{tee_shown_lines, ChatWindows};
 /// The per-character chat cache's restore, called from the world-entry UI load: its two events
 /// must precede the session's first chat line and `PLAYER_LOGIN`.
 pub(crate) use settings::restore_chat_looks;
@@ -119,6 +122,13 @@ impl Plugin for UiChatPlugin {
                     combat::watch::pet_loyalty_lines,
                 )
                     .before(feed::feed_chat),
+            )
+            // After the drain, so the log files take the frame's lines in one order.
+            .add_systems(
+                Update,
+                frames::tee_shown_lines
+                    .in_set(UiFeed)
+                    .after(feed::feed_chat),
             )
             // Before the drain, so a broadcast lands on the frame it decodes.
             .add_systems(

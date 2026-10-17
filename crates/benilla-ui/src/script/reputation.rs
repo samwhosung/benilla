@@ -115,6 +115,13 @@ impl super::UiScript {
         model.reputation = state;
     }
 
+    /// Push every reputation-indexed faction's standing, the base plus the wire (`0x4d6370`): what
+    /// the quest log's turn-in test reads (`0x4df6ce`, `0x4df6e3`). A faction left out reads 0, as
+    /// one with no reputation index does (`0x4d6377`).
+    pub fn set_faction_standings(&mut self, standings: HashMap<u32, i32>) {
+        self.model_mut().faction_standings = standings;
+    }
+
     /// Drain the reputation verbs the pane queued since the last call.
     pub fn take_reputation_sends(&mut self) -> Vec<ReputationSend> {
         std::mem::take(&mut self.model_mut().reputation_sends)

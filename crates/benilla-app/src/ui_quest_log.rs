@@ -55,6 +55,12 @@ pub(crate) struct QuestLog {
     creature_waits: HashSet<u32>,
     /// The `SMSG_SET_FACTION_STANDING` packets that moved a rank since the feed last ran.
     faction_rank_moves: u32,
+    /// `SMSG_QUESTGIVER_QUEST_FAILED`'s reason as last read (`0xc4d794`), a global the record
+    /// callback reads when it fires (`0x5dc968`).
+    pub(crate) giver_failed_reason: u32,
+    /// The quests a `SMSG_QUESTGIVER_QUEST_FAILED` found uncached, whose line waits for the record
+    /// (`0x5dc920`).
+    pub(crate) giver_failures: Vec<u32>,
 }
 
 impl crate::query_cache::AskOnce for QuestLog {
@@ -520,9 +526,10 @@ fn money_split(money: i32) -> (u32, u32) {
     }
 }
 
-/// Pushes the server's wall clock every frame, for `GetQuestTimers()`; before the first
-/// `SMSG_QUERY_TIME_RESPONSE` nothing is pushed and the bindings report no timer. Each response
-/// after the VM's first frame signals `QUEST_LOG_UPDATE` once (`0x4def1b`).
+/// Pushes the server's wall clock every frame, for the quest timers; before the first
+/// `SMSG_QUERY_TIME_RESPONSE` the local one, which the reference counts down by while its offset
+/// is 0 (`0x4de3d3`). Each response after the VM's first frame signals `QUEST_LOG_UPDATE` once
+/// (`0x4def1b`).
 fn feed_server_clock(
     script: Option<NonSendMut<UiScript>>,
     clock: Res<crate::net::ServerWallClock>,
@@ -536,6 +543,10 @@ fn feed_server_clock(
     let synced = seen.map_or(0, |was| samples.saturating_sub(was));
     *seen = Some(samples);
     let Some(now) = clock.now_unix() else {
+        let local = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        script.set_local_unix_time(local);
         return;
     };
     script.set_server_unix_time(now);
@@ -597,7 +608,7 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
             }
         }),
         src_item_id: t.src_item_id,
-        // `QUEST_FLAGS_PARTY_ACCEPT` (2) or `_EXPLORATION` (4), vmangos `QuestDef.h:150-151`: the
+        // `QUEST_FLAGS_PARTY_ACCEPT` (2) or `_EXPLORATION` (4), vmangos `QuestDef.h:151-152`: the
         // server's complete bit decides.
         needs_complete_bit: t.flags & 6 != 0,
         rep_min: (t.rep_objective_faction, t.rep_objective_value as i32),
@@ -704,7 +715,7 @@ pub(crate) fn feed_quest_log(
     mut sink: crate::ui_action::MessageSink,
     // The accept line's queue.
     mut quest_lines: ResMut<crate::ui_quest::QuestLines>,
-    // The latch's quest-giver refresh and failure line.
+    // The latch's quest-giver refresh.
     mut quest_giver: ResMut<crate::ui_quest::QuestGiver>,
     mut item_notices: MessageReader<ItemNotice>,
     mut field_notices: MessageReader<FieldNotice>,
@@ -892,12 +903,9 @@ pub(crate) fn feed_quest_log(
     for _ in 0..std::mem::take(&mut quest_log.faction_rank_moves) {
         script.quest_log_faction_rank_changed();
     }
-    // What the expiry latch owes the givers and the chat (`0x4df531`, `0x4e1524`).
+    // What the expiry latch owes the givers (`0x4df531`).
     if script.take_quest_giver_refreshes() > 0 {
         quest_giver.bump_reask();
-    }
-    for title in script.take_quest_failed_lines() {
-        quest_giver.push_message(crate::ui_action::UiError::s("ERR_QUEST_FAILED_S", title));
     }
     // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
     // kill's counter `:14570` before `:14575`), so the toasts go first.
@@ -1926,18 +1934,31 @@ mod tests {
     }
 
     /// A quest whose row holds the expiry latch is done to the update packets (`0x5e5b6c`,
-    /// `0x5e5c16`): no kill line and no item line; and the latch's failure line and quest-giver
-    /// refresh reach the givers' queue (`0x4e1524`, `0x4df531`).
+    /// `0x5e5c16`): no kill line and no item line. The timers' read shows the failure line in chat
+    /// before its `QUEST_LOG_UPDATE` (`0x4e1529`, `0x4e1559`), the line's sound and log follow,
+    /// and the latch's quest-giver refresh reaches the givers (`0x4df531`).
     #[test]
     fn a_latched_quest_takes_no_update_and_its_failure_reaches_the_givers() {
         let mut objectives = none();
         objectives[0] = obj(55, 10, 0, 0, "");
         objectives[1] = obj(0, 0, WOLF_PELT, 5, "");
         let mut rig = Rig::new(vec![quest_template(7, objectives)], &[7]);
+        rig.app.init_resource::<crate::ui_chat::ChatWindows>();
+        rig.app.add_systems(Update, crate::ui_chat::tee_shown_lines);
         rig.creature(55, "Kobold Vermin");
         rig.cache_pelt();
         rig.frame();
         rig.enter_world();
+        rig.script()
+            .run(
+                r#"
+                ERR_QUEST_FAILED_S = "%s failed."
+                local c = CreateFrame("Frame")
+                c:RegisterEvent("CHAT_MSG_SYSTEM")
+                c:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
+            "#,
+            )
+            .unwrap();
         // The deadline ran out with the row made: the timers' read latches it.
         rig.fields.insert(FIELD_PLAYER_QUEST_LOG_1_1 + 2, 1000);
         rig.write_store();
@@ -1945,25 +1966,29 @@ mod tests {
         rig.script().set_quest_slots(slots);
         rig.script().set_server_unix_time(2000.0);
         rig.script().run("GetQuestTimers()").unwrap();
-        assert_eq!(rig.seen(), [QLU]);
+        assert_eq!(rig.seen(), ["CHAT_MSG_SYSTEM:A Threat Within failed.", QLU]);
         let epoch = rig
             .app
             .world()
             .resource::<crate::ui_quest::QuestGiver>()
             .reask_epoch();
+        let failed_sounds = |rig: &Rig| {
+            let sounds = rig.app.world().resource::<crate::sound::MessageSounds>();
+            sounds
+                .queued()
+                .iter()
+                .filter(|r| r.key == "ERR_QUEST_FAILED_S")
+                .count()
+        };
+        assert_eq!(failed_sounds(&rig), 0);
         rig.frame();
+        assert_eq!(failed_sounds(&rig), 1, "the catalog row's sound");
         let mut giver = rig
             .app
             .world_mut()
             .resource_mut::<crate::ui_quest::QuestGiver>();
         assert_eq!(giver.reask_epoch(), epoch.wrapping_add(1));
-        assert_eq!(
-            giver.take_messages(),
-            [crate::ui_action::UiError::s(
-                "ERR_QUEST_FAILED_S",
-                "A Threat Within".to_string()
-            )]
-        );
+        assert!(giver.take_messages().is_empty(), "shown once, in the call");
         rig.packet(SessionEvent::QuestObjectiveKill {
             quest_id: 7,
             entry: 55,

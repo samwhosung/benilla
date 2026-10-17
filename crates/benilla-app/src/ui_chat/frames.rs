@@ -19,6 +19,26 @@ pub(crate) struct ChatWindows {
     pub logs: super::logging::ChatLogFiles,
 }
 
+/// The catalog lines a verb showed in chat itself, such as `GetQuestTimers`' failure line: their
+/// `CHAT_MSG_SYSTEM` fired inside the call, as the reference's does, so the log files and the
+/// row's sound are what is left.
+pub(crate) fn tee_shown_lines(
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut windows: ResMut<ChatWindows>,
+    mut sounds: ResMut<crate::sound::MessageSounds>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    for (key, line) in script.take_shown_chat_lines() {
+        if let Some(record) = benilla_ui::messages::by_key(key) {
+            sounds.push(record);
+        }
+        // A system line is composed verbatim (`ChatFrame.lua:1395`).
+        windows.logs.record(false, &line);
+    }
+}
+
 /// Fire one event's `CHAT_MSG_*` at the VM, where the stock `ChatFrame_OnEvent` prints it, and
 /// tee its composed line to the log files, which the reference writes C-side, not from Lua.
 pub(crate) fn route(
