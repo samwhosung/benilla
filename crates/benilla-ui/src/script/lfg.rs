@@ -42,8 +42,10 @@ impl super::UiScript {
 /// sorted list, which are all there is for the quest list, whose count is its length.
 fn type_list(model: &Model, kind: usize) -> (usize, Vec<String>) {
     if kind == 3 {
-        // `0x4e8be0`: every nonzero quest id of the log's 20 slots (`0x4e8c5b`), cached titles
-        // first, by title (`0x4e8c80`).
+        // Every nonzero quest id of the log's 20 slots (`0x4e8c1e`-`0x4e8c32`), cached titles
+        // first, by title (`0x4e8c80`), the count stored at `0x4e8c5b`. The reference's list is a
+        // snapshot `0x4e8be0` rebuilds when the slot watcher runs (`0x5dde98`); this reads the
+        // slots and the records at the call, so a record landing since re-sorts it.
         let store = &model.quest_store;
         let mut titles: Vec<&str> = store
             .slots
