@@ -11,9 +11,7 @@ use crate::net::NetCommands;
 /// it, and a `GameTooltip`; the driver runs each update.
 fn minimap_app() -> App {
     let mut app = App::new();
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    app.insert_resource(NetCommands(tx))
-        .init_resource::<NameCache>()
+    app.init_resource::<NameCache>()
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<MinimapBlipHover>()
         .add_systems(Update, drive_blip_tooltip);
@@ -67,4 +65,18 @@ fn a_blip_hover_loss_hides_whoever_holds_the_tooltip() {
         .non_send_resource_mut::<UiScript>()
         .take_errors()
         .is_empty());
+}
+
+/// The probe's name lookup passes no callback (`0x4eb33c`): a hovered unit the name cache does not
+/// hold shows nothing and asks nothing, however long the hover.
+#[test]
+fn a_hovered_unnamed_blip_only_reads() {
+    let mut app = minimap_app();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    for _ in 0..600 {
+        blip(&mut app, MinimapBlipHover::Npc(0x9, false));
+    }
+    assert!(!shown(&mut app), "no name, no tooltip");
+    assert!(crate::query_cache::queries(&rx).is_empty());
 }

@@ -38,6 +38,8 @@ pub(crate) struct QuestShare {
     verdicts: Vec<PendingVerdict>,
     /// The confirm the server sent, held until its sender's name resolves and the event fires.
     pending_confirm: Option<QuestConfirmAccept>,
+    /// The held confirm's name has been looked up once, as its packet's: the frames after read.
+    confirm_asked: bool,
     /// The quest `ConfirmAcceptQuest()` answers, latched when the event fires: the verb takes no
     /// argument (`StaticPopup.lua:731-733`), so it answers the last confirm asked.
     confirm_quest: Option<u32>,
@@ -58,6 +60,7 @@ impl QuestShare {
     /// keeps one latch.
     pub(crate) fn set_confirm(&mut self, c: QuestConfirmAccept) {
         self.pending_confirm = Some(c);
+        self.confirm_asked = false;
     }
 
     /// On disconnect: the server's latch went with the session.
@@ -183,8 +186,9 @@ fn feed_quest_share(
             );
             continue;
         };
+        // The packet's frame asks (the module's deviation); the retries read.
         match names
-            .resolve_player(v.member, Ask::New(&commands))
+            .resolve_player(v.member, Ask::at(v.tries == 0, &commands))
             .map(str::to_string)
         {
             Some(name) => {
@@ -212,11 +216,12 @@ fn feed_quest_share(
 
     // The escort confirm, once the member's name lands: player first, then title, as
     // `QUEST_ACCEPT` fills them.
+    let ask = Ask::at(
+        !std::mem::replace(&mut share.confirm_asked, true),
+        &commands,
+    );
     if let Some(c) = share.pending_confirm.as_ref() {
-        if let Some(name) = names
-            .resolve_player(c.sender, Ask::New(&commands))
-            .map(str::to_string)
-        {
+        if let Some(name) = names.resolve_player(c.sender, ask).map(str::to_string) {
             let title = c.title.clone();
             share.confirm_quest = Some(c.quest_id);
             share.pending_confirm = None;
@@ -249,6 +254,52 @@ fn drain_quest_share(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A verdict's and a confirm's packet frame looks the member up once (the module's
+    /// deviation); the frames they wait through read. A refused name is asked by no frame after
+    /// it, only by the next packet.
+    #[test]
+    fn a_refused_member_is_asked_by_the_next_packet_never_by_a_frame() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<QuestShare>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_quest_share);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let packets = |app: &mut App| {
+            let mut share = app.world_mut().resource_mut::<QuestShare>();
+            share.push_verdict(0x9, QuestShareMsg::SHARING_QUEST);
+            share.set_confirm(QuestConfirmAccept {
+                quest_id: 5,
+                title: "Escort".into(),
+                sender: 0xa,
+            });
+            app.update();
+        };
+        packets(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 2);
+        {
+            let mut names = app.world_mut().resource_mut::<NameCache>();
+            names.insert_player(0x9, String::new(), None);
+            names.insert_player(0xa, String::new(), None);
+        }
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        packets(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            2,
+            "the next packets ask again"
+        );
+    }
 
     #[test]
     fn every_wire_verdict_has_a_key_and_an_unknown_has_none() {
