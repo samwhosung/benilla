@@ -29,9 +29,16 @@ const BASIC_CI_SIZE: usize = 8;
 /// at `LUAI_MAXCCALLS`, with the same eighth of margin for a handler. 200 levels of the deepest
 /// library callback use under half of it in an optimized build, so there it never decides.
 const MAX_RUST_STACK: usize = 1 << 20;
-/// A stack slot in the collector's count: 5.1's `TValue`, which C's allocator counts as the
-/// stack grows.
+/// A stack slot in the collector's count: 5.0's 16-byte `TObject` (`stack_init`'s 0x2d0 bytes for
+/// 45 slots, `0x6f6bb8`), counted as the stack grows.
 const STACK_SLOT_BYTES: usize = 16;
+/// A call record in the collector's count: 5.0's 24-byte `CallInfo` (`luaD_reallocCI`,
+/// `0x6f5f1a`).
+const CI_BYTES: usize = 24;
+/// The state's own records in the collector's count, the block count a new state starts from
+/// (`0x6f6e0b`): the 0x68-byte `lua_State` (`0x6f6b8d`) and the 0xc0-byte `global_State`
+/// (`0x6f6d88`).
+const STATE_BYTES: usize = 0x128;
 /// 5.1.5's `MAXTAGLOOP`: the steps `luaV_gettable` and `luaV_settable` take along a chain of
 /// `__index` or `__newindex` tables before `loop in gettable`.
 const MAXTAGLOOP: u32 = 100;
@@ -433,7 +440,7 @@ impl Vm {
             rand: crate::lib_math::GlibcRand::seeded(1),
             identity: Default::default(),
         };
-        vm.heap.charge(STACK_SLOT_BYTES * vm.stack.len());
+        vm.heap.charge(vm.state_bytes());
         vm.heap.threshold = 2 * vm.heap.bytes().max(32 * 1024);
         vm
     }
@@ -1739,6 +1746,7 @@ impl Vm {
     }
 
     fn set_ci_size(&mut self, n: usize) {
+        self.heap.recharge(CI_BYTES * self.ci_size, CI_BYTES * n);
         self.ci_size = n;
         self.ci_limit = n - 1;
     }
@@ -2124,6 +2132,12 @@ impl Vm {
 
     // ── collection ───────────────────────────────────────────────────────────────────────────
 
+    /// What the state holds outside its objects, in the collector's count: its records, its
+    /// stack and its call records.
+    fn state_bytes(&self) -> usize {
+        STATE_BYTES + STACK_SLOT_BYTES * self.stack.len() + CI_BYTES * self.ci_size
+    }
+
     /// 5.0's `luaC_checkGC`, at a safe point: every live value is on the stack or reachable.
     #[inline]
     pub fn check_gc(&mut self) {
@@ -2180,8 +2194,8 @@ impl Vm {
         let live = self
             .heap
             .collect(&roots, &open, &self.retired, self.names.mode)
-            + STACK_SLOT_BYTES * self.stack.len();
-        self.heap.charge(STACK_SLOT_BYTES * self.stack.len());
+            + self.state_bytes();
+        self.heap.charge(self.state_bytes());
         self.heap.threshold = 2 * live;
         // 5.1.5's `checkstacksizes`, which a cycle runs as it traverses the running thread, in
         // propagation and again in the atomic step: a call-info array a quarter used halves,

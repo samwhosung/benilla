@@ -10,15 +10,13 @@
 //! interface and every addon alike: the one reader of the CVar's record (`0x882654`) besides the
 //! glue's two verbs is this one.
 //!
-//! Deviation: the count is benilla-lua's collector estimate ([`mlua::Lua::used_memory`]), which
-//! sizes objects as a 64-bit 5.1 build lays them out, not 5.0's `nblocks` (`[G+0x28]`) of the
-//! 32-bit client's allocations, so the same interface reads heavier here. A string is 32 bytes and
-//! its length against 17 and its length (`0x6f9da1`), a table head 64 against 32 (`0x6fa500`), a
-//! Lua closure 40 and 8 an upvalue against 36 and 4 (`0x6f9ebf`), a C closure 40 and 16 an upvalue
-//! against 16 and 16 (`0x6f9e7c`), and the string table 8 bytes a slot, at most half full,
-//! against 4 a bucket (`0x6f9c62`); an array slot's 16 bytes (`0x6fa579`) and a hash node's 40
-//! (`0x6fa613`) are the same. The stock interface counts some 13 MB here, of which those
-//! differences make some 3 MB.
+//! The count is benilla-lua's, which charges every object at the size the 32-bit client's Lua
+//! 5.0 allocates it, as `nblocks` (`[G+0x28]`) counts it. Deviation: the count follows
+//! benilla-lua's own layout of its objects where that differs from the client's. Its compiled
+//! code is its own instruction stream, its tables' parts are sized by its own rules, and its stack
+//! opens at 256 slots and grows by powers of two without shrinking, against 5.0's 45 halved by a
+//! collection that finds it a quarter used (`0x6f7949`); 5.0's concatenation buffer (`0x6f73c1`)
+//! is not counted. The stock interface counts some 10 MB here.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;

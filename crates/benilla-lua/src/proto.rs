@@ -328,6 +328,10 @@ pub struct Proto {
     pub source: Bytes,
     pub line_defined: u32,
     pub locvars: Vec<LocVar>,
+    /// The strings 5.0's prototype holds besides its constants, interned so the collector keeps
+    /// and counts them as `traverseproto` does: the chunk name, each local's name and each
+    /// upvalue's.
+    pub names: Box<[Value]>,
     /// The instructions 5.1 has no word for, ascending: the jump a skipping `LOADBOOL` makes, a
     /// `LOADNIL` at the head that `luaD_precall`'s clearing stands for, a constant loaded into a
     /// scratch register. The count hook does not count them, as 5.1 never dispatches them.
@@ -347,15 +351,17 @@ pub struct Proto {
 }
 
 impl Proto {
-    /// The bytes 5.1 allocates for this function's prototype, for the collector's count: the
-    /// `Proto` and its code, constants, nested prototype list, line info, locals and upvalue names.
+    /// This function's prototype in the collector's count, as 5.0's `close_func` sizes its
+    /// vectors (`0x6fcb48`..`0x6fcc26`) and `luaF_freeproto` frees them (`0x6fa069`..`0x6fa102`):
+    /// the 0x48-byte `Proto` (`0x6f9fea`), 4 bytes an instruction and a line, 16 a constant, 4 a
+    /// nested prototype, 12 a local and 4 an upvalue name.
     pub fn bytes(&self) -> usize {
-        120 + 4 * self.code.len()
-            + 16 * self.consts.len()
-            + 8 * self.protos.len()
+        0x48 + 4 * self.code.len()
             + 4 * self.lines.len()
-            + 16 * self.locvars.len()
-            + 8 * self.upval_names.len()
+            + 16 * self.consts.len()
+            + 4 * self.protos.len()
+            + 12 * self.locvars.len()
+            + 4 * self.upval_names.len()
     }
 
     /// [`Proto::bytes`] of this function and every one nested in it.

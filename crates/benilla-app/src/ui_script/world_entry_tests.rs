@@ -2437,8 +2437,8 @@ fn a_state_over_script_memory_shows_the_stock_warning_and_recovers() {
 }
 
 /// A limit the interface and the hog fit within says nothing. The stock interface alone, every
-/// FrameXML file loaded and collected, counts some 13 MB here (benilla-lua's estimate,
-/// [`crate::ui_memory`]), under a third of the default's 48 MB.
+/// FrameXML file loaded and collected, counts some 10 MB here ([`crate::ui_memory`]), under a
+/// third of the default's 48 MB.
 #[test]
 fn a_state_within_script_memory_shows_nothing() {
     benilla_formats::wow_data_or_skip!();

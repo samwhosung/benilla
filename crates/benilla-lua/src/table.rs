@@ -676,9 +676,12 @@ impl Table {
         i
     }
 
-    /// A byte estimate for the collector's accounting.
+    /// The table in the collector's count: 5.0's 0x20-byte `Table` (`luaH_new`, `0x6fa500`), 16
+    /// bytes an array slot (`setarrayvector`, `0x6fa579`) and 40 a node (`setnodevector`,
+    /// `0x6fa613`), none for the shared dummy node (`0x6fa601`).
     pub fn bytes(&self) -> usize {
-        64 + self.array.len() * 16 + self.node.len() * 40
+        let nodes = if self.dummy { 0 } else { self.node.len() };
+        0x20 + self.array.len() * 16 + nodes * 40
     }
 }
 

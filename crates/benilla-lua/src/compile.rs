@@ -362,6 +362,11 @@ impl FuncState {
             .filter(|&i| self.cpc.get(i + 1).copied().unwrap_or(self.cpc_next) == self.cpc[i])
             .map(|i| i as u32)
             .collect();
+        let names = std::iter::once(&self.source)
+            .chain(self.locvars.iter().map(|l| &l.name))
+            .chain(&self.upval_names)
+            .map(|n| heap.str_value(n))
+            .collect();
         Proto {
             code: self.code,
             uncounted,
@@ -380,6 +385,7 @@ impl FuncState {
             source: self.source,
             line_defined: self.linedefined,
             locvars: self.locvars,
+            names,
             key: self.key,
             chunk_keys: Rc::from(Vec::new()),
             gc_mark: Default::default(),

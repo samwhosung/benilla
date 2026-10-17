@@ -259,6 +259,28 @@ fn the_count_follows_every_growth_and_paces_the_collector() {
     );
 }
 
+/// A prototype holds its chunk's name and its locals' and upvalues' names as strings, which the
+/// collector keeps and counts, as 5.0's `traverseproto` does.
+#[test]
+fn a_prototypes_names_are_strings_the_collector_keeps() {
+    let mut vm = benilla_lua::new_state();
+    vm.exec(
+        b"local a_local_of_its_own = 1 function F() return a_local_of_its_own end",
+        b"@Its\\Own\\Chunk.lua",
+    )
+    .unwrap();
+    vm.full_gc();
+    let before = vm.heap.bytes();
+    for name in [&b"a_local_of_its_own"[..], b"@Its\\Own\\Chunk.lua"] {
+        vm.heap.intern(name);
+    }
+    assert_eq!(
+        vm.heap.bytes(),
+        before,
+        "each name is a live string already"
+    );
+}
+
 /// A snapshot counts its own tables' growth, and the state it was taken from does not.
 #[test]
 fn a_snapshot_counts_its_own_growth() {
