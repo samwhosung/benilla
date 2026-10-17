@@ -515,15 +515,44 @@ mod tests {
         );
         assert_eq!(s.displayed_count(1), 1);
         assert_eq!(s.displayed_count(0), 1, "the anchored message always shows");
-        // A page is displayed − 1, one message of overlap, never 0.
-        s.page_up(4);
+        // `PageUp` (`0x7885b0`) scrolls up once per displayed line and then down once, so a page
+        // is the displayed count less one, and one displayed line nets nothing.
+        s.page_up(4); // 2 displayed: up, up, down
         assert_eq!(s.scroll_offset, 1);
-        s.page_up(1); // displayed 1 → page clamps to 1 message
-        assert_eq!(s.scroll_offset, 2);
-        s.page_down(4);
-        assert_eq!(s.scroll_offset, 1);
-        s.page_down(4);
+        s.page_up(1); // 1 displayed: up, down
+        assert_eq!(s.scroll_offset, 1, "a page of one line nets 0");
+        // `PageDown` (`0x7885e0`): a step refused at the bottom ends the page with no step back.
+        s.page_down(4); // 2 displayed: down moves, down is refused
         assert!(s.at_bottom());
+        s.page_down(4); // 2 displayed: both refused at the first
+        assert!(s.at_bottom());
+    }
+
+    /// A refused step ends the page where it stands (`0x7885ca`), with no step back; an empty
+    /// frame moves nothing and re-arms nothing (`0x788619`).
+    #[test]
+    fn a_page_stopped_by_an_end_takes_no_step_back() {
+        let mut s = ScrollingMessageState {
+            max_lines: 8,
+            ..Default::default()
+        };
+        assert!(!s.step_up(4), "an empty frame answers 0");
+        s.page_up(4);
+        s.page_down(4);
+        assert!(!s.links_dirty, "an empty frame is left alone");
+        for n in 0..4 {
+            s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+        }
+        // 4 displayed from the bottom: three ups move, the fourth is refused at the top.
+        s.page_up(8);
+        assert_eq!(s.scroll_offset, 3);
+        assert!(s.at_top());
+        // At the top one line is displayed: that up is refused, so no down follows.
+        s.page_up(8);
+        assert_eq!(s.scroll_offset, 3);
+        // One displayed line from the top: down, then up again.
+        s.page_down(1);
+        assert_eq!(s.scroll_offset, 3, "down then up nets 0");
     }
 
     /// A scrolling frame `CF` of the given height holding `messages`, bottom left at (32, 90),

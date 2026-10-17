@@ -204,14 +204,35 @@ impl ScrollingMessageState {
 
     /// `ScrollUp` (`0x788610`): one line older, then re-arm.
     pub fn scroll_up(&mut self, viewport_rows: usize) {
-        self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll());
-        self.reset_all_fade_times(viewport_rows);
+        self.step_up(viewport_rows);
     }
 
     /// `ScrollDown` (`0x788650`): one line newer, then re-arm.
     pub fn scroll_down(&mut self, viewport_rows: usize) {
+        self.step_down(viewport_rows);
+    }
+
+    /// `0x788610`'s answer: whether the view moved. An empty frame answers 0 and touches nothing
+    /// (`0x788619`); one already at the top re-arms and answers 0 (`0x788626`).
+    pub fn step_up(&mut self, viewport_rows: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
+        let moved = !self.at_top();
+        self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll());
+        self.reset_all_fade_times(viewport_rows);
+        moved
+    }
+
+    /// `0x788650`'s answer: the same, toward the newest line (`0x788659`, `0x788666`).
+    pub fn step_down(&mut self, viewport_rows: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
+        let moved = !self.at_bottom();
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
         self.reset_all_fade_times(viewport_rows);
+        moved
     }
 
     /// `ScrollToBottom` (`0x7886d0`): to the newest line, then re-arm.
@@ -251,18 +272,27 @@ impl ScrollingMessageState {
         count
     }
 
-    /// `PageUp` (`0x7885b0`): back by the displayed count less one, then re-arm.
+    /// `PageUp` (`0x7885b0`): `ScrollUp` once per displayed line, the count read once up front
+    /// (`0x7885b4`); a step that cannot move ends the page there (`0x7885ca`), else one `ScrollDown`
+    /// follows (`0x7885d4`). A page is the displayed count less one, and one displayed line nets 0.
     pub fn page_up(&mut self, viewport_rows: usize) {
-        let page = self.displayed_count(viewport_rows).saturating_sub(1).max(1);
-        self.scroll_offset = (self.scroll_offset + page).min(self.max_scroll());
-        self.reset_all_fade_times(viewport_rows);
+        for _ in 0..self.displayed_count(viewport_rows) {
+            if !self.step_up(viewport_rows) {
+                return;
+            }
+        }
+        self.step_down(viewport_rows);
     }
 
-    /// `PageDown`: the same page toward the newest line, then re-arm.
+    /// `PageDown` (`0x7885e0`): the mirror, `ScrollDown` per displayed line (`0x7885f3`), a refusal
+    /// ending the page (`0x7885fa`), else one `ScrollUp` (`0x788604`).
     pub fn page_down(&mut self, viewport_rows: usize) {
-        let page = self.displayed_count(viewport_rows).saturating_sub(1).max(1);
-        self.scroll_offset = self.scroll_offset.saturating_sub(page);
-        self.reset_all_fade_times(viewport_rows);
+        for _ in 0..self.displayed_count(viewport_rows) {
+            if !self.step_down(viewport_rows) {
+                return;
+            }
+        }
+        self.step_up(viewport_rows);
     }
 
     /// Advance the fade by `dt` (OnUpdate, `0x788460`), only at the bottom with fading on; the

@@ -191,6 +191,9 @@ fn log_hover(s: &mut UiScript) {
 fn a_relayout_with_the_same_spans_leaves_and_re_enters_the_hovered_link() {
     let mut s = chat();
     log_hover(&mut s);
+    // A scroll on an empty frame answers 0 at once (`0x788659`), so the frame holds a line.
+    s.run("CF:AddMessage('x')").unwrap();
+    set_link(&mut s, "CF");
     s.mouse_move(130.0, 127.0);
     set_link(&mut s, "CF");
     assert_eq!(log_of(&s), format!("enter:{LINK}"), "no flag: no rebuild");
