@@ -2,7 +2,8 @@
 //! and its answer must equal the one that build gave, recorded in `vm_parity.golden` per platform
 //! where the C library decides it (`PLATFORM_CASES`), with mlua's `runtime error: ` and
 //! `stack traceback:` wrapper taken out. A new case's answer comes from the reference, written in
-//! by hand.
+//! by hand, and so does the answer of a case where benilla-lua follows 1.12.1's Lua 5.0 against
+//! 5.1: a comment at the case names the client's address.
 //!
 //! The cases that list every global answer with each binding the script host has, not with the
 //! VM, so they live in `vm_parity_surface.golden`, which `BENILLA_BLESS=1` rewrites when a
@@ -239,6 +240,7 @@ b]])"#),
           table.insert(o, table.concat(ks, " "))
         end
         return table.concat(o, " | ")"#),
+    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0.
     ("pairs_mixed", r#"local function keys(t) local ks = {} for k, v in pairs(t) do table.insert(ks, tostring(k) .. "=" .. tostring(v)) end return table.concat(ks, " ") end
         local a = {1, 2, 3, x = 1, y = 2, [10] = 5, [1.5] = 6, [-1] = 7, z = 3}
         local b = {} for i = 1, 10 do b[i] = i end b[5] = nil b[20] = 20 b.k = 1
@@ -311,6 +313,7 @@ b]])"#),
         end
         return table.concat(o, " ")"#),
     // ── fix-front: the single-pass front end, 5.1.5's `lparser.c` and `lcode.c` ──
+    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0.
     ("fix-front_setlist_order", r#"local function K(t) local o = {} for k in pairs(t) do table.insert(o, tostring(k)) end return table.concat(o, " ") end
         local function list(n) local o = {} for i = 1, n do o[i] = i end return table.concat(o, ",") end
         local function f() return 1, 2, 3 end

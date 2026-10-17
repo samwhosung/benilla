@@ -1,7 +1,8 @@
 //! A table as 5.1.5's `ltable.c` lays it out: an array part and a chained scatter hash part with
 //! Brent's variation, sized and rehashed by 5.1's rules, as benilla's script host has always run
-//! them. The layout is the iteration order, so `next` walks keys in the order it did (keys hashed
-//! by address excepted: a table, function or userdata key is hashed by its handle here).
+//! them, with the client's 5.0 hashes for strings and numbers. The layout is the iteration order,
+//! so `next` walks keys in the order the layout gives (keys hashed by address excepted: a table,
+//! function or userdata key is hashed by its handle here).
 
 use crate::value::{TableRef, Value, V};
 
@@ -212,12 +213,9 @@ impl Table {
         let mask = self.sizenode() - 1;
         match key.unpack() {
             V::Num(n) => {
-                // 5.1's `hashnum`: zero (either sign) at node 0, anything else its two 32-bit
-                // words summed.
-                if n == 0.0 {
-                    return 0;
-                }
-                let bits = n.to_bits();
+                // The client's `hashnum` (`0x6fa260`), 5.0's: the key plus 1.0 (`0x6fa267`),
+                // which also folds -0 into 0, then its two 32-bit words summed (`0x6fa27e`).
+                let bits = (n + 1.0).to_bits();
                 let h = (bits as u32).wrapping_add((bits >> 32) as u32);
                 self.hashmod(h)
             }
@@ -725,6 +723,28 @@ mod tests {
             k = nk;
         }
         assert_eq!(seen, 200);
+    }
+
+    /// The client's `hashnum` (`0x6fa260`) hashes the key plus 1.0: in four nodes 10 and 20 both
+    /// start at node 0 and 30 at node 1, so the walk is 10, 30, then 20 from the free node.
+    #[test]
+    fn number_keys_take_the_clients_main_positions() {
+        let mut t = Table::new(0, 4);
+        assert_eq!(t.mainposition(n(10.0)), 0);
+        assert_eq!(t.mainposition(n(20.0)), 0);
+        assert_eq!(t.mainposition(n(30.0)), 1);
+        assert_eq!(t.mainposition(n(-1.0)), 0);
+        assert_eq!(t.mainposition(n(-0.0)), t.mainposition(n(0.0)));
+        for k in [10.0, 20.0, 30.0] {
+            t.set(n(k), n(k)).unwrap();
+        }
+        let mut order = Vec::new();
+        let mut k = Value::Nil;
+        while let Some((nk, _)) = t.next(k).unwrap() {
+            order.push(nk.as_num().unwrap());
+            k = nk;
+        }
+        assert_eq!(order, [10.0, 30.0, 20.0]);
     }
 
     #[test]
