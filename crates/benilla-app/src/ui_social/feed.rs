@@ -58,8 +58,9 @@ pub(super) fn feed_social(
     };
     let fed = fed.get(&script);
     let areas = areas.as_deref().map(|a| &a.0);
-    // A name is asked at its packet's lookup ([`SocialState::name_events`]); a new VM reads every
-    // list afresh.
+    // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames between
+    // ask only a name the cache holds nothing for; a new VM's first feed stands for every list's
+    // packet.
     let first = !fed.seeded;
     // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
     // which goes to the server, not the VM.
@@ -151,8 +152,8 @@ fn answer_goes_to_the_frame(to_ui: bool, shown: usize) -> bool {
 }
 
 /// Name every result line whose subject has resolved: a line that needs a name waits for the name
-/// query, as the reference resolves before it composes. `ask` reads the subject's name: an event
-/// on the feed after its packet ([`SocialState::name_events`]).
+/// query, as the reference resolves before it composes. `ask` says how the subject's name is
+/// looked up: an event on the feed after its packet ([`SocialState::name_events`]).
 fn drain_result_lines<'a>(
     social: &mut SocialState,
     names: &NameCache,
@@ -226,8 +227,8 @@ fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>)
     lines
 }
 
-/// The friend rows sorted by name, and their guids in the same order for the drain, each name read
-/// as `ask` says for its guid.
+/// The friend rows sorted by name, and their guids in the same order for the drain, each name
+/// looked up as `ask` says for its guid.
 fn friend_rows<'a>(
     social: &SocialState,
     names: &NameCache,
@@ -279,7 +280,7 @@ fn friend_rows<'a>(
     rows.into_iter().map(|(guid, row)| (row, guid)).unzip()
 }
 
-/// The ignore rows: names only, same ordering rule, each read as `ask` says for its guid.
+/// The ignore rows: names only, same ordering rule, each looked up as `ask` says for its guid.
 fn ignore_rows<'a>(
     social: &SocialState,
     names: &NameCache,
@@ -759,8 +760,9 @@ mod tests {
     }
 
     /// The lists' and the status's packets look their names up with a callback (`0x5ae438`,
-    /// `0x5af59a`, `0x5acb97`); the frames between read. A refused name is asked by no frame
-    /// after it, only by the next packet that names its player, once.
+    /// `0x5af59a`, `0x5acb97`); the frames between ask only a name the cache holds nothing for. A
+    /// refused name is asked by no frame after it, only by the next packet that names its player,
+    /// once.
     #[test]
     fn a_refused_social_name_is_asked_at_its_next_packet_and_never_by_a_frame() {
         let (mut app, rx) = social_app();

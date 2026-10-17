@@ -1645,8 +1645,8 @@ fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
 }
 
 /// The stock window calls `GetTrainerServiceIcon` at `TRAINER_SHOW` and `TRAINER_UPDATE`, which
-/// looks the product up with a callback (`0x4d9096`); the frames between read. A refused product
-/// is asked by no frame, and again by the trainer's next list.
+/// looks the product up with a callback (`0x4d9096`); the frames between ask only what the cache
+/// holds nothing for. A refused product is asked by no frame, and again by the trainer's next list.
 #[test]
 fn a_refused_product_is_asked_at_the_next_list_never_by_a_frame() {
     let (tx, rx) = crossbeam_channel::unbounded();

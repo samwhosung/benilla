@@ -1616,8 +1616,8 @@ mod tests {
     }
 
     /// The log watcher's rebuild looks each quest up with a callback (`0x5dde4f`, `0x4de65f`) when
-    /// the log's fields change; the frames between read. A refused quest is asked by the next
-    /// change, once, and by no frame.
+    /// the log's fields change; the frames between ask only what the cache holds nothing for. A
+    /// refused quest is asked by the next change, once, and by no frame.
     #[test]
     fn a_refused_quest_is_asked_at_the_logs_next_change_never_by_a_frame() {
         let (mut app, rx, player) = quest_log_app(QuestLog::default(), 101);

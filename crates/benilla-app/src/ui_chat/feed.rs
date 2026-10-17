@@ -1091,8 +1091,9 @@ pub(super) fn feed_chat(
                 route(&mut script, &mut windows, &event);
             }
             Pending::Combat(mut line) => {
-                // Both names, looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), then
-                // read within `tries`; guid 0 is already filled (`/chattest`).
+                // Both names, looked up with a callback as the line's (`0x6265a7`, `0x6265e0`); its
+                // retries within `tries` ask only a name the cache holds nothing for. Guid 0 is
+                // already filled (`/chattest`).
                 let ask = Ask::at(line.tries == 0, &commands);
                 let mut wait = false;
                 for (guid, slot) in [(line.subject, 0usize), (line.object, 1usize)] {

@@ -480,7 +480,10 @@ fn drain_lines(
             continue;
         }
         // The packet's lookups pass callbacks (`0x61c047`, `0x61c08e`, `0x61b96a`, `0x61b5c0`):
-        // a line's first render asks, its retries read.
+        // a line's first render asks as they do, and its retries ask only what the cache holds
+        // nothing for. So the roller's name, if still unasked, goes at the first render after the
+        // item lands, where the item's answer asks it (`0x61c4b0` → `0x61c53e` → `0x61c070`,
+        // `0x61c08e`).
         let ask = Ask::at(p.tries == 0, commands);
         match render(&p.line, self_guid, items, names, ask, catalogs, detailed) {
             Some(text) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),

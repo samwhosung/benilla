@@ -1601,8 +1601,9 @@ mod tests {
     }
 
     /// `GetMerchantItemInfo` looks each row up with a callback (`0x4faf1a`) when the stock window
-    /// calls it, at `MERCHANT_SHOW` and the list's `MERCHANT_UPDATE`; the frames between read. A
-    /// refused row is asked by no frame, and again by the vendor's next list.
+    /// calls it, at `MERCHANT_SHOW` and the list's `MERCHANT_UPDATE`; the frames between ask only
+    /// what the cache holds nothing for. A refused row is asked by no frame, and again by the
+    /// vendor's next list.
     #[test]
     fn a_refused_vendor_row_is_asked_at_the_next_list_never_by_a_frame() {
         let (tx, rx) = crossbeam_channel::unbounded();

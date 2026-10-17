@@ -186,7 +186,8 @@ fn feed_quest_share(
             );
             continue;
         };
-        // The packet's frame asks (the module's deviation); the retries read.
+        // The packet's frame asks (the module's deviation); the retries ask only what the cache
+        // holds nothing for.
         match names
             .resolve_player(v.member, Ask::at(v.tries == 0, &commands))
             .map(str::to_string)
@@ -255,9 +256,9 @@ fn drain_quest_share(
 mod tests {
     use super::*;
 
-    /// A verdict's and a confirm's packet frame looks the member up once (the module's
-    /// deviation); the frames they wait through read. A refused name is asked by no frame after
-    /// it, only by the next packet.
+    /// A verdict's and a confirm's packet frame looks the member up once (the module's deviation);
+    /// the frames they wait through ask only what the cache holds nothing for. A refused name is
+    /// asked by no frame after it, only by the next packet.
     #[test]
     fn a_refused_member_is_asked_by_the_next_packet_never_by_a_frame() {
         let (tx, rx) = crossbeam_channel::unbounded();

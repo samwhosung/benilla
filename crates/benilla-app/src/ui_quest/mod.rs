@@ -777,8 +777,8 @@ mod tests {
     }
 
     /// `GetQuestItemInfo` looks each reward up with a callback (`0x5017de`) when the stock frame
-    /// calls it, on the panel's event; the frames between read. A refused reward is asked by no
-    /// frame, and again by the next panel the giver publishes.
+    /// calls it, on the panel's event; the frames between ask only what the cache holds nothing
+    /// for. A refused reward is asked by no frame, and again by the next panel the giver publishes.
     #[test]
     fn a_refused_reward_is_asked_at_the_next_panel_never_by_a_frame() {
         let (tx, rx) = crossbeam_channel::unbounded();
