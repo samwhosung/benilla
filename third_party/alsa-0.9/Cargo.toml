@@ -1,0 +1,6 @@
+[package]
+name = "alsa"
+version = "0.9.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Lock-only stand-in for alsa 0.9.1; see BENILLA.md"

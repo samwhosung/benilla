@@ -39,6 +39,9 @@ sha1 = "0.10.6"
 # kira 0.12.4, patched to compute spatial gains and the volume tween per output chunk and
 # interpolate them, not per sample frame (`third_party/kira/BENILLA.md`).
 kira = { path = "third_party/kira" }
+# A lock-only stand-in: bevy_audio's unbuilt cpal 0.15 would otherwise hold `alsa-sys` 0.3 against
+# cpal 0.17's 0.4, and a lock holds one `links = "alsa"` (`third_party/alsa-0.9/BENILLA.md`).
+alsa = { path = "third_party/alsa-0.9" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]
