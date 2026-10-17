@@ -448,8 +448,9 @@ b]])"#),
           R("local t = {} t[1], t[2] = 1, 2 local a, b = t[1], t[2] a, b = b, a return a, b"),
           R("local a, b, c = (function() return 1, 2, 3 end)() return a, b, c")}, " | ")"#),
     // ── fix-libs: the library fixes, each blessed on the C build ──
-    // `bit.lshift` answers unsigned (`0x7fac40`); `bit.mod(-2^31, -1)` faults in the client's
-    // `idiv` (`0x7fad9b`), and its 0 here is benilla's own.
+    // `bit.lshift` answers unsigned (`0x7fac40`); `bit.mod(-2^31, -1)` and `bit.mod(2^31, -1)`,
+    // whose dividend's low word is `INT32_MIN` too, fault in the client's `idiv` (`0x7fad9b`), and
+    // their 0 here is benilla's own.
     ("fix-libs bit_mod_overflow", "return S(E(bit.mod, -2^31, -1), E(bit.mod, 2^31, -1), E(bit.mod, 7, -1), E(bit.mod, -7, 2), E(bit.mod, 0/0, -1), E(bit.mod, 1/0, -1), E(bit.lshift, 1, 31), E(bit.arshift, -2^31, 31))"),
     ("fix-libs rep_format_sizes", r#"return S(string.rep("ab", 3), string.rep("", 1000000), string.rep("x", -1), string.rep("x", 0/0), E(string.format, "%123d", 1), E(string.format, "%1.123f", 1), string.format("%99d", 1) == string.rep(" ", 98) .. "1", string.len(string.format("%.99f", 1)), string.format("%-5c|%5s|%.1q", 65, "ab", "x"), table.concat({"a", 1, "b"}, string.rep("-", 3)), E(gsub, "abc", "%w", "%0%0%0"))"#),
     ("fix-libs deep_match", r#"local n = 3000 local s, p = string.rep("a", n), string.rep("a?", n) local t = {} for w in string.gfind(s, string.rep("(a)?", 30)) do table.insert(t, w) end return S(E(string.find, s, p), E(string.gsub, s, p, "x"), table.getn(t), E(string.find, s, string.rep("a-", 500) .. "$"))"#),
@@ -902,8 +903,10 @@ fn unescape(s: &str) -> String {
 /// - the transcendental functions are the host libm's, rounded differently by glibc and Apple's;
 /// - a NaN prints its sign under glibc (`-nan`), never under Apple's libc, and which NaN a
 ///   function answers is the host libm's;
-/// - `luaL_checknumber` on two arguments in one C call (`fmod`, `pow`, `ldexp`, `atan2`) checks
-///   them in the compiler's order: gcc on x86-64 the second first, clang on arm64 the first;
+/// - `luaL_checknumber` on two arguments in one C call (`fmod`, `pow`, `ldexp`, `atan2`) checked
+///   them in the compiler's order: gcc on x86-64 the second first, clang on arm64 the first.
+///   benilla-lua checks them in the client's order on every platform (`pow`, `atan2` and `mod`
+///   the first, `ldexp` the second), so the error items of the first three agree everywhere;
 /// - a `double` past the integer range cast to `ptrdiff_t` or `unsigned long` is undefined: x86-64
 ///   answers `INT64_MIN`, arm64 saturates;
 /// - `math.random` is the host `rand`.
