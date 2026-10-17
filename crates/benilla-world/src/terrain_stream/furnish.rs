@@ -1,7 +1,8 @@
 //! Paced tile furnishing: cell meshes are built from a landed tile's decoded chunks
 //! ([`chunks_to_mesh`]) a bounded number per frame while live, nearest tile first, so crossing a
 //! tile line never uploads a whole row in one frame. While the body is not live (entry, teleport)
-//! the cap is off: the loading screen absorbs the burst and waits on furnished tiles.
+//! the cap is off: the loading screen absorbs the burst and waits on furnished tiles. The held
+//! inner tiles are never capped: the reference builds an inner chunk with no limit (`0x6986a5`).
 
 use std::time::Instant;
 
@@ -22,8 +23,9 @@ const CELL_SPAN: usize = 4;
 const CELLS_PER_TILE: usize = (16 / CELL_SPAN) * (16 / CELL_SPAN);
 const CHUNKS_PER_CELL: usize = CELL_SPAN * CELL_SPAN;
 
-/// Spawns the cell entities of unfurnished tiles, nearest the focus first, paced while live.
-/// Chained after `stream_terrain` and before `spawn_loaded_placements`.
+/// Spawns the cell entities of unfurnished tiles, the held inner ones whole, then the rest nearest
+/// the focus first, paced while live. Chained after the tile spawn and before
+/// `spawn_loaded_placements`.
 pub(super) fn furnish_tile_cells(
     mut commands: Commands,
     mut state: ResMut<TerrainStreamer>,
@@ -45,11 +47,17 @@ pub(super) fn furnish_tile_cells(
     let ablated = tile_cells_disabled();
 
     let focus = state.focus;
-    let mut pending: Vec<(i32, (i32, i32))> = state
+    let mut pending: Vec<(bool, i32, (i32, i32))> = state
         .tiles
         .iter()
         .filter(|(_, t)| t.entity.is_some() && !t.furnished)
-        .map(|(&(tx, ty), _)| ((tx - focus.0).abs().max((ty - focus.1).abs()), (tx, ty)))
+        .map(|(&(tx, ty), _)| {
+            (
+                !state.inner.contains(&(tx, ty)),
+                (tx - focus.0).abs().max((ty - focus.1).abs()),
+                (tx, ty),
+            )
+        })
         .collect();
     if pending.is_empty() {
         return;
@@ -57,7 +65,7 @@ pub(super) fn furnish_tile_cells(
     pending.sort_unstable();
 
     let mut built = 0usize;
-    'tiles: for (_, key) in pending {
+    'tiles: for (outer, _, key) in pending {
         let Some(tile) = state.tiles.get_mut(&key) else {
             continue;
         };
@@ -69,7 +77,7 @@ pub(super) fn furnish_tile_cells(
             continue;
         };
         while tile.next_cell < CELLS_PER_TILE {
-            if built >= cap {
+            if outer && built >= cap {
                 break 'tiles;
             }
             let cell = tile.next_cell;

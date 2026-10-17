@@ -32,7 +32,7 @@ const STREAM_TRACE_HEADER: &str = "frame,t,delta_ms,cpu_ms,ents,stream_ms,furnis
                                    spawn_ms,collider_ms,tiles_dropped,pl_dropped,pl_ents_dropped,\
                                    tiles_req,tiles_spawned,cells_spawned,mmeshes_built,pl_spawned,\
                                    attached,adt_freed,meshes_freed,images_freed,adt_added,\
-                                   meshes_added,images_added,pipes_new,pipes_pending\n";
+                                   meshes_added,images_added,pipes_new,pipes_pending,wait_ms\n";
 
 pub(super) fn trace_stream(
     mut trace: ResMut<StreamTrace>,
@@ -97,7 +97,7 @@ pub(super) fn trace_stream(
         let _ = std::fs::write(&trace.path, STREAM_TRACE_HEADER);
     }
     let line = format!(
-        "{},{:.2},{delta_ms:.2},{cpu_ms},{},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{},{},{},{},{},{},{removed_adt},{removed_mesh},{removed_img},{added_adt},{added_mesh},{added_img},{pipes_new},{pipes_pending}\n",
+        "{},{:.2},{delta_ms:.2},{cpu_ms},{},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{},{},{},{},{},{},{removed_adt},{removed_mesh},{removed_img},{added_adt},{added_mesh},{added_img},{pipes_new},{pipes_pending},{:.2}\n",
         trace.frame,
         time.elapsed_secs(),
         entities.iter().len(),
@@ -115,6 +115,7 @@ pub(super) fn trace_stream(
         a.model_meshes_built,
         a.placements_spawned,
         a.colliders_attached,
+        a.wait_ms,
     );
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()

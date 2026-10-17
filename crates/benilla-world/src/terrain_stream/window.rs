@@ -5,8 +5,8 @@
 //! membership in the outer window, by tile (`[area+0x88]` vs `bounds >> 4`).
 //!
 //! - Deviation: whole tiles, because benilla loads, spawns and releases ADT tiles, not chunks: a
-//!   tile is wanted when any of its chunks lies in the outer window, so the resident edge is a
-//!   tile line where the reference's is a chunk line.
+//!   tile is wanted when any of its chunks lies in the outer window, and waited for when any lies
+//!   in the inner one, so each edge is a tile line where the reference's is a chunk line.
 //! - Deviation: a one-chunk keep band ([`KEEP_BAND_CHUNKS`]), because a tile reload re-decodes and
 //!   re-spawns where the reference's is a cheap read: a tile releases only past `outer + 1`.
 
@@ -54,7 +54,11 @@ impl StreamWindow {
 
     /// The tile range the outer window grown by `band` chunks touches, clamped to the grid.
     fn tile_range(&self, band: i32) -> ((i32, i32), (i32, i32)) {
-        let half = self.outer + band;
+        self.tile_span(self.outer + band)
+    }
+
+    /// The tile range a window of `half` chunks around the focus touches, clamped to the grid.
+    fn tile_span(&self, half: i32) -> ((i32, i32), (i32, i32)) {
         let lo = |c: i32| (c - half).clamp(0, CHUNK_MAX) / CHUNKS_PER_TILE;
         let hi = |c: i32| (c + half).clamp(0, CHUNK_MAX) / CHUNKS_PER_TILE;
         (
@@ -65,14 +69,13 @@ impl StreamWindow {
 
     /// Every tile the outer window touches, in grid order: the set the streamer wants resident.
     pub fn wanted_tiles(&self) -> Vec<(i32, i32)> {
-        let ((x0, y0), (x1, y1)) = self.tile_range(0);
-        let mut out = Vec::with_capacity(((x1 - x0 + 1) * (y1 - y0 + 1)) as usize);
-        for tx in x0..=x1 {
-            for ty in y0..=y1 {
-                out.push((tx, ty));
-            }
-        }
-        out
+        tiles_in(self.tile_range(0))
+    }
+
+    /// Every tile the inner window touches, in grid order: the set the tile pass waits for and
+    /// builds without a limit (`0x698644`–`0x6986a5`).
+    pub fn inner_tiles(&self) -> Vec<(i32, i32)> {
+        tiles_in(self.tile_span(self.inner))
     }
 
     /// Whether a tile is inside the outer window plus the keep band.
@@ -80,6 +83,17 @@ impl StreamWindow {
         let ((x0, y0), (x1, y1)) = self.tile_range(KEEP_BAND_CHUNKS);
         (x0..=x1).contains(&tile.0) && (y0..=y1).contains(&tile.1)
     }
+}
+
+/// The tiles of an inclusive tile range, in grid order.
+fn tiles_in(((x0, y0), (x1, y1)): ((i32, i32), (i32, i32))) -> Vec<(i32, i32)> {
+    let mut out = Vec::with_capacity(((x1 - x0 + 1) * (y1 - y0 + 1)) as usize);
+    for tx in x0..=x1 {
+        for ty in y0..=y1 {
+            out.push((tx, ty));
+        }
+    }
+    out
 }
 
 /// The inner half-width in chunks, `1 + trunc(farclip / 33.333)` (`0x6725e9`: `fmul −0.03`,
@@ -173,6 +187,43 @@ mod tests {
         }
     }
 
+    /// The inner window is `±r` chunks: at 177 (r = 6) a mid-tile focus waits on its own tile
+    /// alone, at 350 (r = 11) on its 3×3, and at 777 (r = 24, 49 chunks) always on a 4×4.
+    #[test]
+    fn the_inner_tiles_are_the_inner_windows() {
+        let mid = at_chunk(177.0, (32, 44), (7, 7));
+        assert_eq!(mid.inner_tiles(), vec![(32, 44)]);
+        // From chunk 0, six chunks back is the previous tile's chunk 10.
+        let corner = at_chunk(177.0, (32, 44), (0, 0));
+        assert_eq!(
+            corner.inner_tiles(),
+            vec![(31, 43), (31, 44), (32, 43), (32, 44)]
+        );
+
+        let mid = at_chunk(350.0, (32, 44), (7, 7));
+        let tiles = mid.inner_tiles();
+        assert_eq!(tiles.len(), 9);
+        assert!(tiles.contains(&(31, 43)) && tiles.contains(&(33, 45)));
+        let corner = at_chunk(350.0, (32, 44), (15, 15));
+        assert_eq!(
+            corner.inner_tiles(),
+            vec![(32, 44), (32, 45), (33, 44), (33, 45)]
+        );
+
+        for chunk in [(7, 7), (0, 0), (15, 15)] {
+            let w = at_chunk(777.0, (32, 44), chunk);
+            let tiles = w.inner_tiles();
+            assert_eq!(tiles.len(), 16, "from chunk {chunk:?}");
+            // Always inside what the streamer wants.
+            let wanted = w.wanted_tiles();
+            assert!(tiles.iter().all(|t| wanted.contains(t)));
+        }
+        let mid = at_chunk(777.0, (32, 44), (7, 7));
+        // Chunk 519 ± 24 runs 495..=543: tiles 30..=33.
+        assert!(mid.inner_tiles().contains(&(30, 42)) && mid.inner_tiles().contains(&(33, 45)));
+        assert!(!mid.inner_tiles().contains(&(34, 44)));
+    }
+
     #[test]
     fn the_window_clamps_to_the_grid() {
         let w = at_chunk(777.0, (0, 63), (0, 15));
@@ -182,6 +233,10 @@ mod tests {
             .all(|&(x, y)| (0..64).contains(&x) && (0..64).contains(&y)));
         assert!(tiles.contains(&(0, 63)) && tiles.contains(&(1, 62)));
         assert!(w.keeps((0, 63)) && !w.keeps((-1, 63)) && !w.keeps((0, 64)));
+        assert!(w
+            .inner_tiles()
+            .iter()
+            .all(|&(x, y)| (0..64).contains(&x) && (0..64).contains(&y)));
     }
 
     #[test]

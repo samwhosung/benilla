@@ -59,12 +59,13 @@ impl PendingCollider {
     }
 }
 
+/// [`finish_colliders`]'s query state.
+pub(super) type PendingColliders =
+    SystemState<Query<'static, 'static, (Entity, &'static mut PendingCollider)>>;
+
 /// Attaches off-thread-built colliders, at most [`ATTACH_BUDGET`] worth per frame. Exclusive, so
 /// the deadline can stop mid-burst where deferred commands would all apply in one block.
-pub(super) fn finish_colliders(
-    world: &mut World,
-    state: &mut SystemState<Query<'static, 'static, (Entity, &mut PendingCollider)>>,
-) {
+pub(super) fn finish_colliders(world: &mut World, state: &mut PendingColliders) {
     // Pass 1: poll every in-flight build; a completed task hands its shape to `built`. The ready
     // list is capped far above what a frame can attach (a cold zone load queues tens of
     // thousands); the rest stay queued for the next frame.
@@ -141,6 +142,61 @@ pub(super) fn finish_colliders(
         if let Some(mut epoch) = world.get_resource_mut::<crate::collision::ColliderEpoch>() {
             epoch.bump();
         }
+    }
+}
+
+/// Attaches the held inner tiles' terrain and fence colliders this frame, waiting on any build
+/// still in flight and past [`ATTACH_BUDGET`]: the reference builds an inner chunk with no limit
+/// (`0x6986a5` → `0x6c2880`), so the next frame's mover never meets ground without collision.
+/// After the spawn, whose builds it may wait on; its inserts apply within the frame, and avian's
+/// insert observers size each AABB and file it in the collider tree on the spot, so the next
+/// frame's casts meet it with no physics step between.
+pub(super) fn attach_inner_colliders(
+    mut commands: Commands,
+    state: Res<super::TerrainStreamer>,
+    mut pending: Query<&mut PendingCollider>,
+    mut activity: Option<ResMut<crate::terrain_stream::StreamActivity>>,
+    mut epoch: Option<ResMut<crate::collision::ColliderEpoch>>,
+) {
+    if state.inner.is_empty() {
+        return;
+    }
+    let t0 = Instant::now();
+    let mut attached = 0u32;
+    let roots = state
+        .inner
+        .iter()
+        .filter_map(|t| state.tiles.get(t))
+        .flat_map(|t| t.entity.into_iter().chain(t.wall));
+    for entity in roots {
+        let Ok(mut pc) = pending.get_mut(entity) else {
+            continue;
+        };
+        let collider = match (pc.built.take(), pc.task.take()) {
+            (Some(collider), _) => collider,
+            (None, Some(task)) => block_on(task),
+            (None, None) => continue,
+        };
+        // In `finish_colliders`' order, so avian's observers see what they see there.
+        let mut e = commands.entity(entity);
+        e.remove::<PendingCollider>().insert(collider);
+        if pc.static_body {
+            e.insert(RigidBody::Static);
+        }
+        if let Some(layers) = pc.layers {
+            e.insert(layers);
+        }
+        attached += 1;
+    }
+    if attached == 0 {
+        return;
+    }
+    if let Some(activity) = activity.as_mut() {
+        activity.colliders_attached += attached;
+        activity.wait_ms += t0.elapsed().as_secs_f32() * 1000.0;
+    }
+    if let Some(epoch) = epoch.as_mut() {
+        epoch.bump();
     }
 }
 
@@ -568,6 +624,58 @@ mod tests {
             "a static body rides the attach"
         );
         assert!(app.world().get::<PendingCollider>(e).is_none());
+    }
+
+    /// A held inner tile's terrain collider is attached in its frame, its build waited on, and a
+    /// cast meets it before any physics step has run: the next frame's mover stands on it.
+    #[test]
+    fn a_held_inner_tiles_collider_is_attached_and_castable_in_its_frame() {
+        use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
+
+        let mut app = test_app();
+        let (verts, tris) = grid(16);
+        // Sixteen chunks of 512 triangles, likely still building on the next line; it attaches now.
+        let task = build_collider_task(verts, tris);
+        let inner = app
+            .world_mut()
+            .spawn((Transform::default(), PendingCollider::new(task, None, true)))
+            .id();
+        let mut state = crate::terrain_stream::TerrainStreamer::default();
+        state.tiles.insert(
+            (32, 44),
+            crate::terrain_stream::TileState {
+                entity: Some(inner),
+                ..crate::terrain_stream::TileState::requested(Default::default())
+            },
+        );
+        state.inner = vec![(32, 44)];
+        app.insert_resource(state);
+
+        app.world_mut()
+            .run_system_once(attach_inner_colliders)
+            .unwrap();
+        assert!(app.world().entity(inner).contains::<Collider>());
+        assert!(app.world().entity(inner).contains::<RigidBody>());
+        assert!(app.world().get::<PendingCollider>(inner).is_none());
+        let hit = app
+            .world_mut()
+            .run_system_once(|spatial: SpatialQuery| {
+                spatial
+                    .cast_ray(
+                        Vec3::new(8.5, 100.0, 8.5),
+                        Dir3::NEG_Y,
+                        200.0,
+                        true,
+                        &SpatialQueryFilter::default(),
+                    )
+                    .map(|h| h.entity)
+            })
+            .unwrap();
+        assert_eq!(
+            hit,
+            Some(inner),
+            "the collider tree holds it without a step"
+        );
     }
 
     /// Staged already built with a zero budget, so each call attaches exactly one.

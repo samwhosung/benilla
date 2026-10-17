@@ -23,7 +23,6 @@ use benilla_assets::MapCatalogRes;
 use benilla_assets::{AssetSet, LooseOpen, WorldAssets};
 use benilla_world::schedule::WorldStage;
 use benilla_world::terrain_stream::WorldLoadProgress;
-use benilla_world::world_map::CurrentMap;
 
 /// The cover's input half: while it is up the client takes no input (a source cut in `PreUpdate`).
 mod input;
@@ -489,12 +488,7 @@ pub(crate) fn fit_loading_area(
 #[allow(clippy::type_complexity)]
 fn drive_loading_screen(
     mut screen: ResMut<LoadingScreen>,
-    // Bundled to stay under Bevy's 16-parameter ceiling.
-    stream: (
-        Res<WorldLoadProgress>,
-        Res<benilla_world::terrain_stream::ViewFocus>,
-    ),
-    current_map: Option<Res<CurrentMap>>,
+    progress: Res<WorldLoadProgress>,
     maps: Option<Res<MapCatalogRes>>,
     screens: Option<Res<LoadingScreenCatalogRes>>,
     mut assets: Option<ResMut<WorldAssets>>,
@@ -540,9 +534,7 @@ fn drive_loading_screen(
         transfer,
         roster,
     ) = edges;
-    let (progress, focus) = (&stream.0, &stream.1);
     let now = time.elapsed_secs();
-    let map_id = current_map.as_ref().map(|m| m.0);
     // The physics hold releases on the same residency signal, so the body's world is live first.
     let player_settling = player.as_ref().is_some_and(|p| p.settling);
 
@@ -604,20 +596,6 @@ fn drive_loading_screen(
     if screen.blackout && *state.get() != crate::client_state::ClientState::InWorld {
         // The glue is up (it renders above this root); the cover's job is done.
         screen.dismiss();
-    }
-
-    // --- Backstop: the ground under the focus is not resident and nothing raised us. In world
-    // only, since behind the glue nothing loads; only while the focus is the body, since in a
-    // cinematic or free-fly residency describes the camera's tile; and never while a same-map
-    // teleport's settle hold is up. ---
-    if !screen.active
-        && !progress.focus_resident
-        && focus.follows_body()
-        && !player_settling
-        && *state.get() == crate::client_state::ClientState::InWorld
-    {
-        // Same map by construction: the ground under the body.
-        screen.raise("focus not resident", false, map_id, now);
     }
 
     // --- Clear, sustained a few frames. ---
@@ -746,6 +724,7 @@ fn drive_loading_screen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_world::world_map::CurrentMap;
 
     fn fit(w: f32, h: f32) -> [f32; 4] {
         let r = fit_rect(Vec2::new(w, h), true);
@@ -1049,15 +1028,26 @@ mod tests {
         }
     }
 
+    /// A live body outrunning the stream (GM speed ×100) stands on unloaded ground with no hold:
+    /// the reference's tile pass waits for the read in the frame and calls no raise (`0x6985d0`),
+    /// so the frame hitches and no screen comes up.
     #[test]
-    fn unloaded_ground_under_a_body_no_snap_holds_is_covered() {
+    fn outrunning_the_stream_raises_no_screen() {
         let mut app = in_world(GM_ISLAND);
         land_unloaded(&mut app, SOUTH_SEAS);
         app.world_mut()
             .resource_mut::<crate::player::Player>()
             .settling = false;
-        app.update();
-        assert!(covering(&app));
+        app.insert_resource(benilla_world::terrain_stream::ViewFocus::body(
+            SOUTH_SEAS, true,
+        ));
+        for _ in 0..30 {
+            app.update();
+            assert!(
+                !covering(&app),
+                "the ground under a live body is not a load"
+            );
+        }
     }
 
     #[test]

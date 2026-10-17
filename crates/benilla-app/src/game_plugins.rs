@@ -833,12 +833,18 @@ pub(crate) mod schedule_tests {
     ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
-    ///   `own_control_lost` only, and the loader writes the saved camera pose.
+    ///   `own_control_lost` only, and the loader writes the saved camera pose;
+    /// - the terrain stream's spawn half (`terrain_stream::spawn_streamed_tiles`) against the
+    ///   readers of `TerrainStreamer`, `Placements` and the asset stores its request half
+    ///   (`stream_terrain`) already pairs with: the inner-window wait sits between the two, so a
+    ///   pair the one system carried now counts on both; and `attach_inner_colliders` against the
+    ///   other users of `PendingCollider`, `StreamActivity` and `TerrainStreamer`: it attaches
+    ///   only the held inner tiles' terrain builds, and the others never touch those.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_346;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_367;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

@@ -35,7 +35,10 @@ mod spawn;
 mod weld;
 pub(crate) mod window;
 
-use collider::{finish_colliders, impassable_wall_data, terrain_collider_data};
+use collider::{
+    attach_inner_colliders, finish_colliders, impassable_wall_data, terrain_collider_data,
+    PendingColliders,
+};
 use furnish::furnish_tile_cells;
 use merge::{flush_static_merge, StaticMerge};
 use spawn::prop_light::WmoDoodadInst;
@@ -85,6 +88,21 @@ pub struct TerrainStreamer {
     settled: bool,
     /// The off-grid focus tile last warned about, so the warning fires once per tile.
     off_grid_reported: Option<(i32, i32)>,
+    /// The tiles held resident: the WDT-authored tiles of the inner window while a live paced body
+    /// leads the stream ([`ViewFocus::holds_inner`]), else none. The tile pass waits for these
+    /// and builds them with no limit (`0x698644`–`0x6986a5`).
+    inner: Vec<(i32, i32)>,
+    /// This frame's plan, from [`stream_terrain`] to [`spawn_streamed_tiles`]; `None` on a frame
+    /// with nothing to do.
+    plan: Option<StreamPlan>,
+}
+
+/// What [`stream_terrain`] decided this frame, for the spawn and the residency publish.
+struct StreamPlan {
+    /// Every tile the outer window wants that the WDT authors.
+    desired: Vec<(i32, i32)>,
+    /// Nothing was dropped or requested this frame.
+    quiet: bool,
 }
 
 /// The map-global WMO's placement id: a WMO-only map has no ADT uniqueIds to collide with, and
@@ -127,6 +145,25 @@ struct TileState {
     welds: Vec<Entity>,
     /// Those placements' merged static-render blobs, per cell and material (`WOW_STATIC_MERGE`).
     merged: Vec<Entity>,
+}
+
+impl TileState {
+    /// A tile whose ADT read is in flight, nothing spawned yet.
+    fn requested(handle: Handle<AdtTile>) -> Self {
+        Self {
+            handle,
+            entity: None,
+            material: None,
+            next_cell: 0,
+            furnished: false,
+            placements: Vec::new(),
+            liquid: Vec::new(),
+            wall: None,
+            clutter: Vec::new(),
+            welds: Vec::new(),
+            merged: Vec::new(),
+        }
+    }
 }
 
 /// Doodad and WMO placements, spawned once and refcounted across the tiles that list them.
@@ -181,8 +218,9 @@ pub struct WorldLoadProgress {
     /// Units done of [`Self::total`]: desired tiles furnished, focus-neighbourhood placements up.
     pub ready: usize,
     pub total: usize,
-    /// The tile under the view focus is furnished; false at startup and whenever a teleport lands
-    /// on unloaded ground, same map or not. The loading screen's backstop trigger.
+    /// The tile under the view focus is furnished; false at startup and whenever the focus lands
+    /// on unloaded ground, same map or not. A new load's re-arm and the settle release's map test;
+    /// it raises no screen, as the reference's tile pass never does.
     pub focus_resident: bool,
     /// The focus tile and its 8 neighbours are up with every placement they reference; consumers
     /// read [`Self::presentable`], which adds the backlogs.
@@ -315,6 +353,14 @@ impl ViewFocus {
         self.body
     }
 
+    /// A live paced body leads the stream, so the tile pass holds its inner window resident: it
+    /// waits for those tiles' reads and builds them whole within the frame, as the reference does
+    /// for every frame's pass (`0x6985d0`). Through entry, a teleport and a world swap the loading
+    /// cover or the settle hold waits instead, and a detached eye streams from the camera.
+    pub(crate) fn holds_inner(&self) -> bool {
+        self.follows_body() && self.paced
+    }
+
     /// A body stands in a settled world: the area authority's gate. Through entry, a teleport and
     /// a world swap the area under the body is a stale tile's, and publishing it would announce,
     /// play and join the channels of zones the player was never in.
@@ -358,6 +404,8 @@ pub struct StreamActivity {
     pub mfurnish_ms: f32,
     pub spawn_ms: f32,
     pub collider_ms: f32,
+    /// The inner-window hold's self-time: the wait for the reads and the inner collider attach.
+    pub wait_ms: f32,
 }
 
 impl StreamActivity {
@@ -391,13 +439,17 @@ impl Plugin for TerrainPlugin {
             .init_resource::<CurrentArea>()
             .init_resource::<queries::AreaMap>()
             // In `WorldStage::Stream`, between the teleport snap (Input) and the loading cover
-            // (Present), so a swap never renders uncovered. `finish_colliders` heads the chain so
-            // the collider queue read downstream is this frame's.
+            // (Present), so a swap never renders uncovered. Between the requests and the spawn
+            // the frame waits for the inner window's tiles and attaches finished colliders, so the
+            // collider queue read downstream is this frame's; the inner tiles' colliders attach
+            // before the next frame's mover runs.
             .add_systems(
                 Update,
                 (
-                    finish_colliders,
                     stream_terrain,
+                    await_reads_and_attach,
+                    spawn_streamed_tiles,
+                    attach_inner_colliders,
                     furnish_tile_cells,
                     spawn_loaded_placements,
                     flush_hull_welds,
@@ -449,26 +501,16 @@ impl Plugin for TerrainPlugin {
     }
 }
 
-/// Stream `AdtTile`s around the view focus: drop tiles out of range, request the tiles in range
-/// that the WDT `MAIN` grid authors, spawn each as it loads, and publish residency.
-#[allow(clippy::type_complexity)] // the bundled asset_stores tuple
+/// Stream `AdtTile`s around the view focus: drop tiles out of range and request the tiles in
+/// range that the WDT `MAIN` grid authors; [`spawn_streamed_tiles`] spawns each as it loads.
+#[allow(clippy::type_complexity)] // the bundled tuples
 fn stream_terrain(
     mut commands: Commands,
     mut state: ResMut<TerrainStreamer>,
     placements: ResMut<Placements>,
     asset_server: Res<AssetServer>,
-    tiles: Res<Assets<AdtTile>>,
-    // One tuple, under Bevy's 16-param system limit.
-    asset_stores: (
-        ResMut<Assets<TerrainMaterial>>,
-        ResMut<Assets<Mesh>>,
-        Res<Assets<WdtIndex>>,
-        Res<Time>,
-        ResMut<StreamActivity>,
-    ),
-    liquid_assets: Option<Res<LiquidAssets>>,
-    clutter: Option<Res<GroundClutter>>,
-    clutter_cfg: Option<Res<ClutterConfig>>,
+    wdts: Res<Assets<WdtIndex>>,
+    mut activity: ResMut<StreamActivity>,
     focus: Res<ViewFocus>,
     camera: Query<&Transform, With<WorldCamera>>,
     shared_light: Option<Res<SharedLightBuffer>>,
@@ -489,10 +531,13 @@ fn stream_terrain(
     ),
 ) {
     let (mut welds, mut static_merge, mut staticgx) = batchers;
-    let (mut materials, mut meshes, wdts, _time, mut activity) = asset_stores;
     let (current_map, map_catalog, view) = location;
+    state.plan = None;
+    if !focus.holds_inner() {
+        state.inner.clear();
+    }
     // Idle until other plugins' startup has made the light buffer and the map catalog.
-    let (Some(shared_light), Some(map_catalog)) = (shared_light, map_catalog) else {
+    let (Some(_), Some(map_catalog)) = (shared_light, map_catalog) else {
         return;
     };
     let t0 = Instant::now();
@@ -604,6 +649,14 @@ fn stream_terrain(
     if let Some(w) = wdt_index {
         desired.retain(|&(tx, ty)| w.has_tile(tx as u32, ty as u32));
     }
+    // The inner window's share of them, held resident while a live body leads the stream.
+    state.inner = if focus.holds_inner() {
+        let mut inner = window.inner_tiles();
+        inner.retain(|t| desired.contains(t));
+        inner
+    } else {
+        Vec::new()
+    };
 
     // A focus off the map's tile grid, usually one written in another map's coordinates, wants no
     // tile, so `total == 0` and the loading cover can never clear. Warned once per focus tile;
@@ -669,8 +722,10 @@ fn stream_terrain(
         }
     }
 
-    // Request new tiles once the WDT has answered. While paced, one per frame and nearest first,
-    // so a fresh row's landings stagger; entry and teleports request all at once.
+    // Request new tiles once the WDT has answered. While paced, the outer ring one per frame and
+    // nearest first, so a fresh row's landings stagger; the held inner tiles all at once, as the
+    // reference issues every inner read before it waits (`0x698679`). Entry and teleports
+    // request all at once.
     let mut fresh_empty = true;
     if wdt_index.is_some() || state.wdt_ungated {
         let live = focus.paced;
@@ -681,40 +736,169 @@ fn stream_terrain(
             .collect();
         fresh_empty = fresh.is_empty();
         if live && fresh.len() > 1 {
-            fresh.sort_by_key(|&(tx, ty)| (tx - cx).abs().max((ty - cy).abs()));
-            fresh.truncate(1);
+            let inner = &state.inner;
+            fresh.sort_by_key(|&(tx, ty)| {
+                (
+                    !inner.contains(&(tx, ty)),
+                    (tx - cx).abs().max((ty - cy).abs()),
+                )
+            });
+            let held = fresh.iter().take_while(|t| inner.contains(t)).count();
+            fresh.truncate(held + 1);
         }
         for (tx, ty) in fresh {
             activity.tiles_requested += 1;
             state.tiles.insert(
                 (tx, ty),
-                TileState {
-                    handle: asset_server
-                        .load(format!("mpq://World/Maps/{dir}/{dir}_{tx}_{ty}.adt")),
-                    entity: None,
-                    material: None,
-                    next_cell: 0,
-                    furnished: false,
-                    placements: Vec::new(),
-                    liquid: Vec::new(),
-                    wall: None,
-                    clutter: Vec::new(),
-                    welds: Vec::new(),
-                    merged: Vec::new(),
-                },
+                TileState::requested(
+                    asset_server.load(format!("mpq://World/Maps/{dir}/{dir}_{tx}_{ty}.adt")),
+                ),
             );
         }
     }
+    state.plan = Some(StreamPlan {
+        desired,
+        quiet: stale_empty && fresh_empty,
+    });
+    activity.stream_ms += t0.elapsed().as_secs_f32() * 1000.0;
+}
 
-    // Spawn loaded tiles within the frame's budget. The material binds the shared light buffer,
-    // so a new tile is lit and fogged on its first frame.
-    let tile_deadline = Instant::now() + SPAWN_BUDGET;
-    for (&(tx, ty), tile) in state.tiles.iter_mut() {
-        if tile.entity.is_some() {
-            continue;
+/// How long the inner wait may block before it gives up and lets the frame go on.
+const INNER_WAIT_CAP: Duration = Duration::from_secs(10);
+
+/// The tile pass's wait (`0x698689` → `0x443bd0`, which sleeps 1 ms in a loop until the read
+/// completes): the frame does not go on while a held inner tile is still loading. Exclusive,
+/// since only the asset server's event pump moves a finished load into [`Assets`].
+///
+/// Deviation: the wait gives up after [`INNER_WAIT_CAP`] with a warning, where the reference's
+/// never does, so a lost load stalls the stream and not the client.
+fn await_inner_tiles(world: &mut World) {
+    let pending: Vec<Handle<AdtTile>> = {
+        let state = world.resource::<TerrainStreamer>();
+        if state.plan.is_none() {
+            return;
         }
+        state
+            .inner
+            .iter()
+            .filter_map(|t| state.tiles.get(t))
+            .filter(|t| t.entity.is_none())
+            .map(|t| t.handle.clone())
+            .collect()
+    };
+    if pending.is_empty() {
+        return;
+    }
+    let t0 = Instant::now();
+    let open = |world: &World| {
+        let (adts, server) = (
+            world.resource::<Assets<AdtTile>>(),
+            world.resource::<AssetServer>(),
+        );
+        pending
+            .iter()
+            .filter(|h| {
+                !adts.contains(*h)
+                    && !matches!(
+                        server.load_state(*h),
+                        bevy::asset::LoadState::Failed(_) | bevy::asset::LoadState::NotLoaded
+                    )
+            })
+            .count()
+    };
+    loop {
+        bevy::asset::handle_internal_asset_events(world);
+        let left = open(world);
+        if left == 0 {
+            break;
+        }
+        if t0.elapsed() >= INNER_WAIT_CAP {
+            warn!(
+                "terrain: gave up waiting on {left} inner tile(s) after {:.0?}",
+                t0.elapsed()
+            );
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if let Some(mut activity) = world.get_resource_mut::<StreamActivity>() {
+        activity.wait_ms += t0.elapsed().as_secs_f32() * 1000.0;
+    }
+}
+
+/// The chain's one exclusive stop: the wait for the held inner tiles' reads, then the budgeted
+/// collider attach. One barrier, not two, since an exclusive system stalls everything the
+/// executor could run beside it.
+fn await_reads_and_attach(world: &mut World, colliders: &mut PendingColliders) {
+    await_inner_tiles(world);
+    finish_colliders(world, colliders);
+}
+
+/// Spawn loaded tiles, the held inner ones without a limit and the rest within the frame's
+/// budget, then publish residency.
+#[allow(clippy::type_complexity)] // the bundled asset_stores tuple
+fn spawn_streamed_tiles(
+    mut commands: Commands,
+    mut state: ResMut<TerrainStreamer>,
+    placements: ResMut<Placements>,
+    asset_server: Res<AssetServer>,
+    tiles: Res<Assets<AdtTile>>,
+    // One tuple, under Bevy's 16-param system limit.
+    asset_stores: (
+        ResMut<Assets<TerrainMaterial>>,
+        ResMut<Assets<Mesh>>,
+        Res<Assets<WdtIndex>>,
+        ResMut<StreamActivity>,
+    ),
+    liquid_assets: Option<Res<LiquidAssets>>,
+    clutter: Option<Res<GroundClutter>>,
+    clutter_cfg: Option<Res<ClutterConfig>>,
+    focus: Res<ViewFocus>,
+    shared_light: Option<Res<SharedLightBuffer>>,
+    mut load_progress: Option<ResMut<WorldLoadProgress>>,
+    // `None` only under `WOW_STATIC_GX=0`.
+    mut staticgx: Option<ResMut<crate::static_gx::StaticGx>>,
+) {
+    let (mut materials, mut meshes, wdts, mut activity) = asset_stores;
+    let Some(shared_light) = shared_light else {
+        return;
+    };
+    let state = state.as_mut();
+    let Some(StreamPlan { desired, quiet }) = state.plan.take() else {
+        return;
+    };
+    let t0 = Instant::now();
+    let placements = placements.into_inner();
+    let wdt_index = state.wdt.as_ref().and_then(|h| wdts.get(h));
+    let (cx, cy) = state.focus;
+
+    // Spawn loaded tiles, held inner tiles first and past the budget, the rest nearest first
+    // within it. The material binds the shared light buffer, so a new tile is lit and fogged on
+    // its first frame.
+    let mut landed: Vec<(bool, i32, (i32, i32))> = state
+        .tiles
+        .iter()
+        .filter(|(_, t)| t.entity.is_none() && tiles.contains(&t.handle))
+        .map(|(&(tx, ty), _)| {
+            (
+                !state.inner.contains(&(tx, ty)),
+                (tx - cx).abs().max((ty - cy).abs()),
+                (tx, ty),
+            )
+        })
+        .collect();
+    landed.sort_unstable();
+    let tile_deadline = Instant::now() + SPAWN_BUDGET;
+    for (outer, _, (tx, ty)) in landed {
+        // Past the budget the outer ring waits a frame; the `entity` guard makes this re-entrant.
+        if outer && Instant::now() >= tile_deadline {
+            break;
+        }
+        let Some(tile) = state.tiles.get_mut(&(tx, ty)) else {
+            continue;
+        };
         let Some(adt) = tiles.get(&tile.handle) else {
-            continue; // not loaded yet, or missing
+            continue;
         };
         let material = materials.add(ExtendedMaterial {
             base: terrain_base_material(),
@@ -792,16 +976,10 @@ fn stream_terrain(
             );
             tile.clutter = clutter_ents;
         }
-
-        // Past the budget the rest waits a frame; the `entity` guard above makes this re-entrant.
-        if Instant::now() >= tile_deadline {
-            break;
-        }
     }
 
     // Publish residency; the pacing edge is read and advanced once per frame.
-    state.settled = stale_empty
-        && fresh_empty
+    state.settled = quiet
         && state
             .tiles
             .values()
@@ -990,6 +1168,7 @@ fn drop_streamed_world(
             release_placement(commands, placements, uid, activity);
         }
     }
+    state.inner.clear();
     if std::mem::take(&mut state.global_wmo) {
         release_placement(commands, placements, GLOBAL_WMO_UID, activity);
     }
@@ -1323,17 +1502,8 @@ mod straddler_tests {
 
     fn tile_listing(uids: &[u32]) -> TileState {
         TileState {
-            handle: Default::default(),
-            entity: None,
-            material: None,
-            next_cell: 0,
-            furnished: false,
             placements: uids.to_vec(),
-            liquid: Vec::new(),
-            wall: None,
-            clutter: Vec::new(),
-            welds: Vec::new(),
-            merged: Vec::new(),
+            ..TileState::requested(Default::default())
         }
     }
 
@@ -1432,5 +1602,182 @@ mod straddler_tests {
         assert!(!p8.spawned);
         assert!(world.get_entity(e1).is_ok());
         assert!(world.get_entity(e2).is_err());
+    }
+}
+
+#[cfg(test)]
+mod inner_hold_tests {
+    use std::path::Path;
+
+    use super::*;
+    use benilla_assets::ChunkShading;
+    use benilla_formats::ChunkMesh;
+    use bevy::asset::io::memory::{Dir, MemoryAssetReader};
+    use bevy::asset::io::{AssetSourceBuilder, Reader};
+    use bevy::asset::{AssetLoader, LoadContext};
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// How long the test loader takes over a tile: far longer than a frame.
+    const SLOW_READ: Duration = Duration::from_millis(150);
+
+    /// A tile with `chunks` and nothing else.
+    fn tile_of(chunks: Vec<ChunkMesh>) -> AdtTile {
+        AdtTile {
+            shading: vec![ChunkShading::default(); chunks.len()],
+            layer_array: Handle::default(),
+            alpha_array: Handle::default(),
+            shadow_array: Handle::default(),
+            doodads: Vec::new(),
+            wmos: Vec::new(),
+            chunks,
+        }
+    }
+
+    /// A slow disk: every `.adt` read takes [`SLOW_READ`] and yields an empty tile.
+    #[derive(Default, TypePath)]
+    struct SlowAdtLoader;
+
+    impl AssetLoader for SlowAdtLoader {
+        type Asset = AdtTile;
+        type Settings = ();
+        type Error = std::io::Error;
+
+        async fn load(
+            &self,
+            reader: &mut dyn Reader,
+            _settings: &(),
+            _ctx: &mut LoadContext<'_>,
+        ) -> Result<AdtTile, Self::Error> {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await?;
+            std::thread::sleep(SLOW_READ);
+            Ok(tile_of(Vec::new()))
+        }
+
+        fn extensions(&self) -> &[&str] {
+            &["adt"]
+        }
+    }
+
+    /// The wait alone, over a memory source and the slow loader, with tile (32, 44) just requested
+    /// and held inner when `held`.
+    fn waiting_app(held: bool) -> (App, Handle<AdtTile>) {
+        let dir = Dir::default();
+        dir.insert_asset(Path::new("t_32_44.adt"), vec![0u8; 4]);
+        let mut app = App::new();
+        app.register_asset_source(
+            "mem",
+            AssetSourceBuilder::new(move || Box::new(MemoryAssetReader { root: dir.clone() })),
+        );
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.init_asset::<AdtTile>();
+        app.register_asset_loader(SlowAdtLoader);
+        app.init_resource::<StreamActivity>();
+        app.add_systems(Update, await_inner_tiles);
+        let handle: Handle<AdtTile> = app
+            .world()
+            .resource::<AssetServer>()
+            .load("mem://t_32_44.adt");
+        let mut state = TerrainStreamer::default();
+        state
+            .tiles
+            .insert((32, 44), TileState::requested(handle.clone()));
+        state.inner = if held { vec![(32, 44)] } else { Vec::new() };
+        state.plan = Some(StreamPlan {
+            desired: vec![(32, 44)],
+            quiet: false,
+        });
+        app.insert_resource(state);
+        (app, handle)
+    }
+
+    /// The frame does not go on while a held inner tile is still being read (`0x698689`): after
+    /// one update the tile is in `Assets`, where a frame that only requests it would not have it.
+    #[test]
+    fn the_frame_waits_for_a_held_inner_tile() {
+        let (mut app, handle) = waiting_app(false);
+        app.update();
+        assert!(
+            !app.world().resource::<Assets<AdtTile>>().contains(&handle),
+            "the read takes {SLOW_READ:?}, so a frame that does not wait has no tile"
+        );
+
+        let (mut app, handle) = waiting_app(true);
+        app.update();
+        assert!(
+            app.world().resource::<Assets<AdtTile>>().contains(&handle),
+            "a held inner tile is loaded by the end of the frame that requested it"
+        );
+        assert!(app.world().resource::<StreamActivity>().wait_ms > 0.0);
+    }
+
+    /// A flat chunk with one drawn triangle, enough for a cell mesh.
+    fn drawn_chunk() -> ChunkMesh {
+        ChunkMesh {
+            positions: (0..145).map(|i| [i as f32, 0.0, 0.0]).collect(),
+            normals: Vec::new(),
+            uvs: vec![[0.0, 0.0]; 145],
+            indices: vec![0, 1, 17],
+            holes: 0,
+            base_texture: None,
+            layer_textures: Vec::new(),
+            layer_effect_ids: Vec::new(),
+            alpha_map: None,
+            shadow: None,
+            pred_tex: [0; 64],
+            no_effect_doodad: [false; 64],
+            index_x: 0,
+            index_y: 0,
+            area_id: 0,
+            impassable: false,
+            liquids: Vec::new(),
+        }
+    }
+
+    /// While paced the furnisher caps an outer-ring tile at four cells a frame, but builds a held
+    /// inner tile whole first, as the reference builds an inner chunk with no limit (`0x6986a5`),
+    /// even when the outer tile sorts nearer.
+    #[test]
+    fn a_held_inner_tile_furnishes_whole_in_one_frame() {
+        let mut world = World::new();
+        let mut adts = Assets::<AdtTile>::default();
+        let mut state = TerrainStreamer {
+            focus: (32, 44),
+            ..Default::default()
+        };
+        // Both a tile from the focus; the outer one sorts first by key.
+        for tile in [(31, 44), (33, 44)] {
+            let handle = adts.add(tile_of((0..256).map(|_| drawn_chunk()).collect()));
+            let root = world.spawn_empty().id();
+            state.tiles.insert(
+                tile,
+                TileState {
+                    entity: Some(root),
+                    material: Some(Handle::default()),
+                    ..TileState::requested(handle)
+                },
+            );
+        }
+        state.inner = vec![(33, 44)];
+        world.insert_resource(state);
+        world.insert_resource(adts);
+        world.insert_resource(Assets::<Mesh>::default());
+        world.init_resource::<StreamActivity>();
+        world.insert_resource(ViewFocus::body([0.0; 3], true));
+        world.run_system_once(furnish_tile_cells).unwrap();
+
+        let state = world.resource::<TerrainStreamer>();
+        let inner = &state.tiles[&(33, 44)];
+        assert!(
+            inner.furnished && inner.next_cell == 16,
+            "the inner tile builds all 16 cells in its frame (got {})",
+            inner.next_cell
+        );
+        let outer = &state.tiles[&(31, 44)];
+        assert!(
+            !outer.furnished && outer.next_cell == 0,
+            "the outer ring waits: the frame's cap went on the inner tile (got {})",
+            outer.next_cell
+        );
     }
 }
