@@ -13,10 +13,10 @@ pub struct Node {
     pub val: Value,
     /// The next node in this chain, or -1.
     pub next: i32,
-    /// The key's object was freed while the entry was empty, or a weak table's clearing took
-    /// the entry (5.0's `removekey`, `0x6f79d0`, which retags the key `LUA_TNONE`). A write does
-    /// not find the key here again, as `luaH_get` does not, so setting it takes a node by
-    /// `newkey`'s rules; `next` still finds it, by identity.
+    /// The key's object was freed while the entry was empty, which 5.0 leaves as it is, its
+    /// pointer dangling. A new object may take the handle, so a write does not find the key here
+    /// and takes a node by `newkey`'s rules; `next` still finds it, by identity. A weak table's
+    /// clearing instead removes the key ([`Table::remove_node`]).
     pub(crate) dead: bool,
 }
 
@@ -251,6 +251,22 @@ impl Table {
         self.node.resize(size, EMPTY);
         self.lsizenode = lsize;
         self.firstfree = size - 1;
+    }
+
+    /// 5.0's `removekey` (`0x6f79d0`), a weak table's clearing: the value cleared and a
+    /// collectable key retagged `LUA_TNONE`, so no lookup finds it, `next` included
+    /// (``invalid key for `next'``, `0x6fa467`). The node stays taken until a rehash.
+    pub(crate) fn remove_node(&mut self, i: usize) {
+        let n = &mut self.node[i];
+        n.val = Value::Nil;
+        if matches!(
+            n.key.unpack(),
+            V::Str(_) | V::Table(_) | V::Func(_) | V::User(_)
+        ) {
+            n.key = Value::NONE_KEY;
+            n.dead = false;
+        }
+        self.hint_key.set(Value::Nil);
     }
 
     /// The hash part is the dummy node: 5.0 shares one, which never keeps a key.

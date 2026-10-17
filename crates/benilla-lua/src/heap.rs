@@ -1131,7 +1131,9 @@ impl Heap {
                 self.tables.arena.items[t as usize].node[i as usize].dead = true;
             }
         }
-        // Weak tables drop entries whose collectable key or value died.
+        // Weak tables drop entries whose collectable key or value died: 5.0's `cleartablekeys`
+        // (`0x6f7970`), every node of a weak-keyed table, and `cleartablevalues`, every live
+        // node of a weak-valued one, each by `removekey`.
         for t in weak_tables {
             let (tables, funcs, users) = (
                 &self.tables.arena.state,
@@ -1146,15 +1148,18 @@ impl Heap {
                 _ => true,
             };
             let tab = &mut self.tables.arena.items[t as usize];
-            for v in tab.array.iter_mut() {
-                if !alive(*v) {
-                    *v = Value::Nil;
+            let (wk, wv) = (tab.weak & 1 != 0, tab.weak & 2 != 0);
+            if wv {
+                for v in tab.array.iter_mut() {
+                    if !alive(*v) {
+                        *v = Value::Nil;
+                    }
                 }
             }
-            for n in tab.node.iter_mut() {
-                if !n.val.is_nil() && (!alive(n.key) || !alive(n.val)) {
-                    n.val = Value::Nil;
-                    n.dead = is_collectable(n.key);
+            for i in 0..tab.node.len() {
+                let n = &tab.node[i];
+                if (wk && !alive(n.key)) || (wv && !alive(n.val)) {
+                    tab.remove_node(i);
                 }
             }
         }

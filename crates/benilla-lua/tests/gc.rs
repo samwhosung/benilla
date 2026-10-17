@@ -328,3 +328,22 @@ fn a_collected_deleted_key_is_set_again_in_its_node() {
         "-1.#INF"
     );
 }
+
+/// A weak table's clearing removes the key (`removekey`, `0x6f79d0`, retags it `LUA_TNONE`), so
+/// `next` from it raises (`luaH_index`, `0x6fa467`), the last step's key included; a key deleted
+/// by a write stays valid through a collection.
+#[test]
+fn a_key_a_weak_table_cleared_is_invalid_for_next() {
+    let mut vm = benilla_lua::new_state();
+    assert_eq!(
+        run(
+            &mut vm,
+            "local t = setmetatable({}, {__mode = 'v'}) t.gone = {} t.cut = 1 t.kept = 2 t.cut = nil \
+             local k = next(t) while k ~= 'gone' do k = next(t, k) end \
+             collectgarbage() \
+             local ok, e = pcall(next, t, 'gone') \
+             return tostring(pcall(next, t, 'cut')) .. ' ' .. tostring(ok) .. ' ' .. e .. ' ' .. tostring(t.gone)"
+        ),
+        "true false invalid key for `next' nil"
+    );
+}
