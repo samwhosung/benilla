@@ -240,3 +240,12 @@ fn number_digits_round_as_the_clients_arithmetic() {
         assert_eq!(vm.display(got[0]), want, "{bits:#x}");
     }
 }
+
+/// The client's `sprintf` (`0x73fec4`) zero-pads `%s` and `%c` for the `0` flag.
+#[test]
+fn format_zero_pads_strings_and_chars() {
+    assert_eq!(
+        ok(r#"return string.format("%05s|%-05s|%05.1s|%03c|%-03c|", "ab", "ab", "ab", 65, 65)"#),
+        ["000ab|ab   |0000a|00A|A  |"]
+    );
+}

@@ -312,7 +312,8 @@ pub fn fmt_float(v: f64, conv: u8, spec: &Spec) -> String {
     )
 }
 
-/// `%s` with an optional precision.
+/// `%s` with an optional precision, and `%c`. The client's `sprintf` pads them as it pads a
+/// number: zeros on the left for the `0` flag, unless `-` puts spaces on the right.
 pub fn fmt_str(s: &[u8], spec: &Spec) -> Vec<u8> {
     let s = match spec.precision {
         Some(p) => &s[..s.len().min(p)],
@@ -321,7 +322,8 @@ pub fn fmt_str(s: &[u8], spec: &Spec) -> Vec<u8> {
     let fill = spec.width.saturating_sub(s.len());
     let mut out = Vec::with_capacity(s.len() + fill);
     if !spec.minus {
-        out.extend(std::iter::repeat_n(b' ', fill));
+        let pad = if spec.zero { b'0' } else { b' ' };
+        out.extend(std::iter::repeat_n(pad, fill));
     }
     out.extend_from_slice(s);
     if spec.minus {
