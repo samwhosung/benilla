@@ -769,6 +769,8 @@ const SWEEP_FNS: &[&str] = &[
     "math.floor",
     "math.max",
     "math.min",
+    // `math.mod`, `math.pow` and `math.atan2` check argument 1, then 2, as the client's do
+    // (`0x7fafd0`, `0x7fb050`, `0x7faf30`), on every platform.
     "math.mod",
     "math.fmod",
     "math.sqrt",
@@ -831,6 +833,7 @@ const SWEEP_FNS: &[&str] = &[
     "floor",
     "max",
     "min",
+    // `math.mod`'s order, as above.
     "mod",
     "sqrt",
     "frexp",

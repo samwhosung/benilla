@@ -14,10 +14,10 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
         "asin" => |vm, n| un(vm, n, f64::asin),
         "acos" => |vm, n| un(vm, n, f64::acos),
         "atan" => |vm, n| un(vm, n, f64::atan),
-        "atan2" => |vm, n| bin_rev(vm, n, f64::atan2),
+        "atan2" => |vm, n| bin(vm, n, f64::atan2),
         "ceil" => |vm, n| un(vm, n, f64::ceil),
         "floor" => |vm, n| un(vm, n, f64::floor),
-        "fmod" | "mod" => |vm, n| bin_rev(vm, n, fmod),
+        "fmod" | "mod" => |vm, n| bin(vm, n, fmod),
         "frexp" => frexp,
         "ldexp" => ldexp,
         "sqrt" => |vm, n| un(vm, n, f64::sqrt),
@@ -27,7 +27,7 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
         "log10" => |vm, n| un(vm, n, f64::log10),
         "exp" => |vm, n| un(vm, n, exp),
         "deg" => |vm, n| un(vm, n, deg),
-        "pow" => |vm, n| bin_rev(vm, n, pow),
+        "pow" => |vm, n| bin(vm, n, pow),
         "rad" => |vm, n| un(vm, n, rad),
         "random" => random,
         "randomseed" => randomseed,
@@ -45,10 +45,10 @@ pub fn open(vm: &mut Vm) {
         ("asin", |vm, n| un(vm, n, f64::asin)),
         ("acos", |vm, n| un(vm, n, f64::acos)),
         ("atan", |vm, n| un(vm, n, f64::atan)),
-        ("atan2", |vm, n| bin_rev(vm, n, f64::atan2)),
+        ("atan2", |vm, n| bin(vm, n, f64::atan2)),
         ("ceil", |vm, n| un(vm, n, f64::ceil)),
         ("floor", |vm, n| un(vm, n, f64::floor)),
-        ("mod", |vm, n| bin_rev(vm, n, fmod)),
+        ("mod", |vm, n| bin(vm, n, fmod)),
         ("frexp", frexp),
         ("ldexp", ldexp),
         ("sqrt", |vm, n| un(vm, n, f64::sqrt)),
@@ -58,7 +58,7 @@ pub fn open(vm: &mut Vm) {
         ("log10", |vm, n| un(vm, n, f64::log10)),
         ("exp", |vm, n| un(vm, n, exp)),
         ("deg", |vm, n| un(vm, n, deg)),
-        ("pow", |vm, n| bin_rev(vm, n, pow)),
+        ("pow", |vm, n| bin(vm, n, pow)),
         ("rad", |vm, n| un(vm, n, rad)),
         ("random", random),
         ("randomseed", randomseed),
@@ -145,16 +145,9 @@ fn num(r: f64, a: f64, b: f64) -> Value {
     })
 }
 
-/// A two-argument C call such as `fmod(luaL_checknumber(L, 1), luaL_checknumber(L, 2))`: gcc
-/// evaluated the arguments right to left, so the second is checked first. The order is the
-/// x86-64 Linux C build's on every platform (clang on arm64 checks the first); the client's MSVC
-/// x86-32 order is later work, as is its `rand` (#1258).
-fn bin_rev(vm: &mut Vm, nargs: usize, f: fn(f64, f64) -> f64) -> R<usize> {
-    let b = vm.check_number(nargs, 2)?;
-    let a = vm.check_number(nargs, 1)?;
-    Ok(vm.ret1(num(f(a, b), a, b)))
-}
-
+/// A two-argument function: argument 1 checked first, then 2, as the client's `math_atan2`,
+/// `math_mod` and `math_pow` check them (`0x7faf30`, `0x7fafd0`, `0x7fb050`: `luaL_checknumber`
+/// on 1 at `0x7fb057`, then on 2 at `0x7fb066`).
 fn bin(vm: &mut Vm, nargs: usize, f: fn(f64, f64) -> f64) -> R<usize> {
     let x = vm.check_number(nargs, 1)?;
     let y = vm.check_number(nargs, 2)?;
@@ -189,8 +182,8 @@ fn frexp(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(2)
 }
 
-/// `ldexp(luaL_checknumber(L, 1), luaL_checkint(L, 2))`: gcc evaluated the arguments right to
-/// left, so the second is checked first.
+/// `math_ldexp` (`0x7fb1f0`): the client checks argument 2 first (`0x7fb1f8`), then 1
+/// (`0x7fb20a`).
 fn ldexp(vm: &mut Vm, nargs: usize) -> R<usize> {
     let e = vm.check_int(nargs, 2)?;
     let x = vm.check_number(nargs, 1)?;

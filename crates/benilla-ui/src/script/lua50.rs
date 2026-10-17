@@ -517,6 +517,39 @@ mod tests {
         }
     }
 
+    /// `math_atan2`, `math_mod` and `math_pow` (`0x7faf30`, `0x7fafd0`, `0x7fb050`) check
+    /// argument 1, then 2 (`0x7fb057`, `0x7fb066`); only `math_ldexp` (`0x7fb1f0`) checks 2 first.
+    #[test]
+    fn two_argument_math_checks_its_first_argument_first() {
+        let s = UiScript::new().unwrap();
+        let raised = |call: &str| -> String {
+            s.eval::<String>(&format!(
+                "local ok, e = pcall(function() return {call} end) return e"
+            ))
+            .unwrap()
+        };
+        for (call, want) in [
+            (
+                "math.pow()",
+                "bad argument #1 to `pow' (number expected, got no value)",
+            ),
+            (
+                "math.atan2('x', 'y')",
+                "bad argument #1 to `atan2' (number expected, got string)",
+            ),
+            (
+                "math.mod(nil, {})",
+                "bad argument #1 to `mod' (number expected, got nil)",
+            ),
+            (
+                "math.ldexp()",
+                "bad argument #2 to `ldexp' (number expected, got no value)",
+            ),
+        ] {
+            assert!(raised(call).ends_with(want), "{call}: {}", raised(call));
+        }
+    }
+
     /// The bare `mod` is `math.mod`, so it survives `math.fmod`'s removal.
     #[test]
     fn the_bare_math_family_survives_the_removals() {
