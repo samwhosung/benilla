@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 224
+- [benilla-app](#benilla-app): 225
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
@@ -136,6 +136,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference copies a finished model, ours stream in, so while false the pane keeps re-taking and a late weapon is baked. ([`src/entities/equipment/resolve.rs:179`](../crates/benilla-app/src/entities/equipment/resolve.rs#L179))
 - It attaches at that clip's `$SHL`, where the reference attaches it at the draw's start, because it keys on the ranged slot's sheath so it arrives with the bow it feeds; the two are a few hundred ms apart in one clip and never seen apart. ([`src/entities/equipment/resolve.rs:548`](../crates/benilla-app/src/entities/equipment/resolve.rs#L548))
 - `Hold` is one repeating play where the reference re-arms it each pass with variation -1, a weighted random pick, because at most one `Spells\` model authors several variations. ([`src/entities/spell_fx/lifecycle.rs:11`](../crates/benilla-app/src/entities/spell_fx/lifecycle.rs#L11))
+
+#### game_tip
+
+- The reference rasterizes the tip's font at most 32 px (`0x5ca096`/`0x5ca09b` in `0x5ca030`, reached through `0x44d040`) and magnifies it to the string's height; this rasterizes at the true size, as the engine does all big text (`crate::ui_text`'s engine). ([`src/game_tip.rs:191`](../crates/benilla-app/src/game_tip.rs#L191))
 
 #### loading_screen
 
@@ -439,7 +443,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference's measure kernels (`0x5c6940`, `0x5c6b70`, `0x5c6c50`, `0x5c7300`, `0x5c7470`) rasterize each character, but the step law reads only the advance, so skipping the bitmap changes no width. ([`src/ui_text/engine/mod.rs:360`](../crates/benilla-app/src/ui_text/engine/mod.rs#L360))
 - The reference evicts the least recently used glyph and repacks its hole (`0x5cad2b`, over `[CGxFont+0x64..0x6c]`); this drops every cell, because a shelf allocator cannot reclaim an interior cell and the sheet is far larger than the reference's 256×256 pages. ([`src/ui_text/engine/mod.rs:610`](../crates/benilla-app/src/ui_text/engine/mod.rs#L610))
 - Every UI text block sits 1 px below the reference's row, because at that row UI text reads high. ([`src/ui_text/layout/mod.rs:112`](../crates/benilla-app/src/ui_text/layout/mod.rs#L112))
-- The cap is 32 logical units, not 32 device px, because the reference's raster-memory ceiling draws all big text at the same 32 device px on a modern display; at the 768-tall design height the two agree. ([`src/ui_text/mod.rs:46`](../crates/benilla-app/src/ui_text/mod.rs#L46))
+- The cap is 32 logical units, not 32 device px, because the reference's raster-memory ceiling draws all big text at the same 32 device px on a modern display; at the 768-tall design height the two agree. ([`src/ui_text/mod.rs:54`](../crates/benilla-app/src/ui_text/mod.rs#L54))
 - `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster, and 8-bit texels where the reference packs ARGB4444, so nothing bands. ([`src/ui_text/outline.rs:29`](../crates/benilla-app/src/ui_text/outline.rs#L29))
 - One sheet, where the reference keeps up to 8 pages per font (`[CGxFont+0x18c]`), because a nameplate bakes its glyphs into one mesh with one material, which a page would split. ([`src/ui_text/pack.rs:11`](../crates/benilla-app/src/ui_text/pack.rs#L11))
 
