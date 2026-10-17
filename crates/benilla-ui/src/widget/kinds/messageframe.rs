@@ -227,23 +227,28 @@ impl ScrollingMessageState {
         self.reset_all_fade_times(viewport_rows);
     }
 
-    /// How many messages fit `viewport_rows` from the anchor, each costing its wrapped rows; a
-    /// partly fitting one counts, as in the draw's band walk (`emit_message_lines`).
+    /// How many messages the layout places for a frame `viewport_rows` tall, the client's lines
+    /// shown (`+0x34c`, which paging reads at `0x7885b4`). From the anchor outward each message
+    /// costs its wrapped rows (`0x7889ad`); one that does not fit whole ends the walk
+    /// (`0x7889b3`-`0x7889be`, `0x788a2f`) unless it is the anchored one (`0x7889c0`-`0x7889c5`),
+    /// which always shows. A faded message is placed all the same (`0x7889c7`-`0x7889ee` only
+    /// hides it), so it holds its rows. The draw (`emit_message_lines`) walks this many.
     pub fn displayed_count(&self, viewport_rows: usize) -> usize {
-        if self.lines.is_empty() || viewport_rows == 0 {
+        if self.lines.is_empty() {
             return 0;
         }
         let top_index = self.lines.len().saturating_sub(1 + self.scroll_offset);
-        let mut used = 0usize;
+        let mut left = viewport_rows;
         let mut count = 0usize;
         for idx in (0..=top_index).rev() {
-            if used >= viewport_rows {
+            let rows = usize::from(self.lines[idx].rows.max(1));
+            if count > 0 && rows > left {
                 break;
             }
-            used += usize::from(self.lines[idx].rows.max(1));
+            left = left.saturating_sub(rows);
             count += 1;
         }
-        count.max(1)
+        count
     }
 
     /// `PageUp` (`0x7885b0`): back by the displayed count less one, then re-arm.

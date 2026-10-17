@@ -505,10 +505,16 @@ mod tests {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
         s.lines[1].rows = 3;
-        // 4 rows: the newest (1) and the middle (3) fill it; a partly fitting message counts.
+        // 4 rows: the newest (1) and the middle (3) fill it. A message that does not fit whole
+        // ends the walk (`0x7889c0`-`0x7889c5`) unless it is the anchored one.
         assert_eq!(s.displayed_count(4), 2);
-        assert_eq!(s.displayed_count(3), 2, "partial middle line still counts");
+        assert_eq!(
+            s.displayed_count(3),
+            1,
+            "a partly fitting middle line is out"
+        );
         assert_eq!(s.displayed_count(1), 1);
+        assert_eq!(s.displayed_count(0), 1, "the anchored message always shows");
         // A page is displayed − 1, one message of overlap, never 0.
         s.page_up(4);
         assert_eq!(s.scroll_offset, 1);
@@ -520,63 +526,94 @@ mod tests {
         assert!(s.at_bottom());
     }
 
-    #[test]
-    fn emit_stacks_wrapped_rows_and_clips_partial_top() {
+    /// A scrolling frame `CF` of the given height holding `messages`, bottom left at (32, 90),
+    /// after the host answered each message's row count with `rows(index)`: what it draws as
+    /// `(text, bottom, top)` in draw order, and the count its layout reports.
+    fn laid_out(
+        height: u32,
+        messages: &[&str],
+        rows: impl Fn(u32) -> u16,
+    ) -> (Vec<(String, f32, f32)>, usize) {
         let mut s = UiScript::new().unwrap();
         s.set_screen_size(800.0, 600.0);
-        s.run(
+        s.run(&format!(
             "local f = CreateFrame('ScrollingMessageFrame', 'CF')\n\
              f:SetPoint('BOTTOMLEFT', 32, 90)\n\
              f:SetWidth(430)\n\
-             f:SetHeight(34)",
-        )
+             f:SetHeight({height})"
+        ))
         .unwrap();
-        s.run("CF:AddMessage('old', 1, 1, 1)").unwrap();
-        s.run("CF:AddMessage('wrapped', 1, 1, 1)").unwrap();
-        s.run("CF:AddMessage('new', 1, 1, 1)").unwrap();
+        for m in messages {
+            s.run(&format!("CF:AddMessage('{m}', 1, 1, 1)")).unwrap();
+        }
         s.resolve();
-        let reqs = s.message_lines_needing_measure();
-        assert_eq!(reqs.len(), 3);
-        assert!(reqs.iter().all(|r| (r.wrap_width - 430.0).abs() < 0.5));
-        let answers: Vec<(u32, u32, u16, u64)> = reqs
+        let answers: Vec<(u32, u32, u16, u64)> = s
+            .message_lines_needing_measure()
             .iter()
-            .map(|r| (r.frame, r.index, if r.index == 1 { 2 } else { 1 }, r.key))
+            .map(|r| (r.frame, r.index, rows(r.index), r.key))
             .collect();
         s.set_message_line_rows(&answers);
-        assert!(
-            s.message_lines_needing_measure().is_empty(),
-            "answered keys satisfy the cache"
-        );
-        // Default font, pitch 14. Frame [90, 124): 'new' is [90, 104), 'wrapped' [104, 132)
-        // overflows and draws clipped, and 'old' would start at 132, outside, so does not draw.
-        let quads = s.extract();
-        let texts: Vec<(String, f32, f32)> = quads
+        let mut fh = None;
+        let texts = s
+            .extract()
             .iter()
-            .filter_map(|q| match (&q.content, q.rect) {
-                (crate::script::QuadContent::Text { text: Some(t), .. }, Some(r)) => {
+            .filter_map(|q| match (&q.content, q.rect, q.target) {
+                (
+                    crate::script::QuadContent::Text { text: Some(t), .. },
+                    Some(r),
+                    crate::order::ZTarget::Frame(h),
+                ) => {
+                    fh = Some(h);
                     Some((t.clone(), r.bottom, r.top))
                 }
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            texts.len(),
-            2,
-            "partial top line draws, off-top line doesn't"
-        );
-        // Farthest displayed line first, the link rebuild's walk (`0x788c8d`-`0x788d7d`).
+        let model = s.model_mut();
+        let fh = fh.expect("a line drew");
+        let viewport = UiScript::message_viewport_rows(&model, fh);
+        let count = match &model.arena.frame(fh).expect("the frame").kind_state {
+            crate::widget::KindState::ScrollingMessage(smf) => smf.displayed_count(viewport),
+            _ => unreachable!("a scrolling frame"),
+        };
+        (texts, count)
+    }
+
+    /// The layout places the anchored message, then only what fits whole (`0x7889b3`-`0x7889c5`).
+    /// Default font, pitch 14: at 34 px (two rows and a bit) 'wrapped' starts inside the frame at 104
+    /// and runs to 132, past its top at 124, so it is neither drawn nor counted, and 'old' beyond it
+    /// is not either.
+    #[test]
+    fn emit_stacks_wrapped_rows_and_hides_a_partial_top() {
+        let rows = |i| if i == 1 { 2 } else { 1 };
+        let (texts, count) = laid_out(34, &["old", "wrapped", "new"], rows);
+        assert_eq!(texts.len(), 1, "only the anchored message: {texts:?}");
+        assert_eq!(texts[0].0, "new");
+        assert!((texts[0].1 - 90.0).abs() < 0.01 && (texts[0].2 - 104.0).abs() < 0.01);
+        assert_eq!(count, 1, "the displayed count agrees with the draw");
+
+        // 48 px (three rows and a bit) holds 'new' and 'wrapped' whole; 'old' would be the
+        // fraction at the top edge, so it stays out. Farthest displayed line first, the link
+        // rebuild's walk (`0x788c8d`-`0x788d7d`).
+        let (texts, count) = laid_out(48, &["old", "wrapped", "new"], rows);
+        assert_eq!(count, 2);
+        assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0].0, "wrapped");
         assert!((texts[0].1 - 104.0).abs() < 0.01 && (texts[0].2 - 132.0).abs() < 0.01);
         assert_eq!(texts[1].0, "new");
         assert!((texts[1].1 - 90.0).abs() < 0.01 && (texts[1].2 - 104.0).abs() < 0.01);
-        let clip = quads
-            .iter()
-            .find_map(|q| match &q.content {
-                crate::script::QuadContent::Text { text: Some(t), .. } if t == "wrapped" => q.clip,
-                _ => None,
-            })
-            .expect("wrapped line carries a clip");
-        assert!((clip.top - 124.0).abs() < 0.01 && (clip.bottom - 90.0).abs() < 0.01);
+    }
+
+    /// The anchored message shows even when it alone is taller than the frame (`0x7889c0`): the
+    /// frame's 20 px hold a row and a bit, the newest message wraps to three rows, and it draws
+    /// from the bottom edge while the older one does not.
+    #[test]
+    fn the_anchored_message_shows_though_taller_than_the_frame() {
+        let (texts, count) = laid_out(20, &["old", "tall"], |i| if i == 1 { 3 } else { 1 });
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert_eq!(texts[0].0, "tall");
+        assert!((texts[0].1 - 90.0).abs() < 0.01 && (texts[0].2 - 132.0).abs() < 0.01);
+        assert_eq!(count, 1);
     }
 
     /// The lines draw at the frame's ARTWORK layer: a BACKGROUND texture, such as the chat
