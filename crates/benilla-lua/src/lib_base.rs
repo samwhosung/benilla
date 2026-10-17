@@ -194,7 +194,8 @@ fn next(vm: &mut Vm, nargs: usize) -> R<usize> {
             vm.top = base + 1;
             Ok(vm.ret1(Value::Nil))
         }
-        Err(crate::table::InvalidKey) => Err(vm.rt_error("invalid key to `next'")),
+        // `luaH_next`'s `luaG_runerror` (`0x6fa467`, text `0x871aac`).
+        Err(crate::table::InvalidKey) => Err(vm.rt_error("invalid key for `next'")),
     }
 }
 

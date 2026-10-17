@@ -124,6 +124,7 @@ const CASES: &[(&str, &str)] = &[
     ("foreach", "local o = {} foreachi({'a', 'b', 'c'}, function(i, v) table.insert(o, i .. v) end) local r = foreachi({1, 2, 3}, function(i, v) if v == 2 then return 'stop' end end) return table.concat(o, ',') .. S(r)"),
     ("unpack", "return S(unpack({1, 2, 3})) .. '|' .. S(unpack({n = 2, 'a', 'b', 'c'}))"),
     ("next", "local t = {} t.x = 1 local k, v = next(t) return S(k, v, next({}), next(t, 'x'))"),
+    // `luaH_next` raises the client's text (`0x6fa467`, `0x871aac`): "for", not 5.1's "to".
     ("next_err", "return E(function() return next({}, 'nope') end)"),
     ("ipairs", "local o = {} for i, v in ipairs({'a', 'b', nil, 'd'}) do table.insert(o, i .. v) end return table.concat(o, ',')"),
     ("pairs_array", "local o = {} for k, v in pairs({10, 20, 30}) do table.insert(o, k .. '=' .. v) end return table.concat(o, ',')"),
@@ -495,6 +496,7 @@ b]])"#),
     ("fix-libs format_alt_g", r#"local z = 0 local m = -z
         return S(string.format("%#g", 123456), string.format("%#.0g", 1), string.format("%#G", 1e20), string.format("%#g", 0), string.format("%#.3g", 1), string.format("%#g", 1e-10), string.format("%#.0e", 1), string.format("%#.0f", 1), string.format("%#.0G", 1e20), string.format("%#10.1g|%-#8g|", 5, 2.5), string.format("%g %f %e %.3g", m, m, m, m))"#),
     ("fix-libs format_ulong", r#"local z = 0 local o = {} for _, v in {2^64, 1e300, 1 / z, -1 / z, 0 / z, 2^63, -2^63, -1, 2^65, 2^63 + 2^11, -2^64, -1e300, 2^64 - 2^11} do table.insert(o, E(string.format, "%x %u %o %X", v, v, v, v)) end return table.concat(o, "|")"#),
+    // `luaH_next` raises the client's text (`0x6fa467`, `0x871aac`): "for", not 5.1's "to".
     ("fix-libs foreach_invalid_key", r#"local t = {a = 1} return S(E(foreach, t, function(k) t[k] = nil for i = 1, 20 do t["x" .. i] = i end end), E(next, {}, "nope"))"#),
     ("fix-libs chunkid_cr", r#"local o = {}
         for _, s in {"error('e')\r--x", "error('e')\n--x", "error('e')\r\n--x", "error('e') --" .. string.rep("y", 100), "\rerror('e')", "error('e')", "error('e')\0--x"} do
@@ -796,6 +798,7 @@ const SWEEP_FNS: &[&str] = &[
     "rawset",
     "select",
     "unpack",
+    // `luaH_next`'s text is the client's (`0x871aac`).
     "next",
     "ipairs",
     "pairs",

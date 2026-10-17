@@ -370,3 +370,23 @@ fn a_numeric_string_n_is_a_size() {
         "2"
     );
 }
+
+/// `luaH_next` raises the client's text for a key not in the table (`0x6fa467`, `0x871aac`),
+/// through `next` and `table.foreach` alike.
+#[test]
+fn next_names_its_invalid_key_as_the_client_does() {
+    let s = UiScript::new().unwrap();
+    for call in [
+        "next({}, 'nope')",
+        "local t = {a = 1} \
+         table.foreach(t, function(k) t[k] = nil for i = 1, 20 do t['x' .. i] = i end end)",
+    ] {
+        assert_eq!(
+            s.eval::<String>(&format!(
+                "local ok, e = pcall(function() {call} end) return e"
+            ))
+            .unwrap(),
+            "invalid key for `next'"
+        );
+    }
+}
