@@ -132,64 +132,11 @@ pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<Strin
 }
 
 /// Lua's number-to-string as the 1.12 client compiles it: MSVC's `sprintf("%.14g")`
-/// (`luaV_tostring` `0x6f7c80`, format `0x871960`). `EditBox:SetNumber` (`0x798690`) formats
-/// through it too, being byte-identical to `SetText` (`0x7984c0`). The exponent has at least three
-/// digits: `1e20` prints `1e+020`.
-///
-/// Deviation: the result is correctly rounded, where the reference rounds to 17 digits half-up and
-/// then again to 14, differing in the last digit on about 0.05% of doubles, because no consumer
-/// reads that digit.
+/// (`luaV_tostring` `0x6f7c80`, format `0x871960`), the VM's own ([`mlua::benilla_lua::fmt_g14`]).
+/// `EditBox:SetNumber` (`0x798690`) formats through it too, being byte-identical to `SetText`
+/// (`0x7984c0`). The exponent has at least three digits: `1e20` prints `1e+020`.
 pub(crate) fn lua_number_text(v: f64) -> String {
-    if v.is_nan() {
-        // MSVC's own spellings, which are not "NaN".
-        return if v.is_sign_negative() {
-            "-1.#IND".into()
-        } else {
-            "1.#QNAN".into()
-        };
-    }
-    if v.is_infinite() {
-        return if v < 0.0 {
-            "-1.#INF".into()
-        } else {
-            "1.#INF".into()
-        };
-    }
-    if v == 0.0 {
-        // `%g` prints negative zero without the sign.
-        return "0".into();
-    }
-    const SIG: i32 = 14;
-    let exp = v.abs().log10().floor() as i32;
-    // Re-derive the exponent from the rounded form: 9.9999e2 rounds to 1e3 and changes style.
-    let exp = {
-        let probe = format!("{:.*e}", (SIG - 1) as usize, v);
-        probe
-            .rsplit('e')
-            .next()
-            .and_then(|e| e.parse::<i32>().ok())
-            .unwrap_or(exp)
-    };
-    // C's `%g` style rule verbatim: exponential when `exp < -4 || exp >= P`, else fixed.
-    if !(-4..SIG).contains(&exp) {
-        let mantissa = format!("{:.*e}", (SIG - 1) as usize, v);
-        let (m, _) = mantissa.split_once('e').unwrap_or((mantissa.as_str(), "0"));
-        let m = trim_g(m);
-        let sign = if exp < 0 { '-' } else { '+' };
-        // At least three exponent digits, more when needed.
-        format!("{m}e{sign}{:03}", exp.abs())
-    } else {
-        let decimals = (SIG - 1 - exp).max(0) as usize;
-        trim_g(&format!("{v:.decimals$}")).to_string()
-    }
-}
-
-/// Strip `%g`'s trailing zeros, and the decimal point if nothing follows it.
-fn trim_g(s: &str) -> &str {
-    if !s.contains('.') {
-        return s;
-    }
-    s.trim_end_matches('0').trim_end_matches('.')
+    mlua::benilla_lua::fmt_g14(v)
 }
 
 /// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits

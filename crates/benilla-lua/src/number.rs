@@ -1,6 +1,6 @@
-//! Numbers to and from text as benilla's Lua 5.1 build read and wrote them over glibc: the
-//! client's `luaO_str2d` and `strtod`, its 32-bit `strtoul` for `tonumber`, and `lua_number2str`'s
-//! `%.14g`.
+//! Numbers to and from text as the client reads and writes them: its `luaO_str2d` and `strtod`,
+//! its 32-bit `strtoul` for `tonumber`, and `lua_number2str`'s `%.14g` in its MSVC runtime's
+//! spelling.
 
 use std::fmt::Write;
 
@@ -168,26 +168,30 @@ pub fn strtoul(s: &[u8], base: u32) -> (u32, usize) {
     (if neg { n.wrapping_neg() } else { n }, i)
 }
 
-/// `%.14g` as glibc's `printf` writes it: a two-digit exponent at least (`1e+20`), and `inf`,
-/// `-inf`, `nan` and `-nan` for the non-finite values. The client's MSVC text (`1e+020`,
-/// `1.#INF`) is later work (#1376).
+/// `lua_number2str`: the client's `luaV_tostring` (`0x6f7c80`) formats with `%.14g` (`0x871960`)
+/// through its MSVC `sprintf` (`0x73fec4`): `1e+020`, `1.#INF`, `-1.#IND` and `0` for `-0`.
 pub fn fmt_g14(n: f64) -> String {
-    fmt_g(n, 14)
+    if let Some(i) = small_integer(n) {
+        return i.to_string();
+    }
+    crate::cfmt::fmt_float(
+        n,
+        b'g',
+        &crate::cfmt::Spec {
+            precision: Some(14),
+            ..Default::default()
+        },
+    )
 }
 
-/// `10^p`, exact for the precisions `%g` is asked for.
-fn pow10(p: usize) -> f64 {
-    const P: [f64; 18] = [
-        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
-        1e17,
-    ];
-    P.get(p).copied().unwrap_or_else(|| 10f64.powi(p as i32))
+/// A non-zero integer below 10^14, which `%.14g` prints as its digits.
+fn small_integer(n: f64) -> Option<i64> {
+    (n.fract() == 0.0 && n.abs() < 1e14 && n != 0.0).then_some(n as i64)
 }
 
 /// `fmt_g14(n)` appended to `out`; an integer is written without a temporary string.
 pub fn push_g14(n: f64, out: &mut Vec<u8>) {
-    if n.fract() == 0.0 && n.abs() < 1e14 && n != 0.0 {
-        let mut v = n as i64;
+    if let Some(mut v) = small_integer(n) {
         if v < 0 {
             out.push(b'-');
             v = -v;
@@ -205,91 +209,49 @@ pub fn push_g14(n: f64, out: &mut Vec<u8>) {
     }
 }
 
-/// `%.<prec>g` in glibc's spelling: a two-digit exponent at least, `inf` and `nan`.
-pub fn fmt_g(n: f64, prec: usize) -> String {
-    // An integer below `10^prec` prints as its digits: the common case, without float
-    // formatting's exact-decimal arithmetic.
-    if n.fract() == 0.0 && n.abs() < pow10(prec) && n != 0.0 {
-        return (n as i64).to_string();
-    }
-    if n.is_nan() {
-        // The sign bit prints, as glibc prints it: x86's default NaN, from `0/0`, has it set.
-        // Which NaN an operation answers is the host's; the client's MSVC text (`-1.#IND`) is
-        // later work (#1376).
-        return if n.is_sign_negative() {
-            "-nan".into()
-        } else {
-            "nan".into()
-        };
-    }
-    if n.is_infinite() {
-        return if n < 0.0 { "-inf".into() } else { "inf".into() };
-    }
-    let p = prec.max(1);
-    if n == 0.0 {
-        return if n.is_sign_negative() {
-            "-0".into()
-        } else {
-            "0".into()
-        };
-    }
-    // The exponent after rounding to `p` significant digits decides the style.
-    let sci = format!("{:.*e}", p - 1, n);
-    let (mant, exp) = sci.split_once('e').unwrap();
-    let x: i32 = exp.parse().unwrap();
-    if x < -4 || x >= p as i32 {
-        let mant = strip_zeros(mant);
-        let sign = if x < 0 { '-' } else { '+' };
-        format!("{mant}e{sign}{:02}", x.abs())
-    } else {
-        let decimals = (p as i32 - 1 - x).max(0) as usize;
-        strip_zeros(&format!("{:.*}", decimals, n)).to_string()
-    }
-}
-
-fn strip_zeros(s: &str) -> &str {
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The client's `%.14g`, as `fmtg_probe` in benilla-re pins it by running its `sprintf`.
     #[test]
-    fn g14_matches_glibc() {
-        assert_eq!(fmt_g14(1.0), "1");
-        assert_eq!(fmt_g14(0.1), "0.1");
-        assert_eq!(fmt_g14(1e20), "1e+20");
-        assert_eq!(fmt_g14(1e-5), "1e-05");
-        assert_eq!(fmt_g14(1e100), "1e+100");
-        assert_eq!(fmt_g14(123456789012345.0), "1.2345678901234e+14");
-        assert_eq!(fmt_g14(12345678901234.0), "12345678901234");
-        assert_eq!(fmt_g14(-2.5), "-2.5");
-        for n in [
-            1.0,
-            -7.0,
-            42.0,
-            99999999999999.0,
-            -12345678901234.0,
-            0.0,
-            -0.0,
-            0.5,
-            1e14,
-            1e20,
-        ] {
+    fn g14_is_the_clients() {
+        let cases: &[(f64, &str)] = &[
+            (0.0, "0"),
+            (-0.0, "0"),
+            (3.0, "3"),
+            (0.8, "0.8"),
+            (-0.5, "-0.5"),
+            (0.1, "0.1"),
+            (0.1 + 0.2, "0.3"),
+            (1.0 / 3.0, "0.33333333333333"),
+            (1e13, "10000000000000"),
+            (1e14, "1e+014"),
+            (1e15, "1e+015"),
+            (1e20, "1e+020"),
+            (1e100, "1e+100"),
+            (1e-4, "0.0001"),
+            (1e-5, "1e-005"),
+            (1.5e-5, "1.5e-005"),
+            (2147483648.0, "2147483648"),
+            (1.2345678901234568e17, "1.2345678901235e+017"),
+            (1e308, "1e+308"),
+            (1e-308, "1e-308"),
+            (5e-324, "4.9406564584125e-324"),
+            (f64::INFINITY, "1.#INF"),
+            (f64::NEG_INFINITY, "-1.#INF"),
+            (f64::from_bits(0x7ff8_0000_0000_0000), "1.#QNAN"),
+            (f64::from_bits(0xfff8_0000_0000_0000), "-1.#IND"),
+            // 17 digits half-up, then 14 half-up: a correctly rounded `%.14g` differs on these.
+            (f64::from_bits(0xbfbd_ae46_18cc_a433), "-0.11594045739607"),
+            (123456789012345.0, "1.2345678901235e+014"),
+        ];
+        for &(n, want) in cases {
+            assert_eq!(fmt_g14(n), want, "{n:e}");
             let mut out = Vec::new();
             push_g14(n, &mut out);
-            assert_eq!(out, fmt_g14(n).into_bytes(), "{n}");
+            assert_eq!(out, want.as_bytes(), "{n:e}");
         }
-        assert_eq!(fmt_g14(1.0 / 3.0), "0.33333333333333");
-        assert_eq!(fmt_g14(f64::INFINITY), "inf");
-        assert_eq!(fmt_g14(f64::NEG_INFINITY), "-inf");
-        assert_eq!(fmt_g14(-f64::NAN), "-nan");
-        assert_eq!(fmt_g14(0.0001), "0.0001");
     }
 
     #[test]

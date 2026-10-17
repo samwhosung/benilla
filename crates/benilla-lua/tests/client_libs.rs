@@ -146,3 +146,21 @@ fn tonumber_with_a_base_is_32_bit() {
         ["nil", "nil", "nil"]
     );
 }
+
+/// Number text is the client's MSVC runtime's (`luaV_tostring` `0x6f7c80`, `sprintf` `0x73fec4`):
+/// `1#INF` and its kin, three exponent digits, no sign on a zero, and rounding by digit text.
+#[test]
+fn number_text_is_msvcs() {
+    assert_eq!(
+        ok("local z = 0 return tostring(1/z), tostring(-1/z), tostring(-z)"),
+        ["1.#INF", "-1.#INF", "0"]
+    );
+    assert_eq!(
+        ok("return 1e20 .. '', 1e-5 .. '', tostring(123456789012345)"),
+        ["1e+020", "1e-005", "1.2345678901235e+014"]
+    );
+    assert_eq!(
+        ok(r#"return string.format("%e|%.2f|%5.1f|%g|%.0f", 12345.678, 1/0, -1/0, -1/0, 2.5)"#),
+        ["1.234568e+004|1.#J| -1.$|-1.#INF|3"]
+    );
+}

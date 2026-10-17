@@ -47,7 +47,10 @@ fn left_nested_chains_compile_at_any_length() {
                 format!("local t = {{}} t.a = t return t{} == t", ".a".repeat(50000)),
                 "true",
             ),
-            (format!("local x = 2 return x{}", "*x".repeat(30000)), "inf"),
+            (
+                format!("local x = 2 return x{}", "*x".repeat(30000)),
+                "1.#INF",
+            ),
             (format!("return 1 == 1{}", " == true".repeat(30000)), "true"),
         ];
         for (src, want) in cases {

@@ -296,6 +296,6 @@ fn a_collected_deleted_key_is_set_again_as_a_new_one() {
             &mut vm,
             "local z = 0 local t = {} t[-z] = 1 t[0] = 2 local k = next(t) return 1 / k"
         ),
-        "-inf"
+        "-1.#INF"
     );
 }
