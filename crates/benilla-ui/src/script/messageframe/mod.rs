@@ -34,13 +34,35 @@ pub(super) use scrolling::REG_SCROLLINGMESSAGEFRAME_METHODS;
 pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     let rows = UiScript::message_viewport_rows(model, h);
     let viewport = UiScript::message_viewport(model, h);
+    let layout_key = UiScript::message_layout_key(model, h);
     match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         Some(KindState::Message(mf)) => {
             mf.trim_to_viewport(rows);
             mf.tick(elapsed);
         }
-        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed, viewport),
+        Some(KindState::ScrollingMessage(smf)) => {
+            // A resize or a font change relayouts at the current position (`0x788427`,
+            // `0x788086`), as a show does (`0x788451`, [`on_visibility`]).
+            if smf.laid.replace(layout_key) != Some(layout_key) {
+                smf.relayout(viewport);
+            }
+            smf.tick(elapsed, viewport)
+        }
         _ => {}
+    }
+}
+
+/// A scrolling frame's show relayouts (`0x788451`): forget what it laid out against, so its next
+/// update does.
+pub(super) fn on_visibility(lua: &mlua::Lua, h: FrameHandle, visible: bool) {
+    if !visible {
+        return;
+    }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if let Some(KindState::ScrollingMessage(smf)) =
+        model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+    {
+        smf.laid = None;
     }
 }
 
@@ -211,9 +233,10 @@ impl MessageFont {
 
     /// The gap between the rows of one message: each line string inherits the frame's font
     /// (`0x7888fd`) through the clamping setter (`0x7708fd` → `0x772240`), and the block height
-    /// spaces its rows by the spacing times the scale (`0x772a07`-`0x772a0d`), unsnapped.
+    /// forms the spacing times the scale (`0x772a07`-`0x772a0d`), which `GxuFontGetTextBlockHeight`
+    /// rounds up to a whole pixel (`0x5c2143`-`0x5c215c`, `+0.99999`).
     fn row_gap(&self, scale: f32) -> f32 {
-        self.spacing.max(0.0) * scale
+        snap_px(self.spacing.max(0.0) * scale)
     }
 
     /// The scrolling class's gap between one message and the next: the stack snaps the unscaled
@@ -339,6 +362,22 @@ impl UiScript {
             .get(&fh)
             .map_or(0.0, |r| (r.top - r.bottom).max(0.0));
         font.viewport(height, scale)
+    }
+
+    /// What the scrolling frame `fh`'s relayout lays out against: its size and its font.
+    pub(super) fn message_layout_key(model: &Model, fh: FrameHandle) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let font = Self::message_frame_font(model, fh);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if let Some(r) = model.resolved.get(&fh) {
+            (r.right - r.left).to_bits().hash(&mut hasher);
+            (r.top - r.bottom).to_bits().hash(&mut hasher);
+        }
+        font.path.hash(&mut hasher);
+        font.height.map(f32::to_bits).hash(&mut hasher);
+        font.spacing.to_bits().hash(&mut hasher);
+        (font.outline as u8).hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Message lines whose wrapped row count needs a host measure. Call after

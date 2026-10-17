@@ -275,6 +275,7 @@ fn notify(lua: &Lua, h: FrameHandle, visible: bool) {
         record(lua, fired);
     }
     super::editbox::visibility_focus(lua, h, visible);
+    super::messageframe::on_visibility(lua, h, visible);
 }
 
 /// Open or close a frame's load window: the pre-load hook's `+0x114 = 1` (`0x7697c2`) and the

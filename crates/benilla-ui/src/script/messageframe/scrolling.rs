@@ -118,8 +118,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let id =
                     crate::script::binding_abi::ftol(is_number(lua, &id).unwrap_or(0.0)) as u32;
                 let (r, g, b) = (channel(lua, &r), channel(lua, &g), channel(lua, &b));
-                with_smf(lua, &this, |smf| {
-                    smf.update_color_by_id(id, r, g, b);
+                with_viewport(lua, &this, |smf, viewport| {
+                    smf.update_color_by_id(id, r, g, b, viewport);
                 })
             },
         )?,
@@ -800,6 +800,77 @@ mod tests {
         );
     }
 
+    /// `CF` holds `l0`..`l5`, three rows high, scrolled up one line (shown `l4 l3 l2`, walked
+    /// `l1`), with every line's alpha knocked to 0.5; `bottom` scrolls it back down first.
+    fn faded_chat(bottom: bool) -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        s.run(
+            "CF = CreateFrame('ScrollingMessageFrame', 'CF')\n\
+             CF:SetPoint('BOTTOMLEFT', 32, 90)\n\
+             CF:SetWidth(430)\n\
+             CF:SetHeight(44)\n\
+             for n = 0, 5 do CF:AddMessage('l' .. n, 1, 1, 1, 5) end",
+        )
+        .unwrap();
+        s.resolve();
+        s.tick(0.0); // the first relayout
+        s.run(if bottom { "" } else { "CF:ScrollUp()" }).unwrap();
+        let mut model = s.model_mut();
+        let fh = model.arena.lookup("CF").expect("CF");
+        let Some(crate::widget::KindState::ScrollingMessage(smf)) =
+            model.arena.frame_mut(fh).map(|f| &mut f.kind_state)
+        else {
+            unreachable!("a scrolling frame")
+        };
+        smf.lines.iter_mut().for_each(|l| l.alpha = 0.5);
+        drop(model);
+        s
+    }
+
+    fn alphas(s: &UiScript) -> Vec<f32> {
+        let model = s.model_ref();
+        let fh = model.arena.lookup("CF").expect("CF");
+        match model.arena.frame(fh).map(|f| &f.kind_state) {
+            Some(crate::widget::KindState::ScrollingMessage(smf)) => {
+                smf.lines.iter().map(|l| l.alpha).collect()
+            }
+            _ => unreachable!("a scrolling frame"),
+        }
+    }
+
+    /// A relayout that is not a scroll re-arms what it walks off the bottom, as a scroll does:
+    /// force 0 re-arms unless `+0x354` is set (`0x788aff`). A resize (`0x788427`), a font change
+    /// (`0x788086`), a show (`0x788451`) and `UpdateColorByID` (`0x78829e`) are such relayouts.
+    #[test]
+    fn a_relayout_without_a_scroll_re_arms_what_it_walks_off_the_bottom() {
+        let (half, full) = (0.5, 1.0);
+        let case = |action: &str, after: &[f32]| {
+            let mut s = faded_chat(false);
+            // Nothing relayouts on its own.
+            s.resolve();
+            s.tick(0.0);
+            assert_eq!(alphas(&s), [half; 6], "{action}: before");
+            s.run(action).unwrap();
+            s.resolve();
+            s.tick(0.0);
+            assert_eq!(alphas(&s), after, "{action}");
+        };
+        // Grown to six rows, the view places l1 and l0 as well: l5 is newer than the anchor.
+        case("CF:SetHeight(86)", &[full, full, full, full, full, half]);
+        // A new font: the three rows in view and the one that did not fit.
+        let four = [half, full, full, full, full, half];
+        case("CF:SetFont('Fonts\\\\FRIZQT__.TTF', 12)", &four);
+        case("CF:Hide() CF:Show()", &four);
+        case("CF:UpdateColorByID(5, 1, 0, 0)", &four);
+        // At the bottom a relayout re-arms nothing (`0x788aff`).
+        let mut s = faded_chat(true);
+        s.run("CF:SetHeight(86)").unwrap();
+        s.resolve();
+        s.tick(0.0);
+        assert_eq!(alphas(&s), [half; 6]);
+    }
+
     /// A scrolling frame `CF` of the given height holding `messages`, bottom left at (32, 90),
     /// after the host answered each message's row count with `rows(index)`: what it draws as
     /// `(text, bottom, top)` in draw order, and the count its layout reports.
@@ -845,7 +916,7 @@ mod tests {
             .collect();
         let model = s.model_mut();
         let fh = fh.expect("a line drew");
-        let viewport = UiScript::message_viewport_rows(&model, fh);
+        let viewport = UiScript::message_viewport(&model, fh);
         let count = match &model.arena.frame(fh).expect("the frame").kind_state {
             crate::widget::KindState::ScrollingMessage(smf) => smf.displayed_count(viewport),
             _ => unreachable!("a scrolling frame"),
@@ -1111,7 +1182,7 @@ mod tests {
         smf.add_with_id("c".into(), 1.0, 1.0, 1.0, 11, 8);
         smf.add("d".into(), 1.0, 1.0, 1.0);
         let gen = smf.lines_gen;
-        assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0), 2);
+        assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0, 8), 2);
         let colors: Vec<[u8; 3]> = smf.lines.iter().map(|l| l.color).collect();
         assert_eq!(
             colors,
@@ -1123,12 +1194,20 @@ mod tests {
             ]
         );
         assert_ne!(smf.lines_gen, gen, "a recolour is a redraw");
-        assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0), 0, "idempotent");
-        assert_eq!(smf.update_color_by_id(99, 0.0, 0.0, 0.0), 0, "no such id");
+        assert_eq!(
+            smf.update_color_by_id(11, 0.0, 0.5, 1.0, 8),
+            0,
+            "idempotent"
+        );
+        assert_eq!(
+            smf.update_color_by_id(99, 0.0, 0.0, 0.0, 8),
+            0,
+            "no such id"
+        );
         // Id 0 matches nothing (`0x788250`). REPLY's chat type has id 0 and `UPDATE_CHAT_COLOR`
         // mirrors WHISPER into it, so without the guard every id-less line turns whisper pink.
         assert_eq!(
-            smf.update_color_by_id(0, 1.0, 0.5, 1.0),
+            smf.update_color_by_id(0, 1.0, 0.5, 1.0, 8),
             0,
             "id 0 never reaches the record walk"
         );

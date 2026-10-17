@@ -54,6 +54,10 @@ pub struct ScrollingMessageState {
     /// relayout (`0x788a8e`), a line fading out (`0x788538`) and a fade re-arm (`0x788bf1`), and
     /// spent by the per-frame rebuild (`0x788595` → `0x788c00`).
     pub links_dirty: bool,
+    /// A key of what the last relayout laid out against: the frame's size and font. A change is
+    /// a resize (`0x788427`) or a font change (`0x788086`), and `None` after a show (`0x788451`):
+    /// each relayouts at the current position, which re-arms what it walks unless at the bottom.
+    pub laid: Option<u64>,
 }
 
 impl Default for ScrollingMessageState {
@@ -69,6 +73,7 @@ impl Default for ScrollingMessageState {
             lines_gen: 0,
             scroll_offset: 0,
             links_dirty: false,
+            laid: None,
         }
     }
 }
@@ -80,22 +85,24 @@ pub fn quantize_u8(x: f32) -> u8 {
 
 /// The space a ScrollingMessageFrame's layout fits messages into, in screen pixels. The relayout
 /// charges each message its block height, which spaces its rows by the spacing times the scale
-/// (`0x772a07`-`0x772a0d`), plus the gap to the next message, the spacing snapped unscaled and
-/// then scaled (`0x788954`-`0x788975`, `0x7889a3`-`0x7889ad`).
+/// snapped up to a whole pixel (`0x772a07`-`0x772a0d` forms it, `0x5c2143`-`0x5c215c` snaps it),
+/// plus the gap to the next message, the spacing snapped unscaled and then scaled
+/// (`0x788954`-`0x788975`, `0x7889a3`-`0x7889ad`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
     /// The frame's height.
     pub height: f32,
     /// One row's height.
     pub line_h: f32,
-    /// The gap between the rows of one message.
+    /// The gap between the rows of one message, snapped up to a whole pixel.
     pub row_gap: f32,
     /// The gap between one message and the next.
     pub message_gap: f32,
 }
 
 impl Viewport {
-    /// A viewport of `n` unit rows with no gaps, for a state that has no font yet.
+    /// A viewport of `n` unit rows with no gaps, for a test that has no font.
+    #[cfg(test)]
     pub fn rows(n: usize) -> Viewport {
         Viewport {
             height: n as f32,
@@ -105,7 +112,8 @@ impl Viewport {
         }
     }
 
-    /// The height of a message of `rows` wrapped rows, as `GxuFontGetTextBlockHeight` gives it.
+    /// The height of a message of `rows` wrapped rows, as `GxuFontGetTextBlockHeight` gives it:
+    /// `rows` lines and `rows - 1` row gaps (`0x5c2168`).
     pub fn block(&self, rows: u16) -> f32 {
         let rows = f32::from(rows.max(1));
         rows * self.line_h + (rows - 1.0) * self.row_gap
@@ -117,6 +125,7 @@ impl Viewport {
     }
 }
 
+#[cfg(test)]
 impl From<usize> for Viewport {
     fn from(n: usize) -> Viewport {
         Viewport::rows(n)
@@ -127,12 +136,19 @@ impl ScrollingMessageState {
     /// `UpdateColorByID(id, r, g, b)` (`0x7932b0`): recolour every line tagged `id`, returning how
     /// many changed. `id == 0` matches nothing (the guard at `0x788250`): a line printed without
     /// an id stores 0 (`0x7929b7`), and `ChatFrame.lua:1357` recolours REPLY, whose id is 0.
-    pub fn update_color_by_id(&mut self, id: u32, r: f32, g: f32, b: f32) -> usize {
+    pub fn update_color_by_id(
+        &mut self,
+        id: u32,
+        r: f32,
+        g: f32,
+        b: f32,
+        viewport: impl Into<Viewport>,
+    ) -> usize {
         if id == 0 {
             return 0;
         }
         // Past the guard the relayout runs whether or not a line matched (`0x78829e`).
-        self.links_dirty = true;
+        self.relayout(viewport);
         let rgb = [quantize_u8(r), quantize_u8(g), quantize_u8(b)];
         let mut moved = 0;
         for line in self.lines.iter_mut().filter(|l| l.id == id) {
@@ -192,8 +208,8 @@ impl ScrollingMessageState {
         if !scrolled_up {
             self.links_dirty = true;
         } else if overwrites_topmost {
-            // The anchor message moves up one place in the ring as the oldest goes, and the
-            // scroll down keeps the view's other messages where they are: the offset holds.
+            // The new message puts the anchor one further from the newest, and the scroll down
+            // (`0x788245`) takes it back one, so the offset holds.
             self.rearm_walked(viewport);
         } else {
             // The same messages stay in view: the new one is one place newer than the anchor.
@@ -261,10 +277,23 @@ impl ScrollingMessageState {
         self.rearm(self.displayed_range(viewport));
     }
 
+    /// A relayout at the current position, with no scroll: it marks the links and, off the bottom,
+    /// re-arms what it walks (force 0 re-arms unless `+0x354` is set, `0x788aff`). `UpdateColorByID`
+    /// (`0x78829e`), a resize (`0x788427`), a font change (`0x788086`) and a show (`0x788451`) are
+    /// such relayouts.
+    pub fn relayout(&mut self, viewport: impl Into<Viewport>) {
+        if self.at_bottom() {
+            self.links_dirty = true;
+        } else {
+            self.rearm_walked(viewport);
+        }
+    }
+
     /// A moving scroll's re-arm: the relayout re-arms each message it walks (`0x788af0` at
-    /// `0x7888be`, before the fit test at `0x7889b3`), so the first older message that did not
-    /// fit is re-armed with the displayed ones, though it is not shown and never ticks.
-    fn rearm_walked(&mut self, viewport: impl Into<Viewport>) {
+    /// `0x7888be`, before the fit test at `0x7889b3`). That is the displayed messages and the
+    /// first older one that did not fit; a walk that ran out of messages has no extra one. The
+    /// extra message is re-armed but not shown, so it ticks only once a larger view places it.
+    pub fn rearm_walked(&mut self, viewport: impl Into<Viewport>) {
         let viewport = viewport.into();
         self.links_dirty = true;
         let shown = self.displayed_range(viewport);
