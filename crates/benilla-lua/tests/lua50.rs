@@ -252,3 +252,13 @@ fn a_generic_for_steps_from_its_first_variable() {
         "t:1: too many local variables (limit=200) near `in'"
     );
 }
+
+/// `getfuncname` names a function only an `OP_CALL` or `OP_TAILCALL` called (`0x6fc499`..
+/// `0x6fc4a1`): a library function failing as a generic `for`'s generator is `?`.
+#[test]
+fn a_generator_is_not_named_by_its_loop() {
+    assert_eq!(
+        run("for k in next, 5 do end"),
+        "<raised> t:1: bad argument #1 to `?' (table expected, got number)"
+    );
+}

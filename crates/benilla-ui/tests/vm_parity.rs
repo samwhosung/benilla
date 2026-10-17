@@ -422,6 +422,8 @@ b]])"#),
           R("return 2^0.5, 2 - 3, 1/3, 0/0 ~= 0/0, 1e308 * 10")}, " | ")"#),
     ("fix-front_negative_zero_main", "return S(-0, 1/0)"),
     ("fix-front_negative_zero_local", "local x = 1/0 return S(-0, x, 1/0)"),
+    // A generic `for`'s generator is named `?`: the client's `getfuncname` names only what an
+    // `OP_CALL` or `OP_TAILCALL` called (`0x6fc499`..`0x6fc4a1`).
     ("fix-front_for_names", r#"return S(E(function() for k, v in pairs({1}), 5 do end end), E(function() for i in string.rep do end end),
         E(function() for i in next, 5 do end end), E(function() local t = {} for k in t.f do end end))"#),
     ("fix-front_nul_in_messages", r#"local function L(src, name) local f, e = loadstring(src, name or "=t") return e end

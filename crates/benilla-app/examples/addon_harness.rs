@@ -759,8 +759,7 @@ fn main() {
         );
         for (name, err) in &hits {
             println!("    {name}");
-            // The message, then mlua's traceback frames; the first tells a generic-for
-            // (`in local '(for generator)'`) apart from any other call of a table value.
+            // The message, then the traceback's frames, which place the failing call.
             for line in err.lines().take(WHY_TRACEBACK_LINES) {
                 println!("        {}", line.trim());
             }

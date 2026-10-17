@@ -157,7 +157,7 @@ fix-front_names_in_errors	\"err t:1: attempt to concatenate a nil value\",\"err 
 fix-front_negative_zero	-0,-inf | 0,inf,inf | inf | -0,5,-inf,-0 | inf,0 | -0,-inf,true | -0,-inf | 1.4142135623730951,-1,0.33333333333333331,true,inf
 fix-front_negative_zero_main	-0,-inf
 fix-front_negative_zero_local	0,inf,inf
-fix-front_for_names	\"err t:32: bad argument #1 to `(for generator)\' (table expected, got number)\",\"err t:32: bad argument #1 to `(for generator)\' (string expected, got nil)\",\"err t:33: bad argument #1 to `(for generator)\' (table expected, got number)\",\"err t:33: attempt to call a nil value\"
+fix-front_for_names	\"err t:32: bad argument #1 to `?\' (table expected, got number)\",\"err t:32: bad argument #1 to `?\' (string expected, got nil)\",\"err t:33: bad argument #1 to `?\' (table expected, got number)\",\"err t:33: attempt to call a nil value\"
 fix-front_nul_in_messages	\"t:1: unfinished string near `\\\"a\'\",\"t:1: unexpected symbol\",\"t:1: unexpected symbol\",\"t:1: unexpected symbol\",\"t:1: unexpected symbol near `<eof>\'\",\"err t:34: attempt to call field `a\' (a nil value)\",\"err t:34: attempt to call method `m\' (a nil value)\",\"err t:34: attempt to index field `g\' (a nil value)\"
 fix-front_constants_and_folding	5,1024,3,2,true,\"34\" | 7,10,2.5,-4,25,-5 | true,false,true,true,false,nil,nil,2 | 2,1 | 1,2,3
 fix-libs bit_mod_overflow	\"ok 0\",\"ok 0\",\"ok 0\",\"ok -1\",\"ok 0\",\"ok 0\",\"ok -2147483648\",\"ok -1\"

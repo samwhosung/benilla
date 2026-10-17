@@ -1991,10 +1991,9 @@ impl Vm {
         let p = unsafe { caller.proto.as_ref() }?;
         let pc = caller.pc().checked_sub(1)?;
         match p.code.get(pc)? {
-            // 5.1's `getfuncname`: the generic for's call names its generator.
-            Op::Call(a, ..) | Op::TailCall(a, ..) | Op::TForLoop(a, _) => {
-                objname_in(p, &self.heap, pc, *a as usize)
-            }
+            // The client's `getfuncname` names a function only an `OP_CALL` or `OP_TAILCALL`
+            // called (`0x6fc499`..`0x6fc4a1`): a generic `for`'s generator is named nothing.
+            Op::Call(a, ..) | Op::TailCall(a, ..) => objname_in(p, &self.heap, pc, *a as usize),
             _ => None,
         }
     }
@@ -2015,10 +2014,9 @@ impl Vm {
         let p = unsafe { caller.proto.as_ref() }?;
         let pc = caller.pc().checked_sub(1)?;
         match p.code.get(pc)? {
-            // 5.1's `getfuncname`: the generic for's call names its generator.
-            Op::Call(a, ..) | Op::TailCall(a, ..) | Op::TForLoop(a, _) => {
-                objname_in(p, &self.heap, pc, *a as usize)
-            }
+            // The client's `getfuncname` names a function only an `OP_CALL` or `OP_TAILCALL`
+            // called (`0x6fc499`..`0x6fc4a1`): a generic `for`'s generator is named nothing.
+            Op::Call(a, ..) | Op::TailCall(a, ..) => objname_in(p, &self.heap, pc, *a as usize),
             _ => None,
         }
     }
