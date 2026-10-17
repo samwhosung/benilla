@@ -74,17 +74,9 @@ fn on_leader_changed(
     mut errors: ResMut<UiErrorKeys>,
     self_guid: Res<SelfGuid>,
     names: Res<NameCache>,
-    commands: Res<NetCommands>,
 ) {
     if let SessionEvent::GroupLeaderChanged { name } = ev {
-        leader_changed(
-            &mut group,
-            &mut errors,
-            &name,
-            &self_guid,
-            &names,
-            &commands,
-        );
+        leader_changed(&mut group, &mut errors, &name, &self_guid, &names);
     }
 }
 
@@ -236,13 +228,10 @@ fn leader_changed(
     name: &str,
     self_guid: &SelfGuid,
     names: &NameCache,
-    net_commands: &NetCommands,
 ) {
-    let own = self_guid.0.and_then(|g| {
-        names
-            .resolve_player(g, Ask::New(net_commands))
-            .map(str::to_string)
-    });
+    let own = self_guid
+        .0
+        .and_then(|g| names.resolve_player(g, Ask::Read).map(str::to_string));
     push_group_lines(errors, group.apply_leader_changed(name, own.as_deref()));
 }
 
@@ -267,15 +256,19 @@ fn list(
     index: &GuidIndex,
     net_commands: &NetCommands,
 ) {
+    // Each member's seat looks its name up with the callback `0x4e8490` (`0x4e8477`): the packet
+    // asks a refused name again.
     let mut names_pending = false;
     for m in &members {
         names_pending |= names
-            .resolve_player(m.guid, Ask::New(net_commands))
+            .resolve_player(m.guid, Ask::Event(net_commands))
             .is_none();
     }
     if group_type == GROUPTYPE_RAID && !members.is_empty() {
         if let Some(own) = self_guid.0 {
-            names_pending |= names.resolve_player(own, Ask::New(net_commands)).is_none();
+            names_pending |= names
+                .resolve_player(own, Ask::Event(net_commands))
+                .is_none();
         }
     }
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
@@ -410,6 +403,48 @@ mod tests {
             status: 1, // ONLINE
             flags: 0,
         }
+    }
+
+    /// Each list looks its members up with a callback (`0x4e8477`): a refused name is asked again
+    /// by the next list, and nothing between lists asks.
+    #[test]
+    fn a_refused_member_is_asked_again_by_the_next_list() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mut group, mut errors, mut quest) = (
+            GroupState::default(),
+            UiErrorKeys::default(),
+            QuestGiver::default(),
+        );
+        let mut names = NameCache::default();
+        let far = 8 | (u64::from(guid::HIGH_PLAYER) << 48);
+        let mut send = |names: &NameCache| {
+            list(
+                &mut group,
+                &mut errors,
+                &mut MessageSounds::default(),
+                &mut quest,
+                0,
+                0,
+                vec![member(far, "Brisca")],
+                far,
+                None,
+                &SelfGuid::default(),
+                names,
+                &GuidIndex::default(),
+                &net,
+            );
+        };
+        send(&names);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        names.insert_player(far, String::new(), None);
+        assert!(crate::query_cache::queries(&rx).is_empty());
+        send(&names);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next list asks again"
+        );
     }
 
     #[test]

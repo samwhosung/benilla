@@ -832,7 +832,7 @@ pub(super) fn drain_party(
                         .filter(|g| benilla_protocol::guid::is_player(*g))
                         .and_then(|g| {
                             names
-                                .resolve_player(g, Ask::New(&commands))
+                                .resolve_player(g, Ask::Event(&commands))
                                 .map(str::to_string)
                         })
                 } else {
