@@ -608,6 +608,17 @@ mod tests {
         }
     }
 
+    /// `ScrollToTop` and `ScrollToBottom` on an empty frame return at once (`0x788697`-`0x78869a`,
+    /// `0x7886d6`-`0x7886d9`): no re-arm, no link rebuild.
+    #[test]
+    fn scrolling_to_either_end_of_an_empty_frame_does_nothing() {
+        let mut s = ScrollingMessageState::default();
+        s.scroll_to_top(8);
+        s.scroll_to_bottom(8);
+        assert!(!s.links_dirty);
+        assert_eq!(s.scroll_offset, 0);
+    }
+
     /// `ScrollToTop` on a single message anchors the newest (`0x788799`-`0x7887aa`); a frame
     /// already at the bottom skips the re-arm (`0x788aff`), which two messages do not.
     #[test]

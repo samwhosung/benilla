@@ -248,8 +248,12 @@ impl ScrollingMessageState {
         moved
     }
 
-    /// `ScrollToBottom` (`0x7886d0`): to the newest line, then re-arm.
+    /// `ScrollToBottom` (`0x7886d0`): to the newest line, then re-arm. An empty frame returns
+    /// at once (`0x7886d6`-`0x7886d9`).
     pub fn scroll_to_bottom(&mut self, viewport_rows: usize) {
+        if self.lines.is_empty() {
+            return;
+        }
         self.scroll_offset = 0;
         self.reset_all_fade_times(viewport_rows);
     }
@@ -257,8 +261,11 @@ impl ScrollingMessageState {
     /// `ScrollToTop` (`0x788690`): the oldest line as the anchor, then re-arm, as its relayout
     /// lands off the bottom. With exactly one message the anchor is the newest (`0x788799`-
     /// `0x7887aa`), and a frame already at the bottom skips the re-arm (`0x788aff`); the links
-    /// still rebuild (`0x788a8e`).
+    /// still rebuild (`0x788a8e`). An empty frame returns at once (`0x788697`-`0x78869a`).
     pub fn scroll_to_top(&mut self, viewport_rows: usize) {
+        if self.lines.is_empty() {
+            return;
+        }
         let stays_at_bottom = self.at_bottom() && self.lines.len() == 1;
         self.scroll_offset = self.max_scroll();
         if stays_at_bottom {
