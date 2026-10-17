@@ -3,6 +3,8 @@
 //! a value from at most 17 significant digits, rounds by digit text, spells a non-finite value
 //! from `1#INF` and its kin, and writes an exponent of three digits at least.
 
+mod i10;
+
 #[derive(Default, Clone, Copy)]
 pub struct Spec {
     pub minus: bool,
@@ -143,58 +145,8 @@ fn fltout(v: f64) -> Flt {
             man: b"0".to_vec(),
         };
     }
-    let (mut man, exp) = digits17(v.abs());
-    while man.last() == Some(&b'0') {
-        man.pop();
-    }
-    Flt {
-        neg,
-        decpt: exp + 1,
-        man,
-    }
-}
-
-/// `a`'s first 17 significant digits rounded half-up on the rest, and the decimal exponent of the
-/// first.
-///
-/// Deviation: `$I10_OUTPUT` (`0x4116fd`) makes the 18th digit from a 96-bit product, so a value
-/// whose digits past the 17th are exactly 5 rounds up or down by that product's last bits; this
-/// rounds it down, as the client does about 98 times in 100.
-fn digits17(a: f64) -> (Vec<u8>, i32) {
-    let split = |s: String| -> (Vec<u8>, i32) {
-        let (m, e) = s.split_once('e').unwrap();
-        (
-            m.bytes().filter(u8::is_ascii_digit).collect(),
-            e.parse().unwrap(),
-        )
-    };
-    // 25 digits, correctly rounded: past the 18th they show whether a 5 there is more than half,
-    // unless they are all 0, when the exact expansion (767 digits at most) decides.
-    let (mut d, mut exp) = split(format!("{a:.24e}"));
-    if d[17] == b'5' && d[18..].iter().all(|&c| c == b'0') {
-        (d, exp) = split(format!("{a:.800e}"));
-    }
-    let up = d[17] > b'5' || (d[17] == b'5' && d[18..].iter().any(|&c| c != b'0'));
-    d.truncate(17);
-    if up {
-        let mut k = 16;
-        loop {
-            if d[k] == b'9' {
-                d[k] = b'0';
-                if k == 0 {
-                    d.insert(0, b'1');
-                    d.truncate(17);
-                    exp += 1;
-                    break;
-                }
-                k -= 1;
-            } else {
-                d[k] += 1;
-                break;
-            }
-        }
-    }
-    (d, exp)
+    let (man, decpt) = i10::digits(v.abs());
+    Flt { neg, decpt, man }
 }
 
 /// The client's `_fptostr` (`0x40fef9`): `digits` digits of the mantissa, padded with `0`, and
@@ -455,6 +407,26 @@ mod tests {
             (0.125, ".2", b'f', "0.13"),
             (0.0005, ".3", b'f', "0.001"),
             (0.0015, ".3", b'f', "0.002"),
+            // An 18th digit of 5 and zeros: `$I10_OUTPUT`'s own arithmetic rounds these two
+            // down and up.
+            (
+                f64::from_bits(0x4317_1eee_124d_37a7),
+                ".16",
+                b'e',
+                "1.6269830806113057e+015",
+            ),
+            (
+                f64::from_bits(0x4319_1f38_6560_ea63),
+                ".16",
+                b'e',
+                "1.7678003743115768e+015",
+            ),
+            (
+                f64::from_bits(0x431b_d9d0_248a_4ae7),
+                "",
+                b'f',
+                "1959828090163897.800000",
+            ),
             // 17 significant digits, then zeros.
             (0.1, ".20", b'f', "0.10000000000000001000"),
             (0.1, ".20", b'g', "0.10000000000000001"),

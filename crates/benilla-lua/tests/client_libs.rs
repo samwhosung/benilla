@@ -223,3 +223,20 @@ fn format_converts_at_32_bits() {
         ["\"a\\\"b\\\\c\\\nd\re\\000f\""]
     );
 }
+
+/// `$I10_OUTPUT` (`0x4116fd`) rounds an 18th digit of 5 and zeros by its own 96-bit arithmetic:
+/// down on the first value, up on the second.
+#[test]
+fn number_digits_round_as_the_clients_arithmetic() {
+    let mut vm = benilla_lua::new_script_host_state();
+    for (bits, want) in [
+        (0x4317_1eee_124d_37a7u64, "1.6269830806113057e+015"),
+        (0x4319_1f38_6560_ea63, "1.7678003743115768e+015"),
+    ] {
+        vm.set_global("V", benilla_lua::Value::Num(f64::from_bits(bits)));
+        let got = vm
+            .exec(br#"return string.format("%.16e", V)"#, b"=t")
+            .unwrap();
+        assert_eq!(vm.display(got[0]), want, "{bits:#x}");
+    }
+}
