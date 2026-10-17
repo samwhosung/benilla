@@ -14,7 +14,7 @@ use benilla_ui::script::EQUIPMENT_BAG;
 use bevy::prelude::*;
 
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore, Objects};
+use crate::net::{ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
@@ -515,12 +515,7 @@ pub(crate) fn collect_inventory(
 /// walker (`0x6223a0` → `0x622420`) with predicate `0x6223d0`, `BagFamily == 9` (`template+0x1d0`),
 /// at mode `0x4f`, so a key in the bank counts. A slot whose template is still in flight reads as
 /// no key until the answer lands.
-pub(crate) fn has_key(
-    store: &ObjectFields,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-) -> bool {
+pub(crate) fn has_key(store: &ObjectFields, objects: &Objects, items: &Items) -> bool {
     // Every guid mode `0x4f` reaches, in the walker's order: each bag's contents follow its slot.
     fn contents(bag_guid: u64, objects: &Objects, out: &mut Vec<u64>) {
         let Some(f) = objects.object(bag_guid) else {
@@ -559,8 +554,9 @@ pub(crate) fn has_key(
         let Some(entry) = objects.object(guid).and_then(|f| f.object_entry()) else {
             return false;
         };
+        // The bag family getter only reads (`0x5da08d`).
         items
-            .template(entry, guid, Ask::New(commands))
+            .template(entry, guid, Ask::Read)
             .is_some_and(|t| t.bag_family == BAG_FAMILY_KEYS)
     })
 }
@@ -1537,12 +1533,9 @@ mod find_item_tests {
     fn has_key_finds_a_key_anywhere_the_reference_looks() {
         use super::{has_key, BAG_FAMILY_KEYS};
         use crate::items::{test_template, Items};
-        use crate::net::NetCommands;
 
         const KEY: u32 = 7_146; // The Scarlet Key (bag_family 9)
         const BREAD: u32 = 4_540;
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
 
         let mut objs = TestObjects::new();
         let mut items = Items::default();
@@ -1553,35 +1546,20 @@ mod find_item_tests {
         item(&mut objs, 0xF1, KEY, None);
         item(&mut objs, 0xF2, BREAD, None);
 
-        assert!(!has_key(&player(&[]), &objs.get(), &items, &commands));
+        assert!(!has_key(&player(&[]), &objs.get(), &items));
         // A non-key in the backpack is not a key.
-        assert!(!has_key(
-            &player(&[(23, 0xF2)]),
-            &objs.get(),
-            &items,
-            &commands
-        ));
+        assert!(!has_key(&player(&[(23, 0xF2)]), &objs.get(), &items));
         // A key in keyring slot 1.
-        assert!(has_key(
-            &player(&[(81, 0xF1)]),
-            &objs.get(),
-            &items,
-            &commands
-        ));
+        assert!(has_key(&player(&[(81, 0xF1)]), &objs.get(), &items));
         // And in the backpack, before it has been filed.
-        assert!(has_key(
-            &player(&[(23, 0xF1)]),
-            &objs.get(),
-            &items,
-            &commands
-        ));
+        assert!(has_key(&player(&[(23, 0xF1)]), &objs.get(), &items));
 
         // The bank: mode `0x4f` reaches it, `find_item`'s `0x47` does not.
         let mut banked = std::collections::HashMap::new();
         banked.insert(39u16, 0xF1u64);
         let store = bank_player(&banked);
         assert!(
-            has_key(&store, &objs.get(), &items, &commands),
+            has_key(&store, &objs.get(), &items),
             "a key in the bank still gives you a keyring"
         );
         assert_eq!(

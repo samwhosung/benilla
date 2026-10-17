@@ -290,7 +290,10 @@ pub(super) fn feed_item_sets(
     let pending = pending.get(&script);
     let mod_sensitive = mod_sensitive.get(&script);
     let me = self_q.single().ok();
-    for id in script.take_item_set_asks() {
+    // The build's asks are its lookups with a callback (`0x52bf60`): their members are asked,
+    // a refused one again; a set carried since only reads.
+    let asked: HashSet<u32> = script.take_item_set_asks().into_iter().collect();
+    for &id in &asked {
         pending.entry(id).or_default();
     }
     // The `$`-tokens follow the player's skills and gender.
@@ -326,17 +329,15 @@ pub(super) fn feed_item_sets(
         } else {
             mod_sensitive.remove(&set_id);
         }
+        let ask = if asked.contains(&set_id) {
+            Ask::Event(&commands)
+        } else {
+            Ask::Read
+        };
         let members: Vec<(u32, Option<String>)> = row
             .items
             .iter()
-            .map(|&id| {
-                (
-                    id,
-                    items
-                        .template(id, 0, Ask::New(&commands))
-                        .map(|t| t.name.clone()),
-                )
-            })
+            .map(|&id| (id, items.template(id, 0, ask).map(|t| t.name.clone())))
             .collect();
         let view = benilla_ui::script::ItemSetView {
             name: row.name.clone(),
@@ -687,7 +688,8 @@ fn resolve_slot(
         // `PageText` book does not set it.
         fields.item_text_id().is_some_and(|id| id != 0),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
-        // name query answers.
+        // name query answers. The tooltip build looks it up with a callback (`0x52e204`), which
+        // no event here marks: it is asked when it first shows.
         fields.item_creator().filter(|&g| g != 0).and_then(|g| {
             names
                 .resolve_player(g, Ask::New(commands))
@@ -729,7 +731,8 @@ fn resolve_slot(
             ..Default::default()
         });
     }
-    let template: Option<ItemInfo> = items.template(entry, guid, Ask::New(commands)).cloned();
+    // Only read, as `GetContainerItemInfo` reads it (`0x4f978b`): the item's create asked.
+    let template: Option<ItemInfo> = items.template(entry, guid, Ask::Read).cloned();
     let Some(t) = template else {
         // Asked (or a cached negative); show the slot occupied while the answer is in flight.
         return Some(ContainerSlot {
@@ -851,7 +854,6 @@ fn worn_cooldowns(
     store: &ObjectStore,
     objects: &Objects,
     items: &Items,
-    commands: &NetCommands,
     cooldowns: &crate::spell::Cooldowns,
     spells: Option<&benilla_formats::SpellCatalog>,
     now: std::time::Instant,
@@ -862,7 +864,8 @@ fn worn_cooldowns(
             let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
             let fields = objects.object(guid)?;
             let entry = fields.object_entry()?;
-            let t = items.template(entry, guid, Ask::New(commands))?;
+            // Only read (`0x4c8b3a`).
+            let t = items.template(entry, guid, Ask::Read)?;
             let charges_left = fields.item_spell_charges(0).unwrap_or(0);
             let triple = use_cooldown(t, entry, charges_left, cooldowns, spells, now, ui_now)?;
             Some((usize::from(slot0) + 1, triple))
@@ -881,7 +884,6 @@ fn bag_family_name(
     objects: &Objects,
     items: &Items,
     families: Option<&benilla_formats::ItemBagFamilyCatalog>,
-    commands: &NetCommands,
 ) -> Option<String> {
     let store = player?;
     let families = families?;
@@ -895,7 +897,8 @@ fn bag_family_name(
     }
     .filter(|&g| g != 0)?;
     let entry = objects.object(guid)?.object_entry().filter(|&e| e != 0)?;
-    let family = items.template(entry, guid, Ask::New(commands))?.bag_family;
+    // Only read (`0x5da08d`).
+    let family = items.template(entry, guid, Ask::Read)?.bag_family;
     families.name(family).map(str::to_string)
 }
 
@@ -1030,7 +1033,6 @@ pub(crate) fn feed_containers(
                     &inv.objects,
                     &items,
                     bag_families.as_deref().map(|c| &c.0),
-                    &commands,
                 )
             })
             .flatten();
@@ -1127,8 +1129,9 @@ pub(crate) fn feed_containers(
             };
             let name = (entry != 0)
                 .then(|| {
+                    // `GetBagName` only reads (`0x4fa75e`).
                     items
-                        .template(entry, bag_guid, Ask::New(&commands))
+                        .template(entry, bag_guid, Ask::Read)
                         .map(|t| t.name.clone())
                 })
                 .flatten();
@@ -1211,8 +1214,9 @@ pub(crate) fn feed_containers(
             };
             let name = (entry != 0)
                 .then(|| {
+                    // `GetBagName` only reads (`0x4fa75e`).
                     items
-                        .template(entry, bag_guid, Ask::New(&commands))
+                        .template(entry, bag_guid, Ask::Read)
                         .map(|t| t.name.clone())
                 })
                 .flatten();
@@ -1282,7 +1286,7 @@ pub(crate) fn feed_containers(
 
         // `HasKey()`, which decides whether the keyring shows at all, pushed with the containers
         // so it is fresh on every `BAG_UPDATE` frame.
-        let key = has_key(&store.0, &inv.objects, &items, &commands);
+        let key = has_key(&store.0, &inv.objects, &items);
         if key != memory.had_key {
             gate.audit("feed_containers", "the HasKey() flip");
             debug!(
@@ -1298,7 +1302,6 @@ pub(crate) fn feed_containers(
             store,
             &inv.objects,
             &items,
-            &commands,
             &cooldowns,
             spell_catalog,
             now,
@@ -1568,7 +1571,7 @@ mod tests {
         use benilla_protocol::ObjectFields;
 
         const ENTRY: u16 = 3; // OBJECT_FIELD_ENTRY
-        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
         let mut objs = TestObjects::new();
         for (guid, entry) in [(0xA1_u64, 1234_u32), (0xA2, 1235), (0xA3, 1236)] {
@@ -1616,6 +1619,12 @@ mod tests {
         // auto-equip's unlock reads the other (`0x5e1704`).
         assert_eq!((sword.guid, sword.item_class), (0xA1, Some(sword_class)));
         assert_eq!((pending.guid, pending.item_class), (0xA3, None));
+        // The slot only reads, as `GetContainerItemInfo` does (`0x4f978b`): the item's create
+        // asked, so no frame of the feed does.
+        for _ in 0..600 {
+            slot(0xA3);
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
     }
 
     /// A bag slot holding a container says how many of its seats are filled, which
@@ -1689,14 +1698,12 @@ mod tests {
     fn a_worn_item_on_cooldown_is_keyed_by_its_live_slot_id() {
         use super::worn_cooldowns;
         use crate::items::{test_template, Items};
-        use crate::net::{NetCommands, ObjectStore};
+        use crate::net::ObjectStore;
         use crate::ui_items::TestObjects;
         use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD};
         use benilla_protocol::messages::ItemUseSpell;
         use benilla_protocol::ObjectFields;
 
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = TestObjects::new();
         for (guid, entry) in [(0xA1_u64, 2000_u32), (0xA2, 2001), (0xA3, 2002)] {
             objs.spawn(
@@ -1737,16 +1744,7 @@ mod tests {
             .collect();
         let store = ObjectStore(ObjectFields::from_pairs(&pairs));
 
-        let worn = worn_cooldowns(
-            &store,
-            &objs.get(),
-            &items,
-            &commands,
-            &cooldowns,
-            None,
-            now,
-            50.0,
-        );
+        let worn = worn_cooldowns(&store, &objs.get(), &items, &cooldowns, None, now, 50.0);
         assert_eq!(
             worn,
             HashMap::from([(13, (50_000, 120_000, true)), (14, (0, 0, true))]),
@@ -1839,16 +1837,7 @@ mod tests {
             })
             .collect();
         let store = ObjectStore(ObjectFields::from_pairs(&pairs));
-        let worn = worn_cooldowns(
-            &store,
-            &objs.get(),
-            &items,
-            &commands,
-            &cooldowns,
-            None,
-            now,
-            50.0,
-        );
+        let worn = worn_cooldowns(&store, &objs.get(), &items, &cooldowns, None, now, 50.0);
         let want: HashMap<usize, (i64, u32, bool)> = expected
             .iter()
             .enumerate()

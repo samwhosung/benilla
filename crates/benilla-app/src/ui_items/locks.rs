@@ -14,7 +14,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use crate::items::Items;
-use crate::net::{NetCommands, Objects};
+use crate::net::Objects;
 use crate::query_cache::Ask;
 
 /// One server-side release, run into the VM by [`apply_item_releases`].
@@ -297,7 +297,6 @@ pub(crate) fn apply_item_releases(
     created: Query<&crate::net::Guid, Added<crate::items::ItemObject>>,
     me: Res<crate::net::SelfGuid>,
     items: Res<Items>,
-    commands: Res<NetCommands>,
     mut queued: ResMut<ItemReleases>,
     // The loot window's closes and refusals owe theirs on the session.
     loot: Option<ResMut<crate::ui_loot::LootState>>,
@@ -339,7 +338,7 @@ pub(crate) fn apply_item_releases(
     // template is unanswered.
     let stackable = |entry: u32, guid: u64| {
         items
-            .template(entry, guid, Ask::New(&commands))
+            .template(entry, guid, Ask::Read)
             .map(|t| t.stackable > 1)
     };
     let objects = &inv.objects;
@@ -502,14 +501,12 @@ mod tests {
 
     /// The release system over a world with arrows in backpack slot 1, its baseline taken.
     fn arrow_world() -> (App, Entity) {
-        let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<Items>()
             .init_resource::<ItemReleases>()
             .init_resource::<LockWatch>()
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(crate::net::SelfGuid(Some(ME)))
-            .insert_resource(NetCommands(tx))
             .add_systems(Update, apply_item_releases);
         let mut items = app.world_mut().resource_mut::<Items>();
         items.insert_template(
