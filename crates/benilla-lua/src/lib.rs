@@ -351,7 +351,7 @@ mod tests {
         );
         assert_eq!(err("x = \"a\nb\""), "t:1: unfinished string near `\"a'");
         assert_eq!(err("x = [[a"), "t:1: unfinished long string near `<eof>'");
-        assert_eq!(err("x = 1\x01"), "t:1: unexpected symbol near `char(1)'");
+        assert_eq!(err("x = 1\x01"), "t:1: invalid control char near `char(1)'");
         assert_eq!(
             err("f()\n(g)()"),
             "t:2: ambiguous syntax (function call x new statement) near `('"
@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(e(b"x = +", b"=a\0b"), "a:1: unexpected symbol near `+'");
         assert_eq!(
             e(b"x = \0", b"x = \0"),
-            "[string \"x = \"]:1: unexpected symbol"
+            "[string \"x = \"]:1: invalid control char near `char(0)'"
         );
         assert_eq!(
             e(b"x = +\0", b"x = +\0"),

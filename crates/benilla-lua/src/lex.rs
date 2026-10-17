@@ -109,8 +109,8 @@ impl Tok {
             Tok::Number => b"<number>",
             Tok::String => b"<string>",
             Tok::Eof => b"<eof>",
-            // 5.1's `luaX_token2str`: a control byte as `char(n)`, any other as itself.
-            Tok::Char(c) if c < 32 || c == 127 => return format!("char({c})").into_bytes(),
+            // `luaX_token2str` (`0x6ff550`): a one-byte token as `%c`. The lexer refuses a
+            // control byte itself, so none reaches here.
             Tok::Char(c) => return vec![c],
             word => RESERVED.iter().find(|r| r.1 == word).unwrap().0,
         };
@@ -162,6 +162,11 @@ pub fn cstr(s: &[u8]) -> &[u8] {
 /// C's `isspace` in the "C" locale.
 fn is_space(c: i32) -> bool {
     matches!(c, 0x20 | 0x09..=0x0D)
+}
+
+/// C's `iscntrl` in the "C" locale.
+fn is_cntrl(c: i32) -> bool {
+    matches!(c, 0x00..=0x1F | 0x7F)
 }
 
 fn is_digit(c: i32) -> bool {
@@ -229,11 +234,9 @@ impl<'a> Lexer<'a> {
         SyntaxError(out)
     }
 
-    /// `luaX_syntaxerror` at the current token. A NUL byte is token 0, which `luaX_lexerror`
-    /// takes for "no token": the message then names none.
+    /// `luaX_syntaxerror` (`0x6ff4d0`) at the current token, which it always names.
     pub fn error(&self, msg: &str) -> SyntaxError {
         let near = match self.cur.tok {
-            Tok::Char(0) => return self.error_at(msg.as_bytes(), None),
             Tok::Name => self.name().to_vec(),
             Tok::String | Tok::Number => self.buff.clone(),
             t => t.text(),
@@ -363,9 +366,13 @@ impl<'a> Lexer<'a> {
                         let mut t = Self::tok(Tok::Name);
                         t.name = (start, self.pos);
                         return Ok(t);
+                    } else if is_cntrl(c) {
+                        // `iscntrl` (`0x6ffabb`): a control byte is the lexer's own error, near
+                        // `char(%d)` (`0x8721a8`), through `luaX_error` (`0x6ffafd`).
+                        let near = format!("char({c})");
+                        return Err(self.error_at(b"invalid control char", Some(near.as_bytes())));
                     } else {
-                        // Any other byte, a control one too, is a one-byte token for the parser
-                        // to refuse.
+                        // Any other byte is a one-byte token for the parser to refuse.
                         self.pos += 1;
                         return Ok(Self::tok(Tok::Char(c as u8)));
                     }

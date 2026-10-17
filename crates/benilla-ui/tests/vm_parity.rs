@@ -244,7 +244,8 @@ const CASES: &[(&str, &str)] = &[
     ("coerce_d_and_hex", r#"return S("1d2" + 0, "2" + 1, E(function() return "0x2" + 1 end), E(function() return "nan" * 1 end), " 5.D1 " * 2, E(string.rep, "x", "0x2"), string.rep("x", "2d0"))"#),
     ("coerce_edges", r#"return S(E(function() return "0x10" * 1 end), " 2 " * " 3 ", E(function() return "1e" + 1 end), E(function() return "inf" + 0 end), 10 .. "", 1e100 .. "", -0.0 .. "", 2^63 .. "")"#),
     // ── Syntax errors and the lexer's edges, through `loadstring` ──
-    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`).
+    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`). A control
+    // byte is the lexer's `invalid control char` (`0x6ffabb`).
     ("syntax_errors", r#"local o = {}
         for _, src in ipairs({"x = 1 +", "local function", "x = #t", "x = a % b",
             "return function(...) return ... end", "for x do end", "x = 1..2", "x = \"a\nb\"",
@@ -438,6 +439,8 @@ b]])"#),
     // `OP_CALL` or `OP_TAILCALL` called (`0x6fc499`..`0x6fc4a1`).
     ("fix-front_for_names", r#"return S(E(function() for k, v in pairs({1}), 5 do end end), E(function() for i in string.rep do end end),
         E(function() for i in next, 5 do end end), E(function() local t = {} for k in t.f do end end))"#),
+    // A NUL byte outside a string is a control byte, the lexer's `invalid control char`
+    // (`0x6ffabb`) near `char(0)`.
     ("fix-front_nul_in_messages", r#"local function L(src, name) local f, e = loadstring(src, name or "=t") return e end
         return S(L('x = "a\0b\n'), L("x = \0"), L("\0"), L("x = 1 \0 y"), L('x = "a\0b" +'),
           E(function() local t = {} t["a\0b"]() end), E(function() local t = {} t:m(1) end), E(function() return _G["g\0h"].x end))"#),

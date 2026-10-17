@@ -317,3 +317,23 @@ fn a_generic_for_with_many_names_runs() {
         assert_eq!(run(&src), want, "{n} names");
     }
 }
+
+/// A control byte outside a string is the lexer's own error (`iscntrl` at `0x6ffabb`), near
+/// `char(%d)` (`0x8721a8`); the control bytes `isspace` takes first are blanks (`0x6ff709`).
+#[test]
+fn a_control_byte_is_the_lexers_error() {
+    assert_eq!(
+        compile_error("x = 1 \x01"),
+        "t:1: invalid control char near `char(1)'"
+    );
+    assert_eq!(
+        compile_error("x = 1\n\x7f"),
+        "t:2: invalid control char near `char(127)'"
+    );
+    assert_eq!(
+        compile_error("x = \0"),
+        "t:1: invalid control char near `char(0)'"
+    );
+    assert_eq!(compile_error("x\t=\x0b1\x0c"), "ok");
+    assert_eq!(compile_error("x = '\x01\x7f'"), "ok");
+}
