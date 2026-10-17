@@ -1,6 +1,6 @@
 //! Numbers to and from text as benilla's Lua 5.1 build read and wrote them over glibc: the
-//! client's `luaO_str2d` and `strtod`, `tonumber`'s `strtoul` with a 64-bit `unsigned long`, and
-//! `lua_number2str`'s `%.14g`.
+//! client's `luaO_str2d` and `strtod`, its 32-bit `strtoul` for `tonumber`, and `lua_number2str`'s
+//! `%.14g`.
 
 use std::fmt::Write;
 
@@ -130,32 +130,32 @@ pub fn ldexp(x: f64, n: i32) -> f64 {
     y * two(n)
 }
 
-/// glibc's `strtoul` with a 64-bit `unsigned long`: the value and the index after the last digit,
-/// that index `0` when no digit was read. A `-` negates modulo 2^64; an overflow is `u64::MAX`.
-pub fn strtoul(s: &[u8], base: u32) -> (u64, usize) {
+/// The client's `strtoul` (`0x40dd0e`), MSVC's `_strtoxl` (`0x40db09`) with its 32-bit
+/// `unsigned long`, for a base from 2 to 36: the value and the index after the last digit, that
+/// index `0` when no digit was read. Spaces and one sign lead; base 16 skips a `0x` or `0X`
+/// whether or not a digit follows (`0x40dbb7`); a digit is `0`-`9` or a letter, up to the base.
+/// An overflow keeps reading and answers `0xffffffff` (`0x40dccc`), and a `-` then negates
+/// modulo 2^32 (`0x40dcf4`), so `-fffffffff` is 1.
+pub fn strtoul(s: &[u8], base: u32) -> (u32, usize) {
+    debug_assert!((2..=36).contains(&base));
     let mut i = 0;
     while i < s.len() && is_space(s[i]) {
         i += 1;
     }
-    let neg = matches!(s.get(i), Some(b'-'));
+    let neg = s.get(i) == Some(&b'-');
     if matches!(s.get(i), Some(b'+' | b'-')) {
         i += 1;
     }
-    if base == 16
-        && s.get(i) == Some(&b'0')
-        && matches!(s.get(i + 1), Some(b'x' | b'X'))
-        && s.get(i + 2).is_some_and(|b| b.is_ascii_hexdigit())
-    {
+    if base == 16 && s.get(i) == Some(&b'0') && matches!(s.get(i + 1), Some(b'x' | b'X')) {
         i += 2;
     }
     let at = i;
-    let mut n: u64 = 0;
-    let mut over = false;
-    while let Some(d) = s.get(i).and_then(|&c| (c as char).to_digit(base)) {
-        match n
-            .checked_mul(base as u64)
-            .and_then(|x| x.checked_add(d as u64))
-        {
+    let (mut n, mut over) = (0u32, false);
+    while let Some(d) = s.get(i).and_then(|&c| (c as char).to_digit(36)) {
+        if d >= base {
+            break;
+        }
+        match n.checked_mul(base).and_then(|x| x.checked_add(d)) {
             Some(x) => n = x,
             None => over = true,
         }
@@ -164,14 +164,8 @@ pub fn strtoul(s: &[u8], base: u32) -> (u64, usize) {
     if i == at {
         return (0, 0);
     }
-    let n = if over {
-        u64::MAX
-    } else if neg {
-        n.wrapping_neg()
-    } else {
-        n
-    };
-    (n, i)
+    let n = if over { u32::MAX } else { n };
+    (if neg { n.wrapping_neg() } else { n }, i)
 }
 
 /// `%.14g` as glibc's `printf` writes it: a two-digit exponent at least (`1e+20`), and `inf`,
@@ -401,13 +395,24 @@ mod tests {
         }
     }
 
+    /// Against the client's own `strtoul`, run at `0x40dd0e`.
     #[test]
-    fn strtoul_is_glibc_64() {
+    fn strtoul_is_msvc_32() {
         assert_eq!(strtoul(b"ff", 16), (255, 2));
         assert_eq!(strtoul(b"0x10", 16), (16, 4));
-        assert_eq!(strtoul(b"-1", 16), (u64::MAX, 2));
-        assert_eq!(strtoul(b"ffffffffffffffffffff", 16).0, u64::MAX);
+        assert_eq!(strtoul(b"-0x10", 16), (0xffff_fff0, 5));
+        assert_eq!(strtoul(b"ffffffff", 16), (u32::MAX, 8));
+        assert_eq!(strtoul(b"fffffffff", 16), (u32::MAX, 9));
+        assert_eq!(strtoul(b"100000000", 16), (u32::MAX, 9));
+        assert_eq!(strtoul(b"4294967296", 10), (u32::MAX, 10));
+        assert_eq!(strtoul(b"-1", 16), (u32::MAX, 2));
+        assert_eq!(strtoul(b"-ffffffff", 16), (1, 9));
+        assert_eq!(strtoul(b"-fffffffff", 16), (1, 10));
+        assert_eq!(strtoul(b"zz", 36), (1295, 2));
+        assert_eq!(strtoul(b"101", 2), (5, 3));
         assert_eq!(strtoul(b"8", 8), (0, 0));
-        assert_eq!(strtoul(b"  +7", 8), (7, 4));
+        assert_eq!(strtoul(b"  +ff", 16), (255, 5));
+        assert_eq!(strtoul(b"0x", 16), (0, 0));
+        assert_eq!(strtoul(b"0xg", 16), (0, 0));
     }
 }

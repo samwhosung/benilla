@@ -252,9 +252,9 @@ fn tonumber(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(vm.ret1(Value::Nil))
 }
 
-/// 5.1's `tonumber` with a base: glibc's `strtoul` must read a digit, then only spaces may
-/// follow, up to the C string's end.
-fn strtoul(s: &[u8], base: u32) -> Option<u64> {
+/// The client's `tonumber` with a base (`0x702e9b`-`0x702f11`): its 32-bit `strtoul` must read a
+/// digit, then only spaces may follow, up to the C string's end; the value is pushed unsigned.
+fn strtoul(s: &[u8], base: u32) -> Option<u32> {
     let s = &s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())];
     let (n, end) = crate::number::strtoul(s, base);
     (end > 0 && s[end..].iter().all(|&b| matches!(b, 0x20 | 0x09..=0x0D))).then_some(n)

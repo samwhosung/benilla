@@ -124,3 +124,25 @@ fn lower_and_upper_map_utf8_code_points() {
     assert_eq!(q(r#"string.lower("AB\0CD")"#), ["\"ab\""]);
     assert_eq!(q(r#"string.upper("\195\0x")"#), ["\"\""]);
 }
+
+/// `tonumber` with a base (`0x702e30`) parses with the client's 32-bit `strtoul` (`0x40dd0e`), on
+/// every platform: an overflow is 0xffffffff, a `-` negates modulo 2^32.
+#[test]
+fn tonumber_with_a_base_is_32_bit() {
+    assert_eq!(
+        ok(r#"return tonumber("fffffffff", 16), tonumber("-1", 16), tonumber("-fffffffff", 16)"#),
+        ["4294967295", "4294967295", "1"]
+    );
+    assert_eq!(
+        ok(r#"return tonumber("ffffffff", 16), tonumber("-80000000", 16), tonumber("z", 36)"#),
+        ["4294967295", "2147483648", "35"]
+    );
+    assert_eq!(
+        ok(r#"return tonumber(" 0xff ", 16), tonumber("10", 16.9), tonumber("ff\0zz", 16)"#),
+        ["255", "16", "255"]
+    );
+    assert_eq!(
+        ok(r#"return tonumber("0x", 16), tonumber("8", 8), tonumber("1 1", 2)"#),
+        ["nil", "nil", "nil"]
+    );
+}
