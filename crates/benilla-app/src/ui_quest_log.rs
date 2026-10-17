@@ -244,6 +244,7 @@ pub(crate) fn seed_quest_folds(world: &World, script: &mut UiScript) {
 mod net {
     use benilla_protocol::messages::{quest_slot_state, QuestTemplate, PLAYER_QUEST_LOG_SLOTS};
     use benilla_protocol::{ObjectFields, SessionEvent, SessionEventKind};
+    use benilla_ui::script::UiScript;
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::*;
 
@@ -298,9 +299,14 @@ mod net {
     /// (`0x5e5b3d`-`0x5e5beb`) that `0x5dd060` ends on the first quest needing the item. A quest
     /// whose record is not cached queues the pair for its arrival and the walk goes on
     /// (`0x5e5b93`-`0x5e5bd0`). The held count is read now, before the item's own create reaches
-    /// the bags, as the packet leads it (vmangos `Player.cpp:10249`). The reference's expiry latch
-    /// (`0x4df4b0`, a timed quest that ran out) is not modelled.
-    fn on_item_added(In(ev): In<SessionEvent>, book: ItemBook, mut quest_log: ResMut<QuestLog>) {
+    /// the bags, as the packet leads it (vmangos `Player.cpp:10249`). A quest whose row holds the
+    /// expiry latch is passed over (`0x5e5b6c`).
+    fn on_item_added(
+        In(ev): In<SessionEvent>,
+        book: ItemBook,
+        mut quest_log: ResMut<QuestLog>,
+        script: Option<NonSend<UiScript>>,
+    ) {
         let SessionEvent::QuestObjectiveItem { item_id, count } = ev else {
             return;
         };
@@ -311,7 +317,8 @@ mod net {
             let Some(quest_id) = store
                 .player_quest_log(slot)
                 .map(|s| s.quest_id)
-                .filter(|&id| id != 0)
+                .filter(|&id| (id as i32) > 0)
+                .filter(|&id| !script.as_ref().is_some_and(|s| s.quest_log_latched(id)))
             else {
                 continue;
             };
@@ -370,14 +377,15 @@ mod net {
         }
     }
 
-    /// Whether the quest is done for the update arms: its log slot's failed bit (`0x2`); the
-    /// expiry latch `0x4df4b0` is not modelled.
-    fn done(store: Option<&ObjectFields>, quest_id: u32) -> bool {
-        store.is_some_and(|store| {
-            (0..PLAYER_QUEST_LOG_SLOTS)
-                .filter_map(|slot| store.player_quest_log(slot))
-                .any(|s| s.quest_id == quest_id && s.state & quest_slot_state::FAIL != 0)
-        })
+    /// Whether the quest is done for the update arms: its row's expiry latch (`0x4df4b0`,
+    /// `0x5e5c16`) or its log slot's failed bit (`0x2`, `0x5e5c7b`).
+    fn done(store: Option<&ObjectFields>, script: Option<&UiScript>, quest_id: u32) -> bool {
+        script.is_some_and(|s| s.quest_log_latched(quest_id))
+            || store.is_some_and(|store| {
+                (0..PLAYER_QUEST_LOG_SLOTS)
+                    .filter_map(|slot| store.player_quest_log(slot))
+                    .any(|s| s.quest_id == quest_id && s.state & quest_slot_state::FAIL != 0)
+            })
     }
 
     /// `SMSG_QUESTUPDATE_ADD_KILL` (case `0x199`, `0x5e5d61`): the record read without a callback
@@ -390,6 +398,7 @@ mod net {
         names: Res<NameCache>,
         go_templates: Option<Res<crate::go_templates::GameObjectTemplates>>,
         mut quest_log: ResMut<QuestLog>,
+        script: Option<NonSend<UiScript>>,
     ) {
         let SessionEvent::QuestObjectiveKill {
             quest_id,
@@ -400,7 +409,11 @@ mod net {
         else {
             return;
         };
-        if done(self_q.iter().next().map(|s| &s.0), quest_id) {
+        if done(
+            self_q.iter().next().map(|s| &s.0),
+            script.as_deref(),
+            quest_id,
+        ) {
             return;
         }
         let Some(template) = quest_log.template(quest_id, Ask::Read) else {
@@ -431,11 +444,16 @@ mod net {
         In(ev): In<SessionEvent>,
         self_q: Query<&ObjectStore, With<SelfPlayer>>,
         mut quest_log: ResMut<QuestLog>,
+        script: Option<NonSend<UiScript>>,
     ) {
         let SessionEvent::QuestObjectivesComplete { quest_id } = ev else {
             return;
         };
-        if done(self_q.iter().next().map(|s| &s.0), quest_id) {
+        if done(
+            self_q.iter().next().map(|s| &s.0),
+            script.as_deref(),
+            quest_id,
+        ) {
             return;
         }
         let Some(template) = quest_log.template(quest_id, Ask::Read) else {
@@ -686,6 +704,8 @@ pub(crate) fn feed_quest_log(
     mut sink: crate::ui_action::MessageSink,
     // The accept line's queue.
     mut quest_lines: ResMut<crate::ui_quest::QuestLines>,
+    // The latch's quest-giver refresh and failure line.
+    mut quest_giver: ResMut<crate::ui_quest::QuestGiver>,
     mut item_notices: MessageReader<ItemNotice>,
     mut field_notices: MessageReader<FieldNotice>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
@@ -871,6 +891,13 @@ pub(crate) fn feed_quest_log(
 
     for _ in 0..std::mem::take(&mut quest_log.faction_rank_moves) {
         script.quest_log_faction_rank_changed();
+    }
+    // What the expiry latch owes the givers and the chat (`0x4df531`, `0x4e1524`).
+    if script.take_quest_giver_refreshes() > 0 {
+        quest_giver.bump_reask();
+    }
+    for title in script.take_quest_failed_lines() {
+        quest_giver.push_message(crate::ui_action::UiError::s("ERR_QUEST_FAILED_S", title));
     }
     // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
     // kill's counter `:14570` before `:14575`), so the toasts go first.
@@ -1189,6 +1216,7 @@ mod tests {
                 .init_resource::<crate::ui_chat::ChatLog>()
                 .init_resource::<crate::sound::MessageSounds>()
                 .init_resource::<crate::ui_quest::QuestLines>()
+                .init_resource::<crate::ui_quest::QuestGiver>()
                 .init_resource::<crate::ui_unit::field_events::FieldNoticeCursor>()
                 .init_resource::<QuestLog>()
                 .add_message::<ItemNotice>()
@@ -1895,6 +1923,58 @@ mod tests {
             ]));
         rig.frame();
         assert_eq!(rig.eval(board), "Wolf Pelt: 0/5");
+    }
+
+    /// A quest whose row holds the expiry latch is done to the update packets (`0x5e5b6c`,
+    /// `0x5e5c16`): no kill line and no item line; and the latch's failure line and quest-giver
+    /// refresh reach the givers' queue (`0x4e1524`, `0x4df531`).
+    #[test]
+    fn a_latched_quest_takes_no_update_and_its_failure_reaches_the_givers() {
+        let mut objectives = none();
+        objectives[0] = obj(55, 10, 0, 0, "");
+        objectives[1] = obj(0, 0, WOLF_PELT, 5, "");
+        let mut rig = Rig::new(vec![quest_template(7, objectives)], &[7]);
+        rig.creature(55, "Kobold Vermin");
+        rig.cache_pelt();
+        rig.frame();
+        rig.enter_world();
+        // The deadline ran out with the row made: the timers' read latches it.
+        rig.fields.insert(FIELD_PLAYER_QUEST_LOG_1_1 + 2, 1000);
+        rig.write_store();
+        let slots = slot_views(&rig.app.world().get::<ObjectStore>(rig.player).unwrap().0);
+        rig.script().set_quest_slots(slots);
+        rig.script().set_server_unix_time(2000.0);
+        rig.script().run("GetQuestTimers()").unwrap();
+        assert_eq!(rig.seen(), [QLU]);
+        let epoch = rig
+            .app
+            .world()
+            .resource::<crate::ui_quest::QuestGiver>()
+            .reask_epoch();
+        rig.frame();
+        let mut giver = rig
+            .app
+            .world_mut()
+            .resource_mut::<crate::ui_quest::QuestGiver>();
+        assert_eq!(giver.reask_epoch(), epoch.wrapping_add(1));
+        assert_eq!(
+            giver.take_messages(),
+            [crate::ui_action::UiError::s(
+                "ERR_QUEST_FAILED_S",
+                "A Threat Within".to_string()
+            )]
+        );
+        rig.packet(SessionEvent::QuestObjectiveKill {
+            quest_id: 7,
+            entry: 55,
+            count: 3,
+            required: 10,
+        });
+        rig.packet(SessionEvent::QuestObjectiveItem {
+            item_id: WOLF_PELT,
+            count: 1,
+        });
+        assert_eq!(rig.frame(), Vec::<String>::new());
     }
 
     /// The slot watcher runs on the log's slots, not its rows: an accepted quest is announced before

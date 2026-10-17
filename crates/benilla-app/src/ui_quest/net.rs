@@ -132,9 +132,16 @@ fn on_objectives_complete(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver
     }
 }
 
-fn on_failed(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>, quest_log: Res<QuestLog>) {
+fn on_failed(
+    In(ev): In<SessionEvent>,
+    mut quest: ResMut<QuestGiver>,
+    quest_log: Res<QuestLog>,
+    self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+) {
     if let SessionEvent::QuestFailed { quest_id, timed } = ev {
-        quest_failed(quest_id, timed, &quest_log, &mut quest);
+        let store = self_q.iter().next().map(|s| &s.0);
+        quest_failed(quest_id, timed, store, script, &quest_log, &mut quest);
     }
 }
 
@@ -305,19 +312,46 @@ fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
 }
 
 /// `SMSG_QUESTUPDATE_FAILED` (`0x196`) or `_FAILEDTIMER` (`0x197`): `ERR_QUEST_FAILED_S` (msg
-/// `0x8b`) in chat, named by the quest's title. The reference's arm (`0x5e5ad0`) prints nothing
-/// without a cached template, as here, or when the slot's `byte[slot+7] & 2` is set, which this
-/// does not check.
-fn quest_failed(quest_id: u32, timed: bool, quest_log: &QuestLog, quest: &mut QuestGiver) {
+/// `0x8b`) in chat, named by the quest's title, unless the quest was already done: its row
+/// latched or its slot failed (`0x5e5c16`-`0x5e5c81`), as read before the timer arm latches the
+/// row (`0x4df550`, `0x5e5cd9`). Nothing shows without a cached template (`0x5e5ca0`).
+fn quest_failed(
+    quest_id: u32,
+    timed: bool,
+    store: Option<&benilla_protocol::ObjectFields>,
+    mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    quest_log: &QuestLog,
+    quest: &mut QuestGiver,
+) {
+    use benilla_protocol::messages::{quest_slot_state, PLAYER_QUEST_LOG_SLOTS};
     debug!("net: quest {quest_id} failed (timed: {timed})");
-    // Read without a callback (`0x5e5ca0`).
-    if let Some(t) = quest_log.template(quest_id, Ask::Read) {
-        quest.push_message(UiError::s("ERR_QUEST_FAILED_S", t.title.clone()));
+    let latched = script
+        .as_ref()
+        .is_some_and(|s| s.quest_log_latched(quest_id));
+    let failed = store.is_some_and(|store| {
+        (0..PLAYER_QUEST_LOG_SLOTS)
+            .filter_map(|slot| store.player_quest_log(slot))
+            .any(|s| s.quest_id == quest_id && s.state & quest_slot_state::FAIL != 0)
+    });
+    if timed {
+        // The latch's quest-giver refresh (`0x4df531`) reaches the givers through the feed.
+        if let Some(script) = script.as_mut() {
+            script.quest_log_latch_quest(quest_id);
+        }
     } else {
-        debug!("net: quest {quest_id} has no cached template — the reference shows nothing");
+        // A failure moves what the givers offer, so the givers are asked again.
+        quest.bump_reask();
     }
-    // A failure moves what the givers offer, so the reference re-asks here too.
-    quest.bump_reask();
+    // Read without a callback (`0x5e5ca0`).
+    match quest_log.template(quest_id, Ask::Read) {
+        Some(t) if !(latched || failed) => {
+            quest.push_message(UiError::s("ERR_QUEST_FAILED_S", t.title.clone()));
+        }
+        Some(_) => {}
+        None => {
+            debug!("net: quest {quest_id} has no cached template — the reference shows nothing")
+        }
+    }
 }
 
 /// `SMSG_QUESTLOG_FULL`: the reference's `0x195` arm only raises msg 153, `ERR_QUEST_LOG_FULL`, a
@@ -369,6 +403,37 @@ fn quest_giver_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x5e5ad0`'s failure arms print unless the quest is done, read before the timer arm
+    /// latches its row (`0x5e5c16`, `0x5e5cd9`), so a second timer failure prints nothing.
+    #[test]
+    fn a_timed_failure_latches_and_a_done_quest_prints_no_failure() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<QuestGiver>();
+        let mut log = QuestLog::default();
+        log.insert_template(crate::ui_quest::test_template(7, "Deliver the Message", 0));
+        world.insert_resource(log);
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        let mut q = crate::ui_quest_log::fixture::quest(7, "Deliver the Message", 1);
+        q.record.objectives[0] = crate::ui_quest_log::fixture::kill(40, 3);
+        crate::ui_quest_log::fixture::seat(&mut script, &[q]);
+        world.insert_non_send_resource(script);
+        let mut fail = |timed| {
+            world
+                .run_system_once_with(on_failed, SessionEvent::QuestFailed { quest_id: 7, timed })
+                .unwrap();
+            let lines = world.resource_mut::<QuestGiver>().take_messages().len();
+            let latched = world
+                .non_send_resource::<benilla_ui::script::UiScript>()
+                .quest_log_latched(7);
+            (lines, latched)
+        };
+        assert_eq!(fail(false), (1, false), "0x196 prints and latches nothing");
+        assert_eq!(fail(true), (1, true), "0x197 prints, read before its latch");
+        assert_eq!(fail(true), (0, true), "done: the row's latch");
+        assert_eq!(fail(false), (0, true));
+    }
 
     /// A world with the giver and a wire, for the handlers that open a panel through the latch.
     fn quest_world() -> (World, crossbeam_channel::Receiver<ClientCommand>) {
