@@ -71,7 +71,14 @@ pub(crate) struct HoverMemo<'s> {
     trace: Local<'s, String>,
     /// Whether the VM holds a `"mouseover"` unit, so the clear is pushed once.
     published: Local<'s, crate::ui_script::VmMemo<bool>>,
+    /// What the last frame hovered, unit, corpse and object: a hover onto anything else is the
+    /// build, whose lookups pass a callback (`GetUnitName` `0x609210` from `0x529fe0`, the corpse's
+    /// owner `0x52af77`, a lock's key `0x52aca6`); the frames under the same hover read.
+    hovering: Local<'s, Option<HoverKey>>,
 }
+
+/// What the pointer is over: the picked unit, corpse and object guids.
+type HoverKey = (Option<u64>, Option<u64>, Option<u64>);
 
 fn lines_view(s: &UnitState) -> UnitState {
     UnitState {
@@ -140,10 +147,16 @@ fn drive_mouseover_tooltip(
         script.publish_world_mouseover(None);
         return;
     }
+    let hover: HoverKey = (
+        hovered.mouseover(&hovered_go).map(|(_, guid)| guid),
+        hovered.corpse_guid,
+        hovered_go.guid,
+    );
+    let ask = Ask::at(memo.hovering.replace(hover) != Some(hover), &commands);
     let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
         let store = stores.get(entity).ok()?;
         let name = names
-            .resolve_unit(guid, Some(store), Ask::New(&commands))
+            .resolve_unit(guid, Some(store), ask)
             .map(str::to_string);
         let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
         // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
@@ -210,10 +223,7 @@ fn drive_mouseover_tooltip(
         let Some(owner) = store.0.corpse_owner() else {
             return;
         };
-        let Some(name) = names
-            .resolve_player(owner, Ask::New(&commands))
-            .map(str::to_string)
-        else {
+        let Some(name) = names.resolve_player(owner, ask).map(str::to_string) else {
             return;
         };
         // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.
@@ -278,11 +288,9 @@ fn drive_mouseover_tooltip(
         let Some(fields) = go_fields else {
             return; // not streamed: no descriptor, no entry
         };
+        // The builder reads the record its create asked for (`0x5f7d81`, `0x5f8100`): an object
+        // whose template has not landed shows when it does.
         let Some(template) = go_inputs.templates.of(fields).cloned() else {
-            // Template in flight: ask once, and show it when it lands.
-            go_inputs
-                .templates
-                .request(guid, fields, Ask::New(&commands));
             return;
         };
         // The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then
@@ -330,10 +338,7 @@ fn drive_mouseover_tooltip(
         {
             match slot0.key_type {
                 benilla_formats::LOCK_KEY_ITEM => {
-                    if let Some(t) = go_inputs
-                        .items
-                        .template(slot0.index, 0, Ask::New(&commands))
-                    {
+                    if let Some(t) = go_inputs.items.template(slot0.index, 0, ask) {
                         // `LOCKED_WITH_ITEM`, at `0x52acb8`.
                         if let Some(text) = keyed(&go_get, "LOCKED_WITH_ITEM", &[Arg::S(&t.name)]) {
                             lines.push((text, TooltipTint::White));

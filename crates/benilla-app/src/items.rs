@@ -667,19 +667,6 @@ pub(crate) fn test_spawn_object(world: &mut World, guid: u64, fields: ObjectFiel
 pub(crate) const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 pub(crate) const EQUIPMENT_SLOT_OFFHAND: u8 = 16;
 
-/// One equipment slot's item class; `None` while empty or its template is in flight.
-fn equipped_class(
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-    slot: u8,
-) -> Option<u8> {
-    let guid = store.0.player_inv_slot(slot).filter(|&g| g != 0)?;
-    let entry = objects.object(guid).and_then(|o| o.object_entry())?;
-    Some(items.template(entry, guid, Ask::New(commands))?.class as u8)
-}
-
 /// Whether the disarm flag is up (`UNIT_FIELD_FLAGS & UNIT_FLAG_DISARMED`), which hides one hand
 /// from the equipped-item search.
 pub(crate) fn is_disarmed(store: &ObjectStore) -> bool {
@@ -689,23 +676,8 @@ pub(crate) fn is_disarmed(store: &ObjectStore) -> bool {
 /// The equipment slot this character's disarm hides ([`crate::creature_anim::disarmed_hand`] over
 /// the raw inventory), for the action bar's equipped-item requirement (`0x5f0c50`) and the
 /// item-use refusal (`CGItem::Use` rung 15). `None` while the flag is down or neither hand holds
-/// a weapon.
+/// a weapon. The templates are only read, as the reference's item getters read them (`0x5d9f6d`).
 pub(crate) fn disarmed_equipment_slot(
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-) -> Option<u8> {
-    if !is_disarmed(store) {
-        return None;
-    }
-    let main = equipped_class(store, objects, items, commands, EQUIPMENT_SLOT_MAINHAND);
-    let off = equipped_class(store, objects, items, commands, EQUIPMENT_SLOT_OFFHAND);
-    crate::creature_anim::disarmed_hand(main, off).map(|hand| EQUIPMENT_SLOT_MAINHAND + hand as u8)
-}
-
-/// [`disarmed_equipment_slot`] without the ask.
-pub(crate) fn disarmed_equipment_slot_cached(
     store: &ObjectStore,
     objects: &Objects,
     items: &Items,

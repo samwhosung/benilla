@@ -18,7 +18,7 @@ use benilla_formats::{
 };
 
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore, Objects, Reputations};
+use crate::net::{ObjectStore, Objects, Reputations};
 use crate::spell::Cooldowns;
 use crate::spell::{SpellModifiers, OP_COST};
 use crate::target::{can_attack, ring_reaction, Factions};
@@ -27,7 +27,6 @@ use crate::ui_action::Spells;
 
 /// Leg 8's caster unit flag.
 use crate::player::UNIT_FLAG_IN_COMBAT;
-use crate::query_cache::Ask;
 
 /// The implicit targets leg 10b forks on (`0x6e3f8a`/`0x6e3fa2`): 6, single enemy, asks
 /// `CanAttack 0x606980`; 21, single friend, asks `CanAssist 0x6066f0`.
@@ -108,9 +107,10 @@ const HANDS: u32 =
 /// Every equipment index the search covers, as a mask: the 19 worn slots and the four bags.
 pub(crate) const EQUIPMENT_MASK: u32 = (1 << EQUIPMENT_SLOTS) - 1;
 
-/// [`equipped_item_fits`] for the cast ladder's rung 7: the same search, never querying a
-/// missing template; an uncached one counts as a match.
-pub(crate) fn equipped_item_fits_cached(
+/// Leg 4 (`0x6e40e0`), shared with the tooltip's requirement line and the cast ladder's rung 7:
+/// does a worn item match `EquippedItemClass` and `EquippedItemSubClassMask`? The templates are
+/// only read (`0x6e428f`): one that has not streamed counts as a match.
+pub(crate) fn equipped_item_fits(
     d: &SpellDisplay,
     store: &ObjectStore,
     objects: &Objects,
@@ -120,7 +120,7 @@ pub(crate) fn equipped_item_fits_cached(
         return true;
     }
     let mut mask = hand_mask(d);
-    if let Some(hidden) = crate::items::disarmed_equipment_slot_cached(store, objects, items) {
+    if let Some(hidden) = crate::items::disarmed_equipment_slot(store, objects, items) {
         mask &= !(1u32 << hidden);
     }
     equipped_slots_match(
@@ -226,46 +226,6 @@ pub(crate) fn equipped_item_reason(d: &SpellDisplay) -> u8 {
     }
 }
 
-/// Leg 4 (`0x6e40e0`), shared with the tooltip's requirement line: does a worn item match
-/// `EquippedItemClass` and `EquippedItemSubClassMask`? An item whose template has not streamed
-/// counts as a match.
-pub(crate) fn equipped_item_fits(
-    d: &SpellDisplay,
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-) -> bool {
-    // The short-circuits to "fits" (`0x6e40e0` at `6e4103`..`6e4130`): a caster that is not the
-    // active player (always ours here), and those of [`needs_equipped_item`].
-    if !needs_equipped_item(d) {
-        return true;
-    }
-    let class = d.equipped_item_class as u32;
-    let mut mask = hand_mask(d);
-    // The disarm ladder strips the one hidden hand from the mask (`0x5f0c69`/`0x5f0c91`).
-    if let Some(hidden) = crate::items::disarmed_equipment_slot(store, objects, items, commands) {
-        mask &= !(1u32 << hidden);
-    }
-    equipped_slots_match(store, mask, class, d.equipped_item_subclass_mask, |guid| {
-        let (entry, durability, max_durability) = objects.object(guid).and_then(|o| {
-            Some((
-                o.object_entry()?,
-                o.item_durability(),
-                o.item_max_durability(),
-            ))
-        })?;
-        let t = items.template(entry, guid, Ask::New(commands))?;
-        Some(WornItem {
-            class: t.class,
-            subclass: t.subclass,
-            flags: t.flags,
-            durability,
-            max_durability,
-        })
-    })
-}
-
 /// One worn item, as the equipped-item search reads it.
 pub(crate) struct WornItem {
     pub(crate) class: u32,
@@ -317,7 +277,6 @@ pub(crate) fn item_usable(
     spells: Option<&Spells>,
     objects: &Objects,
     items: &Items,
-    commands: &NetCommands,
 ) -> (bool, bool) {
     if !held {
         return (false, false);
@@ -341,7 +300,7 @@ pub(crate) fn item_usable(
     let (Some(d), Some(spells)) = (d, spells) else {
         return (false, false);
     };
-    spell_usable(spell_id, d, spells, ctx, objects, items, commands)
+    spell_usable(spell_id, d, spells, ctx, objects, items)
 }
 
 /// The walk; returns the `IsUsableAction` pair `(usable, not_enough_mana)`.
@@ -352,7 +311,6 @@ pub(crate) fn spell_usable(
     ctx: &UsableCtx,
     objects: &Objects,
     items: &Items,
-    commands: &NetCommands,
 ) -> (bool, bool) {
     // Early-out (`0x6e3d99`): a tradeskill "spell" is always usable.
     if d.effects[0] == SPELL_EFFECT_TRADE_SKILL {
@@ -383,7 +341,7 @@ pub(crate) fn spell_usable(
         }
     }
     // Leg 4 (`0x6e40e0`): some worn item matches the class and subclass mask.
-    if !equipped_item_fits(d, ctx.store, objects, items, commands) {
+    if !equipped_item_fits(d, ctx.store, objects, items) {
         return (false, false);
     }
     // Leg 5 (`0x6e3e7a`..`0x6e3eb2`): a finishing move (`AttributesEx & 0x500000`, one any-of
@@ -591,8 +549,8 @@ mod tests {
                 );
             }
             let store = ObjectStore(ObjectFields::from_pairs(&pairs));
-            deps.with_objects(|objects, items, commands| {
-                equipped_item_fits(&needs_a_weapon, &store, objects, items, commands)
+            deps.with_objects(|objects, items, _| {
+                equipped_item_fits(&needs_a_weapon, &store, objects, items)
             })
         };
 
@@ -648,9 +606,7 @@ mod tests {
                 );
             }
             let store = ObjectStore(ObjectFields::from_pairs(&pairs));
-            deps.with_objects(|objects, items, commands| {
-                equipped_item_fits(d, &store, objects, items, commands)
-            })
+            deps.with_objects(|objects, items, _| equipped_item_fits(d, &store, objects, items))
         };
 
         let sound = |field| (field, 0x2au64, 0u32, 0u32, 0u32);
@@ -712,7 +668,7 @@ mod tests {
                 );
             }
             let store = ObjectStore(ObjectFields::from_pairs(&pairs));
-            deps.with_objects(|objects, items, commands| {
+            deps.with_objects(|objects, items, _| {
                 equipped_item_fits(
                     &SpellDisplay {
                         equipped_item_class: 2,
@@ -723,7 +679,6 @@ mod tests {
                     &store,
                     objects,
                     items,
-                    commands,
                 )
             })
         };
@@ -760,8 +715,6 @@ mod tests {
         let reputations = Reputations::default();
         let spells = Spells::empty_for_tests();
         let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let stacks = crate::ui_items::stack_counts(&store.0, &objects);
@@ -773,7 +726,6 @@ mod tests {
             &ctx(store, &cooldowns, &reputations, &stacks, &spell_mods),
             &objects,
             &items,
-            &commands,
         )
     }
 
@@ -991,8 +943,6 @@ mod tests {
         let reputations = Reputations::default();
         let spells = Spells::empty_for_tests();
         let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let execute = SpellDisplay {
             target_aura_state: 2,
             implicit_target_a1: 6,
@@ -1016,7 +966,7 @@ mod tests {
                 control_lost: false,
             };
             assert_eq!(
-                spell_usable(5308, &execute, &spells, &ctx, &objects, &items, &commands),
+                spell_usable(5308, &execute, &spells, &ctx, &objects, &items),
                 (expect, false)
             );
         }
@@ -1032,15 +982,13 @@ mod tests {
         let cooldowns = Cooldowns::default();
         let reputations = Reputations::default();
         let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let stacks = crate::ui_items::stack_counts(&store.0, &objects);
         let spell_mods = SpellModifiers::default();
         let mut c = ctx(store, &cooldowns, &reputations, &stacks, &spell_mods);
         c.control_lost = control_lost;
-        spell_usable(1, d, spells, &c, &objects, &items, &commands)
+        spell_usable(1, d, spells, &c, &objects, &items)
     }
 
     /// `UNIT_FIELD_FLAGS` (46) bit 23 and the first `UNIT_FIELD_AURA` slot (47).
@@ -1099,16 +1047,13 @@ mod tests {
         let cooldowns = Cooldowns::default();
         let reputations = Reputations::default();
         let items = Items::default();
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let store = player(&[]);
         let stacks = std::collections::HashMap::new();
         let spell_mods = SpellModifiers::default();
         let mut c = ctx(&store, &cooldowns, &reputations, &stacks, &spell_mods);
-        let usable =
-            |c: &UsableCtx| item_usable(6948, None, true, c, None, &objects, &items, &commands);
+        let usable = |c: &UsableCtx| item_usable(6948, None, true, c, None, &objects, &items);
         assert_eq!(usable(&c), (true, false));
         c.control_lost = true;
         assert_eq!(usable(&c), (false, false));

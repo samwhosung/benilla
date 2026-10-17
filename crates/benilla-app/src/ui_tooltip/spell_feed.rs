@@ -322,18 +322,19 @@ pub(super) fn build_view(
         deps.borrow_mut().item_search(usable::worn_slots_read(d));
     }
     let item_met = matches!(caster, ViewCaster::Pet(_))
-        || vctx.store.is_none_or(|s| {
-            usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
-        });
+        || vctx
+            .store
+            .is_none_or(|s| usable::equipped_item_fits(d, s, vctx.objects, vctx.items));
     // Reagents (`SPELL_REAGENTS`, `0x854e54`), red when short; one whose template has not
-    // streamed is absent until `feed_spell_tooltips` re-pushes on its arrival.
+    // streamed is absent until `feed_spell_tooltips` re-pushes on its arrival. A build is the
+    // reference's, which looks each reagent up with a callback (`0x52f3f4`).
     let reagents = {
         let mut parts: Vec<String> = Vec::new();
         for (entry, count) in d.reagents.iter().copied().filter(|&(e, _)| e != 0) {
             deps.borrow_mut().reagent(entry);
             let Some(name) = vctx
                 .items
-                .template(entry, 0, Ask::New(vctx.commands))
+                .template(entry, 0, Ask::Event(vctx.commands))
                 .map(|t| t.name.clone())
             else {
                 continue;
@@ -461,15 +462,15 @@ impl SpellFeedMemory {
     }
 }
 
-/// What a reagent's line renders for `entry`: the carried count and whether its name has streamed.
+/// What a reagent's line renders for `entry`: the carried count and whether its name has streamed,
+/// read without an ask: the view's build asked.
 pub(super) fn reagent_state(
     entry: u32,
     store: Option<&ObjectStore>,
     objects: &Objects,
-    items: &mut Items,
-    commands: &NetCommands,
+    items: &Items,
 ) -> (u32, bool) {
-    let named = items.template(entry, 0, Ask::New(commands)).is_some();
+    let named = items.template(entry, 0, Ask::Read).is_some();
     let owned = store.map_or(0, |s| {
         count_of(&s.0, objects, entry, InventoryScope::DEFAULT)
     });
@@ -652,12 +653,7 @@ pub(super) fn feed_spell_tooltips(
     let reagent_state: Reagents = memory
         .reagents
         .keys()
-        .map(|&entry| {
-            (
-                entry,
-                reagent_state(entry, self_store, &objects, &mut items, &commands),
-            )
-        })
+        .map(|&entry| (entry, reagent_state(entry, self_store, &objects, &items)))
         .collect();
     changes = changes.with_reagents(&memory.reagents, &reagent_state);
     memory.reagents = reagent_state;
@@ -736,13 +732,7 @@ fn build_views(
         };
         for &entry in deps.reagents() {
             if let std::collections::btree_map::Entry::Vacant(slot) = memory.reagents.entry(entry) {
-                slot.insert(reagent_state(
-                    entry,
-                    vctx.store,
-                    vctx.objects,
-                    vctx.items,
-                    vctx.commands,
-                ));
+                slot.insert(reagent_state(entry, vctx.store, vctx.objects, vctx.items));
             }
         }
         built.push((id, view));
@@ -779,10 +769,10 @@ mod tests {
         };
         for slot in [81, 17] {
             let store = ObjectStore(ObjectFields::from_pairs(&seat(slot)));
-            let (items, commands) = (&mut deps.items, &deps.commands);
+            let items = &deps.items;
             let mut state = bevy::ecs::system::SystemState::<Objects>::new(&mut deps.world);
             let objects = state.get(&deps.world);
-            let (owned, _) = reagent_state(17056, Some(&store), &objects, items, commands);
+            let (owned, _) = reagent_state(17056, Some(&store), &objects, items);
             assert_eq!(owned, 3, "player slot {slot}");
         }
     }

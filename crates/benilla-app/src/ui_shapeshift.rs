@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use benilla_ui::script::{ShapeshiftFormView, UiScript};
 
 use crate::items::Items;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, Reputations, SelfPlayer};
+use crate::net::{ClientCommand, ObjectStore, Objects, Reputations, SelfPlayer};
 use crate::spell::Cooldowns;
 use crate::spell::{usable, CastCommit};
 use crate::target::Selection;
@@ -150,7 +150,6 @@ fn feed_shapeshift_bar(
     factions: Option<Res<crate::target::Factions>>,
     reputations: Res<Reputations>,
     items: Res<Items>,
-    commands: Res<NetCommands>,
     clock: Res<crate::ui_script::UiClock>,
     spell_mods: Res<crate::spell::SpellModifiers>,
     player: Option<Res<crate::player::Player>>,
@@ -217,7 +216,7 @@ fn feed_shapeshift_bar(
                         spell_mods: &spell_mods,
                         control_lost: player.as_ref().is_some_and(|p| p.own_control_lost),
                     };
-                    usable::spell_usable(id, d, &spells, &ctx, &objects, &items, &commands).0
+                    usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
                 });
             let texture = form_texture(d, active);
             let cooldown = cooldowns
@@ -459,7 +458,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Reputations>()
             .init_resource::<Items>()
-            .insert_resource(NetCommands(tx));
+            .insert_resource(crate::net::NetCommands(tx));
         app.world_mut().spawn((
             SelfPlayer,
             ObjectStore(ObjectFields::from_pairs(&[

@@ -209,15 +209,8 @@ pub(super) fn feed_action_state(
                         spell_mods,
                         control_lost,
                     };
-                    let (u, oom) = usable::spell_usable(
-                        button.action,
-                        d,
-                        sp,
-                        &ctx,
-                        &objects,
-                        &items,
-                        &commands,
-                    );
+                    let (u, oom) =
+                        usable::spell_usable(button.action, d, sp, &ctx, &objects, &items);
                     st.usable = u;
                     st.not_enough_mana = oom;
                 } else {
@@ -303,7 +296,6 @@ pub(super) fn feed_action_state(
                         spells.as_deref(),
                         &objects,
                         &items,
-                        &commands,
                     );
                     st.usable = u;
                     st.not_enough_mana = oom;

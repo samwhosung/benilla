@@ -741,12 +741,7 @@ pub(crate) fn send_item_use(
     };
     // The disarm ladder, asked of the caster's own inventory.
     let disarmed_hand = ctx.rel.self_store.and_then(|store| {
-        crate::items::disarmed_equipment_slot(
-            store,
-            &ladder.objects,
-            &ladder.items,
-            &ladder.commands,
-        )
+        crate::items::disarmed_equipment_slot(store, &ladder.objects, &ladder.items)
     });
     match item_use_route(it, aura_cancels, disarmed_hand) {
         ItemUseRoute::CantUseDisarmed => {

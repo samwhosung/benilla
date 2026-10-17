@@ -887,7 +887,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
         reagents
             .iter()
             .map(|&e| {
-                let state = reagent_state(e, Some(store), &objects, &mut t.items, &t.commands);
+                let state = reagent_state(e, Some(store), &objects, &t.items);
                 (e, state)
             })
             .collect()

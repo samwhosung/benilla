@@ -519,3 +519,43 @@ fn a_reagent_is_red_only_when_no_copy_is_carried() {
         );
     }
 }
+
+/// A view's build is the reference's `BuildSpell`, which looks each reagent up with a callback
+/// (`0x52f3f4`); the frames between read the reagent's state. A refused reagent is asked by no
+/// frame, and again by the next build of a view that lists it.
+#[test]
+fn a_refused_reagent_is_asked_by_the_next_build_of_its_view_only() {
+    let spells = |g: u32| {
+        let mut reagents = [(0, 0); 8];
+        reagents[0] = (7_000, 1);
+        vec![(
+            1,
+            benilla_formats::SpellDisplay {
+                name: "Spell".into(),
+                effects: [20, 0, 0], // chance to dodge, so the dodge field rebuilds it
+                passive: true,
+                reagents,
+                description: Some(format!("gen{g}")),
+                ..Default::default()
+            },
+        )]
+    };
+    let dodge = |pct: f32| [(22, 100), (1107, pct.to_bits())];
+    let mut feed = FeedApp::new(spells, &dodge(5.0));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    feed.app.insert_resource(NetCommands(tx));
+    feed.app
+        .world_mut()
+        .resource_mut::<Items>()
+        .insert_template(7_000, None);
+    for _ in 0..600 {
+        feed.app.update();
+    }
+    assert!(crate::query_cache::queries(&rx).is_empty(), "no frame asks");
+    feed.set_player(&dodge(9.5));
+    feed.app.update();
+    assert!(matches!(
+        crate::query_cache::queries(&rx)[..],
+        [crate::net::ClientCommand::ItemQuery { entry: 7_000, .. }]
+    ));
+}

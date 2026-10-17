@@ -1331,3 +1331,37 @@ fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level(
         )
     );
 }
+
+/// The build looks the hovered unit's name up with a callback (`GetUnitName`, `0x609210`, from
+/// `0x529fe0`) once per hover; the frames under that hover read. A refused name is asked again by
+/// the next hover onto the unit, once, and by no frame.
+#[test]
+fn a_refused_hover_name_is_asked_again_by_the_next_hover_only() {
+    let (mut app, _wolf, boar) = mouseover_app();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    const PLAYER: u64 = 0x42;
+    hover_unit(&mut app, boar, PLAYER);
+    assert!(matches!(
+        crate::query_cache::queries(&rx)[..],
+        [crate::net::ClientCommand::NameQuery { guid: PLAYER }]
+    ));
+    app.world_mut()
+        .resource_mut::<NameCache>()
+        .insert_player(PLAYER, String::new(), None);
+    for _ in 0..600 {
+        hover_unit(&mut app, boar, PLAYER);
+    }
+    assert!(crate::query_cache::queries(&rx).is_empty(), "no frame asks");
+    hover(&mut app, Hovered::default(), HoveredObject::default());
+    hover_unit(&mut app, boar, PLAYER);
+    assert_eq!(
+        crate::query_cache::queries(&rx).len(),
+        1,
+        "the new hover does"
+    );
+    for _ in 0..600 {
+        hover_unit(&mut app, boar, PLAYER);
+    }
+    assert!(crate::query_cache::queries(&rx).is_empty());
+}
