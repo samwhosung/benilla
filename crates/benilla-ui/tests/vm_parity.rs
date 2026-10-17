@@ -564,28 +564,6 @@ b]])"#),
         E(function() local q = setmetatable({}, {__index = 5}) return q.x end))"#),
     ("fix-vm tm_unm_args", r#"local u = setmetatable({}, {__unm = function(a, b) return S(a == b, rawequal(a, b)) end})
         return -u"#),
-    // ── fix-vm: a callback's arguments and results share `LUAI_MAXCSTACK` slots ──
-    // `unpack` is the client's (`0x7030a0`): its `luaL_checkstack` refuses each of these past
-    // 2048 slots (`0x6f2f43`) with the text at `0x872bc4`, raised at the caller's line.
-    ("fix-vm callback_results", r#"local t = {} for i = 1, 8000 do t[i] = i end
-        local function n(...) return arg.n end
-        -- The C build's first callback with many results fails earlier, an mlua artifact; warm it.
-        n(unpack(t, 1, 100))
-        local calls = {
-          [3] = function(k) return n(unpack(t, 1, k)) end,
-          [4] = function(k) return n(unpack(t, 1, k, nil)) end,
-          [6] = function(k) return n(unpack(t, 1, k, nil, nil, nil)) end,
-        }
-        local o = {}
-        for _, a in ipairs({3, 4, 6}) do
-          local most = 0
-          for k = 7985, 7999 do if pcall(calls[a], k) then most = k end end
-          table.insert(o, a .. ":" .. most)
-        end
-        -- The message alone: the C build's carries a Rust-side traceback after it.
-        local ok, e = pcall(calls[3], 7999)
-        local _, _, m = string.find(tostring(e), "^([^\n]*)")
-        return table.concat(o, " ") .. " " .. m"#),
     // ── perf-fix: gsub skips to a literal first byte; every shape answers as before ──
     ("perf-fix gsub_literal_first", r##"local s = "a-b--c-d.e%f(g)h"
         return S(string.gsub(s, "%-", "+"), string.gsub(s, "-", "+"), string.gsub(s, "%-+", "+"), string.gsub(s, "%-*", "+"),
@@ -803,6 +781,7 @@ const SWEEP_FNS: &[&str] = &[
     "rawget",
     "rawset",
     "select",
+    // The client's `unpack` reads its table alone (`0x7030a0`): items 1 to `getn`.
     "unpack",
     // `luaH_next`'s text is the client's (`0x871aac`).
     "next",

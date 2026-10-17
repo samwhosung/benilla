@@ -103,7 +103,7 @@ fn results_beyond_the_c_stack_raise() {
     // One argument in use: 2048 more pass 2048.
     assert_eq!(got[2], "false", "{got:?}");
     assert_eq!(
-        got[3], "t:4: stack overflow (table too big to unpack)",
+        got[3], "t:5: stack overflow (table too big to unpack)",
         "{got:?}"
     );
     assert_eq!(got[4], "2047");

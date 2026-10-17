@@ -148,8 +148,8 @@ fn concat_sort_foreachi_and_unpack_all_read_the_remembered_size() {
     );
     assert_eq!(
         s.eval::<String>(
-            "local t = {} t[1] = 'a' t[3] = 'c' \
-             local x, y, z = unpack(t, 1, 3) \
+            "local t = {} t[1] = 'a' t[3] = 'c' table.setn(t, 3) \
+             local x, y, z = unpack(t) \
              return tostring(x) .. tostring(y) .. tostring(z)"
         )
         .unwrap(),
@@ -389,4 +389,31 @@ fn next_names_its_invalid_key_as_the_client_does() {
             "invalid key for `next'"
         );
     }
+}
+
+/// `luaB_unpack` (`0x7030a0`) reads the table alone: items 1 to `getn`, every later argument
+/// unread.
+#[test]
+fn unpack_reads_its_table_alone() {
+    let s = UiScript::new().unwrap();
+    assert_eq!(
+        s.eval::<Vec<i64>>("return {unpack({1, 2, 3}, 2)}").unwrap(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        s.eval::<Vec<i64>>("return {unpack({1, 2, 3}, 2, 2)}")
+            .unwrap(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        s.eval::<i64>("return table.getn({unpack({1, 2, 3}, 'x', {})})")
+            .unwrap(),
+        3
+    );
+    // The positional `format` still carries a trailing nil through `arg.n`.
+    assert_eq!(
+        s.eval::<String>("return format('%2$s %1$s', 'a', 'b')")
+            .unwrap(),
+        "b a"
+    );
 }

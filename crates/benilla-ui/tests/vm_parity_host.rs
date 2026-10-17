@@ -2,7 +2,7 @@
 //! cannot write in Lua. Each expected answer is the one the C Lua build gave before benilla-lua
 //! replaced it.
 
-use benilla_ui::mlua::{self, Function, Lua, Table, Value};
+use benilla_ui::mlua::{self, Function, Lua, Table, Value, Variadic};
 use benilla_ui::script::UiScript;
 
 fn eval(s: &UiScript, src: &str) -> String {
@@ -95,5 +95,31 @@ fn a_callback_answering_a_foreign_value_is_caught_and_leaves_the_state_sound() {
             local f = loadstring("return 1 + 1") return tostring(f())"#
         ),
         "2"
+    );
+}
+
+/// A Rust callback's arguments and results share 5.1's `LUAI_MAXCSTACK`, 8000 slots, as mlua's
+/// `check_stack` allows: one argument and 7998 results fit, one more raises.
+#[test]
+fn a_callbacks_arguments_and_results_share_the_c_stack() {
+    let s = UiScript::new().unwrap();
+    let lua = s.lua();
+    let many = lua
+        .create_function(|_, k: usize| {
+            let mut v = Variadic::with_capacity(k);
+            v.extend(1..=k);
+            Ok(v)
+        })
+        .unwrap();
+    lua.globals().set("many", many).unwrap();
+    assert_eq!(
+        eval(
+            &s,
+            r#"local function n(...) return arg.n end
+            local most = 0
+            for k = 7990, 8005 do if pcall(function() return n(many(k)) end) then most = k end end
+            return tostring(most)"#
+        ),
+        "7998"
     );
 }

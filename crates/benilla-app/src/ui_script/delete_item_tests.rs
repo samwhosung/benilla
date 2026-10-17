@@ -185,7 +185,7 @@ fn delete_item_confirm_no_clears_without_destroying() {
         "repaints = 0\n\
          local real = ContainerFrame_Update\n\
          ContainerFrame_Update = function(...) repaints = repaints + 1; \
-         return real(unpack(arg, 1, arg.n)) end",
+         return real(unpack(arg)) end",
     )
     .unwrap();
 

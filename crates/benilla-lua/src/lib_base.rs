@@ -353,32 +353,21 @@ pub fn setn(vm: &mut Vm, t: crate::value::TableRef, n: i32) {
 /// use plus those asked for pass it (`cmp ecx,0x800` at `0x6f2f43`).
 const MAXCSTACK_50: usize = 0x800;
 
-/// `luaB_unpack` (`0x7030a0`): items 1 to `getn(t)`, after `luaL_checkstack(n, "table too big to
-/// unpack")` (`0x7030c8`, text `0x872bc4`), whose slots in use are the arguments. Deviation: the
-/// reference ignores every argument after the table; `i` and `j` stay, `j` by default `getn`,
-/// because the positional-`format` shim passes a range to carry embedded nils.
+/// `luaB_unpack` (`0x7030a0`): items 1 to `getn(t)`, every argument after the table unread,
+/// after `luaL_checkstack(n, "table too big to unpack")` (`0x7030c8`, text `0x872bc4`), whose
+/// slots in use are the arguments.
 fn unpack(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
-    let i = vm.opt_int(nargs, 2, 1)?;
-    let e = if vm.arg(nargs, 2).is_nil() {
-        getn(vm, t) as i32
-    } else {
-        vm.check_int(nargs, 3)?
-    };
-    if i > e {
-        return Ok(0);
-    }
-    // `n <= 0`: an `e - i + 1` past `i32`, which no stack holds.
-    let n = e.wrapping_sub(i).wrapping_add(1);
-    if n <= 0 || vm.top - vm.native_base() + n as usize > MAXCSTACK_50 {
+    let n = getn(vm, t);
+    if vm.top - vm.native_base() + n > MAXCSTACK_50 {
         // `luaL_checkstack` (`0x6f4b20`): `luaL_error` with `stack overflow (%s)` (`0x8716b0`).
         return Err(vm.error_at(1, "stack overflow (table too big to unpack)"));
     }
-    for k in 0..n {
-        let v = vm.heap.table(t).get_int(i.wrapping_add(k));
+    for k in 1..=n {
+        let v = vm.heap.table(t).get_int(k as i32);
         vm.push(v);
     }
-    Ok(n as usize)
+    Ok(n)
 }
 
 fn rawequal(vm: &mut Vm, nargs: usize) -> R<usize> {
