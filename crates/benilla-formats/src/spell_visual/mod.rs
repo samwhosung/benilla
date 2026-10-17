@@ -478,9 +478,10 @@ fn kit_anim_id(v: u32) -> Option<u16> {
 }
 
 /// One `SpellVisualKit.dbc` row. Effect, world-effect, sound and shake ids keep 0 as none: the
-/// effect slots and the world effect test only for a negative id (`0x60efdf`, `0x60f01d`) but then
-/// index `SpellVisualEffectName`, which has no row 0, so 0 resolves to nothing either way; the
-/// sound tests `je` on 0 (`0x60f440`) and the shake `jle` (`0x60f4cd`).
+/// effect slots and the world effect test only for a negative id (`0x60efe4 jl`, `0x60f022 jl`)
+/// but then index `SpellVisualEffectName` and drop a null row (`0x60eff9 je`, `0x60f042 je`), and
+/// that table has no row 0, so 0 resolves to nothing either way; the sound tests `je` on 0
+/// (`0x60f442`) and the shake `jle` (`0x60f4cd`).
 fn kit_from_record(r: &benilla_dbc::Record) -> VisualKit {
     let mut effect_slots = [None; 9];
     for (i, slot) in effect_slots.iter_mut().enumerate() {

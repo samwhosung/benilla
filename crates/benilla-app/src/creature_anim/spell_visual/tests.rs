@@ -1334,10 +1334,10 @@ fn a_precast_or_channel_kit_naming_stand_arms_no_hold() {
     );
 }
 
-/// A cast kit's animation plays as a one-shot through `0x5fe2f0` (`0x60f3c5`); a Stand (0) one is
-/// not played here, as the driver cannot yet dedup it against the idle that already requests it.
+/// A cast kit's animation plays as a one-shot through `0x5fe2f0` (`0x60f3c5`), Stand (0) included:
+/// `0x60f366` skips only a negative id and `0x60f510(0)` is false.
 #[test]
-fn a_cast_kit_naming_stand_plays_no_one_shot() {
+fn a_cast_kit_naming_stand_plays_it_like_any_id() {
     const STAND_SPELL: u32 = 2061;
     const STAND_VISUAL: u32 = 91;
     const STAND_CAST_KIT: u32 = 6002;
@@ -1409,8 +1409,8 @@ fn a_cast_kit_naming_stand_plays_no_one_shot() {
     app.update();
     assert_eq!(
         emote_anims(&mut app, unit),
-        vec![SPELL_CAST_DIRECTED],
-        "the control plays; the Stand kit does not"
+        vec![0, SPELL_CAST_DIRECTED],
+        "the Stand kit plays as the control does"
     );
 }
 
@@ -1864,8 +1864,8 @@ fn an_anim_only_state_kit_still_arms_on_the_aura_add_edge() {
 }
 
 /// A state kit naming Stand (0) is not skipped: the recompute runs for any id of 0 or more
-/// (`0x60f366 jl`), but the pin takes only an id above 0 (`0x5fdeb5 jle`). Kit 6354 is the
-/// anim-only Stand kit of Heart of Hakkar Banning.
+/// (`0x60f366 jl`), but the pin takes only an id above 0 (`0x5fdeb5 jle`). Kit 6354, Heart of
+/// Hakkar Banning's, names Stand and has no effect, sound or proc.
 #[test]
 fn a_stand_state_kit_recomputes_but_never_pins() {
     use benilla_protocol::messages::ObjectFields;

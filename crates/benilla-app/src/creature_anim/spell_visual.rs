@@ -436,13 +436,10 @@ fn play_kit(
             // Stage 2 compares, never plays; the driver holds the armed id and compares. Any id of
             // 0 or more reaches it (`0x60f366 jl`), Stand included.
             out.recomputes.write(BaseAnimRecompute { entity, anim_id });
-        } else if anim_id == 0 {
-            // The reference plays Stand through `0x5fe2f0` (`0x60f3c5`) like any id. The driver
-            // has no dedup against the base's own requested id (`0x5fdba0`), so it would restart
-            // the idle; nothing plays here.
         } else if (8..=10).contains(&anim_id) {
             // A CombatWound id (8 to 10) lays a severity-0 wound in the blend slot, not the
-            // kit's own id (`0x60f3ad` → `0x60f510`, `0x60f3b8`).
+            // kit's own id (`0x60f3ad` → `0x60f510`, `0x60f3b8`). Every other id, Stand included
+            // (`0x60f510(0)` is false), plays through `0x5fe2f0` (`0x60f3c5`).
             out.wounds.write(WoundAnim { entity });
         } else {
             out.oneshots.write(EmoteAnim {
@@ -1100,8 +1097,8 @@ pub(crate) fn arm_aura_state_fx(
             // (`0x5fdeb5 jle`); the recompute skips only a negative one (`0x60f366`).
             if let Some(anim_id) = kit.anim_id {
                 recomputes.write(BaseAnimRecompute { entity, anim_id });
-                if anim_id > 0 {
-                    pins.insert(0, (spell_id, anim_id));
+                if let Some(pin) = kit.positive_anim() {
+                    pins.insert(0, (spell_id, pin));
                 }
             }
             next.push(spell_id);
