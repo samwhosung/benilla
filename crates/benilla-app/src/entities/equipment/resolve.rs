@@ -8,6 +8,7 @@ use crate::creature_anim::{
 };
 use crate::items::{HeldTemplate, Items};
 use crate::net::{NetCommands, NetEntity, ObjectStore};
+use crate::query_cache::Ask;
 
 use super::super::item_glow::{self, ItemGlows};
 use super::super::Creatures;
@@ -129,7 +130,8 @@ impl SlotReads<'_> {
     /// will ever come for it. Any other slot only reads.
     fn read(&self, changed: bool, entry: u32) -> Option<HeldTemplate> {
         if changed || !self.templates.template_known(entry) {
-            self.templates.held_lookup(entry, self.net)
+            // The visible item's change, the lookup with the callback `0x5ed880` (`0x5ed764`).
+            self.templates.held(entry, Ask::Event(self.net))
         } else {
             self.templates.template_cached(entry).map(HeldTemplate::of)
         }

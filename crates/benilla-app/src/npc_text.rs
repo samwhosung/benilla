@@ -198,22 +198,21 @@ fn class_word(names: UnitNames<'_>, class: u8) -> String {
 }
 
 /// The chat feed's [`Subject`] for any guid: the object manager's descriptors, else the name
-/// cache (`0x506f70`). Guid 0 has no subject.
+/// cache (`0x506f70`), which the expansion only reads (`0x506fd4`); the chat handler's own lookup
+/// with a callback asks for it (`0x49d9f5`), as `ask` says. Guid 0 has no subject.
 pub(crate) fn subject_for_guid(
     guid: u64,
     index: &GuidIndex,
     stores: &Query<&ObjectStore>,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     unit_names: UnitNames<'_>,
 ) -> Option<Subject> {
     if guid == 0 {
         return None;
     }
     let store = index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    let name = names
-        .resolve_unit(guid, store, Ask::New(commands))?
-        .to_string();
+    let name = names.resolve_unit(guid, store, ask)?.to_string();
     if let Some(store) = store {
         return Some(Subject {
             name,

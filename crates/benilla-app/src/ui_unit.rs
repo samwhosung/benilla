@@ -1232,6 +1232,9 @@ fn player_snapshot(
     factions: Option<&Factions>,
     guild: &mut crate::ui_guild::GuildState,
 ) -> UnitState {
+    // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
+    // a name the cache holds nothing for, as one invalidated since, and a refused one waits
+    // for the next create.
     let name = names
         .resolve_unit(guid, Some(store), Ask::New(commands))
         .map(str::to_string);

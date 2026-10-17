@@ -185,12 +185,6 @@ impl GuildState {
         })
     }
 
-    /// The guild cache's lookup with a callback on an event (`0x560e30`): a refused guild is
-    /// asked again at once ([`QueryCache::lookup`]).
-    fn lookup_identity(&self, guild_id: u32, commands: &NetCommands) -> Option<&Identity> {
-        self.resolve_identity(guild_id, Ask::Event(commands))
-    }
-
     /// Asks for `guild_id` and lands the server's refusal of it, for a test elsewhere.
     #[cfg(test)]
     pub(crate) fn refuse_for_test(&mut self, guild_id: u32, commands: &NetCommands) {
@@ -446,7 +440,10 @@ pub(crate) fn last_online(days: f32) -> LastOnline {
 
 /// `GetGuildInfo(unit)`: the unit's public guild fields joined against the identity cache, asking
 /// on a miss. `None` for a guildless unit, a creature or an unanswered query, one nil path in the
-/// reference (`0x4c93d7`, `0x4c943c`).
+/// reference (`0x4c93d7`, `0x4c943c`). The getter's lookup passes the callback `0x4c9470`
+/// (`0x4c93d2`) on the stock frames' events, which no event here marks: a guild is asked when it
+/// first shows, and a refused one again at the guild id's next change (the equipment resolver's
+/// lookup, `0x5e078f`).
 pub(crate) fn unit_guild(
     fields: &ObjectFields,
     guild: &mut GuildState,
@@ -497,7 +494,7 @@ pub(crate) fn unit_guild_emblem_lookup(
     commands: &NetCommands,
 ) -> Option<GuildEmblem> {
     let emblem = guild
-        .lookup_identity(fields.player_guild_id(), commands)?
+        .resolve_identity(fields.player_guild_id(), Ask::Event(commands))?
         .emblem;
     emblem.is_designed().then_some(emblem)
 }

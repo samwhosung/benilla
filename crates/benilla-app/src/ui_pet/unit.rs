@@ -74,6 +74,9 @@ pub(crate) fn feed_pet_unit(
         .then(|| pet.store(pet_guid))
         .flatten()
         .map(|store| {
+            // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
+            // a name the cache holds nothing for, as one invalidated since, and a refused one waits
+            // for the next create.
             let name = names
                 .resolve_unit(pet_guid, Some(store), Ask::New(&commands))
                 .map(str::to_string);

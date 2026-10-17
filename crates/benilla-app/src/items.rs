@@ -238,7 +238,8 @@ pub(crate) fn enchant_lines(
 /// The name behind a wrapped item's `ITEM_WRAPPED_BY` line: only an item carrying WRAPPED `0x8`
 /// takes the gift arm (`0x52b789`, `0x52e1b9`), which reads `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`)
 /// and asks the name cache (`0x52e29d`). A zero guid, an unwrapped item or a name not yet
-/// answered gives `None`, and only the first two ask nothing.
+/// answered gives `None`, and only the first two ask nothing. That lookup is the tooltip build's,
+/// with the callback `0x52e530`, which no event here marks: the name is asked when it first shows.
 pub(crate) fn gift_creator_name(
     fields: &ObjectFields,
     names: &crate::names::NameCache,
@@ -498,15 +499,6 @@ impl Items {
     fn send_template(entry: u32, guid: u64, commands: &NetCommands) {
         debug!("items: asking template (entry {entry})");
         let _ = commands.0.send(ClientCommand::ItemQuery { entry, guid });
-    }
-
-    /// [`Self::held`] as the reference's lookup with a callback on an event, such as a visible
-    /// item changing (`0x5ed764`, callback `0x5ed880`): a refused entry is asked again at once
-    /// ([`QueryCache::lookup`]).
-    pub(crate) fn held_lookup(&self, entry: u32, commands: &NetCommands) -> Option<HeldTemplate> {
-        self.templates
-            .lookup(entry, || Self::send_template(entry, 0, commands))
-            .map(HeldTemplate::of)
     }
 
     /// Whether the cache holds a record, a pending ask or a refusal for `entry`

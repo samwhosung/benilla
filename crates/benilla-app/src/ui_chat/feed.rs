@@ -741,7 +741,7 @@ pub(super) fn feed_chat(
                         &guids,
                         &stores,
                         &names,
-                        &commands,
+                        Ask::at(tries == 0, &commands),
                         unit_names.get(),
                     );
                     let (text, clean) = crate::npc_text::substitute_checked(

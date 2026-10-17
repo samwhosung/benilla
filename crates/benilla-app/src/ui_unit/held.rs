@@ -41,6 +41,9 @@ impl HeldUnits<'_> {
     /// other than the player carries it. It has no guild leg, so `GetGuildInfo` on a chain answers
     /// nothing, where the reference resolves the token and reads the object's guild (`0x4c9330`).
     pub(super) fn state(&self, store: &ObjectStore, guid: u64) -> UnitState {
+        // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
+        // a name the cache holds nothing for, as one invalidated since, and a refused one waits
+        // for the next create.
         let name = self
             .names
             .resolve_unit(guid, Some(store), Ask::New(self.commands))
