@@ -136,9 +136,9 @@ pub enum Op {
     ForLoopUp(Reg, i32),
     /// 5.0's `TFORPREP`: a table generator becomes `next` over it; then the jump.
     TForPrep(Reg, i32),
-    /// 5.1's `TFORLOOP`: call `R(a)(R(a+1), R(a+2))` into the `b` variables from `R(a+3)`; unless
-    /// the first is nil it becomes the control `R(a+2)`, else the next instruction, the jump back
-    /// to the body, is skipped.
+    /// The client's `TFORLOOP` (`0x6f933b`): `R(a)(R(a+1), R(a+2))`, called from above the `b`
+    /// variables, into the variables from `R(a+2)`, the first of them the control; when it is
+    /// nil the next instruction, the jump back to the body, is skipped.
     TForLoop(Reg, u8),
     /// 5.1's `SETLIST`: `R(a)[base + i] = R(a + i)` for `i` in `1..=n`, the array part grown
     /// first to hold them all.
@@ -566,9 +566,10 @@ impl Proto {
                     reg(x as usize + 2);
                     to(0, off);
                 }
-                // The loop variables `a+3..a+2+b`; past a nil, the jump after it is skipped.
+                // The loop variables `a+2..a+1+b`, the call's three registers above them; past a
+                // nil, the jump after it is skipped.
                 Op::TForLoop(x, nb) => {
-                    reg(x as usize + 2 + (nb as usize).max(1));
+                    reg(x as usize + 4 + nb as usize);
                     to(1, 0);
                 }
                 Op::SetList(x, _, cnt) => reg(x as usize + cnt as usize),

@@ -358,6 +358,7 @@ b]])"#),
           L("local x = 1 return " .. string.rep("(x+", 150) .. "x" .. string.rep(")", 150)),
           L("local x = 1 return " .. string.rep("(x+", 245) .. "x" .. string.rep(")", 245)),
           L("return " .. string.rep("1 .. ", 190) .. "1"))"#),
+    // A generic `for` has two hidden locals and its names (`forlist`, `0x6fe540`).
     ("fix-front_local_limits", r#"local function L(src) local f, e = loadstring(src) if f then return "ok" end return e end
         local function names(p, n) local o = {} for i = 1, n do o[i] = p .. i end return table.concat(o, ",") end
         return S(L("local " .. names("a", 200)), L("local " .. names("a", 201)),
@@ -577,10 +578,14 @@ b]])"#),
           E(function() return string.gsub("abc", "b%1", "x") end), E(function() return string.gsub("xyz", "b[", "x") end),
           E(function() return string.gsub("abc", "b[", "x") end), E(function() return string.gsub("abc", "b", "%2") end),
           E(function() return string.gsub("xyz", "b", "%2") end))"#),
+    // A generic `for` given more values than locals: the body's first local reads the register
+    // the client's `OP_TFORLOOP` called the generator at (`0x6f9344`), its first result.
     ("r2-front_forlist_extra_values", r#"local function R(src) return E(loadstring(src, "=t")) end
         return S(R("for k in function() end, nil, nil, 42 do end return 7"),
           R("local n = 0 for k in function(s, c) if c ~= 3 then return (c or 0) + 1 end end, nil, nil, 9, 8 do do local y = k n = n + y end end return n"),
           R("local n = 0 for k, v in function(s, c) if c ~= 2 then return (c or 0) + 1, 10 end end, 1, nil, 4 do n = n + k + v end return n"))"#),
+    // A generic `for` given more values than locals: the body's first local reads the register
+    // the client's `OP_TFORLOOP` called the generator at (`0x6f9344`), its first result.
     ("fix-front_forlist_return", r#"local function R(src) return E(loadstring(src, "=t")) end
         local f = "local function f(s, c) if not c then return 1 end end "
         return S(R(f .. "for k in f, nil, nil, 42 do return k, 5 end"),
@@ -588,13 +593,13 @@ b]])"#),
           R(f .. "for k in f, nil, nil, 42 do return tostring(k) end"),
           R(f .. "local function g(x) return 'g' .. tostring(x) end for k in f, nil, nil, 42 do return g(k) end"),
           R(f .. "for k in f, nil, nil, 42, 43 do return k, 5 end"))"#),
-    // A generic `for` over `next` with a fourth value: the body's first local reads the register
-    // above the loop's variables, which the call to `next` leaves as `OP_TFORLOOP` and
-    // `lua_next` wrote it.
+    // A generic `for` over `next` given more values than it has locals: the body's first locals
+    // read the registers above the loop's variables, where the client's `OP_TFORLOOP` called
+    // the generator (`0x6f9344`), as the call and `lua_next` left them.
     ("fix-vm tforloop_next_registers", r#"local function R(src) return E(loadstring(src, "=t")) end
         local t = "local t, o = {10, 20}, {} "
         return S(R(t .. "for k in next, t, nil, 42 do local y = k table.insert(o, type(y)) end return table.concat(o, ' ')"),
-          R(t .. "for k in next, t, nil, 42, 43 do local y, z = k table.insert(o, tostring(z)) end return table.concat(o, ' ')"),
+          R(t .. "for k in next, t, nil, 42, 43 do local y, z = k table.insert(o, type(z)) end return table.concat(o, ' ')"),
           R(t .. "for k, v in next, t, nil, 42 do local y = k table.insert(o, tostring(y)) end return table.concat(o, ' ')"),
           R(t .. "for k, v, w in next, t, nil, 42 do local y = k table.insert(o, tostring(y) .. tostring(w)) end return table.concat(o, ' ')"),
           R(t .. "for k, v, w, x in next, t, nil, 42 do local y = k table.insert(o, tostring(y) .. tostring(x)) end return table.concat(o, ' ')"),
@@ -602,8 +607,9 @@ b]])"#),
           R(t .. "local function f() local a, b, c, d, e, g, h, i, j, l = 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x' end "
             .. "local function h() for k, v, w, x in next, t, nil, 42 do local y = k table.insert(o, tostring(y)) end end f() h() return table.concat(o, ' ')"))"#),
     // `luaD_precall` starts every Lua frame with its registers nil, and `OP_TAILCALL` makes the
-    // callee's frame where its function sits before moving it down: a generic `for` over more
-    // than three values lets its body read what the calls under it left.
+    // callee's frame where its function sits before moving it down: a generic `for` given more
+    // values than it has locals lets its body read what the calls under it left, from the
+    // register the client's `OP_TFORLOOP` calls at (`0x6f9344`) up.
     ("fix-vm frame_clears", r#"local function R(src) return E(loadstring(src, "=t")) end
         local P = 'local o, n = {}, 0 local function T(v) return type(v) == "function" and "f" or tostring(v) end '
         local B = ' for k in it, "s", "c", 1, 2, 3, 4, 5, 6 do local x1, x2, x3, x4, x5, x6, x7, x8, x9 '

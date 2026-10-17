@@ -3069,22 +3069,29 @@ impl Vm {
                         }
                         jump!(off);
                     }
+                    // The client's `OP_TFORLOOP` (`0x6f933b`): the generator, the state and
+                    // the first variable, the control, copied above the variables
+                    // (`0x6f9344`..`0x6f93e0`), the call there for `nv` results (`0x6f940f`),
+                    // the results moved down into the variables (`0x6f9445`..`0x6f9464`), and
+                    // the loop ends when the first is nil (`0x6f9490`).
                     Op::TForLoop(a, nvar) => {
                         let nv = nvar as usize;
-                        let cb = a as usize + 3;
+                        let ctl = a as usize + 2;
+                        let cb = ctl + nv;
                         // The built-in `next` over a table, stepped without a call: what the
                         // call would do, minus the frame. An invalid key takes the call, which
                         // raises from inside `next` as before.
                         if r!(a) == self.builtin_next && !self.builtin_next.is_nil() {
                             let state = r!(a + 1);
                             if let V::Table(t) = state.unpack() {
-                                if let Ok(step) = self.heap.table(t).next(r!(a + 2)) {
+                                if let Ok(step) = self.heap.table(t).next(r!(ctl)) {
                                     // The registers from `cb` up as the call leaves them: the
                                     // state and control copied to `cb + 1` and `cb + 2`, then
                                     // `lua_next` writes the key over the control and the value
                                     // above it (or `next` one nil there), and `nv` results move
-                                    // down to `cb`, nil past those given. A body can read one
-                                    // past its variables (`Proto::clears`).
+                                    // down to `cb`, nil past those given; those then copy into
+                                    // the variables. A body can read past its variables
+                                    // (`Proto::clears`).
                                     let (k, v, n) = match step {
                                         Some((k, v)) => (k, v, 2),
                                         None => (Value::Nil, Value::Nil, 1),
@@ -3104,11 +3111,13 @@ impl Vm {
                                         if cb + i < maxstack!() {
                                             r!(cb + i) = x;
                                         }
+                                        if i < nv {
+                                            r!(ctl + i) = x;
+                                        }
                                     }
                                     if k.is_nil() {
                                         skip!(1);
                                     } else {
-                                        r!(a + 2) = k;
                                         // SAFETY: a `TForLoop` is always followed by its `Jmp`.
                                         let Op::Jmp(back) = (unsafe { *ip }) else {
                                             unreachable!()
@@ -3119,18 +3128,19 @@ impl Vm {
                                 }
                             }
                         }
-                        // 5.1's `OP_TFORLOOP`: the call at `R(a+3)`, its results the variables.
-                        r!(cb + 2) = r!(a + 2);
+                        r!(cb + 2) = r!(ctl);
                         r!(cb + 1) = r!(a + 1);
                         r!(cb) = r!(a);
                         self.top = base!() + cb + 3;
                         let call_at = base!() + cb;
                         slow!(self.call_at(call_at, 2, nv as i32))?;
                         self.top = base!() + maxstack!();
-                        if r!(cb).is_nil() {
+                        for i in (0..nv).rev() {
+                            r!(ctl + i) = r!(cb + i);
+                        }
+                        if r!(ctl).is_nil() {
                             skip!(1);
                         } else {
-                            r!(a + 2) = r!(cb);
                             // SAFETY: a `TForLoop` is always followed by its `Jmp`.
                             let Op::Jmp(back) = (unsafe { *ip }) else {
                                 unreachable!()
@@ -3229,14 +3239,6 @@ fn ran_since(seg: *const Op, ip: *const Op, p: &Proto) -> u64 {
 /// 5.1's `getobjname` over a prototype: a local's name, else what a symbolic run from the start
 /// says last wrote `reg` before `pc`. Names are C strings there, so a constant's stops at a NUL.
 fn objname_in(p: &Proto, heap: &Heap, pc: usize, reg: usize) -> Option<(&'static str, Vec<u8>)> {
-    // The client's `OP_TFORLOOP` calls a copy of the generator above every loop variable
-    // (`0x6f9345`), where no local and no instruction names it; the copy here is at `a + 3`, the
-    // first variable's register.
-    if let Some(&Op::TForLoop(a, _)) = p.code.get(pc) {
-        if reg >= a as usize + 3 {
-            return None;
-        }
-    }
     if let Some(n) = p.local_name(reg as Reg, pc) {
         return Some(("local", n.to_vec()));
     }

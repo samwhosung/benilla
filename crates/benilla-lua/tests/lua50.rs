@@ -216,3 +216,39 @@ fn a_nil_generator_is_named_nothing() {
         "<raised> t:1: attempt to call a nil value"
     );
 }
+
+/// A generic `for`'s first variable is its control (`forlist`, `0x6fe540`): the body may move it,
+/// and `OP_TFORLOOP` calls the generator from above the variables (`0x6f9344`), so a closure the
+/// body made reads them as the body left them while the generator runs. Two hidden locals and 198
+/// names make the 200 a function may have.
+#[test]
+fn a_generic_for_steps_from_its_first_variable() {
+    assert_eq!(
+        run("local o = {} local t = {'a', 'b', 'c', 'd'} \
+             for k, v in next, t do table.insert(o, v) if k == 1 then k = 3 end end \
+             return table.concat(o, ' ')"),
+        "a d"
+    );
+    assert_eq!(
+        run("local seen = {} local peek \
+             local function gen(s, c) if peek then table.insert(seen, tostring(peek())) end \
+             if c < 3 then return c + 1, c * 10 end end \
+             for i, v in gen, nil, 0 do peek = function() return i .. ':' .. v end end \
+             return table.concat(seen, ' ')"),
+        "1:0 2:10 3:20"
+    );
+    let names = |n: usize| {
+        (1..=n)
+            .map(|i| format!("k{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    assert_eq!(
+        compile_error(&format!("for {} in x do end", names(198))),
+        "ok"
+    );
+    assert_eq!(
+        compile_error(&format!("for {} in x do end", names(199))),
+        "t:1: too many local variables (limit=200) near `in'"
+    );
+}
