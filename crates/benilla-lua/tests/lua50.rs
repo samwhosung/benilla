@@ -288,3 +288,32 @@ fn parameters_and_assignments_fail_where_the_client_does() {
         "t:1: function or expression too complex near `<eof>'"
     );
 }
+
+/// A generic `for` with more than three names takes its results back from above its variables
+/// (`0x6f9445`), past the three registers `forlist` checks (`0x6fe5e7`).
+#[test]
+fn a_generic_for_with_many_names_runs() {
+    assert_eq!(
+        run(
+            "local t = {} for a, b, c, d, e in string.gfind('abcde', '(%a)(%a)(%a)(%a)(%a)') do \
+             t[a] = e end return t.a"
+        ),
+        "e"
+    );
+    let names = |n: usize| (1..=n).map(|i| format!("v{i}")).collect::<Vec<_>>();
+    for n in [6, 8] {
+        let vs = names(n);
+        let src = format!(
+            "local function gen(s, c) if not c then return {} end end \
+             local r for {} in gen do r = {} end return r",
+            (1..=n)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            vs.join(", "),
+            vs.join(" .. "),
+        );
+        let want: String = (1..=n).map(|i| i.to_string()).collect();
+        assert_eq!(run(&src), want, "{n} names");
+    }
+}

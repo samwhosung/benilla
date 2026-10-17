@@ -319,9 +319,11 @@ pub struct Proto {
     /// reads it, so the VM skips the clearing.
     pub clears: bool,
     pub maxstack: u16,
-    /// 5.1's `maxstacksize`, the registers the C build's code for this function uses: the frame
-    /// a call clears ([`crate::vm::Vm`]'s `clear_below`). `maxstack` is more by the slot the
-    /// generic `for` steps `next` into and the scratch registers benilla's operands need.
+    /// The client's `maxstacksize`, the registers its `luaK_checkstack` (`0x700a50`) reserves for
+    /// this function: the frame a call clears ([`crate::vm::Vm`]'s `clear_below`). `maxstack` is
+    /// more by the slot the generic `for` steps `next` into, the scratch registers benilla's
+    /// operands need, and the results a generic `for` with more than three names takes back
+    /// above its variables, which the client's stack holds in its slack.
     pub c_maxstack: u8,
     pub source: Bytes,
     pub line_defined: u32,
@@ -400,7 +402,8 @@ impl Proto {
             fail(n, "a line per instruction");
         }
         if (self.nparams as usize + self.vararg as usize) > self.maxstack as usize
-            || self.maxstack as usize > MAXSTACK + 5
+            // The registers, then a generic `for`'s results above at most 198 variables.
+            || self.maxstack as usize > 2 * MAXSTACK
         {
             fail(0, "the register count");
         }
@@ -566,10 +569,11 @@ impl Proto {
                     reg(x as usize + 2);
                     to(0, off);
                 }
-                // The loop variables `a+2..a+1+b`, the call's three registers above them; past a
-                // nil, the jump after it is skipped.
+                // The loop variables `a+2..a+1+b`, and above them the call's three registers and
+                // its `b` results; past a nil, the jump after it is skipped.
                 Op::TForLoop(x, nb) => {
-                    reg(x as usize + 4 + nb as usize);
+                    let nb = nb as usize;
+                    reg(x as usize + 1 + nb + nb.max(3));
                     to(1, 0);
                 }
                 Op::SetList(x, _, cnt) => reg(x as usize + cnt as usize),

@@ -593,8 +593,9 @@ b]])"#),
         return S(R("for k in function() end, nil, nil, 42 do end return 7"),
           R("local n = 0 for k in function(s, c) if c ~= 3 then return (c or 0) + 1 end end, nil, nil, 9, 8 do do local y = k n = n + y end end return n"),
           R("local n = 0 for k, v in function(s, c) if c ~= 2 then return (c or 0) + 1, 10 end end, 1, nil, 4 do n = n + k + v end return n"))"#),
-    // A generic `for` given more values than locals: the body's first local reads the register
-    // the client's `OP_TFORLOOP` called the generator at (`0x6f9344`), its first result.
+    // A `return` in a generic `for` given more values than locals: the client's `retstat`
+    // (`0x6feae0`) returns from the first free local, a register below where the values went,
+    // which holds the generator's first result (`OP_TFORLOOP` called it there, `0x6f9344`).
     ("fix-front_forlist_return", r#"local function R(src) return E(loadstring(src, "=t")) end
         local f = "local function f(s, c) if not c then return 1 end end "
         return S(R(f .. "for k in f, nil, nil, 42 do return k, 5 end"),

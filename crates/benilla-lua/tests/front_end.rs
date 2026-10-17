@@ -180,7 +180,8 @@ fn shape(p: &benilla_lua::proto::Proto, heap: &benilla_lua::heap::Heap) -> Shape
         nups: p.upvals.len() as u8,
         numparams: p.nparams,
         vararg: p.vararg,
-        maxstack: (p.maxstack - 1) as u8,
+        // The client's `maxstacksize`, without benilla's own registers.
+        maxstack: p.c_maxstack,
         lines: {
             let mut l = p.lines.clone();
             l.dedup();

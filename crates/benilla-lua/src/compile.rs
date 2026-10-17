@@ -226,6 +226,9 @@ pub(crate) struct FuncState {
     pub maxstack: u8,
     /// [`Proto::c_maxstack`]: `maxstack` as `luaK_checkstack` alone raises it.
     c_maxstack: u8,
+    /// The registers a generic `for`'s call and results reach above its variables, which
+    /// `luaK_checkstack` does not count ([`Proto::maxstack`]).
+    pub tfor_top: u16,
     /// The last pc marked as a jump target (`luaK_getlabel`), in 5.1's count, or -1.
     lasttarget: i64,
     /// `LoadNil`s at the head of the function that 5.1 leaves out (see [`Parser::nil`]).
@@ -266,6 +269,7 @@ impl FuncState {
             freereg: 0,
             maxstack: 2,
             c_maxstack: 2,
+            tfor_top: 0,
             lasttarget: -1,
             silent_nils: 0,
             jpc: NO_JUMP,
@@ -342,7 +346,7 @@ impl FuncState {
             nparams: self.nparams,
             vararg: self.vararg,
             clears: self.clears,
-            maxstack: self.maxstack as u16 + 1,
+            maxstack: (self.maxstack as u16 + 1).max(self.tfor_top),
             c_maxstack: self.c_maxstack,
             source_id: heap.source_id(&self.source),
             source: self.source,

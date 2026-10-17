@@ -3321,7 +3321,8 @@ fn symbexec(p: &Proto, lastpc: usize, reg: usize) -> Option<usize> {
             Op::LoadNil(a, b) => (a as usize..=b as usize).contains(&reg),
             Op::SelfOp(a, ..) | Op::SelfField(a, ..) => writes(a) || reg == a as usize + 1,
             Op::Call(a, ..) | Op::TailCall(a, ..) => reg >= a as usize,
-            Op::TForLoop(a, _) => reg >= a as usize + 2,
+            // The client's rule writes every register from `a` up (`0x6fc22c`).
+            Op::TForLoop(a, _) => reg >= a as usize,
             _ => false,
         };
         if hit {

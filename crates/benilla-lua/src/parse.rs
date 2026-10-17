@@ -671,6 +671,12 @@ impl<'a> Parser<'a> {
         }
         self.adjust_assign(nvars, nexps, &mut e)?;
         self.checkstack(3)?;
+        // `OP_TFORLOOP` calls from above the variables and takes back a result per name there
+        // (`0x6f9344`, `0x6f940f`): with more than three names they pass the three registers
+        // checked here, into the slack the client's stack keeps (`EXTRA_STACK`).
+        let cb = base as u16 + nvars as u16;
+        let fs = self.fs();
+        fs.tfor_top = fs.tfor_top.max(cb + (nvars as u16 - 2).max(3));
         // The client's `TFORPREP` (`0x6fe5fc`), which turns a table into `next` over it and
         // jumps to the `TFORLOOP`.
         let prep = self.code(Op::TForPrep(base, NO_JUMP), 1)?;
