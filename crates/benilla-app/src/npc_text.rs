@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 
 use crate::names::NameCache;
-use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_unit::UnitNames;
 
