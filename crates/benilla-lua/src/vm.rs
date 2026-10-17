@@ -3229,6 +3229,14 @@ fn ran_since(seg: *const Op, ip: *const Op, p: &Proto) -> u64 {
 /// 5.1's `getobjname` over a prototype: a local's name, else what a symbolic run from the start
 /// says last wrote `reg` before `pc`. Names are C strings there, so a constant's stops at a NUL.
 fn objname_in(p: &Proto, heap: &Heap, pc: usize, reg: usize) -> Option<(&'static str, Vec<u8>)> {
+    // The client's `OP_TFORLOOP` calls a copy of the generator above every loop variable
+    // (`0x6f9345`), where no local and no instruction names it; the copy here is at `a + 3`, the
+    // first variable's register.
+    if let Some(&Op::TForLoop(a, _)) = p.code.get(pc) {
+        if reg >= a as usize + 3 {
+            return None;
+        }
+    }
     if let Some(n) = p.local_name(reg as Reg, pc) {
         return Some(("local", n.to_vec()));
     }

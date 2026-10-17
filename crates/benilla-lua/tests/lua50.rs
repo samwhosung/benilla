@@ -159,3 +159,60 @@ fn a_numeric_for_steps_its_own_variable() {
         "11 12"
     );
 }
+
+/// Each loop variable is one local for the whole loop (`forbody`, `0x6fe480`, declares them at
+/// `0x6fe493` before it enters the loop's block at `0x6fe4ab`): closures made in the body share
+/// it and see its value when the loop ends, nil for a generic `for` (`OP_TFORLOOP` writes the
+/// generator's nil into it, `0x6f9445`) and the last counter for a numeric one, also after a
+/// `break`. A body local is fresh each pass.
+#[test]
+fn closures_in_a_for_share_its_variables() {
+    assert_eq!(
+        run(
+            "local fs = {} for i = 1, 3 do fs[i] = function() return i end end \
+             return fs[1](), fs[2](), fs[3]()"
+        ),
+        "3,3,3"
+    );
+    assert_eq!(
+        run("local fs = {} for k, v in ipairs({'a', 'b'}) do fs[k] = function() return k, v end end \
+             return fs[1]()"),
+        "nil,nil"
+    );
+    assert_eq!(
+        run("local f for k, v in pairs({x = 1}) do f = function() return k end end return f()"),
+        "nil"
+    );
+    assert_eq!(
+        run("local fs = {} for i = 1, 10 do fs[i] = function() return i end if i == 2 then break end end \
+             return fs[1](), fs[2]()"),
+        "2,2"
+    );
+    assert_eq!(
+        run(
+            "local fs = {} for k, v in ipairs({'a', 'b', 'c'}) do fs[k] = function() return v end \
+             if k == 2 then break end end return fs[1](), fs[2]()"
+        ),
+        "b,b"
+    );
+    // The upvalue is closed when the loop ends: the slot's later use does not reach it.
+    assert_eq!(
+        run("local f for i = 1, 2 do f = function() return i end end local x = 'later' return f()"),
+        "2"
+    );
+    assert_eq!(
+        run("local fs = {} for k, v in ipairs({'a', 'b'}) do local w = v fs[k] = function() return w end end \
+             return fs[1](), fs[2]()"),
+        "a,b"
+    );
+}
+
+/// The generator a generic `for` calls is a copy above its variables (`0x6f9345`): calling a
+/// nil one names no variable.
+#[test]
+fn a_nil_generator_is_named_nothing() {
+    assert_eq!(
+        run("local t = {} for k in t.f do end"),
+        "<raised> t:1: attempt to call a nil value"
+    );
+}

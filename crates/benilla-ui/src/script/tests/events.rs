@@ -200,7 +200,9 @@ fn a_self_unregistering_handler_does_not_rob_its_successor() {
     s.run(
         r#"
         log = {}
-        for _, n in ipairs({"WalkA", "WalkB", "WalkC"}) do
+        for _, name in ipairs({"WalkA", "WalkB", "WalkC"}) do
+            -- A body local: the loop's own variable is one for the whole loop, nil after it.
+            local n = name
             local f = CreateFrame("Frame", n)
             f:RegisterEvent("PLAYER_LOGIN")
             f:SetScript("OnEvent", function()

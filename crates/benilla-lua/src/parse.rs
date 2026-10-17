@@ -591,9 +591,9 @@ impl<'a> Parser<'a> {
 
     /// The client's `forbody` (`0x6fe480`), after the jump `prep` that enters the loop at its
     /// test: the loop's locals come into scope (`0x6fe493`), the body runs in a block `break`
-    /// leaves (`0x6fe4ab`), and the test ends the loop. A generic loop's variables are fresh for
-    /// each pass, as 5.1 has them. A numeric loop whose step is a positive constant counts up
-    /// with `ForLoopUp`.
+    /// leaves (`0x6fe4ab`), and the test ends the loop. Each loop variable is one local for the
+    /// whole loop, so every closure the body makes shares it and sees its value at the exit. A
+    /// numeric loop whose step is a positive constant counts up with `ForLoopUp`.
     fn forbody(
         &mut self,
         base: Reg,
@@ -602,18 +602,11 @@ impl<'a> Parser<'a> {
         num: Option<bool>,
         prep: usize,
     ) -> R<()> {
-        self.adjustlocalvars(3);
+        self.adjustlocalvars(3 + nvars);
+        self.reserveregs(nvars as u32)?;
         self.checknext(Tok::Do)?;
         self.enterblock(true);
-        if num.is_some() {
-            self.block()?;
-        } else {
-            self.enterblock(false);
-            self.adjustlocalvars(nvars);
-            self.reserveregs(nvars as u32)?;
-            self.block()?;
-            self.leaveblock()?;
-        }
+        self.block()?;
         self.patchtohere(prep as i32)?;
         let endfor = match num {
             Some(true) => self.code(Op::ForLoopUp(base, NO_JUMP), 1)?,

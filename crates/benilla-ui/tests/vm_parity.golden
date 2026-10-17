@@ -81,7 +81,7 @@ method	6,7
 nested_fn_names	1,true
 numfor	1,2,3,3,2,1,1,1.5,2
 numfor_closures	3,3,3
-genfor_closures	\"a\",\"b\"
+genfor_closures	nil,nil
 body_local_closures	1,2,3
 numfor_assign	1,3,5
 genfor_control	a
@@ -118,7 +118,7 @@ hex_literals	<raised> syntax error: t:32: `)\' expected near `x10\'
 long_brackets	\"a]]b\",\"x]=]y\",\"plain\"
 string_dump	\"function\",\"ok \\\"string\\\"\"
 numeric_for_fresh_var	3,3,3
-generic_for_fresh_var	10,20
+generic_for_fresh_var	nil,nil
 for_var_assigned	1
 until_sees_body_locals	3
 pow_metamethod	\"ok \\\"mm\\\"\",\"ok \\\"mm\\\"\"

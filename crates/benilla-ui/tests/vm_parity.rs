@@ -153,6 +153,8 @@ const CASES: &[(&str, &str)] = &[
     // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
     // steps the variable.
     ("numfor_closures", "local fs = {} for i = 1, 3 do fs[i] = function() return i end end return S(fs[1](), fs[2](), fs[3]())"),
+    // A generic `for`'s variables are one for the loop (`forbody`, `0x6fe480`): its closures
+    // see them as the loop leaves them, nil.
     ("genfor_closures", "local fs = {} for k, v in ipairs({'a', 'b'}) do fs[k] = function() return v end end return S(fs[1](), fs[2]())"),
     ("body_local_closures", "local fs = {} for i = 1, 3 do local j = i fs[i] = function() return j end end return S(fs[1](), fs[2](), fs[3]())"),
     // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
@@ -200,6 +202,8 @@ const CASES: &[(&str, &str)] = &[
     // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
     // steps the variable.
     ("numeric_for_fresh_var", "local fs = {} for i = 1, 3 do fs[i] = function() return i end end return S(fs[1](), fs[2](), fs[3]())"),
+    // A generic `for`'s variables are one for the loop (`forbody`, `0x6fe480`): its closures
+    // see them as the loop leaves them, nil.
     ("generic_for_fresh_var", "local fs = {} for i, v in ipairs({10, 20}) do fs[i] = function() return v end end return S(fs[1](), fs[2]())"),
     // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
     // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
