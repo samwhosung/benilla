@@ -62,7 +62,7 @@
         -- (ShaguTweaks) moves them down as it moves the stock rungs.
         GameMenuButtonKeybindings:Hide()
 
-        -- The era's Edit Mode and Support, with nothing behind them yet: disabled.
+        -- The era's Edit Mode, with nothing behind it yet: disabled.
         local editMode = CreateFrame("Button", "BenillaGameMenuButtonEditMode", GameMenuFrame,
             "GameMenuButtonTemplate")
         editMode:SetPoint("TOP", GameMenuButtonKeybindings, "TOP", 0, -19)
@@ -72,7 +72,13 @@
             "GameMenuButtonTemplate")
         support:SetPoint("TOP", editMode, "BOTTOM", 0, 0)
         support:SetText("Support")
-        support:Disable()
+        -- The era's Support opens the help window, which 1.12 opens from its "?" micro button
+        -- (`MainMenuBarMicroButtons.xml:217`); closing the menu first, as the Macros rung does.
+        support:SetScript("OnClick", function()
+            PlaySound("igMainMenuOption")
+            HideUIPanel(GameMenuFrame)
+            ToggleHelpFrame()
+        end)
 
         GameMenuButtonMacros:SetPoint("TOP", support, "BOTTOM", 0, 0)
         GameMenuButtonLogout:SetPoint("TOP", GameMenuButtonMacros, "BOTTOM", 0, -20)
