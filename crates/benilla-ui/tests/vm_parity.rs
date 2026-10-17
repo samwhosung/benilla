@@ -265,7 +265,8 @@ b]])"#),
           table.insert(o, table.concat(ks, " "))
         end
         return table.concat(o, " | ")"#),
-    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0.
+    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0; the hash
+    // part is still sized as 5.1 sizes it (#1487), so this order is not yet the client's.
     ("pairs_mixed", r#"local function keys(t) local ks = {} for k, v in pairs(t) do table.insert(ks, tostring(k) .. "=" .. tostring(v)) end return table.concat(ks, " ") end
         local a = {1, 2, 3, x = 1, y = 2, [10] = 5, [1.5] = 6, [-1] = 7, z = 3}
         local b = {} for i = 1, 10 do b[i] = i end b[5] = nil b[20] = 20 b.k = 1
@@ -338,7 +339,8 @@ b]])"#),
         end
         return table.concat(o, " ")"#),
     // ── fix-front: the single-pass front end, 5.1.5's `lparser.c` and `lcode.c` ──
-    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0.
+    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0; the hash
+    // part is still sized as 5.1 sizes it (#1487), so this order is not yet the client's.
     ("fix-front_setlist_order", r#"local function K(t) local o = {} for k in pairs(t) do table.insert(o, tostring(k)) end return table.concat(o, " ") end
         local function list(n) local o = {} for i = 1, n do o[i] = i end return table.concat(o, ",") end
         local function f() return 1, 2, 3 end
