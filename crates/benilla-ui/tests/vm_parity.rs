@@ -804,6 +804,7 @@ const SWEEP_FNS: &[&str] = &[
     "unpack",
     // `luaH_next`'s text is the client's (`0x871aac`).
     "next",
+    // 5.0's `ipairs` (`0x702cd0`): any second argument steps once, as the client answers.
     "ipairs",
     "pairs",
     "getmetatable",
