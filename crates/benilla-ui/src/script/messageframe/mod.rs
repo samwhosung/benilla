@@ -11,7 +11,7 @@
 use crate::layout::Rect;
 use crate::order::ZTarget;
 use crate::script::object::frame_handle_of;
-use crate::widget::{FrameHandle, InsertMode, KindState, MessageLine};
+use crate::widget::{FrameHandle, InsertMode, KindState, MessageLine, Viewport};
 
 use super::layout::FramePaint;
 use super::{
@@ -33,12 +33,13 @@ pub(super) use scrolling::REG_SCROLLINGMESSAGEFRAME_METHODS;
 /// [`MessageFrameState::trim_to_viewport`]: crate::widget::MessageFrameState::trim_to_viewport
 pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     let rows = UiScript::message_viewport_rows(model, h);
+    let viewport = UiScript::message_viewport(model, h);
     match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         Some(KindState::Message(mf)) => {
             mf.trim_to_viewport(rows);
             mf.tick(elapsed);
         }
-        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed, rows),
+        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed, viewport),
         _ => {}
     }
 }
@@ -208,11 +209,29 @@ impl MessageFont {
         self.height.unwrap_or(14.0)
     }
 
-    /// The gap between a line string's rows and, in the scrolling class, between messages: each
-    /// line string inherits the frame's font (`0x7888fd`) through the clamping setter (`0x7708fd`
-    /// → `0x772240`), and the stack snaps its field (`0x78899e` → `0x766750`).
-    fn line_gap(&self, scale: f32) -> f32 {
-        snap_px(self.spacing.max(0.0) * scale)
+    /// The gap between the rows of one message: each line string inherits the frame's font
+    /// (`0x7888fd`) through the clamping setter (`0x7708fd` → `0x772240`), and the block height
+    /// spaces its rows by the spacing times the scale (`0x772a07`-`0x772a0d`), unsnapped.
+    fn row_gap(&self, scale: f32) -> f32 {
+        self.spacing.max(0.0) * scale
+    }
+
+    /// The scrolling class's gap between one message and the next: the stack snaps the unscaled
+    /// spacing (`0x78899e` → `0x766750`) and anchors the next line at that offset in frame units
+    /// (`0x788954`-`0x788975`), so on screen it is the snapped spacing times the scale.
+    fn message_gap(&self, scale: f32) -> f32 {
+        snap_px(self.spacing.max(0.0)) * scale
+    }
+
+    /// What the scrolling class's layout fits messages into: a frame `height` tall, drawn at
+    /// `scale`.
+    fn viewport(&self, height: f32, scale: f32) -> Viewport {
+        Viewport {
+            height,
+            line_h: self.height_or_default() * scale,
+            row_gap: self.row_gap(scale),
+            message_gap: self.message_gap(scale),
+        }
     }
 
     /// The plain class's pitch, its fit and its slot step (`0x785f03`-`0x785f2a`, `0x786184`): the
@@ -292,28 +311,34 @@ impl UiScript {
             })
     }
 
-    /// How many rows frame `fh`'s resolved rect holds at its font's pitch: the plain class's
-    /// capacity (`+0x318`) and the height the scrolling class's layout spends in whole messages.
-    /// The plain class scales both the rect and the pitch (`0x785f0a`, `0x785f1f`) and holds
-    /// nothing at a pitch of 0 or less, which a negative spacing can make (`0x785f8f`). The
-    /// scrolling class divides the rect by the scale (`0x7887d4`) and charges each message its
-    /// height plus the snapped unscaled spacing (`0x78899e`-`0x7889ad`); scaled, that is this pitch.
+    /// How many rows the plain frame `fh`'s resolved rect holds at its font's pitch, its capacity
+    /// (`+0x318`). Both the rect and the pitch are scaled (`0x785f0a`, `0x785f1f`); a pitch of 0
+    /// or less, which a negative spacing can make, holds nothing (`0x785f8f`).
     pub(super) fn message_viewport_rows(model: &Model, fh: FrameHandle) -> usize {
         let font = Self::message_frame_font(model, fh);
         let Some(frame) = model.arena.frame(fh) else {
             return 0;
         };
-        let scale = frame.effective_scale;
-        let pitch = match frame.kind_state {
-            KindState::Message(_) => font.plain_pitch(scale),
-            _ => font.height_or_default() * scale + font.line_gap(scale),
-        };
+        let pitch = font.plain_pitch(frame.effective_scale);
         if pitch <= 0.0 {
             return 0;
         }
         model.resolved.get(&fh).map_or(0, |r| {
             ((r.top - r.bottom) / pitch).floor().max(0.0) as usize
         })
+    }
+
+    /// The viewport of the scrolling frame `fh`'s resolved rect. The relayout divides the rect by
+    /// the scale (`0x7887d4`) and the heights it spends are in the same units, so this is the same
+    /// quantity scaled; no rect yet is no height, which still shows the anchored message.
+    pub(super) fn message_viewport(model: &Model, fh: FrameHandle) -> Viewport {
+        let font = Self::message_frame_font(model, fh);
+        let scale = model.arena.frame(fh).map_or(1.0, |f| f.effective_scale);
+        let height = model
+            .resolved
+            .get(&fh)
+            .map_or(0.0, |r| (r.top - r.bottom).max(0.0));
+        font.viewport(height, scale)
     }
 
     /// Message lines whose wrapped row count needs a host measure. Call after
@@ -487,13 +512,14 @@ impl UiScript {
         };
         // The resolved rect is scaled and the font is frame-local, so the height and gap scale.
         let line_h = font.height_or_default() * paint.scale;
-        let gap = font.line_gap(paint.scale);
-        // A row's advance: the scrolling class's height plus gap, the plain class's own pitch.
-        let row_step = match &frame.kind_state {
-            KindState::Message(_) => font.plain_pitch(paint.scale),
-            _ => line_h + gap,
+        let viewport = font.viewport(fr.top - fr.bottom, paint.scale);
+        // A message's advance to the next: the scrolling class's block and snapped gap, the plain
+        // class's own pitch per row.
+        let advance = |rows: u16| match &frame.kind_state {
+            KindState::Message(_) => f32::from(rows.max(1)) * font.plain_pitch(paint.scale),
+            _ => viewport.cost(rows),
         };
-        if line_h <= 0.0 || row_step <= 0.0 || fr.top <= fr.bottom {
+        if line_h <= 0.0 || advance(1) <= 0.0 || fr.top <= fr.bottom {
             return;
         }
         // Clip to the frame, intersected with any ScrollFrame ancestor's clip.
@@ -508,10 +534,7 @@ impl UiScript {
         // [`super::hyperlink`] in the reference's placement order.
         let first = out.len();
         let (reverse, shown) = match &frame.kind_state {
-            KindState::ScrollingMessage(smf) => (
-                true,
-                smf.displayed_count(Self::message_viewport_rows(model, fh)),
-            ),
+            KindState::ScrollingMessage(smf) => (true, smf.displayed_count(viewport)),
             _ => (false, usize::MAX),
         };
         for idx in (0..=top_index).rev().take(shown) {
@@ -519,14 +542,13 @@ impl UiScript {
                 break; // the next band starts outside the frame
             }
             let line = &lines[idx];
-            let rows = f32::from(line.rows.max(1));
-            let band_h = rows * line_h + (rows - 1.0) * gap;
+            let band_h = viewport.block(line.rows);
             let (bottom, top) = if from_top {
                 (fr.top - used - band_h, fr.top - used)
             } else {
                 (fr.bottom + used, fr.bottom + used + band_h)
             };
-            used += rows * row_step;
+            used += advance(line.rows);
             if line.alpha <= 0.0 {
                 continue; // faded: holds its rows, draws nothing
             }

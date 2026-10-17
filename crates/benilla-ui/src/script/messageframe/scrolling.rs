@@ -9,7 +9,7 @@ use mlua::{Lua, MultiValue, Table, Value};
 use super::{channel, is_number};
 use crate::script::object::frame_handle_of;
 use crate::script::{Model, UiScript};
-use crate::widget::{KindState, ScrollingMessageState};
+use crate::widget::{KindState, ScrollingMessageState, Viewport};
 
 /// Registry key of the ScrollingMessageFrame method table (the MAXCSTACK discipline).
 pub(crate) const REG_SCROLLINGMESSAGEFRAME_METHODS: &str =
@@ -40,11 +40,11 @@ fn with_smf<T>(
 fn with_viewport<T>(
     lua: &Lua,
     this: &Table,
-    f: impl FnOnce(&mut ScrollingMessageState, usize) -> T,
+    f: impl FnOnce(&mut ScrollingMessageState, Viewport) -> T,
 ) -> mlua::Result<T> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let viewport_rows = UiScript::message_viewport_rows(&model, h);
+    let viewport_rows = UiScript::message_viewport(&model, h);
     let frame = model
         .arena
         .frame_mut(h)
@@ -59,7 +59,7 @@ fn with_viewport<T>(
 fn scroll(
     lua: &Lua,
     this: &Table,
-    op: impl FnOnce(&mut ScrollingMessageState, usize),
+    op: impl FnOnce(&mut ScrollingMessageState, Viewport),
 ) -> mlua::Result<()> {
     with_viewport(lua, this, op)
 }

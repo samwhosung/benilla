@@ -134,10 +134,10 @@ pub use kinds::{
     MessageFrameState, MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight,
     ModelPlayHead, ModelState, PaneArm, PaneCopy, RegionKind, ScrollFrameState,
     ScrollingMessageState, SequenceFacts, ShownWrites, SliderState, StatusBarState, TooltipAnchor,
-    TooltipState, ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND, MINIMAP_DEFAULT_ARROW_MODEL,
-    MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM,
-    MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS,
-    TOOLTIP_LINE_GAP, TOOLTIP_PAD, TOOLTIP_WRAP_WIDTH, TURN_HOLD_MS,
+    TooltipState, Viewport, ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND,
+    MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL,
+    MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP,
+    TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD, TOOLTIP_WRAP_WIDTH, TURN_HOLD_MS,
 };
 
 // ── Frame and Region nodes ───────────────────────────────────────────────────────────────────
