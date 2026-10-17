@@ -313,27 +313,34 @@ fn assert(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(vm.ret1(v))
 }
 
-/// `luaL_getn`: `t.n` if numeric, else the size `setn` remembered, else a count to the first nil.
+/// `checkint` (`0x6f4f80`): `lua_tonumber` (`0x6f4f8a`) and `__ftol`'s low word, so a numeric
+/// string counts; -1 for a value that is no number (`lua_isnumber`, `0x6f4f9f`).
+fn checkint(vm: &Vm, v: Value) -> i32 {
+    vm.tonumber(v).map_or(-1, c_int)
+}
+
+/// `luaL_getn` (`0x6f5050`): `t.n` if `checkint` takes it, else the size `setn` remembered, else
+/// a count to the first nil.
 pub fn getn(vm: &mut Vm, t: crate::value::TableRef) -> usize {
-    let n = vm.heap.table(t).get(Value::Str(vm.names.n));
-    if let V::Num(x) = n.unpack() {
-        let i = c_int(x);
-        if i >= 0 {
-            return i as usize;
-        }
+    let n = checkint(vm, vm.heap.table(t).get(Value::Str(vm.names.n)));
+    if n >= 0 {
+        return n as usize;
     }
-    if let Some(n) = vm.heap.table(t).setn {
-        return n;
+    if let Some(n) = vm.heap.table(t).setn.filter(|&n| n >= 0) {
+        return n as usize;
     }
     vm.heap.table(t).border()
 }
 
-/// `luaL_setn`: into `t.n` when the table has a numeric one, else the remembered size.
-pub fn setn(vm: &mut Vm, t: crate::value::TableRef, n: usize) {
+/// `luaL_setn` (`0x6f4ea0`): into `t.n`, as a number, when `checkint` takes the one there, else the
+/// remembered size; either keeps a negative size as given.
+pub fn setn(vm: &mut Vm, t: crate::value::TableRef, n: i32) {
     let key = Value::Str(vm.names.n);
-    let has_n = matches!((vm.heap.table(t).get(key)).unpack(), V::Num(x) if c_int(x) >= 0);
-    if has_n {
-        vm.heap.table_mut(t).set(key, Value::Num(n as f64)).unwrap();
+    if checkint(vm, vm.heap.table(t).get(key)) >= 0 {
+        vm.heap
+            .table_mut(t)
+            .set(key, Value::Num(f64::from(n)))
+            .unwrap();
     } else {
         vm.heap.table_mut(t).setn = Some(n);
     }

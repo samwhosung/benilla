@@ -61,8 +61,9 @@ pub struct Table {
     pub meta: Option<TableRef>,
     /// 5.0's `flags`: a set bit caches "this metamethod is absent" (`luaT_gettm`).
     pub flags: u8,
-    /// The size `table.setn` remembered, 5.0's `n`-less `getn` (the client's `setn`).
-    pub setn: Option<usize>,
+    /// The size `table.setn` remembered, 5.0's `n`-less `getn` (the client's `getsizes` store,
+    /// `0x6f4fc0`), negative as given.
+    pub setn: Option<i32>,
     /// The weak mode the last collection found: bit 0 keys, bit 1 values.
     pub(crate) weak: u8,
     /// The chunk whose code made this table (`Heap::sources`), for a memory census.

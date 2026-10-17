@@ -333,3 +333,40 @@ fn unpack_refuses_past_the_clients_2048_slots() {
         .unwrap()
         .ends_with("stack overflow (table too big to unpack)"));
 }
+
+/// `luaL_getn` (`0x6f5050`) and `luaL_setn` (`0x6f4ea0`) read `t.n` through `checkint`
+/// (`0x6f4f80`): `lua_tonumber`, so a numeric string is a size, and `luaL_setn` then writes a
+/// number over it; a string that is no number is no size. `luaL_setn` keeps a negative size as
+/// given, which `luaL_getn` then passes over.
+#[test]
+fn a_numeric_string_n_is_a_size() {
+    let s = UiScript::new().unwrap();
+    let eval = |src: &str| s.eval::<String>(src).unwrap();
+    assert_eq!(eval("return tostring(table.getn({n = '2'}))"), "2");
+    assert_eq!(eval("return tostring(table.getn({'a', n = ' 3 '}))"), "3");
+    assert_eq!(
+        eval("return tostring(table.getn({'a', 'b', n = 'x'}))"),
+        "2"
+    );
+    assert_eq!(
+        eval("local t = {n = '2'} table.setn(t, 5) return type(t.n) .. t.n"),
+        "number5"
+    );
+    assert_eq!(
+        eval("local t = {'a', n = '1'} table.insert(t, 'b') return type(t.n) .. t.n .. t[2]"),
+        "number2b"
+    );
+    assert_eq!(
+        eval("local t = {'a', 'b', 'c', n = '2'} return table.concat(t) .. unpack(t)"),
+        "aba"
+    );
+    // A negative size: into `t.n` when one is there, else remembered; `getn` counts past both.
+    assert_eq!(
+        eval("local t = {'a', n = 3} table.setn(t, -1) return t.n .. ' ' .. table.getn(t)"),
+        "-1 1"
+    );
+    assert_eq!(
+        eval("local t = {'a', 'b'} table.setn(t, 5) table.setn(t, -1) return tostring(table.getn(t))"),
+        "2"
+    );
+}

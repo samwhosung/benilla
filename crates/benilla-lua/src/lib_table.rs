@@ -61,7 +61,7 @@ fn getn_(vm: &mut Vm, nargs: usize) -> R<usize> {
 fn setn_(vm: &mut Vm, nargs: usize) -> R<usize> {
     let t = vm.check_table(nargs, 1)?;
     let n = vm.check_int(nargs, 2)?;
-    setn(vm, t, n.max(0) as usize);
+    setn(vm, t, n);
     Ok(0)
 }
 
@@ -134,7 +134,7 @@ fn insert(vm: &mut Vm, nargs: usize) -> R<usize> {
     if n.saturating_sub(pos) > MAX_SHIFT {
         return Err(vm.error_at(1, "table too big to insert into"));
     }
-    setn(vm, t, n.max(0) as usize);
+    setn(vm, t, n as i32);
     n -= 1;
     while n >= pos {
         let x = rawgeti(vm, t, n);
@@ -157,7 +157,7 @@ fn remove(vm: &mut Vm, nargs: usize) -> R<usize> {
     if n.saturating_sub(pos) > MAX_SHIFT {
         return Err(vm.error_at(1, "table too big to remove from"));
     }
-    setn(vm, t, (n - 1) as usize);
+    setn(vm, t, (n - 1) as i32);
     let out = rawgeti(vm, t, pos);
     while pos < n {
         let x = rawgeti(vm, t, pos + 1);
