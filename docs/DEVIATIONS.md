@@ -175,7 +175,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:397`](../crates/benilla-app/src/net/io.rs#L397))
 - The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1158`](../crates/benilla-app/src/net/io.rs#L1158))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
-- The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:55`](../crates/benilla-app/src/net/motion/remote.rs#L55))
+- The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
 
 #### no_install
