@@ -18,7 +18,7 @@ fn recipe(
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         min_made: 1,
         max_made: 1,
-        cooldown_secs: None,
+        cooldown: None,
         product_item: spell_id + 10_000,
         product_inv_type: 20, // Robe: folds to the Chest slot bit (4)
         // 0 everywhere, so ties fall through to the name; the ItemLevel test sets it.
@@ -1183,4 +1183,41 @@ fn the_link_verbs_answer_the_clients_shapes() {
         "{err}"
     );
     assert!(s.run("GetTradeSkillItemLink('x')").is_err());
+}
+
+/// `GetTradeSkillCooldown` (`0x4fda20`) derives the seconds left at the call from the pushed
+/// start and duration: the pushed state stays put while the clock runs, and the answer turns nil
+/// once the cooldown is over.
+#[test]
+fn the_cooldown_left_is_read_off_the_clock_at_the_call() {
+    let mut s = UiScript::new().unwrap();
+    let mut state = two_recipe_state();
+    // Started at 100 s on the GetTime clock, for an hour.
+    state.recipes[0].cooldown = Some((100_000, 3_600_000, true));
+    s.set_trade_skill(Some(state));
+    // The row the bolt sorts to, and the robe's.
+    let row = |s: &UiScript, name: &str| -> i64 {
+        s.eval(&format!(
+            "for i = 1, GetNumTradeSkills() do if GetTradeSkillInfo(i) == {name:?} then return i end end"
+        ))
+        .unwrap()
+    };
+    let (bolt, robe) = (row(&s, "Bolt of Linen Cloth"), row(&s, "Simple Robe"));
+    let left = |s: &UiScript| -> f64 {
+        s.eval(&format!("return GetTradeSkillCooldown({bolt})"))
+            .unwrap()
+    };
+    s.set_now(160.0);
+    assert_eq!(left(&s), 3540.0);
+    s.set_now(160.5);
+    assert_eq!(left(&s), 3539.5);
+    s.set_now(3700.0);
+    assert!(s
+        .eval::<bool>(&format!("return GetTradeSkillCooldown({bolt}) == nil"))
+        .unwrap());
+    assert!(
+        s.eval::<bool>(&format!("return GetTradeSkillCooldown({robe}) == nil"))
+            .unwrap(),
+        "a recipe not cooling down"
+    );
 }

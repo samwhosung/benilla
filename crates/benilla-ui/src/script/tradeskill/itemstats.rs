@@ -688,7 +688,7 @@ mod tests {
             icon: None,
             min_made: 1,
             max_made: 1,
-            cooldown_secs: None,
+            cooldown: None,
             product_item: product,
             product_inv_type: 5,
             product_item_level: 0,

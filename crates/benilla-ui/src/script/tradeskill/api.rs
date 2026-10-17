@@ -332,18 +332,26 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillCooldown(index): nil when ready, which the stock Lua tests for truthiness
-    // (Blizzard_TradeSkillUI.lua:215).
+    // GetTradeSkillCooldown(index) (`0x4fda20`): the start plus the duration minus the clock,
+    // scaled by 0.001, read at the call; nil when ready, which the stock Lua tests for truthiness
+    // (Blizzard_TradeSkillUI.lua:215). A held cooldown has not started, so its whole duration is
+    // left.
     g.set(
         "GetTradeSkillCooldown",
         lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(
-                match recipe_at(&model, index).and_then(|r| r.cooldown_secs) {
-                    Some(secs) => Value::Integer(secs as i64),
-                    None => Value::Nil,
-                },
-            )
+            let left = recipe_at(&model, index)
+                .and_then(|r| r.cooldown)
+                .map(|(start_ms, duration_ms, enabled)| {
+                    let duration = f64::from(duration_ms) / 1000.0;
+                    if enabled {
+                        start_ms as f64 / 1000.0 + duration - model.now
+                    } else {
+                        duration
+                    }
+                })
+                .filter(|&left| left > 0.0);
+            Ok(left.map_or(Value::Nil, Value::Number))
         })?,
     )?;
 

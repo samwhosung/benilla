@@ -688,7 +688,7 @@ fn a_refusal_of_the_armed_craft_disarms_the_batch() {
                 icon: None,
                 min_made: 1,
                 max_made: 1,
-                cooldown_secs: None,
+                cooldown: None,
                 product_item: 2996,
                 product_inv_type: 0,
                 product_item_level: 0,

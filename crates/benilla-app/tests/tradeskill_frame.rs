@@ -60,7 +60,7 @@ fn recipe(
         icon: Some("Interface\\Icons\\INV_Misc_ArmorKit_04".into()),
         min_made: 1,
         max_made: 1,
-        cooldown_secs: None,
+        cooldown: None,
         product_item: spell_id + 10_000,
         product_inv_type,
         product_item_level: 0, // neutral: ordering falls through to the name

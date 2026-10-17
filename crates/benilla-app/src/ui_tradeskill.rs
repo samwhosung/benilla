@@ -249,7 +249,9 @@ fn resolve_recipe(
     items: &Items,
     ask: Ask<'_>,
     cooldowns: &crate::spell::Cooldowns,
-    now: Instant,
+    // The frame's one clock pair ([`crate::ui_script::UiClock`]): a running cooldown then pushes
+    // the same start every frame.
+    (anchor, ui_now): (Instant, f64),
 ) -> Option<TradeSkillRecipe> {
     let d = spells.catalog.get(spell_id)?;
     let sla = skill_lines.catalog.ability(spell_id)?;
@@ -322,7 +324,7 @@ fn resolve_recipe(
         }
     }
 
-    let cd = cooldowns.info(spell_id, 0, Some(d), now);
+    let cd = cooldowns.info(spell_id, 0, Some(d), anchor);
     Some(TradeSkillRecipe {
         group,
         spell_id,
@@ -332,7 +334,7 @@ fn resolve_recipe(
         icon,
         min_made,
         max_made,
-        cooldown_secs: (cd.remaining_ms > 0).then(|| u64::from(cd.remaining_ms).div_ceil(1000)),
+        cooldown: cd.ui_triple(anchor, ui_now),
         product_item,
         product_inv_type,
         product_item_level,
@@ -356,6 +358,7 @@ fn feed_trade_skill(
     items: Res<Items>,
     commands: Res<NetCommands>,
     cooldowns: Res<crate::spell::Cooldowns>,
+    clock: Res<crate::ui_script::UiClock>,
     mut last: Local<crate::ui_script::VmMemo<Option<TradeSkillState>>>,
 ) {
     let Some(mut script) = script else {
@@ -377,7 +380,7 @@ fn feed_trade_skill(
             .line(line)
             .map(|l| l.name.clone())
             .unwrap_or_else(|| format!("Skill {line}"));
-        let now = Instant::now();
+        let now = (clock.anchor, clock.ui_now);
         let recipes: Vec<TradeSkillRecipe> = actions
             .spells
             .iter()
@@ -614,6 +617,74 @@ mod tests {
         );
     }
 
+    /// No `TRADE_SKILL_UPDATE` sender runs off a cooldown's clock (`0x4fd164` in the rebuild
+    /// `0x4fca20`, and the filter setters `0x4fd725`, `0x4fd745`, `0x4fd765`); the getter reads the
+    /// seconds left at its call (`0x4fda20`). So a running cooldown pushes the same recipe every
+    /// frame, and the snapshot diff, which fires the event, never sees it tick.
+    #[test]
+    fn a_running_cooldown_leaves_the_recipe_unchanged_frame_to_frame() {
+        use std::time::Duration;
+        const SPELL: u32 = 18_560; // Mooncloth, a day-long cooldown
+        let mut deps = TestDeps::new();
+        let mooncloth = || SpellDisplay {
+            name: "Mooncloth".into(),
+            recovery_ms: 86_400_000,
+            ..Default::default()
+        };
+        let d = mooncloth();
+        let spells = Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [(SPELL, mooncloth())].into_iter().collect(),
+            ),
+            ..Spells::empty_for_tests()
+        };
+        let lines = SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_abilities([(
+                SPELL,
+                benilla_formats::SlaInfo {
+                    skill_id: 197,
+                    req_skill_value: 1,
+                    forward_spell_id: 0,
+                    trivial_low: 1,
+                    trivial_high: 2,
+                },
+            )]),
+        };
+        let t0 = Instant::now();
+        let mut cooldowns = crate::spell::Cooldowns::default();
+        cooldowns.start_spell(SPELL, &d, 0, t0, None);
+        let store = ObjectStore(benilla_protocol::ObjectFields::default());
+        let mut frame = |elapsed: Duration| {
+            deps.with_objects(|objects, items, commands| {
+                resolve_recipe(
+                    SPELL,
+                    0,
+                    &spells,
+                    &lines,
+                    None,
+                    None,
+                    None,
+                    &store,
+                    objects,
+                    items,
+                    Ask::New(commands),
+                    &cooldowns,
+                    (t0 + elapsed, 50.0 + elapsed.as_secs_f64()),
+                )
+                .expect("a recipe")
+            })
+        };
+        let first = frame(Duration::from_millis(16));
+        assert_eq!(first.cooldown, Some((50_000, 86_400_000, true)));
+        for secs in [1, 2, 61, 3_600] {
+            assert_eq!(
+                frame(Duration::from_secs(secs)),
+                first,
+                "{secs} s on: the same push"
+            );
+        }
+    }
+
     /// `0x4fccfc` counts a reagent with `0x622130` and `0x4ffb10` finds a tool with `0x622270`,
     /// both at mask 0: a copy worn in a slot or in the keyring counts, one in the bank does not.
     #[test]
@@ -704,7 +775,7 @@ mod tests {
                     items,
                     Ask::New(commands),
                     &cooldowns,
-                    Instant::now(),
+                    (Instant::now(), 0.0),
                 )
                 .expect("a recipe");
                 (r.reagents[0].have, r.tools[0].1)
@@ -788,7 +859,7 @@ mod tests {
                 icon: None,
                 min_made: 1,
                 max_made: 1,
-                cooldown_secs: None,
+                cooldown: None,
                 product_item: 2996,
                 product_inv_type: 0,
                 product_item_level: 0,
@@ -892,7 +963,7 @@ mod tests {
                 icon: None,
                 min_made: 1,
                 max_made: 1,
-                cooldown_secs: None,
+                cooldown: None,
                 product_item: 2996,
                 product_inv_type: 0,
                 product_item_level: 0,
@@ -990,7 +1061,7 @@ mod tests {
                 icon: None,
                 min_made: 1,
                 max_made: 1,
-                cooldown_secs: None,
+                cooldown: None,
                 product_item: 2996,
                 product_inv_type: 0,
                 product_item_level: 0,

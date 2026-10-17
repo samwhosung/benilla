@@ -897,7 +897,7 @@ fn a_reload_keeps_the_quest_folds_and_the_repeat() {
                 icon: None,
                 min_made: 1,
                 max_made: 1,
-                cooldown_secs: None,
+                cooldown: None,
                 product_item: 2996,
                 product_inv_type: 0,
                 product_item_level: 0,

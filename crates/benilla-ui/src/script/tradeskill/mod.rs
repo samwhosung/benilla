@@ -89,8 +89,10 @@ pub struct TradeSkillRecipe {
     pub icon: Option<String>,
     pub min_made: u32,
     pub max_made: u32,
-    /// Remaining cooldown in seconds; `None` when ready.
-    pub cooldown_secs: Option<u64>,
+    /// The recipe spell's cooldown as `(start_ms on the GetTime clock, duration_ms, enabled)`,
+    /// `None` when ready: the getter derives the seconds left at its call (`0x4fda20`), so a
+    /// running cooldown never changes the pushed state.
+    pub cooldown: Option<(i64, u32, bool)>,
     /// The created item, 0 for a pure-effect recipe.
     pub product_item: u32,
     /// The product's `InventoryType`, which the inv-slot filter folds to slot bits through
