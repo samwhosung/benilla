@@ -235,6 +235,45 @@ fn loadstring_is_text_only_bytecode_rejected() {
     assert!(ok, "loadstring must reject bytecode");
 }
 
+/// `luaB_loadstring` (`0x703280`) names a chunk by its source's bytes as a C string, which
+/// `luaO_chunkid` (`0x6f5c40`) cuts at the first `\n` alone; a NUL in the source compiles.
+#[test]
+fn loadstring_names_a_chunk_by_its_raw_bytes() {
+    let s = script();
+    let err = |src: &str| {
+        s.eval::<String>(&format!(
+            "local f, e = loadstring({src}) if not f then return e end \
+             local ok, m = pcall(f) return m"
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        s.eval::<i64>(r#"return string.len(loadstring("return '\0'")())"#)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        err(r#""error('e') --\0x""#),
+        "[string \"error('e') --\"]:1: e"
+    );
+    assert_eq!(
+        err(r#""error('e')\r--x""#),
+        "[string \"error('e')\r--x\"]:1: e"
+    );
+    assert_eq!(
+        err(r#""error('e')\n--x""#),
+        "[string \"error('e')...\"]:1: e"
+    );
+    assert!(
+        s.eval::<bool>(
+            r#"local f = loadstring("error('e') --\233") local ok, m = pcall(f)
+               return string.find(m, "\233", 1, true) ~= nil"#
+        )
+        .unwrap(),
+        "a Latin-1 byte in the name stays itself"
+    );
+}
+
 // ── GetTime: the session clock ──
 
 #[test]

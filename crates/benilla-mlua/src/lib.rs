@@ -580,7 +580,8 @@ impl Lua {
             source: chunk.source(),
             name: chunk
                 .name()
-                .unwrap_or_else(|| format!("@{}:{}", at.file(), at.line())),
+                .unwrap_or_else(|| format!("@{}:{}", at.file(), at.line()))
+                .into_bytes(),
             mode: None,
             env: None,
         }
@@ -1925,18 +1926,19 @@ impl AsChunk for Cow<'_, [u8]> {
 pub struct Chunk<'a> {
     lua: &'a Lua,
     source: Vec<u8>,
-    name: std::string::String,
+    /// The chunk name as `lua_load` takes it: bytes, which need not be UTF-8.
+    name: Vec<u8>,
     mode: Option<ChunkMode>,
     env: Option<Table>,
 }
 
 impl<'a> Chunk<'a> {
-    pub fn set_name(mut self, name: impl Into<std::string::String>) -> Self {
-        self.name = name.into();
+    pub fn set_name(mut self, name: impl AsRef<[u8]>) -> Self {
+        self.name = name.as_ref().to_vec();
         self
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         &self.name
     }
 
@@ -1951,12 +1953,6 @@ impl<'a> Chunk<'a> {
     }
 
     fn compile(&self, src: &[u8]) -> Result<Function> {
-        // mlua hands the name to C as a C string, which a NUL cannot be in.
-        if let Some(pos) = self.name.bytes().position(|b| b == 0) {
-            return Err(Error::runtime(format!(
-                "invalid name: nul byte found in provided data at position: {pos}"
-            )));
-        }
         if src.first() == Some(&0x1b) {
             // mlua-sys's `luaL_loadbufferx` text, for the mode in effect; with no mode set, a
             // binary chunk would load on the C build, which this VM cannot.
@@ -1969,14 +1965,13 @@ impl<'a> Chunk<'a> {
                 incomplete_input: false,
             });
         }
+        // `lua_load` takes the name as a C string: it ends at its first NUL.
+        let name = self.name.split(|&b| b == 0).next().unwrap_or_default();
         let lua = self.lua;
-        let f = lua
-            .vm()
-            .load(src, self.name.as_bytes())
-            .map_err(|e| Error::SyntaxError {
-                message: e.to_string(),
-                incomplete_input: e.0.ends_with(b"near `<eof>'"),
-            })?;
+        let f = lua.vm().load(src, name).map_err(|e| Error::SyntaxError {
+            message: e.to_string(),
+            incomplete_input: e.0.ends_with(b"near `<eof>'"),
+        })?;
         let f = Function(lua.make_ref(f));
         if let Some(env) = &self.env {
             f.set_environment(env.clone())?;

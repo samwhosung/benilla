@@ -72,10 +72,11 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
             // The chunk name is the caller's string verbatim, defaulting to the source itself
             // (`luaB_loadstring` `0x703280`, `0x70329a`), which `luaO_chunkid` `0x6f5c40` renders
             // as `[string "…"]`. It comes from the raw bytes: `luaL_loadbuffer` `0x6f5690` strips
-            // a BOM only after `0x703296` took the name.
-            let name = match &chunkname {
-                Some(n) => String::from_utf8_lossy(&n.as_bytes()).into_owned(),
-                None => String::from_utf8_lossy(&raw).into_owned(),
+            // a BOM only after `0x703296` took the name. It is a C string, its bytes as they are:
+            // `lua_load` ends it at its first NUL, and the source still compiles whole.
+            let name: Vec<u8> = match &chunkname {
+                Some(n) => n.as_bytes().to_vec(),
+                None => raw.to_vec(),
             };
             let chunk = lua
                 .load(bytes)
