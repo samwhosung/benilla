@@ -983,8 +983,12 @@ pub(crate) struct Model {
     pub(crate) quest_confirms: u32,
     /// Item id to its tooltip view.
     pub(crate) item_templates: HashMap<u32, ItemTemplateView>,
-    /// Item ids asked for and missing, for the app to answer.
+    /// Item ids asked for and missing, for the app to answer: a lookup with a callback, which
+    /// asks the server.
     pub(crate) item_stat_asks: HashSet<u32>,
+    /// Item ids `GetItemInfo` read and missing: its lookup passes no callback (`0x48e185`), so
+    /// the app answers from its cache only.
+    pub(crate) item_stat_reads: HashSet<u32>,
     /// Set id to its tooltip set block (`0x854b1c`), and the misses asked for.
     pub(crate) item_sets: HashMap<u32, super::ItemSetView>,
     pub(crate) item_set_asks: HashSet<u32>,
@@ -1693,6 +1697,7 @@ impl Model {
             item_set_asks: HashSet::new(),
             random_properties: HashMap::new(),
             item_stat_asks: HashSet::new(),
+            item_stat_reads: HashSet::new(),
             player_req: PlayerReqState::default(),
             lock_rows: HashMap::new(),
             lock_openers: None,

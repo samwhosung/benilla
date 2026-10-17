@@ -412,8 +412,9 @@ pub(super) fn feed_random_properties(
 }
 
 /// The item-tooltip feed: every template that lands is pushed unprompted, so the first hover never
-/// misses, as the reference reads one item cache synchronously; a read of an unresolved id records
-/// a miss, which queries it here.
+/// misses, as the reference reads one item cache synchronously. A miss the VM asked for is the
+/// getter's lookup with a callback, which queries it here and asks a refused one again; a miss
+/// `GetItemInfo` read is served from the cache and never queried (`0x48e172`).
 pub(super) fn feed_item_stats(
     script: Option<NonSendMut<UiScript>>,
     mut items: ResMut<Items>,
@@ -462,7 +463,17 @@ pub(super) fn feed_item_stats(
     }
 
     pending.extend(items.take_fresh());
-    pending.extend(script.take_item_stat_asks());
+    for id in script.take_item_stat_asks() {
+        items.template(id, 0, Ask::Event(&commands));
+        pending.insert(id);
+    }
+    // A read the cache misses has nothing to push; a later landing pushes it unprompted.
+    pending.extend(
+        script
+            .take_item_stat_reads()
+            .into_iter()
+            .filter(|&id| items.template_cached(id).is_some()),
+    );
     if spell_mods.is_changed() || reads_changed {
         pending.extend(mod_sensitive.iter().copied());
     }
@@ -475,7 +486,7 @@ pub(super) fn feed_item_stats(
     let ready: Vec<u32> = pending
         .iter()
         .copied()
-        .filter(|&id| items.template(id, 0, Ask::New(&commands)).is_some())
+        .filter(|&id| items.template_cached(id).is_some())
         .collect();
     // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs mutably.
     let views: Vec<(u32, benilla_ui::script::ItemTemplateView)> = {
@@ -491,7 +502,7 @@ pub(super) fn feed_item_stats(
             .into_iter()
             .filter_map(|id| {
                 pending.remove(&id);
-                let t = items.template(id, 0, Ask::New(&commands))?.clone();
+                let t = items.template_cached(id)?.clone();
                 if item_has_mod_tokens(&t, spell_res) {
                     mod_sensitive.insert(id);
                 } else {
@@ -2310,5 +2321,63 @@ mod tests {
         let male = super::token_reads(Some(&store(4 | 1 << 8)));
         assert_ne!(super::token_reads(Some(&store(4 | 1 << 8 | 1 << 16))), male);
         assert_eq!(super::token_reads(Some(&store(1 | 2 << 8 | 1 << 24))), male);
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use bevy::prelude::*;
+
+    use crate::items::Items;
+    use crate::net::NetCommands;
+
+    /// A miss the VM asks for is the getter's lookup with a callback: it queries, a frame between
+    /// asks queries nothing, and the next ask queries a refused id again. A miss `GetItemInfo`
+    /// reads never queries (`0x48e172`).
+    #[test]
+    fn a_refused_template_is_asked_by_the_next_getter_and_never_by_get_item_info() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .add_systems(Update, super::feed_item_stats);
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        let run = |app: &mut App, lua: &str| {
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .run(lua)
+                .unwrap();
+            app.update();
+        };
+        run(&mut app, "GetItemInfo(25)");
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "a read asks nothing"
+        );
+        let ask = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .ask_item_templates([25]);
+            app.update();
+        };
+        ask(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(25, None);
+        for _ in 0..600 {
+            run(&mut app, "GetItemInfo(25)");
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame or read asks a refusal"
+        );
+        ask(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next getter asks again"
+        );
     }
 }
