@@ -1,7 +1,15 @@
-//! Which terrain the mover may resolve against: the reference's world triangle query fails, and
-//! the mover's substep is skipped, unless every terrain chunk under the swept box is loaded
-//! (`0x6aa8b0` → `0x6aadc0`). [`publish_terrain_residency`] writes the tiles that qualify each
-//! frame, after the attaches, and [`TerrainResidency::box_resident`] answers for a box.
+//! Which terrain the mover may resolve against. The reference's world triangle query `0x6aa8b0`
+//! fails, and the mover's substep is skipped, on any of three legs: a map object not ready
+//! (`0x6aa90c` → `0x6aaab0`, which `0x6aa913` tests before the one-object branch), a terrain
+//! chunk under the swept box not loaded (`0x6aadc0`), or a doodad in a gathered chunk not ready
+//! (`0x6ab4a1` → `0x6abc40`, 0 at `0x6abcda`). [`publish_terrain_residency`] writes the tiles that
+//! pass the terrain leg each frame, after the attaches, and [`TerrainResidency::box_resident`]
+//! answers for a box.
+//!
+//! Deviation: benilla gates on terrain alone, which is more permissive; the settle hold covers a
+//! building or doodad arriving after a teleport. And an authored tile whose ADT failed to load
+//! counts as resident, where the reference would have loaded it: a permanent wall over a bad file
+//! is worse for a player than walking on without its ground.
 
 use bevy::prelude::*;
 
@@ -19,10 +27,10 @@ const CELLS_PER_YARD: f32 = 0.24;
 #[derive(Resource, Clone, PartialEq, Eq, Debug)]
 pub struct TerrainResidency {
     /// Bit `tile_x` of row `tile_y` (the [`benilla_formats::world_to_tile`] key): the tile is
-    /// spawned and its terrain and fence colliders are attached.
+    /// spawned and its terrain and fence colliders are attached, or its ADT failed to load.
     rows: [u64; 64],
-    /// The map is one object (WDT `MPHD` bit 0, `[0xc9e384]`): its query returns 1 without testing
-    /// terrain (`0x6aa919`), so nothing is ever gated.
+    /// The map is one object (WDT `MPHD` bit 0, `[0xc9e384]`): after the map-object leg its query
+    /// returns 1 without testing terrain (`0x6aa919`), so terrain gates nothing there.
     one_object: bool,
 }
 
@@ -46,7 +54,7 @@ impl TerrainResidency {
         r
     }
 
-    /// A one-object map's residency, which gates nothing.
+    /// A one-object map's residency, whose terrain gates nothing.
     pub fn one_object() -> Self {
         Self {
             one_object: true,
@@ -65,7 +73,7 @@ impl TerrainResidency {
         (0..64).contains(&tx) && (0..64).contains(&ty) && self.rows[ty as usize] & (1 << tx) != 0
     }
 
-    /// The terrain arm of `0x6aa8b0` for the WoW-space box `min..max` (x, y; z is not read): every
+    /// The terrain leg of `0x6aa8b0` for the WoW-space box `min..max` (x, y; z is not read): every
     /// chunk the box's cells touch must be loaded (`0x6aadc0` returns 0 for a null tile at
     /// `0x6aadfa` and a null chunk at `0x6aae1f`), and the box must lie on the grid (`0x6aa967`,
     /// `0x6aa98c`). benilla loads whole tiles, so a chunk is loaded when its tile is resident.
@@ -98,11 +106,13 @@ impl TerrainResidency {
 
 /// Publishes [`TerrainResidency`] at the end of the stream stage, so the next frame's mover reads
 /// the tiles whose colliders are attached by then: a tile counts once its root is spawned and
-/// neither its terrain nor its fence collider is still building. A tile the WDT does not author is
-/// never requested, so never resident.
+/// neither its terrain nor its fence collider is still building, or once its ADT's load failed
+/// (the module's `Deviation:`). A tile the WDT does not author is never requested, so never
+/// resident.
 pub(super) fn publish_terrain_residency(
     state: Res<TerrainStreamer>,
     pending: Query<(), With<PendingCollider>>,
+    asset_server: Res<AssetServer>,
     mut residency: ResMut<TerrainResidency>,
 ) {
     let mut next = TerrainResidency {
@@ -110,7 +120,15 @@ pub(super) fn publish_terrain_residency(
         ..TerrainResidency::default()
     };
     for (&(tx, ty), t) in &state.tiles {
-        let Some(root) = t.entity else { continue };
+        let Some(root) = t.entity else {
+            if matches!(
+                asset_server.load_state(&t.handle),
+                bevy::asset::LoadState::Failed(_)
+            ) {
+                next.insert(tx, ty);
+            }
+            continue;
+        };
         if pending.contains(root) || t.wall.is_some_and(|w| pending.contains(w)) {
             continue;
         }
@@ -178,9 +196,7 @@ mod tests {
     #[test]
     fn a_tile_counts_once_its_colliders_are_attached() {
         use super::super::TileState;
-        let mut app = App::new();
-        app.init_resource::<TerrainResidency>()
-            .add_systems(Update, publish_terrain_residency);
+        let mut app = test_app();
         let pending =
             || PendingCollider::ready(avian3d::prelude::Collider::sphere(1.0), None, true);
         let root = app.world_mut().spawn(pending()).id();
@@ -212,6 +228,51 @@ mod tests {
         assert!(r.tile(32, 48), "spawned with both colliders attached");
         assert!(!r.tile(33, 48), "a tile still being read is not resident");
         assert!(!r.tile(34, 48), "nor is one never requested");
+    }
+
+    /// The publish under a headless asset server, so a tile's load state is real.
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<benilla_assets::AdtTile>()
+            .init_resource::<TerrainResidency>()
+            .add_systems(Update, publish_terrain_residency);
+        app
+    }
+
+    /// An authored tile whose ADT fails to load is walked on, not walled off.
+    #[test]
+    fn a_tile_whose_adt_failed_to_load_counts_as_resident() {
+        use super::super::TileState;
+        let mut app = test_app();
+        let handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<benilla_assets::AdtTile>("no_such_dir/no_such_tile.adt");
+        let mut state = TerrainStreamer::default();
+        state
+            .tiles
+            .insert((32, 48), TileState::requested(handle.clone()));
+        app.insert_resource(state);
+        let failed = |app: &App| {
+            matches!(
+                app.world().resource::<AssetServer>().load_state(&handle),
+                bevy::asset::LoadState::Failed(_)
+            )
+        };
+        for _ in 0..400 {
+            if failed(&app) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.update();
+        }
+        assert!(failed(&app), "the read never failed");
+        app.update();
+        assert!(
+            app.world().resource::<TerrainResidency>().tile(32, 48),
+            "a failed read keeps the old walk-on behaviour"
+        );
     }
 
     #[test]

@@ -373,10 +373,11 @@ pub(crate) struct Player {
     pub(crate) owes_worldport_ack: bool,
     /// `Time::elapsed_secs` when we last sent a heartbeat.
     pub(super) last_heartbeat: f32,
-    /// Milliseconds of movement skipped and not yet sent as `CMSG_MOVE_TIME_SKIPPED`: the settle
-    /// hold's whole sum until its release edge, else the sub-millisecond residue of the world
-    /// query gate's per-frame reports; fractional because it accrues a frame `dt` at a time.
+    /// Milliseconds of movement the settle hold skipped, sent as `CMSG_MOVE_TIME_SKIPPED` on the
+    /// release edge; fractional because it accrues a frame `dt` at a time.
     pub(super) skipped_ms: f32,
+    /// The world query gate's sub-millisecond residue, carried into its next per-frame report.
+    pub(super) gate_skip_ms: f32,
     /// The last mover step was refused by the world query gate ([`super::edge`]), the latch of the
     /// `gate` trace's edges.
     pub(super) gated: bool,

@@ -91,19 +91,26 @@ pub(super) fn step(
     // The world query gate for a body falling into the frame, whose mode at the substep loop is
     // FALLING: a refused query leaves it hanging before anything could land it, its speed and fall
     // clock kept. A knockback is a command ahead of the loop, so it is flown and gated below; the
-    // settle hold and a root run no substep (`0x634100`).
+    // settle hold and a root run no substep (`0x634100`). The air nudge is a command too
+    // (`0x7c6afc`), so it shapes the box and takes effect in the hang.
     if player.airborne_prev && knockback.is_none() && !player.settling && !player.modes.rooted {
+        let nudge = (moving && !player.arc_dirs_set).then(|| dir.normalize_or_zero() * nudge_speed);
         let (_, mean_vy) = fall_step(player.vel_y, dt, terminal);
         let sweep = super::edge::Sweep::Fall {
             drop: -mean_vy * dt,
         };
-        if !super::edge::may_resolve(world, player.pos, player.horiz_vel * dt, sweep) {
+        let horiz = nudge.unwrap_or(player.horiz_vel);
+        if !super::edge::may_resolve(world, player.pos, horiz * dt, sweep) {
+            if nudge.is_some() {
+                player.horiz_vel = horiz;
+                player.arc_dirs_set = true;
+            }
             return Outcome {
                 held: false,
                 grounded: false,
                 jumped: false,
                 knocked: false,
-                air_nudged: false,
+                air_nudged: nudge.is_some(),
                 ground: None,
                 gated: true,
             };
@@ -2602,5 +2609,33 @@ mod tests {
         assert!(falling, "with FALLING on, as the teleport's restarted fall");
         let (y, _) = drop(benilla_world::terrain_stream::TerrainResidency::one_object());
         assert!(y < 45.0, "a one-object map gates nothing: {y}");
+    }
+
+    /// The air nudge is a command ahead of the substep loop (`0x7c6afc`): pressed during a hang it
+    /// takes effect at once, and once only.
+    #[test]
+    fn an_air_nudge_pressed_in_a_hang_takes_effect_at_once() {
+        let (first, second, vel) = world_with_edge(east_half())
+            .world_mut()
+            .run_system_once(|world: benilla_world::collision::WorldCollision| {
+                let mut player = Player {
+                    pos: Vec3::new(-10.0, 50.0, -1.0),
+                    ..Default::default()
+                };
+                // Put down off the grid: a step-off with no keys, then the hang.
+                assert!(frame(&world, &mut player, Vec3::ZERO, false).gated);
+                assert!(frame(&world, &mut player, Vec3::ZERO, false).gated);
+                let first = frame(&world, &mut player, Vec3::Z, false);
+                assert!(first.gated, "still hung");
+                let second = frame(&world, &mut player, Vec3::Z, false).air_nudged;
+                (first.air_nudged, second, player.horiz_vel)
+            })
+            .unwrap();
+        assert!(first, "the nudge fired in the hang");
+        assert!(!second, "and seeded the nibble, so it does not fire again");
+        assert!(
+            (vel - Vec3::Z * AIR_NUDGE_SPEED).length() < 1e-5,
+            "the body carries the nudge's velocity: {vel:?}"
+        );
     }
 }

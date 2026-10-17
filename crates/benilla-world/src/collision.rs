@@ -120,10 +120,11 @@ pub struct WorldCollision<'w, 's> {
 }
 
 impl WorldCollision<'_, '_> {
-    /// Whether the mover's world query over the WoW-space box `min..max` (x, y) would complete:
-    /// the reference's `0x6721b0` returns its terrain gather's result, 0 unless every chunk under
-    /// the box is loaded ([`crate::terrain_stream::TerrainResidency::box_resident`]), and the
-    /// substep loop then resolves nothing (`0x634154`). An app with no streamer gates nothing.
+    /// Whether the terrain leg of the mover's world query over the WoW-space box `min..max` (x, y)
+    /// would complete: the reference's `0x6721b0` returns its gather's result, which is 0 when a
+    /// chunk under the box is not loaded ([`crate::terrain_stream::TerrainResidency::box_resident`],
+    /// whose module names the legs not built), and the substep loop then resolves nothing
+    /// (`0x634154`). An app with no streamer gates nothing.
     pub fn terrain_resident(&self, min: [f32; 2], max: [f32; 2]) -> bool {
         self.residency
             .as_deref()

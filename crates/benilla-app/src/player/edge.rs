@@ -1,8 +1,9 @@
 //! The world query gate ahead of the player's resolvers. Each substep the reference grows a swept
-//! box (`0x633840`) and gathers the world inside it; when that query fails because a terrain chunk
-//! under the box is not loaded (`0x6aa8b0`), the substep loop reports the time skipped and resolves
-//! nothing (`0x634154 je 0x6342a3`). Where the WDT authors no tile, the world's edge, that holds
-//! the body like a wall, and a body already falling hangs with FALLING kept.
+//! box (`0x633840`) and gathers the world inside it; when that query fails, as it does when a
+//! terrain chunk under the box is not loaded (`0x6aa8b0`), the substep loop reports the time
+//! skipped and resolves nothing (`0x634154 je 0x6342a3`). Where the WDT authors no tile, the
+//! world's edge, that holds the body like a wall, and a body already falling hangs with FALLING
+//! kept. Only the terrain leg is built ([`benilla_world::terrain_stream::TerrainResidency`]).
 
 use bevy::prelude::*;
 
@@ -14,7 +15,7 @@ use super::{CAPSULE_RADIUS, STEP_UP_HEIGHT};
 const TAN_50: f32 = 1.191_753_6;
 /// The skin every face of the box moves out by (`0x3ab60b61`, 1/720, applied at `0x633b14`).
 const SKIN: f32 = 1.0 / 720.0;
-/// Below this travel the direction is zero (`0x35800000`, 2^-20, at `0x6340a6`).
+/// Below this travel the direction is zero (`0x35800000`, 2^-20: `0x6340af fcomp [0x8026bc]`, `0x6340ba jnp`).
 const MIN_TRAVEL: f32 = 1.0 / 1_048_576.0;
 
 /// Which growth rule the swept box takes, the first matching mode of `0x633840`.

@@ -304,24 +304,23 @@ pub(super) fn stream_self_movement(
 /// because it stands in for the reference's blocking load (`0x694920`), not a refused substep,
 /// and lasts seconds.
 fn stream_skipped_time(sender: &Sender<ClientCommand>, player: &mut Player, skip: SkipClock) {
-    if skip.held || skip.gated {
-        player.skipped_ms += skip.dt * 1000.0;
-    }
     if skip.held {
+        player.skipped_ms += skip.dt * 1000.0;
         return;
     }
-    // Whole ms: a gated frame keeps the residue for the next, a release edge drops it.
-    let lag_ms = player.skipped_ms as u32;
-    player.skipped_ms = if skip.gated {
-        player.skipped_ms - lag_ms as f32
-    } else {
-        0.0
-    };
+    // The release edge's whole hold, in whole ms; its residue is dropped.
+    let held_ms = player.skipped_ms as u32;
+    player.skipped_ms = 0.0;
+    // A gated frame's own time, in whole ms, its residue carried to the next.
+    let mut gated_ms = 0;
+    if skip.gated {
+        player.gate_skip_ms += skip.dt * 1000.0;
+        gated_ms = player.gate_skip_ms as u32;
+        player.gate_skip_ms -= gated_ms as f32;
+    }
+    let lag_ms = held_ms + gated_ms;
     if lag_ms == 0 {
         return;
-    }
-    if skip.gated {
-        player.last_heartbeat += lag_ms as f32 / 1000.0;
     }
     let Some(guid) = skip.mover else {
         return;
@@ -330,6 +329,8 @@ fn stream_skipped_time(sender: &Sender<ClientCommand>, player: &mut Player, skip
     // against `[0xc4da98]`/`[0xc4da9c]`); we name only the one we drive.
     super::move_trace::skipped_time(guid, lag_ms);
     let _ = sender.send(ClientCommand::MoveTimeSkipped { guid, lag_ms });
+    // The deadline push follows a send (`0x615b02`, behind `0x600be0`), by the gated time alone.
+    player.last_heartbeat += gated_ms as f32 / 1000.0;
 }
 
 /// Sends one flag-less `MSG_MOVE_STOP` when the controller stops driving the avatar (free-fly),
@@ -497,6 +498,44 @@ mod tests {
             "the heartbeat deadline moved by the time sent (`0x615b02`): {}",
             player.last_heartbeat
         );
+    }
+
+    #[test]
+    fn a_gated_release_frame_sends_the_hold_and_pushes_by_its_own_time_only() {
+        const MOVER: u64 = 0x0000_0000_0000_002a;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let frame = |held: bool, gated: bool| SkipClock {
+            dt: 0.5,
+            held,
+            gated,
+            mover: Some(MOVER),
+        };
+        for _ in 0..4 {
+            stream_skipped_time(&tx, &mut player, frame(true, false));
+        }
+        // The release frame is itself gated: 2 s held, 0.5 s refused.
+        stream_skipped_time(&tx, &mut player, frame(false, true));
+        match rx.try_recv().expect("the release reports") {
+            ClientCommand::MoveTimeSkipped { lag_ms, .. } => assert_eq!(lag_ms, 2500),
+            other => panic!("expected MoveTimeSkipped, got {other:?}"),
+        }
+        assert!(
+            (player.last_heartbeat - 0.5).abs() < 1e-6,
+            "the deadline moves by the gated frame's 500 ms, not the hold's: {}",
+            player.last_heartbeat
+        );
+        // With no mover named nothing is sent, so nothing is pushed.
+        let mut unnamed = Player::default();
+        let gated = SkipClock {
+            dt: 0.5,
+            held: false,
+            gated: true,
+            mover: None,
+        };
+        stream_skipped_time(&tx, &mut unnamed, gated);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(unnamed.last_heartbeat, 0.0, "no send, no push");
     }
 
     #[test]
