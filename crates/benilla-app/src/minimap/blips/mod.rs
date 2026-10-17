@@ -44,7 +44,7 @@ use benilla_ui::script::UiScript;
 
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
-use crate::net::{Embodied, Guid, GuidIndex, NetEntity, ObjectStore, SelfPlayer};
+use crate::net::{Embodied, Guid, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
@@ -410,6 +410,7 @@ pub(super) fn drive_blip_tooltip(
     hover: Res<MinimapBlipHover>,
     names: Res<NameCache>,
     objects: crate::net::Objects,
+    commands: Res<NetCommands>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -420,10 +421,20 @@ pub(super) fn drive_blip_tooltip(
     let show = match &*hover {
         MinimapBlipHover::None => None,
         MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
-        // The hover only reads: its lookup passes no callback (`0x4eb33c`).
-        MinimapBlipHover::Npc(npc, grey) => names
-            .resolve(&objects, *npc, Ask::Read)
-            .map(|n| (n.to_string(), *grey)),
+        // A live object names itself through its name method (`0x4eb31a`, vtable slot 28,
+        // `GetUnitName` with a callback), which every probe runs, so a refused name is asked
+        // again about once per answer; a guid with no object only reads (`0x4eb33c`), and so does
+        // a creature's record (`0x60934b`).
+        MinimapBlipHover::Npc(npc, grey) => {
+            let ask = if objects.store(*npc).is_some() {
+                Ask::Event(&commands)
+            } else {
+                Ask::Read
+            };
+            names
+                .resolve(&objects, *npc, ask)
+                .map(|n| (n.to_string(), *grey))
+        }
         MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
     };
     match (show, script.minimap_blip()) {
