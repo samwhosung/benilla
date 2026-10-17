@@ -87,6 +87,9 @@ struct ActiveRoll {
     /// How long the roll has waited for its item template.
     held_ms: u32,
     phase: Phase,
+    /// The start packet's lookup of the item, with the callback `0x61b460` (`0x61b40e`), is made:
+    /// the frames after only read, as the getters do (`0x4c30d2`).
+    asked: bool,
 }
 
 /// One queued chat announcement, awaiting the names it needs.
@@ -141,6 +144,7 @@ impl LootRolls {
             remaining_ms: p.countdown_ms,
             held_ms: 0,
             phase: Phase::Waiting,
+            asked: false,
         });
     }
 
@@ -419,7 +423,7 @@ fn render(
     self_guid: Option<u64>,
     items: &Items,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
     detailed: bool,
 ) -> Option<String> {
@@ -429,7 +433,7 @@ fn render(
         RollLine::Won(p) => (p.item_id, p.random_property_id, Some(p.winner)),
         RollLine::AllPassed(p) => (p.item_id, p.random_property_id, None),
     };
-    let t = items.template(looted_item, 0, Ask::New(commands))?;
+    let t = items.template(looted_item, 0, ask)?;
     // The link names the rolled drop, suffix included, as the roll frame does.
     let link = crate::ui_items::item_link_full(
         looted_item,
@@ -449,7 +453,7 @@ fn render(
         RollLine::AllPassed(_) => false,
     };
     let name = match roller {
-        Some(g) if needs_name => Some(names.resolve_player(g, Ask::New(commands))?.to_string()),
+        Some(g) if needs_name => Some(names.resolve_player(g, ask)?.to_string()),
         _ => None,
     };
 
@@ -475,9 +479,10 @@ fn drain_lines(
         if !detailed && matches!(p.line, RollLine::Announce(_)) {
             continue;
         }
-        match render(
-            &p.line, self_guid, items, names, commands, catalogs, detailed,
-        ) {
+        // The packet's lookups pass callbacks (`0x61c047`, `0x61c08e`, `0x61b96a`, `0x61b5c0`):
+        // a line's first render asks, its retries read.
+        let ask = Ask::at(p.tries == 0, commands);
+        match render(&p.line, self_guid, items, names, ask, catalogs, detailed) {
             Some(text) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),
             None => {
                 p.tries += 1;
@@ -495,14 +500,13 @@ fn snapshot(
     rolls: &LootRolls,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
     catalogs: crate::items::RollCatalogs,
 ) -> LootRollsState {
     let entries = rolls
         .active
         .iter()
         .map(|r| {
-            let t = items.template(r.item_id, 0, Ask::New(commands));
+            let t = items.template(r.item_id, 0, Ask::Read);
             let texture = t
                 .and_then(|t| icons?.catalog.get(t.display_info_id))
                 .and_then(|d| d.icon.clone());
@@ -571,8 +575,12 @@ fn feed_loot_rolls(
         loot.show_loot_spam,
     );
 
+    for r in rolls.active.iter_mut().filter(|r| !r.asked) {
+        items.template(r.item_id, 0, Ask::Event(&commands));
+        r.asked = true;
+    }
     // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from it.
-    let fresh = snapshot(&rolls, &items, icons.as_deref(), &commands, catalogs);
+    let fresh = snapshot(&rolls, &items, icons.as_deref(), catalogs);
     if fresh != *last {
         script.set_loot_rolls(fresh.clone());
         *last = fresh;
@@ -581,7 +589,7 @@ fn feed_loot_rolls(
     // The hold: a fresh roll reaches `0x61b430` once its template is in the snapshot above, and
     // takes a free slot or is deferred.
     rolls.reach_ready(|r| {
-        if items.template(r.item_id, 0, Ask::New(&commands)).is_none() {
+        if items.template(r.item_id, 0, Ask::Read).is_none() {
             // The module doc's deviation: an entry the server does not know, or an expired hold.
             let unknown = items.template_answered_unknown(r.item_id);
             if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {
@@ -1054,6 +1062,38 @@ mod tests {
             .unwrap();
         app.insert_non_send_resource(script);
         (app, rx)
+    }
+
+    /// The start packet looks its item up with the callback `0x61b460` (`0x61b40e`); the frames
+    /// its roll waits through read, as `GetLootRollItemInfo` does (`0x4c30d2`). A refused item is
+    /// asked by no frame after it, only by the next start.
+    #[test]
+    fn a_refused_roll_item_is_asked_by_the_next_start_never_by_a_frame() {
+        let (mut app, rx) = hold_app();
+        let begin = |app: &mut App, slot: u32| {
+            app.world_mut()
+                .resource_mut::<LootRolls>()
+                .start(start(0x42, slot, ROLLED));
+            app.update();
+        };
+        begin(&mut app, 0);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(ROLLED, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        begin(&mut app, 1);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next start asks again"
+        );
     }
 
     /// `rollID:rollTime:name` for each `START_LOOT_ROLL` seen so far, in order.

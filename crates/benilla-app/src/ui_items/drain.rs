@@ -680,7 +680,7 @@ pub(crate) fn send_container_move(
             let slot0 = u8::try_from(item_slot.saturating_sub(1)).unwrap_or(0);
             let guid = store.and_then(|s| slot_guid(&s.0, item_bag, slot0, objects));
             if let Some(guid) = guid {
-                if gate.equip_binds(script, objects, items, commands, guid) {
+                if gate.equip_binds(script, objects, items, guid) {
                     gate.defer_equip(
                         script,
                         crate::ui_bind_confirm::PendingEquip::Swap {

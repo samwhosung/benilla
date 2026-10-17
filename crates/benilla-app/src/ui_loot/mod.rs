@@ -110,6 +110,9 @@ pub(crate) struct LootState {
     /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them. The flag
     /// marks a window source's, owed only while the guid resolves as a live item object.
     item_unlocks: Vec<(u64, bool)>,
+    /// A response the feed has not read: its copier looks every row up with the callback
+    /// `0x4c2ac0` (`0x4c1e77`); the frames after it read, as the row getters do (`0x4c241d`).
+    opened: bool,
 }
 
 /// The client's candidate array: 40 slots at `0xc4dc38`, bound-checked by the getter `0x61c660`.
@@ -147,6 +150,7 @@ impl LootState {
         self.loot_type = loot_type;
         self.fishing = loot_type == benilla_protocol::messages::loot_type::FISHING;
         self.master_candidates = std::mem::take(&mut self.pending_master_candidates);
+        self.opened = true;
     }
 
     /// Stages a list for the next open; an open window takes it at once, as a refresh.
@@ -502,10 +506,10 @@ fn resolve_item(
     item: &LootItem,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     rolls: RollCatalogs,
 ) -> LootRow {
-    let (name, quality, link) = match items.template(item.item_id, 0, Ask::New(commands)) {
+    let (name, quality, link) = match items.template(item.item_id, 0, ask) {
         Some(t) => {
             // The rolled name: the reference composes every display of it through `0x5d8b00`.
             let name = rolls.name(&t.name, item.random_property_id);
@@ -558,7 +562,7 @@ fn snapshot(
     loot: &LootState,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     rolls: RollCatalogs,
     who: Candidates,
 ) -> Option<LootSnapshot> {
@@ -580,8 +584,7 @@ fn snapshot(
     }
     for it in &loot.items {
         rows.push(
-            (!loot.taken.contains(&it.slot))
-                .then(|| resolve_item(it, items, icons, commands, rolls)),
+            (!loot.taken.contains(&it.slot)).then(|| resolve_item(it, items, icons, ask, rolls)),
         );
     }
     Some(LootSnapshot {
@@ -665,8 +668,14 @@ fn drain_receives(
     let pending = std::mem::take(&mut loot.receives);
     let mut still = Vec::new();
     for mut r in pending {
+        // The push's lookup with the callback `0x491ee0` (`0x491b05`); its retries read.
+        let ask = if r.tries == 0 {
+            Ask::Event(commands)
+        } else {
+            Ask::Read
+        };
         let resolved = items
-            .template(r.entry, 0, Ask::New(commands))
+            .template(r.entry, 0, ask)
             .map(|t| (t.name.clone(), t.quality, t.display_info_id));
         match resolved {
             Some((name, quality, display_id)) => {
@@ -767,7 +776,12 @@ fn feed_loot(
         group: &group,
         names: &names,
     };
-    let fresh = snapshot(&loot, &items, icons.as_deref(), &commands, rolls, who).map(|mut snap| {
+    let ask = if std::mem::take(&mut loot.opened) {
+        Ask::Event(&commands)
+    } else {
+        Ask::Read
+    };
+    let fresh = snapshot(&loot, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
         snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
         snap
     });
@@ -847,7 +861,7 @@ fn sweep_rows(
                 item_id,
                 slot_type,
             }) if slot_type == slot_type::ALLOW_LOOT => {
-                if bind_confirm_required(items, commands, item_id) {
+                if bind_confirm_required(items, item_id) {
                     if bind_confirm_fired {
                         continue;
                     }
@@ -871,9 +885,9 @@ fn sweep_rows(
 
 /// Whether a take must raise `LOOT_BIND_CONFIRM` first (`0x4c28f2`/`0x4c28fb`): bind on pickup
 /// and uncommon or better. An unresolved template answers false, as the reference's cache peek.
-fn bind_confirm_required(items: &Items, commands: &NetCommands, item_id: u32) -> bool {
+fn bind_confirm_required(items: &Items, item_id: u32) -> bool {
     items
-        .template(item_id, 0, Ask::New(commands))
+        .template(item_id, 0, Ask::Read)
         .is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP && t.quality >= BIND_CONFIRM_MIN_QUALITY)
 }
 
@@ -1080,7 +1094,7 @@ fn drain_loot(
             }) => {
                 // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`): stash the row, fire the
                 // event, send nothing, not even the pickup sound.
-                if bind_confirm_required(&items, &commands, item_id) {
+                if bind_confirm_required(&items, item_id) {
                     debug!("ui_loot: row {index} (wire {wire_slot}) binds on pickup — confirming");
                     loot.pending_bind_confirm = Some(index);
                     script.fire_event(
@@ -2215,7 +2229,7 @@ mod tests {
             &loot,
             &items,
             None,
-            &commands,
+            Ask::Event(&commands),
             RollCatalogs::NONE,
             Candidates {
                 group: &grp,
@@ -2241,7 +2255,7 @@ mod tests {
             &loot,
             &items,
             None,
-            &commands,
+            Ask::Event(&commands),
             RollCatalogs::NONE,
             Candidates {
                 group: &grp,
@@ -2254,7 +2268,7 @@ mod tests {
             &loot,
             &items,
             None,
-            &commands,
+            Ask::Event(&commands),
             RollCatalogs::NONE,
             Candidates {
                 group: &grp,
@@ -2279,7 +2293,7 @@ mod tests {
             &loot,
             &items,
             None,
-            &commands,
+            Ask::Event(&commands),
             RollCatalogs::NONE,
             Candidates {
                 group: &grp,
@@ -2296,7 +2310,7 @@ mod tests {
             &loot,
             &items,
             None,
-            &commands,
+            Ask::Event(&commands),
             RollCatalogs::NONE,
             Candidates {
                 group: &grp,
@@ -2637,6 +2651,42 @@ mod tests {
             .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
             .add_systems(Update, feed_loot);
         (app, rx)
+    }
+
+    /// The response's copier looks every row up with the callback `0x4c2ac0` (`0x4c1e77`); the
+    /// frames the window waits through read, as the row getters do (`0x4c241d`). A refused row is
+    /// asked by no frame after it, only by the next response.
+    #[test]
+    fn a_refused_loot_row_is_asked_by_the_next_response_never_by_a_frame() {
+        let (mut app, rx) = sweep_loot_app();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let row = LootItem {
+            slot: 0,
+            item_id: 955,
+            count: 1,
+            display_info_id: 0,
+            random_property_id: 0,
+            slot_type: slot_type::ALLOW_LOOT,
+        };
+        let open = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<LootState>()
+                .open(CORPSE, 1, 0, vec![row]);
+            app.update();
+        };
+        let asked =
+            |rx: &crossbeam_channel::Receiver<ClientCommand>| crate::query_cache::queries(rx).len();
+        open(&mut app);
+        assert_eq!(asked(&rx), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(955, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(asked(&rx), 0, "no frame asks a refusal");
+        open(&mut app);
+        assert_eq!(asked(&rx), 1, "the next response asks again");
     }
 
     const EVENTS: [&str; 2] = ["LOOT_OPENED", "LOOT_CLOSED"];

@@ -778,9 +778,9 @@ pub(crate) fn send_item_use(
         // are on-use spell lookup failures, so the reference asks with no usable on-use spell.
         ItemUseRoute::Nothing | ItemUseRoute::Cast(_)
             if !suppress
-                && it.guid.is_some_and(|g| {
-                    gate.use_binds(&ladder.objects, &ladder.items, &ladder.commands, g)
-                }) =>
+                && it
+                    .guid
+                    .is_some_and(|g| gate.use_binds(&ladder.objects, &ladder.items, g)) =>
         {
             gate.defer_use(script, it);
             false

@@ -112,6 +112,9 @@ fn feed_craft(
         return;
     };
     let last = last.get(&script);
+    // The show stands for the stock frame's getter calls, whose lookups pass the callback
+    // `0x4f7710` (`0x4f75f2`, `0x4f7a0a`); the rebuilds between read.
+    let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
     let fresh = (|| -> Option<CraftState> {
         let line = open.line?;
         let craft_type = open.craft_type;
@@ -160,7 +163,7 @@ fn feed_craft(
                 for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
                     let have = count_of(&store.0, &objects, entry, InventoryScope::DEFAULT);
                     // A reagent's icon is the shared item chain (`0x5d88b0`) through its display.
-                    let (name, icon) = match items.template(entry, 0, Ask::New(&commands)) {
+                    let (name, icon) = match items.template(entry, 0, ask) {
                         Some(t) => (
                             Some(t.name.clone()),
                             item_icon(icons.as_deref(), t.display_info_id),
@@ -192,7 +195,7 @@ fn feed_craft(
                 }
                 for &t in d.totems.iter().filter(|&&t| t != 0) {
                     let have = count_of(&store.0, &objects, t, InventoryScope::DEFAULT) > 0;
-                    if let Some(info) = items.template(t, 0, Ask::New(&commands)) {
+                    if let Some(info) = items.template(t, 0, ask) {
                         tools.push((info.name.clone(), have));
                     }
                 }

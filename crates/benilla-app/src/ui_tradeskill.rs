@@ -225,13 +225,13 @@ fn recipe_icon(
     d: &benilla_formats::SpellDisplay,
     icons: Option<&ItemDisplays>,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<String> {
     let item = d.effect_item_type[0];
     if item == 0 {
         return None;
     }
-    let display = items.template(item, 0, Ask::New(commands))?.display_info_id;
+    let display = items.template(item, 0, ask)?.display_info_id;
     item_icon(icons, display)
 }
 
@@ -247,7 +247,7 @@ fn resolve_recipe(
     store: &ObjectStore,
     objects: &Objects,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     cooldowns: &crate::spell::Cooldowns,
     now: Instant,
 ) -> Option<TradeSkillRecipe> {
@@ -259,7 +259,7 @@ fn resolve_recipe(
     let mut num_available = u32::MAX;
     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
         let have = count_of(&store.0, objects, entry, InventoryScope::DEFAULT);
-        let (name, icon) = match items.template(entry, 0, Ask::New(commands)) {
+        let (name, icon) = match items.template(entry, 0, ask) {
             Some(t) => (Some(t.name.clone()), item_icon(icons, t.display_info_id)),
             None => (None, None),
         };
@@ -288,22 +288,20 @@ fn resolve_recipe(
     } else {
         (0, 1, 1)
     };
-    let icon = recipe_icon(d, icons, items, commands);
+    let icon = recipe_icon(d, icons, items, ask);
     // The header key (`0x4fca20`): the product's `(class, subclass)` named from
     // `ItemSubClass.dbc`, `None` while its template is in flight, as in the client. The same
     // template gives the `InventoryType` the slot filter reads and the `ItemLevel` the sort
     // breaks ties on (`record+0x14`).
     let (group, product_inv_type, product_item_level) = (product_item != 0)
         .then(|| {
-            items
-                .template(product_item, 0, Ask::New(commands))
-                .map(|t| {
-                    let name = subclasses
-                        .and_then(|sc| sc.0.name(t.class, t.subclass))
-                        .unwrap_or_default()
-                        .to_string();
-                    ((t.class, t.subclass, name), t.inventory_type, t.item_level)
-                })
+            items.template(product_item, 0, ask).map(|t| {
+                let name = subclasses
+                    .and_then(|sc| sc.0.name(t.class, t.subclass))
+                    .unwrap_or_default()
+                    .to_string();
+                ((t.class, t.subclass, name), t.inventory_type, t.item_level)
+            })
         })
         .flatten()
         .map_or((None, 0, 0), |(g, it, il)| (Some(g), it, il));
@@ -319,7 +317,7 @@ fn resolve_recipe(
     }
     for &t in d.totems.iter().filter(|&&t| t != 0) {
         let have = count_of(&store.0, objects, t, InventoryScope::DEFAULT) > 0;
-        if let Some(info) = items.template(t, 0, Ask::New(commands)) {
+        if let Some(info) = items.template(t, 0, ask) {
             tools.push((info.name.clone(), have));
         }
     }
@@ -364,6 +362,10 @@ fn feed_trade_skill(
         return;
     };
     let last = last.get(&script);
+    // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
+    // window's show; the rebuilds between read, as the getters' lookups stand for the stock
+    // frame's calls (`0x4fdba8`), which the asks below make.
+    let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
     let fresh = (|| -> Option<TradeSkillState> {
         let line = open.line?;
         let spells = spells.as_deref()?;
@@ -398,7 +400,7 @@ fn feed_trade_skill(
                     store,
                     &objects,
                     &items,
-                    &commands,
+                    ask,
                     &cooldowns,
                     now,
                 )
@@ -552,7 +554,7 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, &deps.commands),
+            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands)),
             Some("ITEM".into()),
         );
     }
@@ -564,7 +566,7 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_ENCHANT_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, &deps.commands),
+            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands)),
             Some("ITEM".into()),
         );
     }
@@ -578,25 +580,38 @@ mod tests {
         // EffectItemType[0] == 0: 0x55ba30 short-circuits on a zero id before hashing.
         let none = recipe(SPELL_EFFECT_ENCHANT_ITEM, 0);
         assert_eq!(
-            recipe_icon(&none, Some(&icons), &deps.items, &deps.commands),
+            recipe_icon(&none, Some(&icons), &deps.items, Ask::New(&deps.commands)),
             None,
         );
 
         // A template that never lands: nil, asked for once.
         let missing = recipe(SPELL_EFFECT_CREATE_ITEM, 999);
         assert_eq!(
-            recipe_icon(&missing, Some(&icons), &deps.items, &deps.commands),
+            recipe_icon(
+                &missing,
+                Some(&icons),
+                &deps.items,
+                Ask::New(&deps.commands)
+            ),
             None,
         );
         assert_eq!(
-            recipe_icon(&missing, Some(&icons), &deps.items, &deps.commands),
+            recipe_icon(
+                &missing,
+                Some(&icons),
+                &deps.items,
+                Ask::New(&deps.commands)
+            ),
             None,
         );
         assert_eq!(deps.queried_entries(), vec![999], "ask-once, not ask-often");
 
         // Template landed, `ItemDisplayInfo` missing: still nil.
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
-        assert_eq!(recipe_icon(&d, None, &deps.items, &deps.commands), None);
+        assert_eq!(
+            recipe_icon(&d, None, &deps.items, Ask::New(&deps.commands)),
+            None
+        );
     }
 
     /// `0x4fccfc` counts a reagent with `0x622130` and `0x4ffb10` finds a tool with `0x622270`,
@@ -687,7 +702,7 @@ mod tests {
                     &store,
                     objects,
                     items,
-                    commands,
+                    Ask::New(commands),
                     &cooldowns,
                     Instant::now(),
                 )
