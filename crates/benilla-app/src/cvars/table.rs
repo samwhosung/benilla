@@ -561,9 +561,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // ([`Cvars::addon_version_check`]) and live by the VM's gate.
     same("checkAddonVersion", "1"),
     // `scriptMemory` (`0x402e63`: name `0x82e81c`, "49152" `0x82e858`, category 4, record
-    // `0x882654`): the Lua heap cap in KB, shown in MB by the glue AddOns screen
-    // (`GetScriptMemory 0x46da10`, `SetScriptMemory 0x46da50`). Deviation: nothing caps the heap
-    // here; the row holds what the screen's box was set to.
+    // `0x882654`): the Lua state's limit in KB, shown in MB by the glue AddOns screen
+    // (`GetScriptMemory 0x46da10`, `SetScriptMemory 0x46da50`) and watched each frame in the
+    // world (`0x495599`), [`crate::ui_memory`].
     same("scriptMemory", "49152"),
     // `gxApi` (`0x63a833`: name `0x842a64`, default `0x864f7c` "direct3d", flags 3, callback
     // `0x63b030`, record `[0xc4ea94]`): the reference builds D3D9 unless it reads "OpenGl"

@@ -1920,15 +1920,6 @@ mod tests {
                  benilla's gossip feed carries no code-entry option kind yet",
             ),
             (
-                "MEMORY_EXHAUSTED",
-                "UIParent.lua — the client's own out-of-memory dialog; benilla's allocator \
-                 failure is a Rust abort, not a Lua event",
-            ),
-            (
-                "MEMORY_RECOVERED",
-                "UIParent.lua — the other half of MEMORY_EXHAUSTED",
-            ),
-            (
                 "PLAYER_SKINNED",
                 "UIParent.lua — the corpse-skinned notice; benilla's loot feed does not derive it",
             ),
