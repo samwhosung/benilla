@@ -355,9 +355,9 @@ b]])"#),
         end
         return table.concat(o, " ")"#),
     // ── fix-front: the single-pass front end, 5.1.5's `lparser.c` and `lcode.c` ──
-    // 5.0's `OP_SETLIST` stores every 32 items (`0x6fd6d0`), each by `luaH_setnum` (`0x6f95b1`)
-    // into the array part `OP_NEWTABLE` sized, and a trailing call counts as one item toward that
-    // size (`0x6fd72b`).
+    // 5.0's parser flushes a constructor's items every 32 (`closelistfield`, `0x6fd6d0`), and
+    // `OP_SETLIST` stores each by `luaH_setnum` (`0x6f95b1`) into the array part `OP_NEWTABLE`
+    // sized; a trailing call counts as one item toward that size (`0x6fd72b`).
     ("fix-front_setlist_order", r#"local function K(t) local o = {} for k in pairs(t) do table.insert(o, tostring(k)) end return table.concat(o, " ") end
         local function list(n) local o = {} for i = 1, n do o[i] = i end return table.concat(o, ",") end
         local function f() return 1, 2, 3 end
