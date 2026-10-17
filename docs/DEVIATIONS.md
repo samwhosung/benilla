@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 226
+- [benilla-app](#benilla-app): 227
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
@@ -37,7 +37,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 113
-- [benilla-world](#benilla-world): 48
+- [benilla-world](#benilla-world): 49
 
 ### benilla-app
 
@@ -196,8 +196,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `ResetView` writes the CVars back to their defaults, because the CVar store is our persistence; the reference (`0x50fae0`) touches no CVar, so its reset reverts at next launch. ([`src/player/camera_view.rs:15`](../crates/benilla-app/src/player/camera_view.rs#L15))
 - The starting zoom, `CAM_DIST_DEFAULT`, is 15 yd where the reference's `cameraDistance` is 5.55 (`0x84f488`), for a wider view. ([`src/player/camera_zoom.rs:9`](../crates/benilla-app/src/player/camera_zoom.rs#L9))
 - No drunk field-of-view lane, because the reference's is invisible in play: its target `(179° − 90°)·fraction` (camera `+0x10c`, setter `0x511250`) eases at `cameraFoVSmoothSpeed`, 0.5°/s, and restarts on every drunk-byte change, so it creeps under 1°. ([`src/player/drunk.rs:46`](../crates/benilla-app/src/player/drunk.rs#L46))
-- A hold is summed and sent once on release, without the send's `[mgr+0x130] += lag` heartbeat push, because ours lasts seconds where the reference's lasts a substep. ([`src/player/movement_net.rs:299`](../crates/benilla-app/src/player/movement_net.rs#L299))
-- Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:198`](../crates/benilla-app/src/player/state.rs#L198))
+- A settle hold is summed and sent once on release, without the push, because it stands in for the reference's blocking load (`0x694920`), not a refused substep, and lasts seconds. ([`src/player/movement_net.rs:303`](../crates/benilla-app/src/player/movement_net.rs#L303))
+- The reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has no such release; without one, a model that never loads would freeze our body for good. ([`src/player/state.rs:120`](../crates/benilla-app/src/player/state.rs#L120))
+- Root is not merged, because a bare pose unrooting us while the server still roots us streams motion into `CHEAT_TYPE_ROOT_MOVE`; vmangos keeps a rooted mover's root bit (`MovementHandler.cpp:1064`), so the reference's merge of it is a no-op anyway. ([`src/player/state.rs:202`](../crates/benilla-app/src/player/state.rs#L202))
 - Applied at arrival, because our own avatar has no motion to de-jitter; the reference routes it through the replay chain remotes use, which paces to the sender's cadence and can hold an early packet (up to 1000 ms in `net::motion`). ([`src/player/wire_in.rs:413`](../crates/benilla-app/src/player/wire_in.rs#L413))
 
 #### portrait
@@ -828,9 +829,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### terrain_stream
 
-- The debug free-fly eye holds nothing: it is benilla's own tool with no reference counterpart, and a stall there only slows the developer. ([`src/terrain_stream.rs:387`](../crates/benilla-world/src/terrain_stream.rs#L387))
-- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:713`](../crates/benilla-world/src/terrain_stream.rs#L713))
-- A read still loading after `INNER_WAIT_CAP` is given up on with a warning, once per request, and its tile then streams on unwaited like the outer ring, where the reference waits for ever: a hung read costs one capped stall, not one every frame. ([`src/terrain_stream.rs:808`](../crates/benilla-world/src/terrain_stream.rs#L808))
+- The debug free-fly eye holds nothing: it is benilla's own tool with no reference counterpart, and a stall there only slows the developer. ([`src/terrain_stream.rs:390`](../crates/benilla-world/src/terrain_stream.rs#L390))
+- A tile is released only one chunk past the outer window (`StreamWindow::keeps`), where the reference releases by window membership (`0x6984f0`), because our reload is a re-decode and re-spawn, not a cheap async read. ([`src/terrain_stream.rs:719`](../crates/benilla-world/src/terrain_stream.rs#L719))
+- A read still loading after `INNER_WAIT_CAP` is given up on with a warning, once per request, and its tile then streams on unwaited like the outer ring, where the reference waits for ever: a hung read costs one capped stall, not one every frame. ([`src/terrain_stream.rs:814`](../crates/benilla-world/src/terrain_stream.rs#L814))
+- Benilla gates on terrain alone, which is more permissive; the settle hold covers a building or doodad arriving after a teleport. ([`src/terrain_stream/residency.rs:9`](../crates/benilla-world/src/terrain_stream/residency.rs#L9))
 - Tagged per submesh, where the reference tests the whole object, because a placement has no root entity to carry the bound. ([`src/terrain_stream/spawn/mod.rs:229`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L229))
 - The box, where the reference tests its circumsphere (`0x683700` → `0x682ef0` → `0x686b80` on the `[rec+0x5c]` centre and `[rec+0x68]` radius × scale), because Bevy culls by box and the box is tighter. ([`src/terrain_stream/spawn/mod.rs:896`](../crates/benilla-world/src/terrain_stream/spawn/mod.rs#L896))
 - Whole tiles, because benilla loads, spawns and releases ADT tiles, not chunks: a tile is wanted when any of its chunks lies in the outer window, and waited for when any lies in the inner one, so each edge is a tile line where the reference's is a chunk line. ([`src/terrain_stream/window.rs:7`](../crates/benilla-world/src/terrain_stream/window.rs#L7))
