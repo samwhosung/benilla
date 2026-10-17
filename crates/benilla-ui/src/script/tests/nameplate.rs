@@ -1129,7 +1129,7 @@ fn a_global_index_metamethod_may_touch_the_model_during_a_plates_font_lookup() {
     s.run(
         r#"NAMEPLATE_FONT = nil
            hits = 0
-           setmetatable(_G, { __index = function(t, k)
+           setmetatable(getfenv(0), { __index = function(t, k)
                if k == "NAMEPLATE_FONT" then
                    hits = hits + 1
                    CreateFrame("Frame", nil, UIParent):SetWidth(UIParent:GetWidth())

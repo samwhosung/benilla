@@ -708,7 +708,7 @@ mod tests {
         assert!(failures.is_empty(), "the shipped manifest: {failures:#?}");
         let have: std::collections::HashSet<String> = s
             .eval::<Vec<String>>(
-                "local t = {} for k in pairs(_G) do table.insert(t, k) end return t",
+                "local t = {} for k in pairs(getfenv(0)) do table.insert(t, k) end return t",
             )
             .expect("dump _G")
             .into_iter()
@@ -1334,7 +1334,7 @@ mod tests {
         }
         let have: std::collections::HashSet<String> = s
             .eval::<Vec<String>>(
-                "local t = {} for k in pairs(_G) do table.insert(t, k) end return t",
+                "local t = {} for k in pairs(getfenv(0)) do table.insert(t, k) end return t",
             )
             .expect("dump _G")
             .into_iter()

@@ -28,7 +28,7 @@ fn pow_calls_the_global_pow() {
     );
     assert_eq!(
         run(
-            "setmetatable(_G, {__index = function() return math.pow end}) __pow = nil return 2 ^ 3"
+            "setmetatable(getfenv(0), {__index = function() return math.pow end}) __pow = nil return 2 ^ 3"
         ),
         "<raised> t:1: `__pow' (`^' operator) is not a function"
     );

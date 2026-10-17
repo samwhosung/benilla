@@ -108,7 +108,7 @@ fenv	\"env\",true,true,true
 fenv_level	\"set\"
 loadstring	2,nil,\"[string \\\"return +\\\"]:1: unexpected symbol near `+\'\"
 loadstring_name	err named:1: x
-globals	\"table\",\"nil\",\"nil\",\"nil\",\"nil\",\"nil\",\"function\",\"table\",\"function\",\"function\",\"function\"
+globals	\"nil\",\"nil\",\"nil\",\"nil\",\"nil\",\"nil\",\"function\",\"table\",\"function\",\"function\",\"function\"
 type	\"nil\",\"number\",\"string\",\"table\",\"nil\",\"function\",\"boolean\"
 tostring	\"nil\",\"true\",\"12\",\"x\",\"table: \",\"nil\"
 bit	8,14,6,4294967295,16,16,-4,1,1

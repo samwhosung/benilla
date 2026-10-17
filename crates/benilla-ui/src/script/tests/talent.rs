@@ -283,7 +283,7 @@ fn set_talent_reads_the_rank_string_with_the_model_free() {
         local a = CreateFrame("Button", "TB4"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT4", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
-        setmetatable(_G, { __index = function(t, k)
+        setmetatable(getfenv(0), { __index = function(t, k)
             if k == "TOOLTIP_TALENT_RANK" then
                 CreateFrame("Frame"):SetWidth(10)
                 return "[RANK %d/%d]"

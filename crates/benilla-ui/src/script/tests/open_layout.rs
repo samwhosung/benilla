@@ -1,7 +1,7 @@
 //! The script host's state once open lays out its globals and libraries as the client's does
 //! after `0x7039e0`: the host and the dialect replace values under the opening's keys and add
 //! none, so `pairs` walks them in the client's order. Each order is the client's, run in its own
-//! code (benilla-lua's `tests/table_layout.rs`), with benilla's `_G` after `atan`.
+//! code (benilla-lua's `tests/table_layout.rs`).
 
 use super::super::{open_state, VmKind};
 use mlua::benilla_lua::value::{TableRef, V};
@@ -29,7 +29,7 @@ fn the_open_state_lays_out_as_the_clients() {
             assert_eq!(
                 keys_of(vm, g),
                 "log tostring getn format debuginfo frexp pairs max assert tonumber debugbreak \
-                 seterrorhandler atan _G foreach tan cos log10 strupper asin loadstring tinsert \
+                 seterrorhandler atan foreach tan cos log10 strupper asin loadstring tinsert \
                  string xpcall date bit strlen strrep strlower deg table __framescript_meta \
                  strsub random gsub sort strchar debugprofilestart next strbyte sqrt sin ipairs \
                  randomseed mod rawequal rad getglobal PI getmetatable min debugload ceil \

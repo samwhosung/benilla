@@ -1671,7 +1671,7 @@ mod tests {
                    RAID_MEMBERS_AFK = "AFK: %s",
                    READY_CHECK_NO_AFK = "No players are AFK",
                }
-               setmetatable(_G, { __index = function(t, k)
+               setmetatable(getfenv(0), { __index = function(t, k)
                    if text[k] then
                        reads = reads .. k .. ","
                        CreateFrame("Frame"):SetWidth(10)
@@ -1745,8 +1745,8 @@ mod tests {
         s.ready_check_answered(0xA11CE, true);
         model_touching_index(&s);
         s.run(
-            r#"local inner = getmetatable(_G).__index
-               getmetatable(_G).__index = function(t, k)
+            r#"local inner = getmetatable(getfenv(0)).__index
+               getmetatable(getfenv(0)).__index = function(t, k)
                    if k == "RAID_MEMBERS_AFK" then CheckReadyCheckTime() end
                    return inner(t, k)
                end"#,

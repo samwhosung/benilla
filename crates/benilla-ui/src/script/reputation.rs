@@ -869,7 +869,7 @@ mod tests {
     fn a_synthetic_header_reads_its_string_with_the_model_free() {
         let s = seated();
         s.run(
-            r#"setmetatable(_G, { __index = function(t, k)
+            r#"setmetatable(getfenv(0), { __index = function(t, k)
                    if k == "FACTION_OTHER" then
                        CreateFrame("Frame"):SetWidth(10)
                        return "Elsewhere"

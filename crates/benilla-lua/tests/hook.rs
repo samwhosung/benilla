@@ -342,7 +342,7 @@ fn an_abort_leaves_the_handler_globals_restored() {
         run(
             &mut vm,
             "local store = {this = 'outer'} Handler = function() while true do end end \
-             setmetatable(_G, {__index = store, \
+             setmetatable(getfenv(0), {__index = store, \
                __newindex = function(t, k, v) k = tostring(k) store[k] = v end})",
         );
         abort_budget(&mut vm, 10);

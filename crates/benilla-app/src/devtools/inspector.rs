@@ -17,7 +17,7 @@ use super::owners::owners_of;
 use crate::debug_panel::{overlay_text, EguiDemand, OVERLAY_FILL, OVERLAY_TEXT_DIM};
 
 /// The root an inspector opens on: the frame under the cursor, else the globals.
-const OPEN_EXPR: &str = "GetMouseFocus() ~= WorldFrame and GetMouseFocus() or _G";
+const OPEN_EXPR: &str = "GetMouseFocus() ~= WorldFrame and GetMouseFocus() or getfenv(0)";
 /// Children one table lists before it asks for the filter.
 const MAX_CHILDREN: usize = 400;
 /// A string value's preview, in characters.
@@ -308,7 +308,7 @@ fn draw(
             });
             ui.horizontal(|ui| {
                 if ui.small_button("_G").clicked() {
-                    ins.expr = "_G".into();
+                    ins.expr = "getfenv(0)".into();
                     asks.evaluate = true;
                 }
                 ui.add(

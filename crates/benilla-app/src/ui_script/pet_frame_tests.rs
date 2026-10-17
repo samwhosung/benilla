@@ -353,7 +353,7 @@ fn every_leg_of_the_pet_frame_click_reaches_a_live_binding() {
         "SpellTargetUnit",
     ] {
         assert!(
-            s.eval::<bool>(&format!("return _G[\"{global}\"] ~= nil"))
+            s.eval::<bool>(&format!("return getfenv(0)[\"{global}\"] ~= nil"))
                 .unwrap_or(false),
             "{global} is not registered — the pet frame's click calls it"
         );

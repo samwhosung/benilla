@@ -1017,7 +1017,7 @@ pub fn surface() -> Vec<(String, String)> {
         .eval(
             r#"
             local out = {}
-            for k, v in pairs(_G) do
+            for k, v in pairs(getfenv(0)) do
               if type(k) == "string" then
                 out[table.getn(out) + 1] = k .. "\t" .. type(v)
               end
@@ -1402,7 +1402,7 @@ fn globals_of(script: &UiScript) -> BTreeSet<String> {
     script
         .eval::<Vec<String>>(
             "local out = {} \
-             for k in pairs(_G) do if type(k) == 'string' then table.insert(out, k) end end \
+             for k in pairs(getfenv(0)) do if type(k) == 'string' then table.insert(out, k) end end \
              return out",
         )
         .unwrap_or_default()

@@ -219,9 +219,9 @@ do
     debugtimestamp = noop
 end
 
--- ── _G accessors (getglobal/setglobal: _G[name] get/set) ───────────────────────────────
-function getglobal(name) return _G[name] end
-function setglobal(name, value) _G[name] = value end
+-- ── the globals' accessors (getglobal/setglobal: get/set in the thread's globals) ─────
+function getglobal(name) return getfenv(0)[name] end
+function setglobal(name, value) getfenv(0)[name] = value end
 
 -- ── NOT here: wipe / tostringall / strsplit / strjoin / strconcat / strtrim ────────────────────
 -- Six 2.0+ names benilla used to define. 1.12 has none of them (absent from

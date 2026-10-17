@@ -170,10 +170,9 @@ fn keys_of(vm: &benilla_lua::Vm, t: benilla_lua::value::TableRef) -> String {
     keys.join(" ")
 }
 
-/// The client's globals once `0x7039e0` has opened its state, run in its code, then benilla's
-/// `_G`, which lands after `atan` and moves no other key.
+/// The client's globals once `0x7039e0` has opened its state, run in its code.
 pub const OPEN_GLOBALS: &str = "log tostring getn format debuginfo frexp pairs max assert \
-    tonumber debugbreak seterrorhandler atan _G foreach tan cos log10 strupper asin loadstring \
+    tonumber debugbreak seterrorhandler atan foreach tan cos log10 strupper asin loadstring \
     tinsert string xpcall date bit strlen strrep strlower deg table __framescript_meta strsub \
     random gsub sort strchar debugprofilestart next strbyte sqrt sin ipairs randomseed mod \
     rawequal rad getglobal PI getmetatable min debugload ceil tremove acos gcinfo rawset ldexp \

@@ -20,7 +20,7 @@ fn main() -> benilla_ui::mlua::Result<()> {
     // boundary directly, where a `Vec<(String, String)>` does not.
     let mut rows: Vec<String> = script.eval(
         "local out = {} \
-         for k, v in pairs(_G) do \
+         for k, v in pairs(getfenv(0)) do \
            if type(k) == 'string' then table.insert(out, k .. '\\t' .. type(v)) end \
          end \
          return out",

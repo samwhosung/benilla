@@ -159,7 +159,7 @@ const CASES: &[(&str, &str)] = &[
     ("pcall_args", "return S(pcall(function(a, b) return a + b end, 1, 2))"),
     ("nested_pcall", "return E(function() local ok, e = pcall(error, 'inner') error('outer:' .. e, 0) end)"),
     // ── environments ──
-    ("fenv", "local env = {x = 'env'} local function f() return x end setfenv(f, env) return S(f(), getfenv(f) == env, getfenv(0) == _G, getfenv() == _G)"),
+    ("fenv", "local env = {x = 'env'} local function f() return x end setfenv(f, env) return S(f(), getfenv(f) == env, getfenv(0) == getfenv(), getfenv(1) == getfenv())"),
     ("fenv_level", "x = 'global' local function f() setfenv(1, {x = 'set'}) return x end return S(f())"),
     ("loadstring", "local f = loadstring('return 1 + 1') local g, e = loadstring('return +') return S(f(), g, e)"),
     ("loadstring_name", "local f = loadstring('error(\"x\")', '=named') return E(f)"),

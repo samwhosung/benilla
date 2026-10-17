@@ -880,7 +880,7 @@ fn inv_slot_names_are_read_with_the_model_free() {
         .product_inv_type = 16;
     s.set_trade_skill(Some(st));
     s.run(
-        r#"setmetatable(_G, { __index = function(t, k)
+        r#"setmetatable(getfenv(0), { __index = function(t, k)
                if string.find(k, "SLOT$") then
                    CreateFrame("Frame"):SetWidth(10)
                    return "<" .. k .. ">"

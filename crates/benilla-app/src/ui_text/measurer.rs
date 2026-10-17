@@ -252,7 +252,7 @@ mod tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         let long = "Two-Handed Weapon Specialization of the Unyielding Mountain King";
         s.run(&format!(
-            "for _, n in ipairs({{'Capped', 'Whole', 'Spare'}}) do _G[n]:SetText({long:?}) end"
+            "for _, n in ipairs({{'Capped', 'Whole', 'Spare'}}) do getfenv(0)[n]:SetText({long:?}) end"
         ))
         .unwrap();
         s.tick(0.016);

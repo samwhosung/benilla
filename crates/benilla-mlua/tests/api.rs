@@ -27,7 +27,7 @@ fn a_stack_level_names_its_function() {
 #[test]
 fn a_host_index_through_a_bad_index_metamethod_raises() {
     let lua = Lua::new();
-    lua.load("setmetatable(_G, {__index = true})")
+    lua.load("setmetatable(getfenv(0), {__index = true})")
         .exec()
         .unwrap();
     let err = lua.globals().get::<benilla_mlua::Value>("x").unwrap_err();

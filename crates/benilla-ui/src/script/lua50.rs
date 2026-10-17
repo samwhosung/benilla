@@ -913,7 +913,7 @@ mod error_quoting_tests {
         // A function stored under a Latin-1 name, then called with a bad argument and as a
         // non-function.
         ends(
-            "_G['\\233'] = string.rep _G['\\233']()",
+            "getfenv(0)['\\233'] = string.rep getfenv(0)['\\233']()",
             b"bad argument #1 to `\xe9' (string expected, got no value)",
         );
         ends(

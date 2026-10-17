@@ -48,7 +48,8 @@ pub fn crt_float(v: f64, conv: u8, precision: Option<usize>) -> String {
 /// array (`0x811e28`), the `string`, `table`, `math` and `bit` libraries (`0x703af5`..`0x703b16`),
 /// then the compat chunk (`0x703b26`). A base function only the host can give
 /// (`seterrorhandler`, `date`, `debugstack` and the like) is a placeholder that raises, which the
-/// host replaces: a new value under a key keeps the layout. Then `_G`, benilla's own and last.
+/// host replaces: a new value under a key keeps the layout. There is no `_G`: an addon reaches the
+/// globals by `getfenv(0)`.
 pub fn new_state() -> Vm {
     let mut vm = Vm::new();
     // `InitLua` sets 256 KB right after `lua_open` (`0x7039f2`), before any library.
@@ -61,10 +62,6 @@ pub fn new_state() -> Vm {
     lib_math::open(&mut vm);
     vm.exec(COMPAT, b"=[benilla-lua compat]")
         .expect("the compat chunk runs");
-    // Deviation: 1.12's base library has no `_G` (an addon reaches the globals by `getfenv(0)`);
-    // benilla's host code reads the globals through it, so it comes last, after the client's keys.
-    let g = Value::Table(vm.globals);
-    vm.set_global("_G", g);
     vm
 }
 
