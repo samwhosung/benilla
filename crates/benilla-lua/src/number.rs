@@ -170,13 +170,19 @@ pub fn strtoul(s: &[u8], base: u32) -> (u32, usize) {
 
 /// The NaN the client's x87 makes of an invalid operation, the real indefinite: the sign set, so
 /// it prints `-1.#IND`.
-const INDEFINITE: u64 = 0xFFF8_0000_0000_0000;
+pub(crate) const INDEFINITE: u64 = 0xFFF8_0000_0000_0000;
 
 /// `r = a op b` as the client's x87 answers it: a NaN the operation made from operands that are
 /// not NaN is the indefinite, and a NaN operand passes through with its own sign. x86's SSE makes
-/// the same indefinite, so only another host (arm64's default NaN has no sign) pays the test.
+/// the same indefinite and passes a NaN operand through, so only another host (arm64's default NaN
+/// has no sign) pays the test.
 #[inline(always)]
 pub fn x87_op(r: f64, a: f64, b: f64) -> f64 {
+    // Of two NaN operands SSE answers the first, where the x87 answers the one with the larger
+    // significand (Intel SDM vol. 1, table 4-7), and of two canonical NaNs the client's `faddp`
+    // answers the positive one in emulation: `(0/0) + -(0/0)` and `-(0/0) + 0/0` are both
+    // `1.#QNAN` there, and the first is `-1.#IND` on an x86 host. benilla does not follow there: no addon meets two NaNs of opposite
+    // sign, and the test would cost every operation on x86.
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     if r.is_nan() {
         return x87_fn(r, a, b);
@@ -185,15 +191,19 @@ pub fn x87_op(r: f64, a: f64, b: f64) -> f64 {
     r
 }
 
-/// [`x87_op`] for a C library function of `a` and `b` (`b` 0 for one argument), on every host:
-/// the client's runtime answers the indefinite for a domain error (`sqrt(-1)`, `asin(2)`,
-/// `fmod(1, 0)`), where a host's libm answers a NaN of its own choosing.
+/// [`x87_op`] for a C library function of `a` and `b` (`b` 0 for one argument), on every host,
+/// when `r` is NaN: a NaN operand is the answer, the positive one of two (the x87's pick of two
+/// canonical NaNs), and a NaN made from numbers is the indefinite. A host's libm picks its own
+/// sign: macOS's `acos(2)` is positive, its `acos` flips a NaN operand's sign and its `cos` and
+/// `fmod` answer a positive NaN for a negative one.
 #[cold]
 pub fn x87_fn(r: f64, a: f64, b: f64) -> f64 {
-    if r.is_nan() && !a.is_nan() && !b.is_nan() {
-        f64::from_bits(INDEFINITE)
-    } else {
-        r
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) if a.is_sign_negative() => b,
+        (true, _) => a,
+        (false, true) => b,
+        (false, false) if r.is_nan() => f64::from_bits(INDEFINITE),
+        (false, false) => r,
     }
 }
 

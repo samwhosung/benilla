@@ -267,6 +267,8 @@ fn a_made_nan_is_the_x87_indefinite() {
         "math.mod(1, 0)",
         "math.sin(1/z)",
         "math.pow(-8, 1/3)",
+        "math.acos(0/z)",
+        "math.cos(0/z)",
     ];
     for expr in made {
         assert_eq!(
@@ -282,10 +284,19 @@ fn a_made_nan_is_the_x87_indefinite() {
     );
     let got = vm
         .exec(
-            b"return tostring(V), tostring(V + 1), tostring(2 * V), tostring(math.sqrt(V)), tostring(-V)",
+            b"return tostring(V), tostring(V + 1), tostring(2 * V), tostring(math.sqrt(V)), \
+              tostring(-V), tostring(math.acos(V)), tostring(math.cos(-V)), \
+              tostring(math.mod(2, -V)), tostring(math.mod(-V, V)), tostring(math.mod(V, -V))",
             b"=t",
         )
         .unwrap();
     let got: Vec<String> = got.into_iter().map(|v| vm.display(v)).collect();
-    assert_eq!(got, ["1.#QNAN", "1.#QNAN", "1.#QNAN", "1.#QNAN", "-1.#IND"]);
+    // Of two NaNs the client's x87 answers the positive one.
+    assert_eq!(
+        got,
+        [
+            "1.#QNAN", "1.#QNAN", "1.#QNAN", "1.#QNAN", "-1.#IND", "1.#QNAN", "-1.#IND", "-1.#IND",
+            "1.#QNAN", "1.#QNAN"
+        ]
+    );
 }
