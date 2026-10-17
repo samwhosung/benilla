@@ -412,8 +412,9 @@ pub(super) fn feed_random_properties(
     *pushed.get(&script) = true;
 }
 
-/// The item-tooltip feed: every template that lands is pushed unprompted, so the first hover never
-/// misses, as the reference reads one item cache synchronously. A miss the VM asked for is the
+/// The item-tooltip feed: every template that lands is pushed unprompted, and a new VM is seated
+/// with every cached one, so the first hover never misses, as the reference reads one item cache
+/// synchronously that a `/reload` keeps. A miss the VM asked for is the
 /// getter's lookup with a callback, which queries it here and asks a refused one again; a miss
 /// `GetItemInfo` read is served from the cache and never queried (`0x48e172`).
 pub(super) fn feed_item_stats(
@@ -440,7 +441,10 @@ pub(super) fn feed_item_stats(
     let Some(mut script) = script else {
         return;
     };
-    let pending = pending.get(&script);
+    let (pending, new_vm) = pending.get_reset(&script);
+    if new_vm {
+        pending.extend(items.cached_template_ids());
+    }
     let mod_sensitive = mod_sensitive.get(&script);
     let last_home = last_home.get(&script);
     let me = self_q.single().ok();
@@ -2359,6 +2363,38 @@ mod ask_tests {
 
     use crate::items::Items;
     use crate::net::NetCommands;
+
+    /// A `/reload` keeps the reference's item cache, so a new VM is seated with every cached
+    /// record its first frame, ahead of its world entry, and its first read hits.
+    #[test]
+    fn a_new_vm_is_seated_with_every_cached_template() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .add_systems(Update, super::feed_item_stats);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
+        let name = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .eval::<Option<String>>("return (GetItemInfo(25))")
+                .unwrap()
+        };
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        app.update();
+        assert_eq!(name(&mut app).as_deref(), Some("Linen Cloth"));
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        app.update();
+        assert_eq!(
+            name(&mut app).as_deref(),
+            Some("Linen Cloth"),
+            "the new VM's"
+        );
+        assert!(crate::query_cache::queries(&rx).is_empty());
+    }
 
     /// A miss the VM asks for is the getter's lookup with a callback: it queries, a frame between
     /// asks queries nothing, and the next ask queries a refused id again. A miss `GetItemInfo`

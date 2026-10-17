@@ -28,6 +28,12 @@ mod held;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitFeed;
 
+/// The feeds that seat a new VM with what the reference's caches hold across a `/reload`, ahead of
+/// the world-enter cascade whose handlers read it: the quest log's records, slots and creature
+/// names, and the item records.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct WorldEnterSeats;
+
 /// One `UNIT_COMBAT` over a unit, the portrait hit indicator's feed. The emitter `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per token naming the unit, with no
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
@@ -125,10 +131,10 @@ impl Plugin for UiUnitPlugin {
         .add_systems(
             Update,
             (
-                // After the quest log's seat, which the world-enter cascade's rebuild reads.
+                // After the seats the world-enter cascade's handlers read.
                 feed_units
                     .in_set(field_events::FieldEventPushes)
-                    .after(crate::ui_quest_log::feed_quest_log),
+                    .after(WorldEnterSeats),
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 // After the same feed, whose guids it covers.
@@ -2494,6 +2500,34 @@ mod tests {
             c.dependencies.contains(&(aura, reach)),
             "feed_unit_reach is declared after feed_auras"
         );
+    }
+
+    /// The world-enter cascade's handlers read the quest log's seat and the item records, which a
+    /// new VM is given by their feeds: both are declared before the unit feed that fires it.
+    #[test]
+    fn the_world_entry_runs_after_the_seats_it_reads() {
+        use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
+
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let units = one("::ui_unit::feed_units");
+        for seat in ["::ui_quest_log::feed_quest_log", "::feed::feed_item_stats"] {
+            assert!(
+                c.dependencies.contains(&(one(seat), units)),
+                "feed_units is declared after {seat}"
+            );
+        }
     }
 
     /// `UnitRace` and `UnitClass` push the table's name at the install's locale column beside the

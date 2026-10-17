@@ -1021,8 +1021,10 @@ impl Plugin for UiItemsPlugin {
                         .in_set(UnitFeed)
                         .before(crate::ui_action::CooldownEvents),
                     // The item-tooltip store answers before the input pass, so a re-hover the
-                    // next frame sees the answer.
-                    feed_item_stats.in_set(UnitFeed),
+                    // next frame sees the answer, and seats a new VM before its world entry.
+                    feed_item_stats
+                        .in_set(UnitFeed)
+                        .in_set(crate::ui_unit::WorldEnterSeats),
                     feed_item_sets.in_set(UnitFeed),
                     ask_item_build_lookups.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
