@@ -189,6 +189,15 @@ impl super::UiScript {
             .map(|s| s.value.clone())
     }
 
+    /// One CVar's integer, the record's `+0x28`: Storm's `SStrToInt` of its text, as the set
+    /// stores it (`0x63e127`). `None` with no such record.
+    pub fn cvar_int(&self, name: &str) -> Option<i32> {
+        self.model_mut()
+            .cvars
+            .get(&name.to_ascii_lowercase())
+            .map(|s| super::binding_abi::s_str_to_int(&s.value) as i32)
+    }
+
     /// Snapshot the table as `(name, value, default)`; the saver writes only rows off their
     /// default, so the config file stays a diff.
     pub fn cvars_snapshot(&self) -> Vec<(String, String, String)> {
