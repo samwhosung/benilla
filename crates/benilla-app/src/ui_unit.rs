@@ -15,6 +15,7 @@ use benilla_ui::script::{
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::{ring_reaction, Factions, Selection};
 use crate::ui_script::{gate, SweepApp, UiInput};
 
@@ -1232,7 +1233,7 @@ fn player_snapshot(
     guild: &mut crate::ui_guild::GuildState,
 ) -> UnitState {
     let name = names
-        .resolve_unit(guid, Some(store), commands)
+        .resolve_unit(guid, Some(store), Ask::New(commands))
         .map(str::to_string);
     let mut s = snapshot(
         store,

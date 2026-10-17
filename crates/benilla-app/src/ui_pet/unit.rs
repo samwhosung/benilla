@@ -12,6 +12,7 @@ use crate::ui_script::gate;
 use crate::ui_unit::snapshot;
 
 use super::{PetBar, PetUnit};
+use crate::query_cache::Ask;
 
 /// What the `"pet"` feed last pushed, for its edges.
 #[derive(Default)]
@@ -74,7 +75,7 @@ pub(crate) fn feed_pet_unit(
         .flatten()
         .map(|store| {
             let name = names
-                .resolve_unit(pet_guid, Some(store), &commands)
+                .resolve_unit(pet_guid, Some(store), Ask::New(&commands))
                 .map(str::to_string);
             // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
             let types = CreatureTypeSources::of_resources(

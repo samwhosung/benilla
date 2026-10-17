@@ -23,6 +23,7 @@ use crate::spell::Cooldowns;
 use crate::target::Selection;
 
 use super::{PlayerActions, Spells};
+use crate::query_cache::Ask;
 use crate::spell::usable;
 use crate::spell::AutoRepeatActive;
 
@@ -261,7 +262,7 @@ pub(super) fn feed_action_state(
             ACTION_KIND_ITEM => {
                 // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
                 let use_spell = items
-                    .template(button.action, 0, &commands)
+                    .template(button.action, 0, Ask::New(&commands))
                     .and_then(|t| t.use_spell);
                 // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too: the
                 // gate reads the cache the recount wrote, never the bags (`0x4e50ab`).

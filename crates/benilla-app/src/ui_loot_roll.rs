@@ -39,6 +39,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfGuid};
+use crate::query_cache::Ask;
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
 use crate::ui_script::{UiFeed, UiInput};
 
@@ -428,7 +429,7 @@ fn render(
         RollLine::Won(p) => (p.item_id, p.random_property_id, Some(p.winner)),
         RollLine::AllPassed(p) => (p.item_id, p.random_property_id, None),
     };
-    let t = items.template(looted_item, 0, commands)?;
+    let t = items.template(looted_item, 0, Ask::New(commands))?;
     // The link names the rolled drop, suffix included, as the roll frame does.
     let link = crate::ui_items::item_link_full(
         looted_item,
@@ -448,7 +449,7 @@ fn render(
         RollLine::AllPassed(_) => false,
     };
     let name = match roller {
-        Some(g) if needs_name => Some(names.resolve_player(g, commands)?.to_string()),
+        Some(g) if needs_name => Some(names.resolve_player(g, Ask::New(commands))?.to_string()),
         _ => None,
     };
 
@@ -501,7 +502,7 @@ fn snapshot(
         .active
         .iter()
         .map(|r| {
-            let t = items.template(r.item_id, 0, commands);
+            let t = items.template(r.item_id, 0, Ask::New(commands));
             let texture = t
                 .and_then(|t| icons?.catalog.get(t.display_info_id))
                 .and_then(|d| d.icon.clone());
@@ -580,7 +581,7 @@ fn feed_loot_rolls(
     // The hold: a fresh roll reaches `0x61b430` once its template is in the snapshot above, and
     // takes a free slot or is deferred.
     rolls.reach_ready(|r| {
-        if items.template(r.item_id, 0, &commands).is_none() {
+        if items.template(r.item_id, 0, Ask::New(&commands)).is_none() {
             // The module doc's deviation: an entry the server does not know, or an expired hold.
             let unknown = items.template_answered_unknown(r.item_id);
             if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {

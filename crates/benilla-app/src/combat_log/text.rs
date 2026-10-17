@@ -23,6 +23,7 @@ use crate::ui_chat::ChatLog;
 use crate::ui_unit::{CombatTextEvent, UnitCombatFeedback};
 
 use crate::net::{GuidIndex, NetCommands, ObjectStore, SelfGuid};
+use crate::query_cache::Ask;
 
 /// A streamed unit's descriptor, which names it (`0x609210`); `None` for a guid not streamed.
 fn streamed<'a>(
@@ -334,7 +335,11 @@ pub(super) fn periodic_aura_log(
                     message_type: "PERIODIC_HEAL",
                     data: Some(
                         names
-                            .resolve_unit(s.caster, streamed(index, stores, s.caster), net)
+                            .resolve_unit(
+                                s.caster,
+                                streamed(index, stores, s.caster),
+                                Ask::New(net),
+                            )
                             .map(str::to_string)
                             .unwrap_or_default(),
                     ),
@@ -486,7 +491,7 @@ pub(super) fn spell_heal_log(
             message_type: if s.critical { "HEAL_CRIT" } else { "HEAL" },
             data: Some(
                 names
-                    .resolve_unit(s.healer, streamed(index, stores, s.healer), net)
+                    .resolve_unit(s.healer, streamed(index, stores, s.healer), Ask::New(net))
                     .map(str::to_string)
                     .unwrap_or_default(),
             ),

@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_action::{MessageSink, Shown, UiError};
 use crate::ui_unit::{NameTables, UnitNames};
 
@@ -166,7 +167,7 @@ fn drain_result_lines(
             continue;
         }
         match names
-            .resolve_player(update.guid, commands)
+            .resolve_player(update.guid, Ask::New(commands))
             .map(str::to_string)
         {
             // The name, once per `%s` the key's arity names (twice for the player link).
@@ -232,7 +233,7 @@ fn friend_rows(
         .iter()
         .map(|entry| {
             let name = names
-                .resolve_player(entry.guid, commands)
+                .resolve_player(entry.guid, Ask::New(commands))
                 .map(str::to_string)
                 .unwrap_or_default();
             let online = entry.is_online();
@@ -283,7 +284,7 @@ fn ignore_rows(
             (
                 *guid,
                 names
-                    .resolve_player(*guid, commands)
+                    .resolve_player(*guid, Ask::New(commands))
                     .map(str::to_string)
                     .unwrap_or_default(),
             )

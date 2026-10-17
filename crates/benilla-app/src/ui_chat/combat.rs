@@ -9,6 +9,7 @@ use crate::names::NameCache;
 use crate::ui_chat::event::ChatEventKind;
 
 use crate::net::{GuidIndex, NetCommands, ObjectStore, Reputations, SelfGuid};
+use crate::query_cache::Ask;
 use crate::target::ring::Factions;
 use crate::ui_party::GroupState;
 
@@ -808,7 +809,9 @@ pub(crate) fn object_name(
     if guid == 0 {
         return None;
     }
-    names.resolve_unit(guid, unit, commands).map(str::to_owned)
+    names
+        .resolve_unit(guid, unit, Ask::New(commands))
+        .map(str::to_owned)
 }
 
 // ────────────────────────────────── the families ──────────────────────────────────────

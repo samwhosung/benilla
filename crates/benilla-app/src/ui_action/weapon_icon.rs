@@ -8,6 +8,7 @@ use crate::creature_anim::UNIT_FLAG_DISARMED;
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects};
+use crate::query_cache::Ask;
 
 const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 
@@ -33,7 +34,7 @@ fn main_hand_item(
 ) -> Option<(u32, Option<String>)> {
     let guid = store.0.player_inv_slot(EQUIPMENT_SLOT_MAINHAND)?;
     let entry = objects.object(guid)?.object_entry()?;
-    let template = items.template(entry, guid, commands)?;
+    let template = items.template(entry, guid, Ask::New(commands))?;
     let (class, display) = (template.class, template.display_info_id);
     let icon = icons
         .and_then(|i| i.catalog.get(display))
@@ -86,7 +87,7 @@ pub(crate) fn ranged_weapon_icon(
 ) -> Option<String> {
     let guid = store.0.player_inv_slot(EQUIPMENT_SLOT_RANGED)?;
     let entry = objects.object(guid)?.object_entry()?;
-    let template = items.template(entry, guid, commands)?;
+    let template = items.template(entry, guid, Ask::New(commands))?;
     if template.subclass == ITEM_SUBCLASS_THROWN {
         return None;
     }

@@ -27,6 +27,7 @@ use crate::ui_action::Spells;
 
 /// Leg 8's caster unit flag.
 use crate::player::UNIT_FLAG_IN_COMBAT;
+use crate::query_cache::Ask;
 
 /// The implicit targets leg 10b forks on (`0x6e3f8a`/`0x6e3fa2`): 6, single enemy, asks
 /// `CanAttack 0x606980`; 21, single friend, asks `CanAssist 0x6066f0`.
@@ -254,7 +255,7 @@ pub(crate) fn equipped_item_fits(
                 o.item_max_durability(),
             ))
         })?;
-        let t = items.template(entry, guid, commands)?;
+        let t = items.template(entry, guid, Ask::New(commands))?;
         Some(WornItem {
             class: t.class,
             subclass: t.subclass,

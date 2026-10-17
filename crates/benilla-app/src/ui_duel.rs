@@ -13,6 +13,7 @@ use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::Selection;
 use crate::ui_action::Spells;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
@@ -298,7 +299,10 @@ fn feed_duel(
 
     // `DUEL_REQUESTED(name)`, held until the name resolves (the module's deviation).
     if let Some(guid) = duel.challenger {
-        if let Some(name) = names.resolve_player(guid, &commands).map(str::to_string) {
+        if let Some(name) = names
+            .resolve_player(guid, Ask::New(&commands))
+            .map(str::to_string)
+        {
             script.fire_event("DUEL_REQUESTED", vec![ScriptValue::Str(name)]);
             duel.challenger = None;
         }

@@ -13,7 +13,7 @@ use benilla_protocol::{ItemInfo, ObjectFields};
 use bevy::ecs::system::SystemParam;
 
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Objects};
-use crate::query_cache::QueryCache;
+use crate::query_cache::{Ask, QueryCache};
 
 /// An item or container entity's kind (`TYPEMASK_ITEM` / `TYPEMASK_CONTAINER`), with no model or
 /// pose. Unit readers filter it out (`Without<ItemObject>`): an item block's dwords overlap the
@@ -248,7 +248,9 @@ pub(crate) fn gift_creator_name(
         return None;
     }
     let giver = fields.item_gift_creator()?;
-    names.resolve_player(giver, commands).map(str::to_string)
+    names
+        .resolve_player(giver, Ask::New(commands))
+        .map(str::to_string)
 }
 
 /// The creator's guid (`ITEM_FIELD_CREATOR`, asked at `0x52e1f4`) and, for a wrapped item only,
@@ -410,10 +412,8 @@ impl RollCatalogs<'_> {
 #[derive(Resource, Default)]
 pub(crate) struct Items {
     /// A refused entry is the server's unknown one, read as such by
-    /// [`Items::template_answered_unknown`] and asked again by a later lookup
-    /// ([`QueryCache::refuse`]); it is never kept as a record. Every reader asks as it reads, so
-    /// a refused entry is asked again once the window from the refusal has passed
-    /// ([`QueryCache::get_or_ask`]).
+    /// [`Items::template_answered_unknown`] and asked again by the next event's lookup
+    /// ([`QueryCache::refuse`]); it is never kept as a record.
     templates: QueryCache<u32, ItemInfo>,
     /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
     fresh: Vec<u32>,
@@ -487,17 +487,12 @@ impl Items {
         taken
     }
 
-    /// The template for `entry` if known; a miss asks once while in flight (`guid` rides along, `0`
-    /// for template-only). A refused entry is also `None`, and asks again once the window from
-    /// the refusal has passed ([`QueryCache::get_or_ask`]).
-    pub(crate) fn template(
-        &self,
-        entry: u32,
-        guid: u64,
-        commands: &NetCommands,
-    ) -> Option<&ItemInfo> {
-        self.templates
-            .get_or_ask(entry, || Self::send_template(entry, guid, commands))
+    /// The template for `entry` if known, read as `ask` says; an ask goes once while in flight
+    /// (`guid` rides along, `0` for template-only). A refused entry is also `None`.
+    pub(crate) fn template(&self, entry: u32, guid: u64, ask: Ask<'_>) -> Option<&ItemInfo> {
+        self.templates.read(entry, ask, |commands| {
+            Self::send_template(entry, guid, commands)
+        })
     }
 
     fn send_template(entry: u32, guid: u64, commands: &NetCommands) {
@@ -528,8 +523,8 @@ impl Items {
     }
 
     /// The [`HeldTemplate`] view of [`Self::template`], asked template-only.
-    pub(crate) fn held(&self, entry: u32, commands: &NetCommands) -> Option<HeldTemplate> {
-        self.template(entry, 0, commands).map(HeldTemplate::of)
+    pub(crate) fn held(&self, entry: u32, ask: Ask<'_>) -> Option<HeldTemplate> {
+        self.template(entry, 0, ask).map(HeldTemplate::of)
     }
 
     /// [`Self::template`] without the ask: the cached record only.
@@ -682,7 +677,7 @@ fn equipped_class(
 ) -> Option<u8> {
     let guid = store.0.player_inv_slot(slot).filter(|&g| g != 0)?;
     let entry = objects.object(guid).and_then(|o| o.object_entry())?;
-    Some(items.template(entry, guid, commands)?.class as u8)
+    Some(items.template(entry, guid, Ask::New(commands))?.class as u8)
 }
 
 /// Whether the disarm flag is up (`UNIT_FIELD_FLAGS & UNIT_FLAG_DISARMED`), which hides one hand
@@ -811,9 +806,9 @@ mod tests {
         let (cmds, rx) = commands();
         let mut items = Items::default();
 
-        assert!(items.template(117, 0x42, &cmds).is_none());
+        assert!(items.template(117, 0x42, Ask::New(&cmds)).is_none());
         // Second copy of the same item: no second query.
-        assert!(items.template(117, 0x43, &cmds).is_none());
+        assert!(items.template(117, 0x43, Ask::New(&cmds)).is_none());
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::ItemQuery {
@@ -825,7 +820,9 @@ mod tests {
 
         items.insert_template(117, Some(info("Tough Jerky")));
         assert_eq!(
-            items.template(117, 0x43, &cmds).map(|i| i.name.as_str()),
+            items
+                .template(117, 0x43, Ask::New(&cmds))
+                .map(|i| i.name.as_str()),
             Some("Tough Jerky")
         );
     }
@@ -836,7 +833,7 @@ mod tests {
         let mut items = Items::default();
         let t0 = items.template_epoch();
 
-        assert!(items.template(117, 0x42, &cmds).is_none());
+        assert!(items.template(117, 0x42, Ask::New(&cmds)).is_none());
         assert_eq!(
             items.template_epoch(),
             t0,
@@ -959,14 +956,14 @@ mod tests {
     }
 
     /// `0x55bdf7`: an item key with its top bit set is a refusal. The waiters read unknown
-    /// (`template_answered_unknown`), nothing is kept, and an ask once the window from the refusal
-    /// has passed asks again, however often the entry was read meanwhile.
+    /// (`template_answered_unknown`), nothing is kept, the reads between events never ask it
+    /// however often they run, and the next event's lookup does.
     #[test]
-    fn a_refused_template_reads_unknown_and_is_asked_again_after_the_window() {
+    fn a_refused_template_reads_unknown_and_only_the_next_event_asks_again() {
         let (cmds, rx) = commands();
         let mut items = Items::default();
 
-        assert!(items.template(9999, 0, &cmds).is_none());
+        assert!(items.template(9999, 0, Ask::New(&cmds)).is_none());
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::ItemQuery { entry: 9999, .. })
@@ -983,24 +980,21 @@ mod tests {
         assert!(items.template_cached(9999).is_none(), "and nothing is kept");
         assert!(items.cached_template_ids().is_empty());
 
-        // A reader asking every second through the window: no ask, and the window does not move.
-        for _ in 0..crate::query_cache::RELOOK_AFTER.as_secs() - 1 {
-            crate::query_cache::test_clock::advance(std::time::Duration::from_secs(1));
-            assert!(items.template(9999, 0, &cmds).is_none());
+        for _ in 0..600 {
+            assert!(items.template(9999, 0, Ask::New(&cmds)).is_none());
         }
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
-            "an ask within the window does not send"
+            "a read between events does not send"
         );
 
-        crate::query_cache::test_clock::advance(std::time::Duration::from_secs(2));
-        assert!(items.template(9999, 0, &cmds).is_none());
+        assert!(items.template(9999, 0, Ask::Event(&cmds)).is_none());
         assert!(
             matches!(
                 rx.try_recv(),
                 Ok(ClientCommand::ItemQuery { entry: 9999, .. })
             ),
-            "the first ask past the window from the refusal does"
+            "the event's lookup does"
         );
         assert!(!items.template_answered_unknown(9999), "pending again");
     }
@@ -1092,13 +1086,16 @@ mod tests {
         // A disconnect drops unarrived records and in-flight asks, and keeps the templates.
         let (cmds, rx) = commands();
         items.insert_template(117, Some(info("Tough Jerky")));
-        assert!(items.template(118, 0, &cmds).is_none()); // leaves 118 in flight
+        assert!(items.template(118, 0, Ask::New(&cmds)).is_none()); // leaves 118 in flight
         items.clear_session();
         assert!(items.take_enchant_times(0x43).is_empty());
-        assert!(items.template(117, 0, &cmds).is_some(), "templates survive");
+        assert!(
+            items.template(117, 0, Ask::New(&cmds)).is_some(),
+            "templates survive"
+        );
         // 118's ask was dropped with the writer, so it re-asks now.
         let _ = rx.try_recv();
-        assert!(items.template(118, 0, &cmds).is_none());
+        assert!(items.template(118, 0, Ask::New(&cmds)).is_none());
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::ItemQuery { entry: 118, .. })

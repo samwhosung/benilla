@@ -16,6 +16,7 @@ use crate::aura_visual::AuraProc;
 use crate::entities::ItemDisplays;
 use crate::items::{ItemObject, Items};
 use crate::net::{FieldChanged, NetCommands, NetEntity, ObjectStore};
+use crate::query_cache::Ask;
 use benilla_assets::{LockRecover, WorldAssets};
 
 use super::{
@@ -242,7 +243,11 @@ impl WeaponVisualSrc<'_, '_> {
             EntityKind::Player => s
                 .player_visible_item_entry(17)
                 .filter(|e| *e != 0)
-                .and_then(|entry| self.items.as_deref()?.held(entry, self.net.as_deref()?))
+                .and_then(|entry| {
+                    self.items
+                        .as_deref()?
+                        .held(entry, Ask::New(self.net.as_deref()?))
+                })
                 .map(|t| t.display_info_id),
             _ => None,
         }

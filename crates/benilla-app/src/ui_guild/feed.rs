@@ -67,8 +67,9 @@ pub(super) fn feed_guild(
     // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss, and the
     // answer fires a bare `GUILD_ROSTER_UPDATE`.
     let guild_id = guild.guild_id;
-    guild.request_identity(guild_id, &commands);
-    let identity = guild.identity(guild_id).cloned();
+    let identity = guild
+        .resolve_identity(guild_id, crate::query_cache::Ask::New(&commands))
+        .cloned();
     let identity = identity.as_ref();
 
     let rows = display_rows(

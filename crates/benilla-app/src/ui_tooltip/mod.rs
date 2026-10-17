@@ -15,6 +15,7 @@ use benilla_ui::strings::Arg;
 
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
 use crate::ui_script::UiFeed;
 use crate::ui_trainer::TrainerFeed;
@@ -142,7 +143,7 @@ fn drive_mouseover_tooltip(
     let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
         let store = stores.get(entity).ok()?;
         let name = names
-            .resolve_unit(guid, Some(store), &commands)
+            .resolve_unit(guid, Some(store), Ask::New(&commands))
             .map(str::to_string);
         let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
         // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
@@ -209,7 +210,10 @@ fn drive_mouseover_tooltip(
         let Some(owner) = store.0.corpse_owner() else {
             return;
         };
-        let Some(name) = names.resolve_player(owner, &commands).map(str::to_string) else {
+        let Some(name) = names
+            .resolve_player(owner, Ask::New(&commands))
+            .map(str::to_string)
+        else {
             return;
         };
         // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.
@@ -276,7 +280,9 @@ fn drive_mouseover_tooltip(
         };
         let Some(template) = go_inputs.templates.of(fields).cloned() else {
             // Template in flight: ask once, and show it when it lands.
-            go_inputs.templates.request(guid, fields, &commands);
+            go_inputs
+                .templates
+                .request(guid, fields, Ask::New(&commands));
             return;
         };
         // The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then
@@ -324,7 +330,10 @@ fn drive_mouseover_tooltip(
         {
             match slot0.key_type {
                 benilla_formats::LOCK_KEY_ITEM => {
-                    if let Some(t) = go_inputs.items.template(slot0.index, 0, &commands) {
+                    if let Some(t) = go_inputs
+                        .items
+                        .template(slot0.index, 0, Ask::New(&commands))
+                    {
                         // `LOCKED_WITH_ITEM`, at `0x52acb8`.
                         if let Some(text) = keyed(&go_get, "LOCKED_WITH_ITEM", &[Arg::S(&t.name)]) {
                             lines.push((text, TooltipTint::White));

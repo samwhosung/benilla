@@ -9,6 +9,7 @@ use benilla_assets::coords::wow_to_bevy;
 use benilla_ui::script::{DeathAction, DeathUiState, ScriptValue, UiScript};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_action::Spells;
 use crate::ui_script::{UiFeed, UiInput};
 
@@ -244,7 +245,9 @@ fn feed_death(
     if let Some(name) = offer_announcement(memo, &death_net, store.0.is_dead_or_ghost(), |offer| {
         // A player caster's name is empty on the wire; hold the popup until the cache resolves it.
         if offer.name.is_empty() {
-            names.resolve_player(offer.caster, &net).map(str::to_owned)
+            names
+                .resolve_player(offer.caster, Ask::New(&net))
+                .map(str::to_owned)
         } else {
             Some(offer.name.clone())
         }
@@ -368,7 +371,7 @@ fn resolve_self_res(
     );
     slots.into_iter().find_map(|(bag_index, slot, guid)| {
         let entry = objects.object(guid)?.object_entry()?;
-        let t = items.template(entry, guid, commands)?;
+        let t = items.template(entry, guid, Ask::New(commands))?;
         let self_res = t.spells.iter().any(|sp| {
             sp.trigger == 0
                 && spells.is_some_and(|c| {
@@ -509,7 +512,7 @@ fn drain_death(
                             let mut ladder = cast.p0();
                             let t = ladder
                                 .items
-                                .template(entry, guid, &ladder.commands)
+                                .template(entry, guid, Ask::New(&ladder.commands))
                                 .cloned();
                             let it = crate::ui_items::ItemUse {
                                 guid: Some(guid),

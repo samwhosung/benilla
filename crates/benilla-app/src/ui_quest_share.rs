@@ -17,6 +17,7 @@ use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
 use crate::ui_script::{UiFeed, UiInput};
 
@@ -183,7 +184,7 @@ fn feed_quest_share(
             continue;
         };
         match names
-            .resolve_player(v.member, &commands)
+            .resolve_player(v.member, Ask::New(&commands))
             .map(str::to_string)
         {
             Some(name) => {
@@ -213,7 +214,7 @@ fn feed_quest_share(
     // `QUEST_ACCEPT` fills them.
     if let Some(c) = share.pending_confirm.as_ref() {
         if let Some(name) = names
-            .resolve_player(c.sender, &commands)
+            .resolve_player(c.sender, Ask::New(&commands))
             .map(str::to_string)
         {
             let title = c.title.clone();

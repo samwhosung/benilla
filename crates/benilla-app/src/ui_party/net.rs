@@ -11,6 +11,7 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use super::{GroupState, GROUPTYPE_RAID};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
+use crate::query_cache::Ask;
 use crate::sound::MessageSounds;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
@@ -237,9 +238,11 @@ fn leader_changed(
     names: &NameCache,
     net_commands: &NetCommands,
 ) {
-    let own = self_guid
-        .0
-        .and_then(|g| names.resolve_player(g, net_commands).map(str::to_string));
+    let own = self_guid.0.and_then(|g| {
+        names
+            .resolve_player(g, Ask::New(net_commands))
+            .map(str::to_string)
+    });
     push_group_lines(errors, group.apply_leader_changed(name, own.as_deref()));
 }
 
@@ -266,11 +269,13 @@ fn list(
 ) {
     let mut names_pending = false;
     for m in &members {
-        names_pending |= names.resolve_player(m.guid, net_commands).is_none();
+        names_pending |= names
+            .resolve_player(m.guid, Ask::New(net_commands))
+            .is_none();
     }
     if group_type == GROUPTYPE_RAID && !members.is_empty() {
         if let Some(own) = self_guid.0 {
-            names_pending |= names.resolve_player(own, net_commands).is_none();
+            names_pending |= names.resolve_player(own, Ask::New(net_commands)).is_none();
         }
     }
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with

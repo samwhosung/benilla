@@ -16,6 +16,7 @@ use benilla_ui::script::{CraftReagent, CraftRecipe, CraftState, CraftTooltip, Ui
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::spell::{cast_target, CastCommit, CastLadder};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
@@ -159,7 +160,7 @@ fn feed_craft(
                 for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
                     let have = count_of(&store.0, &objects, entry, InventoryScope::DEFAULT);
                     // A reagent's icon is the shared item chain (`0x5d88b0`) through its display.
-                    let (name, icon) = match items.template(entry, 0, &commands) {
+                    let (name, icon) = match items.template(entry, 0, Ask::New(&commands)) {
                         Some(t) => (
                             Some(t.name.clone()),
                             item_icon(icons.as_deref(), t.display_info_id),
@@ -191,7 +192,7 @@ fn feed_craft(
                 }
                 for &t in d.totems.iter().filter(|&&t| t != 0) {
                     let have = count_of(&store.0, &objects, t, InventoryScope::DEFAULT) > 0;
-                    if let Some(info) = items.template(t, 0, &commands) {
+                    if let Some(info) = items.template(t, 0, Ask::New(&commands)) {
                         tools.push((info.name.clone(), have));
                     }
                 }

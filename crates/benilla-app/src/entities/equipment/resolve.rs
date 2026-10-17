@@ -764,6 +764,7 @@ mod tests {
     use super::{ammo_attach, attach_id, placement, resolve_corpse_equipment, resolve_equipment};
     use crate::items::Items;
     use crate::net::{ClientCommand, NetCommands, NetEntity, ObjectStore};
+    use crate::query_cache::Ask;
     use benilla_protocol::messages::{ItemInfo, ObjectFields};
     use benilla_protocol::EntityKind;
 
@@ -1076,7 +1077,7 @@ mod tests {
     fn a_slot_changing_to_a_refused_entry_asks_again_at_once() {
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let mut items = Items::default();
-        items.template(300, 0, &NetCommands(tx.clone()));
+        items.template(300, 0, Ask::New(&NetCommands(tx.clone())));
         items.insert_template(300, None);
         let _ = rx.try_iter().count();
         let mut app = equip_app(items, Default::default(), tx);
@@ -1166,8 +1167,7 @@ mod tests {
     }
 
     /// `0x5ed700` looks a slot's item up when the slot's entry changes: a template landing for
-    /// another item, past the refusal's window, does not ask a refused slot again or hold the
-    /// player.
+    /// another item does not ask a refused slot again or hold the player.
     #[test]
     fn a_refused_slot_is_not_asked_again_when_another_template_lands() {
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
@@ -1181,9 +1181,6 @@ mod tests {
         app.update();
         assert!(app.world().get::<Equipment>(player).unwrap().settled);
 
-        crate::query_cache::test_clock::advance(
-            crate::query_cache::RELOOK_AFTER + std::time::Duration::from_secs(1),
-        );
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(555, Some(worn(901, 1)));

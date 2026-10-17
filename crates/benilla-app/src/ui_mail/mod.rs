@@ -21,6 +21,7 @@ use crate::names::NameCache;
 use crate::net::{
     ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage,
 };
+use crate::query_cache::Ask;
 use crate::query_cache::QueryCache;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -334,7 +335,7 @@ fn resolve_row(
     let (item_id, item_roll, item_count, item_name, item_texture, item_quality) = match &entry.item
     {
         Some(att) => {
-            let template = items.template(att.entry, 0, commands);
+            let template = items.template(att.entry, 0, Ask::New(commands));
             let name = template.map(|t| rolls.name(&t.name, att.random_prop_id));
             let quality = template.map(|t| t.quality);
             let display_id = template.map(|t| t.display_info_id).unwrap_or(0);
@@ -353,9 +354,11 @@ fn resolve_row(
         None => (0, 0, 0, None, None, None),
     };
 
-    let sender = entry
-        .sender_guid
-        .and_then(|g| names.resolve_player(g, commands).map(str::to_string));
+    let sender = entry.sender_guid.and_then(|g| {
+        names
+            .resolve_player(g, Ask::New(commands))
+            .map(str::to_string)
+    });
 
     let stationery_texture = stationery
         .map(|s| s.0.texture(entry.stationery).to_string())
@@ -374,7 +377,7 @@ fn resolve_row(
         .flatten();
     // The notice's item comes from the subject: a sold notice names an item it does not carry.
     let notice_item_name = auction
-        .and_then(|a| items.template(a.entry, 0, commands))
+        .and_then(|a| items.template(a.entry, 0, Ask::New(commands)))
         .map(|t| t.name.clone());
     // Until the item template lands, the raw triplet stands.
     let subject = match (auction, &notice_item_name) {
@@ -390,7 +393,9 @@ fn resolve_row(
             let seller = a.result == auction_mail::SOLD;
             let n = invoice::parse_body(raw_body?, seller)?;
             // An unresolved counterparty fills in when its name lands, as in the reference.
-            let player_name = names.resolve_player(n.player_guid, commands)?.to_string();
+            let player_name = names
+                .resolve_player(n.player_guid, Ask::New(commands))?
+                .to_string();
             Some(benilla_ui::script::MailInvoice {
                 seller,
                 item_name: notice_item_name.clone()?,
@@ -458,7 +463,7 @@ fn stationeries(
     let store = self_q.iter().next().map(|(s, _)| s);
     let mut out: Vec<(u32, StationeryView)> = Vec::new();
     for row in catalog.0.rows() {
-        let Some(t) = items.template(row.item, 0, commands).cloned() else {
+        let Some(t) = items.template(row.item, 0, Ask::New(commands)).cloned() else {
             continue;
         };
         let carried = store.is_some_and(|s| {
@@ -801,7 +806,7 @@ fn drain_mail(
                 .send(ClientCommand::MailMarkAsRead { mailbox, mail_id });
         }
         if text_id != 0 {
-            mail.bodies.get_or_ask(text_id, || {
+            mail.bodies.lookup_new(text_id, || {
                 let _ = commands
                     .0
                     .send(ClientCommand::ItemTextQuery { text_id, mail_id });

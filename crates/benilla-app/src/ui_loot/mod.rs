@@ -11,6 +11,7 @@ use crate::entities::ItemDisplays;
 use crate::items::{Items, RollCatalogs};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP};
@@ -504,7 +505,7 @@ fn resolve_item(
     commands: &NetCommands,
     rolls: RollCatalogs,
 ) -> LootRow {
-    let (name, quality, link) = match items.template(item.item_id, 0, commands) {
+    let (name, quality, link) = match items.template(item.item_id, 0, Ask::New(commands)) {
         Some(t) => {
             // The rolled name: the reference composes every display of it through `0x5d8b00`.
             let name = rolls.name(&t.name, item.random_property_id);
@@ -665,7 +666,7 @@ fn drain_receives(
     let mut still = Vec::new();
     for mut r in pending {
         let resolved = items
-            .template(r.entry, 0, commands)
+            .template(r.entry, 0, Ask::New(commands))
             .map(|t| (t.name.clone(), t.quality, t.display_info_id));
         match resolved {
             Some((name, quality, display_id)) => {
@@ -872,7 +873,7 @@ fn sweep_rows(
 /// and uncommon or better. An unresolved template answers false, as the reference's cache peek.
 fn bind_confirm_required(items: &Items, commands: &NetCommands, item_id: u32) -> bool {
     items
-        .template(item_id, 0, commands)
+        .template(item_id, 0, Ask::New(commands))
         .is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP && t.quality >= BIND_CONFIRM_MIN_QUALITY)
 }
 

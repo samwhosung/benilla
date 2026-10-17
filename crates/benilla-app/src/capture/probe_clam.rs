@@ -26,6 +26,7 @@ use benilla_ui::script::UiScript;
 use super::probes::ProbeClock;
 use crate::items::Items;
 use crate::net::{ChatKind, ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_loot::{LootConfig, LootLatch, LootState};
 
 /// The default template, Small Barnacled Clam (entry 7973); its `item_loot_template` row (a Zesty
@@ -169,7 +170,7 @@ fn find_in_backpack(
     // `template` asks the server once on a miss and answers `None` until the reply lands, which is
     // exactly the "not stocked yet" state this returns.
     items
-        .template(entry, guid, net)
+        .template(entry, guid, Ask::New(net))
         .filter(|t| t.opens_loot())
         .map(|_| (guid, u32::from(i) + 1))
 }

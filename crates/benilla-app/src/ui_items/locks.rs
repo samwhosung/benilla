@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use crate::items::Items;
 use crate::net::{NetCommands, Objects};
+use crate::query_cache::Ask;
 
 /// One server-side release, run into the VM by [`apply_item_releases`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -338,7 +339,7 @@ pub(crate) fn apply_item_releases(
     // template is unanswered.
     let stackable = |entry: u32, guid: u64| {
         items
-            .template(entry, guid, &commands)
+            .template(entry, guid, Ask::New(&commands))
             .map(|t| t.stackable > 1)
     };
     let objects = &inv.objects;

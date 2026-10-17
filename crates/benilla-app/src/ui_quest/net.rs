@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use super::{QuestGiver, QuestLine, QuestLines};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
+use crate::query_cache::Ask;
 use crate::ui_action::UiError;
 use crate::ui_quest_log::QuestLog;
 
@@ -97,7 +98,7 @@ fn on_complete(
 ) {
     if let SessionEvent::QuestComplete(c) = ev {
         let chained = quest_log
-            .template(c.quest_id, &net_commands)
+            .template(c.quest_id, Ask::New(&net_commands))
             .is_some_and(|t| t.next_quest_in_chain != 0);
         quest_complete(c, &mut quest, &mut lines);
         if !chained {
@@ -319,7 +320,7 @@ fn quest_failed(
     quest: &mut QuestGiver,
 ) {
     debug!("net: quest {quest_id} failed (timed: {timed})");
-    if let Some(t) = quest_log.template(quest_id, net_commands) {
+    if let Some(t) = quest_log.template(quest_id, Ask::New(net_commands)) {
         quest.push_message(UiError::s("ERR_QUEST_FAILED_S", t.title.clone()));
     } else {
         debug!("net: quest {quest_id} has no cached template — the reference shows nothing");
@@ -360,7 +361,7 @@ fn quest_giver_failed(
         .view_title(quest_id)
         .or_else(|| {
             quest_log
-                .template(quest_id, net_commands)
+                .template(quest_id, Ask::New(net_commands))
                 .map(|t| t.title.clone())
         })
         .unwrap_or_default();

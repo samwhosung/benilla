@@ -28,6 +28,7 @@ use bevy::ecs::system::SystemParam;
 use crate::net::{
     ClientCommand, FieldChanged, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer,
 };
+use crate::query_cache::Ask;
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -564,7 +565,9 @@ pub(crate) fn feed_trainer(
             .0
             .get(&g)
             .and_then(|&e| re_eval.stores.get(e).ok());
-        names.resolve_unit(g, store, &commands).map(str::to_string)
+        names
+            .resolve_unit(g, store, Ask::New(&commands))
+            .map(str::to_string)
     });
     let name_changed = *last_name != trainer_name;
     if fresh == *last && !name_changed && !forced {

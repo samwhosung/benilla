@@ -12,6 +12,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::Selection;
 use crate::ui_party::GroupState;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
@@ -562,7 +563,7 @@ fn answer_trade_request(
     // the trade to us when the initiator leaves (`Player.cpp:11747`), which clears the request.
     if block_trades.0 {
         let Some(name) = names
-            .resolve_player(initiator, &commands)
+            .resolve_player(initiator, Ask::New(&commands))
             .map(str::to_string)
         else {
             return;
@@ -593,7 +594,7 @@ fn resolve_slot(
     names: &NameCache,
     commands: &NetCommands,
 ) -> TradeSlotItem {
-    let template = items.template(item.entry, 0, commands);
+    let template = items.template(item.entry, 0, Ask::New(commands));
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality);
     let inventory_type = template.map_or(0, |t| t.inventory_type);
@@ -614,7 +615,7 @@ fn resolve_slot(
     // Only a wrapped gift asks for its giver, and a zero guid asks nothing (`0x52e288`,
     // `0x52e29d`).
     let gift_creator = (item.wrapped && item.gift_creator != 0)
-        .then(|| names.resolve_player(item.gift_creator, commands))
+        .then(|| names.resolve_player(item.gift_creator, Ask::New(commands)))
         .flatten()
         .map(str::to_string);
     TradeSlotItem {
@@ -666,7 +667,7 @@ fn own_item(
     // (`0x52b789`, `0x52e32a`).
     let wrapped = flags & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0;
     let display_id = items
-        .template(entry, guid, commands)
+        .template(entry, guid, Ask::New(commands))
         .map(|t| t.display_info_id)
         .unwrap_or(0);
     Some((
@@ -1012,7 +1013,7 @@ fn feed_trade(
             continue;
         }
         match names
-            .resolve_player(line.who, &commands)
+            .resolve_player(line.who, Ask::New(&commands))
             .map(str::to_string)
         {
             Some(name) => errors.0.push(crate::ui_action::UiError::s(line.key, name)),

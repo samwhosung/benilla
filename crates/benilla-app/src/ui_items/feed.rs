@@ -11,6 +11,7 @@ use benilla_ui::script::{ContainerSlot, ContainerState, ScriptValue, UiScript};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_script::gate;
 
 use super::equip_error::equip_error_key;
@@ -328,7 +329,14 @@ pub(super) fn feed_item_sets(
         let members: Vec<(u32, Option<String>)> = row
             .items
             .iter()
-            .map(|&id| (id, items.template(id, 0, &commands).map(|t| t.name.clone())))
+            .map(|&id| {
+                (
+                    id,
+                    items
+                        .template(id, 0, Ask::New(&commands))
+                        .map(|t| t.name.clone()),
+                )
+            })
             .collect();
         let view = benilla_ui::script::ItemSetView {
             name: row.name.clone(),
@@ -467,7 +475,7 @@ pub(super) fn feed_item_stats(
     let ready: Vec<u32> = pending
         .iter()
         .copied()
-        .filter(|&id| items.template(id, 0, &commands).is_some())
+        .filter(|&id| items.template(id, 0, Ask::New(&commands)).is_some())
         .collect();
     // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs mutably.
     let views: Vec<(u32, benilla_ui::script::ItemTemplateView)> = {
@@ -483,7 +491,7 @@ pub(super) fn feed_item_stats(
             .into_iter()
             .filter_map(|id| {
                 pending.remove(&id);
-                let t = items.template(id, 0, &commands)?.clone();
+                let t = items.template(id, 0, Ask::New(&commands))?.clone();
                 if item_has_mod_tokens(&t, spell_res) {
                     mod_sensitive.insert(id);
                 } else {
@@ -669,10 +677,11 @@ fn resolve_slot(
         fields.item_text_id().is_some_and(|id| id != 0),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
         // name query answers.
-        fields
-            .item_creator()
-            .filter(|&g| g != 0)
-            .and_then(|g| names.resolve_player(g, commands).map(str::to_string)),
+        fields.item_creator().filter(|&g| g != 0).and_then(|g| {
+            names
+                .resolve_player(g, Ask::New(commands))
+                .map(str::to_string)
+        }),
         // The tooltip's unlocked (0x4) and wrapped (0x8) bits.
         fields.item_flags().unwrap_or(0),
         // `0x5da2c0`: soulbound, or carrying a binding enchant, off the raw descriptor.
@@ -709,7 +718,7 @@ fn resolve_slot(
             ..Default::default()
         });
     }
-    let template: Option<ItemInfo> = items.template(entry, guid, commands).cloned();
+    let template: Option<ItemInfo> = items.template(entry, guid, Ask::New(commands)).cloned();
     let Some(t) = template else {
         // Asked (or a cached negative); show the slot occupied while the answer is in flight.
         return Some(ContainerSlot {
@@ -842,7 +851,7 @@ fn worn_cooldowns(
             let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
             let fields = objects.object(guid)?;
             let entry = fields.object_entry()?;
-            let t = items.template(entry, guid, commands)?;
+            let t = items.template(entry, guid, Ask::New(commands))?;
             let charges_left = fields.item_spell_charges(0).unwrap_or(0);
             let triple = use_cooldown(t, entry, charges_left, cooldowns, spells, now, ui_now)?;
             Some((usize::from(slot0) + 1, triple))
@@ -875,7 +884,7 @@ fn bag_family_name(
     }
     .filter(|&g| g != 0)?;
     let entry = objects.object(guid)?.object_entry().filter(|&e| e != 0)?;
-    let family = items.template(entry, guid, commands)?.bag_family;
+    let family = items.template(entry, guid, Ask::New(commands))?.bag_family;
     families.name(family).map(str::to_string)
 }
 
@@ -1108,7 +1117,7 @@ pub(crate) fn feed_containers(
             let name = (entry != 0)
                 .then(|| {
                     items
-                        .template(entry, bag_guid, &commands)
+                        .template(entry, bag_guid, Ask::New(&commands))
                         .map(|t| t.name.clone())
                 })
                 .flatten();
@@ -1192,7 +1201,7 @@ pub(crate) fn feed_containers(
             let name = (entry != 0)
                 .then(|| {
                     items
-                        .template(entry, bag_guid, &commands)
+                        .template(entry, bag_guid, Ask::New(&commands))
                         .map(|t| t.name.clone())
                 })
                 .flatten();

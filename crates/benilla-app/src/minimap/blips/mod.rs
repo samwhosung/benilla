@@ -45,6 +45,7 @@ use benilla_ui::script::UiScript;
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
 use crate::net::{Embodied, Guid, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
 /// The landmark rank radius in yards (`0x8116cc`).
@@ -421,7 +422,7 @@ pub(super) fn drive_blip_tooltip(
         MinimapBlipHover::None => None,
         MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
         MinimapBlipHover::Npc(npc, grey) => names
-            .resolve(&objects, *npc, &commands)
+            .resolve(&objects, *npc, Ask::New(&commands))
             .map(|n| (n.to_string(), *grey)),
         MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
     };

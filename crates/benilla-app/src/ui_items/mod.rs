@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects};
+use crate::query_cache::Ask;
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
@@ -559,7 +560,7 @@ pub(crate) fn has_key(
             return false;
         };
         items
-            .template(entry, guid, commands)
+            .template(entry, guid, Ask::New(commands))
             .is_some_and(|t| t.bag_family == BAG_FAMILY_KEYS)
     })
 }

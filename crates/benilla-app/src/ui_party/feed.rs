@@ -19,6 +19,7 @@ use crate::ui_script::gate;
 
 use super::pets::{self, Roster};
 use super::GroupState;
+use crate::query_cache::Ask;
 
 // ─── The VM feed and drain ───────────────────────────────────────────────────────────────────────
 
@@ -829,7 +830,11 @@ pub(super) fn drain_party(
                     selection
                         .guid
                         .filter(|g| benilla_protocol::guid::is_player(*g))
-                        .and_then(|g| names.resolve_player(g, &commands).map(str::to_string))
+                        .and_then(|g| {
+                            names
+                                .resolve_player(g, Ask::New(&commands))
+                                .map(str::to_string)
+                        })
                 } else {
                     member_for_token(&group, &token).map(|m| m.name.clone())
                 };

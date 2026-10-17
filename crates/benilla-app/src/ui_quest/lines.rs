@@ -10,6 +10,7 @@ use benilla_ui::script::UiScript;
 
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp};
+use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, FillArg, MessageSink, Shown, UiError};
 use crate::ui_quest_log::QuestLog;
 
@@ -129,7 +130,7 @@ fn resolve(
             coin_text(copper, &|k| get(k).unwrap_or_default()),
         )),
         // The name is `0x5d8b00`'s with no random property, the link `0x52adb0`'s.
-        QuestLine::Item(entry) => match items.template(entry, 0, commands) {
+        QuestLine::Item(entry) => match items.template(entry, 0, Ask::New(commands)) {
             Some(t) => Resolved::Show(UiError::s(
                 "ERR_QUEST_REWARD_ITEM_S",
                 crate::ui_items::item_link(entry, &t.name, t.quality),
@@ -146,7 +147,7 @@ fn quest<'a>(
     quest_log: &'a QuestLog,
     commands: &NetCommands,
 ) -> Result<&'a benilla_protocol::messages::QuestTemplate, Resolved> {
-    match quest_log.template(id, commands) {
+    match quest_log.template(id, Ask::New(commands)) {
         Some(t) => Ok(t),
         None if quest_log.template_answered_unknown(id) => Err(Resolved::Drop),
         None => Err(Resolved::Wait),
@@ -337,7 +338,7 @@ mod tests {
             let (tx, _) = crossbeam_channel::unbounded();
             world
                 .resource::<Items>()
-                .template(9_999, 0, &crate::net::NetCommands(tx));
+                .template(9_999, 0, Ask::New(&crate::net::NetCommands(tx)));
             world.resource_mut::<Items>().insert_template(9_999, None);
             let mut lines = world.resource_mut::<QuestLines>();
             lines.push(QuestLine::Completed(783));

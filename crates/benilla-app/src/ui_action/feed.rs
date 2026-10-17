@@ -4,6 +4,7 @@
 //! and feeds the stance page (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc`
 //! BonusActionBar column, `0x4e4fc0`).
 
+use crate::query_cache::Ask;
 use crate::ui_items::action_count;
 use std::collections::{HashMap, HashSet};
 
@@ -180,7 +181,7 @@ pub(super) fn feed_actions(
                             .or_else(|| d.reagents.iter().map(|&(id, _)| id).find(|&id| id != 0))
                     }?;
                     let cached = items
-                        .template(failing, 0, &commands)
+                        .template(failing, 0, Ask::New(&commands))
                         .map(|i| i.name.clone());
                     let name = match cached {
                         Some(name) => name,
@@ -385,7 +386,9 @@ pub(super) fn feed_actions(
                 ACTION_KIND_ITEM => {
                     // Never nil: the reference's resolver `0x5d88b0` returns the question mark,
                     // and the stock `ActionButton.lua:158` hides the icon on a nil texture.
-                    let template = items.template(button.action, 0, &commands).cloned();
+                    let template = items
+                        .template(button.action, 0, Ask::New(&commands))
+                        .cloned();
                     let texture = template
                         .as_ref()
                         .and_then(|t| icons.as_ref()?.catalog.get(t.display_info_id)?.icon.clone())

@@ -18,6 +18,7 @@ use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::query_cache::QueryCache;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
@@ -213,7 +214,7 @@ impl PetitionState {
 
     /// Ask once per petition id; the feed's next rebuild reads the answer.
     fn request_record(&self, petition_id: u32, item: u64, commands: &NetCommands) {
-        self.records.get_or_ask(petition_id, || {
+        self.records.lookup_new(petition_id, || {
             let _ = commands
                 .0
                 .send(ClientCommand::PetitionQuery { petition_id, item });
@@ -259,7 +260,7 @@ impl PetitionState {
             is_charter,
             title,
             owner: names
-                .resolve_player(owner_guid, commands)
+                .resolve_player(owner_guid, Ask::New(commands))
                 .map(str::to_string),
         })
     }
@@ -277,7 +278,9 @@ impl PetitionState {
         if !open.signers.contains(&signer) {
             open.signers.push(signer);
         }
-        names.resolve_player(signer, commands).map(str::to_string)
+        names
+            .resolve_player(signer, Ask::New(commands))
+            .map(str::to_string)
     }
 
     /// The `MSG_PETITION_DECLINE` `ClosePetition()` sends (`0x4f3f60`'s leg at `0x4f3fb5`), only

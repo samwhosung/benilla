@@ -12,6 +12,7 @@ use crate::debug_panel::{overlay_text, OVERLAY_FILL, OVERLAY_TEXT_DIM};
 use crate::net::{Guid, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
 
+use crate::query_cache::Ask;
 use crate::ui_script::InspectMode;
 
 /// Records kept in the ring buffer.
@@ -178,7 +179,7 @@ pub(super) fn journal_ui(
                             "you".to_string()
                         } else {
                             names
-                                .resolve(&objects, r.caster, &net_commands)
+                                .resolve(&objects, r.caster, Ask::New(&net_commands))
                                 .map(str::to_string)
                                 .unwrap_or_else(|| format!("guid {:#x}", r.caster))
                         };

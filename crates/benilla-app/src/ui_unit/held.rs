@@ -17,6 +17,7 @@ use super::{enrich_unit, faction_group, faction_group_localized, snapshot, unit_
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::{Candidacy, Factions, NameSearch};
 use crate::ui_script::{gate, VmMemo};
 
@@ -42,7 +43,7 @@ impl HeldUnits<'_> {
     pub(super) fn state(&self, store: &ObjectStore, guid: u64) -> UnitState {
         let name = self
             .names
-            .resolve_unit(guid, Some(store), self.commands)
+            .resolve_unit(guid, Some(store), Ask::New(self.commands))
             .map(str::to_string);
         self.state_named(store, guid, name)
     }

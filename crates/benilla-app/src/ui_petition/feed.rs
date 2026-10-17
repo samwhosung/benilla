@@ -17,6 +17,7 @@ use crate::ui_items::{find_item, ItemSearch};
 use crate::ui_session::{CoreCloses, NpcWindow};
 
 use super::{lines, GuildRegistrarState, PetitionState};
+use crate::query_cache::Ask;
 
 /// What the feed last announced of the charter, so the events fire on edges rather than every
 /// frame. It is the session's, not the VM's: every `PETITION_SHOW` the reference fires answers a
@@ -91,7 +92,11 @@ pub(super) fn feed_petition(
         .map(|o| {
             o.signers
                 .iter()
-                .map(|s| names.resolve_player(*s, &commands).map(str::to_string))
+                .map(|s| {
+                    names
+                        .resolve_player(*s, Ask::New(&commands))
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -109,7 +114,9 @@ pub(super) fn feed_petition(
             body_text: r.body_text.clone(),
             max_signatures: r.required,
             // Nil until the name lands, and not waited for.
-            originator: names.resolve_player(o.owner, &commands).map(str::to_string),
+            originator: names
+                .resolve_player(o.owner, Ask::New(&commands))
+                .map(str::to_string),
             // The record's owner, which the binding compares (`0x4f447a`), not the packet's.
             is_originator: r.owner == me,
         })
@@ -274,7 +281,7 @@ pub(super) fn drain_petition(
                     .send(ClientCommand::OfferPetition { item, player });
                 // Printed on the send, unconfirmed: the server answers only the target.
                 let name = names
-                    .resolve_player(player, &commands)
+                    .resolve_player(player, Ask::New(&commands))
                     .unwrap_or_default()
                     .to_string();
                 petition.lines.push(lines::offered_line(&name));

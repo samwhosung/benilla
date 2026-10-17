@@ -22,6 +22,7 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
 use super::kit::{self, KitRef, SoundKits};
 use super::{SoundConfig, SoundOutput};
+use crate::query_cache::Ask;
 
 /// Drain the VM's queued `PlaySound` intents into the kit player; drained even with no catalog,
 /// so the queue cannot grow unbounded.
@@ -158,7 +159,7 @@ fn play_item_gesture_sounds(
             // The template is cached by now (the bag drew the icon); one still in flight is
             // silent, like the client's null-record return.
             let Some(display_id) = items
-                .template(item_id, 0, &net)
+                .template(item_id, 0, Ask::New(&net))
                 .map(|t| t.display_info_id)
             else {
                 return;

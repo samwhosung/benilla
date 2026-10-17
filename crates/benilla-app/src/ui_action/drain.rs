@@ -14,6 +14,7 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::spell::{cast_target, CastLadder};
 
 use super::{attack_actor_refusal, PlayerActions, UiErrorKeys, SPELL_ATTACK};
+use crate::query_cache::Ask;
 
 /// What clicking an item action does, and to which copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,7 +310,7 @@ pub(crate) fn use_action(
             };
             let template = ladder
                 .items
-                .template(b.action, 0, &ladder.commands)
+                .template(b.action, 0, Ask::New(&ladder.commands))
                 .cloned();
             // The reference bails on a null template too; the icon resolve usually cached it.
             let Some(template) = template else {
@@ -362,7 +363,9 @@ pub(crate) fn use_action(
                                 .object(guid)
                                 .and_then(|o| o.object_entry())
                                 .and_then(|entry| {
-                                    ladder.items.template(entry, guid, &ladder.commands)
+                                    ladder
+                                        .items
+                                        .template(entry, guid, Ask::New(&ladder.commands))
                                 })
                                 .map(|t| t.display_info_id)
                             {

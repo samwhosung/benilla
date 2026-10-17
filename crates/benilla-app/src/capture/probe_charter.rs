@@ -34,6 +34,7 @@ use crate::net::{
     ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectStore, Objects, SelfPlayer,
 };
 use crate::player::Player;
+use crate::query_cache::Ask;
 use crate::target::cursor_mode::npc_flags;
 use crate::ui_gossip::GossipState;
 use crate::ui_items::{find_item, ItemSearch, PACK_SLOTS};
@@ -640,7 +641,7 @@ fn charter_probe(
             // `ITEM_FLAG_CHARTER`. Folded into one `Option` so a missing template still times out.
             let ready = found.and_then(|(bag_index, slot, guid)| {
                 items
-                    .template(CHARTER_ITEM_ENTRY, guid, &net)
+                    .template(CHARTER_ITEM_ENTRY, guid, Ask::New(&net))
                     .map(|t| (bag_index, slot, guid, t.flags))
             });
             if let Some((bag_index, slot, guid, flags)) = ready {

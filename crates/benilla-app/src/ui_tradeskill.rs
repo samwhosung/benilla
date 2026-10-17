@@ -24,6 +24,7 @@ use crate::creature_anim::{CastEvent, CastEventKind};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::spell::{cast_target, CastCommit, CastLadder};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
@@ -230,7 +231,7 @@ fn recipe_icon(
     if item == 0 {
         return None;
     }
-    let display = items.template(item, 0, commands)?.display_info_id;
+    let display = items.template(item, 0, Ask::New(commands))?.display_info_id;
     item_icon(icons, display)
 }
 
@@ -258,7 +259,7 @@ fn resolve_recipe(
     let mut num_available = u32::MAX;
     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
         let have = count_of(&store.0, objects, entry, InventoryScope::DEFAULT);
-        let (name, icon) = match items.template(entry, 0, commands) {
+        let (name, icon) = match items.template(entry, 0, Ask::New(commands)) {
             Some(t) => (Some(t.name.clone()), item_icon(icons, t.display_info_id)),
             None => (None, None),
         };
@@ -294,13 +295,15 @@ fn resolve_recipe(
     // breaks ties on (`record+0x14`).
     let (group, product_inv_type, product_item_level) = (product_item != 0)
         .then(|| {
-            items.template(product_item, 0, commands).map(|t| {
-                let name = subclasses
-                    .and_then(|sc| sc.0.name(t.class, t.subclass))
-                    .unwrap_or_default()
-                    .to_string();
-                ((t.class, t.subclass, name), t.inventory_type, t.item_level)
-            })
+            items
+                .template(product_item, 0, Ask::New(commands))
+                .map(|t| {
+                    let name = subclasses
+                        .and_then(|sc| sc.0.name(t.class, t.subclass))
+                        .unwrap_or_default()
+                        .to_string();
+                    ((t.class, t.subclass, name), t.inventory_type, t.item_level)
+                })
         })
         .flatten()
         .map_or((None, 0, 0), |(g, it, il)| (Some(g), it, il));
@@ -316,7 +319,7 @@ fn resolve_recipe(
     }
     for &t in d.totems.iter().filter(|&&t| t != 0) {
         let have = count_of(&store.0, objects, t, InventoryScope::DEFAULT) > 0;
-        if let Some(info) = items.template(t, 0, commands) {
+        if let Some(info) = items.template(t, 0, Ask::New(commands)) {
             tools.push((info.name.clone(), have));
         }
     }

@@ -18,6 +18,7 @@ use benilla_ui::script::{BattlefieldFlagView, BattlefieldPositionView, UiScript}
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, EnteredWorldMessage, GuidIndex, NetCommands, NetEntity, SelfGuid};
+use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
 use crate::ui_script::{UiFeed, UiInput};
@@ -137,7 +138,9 @@ fn feed_battlefield_positions(
             continue;
         }
         let (x, y) = live_or_packet(p, &guids, &unit_pos);
-        let name = names.resolve_player(p.guid, &commands).map(str::to_string);
+        let name = names
+            .resolve_player(p.guid, Ask::New(&commands))
+            .map(str::to_string);
         match name {
             None => {
                 if !pending_names.contains(&p.guid) {

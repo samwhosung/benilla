@@ -7,7 +7,7 @@ use benilla_protocol::messages::{ObjectFields, ObjectType};
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands, Objects};
-use crate::query_cache::QueryCache;
+use crate::query_cache::{Ask, QueryCache};
 
 /// `Lock.dbc`: decides use against cast, and which `LockType` the opener spell must match.
 #[derive(Resource)]
@@ -110,13 +110,11 @@ impl GameObjectTemplates {
         }
     }
 
-    /// A reader's ask for an object's template, run every frame while it is missing (a hover, a
-    /// quest's background): a refused entry is asked again only once the window from the refusal
-    /// has passed ([`QueryCache::get_or_ask`]).
-    pub(crate) fn request(&self, guid: u64, fields: &ObjectFields, commands: &NetCommands) {
+    /// A reader's ask for an object's template (a hover, a quest's background), as `ask` says.
+    pub(crate) fn request(&self, guid: u64, fields: &ObjectFields, ask: Ask<'_>) {
         if let Some(entry) = Self::key(fields) {
             self.templates
-                .get_or_ask(entry, || Self::send(entry, guid, commands));
+                .read(entry, ask, |commands| Self::send(entry, guid, commands));
         }
     }
 
@@ -374,8 +372,8 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let commands = NetCommands(tx);
         let mut t = GameObjectTemplates::default();
-        t.request(boat, &fields, &commands);
-        t.request(boat, &fields, &commands);
+        t.request(boat, &fields, Ask::New(&commands));
+        t.request(boat, &fields, Ask::New(&commands));
         let asked: Vec<_> = rx
             .try_iter()
             .map(|c| match c {
@@ -392,7 +390,7 @@ mod tests {
         assert_eq!(mo.map(|m| m.taxi_path_id), Some(292), "read by the field");
 
         // A second object of the same template shares the one query.
-        t.request(boat + 2, &fields, &commands);
+        t.request(boat + 2, &fields, Ask::New(&commands));
         assert!(rx.try_recv().is_err(), "the cached entry is not re-asked");
     }
 
@@ -402,7 +400,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let commands = NetCommands(tx);
         let mut t = GameObjectTemplates::default();
-        t.request(1, &ObjectFields::default(), &commands);
+        t.request(1, &ObjectFields::default(), Ask::New(&commands));
         assert!(rx.try_recv().is_err());
         t.insert(0, 3, "Chest".into(), &[0; 24]);
         assert!(t.of(&ObjectFields::default()).is_none());

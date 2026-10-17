@@ -9,6 +9,7 @@ use benilla_protocol::guid;
 use super::probes::ProbeClock;
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 use benilla_world::view::WorldCamera;
 
 /// How far the subject gate's warning looks when listing what is nearby.
@@ -153,7 +154,7 @@ fn fire_live_shot(
             }
             let dist = cam_pose.translation.distance(tf.translation);
             let name = names
-                .resolve_unit(guid.0, store, &net_commands)
+                .resolve_unit(guid.0, store, Ask::New(&net_commands))
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("<unresolved 0x{:x}>", guid.0));
             if dist <= shot.require_dist.max(REQUIRE_NEARBY_RANGE) {

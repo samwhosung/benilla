@@ -20,6 +20,7 @@ use crate::net::{GuidIndex, NetCommands, ObjectStore};
 use crate::ui_script::gate;
 
 use super::GroupState;
+use crate::query_cache::Ask;
 
 /// Which roster a pet token counts its owner in: the two resolve the pet's guid apart
 /// (`0x4e81d0` behind the owner's online bit, `0x491960` with none).
@@ -133,7 +134,7 @@ pub(super) fn member_pet(
         Some(store) => {
             let name = look
                 .names
-                .resolve_unit(guid, Some(store), look.commands)
+                .resolve_unit(guid, Some(store), Ask::New(look.commands))
                 .map(str::to_string);
             crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types)
         }

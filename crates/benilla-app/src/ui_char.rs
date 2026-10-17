@@ -17,6 +17,7 @@ use benilla_ui::strings::Arg;
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_items::{find_equip_slot, item_link};
 use crate::ui_script::{gate, UiFeed, UiInput};
 
@@ -365,7 +366,7 @@ fn weapon_skill_id(
     let Some(entry) = slot_entry(store, objects, slot0) else {
         return SKILL_UNARMED;
     };
-    let Some(t) = items.template(entry, 0, commands) else {
+    let Some(t) = items.template(entry, 0, Ask::New(commands)) else {
         return SKILL_UNARMED; // in flight: refined when the template lands
     };
     if t.class != ITEM_CLASS_WEAPON {
@@ -473,16 +474,16 @@ fn combat_stats(
     // The off hand counts only as a weapon (a shield does not swing); both flags read false
     // until the template lands.
     let has_offhand = slot_entry(store, objects, SLOT_OFF_HAND)
-        .and_then(|e| items.template(e, 0, commands))
+        .and_then(|e| items.template(e, 0, Ask::New(commands)))
         .is_some_and(|t| t.class == ITEM_CLASS_WEAPON);
     let has_wand = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, commands))
+        .and_then(|e| items.template(e, 0, Ask::New(commands)))
         .is_some_and(|t| t.class == ITEM_CLASS_WEAPON && t.subclass == SUBCLASS_WAND);
 
     let main_skill = weapon_skill_id(store, objects, items, commands, SLOT_MAIN_HAND);
     let offhand_skill = weapon_skill_id(store, objects, items, commands, SLOT_OFF_HAND);
     let ranged_skill_id = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, commands))
+        .and_then(|e| items.template(e, 0, Ask::New(commands)))
         .filter(|t| t.class == ITEM_CLASS_WEAPON)
         .and_then(|t| weapon_subclass_skill(t.subclass));
 
@@ -543,10 +544,11 @@ fn slot_view(
     // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
     // the enchant lines below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
-    let creator = obj
-        .item_creator()
-        .filter(|&g| g != 0)
-        .and_then(|g| names.resolve_player(g, commands).map(str::to_string));
+    let creator = obj.item_creator().filter(|&g| g != 0).and_then(|g| {
+        names
+            .resolve_player(g, Ask::New(commands))
+            .map(str::to_string)
+    });
     let gift_creator = crate::items::gift_creator_name(obj, names, commands);
     let (creator_guid, gift_creator_guid) = crate::items::creator_guids(obj);
     // All seven enchant slots: our own gear streams as item objects, where an inspected player's
@@ -565,7 +567,7 @@ fn slot_view(
     // `ITEM_FIELD_RANDOM_PROPERTIES_ID`, the roll behind an "of the Bear" name; its enchants are
     // already in the slots above.
     let roll = obj.item_random_properties_id();
-    let t = items.template(entry, guid, commands);
+    let t = items.template(entry, guid, Ask::New(commands));
     let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
         Some(t) => {
             let name = rolls.name(&t.name, roll);
@@ -684,7 +686,7 @@ fn inventory_slots(
     let mut inv: InventorySlots = Default::default();
     let ammo_id = store.0.player_ammo_id().unwrap_or(0);
     if ammo_id != 0 {
-        let t = items.template(ammo_id, 0, commands);
+        let t = items.template(ammo_id, 0, Ask::New(commands));
         let (name, quality, display, link) = match t {
             Some(t) => (
                 Some(t.name.clone()),

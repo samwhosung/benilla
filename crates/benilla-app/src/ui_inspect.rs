@@ -16,6 +16,7 @@ use benilla_ui::script::{InspectView, InvSlotView, InventorySlots, ScriptValue, 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore};
+use crate::query_cache::Ask;
 use crate::ui_script::UiFeed;
 
 /// The reference's `InspectFrame.unit`. The token, not the guid, is the identity: the reference
@@ -67,7 +68,7 @@ fn inspect_slot_view(
     // servers leave empty.
     let roll = store.0.player_visible_item_properties(slot0);
     // By entry alone (guid 0), as the reference's item cache asks: there is no item object.
-    let (name, quality, display) = match items.template(entry, 0, commands) {
+    let (name, quality, display) = match items.template(entry, 0, Ask::New(commands)) {
         Some(t) => (
             Some(rolls.name(&t.name, roll)),
             t.quality,

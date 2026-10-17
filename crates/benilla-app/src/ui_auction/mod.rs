@@ -20,6 +20,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -362,7 +363,7 @@ fn high_bidder(
             return AuctionHighBidder::Nil;
         }
         return names
-            .resolve_player(entry.bidder_guid, commands)
+            .resolve_player(entry.bidder_guid, Ask::New(commands))
             .map_or(AuctionHighBidder::Nil, |n| {
                 AuctionHighBidder::Name(n.to_string())
             });
@@ -386,7 +387,7 @@ fn resolve_row(
     commands: &NetCommands,
     rolls: crate::items::RollCatalogs,
 ) -> AuctionRow {
-    let template = items.template(entry.item_entry, 0, commands);
+    let template = items.template(entry.item_entry, 0, Ask::New(commands));
     let roll = entry.random_property_id as u32;
     let name = template.map(|t| rolls.name(&t.name, roll));
     let quality = template.map(|t| t.quality);
@@ -420,7 +421,7 @@ fn resolve_row(
         player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
         high_bidder: high_bidder(list, entry, self_guid, names, commands),
         owner: names
-            .resolve_player(entry.owner_guid, commands)
+            .resolve_player(entry.owner_guid, Ask::New(commands))
             .map(str::to_string),
         link,
     }
@@ -562,7 +563,7 @@ fn feed_auction(
         for msg in std::mem::take(&mut auction.messages) {
             let fill = match msg.item {
                 None => None,
-                Some(entry) => match items.template(entry, 0, &commands) {
+                Some(entry) => match items.template(entry, 0, Ask::New(&commands)) {
                     Some(t) => Some(t.name.clone()),
                     None => {
                         deferred.push(msg);

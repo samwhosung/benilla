@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_unit::UnitNames;
 
 /// The unit a `$`-macro expands against: the self player, or the speaker at the reference's four
@@ -175,7 +176,9 @@ pub(crate) fn player_identity(
 ) -> Option<Subject> {
     let (store, guid) = self_q.iter().next()?;
     Some(Subject {
-        name: names.resolve_player(guid.0, commands)?.to_string(),
+        name: names
+            .resolve_player(guid.0, Ask::New(commands))?
+            .to_string(),
         race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
         class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),
@@ -210,7 +213,9 @@ pub(crate) fn subject_for_guid(
         return None;
     }
     let store = index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    let name = names.resolve_unit(guid, store, commands)?.to_string();
+    let name = names
+        .resolve_unit(guid, store, Ask::New(commands))?
+        .to_string();
     if let Some(store) = store {
         return Some(Subject {
             name,

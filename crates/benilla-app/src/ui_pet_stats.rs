@@ -13,6 +13,7 @@ use benilla_ui::script::{PetStats, ScriptValue, UiScript};
 
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore};
+use crate::query_cache::Ask;
 use crate::ui_pet::{PetBar, PetUnit};
 use crate::ui_unit::UnitFeed;
 
@@ -77,7 +78,7 @@ fn family_for(
     };
     // vmangos answers a creature query off the entry alone (`HandleCreatureQueryOpcode`), so the
     // guid is 0.
-    let _ = names.resolve_creature(entry, 0, commands);
+    let _ = names.resolve_creature(entry, 0, Ask::New(commands));
     let Some(tables) = tables else {
         return (None, None, Vec::new());
     };

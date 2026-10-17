@@ -12,6 +12,7 @@ use benilla_ui::script::{ScriptValue, UiScript};
 use crate::item_watch::ItemNotice;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage};
+use crate::query_cache::Ask;
 use crate::ui_items::action_count;
 
 /// The bar's 120 slots, as Lua action ids.
@@ -83,7 +84,7 @@ impl Counter<'_> {
     /// template, requested here as the reference does (`0x4e6d78`).
     fn count(&self, entry: u32) -> u32 {
         self.store.map_or(0, |s| {
-            let template = self.items.template(entry, 0, self.commands);
+            let template = self.items.template(entry, 0, Ask::New(self.commands));
             action_count(&s.0, self.objects, entry, template)
         })
     }

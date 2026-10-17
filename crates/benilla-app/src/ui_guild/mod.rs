@@ -13,7 +13,7 @@ use benilla_ui::script::{LastOnline, UnitGuild};
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands};
-use crate::query_cache::{QueryCache, Refused};
+use crate::query_cache::{Ask, QueryCache, Refused};
 use crate::ui_script::{UiFeed, UiInput};
 
 mod feed;
@@ -174,31 +174,27 @@ impl GuildState {
         self.dirty = true;
     }
 
-    /// Send `CMSG_GUILD_QUERY` for a guild we hold nothing for, once while in flight and while a
-    /// refusal is being read.
-    fn request_identity(&self, guild_id: u32, commands: &NetCommands) {
-        if guild_id != 0 {
-            self.identities.get_or_ask(guild_id, || {
-                let _ = commands.0.send(ClientCommand::GuildQuery { guild_id });
-            });
-        }
-    }
-
-    /// The guild cache's lookup with a callback on an event (`0x560e30`): a refused guild is
-    /// asked again at once ([`QueryCache::lookup`]). Guild 0 is no guild (`0x560e3d`).
-    fn lookup_identity(&self, guild_id: u32, commands: &NetCommands) -> Option<&Identity> {
+    /// Reads `guild_id` as `ask` says, sending `CMSG_GUILD_QUERY` on an ask. Guild 0 is no guild
+    /// (`0x560e3d`).
+    fn resolve_identity(&self, guild_id: u32, ask: Ask<'_>) -> Option<&Identity> {
         if guild_id == 0 {
             return None;
         }
-        self.identities.lookup(guild_id, || {
+        self.identities.read(guild_id, ask, |commands| {
             let _ = commands.0.send(ClientCommand::GuildQuery { guild_id });
         })
+    }
+
+    /// The guild cache's lookup with a callback on an event (`0x560e30`): a refused guild is
+    /// asked again at once ([`QueryCache::lookup`]).
+    fn lookup_identity(&self, guild_id: u32, commands: &NetCommands) -> Option<&Identity> {
+        self.resolve_identity(guild_id, Ask::Event(commands))
     }
 
     /// Asks for `guild_id` and lands the server's refusal of it, for a test elsewhere.
     #[cfg(test)]
     pub(crate) fn refuse_for_test(&mut self, guild_id: u32, commands: &NetCommands) {
-        self.request_identity(guild_id, commands);
+        self.resolve_identity(guild_id, Ask::New(commands));
         self.apply_query_response(GuildQueryResponse {
             guild_id,
             name: String::new(),
@@ -223,13 +219,6 @@ impl GuildState {
         self.identities.get(guild_id)
     }
 
-    /// The read that also asks: `None` on a miss, which sends the query, as the reference's
-    /// `GetGuildRosterInfo` answers nil and queries inline (`0x4d1291`).
-    fn resolve_identity(&self, guild_id: u32, commands: &NetCommands) -> Option<&Identity> {
-        self.request_identity(guild_id, commands);
-        self.identity(guild_id)
-    }
-
     /// The landed-identity counter the unit feeds watch.
     pub(crate) fn identity_generation(&self) -> u64 {
         self.identity_generation
@@ -242,7 +231,7 @@ impl GuildState {
         guild_id: u32,
         commands: &NetCommands,
     ) -> Option<[i32; 5]> {
-        let e = self.resolve_identity(guild_id, commands)?.emblem;
+        let e = self.resolve_identity(guild_id, Ask::New(commands))?.emblem;
         Some([
             e.emblem_style,
             e.emblem_color,
@@ -468,7 +457,7 @@ pub(crate) fn unit_guild(
 ) -> Option<UnitGuild> {
     let guild_id = fields.player_guild_id();
     let rank_index = fields.player_guild_rank();
-    let identity = guild.resolve_identity(guild_id, commands)?;
+    let identity = guild.resolve_identity(guild_id, Ask::New(commands))?;
     Some(UnitGuild {
         name: identity.name.clone(),
         rank_name: identity.rank_name(rank_index).to_string(),
@@ -485,7 +474,7 @@ pub(crate) fn unit_guild_name<'a>(
     commands: &NetCommands,
 ) -> Option<&'a str> {
     guild
-        .resolve_identity(fields.player_guild_id(), commands)
+        .resolve_identity(fields.player_guild_id(), Ask::New(commands))
         .map(|identity| identity.name.as_str())
 }
 
@@ -540,7 +529,7 @@ fn guild_emblem(
     guild: &mut GuildState,
     commands: &NetCommands,
 ) -> Option<GuildEmblem> {
-    let emblem = guild.resolve_identity(guild_id, commands)?.emblem;
+    let emblem = guild.resolve_identity(guild_id, Ask::New(commands))?.emblem;
     emblem.is_designed().then_some(emblem)
 }
 
@@ -931,8 +920,8 @@ mod tests {
         let (commands, rx) = net_commands();
         let mut guild = GuildState::default();
 
-        assert!(guild.resolve_identity(7, &commands).is_none());
-        assert!(guild.resolve_identity(7, &commands).is_none());
+        assert!(guild.resolve_identity(7, Ask::New(&commands)).is_none());
+        assert!(guild.resolve_identity(7, Ask::New(&commands)).is_none());
         assert_eq!(rx.try_iter().count(), 1, "asked exactly once");
 
         let generation = guild.identity_generation();
@@ -951,7 +940,7 @@ mod tests {
         assert!(!guild.identities.is_pending(7), "and no longer in flight");
         assert!(guild.identities.get(7).is_none());
         assert!(
-            guild.resolve_identity(7, &commands).is_none(),
+            guild.resolve_identity(7, Ask::New(&commands)).is_none(),
             "an empty name is not a guild"
         );
         assert_eq!(
@@ -1222,7 +1211,7 @@ mod tests {
             .identities
             .insert(7, identity("Legacy", &["GM", "Off"]));
         // An empty answer to our ask is a refusal: no such guild.
-        guild.request_identity(8, &commands);
+        guild.resolve_identity(8, Ask::New(&commands));
         let _ = rx.try_iter().count();
         guild.identities.refuse(8);
 

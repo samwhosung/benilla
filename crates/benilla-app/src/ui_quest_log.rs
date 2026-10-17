@@ -23,7 +23,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
-use crate::query_cache::QueryCache;
+use crate::query_cache::{Ask, QueryCache};
 use crate::ui_action::Spells;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_unit::UnitFeed;
@@ -61,11 +61,11 @@ impl crate::query_cache::AskOnce for QuestLog {
 }
 
 impl QuestLog {
-    /// The template, asked once while in flight: a miss sends `CMSG_QUEST_QUERY`. vmangos answers
+    /// The template, read as `ask` says: an ask sends `CMSG_QUEST_QUERY`, once while in flight. vmangos answers
     /// nothing for an id it does not know (`QuestHandler.cpp:229-231`); an answer with an empty
     /// title is a refusal ([`Self::insert_template`]).
-    pub(crate) fn template(&self, quest_id: u32, commands: &NetCommands) -> Option<&QuestTemplate> {
-        self.templates.get_or_ask(quest_id, || {
+    pub(crate) fn template(&self, quest_id: u32, ask: Ask<'_>) -> Option<&QuestTemplate> {
+        self.templates.read(quest_id, ask, |commands| {
             debug!("ui_quest_log: asking quest template (quest {quest_id})");
             let _ = commands
                 .0
@@ -194,6 +194,7 @@ mod net {
     use super::{item_added_to_quest, ItemAdd, QuestLog};
     use crate::items::Items;
     use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
+    use crate::query_cache::Ask;
     use crate::ui_items::{count_of, InventoryScope};
 
     /// Registers the template and item-added handlers and the session-end listener.
@@ -228,7 +229,7 @@ mod net {
 
         fn name(&self, item_id: u32) -> Option<String> {
             self.items
-                .template(item_id, 0, &self.commands)
+                .template(item_id, 0, Ask::New(&self.commands))
                 .map(|t| t.name.clone())
         }
     }
@@ -254,7 +255,7 @@ mod net {
             else {
                 continue;
             };
-            let Some(template) = quest_log.template(quest_id, &book.commands) else {
+            let Some(template) = quest_log.template(quest_id, Ask::New(&book.commands)) else {
                 if !quest_log.template_answered_unknown(quest_id) {
                     quest_log
                         .deferred_item_adds
@@ -458,7 +459,7 @@ fn resolve_template_item(
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
 ) -> QuestItemView {
-    let template = items.template(entry, 0, commands).cloned();
+    let template = items.template(entry, 0, Ask::New(commands)).cloned();
     let name = template.as_ref().map(|t| t.name.clone());
     let quality = template.as_ref().map(|t| t.quality).unwrap_or(1);
     let texture = template.as_ref().and_then(|t| {
@@ -503,7 +504,7 @@ fn build_objectives(
         let creature_name = (obj.creature_or_go != 0 && !is_go)
             .then(|| {
                 names
-                    .resolve_creature(obj.creature_or_go, 0, commands)
+                    .resolve_creature(obj.creature_or_go, 0, Ask::New(commands))
                     .map(str::to_string)
             })
             .flatten();
@@ -518,7 +519,7 @@ fn build_objectives(
             continue;
         }
         let item_name = items
-            .template(obj.item_id, 0, commands)
+            .template(obj.item_id, 0, Ask::New(commands))
             .map(|t| t.name.clone());
         let bag_count = count_of(store, objects, obj.item_id, InventoryScope::QUEST_ITEMS);
         if let Some(line) = item_line(
@@ -710,7 +711,11 @@ pub(crate) fn feed_quest_log(
     // every row before the filter: the miss is what sends the query.
     let cached: Vec<bool> = rows
         .iter()
-        .map(|r| quest_log.template(r.quest_id, &commands).is_some())
+        .map(|r| {
+            quest_log
+                .template(r.quest_id, Ask::New(&commands))
+                .is_some()
+        })
         .collect();
     let rows: Vec<Row> = rows
         .into_iter()
@@ -773,7 +778,7 @@ pub(crate) fn feed_quest_log(
         for &ri in row_idxs {
             let r = &rows[ri];
             let (title, level, tag, pushable, objectives, detail) =
-                match quest_log.template(r.quest_id, &commands) {
+                match quest_log.template(r.quest_id, Ask::New(&commands)) {
                     Some(t) => (
                         t.title.clone(),
                         t.level,
@@ -1071,7 +1076,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
         let mut log = QuestLog::default();
-        assert!(log.template(77, &commands).is_none());
+        assert!(log.template(77, Ask::New(&commands)).is_none());
         assert_eq!(rx.try_iter().count(), 1);
 
         let mut t = quest_template(std::array::from_fn(|_| obj(0, 0, 0, 0, "")));

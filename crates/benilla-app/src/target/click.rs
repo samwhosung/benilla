@@ -3,6 +3,7 @@
 
 use super::lock::GoLockInputs;
 use super::*;
+use crate::query_cache::Ask;
 
 /// The right-click payload leg of the reference's click router (`0x481f60`, clean clicks only,
 /// `0x514ae0`): over terrain (`0x492c90`) or nothing (`0x492d30`) any payload clears, silently.
@@ -1165,7 +1166,7 @@ pub(crate) fn resolve_go_action(
             // The toast routing keys off Lock.dbc slot 0, whichever slot the resolver walked.
             let slot0 = slots[0];
             let key = if slot0.key_type == benilla_formats::LOCK_KEY_ITEM {
-                match inputs.items.template(slot0.index, 0, net) {
+                match inputs.items.template(slot0.index, 0, Ask::New(net)) {
                     Some(info) => KeyFact::Named(info.name.clone()),
                     None => KeyFact::Unknown,
                 }
@@ -1201,7 +1202,7 @@ pub(crate) fn resolve_go_action(
     };
     // An uncached template queries and does nothing this click. `use_spell_index` is the spell
     // block ordinal, the packet's third byte.
-    let Some(tmpl) = inputs.items.template(key_entry, 0, net) else {
+    let Some(tmpl) = inputs.items.template(key_entry, 0, Ask::New(net)) else {
         return GoAction::Refuse(None);
     };
     let Some(spell_index) = tmpl.use_spell_index() else {

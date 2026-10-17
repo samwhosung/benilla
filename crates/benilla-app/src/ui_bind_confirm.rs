@@ -14,6 +14,7 @@ use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::items::{Enchants, Items};
 use crate::net::Objects;
+use crate::query_cache::Ask;
 
 /// The equip arms' `item_template.bonding` (vmangos `ItemPrototype.h` `ItemBondingType`).
 pub(crate) const BIND_WHEN_EQUIPPED: u32 = benilla_ui::script::BIND_WHEN_EQUIPPED;
@@ -117,7 +118,7 @@ impl BindGate<'_> {
         let Some(entry) = objects.object(item_guid).and_then(|o| o.object_entry()) else {
             return false;
         };
-        let Some(t) = items.template(entry, item_guid, commands) else {
+        let Some(t) = items.template(entry, item_guid, Ask::New(commands)) else {
             return false;
         };
         t.bonding == BIND_WHEN_EQUIPPED && script.item_usable(entry)
@@ -143,7 +144,7 @@ impl BindGate<'_> {
             return false;
         };
         items
-            .template(entry, item_guid, commands)
+            .template(entry, item_guid, Ask::New(commands))
             .is_some_and(|t| t.bonding == BIND_WHEN_USE)
     }
 

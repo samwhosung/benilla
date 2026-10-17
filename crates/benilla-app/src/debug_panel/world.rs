@@ -10,6 +10,7 @@ use bevy_egui::egui;
 
 use super::OVERLAY_TEXT_DIM;
 use crate::player::land::LandHere;
+use crate::query_cache::Ask;
 
 /// The World section's inputs, bundled to stay under `debug_panel_ui`'s 16-param ceiling.
 #[derive(SystemParam)]
@@ -40,7 +41,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         Some(guid) => {
             let name = world
                 .names
-                .resolve_player(guid, &world.net_commands)
+                .resolve_player(guid, Ask::New(&world.net_commands))
                 .unwrap_or("…")
                 .to_string();
             ui.strong(name);

@@ -8,6 +8,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use super::{overlay_text, OVERLAY_FILL, OVERLAY_TEXT_DIM};
 use crate::net::ObjectStore;
+use crate::query_cache::Ask;
 use crate::ui_script::{InspectMode, PointerOverUi};
 use benilla_world::interact::{WorldObject, WorldPick};
 use benilla_world::model_render::ModelKind;
@@ -291,7 +292,7 @@ pub(super) fn inspect_ui(
     // The unit's name through the ask-once cache; it fills on a later frame.
     let name_line = net_entity
         .and_then(|p| guids.get(p).ok())
-        .and_then(|g| names.resolve_unit(g.0, store, &net_commands))
+        .and_then(|g| names.resolve_unit(g.0, store, Ask::New(&net_commands)))
         .map(str::to_string);
     // Gate by kind, not field presence: a create-seeded store answers every field (absent is 0).
     let kind = net_entity.and_then(|p| kinds.get(p).ok()).map(|n| n.kind);

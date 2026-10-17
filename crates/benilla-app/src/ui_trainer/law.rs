@@ -17,6 +17,7 @@ use crate::net::NetCommands;
 use crate::ui_items::item_icon;
 
 use super::{TRAINER_TYPE_MOUNT, TRAINER_TYPE_TRADESKILL};
+use crate::query_cache::Ask;
 
 /// `GetTrainerServiceIcon 0x4d8f50`: at a tradeskill trainer (`[0xb73a08]`), the item the wire
 /// spell's first learn effect (`0x4d8ff5`/`0x4d8ffa`) teaches to create (`0x4d906a`); otherwise
@@ -47,7 +48,7 @@ pub(super) fn service_icon(
             .filter(|&e| e != 0)
         {
             return items
-                .template(product, 0, commands)
+                .template(product, 0, Ask::New(commands))
                 .map(|t| t.display_info_id)
                 .and_then(|d| item_icon(icons, d));
         }
@@ -152,7 +153,7 @@ pub(super) fn service_description(
                 && taught.effects[0] == SPELL_EFFECT_CREATE_ITEM
             {
                 if let Some(t) = items
-                    .template(taught.effect_item_type[0], 0, commands)
+                    .template(taught.effect_item_type[0], 0, Ask::New(commands))
                     .map(|item| item.description.clone())
                     .filter(|t| !t.is_empty())
                 {

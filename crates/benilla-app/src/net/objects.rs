@@ -1337,6 +1337,7 @@ mod update_tests;
 mod tests {
     use super::*;
     use crate::net::ClientCommand;
+    use crate::query_cache::Ask;
 
     /// The object packets run the item watchers in wire order: the create hook, a values block,
     /// a seat of ours, a late record, the destroy; another player's item and a resend run none.
@@ -1789,7 +1790,7 @@ mod tests {
         // A hover asks every frame while the template is missing (`ui_tooltip`): within the
         // window of the refusal, none of those asks is sent.
         for _ in 0..600 {
-            templates.request(0x11, &fields, &commands);
+            templates.request(0x11, &fields, Ask::New(&commands));
         }
         assert!(
             rx.try_recv().is_err(),

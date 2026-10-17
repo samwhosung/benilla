@@ -18,6 +18,7 @@ use crate::names::NameCache;
 use crate::net::{
     ClientCommand, NetCommands, ObjectStore, SelfGuid, SelfPlayer, WorldEnterCascadeMessage,
 };
+use crate::query_cache::Ask;
 use crate::ui_party::GroupState;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
@@ -490,7 +491,7 @@ fn feed_meeting_stone(
     for guid in pending {
         match inputs
             .names
-            .resolve_player(guid, &inputs.commands)
+            .resolve_player(guid, Ask::New(&inputs.commands))
             .map(str::to_string)
         {
             Some(name) => lines.extend(crate::ui_action::keyed_line_s(

@@ -14,6 +14,7 @@ use benilla_ui::script::{StableIntent, StablePetSlot, StableState, UiScript, NUM
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -127,7 +128,7 @@ fn resolve_pet(
     commands: &NetCommands,
 ) -> StablePetSlot {
     // Guid 0 asks for the template alone: a stabled pet has no spawn.
-    let _ = names.resolve_creature(wire.creature_entry, 0, commands);
+    let _ = names.resolve_creature(wire.creature_entry, 0, Ask::New(commands));
     let family_id = names
         .creature_record(wire.creature_entry)
         .map(|r| r.pet_family)

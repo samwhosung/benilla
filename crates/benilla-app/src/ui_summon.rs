@@ -23,6 +23,7 @@ use bevy::prelude::*;
 use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_script::{UiFeed, UiInput};
 
 /// The latched question, the reference's four globals: written by [`net::request`], read by
@@ -85,7 +86,7 @@ fn feed_summon(
     // A miss asks and reports `""` this frame; a zero guid names nobody and is never asked about.
     let summoner_name = match summon.pending() {
         Some(guid) => names
-            .resolve_player(guid, &commands)
+            .resolve_player(guid, Ask::New(&commands))
             .unwrap_or_default()
             .to_string(),
         None => String::new(),

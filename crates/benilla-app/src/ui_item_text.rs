@@ -22,7 +22,7 @@ use crate::go_templates::GameObjectTemplates;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, Objects};
-use crate::query_cache::QueryCache;
+use crate::query_cache::{Ask, QueryCache};
 use crate::ui_mail::MailOpen;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
@@ -52,9 +52,9 @@ impl PageTexts {
         self.pages.insert(page_id, PageText { text, next });
     }
 
-    /// The cached page, asked for once; `guid` is the reading object, which vmangos discards.
-    fn get_or_ask(&self, page_id: u32, guid: u64, commands: &NetCommands) -> Option<&PageText> {
-        self.pages.get_or_ask(page_id, || {
+    /// The cached page, read as `ask` says; `guid` is the reading object, which vmangos discards.
+    fn page(&self, page_id: u32, guid: u64, ask: Ask<'_>) -> Option<&PageText> {
+        self.pages.read(page_id, ask, |commands| {
             debug!("page text: asking page {page_id} (object {guid:#x})");
             let _ = commands
                 .0
@@ -366,13 +366,13 @@ pub(crate) fn object_material(
         return match go_templates.of(fields) {
             Some(go) => go.quest_material.and_then(name),
             None => {
-                go_templates.request(guid, fields, commands);
+                go_templates.request(guid, fields, Ask::New(commands));
                 None
             }
         };
     }
     let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, commands)?;
+    let t = items.template(entry, guid, Ask::New(commands))?;
     name(t.page_material)
 }
 
@@ -394,7 +394,7 @@ fn readable(
         });
     }
     let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, commands)?;
+    let t = items.template(entry, guid, Ask::New(commands))?;
     Some(Readable {
         title: t.name.clone(),
         material: name(t.page_material),
@@ -448,7 +448,7 @@ fn feed_item_text(
                 .and_then(|o| o.item_creator());
             let creator = match creator_guid {
                 None => None, // authorless
-                Some(guid) => match names.resolve_player(guid, &commands) {
+                Some(guid) => match names.resolve_player(guid, Ask::New(&commands)) {
                     Some(name) => Some(name.to_string()),
                     None => return, // name query in flight
                 },
@@ -456,7 +456,7 @@ fn feed_item_text(
             // The body, from the client's one item-text cache, which mail shares.
             let body = mail
                 .bodies
-                .get_or_ask(*text_id, || {
+                .read(*text_id, Ask::New(&commands), |commands| {
                     let _ = commands.0.send(ClientCommand::ItemTextQuery {
                         text_id: *text_id,
                         mail_id: 0,
@@ -473,7 +473,7 @@ fn feed_item_text(
                 visited.push(readable.page_head);
             }
             let page_id = *visited.last().expect("seeded just above");
-            let Some(page) = pages.get_or_ask(page_id, sess.object_guid, &commands) else {
+            let Some(page) = pages.page(page_id, sess.object_guid, Ask::New(&commands)) else {
                 return; // page query in flight
             };
             // A book has no creator line.

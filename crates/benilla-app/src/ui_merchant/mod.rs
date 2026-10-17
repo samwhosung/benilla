@@ -13,6 +13,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_items::{item_link, slot_guid, wire_pos};
 use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -169,7 +170,7 @@ fn resolve_item(
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
 ) -> MerchantItem {
-    let template = items.template(item.entry, 0, commands);
+    let template = items.template(item.entry, 0, Ask::New(commands));
     let name = template.map(|t| t.name.clone());
     let stats = template.map(|t| ItemStatsHead {
         quality: t.quality,
@@ -237,7 +238,7 @@ fn resolve_buyback(
     let obj = objects.object(guid);
     let entry = obj.and_then(|o| o.object_entry()).unwrap_or(0);
     let quantity = obj.and_then(|o| o.item_stack_count()).unwrap_or(1).max(1);
-    let template = items.template(entry, guid, commands);
+    let template = items.template(entry, guid, Ask::New(commands));
     let name = template.map(|t| t.name.clone());
     let stats = template.map(|t| ItemStatsHead {
         quality: t.quality,
@@ -293,7 +294,7 @@ fn item_repair_cost(
         return 0;
     }
     let points = max - cur;
-    let Some(t) = items.template(entry, guid, commands) else {
+    let Some(t) = items.template(entry, guid, Ask::New(commands)) else {
         return 0;
     };
     let (level, quality, class, subclass) = (t.item_level, t.quality, t.class, t.subclass);
@@ -631,9 +632,11 @@ fn feed_merchant(
     // `MERCHANT_SHOW` and `MERCHANT_UPDATE` carry no argument (`SignalEvent` `0x4fad92`,
     // `0x4facaa`) and the stock window titles with `UnitName("NPC")` (`MerchantFrame.lua:67`), so
     // the name's landing alone re-fires `MERCHANT_UPDATE`.
-    let vendor_name = open
-        .vendor
-        .and_then(|g| names.resolve(&objects, g, &commands).map(str::to_string));
+    let vendor_name = open.vendor.and_then(|g| {
+        names
+            .resolve(&objects, g, Ask::New(&commands))
+            .map(str::to_string)
+    });
     let name_changed = *last_name != vendor_name;
     if fresh == *last && !name_changed {
         return;

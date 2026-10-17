@@ -16,6 +16,7 @@ use benilla_ui::script::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStat
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::world_state_ui::WorldStateUiRes;
@@ -65,7 +66,9 @@ fn resolve_board(
 ) -> Option<Vec<BattlefieldScoreRow>> {
     let mut rows = Vec::with_capacity(log.rows.len());
     for r in &log.rows {
-        let name = names.resolve_player(r.guid, commands)?.to_string();
+        let name = names
+            .resolve_player(r.guid, Ask::New(commands))?
+            .to_string();
         let (race, class) = names
             .player_traits(r.guid)
             .map_or((0, 0), |(race, class, _)| (race, class));

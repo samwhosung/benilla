@@ -18,6 +18,7 @@ use benilla_ui::script::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQue
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, WorldEnterCascadeMessage};
 use crate::player::Player;
+use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
 use crate::ui_script::{UiFeed, UiInput};
@@ -245,7 +246,10 @@ fn feed_battlefield(
     }
     let pending = std::mem::take(&mut state.players);
     for (guid, joined) in pending {
-        let Some(name) = names.resolve_player(guid, &commands).map(str::to_string) else {
+        let Some(name) = names
+            .resolve_player(guid, Ask::New(&commands))
+            .map(str::to_string)
+        else {
             state.players.push((guid, joined));
             continue;
         };

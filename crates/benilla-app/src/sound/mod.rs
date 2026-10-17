@@ -5,6 +5,7 @@ use bevy::prelude::*;
 
 use crate::net::Embodied;
 use crate::player::{head_height, CameraPivot, Player};
+use crate::query_cache::Ask;
 use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
 
@@ -287,7 +288,7 @@ pub(super) fn worn_chest_material(
     const EQUIPMENT_SLOT_CHEST: u8 = 4;
     let guid = store?.0.player_inv_slot(EQUIPMENT_SLOT_CHEST)?;
     let entry = objects.object(guid)?.object_entry()?;
-    Some(items.held(entry, net)?.material)
+    Some(items.held(entry, Ask::New(net))?.material)
 }
 
 /// This frame's listener pose in Bevy space, set by [`update_audio_listener`] and read by every

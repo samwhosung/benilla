@@ -10,6 +10,7 @@ use benilla_ui::script::{TaxiUiState, UiScript};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::UNIT_FLAG_TAXI_FLIGHT;
+use crate::query_cache::Ask;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
@@ -225,7 +226,7 @@ fn feed_taxi(
                 .0
                 .get(&open.flightmaster)
                 .and_then(|&e| stores.get(e).ok());
-            names.resolve_unit(open.flightmaster, store, &commands)
+            names.resolve_unit(open.flightmaster, store, Ask::New(&commands))
         })
         .map(str::to_string);
     let name_changed = *last_name != flightmaster_name;

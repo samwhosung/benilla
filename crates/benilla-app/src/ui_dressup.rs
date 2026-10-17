@@ -12,6 +12,7 @@ use crate::entities::equip_slot;
 use crate::items::Items;
 use crate::net::{NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::portrait::{DressUpLook, DressUpPreview};
+use crate::query_cache::Ask;
 use crate::ui_script::UiFeed;
 
 /// Every rendered equipment slot, the set [`equip_slot`] can map an item into.
@@ -135,7 +136,7 @@ impl DressUpRoom {
     fn resolve_pending(&mut self, items: &Items, commands: &NetCommands) {
         let mut pending = std::mem::take(&mut self.pending);
         pending.retain(|item| {
-            let Some(t) = items.template(*item, 0, commands) else {
+            let Some(t) = items.template(*item, 0, Ask::New(commands)) else {
                 return true; // in flight
             };
             let (display_id, inventory_type) = (t.display_info_id, t.inventory_type as u8);
@@ -241,7 +242,7 @@ fn player_look(
             continue;
         };
         // The visible-item field carries an item entry; the display id is on its template.
-        if let Some(t) = items.template(entry, 0, commands) {
+        if let Some(t) = items.template(entry, 0, Ask::New(commands)) {
             equipment[idx] = CharEnumItem {
                 display_id: t.display_info_id,
                 inventory_type: t.inventory_type as u8,

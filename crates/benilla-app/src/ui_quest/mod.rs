@@ -17,6 +17,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, Spells, UiError};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -305,7 +306,7 @@ fn resolve_item(
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
 ) -> QuestItemView {
-    let template = items.template(it.item_id, 0, commands);
+    let template = items.template(it.item_id, 0, Ask::New(commands));
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality).unwrap_or(1);
     let texture = icons
@@ -502,9 +503,11 @@ pub(crate) fn feed_quest(
         });
         st
     });
-    let npc_name = giver
-        .npc
-        .and_then(|g| names.resolve(&objects, g, &commands).map(str::to_string));
+    let npc_name = giver.npc.and_then(|g| {
+        names
+            .resolve(&objects, g, Ask::New(&commands))
+            .map(str::to_string)
+    });
     let name_changed = *last_name != npc_name;
     if fresh == *last && !name_changed {
         return;

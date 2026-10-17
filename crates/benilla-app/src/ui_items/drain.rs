@@ -10,6 +10,7 @@ use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
 
 use super::{slot_guid, wire_pos, ITEM_CLASS_PROJECTILE};
+use crate::query_cache::Ask;
 
 /// The one auto-equip sender (`AutoEquipCursorItem`, `0x5e1480`, past its question). A
 /// projectile, the template class `0x5d9f30` reads (`0x5e16ff`, `0x5e1704`), loads by entry with
@@ -28,7 +29,7 @@ pub(crate) fn send_auto_equip(
 ) {
     let ammo = guid.and_then(|guid| {
         let entry = objects.object(guid)?.object_entry()?;
-        let t = items.template(entry, guid, commands)?;
+        let t = items.template(entry, guid, Ask::New(commands))?;
         (t.class == ITEM_CLASS_PROJECTILE).then_some((guid, entry))
     });
     if let Some((guid, entry)) = ammo {
@@ -176,7 +177,9 @@ impl ScriptItemUse<'_, '_> {
             .and_then(|store| slot_guid(&store.0, EQUIPMENT_BAG, slot, &ladder.objects))
             .and_then(|guid| {
                 let entry = ladder.objects.object(guid)?.object_entry()?;
-                let t = ladder.items.template(entry, guid, &ladder.commands)?;
+                let t = ladder
+                    .items
+                    .template(entry, guid, Ask::New(&ladder.commands))?;
                 Some((
                     Some(guid),
                     t.start_quest,
@@ -303,7 +306,9 @@ impl ScriptItemUse<'_, '_> {
         // `None` while the template is in flight, which the call read as a plain use.
         let clicked = ladder.objects.object(item_guid).and_then(|obj| {
             let entry = obj.object_entry()?;
-            let t = ladder.items.template(entry, item_guid, &ladder.commands)?;
+            let t = ladder
+                .items
+                .template(entry, item_guid, Ask::New(&ladder.commands))?;
             Some(Clicked {
                 guid: item_guid,
                 entry,
@@ -865,7 +870,11 @@ mod tests {
         let t = app
             .world()
             .resource::<Items>()
-            .template(CLAM_ENTRY, CLAM, app.world().resource::<NetCommands>())
+            .template(
+                CLAM_ENTRY,
+                CLAM,
+                Ask::New(app.world().resource::<NetCommands>()),
+            )
             .cloned()
             .expect("the clam's template");
         let slot = benilla_ui::script::ContainerSlot {
@@ -1674,7 +1683,7 @@ pub(super) fn drain_bind_confirm_answers(
                         if let Some(display_id) = objects
                             .object(guid)
                             .and_then(|o| o.object_entry())
-                            .and_then(|entry| items.template(entry, guid, &commands))
+                            .and_then(|entry| items.template(entry, guid, Ask::New(&commands)))
                             .map(|t| t.display_info_id)
                         {
                             equip_sound.write(crate::sound::AutoEquipSound { display_id });

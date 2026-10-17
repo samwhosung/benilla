@@ -29,6 +29,7 @@ use crate::names::NameCache;
 use crate::net::{ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::player::Player;
 use crate::portrait::{BoothPanes, PortraitImages, PortraitSource};
+use crate::query_cache::Ask;
 use crate::ui_merchant::MerchantOpen;
 
 /// Brog Hamfist `<General Supplies>`: `creature_template.entry = 151`, `npc_flags = 4`.
@@ -200,7 +201,7 @@ fn vendor_swap_probe(
                         .iter()
                         .find(|(guid, ..)| guid.0 == g)
                         .map(|(_, _, s, _)| s);
-                    names.resolve_unit(g, store, &net).is_some()
+                    names.resolve_unit(g, store, Ask::New(&net)).is_some()
                 })
             };
             let (brog_named, dobbins_named) = (named(brog), named(dobbins));

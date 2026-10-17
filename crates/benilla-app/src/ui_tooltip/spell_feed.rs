@@ -15,6 +15,7 @@ use super::keyed;
 use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::spell::usable::{self, CostBasis};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, find_item, InventoryScope, ItemSearch};
@@ -332,7 +333,7 @@ pub(super) fn build_view(
             deps.borrow_mut().reagent(entry);
             let Some(name) = vctx
                 .items
-                .template(entry, 0, vctx.commands)
+                .template(entry, 0, Ask::New(vctx.commands))
                 .map(|t| t.name.clone())
             else {
                 continue;
@@ -468,7 +469,7 @@ pub(super) fn reagent_state(
     items: &mut Items,
     commands: &NetCommands,
 ) -> (u32, bool) {
-    let named = items.template(entry, 0, commands).is_some();
+    let named = items.template(entry, 0, Ask::New(commands)).is_some();
     let owned = store.map_or(0, |s| {
         count_of(&s.0, objects, entry, InventoryScope::DEFAULT)
     });
