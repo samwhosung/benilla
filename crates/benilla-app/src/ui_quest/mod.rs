@@ -60,6 +60,11 @@ pub(crate) struct QuestGiver {
     /// vmangos sends), per guid, so a live probe can tell a drop from a query never sent.
     refused: HashMap<u64, u32>,
     refused_count: u32,
+    /// Panel publishes so far, and the last one [`feed_quest`] asked for: a publish fires the
+    /// panel's event, on which the stock frame calls `GetQuestItemInfo`, which looks the item up
+    /// with a callback (`0x5017de`).
+    panels: u64,
+    panels_asked: u64,
 }
 
 impl QuestGiver {
@@ -67,6 +72,7 @@ impl QuestGiver {
     pub(crate) fn open(&mut self, npc: u64, view: QuestView) {
         self.npc = Some(npc);
         self.view = Some(view);
+        self.panels = self.panels.wrapping_add(1);
         // `0x500bd0` clears the already-acted latch (`0x500d91`) and the chosen reward
         // (`0x500d8c`) on every panel publish.
         self.acted = false;
@@ -300,13 +306,14 @@ pub(crate) fn row_is_one_click(icon: u32) -> bool {
 type Pool = Vec<(u32, u32)>;
 
 /// One wire item row for Lua; the name and quality are `None` and white until the template lands.
+/// Read as `ask` says: `GetQuestItemInfo` looks it up with a callback (`0x5017de`).
 fn resolve_item(
     it: &QuestRewardItem,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> QuestItemView {
-    let template = items.template(it.item_id, 0, Ask::New(commands));
+    let template = items.template(it.item_id, 0, ask);
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality).unwrap_or(1);
     let texture = icons
@@ -331,10 +338,10 @@ fn resolve_items(
     src: &[QuestRewardItem],
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Vec<QuestItemView> {
     src.iter()
-        .map(|it| resolve_item(it, items, icons, commands))
+        .map(|it| resolve_item(it, items, icons, ask))
         .collect()
 }
 
@@ -361,7 +368,7 @@ fn snapshot(
     giver: &QuestGiver,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     macros: &crate::npc_text::MacroContext,
     spells: Option<&Spells>,
 ) -> Option<QuestState> {
@@ -397,8 +404,8 @@ fn snapshot(
             title: sub(&d.title),
             body: sub(&d.details),
             objectives: sub(&d.objectives),
-            choices: resolve_items(&d.choices, items, icons, commands),
-            rewards: resolve_items(&d.rewards, items, icons, commands),
+            choices: resolve_items(&d.choices, items, icons, ask),
+            rewards: resolve_items(&d.rewards, items, icons, ask),
             reward_money: d.money.max(0) as u32,
             reward_spell: reward_spell_view(d.reward_spell, spells),
             ..Default::default()
@@ -407,7 +414,7 @@ fn snapshot(
             panel: QuestPanel::Progress,
             title: sub(&p.title),
             body: sub(&p.request_text),
-            required: resolve_items(&p.required_items, items, icons, commands),
+            required: resolve_items(&p.required_items, items, icons, ask),
             required_money: p.required_money,
             completable: p.is_complete,
             ..Default::default()
@@ -416,8 +423,8 @@ fn snapshot(
             panel: QuestPanel::Reward,
             title: sub(&o.title),
             body: sub(&o.offer_text),
-            choices: resolve_items(&o.choices, items, icons, commands),
-            rewards: resolve_items(&o.rewards, items, icons, commands),
+            choices: resolve_items(&o.choices, items, icons, ask),
+            rewards: resolve_items(&o.rewards, items, icons, ask),
             reward_money: o.money.max(0) as u32,
             reward_spell: reward_spell_view(o.reward_spell, spells),
             ..Default::default()
@@ -477,11 +484,17 @@ pub(crate) fn feed_quest(
         .collect();
     show_messages(&mut script, &mut sink, "ui_quest", lines);
     let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
+    // A panel's publish, or a window this VM has not shown, is the stock frame's getter calls.
+    let ask = Ask::at(
+        last.is_none() || giver.panels != giver.panels_asked,
+        &commands,
+    );
+    giver.panels_asked = giver.panels;
     let fresh = snapshot(
         &giver,
         &items,
         icons.as_deref(),
-        &commands,
+        ask,
         &crate::npc_text::MacroContext {
             subject: player.as_ref(),
             states: &states,
@@ -498,16 +511,13 @@ pub(crate) fn feed_quest(
                 &items,
                 &go_templates,
                 materials.as_deref(),
-                &commands,
             )
         });
         st
     });
-    let npc_name = giver.npc.and_then(|g| {
-        names
-            .resolve(&objects, g, Ask::New(&commands))
-            .map(str::to_string)
-    });
+    let npc_name = giver
+        .npc
+        .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
     let name_changed = *last_name != npc_name;
     if fresh == *last && !name_changed {
         return;
@@ -766,6 +776,68 @@ mod tests {
         }
     }
 
+    /// `GetQuestItemInfo` looks each reward up with a callback (`0x5017de`) when the stock frame
+    /// calls it, on the panel's event; the frames between read. A refused reward is asked by no
+    /// frame, and again by the next panel the giver publishes.
+    #[test]
+    fn a_refused_reward_is_asked_at_the_next_panel_never_by_a_frame() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<QuestGiver>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::go_templates::GameObjectTemplates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_quest);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        // A player source, so the giver's name is no creature read: its own query is the name's.
+        const SOURCE: u64 = 0x42;
+        let publish = |app: &mut App| {
+            app.world_mut().resource_mut::<QuestGiver>().open(
+                SOURCE,
+                QuestView::Detail(QuestDetails {
+                    npc: SOURCE,
+                    quest_id: 100,
+                    title: "A Threat Within".into(),
+                    details: String::new(),
+                    objectives: String::new(),
+                    auto_finish: 1,
+                    choices: vec![],
+                    rewards: vec![triple(3000)],
+                    money: 0,
+                    reward_spell: 0,
+                }),
+            );
+        };
+        let reward_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            crate::query_cache::queries(rx)
+                .iter()
+                .filter(|c| matches!(c, ClientCommand::ItemQuery { entry: 3000, .. }))
+                .count()
+        };
+        publish(&mut app);
+        app.update();
+        assert_eq!(reward_asks(&rx), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(3000, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(reward_asks(&rx), 0, "no frame asks the refusal");
+        publish(&mut app);
+        app.update();
+        assert_eq!(reward_asks(&rx), 1, "the next panel does, once");
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(reward_asks(&rx), 0);
+    }
+
     #[test]
     fn detail_snapshot_carries_text_and_rows() {
         let mut giver = QuestGiver::default();
@@ -798,7 +870,7 @@ mod tests {
             &giver,
             &items,
             None,
-            &commands,
+            Ask::New(&commands),
             &crate::npc_text::MacroContext {
                 subject: Some(&player),
                 states: &crate::world_state::WorldStates::default(),
@@ -842,7 +914,7 @@ mod tests {
             &giver,
             &items,
             None,
-            &commands,
+            Ask::New(&commands),
             &crate::npc_text::MacroContext {
                 subject: None,
                 states: &crate::world_state::WorldStates::default(),
@@ -888,7 +960,7 @@ mod tests {
             &giver,
             &Items::default(),
             None,
-            &NetCommands(tx),
+            Ask::New(&NetCommands(tx)),
             &crate::npc_text::MacroContext {
                 subject: None,
                 states: &crate::world_state::WorldStates::default(),

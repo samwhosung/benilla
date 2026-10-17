@@ -82,6 +82,9 @@ pub(crate) struct ReadSession {
     registered: bool,
     /// Keyed on the VM; the leave-world sweep closes the reader, so no later VM inherits one.
     told: crate::ui_script::VmMemo<ItemTextTold>,
+    /// The open has looked the object's record up: the open (`0x4e32e0`) runs once, and its
+    /// callback re-enters it when the record lands.
+    opened: bool,
 }
 
 #[derive(Default)]
@@ -89,6 +92,10 @@ struct ItemTextTold {
     /// `ITEM_TEXT_BEGIN` fired: once per open, before the text lands.
     begun: bool,
     ready: bool,
+    /// The feed has run the open's or the page turn's lookups, which pass a callback (the page
+    /// or the text at `0x4e3465`, `0x4e347c`, `0x4e363c`; the creator at `0x4e39b9`); the frames
+    /// after it until `ITEM_TEXT_READY` read.
+    asked: bool,
 }
 
 #[derive(Resource, Default)]
@@ -134,6 +141,7 @@ impl ItemTextOpen {
             source,
             registered: false,
             told: Default::default(),
+            opened: false,
         });
     }
 
@@ -222,7 +230,7 @@ fn begin_item_text(
     net: Res<NetCommands>,
     mut commands: Commands,
 ) {
-    let Some(sess) = open.pending.as_ref() else {
+    let Some(sess) = open.pending.as_mut() else {
         return;
     };
     if sess.registered {
@@ -230,13 +238,14 @@ fn begin_item_text(
     }
     let object = sess.object_guid;
     let is_pages = matches!(sess.source, ReadSource::Pages { .. });
+    let ask = Ask::at(!std::mem::replace(&mut sess.opened, true), &net);
     let Some(readable) = readable(
         object,
         &objects,
         &items,
         &go_templates,
         materials.as_deref(),
-        &net,
+        ask,
     ) else {
         return; // template in flight; the reference re-enters the open when it lands
     };
@@ -351,39 +360,35 @@ struct Readable {
 }
 
 /// The material a quest from `guid` paints on, `GetQuestBackgroundMaterial` (`0x502230`), the
-/// body of `ItemTextGetMaterial`; `None` is FrameXML's Parchment. Asks for an uncached GameObject.
+/// body of `ItemTextGetMaterial`; `None` is FrameXML's Parchment. Both only read the records
+/// (`0x50229a`, `0x4e3a5a`).
 pub(crate) fn object_material(
     guid: u64,
     objects: &Objects,
     items: &Items,
     go_templates: &GameObjectTemplates,
     materials: Option<&PageMaterials>,
-    commands: &NetCommands,
 ) -> Option<String> {
     let name = |id: u32| materials.and_then(|m| m.0.name(id)).map(str::to_string);
     if benilla_protocol::guid::is_gameobject(guid) {
         let fields = objects.object(guid)?;
-        return match go_templates.of(fields) {
-            Some(go) => go.quest_material.and_then(name),
-            None => {
-                go_templates.request(guid, fields, Ask::New(commands));
-                None
-            }
-        };
+        return go_templates.of(fields)?.quest_material.and_then(name);
     }
     let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, Ask::New(commands))?;
+    let t = items.template(entry, guid, Ask::Read)?;
     name(t.page_material)
 }
 
 /// The object's [`Readable`], item or GameObject alike; `None` while its template is in flight.
+/// An item's is read as `ask` says, the open reading its page id off the record (`0x4e33ec`); a
+/// GameObject's is the one its create asked for.
 fn readable(
     guid: u64,
     objects: &Objects,
     items: &Items,
     go_templates: &GameObjectTemplates,
     materials: Option<&PageMaterials>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<Readable> {
     let name = |id: u32| materials.and_then(|m| m.0.name(id)).map(str::to_string);
     if let Some(go) = go_templates.of_guid(objects, guid) {
@@ -394,7 +399,7 @@ fn readable(
         });
     }
     let entry = objects.object(guid)?.object_entry()?;
-    let t = items.template(entry, guid, Ask::New(commands))?;
+    let t = items.template(entry, guid, ask)?;
     Some(Readable {
         title: t.name.clone(),
         material: name(t.page_material),
@@ -430,13 +435,17 @@ fn feed_item_text(
     if sess.told.get(&script).ready || !sess.told.get(&script).begun {
         return;
     }
+    let ask = Ask::at(
+        !std::mem::replace(&mut sess.told.get(&script).asked, true),
+        &commands,
+    );
     let Some(readable) = readable(
         sess.object_guid,
         &objects,
         &items,
         &go_templates,
         materials.as_deref(),
-        &commands,
+        ask,
     ) else {
         return; // template in flight; the reference re-enters the open when it lands
     };
@@ -448,7 +457,7 @@ fn feed_item_text(
                 .and_then(|o| o.item_creator());
             let creator = match creator_guid {
                 None => None, // authorless
-                Some(guid) => match names.resolve_player(guid, Ask::New(&commands)) {
+                Some(guid) => match names.resolve_player(guid, ask) {
                     Some(name) => Some(name.to_string()),
                     None => return, // name query in flight
                 },
@@ -456,7 +465,7 @@ fn feed_item_text(
             // The body, from the client's one item-text cache, which mail shares.
             let body = mail
                 .bodies
-                .read(*text_id, Ask::New(&commands), |commands| {
+                .read(*text_id, ask, |commands| {
                     let _ = commands.0.send(ClientCommand::ItemTextQuery {
                         text_id: *text_id,
                         mail_id: 0,
@@ -473,7 +482,7 @@ fn feed_item_text(
                 visited.push(readable.page_head);
             }
             let page_id = *visited.last().expect("seeded just above");
-            let Some(page) = pages.page(page_id, sess.object_guid, Ask::New(&commands)) else {
+            let Some(page) = pages.page(page_id, sess.object_guid, ask) else {
                 return; // page query in flight
             };
             // A book has no creator line.
@@ -530,8 +539,10 @@ fn drain_item_text(
             continue; // a letter has no pages; its buttons never show
         };
         if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
-            // Repaint on the next feed without re-firing BEGIN.
-            sess.told.get(&script).ready = false;
+            // Repaint on the next feed without re-firing BEGIN; the show asks for the new page.
+            let told = sess.told.get(&script);
+            told.ready = false;
+            told.asked = false;
         }
     }
     if script.take_item_text_close() {
@@ -562,6 +573,81 @@ fn turn_page(visited: &mut Vec<u32>, delta: i32, next_of: impl Fn(u32) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The open looks the record up with a callback (`0x4e32e0`), and so does `ItemTextGetCreator`
+    /// (`0x4e39b9`) and the show (`0x4e363c`); the frames that wait read. A refused creator is
+    /// asked by no frame, and again by the next read of the letter.
+    #[test]
+    fn a_refused_letter_creator_is_asked_at_the_next_read_never_by_a_frame() {
+        // `OBJECT_FIELD_ENTRY` and `ITEM_FIELD_CREATOR`'s two words.
+        const FIELD_OBJECT_ENTRY: u16 = 3;
+        const FIELD_ITEM_CREATOR: u16 = 10;
+        const LETTER: u64 = 0x4000_0000_0000_0009;
+        const AUTHOR: u64 = 0x42;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<ItemTextOpen>()
+            .init_resource::<PageTexts>()
+            .init_resource::<MailOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<GameObjectTemplates>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .add_systems(
+                Update,
+                (
+                    apply_reads,
+                    begin_item_text,
+                    feed_item_text,
+                    drain_item_text,
+                )
+                    .chain(),
+            );
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(5_000, Some(crate::items::test_template("Letter")));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            LETTER,
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (FIELD_OBJECT_ENTRY, 5_000),
+                (FIELD_ITEM_CREATOR, AUTHOR as u32),
+                (FIELD_ITEM_CREATOR + 1, 0),
+            ]),
+            false,
+        );
+        let names_asked = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            crate::query_cache::queries(rx)
+                .iter()
+                .filter(|c| matches!(c, ClientCommand::NameQuery { guid: AUTHOR }))
+                .count()
+        };
+        app.world_mut()
+            .resource_mut::<ItemTextOpen>()
+            .read_letter(LETTER, 77);
+        app.update();
+        app.update();
+        assert_eq!(names_asked(&rx), 1, "the read asks the creator");
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(AUTHOR, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(names_asked(&rx), 0, "no waiting frame asks the refusal");
+        // A close, then a new read of the letter.
+        close_core(app.world_mut());
+        assert!(app.world().resource::<ItemTextOpen>().pending.is_none());
+        app.world_mut()
+            .resource_mut::<ItemTextOpen>()
+            .read_letter(LETTER, 77);
+        app.update();
+        app.update();
+        assert_eq!(names_asked(&rx), 1, "the next read asks it, once");
+    }
 
     #[test]
     fn page_turns_walk_the_chain_both_ways() {
@@ -632,8 +718,6 @@ mod quest_material_tests {
         }
         let objects = objs.get();
         let mut gos = GameObjectTemplates::default();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let catalog = PageMaterials(benilla_formats::PageTextMaterialCatalog::from_rows(&[
             (1, "Parchment"),
             (2, "Stone"),
@@ -645,52 +729,25 @@ mod quest_material_tests {
         gos.insert(100, 2, "Wanted Poster".into(), &data);
         gos.insert(102, 10, "Chest".into(), &data);
         assert_eq!(
-            object_material(
-                go_guid(100),
-                &objects,
-                &items,
-                &gos,
-                Some(&catalog),
-                &commands
-            )
-            .as_deref(),
+            object_material(go_guid(100), &objects, &items, &gos, Some(&catalog)).as_deref(),
             Some("Stone")
         );
         assert_eq!(
-            object_material(
-                go_guid(102),
-                &objects,
-                &items,
-                &gos,
-                Some(&catalog),
-                &commands
-            )
-            .as_deref(),
+            object_material(go_guid(102), &objects, &items, &gos, Some(&catalog)).as_deref(),
             Some("Marble"),
             "a chest reads data[9]"
         );
         // A creature quest-giver: neither template, nothing asked.
         let creature = (u64::from(benilla_protocol::guid::HIGH_UNIT) << 48) | (6 << 24) | 1;
         assert_eq!(
-            object_material(creature, &objects, &items, &gos, Some(&catalog), &commands),
+            object_material(creature, &objects, &items, &gos, Some(&catalog)),
             None
         );
-        assert!(rx.try_recv().is_err(), "a creature source asks for nothing");
-        // An uncached object: nothing yet, and the template is asked for.
+        // An uncached object: nothing yet, and nothing asked: the material getters only read
+        // (`0x50229a`, `0x4e3a5a`).
         assert_eq!(
-            object_material(
-                go_guid(777),
-                &objects,
-                &items,
-                &gos,
-                Some(&catalog),
-                &commands
-            ),
+            object_material(go_guid(777), &objects, &items, &gos, Some(&catalog)),
             None
-        );
-        assert!(
-            rx.try_recv().is_ok(),
-            "an uncached object's template is asked for"
         );
     }
 }
