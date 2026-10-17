@@ -33,7 +33,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
-- [benilla-lua](#benilla-lua): 6
+- [benilla-lua](#benilla-lua): 10
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 110
@@ -551,7 +551,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### heap
 
-- C Lua has no such bound; past it the string is `not enough memory`, as C's would be when memory runs out. ([`src/heap.rs:638`](../crates/benilla-lua/src/heap.rs#L638))
+- C Lua has no such bound; past it the string is `not enough memory`, as C's would be when memory runs out. ([`src/heap.rs:659`](../crates/benilla-lua/src/heap.rs#L659))
+- The client's `luaM_realloc` (`0x6fc980`) has no failure path to ask from; here a refused string asks for the collection that may free room. ([`src/heap.rs:697`](../crates/benilla-lua/src/heap.rs#L697))
 
 #### lib_string
 
@@ -562,6 +563,15 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### lib_table
 
 - The client's loops have no bound (`0x7fb728`, `0x7fb7e0`), but a remembered size is whatever an addon wrote, and the instruction-budget hook never sees a native's loop, so one over two billion slots would hang the client. ([`src/lib_table.rs:48`](../crates/benilla-lua/src/lib_table.rs#L48))
+
+#### pools
+
+- That sequence is not wholly the client's. A table's node vector is sized as 5.1 sizes it, neither the constant table each function's parse makes (`open_func`'s `luaH_new`, `0x6fcad0`) nor `lua_load`'s token buffer is counted, and a prototype's vectors are grown one after another where the client's parser grows them together; each moves a pool's chunk boundary, and so its free space, by what it changes. ([`src/pools.rs:8`](../crates/benilla-lua/src/pools.rs#L8))
+
+#### vm
+
+- These are benilla's own needs, past what the client's checks (`Vm::checkstack`) reserve: a frame's registers above `c_maxstack` (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of `EXTRA_STACK` and one more. ([`src/vm.rs:950`](../crates/benilla-lua/src/vm.rs#L950))
+- benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2247`](../crates/benilla-lua/src/vm.rs#L2247))
 ### benilla-protocol
 
 #### auth
@@ -677,7 +687,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Nil for a display row with no icon, where the reference answers the unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either. ([`src/script/item_stats.rs:481`](../crates/benilla-ui/src/script/item_stats.rs#L481))
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:292`](../crates/benilla-ui/src/script/keybind.rs#L292))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:777`](../crates/benilla-ui/src/script/mod.rs#L777))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:781`](../crates/benilla-ui/src/script/mod.rs#L781))
 - A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:305`](../crates/benilla-ui/src/script/model.rs#L305))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:335`](../crates/benilla-ui/src/script/modelframe.rs#L335))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
