@@ -369,10 +369,12 @@ fn a_still_units_jump_plays_the_pin() {
 
 const RUN: u16 = 5;
 const ATTACK_UNARMED: u16 = 16;
+const READY_2H_LOOSE: u16 = 28;
 
-/// Stand, Run and a one-shot AttackUnarmed, on real clip assets. Nodes in that order.
-fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 3]) {
-    let handles: Vec<_> = (0..3)
+/// Stand, Run, a one-shot AttackUnarmed and the staff Ready idle, on real clip assets. Nodes in
+/// that order.
+fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 4]) {
+    let handles: Vec<_> = (0..4)
         .map(|_| {
             let mut c = AnimationClip::default();
             c.set_duration(SPAN);
@@ -399,6 +401,7 @@ fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 3]) {
             seq(STAND, nodes[0], true),
             seq(RUN, nodes[1], true),
             seq(ATTACK_UNARMED, nodes[2], false),
+            seq(READY_2H_LOOSE, nodes[3], true),
         ],
         hand_close: [None, None],
         playable_animation_lookup: Vec::new(),
@@ -418,7 +421,7 @@ fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 3]) {
             MovementState::default(),
         ))
         .id();
-    (unit, [nodes[0], nodes[1], nodes[2]])
+    (unit, [nodes[0], nodes[1], nodes[2], nodes[3]])
 }
 
 /// `0x5fd9e0(-1)` re-picks Run for a running unit, and `PlayTrack` drops the request for the id
@@ -499,4 +502,58 @@ fn a_stand_request_returns_a_unit_mid_one_shot_to_stand() {
     });
     advance(&mut app, 50);
     assert_eq!(main_node(&app, unit), Some(nodes[0]), "back to Stand");
+}
+
+/// A looping Stand set on bone 0 by a kit ends with its window, `span · R` (`0x712784`): the
+/// sequence-end callback sends id 0 to the default case of `0x5fc3f0` (`0x5fc416 ja 0x5fc45a`),
+/// which re-picks the base (`0x5fd9e0(-1)`). A unit in its ready stance returns to it then.
+#[test]
+fn a_stand_request_over_a_ready_stance_ends_with_its_window() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.world_mut().entity_mut(unit).insert((
+        crate::creature_anim::Engaged(0),
+        crate::creature_anim::Wielded {
+            main: Some((2, 0xa)), // a staff
+            main_sheath: 2,
+            ..Default::default()
+        },
+    ));
+    app.update();
+    advance(&mut app, 100);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[3]),
+        "engaged: the ready idle"
+    );
+
+    app.world_mut().write_message(EmoteAnim {
+        entity: unit,
+        anim_id: STAND,
+        seq: 1,
+        via_player: false,
+    });
+    advance(&mut app, 100);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[0]),
+        "the kit's Stand plays"
+    );
+
+    for _ in 0..4 {
+        advance(&mut app, 100);
+    }
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[0]),
+        "and holds for its window (one 1.0 s pass here)"
+    );
+    for _ in 0..8 {
+        advance(&mut app, 100);
+    }
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[3]),
+        "the window's end re-picks the ready stance"
+    );
 }
