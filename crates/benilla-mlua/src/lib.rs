@@ -205,7 +205,7 @@ fn panic_meta(vm: &mut Vm) -> benilla_lua::value::TableRef {
         vm.push(s);
         Ok(1)
     }
-    let meta = vm.heap.new_table(0, 1);
+    let meta = vm.heap.new_table(0, benilla_lua::table::lsize_for(1));
     let f = vm.new_native("__tostring", tostring);
     let name = vm.str(b"__tostring");
     vm.heap.table_mut(meta).set(name, f).expect("a string key");
@@ -581,8 +581,11 @@ impl Lua {
     }
 
     pub fn create_table_with_capacity(&self, narr: usize, nrec: usize) -> Result<Table> {
-        // `lua_createtable(L, narr, nrec)`.
-        let t = self.vm().heap.new_table(narr, nrec);
+        // `lua_createtable(L, narr, nrec)`, the hash part sized for `nrec` keys as 5.0 sizes one.
+        let t = self
+            .vm()
+            .heap
+            .new_table(narr, benilla_lua::table::lsize_for(nrec));
         Ok(Table(self.make_ref(benilla_lua::Value::Table(t))))
     }
 

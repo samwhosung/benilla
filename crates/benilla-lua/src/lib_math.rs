@@ -36,7 +36,8 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
 }
 
 pub fn open(vm: &mut Vm) {
-    let t = vm.heap.new_table(0, 5);
+    // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
+    let t = vm.heap.new_table(0, 0);
     let fns: [(&'static str, crate::heap::NativeFn); 24] = [
         ("abs", |vm, n| un(vm, n, f64::abs)),
         ("sin", |vm, n| un(vm, n, f64::sin)),
@@ -381,7 +382,8 @@ pub fn bit_library() -> [(&'static str, crate::heap::NativeFn); 8] {
 }
 
 fn open_bit(vm: &mut Vm) {
-    let t = vm.heap.new_table(0, 3);
+    // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
+    let t = vm.heap.new_table(0, 0);
     for (name, f) in bit_library() {
         let v = vm.new_native(name, f);
         let k = vm.str(name.as_bytes());

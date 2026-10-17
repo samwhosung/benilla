@@ -882,9 +882,10 @@ impl Heap {
         out
     }
 
-    /// `luaH_new`: `narray` array slots and room for `nhash` keys.
-    pub fn new_table(&mut self, narray: usize, nhash: usize) -> TableRef {
-        let mut t = Table::new(narray, nhash);
+    /// `luaH_new`: `narray` array slots and `2^lnhash` nodes, the dummy node for 0
+    /// ([`crate::table::lsize_for`] gives the log for a key count).
+    pub fn new_table(&mut self, narray: usize, lnhash: u8) -> TableRef {
+        let mut t = Table::new(narray, lnhash);
         t.owner = self.cur_source;
         t.growth = Growth(Some(self.tables.acct.clone()));
         self.bytes += t.bytes();

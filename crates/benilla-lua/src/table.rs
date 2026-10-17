@@ -1,8 +1,8 @@
-//! A table as 5.1.5's `ltable.c` lays it out: an array part and a chained scatter hash part with
-//! Brent's variation, sized and rehashed by 5.1's rules, as benilla's script host has always run
-//! them, with the client's 5.0 hashes for strings and numbers. The layout is the iteration order,
-//! so `next` walks keys in the order the layout gives (keys hashed by address excepted: a table,
-//! function or userdata key is hashed by its handle here).
+//! A table as the client's Lua 5.0 `ltable.c` lays it out (`0x6fa1a0`..`0x6fad80`): an array part
+//! and a chained scatter hash part with Brent's variation, sized, filled and rehashed by 5.0's
+//! rules, with 5.0's hashes for strings and numbers. The layout is the iteration order, so `next`
+//! walks keys in the order the client's would (keys hashed by address excepted: a table, function
+//! or userdata key is hashed by its handle here).
 
 use crate::pools::{Block, Pools};
 use crate::value::{TableRef, Value, V};
@@ -13,9 +13,10 @@ pub struct Node {
     pub val: Value,
     /// The next node in this chain, or -1.
     pub next: i32,
-    /// 5.1.5's `LUA_TDEADKEY`: a collection found the entry empty and its key collectable
-    /// (`removeentry`). A write does not find the key here again, as `luaH_get` does not, so
-    /// setting it takes a node by `newkey`'s rules; `next` still finds it, by identity.
+    /// The key's object was freed while the entry was empty, or a weak table's clearing took
+    /// the entry (5.0's `removekey`, `0x6f79d0`, which retags the key `LUA_TNONE`). A write does
+    /// not find the key here again, as `luaH_get` does not, so setting it takes a node by
+    /// `newkey`'s rules; `next` still finds it, by identity.
     pub(crate) dead: bool,
 }
 
@@ -55,8 +56,9 @@ impl Growth {
     pub(crate) const NONE: Growth = Growth(None);
 }
 
-/// 5.1's `MAXBITS`: `2^MAXBITS` (`MAXASIZE`) is the largest array index kept in the array part.
-const MAXBITS: u32 = 26;
+/// 5.0's `MAXBITS`: `2^MAXBITS` is the largest array index (`arrayindex`'s bound, `0x6fa4d0`) and
+/// the largest log node count (`setnodevector`, `0x6fa5e2`).
+const MAXBITS: u32 = 24;
 
 /// Aligned to a cache line, which makes it two lines long: the heap reaches a table by index,
 /// and a power-of-two size turns that index into a shift instead of a multiply.
@@ -64,14 +66,13 @@ const MAXBITS: u32 = 26;
 #[repr(align(64))]
 pub struct Table {
     pub array: Vec<Value>,
-    /// The hash part: `2^lsizenode` nodes. A size of zero is 5.0's shared `dummynode`, kept
-    /// here as one node of the table's own.
+    /// The hash part: `2^lsizenode` nodes. A log size of 0 is 5.0's shared `dummynode`, kept
+    /// here as one node of the table's own: `newkey` writes a key into it and rehashes at once.
     pub node: Vec<Node>,
     pub lsizenode: u8,
-    /// 5.1's `lastfree`: a free node is searched for below it, lazily.
-    lastfree: usize,
-    /// The hash part is 5.1's shared `dummynode`: its one node takes no key.
-    dummy: bool,
+    /// 5.0's `firstfree`: no node above it has a nil key, and itself has one until the table
+    /// is full, which `newkey` answers with a rehash.
+    firstfree: usize,
     pub meta: Option<TableRef>,
     /// 5.0's `flags`: a set bit caches "this metamethod is absent" (`luaT_gettm`).
     pub flags: u8,
@@ -112,25 +113,54 @@ pub fn num_to_int(n: f64) -> Option<i32> {
     }
 }
 
-/// 5.1's `ceillog2`: the ceiling of log2, 0 for one.
-fn ceillog2(x: u32) -> u32 {
-    if x <= 1 {
-        0
+/// `luaO_log2` (`0x6f5830`): the floor of log2, -1 for 0.
+fn log2(x: u32) -> i32 {
+    if x == 0 {
+        -1
     } else {
-        32 - (x - 1).leading_zeros()
+        31 - x.leading_zeros() as i32
     }
 }
 
-/// 5.1's `countint` test: a key that may live in the array part, or `None`.
+/// The log node count 5.0 gives a hash part for `n` keys, `luaO_log2(n) + 1`: the constructor's
+/// `OP_NEWTABLE` hint (`0x6fd563`, `0x6fd568`) and `rehash`'s size (`0x6fa9dd`, `0x6fa9e5`). It is
+/// one power of two above the count, so `2^k` keys sit in `2^(k+1)` nodes, and none in the dummy.
+pub fn lsize_for(n: usize) -> u8 {
+    (log2(n.min(u32::MAX as usize) as u32) + 1) as u8
+}
+
+/// 5.0's `arrayindex` (`0x6fa4a0`): a key that may live in the array part, 1 to 2^24, or `None`.
 fn arrayindex(key: Value) -> Option<usize> {
     if let V::Num(n) = key.unpack() {
         if let Some(k) = num_to_int(n) {
-            if k >= 1 && (k as u32) <= (1 << MAXBITS) {
+            if k >= 1 && ((k - 1) >> MAXBITS) == 0 {
                 return Some(k as usize);
             }
         }
     }
     None
+}
+
+/// 5.0's `computesizes` (`0x6fab00`): the array part is the `2^n` of the last slice at which
+/// the integer keys up to it reach half of it, `a >= 2^(n-1)` (`0x6fab45`), 0 for none (`0x6fab69`);
+/// the rest go to the hash part. `nums[i]` counts the keys in `(2^(i-1), 2^i]`, `nums[0]` key 1;
+/// `narray` counts every integer key, `ntotal` every live entry.
+fn computesizes(nums: &[usize], ntotal: usize, narray: usize) -> (usize, usize) {
+    let mut a = nums[0];
+    let mut na = a;
+    let mut n: Option<usize> = (na != 0).then_some(0);
+    let mut i = 1;
+    while a < narray && i < nums.len() && narray >= 1 << (i - 1) {
+        if nums[i] > 0 {
+            a += nums[i];
+            if a >= 1 << (i - 1) {
+                n = Some(i);
+                na = a;
+            }
+        }
+        i += 1;
+    }
+    (n.map_or(0, |n| 1 << n), ntotal - na)
 }
 
 /// `next` was given a key the table does not hold.
@@ -145,15 +175,14 @@ pub enum KeyError {
 }
 
 impl Table {
-    /// `luaH_new`: `narray` array slots and room for `nhash` keys, rounded up to a power of two
-    /// (none at 0).
-    pub fn new(narray: usize, nhash: usize) -> Table {
+    /// `luaH_new` (`0x6fa4f0`): `narray` array slots and `2^lnhash` nodes, the dummy node for 0.
+    /// [`lsize_for`] turns a key count into the log 5.0 would give it.
+    pub fn new(narray: usize, lnhash: u8) -> Table {
         let mut t = Table {
             array: Vec::new(),
             node: Vec::new(),
             lsizenode: 0,
-            lastfree: 0,
-            dummy: true,
+            firstfree: 0,
             meta: None,
             flags: 0,
             setn: None,
@@ -165,7 +194,7 @@ impl Table {
             array_block: Block::None,
         };
         t.array.resize(narray, Value::Nil);
-        t.set_node_vector(nhash);
+        t.set_node_vector(lnhash);
         t
     }
 
@@ -176,8 +205,7 @@ impl Table {
             array: Vec::new(),
             node: Vec::new(),
             lsizenode: 0,
-            lastfree: 0,
-            dummy: true,
+            firstfree: 0,
             meta: None,
             flags: 0,
             setn: None,
@@ -190,33 +218,19 @@ impl Table {
         }
     }
 
-    /// 5.1's `setnodevector`: room for `size` keys, or the dummy node for none.
-    fn set_node_vector(&mut self, size: usize) {
-        self.node.clear();
-        if size == 0 {
-            self.node.push(EMPTY);
-            self.lsizenode = 0;
-            self.dummy = true;
-            self.lastfree = 0;
-            return;
-        }
-        let lsize = ceillog2(size as u32);
+    /// 5.0's `setnodevector` (`0x6fa5d0`): `2^lsize` nil nodes, the dummy node for 0, and
+    /// `firstfree` at the last one (`0x6fa67c`).
+    fn set_node_vector(&mut self, lsize: u8) {
         let size = 1usize << lsize;
+        self.node.clear();
         self.node.resize(size, EMPTY);
-        self.lsizenode = lsize as u8;
-        self.dummy = false;
-        self.lastfree = size;
+        self.lsizenode = lsize;
+        self.firstfree = size - 1;
     }
 
-    /// 5.1's `getfreepos`: the highest never-used node below `lastfree`.
-    fn getfreepos(&mut self) -> Option<usize> {
-        while self.lastfree > 0 {
-            self.lastfree -= 1;
-            if self.node[self.lastfree].key.is_nil() {
-                return Some(self.lastfree);
-            }
-        }
-        None
+    /// The hash part is the dummy node: 5.0 shares one, which never keeps a key.
+    fn is_dummy(&self) -> bool {
+        self.lsizenode == 0
     }
 
     fn sizenode(&self) -> usize {
@@ -443,21 +457,18 @@ impl Table {
         }
     }
 
-    /// 5.1's `newkey`: Brent's variation; with no free node, a rehash counting the new key, then
-    /// the key set into the grown table.
+    /// 5.0's `newkey` (`0x6fa8a0`): Brent's variation, the free node `firstfree`. The key is
+    /// written first; then `firstfree` walks down to a node with a nil key (`0x6fa95e`), and
+    /// when there is none the table is full: the new key holds `false` while `rehash` counts and
+    /// moves it with the rest (`0x6fa974`, `0x6fa98c`), and is found again in the new layout
+    /// (`0x6fa995`).
     fn newkey(&mut self, key: Value) -> Slot {
-        // A new key may move another one (the colliding-node move).
+        // A new key may move another one (the colliding-node move), and a rehash moves all.
         self.hint_key.set(Value::Nil);
         let mut mp = self.mainposition(key);
-        if !self.node[mp].val.is_nil() || self.dummy {
-            let Some(n) = self.getfreepos() else {
-                self.rehash(key);
-                return match self.find(key) {
-                    Some(s) => s,
-                    None => self.newkey(key),
-                };
-            };
+        if !self.node[mp].val.is_nil() {
             let othern0 = self.mainposition(self.node[mp].key);
+            let n = self.firstfree;
             if othern0 != mp {
                 // The colliding node is out of its main position: move it to the free node.
                 let mut othern = othern0;
@@ -477,106 +488,78 @@ impl Table {
         }
         self.node[mp].key = key;
         self.node[mp].dead = false;
-        Slot::Node(mp)
+        loop {
+            if self.node[self.firstfree].key.is_nil() {
+                return Slot::Node(mp);
+            }
+            if self.firstfree == 0 {
+                break;
+            }
+            self.firstfree -= 1;
+        }
+        self.node[mp].val = Value::Bool(false);
+        self.rehash();
+        let s = self.find(key).expect("a rehash keeps the new key");
+        *self.slot_mut(s) = Value::Nil;
+        s
     }
 
-    /// 5.1's `rehash`: count the integer keys of both parts and the new key `ek`, size the array
-    /// part by `computesizes`, and give the hash part room for the rest.
-    fn rehash(&mut self, ek: Value) {
-        let mut nums = [0i32; MAXBITS as usize + 1];
-        // `numusearray`: slice `(2^(lg-1), 2^lg]` counted into `nums[lg]`.
-        let mut nasize = 0i32;
-        let mut i = 1usize;
-        let mut lg = 0usize;
-        let mut ttlg = 1usize;
-        while lg <= MAXBITS as usize {
-            let mut lim = ttlg;
-            if lim > self.array.len() {
-                lim = self.array.len();
-                if i > lim {
+    /// 5.0's `rehash` (`0x6fa9c0`): the sizes `numuse` counts, the hash part `luaO_log2(n) + 1`
+    /// for `n` keys (`0x6fa9e5`).
+    fn rehash(&mut self) {
+        let (nasize, nhsize) = self.numuse();
+        self.resize(nasize, lsize_for(nhsize));
+    }
+
+    /// 5.0's `numuse` (`0x6faa00`): the live entries, those that are integer keys counted per
+    /// slice `(2^(lg-1), 2^lg]`, the array part by slices then the nodes last first, and the
+    /// array and hash sizes `computesizes` makes of them.
+    fn numuse(&self) -> (usize, usize) {
+        let mut nums = [0usize; MAXBITS as usize + 1];
+        let mut totaluse = 0;
+        let sizearray = self.array.len();
+        let mut i = 0;
+        for (lg, num) in nums.iter_mut().enumerate() {
+            let mut ttlg = 1usize << lg;
+            if ttlg > sizearray {
+                ttlg = sizearray;
+                if i >= ttlg {
                     break;
                 }
             }
-            let mut lc = 0;
-            while i <= lim {
-                if !self.array[i - 1].is_nil() {
-                    lc += 1;
+            while i < ttlg {
+                if !self.array[i].is_nil() {
+                    *num += 1;
+                    totaluse += 1;
                 }
                 i += 1;
             }
-            nums[lg] += lc;
-            nasize += lc;
-            lg += 1;
-            ttlg *= 2;
         }
-        let mut totaluse = nasize;
-        // `numusehash`, last node first.
-        let countint = |k: Value, nums: &mut [i32]| -> i32 {
-            match arrayindex(k) {
-                Some(k) => {
-                    nums[ceillog2(k as u32) as usize] += 1;
-                    1
-                }
-                None => 0,
-            }
-        };
+        let mut narray = totaluse;
         for n in self.node.iter().rev() {
             if !n.val.is_nil() {
-                nasize += countint(n.key, &mut nums);
+                if let Some(k) = arrayindex(n.key) {
+                    nums[(log2(k as u32 - 1) + 1) as usize] += 1;
+                    narray += 1;
+                }
                 totaluse += 1;
             }
         }
-        nasize += countint(ek, &mut nums);
-        totaluse += 1;
-        // `computesizes`: the largest `n` with more than half of `1..n` in use.
-        let (mut a, mut na, mut n) = (0i32, 0i32, 0i32);
-        let mut i = 0usize;
-        let mut twotoi = 1i32;
-        while twotoi / 2 < nasize {
-            if nums[i] > 0 {
-                a += nums[i];
-                if a > twotoi / 2 {
-                    n = twotoi;
-                    na = a;
-                }
-            }
-            if a == nasize {
-                break;
-            }
-            i += 1;
-            twotoi *= 2;
-        }
-        self.resize(n as usize, (totaluse - na) as usize);
+        computesizes(&nums, totaluse, narray)
     }
 
-    /// `OP_SETLIST`'s growth: an array part short of `last` slots is resized to `last` by 5.1's
-    /// `luaH_resizearray`, the hash part kept at its size and rebuilt.
-    #[inline]
-    pub fn grow_array(&mut self, last: usize) {
-        if last > self.array.len() {
-            self.resize_array(last);
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn resize_array(&mut self, nasize: usize) {
-        let nsize = if self.dummy { 0 } else { self.sizenode() };
-        self.resize(nasize, nsize);
-    }
-
-    /// 5.1's `resize`.
-    fn resize(&mut self, nasize: usize, nhsize: usize) {
+    /// 5.0's `resize` (`0x6fab90`).
+    fn resize(&mut self, nasize: usize, lnhsize: u8) {
         let before = self.bytes() as isize;
         let (oldasize, oldnodes) = (self.array.len(), self.node_count());
-        self.resize_parts(nasize, nhsize);
+        self.resize_parts(nasize, lnhsize);
         let Some(acct) = &self.growth.0 else { return };
-        // 5.1's `luaM_reallocvector` charges `totalbytes` for both parts.
+        // `luaM_irealloc` (`0x6fc980`) counts the change in both parts.
         acct.growth
             .set(acct.growth.get() + self.bytes() as isize - before);
-        // The client's `resize` (`0x6fab90`): a growing array part reallocated first
-        // (`0x6fac1f`), the new node vector made (`0x6fac2f`), a shrinking array part reallocated
-        // after it, and the old node vector freed last (`0x6fad5e`).
+        // A growing array part reallocated first (`0x6fac1f`), the new node vector made
+        // (`0x6fac2f`), a shrinking array part reallocated after it, and the old node vector
+        // freed last (`0x6fad5e`).
         let mut p = acct.pools.borrow_mut();
         if nasize > oldasize {
             self.array_block = p.realloc(self.array_block, 16 * nasize);
@@ -590,21 +573,25 @@ impl Table {
 
     /// The nodes the client's allocator holds for the hash part: none for the shared dummy node.
     pub(crate) fn node_count(&self) -> usize {
-        if self.dummy {
+        if self.is_dummy() {
             0
         } else {
             self.node.len()
         }
     }
 
-    fn resize_parts(&mut self, nasize: usize, nhsize: usize) {
+    /// The array grows first (`0x6fac1f`), then the new node vector is made (`0x6fac2f`); a
+    /// shrinking array's vanishing slice goes into it by `luaH_setnum`, lowest index first
+    /// (`0x6fac63`), then the old nodes by `luaH_set`, last node first (`0x6facfd`). That order
+    /// is the new layout.
+    fn resize_parts(&mut self, nasize: usize, lnhsize: u8) {
         self.hint_key.set(Value::Nil);
         let oldasize = self.array.len();
         let nold = std::mem::take(&mut self.node);
         if nasize > oldasize {
             self.array.resize(nasize, Value::Nil);
         }
-        self.set_node_vector(nhsize);
+        self.set_node_vector(lnhsize);
         if nasize < oldasize {
             let vanishing: Vec<Value> = self.array.drain(nasize..).collect();
             for (j, v) in vanishing.into_iter().enumerate() {
@@ -689,7 +676,7 @@ impl Table {
             }
             return i;
         }
-        if self.dummy {
+        if self.is_dummy() {
             return j;
         }
         // `unbound_search`.
@@ -775,7 +762,7 @@ mod tests {
     /// start at node 0 and 30 at node 1, so the walk is 10, 30, then 20 from the free node.
     #[test]
     fn number_keys_take_the_clients_main_positions() {
-        let mut t = Table::new(0, 4);
+        let mut t = Table::new(0, 2);
         assert_eq!(t.mainposition(n(10.0)), 0);
         assert_eq!(t.mainposition(n(20.0)), 0);
         assert_eq!(t.mainposition(n(30.0)), 1);

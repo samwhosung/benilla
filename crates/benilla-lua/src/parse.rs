@@ -1091,11 +1091,12 @@ impl<'a> Parser<'a> {
         let items = cc.na;
         self.lastlistfield(&mut cc)?;
         self.setlists50(items);
-        // `OP_NEWTABLE`'s hints as floating point bytes; the array one is kept decoded.
+        // `OP_NEWTABLE`'s hints: the array size as a floating point byte (`0x6fd53c`), kept
+        // decoded, and the hash part's log size, `luaO_log2(nh) + 1` (`0x6fd563`, `0x6fd568`).
         self.fs().code[pc] = Op::NewTable(
             treg,
             crate::compile::fb2int(crate::compile::int2fb(cc.na)),
-            crate::compile::int2fb(cc.nh) as u8,
+            crate::table::lsize_for(cc.nh as usize),
         );
         Ok(t)
     }

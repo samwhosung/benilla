@@ -59,9 +59,9 @@ pub fn new_state() -> Vm {
 
 /// The state benilla's script host starts from: Lua 5.1's standard libraries as the C build's
 /// mlua `Lua::new()` opened them (`luaopen_base`, then table, io, os, string, math and package),
-/// each table sized and filled in its C registration order. The script host's sandbox then deletes
-/// what 1.12 lacks, and the deleted keys stay in the tables as 5.1 leaves them, so every table
-/// lays out, and iterates, as it did. A function 5.1 has and benilla does not is a placeholder
+/// each table made empty, as the client's `luaL_openlib` makes one, and filled in its C
+/// registration order. The script host's sandbox then deletes what 1.12 lacks, and the deleted
+/// keys stay in the tables, as 5.0 leaves them. A function 5.1 has and benilla does not is a placeholder
 /// that raises: the sandbox deletes every one.
 pub fn new_script_host_state() -> Vm {
     let mut vm = Vm::new();
@@ -217,14 +217,15 @@ fn not_in_the_host(vm: &mut Vm, _nargs: usize) -> api::R<usize> {
     Err(vm.rt_error("not available in the script host"))
 }
 
-/// `luaL_register`: a global table with room for every entry, the entries set in order.
+/// `luaL_register`'s global table, made empty as the client's `luaL_openlib` makes one
+/// (`lua_newtable`, `0x6f4dff`), the entries set in order.
 fn register_51(
     vm: &mut Vm,
     lib: &str,
     names: &[&'static str],
     native: fn(&str) -> Option<heap::NativeFn>,
 ) -> value::TableRef {
-    let t = vm.heap.new_table(0, names.len());
+    let t = vm.heap.new_table(0, 0);
     vm.set_global(lib, Value::Table(t));
     for &name in names {
         let f = vm.new_native(name, native(name).unwrap_or(not_in_the_host));

@@ -418,9 +418,10 @@ impl Vm {
             n: s(b"n"),
             next: s(b"next"),
         };
-        // `lua_newstate`: both made by `luaH_new(L, 0, 2)`.
-        let globals = heap.new_table(0, 2);
-        let registry = heap.new_table(0, 2);
+        // `f_luaopen`: the globals by `luaH_new(L, 0, 4)` (`0x6f6e62`), the registry by
+        // `luaH_new(L, 4, 4)` (`0x6f6e87`).
+        let globals = heap.new_table(0, 4);
+        let registry = heap.new_table(4, 4);
         let mut vm = Vm {
             heap,
             stack: vec![Value::Nil; BASIC_STACK_SIZE],
@@ -1662,7 +1663,8 @@ impl Vm {
                 self.ensure(frame_top + 1);
                 let mut fill_from = base + nargs;
                 if proto.vararg {
-                    // 5.0's `adjust_varargs`: the extras into `arg`, with `n`.
+                    // 5.0's `adjust_varargs`: the extras into `arg`, made by
+                    // `luaH_new(L, actual, 1)` (`0x6f6266`), with `n`.
                     let extra = nargs.saturating_sub(np);
                     let t = self.heap.new_table(extra, 1);
                     for i in 0..extra {
@@ -2891,9 +2893,7 @@ impl Vm {
                         slow!(self.setindex(t, key, v, Some(a as usize)))?;
                     }
                     Op::NewTable(a, b, c) => {
-                        let t = self
-                            .heap
-                            .new_table(b as usize, crate::compile::fb2int(c as u32) as usize);
+                        let t = self.heap.new_table(b as usize, c);
                         r!(a) = Value::Table(t);
                         save!();
                         self.top = base!() + maxstack!();
@@ -3357,15 +3357,13 @@ impl Vm {
                             jump!(1 + back);
                         }
                     }
-                    // 5.1's `OP_SETLIST`: the array part grows to hold the batch first
-                    // (`luaH_resizearray`), then the items are stored from the last down.
+                    // 5.0's `OP_SETLIST` (`0x6f955a`): the items stored from the last down by
+                    // `luaH_setnum`, into the array part as `OP_NEWTABLE` sized it or else as
+                    // new keys, which may rehash.
                     Op::SetList(a, first, n) => {
                         let V::Table(t) = (r!(a)).unpack() else {
                             unreachable!()
                         };
-                        self.heap
-                            .table_mut(t)
-                            .grow_array(first as usize + n as usize);
                         for i in (1..=n as usize).rev() {
                             let v = r!(a as usize + i);
                             self.heap
@@ -3378,7 +3376,6 @@ impl Vm {
                             unreachable!()
                         };
                         let n = self.top - (base!() + a as usize) - 1;
-                        self.heap.table_mut(t).grow_array(first as usize + n);
                         for i in (1..=n).rev() {
                             let v = self.stack[base!() + a as usize + i];
                             self.heap

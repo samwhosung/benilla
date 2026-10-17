@@ -27,7 +27,8 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
 }
 
 pub fn open(vm: &mut Vm) {
-    let t = vm.heap.new_table(0, 4);
+    // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
+    let t = vm.heap.new_table(0, 0);
     let fns: [(&'static str, crate::heap::NativeFn); 12] = [
         ("len", len),
         ("sub", sub),

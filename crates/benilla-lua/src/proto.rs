@@ -83,7 +83,8 @@ pub enum Op {
     GetField(Reg, Reg, u16),
     /// `R(a)[K(b)] = RK(c)` for a string constant key.
     SetField(Reg, u16, Rk),
-    /// `R(a) = {}` with an array part and a hash part of `2^c` nodes.
+    /// `R(a) = {}` with an array part of `b` slots and a hash part of `2^c` nodes, the dummy
+    /// node for 0: `luaH_new(L, fb2int(B), C)` (`0x6f8b45`), `b` kept decoded.
     NewTable(Reg, u32, u8),
     /// `R(a+1) = R(b); R(a) = R(b)[RK(c)]`.
     SelfOp(Reg, Reg, Rk),
@@ -140,8 +141,8 @@ pub enum Op {
     /// variables, into the variables from `R(a+2)`, the first of them the control; when it is
     /// nil the next instruction, the jump back to the body, is skipped.
     TForLoop(Reg, u8),
-    /// 5.1's `SETLIST`: `R(a)[base + i] = R(a + i)` for `i` in `1..=n`, the array part grown
-    /// first to hold them all.
+    /// 5.0's `SETLIST`: `R(a)[base + i] = R(a + i)` for `i` from `n` down to 1, each by
+    /// `luaH_setnum` (`0x6f95b1`), the array part as it is.
     SetList(Reg, u32, u16),
     /// The same, items up to the top (the last item was a call).
     SetListTop(Reg, u32),
