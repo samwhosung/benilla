@@ -74,7 +74,11 @@ fn corpus_chunks(out: &mut Vec<Chunk>) -> bool {
     walk(&root, &mut files);
     files.sort();
     for f in files {
-        let name = f.strip_prefix(&root).unwrap().display().to_string();
+        let name = f
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         let ext = f
             .extension()
             .and_then(|e| e.to_str())

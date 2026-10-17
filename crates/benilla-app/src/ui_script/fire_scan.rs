@@ -519,7 +519,11 @@ fn read_sources() -> Vec<Src> {
                 stack.push(p);
                 continue;
             }
-            let rel = p.strip_prefix(&root).unwrap_or(&p).display().to_string();
+            let rel = p
+                .strip_prefix(&root)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .replace('\\', "/");
             if p.extension().is_some_and(|x| x == "rs") && !rel.contains("test") {
                 let text = std::fs::read_to_string(&p).unwrap_or_default();
                 out.push(Src::new(&rel, &text));

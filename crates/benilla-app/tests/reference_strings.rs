@@ -178,7 +178,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
 
     for path in &sources {
         // Name every hit `<crate>/src/...`.
-        let raw = path.to_string_lossy().to_string();
+        let raw = path.to_string_lossy().replace('\\', "/");
         let rel = match raw.strip_prefix("../") {
             Some(sibling) => sibling.to_string(),
             None => format!("benilla-app/{raw}"),

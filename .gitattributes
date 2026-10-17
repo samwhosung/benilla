@@ -1,2 +1,7 @@
 # Vendored benilla-re tables are compared and read byte for byte; no line-ending conversion.
 reference/*.tsv -text
+
+# Rust sources check out with LF on every platform: tests read their own and other sources and
+# split them on "\n". The vendored kira tree is CRLF in the index and stays byte for byte.
+*.rs text eol=lf
+third_party/kira/** -text

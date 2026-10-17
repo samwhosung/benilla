@@ -113,7 +113,10 @@ fn sources() -> Vec<(PathBuf, String)> {
             {
                 continue;
             }
-            let whole = std::fs::read_to_string(&p).unwrap_or_default();
+            // A CRLF checkout reads the same: the `#[cfg(test)]` split below is on `\n`.
+            let whole = std::fs::read_to_string(&p)
+                .unwrap_or_default()
+                .replace("\r\n", "\n");
             let head = whole
                 .rfind("#[cfg(test)]\nmod ")
                 .map_or(whole.as_str(), |i| &whole[..i]);
@@ -133,10 +136,15 @@ fn quoted(text: &str, name: &str) -> bool {
     text.contains(&format!("\"{name}\""))
 }
 
+/// A source path from `crates/` on, with forward slashes whichever separator the platform uses.
 fn short(p: &std::path::Path) -> String {
-    let s = p.to_string_lossy();
+    let s = slashed(p);
     s.split_once("/crates/")
         .map_or(s.to_string(), |(_, t)| t.to_string())
+}
+
+fn slashed(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
 }
 
 /// The files that register `verb`, and whether any of them fires `event`.
@@ -220,7 +228,7 @@ fn the_declared_rows_are_still_true() {
         }
         let named: Vec<&(PathBuf, String)> = src
             .iter()
-            .filter(|(p, _)| p.to_string_lossy().ends_with(file))
+            .filter(|(p, _)| slashed(p).ends_with(file))
             .collect();
         if named.is_empty() {
             wrong.push(format!(

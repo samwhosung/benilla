@@ -210,7 +210,8 @@ fn debugstack_frames_end_in_newline_and_count1_does_not_clamp() {
 
 /// An addon chunk is named as the reference names it, `@Interface\AddOns\<folder>\<file>`:
 /// `FuBarPlugin-2.0.lua:752` finds its folder with a greedy `"\\AddOns\\(.*)\\"`, which captures
-/// up to the last backslash, so the file must be in the name.
+/// up to the last backslash, so the file must be in the name. The test bounds the capture at the
+/// folder's own backslash, so a later frame named by a host path (`\` on Windows) stays out of it.
 #[test]
 fn an_addon_chunk_is_named_the_way_the_client_names_it() {
     let name = crate::script::addon_chunk_name("FuBar_BagFu", "FuBar_BagFu.lua");
@@ -225,7 +226,7 @@ fn an_addon_chunk_is_named_the_way_the_client_names_it() {
     .unwrap();
     let folder: String = s
         .eval(
-            "local _, _, f = string.find(BenillaProbeFolder(), \"\\\\AddOns\\\\(.*)\\\\\") \
+            "local _, _, f = string.find(BenillaProbeFolder(), \"\\\\AddOns\\\\([^\\\\]*)\\\\\") \
              return f or '<no match>'",
         )
         .unwrap();
