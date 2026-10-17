@@ -1590,7 +1590,8 @@ mod ppem_tests {
     /// An antialiased cell is the unhinted raster (`0x5d1300`: both load-flag words carry
     /// `FT_LOAD_NO_HINTING`, rendered in mode 0 at `0x7cec20`). Arial Narrow's `e` at 18 px, the
     /// chat frame's, as FreeType's smooth rasterizer draws it unhinted, computed outside this code
-    /// base: the bar spreads over two partial rows, where a hinter snaps it to one full row.
+    /// base: the bar spreads over two partial rows, where a hinter snaps it to one full row. The
+    /// golden is the raster's coverage; the cell holds its top 4 bits ([`Cell::Coverage`]).
     #[test]
     fn an_antialiased_cell_is_the_unhinted_raster() {
         let Some(mut e) = engine_or_skip() else {
@@ -1620,7 +1621,17 @@ mod ppem_tests {
             .chunks(8)
             .map(|row| row.iter().map(|t| format!("{:02x}", t[3])).collect())
             .collect();
-        assert_eq!(got, golden);
+        let want: Vec<String> = golden
+            .iter()
+            .map(|row| {
+                (0..row.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&row[i..i + 2], 16).expect("hex"))
+                    .map(|c| format!("{:02x}", crate::ui_text::pack::widen4(c >> 4)))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(got, want);
     }
 
     /// A glyph taller than the em keeps its first `em` rows (`0x5d1195`), whatever the bake, and
@@ -1651,7 +1662,7 @@ mod ppem_tests {
         let top: Vec<u8> = texels.iter().map(|t| t[3]).collect();
         let want: Vec<u8> = raster.coverage[..(14 * raster.w) as usize]
             .iter()
-            .copied()
+            .map(|&c| crate::ui_text::pack::widen4(c >> 4))
             .collect();
         assert_eq!(top, want, "the top 14 rows, not the bottom");
 

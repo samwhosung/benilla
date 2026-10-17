@@ -26,11 +26,18 @@ pub(super) const SHEET_SIZE: u32 = 2048;
 /// pixel samples under half a texel outside its cell at any magnification.
 const PAD: u32 = 1;
 
+/// A 4-bit channel as the GPU widens it to 8 bits (`n / 15`): the reference's glyph pages are
+/// ARGB4444 (`0x5cf4d0`), so every texel channel it bakes is one of these 16 values.
+pub(super) const fn widen4(n: u8) -> u8 {
+    n * 17
+}
+
 /// A cell's texel payload, in the two shapes the rasterizer produces.
 pub(super) enum Cell<'a> {
-    /// One byte per texel: coverage, expanded to white × alpha (the vertex color supplies the ink).
+    /// One byte per texel: coverage, expanded to white at its top 4 bits as alpha, the plain bake's
+    /// `(coverage << 8) | 0x0fff` texel (`0x5cf298`); the vertex color supplies the ink.
     Coverage(&'a [u8]),
-    /// Four bytes per texel, straight alpha: an outlined cell, taken verbatim.
+    /// Four bytes per texel, straight alpha, already 4-bit exact: a baked cell, taken verbatim.
     Rgba(&'a [u8]),
 }
 
@@ -135,7 +142,7 @@ impl Sheet {
             Cell::Coverage(cov) => {
                 let mut out = vec![255u8; (w * h * 4) as usize];
                 for (i, &a) in cov.iter().enumerate().take((w * h) as usize) {
-                    out[i * 4 + 3] = a;
+                    out[i * 4 + 3] = widen4(a >> 4);
                 }
                 out
             }
@@ -266,7 +273,8 @@ mod tests {
         s.alloc(2, 1, &Cell::Coverage(&[0, 128])).expect("room");
         let (_, uploads) = s.take_pending();
         assert_eq!(texel(&uploads[0], 0, 0), [255, 255, 255, 0]);
-        assert_eq!(texel(&uploads[0], 1, 0), [255, 255, 255, 128]);
+        // 128's top 4 bits, 8, read back as 8/15.
+        assert_eq!(texel(&uploads[0], 1, 0), [255, 255, 255, 136]);
 
         let mut s = sheet();
         let ring = vec![0u8, 0, 0, 153, 200, 200, 200, 255];
@@ -278,6 +286,24 @@ mod tests {
             [200, 200, 200, 255],
             "a composited cell is not re-tinted"
         );
+    }
+
+    /// The plain bake keeps coverage's top 4 bits as a 4444 texel's alpha (`0x5cf298`): 16 levels,
+    /// and coverage under 16 draws nothing.
+    #[test]
+    fn coverage_keeps_its_top_four_bits_of_alpha() {
+        let cov: Vec<u8> = (0..=255).collect();
+        let mut s = sheet();
+        s.alloc(256, 1, &Cell::Coverage(&cov)).expect("room");
+        let (_, uploads) = s.take_pending();
+        for (x, &c) in cov.iter().enumerate() {
+            let a = texel(&uploads[0], x as u32, 0)[3];
+            assert_eq!(a % 17, 0, "coverage {c} packs to a 4-bit alpha, not {a}");
+            assert_eq!(a / 17, c >> 4, "coverage {c}");
+        }
+        assert_eq!(texel(&uploads[0], 15, 0)[3], 0, "coverage 15 vanishes");
+        assert_eq!(texel(&uploads[0], 16, 0)[3], 17);
+        assert_eq!(texel(&uploads[0], 255, 0)[3], 255);
     }
 
     /// A cell uploads its own frame, its edge colour at alpha 0 on every side, since a reset leaves

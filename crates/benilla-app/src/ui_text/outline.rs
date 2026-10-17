@@ -6,6 +6,8 @@
 
 use benilla_ui::script::Outline;
 
+use super::pack::widen4;
+
 /// What a glyph's cell is baked from, the font flags `0x5cf310` picks its bake by: the outline's
 /// ring reach in logical px (NORMAL 1, THICK 2) and the monochrome flag (bit 1). Part of the cell
 /// cache's key.
@@ -39,6 +41,12 @@ impl Bake {
 /// texels in the in-bounds 3×3 box, centre included; its 4-bit alphas are widened × 17.
 const AA_NEIGHBOUR_LUT: [u8; 10] = [0, 17, 17, 51, 85, 119, 153, 187, 221, 255];
 
+/// A fill texel's gray, the 4-bit `(coverage · 0xff) >> 12` the AA-outline bake packs into each
+/// colour channel (`0x5cf1b0`–`0x5cf1dd`), widened.
+fn fill_gray(coverage: u8) -> u8 {
+    widen4(((u32::from(coverage) * 0xff) >> 12) as u8)
+}
+
 /// Composite one glyph's coverage into an outlined cell, the reference's AA-outline blit:
 ///
 /// 1. Mark every texel with coverage.
@@ -46,10 +54,10 @@ const AA_NEIGHBOUR_LUT: [u8; 10] = [0, 17, 17, 51, 85, 119, 153, 187, 221, 255];
 ///    and 2 for THICK.
 /// 3. Alpha: the [`AA_NEIGHBOUR_LUT`] entry for the marked count in the texel's in-bounds 3×3
 ///    box, for ring and fill edge alike.
-/// 4. Pack: the coverage as gray, so the pure ring is black and the fill ramps toward it.
+/// 4. Pack: the coverage as a 4-bit gray ([`fill_gray`]), so the pure ring is black and the fill
+///    ramps toward it.
 ///
-/// Deviation: `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster,
-/// and 8-bit texels where the reference packs ARGB4444, so nothing bands.
+/// Deviation: `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster.
 ///
 /// It draws as one quad per glyph (`0x5ccbe0`) whose vertex colour tints the fill and leaves the
 /// ring black. Returns `(rgba, out_w, out_h, pad)`: the cell grows `pad` texels each side (the
@@ -88,7 +96,7 @@ pub(super) fn outlined_cell(
             }
             let alpha = AA_NEIGHBOUR_LUT[count];
             let fill = if row >= pad && row < pad + h && col >= pad && col < pad + w {
-                cov[((row - pad) * w + (col - pad)) as usize]
+                fill_gray(cov[((row - pad) * w + (col - pad)) as usize])
             } else {
                 0
             };
@@ -236,14 +244,35 @@ mod outlined_cell_tests {
 
     #[test]
     fn aa_fill_ramps_gray_toward_the_ring() {
-        // Half coverage packs as gray at the table's alpha, not white at a thin alpha.
+        // Half coverage packs as gray at the table's alpha, not white at a thin alpha: the gray is
+        // the 4-bit `(128 · 255) >> 12` = 7, read back as 7/15.
         let (rgba, w, _, _) = outlined_cell(&[128], 1, 1, 1, 1.0);
         assert_eq!(
             px(&rgba, w, 1, 1),
-            [128, 128, 128, 255],
+            [119, 119, 119, 255],
             "gray fill, LUT alpha"
         );
         assert_eq!(px(&rgba, w, 1, 0), [0, 0, 0, 153], "ring stays black");
+    }
+
+    #[test]
+    fn the_fill_gray_is_the_bakes_four_bit_channel() {
+        // `(c · 0xff) >> 12` (`0x5cf1b8`–`0x5cf1c8`): not `c >> 4`, which is 1 at 16 and 15 at 240.
+        for (c, n) in [
+            (0u8, 0u8),
+            (16, 0),
+            (17, 1),
+            (128, 7),
+            (240, 14),
+            (241, 15),
+            (255, 15),
+        ] {
+            assert_eq!(fill_gray(c), n * 17, "coverage {c}");
+        }
+        // Every texel of an outlined cell is 4-bit exact, as the 4444 page holds it.
+        let cov: Vec<u8> = (0..=255).collect();
+        let (rgba, ..) = outlined_cell(&cov, 16, 16, 2, 1.0);
+        assert!(rgba.iter().all(|&b| b % 17 == 0));
     }
 }
 
