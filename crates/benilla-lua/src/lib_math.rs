@@ -362,9 +362,12 @@ pub fn bit_library() -> [(&'static str, crate::heap::NativeFn); 8] {
         // `bit_mod` (`0x7fad20`) and its remainder (`0x7fad70`): the divisor, argument 2, read
         // first; `cdq; idiv`, the remainder signed (`0x7fadab`).
         ("mod", |vm, n| {
-            let b = arg_word(vm, n, 2)? as i32;
+            let d = vm.check_number(n, 2)?;
+            let b = ftol(d) as i32;
+            // A divisor whose low word is 0 (`0x7fad32`) answers 1 divided by it (`fdivr` with
+            // 1.0 at `0x7fad42`), argument 1 unread: `mod(7, 0.5)` is 2, `mod(7, 0)` infinity.
             if b == 0 {
-                return Err(vm.error_at(1, "bit.mod: division by zero"));
+                return Ok(vm.ret1(Value::Num(1.0 / d)));
             }
             let a = arg_word(vm, n, 1)? as i32;
             // `wrapping_rem`: `INT32_MIN % -1` is 0, not a Rust panic.

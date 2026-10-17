@@ -727,6 +727,24 @@ mod tests {
             .ends_with("bad argument #1 to `band' (number expected, got no value)"));
     }
 
+    /// `bit.mod` tests only the low word of its divisor's `__ftol` (`0x7fad32`); a 0 there answers
+    /// 1 divided by the divisor (`0x7fad42`), with argument 1 never read, and raises nothing.
+    #[test]
+    fn bit_mod_by_a_zero_word_answers_one_over_the_divisor() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.eval::<f64>("return bit.mod(7, 0.5)").unwrap(), 2.0);
+        assert_eq!(
+            s.eval::<f64>("return bit.mod(7, 0)").unwrap(),
+            f64::INFINITY
+        );
+        assert_eq!(
+            s.eval::<f64>("return bit.mod(7, 2^32)").unwrap(),
+            1.0 / 4_294_967_296.0
+        );
+        assert_eq!(s.eval::<f64>("return bit.mod(nil, '0.25')").unwrap(), 4.0);
+        assert_eq!(s.eval::<i64>("return bit.mod(7, 2^32 + 3)").unwrap(), 1);
+    }
+
     /// `print` and `_VERSION` are not in 1.12's `_G`, and `__pow` is.
     #[test]
     fn the_base_library_matches_the_captured_globals() {
