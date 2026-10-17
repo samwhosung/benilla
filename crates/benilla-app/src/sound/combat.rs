@@ -282,7 +282,6 @@ fn combat_sounds(
     attach: crate::entities::AttachPoints,
     objects: crate::net::Objects,
     mut items: Option<ResMut<crate::items::Items>>,
-    net_commands: Res<crate::net::NetCommands>,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
     mut out: NonSendMut<SoundOutput>,
@@ -504,9 +503,7 @@ fn combat_sounds(
                         {
                             items
                                 .as_mut()
-                                .and_then(|it| {
-                                    super::worn_chest_material(vstore, &objects, it, &net_commands)
-                                })
+                                .and_then(|it| super::worn_chest_material(vstore, &objects, it))
                                 .map_or(impact_slot::FLESH, |m| mats.armor_impact_slot(m) as usize)
                         }
                         _ => creature_impact_slot(

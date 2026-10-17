@@ -356,17 +356,12 @@ fn slot_entry(store: &ObjectStore, objects: &Objects, slot0: u8) -> Option<u32> 
 
 /// The weapon-skill line for `slot0`: vmangos's subclass table (`Item.cpp:700`) for a weapon,
 /// Unarmed (162) for anything else.
-fn weapon_skill_id(
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-    slot0: u8,
-) -> u32 {
+fn weapon_skill_id(store: &ObjectStore, objects: &Objects, items: &Items, slot0: u8) -> u32 {
     let Some(entry) = slot_entry(store, objects, slot0) else {
         return SKILL_UNARMED;
     };
-    let Some(t) = items.template(entry, 0, Ask::New(commands)) else {
+    // A worn item's record only read: its create asked.
+    let Some(t) = items.template(entry, 0, Ask::Read) else {
         return SKILL_UNARMED; // in flight: refined when the template lands
     };
     if t.class != ITEM_CLASS_WEAPON {
@@ -465,25 +460,20 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
 }
 
 /// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs.
-fn combat_stats(
-    store: &ObjectStore,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-) -> UnitCombatStats {
+fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCombatStats {
     // The off hand counts only as a weapon (a shield does not swing); both flags read false
     // until the template lands.
     let has_offhand = slot_entry(store, objects, SLOT_OFF_HAND)
-        .and_then(|e| items.template(e, 0, Ask::New(commands)))
+        .and_then(|e| items.template(e, 0, Ask::Read))
         .is_some_and(|t| t.class == ITEM_CLASS_WEAPON);
     let has_wand = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, Ask::New(commands)))
+        .and_then(|e| items.template(e, 0, Ask::Read))
         .is_some_and(|t| t.class == ITEM_CLASS_WEAPON && t.subclass == SUBCLASS_WAND);
 
-    let main_skill = weapon_skill_id(store, objects, items, commands, SLOT_MAIN_HAND);
-    let offhand_skill = weapon_skill_id(store, objects, items, commands, SLOT_OFF_HAND);
+    let main_skill = weapon_skill_id(store, objects, items, SLOT_MAIN_HAND);
+    let offhand_skill = weapon_skill_id(store, objects, items, SLOT_OFF_HAND);
     let ranged_skill_id = slot_entry(store, objects, SLOT_RANGED)
-        .and_then(|e| items.template(e, 0, Ask::New(commands)))
+        .and_then(|e| items.template(e, 0, Ask::Read))
         .filter(|t| t.class == ITEM_CLASS_WEAPON)
         .and_then(|t| weapon_subclass_skill(t.subclass));
 
@@ -544,6 +534,8 @@ fn slot_view(
     // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
     // the enchant lines below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
+    // The tooltip build looks the creator up with a callback (`0x52e204`), which no event here
+    // marks: it is asked when it first shows.
     let creator = obj.item_creator().filter(|&g| g != 0).and_then(|g| {
         names
             .resolve_player(g, Ask::New(commands))
@@ -567,7 +559,8 @@ fn slot_view(
     // `ITEM_FIELD_RANDOM_PROPERTIES_ID`, the roll behind an "of the Bear" name; its enchants are
     // already in the slots above.
     let roll = obj.item_random_properties_id();
-    let t = items.template(entry, guid, Ask::New(commands));
+    // Only read, as the inventory getters read it (`0x4c8a0a`, `0x4c8d34`): the item's create asked.
+    let t = items.template(entry, guid, Ask::Read);
     let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
         Some(t) => {
             let name = rolls.name(&t.name, roll);
@@ -686,6 +679,8 @@ fn inventory_slots(
     let mut inv: InventorySlots = Default::default();
     let ammo_id = store.0.player_ammo_id().unwrap_or(0);
     if ammo_id != 0 {
+        // An entry, not an item object, so no create asked for it; the texture getter's lookup
+        // passes a callback (`0x4c83ce`), on the doll's events, which none here marks.
         let t = items.template(ammo_id, 0, Ask::New(commands));
         let (name, quality, display, link) = match t {
             Some(t) => (
@@ -866,7 +861,7 @@ pub(crate) fn feed_char(
 
     // The paper doll's getters read this; the stat events that repaint it are field watches,
     // fired after this push (`crate::ui_unit::field_events`).
-    let stats = combat_stats(store, objects, &items, &commands);
+    let stats = combat_stats(store, objects, &items);
     if memo.last_stats.as_ref() != Some(&stats) {
         gate.audit("feed_char", "the combat-stats snapshot");
         script.set_player_combat_stats(Some(stats.clone()));

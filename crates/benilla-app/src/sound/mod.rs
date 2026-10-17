@@ -282,13 +282,13 @@ pub(super) fn worn_chest_material(
     store: Option<&crate::net::ObjectStore>,
     objects: &crate::net::Objects,
     items: &crate::items::Items,
-    net: &crate::net::NetCommands,
 ) -> Option<u32> {
     /// The fifth 8-byte guid of the inv-slot array (`0x62fa50`/`0x62fb86`).
     const EQUIPMENT_SLOT_CHEST: u8 = 4;
     let guid = store?.0.player_inv_slot(EQUIPMENT_SLOT_CHEST)?;
     let entry = objects.object(guid)?.object_entry()?;
-    Some(items.held(entry, Ask::New(net))?.material)
+    // A worn item's record only read: its create asked.
+    Some(items.held(entry, Ask::Read)?.material)
 }
 
 /// This frame's listener pose in Bevy space, set by [`update_audio_listener`] and read by every

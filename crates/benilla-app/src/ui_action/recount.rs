@@ -84,7 +84,7 @@ impl Counter<'_> {
     /// template, requested here as the reference does (`0x4e6d78`).
     fn count(&self, entry: u32) -> u32 {
         self.store.map_or(0, |s| {
-            let template = self.items.template(entry, 0, Ask::New(self.commands));
+            let template = self.items.template(entry, 0, Ask::Event(self.commands));
             action_count(&s.0, self.objects, entry, template)
         })
     }
@@ -226,6 +226,35 @@ mod tests {
             }],
         );
         assert_eq!(seen(&mut app), ["7=0", "3=5", "50=5"]);
+    }
+
+    /// The recount looks the entry up with the callback `0x4e5b80` (`0x4e6d78`) at each notice: a
+    /// refused entry is asked by no frame after it, only by the next notice.
+    #[test]
+    fn a_refused_entry_is_asked_by_the_next_notice_never_by_a_frame() {
+        let mut app = app();
+        let asked = |app: &App| {
+            crate::query_cache::queries(
+                app.world()
+                    .non_send_resource::<crossbeam_channel::Receiver<crate::net::ClientCommand>>(),
+            )
+            .len()
+        };
+        let notice = ItemNotice::StackCount {
+            guid: POTIONS,
+            entry: POTION,
+        };
+        notify(&mut app, [notice.clone()]);
+        assert_eq!(asked(&app), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(POTION, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(asked(&app), 0, "no frame asks a refusal");
+        notify(&mut app, [notice]);
+        assert_eq!(asked(&app), 1, "the next notice asks again");
     }
 
     /// The count is taken at the notice: a stack the store changes runs nothing by itself, and

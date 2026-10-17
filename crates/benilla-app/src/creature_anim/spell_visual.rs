@@ -15,7 +15,7 @@ use benilla_protocol::EntityKind;
 use crate::aura_visual::AuraProc;
 use crate::entities::ItemDisplays;
 use crate::items::{ItemObject, Items};
-use crate::net::{FieldChanged, NetCommands, NetEntity, ObjectStore};
+use crate::net::{FieldChanged, NetEntity, ObjectStore};
 use crate::query_cache::Ask;
 use benilla_assets::{LockRecover, WorldAssets};
 
@@ -226,7 +226,6 @@ pub(super) fn load_spell_visuals(mut commands: Commands, assets: Option<Res<Worl
 pub(super) struct WeaponVisualSrc<'w, 's> {
     displays: Option<Res<'w, ItemDisplays>>,
     items: Option<Res<'w, Items>>,
-    net: Option<Res<'w, NetCommands>>,
     // `Without<ItemObject>`: an item's store overlaps the unit indices, so a unit read of it
     // answers item fields.
     units: Query<'w, 's, (Option<&'static NetEntity>, &'static ObjectStore), Without<ItemObject>>,
@@ -243,11 +242,8 @@ impl WeaponVisualSrc<'_, '_> {
             EntityKind::Player => s
                 .player_visible_item_entry(17)
                 .filter(|e| *e != 0)
-                .and_then(|entry| {
-                    self.items
-                        .as_deref()?
-                        .held(entry, Ask::New(self.net.as_deref()?))
-                })
+                // The visible item's change looked it up (`0x5ed764`); this only reads.
+                .and_then(|entry| self.items.as_deref()?.held(entry, Ask::Read))
                 .map(|t| t.display_info_id),
             _ => None,
         }

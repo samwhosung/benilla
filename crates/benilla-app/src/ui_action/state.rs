@@ -254,6 +254,8 @@ pub(super) fn feed_action_state(
             }
             ACTION_KIND_ITEM => {
                 // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
+                // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which no
+                // event here marks: an entry is asked when it first shows.
                 let use_spell = items
                     .template(button.action, 0, Ask::New(&commands))
                     .and_then(|t| t.use_spell);

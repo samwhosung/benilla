@@ -20,7 +20,6 @@ use benilla_ui::script::{ScriptValue, SpellBookState, SpellSlotView, SpellTabVie
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::NetCommands;
 use crate::ui_action::{melee_auto_attack_icon, ranged_weapon_icon, PlayerActions, Spells};
 use crate::ui_script::gate;
 use crate::ui_unit::UnitFeed;
@@ -103,7 +102,6 @@ fn feed_spellbook(
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    commands: Res<NetCommands>,
     cooldowns: Res<crate::spell::Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
@@ -176,19 +174,11 @@ fn feed_spellbook(
         .map(|s| (s.0.unit_race().unwrap_or(0), s.0.unit_class().unwrap_or(0)))
         .unwrap_or((0, 0));
     // The melee auto-attack shows the main-hand weapon, or Spell-Reset unarmed, not its `Temp`.
-    let attack_icon = store.map(|s| {
-        melee_auto_attack_icon(
-            s,
-            &spells.forms,
-            &inv.objects,
-            &items,
-            icons.as_deref(),
-            &commands,
-        )
-    });
+    let attack_icon = store
+        .map(|s| melee_auto_attack_icon(s, &spells.forms, &inv.objects, &items, icons.as_deref()));
     // Auto Shot and wand Shoot show the ranged weapon; without one, their own icon.
-    let ranged_icon = store
-        .and_then(|s| ranged_weapon_icon(s, &inv.objects, &items, icons.as_deref(), &commands));
+    let ranged_icon =
+        store.and_then(|s| ranged_weapon_icon(s, &inv.objects, &items, icons.as_deref()));
     let (mut fresh, tab_lines) = build_book(
         &actions.spells,
         &spells.catalog,
@@ -216,7 +206,6 @@ fn feed_spellbook(
             &inv.objects,
             &items,
             icons.as_deref(),
-            &commands,
         );
         if face != slot.texture {
             slot.bar_texture = Some(face);

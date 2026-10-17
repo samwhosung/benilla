@@ -41,7 +41,7 @@ use benilla_formats::FootstepCatalog;
 use crate::creature_anim::{is_footstep_sound, move_flags, AnimSoundEvent, MovementState};
 use crate::entities::{CollisionHeight, Creatures};
 use crate::items::Items;
-use crate::net::{NetCommands, NetEntity, ObjectStore};
+use crate::net::{NetEntity, ObjectStore};
 use crate::player::swim_enter_depth;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use benilla_protocol::EntityKind;
@@ -88,7 +88,6 @@ fn footstep_sounds(
     foley: (Option<Res<super::Materials>>, Option<Res<Creatures>>),
     objects: crate::net::Objects,
     mut items: Option<ResMut<Items>>,
-    net_commands: Res<NetCommands>,
     voices: Option<Res<CreatureVoices>>,
     world: benilla_world::world_point::WorldPoint,
     kits: Option<ResMut<SoundKits>>,
@@ -133,9 +132,7 @@ fn footstep_sounds(
         if let (Some(materials), Some(it)) = (materials.as_deref(), items.as_mut()) {
             let material = match net.kind {
                 // `0x62fa30` reads the chest through the private inv-slot array: self only.
-                EntityKind::Player => {
-                    super::worn_chest_material(store, &objects, it, &net_commands)
-                }
+                EntityKind::Player => super::worn_chest_material(store, &objects, it),
                 _ => net
                     .display_id
                     .and_then(|d| creatures.as_deref()?.foley_material(d)),

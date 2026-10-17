@@ -7,7 +7,7 @@ use benilla_formats::SpellDisplay;
 use crate::creature_anim::UNIT_FLAG_DISARMED;
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore, Objects};
+use crate::net::{ObjectStore, Objects};
 use crate::query_cache::Ask;
 
 const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
@@ -30,11 +30,11 @@ fn main_hand_item(
     objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
 ) -> Option<(u32, Option<String>)> {
     let guid = store.0.player_inv_slot(EQUIPMENT_SLOT_MAINHAND)?;
     let entry = objects.object(guid)?.object_entry()?;
-    let template = items.template(entry, guid, Ask::New(commands))?;
+    // A worn item's record only read: its create asked.
+    let template = items.template(entry, guid, Ask::Read)?;
     let (class, display) = (template.class, template.display_info_id);
     let icon = icons
         .and_then(|i| i.catalog.get(display))
@@ -51,7 +51,6 @@ pub(crate) fn melee_auto_attack_icon(
     objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
 ) -> String {
     let form = store.0.unit_shapeshift_form();
     if form != 0 {
@@ -62,7 +61,7 @@ pub(crate) fn melee_auto_attack_icon(
             return icon;
         }
     }
-    let main = main_hand_item(store, objects, items, icons, commands);
+    let main = main_hand_item(store, objects, items, icons);
     // The disarmed guard (`0x4e68df`): a disarmed weapon hand shows `Spell-Reset`, as its swing
     // is unarmed.
     if store.0.unit_flags() & UNIT_FLAG_DISARMED != 0
@@ -83,11 +82,10 @@ pub(crate) fn ranged_weapon_icon(
     objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
 ) -> Option<String> {
     let guid = store.0.player_inv_slot(EQUIPMENT_SLOT_RANGED)?;
     let entry = objects.object(guid)?.object_entry()?;
-    let template = items.template(entry, guid, Ask::New(commands))?;
+    let template = items.template(entry, guid, Ask::Read)?;
     if template.subclass == ITEM_SUBCLASS_THROWN {
         return None;
     }
@@ -108,16 +106,13 @@ pub(super) fn auto_attack_icon(
     objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
 ) -> Option<String> {
     let store = store?;
     if spell.is_melee_auto_attack() {
-        return Some(melee_auto_attack_icon(
-            store, forms, objects, items, icons, commands,
-        ));
+        return Some(melee_auto_attack_icon(store, forms, objects, items, icons));
     }
     if spell.ranged_icon_substitution() {
-        return ranged_weapon_icon(store, objects, items, icons, commands);
+        return ranged_weapon_icon(store, objects, items, icons);
     }
     None
 }
@@ -177,8 +172,8 @@ mod tests {
                 ..Default::default()
             },
         )]);
-        deps.with_objects(|objects, items, commands| {
-            melee_auto_attack_icon(&store, &forms, objects, items, Some(&icons), commands)
+        deps.with_objects(|objects, items, _| {
+            melee_auto_attack_icon(&store, &forms, objects, items, Some(&icons))
         })
     }
 

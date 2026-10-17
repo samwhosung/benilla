@@ -308,10 +308,8 @@ pub(crate) fn use_action(
             let Some(store) = targeting.self_store.iter().next() else {
                 return UseOutcome::Done;
             };
-            let template = ladder
-                .items
-                .template(b.action, 0, Ask::New(&ladder.commands))
-                .cloned();
+            // The use only reads (`0x4e5fd2`).
+            let template = ladder.items.template(b.action, 0, Ask::Read).cloned();
             // The reference bails on a null template too; the icon resolve usually cached it.
             let Some(template) = template else {
                 debug!(
@@ -362,11 +360,7 @@ pub(crate) fn use_action(
                                 .objects
                                 .object(guid)
                                 .and_then(|o| o.object_entry())
-                                .and_then(|entry| {
-                                    ladder
-                                        .items
-                                        .template(entry, guid, Ask::New(&ladder.commands))
-                                })
+                                .and_then(|entry| ladder.items.template(entry, guid, Ask::Read))
                                 .map(|t| t.display_info_id)
                             {
                                 equip_sound.write(crate::sound::AutoEquipSound { display_id });

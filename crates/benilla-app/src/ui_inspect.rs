@@ -59,7 +59,7 @@ fn inspect_slot_view(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     slot0: u8,
 ) -> Option<InvSlotView> {
     let entry = store.0.player_visible_item_entry(slot0)?;
@@ -68,7 +68,7 @@ fn inspect_slot_view(
     // servers leave empty.
     let roll = store.0.player_visible_item_properties(slot0);
     // By entry alone (guid 0), as the reference's item cache asks: there is no item object.
-    let (name, quality, display) = match items.template(entry, 0, Ask::New(commands)) {
+    let (name, quality, display) = match items.template(entry, 0, ask) {
         Some(t) => (
             Some(rolls.name(&t.name, roll)),
             t.quality,
@@ -128,12 +128,14 @@ fn feed_inspect(
     let memo = feed.vm.get(&script);
 
     // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
+    let mut notified = false;
     for token in script.take_inspect_notifies() {
         match crate::ui_unit::player_token_guid(&token, &selection, &group) {
             Some(guid) => {
                 debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
                 let _ = commands.0.send(ClientCommand::Inspect { target: guid });
                 target.token = Some(token);
+                notified = true;
             }
             None => {
                 debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
@@ -165,6 +167,11 @@ fn feed_inspect(
     let Ok(store) = stores.get(entity) else {
         return;
     };
+    // The frame's show and a new inspectee are its slots' getter calls, whose lookups pass a
+    // callback (`0x4c83ce`); the frames between only see a slot change, which the visible item's
+    // own lookup asked (`0x5ed764`).
+    let shown = notified || memo.last.as_ref().map(|v| v.guid) != Some(guid);
+    let ask = Ask::at(shown, &commands);
     let mut slots: InventorySlots = Default::default();
     for slot in 1..=19u8 {
         slots[usize::from(slot)] = inspect_slot_view(
@@ -175,7 +182,7 @@ fn feed_inspect(
                 enchants: catalogs.0.as_deref(),
                 props: catalogs.1.as_deref(),
             },
-            &commands,
+            ask,
             slot - 1,
         );
     }
@@ -199,6 +206,64 @@ fn feed_inspect(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// The inspect's show and a new inspectee stand for the slots' getter calls, whose lookups
+    /// pass a callback (`0x4c83ce`): a refused entry is asked by no frame after it, only by the
+    /// next inspect.
+    #[test]
+    fn a_refused_inspected_item_is_asked_by_the_next_inspect_never_by_a_frame() {
+        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
+        // A player guid with a head piece showing.
+        const MATE: u64 = 0x2001;
+        let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<InspectTarget>()
+            .init_resource::<InspectFeedState>()
+            .init_resource::<Items>()
+            .init_resource::<GuidIndex>()
+            .insert_resource(crate::target::Selection {
+                guid: Some(MATE),
+                ..Default::default()
+            })
+            .init_resource::<crate::ui_party::GroupState>()
+            .add_systems(Update, feed_inspect);
+        let mate = app
+            .world_mut()
+            .spawn(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, 955),
+            ])))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(MATE, mate);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let inspect = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run(r#"NotifyInspect("target")"#)
+                .unwrap();
+            app.update();
+        };
+        let asked = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            crate::query_cache::queries(rx)
+                .into_iter()
+                .filter(|c| matches!(c, ClientCommand::ItemQuery { entry: 955, .. }))
+                .count()
+        };
+        inspect(&mut app);
+        assert_eq!(asked(&rx), 1);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(955, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(asked(&rx), 0, "no frame asks a refusal");
+        inspect(&mut app);
+        assert_eq!(asked(&rx), 1, "the next inspect asks again");
+    }
 
     /// The inspected unit's level is the bridge's to announce: the feed fires no `UNIT_LEVEL`,
     /// at the first resolve or on a change.

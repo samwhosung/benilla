@@ -169,9 +169,10 @@ pub(crate) fn commit_item_cast_on_pick(
             .object(item_guid)
             .and_then(|o| o.object_entry());
         let clicked = match entry {
+            // Only read (`0x495f76`).
             Some(entry) => ladder
                 .items
-                .template(entry, item_guid, Ask::New(&ladder.commands))
+                .template(entry, item_guid, Ask::Read)
                 .map(|t| (t.class, t.subclass, t.inventory_type)),
             None => None,
         };

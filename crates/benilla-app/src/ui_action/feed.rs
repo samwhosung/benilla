@@ -180,9 +180,14 @@ pub(super) fn feed_actions(
                             .and_then(|s| first_short_reagent(d, s, &objects))
                             .or_else(|| d.reagents.iter().map(|&(id, _)| id).find(|&id| id != 0))
                     }?;
-                    let cached = items
-                        .template(failing, 0, Ask::New(&commands))
-                        .map(|i| i.name.clone());
+                    // The failure handler's lookup with the callback `0x6e29b0` (`0x6e1ea4`) on a
+                    // first pass; its redisplay only reads.
+                    let ask = if fail.redisplay {
+                        Ask::Read
+                    } else {
+                        Ask::Event(&commands)
+                    };
+                    let cached = items.template(failing, 0, ask).map(|i| i.name.clone());
                     let name = match cached {
                         Some(name) => name,
                         // Answered unknown: the reference's callback literal (`0x838044`).
@@ -378,14 +383,15 @@ pub(super) fn feed_actions(
                             &objects,
                             &items,
                             icons.as_deref(),
-                            &commands,
                         )
                     });
                     (icon, 0, false, None)
                 }
                 ACTION_KIND_ITEM => {
                     // Never nil: the reference's resolver `0x5d88b0` returns the question mark,
-                    // and the stock `ActionButton.lua:158` hides the icon on a nil texture.
+                    // and the stock `ActionButton.lua:158` hides the icon on a nil texture. The
+                    // texture getter looks it up with a callback (`0x4e6b24`) on the bar's events,
+                    // which no event here marks: an entry is asked when it first shows.
                     let template = items
                         .template(button.action, 0, Ask::New(&commands))
                         .cloned();
@@ -501,7 +507,6 @@ pub(super) fn feed_actions(
                                 &objects,
                                 &items,
                                 icons.as_deref(),
-                                &commands,
                             );
                             let changed = fresh != slot.texture;
                             if changed {
@@ -552,9 +557,8 @@ pub(crate) fn spell_action_icon(
     objects: &crate::net::Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
 ) -> Option<String> {
-    auto_attack_icon(d, store, &spells.forms, objects, items, icons, commands)
+    auto_attack_icon(d, store, &spells.forms, objects, items, icons)
         .or_else(|| {
             store
                 .filter(|s| super::toggle::active_action_toggle(spell_id, d, s))
