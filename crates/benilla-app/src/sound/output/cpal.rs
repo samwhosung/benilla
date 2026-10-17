@@ -155,7 +155,21 @@ pub(super) fn default_output() -> Result<Device> {
         },
     };
 
-    let alsa = host.id().name() == "ALSA";
+    // By the variant, not its name: cpal names it "Alsa".
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))]
+    let alsa = host.id() == cpal::HostId::Alsa;
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )))]
+    let alsa = false;
     let others = host.devices().into_iter().flatten().filter(|d| {
         d.description()
             .is_ok_and(|desc| desc.direction() != cpal::DeviceDirection::Input)
