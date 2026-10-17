@@ -47,7 +47,8 @@ pub(crate) enum MemoryVerdict {
 pub(crate) trait ScriptHeap {
     /// `lua_getgccount` (`0x6f43f0`): the counted bytes `>> 10`.
     fn count_kb(&mut self) -> i32;
-    /// `FrameScriptCollectGarbage(1)` (`0x703bc0`): a full collection.
+    /// `FrameScriptCollectGarbage(1)` (`0x703bc0`): a full collection, made by setting the
+    /// threshold to 0 (`lua_setgcthreshold`, `0x703bd6`), so the next one is reckoned from 0.
     fn collect(&mut self);
 }
 
@@ -57,7 +58,7 @@ impl ScriptHeap for UiScript {
     }
 
     fn collect(&mut self) {
-        let _ = self.lua().gc_collect();
+        self.lua().set_gc_threshold_kb(0);
     }
 }
 
@@ -240,6 +241,23 @@ mod tests {
         assert_eq!(w.deadline, 1);
         assert_eq!(w.poll(1024, 0, &mut h), None, "a millisecond short");
         assert_eq!(w.poll(1024, 1, &mut h), Some(MemoryVerdict::Quit));
+    }
+
+    #[test]
+    /// The watch's collection sets the threshold to 0 (`0x703bd6`), so `0x6fae00` reckons the
+    /// next one from a headroom wrapped past 4 GB, which only the pools' free space caps; from the
+    /// open's 256 KB, the old headroom, the 50-odd KB the state has below it, would win.
+    fn the_watchs_collection_paces_from_a_threshold_of_0() {
+        let mut s = UiScript::new().unwrap();
+        let before = s.eval::<Vec<f64>>("return { gcinfo() }").unwrap();
+        assert_eq!(before[1], 256.0);
+        ScriptHeap::collect(&mut s);
+        let after = s.eval::<Vec<f64>>("return { gcinfo() }").unwrap();
+        assert!(after[0] < before[0], "collected: {before:?} then {after:?}");
+        assert!(
+            after[1] > 256.0 && after[1] - after[0] > after[0] / 4.0 + 1.0,
+            "the pools' free space past the quarter and the old headroom: {after:?}"
+        );
     }
 
     #[test]

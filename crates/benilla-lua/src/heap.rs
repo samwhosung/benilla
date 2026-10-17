@@ -475,9 +475,11 @@ pub struct Heap {
     /// 5.0's `GCthreshold` (`[G+0x24]`), in 32 bits: what `gcinfo` answers, and where the next
     /// collection's headroom is reckoned from.
     threshold: usize,
-    /// A collection runs when `bytes` reaches it: the threshold, or 0 when the heap asks for one
-    /// before it (string ids short, a string refused).
+    /// A collection runs when `bytes` reaches it: the threshold, or 0 while the heap asks for one
+    /// before it ([`Heap::ask_collection`]).
     pub(crate) trigger: usize,
+    /// A collection the heap asked for has not run yet: a new threshold leaves the trigger at 0.
+    asked: bool,
     /// Collections run since the state opened: an instrument for the collector's pacing.
     pub collections: u64,
     /// The chunk names prototypes were compiled under, by source id: the owners a profile and
@@ -602,6 +604,7 @@ impl Default for Heap {
             bytes: strt_bytes(STRT_FIRST),
             threshold: 64 * 1024,
             trigger: 64 * 1024,
+            asked: false,
             collections: 0,
             // Id 0 is the host: whatever no Lua chunk created.
             sources: vec![Some(Rc::from(&b"=[host]"[..]))],
@@ -663,7 +666,7 @@ impl Heap {
             // Ids run short: a collection, at the next check, frees the dead ones first. It
             // moves the mark to halfway between what lives and the bound; until it runs, the
             // mark moves halfway on, so the request is not made for every new string.
-            self.trigger = 0;
+            self.ask_collection();
             self.str_gc_at = self.strs.used + (self.str_id_limit - self.strs.used) / 2;
         }
         // A string past `MAX_STRING`, or one whose bytes the allocator refuses, is C's
@@ -691,13 +694,21 @@ impl Heap {
     }
 
     /// A string that cannot be made: the pending error set, a collection asked for, and
-    /// [`Heap::oom_str`] in its place.
+    /// [`Heap::oom_str`] in its place. Deviation: the client's `luaM_realloc` (`0x6fc980`) has no
+    /// failure path to ask from; here a refused string asks for the collection that may free room.
     #[cold]
     #[inline(never)]
     fn out_of_memory(&mut self) -> StrRef {
         self.oom = true;
-        self.trigger = 0;
+        self.ask_collection();
         self.oom_str
+    }
+
+    /// A collection at the next check, whatever the threshold: benilla's own, which the client
+    /// never asks for, so the threshold stays the client's.
+    fn ask_collection(&mut self) {
+        self.asked = true;
+        self.trigger = 0;
     }
 
     /// Whether a string could not be made since the last check, clearing it: for a host that
@@ -991,6 +1002,8 @@ impl Heap {
         mode_key: StrRef,
         fixed: &[Block],
     ) -> usize {
+        self.asked = false;
+        self.trigger = self.threshold;
         let mut gray: Vec<Value> = roots.to_vec();
         gray.push(Value::Str(self.oom_str));
         let mut gray_upvals: Vec<u32> = extra_upvals.to_vec();
@@ -1251,10 +1264,10 @@ impl Heap {
         self.threshold
     }
 
-    /// Set the threshold, and the next collection's trigger with it.
+    /// Set the threshold, and the next collection's trigger with it unless one is asked for.
     pub fn set_threshold(&mut self, t: usize) {
         self.threshold = t;
-        self.trigger = t;
+        self.trigger = if self.asked { 0 } else { t };
     }
 
     /// The threshold a collection leaves (`0x6fae00`, [`crate::pools::next_threshold`]), from

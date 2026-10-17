@@ -947,7 +947,11 @@ impl Vm {
     }
 
     /// A need past the stack: grown by 5.0's rule ([`Vm::growstack`]) for what the need asks
-    /// above `top`, until it fits.
+    /// above `top`, until it fits. Deviation: these are benilla's own needs, past what the client's
+    /// checks ([`Vm::checkstack`]) reserve: a frame's registers above `c_maxstack`
+    /// (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of
+    /// `EXTRA_STACK` and one more. Where they pass what the client reserved, the stack grows
+    /// where the client's would not.
     #[cold]
     #[inline(never)]
     fn grow(&mut self, n: usize) {
@@ -1654,14 +1658,7 @@ impl Vm {
                 let base = func_idx + 1;
                 let np = proto.nparams as usize;
                 let frame_top = base + proto.maxstack as usize;
-                // `luaD_precall` asks for the function's registers above its arguments, after
-                // `adjust_varargs` left `arg` above the parameters (`0x6f60ab`..`0x6f60c7`).
-                let top50 = if proto.vararg {
-                    base + np + 1
-                } else {
-                    base + nargs
-                };
-                self.checkstack(top50, proto.c_maxstack as usize);
+                self.checkstack(precall_top50(base, nargs, proto), proto.c_maxstack as usize);
                 self.ensure(frame_top + 1);
                 let mut fill_from = base + nargs;
                 if proto.vararg {
@@ -1716,10 +1713,8 @@ impl Vm {
                     tailcalls: 0,
                     boundary: false,
                 });
-                // 5.1.5's `adjust_varargs` checks the collector for the `arg` table it makes.
-                if proto.vararg {
-                    self.check_gc();
-                }
+                // The client's `adjust_varargs` makes `arg` without checking the collector
+                // (`0x6f6200`..`0x6f6366`), where 5.1.5's checks it.
                 Ok(Called::Lua)
             }
             FuncObj::Native { .. } => {
@@ -3193,6 +3188,18 @@ impl Vm {
                             self.frames.push(new);
                             continue 'frame;
                         }
+                        // The client's `OP_TAILCALL` makes the call where the function sits
+                        // (`0x6f922c`) and moves the frame down after (`0x6f9761`..`0x6f97ef`), so
+                        // its stack check is made there.
+                        if let V::Func(f) = r!(a).unpack() {
+                            if let FuncObj::Lua(LuaFunc { proto, .. }) = self.heap.func(f) {
+                                let (top, n) = (
+                                    precall_top50(func_idx + 1, nargs, proto),
+                                    proto.c_maxstack as usize,
+                                );
+                                self.checkstack(top, n);
+                            }
+                        }
                         let me = self.frames.pop().unwrap();
                         self.stack.copy_within(func_idx..func_idx + nargs + 1, dest);
                         self.top = dest + nargs + 1;
@@ -3542,6 +3549,17 @@ fn symbexec(p: &Proto, lastpc: usize, reg: usize) -> Option<usize> {
     last
 }
 
+/// The top `luaD_precall` checks the stack from for a Lua function whose first register is
+/// `base` (`0x6f60ab`..`0x6f60c7`): above its arguments, or above `arg`, which `adjust_varargs`
+/// leaves past the parameters.
+fn precall_top50(base: usize, nargs: usize, p: &Proto) -> usize {
+    if p.vararg {
+        base + p.nparams as usize + 1
+    } else {
+        base + nargs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3591,6 +3609,63 @@ mod tests {
         }
         // Never back to the first sizes: a stack halves only above 90 slots, the records above 16.
         assert_eq!((vm.stack.len(), vm.ci_size), (2 * BASIC_STACK_SIZE, 16));
+    }
+
+    /// A tail call checks the stack where the called function sits, before its frame moves down
+    /// (`0x6f922c`, then `0x6f9761`..`0x6f97ef`). `f`'s frame starts at slot 4, under the main
+    /// chunk's three registers; with `n` locals it calls `g` from slot `4 + n`, its argument
+    /// above, and `g` reserves 11 registers: the check from `6 + n` asks `6 + n + 11 + 6 < 45`,
+    /// which 21 locals meet and 22 do not, where from `f`'s own slot it would ask only `5 + 17`.
+    #[test]
+    fn a_tail_call_checks_the_stack_where_the_call_is_made() {
+        for (n, size) in [(21, 45), (22, 90)] {
+            let mut vm = crate::new_state();
+            let locals: Vec<String> = (0..n).map(|i| format!("a{i}")).collect();
+            let src = format!(
+                "local function g(x) local p, q, r, s, t, u, v, w, y, z = 1 return x end \
+                 local function f() local {} = 1 return g(1) end f()",
+                locals.join(", ")
+            );
+            vm.exec(src.as_bytes(), b"=t").unwrap();
+            assert_eq!(vm.stack.len(), size, "{n} locals");
+        }
+    }
+
+    /// The client's `adjust_varargs` makes the `arg` table without checking the collector
+    /// (`0x6f6200`..`0x6f6366`): a call to a vararg function whose body allocates nothing never
+    /// collects, with the count at the threshold.
+    #[test]
+    fn a_vararg_call_does_not_collect() {
+        let mut vm = crate::new_state();
+        vm.exec(b"function V(...) return 1 end", b"=t").unwrap();
+        let v = vm.get_global("V");
+        let count = vm.heap.bytes();
+        vm.heap.set_threshold(count);
+        let n = vm.heap.collections;
+        vm.call_value(v, &[Value::Num(1.0), Value::Num(2.0)], 0)
+            .unwrap();
+        assert_eq!(vm.heap.collections, n);
+        assert!(vm.heap.bytes() > count, "`arg` was made");
+    }
+
+    /// A collection the heap asks for (string ids running short) stays asked for through a new
+    /// threshold: `collectgarbage` with the most there is still collects at once.
+    #[test]
+    fn a_new_threshold_keeps_a_collection_the_heap_asked_for() {
+        let mut vm = crate::new_state();
+        vm.full_gc();
+        let used = vm.heap.counts()[0] as u32;
+        vm.heap.limit_string_ids(2 * used + 8);
+        let n = vm.heap.collections;
+        let mut i = 0;
+        while vm.heap.trigger != 0 {
+            vm.heap.intern(format!("s{i}").as_bytes());
+            i += 1;
+        }
+        assert_eq!(vm.heap.collections, n, "asked for, not run");
+        vm.set_gc_threshold(0x3f_ffff);
+        assert_eq!(vm.heap.collections, n + 1);
+        assert_eq!(vm.heap.threshold(), vm.heap.trigger, "the request is met");
     }
 
     /// A bare state has nothing of 16 bytes or less, so its smallest pool has taken no chunk and

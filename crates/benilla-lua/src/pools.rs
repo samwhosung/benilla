@@ -6,10 +6,10 @@
 //!
 //! The book is the client's allocator run over benilla's own sequence of blocks, which a
 //! collection recounts from what lives. Deviation: that sequence is not wholly the client's. A
-//! table's node vector is sized as 5.1 sizes it, the constant table each function's parse makes
-//! (`open_func`'s `luaH_new`, `0x6fcad0`) is not counted, and a prototype's vectors are grown one
-//! after another where the client's parser grows them together; each moves a pool's chunk
-//! boundary, and so its free space, by what it changes.
+//! table's node vector is sized as 5.1 sizes it, neither the constant table each function's parse
+//! makes (`open_func`'s `luaH_new`, `0x6fcad0`) nor `lua_load`'s token buffer is counted, and a
+//! prototype's vectors are grown one after another where the client's parser grows them
+//! together; each moves a pool's chunk boundary, and so its free space, by what it changes.
 
 /// The six pools' block sizes, smallest first (`0x811d34`..`0x811d48`).
 pub(crate) const BLOCK_SIZES: [u32; 6] = [0x10, 0x20, 0x40, 0x60, 0x80, 0x100];
@@ -78,6 +78,7 @@ impl Pools {
     pub(crate) fn free(&mut self, b: Block) {
         if let Block::Pool(i) = b {
             let u = &mut self.used[i as usize];
+            debug_assert!(*u > 0, "a block freed from pool {i}, which has none in use");
             *u = u.saturating_sub(1);
         }
     }
@@ -246,7 +247,9 @@ mod tests {
             Block::System,
             "a system block stays there"
         );
-        assert_eq!(p.realloc(Block::Pool(2), 0), Block::None);
+        let b = p.alloc(64);
+        assert_eq!(p.realloc(b, 0), Block::None);
+        assert_eq!(p.used(), [0; 6]);
     }
 
     /// A vector of 10 instructions grows 16, 32, 64 bytes and is fitted to 40 in its 64-byte
@@ -272,6 +275,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A block given back that the book never took is drift, which a test build catches.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "has none in use")]
+    fn a_free_the_book_never_took_is_caught() {
+        Pools::default().free(Block::Pool(2));
     }
 
     /// `0x6fae00` on hand-worked numbers.
