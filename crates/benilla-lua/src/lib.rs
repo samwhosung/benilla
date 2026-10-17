@@ -341,10 +341,7 @@ mod tests {
         );
         assert_eq!(err("break"), "t:1: no loop to break near `<eof>'");
         assert_eq!(err("(a) = 1"), "t:1: syntax error near `='");
-        assert_eq!(
-            err("if x then\nend end"),
-            "t:2: `<eof>' expected near `end'"
-        );
+        assert_eq!(err("if x then\nend end"), "t:2: <eof> expected near `end'");
         assert_eq!(
             err("do\nx = 1"),
             "t:2: `end' expected (to close `do' at line 1) near `<eof>'"

@@ -79,7 +79,11 @@ pub(crate) fn parse(src: &[u8], chunkname: &[u8], heap: &mut Heap, ccalls: u32) 
     };
     p.fs.push(FuncState::new(Rc::from(chunkname), 0, Key::default()));
     p.chunk()?;
-    p.check(Tok::Eof)?;
+    // The client's `luaY_parser` raises its own bare text past the last statement (`0x6fca1a`,
+    // `0x871cf4`).
+    if p.tok() != Tok::Eof {
+        return Err(p.lx.error("<eof> expected"));
+    }
     let fs = p.close_func()?;
     let mut root = fs.into_proto(p.heap);
     crate::compile::finish_keys(&mut root);

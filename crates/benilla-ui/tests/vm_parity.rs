@@ -219,6 +219,7 @@ const CASES: &[(&str, &str)] = &[
     ("tonumber_edges", r#"return S(tonumber("inf"), tonumber("-inf"), tonumber("nan") ~= nil, tonumber("1e"), tonumber("0x"), tonumber(" 0x1A "), tonumber("0x1p4"), tonumber("1e+"), tonumber(".5"), tonumber("5."), tonumber("- 1"), tonumber("1 2"), tonumber(""), tonumber("  "), tonumber("0x10", 10), tonumber("10", 36), tonumber("z", 36))"#),
     ("tonumber_base_edges", r#"return S(tonumber("-1", 16), tonumber("0x10", 16), tonumber(" ff ", 16), tonumber("ffffffffffffffffffff", 16), tonumber("1z", 36), tonumber("8", 8), tonumber("", 16), tonumber("-ff", 16), tonumber("+7", 8))"#),
     ("numeral_lexing", "return S(1e10, .5, 5., 3e-2, 1E2, 2^53 + 1, 1.5e+3, .5E-1, 2., 5.e2)"),
+    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`).
     ("numeral_reader", r#"local o = {}
         for _, src in ipairs({"return 0x10", "return 0xA0", "a = 0x10()", "a=1b=2 return a, b",
             "return 1..2", "return 1.2.3", "return 3e", "return 3e+", "return .5.3", "return 1d2",
@@ -238,6 +239,7 @@ const CASES: &[(&str, &str)] = &[
     ("coerce_d_and_hex", r#"return S("1d2" + 0, "2" + 1, E(function() return "0x2" + 1 end), E(function() return "nan" * 1 end), " 5.D1 " * 2, E(string.rep, "x", "0x2"), string.rep("x", "2d0"))"#),
     ("coerce_edges", r#"return S(E(function() return "0x10" * 1 end), " 2 " * " 3 ", E(function() return "1e" + 1 end), E(function() return "inf" + 0 end), 10 .. "", 1e100 .. "", -0.0 .. "", 2^63 .. "")"#),
     // ── Syntax errors and the lexer's edges, through `loadstring` ──
+    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`).
     ("syntax_errors", r#"local o = {}
         for _, src in ipairs({"x = 1 +", "local function", "x = #t", "x = a % b",
             "return function(...) return ... end", "for x do end", "x = 1..2", "x = \"a\nb\"",

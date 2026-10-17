@@ -32,7 +32,7 @@ Three delete what 5.1 added, all in `lparser.c`, all byte-read out of the client
 (`simpleexp 0x6fd240`, `getunopr 0x6fe0a0`, `getbinopr 0x6fe0c0`). `...` and `#` land on 5.0's
 own `unexpected symbol` at `prefixexp 0x6fde40`. `%` ends the expression before it, so the error is
 whatever comes next expects: `` unexpected symbol near `%' `` after `x = 5`, and
-`` `<eof>' expected near `%' `` after `return 5`.
+`` <eof> expected near `%' `` (the client's bare text, `0x871cf4`) after `return 5`.
 
 | change | why |
 |---|---|
