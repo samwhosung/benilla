@@ -122,7 +122,7 @@ impl PlayTimeWarning {
 
 /// The process clock in milliseconds, the reference's `OsGetAsyncTimeMs` (`0x42c010`), wrapping
 /// as its dword does.
-fn now_ms(time: &Time<Real>) -> u32 {
+pub(crate) fn now_ms(time: &Time<Real>) -> u32 {
     time.elapsed().as_millis() as u32
 }
 

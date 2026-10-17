@@ -48,8 +48,8 @@ impl LeavingWorldArmed {
         std::mem::take(&mut self.0)
     }
 
-    /// Read without taking, for tests.
-    #[cfg(test)]
+    /// Read without taking: whether a world is entered, as the script memory watch tests the
+    /// byte (`0x4955ab`).
     pub(crate) fn is_armed(&self) -> bool {
         self.0
     }

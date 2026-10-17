@@ -182,6 +182,7 @@ impl PluginGroup for GamePlugins {
             .add(UiFollowPlugin)
             .add(UiInstancePlugin)
             .add(crate::ui_billing::UiBillingPlugin)
+            .add(crate::ui_memory::UiMemoryPlugin)
             .add(UiLogoutPlugin)
             .add(UiSocialPlugin)
             // After the social session, whose FriendsFrame and ignore list it uses.
@@ -1591,6 +1592,8 @@ pub(crate) mod schedule_tests {
             return;
         }
         let post = census(&mut app, PostUpdate, SyncPoints::Built);
+        // `PreUpdate` holds the frame's head: the script memory watch, ahead of the reload.
+        let pre = census(&mut app, PreUpdate, SyncPoints::Built);
         // The leave-world sweep's legs run only inside its schedule, whose callers hold the
         // interface up: the worldport's producer is gated with the unit feed, the shutdown edges
         // run the sweep before a parked glue VM returns, and the quit returns inside the
@@ -1612,6 +1615,7 @@ pub(crate) mod schedule_tests {
             .systems
             .values()
             .chain(post.systems.values())
+            .chain(pre.systems.values())
             .map(|s| (s.name.as_str(), s))
             .collect();
         let mut gated = 0;
@@ -1658,7 +1662,7 @@ pub(crate) mod schedule_tests {
             } else {
                 // Name its sets: the fix is usually a gate on one of them.
                 let where_ = match info {
-                    None => " (not found in Update/PostUpdate)".to_string(),
+                    None => " (not found in PreUpdate/Update/PostUpdate)".to_string(),
                     Some(i) => {
                         let named: Vec<&str> = i
                             .sets
