@@ -136,7 +136,7 @@ fn vararg_calls_wait_for_the_next_check() {
     assert!(vm.heap.counts()[1] < 50000, "the next check collects them");
 }
 
-/// A table's growth counts toward the heap, as 5.1's `luaM_reallocvector` charges it: an array
+/// A table's growth counts toward the heap, as `luaM_irealloc` (`0x6fc980`) counts it: an array
 /// filled to a hundred thousand slots shows in `gcinfo` before any collection.
 #[test]
 fn table_growth_counts_toward_the_heap() {
