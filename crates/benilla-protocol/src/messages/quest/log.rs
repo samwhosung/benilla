@@ -56,6 +56,10 @@ pub struct QuestTemplate {
     pub quest_type: u32,
     pub rep_objective_faction: u32,
     pub rep_objective_value: u32,
+    /// The faction whose standing must not pass [`Self::opposite_rep_value`] at turn-in
+    /// (`+0x1c`, `+0x20`, the client's `0x4df6e3`); vmangos always sends 0.
+    pub opposite_rep_faction: u32,
+    pub opposite_rep_value: u32,
     pub next_quest_in_chain: u32,
     pub money: i32,
     pub money_max_level: u32,
@@ -104,8 +108,8 @@ pub(in crate::messages) fn read_quest_query_response(r: &mut &[u8]) -> io::Resul
     let quest_type = read_u32_le(r)?;
     let rep_objective_faction = read_u32_le(r)?;
     let rep_objective_value = read_u32_le(r)?;
-    let _opposite_rep_faction = read_u32_le(r)?; // requiredOppositeRepFaction, always 0
-    let _opposite_rep_value = read_u32_le(r)?; // requiredOppositeRepValue, always 0
+    let opposite_rep_faction = read_u32_le(r)?;
+    let opposite_rep_value = read_u32_le(r)?;
     let next_quest_in_chain = read_u32_le(r)?;
     let money = read_i32_le(r)?;
     let money_max_level = read_u32_le(r)?;
@@ -173,6 +177,8 @@ pub(in crate::messages) fn read_quest_query_response(r: &mut &[u8]) -> io::Resul
         quest_type,
         rep_objective_faction,
         rep_objective_value,
+        opposite_rep_faction,
+        opposite_rep_value,
         next_quest_in_chain,
         money,
         money_max_level,
@@ -279,8 +285,8 @@ mod tests {
         push_u32(&mut b, 2); // type
         push_u32(&mut b, 169); // repObjectiveFaction
         push_u32(&mut b, 500); // repObjectiveValue
-        push_u32(&mut b, 0); // requiredOppositeRepFaction (always 0, skipped)
-        push_u32(&mut b, 0); // requiredOppositeRepValue (always 0, skipped)
+        push_u32(&mut b, 72); // requiredOppositeRepFaction
+        push_u32(&mut b, 3000); // requiredOppositeRepValue
         push_u32(&mut b, 777); // nextQuestInChain
         push_i32(&mut b, 5000); // rewOrReqMoney
         push_u32(&mut b, 10); // rewMoneyMaxLevel
@@ -354,6 +360,7 @@ mod tests {
         assert_eq!(q.quest_type, 2);
         assert_eq!(q.rep_objective_faction, 169);
         assert_eq!(q.rep_objective_value, 500);
+        assert_eq!((q.opposite_rep_faction, q.opposite_rep_value), (72, 3000));
         assert_eq!(q.next_quest_in_chain, 777);
         assert_eq!(q.money, 5000);
         assert_eq!(q.money_max_level, 10);

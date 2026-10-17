@@ -579,6 +579,11 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
             }
         }),
         src_item_id: t.src_item_id,
+        // `QUEST_FLAGS_PARTY_ACCEPT` (2) or `_EXPLORATION` (4), vmangos `QuestDef.h:150-151`: the
+        // server's complete bit decides.
+        needs_complete_bit: t.flags & 6 != 0,
+        rep_min: (t.rep_objective_faction, t.rep_objective_value as i32),
+        rep_max: (t.opposite_rep_faction, t.opposite_rep_value as i32),
         required_money,
         reward_money,
         rewards: set(&t.rewards),

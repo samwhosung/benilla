@@ -199,6 +199,8 @@ pub(crate) fn test_template(
         quest_type: 0,
         rep_objective_faction: 0,
         rep_objective_value: 0,
+        opposite_rep_faction: 0,
+        opposite_rep_value: 0,
         next_quest_in_chain,
         money: 0,
         money_max_level: 0,

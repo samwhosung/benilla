@@ -699,6 +699,8 @@ fn the_row_tag_is_its_own_right_flush_string_and_the_state_word_wins() {
     // Row 1 the header, row 2 tagged, row 3 tagged and complete, row 4 failed.
     log[0].record.tag = Some("Elite".into());
     log[1].record.tag = Some("Raid".into());
+    // No objective of its own, so the server's complete bit decides (`0x4df6bd`).
+    log[1].record.needs_complete_bit = true;
     log[1].slot.state = 0x01;
     log[2].slot.state = 0x02;
     seat_cached(&mut s, &log);

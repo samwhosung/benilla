@@ -99,6 +99,14 @@ pub struct QuestRecordView {
     pub objectives: [QuestObjectiveView; 4],
     /// The item the quest hands out (`+0x34`), never a leaderboard line (`0x4e04fa`).
     pub src_item_id: u32,
+    /// The template's flags `+0x38 & 6`: the turn-in test needs the slot's complete bit
+    /// (`0x4df65b`, `0x4df6bd`).
+    pub needs_complete_bit: bool,
+    /// `(faction, standing)`: the least standing the turn-in test needs (`+0x14`, `+0x18`, `jl`
+    /// at `0x4df6d6`), faction 0 for none.
+    pub rep_min: (u32, i32),
+    /// `(faction, standing)`: the most standing it allows (`+0x1c`, `+0x20`, `jg` at `0x4df6eb`).
+    pub rep_max: (u32, i32),
     /// `GetQuestLogRequiredMoney` and `GetQuestLogRewardMoney`, in copper.
     pub required_money: u32,
     pub reward_money: u32,
@@ -288,6 +296,57 @@ pub(crate) fn fold(model: &mut Model) {
         })
         .map_or(0, |i| i as u32 + 1);
     model.quest_log.entries = entries;
+}
+
+/// The turn-in test `0x4df580` on a quest row's record and slot: failed (`0x4df642`) fails; a
+/// template whose flags `& 6` need the slot's complete bit (`0x4df6bd`); one with neither those
+/// flags nor a reputation id nor any creature or item id is never complete (`0x4df66a`-`0x4df6b0`).
+/// Then the least and most standing (`0x4df6d6`, `0x4df6eb`), the coinage a negative money asks
+/// (`0x4df72e`), each creature or object count (`0x4df74a`) and the held count of each item id,
+/// the quest's own item included (`0x4df780`). The expiry latch is the caller's.
+fn turn_in_passes(model: &Model, record: &QuestRecordView, slot: &QuestSlotView) -> bool {
+    if slot.state & SLOT_FAILED != 0 {
+        return false;
+    }
+    let any_objective = record
+        .objectives
+        .iter()
+        .any(|o| o.creature_or_go != 0 || o.item_id != 0);
+    if !record.needs_complete_bit
+        && record.rep_min.0 == 0
+        && record.rep_max.0 == 0
+        && !any_objective
+    {
+        return false;
+    }
+    if record.needs_complete_bit && slot.state & SLOT_COMPLETE == 0 {
+        return false;
+    }
+    // `0x4d6370`: the base plus the wire standing, 0 for a faction with no row.
+    let standing = |faction: u32| {
+        model
+            .reputation
+            .entries
+            .iter()
+            .find(|e| e.faction_id == faction)
+            .map_or(0, |e| e.standing)
+    };
+    if record.rep_min.0 != 0 && standing(record.rep_min.0) < record.rep_min.1 {
+        return false;
+    }
+    if record.rep_max.0 != 0 && standing(record.rep_max.0) > record.rep_max.1 {
+        return false;
+    }
+    if model.money < u64::from(record.required_money) {
+        return false;
+    }
+    let store = &model.quest_store;
+    record.objectives.iter().enumerate().all(|(i, o)| {
+        (o.creature_or_go == 0 || u32::from(slot.counters[i]) >= o.required_count)
+            && (o.item_id == 0
+                || store.held.get(&o.item_id).copied().unwrap_or(0) as i64
+                    >= i64::from(o.item_count as i32))
+    })
 }
 
 /// The visible rows' count, `GetNumQuestLogEntries`'s first return (`[0xbb7490]`).
@@ -796,9 +855,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `title, level, tag, isHeader, isCollapsed, isComplete`, always six (`0x4df930`). The index
     // truncates as `_ftol` does, and a missing or non-number one raises `Usage:`; out of range it
     // answers `nil, 0, nil, nil, nil, nil`, and a header's level is 0 too. A quest's title, level
-    // and tag are its record's. `isComplete` is -1 on the slot's failed bit (`0x4dfa61`) and 1 on
-    // its complete bit; the reference's -1 also takes the expiry latch (`0x4df480`) and its 1 is
-    // the turn-in test (`0x4df580`) (#1793).
+    // and tag are its record's. `isComplete` is -1 on the slot's failed bit (`0x4dfa61`), else 1
+    // when the turn-in test passes (`0x4df580`, at `0x4dfa8d`), else nil.
     g.set(
         "GetQuestLogTitle",
         lua.create_function(|lua, i: Value| {
@@ -845,7 +903,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let complete = if slot.state & SLOT_FAILED != 0 {
                 Value::Integer(-1)
-            } else if slot.state & SLOT_COMPLETE != 0 {
+            } else if turn_in_passes(&model, record, slot) {
                 Value::Integer(1)
             } else {
                 Value::Nil
@@ -1843,6 +1901,108 @@ mod tests {
     }
 
     /// The line reads the slot's counter and the bags at the call: a count that moves changes the
+    /// `isComplete` of one quest seated alone, row 2 under its header.
+    fn is_complete(s: &UiScript) -> Option<i64> {
+        s.eval::<Option<i64>>("local _,_,_,_,_,c = GetQuestLogTitle(2) return c")
+            .unwrap()
+    }
+
+    fn standing_row(faction_id: u32, standing: i32) -> super::super::FactionEntry {
+        super::super::FactionEntry {
+            faction_id,
+            rep_list_id: 0,
+            parent_id: 0,
+            name: String::new(),
+            description: String::new(),
+            standing,
+            standing_id: 0,
+            bar_min: 0,
+            bar_max: 0,
+            visible: true,
+            is_header: false,
+            at_war: false,
+            can_toggle_at_war: false,
+            inactive: false,
+        }
+    }
+
+    /// `isComplete` is the turn-in test `0x4df580`, not the slot's complete bit: the counters
+    /// and the held items decide (`0x4df74a`, `0x4df780`), the bit only for flags `& 6`
+    /// (`0x4df6bd`), a quest with nothing to check never completes (`0x4df6b0`), and failed wins
+    /// (`0x4dfa61`).
+    #[test]
+    fn is_complete_runs_the_turn_in_test() {
+        let seated = |r: QuestRecordView, counter: u8, state: u8| {
+            let mut s = UiScript::new().unwrap();
+            seat(&mut s, &[(50, r, slot(50, counter, state))]);
+            s
+        };
+        let mut hunt = record("Hunt", 1, 12, "Elwynn Forest");
+        hunt.objectives[0] = kill(40, 3);
+        assert_eq!(
+            is_complete(&seated(hunt.clone(), 3, 0)),
+            Some(1),
+            "no bit needed"
+        );
+        assert_eq!(is_complete(&seated(hunt.clone(), 2, SLOT_COMPLETE)), None);
+        assert_eq!(
+            is_complete(&seated(hunt.clone(), 3, SLOT_COMPLETE | SLOT_FAILED)),
+            Some(-1)
+        );
+        let bare = record("Speak", 1, 12, "Elwynn Forest");
+        assert_eq!(is_complete(&seated(bare.clone(), 0, SLOT_COMPLETE)), None);
+        let mut explore = bare;
+        explore.needs_complete_bit = true;
+        assert_eq!(is_complete(&seated(explore.clone(), 0, 0)), None);
+        assert_eq!(is_complete(&seated(explore, 0, SLOT_COMPLETE)), Some(1));
+        let mut gated = hunt;
+        gated.needs_complete_bit = true;
+        assert_eq!(
+            is_complete(&seated(gated, 3, 0)),
+            None,
+            "the bit gates the met counters"
+        );
+
+        // Items count held copies, the quest's own item too.
+        let mut pelts = record("Pelts", 1, 12, "Elwynn Forest");
+        pelts.objectives[0] = collect(900, 5);
+        pelts.src_item_id = 900;
+        let mut s = seated(pelts, 0, 0);
+        s.set_quest_item_counts([(900, 4)].into());
+        assert_eq!(is_complete(&s), None);
+        s.set_quest_item_counts([(900, 5)].into());
+        assert_eq!(is_complete(&s), Some(1));
+    }
+
+    /// The standings are a least (`jl`, `0x4df6d6`) and a most (`jg`, `0x4df6eb`), read off the
+    /// base plus the wire (`0x4d6370`); a negative money asks that much coinage (`0x4df72e`). A
+    /// reputation id alone is enough to be completable.
+    #[test]
+    fn the_turn_in_test_reads_the_standings_and_the_coinage() {
+        let mut r = record("Favor", 1, 12, "Elwynn Forest");
+        r.rep_min = (72, 3000);
+        r.rep_max = (76, 0);
+        r.required_money = 100;
+        let mut s = UiScript::new().unwrap();
+        seat(&mut s, &[(50, r, slot(50, 0, 0))]);
+        let reps = |s: &mut UiScript, min: i32, max: i32| {
+            s.set_reputation(super::super::ReputationState {
+                entries: vec![standing_row(72, min), standing_row(76, max)],
+                watched: None,
+            });
+        };
+        s.set_money(100);
+        reps(&mut s, 3000, 0);
+        assert_eq!(is_complete(&s), Some(1));
+        reps(&mut s, 2999, 0);
+        assert_eq!(is_complete(&s), None, "short of the least");
+        reps(&mut s, 3000, 1);
+        assert_eq!(is_complete(&s), None, "past the most");
+        reps(&mut s, 3000, 0);
+        s.set_money(99);
+        assert_eq!(is_complete(&s), None, "short of the coinage");
+    }
+
     /// next read, with no rebuild and no event.
     #[test]
     fn a_line_reads_the_slot_and_the_bags_at_the_call() {
