@@ -4,10 +4,7 @@
 //!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed), the reference's `debugstack`,
 //!   and a text-only `loadstring`.
 //! - [`install`]: the 1.12 bare globals (string, table and math aliases, the `debug*` family, the
-//!   error-handler pair), `time` and `date`, and a `string.format` that accepts positional `%N$`
-//!   specs as the 1.12 client's does, rewriting them into a sequential format. Mixing positional
-//!   and sequential specs raises, as in the reference, whose single argument cursor a positional
-//!   spec desyncs.
+//!   error-handler pair), `time` and `date`.
 
 use mlua::{Lua, Value, Variadic};
 
@@ -98,7 +95,7 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// Install the stdlib layer: the bare globals, `time`/`date` and the positional `format`.
+/// Install the stdlib layer: the bare globals and `time`/`date`.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_error_handler(lua)?;
     install_time(lua)?;
@@ -273,82 +270,8 @@ function setglobal(name, value) _G[name] = value end
 -- An addon reaching for one of these is reaching for a later client's API, and it should find
 -- what it would find there: nothing.
 
--- ── Blizzard's positional string.format (%N$) ──────────────────────────────────────────────────
-do
-    -- `_find`/`_sub` are captured for the same reason `_format` is: this wrapper runs on every
-    -- `format` call in the UI and must not follow an addon's later replacement of `string.*`.
-    -- They are CALLS and not method syntax because 1.12 installs no string metatable, so
-    -- `fmt:find(...)` raises there, and here too (`lua50::install` removes the metatable). No
-    -- chunk of ours may use what the reference's VM cannot resolve; the parser enforces that
-    -- for the grammar, and this is its runtime twin.
-    local _format, _find, _sub, _len = string.format, string.find, string.sub, string.len
-    local CONV = "diouxXeEfgGqscp"  -- Lua 5.1 conversion letters
-
-    local function reformat(fmt, ...)
-        if type(fmt) ~= "string" then
-            return _format(fmt, unpack(arg, 1, arg.n))
-        end
-        -- fast path: no "%<digit>" at all ⇒ definitely no positional spec.
-        if not _find(fmt, "%%%d") then
-            return _format(fmt, unpack(arg, 1, arg.n))
-        end
-
-        local args = arg
-        local pieces = {}      -- rebuilt (sequential) format fragments
-        local order = {}       -- for each real conversion: the source arg index, or false=sequential
-        local seen_pos, seen_seq = false, false
-        local npieces, norder = 0, 0
-        local i, len = 1, _len(fmt)
-
-        while i <= len do
-            local c = _sub(fmt, i, i)
-            if c ~= "%" then
-                npieces = npieces + 1; pieces[npieces] = c
-                i = i + 1
-            elseif _sub(fmt, i + 1, i + 1) == "%" then
-                npieces = npieces + 1; pieces[npieces] = "%%"
-                i = i + 2
-            else
-                local j = i + 1
-                local ds, de = _find(fmt, "^%d+%$", j)  -- optional N$
-                if ds then
-                    seen_pos = true
-                    norder = norder + 1; order[norder] = tonumber(_sub(fmt, ds, de - 1))
-                    j = de + 1
-                else
-                    seen_seq = true
-                    norder = norder + 1; order[norder] = false
-                end
-                -- copy flags/width/precision + the conversion letter
-                local ce = _find(fmt, "[" .. CONV .. "]", j)
-                if not ce then
-                    error("invalid conversion in format string", 2)
-                end
-                npieces = npieces + 1; pieces[npieces] = "%" .. _sub(fmt, j, ce)
-                i = ce + 1
-            end
-        end
-
-        if seen_pos and seen_seq then
-            error("cannot mix positional and sequential arguments in format string", 2)
-        end
-
-        local out, seq = {}, 0
-        for k = 1, norder do
-            local idx = order[k]
-            if idx == false then
-                seq = seq + 1
-                out[k] = args[seq]
-            else
-                out[k] = args[idx]
-            end
-        end
-        return _format(table.concat(pieces, "", 1, npieces), unpack(out, 1, norder))
-    end
-
-    string.format = reformat
-    format = reformat
-end
+-- `format`, the bare `string.format`.
+format = string.format
 "#;
 
 /// `time()` and `date([format [, when]])`: 1.12 engine globals (`0x7035a0`, `0x7033a0`), Lua 5.0's

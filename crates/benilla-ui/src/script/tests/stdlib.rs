@@ -3,37 +3,62 @@
 
 use super::common::script;
 
-// ── The positional format wrapper ──
+// ── format's positional items ──
 
+/// `str_format` (`0x7fd3d0`) reads one digit and `$` as the item's argument (`0x7fd4ac`) and goes on
+/// from the one after it, so a positional and a sequential item mix without an error.
 #[test]
-fn positional_format_reorders_and_mix_is_an_error() {
+fn format_takes_positional_items_as_the_client() {
     let s = script();
+    let f = |src: &str| s.eval::<String>(src).unwrap();
+    assert_eq!(f(r#"return format("%2$s %1$s", "a", "b")"#), "b a");
+    assert_eq!(f(r#"return format("%1$05d", 42)"#), "00042");
+    assert_eq!(f(r#"return string.format("%d-%s", 1, "x")"#), "1-x");
+    assert_eq!(f(r#"return format("%1$d%%", 50)"#), "50%");
+    // The cursor goes on from a positional item.
+    assert_eq!(f(r#"return format("%1$s %s", "a", "b")"#), "a b");
     assert_eq!(
-        s.eval::<String>(r#"return format("%2$s %1$s", "a", "b")"#)
-            .unwrap(),
-        "b a"
+        f(r#"return format("%2$s %s %1$s", "a", "b", "c")"#),
+        "b c a"
     );
-    // width/precision travel with the positional spec
+    // `%0$s` is the format itself.
+    assert_eq!(f(r#"return format("<%0$s>")"#), "<<%0$s>>");
+}
+
+/// A bad call raises from `format` itself, at its caller's line, in the client's words.
+#[test]
+fn format_errors_are_the_clients() {
+    let s = script();
+    // The message past the chunk's name: the caller's line, then the text.
+    let err = |src: &str| {
+        let e = s
+            .eval::<String>(&format!(
+                "local ok, e = pcall(function()\n{src}\nend) return e"
+            ))
+            .unwrap();
+        e[e.find(":2: ").expect("the caller's line")..].to_string()
+    };
     assert_eq!(
-        s.eval::<String>(r#"return format("%1$05d", 42)"#).unwrap(),
-        "00042"
+        err(r#"return format("%d")"#),
+        ":2: bad argument #2 to `format' (number expected, got no value)"
     );
-    // sequential still works, through the patched `string.format` too
     assert_eq!(
-        s.eval::<String>(r#"return string.format("%d-%s", 1, "x")"#)
-            .unwrap(),
-        "1-x"
+        err(r#"return string.format("%d", "x")"#),
+        ":2: bad argument #2 to `format' (number expected, got string)"
     );
-    // %% is preserved
     assert_eq!(
-        s.eval::<String>(r#"return format("%1$d%%", 50)"#).unwrap(),
-        "50%"
+        err(r#"return format("%y", 1)"#),
+        ":2: invalid option in `format'"
     );
-    // mixing positional and sequential is an error, as in the reference
-    let mixed_ok: bool = s
-        .eval(r#"return pcall(format, "%1$s %s", "a", "b")"#)
-        .unwrap();
-    assert!(!mixed_ok, "mixed positional+sequential must error");
+    // A positional item is one digit: `%10$s` is a width of 10 and the conversion `$`.
+    assert_eq!(
+        err(r#"return format("%10$s", "a")"#),
+        ":2: invalid option in `format'"
+    );
+    assert_eq!(
+        err(r#"return format("%123d", 1)"#),
+        ":2: invalid format (width or precision too long)"
+    );
 }
 
 // ── getglobal and the alias layer ──

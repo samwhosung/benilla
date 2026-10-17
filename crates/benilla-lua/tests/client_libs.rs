@@ -164,3 +164,43 @@ fn number_text_is_msvcs() {
         ["1.234568e+004|1.#J| -1.$|-1.#INF|3"]
     );
 }
+
+/// `str_format` (`0x7fd3d0`) scans as Lua 4.0's: a C string, flags without a count, 18 bytes of
+/// spec at most, a one-digit `n$` that moves the cursor, and its own error texts.
+#[test]
+fn format_scans_as_4_0() {
+    assert_eq!(ok(r#"return string.format("a\0%d", 1)"#), ["a"]);
+    assert_eq!(ok(r#"return string.format("%-----5d|", 3)"#), ["3    |"]);
+    assert_eq!(
+        ok(r#"return string.format("%------------------d", 3)"#),
+        ["3"]
+    );
+    assert_eq!(
+        run(r#"return string.format("%-------------------d", 3)"#),
+        Err("t:1: invalid format (width or precision too long)".into())
+    );
+    assert_eq!(
+        ok(r#"return string.len(string.format("%.s", string.rep("x", 100)))"#),
+        ["100"]
+    );
+    assert_eq!(
+        ok(r#"return string.format("%.0s|%5.s|", string.rep("x", 100), "ab")"#),
+        ["|     |"]
+    );
+    assert_eq!(
+        ok(r#"return string.format("%2$s %s %1$s", "a", "b", "c")"#),
+        ["b c a"]
+    );
+    assert_eq!(
+        run(r#"return string.format("%d")"#),
+        Err("t:1: bad argument #2 to `format' (number expected, got no value)".into())
+    );
+    assert_eq!(
+        run(r#"return string.format("%y", 1)"#),
+        Err("t:1: invalid option in `format'".into())
+    );
+    assert_eq!(
+        run(r#"return string.format("%", 1)"#),
+        Err("t:1: invalid option in `format'".into())
+    );
+}

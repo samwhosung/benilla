@@ -265,6 +265,11 @@ fn dump(vm: &mut Vm, nargs: usize) -> R<usize> {
 
 // ── string.format ────────────────────────────────────────────────────────────────────────────
 
+/// The client's `str_format` (`0x7fd3d0`), which is Lua 4.0's. The format is a C string, read up
+/// to its first NUL. Each item may name its argument with one digit and `$` (`0x7fd4ac`), which
+/// sets the cursor the next items go on from; its flags, width and precision are matched as
+/// `[-+ #0]*(%d*)%.?(%d*)` (`0x8823ec`), two digits at most each and 18 bytes in all (`0x7fd50c`-
+/// `0x7fd51c`), and go to `sprintf` with the conversion.
 fn format(vm: &mut Vm, nargs: usize) -> R<usize> {
     let mut b = vm.take_bufs::<2>();
     let r = format_in(vm, nargs, &mut b);
@@ -274,8 +279,9 @@ fn format(vm: &mut Vm, nargs: usize) -> R<usize> {
 
 fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize> {
     let fs = vm.check_str(nargs, 1)?;
-    f.extend_from_slice(vm.heap.str(fs));
+    f.extend_from_slice(crate::lex::cstr(vm.heap.str(fs)));
     let f = &f[..];
+    let at = |j: usize| f.get(j).copied().unwrap_or(0);
     let mut arg = 1;
     let mut i = 0;
     while i < f.len() {
@@ -285,58 +291,54 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
             continue;
         }
         i += 1;
-        if i < f.len() && f[i] == b'%' {
+        if at(i) == b'%' {
             out.push(b'%');
             i += 1;
             continue;
         }
-        arg += 1;
-        // `if (++arg > top) luaL_argerror(L, arg, "no value")`, before the item is read.
-        if arg > nargs {
-            return Err(vm.arg_error(arg, "no value"));
-        }
         // A number's text is short: the bound on the whole is enough for it.
         vm.check_len(out)?;
-        // `scanformat`: flags, two width digits, a point and two precision digits at most.
+        let mut initf = i;
+        if at(i).is_ascii_digit() && at(i + 1) == b'$' {
+            arg = (at(i) - b'0') as usize;
+            initf = i + 2;
+        }
+        arg += 1;
         let mut spec = Spec::default();
-        let at = |j: usize| f.get(j).copied().unwrap_or(0);
-        let flags_at = i;
-        while at(i) != 0 && b"-+ #0".contains(&at(i)) {
-            match at(i) {
+        let mut j = initf;
+        while at(j) != 0 && b"-+ #0".contains(&at(j)) {
+            match at(j) {
                 b'-' => spec.minus = true,
                 b'+' => spec.plus = true,
                 b' ' => spec.space = true,
                 b'#' => spec.alt = true,
                 _ => spec.zero = true,
             }
-            i += 1;
+            j += 1;
         }
-        // 5.1's `scanformat`: six flags or more, which `FLAGS` cannot hold.
-        if i - flags_at >= 6 {
-            return Err(vm.error_at(1, "invalid format (repeated flags)"));
+        let width_at = j;
+        while at(j).is_ascii_digit() {
+            spec.width = spec.width.saturating_mul(10) + (at(j) - b'0') as usize;
+            j += 1;
         }
-        for _ in 0..2 {
-            if at(i).is_ascii_digit() {
-                spec.width = spec.width * 10 + (at(i) - b'0') as usize;
-                i += 1;
-            }
+        let width_len = j - width_at;
+        if at(j) == b'.' {
+            j += 1;
+            spec.precision = Some(0);
         }
-        if at(i) == b'.' {
-            i += 1;
-            let mut p = 0;
-            for _ in 0..2 {
-                if at(i).is_ascii_digit() {
-                    p = p * 10 + (at(i) - b'0') as usize;
-                    i += 1;
-                }
-            }
-            spec.precision = Some(p);
+        let prec_at = j;
+        while at(j).is_ascii_digit() {
+            spec.precision = spec
+                .precision
+                .map(|p| p.saturating_mul(10) + (at(j) - b'0') as usize);
+            j += 1;
         }
-        if at(i).is_ascii_digit() {
+        let prec_len = j - prec_at;
+        if width_len > 2 || prec_len > 2 || j - initf > 18 {
             return Err(vm.error_at(1, "invalid format (width or precision too long)"));
         }
-        let conv = at(i);
-        i += 1;
+        let conv = at(j);
+        i = j + 1;
         match conv {
             b'c' => {
                 // `(int)luaL_checknumber`: the double cast straight to 32 bits.
@@ -400,11 +402,12 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
                 let len = vm.heap.str(s).len();
                 vm.reserve(out, len.saturating_add(99))?;
                 let b = vm.heap.str(s);
-                if spec.precision.is_none() && b.len() >= 100 {
+                // No precision digits and 100 bytes or more: the string whole (`0x7fd609`).
+                if prec_len == 0 && b.len() >= 100 {
                     out.extend_from_slice(b);
                 } else {
                     // `sprintf` reads a C string.
-                    let c = &b[..b.iter().position(|&x| x == 0).unwrap_or(b.len())];
+                    let c = crate::lex::cstr(b);
                     if spec.is_plain() {
                         out.extend_from_slice(c);
                     } else {
@@ -412,16 +415,7 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
                     }
                 }
             }
-            c => {
-                // 5.1 names the option; past the end it is the C string's NUL, which prints as
-                // nothing.
-                let opt = if c == 0 {
-                    String::new()
-                } else {
-                    (c as char).to_string()
-                };
-                return Err(vm.error_at(1, &format!("invalid option `%{opt}' to `format'")));
-            }
+            _ => return Err(vm.error_at(1, "invalid option in `format'")),
         }
     }
     Ok(vm.ret_str(out))
