@@ -753,7 +753,7 @@ fn resolve_slot(
                     .object(guid)
                     .and_then(|f| f.item_enchant(0))
                     .unwrap_or(0);
-                petitions.tooltip_view(id as u32, guid, names, commands)
+                petitions.tooltip_view(id as u32, guid, names, Ask::New(commands))
             })
             .flatten(),
         texture: icons

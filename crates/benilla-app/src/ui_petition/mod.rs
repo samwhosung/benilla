@@ -161,6 +161,9 @@ pub(crate) struct PetitionState {
     lines: Vec<lines::Line>,
     /// What the feed last announced of the charter, across a `/reload`.
     fed: feed::FedPetition,
+    /// A show the feed has not read: its signers' names are the show's lookups with a callback
+    /// (`0x4f417d`).
+    shown: bool,
 }
 
 /// The charter the petition window is showing.
@@ -200,7 +203,8 @@ impl crate::query_cache::AskOnce for PetitionState {
 }
 
 impl PetitionState {
-    /// `SMSG_PETITION_SHOW_SIGNATURES`: open this charter and ask for its record once.
+    /// `SMSG_PETITION_SHOW_SIGNATURES`: open this charter and look its record up with the
+    /// callback `0x4f4090` (`0x4f4061`), which asks a refused one again.
     fn show(&mut self, sigs: PetitionShowSignatures, commands: &NetCommands) {
         let petition_id = sigs.petition_id;
         self.open = Some(OpenCharter {
@@ -209,12 +213,13 @@ impl PetitionState {
             petition_id,
             signers: sigs.signatures.into_iter().map(|s| s.signer).collect(),
         });
-        self.request_record(petition_id, sigs.item, commands);
+        self.shown = true;
+        self.request_record(petition_id, sigs.item, Ask::Event(commands));
     }
 
-    /// Ask once per petition id; the feed's next rebuild reads the answer.
-    fn request_record(&self, petition_id: u32, item: u64, commands: &NetCommands) {
-        self.records.lookup_new(petition_id, || {
+    /// Look the record up as `ask` says; the feed's next rebuild reads the answer.
+    fn request_record(&self, petition_id: u32, item: u64, ask: Ask<'_>) {
+        self.records.read(petition_id, ask, |commands| {
             let _ = commands
                 .0
                 .send(ClientCommand::PetitionQuery { petition_id, item });
@@ -248,20 +253,19 @@ impl PetitionState {
         petition_id: u32,
         item: u64,
         names: &NameCache,
-        commands: &NetCommands,
+        ask: Ask<'_>,
     ) -> Option<benilla_ui::script::PetitionSlotView> {
         if petition_id == 0 {
             return None;
         }
-        self.request_record(petition_id, item, commands);
+        // The build's lookups pass the callback `0x52e530` (`0x52b93b`, the owner `0x52b9d2`).
+        self.request_record(petition_id, item, ask);
         let rec = self.records.get(petition_id)?;
         let (is_charter, title, owner_guid) = (rec.is_charter, rec.name.clone(), rec.owner);
         Some(benilla_ui::script::PetitionSlotView {
             is_charter,
             title,
-            owner: names
-                .resolve_player(owner_guid, Ask::New(commands))
-                .map(str::to_string),
+            owner: names.resolve_player(owner_guid, ask).map(str::to_string),
         })
     }
 
@@ -278,8 +282,9 @@ impl PetitionState {
         if !open.signers.contains(&signer) {
             open.signers.push(signer);
         }
+        // The packet's lookup with the callback `0x4f3f50` (`0x4f42df`).
         names
-            .resolve_player(signer, Ask::New(commands))
+            .resolve_player(signer, Ask::Event(commands))
             .map(str::to_string)
     }
 
@@ -784,6 +789,55 @@ mod tests {
             !petition.signing,
             "no sign of the old session still in flight"
         );
+    }
+
+    /// The show looks its signers up with a callback (`0x4f417d`); the getters the frames after it
+    /// feed only read (`0x4f45a1`), and so does the originator's (`0x4f4459`). A refused signer is
+    /// asked by no frame after it, only by the next show.
+    #[test]
+    fn a_refused_signer_is_asked_by_the_next_show_never_by_a_frame() {
+        let (commands, rx) = commands();
+        let mut petition = PetitionState::default();
+        petition.apply_record(PetitionQueryResponse {
+            petition_id: 7,
+            name: "Legacy".into(),
+            min_signatures: 9,
+            ..Default::default()
+        });
+        let mut app = App::new();
+        app.insert_resource(petition)
+            .init_resource::<NameCache>()
+            .insert_resource(commands)
+            .init_resource::<GuildRegistrarState>()
+            .init_resource::<crate::net::SelfGuid>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed::feed_petition);
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        let show = |app: &mut App| {
+            let commands = NetCommands(app.world().resource::<NetCommands>().0.clone());
+            app.world_mut()
+                .resource_mut::<PetitionState>()
+                .show(signatures(0x99, 0xaa, 7, &[0xbb]), &commands);
+            app.update();
+        };
+        let named = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            crate::query_cache::queries(rx)
+                .into_iter()
+                .filter(|c| matches!(c, ClientCommand::NameQuery { .. }))
+                .count()
+        };
+        show(&mut app);
+        assert_eq!(named(&rx), 1, "the signer, and not the originator");
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0xbb, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(named(&rx), 0, "no frame asks a refusal");
+        show(&mut app);
+        assert_eq!(named(&rx), 1, "the next show asks again");
     }
 
     /// A `/reload` with a charter shown: every `PETITION_SHOW` answers a packet, so the new VM

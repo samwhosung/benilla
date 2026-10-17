@@ -86,17 +86,15 @@ pub(super) fn feed_petition(
     // only a rebuild sees it.
     let open = petition.open.clone();
     let me = self_guid.0.unwrap_or(0);
+    // The getters only read (`0x4f45a1`, `0x4f4459`); the show looked the signers up.
+    let ask = Ask::at(std::mem::take(&mut petition.shown), &commands);
 
     let signers: Vec<Option<String>> = open
         .as_ref()
         .map(|o| {
             o.signers
                 .iter()
-                .map(|s| {
-                    names
-                        .resolve_player(*s, Ask::New(&commands))
-                        .map(str::to_string)
-                })
+                .map(|s| names.resolve_player(*s, ask).map(str::to_string))
                 .collect()
         })
         .unwrap_or_default();
@@ -113,10 +111,8 @@ pub(super) fn feed_petition(
             title: r.name.clone(),
             body_text: r.body_text.clone(),
             max_signatures: r.required,
-            // Nil until the name lands, and not waited for.
-            originator: names
-                .resolve_player(o.owner, Ask::New(&commands))
-                .map(str::to_string),
+            // Nil until the name lands, and not waited for: only read (`0x4f4459`).
+            originator: names.resolve_player(o.owner, Ask::Read).map(str::to_string),
             // The record's owner, which the binding compares (`0x4f447a`), not the packet's.
             is_originator: r.owner == me,
         })
@@ -281,7 +277,7 @@ pub(super) fn drain_petition(
                     .send(ClientCommand::OfferPetition { item, player });
                 // Printed on the send, unconfirmed: the server answers only the target.
                 let name = names
-                    .resolve_player(player, Ask::New(&commands))
+                    .resolve_player(player, Ask::Event(&commands))
                     .unwrap_or_default()
                     .to_string();
                 petition.lines.push(lines::offered_line(&name));
