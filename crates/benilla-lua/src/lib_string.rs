@@ -244,19 +244,19 @@ fn byte(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(vm.ret1(Value::Num(b as f64)))
 }
 
-/// 5.1's `dump`: a Lua function becomes a binary chunk, a native one cannot. The chunk carries
-/// 5.1's header and the function's source name, not 5.1 bytecode: the script host's
-/// `loadstring` refuses every binary chunk, so nothing reads past the header.
+/// `str_dump` (`0x7fc330`): `lua_dump` (`0x6f4370`) takes only a Lua function with no upvalues
+/// (`0x6f4383`, `0x6f438a`), else `unable to dump given function` (`0x882284`). Deviation: the
+/// client writes 5.0 bytecode (`luaU_dump`, `0x6fb600`); benilla writes 5.1's header and the
+/// function's source name. The client loads no binary chunk (`0x6f6a15`), so the bytes are only
+/// data, and matching them would need 5.0's code generator.
 fn dump(vm: &mut Vm, nargs: usize) -> R<usize> {
     let f = vm.check_function(nargs, 1)?;
     let V::Func(f) = f.unpack() else {
         unreachable!("checked a function")
     };
     let source = match vm.heap.func(f) {
-        crate::heap::FuncObj::Lua(l) => l.proto().source.clone(),
-        crate::heap::FuncObj::Native { .. } => {
-            return Err(vm.error_at(1, "unable to dump given function"))
-        }
+        crate::heap::FuncObj::Lua(l) if l.proto().upvals.is_empty() => l.proto().source.clone(),
+        _ => return Err(vm.error_at(1, "unable to dump given function")),
     };
     let mut out = b"\x1bLuaQ\x00\x01\x04\x08\x04\x08\x00".to_vec();
     out.extend_from_slice(&source);

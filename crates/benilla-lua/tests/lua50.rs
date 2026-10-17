@@ -450,3 +450,21 @@ fn an_upvalue_is_named_nothing() {
         "false,t:1: attempt to index local `l' (a nil value)"
     );
 }
+
+/// `lua_dump` (`0x6f4370`) dumps a Lua function with no upvalues only (`0x6f4383`,
+/// `0x6f438a`); `str_dump` raises `unable to dump given function` (`0x7fc372`) for any other.
+#[test]
+fn string_dump_refuses_a_function_with_upvalues() {
+    assert_eq!(
+        run("local x = 1 return pcall(string.dump, function() return x end)"),
+        "false,unable to dump given function"
+    );
+    assert_eq!(
+        run("return pcall(string.dump, string.len)"),
+        "false,unable to dump given function"
+    );
+    assert_eq!(
+        run("return type(string.dump(function() return 1 end))"),
+        "string"
+    );
+}
