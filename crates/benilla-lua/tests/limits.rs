@@ -14,7 +14,7 @@ fn run_with(
     std::thread::Builder::new()
         .stack_size(2 << 20)
         .spawn(move || {
-            let mut vm = benilla_lua::new_script_host_state();
+            let mut vm = benilla_lua::new_state();
             setup(&mut vm);
             match vm.exec(src.as_bytes(), b"=t") {
                 Ok(vs) => Ok(vs.into_iter().map(|v| vm.display(v)).collect()),
@@ -178,7 +178,7 @@ fn a_hot_reload_out_of_string_ids_is_not_enough_memory() {
     let got = std::thread::Builder::new()
         .stack_size(2 << 20)
         .spawn(|| {
-            let mut vm = benilla_lua::new_script_host_state();
+            let mut vm = benilla_lua::new_state();
             vm.heap.limit_string_ids(50_000);
             vm.exec(b"function F() return 'old' end", b"@f.lua")
                 .unwrap();

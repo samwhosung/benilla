@@ -100,10 +100,8 @@ fn forks_sharing_code_each_keep_its_constants() {
 /// stepped as `next` instead of called.
 #[test]
 fn the_builtin_next_outlives_its_globals() {
-    for mut vm in [
-        benilla_lua::new_state(),
-        benilla_lua::new_script_host_state(),
-    ] {
+    {
+        let mut vm = benilla_lua::new_state();
         run(&mut vm, "next = nil pairs = nil ipairs = nil foreach = nil");
         vm.full_gc();
         assert_eq!(

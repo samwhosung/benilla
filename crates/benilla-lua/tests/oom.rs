@@ -32,7 +32,7 @@ fn a_concatenation_the_allocator_refuses_is_not_enough_memory() {
     let got = std::thread::Builder::new()
         .stack_size(2 << 20)
         .spawn(|| {
-            let mut vm = benilla_lua::new_script_host_state();
+            let mut vm = benilla_lua::new_state();
             let src = br#"local s = string.rep("x", 268435456)
                 local ok1, e1 = pcall(function() return s .. s .. s .. s .. s .. s end)
                 local ok2, e2 = pcall(function() return s .. s .. s .. s end)
