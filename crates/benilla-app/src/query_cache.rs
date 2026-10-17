@@ -98,7 +98,9 @@ impl<K: Copy + Eq + Hash, V> Default for QueryCache<K, V> {
     }
 }
 
-impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
+/// Key 0 names no record: each store's lookup returns null for it before anything else (an item's
+/// `0x55ba42`, a guild's `0x560e3d`, a name's `0x55f0a5`), so it is never asked and never read.
+impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
     /// The reference's lookup with a callback (`0x556aa0`): the record, or `None` after running
     /// `ask` on a miss, once while the key is pending. A refused key is a miss: the lookup drops
     /// its "unknown" and asks again at once.
@@ -124,6 +126,9 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
 
     /// The asking lookup; `relook` says whether a refused key is asked again.
     fn ask_if(&self, key: K, relook: bool, ask: impl FnOnce()) -> Option<&V> {
+        if key == K::default() {
+            return None;
+        }
         if let Some(answer) = self.answered.get(&key) {
             return Some(answer);
         }
@@ -145,7 +150,7 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
     /// The lookup that only reads: the record if it is here, never asking (`0x556b1c` →
     /// `0x556bf9`).
     pub(crate) fn get(&self, key: K) -> Option<&V> {
-        self.answered.get(&key)
+        (key != K::default()).then(|| self.answered.get(&key)).flatten()
     }
 
     /// The record, mutably, for one the wire patches in place; never asking.
@@ -328,6 +333,25 @@ pub(crate) fn queries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Key 0 is null before the cache is searched (`0x55ba42`): no mode asks it or finds it.
+    #[test]
+    fn key_zero_is_never_asked_nor_found() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        let send = |c: &NetCommands| {
+            let _ = c.0.send(crate::net::ClientCommand::NameQuery { guid: 0 });
+        };
+        for ask in [Ask::Read, Ask::New(&commands), Ask::Event(&commands)] {
+            assert!(cache.read(0, ask, send).is_none());
+        }
+        assert!(rx.try_iter().next().is_none(), "nothing asked");
+        cache.insert(0, "zero");
+        for ask in [Ask::Read, Ask::New(&commands), Ask::Event(&commands)] {
+            assert!(cache.read(0, ask, send).is_none(), "a record under 0 is never read");
+        }
+    }
 
     #[test]
     fn a_miss_asks_once_and_a_landing_answers_it() {

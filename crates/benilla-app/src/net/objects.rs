@@ -280,9 +280,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                 })
                 .flatten();
             // The set-up asks for the record of every item, whoever's, with the callback
-            // `0x5d8390` (`0x5d8300` into `0x55ba30`; entry 0 has no key, `0x55ba42`): the readers of a
-            // held item only read it.
-            if let Some(entry) = fields.object_entry().filter(|&e| first && e != 0) {
+            // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
+            if let Some(entry) = fields.object_entry().filter(|_| first) {
                 sc.items.template(entry, guid, Ask::Event(&sc.net));
             }
             let edges = item_create(
