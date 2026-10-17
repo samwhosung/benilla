@@ -26,8 +26,6 @@ const MAXINDEXRK: u32 = 255;
 const MAXARG_BX: usize = (1 << 18) - 1;
 /// 5.1's `MAXARG_sBx`: the longest jump, in 5.1's instructions.
 const MAXARG_SBX: i64 = MAXARG_BX as i64 >> 1;
-/// 5.1's `MAXARG_C`: a `SETLIST` batch number past it takes a second instruction word.
-const MAXARG_C: u32 = (1 << 9) - 1;
 /// `SHRT_MAX`, `registerlocalvar`'s limit on local declarations per function.
 const MAX_LOCVARS: usize = 32767;
 
@@ -37,28 +35,20 @@ pub fn compile(src: &[u8], chunkname: &[u8], heap: &mut Heap) -> R<Rc<Proto>> {
     crate::parse::parse(src, chunkname, heap)
 }
 
-/// 5.1's `luaO_int2fb`: a size as a "floating point byte", `eeeeexxx`, rounded up.
+/// 5.0's `luaO_int2fb` (`0x6f5810`): a size as a "floating point byte" `mmmmmxxx`, `xxx * 2^m`,
+/// halved and rounded up while it is 8 or more.
 pub fn int2fb(mut x: u32) -> u32 {
-    let mut e = 0;
-    while x >= 16 {
+    let mut m = 0;
+    while x >= 8 {
         x = (x + 1) >> 1;
-        e += 1;
+        m += 1;
     }
-    if x < 8 {
-        x
-    } else {
-        ((e + 1) << 3) | (x - 8)
-    }
+    (m << 3) | x
 }
 
-/// 5.1's `luaO_fb2int`.
+/// 5.0's `fb2int`, as `OP_NEWTABLE` decodes its `B` (`0x6f8b31`..`0x6f8b41`): `(x & 7) << (x >> 3)`.
 pub fn fb2int(x: u32) -> u32 {
-    let e = (x >> 3) & 31;
-    if e == 0 {
-        x
-    } else {
-        ((x & 7) + 8) << (e - 1)
-    }
+    (x & 7) << (x >> 3)
 }
 
 /// 5.1's `expkind`, with each kind's `info` in it.
@@ -514,10 +504,6 @@ fn num_key(n: f64) -> KKey {
     KKey::Num(if n == 0.0 { 0 } else { n.to_bits() })
 }
 
-/// The client's 5.0 flushes a constructor's list every 32 items (`LFIELDS_PER_FLUSH`,
-/// `0x6fd6d0`), an `OP_SETLIST` word each.
-const FIELDS_PER_FLUSH50: u32 = 32;
-
 fn is_k(x: Rk) -> bool {
     x >= RK_CONST
 }
@@ -804,11 +790,6 @@ impl<'a> Parser<'a> {
     /// A number the client's 5.0 makes a constant of ([`FuncState::consts50`]).
     pub(crate) fn number_k50(&mut self, n: f64) {
         self.fs().k50.insert(num_key(n));
-    }
-
-    /// A constructor of `items` list items: the `OP_SETLIST`s the client's 5.0 emits for them.
-    pub(crate) fn setlists50(&mut self, items: u32) {
-        self.fs().c50_delta += items.div_ceil(FIELDS_PER_FLUSH50) as i64;
     }
 
     fn bool_k(&mut self, b: bool) -> R<u32> {
@@ -1421,17 +1402,15 @@ impl<'a> Parser<'a> {
     /// `luaK_setlist`: list items `base + 1..` stored into the table at `base`, `nelems` of them
     /// so far, the last `tostore` pending (-1: up to the top).
     pub(crate) fn setlist(&mut self, base: Reg, nelems: u32, tostore: i32) -> R<()> {
-        let c = (nelems - 1) / FIELDS_PER_FLUSH + 1;
-        let first = (c - 1) * FIELDS_PER_FLUSH;
-        let words = if c <= MAXARG_C { 1 } else { 2 };
-        // The client's 5.0 flushes every 32 items, a word each ([`Parser::constructor`]).
-        self.fs().c50_delta -= words as i64;
+        // The batch's base, as `OP_SETLIST` clears the low bits of `Bx = nelems - 1` (`0x6f9593`):
+        // a word every 32 items, as the client's 5.0 emits them.
+        let first = (nelems - 1) / FIELDS_PER_FLUSH * FIELDS_PER_FLUSH;
         let op = if tostore < 0 {
             Op::SetListTop(base, first)
         } else {
             Op::SetList(base, first, tostore as u16)
         };
-        self.code(op, words)?;
+        self.code(op, 1)?;
         self.fs().freereg = base + 1;
         Ok(())
     }
@@ -1477,13 +1456,16 @@ mod tests {
     use super::*;
 
     #[test]
-    /// 5.1's floating point bytes: exact below 16, then rounded up to 4 significant bits.
-    fn constructor_hints_are_5_1_s() {
-        assert_eq!(fb2int(int2fb(9)), 9);
-        assert_eq!(fb2int(int2fb(7)), 7);
-        assert_eq!(fb2int(int2fb(15)), 15);
-        assert_eq!(fb2int(int2fb(17)), 18);
-        assert_eq!(fb2int(int2fb(33)), 36);
+    /// 5.0's floating point bytes (`0x6f5810`): exact below 8, then rounded up to 3 significant
+    /// bits, where 5.1's keep 4.
+    fn constructor_hints_are_5_0_s() {
         assert_eq!(fb2int(int2fb(0)), 0);
+        assert_eq!(fb2int(int2fb(7)), 7);
+        assert_eq!(fb2int(int2fb(8)), 8);
+        assert_eq!(fb2int(int2fb(9)), 10);
+        assert_eq!(fb2int(int2fb(15)), 16);
+        assert_eq!(fb2int(int2fb(17)), 20);
+        assert_eq!(fb2int(int2fb(33)), 40);
+        assert_eq!(int2fb(6), 6);
     }
 }

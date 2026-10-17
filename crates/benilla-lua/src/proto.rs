@@ -16,8 +16,9 @@ pub const RK_CONST: u16 = 256;
 
 /// 5.1's `MAXSTACK`: a function uses fewer registers than this.
 pub const MAXSTACK: usize = 250;
-/// 5.1's `LFIELDS_PER_FLUSH`: list items a constructor stores per `SetList`.
-pub const FIELDS_PER_FLUSH: u32 = 50;
+/// 5.0's `LFIELDS_PER_FLUSH`: list items a constructor stores per `SetList`, 32 in the client's
+/// `closelistfield` (`0x6fd6d0`).
+pub const FIELDS_PER_FLUSH: u32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmp {

@@ -1024,9 +1024,9 @@ impl<'a> Parser<'a> {
         }
         if cc.v.has_multret() {
             self.setmultret(&cc.v);
+            // The call counts as one item toward the array hint, as 5.0's `lastlistfield` leaves
+            // `na` (`0x6fd72b`).
             self.setlist(cc.t, cc.na, -1)?;
-            // The call's values are not counted.
-            cc.na -= 1;
         } else {
             if cc.v.k != Kind::Void {
                 self.exp2nextreg(&mut cc.v)?;
@@ -1088,9 +1088,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.check_match(Tok::Char(b'}'), Tok::Char(b'{'), line)?;
-        let items = cc.na;
         self.lastlistfield(&mut cc)?;
-        self.setlists50(items);
         // `OP_NEWTABLE`'s hints: the array size as a floating point byte (`0x6fd53c`), kept
         // decoded, and the hash part's log size, `luaO_log2(nh) + 1` (`0x6fd563`, `0x6fd568`).
         self.fs().code[pc] = Op::NewTable(
