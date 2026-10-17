@@ -34,13 +34,14 @@ fn with_smf<T>(
     }
 }
 
-/// Run a scroll call with the viewport's row count, which every scroll needs: each re-arms the
-/// fade of the lines on display ([`ScrollingMessageState::reset_all_fade_times`]).
-fn scroll(
+/// Run `f` over the state with the viewport's row count, which every scroll needs: each re-arms
+/// the fade of the lines on display ([`ScrollingMessageState::reset_all_fade_times`]), and `AtTop`
+/// reads the layout's flag.
+fn with_viewport<T>(
     lua: &Lua,
     this: &Table,
-    op: impl FnOnce(&mut ScrollingMessageState, usize),
-) -> mlua::Result<()> {
+    f: impl FnOnce(&mut ScrollingMessageState, usize) -> T,
+) -> mlua::Result<T> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let viewport_rows = UiScript::message_viewport_rows(&model, h);
@@ -49,12 +50,18 @@ fn scroll(
         .frame_mut(h)
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
     match &mut frame.kind_state {
-        KindState::ScrollingMessage(smf) => {
-            op(smf, viewport_rows);
-            Ok(())
-        }
+        KindState::ScrollingMessage(smf) => Ok(f(smf, viewport_rows)),
         _ => Err(mlua::Error::runtime("not a ScrollingMessageFrame")),
     }
+}
+
+/// Run a scroll call: [`with_viewport`] for an op with no answer.
+fn scroll(
+    lua: &Lua,
+    this: &Table,
+    op: impl FnOnce(&mut ScrollingMessageState, usize),
+) -> mlua::Result<()> {
+    with_viewport(lua, this, op)
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -159,8 +166,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "AtTop",
         lua.create_function(|lua, this: Table| {
-            with_smf(lua, &this, |smf| {
-                crate::script::binding_abi::flag(smf.at_top())
+            with_viewport(lua, &this, |smf, rows| {
+                crate::script::binding_abi::flag(smf.at_top(rows))
             })
         })?,
     )?;
@@ -466,11 +473,15 @@ mod tests {
         assert!(s.at_bottom());
         s.scroll_down(8); // already at the bottom: no move
         assert!(s.at_bottom());
-        // 3 lines → max_scroll = 2; scroll past it clamps.
+        // A frame showing every line is at the top already (`+0x350`, `0x788a37`).
+        assert!(s.at_top(8));
+        s.scroll_up(8);
+        assert_eq!(s.scroll_offset, 0, "refused: the oldest is on screen");
+        // One row high, the oldest shows only at offset 2; scrolling past it is refused.
         for _ in 0..10 {
-            s.scroll_up(8);
+            s.scroll_up(1);
         }
-        assert!(s.at_top());
+        assert!(s.at_top(1));
         assert_eq!(s.scroll_offset, 2);
         s.scroll_to_bottom(8);
         assert!(s.at_bottom());
@@ -485,7 +496,7 @@ mod tests {
         for n in 0..4 {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
-        s.scroll_up(8); // viewing one line back (bottom row = l2)
+        s.scroll_up(1); // viewing one line back (bottom row = l2)
         let off = s.scroll_offset;
         s.add("l4".into(), 1.0, 1.0, 1.0);
         assert_eq!(
@@ -543,16 +554,67 @@ mod tests {
         for n in 0..4 {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
-        // 4 displayed from the bottom: three ups move, the fourth is refused at the top.
-        s.page_up(8);
-        assert_eq!(s.scroll_offset, 3);
-        assert!(s.at_top());
-        // At the top one line is displayed: that up is refused, so no down follows.
-        s.page_up(8);
-        assert_eq!(s.scroll_offset, 3);
-        // One displayed line from the top: down, then up again.
+        // Two rows high: the oldest shows from offset 2, where every step up is refused.
+        s.scroll_up(2);
+        s.scroll_up(2);
+        assert_eq!(s.scroll_offset, 2);
+        assert!(s.at_top(2));
+        // The first up is refused, so the page ends with no down after it.
+        s.page_up(2);
+        assert_eq!(s.scroll_offset, 2);
+        // One row high there, `PageDown` is a down and an up: it nets 0.
         s.page_down(1);
-        assert_eq!(s.scroll_offset, 3, "down then up nets 0");
+        assert_eq!(s.scroll_offset, 2, "down then up nets 0");
+    }
+
+    /// `ScrollUp` is refused once the oldest message is on screen (`0x78861c`-`0x788624`, the flag
+    /// the relayout sets at `0x788a3c`), not when it is the bottom row; `ScrollToTop` (`0x788690`)
+    /// anchors the oldest. `AtTop` (`0x793130`) reads the same flag.
+    #[test]
+    fn scroll_up_stops_when_the_oldest_message_shows() {
+        let mut s = ScrollingMessageState {
+            max_lines: 8,
+            ..Default::default()
+        };
+        for n in 0..5 {
+            s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+        }
+        // Three rows show 3 of 5: l4 l3 l2, then l3 l2 l1, then l2 l1 l0.
+        assert!(!s.at_top(3));
+        s.scroll_up(3);
+        s.scroll_up(3);
+        assert_eq!(s.scroll_offset, 2);
+        assert!(s.at_top(3), "l0 is on screen");
+        s.scroll_up(3);
+        assert_eq!(s.scroll_offset, 2, "refused");
+        s.scroll_to_top(3);
+        assert_eq!(s.scroll_offset, 4, "the oldest as the anchor");
+    }
+
+    /// The Lua `AtTop` follows the viewport the frame's rect gives.
+    #[test]
+    fn at_top_reads_the_layout_through_lua() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        s.run(
+            "CF = CreateFrame('ScrollingMessageFrame', 'CF')\n\
+             CF:SetPoint('BOTTOMLEFT', 32, 90)\n\
+             CF:SetWidth(430)\n\
+             CF:SetHeight(44)\n\
+             for n = 1, 5 do CF:AddMessage('m' .. n) end",
+        )
+        .unwrap();
+        s.resolve();
+        // 44 px hold three rows of 14.
+        assert!(s.eval::<bool>("return CF:AtTop() == nil").unwrap());
+        s.run("CF:ScrollUp() CF:ScrollUp()").unwrap();
+        assert!(s.eval::<bool>("return CF:AtTop() == 1").unwrap());
+        s.run("CF:SetHeight(100)").unwrap();
+        s.resolve();
+        assert!(
+            s.eval::<bool>("return CF:AtTop() == 1").unwrap(),
+            "a taller frame shows the oldest too"
+        );
     }
 
     /// A scrolling frame `CF` of the given height holding `messages`, bottom left at (32, 90),

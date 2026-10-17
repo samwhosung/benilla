@@ -127,8 +127,12 @@ fn wheel_scroll_re_arms_the_fade_then_freezes_it() {
     let mut s = chat_frame();
     s.run("ChatFrame1:SetTimeVisible(0); ChatFrame1:SetFadeDuration(4)")
         .unwrap();
-    for t in ["L0", "L1", "L2"] {
-        s.add_chat_message("ChatFrame1", t, 1.0, 1.0, 1.0);
+    // More lines than the window holds: a view that shows the oldest cannot scroll up (`0x78861c`).
+    for t in (0..20)
+        .map(|n| format!("F{n}"))
+        .chain(["L0", "L1", "L2"].map(String::from))
+    {
+        s.add_chat_message("ChatFrame1", &t, 1.0, 1.0, 1.0);
     }
     s.resolve();
     s.tick(1.0);
@@ -797,8 +801,9 @@ fn hovering_the_dock_still_reveals_the_tabs() {
 fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
     benilla_formats::wow_data_or_skip!();
     let mut s = chat_frame();
-    for t in ["L0", "L1", "L2"] {
-        s.add_chat_message("ChatFrame1", t, 1.0, 1.0, 1.0);
+    // More lines than the window holds, so the view can scroll up (`0x78861c`).
+    for t in (0..20).map(|n| format!("L{n}")) {
+        s.add_chat_message("ChatFrame1", &t, 1.0, 1.0, 1.0);
     }
     for _ in 0..3 {
         s.tick(0.016);

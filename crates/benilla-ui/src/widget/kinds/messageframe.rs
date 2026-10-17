@@ -157,12 +157,16 @@ impl ScrollingMessageState {
         self.scroll_offset == 0
     }
 
-    /// Whether the view is scrolled as far back as the ring allows (`AtTop`).
-    pub fn at_top(&self) -> bool {
-        self.scroll_offset >= self.max_scroll()
+    /// `AtTop` (`0x793130`), which reads the flag the relayout sets (`+0x350`): every older
+    /// message was placed (`0x788a37`-`0x788a3c`), so the oldest is on screen. The flag follows
+    /// the viewport, so it is read from the layout at the current offset, never kept.
+    pub fn at_top(&self, viewport_rows: usize) -> bool {
+        let available = self.lines.len().saturating_sub(self.scroll_offset);
+        self.displayed_count(viewport_rows) == available
     }
 
-    /// The furthest the view can scroll up: enough to bring the oldest line to the bottom row.
+    /// The furthest the view can scroll: the oldest line as the anchor, where `ScrollToTop`
+    /// relayouts (`0x788690`).
     fn max_scroll(&self) -> usize {
         self.lines.len().saturating_sub(1)
     }
@@ -213,13 +217,16 @@ impl ScrollingMessageState {
     }
 
     /// `0x788610`'s answer: whether the view moved. An empty frame answers 0 and touches nothing
-    /// (`0x788619`); one already at the top re-arms and answers 0 (`0x788626`).
+    /// (`0x788619`); one whose oldest message is on screen re-arms and answers 0 (`0x78861c`-
+    /// `0x788626`).
     pub fn step_up(&mut self, viewport_rows: usize) -> bool {
         if self.lines.is_empty() {
             return false;
         }
-        let moved = !self.at_top();
-        self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll());
+        let moved = !self.at_top(viewport_rows);
+        if moved {
+            self.scroll_offset += 1;
+        }
         self.reset_all_fade_times(viewport_rows);
         moved
     }
@@ -241,8 +248,8 @@ impl ScrollingMessageState {
         self.reset_all_fade_times(viewport_rows);
     }
 
-    /// `ScrollToTop` (`0x788690`): to the oldest line, then re-arm, as its relayout always lands
-    /// off the bottom.
+    /// `ScrollToTop` (`0x788690`): the oldest line as the anchor, then re-arm, as its relayout
+    /// always lands off the bottom.
     pub fn scroll_to_top(&mut self, viewport_rows: usize) {
         self.scroll_offset = self.max_scroll();
         self.reset_all_fade_times(viewport_rows);
