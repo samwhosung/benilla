@@ -1074,6 +1074,11 @@ impl Heap {
                     }
                     for (i, n) in tab.node.iter().enumerate() {
                         if n.val.is_nil() {
+                            // `cleartablekeys`' `valismarked` marks every string key (`0x6f79f0`).
+                            if wk && matches!(n.key.unpack(), V::Str(_)) {
+                                reach(n.key, wk);
+                                continue;
+                            }
                             // 5.0's `traversetable` (`0x6f7590`) passes an empty entry by
                             // (`0x6f76be`) and leaves its key as it is: found again while its
                             // object lives, which only the end of the marking settles.

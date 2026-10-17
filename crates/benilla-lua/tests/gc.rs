@@ -347,3 +347,20 @@ fn a_key_a_weak_table_cleared_is_invalid_for_next() {
         "true false invalid key for `next' nil"
     );
 }
+
+/// A weak-keyed table's clearing marks every string key (`valismarked`, `0x6f79f0`), an empty
+/// entry's too: the string survives the collection, so the same string rebuilt is still a key
+/// `next` finds.
+#[test]
+fn a_weak_keyed_tables_empty_string_key_survives_a_collection() {
+    let mut vm = benilla_lua::new_state();
+    assert_eq!(
+        run(
+            &mut vm,
+            "local t = setmetatable({}, {__mode = 'k'}) local a, b = 'wk', 'key' \
+             t[a .. b] = 1 t[a .. b] = nil collectgarbage() \
+             return tostring(pcall(next, t, a .. b))"
+        ),
+        "true"
+    );
+}
