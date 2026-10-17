@@ -359,3 +359,29 @@ fn ipairs_answers_as_the_clients() {
         ["60", "4"]
     );
 }
+
+/// `setglobal` (`0x702770`) sets the global to the top value, so a lone name sets it to itself,
+/// and it and `getglobal` (`0x7027b0`) go through the globals' metamethods; each answer the
+/// client's own, run in its opened state.
+#[test]
+fn setglobal_sets_the_top_value_as_the_clients() {
+    assert_eq!(
+        ok(
+            "setglobal('X1') setglobal('X2', 5) setglobal('X3', 5, 6) setglobal('X4', nil)
+            X5 = 1 setglobal('X5')
+            return X1, X2, X3, X4, X5, getglobal('X2')"
+        ),
+        ["X1", "5", "6", "nil", "X5", "5"]
+    );
+    assert_eq!(
+        ok(
+            "setmetatable(getfenv(0), {__newindex = function(t, k, v) rawset(t, k, 'ni') end,
+                                      __index = function(t, k) return 'idx' end})
+            setglobal('Z2', 7)
+            local z1 = getglobal('nothere')
+            setmetatable(getfenv(0), nil)
+            return rawget(getfenv(0), 'Z2'), z1"
+        ),
+        ["ni", "idx"]
+    );
+}

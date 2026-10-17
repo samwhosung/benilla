@@ -13,9 +13,8 @@ pub fn open(vm: &mut Vm, host: crate::heap::NativeFn) {
     fn nothing(_: &mut Vm, _: usize) -> R<usize> {
         Ok(0)
     }
-    for name in ["setglobal", "getglobal"] {
-        vm.register(name, host);
-    }
+    vm.register("setglobal", setglobal);
+    vm.register("getglobal", getglobal);
     for name in [
         "debugload",
         "debuginfo",
@@ -196,6 +195,31 @@ fn pairs(vm: &mut Vm, nargs: usize) -> R<usize> {
     vm.push(Value::Table(t));
     vm.push(Value::Nil);
     Ok(3)
+}
+
+/// `setglobal` (`0x702770`): argument 1 made a string in place (`lua_tostring`), a copy of it
+/// pushed and moved under the top value (`lua_insert(-2)`), then `lua_settable` on the globals,
+/// metamethods and all. So the global gets the top value: the last argument, or the name itself
+/// when it is the only one, so `setglobal("x")` sets `x` to `"x"`. Nothing is answered.
+fn setglobal(vm: &mut Vm, nargs: usize) -> R<usize> {
+    let key = vm.tostr(vm.arg(nargs, 0)).map_or(Value::Nil, Value::Str);
+    let val = if nargs >= 2 {
+        vm.arg(nargs, nargs - 1)
+    } else {
+        key
+    };
+    let g = Value::Table(vm.globals);
+    vm.setindex(g, key, val, None)?;
+    Ok(0)
+}
+
+/// `getglobal` (`0x7027b0`): argument 1 made a string, then `lua_gettable` on the globals,
+/// metamethods and all; one value.
+fn getglobal(vm: &mut Vm, nargs: usize) -> R<usize> {
+    let key = vm.tostr(vm.arg(nargs, 0)).map_or(Value::Nil, Value::Str);
+    let g = Value::Table(vm.globals);
+    let v = vm.index(g, key, None)?;
+    Ok(vm.ret1(v))
 }
 
 /// 5.0's `ipairs` (`0x702cd0`). With no second argument (none, not nil) and so a count of 0, a

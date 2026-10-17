@@ -517,3 +517,17 @@ fn date_star_t_walks_as_the_clients() {
         .unwrap();
     assert_eq!(got, "hour min wday year yday month sec day isdst");
 }
+
+/// The host's `setglobal` is the client's (`0x702770`): the global gets the top value, so a lone
+/// name sets it to itself and a third argument wins over the second.
+#[test]
+fn setglobal_sets_the_top_value_as_the_clients() {
+    let s = script();
+    let got: Vec<String> = s
+        .eval(
+            "setglobal('SgOne') setglobal('SgThree', 5, 6)
+             return { tostring(SgOne), tostring(SgThree), tostring(getglobal('SgThree')) }",
+        )
+        .unwrap();
+    assert_eq!(got, ["SgOne", "6", "6"]);
+}
