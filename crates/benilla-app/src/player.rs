@@ -40,6 +40,7 @@ mod camera_water;
 // The five named camera views, inside `player/` to write the rig's `pub(super)` fields.
 pub(crate) mod camera_view;
 mod drunk;
+mod edge;
 mod embody;
 mod flags;
 mod follow;

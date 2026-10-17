@@ -573,6 +573,7 @@ pub(super) fn control(
             knocked,
             air_nudged,
             ground,
+            gated,
         } = if breach {
             // Jump while swimming (`0x7c6230`): falls unconditionally, seeded about 14% over a land
             // jump, and streams as a normal jump.
@@ -628,6 +629,13 @@ pub(super) fn control(
         }
 
         let now = time.elapsed_secs();
+        if gated {
+            player.skip_arc_time(dt);
+        }
+        if gated != player.gated {
+            player.gated = gated;
+            move_trace::gate(gated, player.pos);
+        }
         // Our FALLING: never while swimming, and a root ends it outright (`SetRoot` `0x7c7340`
         // calls `StopFalling` `0x7c6290`), leaving the body hanging; `grounded` keeps true contact.
         let airborne = !swimming && !held && !player.modes.rooted && (!grounded || jumped);
@@ -768,6 +776,7 @@ pub(super) fn control(
         let skip = movement_net::SkipClock {
             dt,
             held: player.settling,
+            gated,
             mover: player.foreign_mover.or(self_guid),
         };
         movement_net::stream_self_movement(

@@ -136,6 +136,23 @@ pub(super) fn breach_step(
     // The fresh arc's direction nibble seeds from the swim keys, as a ledge step-off's does.
     player.arc_dirs_set = player.horiz_vel.length_squared() > 0.0;
     player.knock_arc = false;
+    // The jump has made the body FALLING, so its substep takes the fall box (`0x633840`); a
+    // refused query hangs the leap at its start ([`super::edge`]).
+    let sweep = super::edge::Sweep::Fall {
+        drop: -player.vel_y * time.delta_secs(),
+    };
+    let travel = player.horiz_vel * time.delta_secs();
+    if !super::edge::may_resolve(world, player.pos, travel, sweep) {
+        return Outcome {
+            held: false,
+            grounded: false,
+            jumped: true,
+            knocked: false,
+            air_nudged: false,
+            ground: None,
+            gated: true,
+        };
+    }
     let half_h = Vec3::Y * (CAPSULE_HEIGHT * 0.5);
     let out = world.slide_body(
         capsule,
@@ -153,6 +170,7 @@ pub(super) fn breach_step(
         knocked: false,
         air_nudged: false,
         ground: None,
+        gated: false,
     }
 }
 
@@ -320,15 +338,31 @@ pub(super) fn drive_step(
     // The stroke rate's numerator is the flag speed whatever the pitch: `0x5fe2f0` divides
     // `GetCurrentSpeed` by the clip's speed, for local and observed units alike.
     player.swim_stroke_speed = if dir3 == Vec3::ZERO { 0.0 } else { dir_speed };
-    let out = swim_step(
-        player,
-        time,
-        collide,
-        capsule,
-        dir3 * dir_speed,
-        rest_line,
-        |feet| surface_over_feet(world, feet),
-    );
+    // A stroke runs a substep, an idle swimmer none (`0x634100`); its box keeps the vertical.
+    let stroke = dir3 * dir_speed;
+    if stroke != Vec3::ZERO
+        && !super::edge::may_resolve(
+            collide,
+            player.pos,
+            stroke * time.delta_secs(),
+            super::edge::Sweep::Swim,
+        )
+    {
+        player.vel_y = 0.0;
+        let outcome = Outcome {
+            held: false,
+            grounded: false,
+            jumped: false,
+            knocked: false,
+            air_nudged: false,
+            ground: None,
+            gated: true,
+        };
+        return SwimFrame { outcome, pitch };
+    }
+    let out = swim_step(player, time, collide, capsule, stroke, rest_line, |feet| {
+        surface_over_feet(world, feet)
+    });
     // After a surface redirect the pose and the wire show the travel pitch, while the raw aim
     // stays in `mover_pitch` so a nose-down dives at once.
     if let Some(p) = out.surface_pitch {
@@ -343,6 +377,7 @@ pub(super) fn drive_step(
         knocked: false,
         air_nudged: false,
         ground: None, // swimming detaches from any platform frame below
+        gated: false,
     };
     SwimFrame { outcome, pitch }
 }

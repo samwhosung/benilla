@@ -31,6 +31,7 @@ mod collider;
 mod furnish;
 pub mod merge;
 mod queries;
+mod residency;
 mod spawn;
 mod weld;
 pub(crate) mod window;
@@ -56,6 +57,8 @@ pub use queries::{
     area_id_under, doodad_ground_shade, ground_effect_under, terrain_height_under,
     terrain_height_under_cached, AreaAuthoritySet, CurrentArea, ShadeResolve,
 };
+use residency::publish_terrain_residency;
+pub use residency::TerrainResidency;
 
 /// Wall-clock per frame for spawning streamed tiles and placements before the rest waits a frame;
 /// uncapped, a cold start spawns the whole ring at once and blocks the main thread for seconds.
@@ -460,6 +463,7 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<ViewFocus>()
             .init_resource::<WorldLoadProgress>()
             .init_resource::<TerrainStreamer>()
+            .init_resource::<TerrainResidency>()
             .init_resource::<StreamActivity>()
             .init_resource::<Placements>()
             .init_resource::<HullWelds>()
@@ -471,7 +475,7 @@ impl Plugin for TerrainPlugin {
             // (Present), so a swap never renders uncovered. Between the requests and the spawn
             // the frame waits for the inner window's tiles and attaches finished colliders, so the
             // collider queue read downstream is this frame's; the inner tiles' colliders attach
-            // before the next frame's mover runs.
+            // before the next frame's mover runs, which reads the residency published last.
             .add_systems(
                 Update,
                 (
@@ -484,6 +488,7 @@ impl Plugin for TerrainPlugin {
                     flush_hull_welds,
                     flush_static_merge,
                     sync_interior_volumes,
+                    publish_terrain_residency,
                 )
                     .chain()
                     .in_set(WorldStage::Stream)
@@ -517,8 +522,9 @@ impl Plugin for TerrainPlugin {
             )
             // Ungated, so the last world's art drains at character select too.
             .add_systems(Update, scope_placement_art)
-            // Ungated, so the density tracker never misses a boot-time config apply.
-            .add_systems(Update, rescatter_clutter)
+            // Ungated, so the density tracker never misses a boot-time config apply; ordered
+            // before the residency publish, which reads the tiles whose clutter it rewrites.
+            .add_systems(Update, rescatter_clutter.before(publish_terrain_residency))
             .add_systems(
                 Update,
                 // After the interior claim: the reference resolves leaf, indoor and names from one

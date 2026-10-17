@@ -115,9 +115,21 @@ pub struct MoverTraceExclusions(pub bevy::ecs::entity::EntityHashSet);
 pub struct WorldCollision<'w, 's> {
     ms: MoveAndSlide<'w, 's>,
     exclusions: bevy::ecs::system::Res<'w, MoverTraceExclusions>,
+    /// Absent in an app with no terrain streamer, which gates nothing.
+    residency: Option<bevy::ecs::system::Res<'w, crate::terrain_stream::TerrainResidency>>,
 }
 
 impl WorldCollision<'_, '_> {
+    /// Whether the mover's world query over the WoW-space box `min..max` (x, y) would complete:
+    /// the reference's `0x6721b0` returns its terrain gather's result, 0 unless every chunk under
+    /// the box is loaded ([`crate::terrain_stream::TerrainResidency::box_resident`]), and the
+    /// substep loop then resolves nothing (`0x634154`). An app with no streamer gates nothing.
+    pub fn terrain_resident(&self, min: [f32; 2], max: [f32; 2]) -> bool {
+        self.residency
+            .as_deref()
+            .is_none_or(|r| r.box_resident(min, max))
+    }
+
     /// What a walking body collides with: the default layer and the WMO walking colliders. Public
     /// for the lanes that hand a filter elsewhere (the mouse pick's occlusion trace, the mount-tilt
     /// probe); the casts below apply it themselves.

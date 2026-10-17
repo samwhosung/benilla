@@ -49,7 +49,11 @@ impl PendingCollider {
 
     /// An already-built collider, so a test stages a burst without a thread pool.
     #[cfg(test)]
-    fn ready(collider: Collider, layers: Option<CollisionLayers>, static_body: bool) -> Self {
+    pub(super) fn ready(
+        collider: Collider,
+        layers: Option<CollisionLayers>,
+        static_body: bool,
+    ) -> Self {
         Self {
             task: None,
             built: Some(collider),

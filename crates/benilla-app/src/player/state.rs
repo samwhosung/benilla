@@ -116,6 +116,10 @@ pub(super) const SKIN_WIDTH: f32 = 0.02;
 
 /// Seconds of stalled streaming before the post-snap hold gives up: the streamer pushes the
 /// deadline on while the world is stale or any load counter moves, so only a dead stream hits it.
+/// Terrain that never arrives still holds the body, by the world query gate ([`super::edge`]),
+/// so what the release can hand over early is a placement that never spawned. Deviation: the
+/// reference's blocking load (`0x694920`) waits out its reads before the frame goes on and has
+/// no such release; without one, a model that never loads would freeze our body for good.
 pub(crate) const SETTLE_TIMEOUT: f32 = 6.0;
 
 /// The player body's collision capsule, swept by avian's `MoveAndSlide`: origin at its centre, the
@@ -369,9 +373,13 @@ pub(crate) struct Player {
     pub(crate) owes_worldport_ack: bool,
     /// `Time::elapsed_secs` when we last sent a heartbeat.
     pub(super) last_heartbeat: f32,
-    /// Milliseconds of movement the settle hold skipped, sent as `CMSG_MOVE_TIME_SKIPPED` on the
-    /// release edge; fractional because it accrues a frame `dt` at a time.
+    /// Milliseconds of movement skipped and not yet sent as `CMSG_MOVE_TIME_SKIPPED`: the settle
+    /// hold's whole sum until its release edge, else the sub-millisecond residue of the world
+    /// query gate's per-frame reports; fractional because it accrues a frame `dt` at a time.
     pub(super) skipped_ms: f32,
+    /// The last mover step was refused by the world query gate ([`super::edge`]), the latch of the
+    /// `gate` trace's edges.
+    pub(super) gated: bool,
     /// When the current airborne phase began (`Time::elapsed_secs`): the wire `fall_time`, and the
     /// take-off and landing edges that emit `MSG_MOVE_JUMP` and `MSG_MOVE_FALL_LAND`.
     pub(super) airborne_since: Option<f32>,

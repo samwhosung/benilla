@@ -54,6 +54,8 @@ pub(super) struct SkipClock {
     pub(super) dt: f32,
     /// The mover held instead of stepping ([`super::Player::settling`]): nothing integrated `dt`.
     pub(super) held: bool,
+    /// The world query gate refused the step ([`super::edge`]): nothing integrated `dt`.
+    pub(super) gated: bool,
     /// The active mover, a possessed unit or our own body; `None` until the server names one.
     pub(super) mover: Option<u64>,
 }
@@ -295,20 +297,31 @@ pub(super) fn stream_self_movement(
 
 /// `CMSG_MOVE_TIME_SKIPPED`: the milliseconds the mover advanced through without integrating. The
 /// reference's common senders are its no-geometry pair (`0x634154`, `0x635742`), time with no
-/// world to resolve against, which is our settle hold; its long-frame site (`0x616642`) has no
-/// counterpart, as we integrate a long frame whole. Deviation: a hold is summed and sent once on
-/// release, without the send's `[mgr+0x130] += lag` heartbeat push, because ours lasts seconds
-/// where the reference's lasts a substep.
+/// world to resolve against: our world query gate, which reports each refused frame as the
+/// reference reports each refused substep, and pushes the heartbeat deadline by it (`0x615b02`),
+/// and our settle hold. Its long-frame site (`0x616642`) has no counterpart, as we integrate a long
+/// frame whole. Deviation: a settle hold is summed and sent once on release, without the push,
+/// because it stands in for the reference's blocking load (`0x694920`), not a refused substep,
+/// and lasts seconds.
 fn stream_skipped_time(sender: &Sender<ClientCommand>, player: &mut Player, skip: SkipClock) {
-    if skip.held {
+    if skip.held || skip.gated {
         player.skipped_ms += skip.dt * 1000.0;
+    }
+    if skip.held {
         return;
     }
-    // The release edge sends the whole hold in whole ms; the residue is dropped.
+    // Whole ms: a gated frame keeps the residue for the next, a release edge drops it.
     let lag_ms = player.skipped_ms as u32;
-    player.skipped_ms = 0.0;
+    player.skipped_ms = if skip.gated {
+        player.skipped_ms - lag_ms as f32
+    } else {
+        0.0
+    };
     if lag_ms == 0 {
         return;
+    }
+    if skip.gated {
+        player.last_heartbeat += lag_ms as f32 / 1000.0;
     }
     let Some(guid) = skip.mover else {
         return;
@@ -399,6 +412,7 @@ mod tests {
         SkipClock {
             dt: 0.0,
             held: false,
+            gated: false,
             mover: None,
         }
     }
@@ -414,11 +428,13 @@ mod tests {
         let held = |dt: f32| SkipClock {
             dt,
             held: true,
+            gated: false,
             mover: Some(MOVER),
         };
         let released = || SkipClock {
             dt: 0.016,
             held: false,
+            gated: false,
             mover: Some(MOVER),
         };
         // Four held frames, 0.5 s in all.
@@ -443,6 +459,43 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "the report is an edge; a running mover skips nothing and says nothing"
+        );
+    }
+
+    #[test]
+    fn a_gated_frame_reports_its_time_at_once_and_pushes_the_heartbeat() {
+        const MOVER: u64 = 0x0000_0000_0000_002a;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let gated = || SkipClock {
+            dt: 0.0166,
+            held: false,
+            gated: true,
+            mover: Some(MOVER),
+        };
+        let mut sent = Vec::new();
+        for _ in 0..3 {
+            stream_skipped_time(&tx, &mut player, gated());
+            match rx
+                .try_recv()
+                .expect("each refused frame reports, as each substep does")
+            {
+                ClientCommand::MoveTimeSkipped { guid, lag_ms } => {
+                    assert_eq!(guid, MOVER);
+                    sent.push(lag_ms);
+                }
+                other => panic!("expected MoveTimeSkipped, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            sent,
+            [16, 17, 16],
+            "whole ms, the residue carried: 49.8 ms in all"
+        );
+        assert!(
+            (player.last_heartbeat - 0.049).abs() < 1e-6,
+            "the heartbeat deadline moved by the time sent (`0x615b02`): {}",
+            player.last_heartbeat
         );
     }
 

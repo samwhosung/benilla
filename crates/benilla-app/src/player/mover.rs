@@ -52,6 +52,9 @@ pub(super) struct Outcome {
     /// The walkable floor's collider: the snap's hit when it ran, else the classify's. Standing on
     /// a transport's collider attaches the mover to its frame.
     pub ground: Option<Entity>,
+    /// The world query gate refused the step ([`super::edge`]): nothing resolved, the speeds and
+    /// the fall clock hold, and the frame's time is reported skipped (`0x634154` → `0x615ae0`).
+    pub gated: bool,
 }
 
 /// Advance the player mover one frame, writing its position and velocities.
@@ -79,6 +82,33 @@ pub(super) fn step(
     let mut center = player.pos + half_h;
     let cast = |from: Vec3, disp: Vec3| world.cast_mover(capsule, from, disp, SKIN_WIDTH);
     let probe_down = |c: Vec3, dist: f32| cast(c, Vec3::NEG_Y * dist);
+    let terminal = if player.modes.feather_fall {
+        FEATHER_TERMINAL_VELOCITY
+    } else {
+        TERMINAL_VELOCITY
+    };
+
+    // The world query gate for a body falling into the frame, whose mode at the substep loop is
+    // FALLING: a refused query leaves it hanging before anything could land it, its speed and fall
+    // clock kept. A knockback is a command ahead of the loop, so it is flown and gated below; the
+    // settle hold and a root run no substep (`0x634100`).
+    if player.airborne_prev && knockback.is_none() && !player.settling && !player.modes.rooted {
+        let (_, mean_vy) = fall_step(player.vel_y, dt, terminal);
+        let sweep = super::edge::Sweep::Fall {
+            drop: -mean_vy * dt,
+        };
+        if !super::edge::may_resolve(world, player.pos, player.horiz_vel * dt, sweep) {
+            return Outcome {
+                held: false,
+                grounded: false,
+                jumped: false,
+                knocked: false,
+                air_nudged: false,
+                ground: None,
+                gated: true,
+            };
+        }
+    }
 
     // Airborne, the ground reach tightens to [`LAND_PROBE`] so the arc ends where the slide meets
     // the floor. A hovering body rests [`HOVER_HEIGHT`] up, so every ground reach grows by it.
@@ -181,12 +211,9 @@ pub(super) fn step(
     // speed (`0x7c5d20`). `vel_y` keeps the end-of-step speed that the next frame and the wire
     // read; `fall_mean_vy` is the exact rate to move at ([`fall_step`]).
     let mut fall_mean_vy = player.vel_y;
+    // The speed the commands left, which a refused substep keeps.
+    let vel_y_cmd = player.vel_y;
     if !held && !anchored && (jumped || !grounded) {
-        let terminal = if player.modes.feather_fall {
-            FEATHER_TERMINAL_VELOCITY
-        } else {
-            TERMINAL_VELOCITY
-        };
         let (end_vy, mean_vy) = fall_step(player.vel_y, dt, terminal);
         player.vel_y = end_vy;
         fall_mean_vy = mean_vy;
@@ -207,6 +234,32 @@ pub(super) fn step(
         air_nudged = true;
         // The press sets the nibble, so there is no second steer.
         player.arc_dirs_set = true;
+    }
+
+    // The gate for a body that was not falling: a take-off, a step-off or a knockback enters the
+    // substep loop FALLING, a walk with its direction bits; a still, grounded body runs none.
+    let falling = jumped || !grounded;
+    if !held && !anchored && (knocked || !player.airborne_prev) && (falling || moving) {
+        let sweep = if falling {
+            super::edge::Sweep::Fall {
+                drop: -fall_mean_vy * dt,
+            }
+        } else {
+            super::edge::Sweep::Walk
+        };
+        if !super::edge::may_resolve(world, player.pos, player.horiz_vel * dt, sweep) {
+            player.vel_y = vel_y_cmd;
+            player.airborne_prev = falling;
+            return Outcome {
+                held: false,
+                grounded: !falling,
+                jumped,
+                knocked,
+                air_nudged,
+                ground: if falling { None } else { ground_entity },
+                gated: true,
+            };
+        }
     }
 
     let pre_move = center;
@@ -349,6 +402,7 @@ pub(super) fn step(
         } else {
             None
         },
+        gated: false,
     }
 }
 
@@ -2399,5 +2453,154 @@ mod tests {
         let v = Vec3::new(7.0, -4.0, 0.0);
         let out = steep_contact_shear(face(90.0), v).expect("must strip");
         assert!(out.x.abs() < 1e-6 && (out.y - v.y).abs() < 1e-6);
+    }
+
+    /// A flat floor at Bevy y = 0 over x ∈ [−20, 20] whose western half is off the resident grid:
+    /// Bevy x < 0 is WoW y > 0, tile column 31, so the world's edge runs along Bevy x = 0. The
+    /// body's rows (Bevy z ∈ [−3, 3], WoW x near 0) are tile rows 31 and 32, both resident.
+    fn world_with_edge(residency: benilla_world::terrain_stream::TerrainResidency) -> App {
+        let mut app = world_from_profile(&[(-20.0, 0.0), (20.0, 0.0)]);
+        app.insert_resource(residency);
+        app
+    }
+
+    fn east_half() -> benilla_world::terrain_stream::TerrainResidency {
+        benilla_world::terrain_stream::TerrainResidency::with_tiles([(32, 31), (32, 32)])
+    }
+
+    /// One 60 fps frame of [`step`] with the keys along `dir` (zero for none) and `jump` held.
+    fn frame(
+        world: &benilla_world::collision::WorldCollision,
+        player: &mut Player,
+        dir: Vec3,
+        jump: bool,
+    ) -> Outcome {
+        let mut time = Time::default();
+        time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        step(
+            player,
+            &time,
+            world,
+            &player_capsule(),
+            dir != Vec3::ZERO,
+            dir,
+            7.0,
+            jump,
+            false,
+            None,
+            None,
+            AIR_NUDGE_SPEED,
+        )
+    }
+
+    /// Walking at the edge stops short of it, as at a wall, and walking back away is free: the
+    /// walk box reaches `r + tan 50°·H + dist` ahead (`0x633c97`).
+    #[test]
+    fn the_worlds_edge_stops_a_walk_like_a_wall_and_lets_it_back() {
+        let (stopped, gated, back) = world_with_edge(east_half())
+            .world_mut()
+            .run_system_once(|world: benilla_world::collision::WorldCollision| {
+                let mut player = Player {
+                    pos: Vec3::new(5.0, 0.0, -1.0),
+                    ..Default::default()
+                };
+                let mut gated = 0;
+                for _ in 0..120 {
+                    let out = frame(&world, &mut player, Vec3::NEG_X, false);
+                    if out.gated {
+                        gated += 1;
+                        assert!(
+                            out.grounded,
+                            "a walk the gate holds stays a walk, no FALLING"
+                        );
+                    }
+                }
+                let stopped = player.pos;
+                for _ in 0..30 {
+                    assert!(!frame(&world, &mut player, Vec3::X, false).gated);
+                }
+                (stopped, gated, player.pos.x - stopped.x)
+            })
+            .unwrap();
+        assert!(
+            stopped.x > 1.5 && stopped.x < 1.8,
+            "the body stops a step allowance short of the edge at x = 0: {stopped:?}"
+        );
+        assert!(stopped.y.abs() < 1e-3, "on the floor: {stopped:?}");
+        assert!(
+            gated > 90,
+            "the gate held the rest of the walk: {gated} frames"
+        );
+        assert!(
+            back > 3.0,
+            "walking away is not gated: {back} yd in half a second"
+        );
+    }
+
+    /// A jump at the edge hangs in the air with FALLING kept, its speed unspent, once the fall box
+    /// reaches the edge.
+    #[test]
+    fn a_jump_at_the_worlds_edge_hangs_in_the_air() {
+        let (hung, vel_y, hung_frames) = world_with_edge(east_half())
+            .world_mut()
+            .run_system_once(|world: benilla_world::collision::WorldCollision| {
+                let mut player = Player {
+                    pos: Vec3::new(2.5, 0.0, -1.0),
+                    ..Default::default()
+                };
+                // Settle onto the floor, then take off running west.
+                frame(&world, &mut player, Vec3::ZERO, false);
+                assert!(frame(&world, &mut player, Vec3::NEG_X, true).jumped);
+                let mut hung_frames = 0;
+                let mut last: Option<(Vec3, f32)> = None;
+                for _ in 0..120 {
+                    let out = frame(&world, &mut player, Vec3::NEG_X, false);
+                    if out.gated {
+                        assert!(!out.grounded, "the hang keeps FALLING");
+                        if let Some((pos, vy)) = last {
+                            assert_eq!(pos, player.pos, "a hung body does not move");
+                            assert_eq!(vy, player.vel_y, "nor does its fall speed change");
+                        }
+                        last = Some((player.pos, player.vel_y));
+                        hung_frames += 1;
+                    }
+                }
+                (player.pos, player.vel_y, hung_frames)
+            })
+            .unwrap();
+        assert!(hung_frames > 60, "the jump hung: {hung_frames} frames");
+        assert!(hung.x > 0.0, "short of the edge: {hung:?}");
+        assert!(hung.y > 0.5, "in the air: {hung:?}");
+        assert!(
+            vel_y != 0.0,
+            "the arc's speed is kept for when it may go on: {vel_y}"
+        );
+    }
+
+    /// A body put down over a tile the WDT does not author, as a GM teleport past the edge does,
+    /// hangs where it was put, FALLING; a one-object map tests no terrain and lets it fall.
+    #[test]
+    fn a_body_off_the_resident_grid_hangs_and_a_one_object_map_lets_it_fall() {
+        let drop = |residency| {
+            world_with_edge(residency)
+                .world_mut()
+                .run_system_once(|world: benilla_world::collision::WorldCollision| {
+                    let mut player = Player {
+                        pos: Vec3::new(-10.0, 50.0, -1.0),
+                        ..Default::default()
+                    };
+                    let mut falling = true;
+                    for _ in 0..60 {
+                        falling &= !frame(&world, &mut player, Vec3::ZERO, false).grounded;
+                    }
+                    (player.pos.y, falling)
+                })
+                .unwrap()
+        };
+        let (y, falling) = drop(east_half());
+        assert_eq!(y, 50.0, "the body hangs where it was put");
+        assert!(falling, "with FALLING on, as the teleport's restarted fall");
+        let (y, _) = drop(benilla_world::terrain_stream::TerrainResidency::one_object());
+        assert!(y < 45.0, "a one-object map gates nothing: {y}");
     }
 }

@@ -11,6 +11,15 @@ pub(super) struct ArcEdges {
 }
 
 impl Player {
+    /// A frame the world query gate refused ([`super::edge`]): only the resolvers advance the fall
+    /// clock (`+0x78`), so the arc's start moves on by `dt`, and the wire `fall_time` and the
+    /// FALLINGFAR timer leg hold through the hang.
+    pub(super) fn skip_arc_time(&mut self, dt: f32) {
+        if let Some(t0) = self.airborne_since.as_mut() {
+            *t0 += dt;
+        }
+    }
+
     /// Advances the arc; call once per non-swim frame, after the mover wrote `pos` and `vel_y`.
     /// `launch_y` is the pre-step feet Y, the true takeoff height.
     ///
@@ -99,6 +108,34 @@ mod tests {
         assert!(edges.new_arc, "the takeoff frame begins a new arc");
         p.pos.y = ground + TAKEOFF_RISE; // the post-step position the mover would have left
         p
+    }
+
+    #[test]
+    fn a_hang_at_the_worlds_edge_runs_no_fall_clock() {
+        let dt = 1.0 / 60.0;
+        let hang = |skip: bool| {
+            let mut p = Player::default();
+            // A step-off's first frame, then a second of frames the gate refuses.
+            p.advance_airborne_arc(true, false, 0.0, 0.0);
+            for i in 1..=60 {
+                if skip {
+                    p.skip_arc_time(dt);
+                }
+                p.advance_airborne_arc(true, false, i as f32 * dt, 0.0);
+            }
+            p
+        };
+        let held = hang(true);
+        assert!(!held.fall_far, "the timer leg did not run through the hang");
+        let t0 = held.airborne_since.expect("still airborne");
+        assert!(
+            (t0 - 1.0).abs() < 1e-4,
+            "the arc's start moved with the clock: {t0}"
+        );
+        assert!(
+            hang(false).fall_far,
+            "control: a second airborne latches FALLINGFAR"
+        );
     }
 
     #[test]
