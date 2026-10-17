@@ -122,11 +122,11 @@ fn raw_insert_and_remove_shift_within_bounds() {
     assert_eq!(t.raw_get::<Option<i64>>("k").unwrap(), None);
 }
 
-/// A table made from an iterator is sized for it first, as mlua's `lua_createtable` sizes it:
-/// five values fill an array of five, where growing by rehash would make one of eight, and five
-/// pairs a hash part of eight, which keeps integer keys there with no rehash to move them.
+/// A table made from an iterator starts empty and grows by rehash, as the client's C code builds
+/// one: five values make an array of eight, and five integer pairs move into it too, the sizes
+/// the client gives `t = {} t[1] = 1 ... t[5] = 5`.
 #[test]
-fn a_table_from_an_iterator_is_sized_for_it() {
+fn a_table_from_an_iterator_grows_from_empty() {
     let lua = Lua::new();
     let seq = lua.create_sequence_from([1, 2, 3, 4, 5]).unwrap();
     let map = lua
@@ -137,13 +137,10 @@ fn a_table_from_an_iterator_is_sized_for_it() {
     lua.with_vm(|vm| {
         let seq = vm.get_global("Seq").as_table().unwrap();
         let map = vm.get_global("Map").as_table().unwrap();
-        assert_eq!(vm.heap.table(seq).array.len(), 5);
+        assert_eq!(vm.heap.table(seq).array.len(), 8);
         assert_eq!(
-            (
-                vm.heap.table(map).array.len(),
-                vm.heap.table(map).node.len()
-            ),
-            (0, 8)
+            (vm.heap.table(map).array.len(), vm.heap.table(map).lsizenode),
+            (8, 0)
         );
     });
 }

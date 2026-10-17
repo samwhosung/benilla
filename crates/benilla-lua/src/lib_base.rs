@@ -6,45 +6,34 @@ use crate::heap::FuncObj;
 use crate::value::{Value, V};
 use crate::vm::Vm;
 
-/// The base function benilla has under `name`, for a state that registers its own list.
-pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
-    Some(match name {
-        "error" => error,
-        "getmetatable" => getmetatable,
-        "setmetatable" => setmetatable,
-        "getfenv" => getfenv,
-        "setfenv" => setfenv,
-        "next" => next,
-        "pairs" => pairs,
-        "tonumber" => tonumber,
-        "tostring" => tostring,
-        "type" => type_,
-        "assert" => assert,
-        "unpack" => unpack,
-        "rawequal" => rawequal,
-        "rawget" => rawget,
-        "rawset" => rawset,
-        "pcall" => pcall,
-        "xpcall" => xpcall,
-        "collectgarbage" => collectgarbage,
-        "gcinfo" => gcinfo,
-        "loadstring" => loadstring,
-        _ => return None,
-    })
-}
-
-/// 5.1's `pairs`, whose `next` is the one it was opened with (its upvalue), not the global's
-/// value now.
-pub(crate) fn pairs_51(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let t = vm.check_table(nargs, 1)?;
-    let next = vm.upvalue(0);
-    vm.push(next);
-    vm.push(Value::Table(t));
-    vm.push(Value::Nil);
-    Ok(3)
-}
-
-pub fn open(vm: &mut Vm) {
+/// The client's base array (`0x811e28`), its 36 functions set as globals in the array's order
+/// (`0x703ab0`). `host` stands in for the ones only the host gives, which it replaces.
+pub fn open(vm: &mut Vm, host: crate::heap::NativeFn) {
+    // `debugload` to `debugtimestamp` do nothing: `xor eax,eax; ret` (`0x7027e0`..`0x702830`).
+    fn nothing(_: &mut Vm, _: usize) -> R<usize> {
+        Ok(0)
+    }
+    for name in ["setglobal", "getglobal"] {
+        vm.register(name, host);
+    }
+    for name in [
+        "debugload",
+        "debuginfo",
+        "debugprint",
+        "debugdump",
+        "debugbreak",
+        "debugtimestamp",
+    ] {
+        vm.register(name, nothing);
+    }
+    for name in [
+        "debugprofilestart",
+        "debugprofilestop",
+        "seterrorhandler",
+        "geterrorhandler",
+    ] {
+        vm.register(name, host);
+    }
     vm.register("error", error);
     vm.register("getmetatable", getmetatable);
     vm.register("setmetatable", setmetatable);
@@ -55,22 +44,24 @@ pub fn open(vm: &mut Vm) {
     let aux = vm.new_native("ipairs_aux", ipairs_aux);
     let ip = vm.new_closure("ipairs", ipairs, vec![aux]);
     vm.set_global("ipairs", ip);
+    // `0x702da0`: the global `next`, read raw, as the generator.
     vm.register("pairs", pairs);
+    vm.register("type", type_);
     vm.register("tonumber", tonumber);
     vm.register("tostring", tostring);
-    vm.register("type", type_);
-    vm.register("assert", assert);
     vm.register("unpack", unpack);
     vm.register("rawequal", rawequal);
     vm.register("rawget", rawget);
     vm.register("rawset", rawset);
+    vm.register("assert", assert);
+    vm.register("gcinfo", gcinfo);
+    vm.register("collectgarbage", collectgarbage);
+    vm.register("loadstring", loadstring);
     vm.register("pcall", pcall);
     vm.register("xpcall", xpcall);
-    vm.register("collectgarbage", collectgarbage);
-    vm.register("gcinfo", gcinfo);
-    vm.register("loadstring", loadstring);
-    let g = Value::Table(vm.globals);
-    vm.set_global("_G", g);
+    for name in ["date", "time", "debugstack"] {
+        vm.register(name, host);
+    }
 }
 
 /// `luaB_error`: a string message gets the position `level` up (default 1).

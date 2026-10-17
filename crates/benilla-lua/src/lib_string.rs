@@ -7,25 +7,6 @@ use crate::cfmt::{self, Spec};
 use crate::value::{Value, V};
 use crate::vm::{LuaError, Vm};
 
-/// The string function benilla has under `name`, for a state that registers its own list.
-pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
-    Some(match name {
-        "len" => len,
-        "sub" => sub,
-        "lower" => lower,
-        "upper" => upper,
-        "char" => char_,
-        "rep" => rep,
-        "byte" => byte,
-        "format" => format,
-        "dump" => dump,
-        "find" => find,
-        "gfind" => gfind,
-        "gsub" => gsub,
-        _ => return None,
-    })
-}
-
 pub fn open(vm: &mut Vm) {
     // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
     let t = vm.heap.new_table(0, 0);

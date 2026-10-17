@@ -4,37 +4,6 @@ use crate::api::R;
 use crate::value::Value;
 use crate::vm::Vm;
 
-/// The math function benilla has under `name`, for a state that registers its own list.
-pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
-    Some(match name {
-        "abs" => |vm, n| un(vm, n, f64::abs),
-        "sin" => |vm, n| un(vm, n, f64::sin),
-        "cos" => |vm, n| un(vm, n, f64::cos),
-        "tan" => |vm, n| un(vm, n, f64::tan),
-        "asin" => |vm, n| un(vm, n, f64::asin),
-        "acos" => |vm, n| un(vm, n, f64::acos),
-        "atan" => |vm, n| un(vm, n, f64::atan),
-        "atan2" => |vm, n| bin(vm, n, f64::atan2),
-        "ceil" => |vm, n| un(vm, n, f64::ceil),
-        "floor" => |vm, n| un(vm, n, f64::floor),
-        "fmod" | "mod" => |vm, n| bin(vm, n, fmod),
-        "frexp" => frexp,
-        "ldexp" => ldexp,
-        "sqrt" => |vm, n| un(vm, n, f64::sqrt),
-        "min" => min,
-        "max" => max,
-        "log" => |vm, n| un(vm, n, f64::ln),
-        "log10" => |vm, n| un(vm, n, f64::log10),
-        "exp" => |vm, n| un(vm, n, exp),
-        "deg" => |vm, n| un(vm, n, deg),
-        "pow" => |vm, n| bin(vm, n, pow),
-        "rad" => |vm, n| un(vm, n, rad),
-        "random" => random,
-        "randomseed" => randomseed,
-        _ => return None,
-    })
-}
-
 pub fn open(vm: &mut Vm) {
     // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
     let t = vm.heap.new_table(0, 0);

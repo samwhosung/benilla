@@ -10,21 +10,6 @@ use crate::lib_base::{getn, setn};
 use crate::value::{TableRef, Value, V};
 use crate::vm::Vm;
 
-/// The table function benilla has under `name`, for a state that registers its own list.
-pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
-    Some(match name {
-        "concat" => concat,
-        "foreach" => foreach,
-        "foreachi" => foreachi,
-        "getn" => getn_,
-        "setn" => setn_,
-        "sort" => sort,
-        "insert" => insert,
-        "remove" => remove,
-        _ => return None,
-    })
-}
-
 pub fn open(vm: &mut Vm) {
     // `luaL_openlib` makes a library's table empty, by `lua_newtable` (`0x6f4dff`).
     let t = vm.heap.new_table(0, 0);

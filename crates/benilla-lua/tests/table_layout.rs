@@ -155,3 +155,66 @@ fn a_collection_keeps_a_deleted_live_key_in_its_node() {
     // collecting between them, and with no collection at all.
     assert_eq!(vm.heap.str(s), b"s5 s1 s4 s3 s2 ");
 }
+
+/// The keys of `t`'s table, in `next` order.
+fn keys_of(vm: &benilla_lua::Vm, t: benilla_lua::value::TableRef) -> String {
+    let mut keys = Vec::new();
+    let mut k = Value::Nil;
+    while let Some((nk, _)) = vm.heap.table(t).next(k).unwrap() {
+        let V::Str(s) = nk.unpack() else {
+            panic!("a string key")
+        };
+        keys.push(String::from_utf8_lossy(vm.heap.str(s)).into_owned());
+        k = nk;
+    }
+    keys.join(" ")
+}
+
+/// The client's globals once `0x7039e0` has opened its state, run in its code, then benilla's
+/// `_G`, which lands after `atan` and moves no other key.
+pub const OPEN_GLOBALS: &str = "log tostring getn format debuginfo frexp pairs max assert \
+    tonumber debugbreak seterrorhandler atan _G foreach tan cos log10 strupper asin loadstring \
+    tinsert string xpcall date bit strlen strrep strlower deg table __framescript_meta strsub \
+    random gsub sort strchar debugprofilestart next strbyte sqrt sin ipairs randomseed mod \
+    rawequal rad getglobal PI getmetatable min debugload ceil tremove acos gcinfo rawset ldexp \
+    foreachi unpack debugprint time exp math floor pcall getfenv setmetatable type \
+    debugprofilestop debugtimestamp abs rawget strfind debugdump setglobal debugstack __pow \
+    setfenv atan2 geterrorhandler error collectgarbage";
+
+/// A new state's globals and its four library tables walk as the client's do after
+/// `0x7039e0`: the base array, `luaL_openlib`'s tables filled from empty in their arrays' order,
+/// and the compat chunk's globals one at a time.
+#[test]
+fn a_new_state_lays_out_its_globals_and_libraries_as_the_clients() {
+    let mut vm = benilla_lua::new_state();
+    let g = vm.globals;
+    assert_eq!(vm.heap.table(g).lsizenode, 7);
+    assert_eq!(
+        keys_of(&vm, g),
+        OPEN_GLOBALS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    for (lib, want) in [
+        (
+            "string",
+            "sub gfind rep gsub char dump find upper len format byte lower",
+        ),
+        (
+            "table",
+            "setn insert getn foreachi foreach sort remove concat",
+        ),
+        (
+            "math",
+            "log atan ldexp deg tan cos pi random randomseed frexp ceil floor rad max sqrt pow \
+             asin min mod exp log10 atan2 acos sin abs",
+        ),
+        ("bit", "band rshift bor bnot arshift mod lshift bxor"),
+    ] {
+        let V::Table(t) = vm.get_global(lib).unpack() else {
+            panic!("{lib}")
+        };
+        assert_eq!(keys_of(&vm, t), want, "{lib}");
+    }
+}

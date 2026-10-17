@@ -3,7 +3,7 @@
 
 /// Run `src` in the script host's state; its results as text, or the error.
 fn run(src: &str) -> Result<Vec<String>, String> {
-    let mut vm = benilla_lua::new_script_host_state();
+    let mut vm = benilla_lua::new_state();
     match vm.exec(src.as_bytes(), b"=t") {
         Ok(vs) => Ok(vs.into_iter().map(|v| vm.display(v)).collect()),
         Err(e) => Err(vm.display(e)),
@@ -228,7 +228,7 @@ fn format_converts_at_32_bits() {
 /// down on the first value, up on the second.
 #[test]
 fn number_digits_round_as_the_clients_arithmetic() {
-    let mut vm = benilla_lua::new_script_host_state();
+    let mut vm = benilla_lua::new_state();
     for (bits, want) in [
         (0x4317_1eee_124d_37a7u64, "1.6269830806113057e+015"),
         (0x4319_1f38_6560_ea63, "1.7678003743115768e+015"),
@@ -277,7 +277,7 @@ fn a_made_nan_is_the_x87_indefinite() {
             "{expr}"
         );
     }
-    let mut vm = benilla_lua::new_script_host_state();
+    let mut vm = benilla_lua::new_state();
     vm.set_global(
         "V",
         benilla_lua::Value::Num(f64::from_bits(0x7ff8_0000_0000_0000)),
@@ -307,7 +307,7 @@ fn a_made_nan_is_the_x87_indefinite() {
 /// (`0x7fd8db`).
 #[test]
 fn the_math_library_answers_the_clients_specials() {
-    let mut vm = benilla_lua::new_script_host_state();
+    let mut vm = benilla_lua::new_state();
     vm.set_global(
         "V",
         benilla_lua::Value::Num(f64::from_bits(0x7ff8_0000_0000_0000)),
