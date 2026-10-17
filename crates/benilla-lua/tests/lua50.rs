@@ -481,3 +481,22 @@ fn a_nul_after_a_dot_is_no_dot() {
         );
     }
 }
+
+/// `str_dump` checks argument 1 (`0x7fc343`) but `lua_dump` dumps the stack's top
+/// (`0x6f4373`): the last argument.
+#[test]
+fn string_dump_dumps_its_last_argument() {
+    assert_eq!(
+        run("return pcall(string.dump, function() end, 1)"),
+        "false,unable to dump given function"
+    );
+    assert_eq!(
+        run("local g = loadstring('return 1', '=g') \
+             return string.sub(string.dump(function() end, g), 13)"),
+        "=g"
+    );
+    assert_eq!(
+        run("return pcall(string.dump, 1, function() end)"),
+        "false,bad argument #1 to `?' (function expected, got number)"
+    );
+}
