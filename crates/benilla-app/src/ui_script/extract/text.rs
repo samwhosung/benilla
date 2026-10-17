@@ -9,9 +9,7 @@ use benilla_ui::script::{EditBoxTextUi, FontShadow, JustifyH, JustifyV, Outline}
 use benilla_ui::widget::FrameHandle;
 
 use crate::ui_pass::{UiQuad, UvRect};
-use crate::ui_text::{
-    layout_text_quads, layout_text_quads_links, shadow_offset_px, TextSeat, UiFontAtlas,
-};
+use crate::ui_text::{layout_text_quads, layout_text_quads_links, TextSeat, UiFontAtlas};
 
 /// `WOW_TEXT_PROBE=1`: log each Text quad's drawn string, font and ink rows; read once.
 static TEXT_PROBE: std::sync::LazyLock<bool> =
@@ -388,6 +386,19 @@ fn caret_width_px(scale: f32, font_scale: f32) -> f32 {
 /// nudge ([`crate::ui_text::UI_SEAT_NUDGE`]) plus a falling shadow's offset.
 fn band_clip_slack(shadow_dy: Option<f32>) -> f32 {
     crate::ui_text::UI_SEAT_NUDGE + shadow_dy.map_or(0.0, |dy| dy.max(0.0))
+}
+
+/// One axis of the drop shadow's offset in the rect's px space, rounded to a whole pixel but
+/// never to zero, as the reference's shadow shows at any window size. Fill and shadow each take
+/// the client's vertical snap, `ceil(y − 0.5)`, which commutes only with an integer translate: a
+/// fractional offset makes the gap between them alternate between 1 and 2 px.
+fn shadow_offset_px(scaled: f32) -> f32 {
+    let rounded = scaled.round();
+    if rounded == 0.0 && scaled != 0.0 {
+        scaled.signum()
+    } else {
+        rounded
+    }
 }
 
 /// A shadow glyph's alpha, every scalar the fill rides plus its own: `layout` (the `<Shadow>`

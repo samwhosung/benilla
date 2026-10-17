@@ -48,7 +48,7 @@ use benilla_formats::GameTipsCatalog;
 
 use crate::ui_pass::UiQuad;
 use crate::ui_text::{glyph_texels, UiFontAtlas};
-use crate::ui_text::{layout_text_quads, shadow_offset_px, FontSpec, Justify, TextSeat};
+use crate::ui_text::{layout_text_quads, FontSpec, Justify, TextSeat};
 
 /// `s` at `a = 1`: the wrap width only, as a fraction of the window's width (the box width the
 /// call at `0x40679c` passes; the font size is [`TIP_FONT_FRACTION`]). Not a FrameXML length:
@@ -99,7 +99,7 @@ impl Default for GameTipSetting {
     }
 }
 
-/// The tips table and the row the screen shows, laid out once per raise.
+/// The tips table and the row the screen shows, picked once per raise.
 #[derive(Resource, Default)]
 pub(crate) struct GameTips {
     /// `GameTips.dbc` in file order, the array at `[0xc0dcd0]`/`[0xc0dcd4]`.
@@ -146,20 +146,25 @@ pub(crate) struct TipPlacement {
     pub(crate) height: f32,
     pub(crate) font_size: f32,
     pub(crate) spacing: f32,
-    /// The reference's `(+x, −y)`; Bevy's y grows down, so the sign already matches.
+    /// The reference's `(+x, −y)` in whole device px; Bevy's y grows down, so the sign already
+    /// matches.
     pub(crate) shadow: Vec2,
 }
 
-/// Where the reference puts the tip for a window of this size (see the module doc), relative to
-/// the content area [`crate::loading_screen::fit_rect`] gives for it.
-pub(crate) fn placement(window: Vec2, widescreen: bool) -> TipPlacement {
+/// Where the reference puts the tip for a window of this logical size at `dpi` device px per
+/// logical px (see the module doc), relative to the content area
+/// [`crate::loading_screen::fit_rect`] gives for it.
+pub(crate) fn placement(window: Vec2, widescreen: bool, dpi: f32) -> TipPlacement {
     let a = crate::loading_screen::scaled_aspect(window, widescreen);
     let area = crate::loading_screen::fit_rect(window, widescreen);
     let s = TIP_SCALE / a;
     // `yoff` is the letterbox band; a NaN or a wider window keeps zero (`0x4066c6`-`0x4066c9`).
     let yoff = if a < 1.0 { (1.0 - a) * 0.5 } else { 0.0 };
-    let from_window_left = (0.5 - s * 0.5) * window.x;
-    let from_window_bottom = (TIP_BOTTOM + yoff) * window.y;
+    // The anchor floors to a whole device px (`0x5cdf70`), y up from the window's bottom.
+    let from_window_left = ((0.5 - s * 0.5) * window.x * dpi).floor() / dpi;
+    let from_window_bottom = ((TIP_BOTTOM + yoff) * window.y * dpi).floor() / dpi;
+    // The offsets round half away from zero in device px at the draw (`0x5c7010`, `0x5c6fa0`).
+    let shadow = |extent: f32| (extent * TIP_SHADOW_OFFSET * dpi).round() / dpi;
     let area_bottom = window.y - (area.y + area.height);
     TipPlacement {
         left: from_window_left - area.x,
@@ -168,7 +173,7 @@ pub(crate) fn placement(window: Vec2, widescreen: bool) -> TipPlacement {
         height: window.y,
         font_size: window.y * TIP_FONT_FRACTION,
         spacing: window.y * TIP_SPACING_FRACTION,
-        shadow: Vec2::new(window.x * TIP_SHADOW_OFFSET, window.y * TIP_SHADOW_OFFSET),
+        shadow: Vec2::new(shadow(window.x), shadow(window.y)),
     }
 }
 
@@ -182,6 +187,10 @@ pub(crate) struct TipGlyphs {
 /// Lays the tip out as `0x5c1c30` creates it, at `p`'s size and spacing, bottom- and
 /// left-justified (`0x406778`/`0x406776` push 2 and 0) in `p`'s box, with the shadow `0x5c27a0`
 /// sets, in the locale's face.
+///
+/// Deviation: the reference rasterizes the tip's font at most 32 px (`0x5ca096`/`0x5ca09b` in
+/// `0x5ca030`, reached through `0x44d040`) and magnifies it to the string's height; this
+/// rasterizes at the true size, as the engine does all big text (`crate::ui_text`'s engine).
 pub(crate) fn tip_glyphs(
     atlas: &UiFontAtlas,
     tip: &str,
@@ -206,7 +215,7 @@ pub(crate) fn tip_glyphs(
         v: JustifyV::Bottom,
     };
     let rect = Rect::new(0.0, -p.height, p.width, 0.0);
-    let (dx, dy) = (shadow_offset_px(p.shadow.x), shadow_offset_px(p.shadow.y));
+    let (dx, dy) = (p.shadow.x, p.shadow.y);
     let shadow_rect = Rect::new(
         rect.min.x + dx,
         rect.min.y + dy,
@@ -303,17 +312,22 @@ fn paint_game_tip(
     };
     let window = window_size(&windows);
     let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
+    // The engine's DPI, which the glyphs are laid out at; the window's without an engine.
+    let dpi = atlas.as_ref().map_or_else(
+        || windows.iter().next().map_or(1.0, Window::scale_factor),
+        |a| a.dpi(),
+    );
     let key = (
         window,
         widescreen,
-        atlas.as_ref().map_or(0.0, |a| a.dpi()),
+        dpi,
         atlas.as_ref().map_or(0, |a| a.generation),
         atlas.is_some(),
     );
     if laid.key == key && laid.tip.as_deref() == tips.shown() {
         return;
     }
-    let p = placement(window, widescreen);
+    let p = placement(window, widescreen, dpi);
     apply(&p, &mut node);
     let mut e = commands.entity(entity);
     e.despawn_related::<Children>();
@@ -389,7 +403,7 @@ impl Plugin for GameTipPlugin {
 }
 
 /// Takes the raise's tip edge and shows or hides the line; [`paint_game_tip`] lays it out. The
-/// reference picks the row in `EnterWorld`, lays it out once per raise and draws it every frame.
+/// reference picks the row in `EnterWorld` and draws it every frame.
 fn drive_game_tip(
     mut screen: ResMut<crate::loading_screen::LoadingScreen>,
     mut tips: ResMut<GameTips>,
@@ -579,27 +593,41 @@ mod tests {
         (got - want).abs() < 0.01
     }
 
-    /// At 4:3, where `yoff` is zero: `s = 515/1024`, left at `0.5 − s/2`, baseline at `0.1`.
+    /// At 4:3, where `yoff` is zero: `s = 515/1024`, left at `0.5 − s/2`, the box's bottom at
+    /// `0.1`, each floored to a device px.
     #[test]
     fn the_layout_is_the_reference_numbers_at_four_three() {
-        let p = placement(Vec2::new(1024.0, 768.0), true);
+        let p = placement(Vec2::new(1024.0, 768.0), true, 1.0);
         assert!(near(p.width, 515.0), "s·width = 515 px");
-        assert!(near(p.left, (1024.0 - 515.0) / 2.0), "centred column");
-        assert!(near(p.bottom, 76.8), "0.1 of the height");
+        assert_eq!(p.left, 254.0, "the centred column's 254.5, floored");
+        assert_eq!(p.bottom, 76.0, "0.1 of the height, 76.8, floored");
         assert!(near(p.font_size, 13.824), "0.018 of the height");
         assert!(near(p.spacing, 3.84), "0.005 of the height");
         assert!(near(p.height, 768.0), "a box the window tall");
-        assert!(near(p.shadow.x, 1.024) && near(p.shadow.y, 0.768));
+        assert_eq!(p.shadow, Vec2::ONE, "1.024 and 0.768 device px, rounded");
+    }
+
+    /// At DPI 2 the anchor floors and the shadow rounds in device px: a 1512×982 window is 3024×1964
+    /// device px, so the shadow is 3 and 2 of them, not the logical 1.512 rounded to 2.
+    #[test]
+    fn the_snaps_are_in_device_pixels() {
+        let p = placement(Vec2::new(1512.0, 982.0), true, 2.0);
+        assert_eq!(p.shadow, Vec2::new(1.5, 1.0));
+        // The column's left edge is 756 − 658.5/2 = 426.75 logical, 853.5 device px, floored.
+        let area = crate::loading_screen::fit_rect(Vec2::new(1512.0, 982.0), true);
+        assert!(near(p.left + area.x, 426.5), "{}", p.left + area.x);
+        // 196.4 device px above the window's bottom, floored; the window is the area's height.
+        assert_eq!(p.bottom, 98.0);
     }
 
     /// Wider than 4:3 the area is pillarboxed and the tip is the same size and height as in a 4:3
     /// window of that height (`s·W = 515·H/768`), centred on the window.
     #[test]
     fn a_wide_window_keeps_the_tip_of_its_height() {
-        let p = placement(Vec2::new(1920.0, 1080.0), true);
+        let p = placement(Vec2::new(1920.0, 1080.0), true, 1.0);
         assert!(near(p.width, 515.0 * 1080.0 / 768.0));
-        // Area x = 240; the column is centred on the window, 960.
-        assert!(near(p.left + 240.0, 960.0 - p.width / 2.0));
+        // Area x = 240; the column is centred on the window, 960, its 597.89 floored.
+        assert!(near(p.left + 240.0, (960.0 - p.width / 2.0).floor()));
         assert!(near(p.bottom, 108.0));
         assert!(near(p.font_size, 19.44));
     }
@@ -608,10 +636,10 @@ mod tests {
     /// `515·W/1024`, centred, at any window shape.
     #[test]
     fn widescreen_off_lays_the_tip_out_on_the_whole_window() {
-        let p = placement(Vec2::new(1280.0, 1024.0), false);
+        let p = placement(Vec2::new(1280.0, 1024.0), false, 1.0);
         assert!(near(p.width, 515.0 * 1280.0 / 1024.0), "{}", p.width);
-        assert!(near(p.left, (1280.0 - p.width) / 2.0));
-        assert!(near(p.bottom, 102.4), "0.1 of the height");
+        assert!(near(p.left, ((1280.0 - p.width) / 2.0).floor()));
+        assert!(near(p.bottom, 102.0), "0.1 of the height, floored");
     }
 
     /// Narrower than 4:3 the area is letterboxed and the tip is laid out in window terms: its
@@ -620,12 +648,13 @@ mod tests {
     #[test]
     fn a_tall_window_lays_the_tip_out_in_window_terms() {
         // 1280x1024: a = 0.9375, the area 1280x960 at y = 32.
-        let p = placement(Vec2::new(1280.0, 1024.0), true);
+        let p = placement(Vec2::new(1280.0, 1024.0), true, 1.0);
         assert!(near(p.width, 515.0 * 1024.0 / 768.0), "{}", p.width);
-        assert!(near(p.left, 640.0 - p.width / 2.0), "area x is 0");
-        assert!(near(p.bottom, 102.4), "{}", p.bottom);
+        assert!(near(p.left, (640.0 - p.width / 2.0).floor()), "area x is 0");
+        // `0.13125·1024 = 134.4` above the window's bottom, floored, less the 32 px band.
+        assert!(near(p.bottom, 102.0), "{}", p.bottom);
         assert!(near(p.font_size, 18.432));
-        assert!(near(p.shadow.x, 1.28) && near(p.shadow.y, 1.024));
+        assert_eq!(p.shadow, Vec2::ONE);
     }
 
     const TIP: &str = "|cffffd100Tip:|r Talk to the innkeeper.\r\n";
@@ -645,7 +674,7 @@ mod tests {
     fn the_tip_is_the_font_engines_layout_of_the_dbc_line() {
         benilla_formats::wow_data_or_skip!();
         let atlas = engine_atlas();
-        let p = placement(Vec2::new(1024.0, 768.0), true);
+        let p = placement(Vec2::new(1024.0, 768.0), true, 1.0);
         let g = tip_glyphs(&atlas, TIP, &p, 0);
         assert_eq!(g.fill.len(), TIP_GLYPHS, "one quad per inked character");
         assert_eq!(g.shadow.len(), g.fill.len());
@@ -689,7 +718,7 @@ mod tests {
         benilla_formats::wow_data_or_skip!();
         for h in [768.0f32, 900.0, 1024.0, 1080.0, 1200.0, 1440.0] {
             let atlas = engine_atlas();
-            let p = placement(Vec2::new(h * 16.0 / 9.0, h), true);
+            let p = placement(Vec2::new(h * 16.0 / 9.0, h), true, 1.0);
             let g = tip_glyphs(&atlas, TIP, &p, 0);
             // `T`, `i`.
             let cell = crate::ui_text::glyph_texels(&g.fill[1].uv);
@@ -763,7 +792,7 @@ mod tests {
             "the tip node never came out of hiding"
         );
         let node = w.get::<Node>(tip).expect("Node");
-        let p = placement(Vec2::new(1024.0, 768.0), true);
+        let p = placement(Vec2::new(1024.0, 768.0), true, 1.0);
         assert_eq!(node.left, Val::Px(p.left));
         assert_eq!(node.bottom, Val::Px(p.bottom));
         assert_eq!(node.width, Val::Px(p.width));
@@ -844,7 +873,7 @@ mod tests {
             .resolution
             .set(1920.0, 1440.0);
         app.update();
-        let want = placement(Vec2::new(1920.0, 1440.0), true);
+        let want = placement(Vec2::new(1920.0, 1440.0), true, 1.0);
         let node = app.world().get::<Node>(tip).unwrap();
         assert_eq!(node.width, Val::Px(want.width));
         assert_eq!(node.bottom, Val::Px(want.bottom));
