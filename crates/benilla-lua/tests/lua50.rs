@@ -369,3 +369,56 @@ fn only_a_newline_ends_a_line() {
     assert_eq!(run("return [[\r\nb]]"), "\r\nb");
     assert_eq!(run("return [[\nb]]"), "b");
 }
+
+/// A `while` condition is at most 100 of 5.0's instructions (`whilestat`, `0x6fd03b`), else
+/// `` `while' condition too complex `` (`0x871d8c`) near the token after it. 5.0 counts what its
+/// code generator emits: a comparison of a local with a numeral is `OP_EQ` and its jump, one
+/// with a global loads it first, a boolean operand is loaded too (`0x701023`), arithmetic is
+/// never folded (`0x701610`), and a constant last term is a jump (`0x6fd00a`, `0x7013b4`).
+#[test]
+fn a_while_condition_is_at_most_100_instructions() {
+    let cond = |terms: &[&str]| {
+        format!(
+            "local x, y = 1, 2 while {} do x = 2 end return x",
+            terms.join(" and ")
+        )
+    };
+    let too_complex = "t:1: `while' condition too complex near `do'";
+    // 50 comparisons of two instructions each.
+    let local = vec!["x == 1"; 50];
+    assert_eq!(run(&cond(&local)), "2");
+    let mut over = vec!["x == 1"; 49];
+    over.push("g == 1");
+    assert_eq!(compile_error(&cond(&over)), too_complex);
+    // Three each with a boolean: 99, then a test of a local, two more.
+    let mut bools = vec!["x ~= true"; 33];
+    assert_eq!(compile_error(&cond(&bools)), "ok");
+    bools.push("y");
+    assert_eq!(compile_error(&cond(&bools)), too_complex);
+    // Three each with a folded sum.
+    let sums = vec!["x ~= 1 + 2"; 34];
+    assert_eq!(compile_error(&cond(&sums[..33])), "ok");
+    assert_eq!(compile_error(&cond(&sums)), too_complex);
+    // A last `true` is 5.0's jump back; a last `false` jumps nowhere.
+    let mut t = vec!["x == 1"; 50];
+    t.push("true");
+    assert_eq!(compile_error(&cond(&t)), too_complex);
+    let mut f = vec!["x == 1"; 50];
+    f.push("false");
+    assert_eq!(compile_error(&cond(&f)), "ok");
+    assert_eq!(compile_error("while true do end"), "ok");
+    // `not` of a folded sum: 5.0's `OP_ADD` and its test and jump, three, or with a second
+    // `OP_NOT`, four (`0x7012be`).
+    for (term, each) in [("not (1 + 2)", 3), ("not not (1 + 2)", 4)] {
+        let n = 100 / each;
+        let fits = vec![term; n];
+        assert_eq!(compile_error(&cond(&fits)), "ok", "{n} of {term}");
+        let over = vec![term; n + 1];
+        assert_eq!(
+            compile_error(&cond(&over)),
+            too_complex,
+            "{} of {term}",
+            n + 1
+        );
+    }
+}

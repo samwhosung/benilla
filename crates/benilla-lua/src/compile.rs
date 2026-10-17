@@ -93,6 +93,10 @@ pub(crate) struct Exp {
     pub k: Kind,
     pub t: i32,
     pub f: i32,
+    /// A `KNum` that 5.1 folded and the client's 5.0 computes when it runs: its `luaK_posfix`
+    /// folds no arithmetic (`0x701610`), so the value is an instruction's result there. A `not`
+    /// keeps it: 5.0's is an `OP_NOT` of that result, where 5.1's is a constant.
+    pub rt: bool,
 }
 
 impl Exp {
@@ -101,7 +105,18 @@ impl Exp {
             k,
             t: NO_JUMP,
             f: NO_JUMP,
+            rt: false,
         }
+    }
+
+    /// A numeral 5.1 folded ([`Exp::rt`]).
+    pub fn is_rt_numeral(&self) -> bool {
+        self.rt && matches!(self.k, Kind::KNum(_))
+    }
+
+    /// A constant 5.1 made of what 5.0 computes ([`Exp::rt`]): a folded numeral or its `not`.
+    fn is_rt(&self) -> bool {
+        self.rt && matches!(self.k, Kind::KNum(_) | Kind::True | Kind::False)
     }
 
     fn has_jumps(&self) -> bool {
@@ -210,6 +225,9 @@ pub(crate) struct FuncState {
     /// jump-range limit is 5.1's.
     cpc: Vec<u32>,
     cpc_next: u32,
+    /// The client's 5.0 code size less 5.1's, summed where their code generators emit
+    /// differently ([`FuncState::code_size50`]).
+    c50_delta: i64,
     pub consts: Vec<Value>,
     kmap: KMap,
     pub protos: Vec<Rc<Proto>>,
@@ -251,12 +269,22 @@ pub(crate) struct FuncState {
 }
 
 impl FuncState {
+    /// The code so far as the client's 5.0 would count it: 5.1's words, and per difference of
+    /// the code generators, each at its site: 5.0 folds no arithmetic (`luaK_posfix`,
+    /// `0x701610`) and only a constant's minus (`luaK_prefix`, `0x701445`); its `luaK_exp2RK`
+    /// makes no constant of `true` or `false` (`0x701023`); and its `luaK_goiftrue` jumps on
+    /// `false` (`0x7011ff`) and `luaK_goiffalse` on `true` (`0x7013b4`), where 5.1 tests them.
+    pub(crate) fn code_size50(&self) -> i64 {
+        self.cpc_next as i64 + self.c50_delta
+    }
+
     pub fn new(source: Bytes, linedefined: u32, key: Key) -> FuncState {
         FuncState {
             code: Vec::new(),
             lines: Vec::new(),
             cpc: Vec::new(),
             cpc_next: 0,
+            c50_delta: 0,
             consts: Vec::new(),
             kmap: KMap::default(),
             protos: Vec::new(),
@@ -830,12 +858,20 @@ impl<'a> Parser<'a> {
         match e.k {
             Kind::Nil => self.nil(reg, 1)?,
             Kind::False | Kind::True => {
+                if e.rt {
+                    // 5.0 names the register its `OP_NOT` writes.
+                    self.fs().c50_delta -= 1;
+                }
                 self.code(Op::LoadBool(reg, e.k == Kind::True), 1)?;
             }
             Kind::K(k) => {
                 self.code(Op::LoadK(reg, k), 1)?;
             }
             Kind::KNum(n) => {
+                if e.rt {
+                    // 5.0 names the register its instruction writes.
+                    self.fs().c50_delta -= 1;
+                }
                 let k = self.number_k(n)?;
                 self.code(Op::LoadK(reg, k), 1)?;
             }
@@ -952,7 +988,13 @@ impl<'a> Parser<'a> {
                     let k = match e.k {
                         Kind::Nil => self.nil_k()?,
                         Kind::KNum(n) => self.number_k(n)?,
-                        k => self.bool_k(k == Kind::True)?,
+                        k => {
+                            // 5.0 loads a boolean into a register, or has its `OP_NOT` there.
+                            if !e.rt {
+                                self.fs().c50_delta += 1;
+                            }
+                            self.bool_k(k == Kind::True)?
+                        }
                     };
                     e.k = Kind::K(k);
                     return Ok(k as Rk + RK_CONST);
@@ -1052,6 +1094,17 @@ impl<'a> Parser<'a> {
     /// `luaK_goiftrue`: falls through when `e` is true, its false jumps kept.
     pub(crate) fn goiftrue(&mut self, e: &mut Exp) -> R<()> {
         self.dischargevars(e)?;
+        if e.is_rt_numeral() {
+            // 5.0 tests the register: `OP_TEST` and its jump.
+            self.fs().c50_delta += 2;
+        } else if e.k == Kind::False {
+            // 5.0 always jumps (`0x7011ff`): one `OP_JMP` for 5.1's load, test and jump. For an
+            // `OP_NOT` it tests the operand instead, as many, the load counted at the discharge.
+            self.fs().c50_delta -= if e.rt { 1 } else { 2 };
+        } else if e.k == Kind::True && e.rt {
+            // 5.0 drops its `OP_NOT` for a test and its jump (`0x7012be`, `0x7012d9`).
+            self.fs().c50_delta += 1;
+        }
         let pc = match e.k {
             Kind::K(_) | Kind::KNum(_) | Kind::True => NO_JUMP,
             Kind::Jmp(pc) => {
@@ -1071,6 +1124,14 @@ impl<'a> Parser<'a> {
     /// `luaK_goiffalse`.
     fn goiffalse(&mut self, e: &mut Exp) -> R<()> {
         self.dischargevars(e)?;
+        if e.k == Kind::True {
+            // 5.0 always jumps (`0x7013b4`): one `OP_JMP` for 5.1's load, test and jump. For an
+            // `OP_NOT` it tests the operand instead, as many, the load counted at the discharge.
+            self.fs().c50_delta -= if e.rt { 1 } else { 2 };
+        } else if e.k == Kind::False && e.rt {
+            // 5.0 drops its `OP_NOT` for a test and its jump (`0x7012be`, `0x7012d9`).
+            self.fs().c50_delta += 1;
+        }
         let pc = match e.k {
             Kind::Nil | Kind::False => NO_JUMP,
             Kind::Jmp(pc) => pc as i32,
@@ -1086,6 +1147,10 @@ impl<'a> Parser<'a> {
 
     fn codenot(&mut self, e: &mut Exp) -> R<()> {
         self.dischargevars(e)?;
+        if e.is_rt() {
+            // 5.0's `OP_NOT` of the register; the result stays one ([`Exp::rt`]).
+            self.fs().c50_delta += 1;
+        }
         match e.k {
             Kind::Nil | Kind::False => e.k = Kind::True,
             Kind::K(_) | Kind::KNum(_) | Kind::True => e.k = Kind::False,
@@ -1120,7 +1185,10 @@ impl<'a> Parser<'a> {
     fn codearith(&mut self, op: BinOpr, e1: &mut Exp, e2: &mut Exp) -> R<()> {
         if let (Some(a), Some(b)) = (e1.is_numeral(), e2.is_numeral()) {
             if let Some(r) = fold(op, a, b) {
+                // 5.0's arithmetic instruction.
+                self.fs().c50_delta += 1;
                 e1.k = Kind::KNum(r);
+                e1.rt = true;
                 return Ok(());
             }
         }
@@ -1199,6 +1267,10 @@ impl<'a> Parser<'a> {
         match op {
             UnOpr::Minus => {
                 if let Some(n) = e.is_numeral() {
+                    if e.rt {
+                        // 5.0's `OP_UNM` of an instruction's result.
+                        self.fs().c50_delta += 1;
+                    }
                     e.k = Kind::KNum(-n);
                     return Ok(());
                 }

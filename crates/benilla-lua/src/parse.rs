@@ -510,7 +510,12 @@ impl<'a> Parser<'a> {
 
     /// `cond`: the jumps taken when the condition is false.
     fn cond(&mut self) -> R<i32> {
-        let mut v = self.expr()?;
+        let v = self.expr()?;
+        self.cond_of(v)
+    }
+
+    /// [`Parser::cond`] of an expression already read.
+    fn cond_of(&mut self, mut v: Exp) -> R<i32> {
         if v.k == Kind::Nil {
             v.k = Kind::False;
         }
@@ -543,10 +548,34 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// 5.1's layout, the body jumping back to the condition. The client's `whilestat`
+    /// (`0x6fcfd0`) copies the condition's code into a buffer of 100 instructions, to emit after
+    /// the body, and a longer condition is `` `while' condition too complex `` (`0x6fd03b`,
+    /// `0x871d8c`) near the token after it. The length is 5.0's
+    /// ([`crate::compile::FuncState::code_size50`]), with its own test at the end: a constant
+    /// condition is `true` there (`0x6fd00a`), which `luaK_goiffalse` (`0x6fd022`) jumps back on,
+    /// and a false or nil one jumps nowhere, where 5.1's `cond` jumps out on false or nil. Two
+    /// gaps of an instruction remain: a constant at index 256 to 261, an operand in 5.0
+    /// (`index + 250 <= 511`, `0x701028`) and loaded in 5.1; and a table constructor, which 5.0
+    /// flushes every 32 items (`0x6fd6d0`) and 5.1 every 50.
     fn whilestat(&mut self, line: u32) -> R<()> {
         self.next()?;
         let whileinit = self.getlabel();
-        let condexit = self.cond()?;
+        let start = self.fsr().code_size50();
+        let v = self.expr()?;
+        // 5.0's last jump less the one counted for 5.1's: each tests anything else alike.
+        let last = match v.k {
+            _ if v.is_rt_numeral() => 0,
+            // 5.0 tests the operand of its `OP_NOT` (`0x7012be`, `0x7012d9`), as 5.1's is counted.
+            Kind::True | Kind::False if v.rt => 0,
+            Kind::K(_) | Kind::KNum(_) | Kind::True => 1,
+            Kind::Nil | Kind::False => -1,
+            _ => 0,
+        };
+        let condexit = self.cond_of(v)?;
+        if self.fsr().code_size50() - start + last > 100 {
+            return Err(self.lx.error("`while' condition too complex"));
+        }
         self.enterblock(true);
         self.checknext(Tok::Do)?;
         self.block()?;
