@@ -554,7 +554,8 @@ impl TextEngine {
     /// (`0x5cb080` mode 0, `0x5cd099`), not at the bitmap's `floor(xMin)`; the bakes put the ink
     /// `pad` columns in (`0x5cf237` plain, `0x5ce481`/`0x5cea7e` outlined, `0x5ce48a`/`0x5cea87` one more for THICK).
     /// Its top sits `pad` rows over FreeType's `bitmap_top`, which the reference's vertical seat
-    /// (`0x5d1360`) hangs from the ascender, so the ink keeps the bitmap's own row.
+    /// (`0x5d1360`) hangs from the ascender, so the ink keeps the bitmap's own row. Only the
+    /// raster's first `ppem` rows are baked ([`em_rows`]), before any ring, and they keep their rows.
     fn ensure_cell(&mut self, face_id: fontdb::ID, ppem: u16, bake: Bake, g: &GlyphRef) {
         let key: GlyphKey = (face_id, g.glyph_id, ppem, bake);
         if self.cells.contains_key(&key) {
@@ -570,15 +571,18 @@ impl TextEngine {
         // seat in whole px.
         let baked = match &outline {
             Some(o) if bake.mono => mono::rasterize(o, ppem).map(|m| {
-                let (rgba, w, h, pad) = mono_cell(&m.bits, m.w, m.h, bake.radius, self.dpi);
+                let (bits, rows) = em_rows(m.bits, m.w, m.h, ppem);
+                let (rgba, w, h, pad) = mono_cell(&bits, m.w, rows, bake.radius, self.dpi);
                 (OwnedCell::Rgba(rgba), w, h, pad, o.bearing(), m.top)
             }),
             Some(o) => smooth::rasterize(o).map(|m| {
-                let (cell, w, h, pad) = self.coverage_cell(m.coverage, m.w, m.h, bake);
+                let (cov, rows) = em_rows(m.coverage, m.w, m.h, ppem);
+                let (cell, w, h, pad) = self.coverage_cell(cov, m.w, rows, bake);
                 (cell, w, h, pad, o.bearing(), m.top)
             }),
             None => self.shaper_raster(g.key).map(|(cov, p, bearing)| {
-                let (cell, w, h, pad) = self.coverage_cell(cov, p.width, p.height, bake);
+                let (cov, rows) = em_rows(cov, p.width, p.height, ppem);
+                let (cell, w, h, pad) = self.coverage_cell(cov, p.width, rows, bake);
                 (cell, w, h, pad, Some(bearing), p.top)
             }),
         };
@@ -869,6 +873,15 @@ fn outline_box(
     (x0 <= x1).then(|| (q(x0), q(x1), q(y0), q(y1)))
 }
 
+/// A raster's first `em` rows, one byte per texel, and how many that is: the reference keeps
+/// `min(em, rows)` of a glyph's rows from the top (`0x5d1195`), `em` being the pixel size its face
+/// is set to (`0x5ca1b5`, `[CGxFont+0x24c]`), which here is the ppem the raster was made at.
+fn em_rows(mut texels: Vec<u8>, w: u32, h: u32, em: u16) -> (Vec<u8>, u32) {
+    let rows = h.min(u32::from(em));
+    texels.truncate((w * rows) as usize);
+    (texels, rows)
+}
+
 /// A baked cell's texels, owned until the sheet copies them ([`Cell`]).
 enum OwnedCell {
     Coverage(Vec<u8>),
@@ -881,6 +894,23 @@ impl OwnedCell {
             OwnedCell::Coverage(c) => Cell::Coverage(c),
             OwnedCell::Rgba(c) => Cell::Rgba(c),
         }
+    }
+}
+
+#[cfg(test)]
+mod em_rows_tests {
+    use super::em_rows;
+
+    #[test]
+    fn a_raster_keeps_at_most_its_em_rows_from_the_top() {
+        let tall: Vec<u8> = (0..12).collect(); // 3 wide, 4 rows
+        assert_eq!(em_rows(tall.clone(), 3, 4, 3), ((0..9).collect(), 3));
+        assert_eq!(em_rows(tall.clone(), 3, 4, 4), (tall.clone(), 4));
+        assert_eq!(
+            em_rows(tall.clone(), 3, 4, 9),
+            (tall, 4),
+            "a short glyph is whole"
+        );
     }
 }
 
@@ -1591,6 +1621,55 @@ mod ppem_tests {
             .map(|row| row.iter().map(|t| format!("{:02x}", t[3])).collect())
             .collect();
         assert_eq!(got, golden);
+    }
+
+    /// A glyph taller than the em keeps its first `em` rows (`0x5d1195`), whatever the bake, and
+    /// they stay where they were. Arial Narrow's `Ò` at 14 px, the chat size, is 15 rows unhinted.
+    #[test]
+    fn an_over_tall_glyph_keeps_its_top_em_rows() {
+        let Some(mut e) = engine_or_skip() else {
+            return;
+        };
+        let face = e.face_for(Some("Fonts\\ARIALN.TTF"));
+        let (info, texels) = cell_texels(&mut e, face, 14, Bake::ring(0), 'Ò');
+        let gid = e.char_cell(face, 14, 'Ò').expect("shaped").glyphs[0].glyph_id;
+        let sfnt = e.faces[face].sfnt.clone().expect("Arial Narrow's tables");
+        let outline = sfnt.outline(gid, 14).expect("outline");
+        let raster = smooth::rasterize(&outline).expect("ink");
+        assert_eq!(raster.h, 15, "the unhinted raster is one row over the em");
+        assert!(
+            raster.coverage[(14 * raster.w) as usize..]
+                .iter()
+                .any(|&c| c >= 16),
+            "its last row has ink that would draw"
+        );
+        assert_eq!((info.px_w, info.px_h), (raster.w as f32, 14.0));
+        assert_eq!(
+            info.bearing_top, raster.top as f32,
+            "the kept rows keep their seat"
+        );
+        let top: Vec<u8> = texels.iter().map(|t| t[3]).collect();
+        let want: Vec<u8> = raster.coverage[..(14 * raster.w) as usize]
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(top, want, "the top 14 rows, not the bottom");
+
+        for (radius, mono) in [(1u8, false), (2, false), (0, true), (2, true)] {
+            let bake = Bake { radius, mono };
+            let (info, _) = cell_texels(&mut e, face, 14, bake, 'Ò');
+            let grow = 2.0 * f32::from(radius);
+            assert_eq!(
+                info.px_h,
+                14.0 + grow,
+                "{bake:?}: an outline grows the em, not the raster"
+            );
+            assert_eq!(
+                info.bearing_top,
+                raster.top as f32 + f32::from(radius),
+                "{bake:?}"
+            );
+        }
     }
 
     /// A cell's left edge is the pen plus `ceil(horiBearingX)`, the quad x of `0x5ccbe0` (`0x5cb080`
