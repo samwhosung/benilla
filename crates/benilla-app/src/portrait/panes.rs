@@ -1023,7 +1023,9 @@ fn build(
     Some(anchors)
 }
 
-/// Aim a pane's camera through its copy's rig at the pane's aspect.
+/// Aim a pane's camera through its copy's rig at the pane's aspect. A camera spawned through
+/// `Commands` this pass is not in the query yet; the pane then stays unaimed and the next pass
+/// aims it.
 fn aim(
     cams: &mut Query<(&mut Transform, &mut Projection, &mut RenderTarget), With<BoothCam>>,
     pane: &mut PaneBooth,
@@ -1034,8 +1036,8 @@ fn aim(
     if let Ok((mut t, mut p, _)) = cams.get_mut(pane.camera) {
         *t = tf;
         *p = proj;
+        pane.aimed = Some(aspect);
     }
-    pane.aimed = Some(aspect);
 }
 
 /// The composite: each drawn pane's target at the pane's rect, premultiplied, at the frame's own
