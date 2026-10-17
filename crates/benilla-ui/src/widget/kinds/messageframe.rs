@@ -102,16 +102,33 @@ impl ScrollingMessageState {
         moved
     }
 
+    /// [`Self::add_with_id`] for a state that has no viewport yet, here eight rows high.
+    #[cfg(test)]
     pub fn add(&mut self, text: String, r: f32, g: f32, b: f32) {
-        self.add_with_id(text, r, g, b, 0);
+        self.add_with_id(text, r, g, b, 0, 8);
     }
 
     /// `AddMessage(text, r, g, b, id)` (`0x792900`, `0x788150`): push the line and drop the oldest
-    /// past `max_lines`; a scrolled-up view stays on the same lines.
-    pub fn add_with_id(&mut self, text: String, r: f32, g: f32, b: f32, id: u32) {
+    /// past `max_lines`. The store leaves the anchor slot where it is, so a scrolled-up view
+    /// stays on the same messages (`0x788220`) and relayouts nothing, except that a full ring
+    /// whose write lands on the topmost shown message, the oldest, scrolls one line newer
+    /// (`0x78819e`-`0x7881bb`, `0x78823f`-`0x78824a`). At the bottom it relayouts at the newest
+    /// (`0x788234`).
+    pub fn add_with_id(
+        &mut self,
+        text: String,
+        r: f32,
+        g: f32,
+        b: f32,
+        id: u32,
+        viewport_rows: usize,
+    ) {
         self.lines_gen = self.lines_gen.wrapping_add(1);
-        // Its relayout (`0x788234`).
-        self.links_dirty = true;
+        let scrolled_up = self.scroll_offset > 0;
+        // A full ring writes over the oldest message, which is the topmost shown one when the
+        // view reaches the top.
+        let overwrites_topmost =
+            scrolled_up && self.lines.len() >= self.max_lines && self.at_top(viewport_rows);
         let line = MessageLine {
             text,
             id,
@@ -123,14 +140,18 @@ impl ScrollingMessageState {
             rows_key: 0,
         };
         self.lines.push_back(line);
-        // Scrolled up: keep the same lines in view as the ring grows below them.
-        if self.scroll_offset > 0 {
-            self.scroll_offset += 1;
-        }
         while self.lines.len() > self.max_lines {
             self.lines.pop_front();
-            // The dropped line was above the view: walk the anchor back down with it.
-            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        }
+        if !scrolled_up {
+            self.links_dirty = true;
+        } else if overwrites_topmost {
+            // The anchor message moves up one place in the ring as the oldest goes, and the
+            // scroll down keeps the view's other messages where they are: the offset holds.
+            self.rearm_walked(viewport_rows);
+        } else {
+            // The same messages stay in view: the new one is one place newer than the anchor.
+            self.scroll_offset += 1;
         }
         self.clamp_scroll();
     }

@@ -94,7 +94,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 } else {
                     (1.0, 1.0, 1.0)
                 };
-                with_smf(lua, &this, |smf| smf.add_with_id(text, r, g, b, id))
+                with_viewport(lua, &this, |smf, rows| {
+                    smf.add_with_id(text, r, g, b, id, rows);
+                })
             },
         )?,
     )?;
@@ -562,6 +564,50 @@ mod tests {
             off + 1,
             "offset tracks so the same lines stay in view"
         );
+    }
+
+    /// A full ring writes over its oldest slot and leaves the anchor slot where it is
+    /// (`0x788150`): a scrolled-up view keeps its messages (`0x788220`), and scrolls one line
+    /// newer only when the write lands on the topmost shown one (`0x78819e`-`0x7881bb`,
+    /// `0x78823f`-`0x78824a`).
+    #[test]
+    fn a_full_ring_holds_a_scrolled_up_view_still() {
+        let full = || {
+            let mut s = ScrollingMessageState {
+                max_lines: 4,
+                ..Default::default()
+            };
+            for n in 0..4 {
+                s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+            }
+            s
+        };
+        let anchor =
+            |s: &ScrollingMessageState| s.lines[s.lines.len() - 1 - s.scroll_offset].text.clone();
+        // Two rows, one line back: l2 l1 are in view, the oldest is not.
+        let mut s = full();
+        s.scroll_up(2);
+        assert_eq!(anchor(&s), "l2");
+        s.add_with_id("l4".into(), 1.0, 1.0, 1.0, 0, 2);
+        assert_eq!(anchor(&s), "l2", "the same messages stay in view");
+        // Now l1 is the oldest and shows, so the next write lands on the topmost shown message.
+        s.add_with_id("l5".into(), 1.0, 1.0, 1.0, 0, 2);
+        assert_eq!(anchor(&s), "l3", "one line newer as the oldest went");
+        // The oldest shows (l1 l0), so the write lands on the topmost shown message.
+        let mut s = full();
+        s.scroll_up(2);
+        s.scroll_up(2);
+        assert_eq!(anchor(&s), "l1");
+        s.add_with_id("l4".into(), 1.0, 1.0, 1.0, 0, 2);
+        assert_eq!(
+            anchor(&s),
+            "l2",
+            "scrolled one line newer as the oldest went"
+        );
+        // At the bottom the view is the newest.
+        let mut s = full();
+        s.add_with_id("l4".into(), 1.0, 1.0, 1.0, 0, 2);
+        assert!(s.at_bottom());
     }
 
     #[test]
@@ -1060,9 +1106,9 @@ mod tests {
     #[test]
     fn update_color_by_id_recolours_only_that_ids_lines() {
         let mut smf = ScrollingMessageState::default();
-        smf.add_with_id("a".into(), 1.0, 1.0, 1.0, 11);
-        smf.add_with_id("b".into(), 1.0, 1.0, 1.0, 1);
-        smf.add_with_id("c".into(), 1.0, 1.0, 1.0, 11);
+        smf.add_with_id("a".into(), 1.0, 1.0, 1.0, 11, 8);
+        smf.add_with_id("b".into(), 1.0, 1.0, 1.0, 1, 8);
+        smf.add_with_id("c".into(), 1.0, 1.0, 1.0, 11, 8);
         smf.add("d".into(), 1.0, 1.0, 1.0);
         let gen = smf.lines_gen;
         assert_eq!(smf.update_color_by_id(11, 0.0, 0.5, 1.0), 2);

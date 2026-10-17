@@ -980,9 +980,10 @@ impl UiScript {
         let Some(h) = model.arena.lookup(frame) else {
             return false;
         };
+        let rows = Self::message_viewport_rows(&model, h);
         match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
             Some(crate::widget::KindState::ScrollingMessage(smf)) => {
-                smf.add(text.to_string(), r, g, b);
+                smf.add_with_id(text.to_string(), r, g, b, 0, rows);
                 true
             }
             _ => false,
