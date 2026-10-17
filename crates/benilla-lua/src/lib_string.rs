@@ -873,7 +873,7 @@ fn gfind_in(vm: &mut Vm, _nargs: usize, [src, cpat]: &mut [Vec<u8>; 2]) -> R<usi
     Ok(0)
 }
 
-/// 5.1's `gsub`: a string, table or function replacement; `nil` or `false` keeps the match.
+/// The client's `str_gsub` (`0x7fd0e0`): 5.0's, a string or a function replacement.
 fn gsub(vm: &mut Vm, nargs: usize) -> R<usize> {
     let mut b = vm.take_bufs::<4>();
     let r = gsub_in(vm, nargs, &mut b);
@@ -888,16 +888,16 @@ fn gsub_in(vm: &mut Vm, nargs: usize, [src, cpat, out, repl_buf]: &mut [Vec<u8>;
     let repl = vm.arg(nargs, 2);
     // `luaL_optint(L, 4, srcl+1)`: the default cast to `int` as C casts it.
     let max_s = vm.opt_int(nargs, 4, (srcl as i64 + 1) as i32)?;
-    // 5.1's `str_gsub`: a string or number, a function, or a table.
+    // `lua_isstring(L, 3) || lua_type(L, 3) == LUA_TFUNCTION`, else `string or function expected`
+    // (`0x7fd163`-`0x7fd195`): no table.
     let kind = match repl.unpack() {
         _ if nargs < 3 => None,
         V::Str(_) | V::Num(_) => Some(0),
         V::Func(_) => Some(1),
-        V::Table(_) => Some(2),
         _ => None,
     };
     let Some(kind) = kind else {
-        return Err(vm.arg_error(3, "string/function/table expected"));
+        return Err(vm.arg_error(3, "string or function expected"));
     };
     if kind == 0 {
         // `lua_tolstring(L, 3)`: a number replacement is its text.
@@ -960,18 +960,7 @@ fn gsub_in(vm: &mut Vm, nargs: usize, [src, cpat, out, repl_buf]: &mut [Vec<u8>;
     Ok(2)
 }
 
-/// 5.1's `push_onecapture`: capture `i`, or the whole match `s..e` for 0 when there are none.
-fn one_capture(vm: &mut Vm, ms: &MatchState, i: usize, s: usize, e: usize) -> R<Value> {
-    if i >= ms.level {
-        if i == 0 {
-            return Ok(vm.str(&ms.src[s..e]));
-        }
-        return Err(pat_err(vm, PatErr("invalid capture index")));
-    }
-    ms.capture_value(vm, i).map_err(|e| pat_err(vm, e))
-}
-
-/// 5.1's `add_value`: one match's replacement onto `out`.
+/// The client's `add_s` (`0x7fd2a0`): one match's replacement onto `out`.
 #[allow(clippy::too_many_arguments)]
 fn add_value(
     vm: &mut Vm,
@@ -983,59 +972,46 @@ fn add_value(
     s: usize,
     e: usize,
 ) -> R<()> {
-    let v = match kind {
-        0 => {
-            // `add_s`: `%0` the whole match, `%1`-`%9` a capture, `%` and anything else itself.
-            vm.check_len(out)?;
-            let mut i = 0;
-            while i < repl_bytes.len() {
-                let c = repl_bytes[i];
-                if c != b'%' {
-                    out.push(c);
-                } else {
-                    i += 1;
-                    let d = repl_bytes.get(i).copied().unwrap_or(0);
-                    if !d.is_ascii_digit() {
-                        out.push(d);
-                    } else if d == b'0' {
-                        vm.reserve(out, e - s)?;
-                        out.extend_from_slice(&ms.src[s..e]);
-                    } else {
-                        let v = one_capture(vm, ms, (d - b'1') as usize, s, e)?;
-                        let sv = vm.tostr(v).unwrap();
-                        vm.reserve(out, vm.heap.str(sv).len())?;
-                        out.extend_from_slice(vm.heap.str(sv));
-                    }
-                }
+    if kind == 0 {
+        // `%` and a digit is a capture through `check_capture` (`0x7fd34d`), so `%0`, and `%1`
+        // with no capture, raise `invalid capture index`; `%` and anything else is that byte.
+        vm.check_len(out)?;
+        let mut i = 0;
+        while i < repl_bytes.len() {
+            let c = repl_bytes[i];
+            if c != b'%' {
+                out.push(c);
+            } else {
                 i += 1;
+                let d = repl_bytes.get(i).copied().unwrap_or(0);
+                if !d.is_ascii_digit() {
+                    out.push(d);
+                } else {
+                    let v = ms
+                        .check_capture(d)
+                        .and_then(|l| ms.capture_value(vm, l))
+                        .map_err(|err| pat_err(vm, err))?;
+                    let sv = vm.tostr(v).unwrap();
+                    vm.reserve(out, vm.heap.str(sv).len())?;
+                    out.extend_from_slice(vm.heap.str(sv));
+                }
             }
-            return Ok(());
+            i += 1;
         }
-        1 => {
-            let caps = ms
-                .captures(vm, Some((s, e)))
-                .map_err(|err| pat_err(vm, err))?;
-            vm.call_value(repl, &caps, 1)?[0]
-        }
-        _ => {
-            let k = one_capture(vm, ms, 0, s, e)?;
-            vm.index(repl, k, None)?
-        }
-    };
-    if !v.truthy() {
-        // Nil or false keeps the matched text.
-        vm.reserve(out, e - s)?;
-        out.extend_from_slice(&ms.src[s..e]);
-    } else if let Some(sv) = matches!(v.unpack(), V::Str(_) | V::Num(_))
+        return Ok(());
+    }
+    let caps = ms
+        .captures(vm, Some((s, e)))
+        .map_err(|err| pat_err(vm, err))?;
+    let v = vm.call_value(repl, &caps, 1)?[0];
+    // A string or number result is added, anything else dropped with the match
+    // (`0x7fd392`-`0x7fd3b7`).
+    if let Some(sv) = matches!(v.unpack(), V::Str(_) | V::Num(_))
         .then(|| vm.tostr(v))
         .flatten()
     {
         vm.reserve(out, vm.heap.str(sv).len())?;
         out.extend_from_slice(vm.heap.str(sv));
-    } else {
-        // `luaL_error`: the position of `gsub`'s caller.
-        let t = v.type_name();
-        return Err(vm.error_at(1, &format!("invalid replacement value (a {t})")));
     }
     Ok(())
 }

@@ -39,3 +39,59 @@ fn string_byte_answers_one_byte() {
     }
     assert_eq!(count("string.byte('')"), ["0"]);
 }
+
+/// `str_gsub` (`0x7fd0e0`) and `add_s` (`0x7fd2a0`): a string or a function replacement, every
+/// `%digit` a checked capture, and a function's result added only when it is a string.
+#[test]
+fn gsub_replaces_as_5_0() {
+    assert_eq!(
+        ok(
+            r#"return string.gsub("a1b2", "%d", function(d) if d == "1" then return "one" end end)"#
+        ),
+        ["aoneb", "2"]
+    );
+    for result in ["false", "true", "{}", "nil"] {
+        assert_eq!(
+            ok(&format!(
+                r#"return string.gsub("a1b", "%d", function() return {result} end)"#
+            )),
+            ["ab", "1"],
+            "a {result} result drops the match"
+        );
+    }
+    assert_eq!(
+        ok(r#"return string.gsub("a1", "%d", function() return 7 end)"#),
+        ["a7", "1"]
+    );
+    assert_eq!(
+        ok(r#"return string.gsub("abc", "(b)", "[%1]")"#),
+        ["a[b]c", "1"]
+    );
+    assert_eq!(
+        ok(r#"return string.gsub("abc", "b", "%%%x")"#),
+        ["a%xc", "1"]
+    );
+    assert_eq!(ok(r#"return string.gsub("abc", "b", 5)"#), ["a5c", "1"]);
+    for repl in [r#""%0""#, r#""%1""#] {
+        assert_eq!(
+            run(&format!(r#"return string.gsub("abc", "b", {repl})"#)),
+            Err("t:1: invalid capture index".into()),
+            "{repl}"
+        );
+    }
+    assert_eq!(
+        run(r#"return string.gsub("abc", "(b)", "%2")"#),
+        Err("t:1: invalid capture index".into())
+    );
+    for repl in ["{b = 'x'}", "nil", "true"] {
+        assert_eq!(
+            run(&format!(r#"return string.gsub("abc", "b", {repl})"#)),
+            Err("t:1: bad argument #3 to `gsub' (string or function expected)".into()),
+            "{repl}"
+        );
+    }
+    assert_eq!(
+        run(r#"return string.gsub("abc", "b")"#),
+        Err("t:1: bad argument #3 to `gsub' (string or function expected)".into())
+    );
+}
