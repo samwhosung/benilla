@@ -503,8 +503,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //   B  else a unit passing the civilian predicate (`0x612550`): `PVP_RANK_CIVILIAN`, a space
     //      and the name. Only creatures reach it.
     //   C  else the plain name.
-    // No snapshot or an unresolved name answers nil, and so does a token resolving to guid 0,
-    // where the reference returns one value it never pushed (`0x517343`).
+    // No snapshot or an unresolved name answers nil.
+    //
+    // Deviation: a token resolving to guid 0 answers nil too. The reference jumps from the guid
+    // test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its
+    // top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer.
     //
     // Deviation: with `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers
     // the plain name, where the reference would format an empty string, because the decoration
