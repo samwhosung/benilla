@@ -35,6 +35,9 @@ mod device;
 #[cfg(not(target_os = "macos"))]
 #[path = "cpal.rs"]
 mod device;
+// The stand-ins `cpal.rs` tries for a default that will not open; tested on every platform.
+#[cfg(any(test, not(target_os = "macos")))]
+mod fallback;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
