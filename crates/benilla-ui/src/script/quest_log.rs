@@ -686,9 +686,10 @@ impl super::UiScript {
 
     /// Fire one `QUEST_LOG_UPDATE` for each missed record that landed, after the frame's landings,
     /// so a handler that walks the log reads every one of them.
-    // Deviation: one signal per missed record, where `DBCache::Set` runs every callback of each
-    // call that missed as its packet lands (`0x562eeb`, `0x4e07ea`, `0x4e083a`), 2^k - 1 for a
-    // walking handler over k landings; it holds while benilla keeps no record cache on disk (#85).
+    // Deviation: one signal per missed record, where the reference runs every callback of every
+    // miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via
+    // `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler
+    // over k first-seen records.
     pub fn flush_quest_log_refires(&mut self) {
         let due = std::mem::take(&mut self.model_mut().quest_store.due);
         for _ in 0..due {
@@ -795,8 +796,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `title, level, tag, isHeader, isCollapsed, isComplete`, always six (`0x4df930`). The index
     // truncates as `_ftol` does, and a missing or non-number one raises `Usage:`; out of range it
     // answers `nil, 0, nil, nil, nil, nil`, and a header's level is 0 too. A quest's title, level
-    // and tag are its record's, `isComplete` its slot's: -1 on the failed bit (`0x4dfa61`); here,
-    // else 1 on the complete bit.
+    // and tag are its record's. `isComplete` is -1 on the slot's failed bit (`0x4dfa61`) and 1 on
+    // its complete bit; the reference's -1 also takes the expiry latch (`0x4df480`) and its 1 is
+    // the turn-in test (`0x4df580`) (#1793).
     g.set(
         "GetQuestLogTitle",
         lua.create_function(|lua, i: Value| {
@@ -962,10 +964,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })?,
         )
     }
-    // The reference counts the reward ids to the first unset one (`0x4e0a34`-`0x4e0a40`); the
-    // record holds the set ones alone.
-    // Deviation: four set ids count 4, where the reference's `cmp ecx,4; jae` skips the store at
-    // `0x4e0a49` and answers 0, a client bug.
+    // The reference counts the reward ids to the first unset one (`0x4e0a34`-`0x4e0a40`), so
+    // `[A, 0, B, 0]` counts 1, and `GetQuestLogRewardInfo` indexes the raw array (`0x4e0b98`);
+    // the record holds the set ids compacted.
+    // Deviation: four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips
+    // the store at `0x4e0a49` and answers 0, a client bug.
     install_detail_count(lua, "GetNumQuestLogRewards", |r| r.rewards.len() as i64)?;
     install_detail_count(lua, "GetNumQuestLogChoices", |r| r.choices.len() as i64)?;
     install_detail_count(lua, "GetQuestLogRewardMoney", |r| i64::from(r.reward_money))?;
