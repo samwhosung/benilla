@@ -312,14 +312,14 @@ mod tests {
         };
         s.add("x".into(), 1.0, 1.0, 1.0);
         // Phase 1: full alpha while timeVisible remains.
-        s.tick(0.5);
+        s.tick(0.5, 8);
         assert_eq!(s.lines[0].alpha, 1.0);
         // 0.5 more spends timeVisible; the ticks after ramp over fadeDuration.
-        s.tick(0.5);
+        s.tick(0.5, 8);
         assert_eq!(s.lines[0].alpha, 1.0, "phase 1 just expired, ramp not yet");
-        s.tick(1.0); // fade_left 2.0 → 1.0 → alpha = trunc(1.0/2.0*255)/255 = 127/255
+        s.tick(1.0, 8); // fade_left 2.0 → 1.0 → alpha = trunc(1.0/2.0*255)/255 = 127/255
         assert!((s.lines[0].alpha - 127.0 / 255.0).abs() < 1e-6);
-        s.tick(1.0); // fade_left → 0 → retired
+        s.tick(1.0, 8); // fade_left → 0 → retired
         assert_eq!(s.lines[0].alpha, 0.0);
     }
 
@@ -331,9 +331,9 @@ mod tests {
             ..Default::default()
         };
         s.add("x".into(), 1.0, 1.0, 1.0);
-        s.tick(0.6); // spends timeVisible, still full this tick
+        s.tick(0.6, 8); // spends timeVisible, still full this tick
         assert_eq!(s.lines[0].alpha, 1.0);
-        s.tick(0.1); // past phase 1 with no ramp: straight to 0
+        s.tick(0.1, 8); // past phase 1 with no ramp: straight to 0
         assert_eq!(s.lines[0].alpha, 0.0);
     }
 
@@ -350,16 +350,16 @@ mod tests {
         assert!(!s.links_dirty, "the ctor clears it");
         s.add("x".into(), 1.0, 1.0, 1.0);
         assert!(std::mem::take(&mut s.links_dirty), "AddMessage relayouts");
-        s.tick(0.6);
-        s.tick(0.5);
+        s.tick(0.6, 8);
+        s.tick(0.5, 8);
         assert!(
             s.lines[0].alpha > 0.0 && !s.links_dirty,
             "mid-ramp: no flag"
         );
-        s.tick(0.6);
+        s.tick(0.6, 8);
         assert_eq!(s.lines[0].alpha, 0.0);
         assert!(std::mem::take(&mut s.links_dirty), "the hide raises it");
-        s.tick(0.6);
+        s.tick(0.6, 8);
         assert!(!s.links_dirty, "a hidden line is not hidden again");
         s.scroll_down(4);
         assert!(
@@ -368,7 +368,8 @@ mod tests {
         );
     }
 
-    /// With a one-row viewport the scroll re-arms one line; the lines either side show the freeze.
+    /// With a one-row viewport the scroll re-arms the line in view and the one past it; the line
+    /// on the other side shows the freeze.
     #[test]
     fn scrolled_up_freezes_the_fade() {
         let mut s = ScrollingMessageState {
@@ -380,20 +381,22 @@ mod tests {
         for n in 0..3 {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
-        s.tick(2.0); // half-way down the ramp: trunc(2.0/4.0*255) = 127
+        s.tick(2.0, 8); // half-way down the ramp: trunc(2.0/4.0*255) = 127
         let half = 127.0 / 255.0;
         assert_eq!(s.lines[0].alpha, half);
-        // Scrolled up, ticks stop; the scroll re-arms only l1, the line now in view.
+        // Scrolled up, ticks stop; the scroll re-arms l1, the line now in view, and l0, the one
+        // the relayout walked that did not fit (`0x7888be`).
         s.scroll_up(1);
         assert!(!s.at_bottom());
         assert_eq!(s.lines[1].alpha, 1.0, "the displayed line was re-armed");
-        s.tick(2.0);
-        assert_eq!(s.lines[0].alpha, half, "frozen while scrolled up");
+        assert_eq!(s.lines[0].alpha, 1.0, "so was the first that did not fit");
+        s.tick(2.0, 8);
+        assert_eq!(s.lines[0].alpha, 1.0, "frozen while scrolled up");
         assert_eq!(s.lines[2].alpha, half);
         assert_eq!(s.lines[1].alpha, 1.0);
         // Back at the bottom, the fade resumes.
         s.scroll_to_bottom(1);
-        s.tick(2.0);
+        s.tick(2.0, 8);
         assert!(s.lines[2].alpha < 1.0);
     }
 
@@ -411,8 +414,8 @@ mod tests {
             for n in 0..3 {
                 s.add(format!("l{n}"), 1.0, 1.0, 1.0);
             }
-            s.tick(1.5); // spend phase 1
-            s.tick(1.5); // spend phase 2: all gone
+            s.tick(1.5, 8); // spend phase 1
+            s.tick(1.5, 8); // spend phase 2: all gone
             assert!(s.lines.iter().all(|l| l.alpha == 0.0), "faded out first");
             op(&mut s, 8);
             s
@@ -441,6 +444,61 @@ mod tests {
         }
     }
 
+    /// The fade ticks the shown messages only (`0x788460`, bounded by `+0x34c`): a line out of view
+    /// keeps its fade where it stopped, and shows at that alpha when the window grows.
+    #[test]
+    fn the_fade_ticks_only_the_shown_messages() {
+        let mut s = ScrollingMessageState {
+            max_lines: 8,
+            time_visible: 0.0,
+            fade_duration: 4.0,
+            ..Default::default()
+        };
+        for n in 0..5 {
+            s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+        }
+        s.tick(2.0, 2); // l3 and l4 are in view
+        let half = 127.0 / 255.0;
+        assert_eq!(s.lines[4].alpha, half);
+        assert_eq!(s.lines[3].alpha, half);
+        for hidden in 0..3 {
+            assert_eq!(s.lines[hidden].alpha, 1.0, "l{hidden} is out of view");
+            assert_eq!(s.lines[hidden].fade_left, 4.0);
+        }
+        s.tick(2.0, 8); // the window grew: all five tick from where each stopped
+        assert_eq!(s.lines[0].alpha, half);
+        assert_eq!(s.lines[4].alpha, 0.0);
+    }
+
+    /// A moving scroll re-arms the messages its relayout walks, the shown ones and the first older
+    /// one that did not fit (`0x788af0` at `0x7888be`); a refused one re-arms the shown only
+    /// (`0x788b80`).
+    #[test]
+    fn a_moving_scroll_re_arms_what_the_relayout_walks() {
+        let faded = || {
+            let mut s = ScrollingMessageState {
+                max_lines: 8,
+                time_visible: 0.0,
+                fade_duration: 1.0,
+                ..Default::default()
+            };
+            for n in 0..5 {
+                s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+            }
+            s.tick(2.0, 8);
+            assert!(s.lines.iter().all(|l| l.alpha == 0.0));
+            s
+        };
+        let alphas =
+            |s: &ScrollingMessageState| s.lines.iter().map(|l| l.alpha).collect::<Vec<_>>();
+        let mut s = faded();
+        s.scroll_up(2); // shows l2 l3 (anchor l3), walks l1 as well
+        assert_eq!(alphas(&s), [0.0, 1.0, 1.0, 1.0, 0.0]);
+        let mut s = faded();
+        s.scroll_down(2); // refused at the bottom: l3 and l4 only
+        assert_eq!(alphas(&s), [0.0, 0.0, 0.0, 1.0, 1.0]);
+    }
+
     /// `0x788b80` walks the lines on display, not the ring.
     #[test]
     fn the_re_arm_reaches_only_the_displayed_lines() {
@@ -453,8 +511,8 @@ mod tests {
         for n in 0..3 {
             s.add(format!("l{n}"), 1.0, 1.0, 1.0);
         }
-        s.tick(1.5);
-        s.tick(1.5);
+        s.tick(1.5, 8);
+        s.tick(1.5, 8);
         s.scroll_down(1); // a no-op scroll at the bottom, one row of viewport
         assert_eq!(s.lines[2].alpha, 1.0, "the one displayed line came back");
         assert_eq!(s.lines[1].alpha, 0.0, "off-screen lines are untouched");
@@ -632,7 +690,7 @@ mod tests {
             for n in 0..count {
                 s.add(format!("l{n}"), 1.0, 1.0, 1.0);
             }
-            s.tick(2.0);
+            s.tick(2.0, 8);
             s.links_dirty = false;
             s.scroll_to_top(8);
             s

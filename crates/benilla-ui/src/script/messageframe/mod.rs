@@ -38,7 +38,7 @@ pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
             mf.trim_to_viewport(rows);
             mf.tick(elapsed);
         }
-        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed),
+        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed, rows),
         _ => {}
     }
 }

@@ -181,15 +181,29 @@ impl ScrollingMessageState {
         self.scroll_offset = self.scroll_offset.min(self.max_scroll());
     }
 
-    /// Re-arm the fade of the displayed lines only, on a frame with lines (`0x788b80`): full alpha and the frame's
-    /// current `timeVisible`/`fadeDuration`, so even a fully faded line comes back (expiry frees
-    /// nothing, `0x788525`). Engine-only, not a 1.12 Lua verb; every scroll entry reaches it.
+    /// Re-arm the fade of the displayed lines only, on a frame with lines (`0x788b80`): full alpha
+    /// and the frame's current `timeVisible`/`fadeDuration`, so even a fully faded line comes back
+    /// (expiry frees nothing, `0x788525`). The refused scroll's re-arm; a scroll that moves
+    /// re-arms [`Self::rearm_walked`]. Engine-only, not a 1.12 Lua verb.
     pub fn reset_all_fade_times(&mut self, viewport_rows: usize) {
         // Both a refused scroll's re-arm (`0x788bf1`) and a moving one's relayout (`0x788a8e`)
         // mark the links for rebuild.
         self.links_dirty = true;
+        self.rearm(self.displayed_range(viewport_rows));
+    }
+
+    /// A moving scroll's re-arm: the relayout re-arms each message it walks (`0x788af0` at
+    /// `0x7888be`, before the fit test at `0x7889b3`), so the first older message that did not
+    /// fit is re-armed with the displayed ones, though it is not shown and never ticks.
+    fn rearm_walked(&mut self, viewport_rows: usize) {
+        self.links_dirty = true;
+        let shown = self.displayed_range(viewport_rows);
+        self.rearm(shown.start.saturating_sub(1)..shown.end);
+    }
+
+    fn rearm(&mut self, range: std::ops::Range<usize>) {
         let (time_visible, fade_duration) = (self.time_visible, self.fade_duration);
-        for line in self.lines.range_mut(self.displayed_range(viewport_rows)) {
+        for line in self.lines.range_mut(range) {
             line.time_left = time_visible;
             line.fade_left = fade_duration;
             line.alpha = 1.0;
@@ -232,8 +246,10 @@ impl ScrollingMessageState {
         let moved = !self.at_top(viewport_rows);
         if moved {
             self.scroll_offset += 1;
+            self.rearm_walked(viewport_rows);
+        } else {
+            self.reset_all_fade_times(viewport_rows);
         }
-        self.reset_all_fade_times(viewport_rows);
         moved
     }
 
@@ -243,8 +259,12 @@ impl ScrollingMessageState {
             return false;
         }
         let moved = !self.at_bottom();
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-        self.reset_all_fade_times(viewport_rows);
+        if moved {
+            self.scroll_offset -= 1;
+            self.rearm_walked(viewport_rows);
+        } else {
+            self.reset_all_fade_times(viewport_rows);
+        }
         moved
     }
 
@@ -254,8 +274,14 @@ impl ScrollingMessageState {
         if self.lines.is_empty() {
             return;
         }
+        // At the bottom it is the refused re-arm (`0x7886e5`); else the relayout's.
+        let moved = !self.at_bottom();
         self.scroll_offset = 0;
-        self.reset_all_fade_times(viewport_rows);
+        if moved {
+            self.rearm_walked(viewport_rows);
+        } else {
+            self.reset_all_fade_times(viewport_rows);
+        }
     }
 
     /// `ScrollToTop` (`0x788690`): the oldest line as the anchor, then re-arm, as its relayout
@@ -271,7 +297,7 @@ impl ScrollingMessageState {
         if stays_at_bottom {
             self.links_dirty = true;
         } else {
-            self.reset_all_fade_times(viewport_rows);
+            self.rearm_walked(viewport_rows);
         }
     }
 
@@ -326,12 +352,14 @@ impl ScrollingMessageState {
     /// scroll entries, not this, bring faded lines back. Both countdowns store `f32` while the
     /// ramp reads the unrounded x87 value (`fst` without pop, `0x7884d7`, `0x788544`), and phase
     /// 1's overshoot is dropped, so the fade starts whole on the next tick.
-    pub fn tick(&mut self, dt: f32) {
+    pub fn tick(&mut self, dt: f32, viewport_rows: usize) {
         if !self.fading_enabled || !self.at_bottom() {
             return;
         }
         let dt = f64::from(dt);
-        for line in &mut self.lines {
+        // Only the shown messages: the loop is bounded by the shown count (`0x78849b`,
+        // `0x788582`), so a line out of view keeps its fade where it stopped.
+        for line in self.lines.range_mut(self.displayed_range(viewport_rows)) {
             if line.time_left > 0.0 {
                 line.time_left = ((f64::from(line.time_left) - dt).max(0.0)) as f32;
                 continue;
