@@ -266,6 +266,10 @@ first newline skipped]], [=[
 also]=], [[a
 b]])"#),
     // ── Table layout, which `pairs` order shows ──
+    // The orders of `pairs_constructors`, `pairs_mixed`, `fix-front_setlist_order` and
+    // `fix-vm dead_keys` are the client's, run in its own `ltable.c` (`0x6fa1a0`..`0x6fad80`):
+    // `n` keys sit in `2^(log2(n)+1)` nodes, the constructor's `luaO_log2(nh) + 1` (`0x6fd563`)
+    // and `rehash`'s (`0x6fa9e5`), so an eight-key constructor walks otherwise than 5.1's.
     ("pairs_constructors", r#"local o = {}
         for n = 1, 20 do
           local parts = {}
@@ -275,8 +279,7 @@ b]])"#),
           table.insert(o, table.concat(ks, " "))
         end
         return table.concat(o, " | ")"#),
-    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0; the hash
-    // part is still sized as 5.1 sizes it (#1487), so this order is not yet the client's.
+    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0.
     ("pairs_mixed", r#"local function keys(t) local ks = {} for k, v in pairs(t) do table.insert(ks, tostring(k) .. "=" .. tostring(v)) end return table.concat(ks, " ") end
         local a = {1, 2, 3, x = 1, y = 2, [10] = 5, [1.5] = 6, [-1] = 7, z = 3}
         local b = {} for i = 1, 10 do b[i] = i end b[5] = nil b[20] = 20 b.k = 1
@@ -318,6 +321,12 @@ b]])"#),
         return S(E(function() return a <= b end), E(function() return b >= a end), a < b)"#),
     ("varargs_arg", r#"local function f(...) return arg.n, arg[1], arg[3] end
         return S(E(f, 1, nil, 3), E(function(a, ...) return a, arg.n end, 9))"#),
+    // Not the client's order: the script host builds these tables from 5.1's registrations and
+    // deletes what 1.12 lacks, where the client's `luaL_openlib` (`0x6f4dc0`) fills an empty table
+    // from its own arrays, which gives `string: sub gfind rep gsub char dump find upper len
+    // format byte lower | table: setn insert getn foreachi foreach sort remove concat | math: log
+    // atan ldexp deg tan cos pi random randomseed frexp ceil floor rad max sqrt pow asin min mod
+    // exp log10 atan2 acos sin abs`, and `bit` as here.
     ("pairs_libraries", r#"local o = {}
         for _, lib in ipairs({"string", "table", "math", "bit"}) do
           local ks = {} for k in pairs(_G[lib]) do table.insert(ks, k) end
@@ -349,8 +358,9 @@ b]])"#),
         end
         return table.concat(o, " ")"#),
     // ── fix-front: the single-pass front end, 5.1.5's `lparser.c` and `lcode.c` ──
-    // Number keys hash as the client's `hashnum` (`0x6fa260`) does, the key plus 1.0; the hash
-    // part is still sized as 5.1 sizes it (#1487), so this order is not yet the client's.
+    // 5.0's `OP_SETLIST` stores every 32 items (`0x6fd6d0`), each by `luaH_setnum` (`0x6f95b1`)
+    // into the array part `OP_NEWTABLE` sized, and a trailing call counts as one item toward that
+    // size (`0x6fd72b`).
     ("fix-front_setlist_order", r#"local function K(t) local o = {} for k in pairs(t) do table.insert(o, tostring(k)) end return table.concat(o, " ") end
         local function list(n) local o = {} for i = 1, n do o[i] = i end return table.concat(o, ",") end
         local function f() return 1, 2, 3 end
@@ -649,9 +659,10 @@ b]])"#),
           table.insert(o, E(function() local t = chain(n, "__newindex") t.y = 1 return "set" end))
         end
         return table.concat(o, "|")"#),
-    // A collection marks a deleted key dead (5.1.5's `removeentry`): a key set again takes a new
-    // node by `newkey`'s rules, not its old one, so `pairs` order shows it. A key equal to an
-    // existing one keeps that key, `-0` or `0`.
+    // A collection leaves a deleted key whose string lives in its node (5.0's `traversetable`
+    // passes an empty entry by, `0x6f76be`), so a key set again finds its old node, as it does
+    // with no collection: each pair of orders is one. A key equal to an existing one keeps that
+    // key, `-0` or `0`.
     ("fix-vm dead_keys", r#"local function order(t) local o = {} for k in pairs(t) do table.insert(o, k) end return table.concat(o, " ") end
         local o = {}
         for _, c in {{5, 4}, {6, 5}, {7, 6}, {8, 4}, {13, 10}, {14, 14}} do

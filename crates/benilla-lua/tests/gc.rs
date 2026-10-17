@@ -301,11 +301,12 @@ fn a_snapshot_counts_its_own_growth() {
     );
 }
 
-/// 5.1.5's dead keys: a collection marks a deleted string key dead, so setting it again takes a
-/// node by `newkey`'s rules, and `pairs` walks in the C build's order; a number key is never
-/// dead, and one equal to it keeps its bits.
+/// A collection leaves a deleted key whose string lives (here the chunk's constant `k4`) in its
+/// node, as the client's `traversetable` passes an empty entry by (`0x6f76be`): setting it again
+/// takes the same node, with a collection between or none, the client's order for both. A number
+/// key is never dead, and one equal to it keeps its bits.
 #[test]
-fn a_collected_deleted_key_is_set_again_as_a_new_one() {
+fn a_collected_deleted_key_is_set_again_in_its_node() {
     let mut vm = benilla_lua::new_state();
     let order = "local function order(t) local o = {} for k in pairs(t) do table.insert(o, k) end \
                  return table.concat(o, ' ') end ";
@@ -315,7 +316,7 @@ fn a_collected_deleted_key_is_set_again_as_a_new_one() {
             &mut vm,
             &format!("{order}{set} collectgarbage() t.k4 = 0 return order(t)")
         ),
-        "k4 k5 k1 k3 k2"
+        "k5 k1 k4 k3 k2"
     );
     assert_eq!(
         run(&mut vm, &format!("{order}{set} t.k4 = 0 return order(t)")),
