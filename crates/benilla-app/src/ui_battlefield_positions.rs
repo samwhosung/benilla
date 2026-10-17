@@ -119,6 +119,8 @@ fn feed_battlefield_positions(
         fresh,
         ..
     } = &mut *state;
+    // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
+    // which goes to the server, not the VM.
     let ask = Ask::at(std::mem::take(fresh), &commands);
     let (Some(map), Some(packet)) = (active, packet.as_ref()) else {
         let key = Some((false, icon_scale.to_bits()));

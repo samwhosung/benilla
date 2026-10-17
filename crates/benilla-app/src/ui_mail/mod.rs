@@ -273,7 +273,7 @@ pub(crate) fn send_query_next_mail_time_on_enter(
     commands: Res<NetCommands>,
     mut mail: ResMut<MailOpen>,
     mut pending: ResMut<MailPending>,
-    items: Res<Items>,
+    items: Option<Res<Items>>,
     stationery: Option<Res<Stationery>>,
 ) {
     if cascades.read().next().is_some() {
@@ -281,8 +281,10 @@ pub(crate) fn send_query_next_mail_time_on_enter(
         if let Some(mut script) = script {
             script.reset_mail_world_state();
         }
-        for row in stationery.iter().flat_map(|s| s.0.rows()) {
-            items.template(row.item, 0, Ask::Event(&commands));
+        if let Some(items) = items.as_deref() {
+            for row in stationery.iter().flat_map(|s| s.0.rows()) {
+                items.template(row.item, 0, Ask::Event(&commands));
+            }
         }
         pending.on_query_sent();
         let _ = commands.0.send(ClientCommand::QueryNextMailTime);

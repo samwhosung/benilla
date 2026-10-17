@@ -1012,6 +1012,8 @@ fn feed_trade(
     }
     // The owed `%s` lines, resolved here where the name cache is; a miss waits for the query it
     // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
+    // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
+    // which goes to the server, not the VM.
     let asked = std::mem::take(&mut trade.named_lines_asked);
     for (i, line) in trade.take_named_lines().into_iter().enumerate() {
         // The status arms print nothing once the player is no longer an object.

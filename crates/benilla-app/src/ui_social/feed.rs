@@ -61,6 +61,8 @@ pub(super) fn feed_social(
     // A name is asked at its packet's lookup ([`SocialState::name_events`]); a new VM reads every
     // list afresh.
     let first = !fed.seeded;
+    // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
+    // which goes to the server, not the VM.
     let name_events = std::mem::take(&mut social.name_events);
     let ask = |guid: u64| Ask::at(first || name_events.contains(&guid), &commands);
     if !fed.lfg_pushed {
