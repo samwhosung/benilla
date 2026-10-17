@@ -332,3 +332,30 @@ fn the_math_library_answers_the_clients_specials() {
         ]
     );
 }
+
+/// 5.0's `ipairs` (`0x702cd0`), each answer the client's own, run in its opened state: a loop's
+/// start answers the global `ipairs`, the table and 0; a second argument, even nil, steps once;
+/// a loop keeps the generator it started with, which is the global read at its start.
+#[test]
+fn ipairs_answers_as_the_clients() {
+    assert_eq!(
+        ok("local t = {10, 20, 30}
+            local f, s, i = ipairs(t)
+            local k, v = ipairs(t, 0)
+            local k2, v2 = ipairs(t, 2)
+            local k4, v4 = ipairs(t, nil)
+            return f == ipairs, s == t, i, k, v, k2, v2, ipairs(t, 3) == nil, k4, v4"),
+        ["true", "true", "0", "1", "10", "3", "30", "true", "1", "10"]
+    );
+    assert_eq!(
+        ok("local t, n, orig = {10, 20, 30}, 0, ipairs
+            for i, v in ipairs(t) do n = n + v if i == 1 then ipairs = function() end end end
+            ipairs = orig
+            local seen = 0
+            ipairs = function(t, i) if i == nil then return orig(t) end seen = seen + 1 return orig(t, i) end
+            for i, v in orig(t) do end
+            ipairs = orig
+            return n, seen"),
+        ["60", "4"]
+    );
+}

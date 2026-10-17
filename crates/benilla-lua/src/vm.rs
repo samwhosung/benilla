@@ -132,6 +132,7 @@ pub struct Names {
     pub tostring: StrRef,
     pub n: StrRef,
     pub next: StrRef,
+    pub ipairs: StrRef,
 }
 
 #[derive(Clone)]
@@ -417,6 +418,7 @@ impl Vm {
             tostring: s(b"__tostring"),
             n: s(b"n"),
             next: s(b"next"),
+            ipairs: s(b"ipairs"),
         };
         // `f_luaopen`: the globals by `luaH_new(L, 0, 4)` (`0x6f6e62`), the registry by
         // `luaH_new(L, 4, 4)` (`0x6f6e87`).

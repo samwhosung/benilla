@@ -41,9 +41,7 @@ pub fn open(vm: &mut Vm, host: crate::heap::NativeFn) {
     vm.register("setfenv", setfenv);
     vm.register("next", next);
     vm.builtin_next = vm.get_global("next");
-    let aux = vm.new_native("ipairs_aux", ipairs_aux);
-    let ip = vm.new_closure("ipairs", ipairs, vec![aux]);
-    vm.set_global("ipairs", ip);
+    vm.register("ipairs", ipairs);
     // `0x702da0`: the global `next`, read raw, as the generator.
     vm.register("pairs", pairs);
     vm.register("type", type_);
@@ -200,26 +198,28 @@ fn pairs(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(3)
 }
 
-/// 5.1's `ipairs`: its iterator, the table and 0.
+/// 5.0's `ipairs` (`0x702cd0`). With no second argument (none, not nil) and so a count of 0, a
+/// loop's start: the global `ipairs` read raw, the table and 0 (`0x702d15`..`0x702d41`); the
+/// loop then calls what it was given, whatever the global holds later. Otherwise one step: the
+/// count plus 1 and the table's raw value there, or nothing at a nil (`0x702d50`..`0x702d8e`).
 pub(crate) fn ipairs(vm: &mut Vm, nargs: usize) -> R<usize> {
+    let a2 = vm.arg(nargs, 1);
+    let n = vm.tonumber(a2).unwrap_or(0.0);
     let t = vm.check_table(nargs, 1)?;
-    let aux = vm.upvalue(0);
-    vm.push(aux);
-    vm.push(Value::Table(t));
-    vm.push(Value::Num(0.0));
-    Ok(3)
-}
-
-/// 5.1's `ipairsaux`: the next index and its value, or nothing at the first nil.
-pub(crate) fn ipairs_aux(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let i = vm.check_int(nargs, 2)?;
-    let t = vm.check_table(nargs, 1)?;
-    let i = i.wrapping_add(1);
-    let v = vm.heap.table(t).get_int(i);
+    if n == 0.0 && nargs < 2 {
+        let g = vm.heap.table(vm.globals).get(Value::Str(vm.names.ipairs));
+        vm.push(g);
+        vm.push(Value::Table(t));
+        vm.push(Value::Num(0.0));
+        return Ok(3);
+    }
+    let n = n + 1.0;
+    // `_ftol`: toward zero.
+    let v = vm.heap.table(t).get_int(n as i32);
     if v.is_nil() {
         return Ok(0);
     }
-    vm.push(Value::Num(i as f64));
+    vm.push(Value::Num(n));
     vm.push(v);
     Ok(2)
 }
