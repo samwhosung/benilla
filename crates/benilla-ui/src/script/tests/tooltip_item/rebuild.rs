@@ -151,14 +151,18 @@ fn a_trade_targets_key_answer_adds_its_locked_with_line_without_a_rehover() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The maker's name answers the name cache (`0x52e1f4`): the bag slot's view carries it once the
-/// app re-pushes it, and the tooltip that lacked it rebuilds with the line.
+/// The maker's name answers the name cache (`0x52e1f4`): each build that misses it asks the app,
+/// the bag slot's view carries it once the app re-pushes it, and the tooltip that lacked it
+/// rebuilds with the line.
 #[test]
 fn a_made_by_name_that_arrives_adds_its_line() {
     let mut s = fixture();
     s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)")
         .unwrap();
     assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    assert_eq!(s.take_item_name_asks(), vec![SMITH], "the build asks the app");
+    s.run("TT:SetBagItem(0, 1)").unwrap();
+    assert_eq!(s.take_item_name_asks(), vec![SMITH], "and so does the next");
     s.set_container(0, Some(backpack((SMITH, Some("Smith")))));
     s.tick(0.1);
     assert_eq!(
@@ -320,6 +324,7 @@ fn a_charters_petition_answer_adds_its_lines() {
     s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetBagItem(0, 1)")
         .unwrap();
     assert_eq!(lines(&mut s, "TT"), ["Charter", "[ITEM_SIGNABLE]"]);
+    assert_eq!(s.take_petition_asks(), vec![0x4000_0000_0000_0009], "the build asks the app");
     s.set_container(
         0,
         Some(charter(Some(PetitionSlotView {
@@ -338,6 +343,7 @@ fn a_charters_petition_answer_adds_its_lines() {
             "[ITEM_SIGNABLE]"
         ]
     );
+    assert!(s.take_petition_asks().is_empty(), "an answered build asks nothing");
     assert!(s.take_errors().is_empty());
 }
 

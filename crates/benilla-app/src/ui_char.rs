@@ -503,7 +503,6 @@ fn slot_view(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    commands: &NetCommands,
     names: &crate::names::NameCache,
     // `ItemSubClass.dbc`, for the count gate below; absent, every bag counts 0.
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
@@ -534,14 +533,12 @@ fn slot_view(
     // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
     // the enchant lines below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
-    // The tooltip build looks the creator up with a callback (`0x52e204`), which no event here
-    // marks: it is asked when it first shows.
-    let creator = obj.item_creator().filter(|&g| g != 0).and_then(|g| {
-        names
-            .resolve_player(g, Ask::New(commands))
-            .map(str::to_string)
-    });
-    let gift_creator = crate::items::gift_creator_name(obj, names, commands);
+    // Only read: the tooltip build asks the creator (`crate::ui_items::feed::ask_item_build_lookups`).
+    let creator = obj
+        .item_creator()
+        .filter(|&g| g != 0)
+        .and_then(|g| names.resolve_player(g, Ask::Read).map(str::to_string));
+    let gift_creator = crate::items::gift_creator_name(obj, names);
     let (creator_guid, gift_creator_guid) = crate::items::creator_guids(obj);
     // All seven enchant slots: our own gear streams as item objects, where an inspected player's
     // descriptor carries only two.
@@ -737,7 +734,6 @@ fn inventory_slots(
             items,
             icons,
             rolls,
-            commands,
             names,
             sub_classes,
             has_relic_slot,
@@ -756,7 +752,6 @@ fn bank_bag_slots(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    commands: &NetCommands,
     names: &crate::names::NameCache,
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
 ) -> BankBagSlots {
@@ -770,7 +765,6 @@ fn bank_bag_slots(
             items,
             icons,
             rolls,
-            commands,
             names,
             sub_classes,
             // A bank bag slot holds a bag; the relic flag decides INVSLOT 17 alone.
@@ -891,7 +885,6 @@ pub(crate) fn feed_char(
             enchants: enchants.as_deref(),
             props: props.as_deref(),
         },
-        &commands,
         &names,
         sub_classes.as_deref(),
     );
@@ -982,8 +975,6 @@ mod tests {
     #[test]
     fn a_worn_bag_view_counts_its_filled_seats() {
         use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         // `OBJECT_FIELD_TYPE` container, `CONTAINER_FIELD_NUM_SLOTS` 4, seat 2 filled.
         objs.spawn_container(
@@ -1011,7 +1002,6 @@ mod tests {
                 &items,
                 None,
                 crate::items::RollCatalogs::NONE,
-                &commands,
                 &names,
                 None,
                 false,

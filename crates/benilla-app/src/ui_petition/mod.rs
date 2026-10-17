@@ -246,10 +246,10 @@ impl PetitionState {
         );
     }
 
-    /// The charter tooltip's line 3, the guild name and its master: the hover asks for the record,
-    /// so an unseen charter reads `None` until the answer repaints it.
+    /// The charter tooltip's line 3, the guild name and its master, `None` for an unseen charter
+    /// until the answer repaints it.
     pub(crate) fn tooltip_view(
-        &mut self,
+        &self,
         petition_id: u32,
         item: u64,
         names: &NameCache,

@@ -34,7 +34,8 @@ use drain::{
 // `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
 pub(crate) use drain::ScriptItemUse;
 use feed::{
-    feed_containers, feed_item_sets, feed_item_stats, feed_player_req, feed_random_properties,
+    ask_item_build_lookups, feed_containers, feed_item_sets, feed_item_stats, feed_player_req,
+    feed_random_properties,
 };
 
 /// The backpack's capacity (`PLAYER_FIELD_PACK_SLOT_1..`).
@@ -1023,6 +1024,7 @@ impl Plugin for UiItemsPlugin {
                     // next frame sees the answer.
                     feed_item_stats.in_set(UnitFeed),
                     feed_item_sets.in_set(UnitFeed),
+                    ask_item_build_lookups.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
                     feed_player_req.in_set(UnitFeed),

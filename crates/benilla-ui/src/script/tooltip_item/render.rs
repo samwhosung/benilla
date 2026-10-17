@@ -196,10 +196,9 @@ pub(super) fn render_view_flagged(
             Some(_) => None,
         };
         if let Some(wait) = wait {
-            note_miss(
-                &mut lua.app_data_mut::<Model>().expect("model app_data"),
-                wait,
-            );
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model.petition_asks.insert(i.guid);
+            note_miss(&mut model, wait);
         }
     }
     if let Some(p) = inst.and_then(|i| i.petition.as_ref()) {
@@ -717,10 +716,9 @@ pub(super) fn render_view_flagged(
         false => (&inst.creator, inst.creator_guid),
     };
     if asked.is_none() && guid != 0 {
-        note_miss(
-            &mut lua.app_data_mut::<Model>().expect("model app_data"),
-            CacheWait::Name(guid),
-        );
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        model.item_name_asks.insert(guid);
+        note_miss(&mut model, CacheWait::Name(guid));
     }
     if inst.wrapped() {
         if let Some(name) = &inst.gift_creator {

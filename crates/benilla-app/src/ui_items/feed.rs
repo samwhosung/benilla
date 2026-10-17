@@ -653,12 +653,11 @@ fn resolve_slot(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    commands: &NetCommands,
     cooldowns: &crate::spell::Cooldowns,
     spells: Option<&benilla_formats::SpellCatalog>,
     names: &crate::names::NameCache,
     // Mutable: reading a charter's record is what queries it.
-    petitions: &mut crate::ui_petition::PetitionState,
+    petitions: &crate::ui_petition::PetitionState,
     now: std::time::Instant,
     ui_now: f64,
     // The class's `ChrClasses.dbc` relic flag, which decides slot 17 for every fit-rule read.
@@ -688,13 +687,11 @@ fn resolve_slot(
         // `PageText` book does not set it.
         fields.item_text_id().is_some_and(|id| id != 0),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
-        // name query answers. The tooltip build looks it up with a callback (`0x52e204`), which
-        // no event here marks: it is asked when it first shows.
-        fields.item_creator().filter(|&g| g != 0).and_then(|g| {
-            names
-                .resolve_player(g, Ask::New(commands))
-                .map(str::to_string)
-        }),
+        // name query answers. The tooltip build asks it ([`ask_item_build_lookups`]).
+        fields
+            .item_creator()
+            .filter(|&g| g != 0)
+            .and_then(|g| names.resolve_player(g, Ask::Read).map(str::to_string)),
         // The tooltip's unlocked (0x4) and wrapped (0x8) bits.
         fields.item_flags().unwrap_or(0),
         // `0x5da2c0`: soulbound, or carrying a binding enchant, off the raw descriptor.
@@ -715,7 +712,7 @@ fn resolve_slot(
             rolls.enchants,
         ),
     );
-    let gift_creator = crate::items::gift_creator_name(fields, names, commands);
+    let gift_creator = crate::items::gift_creator_name(fields, names);
     let (creator_guid, gift_creator_guid) = crate::items::creator_guids(fields);
     // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
     let occupied_seats = fields.is_container().then(|| {
@@ -760,14 +757,14 @@ fn resolve_slot(
         use_spell: t.use_spell.map_or(0, |u| u.spell_id),
         // A charter's guild name and master, keyed by the petition id the server puts in
         // enchantment slot 0 (`PetitionsHandler.cpp:126`), where the reference reads it
-        // (`0x5ef337`) and its enchant lines skip it (`0x52c9e0`). The first hover sends the query.
+        // (`0x5ef337`) and its enchant lines skip it (`0x52c9e0`). The tooltip build asks it.
         petition: (t.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0)
             .then(|| {
                 let id = objects
                     .object(guid)
                     .and_then(|f| f.item_enchant(0))
                     .unwrap_or(0);
-                petitions.tooltip_view(id as u32, guid, names, Ask::New(commands))
+                petitions.tooltip_view(id as u32, guid, names, Ask::Read)
             })
             .flatten(),
         texture: icons
@@ -902,6 +899,45 @@ fn bag_family_name(
     families.name(family).map(str::to_string)
 }
 
+/// The item build's own lookups, asked as it asks them. The creator's and the giver's names
+/// (`0x52e204`, `0x52e29d`) and a charter's record and owner (`0x52b93b`, `0x52b9d2`) pass a
+/// callback at every build, and a hovered bag or paper-doll slot builds again each frame
+/// (`ContainerFrameItemButton_OnUpdate`, `PaperDollItemSlotButton_OnUpdate` run their `OnEnter`
+/// while the tooltip is theirs), so a refused key is asked again about once per answer. The slot
+/// feeds only read what lands.
+pub(super) fn ask_item_build_lookups(
+    script: Option<NonSendMut<UiScript>>,
+    names: Res<crate::names::NameCache>,
+    petitions: Res<crate::ui_petition::PetitionState>,
+    objects: Objects,
+    commands: Res<NetCommands>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    // The petition id rides enchantment slot 0 (`0x5ef337`).
+    let petition_id =
+        |item| objects.object(item).and_then(|f| f.item_enchant(0)).unwrap_or(0) as u32;
+    let asks = (script.take_item_name_asks(), script.take_petition_asks());
+    ask_build_lookups(asks, petition_id, &names, &petitions, &commands);
+}
+
+/// One run's asks: the build's missed names, then its charters' records and owners.
+fn ask_build_lookups(
+    (name_asks, petition_asks): (Vec<u64>, Vec<u64>),
+    petition_id: impl Fn(u64) -> u32,
+    names: &crate::names::NameCache,
+    petitions: &crate::ui_petition::PetitionState,
+    commands: &NetCommands,
+) {
+    for guid in name_asks {
+        names.resolve_player(guid, Ask::Event(commands));
+    }
+    for item in petition_asks {
+        petitions.tooltip_view(petition_id(item), item, names, Ask::Event(commands));
+    }
+}
+
 #[allow(clippy::type_complexity)] // the param list is the input set
 pub(crate) fn feed_containers(
     script: Option<NonSendMut<UiScript>>,
@@ -915,7 +951,6 @@ pub(crate) fn feed_containers(
         Option<Res<crate::items::RandomProperties>>,
     ),
     mut inv: crate::items::Inventory,
-    commands: Res<NetCommands>,
     cooldowns: Res<crate::spell::Cooldowns>,
     spells: Option<Res<crate::ui_action::Spells>>,
     equip: (ResMut<EquipErrors>, crate::ui_action::MessageSink),
@@ -923,10 +958,9 @@ pub(crate) fn feed_containers(
     bag_families: Option<Res<crate::ui_items::ItemBagFamilies>>,
     mut opens: ResMut<super::net::BagOpens>,
     names: Res<crate::names::NameCache>,
-    // The petition cache is mutable: a charter's hover is what queries it.
     clock_and_petitions: (
         Res<crate::ui_script::UiClock>,
-        ResMut<crate::ui_petition::PetitionState>,
+        Res<crate::ui_petition::PetitionState>,
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
 ) {
@@ -939,7 +973,7 @@ pub(crate) fn feed_containers(
         }
         return;
     };
-    let (clock, mut petitions) = clock_and_petitions;
+    let (clock, petitions) = clock_and_petitions;
     let (memory, vm_reset) = memory.get_reset(&script);
     // The snapshot is a function of these inputs; the stores' counters stand in for their
     // `is_changed`, which lazy resolves make always true. `UiClock` is not an input: a running
@@ -1087,11 +1121,10 @@ pub(crate) fn feed_containers(
                 &items,
                 icons.as_deref(),
                 rolls,
-                &commands,
                 &cooldowns,
                 spell_catalog,
                 &names,
-                &mut petitions,
+                &petitions,
                 now,
                 ui_now,
                 has_relic_slot,
@@ -1143,11 +1176,10 @@ pub(crate) fn feed_containers(
                     &items,
                     icons.as_deref(),
                     rolls,
-                    &commands,
                     &cooldowns,
                     spell_catalog,
                     &names,
-                    &mut petitions,
+                    &petitions,
                     now,
                     ui_now,
                     has_relic_slot,
@@ -1176,11 +1208,10 @@ pub(crate) fn feed_containers(
                 &items,
                 icons.as_deref(),
                 rolls,
-                &commands,
                 &cooldowns,
                 spell_catalog,
                 &names,
-                &mut petitions,
+                &petitions,
                 now,
                 ui_now,
                 has_relic_slot,
@@ -1228,11 +1259,10 @@ pub(crate) fn feed_containers(
                     &items,
                     icons.as_deref(),
                     rolls,
-                    &commands,
                     &cooldowns,
                     spell_catalog,
                     &names,
-                    &mut petitions,
+                    &petitions,
                     now,
                     ui_now,
                     has_relic_slot,
@@ -1263,11 +1293,10 @@ pub(crate) fn feed_containers(
                 &items,
                 icons.as_deref(),
                 rolls,
-                &commands,
                 &cooldowns,
                 spell_catalog,
                 &names,
-                &mut petitions,
+                &petitions,
                 now,
                 ui_now,
                 has_relic_slot,
@@ -1496,8 +1525,8 @@ fn diff_and_push(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_container_source, charges_count, resolve_slot, ContainerSlot, FeedMemory, SlotGuids,
-        BANK_CONTAINER, BANK_SLOTS,
+        apply_container_source, ask_build_lookups, charges_count, resolve_slot, ContainerSlot,
+        FeedMemory, SlotGuids, BANK_CONTAINER, BANK_SLOTS,
     };
 
     /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
@@ -1560,19 +1589,36 @@ mod tests {
         );
     }
 
+    /// The build's lookups pass a callback (`0x52e204`, `0x52b93b`): a run asks a name still in
+    /// flight no second time, and asks a refused one again at once.
+    #[test]
+    fn each_build_asks_its_missed_name_and_charter_again_once_answered() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = crate::net::NetCommands(tx);
+        let mut names = crate::names::NameCache::default();
+        let petitions = crate::ui_petition::PetitionState::default();
+        let run = |names: &crate::names::NameCache| {
+            ask_build_lookups((vec![0x5], vec![0x99]), |_| 7, names, &petitions, &commands);
+            crate::query_cache::queries(&rx).len()
+        };
+        assert_eq!(run(&names), 2, "the first build asks the name and the record");
+        for _ in 0..600 {
+            assert_eq!(run(&names), 0, "in flight: no build asks again");
+        }
+        names.insert_player(0x5, String::new(), None);
+        assert_eq!(run(&names), 1, "a refused name is asked at the next build");
+    }
+
     /// A bag slot carries the template's quality and InventoryType, which `GetContainerItemInfo`
     /// gates its fourth value on (`0x4f9794`); an unanswered template leaves them empty.
     #[test]
     fn a_resolved_slot_carries_the_templates_quality_and_inventory_type() {
         use crate::items::{test_template, Items, RollCatalogs};
         use crate::names::NameCache;
-        use crate::net::NetCommands;
         use crate::ui_items::TestObjects;
         use benilla_protocol::ObjectFields;
 
         const ENTRY: u16 = 3; // OBJECT_FIELD_ENTRY
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = TestObjects::new();
         for (guid, entry) in [(0xA1_u64, 1234_u32), (0xA2, 1235), (0xA3, 1236)] {
             objs.spawn(guid, ObjectFields::from_pairs(&[(ENTRY, entry)]));
@@ -1588,7 +1634,7 @@ mod tests {
 
         let names = NameCache::default();
         let cooldowns = crate::spell::Cooldowns::default();
-        let mut petitions = crate::ui_petition::PetitionState::default();
+        let petitions = crate::ui_petition::PetitionState::default();
         let mut slot = |guid: u64| {
             resolve_slot(
                 guid,
@@ -1596,11 +1642,10 @@ mod tests {
                 &items,
                 None,
                 RollCatalogs::NONE,
-                &commands,
                 &cooldowns,
                 None,
                 &names,
-                &mut petitions,
+                &petitions,
                 std::time::Instant::now(),
                 0.0,
                 false,
@@ -1619,12 +1664,6 @@ mod tests {
         // auto-equip's unlock reads the other (`0x5e1704`).
         assert_eq!((sword.guid, sword.item_class), (0xA1, Some(sword_class)));
         assert_eq!((pending.guid, pending.item_class), (0xA3, None));
-        // The slot only reads, as `GetContainerItemInfo` does (`0x4f978b`): the item's create
-        // asked, so no frame of the feed does.
-        for _ in 0..600 {
-            slot(0xA3);
-        }
-        assert!(crate::query_cache::queries(&rx).is_empty());
     }
 
     /// A bag slot holding a container says how many of its seats are filled, which
@@ -1633,7 +1672,6 @@ mod tests {
     fn a_resolved_bag_counts_its_filled_seats() {
         use crate::items::{test_template, Items, RollCatalogs};
         use crate::names::NameCache;
-        use crate::net::NetCommands;
         use crate::ui_items::TestObjects;
         use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
         use benilla_protocol::ObjectFields;
@@ -1641,8 +1679,6 @@ mod tests {
         // `OBJECT_FIELD_TYPE` item or container, `CONTAINER_FIELD_NUM_SLOTS`.
         const TYPE: u16 = 2;
         const NUM_SLOTS: u16 = 48;
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut objs = TestObjects::new();
         let seat = |j: u16, g: u64| {
             [
@@ -1665,7 +1701,7 @@ mod tests {
         items.insert_template(4496, Some(test_template("Small Brown Pouch")));
         let names = NameCache::default();
         let cooldowns = crate::spell::Cooldowns::default();
-        let mut petitions = crate::ui_petition::PetitionState::default();
+        let petitions = crate::ui_petition::PetitionState::default();
         let mut seats = |guid: u64| {
             resolve_slot(
                 guid,
@@ -1673,11 +1709,10 @@ mod tests {
                 &items,
                 None,
                 RollCatalogs::NONE,
-                &commands,
                 &cooldowns,
                 None,
                 &names,
-                &mut petitions,
+                &petitions,
                 std::time::Instant::now(),
                 0.0,
                 false,
@@ -1760,7 +1795,7 @@ mod tests {
         use super::worn_cooldowns;
         use crate::items::{test_template, Items, RollCatalogs};
         use crate::names::NameCache;
-        use crate::net::{NetCommands, ObjectStore};
+        use crate::net::ObjectStore;
         use crate::ui_items::TestObjects;
         use benilla_protocol::field::{
             FIELD_ITEM_SPELL_CHARGES, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
@@ -1768,8 +1803,6 @@ mod tests {
         use benilla_protocol::messages::ItemUseSpell;
         use benilla_protocol::ObjectFields;
 
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let use_spell = |spell_id| ItemUseSpell {
             spell_id,
             cooldown_ms: 120_000,
@@ -1806,7 +1839,7 @@ mod tests {
         let expected = [None, running, None, running, running];
 
         let names = NameCache::default();
-        let mut petitions = crate::ui_petition::PetitionState::default();
+        let petitions = crate::ui_petition::PetitionState::default();
         for (&(guid, ..), want) in cases.iter().zip(expected) {
             let slot = resolve_slot(
                 guid,
@@ -1814,11 +1847,10 @@ mod tests {
                 &items,
                 None,
                 RollCatalogs::NONE,
-                &commands,
                 &cooldowns,
                 None,
                 &names,
-                &mut petitions,
+                &petitions,
                 now,
                 50.0,
                 false,

@@ -602,7 +602,6 @@ fn resolve_slot(
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
-    commands: &NetCommands,
 ) -> TradeSlotItem {
     let template = items.template(item.entry, 0, Ask::Read);
     let name = template.map(|t| t.name.clone());
@@ -622,11 +621,10 @@ fn resolve_slot(
         (Some(n), Some(q)) => Some(crate::ui_items::item_link(item.entry, n, q)),
         _ => None,
     };
-    // Only a wrapped gift asks for its giver, and a zero guid asks nothing (`0x52e288`,
-    // `0x52e29d`). That is the slot tooltip's build, which no event here marks: the giver is asked
-    // when it first shows.
+    // Only a wrapped gift names its giver (`0x52e288`, `0x52e29d`). Only read: the slot tooltip's
+    // build asks it (`crate::ui_items::feed::ask_item_build_lookups`).
     let gift_creator = (item.wrapped && item.gift_creator != 0)
-        .then(|| names.resolve_player(item.gift_creator, Ask::New(commands)))
+        .then(|| names.resolve_player(item.gift_creator, Ask::Read))
         .flatten()
         .map(str::to_string);
     TradeSlotItem {
@@ -707,12 +705,11 @@ fn resolve_side(
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
-    commands: &NetCommands,
 ) -> TradeSideState {
     let mut slots: [Option<TradeSlotItem>; TRADE_SLOT_COUNT] = Default::default();
     for (i, s) in offer.slots.iter().enumerate() {
         slots[i] = s.map(|it| {
-            let mut row = resolve_slot(&it, items, icons, names, commands);
+            let mut row = resolve_slot(&it, items, icons, names);
             // Our items are live objects; the partner's are blocks (`0x5342ed`, `0x53456b`).
             row.object_flags = ours.then_some(offer.object_flags[i]);
             if i == ENCHANT_SLOT {
@@ -733,7 +730,6 @@ fn snapshot(
     icons: Option<&ItemDisplays>,
     spells: Option<&crate::ui_action::Spells>,
     names: &NameCache,
-    commands: &NetCommands,
 ) -> Option<TradeState> {
     if !trade.open {
         return None;
@@ -754,7 +750,6 @@ fn snapshot(
             items,
             icons,
             names,
-            commands,
         ),
         // Our window carries the spell we cast on theirs (`0x4c02b7`, side 0).
         target: resolve_side(
@@ -764,7 +759,6 @@ fn snapshot(
             items,
             icons,
             names,
-            commands,
         ),
     })
 }
@@ -863,7 +857,7 @@ fn resignal_trade_items(
                         slot: wire_slot,
                     },
                 );
-                let mut row = resolve_slot(&item, &items, icons.as_deref(), &names, &commands);
+                let mut row = resolve_slot(&item, &items, icons.as_deref(), &names);
                 row.object_flags = Some(flags);
                 script.replace_trade_slot(slot, row);
             }
@@ -914,7 +908,6 @@ fn feed_trade(
         icons.as_deref(),
         spells.as_deref(),
         &names,
-        &commands,
     );
     // A close is the core's, which shut the VM's window and left both offers in place; a
     // disconnect's clear tells it nothing.
@@ -1269,8 +1262,6 @@ mod tests {
     /// gates its fourth value on; an unanswered template leaves both empty.
     #[test]
     fn a_trade_row_carries_the_templates_quality_and_inventory_type() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut items = Items::default();
         let mut sword = crate::items::test_template("Sword");
         sword.quality = 4;
@@ -1283,7 +1274,6 @@ mod tests {
             &items,
             None,
             &NameCache::default(),
-            &commands,
         );
         assert_eq!((row.quality, row.inventory_type), (Some(4), 13));
         // The icon is the template's display's, the question mark when that row is missing, and
@@ -1298,7 +1288,6 @@ mod tests {
                 &items,
                 None,
                 &NameCache::default(),
-                &commands
             )
             .texture,
             None
@@ -1308,7 +1297,6 @@ mod tests {
             &items,
             None,
             &NameCache::default(),
-            &commands,
         );
         assert_eq!((row.quality, row.inventory_type), (Some(1), 0));
         let row = resolve_slot(
@@ -1316,18 +1304,15 @@ mod tests {
             &items,
             None,
             &NameCache::default(),
-            &commands,
         );
         assert_eq!((row.quality, row.inventory_type), (None, 0));
     }
 
     /// A wrapped gift's giver rides both columns: the partner's block carries the wire's wrapped
     /// word and gift creator (`0x534559`, `0x534574`), our placed item's object the same; only a
-    /// wrapped item asks for the name, a zero guid asks nothing, and a name in flight is `None`.
+    /// wrapped item names it, a zero guid names no one, and a name not yet answered is `None`.
     #[test]
     fn a_wrapped_gifts_giver_reaches_both_columns() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let commands = NetCommands(tx);
         let mut items = Items::default();
         items.insert_template(1234, Some(crate::items::test_template("Gift")));
         let mut names = NameCache::default();
@@ -1346,7 +1331,7 @@ mod tests {
         s.place_own_item(4, gift(true, 0x8), 0x8);
         s.their.slots[0] = Some(gift(true, 0x7));
         s.their.slots[1] = Some(gift(false, 0x7));
-        let state = snapshot(&s, &items, None, None, &names, &commands).expect("open");
+        let state = snapshot(&s, &items, None, None, &names).expect("open");
         let giver = |side: &TradeSideState, i: usize| {
             let row = side.slots[i].as_ref().expect("filled");
             (row.wrapped, row.gift_creator.clone())
@@ -1365,11 +1350,6 @@ mod tests {
             "a zero guid names no one"
         );
         assert_eq!(giver(&state.player, 3), (true, None), "a name in flight");
-        let asked: Vec<_> = rx.try_iter().collect();
-        assert!(
-            matches!(asked.as_slice(), [ClientCommand::NameQuery { guid: 0x8 }]),
-            "only the wrapped, nonzero, uncached giver is asked: {asked:?}"
-        );
     }
 
     #[test]

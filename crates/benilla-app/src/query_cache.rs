@@ -14,13 +14,15 @@
 //! for the readers until a lookup asks again. A refusal is never persisted: [`QueryCache::iter`]
 //! yields records only.
 //!
-//! The reference's lookups with a callback run on events: a unit's create, a field change, a
-//! packet, and the interface events on which the stock UI calls its getters (a window's show, its
-//! update event). Many of benilla's readers instead build their view every frame, so a read says
-//! which it is with [`Ask`]: [`Ask::Event`] on the run that stands for the reference's event,
-//! which asks a refused key again at once ([`QueryCache::lookup`]); [`Ask::New`] on the runs in
-//! between, which asks only a key the cache holds nothing for, so the key a reader shows is asked
-//! when it first appears and a refused one waits for the next event ([`QueryCache::lookup_new`]);
+//! Most of the reference's lookups with a callback run on events: a unit's create, a field change,
+//! a packet, and the interface events on which the stock UI calls its getters (a window's show,
+//! its update event). Some poll: a hovered bag slot's tooltip build each frame, the minimap's blip
+//! probe, a popup's or a map's `OnUpdate` getter. A polled lookup asks at each run, so a refused
+//! key is asked again about once per answer. Many of benilla's readers build their view every
+//! frame, so a read says which it is with [`Ask`]: [`Ask::Event`] on the run that stands for the
+//! reference's event or poll, which asks a refused key again at once ([`QueryCache::lookup`]);
+//! [`Ask::New`] on the runs in between, which asks only a key the cache holds nothing for, so the
+//! key a reader shows is asked when it first appears and a refused one waits for the next event;
 //! and [`Ask::Read`] where the reference's lookup passes no callback.
 
 use std::collections::{HashMap, HashSet};

@@ -273,6 +273,16 @@ impl super::UiScript {
         self.model_mut().item_stat_asks.drain().collect()
     }
 
+    /// Drains the guids an item build missed in the name cache: a creator or a giver.
+    pub fn take_item_name_asks(&mut self) -> Vec<u64> {
+        self.model_mut().item_name_asks.drain().collect()
+    }
+
+    /// Drains the charter item guids an item build missed the petition record or owner of.
+    pub fn take_petition_asks(&mut self) -> Vec<u64> {
+        self.model_mut().petition_asks.drain().collect()
+    }
+
     /// Drains the ids `GetItemInfo` read that the store did not hold, which the app serves from
     /// its cache and never asks the server for.
     pub fn take_item_stat_reads(&mut self) -> Vec<u32> {
