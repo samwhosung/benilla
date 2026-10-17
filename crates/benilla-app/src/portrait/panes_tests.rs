@@ -626,33 +626,22 @@ fn each_pane_draws_its_own_subject_named_or_not() {
     assert_eq!(h.drawn().len(), 2);
 }
 
-/// The camera spawns through `Commands` with the pane, so the pass that builds the copy cannot aim
-/// it; the pane stays unaimed and the next pass does, so the model is framed on the frame after the
-/// pane opens, not only after a resize.
+/// The camera spawns through `Commands` with the pane, and the pass that builds the copy aims it
+/// with that spawn, so the frame the pane opens on already composites an aimed view, not the
+/// spawn pose.
 #[test]
-fn a_pane_opened_this_pass_is_aimed_on_the_next() {
+fn a_pane_is_aimed_on_the_frame_it_opens() {
     let mut h =
         Harness::new(r#"m = CreateFrame("PlayerModel", "Doll", UIParent) m:SetUnit("player")"#);
     let pane = h.handle(Some("Doll"));
-    let camera = |h: &mut Harness| {
-        let world = h.app.world_mut();
-        let booth = &world.resource::<PaneBooths>().panes[&pane];
-        let (entity, aimed) = (booth.camera, booth.aimed);
-        let framed = matches!(world.get::<Projection>(entity), Some(Projection::Custom(_)));
-        (aimed, framed)
-    };
     h.pass();
-    assert_eq!(
-        camera(&mut h),
-        (None, false),
-        "the opening pass could not reach the camera, and says so"
-    );
-    h.pass();
-    let (aimed, framed) = camera(&mut h);
-    assert!(aimed.is_some(), "the next pass records the aim");
+    let world = h.app.world_mut();
+    let booth = &world.resource::<PaneBooths>().panes[&pane];
+    let (entity, aimed) = (booth.camera, booth.aimed);
+    assert!(aimed.is_some(), "the opening pass records the aim");
     assert!(
-        framed,
-        "and the camera wears the body frame, not its spawn pose"
+        matches!(world.get::<Projection>(entity), Some(Projection::Custom(_))),
+        "the camera wears the body frame on the opening frame, not its spawn pose"
     );
 }
 
