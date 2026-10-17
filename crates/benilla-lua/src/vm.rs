@@ -935,10 +935,19 @@ impl Vm {
         }
     }
 
-    /// `callTMres`: `f(a, b)`'s first result.
+    /// `callTMres` (`0x6f7dd0`): `f(a, b)`'s first result, called on the stack's top and read
+    /// from where it lands, with nothing allocated.
     fn call_tm_res(&mut self, f: Value, a: Value, b: Value) -> Result<Value, LuaError> {
-        let r = self.call_value(f, &[a, b], 1)?;
-        Ok(r[0])
+        let func_idx = self.top;
+        self.ensure(func_idx + 4);
+        self.stack[func_idx] = f;
+        self.stack[func_idx + 1] = a;
+        self.stack[func_idx + 2] = b;
+        self.top = func_idx + 3;
+        self.call_at(func_idx, 2, 1)?;
+        let r = self.stack[func_idx];
+        self.top = func_idx;
+        Ok(r)
     }
 
     /// `call_binTM`: the first operand's metamethod, else the second's, called whatever it is
