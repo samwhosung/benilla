@@ -1478,8 +1478,6 @@ pub(crate) mod schedule_tests {
          "`BankErrors` answers a `BuyBankSlot` click; the OPENED edge rides `VmMemo`s"),
         ("ui_battlefield.rs", "feed_battlefield", Because::SelfHealing,
          "`reset_on_world_enter` runs before it at each world-enter cascade, clears the session and re-sends `BattlefieldStatusRequest`"),
-        ("ui_battlefield_positions.rs", "feed_battlefield_positions", Because::Deliberate,
-         "its take is `fresh`, the packet's ask marker: taken before the interface is up it still sends its name queries, to the server and not the VM, and the positions are pushed again every frame"),
         ("ui_binder.rs", "feed_binder", Because::PlayerRoundTrip,
          "`SMSG_BINDER_CONFIRM` only answers the innkeeper's gossip line"),
         ("ui_char.rs", "feed_char", Because::MemoLatched,

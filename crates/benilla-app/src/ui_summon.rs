@@ -83,11 +83,21 @@ fn feed_summon(
         return;
     }
 
-    // A miss asks and reports `""` this frame; a zero guid names nobody and is never asked about.
-    // The packet's frame stands for the popup's getter calls (`0x48b6e1`, callback `0x48b710`).
+    // The getter's calls are its lookups with the callback `0x48b710` (`0x48b6e1`): the popup's
+    // `OnUpdate` makes one a frame (`StaticPopup.lua:1746`), so a miss is asked while it shows and
+    // a refused name again, once per answer. The push itself only reads; a zero guid names nobody
+    // and is never asked about.
+    let looked_up = script.take_summon_summoner_lookups() > 0;
     let summoner_name = match summon.pending() {
         Some(guid) => names
-            .resolve_player(guid, Ask::at(summon.ask, &commands))
+            .resolve_player(
+                guid,
+                if looked_up {
+                    Ask::Event(&commands)
+                } else {
+                    Ask::Read
+                },
+            )
             .unwrap_or_default()
             .to_string(),
         None => String::new(),
@@ -259,11 +269,11 @@ impl Plugin for UiSummonPlugin {
 mod tests {
     use super::*;
 
-    /// The summon packet's frame stands for the popup's getter lookups (`0x48b6e1`, callback
-    /// `0x48b710`); the frames after it read. A refused summoner is asked by no frame after it,
-    /// only by the next summon.
+    /// The getter's calls are the lookups (`0x48b6e1`, callback `0x48b710`), which the popup's
+    /// `OnUpdate` makes every frame: the packet and the frames without a call ask nothing, a call
+    /// asks once while the answer is pending, and the call after a refusal asks again.
     #[test]
-    fn a_refused_summoner_is_asked_by_the_next_summon_never_by_a_frame() {
+    fn the_summoner_is_asked_by_each_getter_call_once_per_answer() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
@@ -272,14 +282,28 @@ mod tests {
             .init_resource::<Time<Real>>()
             .add_systems(Update, feed_summon);
         app.insert_non_send_resource(UiScript::new().unwrap());
-        let summon = |app: &mut App| {
+        let call = |app: &mut App| {
             app.world_mut()
-                .resource_mut::<SummonState>()
-                .latch(0x2a, 1519, 120_000, 0.0);
+                .non_send_resource_mut::<UiScript>()
+                .run("GetSummonConfirmSummoner()")
+                .unwrap();
             app.update();
         };
-        summon(&mut app);
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<SummonState>()
+            .latch(0x2a, 1519, 120_000, 0.0);
+        app.update();
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "the packet only reads"
+        );
+        call(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1, "a call asks");
+        call(&mut app);
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "once while the answer is pending"
+        );
         app.world_mut()
             .resource_mut::<NameCache>()
             .insert_player(0x2a, String::new(), None);
@@ -288,13 +312,13 @@ mod tests {
         }
         assert!(
             crate::query_cache::queries(&rx).is_empty(),
-            "no frame asks a refusal"
+            "no frame without a call asks"
         );
-        summon(&mut app);
+        call(&mut app);
         assert_eq!(
             crate::query_cache::queries(&rx).len(),
             1,
-            "the next summon asks again"
+            "the call after the refusal asks again"
         );
     }
 

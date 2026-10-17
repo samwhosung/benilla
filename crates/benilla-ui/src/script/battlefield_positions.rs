@@ -37,6 +37,12 @@ impl super::UiScript {
         model.battlefield_icon_scale = icon_scale;
     }
 
+    /// The 0-based rows `GetBattlefieldPosition` read with no name since the last drain, in call
+    /// order: each call's lookup passes a callback (`0x4ac118`), which the app makes.
+    pub fn take_battlefield_position_lookups(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.model_mut().battlefield_position_lookups)
+    }
+
     /// `RequestBattlefieldPositions()` calls since the last drain; the app sends at most every
     /// 5000 ms, and only with an active slot.
     pub fn take_battlefield_position_requests(&mut self) -> u32 {
@@ -71,14 +77,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetBattlefieldPosition",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetBattlefieldPosition(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let row = usize::try_from(index)
-                .ok()
-                .and_then(|i| i.checked_sub(1))
-                .and_then(|i| model.battlefield_positions.get(i));
-            match row {
-                Some(r) => three(lua, r.uv, r.name.as_deref()),
-                None => three(lua, (0.0, 0.0), None),
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let i = usize::try_from(index).ok().and_then(|i| i.checked_sub(1));
+            let row = i.and_then(|i| model.battlefield_positions.get(i)).cloned();
+            match (i, row) {
+                (Some(i), Some(r)) => {
+                    // A nameless row is the lookup's ask (callback `0x4ac190`), the app's to make.
+                    if r.name.is_none() {
+                        model.battlefield_position_lookups.push(i);
+                    }
+                    drop(model);
+                    three(lua, r.uv, r.name.as_deref())
+                }
+                _ => {
+                    drop(model);
+                    three(lua, (0.0, 0.0), None)
+                }
             }
         })?,
     )?;
