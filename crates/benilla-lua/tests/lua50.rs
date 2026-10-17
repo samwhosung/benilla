@@ -337,3 +337,35 @@ fn a_control_byte_is_the_lexers_error() {
     assert_eq!(compile_error("x\t=\x0b1\x0c"), "ok");
     assert_eq!(compile_error("x = '\x01\x7f'"), "ok");
 }
+
+/// `\n` alone ends a line: the lexer's switch sends only it to `inclinenumber` (`0x6ffb94`,
+/// `0x6ffc20`), which pairs nothing, and a `\r` is a blank (`0x6ff709`). In a quoted string a
+/// `\r` is a byte, plain (`0x700326`) or escaped (`0x700710`), and a long string keeps it
+/// (`0x700234`). A chunk name's first line also ends at `\n` alone (`0x835144`).
+#[test]
+fn only_a_newline_ends_a_line() {
+    assert_eq!(run("return loadstring('\\rerror(\\'e\\')')"), "function");
+    assert_eq!(
+        run("local _, e = pcall(loadstring('\\rerror(\\'e\\')')) return e"),
+        "[string \"\rerror('e')\"]:1: e"
+    );
+    assert_eq!(
+        compile_error("x = 1\r\ry = +"),
+        "t:1: unexpected symbol near `+'"
+    );
+    assert_eq!(
+        compile_error("x = 1\n\ry = +"),
+        "t:2: unexpected symbol near `+'"
+    );
+    assert_eq!(
+        compile_error("x = 1\r\ny = +"),
+        "t:2: unexpected symbol near `+'"
+    );
+    assert_eq!(compile_error("-- c\r y = +"), "ok");
+    assert_eq!(run("return 'a\rb'"), "a\rb");
+    assert_eq!(run("return 'a\\\rb'"), "a\rb");
+    assert_eq!(run("return 'a\\\nb'"), "a\nb");
+    assert_eq!(run("return [[a\r\nb]]"), "a\r\nb");
+    assert_eq!(run("return [[\r\nb]]"), "\r\nb");
+    assert_eq!(run("return [[\nb]]"), "b");
+}

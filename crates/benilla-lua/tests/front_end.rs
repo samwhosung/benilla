@@ -6,9 +6,9 @@
 //! upvalues, line runs) must also be the one `front_end.digest` records: a line per chunk, a hash
 //! of its source and a hash of its shape. The shapes are the C build's, but where benilla-lua
 //! since follows the client's 5.0 against 5.1 (the `for` loops' locals, closed once at the
-//! loop's end): such a change rewrites the digest with `BENILLA_BLESS=1`,
-//! which prints each chunk whose shape moved, for the review. A chunk whose source is not in it
-//! (another corpus version) is not checked against it.
+//! loop's end; a long string's `\r`, a byte): such a change rewrites the digest with
+//! `BENILLA_BLESS=1`, which prints each chunk whose shape moved, for the review. A chunk whose
+//! source is not in it (another corpus version) is not checked against it.
 
 use std::path::{Path, PathBuf};
 

@@ -245,7 +245,8 @@ const CASES: &[(&str, &str)] = &[
     ("coerce_edges", r#"return S(E(function() return "0x10" * 1 end), " 2 " * " 3 ", E(function() return "1e" + 1 end), E(function() return "inf" + 0 end), 10 .. "", 1e100 .. "", -0.0 .. "", 2^63 .. "")"#),
     // ── Syntax errors and the lexer's edges, through `loadstring` ──
     // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`). A control
-    // byte is the lexer's `invalid control char` (`0x6ffabb`).
+    // byte is the lexer's `invalid control char` (`0x6ffabb`). `\n` alone ends a line
+    // (`0x6ffb94`): a `\r` is a blank, and a byte in a string (`0x700326`).
     ("syntax_errors", r#"local o = {}
         for _, src in ipairs({"x = 1 +", "local function", "x = #t", "x = a % b",
             "return function(...) return ... end", "for x do end", "x = 1..2", "x = \"a\nb\"",
@@ -506,6 +507,8 @@ b]])"#),
     ("fix-libs format_ulong", r#"local z = 0 local o = {} for _, v in {2^64, 1e300, 1 / z, -1 / z, 0 / z, 2^63, -2^63, -1, 2^65, 2^63 + 2^11, -2^64, -1e300, 2^64 - 2^11} do table.insert(o, E(string.format, "%x %u %o %X", v, v, v, v)) end return table.concat(o, "|")"#),
     // `luaH_next` raises the client's text (`0x6fa467`, `0x871aac`): "for", not 5.1's "to".
     ("fix-libs foreach_invalid_key", r#"local t = {a = 1} return S(E(foreach, t, function(k) t[k] = nil for i = 1, 20 do t["x" .. i] = i end end), E(next, {}, "nope"))"#),
+    // A chunk name's first line ends at `\n` alone (`strcspn` set `0x835144`), and a `\r` ends
+    // no line of the source (`0x6ffb94`).
     ("fix-libs chunkid_cr", r#"local o = {}
         for _, s in {"error('e')\r--x", "error('e')\n--x", "error('e')\r\n--x", "error('e') --" .. string.rep("y", 100), "\rerror('e')", "error('e')", "error('e')\0--x"} do
           local f, e = loadstring(s) if f then table.insert(o, E(f)) else table.insert(o, e) end

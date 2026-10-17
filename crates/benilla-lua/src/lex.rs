@@ -1,7 +1,7 @@
 //! The lexer: Lua 5.1's `llex.c` as benilla's script host has always run it, built with
-//! `LUA_COMPAT_LSTR` 2 (`GRAMMAR.md`): `\n`, `\r` and their pairs end a line,
-//! long brackets have levels (`[=[ ]=]`) and a level-0 one nests `[[` as 5.0's did, and a numeral
-//! is read as the client reads it, decimal only. Source is bytes.
+//! `LUA_COMPAT_LSTR` 2 (`GRAMMAR.md`): long brackets have levels (`[=[ ]=]`) and a level-0 one
+//! nests `[[` as 5.0's did. As the client's lexer does, `\n` alone ends a line and a numeral is
+//! read decimal only. Source is bytes.
 
 use crate::chunkid;
 
@@ -253,18 +253,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// 5.1's `currIsNewline`: `\n` or `\r`.
+    /// A line end is `\n` alone: the client's lexer switch sends only it to `inclinenumber`
+    /// (`0x6ffb94`), and a `\r` is a blank (`0x6ff709`) or, in a string, a byte.
     fn at_newline(&self) -> bool {
-        matches!(self.ch(), 0x0A | 0x0D)
+        self.ch() == 0x0A
     }
 
-    /// 5.1's `inclinenumber`, at a `\n` or `\r`: a `\n\r` or `\r\n` pair is one line.
+    /// `inclinenumber` (`0x6ffc20`), at a `\n`: one line, with no pairing.
     fn newline(&mut self) -> Result<(), SyntaxError> {
-        let old = self.ch();
         self.pos += 1;
-        if self.at_newline() && self.ch() != old {
-            self.pos += 1;
-        }
         self.line += 1;
         // `checklimit(LS, ++LS->linenumber, MAX_INT, "lines in a chunk")` never trips here.
         Ok(())
@@ -290,7 +287,7 @@ impl<'a> Lexer<'a> {
             let c = self.ch();
             match c {
                 EOZ => return Ok(Self::tok(Tok::Eof)),
-                0x0A | 0x0D => self.newline()?,
+                0x0A => self.newline()?,
                 0x2D /* - */ => {
                     self.pos += 1;
                     if self.ch() != b'-' as i32 {
@@ -463,7 +460,8 @@ impl<'a> Lexer<'a> {
                         }
                     }
                 }
-                0x0A | 0x0D => {
+                // Only `\n` (`0x700234`); a `\r` is kept as a byte.
+                0x0A => {
                     self.buff.push(b'\n');
                     self.newline()?;
                     if !keep {
@@ -487,8 +485,8 @@ impl<'a> Lexer<'a> {
         Ok(self.buff[n..self.buff.len() - n].to_vec())
     }
 
-    /// 5.1's `read_string`: a newline (`\n` or `\r`) ends it unfinished, `\ddd` is up to three
-    /// digits.
+    /// `read_string` (`0x7002a0`): a `\n` ends it unfinished (`0x700326`), a `\r` is a byte,
+    /// `\ddd` is up to three digits.
     fn string(&mut self, delim: u8) -> Result<Token, SyntaxError> {
         self.buff.clear();
         self.buff.push(delim);
@@ -496,7 +494,7 @@ impl<'a> Lexer<'a> {
         while self.ch() != delim as i32 {
             match self.ch() {
                 EOZ => return Err(self.lex_error("unfinished string", true)),
-                0x0A | 0x0D => return Err(self.lex_error("unfinished string", false)),
+                0x0A => return Err(self.lex_error("unfinished string", false)),
                 0x5C => {
                     self.pos += 1;
                     let e = self.ch();
@@ -513,7 +511,8 @@ impl<'a> Lexer<'a> {
                     if let Some(b) = simple {
                         self.buff.push(b);
                         self.pos += 1;
-                    } else if e == 0x0A || e == 0x0D {
+                    } else if e == 0x0A {
+                        // An escaped `\r` is the default arm's byte (`0x700710`).
                         self.buff.push(b'\n');
                         self.newline()?;
                     } else if e == EOZ {

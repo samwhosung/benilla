@@ -372,8 +372,8 @@ mod tests {
         assert_eq!(err("x = 3e"), "t:1: malformed number near `3e'");
     }
 
-    /// 5.1's lexer with level-0 nesting and the client's numerals: `\r` ends lines, `[=[` has
-    /// levels, and `0x10` is 0 then the name `x10`.
+    /// 5.1's lexer with level-0 nesting and the client's line ends and numerals: `\n` alone ends a
+    /// line, `[=[` has levels, and `0x10` is 0 then the name `x10`.
     #[test]
     fn the_lexer_is_the_script_hosts() {
         // The string constant a chunk returns.
@@ -385,17 +385,13 @@ mod tests {
             };
             heap.str(s).to_vec()
         };
-        assert_eq!(
-            one(b"return [[a\r\nb]]"),
-            b"a\nb",
-            "a line ending is one \\n"
-        );
+        assert_eq!(one(b"return [[a\r\nb]]"), b"a\r\nb", "a \\r is a byte");
         assert_eq!(one(b"return [[a [[b]] c]]"), b"a [[b]] c");
         assert_eq!(one(b"return [=[a]]b]=]"), b"a]]b");
-        assert_eq!(err("x = 'a\rb'"), "t:1: unfinished string near `'a'");
+        assert!(check(b"x = 'a\rb'", b"=t").is_ok());
         assert_eq!(err("x = 0x10"), "t:1: `=' expected near `<eof>'");
         assert!(check(b"a=1b=2", b"=t").is_ok());
-        assert_eq!(err("x = 1\ry = +"), "t:2: unexpected symbol near `+'");
+        assert_eq!(err("x = 1\ry = +"), "t:1: unexpected symbol near `+'");
         assert_eq!(err("x = 1\r\ny = +"), "t:2: unexpected symbol near `+'");
     }
 
