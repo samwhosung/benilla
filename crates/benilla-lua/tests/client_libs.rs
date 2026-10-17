@@ -347,6 +347,13 @@ fn ipairs_answers_as_the_clients() {
             return f == ipairs, s == t, i, k, v, k2, v2, ipairs(t, 3) == nil, k4, v4"),
         ["true", "true", "0", "1", "10", "3", "30", "true", "1", "10"]
     );
+    // `__ftol` (`0x40a2b0`) keeps the low dword of the truncation: 2^32 + 1 and -2^32 + 1 read
+    // `t[1]`.
+    assert_eq!(
+        ok("local a, b = ipairs({10, 20}, 2^32)
+            return a, b, ipairs({10, 20}, -2^32)"),
+        ["4294967297", "10", "-4294967295", "10"]
+    );
     assert_eq!(
         ok("local t, n, orig = {10, 20, 30}, 0, ipairs
             for i, v in ipairs(t) do n = n + v if i == 1 then ipairs = function() end end end

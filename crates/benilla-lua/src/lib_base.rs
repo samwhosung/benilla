@@ -238,8 +238,7 @@ pub(crate) fn ipairs(vm: &mut Vm, nargs: usize) -> R<usize> {
         return Ok(3);
     }
     let n = n + 1.0;
-    // `_ftol`: toward zero.
-    let v = vm.heap.table(t).get_int(n as i32);
+    let v = vm.heap.table(t).get_int(crate::api::c_int(n));
     if v.is_nil() {
         return Ok(0);
     }
