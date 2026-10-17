@@ -706,6 +706,27 @@ mod tests {
         assert_eq!(s.eval::<i64>("return bit.mod(17, 5)").unwrap(), 2);
     }
 
+    /// `bit.band`, `bor` and `bxor` fold every argument from 2 to `lua_gettop` into the first
+    /// (`0x7faac0`..`0x7faad9`): one argument answers itself, and each is checked in turn.
+    #[test]
+    fn band_bor_and_bxor_fold_every_argument() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.eval::<i64>("return bit.bor(1, 2, 4)").unwrap(), 7);
+        assert_eq!(s.eval::<i64>("return bit.band(15, 7, 3)").unwrap(), 3);
+        assert_eq!(s.eval::<i64>("return bit.bxor(1, 3, 7, 15)").unwrap(), 10);
+        assert_eq!(s.eval::<i64>("return bit.band(-1)").unwrap(), 4_294_967_295);
+        assert!(s
+            .eval::<String>(
+                "local ok, e = pcall(function() return bit.bor(1, 2, 'x') end) return e"
+            )
+            .unwrap()
+            .ends_with("bad argument #3 to `bor' (number expected, got string)"));
+        assert!(s
+            .eval::<String>("local ok, e = pcall(function() return bit.band() end) return e")
+            .unwrap()
+            .ends_with("bad argument #1 to `band' (number expected, got no value)"));
+    }
+
     /// `print` and `_VERSION` are not in 1.12's `_G`, and `__pow` is.
     #[test]
     fn the_base_library_matches_the_captured_globals() {

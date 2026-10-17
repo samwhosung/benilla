@@ -343,11 +343,12 @@ pub fn bit_library() -> [(&'static str, crate::heap::NativeFn); 8] {
             let a = arg_word(vm, n, 1)?;
             Ok(unsigned(vm, !a))
         }),
-        // `bit_band`, `bit_bor`, `bit_bxor` (`0x7faa90`, `0x7fab10`, `0x7fab90`), unsigned
+        // `bit_band`, `bit_bor`, `bit_bxor` (`0x7faa90`, `0x7fab10`, `0x7fab90`): every argument
+        // from 2 to `lua_gettop` folded into the first (`0x7faac0`..`0x7faad9`), unsigned
         // (`0x7faae1`).
-        ("band", |vm, n| bit2(vm, n, |a, b| a & b)),
-        ("bor", |vm, n| bit2(vm, n, |a, b| a | b)),
-        ("bxor", |vm, n| bit2(vm, n, |a, b| a ^ b)),
+        ("band", |vm, n| fold(vm, n, |a, b| a & b)),
+        ("bor", |vm, n| fold(vm, n, |a, b| a | b)),
+        ("bxor", |vm, n| fold(vm, n, |a, b| a ^ b)),
         // `bit_lshift`, `bit_rshift` (`0x7fac10`, `0x7fac70`): the count, argument 2, read first
         // (`0x7fac18`), masked to 5 bits by `shl`/`shr eax,cl`, unsigned (`0x7fac40`, `0x7faca0`).
         ("lshift", |vm, n| shift(vm, n, |a, c| a << c)),
@@ -382,10 +383,13 @@ fn open_bit(vm: &mut Vm) {
     vm.set_global("bit", Value::Table(t));
 }
 
-fn bit2(vm: &mut Vm, nargs: usize, f: fn(u32, u32) -> u32) -> R<usize> {
-    let a = arg_word(vm, nargs, 1)?;
-    let b = arg_word(vm, nargs, 2)?;
-    Ok(unsigned(vm, f(a, b)))
+/// Argument 1, then each argument after it folded in: one argument answers itself.
+fn fold(vm: &mut Vm, nargs: usize, f: fn(u32, u32) -> u32) -> R<usize> {
+    let mut acc = arg_word(vm, nargs, 1)?;
+    for i in 2..=nargs {
+        acc = f(acc, arg_word(vm, nargs, i)?);
+    }
+    Ok(unsigned(vm, acc))
 }
 
 /// A logical shift: the count first, then the value; x86 masks the count to 5 bits.
