@@ -84,7 +84,7 @@ fn resolve_service(
             known,
             None,
             &deps.items,
-            &deps.commands,
+            Ask::New(&deps.commands),
             text,
             &probe_strings,
         )
@@ -116,7 +116,7 @@ fn snap(open: &TrainerOpen, spells: &SpellCatalog) -> Option<TrainerState> {
             &BTreeSet::new(),
             None,
             &deps.items,
-            &deps.commands,
+            Ask::New(&deps.commands),
             text,
             &probe_strings,
         )
@@ -170,7 +170,7 @@ fn icon_of(
         spells,
         icons.as_ref(),
         &deps.items,
-        &deps.commands,
+        Ask::New(&deps.commands),
     )
 }
 
@@ -340,7 +340,7 @@ fn trainer_icon_is_nil_until_the_product_template_lands_and_asks_once() {
         &spells,
         Some(&icons),
         &deps.items,
-        &deps.commands,
+        Ask::New(&deps.commands),
     );
     assert_eq!(first, None, "no template yet → nil, not the wrapper's icon");
     assert_eq!(
@@ -355,7 +355,7 @@ fn trainer_icon_is_nil_until_the_product_template_lands_and_asks_once() {
         &spells,
         Some(&icons),
         &deps.items,
-        &deps.commands,
+        Ask::New(&deps.commands),
     );
     assert!(
         deps.queried_entries().is_empty(),
@@ -389,7 +389,7 @@ fn trainer_icon_on_real_data_reaches_for_the_crafted_item() {
         &spells,
         Some(&icons),
         &deps.items,
-        &deps.commands,
+        Ask::New(&deps.commands),
     );
     assert_eq!(
         icon, None,
@@ -403,7 +403,14 @@ fn trainer_icon_on_real_data_reaches_for_the_crafted_item() {
 
     // A class trainer with the same wire spell: the wrapper's own icon, not the recipe's.
     let deps = Deps::new();
-    let class_icon = service_icon(2756, 0, &spells, None, &deps.items, &deps.commands);
+    let class_icon = service_icon(
+        2756,
+        0,
+        &spells,
+        None,
+        &deps.items,
+        Ask::New(&deps.commands),
+    );
     assert_eq!(class_icon, wrapper_icon);
     assert_ne!(
         class_icon, recipe_icon,
@@ -612,7 +619,7 @@ fn service_description_expands_the_wire_spells_own_text() {
                 0,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             ),
             Some("Increases melee damage by 11.".into())
@@ -639,7 +646,7 @@ fn service_description_is_none_without_a_record_or_text() {
                     0,
                     &spells,
                     &deps.items,
-                    &deps.commands,
+                    Ask::New(&deps.commands),
                     text,
                 ),
                 None,
@@ -675,7 +682,7 @@ fn service_description_hops_to_the_taught_spell() {
                 0,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             ),
             Some("Causes 10 threat.".into())
@@ -710,7 +717,7 @@ fn service_description_takes_the_recipes_product_text_verbatim() {
                 TRAINER_TYPE_TRADESKILL,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             ),
             Some("Keeps $s1 for later.".into()),
@@ -742,7 +749,7 @@ fn service_description_skips_the_wire_text_for_a_used_mount_row() {
                 trainer_type,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             )
         })
@@ -795,7 +802,7 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
                 0,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             ),
             Some("Causes 11 threat.".into()),
@@ -807,7 +814,7 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
                 0,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             ),
             Some("Causes 10 threat.".into()),
@@ -837,7 +844,7 @@ fn service_description_expands_z_to_the_bind_area() {
                     0,
                     &spells,
                     &deps.items,
-                    &deps.commands,
+                    Ask::New(&deps.commands),
                     text,
                 ),
                 Some(want.to_string())
@@ -895,7 +902,7 @@ fn service_description_on_real_data_reads_astral_recalls_bind_area() {
             &BTreeSet::new(),
             None,
             &deps.items,
-            &deps.commands,
+            Ask::New(&deps.commands),
             text,
             &probe_strings,
         )
@@ -969,7 +976,7 @@ fn service_description_on_real_data_reaches_for_the_recipes_product() {
                 TRAINER_TYPE_TRADESKILL,
                 &spells,
                 &deps.items,
-                &deps.commands,
+                Ask::New(&deps.commands),
                 text,
             )
         })
@@ -1084,7 +1091,7 @@ fn tooltip_hops_to_the_taught_spell_where_the_icon_pins_the_wire() {
     // The icon law on the same row paints the wire spell's art.
     let deps = Deps::new();
     assert_eq!(
-        super::service_icon(100, 0, &spells, None, &deps.items, &deps.commands),
+        super::service_icon(100, 0, &spells, None, &deps.items, Ask::New(&deps.commands)),
         Some("WRAPPER".into()),
     );
 }
@@ -1635,4 +1642,60 @@ fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
     let (open, sent) = run(false);
     assert_eq!(open, Some(TRAINER), "no player: nothing happens");
     assert!(sent.is_empty(), "no player, no request: {sent:?}");
+}
+
+/// The stock window calls `GetTrainerServiceIcon` at `TRAINER_SHOW` and `TRAINER_UPDATE`, which
+/// looks the product up with a callback (`0x4d9096`); the frames between read. A refused product
+/// is asked by no frame, and again by the trainer's next list.
+#[test]
+fn a_refused_product_is_asked_at_the_next_list_never_by_a_frame() {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .insert_resource(NetCommands(tx))
+        .init_resource::<TrainerOpen>()
+        .init_resource::<TrainerErrors>()
+        .init_resource::<TrainerTooltipSubjects>()
+        .init_resource::<PlayerActions>()
+        .init_resource::<Items>()
+        .init_resource::<NameCache>()
+        .init_resource::<GuidIndex>()
+        .init_resource::<crate::ui_pet::PetBar>()
+        .init_resource::<crate::spell::SpellModifiers>()
+        .insert_resource(Spells {
+            catalog: icon_catalog(),
+            ..Spells::empty_for_tests()
+        })
+        .insert_resource(SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
+        })
+        .add_systems(Update, feed_trainer);
+    app.insert_non_send_resource(UiScript::new().unwrap());
+    let list = |app: &mut App| {
+        app.world_mut().resource_mut::<TrainerOpen>().open(
+            0xF130_0000_4500_0001,
+            TRAINER_TYPE_TRADESKILL,
+            vec![wire(100, trainer_spell_state::GREEN, 10, 1, 0)],
+            String::new(),
+        );
+    };
+    let product_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+        crate::query_cache::queries(rx)
+            .iter()
+            .filter(|c| matches!(c, ClientCommand::ItemQuery { entry: 777, .. }))
+            .count()
+    };
+    list(&mut app);
+    app.update();
+    assert_eq!(product_asks(&rx), 1);
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(777, None);
+    for _ in 0..600 {
+        app.update();
+    }
+    assert_eq!(product_asks(&rx), 0, "no frame asks the refusal");
+    list(&mut app);
+    app.update();
+    assert_eq!(product_asks(&rx), 1, "the next list does, once");
 }

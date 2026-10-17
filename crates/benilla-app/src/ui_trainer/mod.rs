@@ -168,7 +168,7 @@ fn resolve_service(
     known: &BTreeSet<u32>,
     icons: Option<&ItemDisplays>,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     text: &ServiceText,
     // The VM's own `GlobalStrings.lua`, for the group header labels.
     get: &dyn Fn(&str) -> Option<String>,
@@ -230,8 +230,8 @@ fn resolve_service(
         name: display.map(|d| d.name.clone()),
         subtext: display.and_then(|d| d.rank.clone()),
         // Over the wire spell, like the name and subtext ([`service_icon`]).
-        texture: service_icon(wire.spell, trainer_type, spells, icons, items, commands),
-        description: service_description(wire, trainer_type, spells, items, commands, text),
+        texture: service_icon(wire.spell, trainer_type, spells, icons, items, ask),
+        description: service_description(wire, trainer_type, spells, items, ask, text),
         cost: wire.cost,
         prof_first_rank: wire.is_primary_prof_first_rank,
         category: cat,
@@ -289,7 +289,7 @@ fn snapshot(
     known: &BTreeSet<u32>,
     icons: Option<&ItemDisplays>,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     text: &ServiceText,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<TrainerState> {
@@ -309,7 +309,7 @@ fn snapshot(
                     known,
                     icons,
                     items,
-                    commands,
+                    ask,
                     text,
                     get,
                 )
@@ -387,6 +387,7 @@ pub(crate) fn feed_trainer(
     };
     // The per-list reset goes in before the snapshot, so `TRAINER_SHOW` finds it; the stock window
     // re-applies its saved filter only on its own `ADDON_LOADED`.
+    let listed = open.fresh_list;
     if open.fresh_list {
         script.reset_trainer_list_state(open.trainer_type);
         open.fresh_list = false;
@@ -419,6 +420,10 @@ pub(crate) fn feed_trainer(
     }
     // `0x4d7d40` over every row, then `TRAINER_UPDATE` unconditionally, as its tail fires it.
     let forced = open.re_derive && open.trainer.is_some();
+    // The stock window calls `GetTrainerServiceIcon` and `GetTrainerServiceDescription`, which look
+    // the product up with a callback (`0x4d9096`, `0x4d9d07`), at `TRAINER_SHOW` and
+    // `TRAINER_UPDATE`: a list, a re-derive, or a window this VM has not shown.
+    let ask = Ask::at(last.is_none() || listed || forced, &commands);
     if forced {
         open.re_derive = false;
         let player = reeval::PlayerView {
@@ -522,7 +527,7 @@ pub(crate) fn feed_trainer(
             &actions.spells,
             icons.as_deref(),
             &items,
-            &commands,
+            ask,
             &ServiceText {
                 player: &ctx,
                 pet: &pet_ctx,
@@ -565,9 +570,7 @@ pub(crate) fn feed_trainer(
             .0
             .get(&g)
             .and_then(|&e| re_eval.stores.get(e).ok());
-        names
-            .resolve_unit(g, store, Ask::New(&commands))
-            .map(str::to_string)
+        names.resolve_unit(g, store, ask).map(str::to_string)
     });
     let name_changed = *last_name != trainer_name;
     if fresh == *last && !name_changed && !forced {

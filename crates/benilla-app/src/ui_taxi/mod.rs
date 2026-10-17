@@ -226,7 +226,8 @@ fn feed_taxi(
                 .0
                 .get(&open.flightmaster)
                 .and_then(|&e| stores.get(e).ok());
-            names.resolve_unit(open.flightmaster, store, Ask::New(&commands))
+            // `UnitName("npc")` looks it up with a callback (`0x5171b8`), at the open's event.
+            names.resolve_unit(open.flightmaster, store, Ask::at(last.is_none(), &commands))
         })
         .map(str::to_string);
     let name_changed = *last_name != flightmaster_name;
@@ -502,6 +503,53 @@ mod tests {
             .remove(&MASTER);
         app.world_mut().run_system_once(feed_taxi).unwrap();
         assert_eq!(node(&mut app, "Sentinel Hill, Westfall").1, 0);
+    }
+
+    /// The open fires `TAXIMAP_OPENED`, whose handler titles the map with `UnitName("npc")`, which
+    /// looks the name up with a callback (`0x5171b8`); the frames between read. A refused name is
+    /// asked by no frame, and again by the next open.
+    #[test]
+    fn a_refused_flight_master_name_is_asked_at_the_next_open_never_by_a_frame() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalogs = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
+        // Not streamed, so its name is the creature cache's by the guid's entry bits.
+        const MASTER: u64 = 0xF130_0000_4500_0001;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<TaxiState>()
+            .init_resource::<TaxiRouteCache>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(catalogs)
+            .insert_non_send_resource(UiScript::new().unwrap())
+            .add_systems(Update, feed_taxi);
+        let open = |app: &mut App| {
+            app.world_mut().resource_mut::<TaxiState>().open(
+                MASTER,
+                2,
+                TaxiMask([0b1010_1010, 0, 0, 0, 0, 0, 0, 0]),
+            );
+        };
+        open(&mut app);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_creature(0x45, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+        app.world_mut().resource_mut::<TaxiState>().clear();
+        app.update();
+        open(&mut app);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
     }
 
     #[test]

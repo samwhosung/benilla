@@ -120,15 +120,16 @@ pub(crate) fn open_stable(
 }
 
 /// One wire row as a Lua slot; icon, family and diet stay `None` until the creature query answers.
+/// Read as `ask` says: `GetStablePetInfo` looks the template up with a callback (`0x4cb2ce`).
 fn resolve_pet(
     wire: &StabledPet,
     names: &NameCache,
     families: Option<&PetFamilyTables>,
     stats: Option<&PetStatTables>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> StablePetSlot {
     // Guid 0 asks for the template alone: a stabled pet has no spawn.
-    let _ = names.resolve_creature(wire.creature_entry, 0, Ask::New(commands));
+    let _ = names.resolve_creature(wire.creature_entry, 0, ask);
     let family_id = names
         .creature_record(wire.creature_entry)
         .map(|r| r.pet_family)
@@ -176,14 +177,14 @@ fn snapshot(
     stats: Option<&PetStatTables>,
     next_slot_cost: u32,
     has_live_pet: bool,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<StableState> {
     open.npc?;
     let mut slots: [Option<StablePetSlot>; NUM_STABLE_SLOTS] = Default::default();
     for wire in &open.pets {
         // Seat rows by their slot, not position: a petless hunter's list has no slot-0 row.
         match slots.get_mut(usize::from(wire.slot)) {
-            Some(seat) => *seat = Some(resolve_pet(wire, names, families, stats, commands)),
+            Some(seat) => *seat = Some(resolve_pet(wire, names, families, stats, ask)),
             None => debug!(
                 "ui_stable: pet {} arrived in slot {} — past the {NUM_STABLE_SLOTS} the window has, dropped",
                 wire.pet_number, wire.slot
@@ -252,6 +253,8 @@ fn feed_stable(
         .and_then(|entry| names.creature_record(entry))
         .map(|r| r.display_id);
     script.set_stable_live_pet_display(live_pet_display);
+    // Every list fires `PET_STABLE_SHOW`, on which the stock window calls its getters.
+    let fresh_list = std::mem::take(&mut open.fresh_list);
     let fresh = snapshot(
         &open,
         &names,
@@ -259,9 +262,8 @@ fn feed_stable(
         stats.as_deref(),
         next_slot_cost,
         has_live_pet,
-        &commands,
+        Ask::at(fresh_list || last.is_none(), &commands),
     );
-    let fresh_list = std::mem::take(&mut open.fresh_list);
     if fresh == *last && !fresh_list {
         return;
     }
@@ -323,6 +325,53 @@ pub(crate) struct StableSlotPrices(pub(crate) benilla_formats::StableSlotPrices)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every list fires `PET_STABLE_SHOW`, on which the stock window calls `GetStablePetInfo`,
+    /// which looks the template up with a callback (`0x4cb2ce`); the frames between read. A
+    /// refused template is asked by no frame, and again by the next list.
+    #[test]
+    fn a_refused_stabled_pet_is_asked_at_the_next_list_never_by_a_frame() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<StableOpen>()
+            .init_resource::<StableErrors>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::ui_pet::PetBar>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::net::SelfGuid>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_stable);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let list = |app: &mut App| {
+            app.world_mut().resource_mut::<StableOpen>().open(
+                0xF130_0000_4500_0001,
+                1,
+                vec![StabledPet {
+                    pet_number: 3,
+                    creature_entry: 1_126,
+                    level: 10,
+                    name: "Boar".into(),
+                    loyalty: 1,
+                    slot: 1,
+                }],
+            );
+        };
+        list(&mut app);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .insert_creature(1_126, None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+        list(&mut app);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+    }
 
     /// The range guard cannot close it: after the drop there is no self player to measure from.
     #[test]

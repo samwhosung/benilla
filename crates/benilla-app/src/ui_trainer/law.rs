@@ -13,7 +13,6 @@ use benilla_ui::script::{TrainerServiceCategory, TrainerTooltip, TRAINER_GROUP_K
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::NetCommands;
 use crate::ui_items::item_icon;
 
 use super::{TRAINER_TYPE_MOUNT, TRAINER_TYPE_TRADESKILL};
@@ -30,7 +29,7 @@ pub(super) fn service_icon(
     spells: &SpellCatalog,
     icons: Option<&ItemDisplays>,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<String> {
     let wire = spells.get(wire_spell)?;
     if trainer_type == TRAINER_TYPE_TRADESKILL {
@@ -48,7 +47,7 @@ pub(super) fn service_icon(
             .filter(|&e| e != 0)
         {
             return items
-                .template(product, 0, Ask::New(commands))
+                .template(product, 0, ask)
                 .map(|t| t.display_info_id)
                 .and_then(|d| item_icon(icons, d));
         }
@@ -120,7 +119,7 @@ pub(super) fn service_description(
     trainer_type: u32,
     spells: &SpellCatalog,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     text: &ServiceText,
 ) -> Option<String> {
     let d = spells.get(wire.spell)?;
@@ -153,7 +152,7 @@ pub(super) fn service_description(
                 && taught.effects[0] == SPELL_EFFECT_CREATE_ITEM
             {
                 if let Some(t) = items
-                    .template(taught.effect_item_type[0], 0, Ask::New(commands))
+                    .template(taught.effect_item_type[0], 0, ask)
                     .map(|item| item.description.clone())
                     .filter(|t| !t.is_empty())
                 {
