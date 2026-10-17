@@ -30,9 +30,9 @@ pub(crate) struct RemoteMotion {
     pub(crate) vertical_velocity: f32,
     /// The launch's `(cos, sin) * xyspeed`, frozen for the arc; `[0; 2]` on the ground.
     pub(crate) jump_xy_vel: [f32; 2],
-    /// The takeoff Z of this arc, `None` if the mover entered view airborne; on landing,
-    /// `fall_start_z - landing_z` is the fall height that gates the grunt and dust puff.
-    pub(crate) fall_start_z: Option<f32>,
+    /// This arc's takeoff height, `None` if the mover entered view airborne; on landing, its
+    /// drop to the landing is the fall height that gates the grunt and dust puff.
+    pub(crate) fall_start: Option<FallHeight>,
     /// Not-yet-due relayed moves by fire-time, the reference's `CMovement+0x150` queue.
     pub(crate) pending: std::collections::VecDeque<PendingMove>,
     pub(crate) relay: RelayChain,
@@ -40,6 +40,35 @@ pub(crate) struct RemoteMotion {
     /// since is our extrapolation.
     pub(crate) last_apply_ms: f64,
     pub(crate) last_apply_pos: [f32; 3],
+}
+
+/// A relayed pose's height in both frames its packet carries: the world's, and the deck's while
+/// aboard (`ON_TRANSPORT`'s tail).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FallHeight {
+    pub(crate) world_z: f32,
+    /// The transport's guid and the deck-local z.
+    pub(crate) aboard: Option<(u64, f32)>,
+}
+
+impl FallHeight {
+    fn of(ev: &RelayMove) -> Self {
+        Self {
+            world_z: ev.position[2],
+            aboard: ev.transport.as_ref().map(|t| (t.guid, t.pos.z)),
+        }
+    }
+
+    /// The drop from `self` down to `landing`. Aboard one transport at both ends it is the deck
+    /// frame's, where a rider's `+0x7c` lives (`0x7c6900` re-seats it from the local pose), so a
+    /// moving lift adds nothing. Otherwise it is the world's: a takeoff aboard reads the deck at
+    /// takeoff, where the reference's leave (`0x7c6790`) maps `+0x7c` by the deck at the leave.
+    fn drop_to(self, landing: Self) -> f32 {
+        match (self.aboard, landing.aboard) {
+            (Some((from, start)), Some((to, end))) if from == to => start - end,
+            _ => self.world_z - landing.world_z,
+        }
+    }
 }
 
 /// What `unit_move` did with an inbound relayed move: the `out=` field of the `rly` trace, which
@@ -272,8 +301,8 @@ pub(in crate::net) fn apply_move(
     // The `FALLING` to grounded edge is a landing; its fall height gates the grunt and dust puff.
     let was_falling = rm.flags & FALLING != 0;
     let (new_start, descent) =
-        fall_arc_step(was_falling, now_falling, rm.fall_start_z, ev.position[2]);
-    rm.fall_start_z = new_start;
+        fall_arc_step(was_falling, now_falling, rm.fall_start, FallHeight::of(ev));
+    rm.fall_start = new_start;
     if let Some(descent) = descent {
         landings.write(crate::creature_anim::HardLanding { entity: e, descent });
     }
@@ -545,19 +574,19 @@ pub(crate) fn jump_seed(jump: Option<JumpInfo>, fall_time: u32, feather: bool) -
     }
 }
 
-/// One packet's step of the landing predictor: `(fall_start_z, descent)`, the descent
+/// One packet's step of the landing predictor: `(fall_start, descent)`, the descent
 /// `takeoff - landing` only on the `FALLING` to grounded edge with a known takeoff.
 pub(in crate::net) fn fall_arc_step(
     was_falling: bool,
     now_falling: bool,
-    fall_start_z: Option<f32>,
-    packet_z: f32,
-) -> (Option<f32>, Option<f32>) {
+    fall_start: Option<FallHeight>,
+    packet: FallHeight,
+) -> (Option<FallHeight>, Option<f32>) {
     match (was_falling, now_falling) {
-        (false, true) => (Some(packet_z), None), // takeoff
-        (true, true) => (fall_start_z, None),    // still airborne
-        (true, false) => (None, fall_start_z.map(|start| start - packet_z)), // landing edge
-        (false, false) => (None, None),          // grounded
+        (false, true) => (Some(packet), None), // takeoff
+        (true, true) => (fall_start, None),    // still airborne
+        (true, false) => (None, fall_start.map(|start| start.drop_to(packet))), // landing edge
+        (false, false) => (None, None),        // grounded
     }
 }
 
@@ -698,7 +727,7 @@ mod under_floor {
             speed: 0.0,
             vertical_velocity: 0.0,
             jump_xy_vel: [0.0; 2],
-            fall_start_z: None,
+            fall_start: None,
             pending: std::collections::VecDeque::new(),
             relay: RelayChain::default(),
             last_apply_ms: 0.0,

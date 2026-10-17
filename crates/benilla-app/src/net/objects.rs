@@ -948,7 +948,7 @@ fn unit_move(
                 speed: 0.0,
                 vertical_velocity: 0.0,
                 jump_xy_vel: [0.0; 2],
-                fall_start_z: None,
+                fall_start: None,
                 pending: std::collections::VecDeque::new(),
                 relay: Default::default(),
                 last_apply_ms: now_ms,
@@ -1226,7 +1226,7 @@ fn spline_move_mode(
             rm.speed = 0.0;
             rm.vertical_velocity = 0.0;
             rm.jump_xy_vel = [0.0; 2];
-            rm.fall_start_z = None;
+            rm.fall_start = None;
         }
     }
 }
@@ -2187,7 +2187,7 @@ mod tests {
                 speed: 7.0,
                 vertical_velocity: 0.0,
                 jump_xy_vel: [0.0; 2],
-                fall_start_z: None,
+                fall_start: None,
                 relay: Default::default(),
                 last_apply_ms: 0.0,
                 last_apply_pos: [0.0; 3],

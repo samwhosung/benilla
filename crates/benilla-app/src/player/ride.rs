@@ -22,7 +22,7 @@ pub(super) fn carry(player: &mut Player, cam: &mut FlyCam, transports: &Transpor
                 // `to_euler` wraps to (−π, π]; a boat crossing that seam reads as a ±2π hop.
                 dyaw = (dyaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
-                player.pos = world;
+                player.carry_to(world);
                 player.face_yaw += dyaw;
                 player.model_yaw = wrap_pi(player.model_yaw + dyaw);
                 cam.yaw += dyaw;
@@ -32,6 +32,17 @@ pub(super) fn carry(player: &mut Player, cam: &mut FlyCam, transports: &Transpor
             }
             Err(_) => player.ride = None,
         }
+    }
+}
+
+impl Player {
+    /// Moves the rider to its deck-carried `world` feet, and the arc's launch height with it: a
+    /// rider's fall start `+0x7c` lives in the transport's frame (`0x7c6620` maps it at board and
+    /// leave), where the fall height (`0x7c60c0`) and FALLINGFAR (`0x633240`) measure it. A deck
+    /// pose is yaw-only, so the launch height moves by the feet's own vertical carry.
+    pub(super) fn carry_to(&mut self, world: Vec3) {
+        self.fall_start_y += world.y - self.pos.y;
+        self.pos = world;
     }
 }
 
@@ -156,5 +167,63 @@ pub(super) fn update_attachment(
             ride.local_pos = boat.compute_affine().inverse().transform_point3(feet);
             ride.boat_yaw = boat.rotation.to_euler(EulerRot::YXZ).0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::mover::fall_step;
+    use super::super::{GRAVITY, JUMP_SPEED, TERMINAL_VELOCITY};
+    use super::*;
+
+    /// Undercity's lift car 20652 descends 96.5 yd in 3.33 s (`TransportAnimation.dbc`).
+    const LIFT_DROP_SPEED: f32 = 28.95;
+
+    /// A 60 fps jump on a descending deck, carried every frame as `carry` does: the launch height
+    /// rides the deck, so the landing reads the deck-frame drop of a flat jump.
+    #[test]
+    fn a_jump_on_a_descending_lift_lands_with_no_fall_height() {
+        let dt = 1.0 / 60.0;
+        let mut deck_y = 100.0;
+        let mut p = Player {
+            pos: Vec3::new(0.0, deck_y, 0.0),
+            launch_vz: JUMP_SPEED,
+            ..Default::default()
+        };
+        let (mut height, mut vz) = (0.0_f32, JUMP_SPEED);
+        let (mut latched, mut frames) = (false, 0);
+        let descent = loop {
+            if frames > 0 {
+                deck_y -= LIFT_DROP_SPEED * dt;
+                p.carry_to(Vec3::new(0.0, deck_y + height, 0.0));
+            }
+            let launch_y = p.pos.y;
+            let (v1, mean) = fall_step(vz, dt, TERMINAL_VELOCITY);
+            vz = v1;
+            height += mean * dt;
+            let airborne = height > 0.0;
+            if !airborne {
+                height = 0.0;
+            }
+            p.pos.y = deck_y + height;
+            let edges = p.advance_airborne_arc(airborne, frames == 0, frames as f32 * dt, launch_y);
+            latched |= p.fall_far;
+            frames += 1;
+            if edges.landed {
+                break p.fall_start_y - p.pos.y;
+            }
+            assert!(frames < 120, "the arc lands");
+        };
+        let air_time = frames as f32 * dt;
+        assert!(
+            (air_time - 2.0 * JUMP_SPEED / GRAVITY).abs() < 2.0 * dt,
+            "a full flat arc, {air_time} s"
+        );
+        assert!(
+            descent.abs() < 0.01,
+            "a flat jump drops nothing in the deck's frame, not the deck's {descent} yd"
+        );
+        assert!(descent < crate::creature_anim::HARD_LANDING_DESCENT);
+        assert!(!latched, "nor does it latch FALLINGFAR");
     }
 }

@@ -413,7 +413,7 @@ pub(crate) struct Player {
     /// live flags read them instead of the keys; re-seeded by the air nudge, stale while grounded.
     pub(super) airborne_dirs: u32,
     /// Launch height (Bevy Y), the client's `StartFalling` z snapshot (`+0x7c`): the FALLINGFAR
-    /// distance leg measures descent below it.
+    /// distance leg measures descent below it. A rider's moves with the deck ([`Self::carry_to`]).
     pub(super) fall_start_y: f32,
     /// `MOVEFLAG_FALLINGFAR` latched for this arc ([`FALL_FAR_DROP`], [`FALL_FAR_TIME`]); only
     /// landing clears it, as the client's `StopFalling` does.

@@ -976,7 +976,7 @@ fn the_granted_modes_fold_into_the_flags_word_on_every_leg_but_our_own() {
         speed: 7.0,
         vertical_velocity: 0.0,
         jump_xy_vel: [0.0; 2],
-        fall_start_z: None,
+        fall_start: None,
         relay: Default::default(),
         last_apply_ms: 0.0,
         last_apply_pos: [0.0; 3],

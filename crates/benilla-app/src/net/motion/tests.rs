@@ -13,7 +13,7 @@ use crate::player::{GRAVITY, TERMINAL_VELOCITY};
 
 use super::facing::resolve_facing;
 use super::relay::RelayChain;
-use super::remote::{facing_lerp, fall_arc_step, jump_seed, reconcile_lerp};
+use super::remote::{facing_lerp, fall_arc_step, jump_seed, reconcile_lerp, FallHeight};
 use super::spline::monster_move_spline;
 use super::{RemoteMotion, Spline};
 
@@ -28,20 +28,55 @@ fn speeds() -> MoveSpeeds {
     }
 }
 
+/// A pose at world height `z`, off any transport.
+fn at(z: f32) -> FallHeight {
+    FallHeight {
+        world_z: z,
+        aboard: None,
+    }
+}
+
 #[test]
 fn remote_fall_arc_reports_height_only_on_the_landing_edge() {
-    assert_eq!(fall_arc_step(false, true, None, 100.0), (Some(100.0), None));
     assert_eq!(
-        fall_arc_step(true, true, Some(100.0), 80.0),
-        (Some(100.0), None)
+        fall_arc_step(false, true, None, at(100.0)),
+        (Some(at(100.0)), None)
     );
     assert_eq!(
-        fall_arc_step(true, false, Some(100.0), 70.0),
+        fall_arc_step(true, true, Some(at(100.0)), at(80.0)),
+        (Some(at(100.0)), None)
+    );
+    assert_eq!(
+        fall_arc_step(true, false, Some(at(100.0)), at(70.0)),
         (None, Some(30.0))
     );
     // Entered view mid-fall: no takeoff, no prediction.
-    assert_eq!(fall_arc_step(true, false, None, 70.0), (None, None));
-    assert_eq!(fall_arc_step(false, false, None, 70.0), (None, None));
+    assert_eq!(fall_arc_step(true, false, None, at(70.0)), (None, None));
+    assert_eq!(fall_arc_step(false, false, None, at(70.0)), (None, None));
+}
+
+/// A remote's flat jump on Undercity's lift car 20652, descending 28.95 yd/s for the 0.825 s
+/// arc: the deck-local heights measure it, not the world's 23.9 yd.
+#[test]
+fn a_remote_jump_on_a_descending_lift_lands_with_no_fall_height() {
+    const LIFT: u64 = 0x1fc0_0000_0000_0001;
+    let aboard = |world_z: f32| FallHeight {
+        world_z,
+        aboard: Some((LIFT, 0.4)),
+    };
+    let (start, _) = fall_arc_step(false, true, None, aboard(100.0));
+    let (_, descent) = fall_arc_step(true, false, start, aboard(100.0 - 28.95 * 0.825));
+    let descent = descent.expect("a takeoff seen, a landing reported");
+    assert!(
+        descent.abs() < 1e-6,
+        "no deck-frame drop, not the deck's {descent} yd"
+    );
+    // Boarding at the landing, a jump from the world onto the deck measures in the world.
+    let (start, _) = fall_arc_step(false, true, None, at(120.0));
+    assert_eq!(
+        fall_arc_step(true, false, start, aboard(100.0)),
+        (None, Some(20.0))
+    );
 }
 
 fn motion(flags: u32, orientation: f32) -> RemoteMotion {
@@ -54,7 +89,7 @@ fn motion(flags: u32, orientation: f32) -> RemoteMotion {
         speed: 0.0,
         vertical_velocity: 0.0,
         jump_xy_vel: [0.0, 0.0],
-        fall_start_z: None,
+        fall_start: None,
         relay: Default::default(),
         last_apply_ms: 0.0,
         last_apply_pos: [0.0, 0.0, 0.0],
