@@ -617,7 +617,7 @@ fn bad_arg(pos: usize, cause: Error) -> Error {
         to: None,
         pos,
         name: None,
-        cause: Arc::new(cause),
+        cause: std::rc::Rc::new(cause),
     }
 }
 

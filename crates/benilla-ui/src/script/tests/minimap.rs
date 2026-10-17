@@ -262,9 +262,10 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
         "m:SetMaskTexture(nil)",
         "m:SetMaskTexture({})",
     ] {
+        // Through `luaL_error` (`0x4ee555`), at the caller's line.
         assert_eq!(
             crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
-            "Usage: TestMinimap:SetMaskTexture(\"file\")",
+            "[string \"(chunk)\"]:1: Usage: TestMinimap:SetMaskTexture(\"file\")",
             "{chunk}"
         );
     }
@@ -276,7 +277,7 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
             &s.run(r#"CreateFrame("Minimap"):SetMaskTexture(false)"#)
                 .unwrap_err()
         ),
-        "Usage: <unnamed>:SetMaskTexture(\"file\")"
+        "[string \"(chunk)\"]:1: Usage: <unnamed>:SetMaskTexture(\"file\")"
     );
 
     assert!(s.eval::<bool>("return m.GetMaskTexture == nil").unwrap());

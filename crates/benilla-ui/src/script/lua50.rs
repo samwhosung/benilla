@@ -84,7 +84,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     install_bit(lua)?;
     install_gc(lua)?;
-    install_assert(lua)?;
 
     Ok(())
 }
@@ -189,42 +188,6 @@ fn install_gc(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
-}
-
-/// `assert` in its 5.0 shape (`luaB_assert 0x7031a0`): it answers only its first argument
-/// (`lua_settop(L, 1)` at `0x7031e5`) where 5.1 answers them all, and a false value raises
-/// argument 2 or `assertion failed!` (`0x872bdc`) through `luaL_error 0x6f4940`.
-fn install_assert(lua: &Lua) -> mlua::Result<()> {
-    let f = lua.create_function(|lua, args: mlua::MultiValue| {
-        let mut it = args.into_iter();
-        // `luaL_checkany 0x6f4bb0`: an absent argument 1 raises; an explicit `nil` takes the
-        // falsy leg below.
-        let Some(v) = it.next() else {
-            return Err(mlua::Error::RuntimeError(
-                "bad argument #1 to `assert' (value expected)".into(),
-            ));
-        };
-        if matches!(v, Value::Nil | Value::Boolean(false)) {
-            // `luaL_optlstring`: a string or a number; anything else raises its own bad
-            // argument, the type spelled as `luaT_typenames 0x811cd0` spells it.
-            let msg = match it.next() {
-                None | Some(Value::Nil) => "assertion failed!".to_string(),
-                Some(other) => match lua.coerce_string(other.clone())? {
-                    Some(s) => s.to_string_lossy(),
-                    None => {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "bad argument #2 to `assert' (string expected, got {})",
-                            type_name(&other)
-                        )))
-                    }
-                },
-            };
-            return Err(mlua::Error::RuntimeError(msg));
-        }
-        // `lua_settop(L, 1)`: the first argument alone, whatever else was passed.
-        Ok(v)
-    })?;
-    lua.globals().set("assert", f)
 }
 
 fn type_name(v: &Value) -> &'static str {
@@ -979,6 +942,86 @@ mod error_quoting_tests {
                 "a 5.1-quoted element survives in: {e}"
             );
         }
+    }
+
+    /// The client's engine functions and libraries raise through `luaL_error` (`0x6f4940`), which
+    /// prefixes `luaL_where(1)` (`0x6f48e0`), the calling Lua function's `chunk:line: `, and word
+    /// a bad argument as `luaL_argerror` (`0x6f4810`) does. Only `PlaySound`, `PlayMusic` and
+    /// `PlaySoundFile` raise bare, through `lua_error` (`0x458708`, `0x458758`, `0x4587a1`).
+    #[test]
+    fn a_rust_callbacks_error_carries_its_callers_position() {
+        let s = UiScript::new().unwrap();
+        let raised = |body: &str| -> String {
+            s.lua()
+                .load(format!(
+                    "local ok, e = pcall(function()\n{body}\nend) return tostring(e)"
+                ))
+                .set_name("=X.lua")
+                .eval::<String>()
+                .unwrap()
+        };
+        assert_eq!(raised("GetCVar()"), "X.lua:2: Usage: GetCVar(\"cvar\")");
+        assert_eq!(raised("assert(false, 'x')"), "X.lua:2: x");
+        assert_eq!(raised("assert(nil)"), "X.lua:2: assertion failed!");
+        for sound in ["PlaySound()", "PlayMusic()", "PlaySoundFile()"] {
+            assert!(
+                raised(sound).starts_with("Usage: "),
+                "{sound}: {}",
+                raised(sound)
+            );
+        }
+        // A typed argument fails as `luaL_checktype` words it, under the name it was called by.
+        let typed = s
+            .lua()
+            .create_function(|_, (_t, _n): (mlua::Table, f64)| Ok(()))
+            .unwrap();
+        s.lua().globals().set("Typed", typed).unwrap();
+        assert_eq!(
+            raised("Typed(nil)"),
+            "X.lua:2: bad argument #1 to `Typed' (table expected, got nil)"
+        );
+        assert_eq!(
+            raised("local f = Typed f({})"),
+            "X.lua:2: bad argument #2 to `f' (number expected, got no value)"
+        );
+        assert_eq!(
+            raised("local o = {m = Typed} o:m()"),
+            "X.lua:2: bad argument #1 to `m' (number expected, got no value)"
+        );
+    }
+
+    /// A Lua error that comes back through a Rust callback goes on as it was raised: the value
+    /// itself, as `lua_error` raises what a protected call left, never its text again, and never
+    /// with a second position.
+    #[test]
+    fn a_lua_error_passes_through_a_callback_unchanged() {
+        let s = UiScript::new().unwrap();
+        let through = s
+            .lua()
+            .create_function(|_, f: mlua::Function| f.call::<()>(()))
+            .unwrap();
+        s.lua().globals().set("Through", through).unwrap();
+        assert!(s
+            .eval::<bool>(
+                "local E = {} local ok, e = pcall(Through, function() error(E) end) return e == E"
+            )
+            .unwrap());
+        assert_eq!(
+            s.lua()
+                .load(
+                    "local ok, e = pcall(function() Through(function() error('boom') end) end) \
+                     return e"
+                )
+                .set_name("=Y.lua")
+                .eval::<String>()
+                .unwrap(),
+            "Y.lua:1: boom"
+        );
+        assert!(s
+            .eval::<bool>(
+                "local ok, e = pcall(Through, function() error('\\233', 0) end) return e == '\\233'"
+            )
+            .unwrap());
     }
 
     /// `select` is 5.1's; 5.0 counts arguments with `arg.n`, and the host with

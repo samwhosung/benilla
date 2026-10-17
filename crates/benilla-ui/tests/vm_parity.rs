@@ -181,6 +181,7 @@ const CASES: &[(&str, &str)] = &[
     ("err_arith", "return E(function() local x return x + 1 end) .. E(function() return {} * 2 end)"),
     ("error_fn", "return E(function() error('boom') end) .. E(function() error('noloc', 0) end) .. string.sub(E(function() error({}) end), 1, 11) .. E(function() error(42) end)"),
     ("error_level2", "local function f() error('deep', 2) end return E(function() f() end)"),
+    // `luaB_assert` raises through `luaL_error` (`0x7031d6`), at the caller's line.
     ("assert", "return E(function() assert(false) end) .. E(function() assert(nil, 'msg') end) .. S(assert(1, 2, 3))"),
     ("bad_arg", "return E(function() string.sub() end) .. E(function() strfind(nil, 'x') end) .. E(function() setmetatable(1, {}) end) .. E(function() math.floor('x') end)"),
     ("bad_self", "local t = {f = string.len} return E(function() return t:f() end)"),
@@ -809,6 +810,8 @@ const SWEEP_FNS: &[&str] = &[
     "pairs",
     "getmetatable",
     "setmetatable",
+    // `assert` and `loadstring` check their arguments as `luaL_argerror` words it (`0x6f4810`),
+    // named `?` when a C function, `pcall`, called them.
     "assert",
     "error",
     "pcall",

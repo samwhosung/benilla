@@ -8,10 +8,10 @@
 //! used after its state is gone panics. A Rust callback runs with the `&mut Vm` the interpreter
 //! hands it; while it runs, every access reaches the VM through that reference, so one chain of
 //! borrows covers each access, and a handle lets go of its root through the root table alone,
-//! never the VM. A callback's error is raised in Lua as its message, a string, as a 1.12 C
-//! function raises one; a callback's panic is raised as an error value `pcall` can catch, and
-//! resumes as a panic if it reaches Rust, as mlua's does. A Lua error that reaches Rust is a
-//! [`Error::RuntimeError`] with that value's text.
+//! never the VM. A callback's error is raised in Lua as a 1.12 C function raises one, through
+//! `luaL_error`'s rules ([`raise`]); a callback's panic is raised as an error value `pcall` can
+//! catch, and resumes as a panic if it reaches Rust, as mlua's does. A Lua error that reaches
+//! Rust is an [`Error::LuaValue`] with that value and its text.
 
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
@@ -221,6 +221,62 @@ fn take_panic(vm: &Vm, e: benilla_lua::Value) -> Option<Box<dyn Any + Send>> {
         return None;
     }
     PANICS.with(|p| p.borrow_mut().get_mut(&tag).and_then(|e| e.0.take()))
+}
+
+/// A callback's error raised in Lua as the client's C functions raise theirs. A message goes
+/// through `luaL_error` (`0x6f4940`), which prefixes `luaL_where(1)` (`0x6f48e0`), the calling
+/// Lua function's `chunk:line: `; a bad argument is worded as `luaL_argerror` (`0x6f4810`) and
+/// `luaL_typerror` (`0x6f48a0`) word it, named as the caller called the function; a Lua error
+/// that came back through the callback, or an [`Error::bare`] one, is raised as it is, as
+/// `lua_error` (`0x6f4440`) raises a value.
+fn raise(lua: &Lua, nargs: usize, e: Error) -> LuaError {
+    let vm = lua.vm();
+    match e {
+        Error::LuaValue { value: Some(v), .. } => {
+            let x = lua.unwrap(&v);
+            vm.throw(x)
+        }
+        Error::LuaValue {
+            message,
+            value: None,
+        }
+        | Error::SyntaxError { message, .. } => {
+            let msg = vm.str(message.as_bytes());
+            vm.throw(msg)
+        }
+        // 5.0's memory error carries no position.
+        Error::MemoryError(_) => vm.memory_error(),
+        Error::CallbackError { cause, .. } | Error::WithContext { cause, .. } => {
+            raise(lua, nargs, (*cause).clone())
+        }
+        Error::BadArgument { pos, cause, .. } => match &*cause {
+            // `luaL_checktype` and the `luaL_check*` family: `T expected, got U`, `no value` for
+            // an argument past the last.
+            Error::FromLuaConversionError { to, message, .. }
+                if message.as_deref() != Some("out of range") =>
+            {
+                match lua_type(to) {
+                    Some(t) => vm.type_arg_error(nargs, pos, t),
+                    None => vm.arg_error(pos, &cause.lua_message()),
+                }
+            }
+            other => vm.arg_error(pos, &other.lua_message()),
+        },
+        other => vm.error_at(1, &other.lua_message()),
+    }
+}
+
+/// The Lua type a conversion's Rust target reads, as `luaT_typenames` (`0x811cd0`) spells it.
+fn lua_type(rust: &str) -> Option<&'static str> {
+    Some(match rust {
+        "table" | "Vec" | "HashMap" | "BTreeMap" => "table",
+        "function" => "function",
+        "string" | "String" => "string",
+        "lightuserdata" => "userdata",
+        "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "i128" | "u128" | "isize"
+        | "usize" | "f32" | "f64" => "number",
+        _ => return None,
+    })
 }
 
 const DESTROYED: &str = "Lua instance is destroyed";
@@ -541,11 +597,7 @@ impl Lua {
                 }));
                 let out = match res {
                     Ok(Ok(n)) => Ok(n),
-                    Ok(Err(e)) => {
-                        let vm = lua.vm();
-                        let msg = vm.str(e.lua_message().as_bytes());
-                        Err(vm.throw(msg))
-                    }
+                    Ok(Err(e)) => Err(raise(&lua, nargs, e)),
                     Err(payload) => Err(raise_panic(lua.vm(), payload)),
                 };
                 out
@@ -811,7 +863,10 @@ impl Lua {
         if let Some(payload) = take_panic(self.vm(), e) {
             std::panic::resume_unwind(payload);
         }
-        Error::RuntimeError(self.vm().display(e))
+        Error::LuaValue {
+            message: self.vm().display(e),
+            value: Some(Box::new(self.wrap(e))),
+        }
     }
 }
 

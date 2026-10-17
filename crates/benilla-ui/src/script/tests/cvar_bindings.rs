@@ -86,9 +86,10 @@ fn set_cvar_raises_the_reference_usage_without_a_name() {
 fn get_cvar_raises_the_reference_usage_without_a_name() {
     let s = script_with(&[("5", "a")]);
     for chunk in ["GetCVar()", "GetCVar(nil)", "GetCVar({})", "GetCVar(true)"] {
+        // Through `luaL_error` (`0x488bb7`), at the caller's line.
         assert_eq!(
             crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
-            "Usage: GetCVar(\"cvar\")",
+            "[string \"(chunk)\"]:1: Usage: GetCVar(\"cvar\")",
             "{chunk}"
         );
     }
@@ -105,9 +106,10 @@ fn get_cvar_default_raises_the_reference_usage_without_a_name() {
         "GetCVarDefault(nil)",
         "GetCVarDefault({})",
     ] {
+        // Through `luaL_error` (`0x488d07`), at the caller's line.
         assert_eq!(
             crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
-            "Usage: SetCVarDefault(\"cvar\")",
+            "[string \"(chunk)\"]:1: Usage: SetCVarDefault(\"cvar\")",
             "{chunk}"
         );
     }
@@ -150,7 +152,10 @@ fn set_cvar_refuses_a_read_only_row_only_once_flagged() {
             raised(&s, &format!("SetCVar({upper:?}, \"after\", \"TOKEN\")"))
                 .lines()
                 .next(),
-            Some(format!("runtime error: \"{upper}\" is read-only").as_str()),
+            // Through `luaL_error` (`0x488c78`), at the caller's line.
+            Some(
+                format!("runtime error: [string \"(chunk)\"]:1: \"{upper}\" is read-only").as_str()
+            ),
             "the name as passed, any case"
         );
         assert_eq!(get(&s, name), "before", "{name} kept its value");
@@ -301,9 +306,10 @@ fn register_cvar_creates_thirty_cvars_per_process() {
     s.run("RegisterCVar('knob29', '1')").unwrap();
     assert_eq!(s.cvar_lua_created(), 30);
     for chunk in ["RegisterCVar('knob30', '1')", "RegisterCVar('knob0', '1')"] {
+        // Through `luaL_error` (`0x488b34`), at the caller's line.
         assert_eq!(
             crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
-            "Attempted to register too many CVars",
+            "[string \"(chunk)\"]:1: Attempted to register too many CVars",
             "{chunk}"
         );
     }

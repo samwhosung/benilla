@@ -15,7 +15,7 @@ fn eval(s: &UiScript, src: &str) -> String {
 /// An error's message alone: the C build's carries mlua's category and a traceback.
 fn message(e: &mlua::Error) -> String {
     let s = match e {
-        mlua::Error::RuntimeError(m) => m.clone(),
+        mlua::Error::RuntimeError(m) | mlua::Error::LuaValue { message: m, .. } => m.clone(),
         other => other.to_string(),
     };
     s.lines().next().unwrap_or("").to_string()

@@ -54,6 +54,12 @@ impl super::UiScript {
     }
 }
 
+/// The three sound verbs raise their usage text with `lua_error` (`0x458708`, `0x458758`,
+/// `0x4587a1`), not `luaL_error`: no caller's position.
+fn bare(e: mlua::Error) -> mlua::Error {
+    mlua::Error::bare(super::stdlib::lua_message(&e))
+}
+
 /// Register the sound and music globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
@@ -67,7 +73,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 lua,
                 args.front().cloned().unwrap_or(Value::Nil),
                 "Usage: PlaySoundFile(\"soundfile\")",
-            )?;
+            )
+            .map_err(bare)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.sound_queue.push(SoundRequest::File(path));
             Ok(1)
@@ -82,7 +89,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 lua,
                 args.front().cloned().unwrap_or(Value::Nil),
                 "Usage: PlaySound(\"sound\")",
-            )?;
+            )
+            .map_err(bare)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // During the UI load a by-name play is dropped before any other gate (`0x458046`,
             // `0x45804d`).
@@ -102,7 +110,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 lua,
                 args.front().cloned().unwrap_or(Value::Nil),
                 "Usage: PlayMusic(\"music\")",
-            )?;
+            )
+            .map_err(bare)?;
             lua.app_data_mut::<Model>()
                 .expect("model app_data")
                 .music_queue

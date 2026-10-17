@@ -15,7 +15,7 @@ use mlua::{Lua, Value, Variadic};
 pub fn lua_message(e: &mlua::Error) -> String {
     match e {
         mlua::Error::SyntaxError { message, .. } => message.clone(),
-        mlua::Error::RuntimeError(m) => m
+        mlua::Error::RuntimeError(m) | mlua::Error::LuaValue { message: m, .. } => m
             .rfind("\nstack traceback:\n")
             .map_or(m.as_str(), |at| &m[..at])
             .to_string(),

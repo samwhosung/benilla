@@ -1,6 +1,9 @@
-//! mlua's `Error`, the variants benilla's code builds or matches, with mlua's `Display`.
+//! mlua's `Error`, the variants benilla's code builds or matches, with mlua's `Display`. An error
+//! may hold a Lua value of its state ([`Error::LuaValue`]), so it stays on the state's thread, and
+//! a wrapped cause is an `Rc` where mlua's is an `Arc`.
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -11,6 +14,15 @@ pub enum Error {
         incomplete_input: bool,
     },
     RuntimeError(String),
+    /// A Lua error value, raised in Lua as it is, with no position: one a call into Lua answered
+    /// (`message` its text), which a callback that passes it on raises again unchanged, as a C
+    /// function `lua_error`s the value its `lua_pcall` left; or, with no value, `message` raised
+    /// bare, as the client's `PlaySound` raises its usage text (`0x458708`). Its `Display` is a
+    /// [`Error::RuntimeError`]'s.
+    LuaValue {
+        message: String,
+        value: Option<Box<crate::Value>>,
+    },
     MemoryError(String),
     /// A callback's arguments and results overflow the stack a C function may use.
     StackError,
@@ -18,7 +30,7 @@ pub enum Error {
         to: Option<String>,
         pos: usize,
         name: Option<String>,
-        cause: Arc<Error>,
+        cause: Rc<Error>,
     },
     ToLuaConversionError {
         from: String,
@@ -32,11 +44,11 @@ pub enum Error {
     },
     CallbackError {
         traceback: String,
-        cause: Arc<Error>,
+        cause: Rc<Error>,
     },
     WithContext {
         context: String,
-        cause: Arc<Error>,
+        cause: Rc<Error>,
     },
     ExternalError(Arc<dyn std::error::Error + Send + Sync>),
 }
@@ -48,6 +60,14 @@ impl Error {
         Error::RuntimeError(message.to_string())
     }
 
+    /// `message` raised as it is, with no position: `lua_error`, not `luaL_error`.
+    pub fn bare<T: fmt::Display>(message: T) -> Self {
+        Error::LuaValue {
+            message: message.to_string(),
+            value: None,
+        }
+    }
+
     pub fn external<T: Into<Box<dyn std::error::Error + Send + Sync>>>(err: T) -> Self {
         Error::ExternalError(err.into().into())
     }
@@ -57,7 +77,7 @@ impl Error {
     pub(crate) fn lua_message(&self) -> String {
         match self {
             Error::SyntaxError { message, .. } => message.clone(),
-            Error::RuntimeError(m) => m.clone(),
+            Error::RuntimeError(m) | Error::LuaValue { message: m, .. } => m.clone(),
             Error::CallbackError { cause, .. } | Error::WithContext { cause, .. } => {
                 cause.lua_message()
             }
@@ -70,7 +90,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::SyntaxError { message, .. } => write!(f, "syntax error: {message}"),
-            Error::RuntimeError(msg) => write!(f, "runtime error: {msg}"),
+            Error::RuntimeError(msg) | Error::LuaValue { message: msg, .. } => {
+                write!(f, "runtime error: {msg}")
+            }
             Error::MemoryError(msg) => write!(f, "memory error: {msg}"),
             Error::StackError => write!(
                 f,
@@ -131,14 +153,14 @@ impl<T> ErrorContext for Result<T> {
     fn context<C: fmt::Display>(self, context: C) -> Self {
         self.map_err(|e| Error::WithContext {
             context: context.to_string(),
-            cause: Arc::new(e),
+            cause: Rc::new(e),
         })
     }
 
     fn with_context<C: fmt::Display>(self, f: impl FnOnce(&Error) -> C) -> Self {
         self.map_err(|e| Error::WithContext {
             context: f(&e).to_string(),
-            cause: Arc::new(e),
+            cause: Rc::new(e),
         })
     }
 }

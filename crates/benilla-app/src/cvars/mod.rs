@@ -2578,9 +2578,10 @@ mod tests {
         let mut second = UiScript::new().unwrap();
         cvars.seed_vm(&mut second);
         let err = second.run("RegisterCVar('knob0', '1')").unwrap_err();
+        // Through `luaL_error` (`0x488b34`), at the caller's line.
         assert_eq!(
             benilla_ui::script::lua_message(&err),
-            "Attempted to register too many CVars",
+            "[string \"(chunk)\"]:1: Attempted to register too many CVars",
             "at the limit even a re-declaration raises"
         );
         assert!(second.run("RegisterCVar('knob31', '1')").is_err());
