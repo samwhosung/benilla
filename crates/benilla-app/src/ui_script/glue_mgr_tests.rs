@@ -796,11 +796,11 @@ fn the_queue_estimate_stands_between_packets_and_a_connect_clears_it() {
             other => other.to_string(),
         })
     };
-    assert_eq!(shown(&m, last), "Realm 93 15");
-    assert_eq!(shown(&m, last + 300_000), "Realm 93 10");
+    assert_eq!(shown(&m, last), "\nRealm 93 15", "after the blank line");
+    assert_eq!(shown(&m, last + 300_000), "\nRealm 93 10");
     assert_eq!(
         shown(&m, last + 1_000_000),
-        "QUEUE_NAME_TIME_LEFT_SECONDS",
+        "\nQUEUE_NAME_TIME_LEFT_SECONDS",
         "past zero"
     );
     m.begin_connect();

@@ -2,17 +2,16 @@
 //! `SMSG_AUTH_RESPONSE(AUTH_WAIT_QUEUE)` carries a position, is re-sent as the line moves, and
 //! ends with `AUTH_OK`; it is a wait, not a refusal.
 //!
-//! The arithmetic is the reference's (`CGlueMgr::UpdateQueuePosition`, `0x46ae50`), including
-//! its divide-before-multiply truncation: each packet computes the estimate once, against its own
-//! time, and stores it; the dialog counts the stored figure down. Three reference defects are not
-//! reproduced: the 32-bit overflow, the leading blank line and the stale-position redisplay on a
-//! truncated packet ([`benilla_protocol`]'s parser).
+//! The arithmetic is the reference's (`CGlueMgr::UpdateQueuePosition`, `0x46ae50`), in its 32
+//! bits, divide-before-multiply truncation and unguarded overflow included: each packet computes
+//! the estimate once, against its own time, and stores it; the dialog counts the stored figure
+//! down. The dialog's text is the reference's too, the blank line before the estimate included.
 
 /// The reference's ring of `(tick, position)` samples (`0xb41cf8..0xb41d14` ticks,
 /// `0xb41d18..0xb41d34` positions).
 const SAMPLES: usize = 8;
 
-const MINUTE_MS: i64 = 60_000;
+const MINUTE_MS: i32 = 60_000;
 
 /// The reference's queue-estimate ring: `[0]` is the newest sample, `[SAMPLES - 1]` the oldest.
 /// Sampled once per queue packet, on no timer, so its only clock is the server's send cadence.
@@ -22,8 +21,8 @@ pub(crate) struct QueueEstimate {
     tick_ms: [u32; SAMPLES],
     position: [u32; SAMPLES],
     /// `[0xb41df0]`: the wait in ms the last packet that moved the queue forward computed; 0 until
-    /// one has, and kept by a packet that stalls or steps back.
-    estimate_ms: i64,
+    /// one has, and kept by a packet that stalls or steps back. A signed 32-bit word, as there.
+    estimate_ms: i32,
 }
 
 impl QueueEstimate {
@@ -49,28 +48,32 @@ impl QueueEstimate {
         (self.tick_ms[0] != 0).then_some(self.position[0])
     }
 
-    /// The wait the ring gives at its newest tick, in ms: `floor((newest_tick - oldest_tick) /
-    /// (oldest_pos - newest_pos)) * newest_pos`, dividing first (`idiv` at `0x46aed3` before
-    /// `imul` at `0x46aed5`). None until the ring is full and the queue has moved forward, as in
-    /// the reference.
-    ///
-    /// Computed in `i64`: the reference's 32-bit multiply overflows unguarded, which on a long
-    /// queue shows an absurd countdown.
-    fn computed_ms(&self) -> Option<i64> {
+    /// The wait the ring gives at its newest tick, in ms: `-(((newest_tick - oldest_tick) /
+    /// (newest_pos - oldest_pos)) * newest_pos)`, every step a signed 32-bit word: `idiv` at
+    /// `0x46aed3` truncates toward zero before `imul` at `0x46aed5`, which wraps unguarded, then
+    /// `neg`. A wait past `i32::MAX` ms therefore wraps, and one that wraps negative reads as no
+    /// estimate. None until the ring is full and the queue has moved forward, as in the reference.
+    fn computed_ms(&self) -> Option<i32> {
         if self.tick_ms[SAMPLES - 1] == 0 {
             return None; // fewer than SAMPLES packets so far
         }
-        let moved = i64::from(self.position[SAMPLES - 1]) - i64::from(self.position[0]);
-        if moved <= 0 {
+        // Negative once the queue moved forward (`0x46aec8` `sub`, `0x46aece` `jns`).
+        let gained = (self.position[0] as i32).wrapping_sub(self.position[SAMPLES - 1] as i32);
+        if gained >= 0 {
             return None; // stalled, or going backwards
         }
-        let elapsed = i64::from(self.tick_ms[0].wrapping_sub(self.tick_ms[SAMPLES - 1]));
-        let per_place = elapsed / moved;
-        Some(per_place * i64::from(self.position[0]))
+        let elapsed = self.tick_ms[0].wrapping_sub(self.tick_ms[SAMPLES - 1]) as i32;
+        // `wrapping_div` stands where `i32::MIN / -1` would fault the reference's `idiv`.
+        let per_place = elapsed.wrapping_div(gained);
+        Some(
+            per_place
+                .wrapping_mul(self.position[0] as i32)
+                .wrapping_neg(),
+        )
     }
 
-    /// The stored estimate, if there is one: `[0xb41df0]` above 0 (`0x46bcb8`).
-    pub(crate) fn estimate_ms(&self) -> Option<i64> {
+    /// The stored estimate, if there is one: `[0xb41df0]` above 0, signed (`0x46bcb8` `jle`).
+    pub(crate) fn estimate_ms(&self) -> Option<i32> {
         (self.estimate_ms > 0).then_some(self.estimate_ms)
     }
 
@@ -78,13 +81,14 @@ impl QueueEstimate {
     /// read it off the glue VM's own `GlueStrings.lua`. The reference reads `realm` from the `realmName` CVar it wrote on the way
     /// in, so the `_NAME` variants are the ones that render in practice.
     ///
-    /// The shown wait is `tick[0] + estimate - now` (`0x46bcc9`-`0x46bcd7`): the estimate stands
-    /// between packets, so a silent queue counts down. Once it passes a minute short the text is
-    /// "< 1 minute" and stays so at zero and below (`0x46bcd9`, `0x46bcf4`); with no estimate yet
-    /// it is "Calculating...".
+    /// The shown wait is `tick[0] + estimate - now` in 32 bits (`0x46bcc9`-`0x46bcd7`): the
+    /// estimate stands between packets, so a silent queue counts down. Once it passes a minute
+    /// short the text is "< 1 minute" and stays so at zero and below (`0x46bcd9`, `0x46bcfa`);
+    /// with no estimate yet it is "Calculating...".
     ///
-    /// The reference composes `"%s\n%s"` with an always-empty first half, a leading blank line in
-    /// two of three states; that blank line is not reproduced.
+    /// The two estimate texts follow a blank line: `0x46bdd7` joins the status text and the queue
+    /// line with `"%s\n%s"`, and the status text is empty while the queue's operation runs
+    /// (`0x5aa991` to `0x5aaa39`). The unknown text is shown alone (`0x46be09`).
     pub(crate) fn text_by(
         &self,
         now_ms: u32,
@@ -92,15 +96,22 @@ impl QueueEstimate {
         lookup: impl Fn(&str) -> String,
     ) -> String {
         let (key, remaining) = self.key(now_ms, realm);
-        self.fill(&lookup(key), realm, remaining)
+        let line = self.fill(&lookup(key), realm, remaining);
+        if remaining.is_some() {
+            format!("\n{line}")
+        } else {
+            line
+        }
     }
 
     /// The `QUEUE_*` key for this state, and the wait left in ms once there is an estimate.
-    fn key(&self, now_ms: u32, realm: Option<&str>) -> (&'static str, Option<i64>) {
+    fn key(&self, now_ms: u32, realm: Option<&str>) -> (&'static str, Option<i32>) {
         let named = realm.is_some_and(|r| !r.is_empty());
-        let remaining = self
-            .estimate_ms()
-            .map(|est| i64::from(self.tick_ms[0]) + est - i64::from(now_ms));
+        let remaining = self.estimate_ms().map(|est| {
+            (self.tick_ms[0] as i32)
+                .wrapping_add(est)
+                .wrapping_sub(now_ms as i32)
+        });
         let key = match (named, remaining) {
             (true, None) => "QUEUE_NAME_TIME_LEFT_UNKNOWN",
             (true, Some(ms)) if ms < MINUTE_MS => "QUEUE_NAME_TIME_LEFT_SECONDS",
@@ -113,7 +124,7 @@ impl QueueEstimate {
     }
 
     /// The template's holes: the realm's name, the position, then the minutes.
-    fn fill(&self, template: &str, realm: Option<&str>, remaining: Option<i64>) -> String {
+    fn fill(&self, template: &str, realm: Option<&str>, remaining: Option<i32>) -> String {
         let position = self.position().unwrap_or(0);
         let mut out = template.to_string();
         if let Some(realm) = realm.filter(|r| !r.is_empty()) {
@@ -222,12 +233,62 @@ mod tests {
             q.sample(p, 1_000 + (10_000 * i as u32) / 7);
         }
         let last = 1_000 + 10_000;
-        let elapsed = i64::from(last - 1_000);
+        let elapsed = last - 1_000;
         assert_eq!(q.estimate_ms(), Some((elapsed / 7) * 93));
         assert_ne!(
             (elapsed / 7) * 93,
             elapsed * 93 / 7,
             "this fixture must actually distinguish the two orders",
+        );
+    }
+
+    /// The multiply wraps in 32 bits (`0x46aed5`): 50 000 ms a place with 99 993 ahead is
+    /// 4 999 650 000 ms, which the reference's word holds as 704 682 704.
+    #[test]
+    fn a_long_wait_wraps_in_32_bits() {
+        let places: Vec<u32> = (99_993..=100_000).rev().collect();
+        let (q, last) = ring_of(&places, 50_000);
+        assert_eq!(q.estimate_ms(), Some(704_682_704));
+        assert_ne!(
+            i64::from(q.estimate_ms().unwrap()),
+            50_000 * 99_993,
+            "the 64-bit figure is not the reference's"
+        );
+        let text = q.text_by(last, Some("Benilla"), english);
+        assert!(text.ends_with("Estimated time: 11744 min"), "{text}");
+    }
+
+    /// A wait that wraps negative is no estimate (`0x46bcb8` `jle`): 30 000 ms a place with 99 993
+    /// ahead wraps to -1 295 177 296, and the dialog reads "Calculating...".
+    #[test]
+    fn a_wait_that_wraps_negative_reads_calculating() {
+        let places: Vec<u32> = (99_993..=100_000).rev().collect();
+        let (q, last) = ring_of(&places, 30_000);
+        assert_eq!(q.estimate_ms(), None);
+        let text = q.text_by(last, Some("Benilla"), english);
+        assert_eq!(
+            text,
+            "Benilla is Full\nPosition in queue: 99993\nEstimated time: Calculating..."
+        );
+    }
+
+    /// The two estimate texts follow a blank line, the empty status text joined by `"%s\n%s"`
+    /// (`0x46bdd7`); the unknown text stands alone (`0x46be09`).
+    #[test]
+    fn the_estimate_texts_follow_a_blank_line() {
+        let (q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
+        assert_eq!(
+            q.text_by(last, Some("Benilla"), english),
+            "\nBenilla is Full\nPosition in queue: 93\nEstimated time: 1 min"
+        );
+        assert_eq!(
+            q.text_by(last + 60_000, None, english),
+            "\nRealm is Full\nPosition in queue: 93\nEstimated time: < 1 minute"
+        );
+        let (q, last) = ring_of(&[100, 99, 98], 1_000);
+        assert_eq!(
+            q.text_by(last, None, english),
+            "Realm is Full\nPosition in queue: 98\nEstimated time: Calculating..."
         );
     }
 
