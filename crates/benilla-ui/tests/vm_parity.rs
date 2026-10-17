@@ -176,6 +176,7 @@ const CASES: &[(&str, &str)] = &[
     ("err_index_global", "return E(function() return undefined_thing.x end)"),
     ("err_index_local", "return E(function() local t return t.x end)"),
     ("err_index_field", "return E(function() local t = {} return t.a.b end)"),
+    // `getobjname` names no upvalue (`0x6fc5e0`).
     ("err_index_upvalue", "local up return E(function() return up.x end)"),
     ("err_call", "return E(function() undefined_fn() end) .. E(function() local t = {} t.m() end) .. E(function() local t = {} t:m() end)"),
     ("err_arith", "return E(function() local x return x + 1 end) .. E(function() return {} * 2 end)"),
@@ -216,6 +217,7 @@ const CASES: &[(&str, &str)] = &[
     ("for_var_assigned", "local s = 0 for i = 1, 5 do s = s + i i = i + 10 end return S(s)"),
     ("until_sees_body_locals", "local n = 0 repeat local stop = n >= 2 n = n + 1 until stop or n > 5 return S(n)"),
     ("pow_metamethod", "local t = setmetatable({}, {__pow = function(a, b) return 'mm' end}) return S(E(function() return t ^ 2 end), E(function() return 2 ^ t end))"),
+    // `getobjname` names no upvalue (`0x6fc5e0`).
     ("upvalue_error_name", "local u return S(E(function() return u + 1 end), E(function() return u.x end), E(function() u() end))"),
     ("vararg_expr", "return S(E(loadstring, 'return function(...) return ... end'))"),
     // ── Numbers as the C library reads and writes them ──

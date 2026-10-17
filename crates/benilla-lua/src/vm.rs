@@ -3259,8 +3259,8 @@ fn ran_since(seg: *const Op, ip: *const Op, p: &Proto) -> u64 {
     (i - s - free) as u64
 }
 
-/// 5.1's `getobjname` over a prototype: a local's name, else what a symbolic run from the start
-/// says last wrote `reg` before `pc`. Names are C strings there, so a constant's stops at a NUL.
+/// `getobjname` (`0x6fc4c0`) over a prototype: a local's name, else what a symbolic run from the
+/// start says last wrote `reg` before `pc`. Names are C strings there, so a constant's stops at a NUL.
 fn objname_in(p: &Proto, heap: &Heap, pc: usize, reg: usize) -> Option<(&'static str, Vec<u8>)> {
     if let Some(n) = p.local_name(reg as Reg, pc) {
         return Some(("local", n.to_vec()));
@@ -3281,12 +3281,7 @@ fn objname_in(p: &Proto, heap: &Heap, pc: usize, reg: usize) -> Option<(&'static
             _ => None,
         },
         Op::Move(a, b) if (b as usize) < (a as usize) => objname_in(p, heap, pc, b as usize),
-        Op::GetUpval(_, u) => Some((
-            "upvalue",
-            p.upval_names
-                .get(u as usize)
-                .map_or(b"?".to_vec(), |n| n.to_vec()),
-        )),
+        // The client's `getobjname` has no `OP_GETUPVAL` arm (`0x6fc5e0`): an upvalue is unnamed.
         Op::GetTable(_, _, c) => Some(("field", kname(c))),
         Op::GetField(_, _, kx) => Some(("field", kname(kx + RK_CONST))),
         Op::SelfOp(_, _, c) => Some(("method", kname(c))),

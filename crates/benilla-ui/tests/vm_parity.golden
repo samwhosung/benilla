@@ -93,7 +93,7 @@ break_closure	1,2
 err_index_global	err t:32: attempt to index global `undefined_thing\' (a nil value)
 err_index_local	err t:32: attempt to index local `t\' (a nil value)
 err_index_field	err t:32: attempt to index field `a\' (a nil value)
-err_index_upvalue	err t:32: attempt to index upvalue `up\' (a nil value)
+err_index_upvalue	err t:32: attempt to index a nil value
 err_call	err t:32: attempt to call global `undefined_fn\' (a nil value)err t:32: attempt to call field `m\' (a nil value)err t:32: attempt to call method `m\' (a nil value)
 err_arith	err t:32: attempt to perform arithmetic on local `x\' (a nil value)err t:32: attempt to perform arithmetic on a table value
 error_fn	err t:32: boomerr nolocerr tableerr t:32: 42
@@ -122,7 +122,7 @@ generic_for_fresh_var	nil,nil
 for_var_assigned	1
 until_sees_body_locals	3
 pow_metamethod	\"ok \\\"mm\\\"\",\"ok \\\"mm\\\"\"
-upvalue_error_name	\"err t:32: attempt to perform arithmetic on upvalue `u\' (a nil value)\",\"err t:32: attempt to index upvalue `u\' (a nil value)\",\"err t:32: attempt to call upvalue `u\' (a nil value)\"
+upvalue_error_name	\"err t:32: attempt to perform arithmetic on a nil value\",\"err t:32: attempt to index a nil value\",\"err t:32: attempt to call a nil value\"
 vararg_expr	\"ok nil,\\\"[string \\\\\\\"return function(...) return ... end\\\\\\\"]:1: unexpected symbol near `...\'\\\"\"
 nonfinite_print	1.#INF,-1.#INF,\"1.#INF00 -1.#INF 1.#INF00e+000  -1.$\",\"1.#INF\",1.#INF
 nan_print	true,\"3\",\"ff\",\"   ab|\"

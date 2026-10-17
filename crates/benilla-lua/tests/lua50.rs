@@ -422,3 +422,31 @@ fn a_while_condition_is_at_most_100_instructions() {
         );
     }
 }
+
+/// `getobjname` (`0x6fc4c0`) names a register by a local, `OP_MOVE`, `OP_GETGLOBAL`,
+/// `OP_GETTABLE` or `OP_SELF` (`0x6fc5e0`); `OP_GETUPVAL` takes the default arm, so a type error
+/// and an argument error name no upvalue.
+#[test]
+fn an_upvalue_is_named_nothing() {
+    assert_eq!(
+        run("local up return pcall(function() return up.x end)"),
+        "false,t:1: attempt to index a nil value"
+    );
+    assert_eq!(
+        run("local u return pcall(function() return u + 1 end)"),
+        "false,t:1: attempt to perform arithmetic on a nil value"
+    );
+    assert_eq!(
+        run("local u return pcall(function() u() end)"),
+        "false,t:1: attempt to call a nil value"
+    );
+    assert_eq!(
+        run("local strlen = string.len return pcall(function() return strlen(nil) end)"),
+        "false,t:1: bad argument #1 to `?' (string expected, got nil)"
+    );
+    // A local or global keeps its name.
+    assert_eq!(
+        run("return pcall(function() local l return l.x end)"),
+        "false,t:1: attempt to index local `l' (a nil value)"
+    );
+}
