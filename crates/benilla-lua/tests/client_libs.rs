@@ -28,7 +28,7 @@ fn string_byte_answers_one_byte() {
     assert_eq!(ok(r#"return string.byte("abc")"#), ["97"]);
     assert_eq!(ok(r#"return string.byte("abc", -1)"#), ["99"]);
     assert_eq!(ok(r#"return string.byte("abc", 2.9)"#), ["98"]);
-    // `__ftol`'s low dword: 2^32 + 2 is position 2.
+    // `__ftol`'s low dword: 4294967296 + 2 is position 2.
     assert_eq!(ok(r#"return string.byte("abc", 4294967298)"#), ["98"]);
     for pos in ["0", "4", "-4", "1/0"] {
         assert_eq!(
@@ -126,7 +126,7 @@ fn lower_and_upper_map_utf8_code_points() {
 }
 
 /// `tonumber` with a base (`0x702e30`) parses with the client's 32-bit `strtoul` (`0x40dd0e`), on
-/// every platform: an overflow is 0xffffffff, a `-` negates modulo 2^32.
+/// every platform: an overflow is 0xffffffff, a `-` negates modulo 4294967296.
 #[test]
 fn tonumber_with_a_base_is_32_bit() {
     assert_eq!(
@@ -202,5 +202,24 @@ fn format_scans_as_4_0() {
     assert_eq!(
         run(r#"return string.format("%", 1)"#),
         Err("t:1: invalid option in `format'".into())
+    );
+}
+
+/// `str_format`'s integer conversions take `__ftol`'s low 32 bits (`0x7fd56a`, `0x7fd593`), and
+/// `%q` escapes only `"`, `\`, a newline and a NUL (`luaI_addquoted`, table `0x7fd7b0`).
+#[test]
+fn format_converts_at_32_bits() {
+    assert_eq!(
+        ok(r#"return string.format("%x %X %d %u %o", -1, 4294967551, 4294967296, -1, -1)"#),
+        ["ffffffff FF 0 4294967295 37777777777"]
+    );
+    assert_eq!(
+        ok(r#"return string.format("%d %d %i", 2147483648, 1/0, -2.9)"#),
+        ["-2147483648 0 -2"]
+    );
+    assert_eq!(ok(r#"return string.format("%c", 4294967361)"#), ["A"]);
+    assert_eq!(
+        ok(r#"return string.format("%q", "a\"b\\c\nd\re\0f")"#),
+        ["\"a\\\"b\\\\c\\\nd\re\\000f\""]
     );
 }

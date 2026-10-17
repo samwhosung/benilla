@@ -28,27 +28,6 @@ pub fn c_int(n: f64) -> i32 {
     c_integer(n) as i32
 }
 
-/// C's `(int)` cast of a `double` straight, as `string.format`'s `%c` does: `cvttsd2si` on 32
-/// bits, `INT32_MIN` out of range.
-pub fn c_int_direct(n: f64) -> i32 {
-    if n.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&n) {
-        i32::MIN
-    } else {
-        n as i32
-    }
-}
-
-/// C's `(unsigned long)` cast of a `double` as gcc compiles it for x86-64, as `string.format`'s
-/// `%x` does: from 2^63 up, `cvttsd2si(n - 2^63) ^ 2^63`, which is 0 from 2^64 up and for an
-/// infinity; below, `cvttsd2si(n)`.
-pub fn c_ulong(n: f64) -> u64 {
-    if n >= TWO63 {
-        c_integer(n - TWO63) as u64 ^ (1 << 63)
-    } else {
-        c_integer(n) as u64
-    }
-}
-
 /// The longest string the libraries build, `INT32_MAX` bytes: more than the 1.12 client's 32-bit
 /// address space could hold. Deviation: the C build grows a string while `realloc` succeeds, and
 /// a failure is the catchable `not enough memory`; Rust's allocator aborts the process instead,

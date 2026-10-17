@@ -340,36 +340,28 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
         let conv = at(j);
         i = j + 1;
         match conv {
-            b'c' => {
-                // `(int)luaL_checknumber`: the double cast straight to 32 bits.
-                let c = crate::api::c_int_direct(vm.check_number(nargs, arg)?);
-                let item = cfmt::fmt_str(
-                    &[c as u8],
-                    &Spec {
-                        precision: None,
-                        ..spec
-                    },
-                );
-                // `luaL_addlstring(b, buff, strlen(buff))`: a `%c` of 0 ends the item.
-                let item = &item[..item.iter().position(|&b| b == 0).unwrap_or(item.len())];
-                out.extend_from_slice(item);
-            }
-            b'd' | b'i' => {
-                // `(long)luaL_checknumber`.
-                let n = crate::api::c_integer(vm.check_number(nargs, arg)?);
-                let item = if spec.is_plain() {
+            b'c' | b'd' | b'i' | b'o' | b'u' | b'x' | b'X' => {
+                // `luaL_checknumber` and `__ftol` (`0x7fd570`, `0x7fd575`): the low 32 bits.
+                let n = crate::api::c_int(vm.check_number(nargs, arg)?);
+                let item = match conv {
+                    b'c' => {
+                        let item = cfmt::fmt_str(
+                            &[n as u8],
+                            &Spec {
+                                precision: None,
+                                ..spec
+                            },
+                        );
+                        // `luaL_addlstring(b, buff, strlen(buff))`: a `%c` of 0 ends the item.
+                        let end = item.iter().position(|&b| b == 0).unwrap_or(item.len());
+                        out.extend_from_slice(&item[..end]);
+                        continue;
+                    }
                     // A bare `%d`: the digits alone.
-                    n.to_string()
-                } else {
-                    cfmt::fmt_int(n, &spec)
+                    b'd' | b'i' if spec.is_plain() => n.to_string(),
+                    b'd' | b'i' => cfmt::fmt_int(n as i64, &spec),
+                    _ => cfmt::fmt_uint(n as u32 as u64, conv, &spec),
                 };
-                out.extend_from_slice(item.as_bytes());
-            }
-            b'o' | b'u' | b'x' | b'X' => {
-                let n = vm.check_number(nargs, arg)?;
-                // `(unsigned long)luaL_checknumber`.
-                let n = crate::api::c_ulong(n);
-                let item = cfmt::fmt_uint(n, conv, &spec);
                 out.extend_from_slice(item.as_bytes());
             }
             b'e' | b'E' | b'f' | b'g' | b'G' => {
@@ -379,17 +371,14 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
             }
             b'q' => {
                 let s = vm.check_str(nargs, arg)?;
-                // `addquoted`: two quotes, and up to four bytes for each byte quoted.
+                // `luaI_addquoted` (`0x7fd6d0`), by its table at `0x7fd7b0`: `"`, `\` and a
+                // newline take a backslash, a NUL is `\000`, and every other byte is itself.
                 let len = vm.heap.str(s).len();
                 vm.reserve(out, len.saturating_mul(4).saturating_add(2))?;
                 out.push(b'"');
                 for &c in vm.heap.str(s) {
                     match c {
-                        b'"' | b'\\' | b'\n' => {
-                            out.push(b'\\');
-                            out.push(c);
-                        }
-                        b'\r' => out.extend_from_slice(b"\\r"),
+                        b'"' | b'\\' | b'\n' => out.extend_from_slice(&[b'\\', c]),
                         0 => out.extend_from_slice(b"\\000"),
                         _ => out.push(c),
                     }

@@ -913,7 +913,6 @@ fn unescape(s: &str) -> String {
 const PLATFORM_CASES: &[&str] = &[
     "fix-libs deg_rad",
     "fix-libs random_ranges",
-    "fix-libs format_ulong",
     "sweep string.char",
     "sweep string.sub",
     "sweep strsub",
