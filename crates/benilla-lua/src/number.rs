@@ -210,26 +210,23 @@ pub fn x87_fn(r: f64, a: f64, b: f64) -> f64 {
 /// `lua_number2str`: the client's `luaV_tostring` (`0x6f7c80`) formats with `%.14g` (`0x871960`)
 /// through its MSVC `sprintf` (`0x73fec4`): `1e+020`, `1.#INF`, `-1.#IND` and `0` for `-0`.
 pub fn fmt_g14(n: f64) -> String {
-    if let Some(i) = small_integer(n) {
-        return i.to_string();
-    }
-    crate::cfmt::fmt_float(
-        n,
-        b'g',
-        &crate::cfmt::Spec {
-            precision: Some(14),
-            ..Default::default()
-        },
-    )
+    with_g14(n, |b| String::from_utf8(b.to_vec()).expect("ASCII"))
 }
 
-/// A non-zero integer below 10^14, which `%.14g` prints as its digits.
-fn small_integer(n: f64) -> Option<i64> {
-    (n.fract() == 0.0 && n.abs() < 1e14 && n != 0.0).then_some(n as i64)
+/// `f` of [`fmt_g14`]'s text, which lives on the stack.
+pub fn with_g14<R>(n: f64, f: impl FnOnce(&[u8]) -> R) -> R {
+    // At most a sign, 14 digits, a point and `e-308`.
+    let mut b = crate::cfmt::StackBuf::<32>::new();
+    write_g14(n, &mut b);
+    f(b.as_slice())
 }
 
-/// `fmt_g14(n)` appended to `out`; an integer is written without a temporary string.
+/// [`fmt_g14`]'s text appended to `out`.
 pub fn push_g14(n: f64, out: &mut Vec<u8>) {
+    write_g14(n, out);
+}
+
+fn write_g14(n: f64, out: &mut impl crate::cfmt::Out) {
     if let Some(mut v) = small_integer(n) {
         if v < 0 {
             out.push(b'-');
@@ -242,10 +239,19 @@ pub fn push_g14(n: f64, out: &mut Vec<u8>) {
             digits[i] = b'0' + (v % 10) as u8;
             v /= 10;
         }
-        out.extend_from_slice(&digits[i..]);
+        out.extend(&digits[i..]);
     } else {
-        out.extend_from_slice(fmt_g14(n).as_bytes());
+        let spec = crate::cfmt::Spec {
+            precision: Some(14),
+            ..Default::default()
+        };
+        crate::cfmt::write_float(out, n, b'g', &spec);
     }
+}
+
+/// A non-zero integer below 10^14, which `%.14g` prints as its digits.
+fn small_integer(n: f64) -> Option<i64> {
+    (n.fract() == 0.0 && n.abs() < 1e14 && n != 0.0).then_some(n as i64)
 }
 
 #[cfg(test)]

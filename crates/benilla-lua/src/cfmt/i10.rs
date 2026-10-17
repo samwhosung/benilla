@@ -121,9 +121,9 @@ fn multtenpow12(x: &mut Ld12, pow: i32) {
 const ONE_TENTH: Ld12 = [0xcccc, 0xcccc, 0xcccc, 0xcccc, 0xcccc, 0x3ffb];
 
 /// `$I10_OUTPUT` (`0x4116fd`) for a finite non-zero `a`, as `_fltout2` asks it (17 digits, no
-/// flags): the digits, without trailing zeros, and the decimal point's place (the value is
-/// `0.ddd * 10^decpt`).
-pub(super) fn digits(a: f64) -> (Vec<u8>, i32) {
+/// flags): the digits, the first `len` of the array without trailing zeros, and the decimal
+/// point's place (the value is `0.ddd * 10^decpt`).
+pub(super) fn digits(a: f64) -> ([u8; 18], usize, i32) {
     // `___dtold` (`0x40ffcc`): the 80-bit real, a subnormal normalized.
     let bits = a.to_bits();
     let frac = bits & ((1 << 52) - 1);
@@ -163,38 +163,45 @@ pub(super) fn digits(a: f64) -> (Vec<u8>, i32) {
     if ue < 0 {
         f >>= (-ue) & 0xff;
     }
-    // 18 digits, each the top byte after times ten (`0x4118de`).
-    let mut d = Vec::with_capacity(18);
-    for _ in 0..18 {
-        f = ((f << 2 & MASK96) + f) & MASK96;
-        f = f << 1 & MASK96;
-        d.push(b'0' + (f >> 88) as u8);
-        f &= (1 << 88) - 1;
+    // 18 digits, each the top byte after times ten (`0x4118de`). The fraction is below 2^88, so
+    // no product leaves the 96 bits and the digits are those of `f * 10^18 / 2^88`, taken here
+    // nine at a time.
+    const LOW: u128 = (1 << 88) - 1;
+    let p = f * 1_000_000_000;
+    let mut hi = (p >> 88) as u32;
+    let mut lo = (((p & LOW) * 1_000_000_000) >> 88) as u32;
+    let mut d = [0u8; 18];
+    for k in (0..9).rev() {
+        d[k] = b'0' + (hi % 10) as u8;
+        hi /= 10;
+        d[k + 9] = b'0' + (lo % 10) as u8;
+        lo /= 10;
     }
     let mut exp = nexp as i32;
-    let last = d.pop().unwrap();
-    if last >= b'5' {
+    let mut len = 17;
+    if d[17] >= b'5' {
         // Half-up (`0x411930`): nines carry, a carry out of the first digit moves the point.
-        while d.last() == Some(&b'9') {
-            d.pop();
+        while len > 0 && d[len - 1] == b'9' {
+            len -= 1;
         }
-        match d.last_mut() {
-            Some(c) => *c += 1,
-            None => {
-                d.push(b'1');
-                exp += 1;
-            }
+        if len == 0 {
+            d[0] = b'1';
+            len = 1;
+            exp += 1;
+        } else {
+            d[len - 1] += 1;
         }
     } else {
-        while d.last() == Some(&b'0') {
-            d.pop();
+        while len > 0 && d[len - 1] == b'0' {
+            len -= 1;
         }
-        if d.is_empty() {
+        if len == 0 {
             // All 17 zero: `$I10_OUTPUT`'s zero (`0x411978`).
-            return (b"0".to_vec(), 0);
+            d[0] = b'0';
+            return (d, 1, 0);
         }
     }
-    (d, exp)
+    (d, len, exp)
 }
 
 const TEN_POS: [[u16; 6]; 29] = [

@@ -344,31 +344,26 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
             b'c' | b'd' | b'i' | b'o' | b'u' | b'x' | b'X' => {
                 // `luaL_checknumber` and `__ftol` (`0x7fd570`, `0x7fd575`): the low 32 bits.
                 let n = crate::api::c_int(vm.check_number(nargs, arg)?);
-                let item = match conv {
+                match conv {
                     b'c' => {
-                        let item = cfmt::fmt_str(
-                            &[n as u8],
-                            &Spec {
-                                precision: None,
-                                ..spec
-                            },
-                        );
+                        let start = out.len();
+                        let spec = Spec {
+                            precision: None,
+                            ..spec
+                        };
+                        cfmt::write_str(out, &[n as u8], &spec);
                         // `luaL_addlstring(b, buff, strlen(buff))`: a `%c` of 0 ends the item.
-                        let end = item.iter().position(|&b| b == 0).unwrap_or(item.len());
-                        out.extend_from_slice(&item[..end]);
-                        continue;
+                        if let Some(end) = out[start..].iter().position(|&b| b == 0) {
+                            out.truncate(start + end);
+                        }
                     }
-                    // A bare `%d`: the digits alone.
-                    b'd' | b'i' if spec.is_plain() => n.to_string(),
-                    b'd' | b'i' => cfmt::fmt_int(n as i64, &spec),
-                    _ => cfmt::fmt_uint(n as u32 as u64, conv, &spec),
-                };
-                out.extend_from_slice(item.as_bytes());
+                    b'd' | b'i' => cfmt::write_int(out, n as i64, &spec),
+                    _ => cfmt::write_uint(out, n as u32, conv, &spec),
+                }
             }
             b'e' | b'E' | b'f' | b'g' | b'G' => {
                 let n = vm.check_number(nargs, arg)?;
-                let item = cfmt::fmt_float(n, conv, &spec);
-                out.extend_from_slice(item.as_bytes());
+                cfmt::write_float(out, n, conv, &spec);
             }
             b'q' => {
                 let s = vm.check_str(nargs, arg)?;
@@ -401,7 +396,7 @@ fn format_in(vm: &mut Vm, nargs: usize, [f, out]: &mut [Vec<u8>; 2]) -> R<usize>
                     if spec.is_plain() {
                         out.extend_from_slice(c);
                     } else {
-                        out.extend_from_slice(&cfmt::fmt_str(c, &spec));
+                        cfmt::write_str(out, c, &spec);
                     }
                 }
             }

@@ -3,7 +3,6 @@
 
 use crate::api::{c_int, R};
 use crate::heap::FuncObj;
-use crate::number::fmt_g14;
 use crate::value::{Value, V};
 use crate::vm::Vm;
 
@@ -281,7 +280,7 @@ pub fn tostring_value(vm: &mut Vm, v: Value) -> R<Value> {
         return Ok(r[0]);
     }
     Ok(match v.unpack() {
-        V::Num(n) => vm.str(fmt_g14(n).as_bytes()),
+        V::Num(n) => crate::number::with_g14(n, |b| vm.str(b)),
         V::Str(_) => v,
         V::Bool(b) => vm.str(if b { b"true" } else { b"false" }),
         V::Nil => vm.str(b"nil"),

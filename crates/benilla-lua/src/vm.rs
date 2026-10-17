@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use crate::heap::{FuncObj, Heap, LuaFunc, NativeFn, UpvalObj, UserObj};
-use crate::number::{fmt_g14, str2d};
+use crate::number::str2d;
 use crate::proto::{Arith, Cmp, Op, Proto, Reg, Rk, RK_CONST};
 use crate::table::KeyError;
 use crate::value::{FuncRef, StrRef, TableRef, Value, V};
@@ -491,7 +491,7 @@ impl Vm {
     pub fn tostr(&mut self, v: Value) -> Option<StrRef> {
         match v.unpack() {
             V::Str(s) => Some(s),
-            V::Num(n) => Some(self.heap.intern(fmt_g14(n).as_bytes())),
+            V::Num(n) => Some(crate::number::with_g14(n, |b| self.heap.intern(b))),
             _ => None,
         }
     }
