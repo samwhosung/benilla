@@ -30,9 +30,10 @@ pub(crate) enum QuestLine {
     Item(u32),
 }
 
-/// The lines raised and not yet shown.
+/// The lines raised and not yet shown, and how many of them, from the front, a feed has read: the
+/// rest were raised since, each by a handler that looked its record up with a callback.
 #[derive(Resource, Default)]
-pub(crate) struct QuestLines(Vec<QuestLine>);
+pub(crate) struct QuestLines(Vec<QuestLine>, usize);
 
 impl QuestLines {
     pub(crate) fn push(&mut self, line: QuestLine) {
@@ -68,6 +69,7 @@ pub(super) fn register(app: &mut App) {
 /// The waiting lines die with the socket, as the record caches do.
 fn on_session_end(In(_): In<SessionEvent>, mut lines: ResMut<QuestLines>) {
     lines.0.clear();
+    lines.1 = 0;
 }
 
 /// Show every line whose record is here, in the order raised; the rest wait.
@@ -87,8 +89,13 @@ fn feed_quest_lines(
     }
     let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
     let mut shown = Vec::new();
-    lines.0.retain(
-        |&line| match resolve(line, &quest_log, &items, &commands, &get) {
+    // A line's first read is its handler's lookup with a callback; a waiting line asks no more.
+    let mut read = 0;
+    let fed = lines.1;
+    lines.0.retain(|&line| {
+        let ask = Ask::at(read >= fed, &commands);
+        read += 1;
+        match resolve(line, &quest_log, &items, ask, &get) {
             Resolved::Show(msg) => {
                 if let Some(text) = ui_error_text(&msg, &get) {
                     shown.push(Shown::keyed(msg.key, text));
@@ -97,8 +104,9 @@ fn feed_quest_lines(
             }
             Resolved::Wait => true,
             Resolved::Drop => false,
-        },
-    );
+        }
+    });
+    lines.1 = lines.0.len();
     show_messages(&mut script, &mut sink, "ui_quest", shown);
 }
 
@@ -106,15 +114,15 @@ fn resolve(
     line: QuestLine,
     quest_log: &QuestLog,
     items: &Items,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Resolved {
     match line {
-        QuestLine::Accepted(id) => match quest(id, quest_log, commands) {
+        QuestLine::Accepted(id) => match quest(id, quest_log, ask) {
             Ok(t) => Resolved::Show(UiError::s("ERR_QUEST_ACCEPTED_S", t.title.clone())),
             Err(r) => r,
         },
-        QuestLine::Completed(id) => match quest(id, quest_log, commands) {
+        QuestLine::Completed(id) => match quest(id, quest_log, ask) {
             Ok(t) if t.next_quest_in_chain == 0 => {
                 Resolved::Show(UiError::s("ERR_QUEST_COMPLETE_S", t.title.clone()))
             }
@@ -130,7 +138,7 @@ fn resolve(
             coin_text(copper, &|k| get(k).unwrap_or_default()),
         )),
         // The name is `0x5d8b00`'s with no random property, the link `0x52adb0`'s.
-        QuestLine::Item(entry) => match items.template(entry, 0, Ask::New(commands)) {
+        QuestLine::Item(entry) => match items.template(entry, 0, ask) {
             Some(t) => Resolved::Show(UiError::s(
                 "ERR_QUEST_REWARD_ITEM_S",
                 crate::ui_items::item_link(entry, &t.name, t.quality),
@@ -145,9 +153,9 @@ fn resolve(
 fn quest<'a>(
     id: u32,
     quest_log: &'a QuestLog,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Result<&'a benilla_protocol::messages::QuestTemplate, Resolved> {
-    match quest_log.template(id, Ask::New(commands)) {
+    match quest_log.template(id, ask) {
         Some(t) => Ok(t),
         None if quest_log.template_answered_unknown(id) => Err(Resolved::Drop),
         None => Err(Resolved::Wait),
@@ -326,10 +334,12 @@ mod tests {
         assert!(app.world().resource::<QuestLines>().queued().is_empty());
     }
 
-    /// `0x5dc4d7`: a quest that names a next quest in its chain completes silently.
+    /// `0x5dc4d7`: a quest that names a next quest in its chain completes silently. A reward item
+    /// refused before the turn-in is asked again by the turn-in's lookup with a callback
+    /// (`0x5dc647`), and its line goes when the refusal answers that ask.
     #[test]
     fn a_chained_quest_and_an_unknown_record_show_nothing() {
-        let (mut app, _rx) = app();
+        let (mut app, rx) = app();
         {
             let world = app.world_mut();
             world
@@ -344,6 +354,27 @@ mod tests {
             lines.push(QuestLine::Completed(783));
             lines.push(QuestLine::Item(9_999));
         }
+        app.update();
+        assert!(chat(&app).is_empty());
+        assert!(matches!(
+            crate::query_cache::queries(&rx)[..],
+            [ClientCommand::ItemQuery { entry: 9_999, .. }]
+        ));
+        assert_eq!(
+            app.world().resource::<QuestLines>().queued(),
+            [QuestLine::Item(9_999)],
+            "the item line waits on the new ask"
+        );
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "a waiting line asks no more"
+        );
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(9_999, None);
         app.update();
         assert!(chat(&app).is_empty());
         assert!(app.world().resource::<QuestLines>().queued().is_empty());

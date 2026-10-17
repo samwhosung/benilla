@@ -227,9 +227,10 @@ mod net {
             })
         }
 
+        /// The item's record, read without a callback (`0x5dd0bd`).
         fn name(&self, item_id: u32) -> Option<String> {
             self.items
-                .template(item_id, 0, Ask::New(&self.commands))
+                .template(item_id, 0, Ask::Read)
                 .map(|t| t.name.clone())
         }
     }
@@ -255,7 +256,8 @@ mod net {
             else {
                 continue;
             };
-            let Some(template) = quest_log.template(quest_id, Ask::New(&book.commands)) else {
+            // The packet looks the quest up with a callback on a miss (`0x5e5bcb`).
+            let Some(template) = quest_log.template(quest_id, Ask::Event(&book.commands)) else {
                 if !quest_log.template_answered_unknown(quest_id) {
                     quest_log
                         .deferred_item_adds
@@ -457,9 +459,9 @@ fn resolve_template_item(
     count: u32,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> QuestItemView {
-    let template = items.template(entry, 0, Ask::New(commands)).cloned();
+    let template = items.template(entry, 0, ask).cloned();
     let name = template.as_ref().map(|t| t.name.clone());
     let quality = template.as_ref().map(|t| t.quality).unwrap_or(1);
     let texture = template.as_ref().and_then(|t| {
@@ -493,7 +495,7 @@ fn build_objectives(
     objects: &crate::net::Objects,
     items: &Items,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     // The VM's own `GlobalStrings.lua`, for the leaderboard's three format keys.
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<QuestLogObjectiveView> {
@@ -504,7 +506,7 @@ fn build_objectives(
         let creature_name = (obj.creature_or_go != 0 && !is_go)
             .then(|| {
                 names
-                    .resolve_creature(obj.creature_or_go, 0, Ask::New(commands))
+                    .resolve_creature(obj.creature_or_go, 0, ask)
                     .map(str::to_string)
             })
             .flatten();
@@ -518,9 +520,7 @@ fn build_objectives(
         if obj.item_id == 0 {
             continue;
         }
-        let item_name = items
-            .template(obj.item_id, 0, Ask::New(commands))
-            .map(|t| t.name.clone());
+        let item_name = items.template(obj.item_id, 0, ask).map(|t| t.name.clone());
         let bag_count = count_of(store, objects, obj.item_id, InventoryScope::QUEST_ITEMS);
         if let Some(line) = item_line(
             obj,
@@ -540,7 +540,7 @@ fn build_detail(
     template: &QuestTemplate,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     macros: &crate::npc_text::MacroContext,
     spells: Option<&Spells>,
 ) -> QuestLogDetail {
@@ -549,13 +549,13 @@ fn build_detail(
         .rewards
         .iter()
         .filter(|&&(id, _)| id != 0)
-        .map(|&(id, count)| resolve_template_item(id, count, items, icons, commands))
+        .map(|&(id, count)| resolve_template_item(id, count, items, icons, ask))
         .collect();
     let choices = template
         .choices
         .iter()
         .filter(|&&(id, _)| id != 0)
-        .map(|&(id, count)| resolve_template_item(id, count, items, icons, commands))
+        .map(|&(id, count)| resolve_template_item(id, count, items, icons, ask))
         .collect();
 
     QuestLogDetail {
@@ -655,7 +655,7 @@ pub(crate) fn feed_quest_log(
     mut last: Local<crate::ui_script::VmMemo<QuestLogState>>,
     // The accept line's queue.
     mut quest_lines: ResMut<crate::ui_quest::QuestLines>,
-    mut prior_slots: Local<crate::ui_script::VmMemo<Option<SlotStates>>>,
+    mut prior_slots: Local<crate::ui_script::VmMemo<Option<(SlotStates, LogFields)>>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -668,6 +668,17 @@ pub(crate) fn feed_quest_log(
 
     let mut rows = Vec::new();
     let mut slots = Vec::with_capacity(usize::from(PLAYER_QUEST_LOG_SLOTS));
+    let fields: LogFields = (0..PLAYER_QUEST_LOG_SLOTS)
+        .map(|slot| store.0.player_quest_log(slot))
+        .collect();
+    // The log's fields changing is the reference's event: the watcher's rebuild looks each quest
+    // up with a callback (`0x5dde4f`, `0x4de65f`), and the stock frames' update calls the
+    // leaderboard and reward getters, which look up theirs (`0x4e0231`, `0x4e0461`, `0x4e039c`,
+    // `0x4e05e0`, `0x4e0bb3`, `0x4e0da3`). A new VM reads the log afresh.
+    let event = prior_slots
+        .as_ref()
+        .is_none_or(|(_, prior)| *prior != fields);
+    let ask = Ask::at(event, &commands);
     for slot in 0..PLAYER_QUEST_LOG_SLOTS {
         let Some(log_slot) = store.0.player_quest_log(slot) else {
             slots.push((0, 0));
@@ -686,12 +697,12 @@ pub(crate) fn feed_quest_log(
 
     // The quest-slot watcher's accept line, whose catalog row carries `QUESTADDED`. The first
     // snapshot after login is silent: the initial create fills the whole log.
-    if let Some(prior) = prior_slots.as_ref() {
+    if let Some((prior, _)) = prior_slots.as_ref() {
         for quest_id in accepted_quests(prior, &slots) {
             quest_lines.push(crate::ui_quest::QuestLine::Accepted(quest_id));
         }
     }
-    *prior_slots = Some(slots);
+    *prior_slots = Some((slots, fields));
 
     // The player's own `GlobalStrings.lua`, for the leaderboard's three format keys.
     let get = |key: &str| {
@@ -711,11 +722,7 @@ pub(crate) fn feed_quest_log(
     // every row before the filter: the miss is what sends the query.
     let cached: Vec<bool> = rows
         .iter()
-        .map(|r| {
-            quest_log
-                .template(r.quest_id, Ask::New(&commands))
-                .is_some()
-        })
+        .map(|r| quest_log.template(r.quest_id, ask).is_some())
         .collect();
     let rows: Vec<Row> = rows
         .into_iter()
@@ -778,7 +785,7 @@ pub(crate) fn feed_quest_log(
         for &ri in row_idxs {
             let r = &rows[ri];
             let (title, level, tag, pushable, objectives, detail) =
-                match quest_log.template(r.quest_id, Ask::New(&commands)) {
+                match quest_log.templates.get(r.quest_id) {
                     Some(t) => (
                         t.title.clone(),
                         t.level,
@@ -799,7 +806,7 @@ pub(crate) fn feed_quest_log(
                             &objects,
                             &items,
                             &names,
-                            &commands,
+                            ask,
                             &get,
                         ),
                         // Every row's: the bindings resolve the selection per call.
@@ -807,7 +814,7 @@ pub(crate) fn feed_quest_log(
                             t,
                             &items,
                             icons.as_deref(),
-                            &commands,
+                            ask,
                             &macros,
                             spells.as_deref(),
                         )),
@@ -925,6 +932,9 @@ fn show_item_toasts(
 
 /// Every quest-log slot as `(quest id, state)`, the slot watcher's input.
 type SlotStates = Vec<(u32, u8)>;
+
+/// The log's 20 `PLAYER_QUEST_LOG` slots as the descriptor holds them.
+type LogFields = Vec<Option<QuestLogSlot>>;
 
 /// The quests the slot watcher `0x5ddd80` announces, per slot as `(quest id, state)`: a quest in a
 /// slot that held none, or the same quest with its fail bit cleared (`0x5dde17`-`0x5dde34`). A slot
@@ -1359,7 +1369,7 @@ mod tests {
             &objects,
             &items,
             &names,
-            &commands,
+            Ask::New(&commands),
             &probe_strings,
         );
 
@@ -1405,7 +1415,7 @@ mod tests {
             &objects,
             &items,
             &names,
-            &commands,
+            Ask::New(&commands),
             &probe_strings,
         );
 
@@ -1448,7 +1458,7 @@ mod tests {
             &objects,
             &items,
             &names,
-            &commands,
+            Ask::New(&commands),
             &probe_strings,
         );
         assert_eq!(objectives.len(), 2);
@@ -1490,7 +1500,7 @@ mod tests {
             &objects,
             &items,
             &names,
-            &commands,
+            Ask::New(&commands),
             &probe_strings,
         );
         assert!(objectives.is_empty(), "{objectives:#?}");
@@ -1526,7 +1536,7 @@ mod tests {
             &objects,
             &items,
             &names,
-            &commands,
+            Ask::New(&commands),
             &probe_strings,
         );
         assert_eq!(objectives.len(), 1);
@@ -1556,6 +1566,125 @@ mod tests {
         assert_eq!(abandon_slot(7, &row_slots), Some(2));
         assert_eq!(abandon_slot(8, &row_slots), None); // not in the log: nothing to remove
         assert_eq!(abandon_slot(0, &row_slots), None); // 0 is never a quest
+    }
+
+    // ── The asks run at the log's change ────────────────────────────────────────────────────────
+
+    fn quest_log_app(
+        log: QuestLog,
+        slot0: u32,
+    ) -> (App, crossbeam_channel::Receiver<ClientCommand>, Entity) {
+        use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<NameCache>()
+            .init_resource::<Items>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_quest::QuestLines>()
+            .insert_resource(log);
+        let player = app
+            .world_mut()
+            .spawn((
+                ObjectStore(ObjectFields::from_pairs(&[(
+                    FIELD_PLAYER_QUEST_LOG_1_1,
+                    slot0,
+                )])),
+                Guid(0x2A),
+                SelfPlayer,
+            ))
+            .id();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_quest_log);
+        (app, rx, player)
+    }
+
+    /// A field change of the log: slot 0's timer word.
+    fn touch_log(app: &mut App, player: Entity, timer: u32) {
+        use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
+        app.world_mut()
+            .get_mut::<ObjectStore>(player)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(
+                FIELD_PLAYER_QUEST_LOG_1_1 + 2,
+                timer,
+            )]));
+    }
+
+    /// The log watcher's rebuild looks each quest up with a callback (`0x5dde4f`, `0x4de65f`) when
+    /// the log's fields change; the frames between read. A refused quest is asked by the next
+    /// change, once, and by no frame.
+    #[test]
+    fn a_refused_quest_is_asked_at_the_logs_next_change_never_by_a_frame() {
+        let (mut app, rx, player) = quest_log_app(QuestLog::default(), 101);
+        app.update();
+        assert!(matches!(
+            crate::query_cache::queries(&rx)[..],
+            [ClientCommand::QuestQuery { quest: 101 }]
+        ));
+        let mut refused = quest_template(std::array::from_fn(|_| obj(0, 0, 0, 0, "")));
+        refused.quest_id = 101;
+        refused.title = String::new();
+        app.world_mut()
+            .resource_mut::<QuestLog>()
+            .insert_template(refused);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+        touch_log(&mut app, player, 5);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+    }
+
+    /// The leaderboard's creature and item and the rewards are looked up with a callback by the
+    /// getters the stock frames call on the log's update (`0x4e0461`, `0x4e05e0`, `0x4e0bb3`): a
+    /// refused one waits for the next change of the log.
+    #[test]
+    fn refused_objective_and_reward_records_wait_for_the_logs_next_change() {
+        let mut log = QuestLog::default();
+        let mut t = quest_template([
+            obj(55, 3, 0, 0, ""),
+            obj(0, 0, 900, 2, ""),
+            obj(0, 0, 0, 0, ""),
+            obj(0, 0, 0, 0, ""),
+        ]);
+        t.quest_id = 101;
+        t.rewards[0] = (901, 1);
+        log.insert_template(t);
+        let (mut app, rx, player) = quest_log_app(log, 101);
+        app.update();
+        let mut asked: Vec<String> = crate::query_cache::queries(&rx)
+            .iter()
+            .map(|c| format!("{c:?}"))
+            .collect();
+        asked.sort();
+        assert_eq!(
+            asked.len(),
+            3,
+            "the creature, the item, the reward: {asked:?}"
+        );
+        {
+            let world = app.world_mut();
+            world.resource_mut::<Items>().insert_template(900, None);
+            world.resource_mut::<Items>().insert_template(901, None);
+            world.resource_mut::<NameCache>().insert_creature(55, None);
+        }
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+        touch_log(&mut app, player, 9);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 3);
     }
 
     // ── The abandon mark is a quest id ──────────────────────────────────────────────────────────

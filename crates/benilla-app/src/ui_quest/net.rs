@@ -97,8 +97,9 @@ fn on_complete(
     mut commands: Commands,
 ) {
     if let SessionEvent::QuestComplete(c) = ev {
+        // The turn-in looks the quest up with a callback (`0x5dc4cb`).
         let chained = quest_log
-            .template(c.quest_id, Ask::New(&net_commands))
+            .template(c.quest_id, Ask::Event(&net_commands))
             .is_some_and(|t| t.next_quest_in_chain != 0);
         quest_complete(c, &mut quest, &mut lines);
         if !chained {
@@ -131,14 +132,9 @@ fn on_objectives_complete(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver
     }
 }
 
-fn on_failed(
-    In(ev): In<SessionEvent>,
-    mut quest: ResMut<QuestGiver>,
-    mut quest_log: ResMut<QuestLog>,
-    commands: Res<NetCommands>,
-) {
+fn on_failed(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>, quest_log: Res<QuestLog>) {
     if let SessionEvent::QuestFailed { quest_id, timed } = ev {
-        quest_failed(quest_id, timed, &mut quest_log, &commands, &mut quest);
+        quest_failed(quest_id, timed, &quest_log, &mut quest);
     }
 }
 
@@ -312,15 +308,10 @@ fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
 /// `0x8b`) in chat, named by the quest's title. The reference's arm (`0x5e5ad0`) prints nothing
 /// without a cached template, as here, or when the slot's `byte[slot+7] & 2` is set, which this
 /// does not check.
-fn quest_failed(
-    quest_id: u32,
-    timed: bool,
-    quest_log: &mut QuestLog,
-    net_commands: &NetCommands,
-    quest: &mut QuestGiver,
-) {
+fn quest_failed(quest_id: u32, timed: bool, quest_log: &QuestLog, quest: &mut QuestGiver) {
     debug!("net: quest {quest_id} failed (timed: {timed})");
-    if let Some(t) = quest_log.template(quest_id, Ask::New(net_commands)) {
+    // Read without a callback (`0x5e5ca0`).
+    if let Some(t) = quest_log.template(quest_id, Ask::Read) {
         quest.push_message(UiError::s("ERR_QUEST_FAILED_S", t.title.clone()));
     } else {
         debug!("net: quest {quest_id} has no cached template — the reference shows nothing");
@@ -360,8 +351,9 @@ fn quest_giver_failed(
     let title = quest
         .view_title(quest_id)
         .or_else(|| {
+            // Looked up with a callback (`0x5dc875`).
             quest_log
-                .template(quest_id, Ask::New(net_commands))
+                .template(quest_id, Ask::Event(net_commands))
                 .map(|t| t.title.clone())
         })
         .unwrap_or_default();
