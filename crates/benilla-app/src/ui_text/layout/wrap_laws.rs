@@ -10,6 +10,7 @@ fn spec(non_space_wrap: bool, max_lines: u32) -> FontSpec<'static> {
         path: Some("Fonts\\FRIZQT__.TTF"),
         height: Some(12.0),
         outline: Outline::None,
+        monochrome: false,
         spacing: 0.0,
         shadow_x: 0.0,
         alpha_gradient: None,

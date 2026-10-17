@@ -27,6 +27,7 @@ pub(crate) fn measure_request(
         height: super::drawn_px(r.height, r.text_height, rs),
         // THICK adds 1 px per glyph to the step law (`0x5ca2b0`), so the measure needs it.
         outline: r.outline,
+        monochrome: false,
         // The gap between wrapped lines, scaled as the height is (`0x5c2070`).
         spacing: r.spacing * rs,
         // The drawn rows' seed rides the frame scale, as the draw's does (`0x7726a4`).
@@ -67,6 +68,7 @@ pub(crate) fn editbox_advances(
         path: req.font.as_deref(),
         height: super::drawn_px(req.height, None, seam * req.scale),
         outline: req.outline,
+        monochrome: false,
         // A multiline box's row pitch adds the gap (`0x77d161`).
         spacing: req.spacing * seam * req.scale,
         // The draw's row seed, at the box's drawn scale.

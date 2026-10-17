@@ -478,13 +478,21 @@ impl Loader<'_> {
                     );
                     return;
                 };
-                let outline = region.attr("outline").map(str::to_string);
+                // The flags word, set whole on this leg (`0x771194`-`0x771214`): `outline=` is
+                // NORMAL or THICK, and any non-empty `monochrome=` adds the flag, even "false".
+                let flags = (
+                    region
+                        .attr("outline")
+                        .map(crate::script::Outline::parse)
+                        .unwrap_or_default(),
+                    region.attr("monochrome").is_some_and(|v| !v.is_empty()),
+                );
                 if let Err(e) = crate::script::apply_font_parts(
                     self.lua,
                     wrapper,
                     Some(path.to_string()),
                     Some(height),
-                    outline,
+                    Some(flags),
                 ) {
                     self.report.fault(format!("{dbg}: region font attrs: {e}"));
                 }

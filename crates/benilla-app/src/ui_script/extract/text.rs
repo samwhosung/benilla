@@ -25,6 +25,7 @@ pub(super) struct TextStyle {
     pub text_height: Option<f32>,
     pub shadow: Option<FontShadow>,
     pub outline: Outline,
+    pub monochrome: bool,
     /// The gap between lines, frame-local, scaled like the font height.
     pub spacing: f32,
     pub alpha_gradient: Option<(f32, f32)>,
@@ -85,6 +86,7 @@ pub(super) fn emit(
             host.scale * host.font_scale,
         ),
         outline: style.outline,
+        monochrome: style.monochrome,
         spacing: style.spacing * host.scale * host.font_scale,
         // A set shadow seeds each row's pen at its drawn offset (`0x5cddb1`, `0x7726a4`).
         shadow_x: style

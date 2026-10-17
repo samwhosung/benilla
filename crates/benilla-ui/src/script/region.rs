@@ -282,16 +282,17 @@ pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
     model.note_art(rh);
 }
 
-/// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, `outline=`), any of
-/// which may be absent. Not the `SetFont` binding: the reference applies XML fonts in `LoadXML`,
-/// and its `SetFont` requires a path and a height (`0x87c69c`). Each part is an explicit set, so it
-/// survives a change to the inherited font object; an empty `font=` keeps the inherited face.
+/// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, and the flags word of
+/// `outline=` and `monochrome=`), any of which may be absent. Not the `SetFont` binding: the
+/// reference applies XML fonts in `LoadXML`, and its `SetFont` requires a path and a height
+/// (`0x87c69c`). Each part is an explicit set, so it survives a change to the inherited font
+/// object; an empty `font=` keeps the inherited face.
 pub(crate) fn apply_font_parts(
     lua: &Lua,
     this: &Table,
     path: Option<String>,
     height: Option<f32>,
-    flags: Option<String>,
+    flags: Option<(super::Outline, bool)>,
 ) -> mlua::Result<()> {
     let rh = region_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -304,8 +305,9 @@ pub(crate) fn apply_font_parts(
         d.font_height = Some(h);
         d.font_explicit.height = true;
     }
-    if let Some(f) = flags {
-        d.outline = super::Outline::flags(&f);
+    if let Some((outline, monochrome)) = flags {
+        d.outline = outline;
+        d.monochrome = monochrome;
         d.font_explicit.outline = true;
     }
     model.touch_measure(rh);

@@ -85,6 +85,8 @@ pub(super) struct FontArgs {
     pub(super) height: f32,
     /// The flags word written on every load (`0x79f334`): zero, no outline, when the gate fails.
     pub(super) flags: Outline,
+    /// Its `MONOCHROME` bit.
+    pub(super) monochrome: bool,
 }
 
 /// `SetFont`'s argument gate: `0x79f210`, behind the Font (`0x7a0270`), EditBox (`0x797210`),
@@ -116,12 +118,12 @@ pub(super) fn set_font_args(
     };
     // The Lua spelling (`OUTLINE`, `THICKOUTLINE`), not the XML one, parsed like `0x6f1a90`: a
     // case-insensitive substring scan, so `THICKOUTLINE` sets both.
-    let flags =
-        binding_abi::optional_string(lua, flags).map_or(Outline::None, |f| Outline::flags(&f));
+    let flags = binding_abi::optional_string(lua, flags);
     Ok(FontArgs {
         path,
         height: height as f32,
-        flags,
+        flags: flags.as_deref().map_or(Outline::None, Outline::flags),
+        monochrome: flags.as_deref().is_some_and(super::monochrome_flag),
     })
 }
 
@@ -267,13 +269,14 @@ pub(super) fn install(
                     path,
                     height,
                     flags,
+                    monochrome,
                 } = set_font_args(lua, &this, &file, &height, &flags)?;
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let before = model
                     .region_data
                     .get(&rh)
-                    .map(|d| (d.font_path.clone(), d.font_height, d.outline));
+                    .map(|d| (d.font_path.clone(), d.font_height, d.outline, d.monochrome));
                 let load = match kind {
                     // A FontString loads for any height but 0 (`0x77154d`-`0x77155b`); 0 skips the
                     // load and frees its font (`0x7715b3`), which still answers 1. What a negative
@@ -294,15 +297,17 @@ pub(super) fn install(
                 if load == Load::Loaded {
                     d.font_path = Some(path);
                     d.outline = flags;
+                    d.monochrome = monochrome;
                 } else {
                     d.font_path = None;
                     d.outline = Outline::None;
+                    d.monochrome = false;
                 }
                 d.font_height = Some(height);
                 d.font_explicit.face = true;
                 d.font_explicit.outline = true;
                 d.font_explicit.height = true;
-                let after = (d.font_path.clone(), d.font_height, d.outline);
+                let after = (d.font_path.clone(), d.font_height, d.outline, d.monochrome);
                 model.touch_measure(rh);
                 // A FontString's load of another face, height or flags clears its valid bit and
                 // invalidates (`0x7715e0`); the same font returns first (`0x771541`), and a freed

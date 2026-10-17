@@ -207,6 +207,7 @@ pub(super) struct MessageFont {
     pub(super) height: Option<f32>,
     pub(super) shadow: Option<FontShadow>,
     pub(super) outline: Outline,
+    pub(super) monochrome: bool,
     /// The child's `justifyH`, which centres `UIErrorsFrame`'s lines and keeps chat flush left;
     /// LEFT without a declared FontString, not the FontString default of CENTER.
     pub(super) justify_h: JustifyH,
@@ -320,6 +321,7 @@ impl UiScript {
                         height: d.font_height,
                         shadow: d.font_shadow,
                         outline: d.outline,
+                        monochrome: d.monochrome,
                         justify_h: d.justify.paint_h(),
                         spacing: d.spacing,
                     })
@@ -329,6 +331,7 @@ impl UiScript {
                 height: None,
                 shadow: None,
                 outline: Outline::default(),
+                monochrome: false,
                 justify_h: JustifyH::Left,
                 spacing: 0.0,
             })
@@ -621,6 +624,7 @@ impl UiScript {
                     font_height: font.height,
                     text_height: None, // message lines have no SetTextHeight
                     outline: font.outline,
+                    monochrome: font.monochrome,
                     // The line string's own field, clamped; the host snaps it.
                     spacing: font.spacing.max(0.0),
                     alpha_gradient: None,

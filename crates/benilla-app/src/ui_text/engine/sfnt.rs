@@ -31,6 +31,15 @@ pub(super) struct GlyphPx {
     pub(super) ink: f32,
 }
 
+/// A glyph's scaled outline in 26.6, y up: its points, which of them lie on the curve, and the
+/// index of each contour's last point.
+#[derive(Default)]
+pub(super) struct Outline26 {
+    pub(super) pts: Vec<(i64, i64)>,
+    pub(super) on: Vec<bool>,
+    pub(super) ends: Vec<usize>,
+}
+
 /// The tables a glyph's metrics come off, located once per face.
 pub(super) struct Sfnt {
     data: Vec<u8>,
@@ -143,7 +152,7 @@ impl Sfnt {
     /// 16.16), then its offset scaled on its own and, under `ROUND_XY_TO_GRID` (`0x4`), rounded to a
     /// whole pixel, `(x + 32) & −64` (`0x7d4229`–`0x7d423b`), hinted or not. `None` when the glyph
     /// data is malformed.
-    fn points(&self, gid: u16, depth: u8, xs: i64, out: &mut Vec<(i64, i64)>) -> Option<i16> {
+    fn points(&self, gid: u16, depth: u8, xs: i64, out: &mut Outline26) -> Option<i16> {
         let (start, end) = self.glyph_range(gid)?;
         if start == end {
             return Some(0);
@@ -152,12 +161,16 @@ impl Sfnt {
         let contours = be16s(d, start)?;
         let x_min = be16s(d, start + 2)?;
         if contours >= 0 {
-            let mut fu = Vec::new();
+            let base = out.pts.len();
+            let mut fu = Outline26::default();
             simple_points(d, start, contours as usize, &mut fu)?;
-            out.extend(
-                fu.into_iter()
+            out.pts.extend(
+                fu.pts
+                    .into_iter()
                     .map(|(x, y)| (mul_fix(x, xs), mul_fix(y, xs))),
             );
+            out.on.extend(fu.on);
+            out.ends.extend(fu.ends.into_iter().map(|e| base + e));
             return Some(x_min);
         }
         if depth > 8 {
@@ -210,9 +223,10 @@ impl Sfnt {
             if flags & 0x2 != 0 && flags & 0x4 != 0 {
                 (dx, dy) = ((dx + 32) & -64, (dy + 32) & -64);
             }
-            let mut sub = Vec::new();
+            let mut sub = Outline26::default();
             self.points(gid, depth + 1, xs, &mut sub)?;
-            for (x, y) in sub {
+            let base = out.pts.len();
+            for (x, y) in sub.pts {
                 let (tx, ty) = match m {
                     Some(m) => (
                         mul_fix(x, m[0]) + mul_fix(y, m[2]),
@@ -220,8 +234,10 @@ impl Sfnt {
                     ),
                     None => (x, y),
                 };
-                out.push((tx + dx, ty + dy));
+                out.pts.push((tx + dx, ty + dy));
             }
+            out.on.extend(sub.on);
+            out.ends.extend(sub.ends.into_iter().map(|e| base + e));
             if flags & 0x20 == 0 {
                 return Some(x_min);
             }
@@ -238,8 +254,9 @@ impl Sfnt {
     pub(super) fn glyph(&self, gid: u16, ppem: u16) -> Option<GlyphPx> {
         let (adv_fu, lsb) = self.hmetric(gid)?;
         let xs = div_fix(i64::from(ppem) * 64, i64::from(self.upem));
-        let mut pts = Vec::new();
-        let x_min = self.points(gid, 0, xs, &mut pts)?;
+        let mut outline = Outline26::default();
+        let x_min = self.points(gid, 0, xs, &mut outline)?;
+        let pts = outline.pts;
         let origin = i64::from(x_min) - i64::from(lsb);
         let pp1 = mul_fix(origin, xs);
         let adv = mul_fix(origin + i64::from(adv_fu), xs) - pp1;
@@ -271,14 +288,32 @@ impl Sfnt {
             ink: (ceil(x0) + width) as f32,
         })
     }
+
+    /// Glyph `gid`'s outline at `ppem` px as [`Self::glyph`] loads it, unhinted and moved by
+    /// `−pp1`, so its x is from the pen; `None` for malformed glyph data.
+    pub(super) fn outline(&self, gid: u16, ppem: u16) -> Option<Outline26> {
+        let (_, lsb) = self.hmetric(gid)?;
+        let xs = div_fix(i64::from(ppem) * 64, i64::from(self.upem));
+        let mut outline = Outline26::default();
+        let x_min = self.points(gid, 0, xs, &mut outline)?;
+        let pp1 = mul_fix(i64::from(x_min) - i64::from(lsb), xs);
+        for p in &mut outline.pts {
+            p.0 -= pp1;
+        }
+        Some(outline)
+    }
 }
 
 /// A simple glyph's points in font units, appended to `out`.
-fn simple_points(d: &[u8], start: usize, contours: usize, out: &mut Vec<(i64, i64)>) -> Option<()> {
+fn simple_points(d: &[u8], start: usize, contours: usize, out: &mut Outline26) -> Option<()> {
     if contours == 0 {
         return Some(());
     }
     let ends_at = start + 10;
+    for c in 0..contours {
+        out.ends
+            .push(out.pts.len() + usize::from(be16(d, ends_at + 2 * c)?));
+    }
     let n = usize::from(be16(d, ends_at + 2 * (contours - 1))?) + 1;
     let ins = usize::from(be16(d, ends_at + 2 * contours)?);
     let mut at = ends_at + 2 * contours + 2 + ins;
@@ -314,7 +349,8 @@ fn simple_points(d: &[u8], start: usize, contours: usize, out: &mut Vec<(i64, i6
     };
     let xs = coord(0x2, 0x10)?;
     let ys = coord(0x4, 0x20)?;
-    out.extend(xs.into_iter().zip(ys));
+    out.on.extend(flags.iter().map(|f| f & 0x1 != 0));
+    out.pts.extend(xs.into_iter().zip(ys));
     Some(())
 }
 

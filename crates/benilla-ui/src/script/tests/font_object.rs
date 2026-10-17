@@ -230,6 +230,7 @@ fn set_font_object_takes_the_object_or_the_name() {
             height: Some(11.0),
             color: Some([0.25, 0.5, 0.75, 1.0]),
             outline: Outline::Thick,
+            monochrome: false,
             justify_h: None,
             justify_v: None,
             shadow: None,
@@ -291,6 +292,7 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
             height: Some(10.0),
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
+            monochrome: false,
             justify_h: None,
             justify_v: None,
             shadow: None,
@@ -327,6 +329,7 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
             height: Some(12.0),
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
+            monochrome: false,
             justify_h: None,
             justify_v: None,
             shadow: None,
@@ -514,6 +517,7 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
             height: Some(10.0),
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
+            monochrome: false,
             justify_h: Some(JustifyH::Right),
             justify_v: None,
             shadow: None,
@@ -1059,4 +1063,94 @@ fn msbt_paints_its_own_face_size_outline_and_fade_over_the_font_object_it_inheri
             "OUTLINE".to_string()
         )
     );
+}
+
+/// The flags word of the text quad reading `text`: `(outline, monochrome)`.
+fn flags_of(s: &UiScript, text: &str) -> (Outline, bool) {
+    s.extract()
+        .into_iter()
+        .find_map(|q| match q.content {
+            QuadContent::Text {
+                text: Some(ref t),
+                outline,
+                monochrome,
+                ..
+            } if t == text => Some((outline, monochrome)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no text quad reading {text:?}"))
+}
+
+/// The action button's `HotKey` (`ActionButtonTemplate.xml`) inherits `NumberFontNormalSmallGray`,
+/// which inherits `NumberFontNormalSmall`'s `monochrome="true"` (`Fonts.xml`): the hotkey draws
+/// monochrome and THICK.
+#[test]
+fn the_hotkey_font_draws_monochrome_through_its_inherited_object() {
+    let mut s = script();
+    load(
+        &s,
+        r#"<Ui>
+             <Font name="NumberFontNormalSmall" font="Fonts\ARIALN.TTF" outline="THICK" virtual="true" monochrome="true">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+             </Font>
+             <Font name="NumberFontNormalSmallGray" inherits="NumberFontNormalSmall" outline="THICK" virtual="true">
+               <Color r="0.6" g="0.6" b="0.6"/>
+             </Font>
+             <Font name="NumberFontNormal" font="Fonts\ARIALN.TTF" outline="NORMAL" virtual="true">
+               <FontHeight><AbsValue val="14"/></FontHeight>
+             </Font>
+             <Frame name="Bar" parent="UIParent">
+               <Size><AbsDimension x="36" y="36"/></Size>
+               <Anchors><Anchor point="CENTER"/></Anchors>
+               <Layers><Layer level="ARTWORK">
+                 <FontString name="$parentHotKey" inherits="NumberFontNormalSmallGray" text="2">
+                   <Anchors><Anchor point="TOPRIGHT"/></Anchors>
+                 </FontString>
+                 <FontString name="$parentCount" inherits="NumberFontNormal" text="4">
+                   <Anchors><Anchor point="BOTTOMRIGHT"/></Anchors>
+                 </FontString>
+               </Layer></Layers>
+             </Frame>
+           </Ui>"#,
+    );
+    s.resolve();
+    assert_eq!(flags_of(&s, "2"), (Outline::Thick, true));
+    assert_eq!(flags_of(&s, "4"), (Outline::Normal, false));
+}
+
+/// `SetFont`'s flags are found as substrings (`0x6f1a90`), `MONOCHROME` among them, and replace the
+/// whole flags word, the inherited monochrome bit included.
+#[test]
+fn set_font_reads_and_clears_monochrome() {
+    let mut s = script();
+    load(
+        &s,
+        r#"<Ui>
+             <Font name="Mono" font="Fonts\ARIALN.TTF" monochrome="true">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+             </Font>
+             <Frame name="F" parent="UIParent">
+               <Size><AbsDimension x="36" y="36"/></Size>
+               <Anchors><Anchor point="CENTER"/></Anchors>
+               <Layers><Layer level="ARTWORK">
+                 <FontString name="$parentA" inherits="Mono" text="a">
+                   <Anchors><Anchor point="TOP"/></Anchors>
+                 </FontString>
+                 <FontString name="$parentB" inherits="Mono" text="b">
+                   <Anchors><Anchor point="BOTTOM"/></Anchors>
+                 </FontString>
+               </Layer></Layers>
+             </Frame>
+           </Ui>"#,
+    );
+    s.run(
+        r#"
+        FA:SetFont("Fonts\\ARIALN.TTF", 12, "OUTLINE")
+        FB:SetFont("Fonts\\ARIALN.TTF", 12, "outline, monochrome")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(flags_of(&s, "a"), (Outline::Normal, false));
+    assert_eq!(flags_of(&s, "b"), (Outline::Normal, true));
 }

@@ -58,6 +58,9 @@ pub(crate) struct FontSpec<'a> {
     /// The glyph outline: it picks the ring-and-fill cell and, for THICK only, the step law's
     /// extra `+1` (`GlyphStepBase` `0x5ca2b0`), so it changes measured width too.
     pub outline: Outline,
+    /// The `monochrome` flag: glyphs draw from the 1-bit raster and its bakes
+    /// ([`super::outline::mono_cell`]); widths do not change.
+    pub monochrome: bool,
     /// The gap between lines in logical px, scaled like [`Self::height`]; the line step adds it
     /// rounded up to a whole device pixel ([`line_gap`]).
     pub spacing: f32,
@@ -188,7 +191,7 @@ fn layout_text_quads_inner(
     let gradient = font.alpha_gradient;
     let r = measure::resolve(e, &font);
     // One pass fills the caches, as `AllGlyphsCached` (`0x5c9fa0`); the layout below is lookups.
-    e.ensure_str(r.face, r.ppem, r.radius, text);
+    e.ensure_str(r.face, r.ppem, r.bake, text);
     let e = &*e;
     let dpi = e.dpi();
     let sheet = e.sheet_image();
@@ -291,7 +294,7 @@ fn layout_text_quads_inner(
                     color[3] *= gradient_alpha(char_index, start, length);
                 }
                 for g in &cc.glyphs {
-                    if let Some(info) = e.cell(r.face, r.ppem, r.radius, g.glyph_id) {
+                    if let Some(info) = e.cell(r.face, r.ppem, r.bake, g.glyph_id) {
                         pending.push(PendingGlyph {
                             x_dev: pen_dev + info.bearing_x,
                             y_dev: g.y_off - info.bearing_top,
@@ -442,6 +445,7 @@ mod measure_fits_render {
             path: Some(FACE),
             height: Some(h),
             outline: Outline::None,
+            monochrome: false,
             spacing: 0.0,
             shadow_x: 0.0,
             alpha_gradient: None,
@@ -768,6 +772,7 @@ mod measure_fits_render {
             ] {
                 let s = FontSpec {
                     outline,
+                    monochrome: false,
                     shadow_x,
                     ..spec(16.0 * ERA)
                 };
@@ -967,6 +972,7 @@ mod ellipsis_cost {
             path: Some(FACE),
             height: Some(SIZE),
             outline: Outline::None,
+            monochrome: false,
             spacing: 0.0,
             shadow_x: 0.0,
             alpha_gradient: None,

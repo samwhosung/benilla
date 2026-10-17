@@ -552,6 +552,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 path,
                 height,
                 flags,
+                ..
             } = super::font_block::set_font_args(
                 lua,
                 &this,

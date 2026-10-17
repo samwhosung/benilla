@@ -286,11 +286,16 @@ fn an_xml_font_file_without_a_positive_height_leaves_the_string_fontless() {
         );
     }
 
-    // A positive height still sets the font, outline and all.
+    // A positive height still sets the font, outline and all: `outline="NORMAL"` is the OUTLINE
+    // flag (`0x7711b7`).
     assert_eq!(
         s.eval::<(String, f32, String)>("return Sized:GetFont()")
             .unwrap(),
-        ("Fonts\\FRIZQT__.TTF".to_string(), 12.0, "".to_string())
+        (
+            "Fonts\\FRIZQT__.TTF".to_string(),
+            12.0,
+            "OUTLINE".to_string()
+        )
     );
     s.run(r#"Sized:SetText("ok")"#).unwrap();
 }

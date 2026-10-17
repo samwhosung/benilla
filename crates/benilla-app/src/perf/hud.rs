@@ -200,6 +200,7 @@ pub(super) fn pill_quads(
                 path: None,
                 height: Some(PILL_QUAD_PX),
                 outline: Outline::None,
+                monochrome: false,
                 spacing: 0.0,
                 shadow_x: 0.0,
                 alpha_gradient: None,

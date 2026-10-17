@@ -730,6 +730,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     path,
                     height,
                     flags,
+                    ..
                 } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
                 // Each embedded font's load fails alike, writing nothing (`0x79f30f` → `0x79f361`).
                 if !super::font_block::instance_loads(lua, &path, height) {

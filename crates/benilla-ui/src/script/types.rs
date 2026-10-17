@@ -158,6 +158,8 @@ pub enum QuadContent {
         /// 1.12's `MasterFont` sets `(1,-1)` black, so nearly every stock font has one.
         shadow: Option<FontShadow>,
         outline: Outline,
+        /// The `monochrome` flag (font flag bit 1): the glyphs draw from a 1-bit raster.
+        monochrome: bool,
         /// The gap between lines in logical px, never negative: the line step is the font height
         /// plus this, rounded up to a whole device pixel (`LayoutLines` `0x5cdc20`).
         spacing: f32,
@@ -263,7 +265,7 @@ impl Outline {
 
     /// Parse a Lua `SetFont` flags string, shared by every `SetFont` (`0x79f210`) and matched by
     /// substring against `{0x1 OUTLINE, 0x4 THICKOUTLINE, 0x2 MONOCHROME}` (`0x811b10`): THICK
-    /// first, since `THICKOUTLINE` contains `OUTLINE`. MONOCHROME is ignored, its mode not built.
+    /// first, since `THICKOUTLINE` contains `OUTLINE`. MONOCHROME is [`monochrome_flag`]'s.
     pub fn flags(s: &str) -> Outline {
         let s = s.to_ascii_uppercase();
         if s.contains("THICK") {
@@ -283,6 +285,12 @@ impl Outline {
             Outline::Thick => "THICKOUTLINE",
         }
     }
+}
+
+/// Whether a Lua `SetFont` flags string holds `MONOCHROME` (`0x2` in `0x811b10`), matched as
+/// [`Outline::flags`] matches its names.
+pub(crate) fn monochrome_flag(s: &str) -> bool {
+    s.to_ascii_uppercase().contains("MONOCHROME")
 }
 
 /// A font object's `<Shadow>`, inherited down `<Font>` chains; 1.12's `MasterFont` sets `(1,-1)`
@@ -306,6 +314,8 @@ pub struct FontObject {
     pub shadow: Option<FontShadow>,
     pub color: Option<[f32; 4]>,
     pub outline: Outline,
+    /// `monochrome=` (font flag bit 1).
+    pub monochrome: bool,
     pub justify_h: Option<JustifyH>,
     pub justify_v: Option<JustifyV>,
     /// The gap between lines (`spacing=`, `SetSpacing`), stored as given (`+0x50`).
@@ -444,6 +454,8 @@ pub(crate) struct RegionData {
     pub(crate) text_height: Option<f32>,
     /// Resolved glyph outline (`SetFont` flags or the font object).
     pub(crate) outline: Outline,
+    /// Resolved monochrome flag, from the same flags word as [`Self::outline`].
+    pub(crate) monochrome: bool,
     /// Resolved drop shadow (font object `<Shadow>`), drawn behind the glyphs.
     pub(crate) font_shadow: Option<FontShadow>,
     /// The gap between lines, as set (`SetSpacing`, XML `spacing=` or the font object): a
@@ -465,7 +477,8 @@ pub(crate) struct FontExplicit {
     pub(crate) face: bool,
     /// `SetFont`'s height argument, or XML `<FontHeight>`.
     pub(crate) height: bool,
-    /// `SetFont`'s flags argument, or XML `outline=`.
+    /// `SetFont`'s flags argument, or XML `outline=` and `monochrome=`: the outline and the
+    /// monochrome flag together.
     pub(crate) outline: bool,
     /// `SetTextColor`/`SetVertexColor`, or a `<FontString><Color>`.
     pub(crate) color: bool,

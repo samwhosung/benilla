@@ -968,6 +968,8 @@ pub(super) fn font_object_from_element(el: &Element) -> FontObject {
         height: children_named(el, "FontHeight").last().and_then(abs_value),
         color: children_named(el, "Color").last().map(color_of),
         outline: el.attr("outline").map(Outline::parse).unwrap_or_default(),
+        // Any non-empty `monochrome=` sets the flag (`0x783e01`-`0x783e14`), even "false".
+        monochrome: el.attr("monochrome").is_some_and(|v| !v.is_empty()),
         justify_h,
         justify_v,
         shadow,

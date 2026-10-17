@@ -8,6 +8,7 @@ use benilla_ui::script::{JustifyH, JustifyV, Outline};
 
 use super::super::engine::{GlyphRef, TextEngine, UiFontAtlas};
 use super::super::markup::{fontstring_lines, parse_markup, ColorRun};
+use super::super::outline::Bake;
 use super::wrap::{self, row_limit, RowPricer};
 use super::{overflow, FontSpec, Justify, HEIGHT_LIMIT_MIN, WRAP_MIN_WIDTH};
 
@@ -20,8 +21,8 @@ pub(super) struct Resolved {
     pub(super) ppem: u16,
     /// The logical height `ppem` draws at, not the requested one: the pitch and every block em.
     pub(super) size: f32,
-    /// The outline cell variant (`0` = plain).
-    pub(super) radius: u8,
+    /// The cell's bake: the outline's ring and the monochrome raster.
+    pub(super) bake: Bake,
     /// The step law's per-glyph bias ([`super::step_extra_of`]).
     pub(super) step_extra: f32,
     /// The line gap, whole device pixels in logical px ([`super::line_gap`]).
@@ -51,7 +52,7 @@ pub(super) fn resolve(e: &mut TextEngine, font: &FontSpec) -> Resolved {
         face,
         ppem,
         size: e.logical_size(ppem),
-        radius: super::super::outline::radius_of(font.outline),
+        bake: Bake::of(font.outline, font.monochrome),
         step_extra: super::step_extra_of(font.outline),
         gap: super::line_gap(font.spacing, e.dpi()),
         lead,

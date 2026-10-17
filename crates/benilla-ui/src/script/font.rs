@@ -123,6 +123,7 @@ pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
     }
     if !ex.outline {
         d.outline = fo.outline;
+        d.monochrome = fo.monochrome;
     }
     if !ex.shadow {
         if let Some(s) = fo.shadow {
@@ -253,6 +254,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     path,
                     height,
                     flags,
+                    monochrome,
                 } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
                 if !super::font_block::instance_loads(lua, &path, height) {
                     return Ok(Value::Nil);
@@ -260,6 +262,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 edit(lua, &this, |fo| {
                     fo.font = Some(path);
                     fo.outline = flags;
+                    fo.monochrome = monochrome;
                     fo.height = Some(height);
                 })?;
                 Ok(Value::Number(1.0))
