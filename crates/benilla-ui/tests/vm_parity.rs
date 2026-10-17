@@ -226,7 +226,8 @@ const CASES: &[(&str, &str)] = &[
     ("tonumber_edges", r#"return S(tonumber("inf"), tonumber("-inf"), tonumber("nan") ~= nil, tonumber("1e"), tonumber("0x"), tonumber(" 0x1A "), tonumber("0x1p4"), tonumber("1e+"), tonumber(".5"), tonumber("5."), tonumber("- 1"), tonumber("1 2"), tonumber(""), tonumber("  "), tonumber("0x10", 10), tonumber("10", 36), tonumber("z", 36))"#),
     ("tonumber_base_edges", r#"return S(tonumber("-1", 16), tonumber("0x10", 16), tonumber(" ff ", 16), tonumber("ffffffffffffffffffff", 16), tonumber("1z", 36), tonumber("8", 8), tonumber("", 16), tonumber("-ff", 16), tonumber("+7", 8))"#),
     ("numeral_lexing", "return S(1e10, .5, 5., 3e-2, 1E2, 2^53 + 1, 1.5e+3, .5E-1, 2., 5.e2)"),
-    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`).
+    // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`). A NUL after
+    // a `.` is no `.` (`0x6ff98a`, `0x6ff9b3`).
     ("numeral_reader", r#"local o = {}
         for _, src in ipairs({"return 0x10", "return 0xA0", "a = 0x10()", "a=1b=2 return a, b",
             "return 1..2", "return 1.2.3", "return 3e", "return 3e+", "return .5.3", "return 1d2",

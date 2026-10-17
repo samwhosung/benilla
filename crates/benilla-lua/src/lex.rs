@@ -326,9 +326,8 @@ impl<'a> Lexer<'a> {
                 0x7E /* ~ */ => return Ok(self.two(Tok::Ne, b'~')),
                 0x22 | 0x27 => return self.string(c as u8),
                 0x2E /* . */ => {
-                    // `check_next(ls, ".")` is `strchr(".", c)`, which also finds the NUL that
-                    // ends its set: a NUL byte after a `.` reads as another `.`.
-                    let dot = |c: i32| c == b'.' as i32 || c == 0;
+                    // The client tests each next byte against `.` alone (`0x6ff98a`, `0x6ff9b3`).
+                    let dot = |c: i32| c == b'.' as i32;
                     self.pos += 1;
                     if dot(self.ch()) {
                         self.pos += 1;

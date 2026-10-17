@@ -468,3 +468,16 @@ fn string_dump_refuses_a_function_with_upvalues() {
         "string"
     );
 }
+
+/// After a `.` the lexer tests the next byte against `.` alone (`0x6ff98a`, `0x6ff9b3`): a NUL
+/// there is the next character, a control byte (`0x6ffabb`).
+#[test]
+fn a_nul_after_a_dot_is_no_dot() {
+    for src in ["x = a.\0", "x = a..\0"] {
+        assert_eq!(
+            compile_error(src),
+            "t:1: invalid control char near `char(0)'",
+            "{src:?}"
+        );
+    }
+}
