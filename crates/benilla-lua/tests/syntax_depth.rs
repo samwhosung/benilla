@@ -1,5 +1,5 @@
 //! Long and deep source on a 2 MB thread: a left-nested chain of any length compiles and runs,
-//! as 5.1's parser reads it in a loop, and deep nesting stops at 5.1's level limit with its
+//! as 5.1's parser reads it in a loop, and deep nesting stops at the client's level limit with its
 //! message (or, for loops, at its limit on locals). Neither may overflow the Rust stack.
 
 fn on_small_stack(f: impl FnOnce() + Send + 'static) {
@@ -84,10 +84,11 @@ fn deep_nesting_stops_at_the_level_limit() {
         ];
         for src in cases {
             let got = run(src.clone());
-            // Four locals a loop reach 5.1's 200 before the levels do.
-            let locals = src.starts_with("for") && got.ends_with("more than 200 local variables");
+            // Four locals a loop reach the 200 before the levels do.
+            let locals =
+                src.starts_with("for") && got.contains("too many local variables (limit=200)");
             assert!(
-                got.ends_with("chunk has too many syntax levels") || locals,
+                got.contains("too many syntax levels near") || locals,
                 "{}: {got}",
                 &src[..40]
             );

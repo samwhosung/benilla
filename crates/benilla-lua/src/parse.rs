@@ -1,8 +1,8 @@
-//! The parser: 5.1.5's `lparser.c` with the 1.12 grammar (`GRAMMAR.md`),
-//! generating code as it reads, through [`crate::compile`]. Messages, limits and the token they
-//! quote are 5.1's. Left-associative chains (binary operators, `and`/`or`, suffixes such as
-//! `f()()`, `t.a.b`, `o:m()`) are read in loops, so only nesting recurses, and nesting is bounded
-//! by 5.1's level limit.
+//! The parser: 5.1.5's `lparser.c` with the 1.12 grammar (`GRAMMAR.md`), generating code as it
+//! reads, through [`crate::compile`]. Messages and the token they quote are 5.1's, but for the
+//! limits, which are the client's 5.0 ones. Left-associative chains (binary operators,
+//! `and`/`or`, suffixes such as `f()()`, `t.a.b`, `o:m()`) are read in loops, so only nesting
+//! recurses, and nesting is bounded by the client's level limit.
 
 use std::rc::Rc;
 
@@ -11,11 +11,20 @@ use crate::heap::Heap;
 use crate::lex::{Lexer, Tok};
 use crate::proto::*;
 
-/// 5.1's `LUAI_MAXVARS`: active locals per function.
+/// The client's `MAXVARS` (`0x6fd8fc`): active locals per function.
 const MAXVARS: usize = 200;
-/// 5.1's `LUAI_MAXUPVALUES`.
-const MAXUPVALUES: usize = 60;
-/// 5.1's `LUAI_MAXCCALLS`: nested host calls and syntax levels together.
+/// The client's `MAXUPVALUES`, 5.0's 32 (`0x6fdfdc`).
+const MAXUPVALUES: usize = 32;
+/// The client's `LUA_MAXPARAMS`, 5.0's 100 (`0x6fdac7`): a function's parameters, `self` among
+/// them and `arg` not.
+const MAXPARAMS: usize = 100;
+/// The client's `MAXARG_Bx` (`0x6fd7a3`): list items in one table constructor.
+const MAXLISTITEMS: u32 = 0x3ffff;
+/// The client's `LUA_MAXPARSERLEVEL`, 5.0's 200 (`0x6fcc99`, `0x6fd180`): nested syntax levels,
+/// counted from 0 in each chunk (`0x6fc9d0`).
+const MAXPARSERLEVEL: u32 = 200;
+/// 5.1's `LUAI_MAXCCALLS`, which caps the targets of one assignment by the host calls and syntax
+/// levels below it.
 const MAXCCALLS: u32 = 200;
 /// 5.1's `UNARY_PRIORITY`.
 const UNARY_PRIORITY: u8 = 8;
@@ -25,8 +34,10 @@ pub(crate) struct Parser<'a> {
     /// The function being compiled and those enclosing it, innermost last.
     pub(crate) fs: Vec<FuncState>,
     pub(crate) heap: &'a mut Heap,
-    /// 5.1's `L->nCcalls`: the caller's host-call depth, then one per syntax level.
+    /// The caller's host-call depth, 5.1's `L->nCcalls` at the parse.
     ccalls: u32,
+    /// 5.0's `nestlevel`: the syntax levels open in this chunk.
+    nestlevel: u32,
     /// The name of the single target the next expression is assigned to, for the key of a
     /// function or constructor it opens with (`t.x = function`, `local f = function`).
     name_hint: Option<Vec<u8>>,
@@ -63,6 +74,7 @@ pub(crate) fn parse(src: &[u8], chunkname: &[u8], heap: &mut Heap, ccalls: u32) 
         fs: Vec::new(),
         heap,
         ccalls,
+        nestlevel: 0,
         name_hint: None,
     };
     p.fs.push(FuncState::new(Rc::from(chunkname), 0, Key::default()));
@@ -186,28 +198,24 @@ impl<'a> Parser<'a> {
         Ok(name)
     }
 
-    /// `errorlimit`, raised with no token.
+    /// The client's `luaX_checklimit` (`0x6ff440`) past its limit: `too many %s (limit=%d)`
+    /// (`0x872164`), a syntax error near the current token (`0x6ff467`).
     fn errorlimit(&self, limit: usize, what: &str) -> crate::SyntaxError {
-        let line = self.fsr().linedefined;
-        let msg = if line == 0 {
-            format!("main function has more than {limit} {what}")
-        } else {
-            format!("function at line {line} has more than {limit} {what}")
-        };
-        self.lx.error_plain(&msg)
+        self.lx.error(&format!("too many {what} (limit={limit})"))
     }
 
-    /// `enterlevel`.
+    /// 5.0's `enterlevel` (`0x6fcc90`, `0x6fd170`): a syntax error near the current token past
+    /// [`MAXPARSERLEVEL`].
     fn enterlevel(&mut self) -> R<()> {
-        self.ccalls += 1;
-        if self.ccalls > MAXCCALLS {
-            return Err(self.lx.error_plain("chunk has too many syntax levels"));
+        self.nestlevel += 1;
+        if self.nestlevel > MAXPARSERLEVEL {
+            return Err(self.lx.error("too many syntax levels"));
         }
         Ok(())
     }
 
     fn leavelevel(&mut self) {
-        self.ccalls -= 1;
+        self.nestlevel -= 1;
     }
 
     // ── scopes ───────────────────────────────────────────────────────────────────────────────
@@ -319,9 +327,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(Kind::Upval(i as u16)));
         }
         if fs.upvals.len() + 1 > MAXUPVALUES {
-            let line = fs.linedefined;
-            let msg = format!("function at line {line} has more than {MAXUPVALUES} upvalues");
-            return Err(self.lx.error_plain(&msg));
+            return Err(self.errorlimit(MAXUPVALUES, "upvalues"));
         }
         let decl = match k {
             Kind::Local(r) => self.fs[level - 1].local_decl(r),
@@ -435,6 +441,12 @@ impl<'a> Parser<'a> {
             }
         }
         self.adjustlocalvars(nparams);
+        // The client's `code_params` (`0x6fdab0`) checks the count after `self` and the named
+        // parameters are in scope, before it makes `arg`.
+        let named = (self.fsr().nactvar - self.fsr().vararg as u8) as usize;
+        if named > MAXPARAMS {
+            return Err(self.errorlimit(MAXPARAMS, "parameters"));
+        }
         let fs = self.fs();
         fs.nparams = fs.nactvar - fs.vararg as u8;
         let n = fs.nactvar as u32;
@@ -818,7 +830,7 @@ impl<'a> Parser<'a> {
                 self.check_conflict(&mut lhs, r)?;
             }
             let nvars = lhs.len();
-            let limit = MAXCCALLS.saturating_sub(self.ccalls) as usize;
+            let limit = MAXCCALLS.saturating_sub(self.ccalls + self.nestlevel) as usize;
             if nvars > limit {
                 return Err(self.errorlimit(limit, "variables in assignment"));
             }
@@ -980,6 +992,10 @@ impl<'a> Parser<'a> {
 
     fn listfield(&mut self, cc: &mut ConsControl) -> R<()> {
         cc.v = self.expr()?;
+        // The client's `listfield` (`0x6fd7aa`).
+        if cc.na > MAXLISTITEMS {
+            return Err(self.errorlimit(MAXLISTITEMS as usize, "items in a constructor"));
+        }
         cc.na += 1;
         cc.tostore += 1;
         Ok(())

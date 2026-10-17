@@ -241,11 +241,6 @@ impl<'a> Lexer<'a> {
         self.error_at(msg.as_bytes(), Some(&near))
     }
 
-    /// `luaX_lexerror(ls, msg, 0)`: the position and the message, no token.
-    pub fn error_plain(&self, msg: &str) -> SyntaxError {
-        self.error_at(msg.as_bytes(), None)
-    }
-
     /// `luaX_lexerror`: an end of input names `<eof>`, anything else quotes the buffer.
     fn lex_error(&self, msg: &str, eof: bool) -> SyntaxError {
         if eof {

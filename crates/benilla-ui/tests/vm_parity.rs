@@ -323,6 +323,8 @@ b]])"#),
         local big120 = loadstring("return {[0.5]=0," .. list(120) .. ",[-2]=1,a=1,b=2}")()
         return S(K({["x"]=4,["y"]=4,["z"]=4,5}), K({0,1,[true]=2,[2]=4,5}), K({0,["x"]=4,["y"]=4,5}),
           K(big), K(big60), K(big120), K({x = 1, f()}), K({f(), x = 1, y = 2, z = 3}), K({[1]=1, [2]=2, 3, f()}))"#),
+    // The parser's limits are the client's (`0x6ff440`): 200 locals, 100 parameters, 32
+    // upvalues, 200 syntax levels counted in each chunk (`0x6fc9d0`).
     ("fix-front_register_reuse", r#"local function L(src) local f, e = loadstring(src) if not f then return e end local ok, r = pcall(f) return tostring(r) end
         local p = {} for i = 1, 250 do p[i] = "x" end
         local q = {} for i = 1, 400 do q[i] = "a*0.25" end
@@ -344,9 +346,9 @@ b]])"#),
           L("local function g() " .. string.rep("do local a end ", 10) .. "end"))"#),
     ("fix-front_upvalue_limits", r#"local function L(src) local f, e = loadstring(src) if f then return "ok" end return e end
         local function names(n) local o = {} for i = 1, n do o[i] = "u" .. i end return table.concat(o, ",") end
-        return S(L("local " .. names(60) .. "\nreturn function() return " .. names(60) .. " end"),
-          L("local " .. names(61) .. "\nreturn function() return " .. names(61) .. " end"),
-          L("local " .. names(61) .. " return function() return function() return " .. names(61) .. " end end"))"#),
+        return S(L("local " .. names(32) .. "\nreturn function() return " .. names(32) .. " end"),
+          L("local " .. names(33) .. "\nreturn function() return " .. names(33) .. " end"),
+          L("local " .. names(33) .. " return function() return function() return " .. names(33) .. " end end"))"#),
     ("fix-front_syntax_levels", r#"local function first_failing(make)
           for n = 1, 400 do
             local f, e = loadstring(make(n))

@@ -44,10 +44,11 @@ fn peak_compiling(src: &str) -> usize {
 #[test]
 fn compile_memory_follows_the_source_not_its_nesting() {
     let long = "N".repeat(16 * 1024);
-    let locals: Vec<String> = (1..=60).map(|i| format!("u{i}")).collect();
+    let locals: Vec<String> = (1..=32).map(|i| format!("u{i}")).collect();
     let locals = locals.join(",");
 
-    // A long-named function's sixty locals, captured by each of 400 closures.
+    // A long-named function's 32 locals, as many as a closure may capture, captured by each
+    // of 400 closures.
     let inner = format!("F = function() return {locals} end ").repeat(400);
     let captures = format!("function {long}() local {locals} {inner} end");
     // Functions nested 150 deep, each with a long name.

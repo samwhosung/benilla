@@ -38,3 +38,76 @@ fn pow_calls_the_global_pow() {
         "mm"
     );
 }
+
+fn compile_error(src: &str) -> String {
+    benilla_lua::check(src.as_bytes(), b"=t")
+        .err()
+        .map_or("ok".into(), |e| e.to_string())
+}
+
+/// The client's limits (`luaX_checklimit`, `0x6ff440`), each a syntax error near the current
+/// token: 32 upvalues (`0x6fdfdc`), 100 parameters with `self` and without `arg` (`0x6fdac7`),
+/// 200 locals (`0x6fd8fc`), 262143 list items in a constructor (`0x6fd7aa`).
+#[test]
+fn parser_limits_are_the_clients() {
+    let names = |n: usize| {
+        (1..=n)
+            .map(|i| format!("v{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let ups = |n: usize| format!("local {}\nf = function() return {} end", names(n), names(n));
+    assert_eq!(compile_error(&ups(32)), "ok");
+    assert_eq!(
+        compile_error(&ups(33)),
+        "t:2: too many upvalues (limit=32) near `end'"
+    );
+    let params = |pre: &str, n: usize, post: &str| {
+        compile_error(&format!("function {pre}({}{post}) end", names(n)))
+    };
+    assert_eq!(params("f", 100, ""), "ok");
+    assert_eq!(params("f", 100, ", ..."), "ok");
+    assert_eq!(
+        params("f", 101, ""),
+        "t:1: too many parameters (limit=100) near `)'"
+    );
+    assert_eq!(
+        params("t:m", 100, ""),
+        "t:1: too many parameters (limit=100) near `)'"
+    );
+    assert_eq!(
+        compile_error(&format!("local {}", names(201))),
+        "t:1: too many local variables (limit=200) near `<eof>'"
+    );
+    let list = |n: usize| format!("return {{{}}}", "0,".repeat(n));
+    assert_eq!(compile_error(&list(262144)), "ok");
+    assert_eq!(
+        compile_error(&list(262145)),
+        "t:1: too many items in a constructor (limit=262143) near `,'"
+    );
+}
+
+/// Syntax levels are counted in each chunk from 0 (`0x6fc9d0`), by `chunk` and `subexpr`
+/// (`0x6fcc99`, `0x6fd180`): the chunk and its `return` expression take two, each parenthesis
+/// one more, and the host calls the compile runs under take none.
+#[test]
+fn syntax_levels_are_counted_per_chunk() {
+    let parens = |n: usize| format!("return {}1{}", "(".repeat(n), ")".repeat(n));
+    assert_eq!(compile_error(&parens(198)), "ok");
+    assert_eq!(
+        compile_error(&parens(199)),
+        "t:1: too many syntax levels near `1'"
+    );
+    let src = format!(
+        "local src = {:?} \
+         local function r(n) if n == 0 then return loadstring(src) ~= nil end \
+         local ok, v = pcall(r, n - 1) return v end return r(190)",
+        parens(198)
+    );
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || assert_eq!(run(&src), "true"))
+        .unwrap()
+        .join()
+        .unwrap();
+}
