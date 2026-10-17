@@ -99,23 +99,32 @@ fn rad(x: f64) -> f64 {
 
 fn un(vm: &mut Vm, nargs: usize, f: fn(f64) -> f64) -> R<usize> {
     let x = vm.check_number(nargs, 1)?;
-    Ok(vm.ret1(Value::Num(f(x))))
+    Ok(vm.ret1(num(f(x), x, 0.0)))
+}
+
+/// A C library result as the client's runtime answers it: a domain error is the x87 indefinite.
+fn num(r: f64, a: f64, b: f64) -> Value {
+    Value::Num(if r.is_nan() {
+        crate::number::x87_fn(r, a, b)
+    } else {
+        r
+    })
 }
 
 /// A two-argument C call such as `fmod(luaL_checknumber(L, 1), luaL_checknumber(L, 2))`: gcc
 /// evaluated the arguments right to left, so the second is checked first. The order is the
 /// x86-64 Linux C build's on every platform (clang on arm64 checks the first); the client's MSVC
-/// x86-32 order is later work, as are its `rand` (#1258) and number text (#1376).
+/// x86-32 order is later work, as is its `rand` (#1258).
 fn bin_rev(vm: &mut Vm, nargs: usize, f: fn(f64, f64) -> f64) -> R<usize> {
     let b = vm.check_number(nargs, 2)?;
     let a = vm.check_number(nargs, 1)?;
-    Ok(vm.ret1(Value::Num(f(a, b))))
+    Ok(vm.ret1(num(f(a, b), a, b)))
 }
 
 fn bin(vm: &mut Vm, nargs: usize, f: fn(f64, f64) -> f64) -> R<usize> {
     let x = vm.check_number(nargs, 1)?;
     let y = vm.check_number(nargs, 2)?;
-    Ok(vm.ret1(Value::Num(f(x, y))))
+    Ok(vm.ret1(num(f(x, y), x, y)))
 }
 
 fn frexp(vm: &mut Vm, nargs: usize) -> R<usize> {

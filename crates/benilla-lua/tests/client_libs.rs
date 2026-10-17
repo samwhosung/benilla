@@ -249,3 +249,43 @@ fn format_zero_pads_strings_and_chars() {
         ["000ab|ab   |0000a|00A|A  |"]
     );
 }
+
+/// A NaN an operation makes is the x87's real indefinite, `-1.#IND`, on every host; a NaN that
+/// comes in keeps its own sign through arithmetic and the math library.
+#[test]
+fn a_made_nan_is_the_x87_indefinite() {
+    let made = [
+        "0/z",
+        "(1/z) - (1/z)",
+        "(1/z) + (-1/z)",
+        "z * (1/z)",
+        "math.sqrt(-1)",
+        "math.asin(2)",
+        "math.acos(2)",
+        "math.log(-1)",
+        "math.log10(-3)",
+        "math.mod(1, 0)",
+        "math.sin(1/z)",
+        "math.pow(-8, 1/3)",
+    ];
+    for expr in made {
+        assert_eq!(
+            ok(&format!("local z = 0 return tostring({expr})")),
+            ["-1.#IND"],
+            "{expr}"
+        );
+    }
+    let mut vm = benilla_lua::new_script_host_state();
+    vm.set_global(
+        "V",
+        benilla_lua::Value::Num(f64::from_bits(0x7ff8_0000_0000_0000)),
+    );
+    let got = vm
+        .exec(
+            b"return tostring(V), tostring(V + 1), tostring(2 * V), tostring(math.sqrt(V)), tostring(-V)",
+            b"=t",
+        )
+        .unwrap();
+    let got: Vec<String> = got.into_iter().map(|v| vm.display(v)).collect();
+    assert_eq!(got, ["1.#QNAN", "1.#QNAN", "1.#QNAN", "1.#QNAN", "-1.#IND"]);
+}

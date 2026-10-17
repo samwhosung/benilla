@@ -168,6 +168,35 @@ pub fn strtoul(s: &[u8], base: u32) -> (u32, usize) {
     (if neg { n.wrapping_neg() } else { n }, i)
 }
 
+/// The NaN the client's x87 makes of an invalid operation, the real indefinite: the sign set, so
+/// it prints `-1.#IND`.
+const INDEFINITE: u64 = 0xFFF8_0000_0000_0000;
+
+/// `r = a op b` as the client's x87 answers it: a NaN the operation made from operands that are
+/// not NaN is the indefinite, and a NaN operand passes through with its own sign. x86's SSE makes
+/// the same indefinite, so only another host (arm64's default NaN has no sign) pays the test.
+#[inline(always)]
+pub fn x87_op(r: f64, a: f64, b: f64) -> f64 {
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    if r.is_nan() {
+        return x87_fn(r, a, b);
+    }
+    let _ = (a, b);
+    r
+}
+
+/// [`x87_op`] for a C library function of `a` and `b` (`b` 0 for one argument), on every host:
+/// the client's runtime answers the indefinite for a domain error (`sqrt(-1)`, `asin(2)`,
+/// `fmod(1, 0)`), where a host's libm answers a NaN of its own choosing.
+#[cold]
+pub fn x87_fn(r: f64, a: f64, b: f64) -> f64 {
+    if r.is_nan() && !a.is_nan() && !b.is_nan() {
+        f64::from_bits(INDEFINITE)
+    } else {
+        r
+    }
+}
+
 /// `lua_number2str`: the client's `luaV_tostring` (`0x6f7c80`) formats with `%.14g` (`0x871960`)
 /// through its MSVC `sprintf` (`0x73fec4`): `1e+020`, `1.#INF`, `-1.#IND` and `0` for `-0`.
 pub fn fmt_g14(n: f64) -> String {

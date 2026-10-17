@@ -1095,10 +1095,10 @@ impl Vm {
     ) -> Result<Value, LuaError> {
         if let (Some(x), Some(y)) = (self.tonumber(a), self.tonumber(b)) {
             return Ok(Value::Num(match op {
-                Arith::Add => x + y,
-                Arith::Sub => x - y,
-                Arith::Mul => x * y,
-                Arith::Div => x / y,
+                Arith::Add => crate::number::x87_op(x + y, x, y),
+                Arith::Sub => crate::number::x87_op(x - y, x, y),
+                Arith::Mul => crate::number::x87_op(x * y, x, y),
+                Arith::Div => crate::number::x87_op(x / y, x, y),
                 Arith::Pow => return self.pow_global(x, y),
             }));
         }
@@ -2370,7 +2370,7 @@ impl Vm {
                     let (x, y) = (r!($b), r!($c));
                     if let (Some(xn), Some(yn)) = (x.as_num(), y.as_num()) {
                         // Canonical numbers in, a canonical number out.
-                        r!($a) = Value::num_raw(xn $op yn);
+                        r!($a) = Value::num_raw(crate::number::x87_op(xn $op yn, xn, yn));
                     } else {
                         let v = slow!(self.arith($kind, x, y, (Some($b as usize), Some($c as usize))))?;
                         r!($a) = v;
@@ -2382,7 +2382,7 @@ impl Vm {
                 ($a:expr, $kx:expr, $c:expr, $op:tt, $kind:expr) => {{
                     let (x, y) = (kv!($kx), r!($c));
                     if let (Some(xn), Some(yn)) = (x.as_num(), y.as_num()) {
-                        r!($a) = Value::num_raw(xn $op yn);
+                        r!($a) = Value::num_raw(crate::number::x87_op(xn $op yn, xn, yn));
                     } else {
                         let v = slow!(self.arith($kind, x, y, (None, Some($c as usize))))?;
                         r!($a) = v;
@@ -2505,7 +2505,7 @@ impl Vm {
                 ($a:expr, $b:expr, $kx:expr, $op:tt, $kind:expr) => {{
                     let y = kv!($kx);
                     if let (Some(x), Some(yn)) = (r!($b).as_num(), y.as_num()) {
-                        r!($a) = Value::num_raw(x $op yn);
+                        r!($a) = Value::num_raw(crate::number::x87_op(x $op yn, x, yn));
                     } else {
                         let x = r!($b);
                         let v = slow!(self.arith($kind, x, y, (Some($b as usize), None)))?;
