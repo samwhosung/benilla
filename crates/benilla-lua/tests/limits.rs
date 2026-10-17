@@ -206,3 +206,29 @@ fn a_hot_reload_out_of_string_ids_is_not_enough_memory() {
         )
     );
 }
+
+/// `pcall` and `xpcall` return every result of the call, however many fill its frame, as
+/// `luaB_pcall` does: the C build's API check aborted a debug build at 22.
+#[test]
+fn a_protected_call_returns_every_result() {
+    let src = r#"local function seq(k) local t = {} for i = 1, k do t[i] = i end return t end
+        local forty = seq(40)
+        local function many() return unpack(forty) end
+        local function n(...) return arg.n, arg[1], arg[arg.n] end
+        local o = {}
+        for _, k in {21, 22, 23, 60, 300} do
+          local a, b, c = n(pcall(unpack, seq(k)))
+          table.insert(o, a .. ":" .. tostring(b) .. ":" .. c)
+        end
+        local a, b, c = n(pcall(many))
+        table.insert(o, a .. ":" .. tostring(b) .. ":" .. c)
+        a, b, c = n(xpcall(many, function(e) return e end))
+        table.insert(o, a .. ":" .. tostring(b) .. ":" .. c)
+        a, b, c = n(pcall(string.find, string.rep("a", 30), string.rep("(a)", 30)))
+        table.insert(o, a .. ":" .. tostring(b) .. ":" .. c)
+        return table.concat(o, " ")"#;
+    assert_eq!(
+        run(src).unwrap(),
+        ["22:true:21 23:true:22 24:true:23 61:true:60 301:true:300 41:true:40 41:true:40 33:true:a"]
+    );
+}
