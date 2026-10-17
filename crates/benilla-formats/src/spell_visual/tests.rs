@@ -45,7 +45,8 @@ fn spell_visual_row(
     rec
 }
 
-/// One `SpellVisualKit` row: id, anim (field 2), world effect (12), sound (13); the rest zero.
+/// One `SpellVisualKit` row: id, anim (field 2), world effect (12), sound (13); the rest zero,
+/// except the four `CharProcType` slots, which hold the empty -1.
 fn spell_visual_kit_row(id: u32, anim: u32, sound: u32, world: u32) -> Vec<u8> {
     let mut rec = Vec::new();
     rec.extend(u32le(id));
@@ -56,8 +57,9 @@ fn spell_visual_kit_row(id: u32, anim: u32, sound: u32, world: u32) -> Vec<u8> {
     }
     rec.extend(u32le(world)); // field 12
     rec.extend(u32le(sound)); // field 13
-    for _ in 14..SPELL_VISUAL_KIT_FIELDS {
-        rec.extend(u32le(0));
+    for f in 14..SPELL_VISUAL_KIT_FIELDS {
+        let empty_proc = (CHAR_PROC_TYPE_FIELD..CHAR_PROC_PARAM_FIELD).contains(&f);
+        rec.extend(u32le(if empty_proc { u32::MAX } else { 0 }));
     }
     rec
 }
@@ -131,33 +133,19 @@ fn parses_stage_kits_and_zero_means_no_kit_at_that_stage() {
 }
 
 #[test]
-fn kit_anim_and_sound_fold_both_none_sentinels_to_none() {
+fn kit_anim_keeps_stand_and_drops_only_the_negative_sentinel() {
     let mut records = Vec::new();
     records.extend(spell_visual_kit_row(38, 53, 1484, 0)); // Fireball's cast kit
-    records.extend(spell_visual_kit_row(1, 0, 0, 0)); // plain-zero "none"
+    records.extend(spell_visual_kit_row(1, 0, 0, 0)); // anim 0 is Stand; sound 0 is none
     records.extend(spell_visual_kit_row(2, u32::MAX, u32::MAX, u32::MAX)); // the -1 "none" form
     let bytes = build_wdbc(3, SPELL_VISUAL_KIT_FIELDS as u32, &records);
-    let rs = parse(
-        &bytes,
-        n_u32_schema("SpellVisualKit", SPELL_VISUAL_KIT_FIELDS),
-        "t",
-    )
-    .unwrap();
+    let rs = parse(&bytes, kit_schema(), "t").unwrap();
 
-    let mut kits = HashMap::new();
-    for r in rs.records() {
-        let id = u32_at(r, 0).unwrap();
-        let anim_id = u32_at(r, 2).and_then(some_unless_none).map(|a| a as u16);
-        let sound = u32_at(r, 13).and_then(some_unless_none);
-        kits.insert(
-            id,
-            VisualKit {
-                anim_id,
-                sound,
-                ..Default::default()
-            },
-        );
-    }
+    let kits: HashMap<u32, VisualKit> = rs
+        .records()
+        .iter()
+        .map(|r| (u32_at(r, 0).unwrap(), kit_from_record(r)))
+        .collect();
     assert_eq!(
         kits[&38],
         VisualKit {
@@ -166,8 +154,16 @@ fn kit_anim_and_sound_fold_both_none_sentinels_to_none() {
             ..Default::default()
         }
     );
-    assert_eq!(kits[&1], VisualKit::default(), "plain 0 = none");
-    assert_eq!(kits[&2], VisualKit::default(), "0xFFFFFFFF = none too");
+    // `0x60f366 jl` skips only a negative id, so Stand reaches the recompute (`0x60f383`).
+    assert_eq!(
+        kits[&1],
+        VisualKit {
+            anim_id: Some(0),
+            ..Default::default()
+        },
+        "anim 0 is Stand; the sound and world effect read 0 as none"
+    );
+    assert_eq!(kits[&2], VisualKit::default(), "0xFFFFFFFF = none");
 }
 
 #[test]

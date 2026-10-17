@@ -38,7 +38,8 @@ pub const MISSILE_ATTACH_TABLE: [u16; 11] = [
     0x14, 0x22, 0x13, 0x15, 0x16, 0x11, 0x17, 0x18, 0x19, 0xf, 0x10,
 ];
 
-/// The data writes "no value" in an id column as 0 or as this, inconsistently; both read `None`.
+/// The data writes "no value" in an id column as 0 or as this, inconsistently; both read `None`
+/// through [`some_unless_none`], except where 0 is a real id (a kit's animation, [`kit_anim_id`]).
 const NONE_SENTINEL: u32 = u32::MAX;
 
 /// `CharProc` slots per kit; the dispatcher (`0x60d7c0`) walks exactly four.
@@ -231,7 +232,8 @@ impl VisualStages {
 // No `Eq`: the `CharProc` params are floats.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VisualKit {
-    /// Field 2: the `AnimationData.dbc` id played on the unit.
+    /// Field 2: the `AnimationData.dbc` id played on the unit. 0 (Stand) is an id; only a negative
+    /// field reads `None` ([`kit_anim_id`]).
     pub anim_id: Option<u16>,
     /// Field 13: the `SoundEntries.dbc` id.
     pub sound: Option<u32>,
@@ -252,6 +254,13 @@ pub struct VisualKit {
 }
 
 impl VisualKit {
+    /// The animation id where the client tests it above 0, not only against negative: the hold
+    /// resolver (`0x612a08 test; 0x612a0a jle`), the missile release gate (`0x6e8295 jg`) and the
+    /// stationary pin (`0x5fdeb5 cmp …,0; jle`). A kit naming 0 (Stand) passes none of them.
+    pub fn positive_anim(&self) -> Option<u16> {
+        self.anim_id.filter(|&a| a > 0)
+    }
+
     /// The filled `CharProc` slots, in slot order.
     pub fn char_procs(&self) -> impl Iterator<Item = CharProc> + '_ {
         self.char_proc_slots.iter().flatten().copied()
@@ -460,6 +469,37 @@ fn some_unless_none(v: u32) -> Option<u32> {
     (v != 0 && v != NONE_SENTINEL).then_some(v)
 }
 
+/// Kit field 2 (`+0x8`), the `AnimationData.dbc` id the kit plays. The client skips the animation
+/// block only for a negative id (`0x60f361 test eax,eax; 0x60f366 jl`), so 0 (Stand) is an id like
+/// any other: a state kit naming it still recomputes the base animation (`0x60f383`-`0x60f399`).
+/// An id past `u16` matches no animation and reads as none.
+fn kit_anim_id(v: u32) -> Option<u16> {
+    u16::try_from(v).ok()
+}
+
+/// One `SpellVisualKit.dbc` row. Effect, world-effect, sound and shake ids keep 0 as none: the
+/// effect slots and the world effect test only for a negative id (`0x60efdf`, `0x60f01d`) but then
+/// index `SpellVisualEffectName`, which has no row 0, so 0 resolves to nothing either way; the
+/// sound tests `je` on 0 (`0x60f440`) and the shake `jle` (`0x60f4cd`).
+fn kit_from_record(r: &benilla_dbc::Record) -> VisualKit {
+    let mut effect_slots = [None; 9];
+    for (i, slot) in effect_slots.iter_mut().enumerate() {
+        *slot = u32_at(r, 3 + i).and_then(some_unless_none);
+    }
+    let mut char_proc_slots = [None; KIT_CHAR_PROCS];
+    for (i, slot) in char_proc_slots.iter_mut().enumerate() {
+        *slot = char_proc_slot(r, i);
+    }
+    VisualKit {
+        anim_id: u32_at(r, 2).and_then(kit_anim_id),
+        sound: u32_at(r, 13).and_then(some_unless_none),
+        effect_slots,
+        world_effect: u32_at(r, 12).and_then(some_unless_none),
+        shake: u32_at(r, 14).and_then(some_unless_none),
+        char_proc_slots,
+    }
+}
+
 /// Read the four spell visual tables off the patch chain.
 pub fn load_spell_visual_catalog(chain: &mut Chain) -> Result<SpellVisualCatalog> {
     let sv_bytes = chain
@@ -501,27 +541,7 @@ pub fn load_spell_visual_catalog(chain: &mut Chain) -> Result<SpellVisualCatalog
     let mut kits = HashMap::with_capacity(svk_set.records().len());
     for r in svk_set.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        let anim_id = u32_at(r, 2).and_then(some_unless_none).map(|a| a as u16);
-        let sound = u32_at(r, 13).and_then(some_unless_none);
-        let mut effect_slots = [None; 9];
-        for (i, slot) in effect_slots.iter_mut().enumerate() {
-            *slot = u32_at(r, 3 + i).and_then(some_unless_none);
-        }
-        let mut char_proc_slots = [None; KIT_CHAR_PROCS];
-        for (i, slot) in char_proc_slots.iter_mut().enumerate() {
-            *slot = char_proc_slot(r, i);
-        }
-        kits.insert(
-            id,
-            VisualKit {
-                anim_id,
-                sound,
-                effect_slots,
-                world_effect: u32_at(r, 12).and_then(some_unless_none),
-                shake: u32_at(r, 14).and_then(some_unless_none),
-                char_proc_slots,
-            },
-        );
+        kits.insert(id, kit_from_record(r));
     }
 
     let sven_bytes = chain
