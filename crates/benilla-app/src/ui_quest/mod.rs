@@ -476,7 +476,7 @@ pub(crate) fn feed_quest(
         })
         .collect();
     show_messages(&mut script, &mut sink, "ui_quest", lines);
-    let player = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
+    let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
     let fresh = snapshot(
         &giver,
         &items,

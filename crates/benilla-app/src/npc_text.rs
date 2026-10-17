@@ -167,18 +167,16 @@ fn trim_spaces(arm: &[char]) -> &[char] {
     &arm[start..end]
 }
 
-/// The self player as a macro [`Subject`], once it is streamed and its name is known.
+/// The self player as a macro [`Subject`], once it is streamed and its name is known. The expander
+/// reads the name cache without a callback (`0x506fd4`), and our own name is seeded at login.
 pub(crate) fn player_identity(
     self_q: &Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: &NameCache,
-    commands: &NetCommands,
     unit_names: UnitNames<'_>,
 ) -> Option<Subject> {
     let (store, guid) = self_q.iter().next()?;
     Some(Subject {
-        name: names
-            .resolve_player(guid.0, Ask::New(commands))?
-            .to_string(),
+        name: names.resolve_player(guid.0, Ask::Read)?.to_string(),
         race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
         class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),

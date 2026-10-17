@@ -752,7 +752,7 @@ pub(crate) fn feed_quest_log(
     };
     let groups = ordered;
 
-    let player = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
+    let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
     let macros = crate::npc_text::MacroContext {
         subject: player.as_ref(),
         states: &states,

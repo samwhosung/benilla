@@ -487,7 +487,7 @@ fn feed_item_text(
     };
 
     // Server-authored text runs the `$`-macro expander, as in the reference's `ItemTextFrame.cpp`.
-    let subject = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
+    let subject = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
     let text = crate::npc_text::substitute(
         &text,
         &crate::npc_text::MacroContext {
