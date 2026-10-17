@@ -799,6 +799,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
             .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
             .insert_resource(crate::net::NetCommands(tx))
             .insert_resource(Spells::empty_for_tests())
             .insert_resource(SkillLines {
