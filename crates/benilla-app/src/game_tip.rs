@@ -201,7 +201,9 @@ pub(crate) fn tip_glyphs(
     let spec = FontSpec {
         path: Some(tip_font_path(locale)),
         height: Some(p.font_size),
+        // The tip's font is created with flags 0 (`0x406774`): no outline, not monochrome.
         outline: Outline::None,
+        monochrome: false,
         spacing: p.spacing,
         // A set shadow seeds each row's pen (`0x5cddb1`); the layout is built at the first draw
         // (`0x5cd6a0`), after `0x5c27a0` has set it.
