@@ -111,7 +111,6 @@ mod target;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod text_filter;
-mod text_reshape;
 mod textinput;
 mod transport;
 mod tutorial;

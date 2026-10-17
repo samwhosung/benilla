@@ -375,9 +375,14 @@ impl Plugin for GameTipPlugin {
                 Update,
                 (
                     drive_game_tip.after(benilla_world::schedule::WorldStage::Present),
+                    // After the font engine's other users fill this frame's cells: the UI pass,
+                    // the nameplates and the append lane's combat text.
                     paint_game_tip
                         .after(drive_game_tip)
-                        .after(crate::loading_screen::fit_loading_area),
+                        .after(crate::loading_screen::fit_loading_area)
+                        .after(crate::ui_script::UiPaint)
+                        .after(crate::nameplates::drive_nameplates)
+                        .after(crate::ui_pass::UiQuadAppend),
                 ),
             );
     }
