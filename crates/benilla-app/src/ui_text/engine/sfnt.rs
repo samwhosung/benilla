@@ -40,6 +40,15 @@ pub(super) struct Outline26 {
     pub(super) ends: Vec<usize>,
 }
 
+impl Outline26 {
+    /// `ceil(horiBearingX)` in px, the column `0x5cb080` (mode 0) seats the glyph's cell at from
+    /// the pen: FreeType's unhinted bearing is the control box's `xMin`. `None` with no points.
+    pub(super) fn bearing(&self) -> Option<i32> {
+        let x0 = self.pts.iter().map(|&(x, _)| x).min()?;
+        Some((x0 + 63).div_euclid(64) as i32)
+    }
+}
+
 /// The tables a glyph's metrics come off, located once per face.
 pub(super) struct Sfnt {
     data: Vec<u8>,

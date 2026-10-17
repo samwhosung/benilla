@@ -7,12 +7,11 @@
 
 use super::sfnt::Outline26;
 
-/// A 1-bit glyph, one byte per pixel (0 or 1), rows from the top; `left` and `top` place it from
-/// the pen and the baseline in whole px, the control box rounded out as FreeType sizes the bitmap.
+/// A 1-bit glyph, one byte per pixel (0 or 1), rows from the top, over the control box rounded out
+/// as FreeType sizes the bitmap; `top` is its top row over the baseline in whole px.
 pub(super) struct MonoGlyph {
     pub(super) w: u32,
     pub(super) h: u32,
-    pub(super) left: i32,
     pub(super) top: i32,
     pub(super) bits: Vec<u8>,
 }
@@ -301,7 +300,6 @@ pub(super) fn rasterize(o: &Outline26, ppem: u16) -> Option<MonoGlyph> {
     Some(MonoGlyph {
         w: w as u32,
         h: h as u32,
-        left: left as i32,
         top: top as i32,
         bits,
     })
@@ -386,11 +384,7 @@ mod tests {
             12,
         )
         .unwrap();
-        assert_eq!(
-            (g.w, g.h, g.left, g.top),
-            (2, 1, 0, 1),
-            "the control box rounded out"
-        );
+        assert_eq!((g.w, g.h, g.top), (2, 1, 1), "the control box rounded out");
         assert_eq!(rows(&g), ["@@"]);
     }
 
@@ -418,7 +412,6 @@ mod tests {
             12,
         )
         .unwrap();
-        assert_eq!(g.left, 1);
         assert_eq!(rows(&g), [".", "@", "@", "@", "."]);
     }
 

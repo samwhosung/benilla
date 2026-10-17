@@ -700,13 +700,14 @@ mod tests {
             );
         }
         // One 14 px line on the box's bottom, with one CR LF or the two one shipped tip ends in:
-        // no blank line lifts it.
+        // no blank line lifts it. The unhinted `p` hangs 4 rows under its baseline, one past the
+        // line's 3, and the reference's seat keeps its ink there (`0x5d1360` lowers the quad).
         for tip in [TIP, "|cffffd100Tip:|r Talk to the innkeeper.\r\n\r\n"] {
             let g = tip_glyphs(&atlas, tip, &p, 0);
             let bottom = g.fill.iter().map(|q| q.rect.max.y).fold(f32::MIN, f32::max);
             let top = g.fill.iter().map(|q| q.rect.min.y).fold(f32::MAX, f32::min);
             assert!(
-                (-2.0..=0.0).contains(&bottom),
+                (-2.0..=1.0).contains(&bottom),
                 "{tip:?} sits on the box: {bottom}"
             );
             assert!(top > -16.0, "{tip:?} is one line tall: {top}");

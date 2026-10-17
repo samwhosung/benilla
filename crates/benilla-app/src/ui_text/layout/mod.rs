@@ -661,8 +661,8 @@ mod measure_fits_render {
     }
 
     /// One line is one baseline at every DPI, size and seat, where rounding each glyph's own sum
-    /// splits half-pixel ties by bearing at a fractional DPI. FRIZQT's hinted cells all end on the
-    /// baseline (`px_h == bearing_top` at every ppem 8..64), so one baseline is one `rect.max.y`.
+    /// splits half-pixel ties by bearing at a fractional DPI. A glyph's baseline is its quad's top
+    /// plus its cell's `bearing_top`; the unhinted `o`, `C` and `b` overshoot it below.
     #[test]
     fn one_line_is_one_baseline_at_every_dpi() {
         let Some(mut e) = test_engine(1.0) else {
@@ -673,6 +673,18 @@ mod measure_fits_render {
             e.set_dpi_for_test(dpi);
             for base in [10.0f32, 12.0, 13.0, 14.0, 16.0, 18.0, 20.0] {
                 let s = spec(base * ERA);
+                // Each letter's `bearing_top`, in quad order: every letter of "Combat" has ink.
+                let r = measure::resolve(&mut e, &s);
+                e.ensure_str(r.face, r.ppem, r.bake, "Combat");
+                let tops: Vec<f32> = "Combat"
+                    .chars()
+                    .map(|c| {
+                        let g = e.char_cell(r.face, r.ppem, c).expect("shaped").glyphs[0];
+                        e.cell(r.face, r.ppem, r.bake, g.glyph_id)
+                            .expect("inked")
+                            .bearing_top
+                    })
+                    .collect();
                 // A quarter-pixel walk, as a scaled frame's text takes every offset.
                 for step in 0..320 {
                     let top = step as f32 * 0.25;
@@ -690,14 +702,10 @@ mod measure_fits_render {
                         s,
                         TextSeat::UiGrid,
                     );
-                    let lo = quads
-                        .iter()
-                        .map(|q| q.rect.max.y)
-                        .fold(f32::INFINITY, f32::min);
-                    let hi = quads
-                        .iter()
-                        .map(|q| q.rect.max.y)
-                        .fold(f32::NEG_INFINITY, f32::max);
+                    assert_eq!(quads.len(), tops.len());
+                    let baselines = quads.iter().zip(&tops).map(|(q, t)| q.rect.min.y + t / dpi);
+                    let lo = baselines.clone().fold(f32::INFINITY, f32::min);
+                    let hi = baselines.fold(f32::NEG_INFINITY, f32::max);
                     assert!(
                         (hi - lo) * dpi < 1e-3,
                         "dpi {dpi}, height {base}, seat {top}: the letters of \"Combat\" \

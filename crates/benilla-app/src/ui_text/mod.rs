@@ -12,8 +12,8 @@
 //!
 //! The reference loads every glyph unhinted: both its load-flag words (`0x208a`/`0x20c2`, at
 //! `0x5d1324`) carry FreeType's `FT_LOAD_NO_HINTING` (`0x2`), as `FT_Load_Glyph` (`0x7cdb40`) reads
-//! it. The measure reads the unhinted outline (`engine::glyph_ink`); the cells are rasterized
-//! under `cosmic-text`'s default cache key, which hints.
+//! it. The measure and the cells both read the unhinted outline: the face's own tables as FreeType
+//! scales them (`engine::sfnt`), rasterized 1-bit or smooth as the font's flags say.
 
 mod engine;
 mod layout;
