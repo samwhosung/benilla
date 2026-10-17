@@ -71,6 +71,9 @@ const CASES: &[(&str, &str)] = &[
         for i = 5, 1 do table.insert(o, "never") end
         return table.concat(o, " ")"#),
     ("numeric_for_limit_error", r#"return E(function() for i = 1, "x" do end end)"#),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("numeric_for_start_error", r#"return S(E(function() for i = "a", 2 do end end), E(function() for i = 1, 2, {} do end end))"#),
     ("coerce_hex", r#"return E(function() return "0x10" + 0 end)"#),
     ("tonumber", r#"return S(tonumber("12"), tonumber("1e2"), tonumber("x"), tonumber("ff", 16), tonumber("777", 8), tonumber("  5  "), tonumber(nil))"#),
@@ -146,11 +149,20 @@ const CASES: &[(&str, &str)] = &[
     ("method", "local obj = {v = 5} function obj:get(x) return self.v + x end return S(obj:get(1), obj.get(obj, 2))"),
     ("nested_fn_names", "local t = {a = {}} function t.a.f() return 1 end function t.a:g() return self == t.a end return S(t.a.f(), t.a:g())"),
     ("numfor", "local o = {} for i = 1, 3 do table.insert(o, i) end for i = 3, 1, -1 do table.insert(o, i) end for i = 1, 0 do table.insert(o, 'never') end for i = 1, 2, 0.5 do table.insert(o, i) end return table.concat(o, ',')"),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("numfor_closures", "local fs = {} for i = 1, 3 do fs[i] = function() return i end end return S(fs[1](), fs[2](), fs[3]())"),
     ("genfor_closures", "local fs = {} for k, v in ipairs({'a', 'b'}) do fs[k] = function() return v end end return S(fs[1](), fs[2]())"),
     ("body_local_closures", "local fs = {} for i = 1, 3 do local j = i fs[i] = function() return j end end return S(fs[1](), fs[2](), fs[3]())"),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("numfor_assign", "local o = {} for i = 1, 5 do table.insert(o, i) i = i + 1 end return table.concat(o, ',')"),
     ("genfor_control", "local o = {} for k, v in pairs({a = 1}) do table.insert(o, k) end return table.concat(o)"),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("for_errors", "return E(function() for i = 'x', 2 do end end) .. E(function() for i = 1, 'y' do end end)"),
     ("while_repeat", "local i, o = 0, {} while i < 3 do i = i + 1 table.insert(o, i) end repeat i = i - 1 table.insert(o, i) until i == 0 return table.concat(o, ',')"),
     ("repeat_scope", "local x = 'outer' local n = 0 repeat local x = 'inner' n = n + 1 until x == 'outer' or n > 2 return S(n)"),
@@ -184,8 +196,14 @@ const CASES: &[(&str, &str)] = &[
     ("hex_literals", "return S(0x10, 0xff + 1, 0XA)"),
     ("long_brackets", "return S([=[a]]b]=], [==[x]=]y]==], [[plain]])"),
     ("string_dump", "return S(type(string.dump), E(function() return type(string.dump(function() end)) end))"),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("numeric_for_fresh_var", "local fs = {} for i = 1, 3 do fs[i] = function() return i end end return S(fs[1](), fs[2](), fs[3]())"),
     ("generic_for_fresh_var", "local fs = {} for i, v in ipairs({10, 20}) do fs[i] = function() return v end end return S(fs[1](), fs[2]())"),
+    // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
+    // (`0x6fe380`) subtracts the step from the start (`0x6fe42c`) and `OP_FORLOOP` (`0x6f9262`)
+    // steps the variable.
     ("for_var_assigned", "local s = 0 for i = 1, 5 do s = s + i i = i + 10 end return S(s)"),
     ("until_sees_body_locals", "local n = 0 repeat local stop = n >= 2 n = n + 1 until stop or n > 5 return S(n)"),
     ("pow_metamethod", "local t = setmetatable({}, {__pow = function(a, b) return 'mm' end}) return S(E(function() return t ^ 2 end), E(function() return 2 ^ t end))"),

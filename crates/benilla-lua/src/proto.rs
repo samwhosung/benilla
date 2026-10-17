@@ -128,10 +128,9 @@ pub enum Op {
     Return(Reg, u8),
     /// Return `R(a)` alone.
     Return1(Reg),
-    /// 5.1's `FORPREP`: `R(a)`, `R(a+1)`, `R(a+2)` made numbers or the loop refused, the index
-    /// primed one step back; then the jump to the loop's `ForLoop`.
-    ForPrep(Reg, i32),
-    /// 5.1's `FORLOOP`: `R(a) += R(a+2)`; while within `R(a+1)`, `R(a+3) = R(a)` and jump.
+    /// The client's `FORLOOP` (`0x6f9262`): `R(a)`, the loop's variable, must be a number and
+    /// `R(a+1)`, `R(a+2)` are made numbers; `R(a) + R(a+2)`, while within `R(a+1)`, is written
+    /// to `R(a)` and the jump taken.
     ForLoop(Reg, i32),
     /// `ForLoop` whose step the compiler knows is a positive constant: the test is `<=`.
     ForLoopUp(Reg, i32),
@@ -559,8 +558,8 @@ impl Proto {
                         fail(pc, "a return past maxstack");
                     }
                 }
-                Op::ForPrep(x, off) | Op::ForLoop(x, off) | Op::ForLoopUp(x, off) => {
-                    reg(x as usize + 3);
+                Op::ForLoop(x, off) | Op::ForLoopUp(x, off) => {
+                    reg(x as usize + 2);
                     to(0, off);
                 }
                 Op::TForPrep(x, off) => {

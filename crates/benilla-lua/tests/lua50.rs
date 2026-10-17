@@ -111,3 +111,51 @@ fn syntax_levels_are_counted_per_chunk() {
         .join()
         .unwrap();
 }
+
+/// A numeric `for`'s variable is its counter (`fornum`, `0x6fe380`): `OP_FORLOOP` (`0x6f9262`)
+/// steps what the body left in it, refuses a non-number there, not coerced, and makes the limit
+/// and step numbers each pass. The start minus the step is a plain subtraction (`0x6fe42c`).
+#[test]
+fn a_numeric_for_steps_its_own_variable() {
+    assert_eq!(
+        run(
+            "local o = {} for i = 1, 5 do table.insert(o, i) i = i + 1 end \
+             return table.concat(o, ' ')"
+        ),
+        "1 3 5"
+    );
+    assert_eq!(
+        run(
+            "local o = {} for i = 10, 1, -1 do table.insert(o, i) if i == 8 then i = 3 end end \
+             return table.concat(o, ' ')"
+        ),
+        "10 9 8 2 1"
+    );
+    assert_eq!(
+        run("for i = 1, 2 do i = nil end"),
+        "<raised> t:1: `for' initial value must be a number"
+    );
+    assert_eq!(
+        run("for i = 1, 2 do i = '1' end"),
+        "<raised> t:1: `for' initial value must be a number"
+    );
+    assert_eq!(
+        run("for i = 1, 'x' do end"),
+        "<raised> t:1: `for' limit must be a number"
+    );
+    assert_eq!(
+        run("local n = 0 for i = '1', '3', '1' do n = n + i end return n"),
+        "6"
+    );
+    assert_eq!(
+        run("for i = 'a', 2 do end"),
+        "<raised> t:1: attempt to perform arithmetic on a string value"
+    );
+    assert_eq!(
+        run(
+            "local t = setmetatable({}, {__sub = function() return 10 end}) \
+             local o = {} for i = t, 12 do table.insert(o, i) end return table.concat(o, ' ')"
+        ),
+        "11 12"
+    );
+}

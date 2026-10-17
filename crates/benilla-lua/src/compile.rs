@@ -389,7 +389,6 @@ fn jump_of(op: &Op) -> Option<i32> {
         | Op::JmpCmpKR(_, _, _, o)
         | Op::JmpIf(_, _, o)
         | Op::TestSet(_, _, _, o)
-        | Op::ForPrep(_, o)
         | Op::ForLoop(_, o)
         | Op::ForLoopUp(_, o)
         | Op::TForPrep(_, o) => Some(o),
@@ -405,7 +404,6 @@ fn set_jump(op: &mut Op, off: i32) {
         | Op::JmpCmpKR(_, _, _, o)
         | Op::JmpIf(_, _, o)
         | Op::TestSet(_, _, _, o)
-        | Op::ForPrep(_, o)
         | Op::ForLoop(_, o)
         | Op::ForLoopUp(_, o)
         | Op::TForPrep(_, o) => *o = off,

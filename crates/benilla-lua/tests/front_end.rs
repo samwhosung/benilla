@@ -3,9 +3,12 @@
 //! with the message it gave.
 //!
 //! Each compiled chunk's shape (constants in order, register count, parameters, locals,
-//! upvalues, line runs) must also be the one the C build gave it, as `front_end.digest`
-//! records: a line per chunk, a hash of its source and a hash of the C build's shape. A chunk
-//! whose source is not in it (another corpus version) is not checked against it.
+//! upvalues, line runs) must also be the one `front_end.digest` records: a line per chunk, a hash
+//! of its source and a hash of its shape. The shapes are the C build's, but where benilla-lua
+//! since follows the client's 5.0 against 5.1 (a numeric `for`'s three locals): such a change
+//! rewrites the digest with `BENILLA_BLESS=1`, which prints each chunk whose shape moved, for
+//! the review. A chunk whose source is not in it (another corpus version) is not checked
+//! against it.
 
 use std::path::{Path, PathBuf};
 
@@ -231,6 +234,16 @@ fn read_digest() -> std::collections::HashMap<u64, u64> {
         .collect()
 }
 
+fn write_digest(d: &std::collections::HashMap<u64, u64>) {
+    let mut lines: Vec<String> = d
+        .iter()
+        .map(|(a, b)| format!("{a:016x} {b:016x}"))
+        .collect();
+    lines.sort();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/front_end.digest");
+    std::fs::write(path, lines.join("\n") + "\n").expect("write the digest file");
+}
+
 #[test]
 fn every_chunk_compiles_as_the_c_build_compiled_it() {
     let mut chunks = Vec::new();
@@ -257,19 +270,30 @@ fn every_chunk_compiles_as_the_c_build_compiled_it() {
     println!("{} chunks, {} rejected", chunks.len(), got.len());
     assert_eq!(got, want);
 
-    let recorded = read_digest();
+    let mut recorded = read_digest();
+    let bless = std::env::var_os("BENILLA_BLESS").is_some_and(|v| v == "1");
     let mut heap = benilla_lua::heap::Heap::default();
     let (mut checked, mut differ) = (0, Vec::new());
     for c in &chunks {
-        let Some(&want) = recorded.get(&fnv64(&c.bytes)) else {
+        let key = fnv64(&c.bytes);
+        let Some(&want) = recorded.get(&key) else {
             continue;
         };
         let chunkname = format!("@{}", c.name);
         let p = benilla_lua::compile(&c.bytes, chunkname.as_bytes(), &mut heap, 0).unwrap();
         checked += 1;
-        if fnv64(format!("{:?}", shape(&p, &heap)).as_bytes()) != want {
+        let got = fnv64(format!("{:?}", shape(&p, &heap)).as_bytes());
+        if got != want {
             differ.push(c.name.as_str());
+            if bless {
+                println!("blessed: {}", c.name);
+                recorded.insert(key, got);
+            }
         }
+    }
+    if bless {
+        write_digest(&recorded);
+        differ.clear();
     }
     println!("{checked} chunks checked against the digest");
     assert!(
@@ -278,7 +302,7 @@ fn every_chunk_compiles_as_the_c_build_compiled_it() {
     );
     assert!(
         differ.is_empty(),
-        "{} chunks compile to another shape than the C build's: {:?}",
+        "{} chunks compile to another shape than the digest's: {:?}",
         differ.len(),
         &differ[..differ.len().min(20)]
     );

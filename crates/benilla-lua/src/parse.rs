@@ -589,20 +589,31 @@ impl<'a> Parser<'a> {
         Ok(k)
     }
 
-    /// `forbody`. A numeric loop whose step is a positive constant counts up with `ForLoopUp`.
-    fn forbody(&mut self, base: Reg, line: u32, nvars: usize, num: Option<bool>) -> R<()> {
+    /// The client's `forbody` (`0x6fe480`), after the jump `prep` that enters the loop at its
+    /// test: the loop's locals come into scope (`0x6fe493`), the body runs in a block `break`
+    /// leaves (`0x6fe4ab`), and the test ends the loop. A generic loop's variables are fresh for
+    /// each pass, as 5.1 has them. A numeric loop whose step is a positive constant counts up
+    /// with `ForLoopUp`.
+    fn forbody(
+        &mut self,
+        base: Reg,
+        line: u32,
+        nvars: usize,
+        num: Option<bool>,
+        prep: usize,
+    ) -> R<()> {
         self.adjustlocalvars(3);
         self.checknext(Tok::Do)?;
-        let prep = match num {
-            Some(_) => self.code(Op::ForPrep(base, NO_JUMP), 1)?,
-            // 5.1's `JMP` to the `TFORLOOP`, which also turns a table into `next` over it.
-            None => self.code(Op::TForPrep(base, NO_JUMP), 1)?,
-        };
-        self.enterblock(false);
-        self.adjustlocalvars(nvars);
-        self.reserveregs(nvars as u32)?;
-        self.block()?;
-        self.leaveblock()?;
+        self.enterblock(true);
+        if num.is_some() {
+            self.block()?;
+        } else {
+            self.enterblock(false);
+            self.adjustlocalvars(nvars);
+            self.reserveregs(nvars as u32)?;
+            self.block()?;
+            self.leaveblock()?;
+        }
         self.patchtohere(prep as i32)?;
         let endfor = match num {
             Some(true) => self.code(Op::ForLoopUp(base, NO_JUMP), 1)?,
@@ -614,15 +625,18 @@ impl<'a> Parser<'a> {
             Some(_) => endfor as i32,
             None => self.jump()?,
         };
-        self.patchlist(back, prep + 1)
+        self.patchlist(back, prep + 1)?;
+        self.leaveblock()
     }
 
+    /// The client's `fornum` (`0x6fe380`): the loop's own name is its counter, beside
+    /// `(for limit)` and `(for step)` (`0x6fe390`..`0x6fe3ac`); the step is taken off the start
+    /// by a plain subtraction (`0x6fe42c`), and a jump enters the loop at its test.
     fn fornum(&mut self, varname: &[u8], line: u32) -> R<()> {
         let base = self.fsr().freereg;
-        self.new_localvar(b"(for index)", 0)?;
+        self.new_localvar(varname, 0)?;
         self.new_localvar(b"(for limit)", 1)?;
         self.new_localvar(b"(for step)", 2)?;
-        self.new_localvar(varname, 3)?;
         self.checknext(Tok::Char(b'='))?;
         self.exp1()?;
         self.checknext(Tok::Char(b','))?;
@@ -636,7 +650,9 @@ impl<'a> Parser<'a> {
             self.reserveregs(1)?;
             true
         };
-        self.forbody(base, line, 1, Some(up))
+        self.code(Op::Sub(base, base, base + 2), 1)?;
+        let prep = self.jump()? as usize;
+        self.forbody(base, line, 0, Some(up), prep)
     }
 
     fn forlist(&mut self, indexname: &[u8]) -> R<()> {
@@ -660,11 +676,15 @@ impl<'a> Parser<'a> {
         }
         self.adjust_assign(3, nexps, &mut e)?;
         self.checkstack(3)?;
-        self.forbody(base, line, nvars - 3, None)
+        // 5.1's `JMP` to the `TFORLOOP`, which also turns a table into `next` over it.
+        let prep = self.code(Op::TForPrep(base, NO_JUMP), 1)?;
+        self.forbody(base, line, nvars - 3, None, prep)
     }
 
+    /// The client's `forstat` (`0x6fe300`): the loop's locals live in a block of their own,
+    /// outside the one `break` leaves, so their upvalues close after a `break` too.
     fn forstat(&mut self, line: u32) -> R<()> {
-        self.enterblock(true);
+        self.enterblock(false);
         self.next()?;
         let varname = self.str_checkname()?;
         match self.tok() {

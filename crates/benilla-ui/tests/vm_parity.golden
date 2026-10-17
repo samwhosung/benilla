@@ -6,7 +6,7 @@ arith_const_errors	\"err t:32: attempt to perform arithmetic on local `s\' (a st
 arith_regs	10,4,21,2.3333333333333335,-4
 numeric_for	1 2 3 3 2 1 1 1.5 2 1 2 1 3 5
 numeric_for_limit_error	err t:32: `for\' limit must be a number
-numeric_for_start_error	\"err t:32: `for\' initial value must be a number\",\"err t:32: `for\' step must be a number\"
+numeric_for_start_error	\"err t:32: attempt to perform arithmetic on a string value\",\"err t:32: attempt to perform arithmetic on a table value\"
 coerce_hex	err t:32: attempt to perform arithmetic on a string value
 tonumber	12,100,nil,255,511,5,nil
 tonumber_hex	nil
@@ -80,12 +80,12 @@ tailcall	\"done\"
 method	6,7
 nested_fn_names	1,true
 numfor	1,2,3,3,2,1,1,1.5,2
-numfor_closures	1,2,3
+numfor_closures	3,3,3
 genfor_closures	\"a\",\"b\"
 body_local_closures	1,2,3
-numfor_assign	1,2,3,4,5
+numfor_assign	1,3,5
 genfor_control	a
-for_errors	err t:32: `for\' initial value must be a numbererr t:32: `for\' limit must be a number
+for_errors	err t:32: attempt to perform arithmetic on a string valueerr t:32: `for\' limit must be a number
 while_repeat	1,2,3,2,1,0
 repeat_scope	3
 break	1,2,3
@@ -117,9 +117,9 @@ random	true,true,5
 hex_literals	<raised> syntax error: t:32: `)\' expected near `x10\'
 long_brackets	\"a]]b\",\"x]=]y\",\"plain\"
 string_dump	\"function\",\"ok \\\"string\\\"\"
-numeric_for_fresh_var	1,2,3
+numeric_for_fresh_var	3,3,3
 generic_for_fresh_var	10,20
-for_var_assigned	15
+for_var_assigned	1
 until_sees_body_locals	3
 pow_metamethod	\"ok \\\"mm\\\"\",\"ok \\\"mm\\\"\"
 upvalue_error_name	\"err t:32: attempt to perform arithmetic on upvalue `u\' (a nil value)\",\"err t:32: attempt to index upvalue `u\' (a nil value)\",\"err t:32: attempt to call upvalue `u\' (a nil value)\"

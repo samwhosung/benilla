@@ -1114,6 +1114,27 @@ impl Vm {
         }
     }
 
+    /// The client's `OP_FORLOOP` checks, in its order, of the loop at `stack[ra..ra + 3]`: the
+    /// counter must be a number, not coerced (`0x6f9262`, `` `for' initial value must be a
+    /// number ``), and the limit and step are made numbers where they stand (`0x6f928d`,
+    /// `0x6f92b3`) or the loop raises.
+    #[cold]
+    #[inline(never)]
+    fn for_controls(&mut self, ra: usize) -> Result<(f64, f64, f64), LuaError> {
+        let Some(idx) = self.stack[ra].as_num() else {
+            return Err(self.rt_error("`for' initial value must be a number"));
+        };
+        let mut controls = [0.0; 2];
+        for (i, what) in ["limit", "step"].into_iter().enumerate() {
+            let Some(n) = self.tonumber(self.stack[ra + 1 + i]) else {
+                return Err(self.rt_error(&format!("`for' {what} must be a number")));
+            };
+            self.stack[ra + 1 + i] = Value::Num(n);
+            controls[i] = n;
+        }
+        Ok((idx, controls[0], controls[1]))
+    }
+
     /// `x ^ y` on numbers, as the client's `Arith` computes it: the global `__pow`, read raw from
     /// the globals (`0x6f9b5e`), must be a function (`0x6f9b72`) and is called with the two
     /// numbers (`0x6f9b8c`); its first result is the answer.
@@ -3001,60 +3022,37 @@ impl Vm {
                         ret!(a, n);
                     }
                     Op::Return1(a) => ret!(a, 1),
-                    Op::ForPrep(a, off) => {
-                        // 5.1's `OP_FORPREP`: each control made a number, or the loop refused in
-                        // 5.1's order; the index primed one step back.
-                        save!();
-                        let Some(init) = self.tonumber(r!(a)) else {
-                            return Err(self.rt_error("`for' initial value must be a number"));
-                        };
-                        let Some(limit) = self.tonumber(r!(a + 1)) else {
-                            return Err(self.rt_error("`for' limit must be a number"));
-                        };
-                        let Some(step) = self.tonumber(r!(a + 2)) else {
-                            return Err(self.rt_error("`for' step must be a number"));
-                        };
-                        r!(a + 1) = Value::Num(limit);
-                        r!(a + 2) = Value::Num(step);
-                        r!(a) = Value::Num(init - step);
-                        jump!(off);
-                    }
-                    // The controls are numbers since `ForPrep` and no code can reach them.
+                    // The client's `OP_FORLOOP` (`0x6f9262`): the loop's own variable is the
+                    // counter, so the body may move it; each pass checks it is a number, makes
+                    // the limit and step numbers in place, steps it and, while within the
+                    // limit, writes it back and jumps. `ForLoopUp` knows the step is a positive
+                    // constant.
                     Op::ForLoopUp(a, off) => {
-                        let (idx, limit, step) = (
-                            r!(a).as_num().unwrap_or(f64::NAN),
-                            r!(a + 1).as_num().unwrap_or(f64::NAN),
-                            r!(a + 2).as_num().unwrap_or(f64::NAN),
-                        );
-                        let idx = idx + step;
+                        let (idx, limit, _) = match (r!(a).as_num(), r!(a + 1).as_num()) {
+                            (Some(i), Some(l)) => (i, l, 0.0),
+                            _ => slow!(self.for_controls(base!() + a as usize))?,
+                        };
+                        let idx = idx + r!(a + 2).as_num().unwrap_or(f64::NAN);
                         if idx <= limit {
-                            // Canonical numbers in, a canonical number out; written before
-                            // the jump, as `OP_FORLOOP` writes them, so a jump that leaves this
-                            // loop (to the slow one) finds them.
-                            let v = Value::num_raw(idx);
-                            r!(a) = v;
-                            r!(a + 3) = v;
+                            // Canonical numbers in, a canonical number out.
+                            r!(a) = Value::num_raw(idx);
                             jump!(off);
                         }
                     }
                     Op::ForLoop(a, off) => {
-                        let (idx, limit, step) = (
-                            r!(a).as_num().unwrap_or(f64::NAN),
-                            r!(a + 1).as_num().unwrap_or(f64::NAN),
-                            r!(a + 2).as_num().unwrap_or(f64::NAN),
-                        );
+                        let (idx, limit, step) =
+                            match (r!(a).as_num(), r!(a + 1).as_num(), r!(a + 2).as_num()) {
+                                (Some(i), Some(l), Some(s)) => (i, l, s),
+                                _ => slow!(self.for_controls(base!() + a as usize))?,
+                            };
                         let idx = idx + step;
                         if if step > 0.0 {
                             idx <= limit
                         } else {
                             limit <= idx
                         } {
-                            // Canonical numbers in, a canonical number out; written before
-                            // the jump, as `OP_FORLOOP` writes them, so a jump that leaves this
-                            // loop (to the slow one) finds them.
-                            let v = Value::num_raw(idx);
-                            r!(a) = v;
-                            r!(a + 3) = v;
+                            // Canonical numbers in, a canonical number out.
+                            r!(a) = Value::num_raw(idx);
                             jump!(off);
                         }
                     }
@@ -3300,7 +3298,6 @@ fn symbexec(p: &Proto, lastpc: usize, reg: usize) -> Option<usize> {
             | Op::Concat(a, ..)
             | Op::JmpIf(a, ..)
             | Op::TestSet(a, ..)
-            | Op::ForPrep(a, _)
             | Op::ForLoop(a, _)
             | Op::ForLoopUp(a, _)
             | Op::Closure(a, _) => writes(a),
@@ -3316,7 +3313,6 @@ fn symbexec(p: &Proto, lastpc: usize, reg: usize) -> Option<usize> {
         let jump = match op {
             Op::Jmp(off)
             | Op::TForPrep(_, off)
-            | Op::ForPrep(_, off)
             | Op::ForLoop(_, off)
             | Op::ForLoopUp(_, off)
             | Op::JmpIf(_, _, off)

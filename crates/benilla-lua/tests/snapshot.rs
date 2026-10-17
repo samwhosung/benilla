@@ -42,7 +42,7 @@ fn a_snapshot_of_a_large_state_is_whole() {
     let mut vm = benilla_lua::new_state();
     run(
         &mut vm,
-        "Data = {} for i = 1, 100000 do Data[i] = {id = i, name = 'item' .. i, f = function() return i end} end",
+        "Data = {} for i = 1, 100000 do local j = i Data[i] = {id = i, name = 'item' .. i, f = function() return j end} end",
     );
     let counts = vm.heap.counts();
     let t = std::time::Instant::now();
