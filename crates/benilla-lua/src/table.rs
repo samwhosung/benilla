@@ -562,7 +562,12 @@ impl Table {
             if nasize > self.array.len() {
                 let before = self.bytes() as isize;
                 self.array.resize(nasize, Value::Nil);
-                self.growth.add(self.bytes() as isize - before);
+                if let Some(acct) = &self.growth.0 {
+                    acct.growth
+                        .set(acct.growth.get() + self.bytes() as isize - before);
+                    let mut p = acct.pools.borrow_mut();
+                    self.array_block = p.realloc(self.array_block, 16 * nasize);
+                }
             }
             return Err(KeyError::Overflow);
         }
