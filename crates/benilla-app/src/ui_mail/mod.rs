@@ -544,6 +544,9 @@ struct MailFeedExtras<'w, 's> {
     packages_pushed: Local<'s, crate::ui_script::VmMemo<bool>>,
     closes: CoreCloses<'w, 's>,
     unit_names: crate::ui_unit::NameTables<'w>,
+    /// The diff fired `MAIL_INBOX_UPDATE` last frame, which the stock inbox answers with its
+    /// getters, as it does the reference's cache callbacks' (`0x4af080`, `0x4af0a0` on status 1).
+    inbox_updated: Local<'s, crate::ui_script::VmMemo<bool>>,
 }
 
 /// `0x4ad050`'s order for each result: the arm's message line and a send's compose reset
@@ -622,6 +625,7 @@ fn feed_mail(
         mut packages_pushed,
         mut closes,
         unit_names,
+        mut inbox_updated,
     } = extras;
     if let Some(packages) = packages.as_deref() {
         let pushed = packages_pushed.get(&script);
@@ -652,11 +656,14 @@ fn feed_mail(
     // it nothing.
     let opened = last_mailbox.is_none() && mail.mailbox.is_some();
     // The frames the stock inbox calls its getters on: `MAIL_SHOW` and the `MAIL_INBOX_UPDATE` of
-    // a list or a result arm, with the list's subject parse (`0x4ad5a0`) besides.
+    // a list or a result arm, with the list's subject parse (`0x4ad5a0`) besides, and the frame
+    // after the diff's own `MAIL_INBOX_UPDATE`.
+    let inbox_updated = inbox_updated.get(&script);
     let rows_event = opened
         || mail.show_requested
         || mail.list_results > 0
-        || mail.results.iter().any(|r| r.inbox_update);
+        || mail.results.iter().any(|r| r.inbox_update)
+        || std::mem::take(inbox_updated);
     let fresh = {
         // Scoped: the resolver borrows the VM, and `set_mail` below needs it back.
         let get_text = |key: &str| script.lua().globals().get::<String>(key).ok();
@@ -723,6 +730,7 @@ fn feed_mail(
         // they stand.
         if changed && lists == 0 && arm_updates == 0 {
             script.fire_event("MAIL_INBOX_UPDATE", vec![]);
+            *inbox_updated = true;
         }
     }
     // Every list result ends its parse in the event (`0x4ad5c6`-`0x4ad5d6`), changed or not, and
@@ -1471,6 +1479,61 @@ mod tests {
             crate::query_cache::queries(&rx).len(),
             2,
             "the next list asks both again"
+        );
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(crate::query_cache::queries(&rx).is_empty());
+    }
+
+    /// A sender's name landing moves the row, and the diff's `MAIL_INBOX_UPDATE` stands for the
+    /// reference's callback (`0x4af080`): the stock inbox answers it with `GetInboxHeaderInfo`,
+    /// whose item lookup asks a refused item again (`0x4aecc7`), once, at the frame after.
+    #[test]
+    fn a_landed_sender_makes_the_next_frame_ask_a_refused_item_again() {
+        let (mut app, rx) = feed_app();
+        let commands = NetCommands(crossbeam_channel::unbounded().0);
+        let mut row = entry(1, Some(0x77), 0, 30.0);
+        row.item = Some(benilla_protocol::messages::MailAttachment {
+            entry: 900,
+            perm_enchant: 0,
+            random_prop_id: 0,
+            suffix_factor: 0,
+            count: 1,
+            charges: 0,
+            durability_max: 0,
+            durability: 0,
+        });
+        app.world_mut().resource_mut::<MailOpen>().click(0x20);
+        super::net::mail_list(
+            vec![row],
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &commands,
+        );
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 2);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(900, None);
+        app.update();
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "a refusal waits"
+        );
+        let before = logged(&mut app);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x77, "Bob".into(), None);
+        app.update();
+        assert_eq!(logged(&mut app), before + 1, "the diff fires the update");
+        app.update();
+        let asked = crate::query_cache::queries(&rx);
+        assert!(
+            matches!(
+                asked.as_slice(),
+                [ClientCommand::ItemQuery { entry: 900, .. }]
+            ),
+            "the frame after asks the refused item: {asked:?}"
         );
         for _ in 0..600 {
             app.update();
