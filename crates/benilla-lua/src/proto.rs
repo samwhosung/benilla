@@ -355,6 +355,9 @@ pub struct Proto {
     pub(crate) gc_mark: std::cell::Cell<u32>,
 }
 
+/// 5.0's `Proto` record, which `luaF_newproto` allocates (`0x6f9fea`).
+pub(crate) const PROTO_BYTES: usize = 0x48;
+
 impl Proto {
     /// This function's prototype in the collector's count, as 5.0's `close_func` sizes its
     /// vectors (`0x6fcb48`..`0x6fcc26`) and `luaF_freeproto` frees them (`0x6fa069`..`0x6fa102`):
@@ -362,11 +365,25 @@ impl Proto {
     /// 4 a nested prototype, 12 a local and 4 an upvalue name, at the client's own code size and
     /// constant count.
     pub fn bytes(&self) -> usize {
-        0x48 + 8 * self.code50
+        PROTO_BYTES
+            + 8 * self.code50
             + 16 * self.consts50
             + 4 * self.protos.len()
             + 12 * self.locvars.len()
             + 4 * self.upval_names.len()
+    }
+
+    /// The vectors [`Proto::bytes`] counts beside the `Proto`, as (element bytes, elements): the
+    /// code and its lines, the constants, the nested prototypes, the locals, the upvalue names.
+    pub(crate) fn vectors(&self) -> [(usize, usize); 6] {
+        [
+            (4, self.code50),
+            (4, self.code50),
+            (16, self.consts50),
+            (4, self.protos.len()),
+            (12, self.locvars.len()),
+            (4, self.upval_names.len()),
+        ]
     }
 
     /// [`Proto::bytes`] of this function and every one nested in it.

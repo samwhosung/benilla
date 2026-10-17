@@ -447,12 +447,7 @@ fn xpcall(vm: &mut Vm, nargs: usize) -> R<usize> {
 /// the quadword cannot hold, a NaN or an infinity, is 0. A count at the threshold collects.
 fn collectgarbage(vm: &mut Vm, nargs: usize) -> R<usize> {
     let kb = c_int(vm.opt_number(nargs, 1, 0.0)?) as u32;
-    vm.heap.threshold = if kb > 0x3f_ffff {
-        u32::MAX as usize
-    } else {
-        kb as usize * 1024
-    };
-    vm.check_gc();
+    vm.set_gc_threshold(kb);
     Ok(0)
 }
 
@@ -460,7 +455,7 @@ fn collectgarbage(vm: &mut Vm, nargs: usize) -> R<usize> {
 fn gcinfo(vm: &mut Vm, _nargs: usize) -> R<usize> {
     let kb = vm.heap.bytes() >> 10;
     vm.push(Value::Num(kb as f64));
-    vm.push(Value::Num((vm.heap.threshold >> 10) as f64));
+    vm.push(Value::Num((vm.heap.threshold() >> 10) as f64));
     Ok(2)
 }
 

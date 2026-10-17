@@ -884,6 +884,17 @@ impl Lua {
         self.vm().heap.bytes()
     }
 
+    /// 5.0's `lua_setgcthreshold`: the collector's threshold, in kilobytes, and a collection if
+    /// the count has reached it.
+    pub fn set_gc_threshold_kb(&self, kb: u32) {
+        self.vm().set_gc_threshold(kb);
+    }
+
+    /// Collections run since the state opened.
+    pub fn gc_collections(&self) -> u64 {
+        self.vm().heap.collections
+    }
+
     pub fn gc_collect(&self) -> Result<()> {
         self.vm().full_gc();
         Ok(())

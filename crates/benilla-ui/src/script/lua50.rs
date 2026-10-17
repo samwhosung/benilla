@@ -134,6 +134,16 @@ mod tests {
         );
     }
 
+    /// `InitLua` sets the threshold to 256 KB right after `lua_open` (`0x7039f2`), so a new state
+    /// that has not counted that much answers 256 for it.
+    #[test]
+    fn a_new_state_answers_init_luas_256_kb_threshold() {
+        let s = UiScript::new().unwrap();
+        let info = s.eval::<Vec<f64>>("return { gcinfo() }").unwrap();
+        assert!(info[0] < 256.0, "the state counts {} KB", info[0]);
+        assert_eq!(info[1], 256.0);
+    }
+
     /// `0x703250`: `luaL_optnumber(L, 1, 0.0)`, `_ftol`, `lua_setgcthreshold`, no values, and no
     /// string options.
     #[test]

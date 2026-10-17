@@ -287,10 +287,14 @@ fn a_snapshot_counts_its_own_growth() {
     let mut vm = benilla_lua::new_state();
     run(&mut vm, "collectgarbage(-1) Big = {}");
     let mut snap = vm.clone();
-    let (before, snap_before) = (kb(&mut vm), kb(&mut snap));
+    let (before, snap_before) = (vm.heap.bytes(), snap.heap.bytes());
     run(&mut snap, "for j = 1, 100000 do Big[j] = j end");
-    assert!(kb(&mut snap) - snap_before >= 1500.0);
-    assert_eq!(kb(&mut vm), before, "the snapshot's growth counted here");
+    assert!(snap.heap.bytes() - snap_before >= 1500 * 1024);
+    assert_eq!(
+        vm.heap.bytes(),
+        before,
+        "the snapshot's growth counted here"
+    );
 }
 
 /// 5.1.5's dead keys: a collection marks a deleted string key dead, so setting it again takes a

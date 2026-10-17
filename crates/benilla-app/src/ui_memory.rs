@@ -12,9 +12,8 @@
 //!
 //! The count is benilla-lua's, which charges every object at the size the 32-bit client's Lua
 //! 5.0 allocates it, as `nblocks` (`[G+0x28]`) counts it, its code and constants at the client's
-//! own counts. Two layouts still differ from the client's, and the count with them: a table's
-//! hash part, sized as 5.1 sizes it (#1487), and the stack, which never shrinks (#1784). The stock
-//! interface counts some 10 MB here.
+//! own counts. One layout still differs from the client's, and the count with it: a table's hash
+//! part, sized as 5.1 sizes it (#1487). The stock interface counts some 10 MB here.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;

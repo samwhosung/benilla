@@ -13,6 +13,7 @@ mod lib_string;
 mod lib_table;
 mod number;
 mod parse;
+mod pools;
 pub mod proto;
 pub mod reload;
 pub mod table;
@@ -45,6 +46,8 @@ pub fn crt_float(v: f64, conv: u8, precision: Option<usize>) -> String {
 /// bare compatibility globals the client defines over them.
 pub fn new_state() -> Vm {
     let mut vm = Vm::new();
+    // `InitLua` sets 256 KB right after `lua_open` (`0x7039f2`), before any library.
+    vm.set_gc_threshold(0x100);
     lib_base::open(&mut vm);
     lib_string::open(&mut vm);
     lib_table::open(&mut vm);

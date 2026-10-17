@@ -68,7 +68,7 @@ impl Vm {
         if self.heap.take_oom() {
             return Err(SyntaxError(b"not enough memory".to_vec()));
         }
-        self.heap.charge(root.tree_bytes());
+        self.heap.charge_proto(&root);
         let mut fresh = HashMap::new();
         walk(&root, &mut fresh);
         let mut report = Report::default();

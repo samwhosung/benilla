@@ -3,8 +3,9 @@
 
 use std::rc::Rc;
 
+use crate::pools::{Block, Pools, Tally};
 use crate::proto::Proto;
-use crate::table::{Growth, Table};
+use crate::table::{Account, Growth, Table};
 use crate::value::{FuncRef, StrRef, TableRef, UserRef, Value, STR_HASH_MASK, STR_ID_BITS, V};
 
 /// A native function. Its arguments are the `nargs` values below the top of the stack; it pushes
@@ -91,6 +92,8 @@ pub(crate) struct Shape {
     /// A call enters through `Vm::precall`: the function takes `...` or clears its registers.
     pub(crate) precall: bool,
     pub(crate) maxstack: u16,
+    /// [`Proto::c_maxstack`], the room the client's `luaD_precall` asks of the stack.
+    pub(crate) c_maxstack: u8,
     /// The first instruction, so a call starts its frame without reaching the prototype.
     /// Valid as long as the prototype, which the closure holds.
     pub(crate) code: *const crate::proto::Op,
@@ -105,6 +108,7 @@ impl Shape {
             nparams: p.nparams,
             precall: p.vararg || p.clears,
             maxstack: p.maxstack,
+            c_maxstack: p.c_maxstack,
             code: p.code.as_ptr(),
             consts: p.consts.as_ptr(),
         }
@@ -457,6 +461,9 @@ pub struct Heap {
     /// grown to each concatenation's length, 32 at least (`luaZ_openspace`, `0x6fb5d1`), and
     /// halved by a collection while over 64 (`checkSizes`, `0x6f73a1`..`0x6f73cf`).
     concat50: usize,
+    /// Where the client's allocator keeps the concatenation buffer, which `luaZ_resizebuffer`
+    /// reallocates (`0x6fb5d1`, `0x6f73c1`).
+    concat_block: Block,
     tables: Tables,
     funcs: Arena<FuncObj>,
     upvals: Arena<UpvalObj>,
@@ -465,8 +472,14 @@ pub struct Heap {
     /// allocates it, recounted whole at each collection and added to as objects are made; table
     /// resizes are added as [`Heap::bytes`] reads it.
     bytes: usize,
-    /// 5.0's `GCthreshold`: a collection runs when `bytes` reaches it.
-    pub threshold: usize,
+    /// 5.0's `GCthreshold` (`[G+0x24]`), in 32 bits: what `gcinfo` answers, and where the next
+    /// collection's headroom is reckoned from.
+    threshold: usize,
+    /// A collection runs when `bytes` reaches it: the threshold, or 0 when the heap asks for one
+    /// before it (string ids short, a string refused).
+    pub(crate) trigger: usize,
+    /// Collections run since the state opened: an instrument for the collector's pacing.
+    pub collections: u64,
     /// The chunk names prototypes were compiled under, by source id: the owners a profile and
     /// a memory census charge to. [`Heap::free_unreferenced_sources`] frees the slot of a chunk
     /// no function or table refers to any more (a `loadstring` chunk is named by its own code),
@@ -500,19 +513,19 @@ pub struct Heap {
 /// every table the heap made adds to. A clone's tables add to the clone's own.
 struct Tables {
     arena: Arena<Table>,
-    growth: Rc<std::cell::Cell<isize>>,
+    acct: Rc<Account>,
 }
 
 impl Clone for Tables {
     fn clone(&self) -> Tables {
-        let growth = Rc::new(std::cell::Cell::new(self.growth.get()));
+        let acct = Rc::new(self.acct.fork());
         let mut arena = self.arena.clone();
         for t in &mut arena.items {
             if t.growth.0.is_some() {
-                t.growth = Growth(Some(growth.clone()));
+                t.growth = Growth(Some(acct.clone()));
             }
         }
-        Tables { arena, growth }
+        Tables { arena, acct }
     }
 }
 
@@ -578,15 +591,18 @@ impl Default for Heap {
             strt: vec![STRT_EMPTY; 128],
             strt_buckets: STRT_FIRST,
             concat50: 0,
+            concat_block: Block::None,
             tables: Tables {
                 arena: Arena::new(),
-                growth: Default::default(),
+                acct: Default::default(),
             },
             funcs: Arena::new(),
             upvals: Arena::new(),
             users: Arena::new(),
             bytes: strt_bytes(STRT_FIRST),
             threshold: 64 * 1024,
+            trigger: 64 * 1024,
+            collections: 0,
             // Id 0 is the host: whatever no Lua chunk created.
             sources: vec![Some(Rc::from(&b"=[host]"[..]))],
             source_ids: Default::default(),
@@ -604,6 +620,8 @@ impl Default for Heap {
             str_gc_at: STR_ID_MASK / 2,
             freed_hosts: Vec::new(),
         };
+        // `f_luaopen`'s string table (`luaS_resize`, `0x6f6e96`).
+        h.pools().alloc(strt_bytes(STRT_FIRST));
         h.oom_str = h.intern(b"not enough memory");
         h
     }
@@ -645,7 +663,7 @@ impl Heap {
             // Ids run short: a collection, at the next check, frees the dead ones first. It
             // moves the mark to halfway between what lives and the bound; until it runs, the
             // mark moves halfway on, so the request is not made for every new string.
-            self.threshold = 0;
+            self.trigger = 0;
             self.str_gc_at = self.strs.used + (self.str_id_limit - self.strs.used) / 2;
         }
         // A string past `MAX_STRING`, or one whose bytes the allocator refuses, is C's
@@ -657,14 +675,14 @@ impl Heap {
             return self.out_of_memory();
         };
         self.bytes += str_bytes(s);
+        self.pools().alloc(str_bytes(s));
         let id = self.strs.alloc(obj);
         self.strt[b] = strt_entry(hash, id);
         if self.strs.live() * 2 > self.strt.len() {
             self.resize_strt(self.strt.len() * 2);
         }
         if self.strs.live() > self.strt_buckets {
-            self.bytes += strt_bytes(self.strt_buckets);
-            self.strt_buckets *= 2;
+            self.resize_strt50(self.strt_buckets * 2);
         }
         StrRef {
             id,
@@ -678,7 +696,7 @@ impl Heap {
     #[inline(never)]
     fn out_of_memory(&mut self) -> StrRef {
         self.oom = true;
-        self.threshold = 0;
+        self.trigger = 0;
         self.oom_str
     }
 
@@ -857,8 +875,14 @@ impl Heap {
     pub fn new_table(&mut self, narray: usize, nhash: usize) -> TableRef {
         let mut t = Table::new(narray, nhash);
         t.owner = self.cur_source;
-        t.growth = Growth(Some(self.tables.growth.clone()));
+        t.growth = Growth(Some(self.tables.acct.clone()));
         self.bytes += t.bytes();
+        // `luaH_new` (`0x6fa4f0`): the table, then its array part, then its node vector.
+        let mut p = self.tables.acct.pools.borrow_mut();
+        p.alloc(0x20);
+        t.array_block = p.alloc(16 * t.array.len());
+        p.alloc(40 * t.node_count());
+        drop(p);
         TableRef(self.tables.alloc(t))
     }
 
@@ -876,6 +900,7 @@ impl Heap {
 
     pub fn new_func(&mut self, f: FuncObj) -> FuncRef {
         self.bytes += func_bytes(&f);
+        self.pools().alloc(func_bytes(&f));
         FuncRef(self.funcs.alloc(f))
     }
 
@@ -897,6 +922,7 @@ impl Heap {
 
     pub fn new_upval(&mut self, u: UpvalObj) -> u32 {
         self.bytes += UPVAL_BYTES;
+        self.pools().alloc(UPVAL_BYTES);
         self.upvals.alloc(u)
     }
 
@@ -914,6 +940,7 @@ impl Heap {
 
     pub fn new_user(&mut self, u: UserObj) -> UserRef {
         self.bytes += USER_BYTES;
+        self.pools().alloc(USER_BYTES);
         UserRef(self.users.alloc(u))
     }
 
@@ -962,6 +989,7 @@ impl Heap {
         extra_upvals: &[u32],
         code: &[(Rc<Proto>, Upvals)],
         mode_key: StrRef,
+        fixed: &[Block],
     ) -> usize {
         let mut gray: Vec<Value> = roots.to_vec();
         gray.push(Value::Str(self.oom_str));
@@ -971,8 +999,10 @@ impl Heap {
         // A number no other collection, in any VM, has used: prototypes are shared by forks.
         let epoch = GC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let mut proto_bytes = 0;
+        // The client's blocks that stay, each pool: the pools' book is recounted from them.
+        let mut tally = Tally::default();
         for (p, ups) in code {
-            mark_proto(p, &mut gray, epoch, &mut proto_bytes);
+            mark_proto(p, &mut gray, epoch, &mut proto_bytes, &mut tally);
             gray_upvals.extend_from_slice(ups);
         }
         loop {
@@ -1047,7 +1077,7 @@ impl Heap {
                         }) => {
                             gray.push(Value::Table(*env));
                             gray_upvals.extend_from_slice(upvals);
-                            mark_proto(proto, &mut gray, epoch, &mut proto_bytes);
+                            mark_proto(proto, &mut gray, epoch, &mut proto_bytes, &mut tally);
                         }
                         FuncObj::Native { upvals, env, .. } => {
                             gray.push(Value::Table(*env));
@@ -1095,20 +1125,47 @@ impl Heap {
         }
         // Sweep. Dead strings leave the intern chains.
         let mut live = 0usize;
-        live += sweep(&mut self.tables, |t| t.bytes(), |_| false, drop);
+        live += sweep(
+            &mut self.tables,
+            |t| {
+                tally.count_size(0x20);
+                tally.count(t.array_block);
+                tally.count_size(40 * t.node_count());
+                t.bytes()
+            },
+            |_| false,
+            drop,
+        );
         // A host closure's captures run Rust destructors, which may reach the VM: they wait in
         // `freed_hosts` until the collection ends (`Vm::full_gc`).
         let freed = &mut self.freed_hosts;
         live += sweep(
             &mut self.funcs,
-            func_bytes,
+            |f| {
+                tally.count_size(func_bytes(f));
+                func_bytes(f)
+            },
             |f| matches!(f, FuncObj::Native { host: Some(_), .. }),
             |f| freed.push(f),
         );
-        live += sweep(&mut self.upvals, |_| UPVAL_BYTES, |_| false, drop);
-        live += sweep(&mut self.users, |_| USER_BYTES, |_| false, drop);
+        let mut fixed_size = |n: usize| {
+            tally.count_size(n);
+            n
+        };
+        live += sweep(
+            &mut self.upvals,
+            |_| fixed_size(UPVAL_BYTES),
+            |_| false,
+            drop,
+        );
+        live += sweep(&mut self.users, |_| fixed_size(USER_BYTES), |_| false, drop);
         let strs_before = self.strs.live();
-        live += sweep(&mut self.strs, |s| str_bytes(s.bytes()), |_| false, drop);
+        live += sweep(
+            &mut self.strs,
+            |s| fixed_size(str_bytes(s.bytes())),
+            |_| false,
+            drop,
+        );
         let dead_str = self.strs.live() != strs_before;
         let live_strs = self.strs.live() as u32;
         self.str_gc_at = live_strs + (self.str_id_limit.saturating_sub(live_strs)) / 2;
@@ -1116,20 +1173,26 @@ impl Heap {
             let size = self.strt.len();
             self.resize_strt(size);
         }
-        // `checkSizes`: a table under a quarter full above 64 buckets halves, once.
-        if self.strs.live() < self.strt_buckets / 4 && self.strt_buckets > 2 * STRT_FIRST {
-            self.strt_buckets /= 2;
-        }
-        if self.concat50 > 0x40 {
-            self.concat50 /= 2;
-        }
         // A dead key may name a freed object, whose handle a new one may take; as 5.1's dead key,
         // it is found only by `next`, by identity (`Table::slot_for`).
         // Every live table's size is counted whole above, its uncounted growth with it.
-        self.tables.growth.set(0);
-        live += proto_bytes + strt_bytes(self.strt_buckets) + self.concat50;
-        self.bytes = live;
-        live
+        self.tables.acct.growth.set(0);
+        self.bytes = live + proto_bytes + strt_bytes(self.strt_buckets) + self.concat50;
+        tally.count_size(strt_bytes(self.strt_buckets));
+        tally.count(self.concat_block);
+        for &b in fixed {
+            tally.count(b);
+        }
+        self.pools().recounted(tally);
+        // `checkSizes` (`0x6f7370`): a string table under a quarter full above 64 buckets halves
+        // (`0x6f738c`), and a concatenation buffer over 64 bytes (`0x6f73a7`), once each.
+        if self.strs.live() < self.strt_buckets / 4 && self.strt_buckets > 2 * STRT_FIRST {
+            self.resize_strt50(self.strt_buckets / 2);
+        }
+        if self.concat50 > 0x40 {
+            self.resize_concat50(self.concat50 / 2);
+        }
+        self.bytes
     }
 
     /// `n` more bytes the collector counts, as C's allocator would: compiled code, the stack.
@@ -1141,10 +1204,66 @@ impl Heap {
     /// `0x6fb5c0`).
     pub(crate) fn concat_space(&mut self, n: usize) {
         if n > self.concat50 {
-            let size = n.max(0x20);
-            self.recharge(self.concat50, size);
-            self.concat50 = size;
+            self.resize_concat50(n.max(0x20));
         }
+    }
+
+    /// `luaZ_resizebuffer` on 5.0's concatenation buffer: a reallocation.
+    fn resize_concat50(&mut self, size: usize) {
+        self.recharge(self.concat50, size);
+        let b = self.pools().realloc(self.concat_block, size);
+        self.concat_block = b;
+        self.concat50 = size;
+    }
+
+    /// `luaS_resize` (`0x6f9c50`) on 5.0's string table: a new bucket array, then the old freed.
+    fn resize_strt50(&mut self, buckets: usize) {
+        self.recharge(strt_bytes(self.strt_buckets), strt_bytes(buckets));
+        let mut p = self.pools();
+        p.alloc(strt_bytes(buckets));
+        p.free(Pools::place(strt_bytes(self.strt_buckets)));
+        drop(p);
+        self.strt_buckets = buckets;
+    }
+
+    /// The client's block pools, as the objects counted so far have used them.
+    pub(crate) fn pools(&self) -> std::cell::RefMut<'_, Pools> {
+        self.tables.acct.pools.borrow_mut()
+    }
+
+    /// A compiled prototype and those nested in it, counted as the client's parser makes them:
+    /// the `Proto` as `open_func` begins (`0x6f9fea`), its vectors grown as it compiles and fitted
+    /// as `close_func` ends (`0x6fcb48`..`0x6fcc26`).
+    pub(crate) fn charge_proto(&mut self, p: &Proto) {
+        self.bytes += p.bytes();
+        self.pools().alloc(crate::proto::PROTO_BYTES);
+        for q in &p.protos {
+            self.charge_proto(q);
+        }
+        let mut pools = self.pools();
+        for (elem, count) in p.vectors() {
+            pools.grow_vector(elem, count);
+        }
+    }
+
+    /// 5.0's `GCthreshold` (`lua_getgcthreshold`, `0x6f43e0`, in bytes).
+    pub fn threshold(&self) -> usize {
+        self.threshold
+    }
+
+    /// Set the threshold, and the next collection's trigger with it.
+    pub fn set_threshold(&mut self, t: usize) {
+        self.threshold = t;
+        self.trigger = t;
+    }
+
+    /// The threshold a collection leaves (`0x6fae00`, [`crate::pools::next_threshold`]), from
+    /// the count it left and the old threshold.
+    pub(crate) fn pace(&mut self) {
+        let count = u32::try_from(self.bytes()).unwrap_or(u32::MAX);
+        let old = u32::try_from(self.threshold).unwrap_or(u32::MAX);
+        let least = self.pools().least_free();
+        self.set_threshold(crate::pools::next_threshold(old, count, least) as usize);
     }
 
     /// A block of `old` bytes the collector counts reallocated to `new`, as `luaM_irealloc`
@@ -1156,7 +1275,7 @@ impl Heap {
     /// The count, 5.0's `nblocks`: what the last collection found, what was made since, and what
     /// tables grew by since.
     pub fn bytes(&mut self) -> usize {
-        let g = self.tables.growth.replace(0);
+        let g = self.tables.acct.growth.replace(0);
         if g != 0 {
             self.bytes = self.bytes.saturating_add_signed(g);
         }
@@ -1232,16 +1351,26 @@ fn is_collectable(v: Value) -> bool {
 static GC_EPOCH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Constants of `p` and its nested prototypes, once per collection.
-fn mark_proto(p: &Rc<Proto>, gray: &mut Vec<Value>, epoch: u32, bytes: &mut usize) {
+fn mark_proto(
+    p: &Rc<Proto>,
+    gray: &mut Vec<Value>,
+    epoch: u32,
+    bytes: &mut usize,
+    tally: &mut Tally,
+) {
     if p.gc_mark.get() == epoch {
         return;
     }
     p.gc_mark.set(epoch);
     *bytes += p.bytes();
+    tally.count_size(crate::proto::PROTO_BYTES);
+    for (elem, count) in p.vectors() {
+        tally.count(crate::pools::vector_block(elem, count));
+    }
     gray.extend(p.consts.iter().copied().filter(|v| is_collectable(*v)));
     gray.extend_from_slice(&p.names);
     for q in &p.protos {
-        mark_proto(q, gray, epoch, bytes);
+        mark_proto(q, gray, epoch, bytes, tally);
     }
 }
 
@@ -1253,7 +1382,7 @@ fn mark_proto(p: &Rc<Proto>, gray: &mut Vec<Value>, epoch: u32, bytes: &mut usiz
 /// follows the live set instead of the most the arena ever held.
 fn sweep<T: Dead>(
     a: &mut Arena<T>,
-    size: impl Fn(&T) -> usize,
+    mut size: impl FnMut(&T) -> usize,
     keep: impl Fn(&T) -> bool,
     mut kept: impl FnMut(T),
 ) -> usize {
@@ -1401,6 +1530,92 @@ mod tests {
         assert_eq!(charged(&mut h, |h| h.concat_space(100)), 100 - 0x20);
     }
 
+    /// A collection leaves the threshold `0x6fae00` reckons from the count, the old threshold
+    /// and the pools' free space, on numbers worked by hand.
+    #[test]
+    fn a_collection_paces_by_the_old_headroom_the_pools_and_a_quarter() {
+        let mut h = Heap::default();
+        let mode = h.intern(b"__mode");
+        // One block in each pool: a 16-byte userdata, strings of 18, 77 and 167 bytes, the
+        // 34-byte `not enough memory`, and the 128-byte string table of 32 buckets.
+        let keep = [
+            Value::User(h.new_user(UserObj { meta: None, tag: 0 })),
+            Value::Str(h.intern(b"x")),
+            Value::Str(h.intern(&[b'y'; 60])),
+            Value::Str(h.intern(&[b'z'; 150])),
+        ];
+        let count = 16 + 18 + 77 + 167 + 34 + 128;
+        // Free after the collection: 8191 blocks of 16 bytes, 4095 of 32, 2047 of 64, 1364 of 96,
+        // 1023 of 128 and 511 of 256, the least 130 816 bytes.
+        let least = 511 * 256;
+        for (old, next) in [
+            // The headroom capped by the pools.
+            (1 << 20, count + least),
+            // The headroom, 160, over a quarter, 110.
+            (600, 600),
+            // A quarter over the headroom, 60.
+            (500, count + count / 4),
+            // `collectgarbage(0)`: a headroom wrapped past 4 GB, capped by the pools.
+            (0, count + least),
+        ] {
+            h.set_threshold(old);
+            assert_eq!(h.collect(&keep, &[], &[], mode, &[]), count);
+            h.pace();
+            assert_eq!(h.threshold(), next, "from {old}");
+        }
+        // With the userdata gone its pool keeps its chunk, all of it free now: 131 072 bytes,
+        // still not the least.
+        h.set_threshold(1 << 20);
+        assert_eq!(h.collect(&keep[1..], &[], &[], mode, &[]), count - 16);
+        h.pace();
+        assert_eq!(h.threshold(), count - 16 + least);
+    }
+
+    /// A table's resizes take their new blocks and give the old back as they happen, so the
+    /// pools' book between collections is what a collection's recount finds.
+    #[test]
+    fn a_tables_resizes_keep_the_pools_book_exact() {
+        let mut h = Heap::default();
+        let mode = h.intern(b"__mode");
+        let keys: Vec<Value> = (0..40)
+            .map(|i| h.str_value(format!("k{i}").as_bytes()))
+            .collect();
+        let before = h.pools().used();
+        let t = h.new_table(0, 0);
+        for (i, &k) in keys.iter().enumerate() {
+            h.table_mut(t).set(k, Value::Num(i as f64)).unwrap();
+        }
+        for i in 1..=40 {
+            h.table_mut(t)
+                .set(Value::Num(i as f64), Value::Bool(true))
+                .unwrap();
+        }
+        let _ = h.bytes();
+        let grown = h.pools().used();
+        let diff: Vec<i64> = (0..6).map(|i| grown[i] as i64 - before[i] as i64).collect();
+        // The table's 32-byte record; its node vector and its array part, both grown through the
+        // pools past 256 bytes, are on the system heap, and nothing they left stays in a pool.
+        assert_eq!(diff, [0, 1, 0, 0, 0, 0]);
+        let mut roots = keys.clone();
+        roots.push(Value::Table(t));
+        roots.push(Value::Str(mode));
+        h.collect(&roots, &[], &[], mode, &[]);
+        assert_eq!(h.pools().used(), grown, "the recount agrees");
+    }
+
+    /// A pool that has taken no chunk has no free space, so only a quarter is left above the
+    /// count.
+    #[test]
+    fn a_collection_with_a_pool_never_used_leaves_a_quarter() {
+        let mut h = Heap::default();
+        let mode = h.intern(b"__mode");
+        h.set_threshold(1 << 20);
+        let count = h.collect(&[], &[], &[], mode, &[]);
+        assert_eq!(count, 34 + 128);
+        h.pace();
+        assert_eq!(h.threshold(), count + count / 4);
+    }
+
     /// The string table is counted as 5.0 sizes it, 4 bytes a bucket: 32 at open (`0x6f6e96`),
     /// doubled when the strings outnumber the buckets (`0x6f9e0f`), and halved by a collection
     /// that leaves more than 64 buckets under a quarter full (`0x6f738c`).
@@ -1426,10 +1641,10 @@ mod tests {
         // A collection that keeps 33 strings leaves 128 buckets a quarter full; one that keeps
         // 11 halves them, once.
         let mode = h.intern(b"__mode");
-        let live = h.collect(&keep, &[], &[], mode);
+        let live = h.collect(&keep, &[], &[], mode, &[]);
         assert_eq!(h.strt_buckets, 128);
         let kept: Vec<Value> = keep[..10].to_vec();
-        let live_after = h.collect(&kept, &[], &[], mode);
+        let live_after = h.collect(&kept, &[], &[], mode, &[]);
         assert_eq!(h.strt_buckets, 64);
         // What lives: the ten, `not enough memory`, and the buckets.
         assert_eq!(live_after, 10 * (0x11 + 3) + (0x11 + 17) + 4 * 64);
@@ -1447,7 +1662,7 @@ mod tests {
             h.new_table(0, 0);
         }
         let mode = h.intern(b"__mode");
-        h.collect(&[Value::Table(keep)], &[], &[], mode);
+        h.collect(&[Value::Table(keep)], &[], &[], mode, &[]);
         assert!(
             h.tables.arena.items.len() <= 4 * ARENA_FIRST,
             "the arena shrank"
@@ -1458,7 +1673,7 @@ mod tests {
             "a new table takes a low slot, got {}",
             t.0
         );
-        h.collect(&[Value::Table(keep), Value::Table(t)], &[], &[], mode);
+        h.collect(&[Value::Table(keep), Value::Table(t)], &[], &[], mode, &[]);
         assert_eq!(h.table(keep).array.len(), 0, "the kept table is intact");
         assert!(h.tables.arena.used as usize <= ARENA_FIRST);
     }

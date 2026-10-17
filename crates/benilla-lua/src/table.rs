@@ -4,6 +4,7 @@
 //! so `next` walks keys in the order the layout gives (keys hashed by address excepted: a table,
 //! function or userdata key is hashed by its handle here).
 
+use crate::pools::{Block, Pools};
 use crate::value::{TableRef, Value, V};
 
 #[derive(Clone, Copy, Debug)]
@@ -25,20 +26,33 @@ const EMPTY: Node = Node {
     dead: false,
 };
 
-/// A heap's bytes of table growth not yet in its count: shared by every table the heap made, so a
-/// resize is counted where it happens, by the heap that made the table, and a write pays nothing
-/// for it. A table made outside a heap counts nowhere.
+/// What a heap's tables add to its count as they resize: the bytes not yet in it, and the
+/// client's block pools ([`crate::pools`]), which a resize takes blocks from and gives them back to
+/// as it happens.
+#[derive(Debug, Default)]
+pub(crate) struct Account {
+    pub(crate) growth: std::cell::Cell<isize>,
+    pub(crate) pools: std::cell::RefCell<Pools>,
+}
+
+impl Account {
+    /// A copy of this account, for a forked heap.
+    pub(crate) fn fork(&self) -> Account {
+        Account {
+            growth: std::cell::Cell::new(self.growth.get()),
+            pools: std::cell::RefCell::new(self.pools.borrow().clone()),
+        }
+    }
+}
+
+/// A heap's [`Account`]: shared by every table the heap made, so a resize is counted where it
+/// happens, by the heap that made the table, and a write pays nothing for it. A table made outside
+/// a heap counts nowhere.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Growth(pub(crate) Option<std::rc::Rc<std::cell::Cell<isize>>>);
+pub(crate) struct Growth(pub(crate) Option<std::rc::Rc<Account>>);
 
 impl Growth {
     pub(crate) const NONE: Growth = Growth(None);
-
-    fn add(&self, n: isize) {
-        if let Some(c) = &self.0 {
-            c.set(c.get() + n);
-        }
-    }
 }
 
 /// 5.1's `MAXBITS`: `2^MAXBITS` (`MAXASIZE`) is the largest array index kept in the array part.
@@ -75,6 +89,9 @@ pub struct Table {
     hint_pos: std::cell::Cell<u32>,
     /// Where its resizes are counted, as C's allocator counts each one.
     pub(crate) growth: Growth,
+    /// Where the client's allocator keeps the array part's block: a vector `setarrayvector`
+    /// reallocates (`0x6fa584`), so where it lives follows the sizes it has had.
+    pub(crate) array_block: Block,
 }
 
 /// The result of a key lookup: where its slot is, if it has one.
@@ -145,6 +162,7 @@ impl Table {
             hint_key: std::cell::Cell::new(Value::Nil),
             hint_pos: std::cell::Cell::new(0),
             growth: Growth::NONE,
+            array_block: Block::None,
         };
         t.array.resize(narray, Value::Nil);
         t.set_node_vector(nhash);
@@ -168,6 +186,7 @@ impl Table {
             hint_key: std::cell::Cell::new(Value::Nil),
             hint_pos: std::cell::Cell::new(0),
             growth: Growth::NONE,
+            array_block: Block::None,
         }
     }
 
@@ -549,9 +568,33 @@ impl Table {
     /// 5.1's `resize`.
     fn resize(&mut self, nasize: usize, nhsize: usize) {
         let before = self.bytes() as isize;
+        let (oldasize, oldnodes) = (self.array.len(), self.node_count());
         self.resize_parts(nasize, nhsize);
+        let Some(acct) = &self.growth.0 else { return };
         // 5.1's `luaM_reallocvector` charges `totalbytes` for both parts.
-        self.growth.add(self.bytes() as isize - before);
+        acct.growth
+            .set(acct.growth.get() + self.bytes() as isize - before);
+        // The client's `resize` (`0x6fab90`): a growing array part reallocated first
+        // (`0x6fac1f`), the new node vector made (`0x6fac2f`), a shrinking array part reallocated
+        // after it, and the old node vector freed last (`0x6fad5e`).
+        let mut p = acct.pools.borrow_mut();
+        if nasize > oldasize {
+            self.array_block = p.realloc(self.array_block, 16 * nasize);
+        }
+        p.alloc(40 * self.node_count());
+        if nasize < oldasize {
+            self.array_block = p.realloc(self.array_block, 16 * nasize);
+        }
+        p.free(Pools::place(40 * oldnodes));
+    }
+
+    /// The nodes the client's allocator holds for the hash part: none for the shared dummy node.
+    pub(crate) fn node_count(&self) -> usize {
+        if self.dummy {
+            0
+        } else {
+            self.node.len()
+        }
     }
 
     fn resize_parts(&mut self, nasize: usize, nhsize: usize) {
@@ -680,8 +723,7 @@ impl Table {
     /// bytes an array slot (`setarrayvector`, `0x6fa579`) and 40 a node (`setnodevector`,
     /// `0x6fa613`), none for the shared dummy node (`0x6fa601`).
     pub fn bytes(&self) -> usize {
-        let nodes = if self.dummy { 0 } else { self.node.len() };
-        0x20 + self.array.len() * 16 + nodes * 40
+        0x20 + self.array.len() * 16 + self.node_count() * 40
     }
 }
 

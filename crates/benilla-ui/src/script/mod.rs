@@ -573,6 +573,10 @@ pub fn addon_chunk_name(folder: &str, file: &str) -> String {
 /// `0x4587f0` (sound).
 fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     let lua = Lua::new();
+    // `InitLua` sets the collector's threshold to 256 KB right after `lua_open`
+    // (`lua_setgcthreshold(L, 0x100)`, `0x7039f2`). Nothing `Lua::new` opens checks the collector,
+    // so here, after it, is the same.
+    lua.set_gc_threshold_kb(0x100);
     let mut model = Model::new();
     model.vm = vm;
     lua.set_app_data(model);
