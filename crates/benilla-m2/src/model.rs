@@ -263,10 +263,12 @@ pub struct M2Model {
 }
 
 impl M2Model {
-    /// Whether `batch`'s stage `stage` takes generated environment coordinates: the reference's
-    /// gate `0x70b8bd` treats a [`Self::texture_unit_lookup`] entry above 2 (art: `0xffff`), and an
-    /// out-of-range index, as the sphere map of the view-space reflection (`0x70b8d0`), which no
-    /// texture transform drives.
+    /// Whether `batch`'s stage `stage` takes generated environment coordinates: a
+    /// [`Self::texture_unit_lookup`] entry above 2 (art: `0xffff`), and an out-of-range index,
+    /// gives the stage digit 2 of the vertex shader id (`0x71de50`, the test at `0x71deaa`), whose
+    /// `Shaders\Vertex\Model2.bls` program writes the sphere map `0.5 + 0.5·R.xy/|R|` of the
+    /// view-space reflection `R`, which no texture transform drives. The draw's gate `0x70b8bd`
+    /// makes the same test; the constants it then writes (`0x70b8d0`) that program does not read.
     pub fn stage_is_env_mapped(&self, batch: &crate::SkinBatch, stage: u16) -> bool {
         let idx = batch.texture_coord_combo_index as usize + stage as usize;
         self.texture_unit_lookup.get(idx).is_none_or(|&v| v > 2)
