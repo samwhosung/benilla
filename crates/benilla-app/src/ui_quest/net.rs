@@ -282,8 +282,8 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver, lines: &mut QuestLin
     quest.bump_reask();
 }
 
-/// `SMSG_QUESTUPDATE_ADD_KILL`: the progress toast comes from the quest-log objective diff
-/// (`crate::ui_quest_log::feed_quest_log`), and the reference prints no chat line for it.
+/// `SMSG_QUESTUPDATE_ADD_KILL`: its progress toast is the quest log's handler's
+/// (`crate::ui_quest_log`), and the reference prints no chat line for it.
 fn quest_objective_kill(entry: u32, count: u32, required: u32, quest: &mut QuestGiver) {
     debug!("net: quest kill/use objective {entry:#x} at {count}/{required}");
     quest.bump_reask();
@@ -296,8 +296,8 @@ fn quest_objective_item(item_id: u32, count: u32, quest: &mut QuestGiver) {
     quest.bump_reask();
 }
 
-/// `SMSG_QUESTUPDATE_COMPLETE` (0x198): the `ERR_QUEST_OBJECTIVE_COMPLETE_S` toast (kind 1, never
-/// chat) comes from the quest-log diff's complete flip, as the progress toasts do.
+/// `SMSG_QUESTUPDATE_COMPLETE` (0x198): its `ERR_QUEST_OBJECTIVE_COMPLETE_S` toast (kind 1, never
+/// chat) is the quest log's handler's, as the progress toasts are.
 fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
     debug!("net: quest {quest_id} objectives complete");
     // The turn-in `?` can turn gold with no quest-log change, so the reference re-asks here.

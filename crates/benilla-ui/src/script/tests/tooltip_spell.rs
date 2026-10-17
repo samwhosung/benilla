@@ -1027,19 +1027,14 @@ fn quest_reward_spell_getters_and_hovers() {
         "Fireball"
     );
 
-    s.set_quest_log(QuestLogState {
-        entries: vec![QuestLogEntryView {
-            quest_id: 7,
-            detail: Some(QuestLogDetail {
-                reward_spell: Some(reward),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    // The detail hangs on the row, so both readers go through the selection.
-    s.run("SelectQuestLogEntry(1)").unwrap();
+    let mut record = crate::script::quest_log::fixture::record("Q", 1, 12, "Elwynn Forest");
+    record.reward_spell = Some(reward);
+    crate::script::quest_log::fixture::seat(
+        &mut s,
+        &[(7, record, crate::script::quest_log::fixture::slot(7, 0, 0))],
+    );
+    // The spell is the selected quest's, so both readers go through the selection: row 2.
+    s.run("SelectQuestLogEntry(2)").unwrap();
     assert_eq!(
         s.eval::<(String, String, Option<i64>)>("return GetQuestLogRewardSpell()")
             .unwrap()
@@ -1132,17 +1127,12 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
         reward_spell: reward(133),
         ..QuestState::default()
     }));
-    s.set_quest_log(QuestLogState {
-        entries: vec![QuestLogEntryView {
-            quest_id: 7,
-            detail: Some(QuestLogDetail {
-                reward_spell: reward(116),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
+    let mut record = crate::script::quest_log::fixture::record("Q", 1, 12, "Elwynn Forest");
+    record.reward_spell = reward(116);
+    crate::script::quest_log::fixture::seat(
+        &mut s,
+        &[(7, record, crate::script::quest_log::fixture::slot(7, 0, 0))],
+    );
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
         rank: 0,

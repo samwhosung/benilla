@@ -852,25 +852,17 @@ fn a_reload_keeps_the_quest_folds_and_the_repeat() {
     world.init_resource::<crate::ui_tradeskill::TradeSkillRepeatCarry>();
     log_in_as(&mut world, "Onehunter", 1);
 
-    let rows = || benilla_ui::script::QuestLogState {
-        entries: vec![
-            benilla_ui::script::QuestLogEntryView {
-                title: "Elwynn Forest".into(),
-                is_header: true,
-                ..Default::default()
-            },
-            benilla_ui::script::QuestLogEntryView {
-                quest_id: 7,
-                title: "Wolves Across the Border".into(),
-                ..Default::default()
-            },
-        ],
-        num_quests: 1,
-        hidden_quest_ids: Vec::new(),
+    // One quest under its header: two rows open, one folded.
+    let rows = || {
+        [crate::ui_quest_log::fixture::quest(
+            7,
+            "Wolves Across the Border",
+            10,
+        )]
     };
     let visible = |world: &mut World| {
         let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
-        script.set_quest_log(rows());
+        crate::ui_quest_log::fixture::seat(&mut script, &rows());
         script
             .eval::<u32>("return (GetNumQuestLogEntries())")
             .expect("count")

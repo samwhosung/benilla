@@ -25,11 +25,13 @@ pub(crate) struct FieldNoticeCursor(MessageCursor<FieldNotice>);
 
 /// Fire this frame's field notices in the order the packets wrote them. Under the unit feed's
 /// gate, so only while the in-game interface is up; [`drop_field_notices`] takes them otherwise.
-pub(super) fn fire_field_notices(
+pub(crate) fn fire_field_notices(
     script: Option<NonSendMut<UiScript>>,
     notices: Res<Messages<FieldNotice>>,
     mut cursor: ResMut<FieldNoticeCursor>,
     mut sink: crate::ui_action::MessageSink,
+    // The quest log's watcher reads the slots.
+    me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
 ) {
     let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
     // No VM, nobody to hear them: they are dropped, as below.
@@ -37,6 +39,12 @@ pub(super) fn fire_field_notices(
         return;
     };
     for notice in fresh {
+        if notice == FieldNotice::QuestLog {
+            if let Some(store) = me.iter().next() {
+                script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
+            }
+            continue;
+        }
         fire(&mut script, &mut sink, notice);
     }
 }
@@ -106,7 +114,7 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                 script.fire_event(global, vec![]);
             }
         }
-        // The quest log's watcher, which no engine verb answers yet.
+        // Fired by [`fire_field_notices`], which holds the slots.
         FieldNotice::QuestLog => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);

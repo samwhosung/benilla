@@ -1000,7 +1000,8 @@ pub(crate) struct Model {
     pub(crate) quest_log: quest_log::QuestLogState,
     pub(crate) quest_log_selection: u32,
     pub(crate) quest_log_abandon_mark: u32,
-    pub(crate) quest_log_abandons: Vec<u32>,
+    /// The log slots of the confirmed abandons, for the app to send.
+    pub(crate) quest_log_abandons: Vec<u8>,
     /// `QuestLogPushQuest()` quest ids, resolved at the click so a log change cannot retarget one.
     pub(crate) quest_log_pushes: Vec<u32>,
     /// `ConfirmAcceptQuest()` calls, the escort confirm; the app holds the pending quest.
@@ -1052,9 +1053,11 @@ pub(crate) struct Model {
     pub(crate) item_cache_waits: HashMap<FrameHandle, Vec<super::tooltip_item::build::CacheWait>>,
     /// The misses of the item build under way, handed to its tooltip as it ends.
     pub(crate) item_cache_misses: Vec<super::tooltip_item::build::CacheWait>,
-    /// Every quest-log row as the app pushed it, each header followed by all its quests, which
+    /// Every quest-log row as the rebuild made it, each header followed by all its quests, which
     /// [`quest_log::fold`] folds into the visible [`Self::quest_log`].
-    pub(crate) quest_log_rows: Vec<quest_log::QuestLogEntryView>,
+    pub(crate) quest_log_rows: Vec<quest_log::QuestLogRow>,
+    /// The slots, the quest records and the lookups in flight the quest-log verbs read.
+    pub(crate) quest_store: quest_log::QuestLogStore,
     /// The collapsed headers by title, the reference's fold mask `0xbb748c`.
     pub(crate) quest_log_collapsed: HashSet<String>,
     /// A selected quest a previous VM left, placed at the first push.
@@ -1239,14 +1242,6 @@ pub(crate) struct Model {
     pub(crate) framerate: f64,
     /// `(shift, ctrl, alt)` for `Is*KeyDown`, pushed before the frame's mouse events.
     pub(crate) modifiers: (bool, bool, bool),
-}
-
-impl Model {
-    /// The selected quest-log row's detail, resolved per call as the reference's bindings do.
-    pub(crate) fn selected_quest_detail(&self) -> Option<&quest_log::QuestLogDetail> {
-        let index = usize::try_from(self.quest_log_selection.checked_sub(1)?).ok()?;
-        self.quest_log.entries.get(index)?.detail.as_ref()
-    }
 }
 
 impl Model {
@@ -1754,6 +1749,7 @@ impl Model {
             item_cache_waits: HashMap::new(),
             item_cache_misses: Vec::new(),
             quest_log_rows: Vec::new(),
+            quest_store: Default::default(),
             quest_log_collapsed: HashSet::new(),
             quest_log_selection_seed: None,
             quest_log_watched: Vec::new(),

@@ -145,7 +145,15 @@ impl super::UiScript {
                     .quest_log
                     .entries
                     .iter()
-                    .filter_map(|e| e.detail.as_ref()?.reward_spell.as_ref()),
+                    .filter(|e| !e.is_header)
+                    .filter_map(|e| {
+                        model
+                            .quest_store
+                            .records
+                            .get(&e.quest_id)?
+                            .reward_spell
+                            .as_ref()
+                    }),
             )
             .map(|s| s.spell_id);
         let craft = model
@@ -864,8 +872,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let id = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model
-                    .selected_quest_detail()
-                    .and_then(|d| d.reward_spell.as_ref())
+                    .selected_quest_record()
+                    .and_then(|r| r.reward_spell.as_ref())
                     .map(|s| (s.spell_id, s.name.clone()))
             };
             set_reward_spell(lua, &this, id)

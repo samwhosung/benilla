@@ -332,6 +332,11 @@ impl NameCache {
         }
     }
 
+    /// Whether the server refused `entry` and nothing has asked for it since.
+    pub(crate) fn creature_answered_unknown(&self, entry: u32) -> bool {
+        self.creatures.answered_unknown(entry)
+    }
+
     /// The cached subname, the title line under a creature's name.
     pub(crate) fn creature_subname(&self, entry: u32) -> Option<&str> {
         self.creatures.get(entry)?.subname.as_deref()

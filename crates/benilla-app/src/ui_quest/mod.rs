@@ -203,6 +203,8 @@ pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
 mod lines;
 mod net;
 
+#[cfg(test)]
+pub(crate) use lines::test_template;
 pub(crate) use lines::{QuestLine, QuestLines};
 
 pub(crate) struct UiQuestPlugin;

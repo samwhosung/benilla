@@ -42,13 +42,19 @@ impl super::UiScript {
 /// sorted list, which are all there is for the quest list, whose count is its length.
 fn type_list(model: &Model, kind: usize) -> (usize, Vec<String>) {
     if kind == 3 {
-        // `0x4e8be0`: every nonzero quest id of the log, cached titles first, by title (`0x4e8c80`).
-        let mut titles: Vec<&str> = model
-            .quest_log
-            .entries
+        // `0x4e8be0`: every nonzero quest id of the log's 20 slots (`0x4e8c5b`), cached titles
+        // first, by title (`0x4e8c80`).
+        let store = &model.quest_store;
+        let mut titles: Vec<&str> = store
+            .slots
             .iter()
-            .filter(|e| !e.is_header && e.quest_id != 0)
-            .map(|e| e.title.as_str())
+            .filter(|s| s.quest_id != 0)
+            .map(|s| {
+                store
+                    .records
+                    .get(&s.quest_id)
+                    .map_or("", |r| r.title.as_str())
+            })
             .collect();
         let count = titles.len();
         titles.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
@@ -336,23 +342,17 @@ mod tests {
     /// The quest list (type 3) is the log's quests, cached titles first, by title.
     #[test]
     fn the_quest_list_is_the_logs_quests_cached_titles_first() {
-        use crate::script::{QuestLogEntryView, QuestLogState};
+        use crate::script::quest_log::fixture::{record, slot};
+        use crate::script::{QuestSlotView, QUEST_LOG_SLOTS};
         let mut s = UiScript::new().unwrap();
-        let q = |id, title: &str| QuestLogEntryView {
-            quest_id: id,
-            title: title.into(),
-            ..Default::default()
-        };
-        let header = QuestLogEntryView {
-            is_header: true,
-            title: "Elwynn Forest".into(),
-            ..Default::default()
-        };
-        s.set_quest_log(QuestLogState {
-            entries: vec![header, q(10, "wolves"), q(11, ""), q(12, "Apples")],
-            num_quests: 3,
-            ..Default::default()
-        });
+        // Quest 11's record is not held: it lists with no title.
+        let mut slots = [QuestSlotView::default(); QUEST_LOG_SLOTS];
+        for (i, id) in [10, 11, 12].into_iter().enumerate() {
+            slots[i] = slot(id, 0, 0);
+        }
+        s.seed_quest_record(10, record("wolves", 1, 12, "Elwynn Forest"));
+        s.seed_quest_record(12, record("Apples", 1, 12, "Elwynn Forest"));
+        s.set_quest_slots(slots);
         assert_eq!(names(&s, 3), ["Apples", "wolves", ""]);
         // The quest list needs no player.
         assert_eq!(s.arity("GetLFGTypeEntries(3)").unwrap(), 3);
@@ -380,15 +380,9 @@ mod tests {
         };
         assert_eq!(sent, [class(0), class(7), class(0), class(0)]);
         // A quest entry below the log's count.
-        s.set_quest_log(crate::script::QuestLogState {
-            entries: vec![crate::script::QuestLogEntryView {
-                quest_id: 5,
-                title: "A".into(),
-                ..Default::default()
-            }],
-            num_quests: 1,
-            ..Default::default()
-        });
+        let mut slots = [crate::script::QuestSlotView::default(); crate::script::QUEST_LOG_SLOTS];
+        slots[0] = crate::script::quest_log::fixture::slot(5, 0, 0);
+        s.set_quest_slots(slots);
         s.run("LFGQuery(3, 0) LFGQuery(3, 1)").unwrap();
         assert_eq!(
             s.take_social_requests(),

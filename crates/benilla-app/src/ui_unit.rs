@@ -125,7 +125,10 @@ impl Plugin for UiUnitPlugin {
         .add_systems(
             Update,
             (
-                feed_units.in_set(field_events::FieldEventPushes),
+                // After the quest log's seat, which the world-enter cascade's rebuild reads.
+                feed_units
+                    .in_set(field_events::FieldEventPushes)
+                    .after(crate::ui_quest_log::feed_quest_log),
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 // After the same feed, whose guids it covers.

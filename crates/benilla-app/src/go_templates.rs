@@ -178,6 +178,11 @@ impl GameObjectTemplates {
         );
     }
 
+    /// A template's name by entry, read without a callback (the cache `0xc0e318`).
+    pub(crate) fn name(&self, entry: u32) -> Option<&str> {
+        self.templates.get(entry).map(|t| t.name.as_str())
+    }
+
     /// The cached template for a GameObject, found through its own descriptor.
     pub(crate) fn of(&self, fields: &ObjectFields) -> Option<&GoTemplate> {
         Self::key(fields).and_then(|e| self.templates.get(e))

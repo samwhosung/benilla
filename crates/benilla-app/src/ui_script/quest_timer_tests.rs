@@ -1,9 +1,9 @@
 //! The stock timed-quest window (`QuestTimerFrame.lua`): one `SecondsToTime` row per timed quest,
 //! height `45 + 16 * n`, hidden at zero timers, each row mapped back to its quest.
 
-use benilla_ui::script::{
-    QuestLogEntryView, QuestLogObjectiveView, QuestLogState, ScriptValue, UiScript,
-};
+use benilla_ui::script::{ScriptValue, UiScript};
+
+use crate::ui_quest_log::fixture::{seat, LogQuest};
 
 use super::test_ui::load_ui as load_xml;
 
@@ -33,30 +33,12 @@ fn harness() -> UiScript {
     s
 }
 
-/// A quest-log row; `timer` is the absolute deadline, 0 for untimed.
-fn quest(id: u32, title: &str, timer: u32) -> QuestLogEntryView {
-    QuestLogEntryView {
-        quest_id: id,
-        title: title.into(),
-        level: 10,
-        timer,
-        objectives: vec![QuestLogObjectiveView {
-            text: "Bloodscalp Scout slain: 0/8".into(),
-            kind: "monster".into(),
-            finished: false,
-            cur: 0,
-            req: 8,
-        }],
-        ..Default::default()
-    }
-}
-
-fn log(entries: Vec<QuestLogEntryView>) -> QuestLogState {
-    QuestLogState {
-        num_quests: entries.len() as u32,
-        entries,
-        hidden_quest_ids: Vec::new(),
-    }
+/// A quest at level 10 under the Elwynn Forest header; `timer` is the slot's absolute deadline, 0
+/// for untimed.
+fn quest(id: u32, title: &str, timer: u32) -> LogQuest {
+    let mut q = crate::ui_quest_log::fixture::quest(id, title, 10);
+    q.slot.timer = timer;
+    q
 }
 
 fn shown(s: &UiScript, frame: &str) -> bool {
@@ -74,18 +56,19 @@ fn the_window_follows_the_timed_quests() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
 
-    s.set_quest_log(log(vec![quest(783, "A Threat Within", 0)]));
     s.set_server_unix_time(1_000_000.0);
-    s.fire_event("QUEST_LOG_UPDATE", vec![]);
+    seat(&mut s, &[quest(783, "A Threat Within", 0)]);
     assert!(!shown(&s, "QuestTimerFrame"), "no timed quest, no window");
 
     // Two timed quests around an untimed one, 860 s and 45 s out.
-    s.set_quest_log(log(vec![
-        quest(1, "Deliver the Message", 1_000_860),
-        quest(2, "A Threat Within", 0),
-        quest(3, "Escort the Caravan", 1_000_045),
-    ]));
-    s.fire_event("QUEST_LOG_UPDATE", vec![]);
+    seat(
+        &mut s,
+        &[
+            quest(1, "Deliver the Message", 1_000_860),
+            quest(2, "A Threat Within", 0),
+            quest(3, "Escort the Caravan", 1_000_045),
+        ],
+    );
 
     assert!(shown(&s, "QuestTimerFrame"));
     assert!(shown(&s, "QuestTimer1") && shown(&s, "QuestTimer2"));
@@ -98,16 +81,16 @@ fn the_window_follows_the_timed_quests() {
         45.0 + 16.0 * 2.0
     );
 
-    // Row 2 maps to the third log entry, past the untimed one.
-    assert_eq!(s.eval::<i64>("return GetQuestIndexForTimer(2)").unwrap(), 3);
+    // Timer 2 maps to the fourth log row: the header, then the quests by title (`0x4decfb`), the
+    // untimed one between the two timed.
+    assert_eq!(s.eval::<i64>("return GetQuestIndexForTimer(2)").unwrap(), 4);
 
     // The clock alone moves; OnUpdate repaints with no QUEST_LOG_UPDATE (`QuestTimerFrame.lua:35`).
     s.set_server_unix_time(1_000_030.0);
     s.tick(0.2);
     assert_eq!(row_text(&s, 2), "14 Secs ");
 
-    s.set_quest_log(log(vec![quest(2, "A Threat Within", 0)]));
-    s.fire_event("QUEST_LOG_UPDATE", vec![]);
+    seat(&mut s, &[quest(2, "A Threat Within", 0)]);
     assert!(!shown(&s, "QuestTimerFrame"));
 }
 
@@ -115,9 +98,8 @@ fn the_window_follows_the_timed_quests() {
 fn the_countdown_reaches_the_draw_list() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    s.set_quest_log(log(vec![quest(1, "Deliver the Message", 1_000_860)]));
     s.set_server_unix_time(1_000_000.0);
-    s.fire_event("QUEST_LOG_UPDATE", vec![]);
+    seat(&mut s, &[quest(1, "Deliver the Message", 1_000_860)]);
     s.tick(0.0);
 
     let quads = s.extract();
@@ -144,7 +126,8 @@ fn the_countdown_reaches_the_draw_list() {
 fn a_world_entry_paints_a_quest_already_running() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    s.set_quest_log(log(vec![quest(1, "Deliver the Message", 1_000_090)]));
+    // Seated before the clock: the seat's QUEST_LOG_UPDATE finds no timer to paint.
+    seat(&mut s, &[quest(1, "Deliver the Message", 1_000_090)]);
     s.set_server_unix_time(1_000_000.0);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![ScriptValue::Bool(true)]);
     assert!(shown(&s, "QuestTimerFrame"));

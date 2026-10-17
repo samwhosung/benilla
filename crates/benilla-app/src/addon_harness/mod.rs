@@ -1184,45 +1184,42 @@ fn seat_a_session(script: &mut UiScript) {
     // A spellbook (seated below) and a quest log. An empty book fails `TheoryCraftEngine.lua:306`
     // (`for i=1, numSpells` off `GetSpellTabInfo(1)`); two tabs, four spells, `Attack` in slot 1.
     // The quest log is a zone header row (`isHeader`), an in-progress quest with one objective done
-    // and one not, and a complete one (`complete = 1`); failed (-1) and timed quests are not
-    // seated.
+    // and one not, and a complete one (`complete = 1`), rows by level (`0x4decd9`); failed (-1) and
+    // timed quests are not seated.
     {
-        use benilla_ui::script::{QuestLogEntryView, QuestLogObjectiveView, QuestLogState};
-        let objective = |text: &str, cur: u32, req: u32| QuestLogObjectiveView {
-            text: text.into(),
-            kind: "monster".into(),
-            finished: cur >= req,
-            cur,
-            req,
-        };
-        let header = QuestLogEntryView {
-            quest_id: 0,
-            title: "Elwynn Forest".into(),
-            is_header: true,
+        use benilla_ui::script::{QuestObjectiveView, QuestRecordView, QuestSlotView};
+        let kill = |entry: u32, need: u32| QuestObjectiveView {
+            creature_or_go: entry,
+            required_count: need,
             ..Default::default()
         };
-        let in_progress = QuestLogEntryView {
+        let record = |title: &str, level: u32| QuestRecordView {
+            title: title.into(),
+            level,
+            zone_or_sort: 12,
+            header: "Elwynn Forest".into(),
+            ..Default::default()
+        };
+        let mut in_progress = record("The Fargodeep Mine", 7);
+        in_progress.objectives[0] = kill(40, 12);
+        in_progress.objectives[1] = kill(475, 6);
+        script.seed_quest_record(62, in_progress);
+        script.seed_quest_record(176, record("Kobold Candles", 8));
+        script.set_quest_creature_name(40, "Kobold Miner".into());
+        script.set_quest_creature_name(475, "Kobold Vermin".into());
+        let mut slots = [QuestSlotView::default(); benilla_ui::script::QUEST_LOG_SLOTS];
+        slots[0] = QuestSlotView {
             quest_id: 62,
-            title: "The Fargodeep Mine".into(),
-            level: 10,
-            objectives: vec![
-                objective("Kobold Miner slain: 8/12", 8, 12),
-                objective("Kobold Vermin slain: 6/6", 6, 6),
-            ],
+            counters: [8, 6, 0, 0],
             ..Default::default()
         };
-        let done = QuestLogEntryView {
+        slots[1] = QuestSlotView {
             quest_id: 176,
-            title: "Kobold Candles".into(),
-            level: 8,
-            complete: 1,
+            state: 0x01,
             ..Default::default()
         };
-        script.set_quest_log(QuestLogState {
-            entries: vec![header, in_progress, done],
-            num_quests: 2,
-            hidden_quest_ids: Vec::new(),
-        });
+        script.quest_log_changed(slots);
+        script.flush_quest_log_refires();
     }
 
     // The purse: 12_345_678 copper (1234g 56s 78c), every denomination non-zero, so a coin
