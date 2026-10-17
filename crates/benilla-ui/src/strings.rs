@@ -2,8 +2,8 @@
 //! the client's `SStrPrintf` does: `%s`, `%d`, `%c`, `%f` and `%g` take the next argument left to
 //! right, `%N$s` takes argument N without moving that cursor (`DUEL_WINNER_RETREAT` reorders its
 //! two names), `%%` is `%`, and the precision is the template's. A hole with no argument, or one
-//! this does not know, is copied through literally so a mis-modelled template shows. Reals round
-//! as the MSVC CRT behind `SStrPrintf` does: half up on the decimal digits ([`crt_digits`]).
+//! this does not know, is copied through literally so a mis-modelled template shows. Reals are the
+//! MSVC CRT's behind `SStrPrintf` ([`crt_float`]).
 
 use std::fmt::Write as _;
 
@@ -170,124 +170,32 @@ impl Arg<'_> {
         }
     }
 
-    /// `%f`/`%.Nf`, the precision defaulting to C's 6.
+    /// `%f`/`%.Nf` by the CRT, the precision defaulting to C's 6.
     fn as_f(&self, prec: Option<usize>, out: &mut String) {
-        let p = prec.unwrap_or(6);
         match self {
-            Arg::F(x) => crt_f(*x, p, out),
-            Arg::D(n) => crt_f(*n as f64, p, out),
+            Arg::F(x) => out.push_str(&crt_float(*x, b'f', prec)),
+            Arg::D(n) => out.push_str(&crt_float(*n as f64, b'f', prec)),
             Arg::S(s) => out.push_str(s),
         }
     }
 
-    /// `%g`/`%.Ng` by C's rule, the precision P counting significant digits: with X the exponent
-    /// of the value in `%e` at precision P−1, use `%f` at P−1−X when P > X ≥ −4, else `%e`, then
-    /// drop trailing zeros. 1.12's five `%.3g` cast and cooldown templates need it: a 100-second
-    /// cooldown is "1.67 min", where Rust's shortest round-trip `{}` prints 17 digits.
+    /// `%g`/`%.Ng` by the CRT, the precision counting significant digits: 1.12's five `%.3g`
+    /// cast and cooldown templates need it, a 100-second cooldown being "1.67 min".
     fn as_g(&self, prec: Option<usize>, out: &mut String) {
         let Arg::F(x) = self else {
             return self.as_s(out);
         };
-        let p = prec.unwrap_or(6).max(1);
-        if *x == 0.0 {
-            out.push('0');
-            return;
-        }
-        if !x.is_finite() {
-            let _ = write!(out, "{x}");
-            return;
-        }
-        if x.is_sign_negative() {
-            out.push('-');
-        }
-        // Round to P significant digits first, then read the exponent, so 9.999 at P=3 is "10",
-        // not "10.0"; the style's digits are the rounded ones, never rounded twice.
-        let (digits, decpt) = crt_digits(x.abs(), |_| p as i32);
-        let exp = decpt - 1;
-        if exp < -4 || exp >= p as i32 {
-            // `%e`: C writes at least two exponent digits and always a sign; Rust writes neither.
-            let mantissa = fixed(&digits, 1, p - 1);
-            out.push_str(trim_zeros(&mantissa));
-            let _ = write!(out, "e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
-        } else {
-            let decimals = (p as i32 - 1 - exp).max(0) as usize;
-            out.push_str(trim_zeros(&fixed(&digits, decpt, decimals)));
-        }
+        out.push_str(&crt_float(*x, b'g', prec));
     }
 }
 
-/// `%f` by the CRT: the sign, then [`crt_digits`] rounded at `p` decimals.
-fn crt_f(x: f64, p: usize, out: &mut String) {
-    if !x.is_finite() {
-        let _ = write!(out, "{x:.p$}");
-        return;
-    }
-    if x.is_sign_negative() {
-        out.push('-');
-    }
-    let (digits, decpt) = crt_digits(x.abs(), |decpt| decpt + p as i32);
-    out.push_str(&fixed(&digits, decpt, p));
-}
-
-/// The CRT's decimal digits of a finite `a >= 0` and its point position `decpt` (the value is
-/// `0.d1d2… × 10^decpt`): `_fltout2` takes 17 significant digits, then `_fptostr 0x40fef0` keeps
-/// `keep(decpt)` of them and rounds on the next digit, half up (`40ff3d: cmp byte [ecx],0x35`),
-/// a carry out of the first digit moving the point (`40ff4f`). A negative count keeps nothing
-/// and rounds nothing (`40ff3b`). So 41.25 at one decimal is 41.3, where Rust's `{:.1}` rounds
-/// the tie to even.
-fn crt_digits(a: f64, keep: impl FnOnce(i32) -> i32) -> (Vec<u8>, i32) {
-    let sci = format!("{a:.16e}");
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-    let mant: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
-    let mut decpt = exp.parse::<i32>().unwrap_or(0) + 1;
-    let Ok(n) = usize::try_from(keep(decpt)) else {
-        return (Vec::new(), decpt);
-    };
-    // A leading slot takes the carry.
-    let mut buf = vec![b'0'];
-    buf.extend((0..n).map(|i| mant.get(i).copied().unwrap_or(b'0')));
-    if mant.get(n).is_some_and(|&d| d >= b'5') {
-        let mut i = buf.len() - 1;
-        while buf[i] == b'9' {
-            buf[i] = b'0';
-            i -= 1;
-        }
-        buf[i] += 1;
-    }
-    if buf[0] == b'1' {
-        decpt += 1;
-    } else {
-        buf.remove(0);
-    }
-    (buf, decpt)
-}
-
-/// Lay rounded digits out as `int.frac` with `p` decimals, zero-padded both sides (`_cftof`).
-fn fixed(digits: &[u8], decpt: i32, p: usize) -> String {
-    let digit = |i: i32| -> char {
-        usize::try_from(i)
-            .ok()
-            .and_then(|i| digits.get(i))
-            .map_or('0', |&d| d as char)
-    };
-    let mut s: String = if decpt <= 0 {
-        "0".into()
-    } else {
-        (0..decpt).map(digit).collect()
-    };
-    if p > 0 {
-        s.push('.');
-        s.extend((0..p as i32).map(|k| digit(decpt + k)));
-    }
-    s
-}
-
-/// `%g`'s last step: drop a fraction's trailing zeros, and the point if nothing is left.
-fn trim_zeros(s: &str) -> &str {
-    match s.contains('.') {
-        true => s.trim_end_matches('0').trim_end_matches('.'),
-        false => s,
-    }
+/// A real as `SStrPrintf` (`0x64a7f0`) writes it: `ISStrVPrintf` (`0x64a820`) hands the
+/// template to the CRT's `_vsnprintf` (`0x73f6ad`), or with Storm's positional option set to
+/// `vsnoprintf` (`0x6697d0`), which passes each hole to the CRT's `_snprintf` (`0x6699fb`);
+/// either way MSVC's `__output` formats it, half up on the digit text, with three exponent
+/// digits and `1.#INF` for an infinity.
+fn crt_float(x: f64, conv: u8, prec: Option<usize>) -> String {
+    mlua::benilla_lua::crt_float(x, conv, prec)
 }
 
 /// One parsed `%…` specifier.
@@ -438,9 +346,10 @@ mod tests {
         assert_eq!(g("%.3g", 9.999), "10");
         // A bare `%g` is C's default precision of six.
         assert_eq!(g("%g", 1.0 / 3.0), "0.333333");
-        // Outside `P > X >= -4` the style is `%e`, with C's signed two-digit exponent.
-        assert_eq!(g("%.3g", 0.000_012_345), "1.23e-05");
-        assert_eq!(g("%.3g", 123_456.0), "1.23e+05");
+        // Outside `P > X >= -4` the style is `%e`, with MSVC's three exponent digits.
+        assert_eq!(g("%.3g", 0.000_012_345), "1.23e-005");
+        assert_eq!(g("%.3g", 123_456.0), "1.23e+005");
+        assert_eq!(g("%g", f64::INFINITY), "1.#INF");
     }
 
     #[test]

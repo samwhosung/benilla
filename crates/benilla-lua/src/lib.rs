@@ -26,6 +26,20 @@ pub use number::fmt_g14;
 pub use value::Value;
 pub use vm::{LuaError, Vm};
 
+/// `%.<precision><conv>` of a `double`, `conv` one of `e E f g G`, as the client's MSVC runtime
+/// writes it (`_cfltcvt` `0x40b7fe` under `sprintf` and `_snprintf`), for host code that formats a
+/// number as one of the client's C functions does.
+pub fn crt_float(v: f64, conv: u8, precision: Option<usize>) -> String {
+    cfmt::fmt_float(
+        v,
+        conv,
+        &cfmt::Spec {
+            precision,
+            ..Default::default()
+        },
+    )
+}
+
 /// A VM with 1.12's Lua libraries open: base, `string`, `table`, `math` and `bit`, then the
 /// bare compatibility globals the client defines over them.
 pub fn new_state() -> Vm {
