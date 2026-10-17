@@ -300,3 +300,35 @@ fn a_made_nan_is_the_x87_indefinite() {
         ]
     );
 }
+
+/// Where the client's runtime makes a NaN or a zero that C's does not: `exp` of an infinity
+/// (`0x7fb11c`), `pow` of `±1^±inf` (`0x744cdc`) or with a NaN operand (`0x73fa0c`), `fmod` by an
+/// infinity (`0x743ad6`) and of `-0` (`0x743a38`), and `frexp` of a zero, an infinity or a NaN
+/// (`0x7fd8db`).
+#[test]
+fn the_math_library_answers_the_clients_specials() {
+    let mut vm = benilla_lua::new_script_host_state();
+    vm.set_global(
+        "V",
+        benilla_lua::Value::Num(f64::from_bits(0x7ff8_0000_0000_0000)),
+    );
+    let got = vm
+        .exec(
+            b"local z = 0 local inf, nz = 1/z, -z \
+              local fi, ei = math.frexp(inf) local fn, en = math.frexp(V) \
+              local f0, e0 = math.frexp(nz) \
+              return math.exp(inf), math.exp(-inf), math.pow(1, inf), math.pow(-1, -inf), \
+                math.pow(1, V), math.pow(V, 0), math.pow(V, nz), math.mod(5, inf), \
+                math.mod(-5, -inf), 1/math.mod(nz, 2), math.mod(nz, inf), fi, ei, fn, en, 1/f0, e0",
+            b"=t",
+        )
+        .unwrap();
+    let got: Vec<String> = got.into_iter().map(|v| vm.display(v)).collect();
+    assert_eq!(
+        got,
+        [
+            "-1.#IND", "-1.#IND", "-1.#IND", "-1.#IND", "1.#QNAN", "1.#QNAN", "1.#QNAN", "-1.#IND",
+            "-1.#IND", "1.#INF", "-1.#IND", "-1.#IND", "-1", "1.#QNAN", "-1", "1.#INF", "0"
+        ]
+    );
+}

@@ -17,8 +17,7 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
         "atan2" => |vm, n| bin_rev(vm, n, f64::atan2),
         "ceil" => |vm, n| un(vm, n, f64::ceil),
         "floor" => |vm, n| un(vm, n, f64::floor),
-        // C's `fmod`: the sign of the dividend.
-        "fmod" | "mod" => |vm, n| bin_rev(vm, n, |a, b| a % b),
+        "fmod" | "mod" => |vm, n| bin_rev(vm, n, fmod),
         "frexp" => frexp,
         "ldexp" => ldexp,
         "sqrt" => |vm, n| un(vm, n, f64::sqrt),
@@ -26,9 +25,9 @@ pub(crate) fn native(name: &str) -> Option<crate::heap::NativeFn> {
         "max" => max,
         "log" => |vm, n| un(vm, n, f64::ln),
         "log10" => |vm, n| un(vm, n, f64::log10),
-        "exp" => |vm, n| un(vm, n, f64::exp),
+        "exp" => |vm, n| un(vm, n, exp),
         "deg" => |vm, n| un(vm, n, deg),
-        "pow" => |vm, n| bin_rev(vm, n, f64::powf),
+        "pow" => |vm, n| bin_rev(vm, n, pow),
         "rad" => |vm, n| un(vm, n, rad),
         "random" => random,
         "randomseed" => randomseed,
@@ -49,8 +48,7 @@ pub fn open(vm: &mut Vm) {
         ("atan2", |vm, n| bin_rev(vm, n, f64::atan2)),
         ("ceil", |vm, n| un(vm, n, f64::ceil)),
         ("floor", |vm, n| un(vm, n, f64::floor)),
-        // C's `fmod`: the sign of the dividend.
-        ("mod", |vm, n| bin_rev(vm, n, |a, b| a % b)),
+        ("mod", |vm, n| bin_rev(vm, n, fmod)),
         ("frexp", frexp),
         ("ldexp", ldexp),
         ("sqrt", |vm, n| un(vm, n, f64::sqrt)),
@@ -58,9 +56,9 @@ pub fn open(vm: &mut Vm) {
         ("max", max),
         ("log", |vm, n| un(vm, n, f64::ln)),
         ("log10", |vm, n| un(vm, n, f64::log10)),
-        ("exp", |vm, n| un(vm, n, f64::exp)),
+        ("exp", |vm, n| un(vm, n, exp)),
         ("deg", |vm, n| un(vm, n, deg)),
-        ("pow", |vm, n| bin_rev(vm, n, f64::powf)),
+        ("pow", |vm, n| bin_rev(vm, n, pow)),
         ("rad", |vm, n| un(vm, n, rad)),
         ("random", random),
         ("randomseed", randomseed),
@@ -78,7 +76,7 @@ pub fn open(vm: &mut Vm) {
     vm.set_global("math", Value::Table(t));
     // The client's `luaopen_math` registers `math_pow` as the global `__pow` (`0x7fb4c4`), which
     // its `^` calls.
-    let pow = vm.new_native("__pow", |vm, n| bin(vm, n, f64::powf));
+    let pow = vm.new_native("__pow", |vm, n| bin(vm, n, pow));
     vm.set_global("__pow", pow);
     open_bit(vm);
 }
@@ -95,6 +93,42 @@ fn deg(x: f64) -> f64 {
 /// `math_rad`: a product with `RADIANS_PER_DEGREE`.
 fn rad(x: f64) -> f64 {
     x * RADIANS_PER_DEGREE
+}
+
+/// `math_exp` (`0x7fb100`) computes inline on the x87, `2^(x·log2 e)` split at `frndint`; for an
+/// infinite argument its `fsub` (`0x7fb11c`) is `±inf − ±inf`, the indefinite, where C's is
+/// `inf` or `0`.
+fn exp(x: f64) -> f64 {
+    if x.is_infinite() {
+        f64::NAN
+    } else {
+        x.exp()
+    }
+}
+
+/// The client's `pow` (`__CIpow`, `0x73f940`): a NaN operand is the answer (its `faddp` at
+/// `0x73fa0c`), so neither C99's `1^NaN = 1` nor `NaN^0 = 1`, and `__powhlp` (`0x744c8c`)
+/// answers the indefinite for `±1^±inf` (`0x744cdc`), where C's is `1`.
+fn pow(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || (b.is_infinite() && a.abs() == 1.0) {
+        f64::NAN
+    } else {
+        a.powf(b)
+    }
+}
+
+/// The client's `fmod` (`__CIfmod`, `0x73f90a`), `fprem` with the sign of the dividend, behind
+/// the operand classes of `__cintrindisp2` (`0x7436c0`, its table at `0x875eb0`): an infinite
+/// divisor is a domain error, the indefinite (`0x743ad6`), where C's answers the dividend, and a
+/// zero dividend over a finite divisor is `fldz` (`0x743a38`), so `fmod(-0, 2)` is `+0`.
+fn fmod(a: f64, b: f64) -> f64 {
+    if b.is_infinite() {
+        f64::NAN
+    } else if a == 0.0 && b != 0.0 && !b.is_nan() {
+        0.0
+    } else {
+        a % b
+    }
 }
 
 fn un(vm: &mut Vm, nargs: usize, f: fn(f64) -> f64) -> R<usize> {
@@ -129,8 +163,14 @@ fn bin(vm: &mut Vm, nargs: usize, f: fn(f64, f64) -> f64) -> R<usize> {
 
 fn frexp(vm: &mut Vm, nargs: usize) -> R<usize> {
     let x = vm.check_number(nargs, 1)?;
-    let (m, e) = if x == 0.0 || !x.is_finite() {
-        (x, 0)
+    // The client's `_frexp` (`0x7fd8db`): `0` for either zero (`fldz`, `0x40c6fa`), and for an
+    // infinity or NaN an exponent of -1 (`0x7fd908`) beside the indefinite (`0x7fd939`) or the NaN.
+    let (m, e) = if x == 0.0 {
+        (0.0, 0)
+    } else if x.is_nan() {
+        (x, -1)
+    } else if x.is_infinite() {
+        (f64::from_bits(crate::number::INDEFINITE), -1)
     } else {
         let bits = x.to_bits();
         let exp = ((bits >> 52) & 0x7ff) as i32;
