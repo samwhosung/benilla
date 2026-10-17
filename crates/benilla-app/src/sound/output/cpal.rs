@@ -332,6 +332,13 @@ pub(super) struct Notices {
 /// The device watch: a thread that re-reads the host's default output every [`WATCH_EVERY`] and
 /// raises a notice when it changes. One-shot: the backend answers a notice by rebuilding the
 /// stream, which arms a fresh watch.
+///
+/// Deviation: a change of the default output device is followed (here and in `coreaudio.rs`), where
+/// 1.12.1 initialises its sound device once and never again (`Sound::Initialize` `0x7a4330`
+/// refuses a second call; the driver-enumeration functions `0x7a6320`-`0x7a6380` have no caller),
+/// because a headset plugged in mid-session should play at once. On ALSA the watch sees only the
+/// "default" PCM, whose id never changes, so on Linux it is the sound server (PipeWire or Pulse)
+/// that moves the stream.
 pub(super) struct Listeners {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,

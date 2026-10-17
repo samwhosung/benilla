@@ -650,8 +650,8 @@ fn render_loop(
     period_ns: u64,
 ) {
     // Held for the thread's life: on Windows its drop hands the MMCSS registration back.
-    // `WOW_AUDIO_NO_RT=1` skips realtime for the user-interactive QoS fallback, an A/B lever for
-    // the render thread preempting the compute pools.
+    // `WOW_AUDIO_NO_RT=1` skips realtime for the fallback (user-interactive QoS on macOS), an A/B
+    // lever for the render thread preempting the compute pools.
     let no_rt = std::env::var_os("WOW_AUDIO_NO_RT").is_some();
     let realtime = if no_rt {
         Err(anyhow::anyhow!("WOW_AUDIO_NO_RT=1"))
@@ -667,7 +667,13 @@ fn render_loop(
             Some(realtime)
         }
         Err(e) => {
-            warn!("audio: render thread could not go realtime ({e}); using user-interactive QoS");
+            // `promote_current_thread` is a no-op off macOS, so the thread keeps its normal priority.
+            let fallback = if cfg!(target_os = "macos") {
+                "user-interactive QoS"
+            } else {
+                "normal thread priority"
+            };
+            warn!("audio: render thread could not go realtime ({e}); using {fallback}");
             benilla_world::thread_qos::promote_current_thread(
                 benilla_world::thread_qos::QosClass::UserInteractive,
             );
