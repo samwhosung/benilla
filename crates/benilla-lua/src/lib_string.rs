@@ -265,11 +265,12 @@ fn dump(vm: &mut Vm, nargs: usize) -> R<usize> {
 
 // ── string.format ────────────────────────────────────────────────────────────────────────────
 
-/// The client's `str_format` (`0x7fd3d0`), which is Lua 4.0's. The format is a C string, read up
-/// to its first NUL. Each item may name its argument with one digit and `$` (`0x7fd4ac`), which
-/// sets the cursor the next items go on from; its flags, width and precision are matched as
-/// `[-+ #0]*(%d*)%.?(%d*)` (`0x8823ec`), two digits at most each and 18 bytes in all (`0x7fd50c`-
-/// `0x7fd51c`), and go to `sprintf` with the conversion.
+/// The client's `str_format` (`0x7fd3d0`): in its Lua 5.0 library, this one function is Lua 4.0's
+/// `lstrlib.c` code. The format is a C string, read up to its first NUL. Each item may name its
+/// argument with one digit and `$` (`0x7fd4ac`), which sets the cursor the next items go on from;
+/// its flags, width and precision are matched as `[-+ #0]*(%d*)%.?(%d*)` (`0x8823ec`), two digits
+/// at most each and 18 bytes in all (`0x7fd50c`-`0x7fd51c`), and go to `sprintf` with the
+/// conversion.
 fn format(vm: &mut Vm, nargs: usize) -> R<usize> {
     let mut b = vm.take_bufs::<2>();
     let r = format_in(vm, nargs, &mut b);
