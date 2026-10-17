@@ -566,6 +566,7 @@ struct RecordTables<'a> {
     tags: Option<&'a QuestTagNamesRes>,
     macros: &'a crate::npc_text::MacroContext<'a>,
     spells: Option<&'a Spells>,
+    factions: Option<&'a benilla_formats::FactionCatalog>,
 }
 
 /// A template as the engine's record: the group's name (`AreaTable` above 0, `QuestSort` below),
@@ -613,7 +614,13 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
         // server's complete bit decides.
         needs_complete_bit: t.flags & 6 != 0,
         rep_min: (t.rep_objective_faction, t.rep_objective_value as i32),
+        rep_faction_name: tables
+            .factions
+            .and_then(|f| f.faction_name(t.rep_objective_faction))
+            .map(str::to_string),
         rep_max: (t.opposite_rep_faction, t.opposite_rep_value as i32),
+        // The leaderboard pushes the cached string itself (`0x4e0289`): no macro is expanded.
+        end_text: t.end_text.clone(),
         required_money,
         reward_money,
         rewards: set(&t.rewards),
@@ -698,6 +705,8 @@ pub(crate) struct QuestLogReads<'w, 's> {
     tag_names: Option<Res<'w, QuestTagNamesRes>>,
     states: Res<'w, crate::world_state::WorldStates>,
     spells: Option<Res<'w, Spells>>,
+    // `Faction.dbc`'s names, the reputation line's faction (`0x4e0743`).
+    factions: Option<Res<'w, crate::target::Factions>>,
     unit_names: crate::ui_unit::NameTables<'w>,
     // A durability change moves no notice, and a broken copy is not counted (`0x6224fc`).
     changed_items: Query<'w, 's, (), (With<crate::items::ItemObject>, Changed<ObjectStore>)>,
@@ -768,6 +777,10 @@ pub(crate) fn feed_quest_log(
         tags: reads.tag_names.as_deref(),
         macros: &macros,
         spells: reads.spells.as_deref(),
+        factions: reads
+            .factions
+            .as_deref()
+            .map(crate::target::Factions::catalog),
     };
     let key: Option<SubjectKey> = subject
         .as_ref()
@@ -1693,6 +1706,27 @@ mod tests {
         rig.write_store();
         rig.packet(SessionEvent::QuestObjectivesComplete { quest_id: 7 });
         assert_eq!(rig.frame(), Vec::<String>::new());
+    }
+
+    /// The template's end text reaches the record as the wire sent it: the event line, first
+    /// (`0x4e0289`).
+    #[test]
+    fn the_end_text_is_the_leaderboards_event_line() {
+        let mut t = pelt_quest();
+        t.end_text = "Bring the pelts to $N.".into();
+        let mut rig = Rig::new(vec![t], &[7]);
+        rig.cache_pelt();
+        rig.frame();
+        rig.enter_world();
+        assert_eq!(rig.eval("return tostring(GetNumQuestLeaderBoards(2))"), "2");
+        assert_eq!(
+            rig.eval("local t, k = GetQuestLogLeaderBoard(1, 2); return t .. '|' .. k"),
+            "Bring the pelts to $N.|event"
+        );
+        assert_eq!(
+            rig.eval("local t, k = GetQuestLogLeaderBoard(2, 2); return t .. '|' .. k"),
+            "Wolf Pelt: 0/5|item"
+        );
     }
 
     /// Shift-splitting a held stack (`CMSG_SPLIT_ITEM`): vmangos shrinks the source at once and
