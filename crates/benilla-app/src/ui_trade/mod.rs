@@ -72,6 +72,12 @@ pub(crate) struct TradeSession {
     /// a hit, the query callback `0x5d4080` at `0x5d40ca` on a miss); the lines survive
     /// [`Self::close_window`], since that callback hangs off the name query, not the trade.
     named_lines: Vec<NamedLine>,
+    /// How many of `named_lines`, from the front, a feed has read: the rest were raised since,
+    /// each by a handler that looked the name up with a callback.
+    named_lines_asked: usize,
+    /// The pending request's ladder has looked the initiator's name up (leg 8, `0x609210`): the
+    /// frames that wait on it read.
+    request_asked: bool,
 }
 
 /// A line owed whose `%s` names a player.
@@ -106,6 +112,7 @@ impl TradeSession {
     /// [`answer_trade_request`] replies, and only [`Self::begin`] resets the session.
     pub(crate) fn request(&mut self, initiator: u64) {
         self.request = Some(initiator);
+        self.request_asked = false;
     }
 
     pub(crate) fn pending_request(&self) -> Option<u64> {
@@ -278,6 +285,7 @@ impl TradeSession {
     pub(crate) fn close_window(&mut self) {
         *self = TradeSession {
             named_lines: std::mem::take(&mut self.named_lines),
+            named_lines_asked: self.named_lines_asked,
             ..Default::default()
         };
     }
@@ -562,10 +570,11 @@ fn answer_trade_request(
     // `CGUnit` (`0x609210`); this may wait on a name query, with no timer, since vmangos cancels
     // the trade to us when the initiator leaves (`Player.cpp:11747`), which clears the request.
     if block_trades.0 {
-        let Some(name) = names
-            .resolve_player(initiator, Ask::New(&commands))
-            .map(str::to_string)
-        else {
+        let ask = Ask::at(
+            !std::mem::replace(&mut trade.request_asked, true),
+            &commands,
+        );
+        let Some(name) = names.resolve_player(initiator, ask).map(str::to_string) else {
             return;
         };
         info!(target: "trade", "BEGIN_TRADE from {name} refused by BlockTrades; sending CMSG_BUSY_TRADE");
@@ -586,7 +595,8 @@ fn answer_trade_request(
 
 /// A wire [`TradeItem`] as the Lua row: name and quality from the item-template cache once it
 /// answers, the icon from `display_id` via `ItemDisplayInfo.dbc`; [`resolve_side`] names slot 7's
-/// `enchantment`.
+/// `enchantment`. The template is only read: the getters' lookups ask for it
+/// ([`run_record_callbacks`]).
 fn resolve_slot(
     item: &TradeItem,
     items: &Items,
@@ -594,7 +604,7 @@ fn resolve_slot(
     names: &NameCache,
     commands: &NetCommands,
 ) -> TradeSlotItem {
-    let template = items.template(item.entry, 0, Ask::New(commands));
+    let template = items.template(item.entry, 0, Ask::Read);
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality);
     let inventory_type = template.map_or(0, |t| t.inventory_type);
@@ -613,7 +623,8 @@ fn resolve_slot(
         _ => None,
     };
     // Only a wrapped gift asks for its giver, and a zero guid asks nothing (`0x52e288`,
-    // `0x52e29d`).
+    // `0x52e29d`). That is the slot tooltip's build, which no event here marks: the giver is asked
+    // when it first shows.
     let gift_creator = (item.wrapped && item.gift_creator != 0)
         .then(|| names.resolve_player(item.gift_creator, Ask::New(commands)))
         .flatten()
@@ -643,31 +654,25 @@ fn own_item_at(
     store: Option<&ObjectStore>,
     objects: &Objects,
     items: &Items,
-    commands: &NetCommands,
 ) -> Option<(TradeItem, u32)> {
     let (guid, count) = crate::ui_items::slot_guid_count(store, bag, slot, objects);
     if guid == 0 {
         return None;
     }
-    own_item(guid, count, objects, items, commands)
+    own_item(guid, count, objects, items)
 }
 
 /// Our item object `guid` as a wire [`TradeItem`] of `count`, with its `ITEM_FIELD_FLAGS`.
-fn own_item(
-    guid: u64,
-    count: u32,
-    objects: &Objects,
-    items: &Items,
-    commands: &NetCommands,
-) -> Option<(TradeItem, u32)> {
+fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<(TradeItem, u32)> {
     let fields = objects.object(guid)?;
     let entry = fields.object_entry()?;
     let flags = fields.item_flags().unwrap_or(0);
     // The placed item's WRAPPED flag and giver, which its slot's tooltip reads off the object
     // (`0x52b789`, `0x52e32a`).
     let wrapped = flags & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0;
+    // Read, as the placing click reads it (`0x4bfede`).
     let display_id = items
-        .template(entry, guid, Ask::New(commands))
+        .template(entry, guid, Ask::Read)
         .map(|t| t.display_info_id)
         .unwrap_or(0);
     Some((
@@ -844,7 +849,7 @@ fn resignal_trade_items(
                     .unwrap_or(1);
                 let (Some(_), Some((item, flags)), Some((wire_bag, wire_slot))) = (
                     objects.player(),
-                    own_item(guid, count, &objects, &items, &commands),
+                    own_item(guid, count, &objects, &items),
                     crate::ui_items::wire_pos(bag, bag_slot),
                 ) else {
                     continue;
@@ -1007,20 +1012,22 @@ fn feed_trade(
     }
     // The owed `%s` lines, resolved here where the name cache is; a miss waits for the query it
     // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
-    for line in trade.take_named_lines() {
+    let asked = std::mem::take(&mut trade.named_lines_asked);
+    for (i, line) in trade.take_named_lines().into_iter().enumerate() {
         // The status arms print nothing once the player is no longer an object.
         if line.needs_live_object && streamed_player(&index, &stores, line.who).is_none() {
             continue;
         }
         match names
-            .resolve_player(line.who, Ask::New(&commands))
+            .resolve_player(line.who, Ask::at(i >= asked, &commands))
             .map(str::to_string)
         {
             Some(name) => errors.0.push(crate::ui_action::UiError::s(line.key, name)),
-            // Not cached: `resolve` has asked, so park it and retry next frame.
+            // Not cached: the line's lookup has asked, so park it and read it again next frame.
             None => trade.owe_named_line(line),
         }
     }
+    trade.named_lines_asked = trade.named_lines.len();
     if opened {
         // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
         // first and fire the two money events locally; the send goes out with the money intent.
@@ -1080,11 +1087,12 @@ fn feed_trade(
 fn run_record_callbacks(
     script: &mut UiScript,
     items: &Items,
+    commands: &NetCommands,
     notices: &mut MessageReader<crate::item_watch::ItemNotice>,
 ) {
     for entry in script.take_trade_record_asks() {
-        // An answered entry is never asked again, so nothing could run its callback.
-        if items.template_cached(entry).is_none() && !items.template_answered_unknown(entry) {
+        // The getter's lookup with the callback: a miss asks, a refused entry again.
+        if items.template(entry, 0, Ask::Event(commands)).is_none() {
             items.wait_for_trade_record(entry);
         }
     }
@@ -1112,7 +1120,7 @@ fn drain_trade(
     let Some(mut script) = script else {
         return;
     };
-    run_record_callbacks(&mut script, &items, &mut notices);
+    run_record_callbacks(&mut script, &items, &commands, &mut notices);
     // Our bag contents, for the own-column item resolve.
     let store = self_q.iter().next();
 
@@ -1161,8 +1169,7 @@ fn drain_trade(
         };
         if let Some(trade_slot) = id.checked_sub(1).and_then(|n| u8::try_from(n).ok()) {
             // vmangos echoes a placement to the partner only, so our column is filled here.
-            if let Some((item, flags)) = own_item_at(bag, slot, store, &objects, &items, &commands)
-            {
+            if let Some((item, flags)) = own_item_at(bag, slot, store, &objects, &items) {
                 trade.place_own_item(id, item, flags);
             }
             info!(target: "trade", "set item: slot {id} <- bag {bag}/{slot} (wire {wire_bag}/{wire_slot}); sending CMSG_SET_TRADE_ITEM");
@@ -2747,6 +2754,90 @@ mod tests {
                 .resource_mut::<Items>()
                 .take_trade_waiters(4306),
             0
+        );
+    }
+
+    /// The slot rows only read their record; the getters' lookups ask, with the callback
+    /// `0x4c0340` (`0x4c0191`). A refused record is asked by no frame after it, only by the next
+    /// getter call.
+    #[test]
+    fn a_refused_slot_record_is_asked_by_the_next_getter_never_by_a_frame() {
+        let (mut app, rx) = feed_app();
+        app.add_systems(Update, drain_trade.after(feed_trade))
+            .init_resource::<Selection>()
+            .init_resource::<GroupState>();
+        open_with(&mut app, 0x7);
+        app.update();
+        let mut theirs = [None; TRADE_SLOT_COUNT];
+        theirs[0] = Some(wire_item(4306));
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .set_offer(&TradeStatusExtended {
+                their_window: true,
+                sequence: 7,
+                gold: 0,
+                enchant_spell_id: 0,
+                slots: theirs,
+            });
+        app.update();
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "the row only reads"
+        );
+        let getter = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run("GetTradeTargetItemInfo(1)")
+                .unwrap();
+            app.update();
+        };
+        getter(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        {
+            let mut items = app.world_mut().resource_mut::<Items>();
+            items.insert_template(4306, None);
+            items.take_trade_waiters(4306);
+        }
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        getter(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next getter asks again"
+        );
+    }
+
+    /// A line naming a player looks the name up as it is raised (`0x5d4031`, callback `0x5d4080`)
+    /// and waits for it; the frames it waits through read. A refused name is asked by no frame
+    /// after it, only by the next line that names its player.
+    #[test]
+    fn a_refused_line_name_is_asked_by_the_next_line_never_by_a_frame() {
+        let (mut app, rx) = feed_app();
+        app.world_mut().resource_mut::<TradeSession>().initiate(0x9);
+        app.update();
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x9, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        app.world_mut().resource_mut::<TradeSession>().initiate(0x9);
+        app.update();
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next line asks again"
         );
     }
 
