@@ -73,8 +73,13 @@ pub(super) fn feed_actions(
     mut cast_errors: ResMut<CastErrors>,
     mut mount_errors: ResMut<MountErrors>,
     mut pet_tame_failures: ResMut<PetTameFailures>,
-    // The by-key and resolved-text queues as one parameter, at Bevy's 16-parameter limit.
-    ui_errors: (ResMut<UiErrorKeys>, ResMut<UiErrorTexts>),
+    // The by-key and resolved-text queues and the cover that holds the latter, as one parameter,
+    // at Bevy's 16-parameter limit.
+    ui_errors: (
+        ResMut<UiErrorKeys>,
+        ResMut<UiErrorTexts>,
+        Option<Res<crate::loading_screen::LoadingScreen>>,
+    ),
     spells: Option<Res<Spells>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: crate::net::Objects,
@@ -89,7 +94,7 @@ pub(super) fn feed_actions(
     let Some(mut script) = script else {
         return;
     };
-    let (mut ui_error_keys, mut ui_error_texts) = ui_errors;
+    let (mut ui_error_keys, mut ui_error_texts, cover) = ui_errors;
     let memory = memory.get(&script);
 
     // Cast failures become error lines through [`cast_fail`], all resolved before any event
@@ -316,13 +321,19 @@ pub(super) fn feed_actions(
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", key_lines);
 
-    // Already-resolved lines ([`UiErrorTexts`]); the queued kind is the `0x4945b0` flag.
-    let resolved: Vec<Shown> = ui_error_texts
-        .0
-        .drain(..)
-        .map(|(text, kind)| Shown::unkeyed(kind, text))
-        .collect();
-    show_messages(&mut script, &mut sink, "ui_action", resolved);
+    // Already-resolved lines ([`UiErrorTexts`]); the queued kind is the `0x4945b0` flag. Held
+    // while the loading cover is up, so a login notice's hold starts at the reveal: the reference
+    // sends `CMSG_PLAYER_LOGIN` only after its world load (`0x46c272`), and its cover drops at the
+    // player's create (`0x5debbd`), which vmangos sends ahead of the notices (`Maps/Map.cpp:432`,
+    // `Handlers/CharacterHandler.cpp:675`).
+    if !cover.is_some_and(|c| c.covering()) {
+        let resolved: Vec<Shown> = ui_error_texts
+            .0
+            .drain(..)
+            .map(|(text, kind)| Shown::unkeyed(kind, text))
+            .collect();
+        show_messages(&mut script, &mut sink, "ui_action", resolved);
+    }
 
     // The engine's own by-key refusals (`ERR_PASSIVE_ABILITY`): `benilla_ui` cannot reach
     // [`UiErrorKeys`], so it queues keys that show here, one frame late.

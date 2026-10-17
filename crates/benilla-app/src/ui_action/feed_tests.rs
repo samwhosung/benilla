@@ -541,6 +541,53 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     );
 }
 
+/// A login notice queued while the loading cover is up waits for the reveal: the reference's
+/// cover drops at the player's create (`0x5debbd`), ahead of the notice, so its `UIErrorsFrame`
+/// hold is never spent under the cover.
+#[test]
+fn a_notice_under_the_loading_cover_fires_at_the_reveal() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    app.insert_resource(crate::loading_screen::LoadingScreen::test_covering());
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            BENILLA_TEST_ERRORS = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:SetScript("OnEvent", function() table.insert(BENILLA_TEST_ERRORS, arg1) end)
+            "#,
+        )
+        .unwrap();
+    let fired = |app: &mut App| {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("return BENILLA_TEST_ERRORS")
+            .unwrap()
+    };
+
+    app.world_mut()
+        .resource_mut::<UiErrorTexts>()
+        .error("GM mode is ON".to_string());
+    app.update();
+    app.update();
+    assert!(fired(&mut app).is_empty(), "nothing fires under the cover");
+    assert_eq!(
+        app.world().resource::<UiErrorTexts>().0.len(),
+        1,
+        "the notice stays queued"
+    );
+
+    app.insert_resource(crate::loading_screen::LoadingScreen::default());
+    app.update();
+    assert_eq!(
+        fired(&mut app),
+        ["GM mode is ON"],
+        "the reveal fires it once"
+    );
+    assert!(app.world().resource::<UiErrorTexts>().0.is_empty());
+}
+
 /// `HandleCastFailed 0x6e1a00` logs through `0x62c360`; `HandlePetCastFailed 0x6e8eb0` calls only
 /// the packet readers and `0x496720`, with no log line and no error sound. Both entries name the
 /// same spell, so only the caster differs.

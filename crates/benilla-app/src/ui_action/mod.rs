@@ -295,8 +295,18 @@ impl Plugin for UiActionPlugin {
                         .in_set(UnitFeed)
                         .after(feed::feed_actions),
                 ),
+            )
+            .add_systems(
+                OnExit(crate::client_state::ClientState::InWorld),
+                drop_held_lines,
             );
     }
+}
+
+/// `OnExit(InWorld)`: a line still held under the cover dies with the world's interface, as the
+/// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`).
+fn drop_held_lines(mut texts: ResMut<UiErrorTexts>) {
+    texts.0.clear();
 }
 
 fn load_spells(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
