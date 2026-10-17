@@ -82,7 +82,9 @@ pub(super) fn publish_view_focus(
         Some(p) if p.active => {
             let wow = benilla_assets::coords::bevy_to_wow(p.pos);
             let paced = !p.settling && !p.world_stale;
-            if p.detached || flying {
+            if flying {
+                ViewFocus::cinematic(wow, paced)
+            } else if p.detached {
                 ViewFocus::detached(wow, paced)
             } else {
                 ViewFocus::body(wow, paced)

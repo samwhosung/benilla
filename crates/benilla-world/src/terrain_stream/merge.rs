@@ -655,19 +655,7 @@ mod tests {
     }
 
     fn blank_tile() -> TileState {
-        TileState {
-            handle: Default::default(),
-            entity: None,
-            material: None,
-            next_cell: 0,
-            furnished: false,
-            placements: Vec::new(),
-            liquid: Vec::new(),
-            wall: None,
-            clutter: Vec::new(),
-            welds: Vec::new(),
-            merged: Vec::new(),
-        }
+        TileState::requested(Default::default())
     }
 
     /// A test placement identity; every divert carries one.

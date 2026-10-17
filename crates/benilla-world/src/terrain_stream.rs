@@ -91,8 +91,8 @@ pub struct TerrainStreamer {
     settled: bool,
     /// The off-grid focus tile last warned about, so the warning fires once per tile.
     off_grid_reported: Option<(i32, i32)>,
-    /// The tiles held resident: the WDT-authored tiles of the inner window while a live paced body
-    /// leads the stream ([`ViewFocus::holds_inner`]), else none. The tile pass waits for these
+    /// The tiles held resident: the WDT-authored tiles of the inner window while the focus holds
+    /// it (a live paced body or a cinematic's camera, [`ViewFocus::holds_inner`]), else none. The tile pass waits for these
     /// and builds them with no limit (`0x698644`–`0x6986a5`).
     inner: Vec<(i32, i32)>,
     /// This frame's plan, from [`stream_terrain`] to [`spawn_streamed_tiles`]; `None` on a frame
@@ -155,6 +155,9 @@ struct TileState {
     welds: Vec<Entity>,
     /// Those placements' merged static-render blobs, per cell and material (`WOW_STATIC_MERGE`).
     merged: Vec<Entity>,
+    /// The inner wait gave up on this request's read ([`INNER_WAIT_CAP`]); it streams on
+    /// unwaited, and a fresh request after a drop is waited on again.
+    gave_up: bool,
 }
 
 impl TileState {
@@ -172,6 +175,7 @@ impl TileState {
             clutter: Vec::new(),
             welds: Vec::new(),
             merged: Vec::new(),
+            gave_up: false,
         }
     }
 }
@@ -291,6 +295,8 @@ pub struct ViewFocus {
     /// The focus is settled, so spawning is paced; false through entry, a teleport and a world
     /// swap, while the loading cover or the settle hold absorbs the burst.
     pub(crate) paced: bool,
+    /// The eye is a cinematic's camera, which the tile pass follows as it follows a body.
+    cinematic: bool,
 }
 
 impl ViewFocus {
@@ -306,6 +312,7 @@ impl ViewFocus {
             attached: true,
             entry: None,
             paced,
+            cinematic: false,
         }
     }
 
@@ -320,6 +327,14 @@ impl ViewFocus {
         Self {
             attached: false,
             ..Self::body(wow, paced)
+        }
+    }
+
+    /// A live avatar watching a cinematic: detached, and the camera's inner window is held.
+    pub fn cinematic(wow: [f32; 3], paced: bool) -> Self {
+        Self {
+            cinematic: true,
+            ..Self::detached(wow, paced)
         }
     }
 
@@ -363,12 +378,16 @@ impl ViewFocus {
         self.body
     }
 
-    /// A live paced body leads the stream, so the tile pass holds its inner window resident: it
-    /// waits for those tiles' reads and builds them whole within the frame, as the reference does
-    /// for every frame's pass (`0x6985d0`). Through entry, a teleport and a world swap the loading
-    /// cover or the settle hold waits instead, and a detached eye streams from the camera.
+    /// The tile pass holds the inner window resident: it waits for those tiles' reads and builds
+    /// them whole within the frame, as the reference's pass does every world frame (`0x6985d0`),
+    /// centred on the followed object or else the camera (`0x66fd50` from `0x483297`). Held for a
+    /// live paced body and for a cinematic's camera; through entry, a teleport and a world swap
+    /// the loading cover or the settle hold waits instead.
+    ///
+    /// Deviation: the debug free-fly eye holds nothing: it is benilla's own tool with no
+    /// reference counterpart, and a stall there only slows the developer.
     pub(crate) fn holds_inner(&self) -> bool {
-        self.follows_body() && self.paced
+        (self.follows_body() && self.paced) || self.cinematic
     }
 
     /// A body stands in a settled world: the area authority's gate. Through entry, a teleport and
@@ -660,7 +679,7 @@ fn stream_terrain(
     if let Some(w) = wdt_index {
         desired.retain(|&(tx, ty)| w.has_tile(tx as u32, ty as u32));
     }
-    // The inner window's share of them, held resident while a live body leads the stream.
+    // The inner window's share of them, held resident while the focus holds it.
     state.inner = if focus.holds_inner() {
         let mut inner = window.inner_tiles();
         inner.retain(|t| desired.contains(t));
@@ -734,9 +753,10 @@ fn stream_terrain(
     }
 
     // Request new tiles once the WDT has answered. While paced, the outer ring one per frame and
-    // nearest first, so a fresh row's landings stagger; the held inner tiles all at once, as the
-    // reference issues every inner read before it waits (`0x698679`). Entry and teleports
-    // request all at once.
+    // nearest first, so a fresh row's landings stagger; the held inner tiles all at once, and the
+    // wait then covers them together, where the reference issues one tile's read and waits on
+    // it before the next (`0x698679`, `0x69867e`–`0x698689`). Entry and teleports request all
+    // at once.
     let mut fresh_empty = true;
     if wdt_index.is_some() || state.wdt_ungated {
         let live = focus.paced;
@@ -777,14 +797,19 @@ fn stream_terrain(
 /// How long the inner wait may block before it gives up and lets the frame go on.
 const INNER_WAIT_CAP: Duration = Duration::from_secs(10);
 
+/// A test's override of [`INNER_WAIT_CAP`].
+#[derive(Resource)]
+struct InnerWaitCap(Duration);
+
 /// The tile pass's wait (`0x698689` → `0x443bd0`, which sleeps 1 ms in a loop until the read
 /// completes): the frame does not go on while a held inner tile is still loading. Exclusive,
 /// since only the asset server's event pump moves a finished load into [`Assets`].
 ///
-/// Deviation: the wait gives up after [`INNER_WAIT_CAP`] with a warning, where the reference's
-/// never does, so a lost load stalls the stream and not the client.
+/// Deviation: a read still loading after [`INNER_WAIT_CAP`] is given up on with a warning, once
+/// per request, and its tile then streams on unwaited like the outer ring, where the reference
+/// waits for ever: a hung read costs one capped stall, not one every frame.
 fn await_inner_tiles(world: &mut World) {
-    let pending: Vec<Handle<AdtTile>> = {
+    let pending: Vec<((i32, i32), Handle<AdtTile>)> = {
         let state = world.resource::<TerrainStreamer>();
         if state.plan.is_none() {
             return;
@@ -792,42 +817,53 @@ fn await_inner_tiles(world: &mut World) {
         state
             .inner
             .iter()
-            .filter_map(|t| state.tiles.get(t))
-            .filter(|t| t.entity.is_none())
-            .map(|t| t.handle.clone())
+            .filter_map(|&k| Some((k, state.tiles.get(&k)?)))
+            .filter(|(_, t)| t.entity.is_none() && !t.gave_up)
+            .map(|(k, t)| (k, t.handle.clone()))
             .collect()
     };
     if pending.is_empty() {
         return;
     }
     let t0 = Instant::now();
-    let open = |world: &World| {
+    let cap = world
+        .get_resource::<InnerWaitCap>()
+        .map_or(INNER_WAIT_CAP, |c| c.0);
+    let open = |world: &World| -> Vec<(i32, i32)> {
         let (adts, server) = (
             world.resource::<Assets<AdtTile>>(),
             world.resource::<AssetServer>(),
         );
         pending
             .iter()
-            .filter(|h| {
-                !adts.contains(*h)
+            .filter(|(_, h)| {
+                !adts.contains(h)
                     && !matches!(
-                        server.load_state(*h),
+                        server.load_state(h),
                         bevy::asset::LoadState::Failed(_) | bevy::asset::LoadState::NotLoaded
                     )
             })
-            .count()
+            .map(|(k, _)| *k)
+            .collect()
     };
     loop {
         bevy::asset::handle_internal_asset_events(world);
         let left = open(world);
-        if left == 0 {
+        if left.is_empty() {
             break;
         }
-        if t0.elapsed() >= INNER_WAIT_CAP {
+        if t0.elapsed() >= cap {
             warn!(
-                "terrain: gave up waiting on {left} inner tile(s) after {:.0?}",
+                "terrain: gave up waiting on inner tile(s) {left:?} after {:.0?}; they stream on \
+                 unwaited",
                 t0.elapsed()
             );
+            let mut state = world.resource_mut::<TerrainStreamer>();
+            for k in left {
+                if let Some(t) = state.tiles.get_mut(&k) {
+                    t.gave_up = true;
+                }
+            }
             break;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -1492,6 +1528,20 @@ mod focus_tests {
         );
     }
 
+    /// The tile pass runs every world frame on the followed object or else the camera
+    /// (`0x66fd50`), so a cinematic's camera holds its inner window even through the body's settle
+    /// hold; the debug free-fly eye and a body still settling do not.
+    #[test]
+    fn a_cinematic_holds_the_inner_window_and_free_flight_does_not() {
+        let at = [100.0, 200.0, 30.0];
+        assert!(ViewFocus::body(at, true).holds_inner());
+        assert!(!ViewFocus::body(at, false).holds_inner());
+        assert!(ViewFocus::cinematic(at, false).holds_inner());
+        assert!(!ViewFocus::detached(at, true).holds_inner());
+        // The cinematic still streams from the camera.
+        assert!(!ViewFocus::cinematic(at, false).follows_body());
+    }
+
     #[test]
     fn free_flight_follows_the_camera_and_a_server_less_run_still_has_one() {
         let flying = ViewFocus::detached([100.0, 200.0, 30.0], true);
@@ -1672,11 +1722,39 @@ mod inner_hold_tests {
         }
     }
 
-    /// The wait alone, over a memory source and the slow loader, with tile (32, 44) just requested
-    /// and held inner when `held`.
+    /// A hung disk: every `.hung` read stays loading for ever.
+    #[derive(Default, TypePath)]
+    struct HungAdtLoader;
+
+    impl AssetLoader for HungAdtLoader {
+        type Asset = AdtTile;
+        type Settings = ();
+        type Error = std::io::Error;
+
+        async fn load(
+            &self,
+            _reader: &mut dyn Reader,
+            _settings: &(),
+            _ctx: &mut LoadContext<'_>,
+        ) -> Result<AdtTile, Self::Error> {
+            std::future::pending::<()>().await;
+            unreachable!("a pending future never resolves")
+        }
+
+        fn extensions(&self) -> &[&str] {
+            &["hung"]
+        }
+    }
+
+    /// The wait alone, over a memory source and the slow and hung loaders, with tile (32, 44)
+    /// just requested from `file` and held inner when `held`.
     fn waiting_app(held: bool) -> (App, Handle<AdtTile>) {
+        waiting_app_on("t_32_44.adt", held)
+    }
+
+    fn waiting_app_on(file: &str, held: bool) -> (App, Handle<AdtTile>) {
         let dir = Dir::default();
-        dir.insert_asset(Path::new("t_32_44.adt"), vec![0u8; 4]);
+        dir.insert_asset(Path::new(file), vec![0u8; 4]);
         let mut app = App::new();
         app.register_asset_source(
             "mem",
@@ -1685,12 +1763,13 @@ mod inner_hold_tests {
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
         app.init_asset::<AdtTile>();
         app.register_asset_loader(SlowAdtLoader);
+        app.register_asset_loader(HungAdtLoader);
         app.init_resource::<StreamActivity>();
         app.add_systems(Update, await_inner_tiles);
         let handle: Handle<AdtTile> = app
             .world()
             .resource::<AssetServer>()
-            .load("mem://t_32_44.adt");
+            .load(format!("mem://{file}"));
         let mut state = TerrainStreamer::default();
         state
             .tiles
@@ -1741,6 +1820,32 @@ mod inner_hold_tests {
             !state.streamed(&ahead),
             "a chunk's step moves the window, though the focus tile is the same"
         );
+    }
+
+    /// A read that never finishes is waited on for one capped stall, then streams on unwaited:
+    /// the next frame does not wait again, though the tile is still unspawned and the world
+    /// never settles.
+    #[test]
+    fn a_hung_inner_read_costs_one_capped_wait() {
+        const CAP: Duration = Duration::from_millis(60);
+        let (mut app, handle) = waiting_app_on("t_32_44.hung", true);
+        app.insert_resource(InnerWaitCap(CAP));
+
+        let t0 = Instant::now();
+        app.update();
+        assert!(t0.elapsed() >= CAP, "the first frame waits out the cap");
+        assert!(app.world().resource::<TerrainStreamer>().tiles[&(32, 44)].gave_up);
+
+        app.world_mut().resource_mut::<StreamActivity>().wait_ms = 0.0;
+        let t1 = Instant::now();
+        app.update();
+        assert!(
+            t1.elapsed() < CAP,
+            "a given-up read is not waited on again ({:?})",
+            t1.elapsed()
+        );
+        assert_eq!(app.world().resource::<StreamActivity>().wait_ms, 0.0);
+        assert!(!app.world().resource::<Assets<AdtTile>>().contains(&handle));
     }
 
     /// A flat chunk with one drawn triangle, enough for a cell mesh.
