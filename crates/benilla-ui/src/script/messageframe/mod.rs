@@ -294,8 +294,10 @@ impl UiScript {
 
     /// How many rows frame `fh`'s resolved rect holds at its font's pitch: the plain class's
     /// capacity (`+0x318`) and the height the scrolling class's layout spends in whole messages.
-    /// Both the rect and the pitch are scaled (`0x785f0a`, `0x785f1f`); a pitch of 0 or less, which
-    /// a negative spacing can make on the plain class, holds nothing (`0x785f8f`).
+    /// The plain class scales both the rect and the pitch (`0x785f0a`, `0x785f1f`) and holds
+    /// nothing at a pitch of 0 or less, which a negative spacing can make (`0x785f8f`). The
+    /// scrolling class divides the rect by the scale (`0x7887d4`) and charges each message its
+    /// height plus the snapped unscaled spacing (`0x78899e`-`0x7889ad`); scaled, that is this pitch.
     pub(super) fn message_viewport_rows(model: &Model, fh: FrameHandle) -> usize {
         let font = Self::message_frame_font(model, fh);
         let Some(frame) = model.arena.frame(fh) else {

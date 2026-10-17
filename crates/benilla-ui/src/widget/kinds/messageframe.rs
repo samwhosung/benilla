@@ -157,10 +157,16 @@ impl ScrollingMessageState {
         self.scroll_offset == 0
     }
 
-    /// `AtTop` (`0x793130`), which reads the flag the relayout sets (`+0x350`): every older
-    /// message was placed (`0x788a37`-`0x788a3c`), so the oldest is on screen. The flag follows
-    /// the viewport, so it is read from the layout at the current offset, never kept.
+    /// `AtTop` (`0x793130`), which reads the flag `+0x350`: the relayout sets it when every older
+    /// message was placed (`0x788a37`-`0x788a3c`), so the oldest is on screen. An empty frame
+    /// answers false: the constructor, `Clear` after its relayout and `SetMaxLines` all zero it
+    /// (`0x787775`, `0x7882ce`, `0x787eb1`). This reads the layout live, while the reference caches
+    /// the flag per relayout, so the two differ on a hidden frame, whose relayout does nothing
+    /// (`0x78878e`), and after an `AddMessage` while scrolled up (`0x788220`-`0x78824a`).
     pub fn at_top(&self, viewport_rows: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
         let available = self.lines.len().saturating_sub(self.scroll_offset);
         self.displayed_count(viewport_rows) == available
     }
@@ -175,7 +181,7 @@ impl ScrollingMessageState {
         self.scroll_offset = self.scroll_offset.min(self.max_scroll());
     }
 
-    /// Re-arm the fade of the displayed lines only (`0x788b80`): full alpha and the frame's
+    /// Re-arm the fade of the displayed lines only, on a frame with lines (`0x788b80`): full alpha and the frame's
     /// current `timeVisible`/`fadeDuration`, so even a fully faded line comes back (expiry frees
     /// nothing, `0x788525`). Engine-only, not a 1.12 Lua verb; every scroll entry reaches it.
     pub fn reset_all_fade_times(&mut self, viewport_rows: usize) {
@@ -249,10 +255,17 @@ impl ScrollingMessageState {
     }
 
     /// `ScrollToTop` (`0x788690`): the oldest line as the anchor, then re-arm, as its relayout
-    /// always lands off the bottom.
+    /// lands off the bottom. With exactly one message the anchor is the newest (`0x788799`-
+    /// `0x7887aa`), and a frame already at the bottom skips the re-arm (`0x788aff`); the links
+    /// still rebuild (`0x788a8e`).
     pub fn scroll_to_top(&mut self, viewport_rows: usize) {
+        let stays_at_bottom = self.at_bottom() && self.lines.len() == 1;
         self.scroll_offset = self.max_scroll();
-        self.reset_all_fade_times(viewport_rows);
+        if stays_at_bottom {
+            self.links_dirty = true;
+        } else {
+            self.reset_all_fade_times(viewport_rows);
+        }
     }
 
     /// How many messages the layout places for a frame `viewport_rows` tall, the client's lines

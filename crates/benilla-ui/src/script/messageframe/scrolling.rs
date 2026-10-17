@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(s.displayed_count(0), 1, "the anchored message always shows");
         // `PageUp` (`0x7885b0`) scrolls up once per displayed line and then down once, so a page
         // is the displayed count less one, and one displayed line nets nothing.
-        s.page_up(4); // 2 displayed: up, up, down
+        s.page_up(4); // 2 displayed: up moves, the second up is refused (the oldest shows)
         assert_eq!(s.scroll_offset, 1);
         s.page_up(1); // 1 displayed: up, down
         assert_eq!(s.scroll_offset, 1, "a page of one line nets 0");
@@ -565,6 +565,73 @@ mod tests {
         // One row high there, `PageDown` is a down and an up: it nets 0.
         s.page_down(1);
         assert_eq!(s.scroll_offset, 2, "down then up nets 0");
+    }
+
+    /// With two or more lines displayed and room to move, the page runs its whole loop and then
+    /// steps back: a page is the displayed count less one (`0x7885b0`, `0x7885e0`).
+    #[test]
+    fn a_page_with_room_runs_the_loop_and_steps_back() {
+        let mut s = ScrollingMessageState {
+            max_lines: 8,
+            ..Default::default()
+        };
+        for n in 0..8 {
+            s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+        }
+        s.page_up(3); // 3 displayed: up, up, up, down
+        assert_eq!(s.scroll_offset, 2);
+        s.page_up(3);
+        assert_eq!(s.scroll_offset, 4);
+        s.page_down(3); // down, down, down, up
+        assert_eq!(s.scroll_offset, 2);
+    }
+
+    /// `AtTop` answers nil on an empty frame: the constructor, `Clear` and `SetMaxLines` zero the
+    /// flag (`0x787775`, `0x7882ce`, `0x787eb1`).
+    #[test]
+    fn at_top_is_nil_on_an_empty_frame() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            "CF = CreateFrame('ScrollingMessageFrame', 'CF')\n\
+             EMPTY = CF:AtTop()\n\
+             CF:AddMessage('a') CF:Clear()\n\
+             CLEARED = CF:AtTop()\n\
+             CF:AddMessage('a') CF:SetMaxLines(4)\n\
+             WIPED = CF:AtTop()",
+        )
+        .unwrap();
+        for name in ["EMPTY", "CLEARED", "WIPED"] {
+            assert!(
+                s.eval::<bool>(&format!("return {name} == nil")).unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    /// `ScrollToTop` on a single message anchors the newest (`0x788799`-`0x7887aa`); a frame
+    /// already at the bottom skips the re-arm (`0x788aff`), which two messages do not.
+    #[test]
+    fn scroll_to_top_with_one_message_skips_the_re_arm_at_the_bottom() {
+        let faded = |count: usize| {
+            let mut s = ScrollingMessageState {
+                time_visible: 0.0,
+                fade_duration: 4.0,
+                ..Default::default()
+            };
+            for n in 0..count {
+                s.add(format!("l{n}"), 1.0, 1.0, 1.0);
+            }
+            s.tick(2.0);
+            s.links_dirty = false;
+            s.scroll_to_top(8);
+            s
+        };
+        let one = faded(1);
+        assert_eq!(one.lines[0].alpha, 127.0 / 255.0, "left as it was");
+        assert!(one.links_dirty, "the links still rebuild");
+        let two = faded(2);
+        assert_eq!(two.scroll_offset, 1);
+        assert_eq!(two.lines[0].alpha, 1.0, "the oldest was re-armed");
     }
 
     /// `ScrollUp` is refused once the oldest message is on screen (`0x78861c`-`0x788624`, the flag
@@ -609,11 +676,12 @@ mod tests {
         assert!(s.eval::<bool>("return CF:AtTop() == nil").unwrap());
         s.run("CF:ScrollUp() CF:ScrollUp()").unwrap();
         assert!(s.eval::<bool>("return CF:AtTop() == 1").unwrap());
-        s.run("CF:SetHeight(100)").unwrap();
+        // Shrunk to two rows, the oldest message no longer shows.
+        s.run("CF:SetHeight(30)").unwrap();
         s.resolve();
         assert!(
-            s.eval::<bool>("return CF:AtTop() == 1").unwrap(),
-            "a taller frame shows the oldest too"
+            s.eval::<bool>("return CF:AtTop() == nil").unwrap(),
+            "a shorter frame places fewer messages, so the oldest drops off"
         );
     }
 
