@@ -89,61 +89,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The `bit` library 1.12 opens (`0x7fadc0`, array `0x822c18`): its eight functions, in the
-/// array's order, on 32-bit two's complement.
+/// The `bit` library 1.12 opens (`0x7fadc0`, array `0x822c18`): benilla-lua's natives for its
+/// eight functions, in the array's order.
 fn install_bit(lua: &Lua) -> mlua::Result<()> {
     let bit = lua.create_table()?;
-    // The client truncates to a 32-bit int and answers signed. `as i64 as u32` is C's wrapping
-    // `(unsigned)(int)x`, not a saturating cast, so `bnot(0)` is -1 as there.
-    fn u32_of(v: f64) -> u32 {
-        v as i64 as u32
+    for (name, f) in mlua::benilla_lua::bit_library() {
+        bit.set(name, lua.create_native(name, f)?)?;
     }
-    fn out(v: u32) -> i64 {
-        v as i32 as i64
-    }
-    bit.set(
-        "bnot",
-        lua.create_function(|_, a: f64| Ok(out(!u32_of(a))))?,
-    )?;
-    bit.set(
-        "band",
-        lua.create_function(|_, (a, b): (f64, f64)| Ok(out(u32_of(a) & u32_of(b))))?,
-    )?;
-    bit.set(
-        "bor",
-        lua.create_function(|_, (a, b): (f64, f64)| Ok(out(u32_of(a) | u32_of(b))))?,
-    )?;
-    bit.set(
-        "bxor",
-        lua.create_function(|_, (a, b): (f64, f64)| Ok(out(u32_of(a) ^ u32_of(b))))?,
-    )?;
-    // Shift counts mask to 5 bits, as the client's x86 shifts do: `lshift(1, 32)` is 1.
-    bit.set(
-        "lshift",
-        lua.create_function(|_, (a, n): (f64, f64)| Ok(out(u32_of(a) << (u32_of(n) & 31))))?,
-    )?;
-    bit.set(
-        "rshift",
-        lua.create_function(|_, (a, n): (f64, f64)| Ok(out(u32_of(a) >> (u32_of(n) & 31))))?,
-    )?;
-    bit.set(
-        "arshift",
-        lua.create_function(|_, (a, n): (f64, f64)| {
-            Ok(out(((u32_of(a) as i32) >> (u32_of(n) & 31)) as u32))
-        })?,
-    )?;
-    // `bit.mod`: an integer remainder, unlike `math.mod`'s float one.
-    bit.set(
-        "mod",
-        lua.create_function(|_, (a, b): (f64, f64)| {
-            let b = u32_of(b) as i32;
-            if b == 0 {
-                return Err(mlua::Error::runtime("bit.mod: division by zero"));
-            }
-            // `wrapping_rem`: `INT32_MIN % -1` is 0, not a Rust panic.
-            Ok((u32_of(a) as i32).wrapping_rem(b) as i64)
-        })?,
-    )?;
     lua.globals().set("bit", bit)
 }
 
@@ -705,8 +657,43 @@ mod tests {
                 "bit.{name} is one of the array's eight entries"
             );
         }
-        // Two's complement, signed out: `bnot(0)` is -1, not 4294967295.
-        assert_eq!(s.eval::<i64>("return bit.bnot(0)").unwrap(), -1);
+        // Unsigned out, the word loaded by `fild qword` with its high word zeroed (`0x7faa6d`).
+        assert_eq!(s.eval::<i64>("return bit.bnot(0)").unwrap(), 4_294_967_295);
+        assert_eq!(
+            s.eval::<i64>("return bit.band(4294967295, 4294967295)")
+                .unwrap(),
+            4_294_967_295
+        );
+        assert_eq!(
+            s.eval::<i64>("return bit.bor(-1, 0)").unwrap(),
+            4_294_967_295
+        );
+        assert_eq!(
+            s.eval::<i64>("return bit.bxor(-1, 1)").unwrap(),
+            4_294_967_294
+        );
+        assert_eq!(
+            s.eval::<i64>("return bit.lshift(1, 31)").unwrap(),
+            2_147_483_648
+        );
+        assert_eq!(
+            s.eval::<i64>("return bit.rshift(-1, 0)").unwrap(),
+            4_294_967_295
+        );
+        // `arshift` and `mod` alone load `fild dword`: signed (`0x7fad06`, `0x7fadab`).
+        assert_eq!(s.eval::<i64>("return bit.arshift(-8, 1)").unwrap(), -4);
+        assert_eq!(s.eval::<i64>("return bit.mod(-7, 4)").unwrap(), -3);
+        // `__ftol` truncates to 64 bits and the low word is read: past 64 bits is 0.
+        assert_eq!(s.eval::<i64>("return bit.bor(2^32 + 5, 0)").unwrap(), 5);
+        assert_eq!(
+            s.eval::<i64>("return bit.bnot(2^64)").unwrap(),
+            4_294_967_295
+        );
+        // A shift reads its count, argument 2, first (`0x7fac18`).
+        assert!(s
+            .eval::<String>("local ok, e = pcall(function() return bit.lshift() end) return e")
+            .unwrap()
+            .ends_with("bad argument #2 to `lshift' (number expected, got no value)"));
         assert_eq!(s.eval::<i64>("return bit.band(4660, 255)").unwrap(), 0x34);
         assert_eq!(s.eval::<i64>("return bit.bor(240, 15)").unwrap(), 0xFF);
         assert_eq!(s.eval::<i64>("return bit.bxor(255, 15)").unwrap(), 0xF0);

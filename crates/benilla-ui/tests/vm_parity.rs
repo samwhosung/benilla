@@ -194,6 +194,7 @@ const CASES: &[(&str, &str)] = &[
     ("globals", "return S(type(_G), type(print), type(select), type(coroutine), type(string.gmatch), type(math.fmod), type(gcinfo), type(bit), type(getn), type(strfind), type(sin))"),
     ("type", "return S(type(nil), type(1), type('s'), type({}), type(print), type(type), type(true))"),
     ("tostring", "return S(tostring(nil), tostring(true), tostring(12), tostring('x'), string.sub(tostring({}), 1, 7), string.sub(tostring(print), 1, 10))"),
+    // The client's `bit` answers unsigned but for `arshift` and `mod` (`0x7faa6d`, `0x7fad06`).
     ("bit", "return S(bit.band(12, 10), bit.bor(12, 10), bit.bxor(12, 10), bit.bnot(0), bit.lshift(1, 4), bit.rshift(256, 4), bit.arshift(-16, 2), bit.lshift(1, 32), bit.mod(7, 3))"),
     ("math", "return S(math.abs(-3), math.max(1, 5, 3), math.min(4, 2), math.sqrt(16), math.floor(2.7), math.pi > 3.14, math.frexp(8), math.ldexp(0.5, 4), math.deg(math.pi))"),
     ("random", "math.randomseed(42) local a = math.random(100) math.randomseed(42) return S(a == math.random(100), math.random() < 1, math.random(5, 5))"),
@@ -446,6 +447,8 @@ b]])"#),
           R("local t = {} t[1], t[2] = 1, 2 local a, b = t[1], t[2] a, b = b, a return a, b"),
           R("local a, b, c = (function() return 1, 2, 3 end)() return a, b, c")}, " | ")"#),
     // ── fix-libs: the library fixes, each blessed on the C build ──
+    // `bit.lshift` answers unsigned (`0x7fac40`); `bit.mod(-2^31, -1)` faults in the client's
+    // `idiv` (`0x7fad9b`), and its 0 here is benilla's own.
     ("fix-libs bit_mod_overflow", "return S(E(bit.mod, -2^31, -1), E(bit.mod, 2^31, -1), E(bit.mod, 7, -1), E(bit.mod, -7, 2), E(bit.mod, 0/0, -1), E(bit.mod, 1/0, -1), E(bit.lshift, 1, 31), E(bit.arshift, -2^31, 31))"),
     ("fix-libs rep_format_sizes", r#"return S(string.rep("ab", 3), string.rep("", 1000000), string.rep("x", -1), string.rep("x", 0/0), E(string.format, "%123d", 1), E(string.format, "%1.123f", 1), string.format("%99d", 1) == string.rep(" ", 98) .. "1", string.len(string.format("%.99f", 1)), string.format("%-5c|%5s|%.1q", 65, "ab", "x"), table.concat({"a", 1, "b"}, string.rep("-", 3)), E(gsub, "abc", "%w", "%0%0%0"))"#),
     ("fix-libs deep_match", r#"local n = 3000 local s, p = string.rep("a", n), string.rep("a?", n) local t = {} for w in string.gfind(s, string.rep("(a)?", 30)) do table.insert(t, w) end return S(E(string.find, s, p), E(string.gsub, s, p, "x"), table.getn(t), E(string.find, s, string.rep("a-", 500) .. "$"))"#),

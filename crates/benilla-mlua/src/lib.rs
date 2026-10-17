@@ -555,6 +555,18 @@ impl Lua {
         Ok(Function(self.make_ref(f)))
     }
 
+    /// A Lua function over one of the interpreter's own natives, such as
+    /// [`benilla_lua::bit_library`]'s: it runs on the VM directly, as a C function of the
+    /// client's library runs, with the interpreter's argument checks and messages.
+    pub fn create_native(
+        &self,
+        name: &'static str,
+        f: benilla_lua::heap::NativeFn,
+    ) -> Result<Function> {
+        let v = self.vm().new_native(name, f);
+        Ok(Function(self.make_ref(v)))
+    }
+
     /// mlua's `create_function_mut`: the closure behind a `RefCell`.
     pub fn create_function_mut<F, A, R>(&self, func: F) -> Result<Function>
     where
