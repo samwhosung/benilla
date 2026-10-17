@@ -563,7 +563,7 @@ fn lines(record: &QuestRecordView) -> impl Iterator<Item = Line> + '_ {
 }
 
 /// The line `GetQuestLogLeaderBoard` answers for the 1-based `line`. The event, creature and item
-/// lines each match their own index alone (`cmp eax,ecx` at `0x4e0285`, `0x4e02df`, `0x4e0505`);
+/// lines each match their own index alone (`cmp eax,ecx` at `0x4e0285`, `cmp ecx,eax` at `0x4e02dd` and `0x4e0503`);
 /// the reputation tail compares no index (`0x4e0510`), so it answers any index the others leave,
 /// 0 and past the count included.
 fn line_at(record: &QuestRecordView, line: usize) -> Option<Line> {
