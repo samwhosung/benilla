@@ -10,12 +10,14 @@
 //! on the press frame would still show a second press's fading status; [`ask_for_captures`]
 //! therefore holds each ask exactly one frame.
 //!
-//! Deviations:
-//! - PNG, not TGA, because a 32-bit Targa of a modern window is about 8 MB and few tools open it.
-//! - `benilla-config/Screenshots/`, not the install's, because benilla never writes the install.
+//! Deviation: the file is a PNG where the reference writes a TGA (`0x4426f0`, the name
+//! `%s\WoWScrnShot_%s.tga` at `0x834c44`), because a 32-bit Targa of a modern window is about
+//! 8 MB and few tools open it. The folder is [`crate::local_state::screenshots_dir`]'s.
 //!
-//! The reference fires `SCREENSHOT_SUCCEEDED` even when the write fails, a bug not copied:
-//! [`report_captures`] answers `SCREENSHOT_FAILED` and logs the reason.
+//! Deviation: a failed write answers `SCREENSHOT_FAILED` and logs the reason
+//! ([`report_captures`]), where the reference fires `SCREENSHOT_SUCCEEDED`, because its capture
+//! returns 1 whenever it had a buffer and discards the write's result (`0x442792`, `0x4427a2`);
+//! announcing a shot that was never saved is a defect.
 //!
 //! As in the reference, a raw `Screenshot()` from Lua skips the `Hide()`.
 
