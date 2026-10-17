@@ -230,6 +230,11 @@ pub(crate) struct FuncState {
     c50_delta: i64,
     pub consts: Vec<Value>,
     kmap: KMap,
+    /// The constants the client's 5.0 makes for the same code ([`FuncState::consts50`]).
+    k50: std::collections::HashSet<KKey, std::hash::BuildHasherDefault<KHasher>>,
+    /// The registers of the `OP_LOADNIL` 5.0 emits at the head of the function, where 5.1 emits
+    /// none ([`Parser::nil`]).
+    head_nil50: Option<(Reg, Reg)>,
     pub protos: Vec<Rc<Proto>>,
     /// Each upvalue as `(true, register)` in the enclosing function or `(false, upvalue)`.
     pub upvals: Vec<(bool, u16)>,
@@ -278,6 +283,14 @@ impl FuncState {
         self.cpc_next as i64 + self.c50_delta
     }
 
+    /// The constants the client's 5.0 makes for the same code: every string, `nil` where an
+    /// operand takes it, and every numeral as its token is read (`simpleexp`'s `luaK_numberK`)
+    /// and again negated (`luaK_prefix`, `0x701445`); no boolean (`luaK_exp2RK`, `0x701023`) and
+    /// nothing 5.1 folds (`luaK_posfix`, `0x701610`).
+    pub(crate) fn consts50(&self) -> usize {
+        self.k50.len()
+    }
+
     pub fn new(source: Bytes, linedefined: u32, key: Key) -> FuncState {
         FuncState {
             code: Vec::new(),
@@ -287,6 +300,8 @@ impl FuncState {
             c50_delta: 0,
             consts: Vec::new(),
             kmap: KMap::default(),
+            k50: Default::default(),
+            head_nil50: None,
             protos: Vec::new(),
             upvals: Vec::new(),
             upval_names: Vec::new(),
@@ -362,9 +377,12 @@ impl FuncState {
             .filter(|&i| self.cpc.get(i + 1).copied().unwrap_or(self.cpc_next) == self.cpc[i])
             .map(|i| i as u32)
             .collect();
-        let names = std::iter::once(&self.source)
-            .chain(self.locvars.iter().map(|l| &l.name))
-            .chain(&self.upval_names)
+        let code50 = self.code_size50().max(0) as usize;
+        let consts50 = self.consts50();
+        // `luaY_parser` takes the chunk name by `strlen` (`0x6fc9c2`..`0x6fc9df`).
+        let names = std::iter::once(crate::lex::cstr(&self.source))
+            .chain(self.locvars.iter().map(|l| &*l.name))
+            .chain(self.upval_names.iter().map(|n| &**n))
             .map(|n| heap.str_value(n))
             .collect();
         Proto {
@@ -386,6 +404,8 @@ impl FuncState {
             line_defined: self.linedefined,
             locvars: self.locvars,
             names,
+            code50,
+            consts50,
             key: self.key,
             chunk_keys: Rc::from(Vec::new()),
             gc_mark: Default::default(),
@@ -488,6 +508,15 @@ fn set_a(op: &mut Op, r: Reg) {
         op => unreachable!("not relocatable: {op:?}"),
     }
 }
+
+/// A number's constant key: `-0` and `0` are one constant, the first seen.
+fn num_key(n: f64) -> KKey {
+    KKey::Num(if n == 0.0 { 0 } else { n.to_bits() })
+}
+
+/// The client's 5.0 flushes a constructor's list every 32 items (`LFIELDS_PER_FLUSH`,
+/// `0x6fd6d0`), an `OP_SETLIST` word each.
+const FIELDS_PER_FLUSH50: u32 = 32;
 
 fn is_k(x: Rk) -> bool {
     x >= RK_CONST
@@ -761,12 +790,25 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn string_k(&mut self, s: &[u8]) -> R<u32> {
         let r = self.heap.intern(s);
+        self.fs().k50.insert(KKey::Str(r.id));
         self.addk(KKey::Str(r.id), Value::Str(r))
     }
 
+    /// A number constant. The client's 5.0 counts it where its own code makes it
+    /// ([`Parser::number_k50`]), not here: what 5.1 makes of a numeral 5.0 already has, and what
+    /// it makes of a fold 5.0 has not.
     pub(crate) fn number_k(&mut self, n: f64) -> R<u32> {
-        let bits = if n == 0.0 { 0 } else { n.to_bits() };
-        self.addk(KKey::Num(bits), Value::Num(n))
+        self.addk(num_key(n), Value::Num(n))
+    }
+
+    /// A number the client's 5.0 makes a constant of ([`FuncState::consts50`]).
+    pub(crate) fn number_k50(&mut self, n: f64) {
+        self.fs().k50.insert(num_key(n));
+    }
+
+    /// A constructor of `items` list items: the `OP_SETLIST`s the client's 5.0 emits for them.
+    pub(crate) fn setlists50(&mut self, items: u32) {
+        self.fs().c50_delta += items.div_ceil(FIELDS_PER_FLUSH50) as i64;
     }
 
     fn bool_k(&mut self, b: bool) -> R<u32> {
@@ -774,6 +816,7 @@ impl<'a> Parser<'a> {
     }
 
     fn nil_k(&mut self) -> R<u32> {
+        self.fs().k50.insert(KKey::Nil);
         self.addk(KKey::Nil, Value::Nil)
     }
 
@@ -797,11 +840,26 @@ impl<'a> Parser<'a> {
         let fs = self.fsr();
         if fs.cpc_next as i64 > fs.lasttarget {
             if fs.cpc_next == 0 {
+                // The client's 5.0 emits these (its `lasttarget` starts at 0, `0x6fcaba`, so its
+                // `luaK_nil` at pc 0 has no previous to widen, `0x700798`), one `OP_LOADNIL`
+                // widened while each follows on.
+                let fs = self.fs();
+                match fs.head_nil50 {
+                    Some((pfrom, pto)) if pfrom <= from && from as u32 <= pto as u32 + 1 => {
+                        fs.head_nil50 = Some((pfrom, to.max(pto)));
+                    }
+                    _ => {
+                        fs.c50_delta += 1;
+                        fs.head_nil50 = Some((from, to));
+                    }
+                }
                 if from >= fs.nactvar {
                     self.code(Op::LoadNil(from, to), 0)?;
                     self.fs().silent_nils += 1;
                     return Ok(());
                 }
+                // A local's register: 5.1 emits it, which 5.0 widened its own into or emitted.
+                self.fs().c50_delta -= 1;
             } else if let Some(&Op::LoadNil(pfrom, pto)) = fs.code.last() {
                 if pfrom <= from && from as u32 <= pto as u32 + 1 {
                     if to > pto {
@@ -1276,6 +1334,9 @@ impl<'a> Parser<'a> {
                     if e.rt {
                         // 5.0's `OP_UNM` of an instruction's result.
                         self.fs().c50_delta += 1;
+                    } else {
+                        // 5.0's constant of the negated numeral.
+                        self.number_k50(-n);
                     }
                     e.k = Kind::KNum(-n);
                     return Ok(());
@@ -1363,6 +1424,8 @@ impl<'a> Parser<'a> {
         let c = (nelems - 1) / FIELDS_PER_FLUSH + 1;
         let first = (c - 1) * FIELDS_PER_FLUSH;
         let words = if c <= MAXARG_C { 1 } else { 2 };
+        // The client's 5.0 flushes every 32 items, a word each ([`Parser::constructor`]).
+        self.fs().c50_delta -= words as i64;
         let op = if tostore < 0 {
             Op::SetListTop(base, first)
         } else {

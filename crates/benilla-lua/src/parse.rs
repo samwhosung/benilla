@@ -554,10 +554,9 @@ impl<'a> Parser<'a> {
     /// `0x871d8c`) near the token after it. The length is 5.0's
     /// ([`crate::compile::FuncState::code_size50`]), with its own test at the end: a constant
     /// condition is `true` there (`0x6fd00a`), which `luaK_goiffalse` (`0x6fd022`) jumps back on,
-    /// and a false or nil one jumps nowhere, where 5.1's `cond` jumps out on false or nil. Two
-    /// gaps of an instruction remain: a constant at index 256 to 261, an operand in 5.0
-    /// (`index + 250 <= 511`, `0x701028`) and loaded in 5.1; and a table constructor, which 5.0
-    /// flushes every 32 items (`0x6fd6d0`) and 5.1 every 50.
+    /// and a false or nil one jumps nowhere, where 5.1's `cond` jumps out on false or nil. One
+    /// gap of an instruction remains: a constant at index 256 to 261, an operand in 5.0
+    /// (`index + 250 <= 511`, `0x701028`) and loaded in 5.1.
     fn whilestat(&mut self, line: u32) -> R<()> {
         self.next()?;
         let whileinit = self.getlabel();
@@ -667,6 +666,7 @@ impl<'a> Parser<'a> {
         } else {
             let r = self.fsr().freereg;
             let k = self.number_k(1.0)?;
+            self.number_k50(1.0);
             self.code(Op::LoadK(r, k), 1)?;
             self.reserveregs(1)?;
             true
@@ -1088,7 +1088,9 @@ impl<'a> Parser<'a> {
             }
         }
         self.check_match(Tok::Char(b'}'), Tok::Char(b'{'), line)?;
+        let items = cc.na;
         self.lastlistfield(&mut cc)?;
+        self.setlists50(items);
         // `OP_NEWTABLE`'s hints as floating point bytes; the array one is kept decoded.
         self.fs().code[pc] = Op::NewTable(
             treg,
@@ -1268,7 +1270,11 @@ impl<'a> Parser<'a> {
         // Only the expression's first operand is named after the target.
         let hint = self.name_hint.take();
         let v = match self.tok() {
-            Tok::Number => Exp::new(Kind::KNum(self.lx.cur.num)),
+            Tok::Number => {
+                let n = self.lx.cur.num;
+                self.number_k50(n);
+                Exp::new(Kind::KNum(n))
+            }
             Tok::String => {
                 let bytes = std::mem::take(&mut self.lx.cur.bytes);
                 let k = self.string_k(&bytes)?;

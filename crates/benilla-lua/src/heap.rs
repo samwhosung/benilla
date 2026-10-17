@@ -453,6 +453,10 @@ pub struct Heap {
     /// 32 at open (`0x6f6e96`), doubled when the strings outnumber them (`0x6f9e0f`), halved by a
     /// collection that leaves them under a quarter full above 64 (`0x6f738c`).
     strt_buckets: usize,
+    /// The size of 5.0's concatenation buffer (`[G+0x1c]`, `[G+0x20]`), which the count charges:
+    /// grown to each concatenation's length, 32 at least (`luaZ_openspace`, `0x6fb5d1`), and
+    /// halved by a collection while over 64 (`checkSizes`, `0x6f73a1`..`0x6f73cf`).
+    concat50: usize,
     tables: Tables,
     funcs: Arena<FuncObj>,
     upvals: Arena<UpvalObj>,
@@ -573,6 +577,7 @@ impl Default for Heap {
             strs: Arena::new(),
             strt: vec![STRT_EMPTY; 128],
             strt_buckets: STRT_FIRST,
+            concat50: 0,
             tables: Tables {
                 arena: Arena::new(),
                 growth: Default::default(),
@@ -1115,11 +1120,14 @@ impl Heap {
         if self.strs.live() < self.strt_buckets / 4 && self.strt_buckets > 2 * STRT_FIRST {
             self.strt_buckets /= 2;
         }
+        if self.concat50 > 0x40 {
+            self.concat50 /= 2;
+        }
         // A dead key may name a freed object, whose handle a new one may take; as 5.1's dead key,
         // it is found only by `next`, by identity (`Table::slot_for`).
         // Every live table's size is counted whole above, its uncounted growth with it.
         self.tables.growth.set(0);
-        live += proto_bytes + strt_bytes(self.strt_buckets);
+        live += proto_bytes + strt_bytes(self.strt_buckets) + self.concat50;
         self.bytes = live;
         live
     }
@@ -1127,6 +1135,16 @@ impl Heap {
     /// `n` more bytes the collector counts, as C's allocator would: compiled code, the stack.
     pub(crate) fn charge(&mut self, n: usize) {
         self.bytes += n;
+    }
+
+    /// A concatenation `n` bytes long: 5.0's buffer grown to hold it (`luaZ_openspace`,
+    /// `0x6fb5c0`).
+    pub(crate) fn concat_space(&mut self, n: usize) {
+        if n > self.concat50 {
+            let size = n.max(0x20);
+            self.recharge(self.concat50, size);
+            self.concat50 = size;
+        }
     }
 
     /// A block of `old` bytes the collector counts reallocated to `new`, as `luaM_irealloc`
@@ -1337,6 +1355,50 @@ mod tests {
         assert_eq!(charged(&mut h, |h| h.new_func(c(0))), 16);
         assert_eq!(charged(&mut h, |h| h.new_func(c(2))), 48);
         assert_eq!(charged(&mut h, |h| h.new_upval(UpvalObj::Open(0))), 0x20);
+    }
+
+    /// A prototype's chunk name is the string `luaY_parser` takes by `strlen` (`0x6fc9c2`): up to
+    /// its first NUL.
+    #[test]
+    fn a_chunk_name_is_counted_to_its_first_nul() {
+        let mut h = Heap::default();
+        let _p = crate::compile::compile(b"local x", b"=name\0tail", &mut h).unwrap();
+        assert_eq!(
+            charged(&mut h, |h| h.intern(b"=name")),
+            0,
+            "made by the compile"
+        );
+        assert_eq!(
+            charged(&mut h, |h| h.intern(b"=name\0tail")),
+            0x11 + 10,
+            "never made"
+        );
+    }
+
+    /// 5.0's concatenation buffer is counted (`[G+0x20]`): grown to the longest concatenation,
+    /// 32 bytes at least (`luaZ_openspace`, `0x6fb5d1`), halved by each collection while over 64
+    /// (`checkSizes`, `0x6f73a1`..`0x6f73cf`).
+    #[test]
+    fn the_concatenation_buffer_is_counted_as_5_0_sizes_it() {
+        let mut vm = crate::new_state();
+        vm.full_gc();
+        let before = vm.heap.concat50;
+        assert!(before < 1001);
+        let n = {
+            let b = vm.heap.bytes();
+            vm.exec(b"S = string.rep('x', 1000) .. 'y'", b"=t").unwrap();
+            vm.heap.bytes() - b
+        };
+        assert_eq!(vm.heap.concat50, 1001);
+        assert!(n >= 1001 - before, "the buffer's growth is counted: {n}");
+        for want in [500, 250, 125, 62, 62] {
+            vm.full_gc();
+            assert_eq!(vm.heap.concat50, want);
+        }
+        let mut h = Heap::default();
+        assert_eq!(charged(&mut h, |h| h.concat_space(5)), 0x20);
+        assert_eq!(charged(&mut h, |h| h.concat_space(20)), 0);
+        assert_eq!(charged(&mut h, |h| h.concat_space(100)), 100 - 0x20);
     }
 
     /// The string table is counted as 5.0 sizes it, 4 bytes a bucket: 32 at open (`0x6f6e96`),

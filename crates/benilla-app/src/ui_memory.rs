@@ -11,12 +11,10 @@
 //! glue's two verbs is this one.
 //!
 //! The count is benilla-lua's, which charges every object at the size the 32-bit client's Lua
-//! 5.0 allocates it, as `nblocks` (`[G+0x28]`) counts it. Deviation: the count follows
-//! benilla-lua's own layout of its objects where that differs from the client's. Its compiled
-//! code is its own instruction stream, its tables' parts are sized by its own rules, and its stack
-//! opens at 256 slots and grows by powers of two without shrinking, against 5.0's 45 halved by a
-//! collection that finds it a quarter used (`0x6f7949`); 5.0's concatenation buffer (`0x6f73c1`)
-//! is not counted. The stock interface counts some 10 MB here.
+//! 5.0 allocates it, as `nblocks` (`[G+0x28]`) counts it, its code and constants at the client's
+//! own counts. Two layouts still differ from the client's, and the count with them: a table's
+//! hash part, sized as 5.1 sizes it (#1487), and the stack, which never shrinks (#1784). The stock
+//! interface counts some 10 MB here.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;

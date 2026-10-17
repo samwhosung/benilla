@@ -1336,6 +1336,7 @@ impl Vm {
                         if refused {
                             return Err(self.memory_error());
                         }
+                        self.heap.concat_space(buf.len());
                         self.stack[top - n] = self.str(&buf);
                         // A large buffer is not kept: one long result would hold its memory.
                         if buf.capacity() <= 64 * 1024 {
