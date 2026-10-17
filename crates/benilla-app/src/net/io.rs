@@ -1049,7 +1049,7 @@ fn stream(
 }
 
 /// Logs, once per link, that the server asked for Warden before the world entry and was left
-/// unanswered ([`WorldSession::warden_asked`]).
+/// unanswered ([`WorldSession::warden_asked`]), the deviation [`WorldSession::recv`] records.
 fn note_warden(session: &WorldSession, noted: &mut bool) {
     if !*noted && session.warden_asked() {
         *noted = true;

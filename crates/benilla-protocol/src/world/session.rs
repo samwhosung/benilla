@@ -219,7 +219,8 @@ impl WorldSession {
             // hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`)
             // and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`). The message is
             // read past like any stray and the login goes on; what follows is the server's policy
-            // (vmangos kicks after `Warden.ClientResponseDelay`, `Warden.cpp:686-691`).
+            // (vmangos kicks after `Warden.ClientResponseDelay`, `Warden.cpp:686-691`). benilla
+            // runs no code a server sends ([`crate::auth::AuthReject::reply`] gives the rule).
             ServerPacket::Other {
                 opcode: opcode::SMSG_WARDEN_DATA,
             } => self.link.warden_asked = true,

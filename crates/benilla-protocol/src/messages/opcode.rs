@@ -70,7 +70,8 @@ pub const CMSG_SET_WATCHED_FACTION: u16 = 0x0318; // 792
 pub const SMSG_AUTH_CHALLENGE: u16 = 0x01EC;
 pub const SMSG_AUTH_RESPONSE: u16 = 0x01EE;
 /// The Warden anticheat channel, which the reference hands to its Warden module (`0x6ca5c0`).
-/// benilla runs none and reads it past unanswered ([`crate::WorldSession::warden_asked`]).
+/// benilla runs none and reads it past unanswered, a deviation recorded at
+/// [`crate::WorldSession::recv`] ([`crate::WorldSession::warden_asked`]).
 pub const SMSG_WARDEN_DATA: u16 = 0x02E6;
 /// The answer to `CMSG_AUTH_SESSION`'s addon block: one record per `## Secure:` addon, in order,
 /// with no count or names.

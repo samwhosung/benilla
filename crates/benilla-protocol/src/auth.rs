@@ -48,6 +48,15 @@ pub struct AuthReject {
     pub code: u8,
     /// Which reply carried it: the reference handles a byte by its reply, swallowing a proof's
     /// `0x0A` (`0x5bada2`) where a challenge's reaches the patch state.
+    ///
+    /// Deviation: the patch state downloads no patch and starts no updater, because benilla runs
+    /// no code a server sends. There the reference takes the server's transfer into
+    /// `wow-patch.mpq` (`0x474610`), runs the archive's `prepatch.lst`, whose `execute` lines start
+    /// its programs (`0x474820`), and quits (`0x46b870`). The rule covers the system survey
+    /// ([`read_proof_reply`]) and Warden ([`crate::WorldSession::recv`]) too: each is native code
+    /// the server picks for the original client, which benilla cannot run on its three platforms
+    /// and would not run if it could. A fork that wants any of them builds it on top of the
+    /// decoded wire.
     pub reply: LogonReply,
 }
 
@@ -260,6 +269,10 @@ pub fn read_proof_reply(r: &mut impl Read) -> Result<Option<[u8; 20]>> {
         .into());
     }
     let server_proof = read_array::<20>(r)?;
+    // Deviation: the survey id is read and dropped, and no survey runs, where the reference keeps
+    // it on the link (`0x5bad53`) for the `Survey.dll` it downloads and calls (`GetSurveyId
+    // 0x5ab620`, passed at `0x47404f`). benilla runs no code a server sends
+    // ([`AuthReject::reply`] gives the rule).
     let _hardware_survey_id = read_u32_le(r)?;
     Ok(Some(server_proof))
 }
