@@ -19,6 +19,7 @@ use benilla_formats::{
 
 use crate::items::Items;
 use crate::net::{ObjectStore, Objects, Reputations};
+use crate::query_cache::Ask;
 use crate::spell::Cooldowns;
 use crate::spell::{SpellModifiers, OP_COST};
 use crate::target::{can_attack, ring_reaction, Factions};
@@ -136,7 +137,7 @@ pub(crate) fn equipped_item_fits(
 /// template has not streamed.
 fn worn_item_cached(guid: u64, objects: &Objects, items: &Items) -> Option<WornItem> {
     let obj = objects.object(guid)?;
-    let t = items.template_cached(obj.object_entry()?)?;
+    let t = items.template(obj.object_entry()?, 0, Ask::Read)?;
     Some(WornItem {
         class: t.class,
         subclass: t.subclass,

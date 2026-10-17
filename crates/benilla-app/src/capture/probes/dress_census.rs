@@ -18,6 +18,7 @@ use crate::entities::equipment::ATTACH_SLOT_NAMES;
 use crate::entities::{Equipment, HeldAttached};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 
 /// Census radius in yards, past what the server streams; `WOW_DRESS_CENSUS_RADIUS` overrides.
 const DEFAULT_RADIUS: f32 = 120.0;
@@ -130,7 +131,7 @@ fn fire_dress_census(
                 eq.cloak,
                 u8::from(eq.settled),
                 spawned.join(","),
-                names.peek(guid.0).unwrap_or("?"),
+                names.resolve_unit(guid.0, None, Ask::Read).unwrap_or("?"),
                 if contradiction { "  !!" } else { "" },
             ),
         ));

@@ -130,6 +130,7 @@ fn write_now(file: &mut NameCacheFile, names: &NameCache) {
 mod tests {
     use super::*;
     use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+    use crate::query_cache::Ask;
 
     /// A roster with a pick in flight and no realm: [`crate::ui_macro::identity`] answers
     /// `("Realm", <name>)`.
@@ -222,17 +223,17 @@ mod tests {
 
         let names = app.world().resource::<NameCache>();
         assert_eq!(
-            names.peek(me),
+            names.resolve_unit(me, None, Ask::Read),
             Some("Nelprifour"),
             "the login's seed of our own name must survive the disk load — losing it is the bug"
         );
         assert_eq!(
-            names.peek(pet),
+            names.resolve_unit(pet, None, Ask::Read),
             Some("Fluffy"),
             "…and so must a pet name: the file carries neither, so neither is its to replace"
         );
         assert_eq!(
-            names.peek(guard),
+            names.resolve_unit(guard, None, Ask::Read),
             Some("Stormwind Guard"),
             "the file's own records are what the load is for"
         );

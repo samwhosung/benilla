@@ -25,6 +25,7 @@ use benilla_ui::script::{ScriptValue, UiScript};
 use crate::client_state::ClientState;
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::Player;
+use crate::query_cache::Ask;
 use crate::ui_script::{UiFeed, UiInput};
 
 /// The popup cue `0x4b5390` plays on both legs (`0x846b68`).
@@ -289,7 +290,7 @@ fn feed_tutorials(
     let class = self_q.single().ok().and_then(|s| s.0.unit_class());
     for (entry, bag, slot) in pushes {
         tutorials.trigger(id::BACKPACK, 0, now);
-        if let Some(info) = items.template_cached(entry) {
+        if let Some(info) = items.template(entry, 0, Ask::Read) {
             if info.inventory_type != 0 {
                 tutorials.trigger(id::EQUIPPABLE_ITEMS, 0, now);
             }

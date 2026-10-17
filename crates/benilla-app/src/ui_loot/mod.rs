@@ -621,7 +621,11 @@ impl Candidates<'_> {
             .iter()
             .find(|m| m.guid == guid)
             .map(|m| m.name.clone())
-            .or_else(|| self.names.peek(guid).map(str::to_string))
+            .or_else(|| {
+                self.names
+                    .resolve_unit(guid, None, Ask::Read)
+                    .map(str::to_string)
+            })
             .filter(|n| !n.is_empty())
     }
 }

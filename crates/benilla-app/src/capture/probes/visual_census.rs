@@ -22,6 +22,7 @@ use crate::entities::equipment::ATTACH_SLOT_NAMES;
 use crate::entities::{FallbackCube, HeldAttached, VisualAttached};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::hover::pick_model_roots;
 
 /// Census radius in yards, past the server's visibility radius; `WOW_UNIT_VISUALS_RADIUS` sets it.
@@ -174,7 +175,7 @@ fn fire_unit_visuals(
                 match (net.kind, store) {
                     (EntityKind::Corpse, Some(s)) if s.0.corpse_is_bones() => "<bones>",
                     (EntityKind::Corpse, Some(_)) => "<corpse body>",
-                    _ => names.peek(guid.0).unwrap_or("?"),
+                    _ => names.resolve_unit(guid.0, None, Ask::Read).unwrap_or("?"),
                 },
             ),
         ));

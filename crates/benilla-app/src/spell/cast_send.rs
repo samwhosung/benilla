@@ -23,6 +23,7 @@ use bevy::prelude::*;
 
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, Objects, SelfPlayer};
+use crate::query_cache::Ask;
 
 use super::{cast_target, validator, AutoRepeatActive};
 use crate::ui_action::{reagent_totem_refusal, CastErrors, Spells};
@@ -352,7 +353,9 @@ fn record_commit(
     }
     let item_flags = match commit {
         CastCommit::Spell => None,
-        CastCommit::Item { entry, .. } => Some(items.template_cached(entry).map_or(0, |t| t.flags)),
+        CastCommit::Item { entry, .. } => {
+            Some(items.template(entry, 0, Ask::Read).map_or(0, |t| t.flags))
+        }
     };
     pending.commit(
         spell_id,
@@ -575,7 +578,7 @@ fn send_spell_cast(
     };
     // The item's own category for this spell replaces the spell's in the category leg (`0x6e1492`).
     let item_category = items
-        .template_cached(queried_item)
+        .template(queried_item, 0, Ask::Read)
         .and_then(|t| t.use_spell)
         .filter(|u| u.spell_id == spell_id)
         .map_or(0, |u| u.category);
@@ -728,7 +731,7 @@ fn send_spell_cast(
         let pushed = match commit {
             CastCommit::Spell => true,
             CastCommit::Item { entry, .. } => items
-                .template_cached(entry)
+                .template(entry, 0, Ask::Read)
                 .is_some_and(|t| t.flags & benilla_protocol::messages::ITEM_FLAG_PLAYERCAST != 0),
         };
         if pushed {

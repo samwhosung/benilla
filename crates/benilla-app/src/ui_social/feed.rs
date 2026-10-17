@@ -462,7 +462,7 @@ fn row_guid(order: &[u64], index: u32) -> Option<u64> {
 fn guid_named(order: &[u64], name: &str, names: &NameCache) -> Option<u64> {
     order.iter().copied().find(|guid| {
         names
-            .peek(*guid)
+            .resolve_unit(*guid, None, Ask::Read)
             .is_some_and(|n| n.eq_ignore_ascii_case(name))
     })
 }

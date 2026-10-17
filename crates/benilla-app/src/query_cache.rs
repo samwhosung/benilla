@@ -37,7 +37,7 @@ use crate::net::{EnteredWorldMessage, NetCommands};
 /// How a read reaches the server on a miss: the reference's lookup with a callback or without, and
 /// the runs of a reader that builds its view every frame between the events that stand for the
 /// reference's (the module's head).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Ask<'a> {
     /// The lookup with no callback (`0x556b1c` → `0x556bf9`): the record if held, never asking.
     Read,
@@ -111,7 +111,7 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
     /// The lookup of a reader's run between its events ([`Ask::New`]): the record, or `None`
     /// after running `ask` for a key the cache holds nothing for, once while it is pending. A
     /// refused key reads unknown and asks nothing: the next [`Self::lookup`] asks it.
-    pub(crate) fn lookup_new(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
+    fn lookup_new(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
         self.ask_if(key, false, ask)
     }
 
@@ -150,7 +150,9 @@ impl<K: Copy + Eq + Hash + Default, V> QueryCache<K, V> {
     /// The lookup that only reads: the record if it is here, never asking (`0x556b1c` →
     /// `0x556bf9`).
     pub(crate) fn get(&self, key: K) -> Option<&V> {
-        (key != K::default()).then(|| self.answered.get(&key)).flatten()
+        (key != K::default())
+            .then(|| self.answered.get(&key))
+            .flatten()
     }
 
     /// The record, mutably, for one the wire patches in place; never asking.
@@ -349,7 +351,10 @@ mod tests {
         assert!(rx.try_iter().next().is_none(), "nothing asked");
         cache.insert(0, "zero");
         for ask in [Ask::Read, Ask::New(&commands), Ask::Event(&commands)] {
-            assert!(cache.read(0, ask, send).is_none(), "a record under 0 is never read");
+            assert!(
+                cache.read(0, ask, send).is_none(),
+                "a record under 0 is never read"
+            );
         }
     }
 

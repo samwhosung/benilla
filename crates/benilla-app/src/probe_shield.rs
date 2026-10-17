@@ -24,6 +24,7 @@ use bevy::prelude::*;
 use crate::glue_session::login::LoginIntent;
 use crate::names::NameCache;
 use crate::net::{EnteredWorldMessage, ObjectStore, SelfGuid, SelfPlayer, ServerSaidMessage};
+use crate::query_cache::Ask;
 
 /// `PLAYER_FLAGS_GM`: the body carries the faction-35 re-template.
 const PLAYER_FLAGS_GM: u32 = 0x0000_0008;
@@ -244,7 +245,9 @@ fn drive_shield(
     // Build the batch once the body, and ideally our own name, is there to address.
     if let Some(wanted_at) = shield.arm_wanted {
         let Ok(store) = self_q.single() else { return };
-        let name = self_guid.0.and_then(|g| names.peek(g));
+        let name = self_guid
+            .0
+            .and_then(|g| names.resolve_unit(g, None, Ask::Read));
         let waited = time.elapsed_secs() - wanted_at;
         if name.is_none() && waited < NAME_WAIT_SECS {
             return;
@@ -317,7 +320,9 @@ fn god_line(name: Option<&str>) -> String {
 
 /// Queue another `.cheat god on` and re-open the confirmation window.
 fn rearm(shield: &mut ProbeShield, time: &Time, names: &NameCache, self_guid: &SelfGuid) {
-    let name = self_guid.0.and_then(|g| names.peek(g));
+    let name = self_guid
+        .0
+        .and_then(|g| names.resolve_unit(g, None, Ask::Read));
     shield.steps.push(god_line(name));
     shield.next_at = time.elapsed_secs();
     shield.confirm_by = time.elapsed_secs() + CONFIRM_SECS;

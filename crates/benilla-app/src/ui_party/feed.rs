@@ -371,7 +371,9 @@ pub(crate) fn feed_party(
         let snap = raid_guids.get(i).and_then(|guid| {
             if Some(*guid) == self_guid {
                 let (_, _, store) = self_pair?;
-                let name = names.peek(*guid).map(str::to_string);
+                let name = names
+                    .resolve_unit(*guid, None, Ask::Read)
+                    .map(str::to_string);
                 let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
                 s.is_player = true;
                 s.raid_target = group.raid_target_index(*guid);
@@ -601,7 +603,9 @@ fn raid_name_of(
     guid: u64,
 ) -> Option<String> {
     if Some(guid) == self_guid {
-        return names.peek(guid).map(str::to_string);
+        return names
+            .resolve_unit(guid, None, Ask::Read)
+            .map(str::to_string);
     }
     group
         .members
@@ -619,7 +623,10 @@ fn raid_guid_for_name(
     name: &str,
 ) -> Option<u64> {
     if let Some(g) = self_guid {
-        if names.peek(g).is_some_and(|n| n.eq_ignore_ascii_case(name)) {
+        if names
+            .resolve_unit(g, None, Ask::Read)
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
             return Some(g);
         }
     }
@@ -683,7 +690,10 @@ fn raid_roster(
         roster.push(row(
             me.guid,
             // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
-            names.peek(me.guid).unwrap_or_default().to_string(),
+            names
+                .resolve_unit(me.guid, None, Ask::Read)
+                .unwrap_or_default()
+                .to_string(),
             me.flags,
             me.level,
             me.area.and_then(zone_name),

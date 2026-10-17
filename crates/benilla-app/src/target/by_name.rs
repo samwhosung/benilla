@@ -25,6 +25,7 @@ use benilla_ui::script::by_name::{rank, Match, Rank};
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
 
 use super::{scan, Selection};
 
@@ -64,7 +65,7 @@ impl NameSearch {
             return Candidacy::Outside;
         }
         names
-            .peek(guid_val)
+            .resolve_unit(guid_val, None, Ask::Read)
             .map_or(Candidacy::Nameless, Candidacy::Named)
     }
 }
@@ -442,7 +443,11 @@ pub(super) fn follow_requests(
                 tok => crate::ui_unit::player_token_guid(tok, &selection, &group),
             }
             .map(|guid| {
-                let name = scan_params.names.peek(guid).unwrap_or_default().to_string();
+                let name = scan_params
+                    .names
+                    .resolve_unit(guid, None, Ask::Read)
+                    .unwrap_or_default()
+                    .to_string();
                 (guid, name)
             }),
         };

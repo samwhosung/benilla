@@ -432,7 +432,11 @@ pub(crate) fn streamed_player_named(
         .keys()
         .copied()
         .filter(|g| benilla_protocol::guid::is_player(*g))
-        .find(|g| names.peek(*g).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        .find(|g| {
+            names
+                .resolve_unit(*g, None, Ask::Read)
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
 }
 
 /// Cast the duel spell at `guid`, a plain spell cast as in the reference's `0x4d4810`, not a duel

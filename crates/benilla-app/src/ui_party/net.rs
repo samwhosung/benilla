@@ -344,7 +344,7 @@ pub(crate) fn member_deactivated<'a>(
     let pet = pet_guid.and_then(held);
     let pet_name = pet_guid
         .zip(pet)
-        .and_then(|(g, p)| names.peek_unit(g, Some(p)));
+        .and_then(|(g, p)| names.resolve_unit(g, Some(p), Ask::Read));
     group
         .stats
         .entry(guid)

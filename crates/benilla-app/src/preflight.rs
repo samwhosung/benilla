@@ -29,6 +29,7 @@ use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{DisconnectedMessage, EnteredWorldMessage, ObjectStore, SelfGuid, SelfPlayer};
 use crate::probe_shield::{ProbeShield, ShieldReport};
+use crate::query_cache::Ask;
 use benilla_world::world_map::CurrentMap;
 
 /// `PLAYER_FLAGS_GM` (vmangos `Player.h`), set by `SetGameMaster(true)` with the faction-35
@@ -229,7 +230,7 @@ fn report_session(
 
     let name = self_guid
         .0
-        .and_then(|g| names.peek(g))
+        .and_then(|g| names.resolve_unit(g, None, Ask::Read))
         .unwrap_or("<unnamed>");
     let race = store
         .0

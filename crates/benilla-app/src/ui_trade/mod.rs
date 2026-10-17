@@ -902,13 +902,7 @@ fn feed_trade(
         *last_their_gold = 0;
     }
 
-    let fresh = snapshot(
-        &trade,
-        &items,
-        icons.as_deref(),
-        spells.as_deref(),
-        &names,
-    );
+    let fresh = snapshot(&trade, &items, icons.as_deref(), spells.as_deref(), &names);
     // A close is the core's, which shut the VM's window and left both offers in place; a
     // disconnect's clear tells it nothing.
     let opened = !*last_open && trade.is_open();
@@ -1269,12 +1263,7 @@ mod tests {
         items.insert_template(1234, Some(sword));
         items.insert_template(1235, Some(crate::items::test_template("Linen Cloth")));
 
-        let row = resolve_slot(
-            &wire_item(1234),
-            &items,
-            None,
-            &NameCache::default(),
-        );
+        let row = resolve_slot(&wire_item(1234), &items, None, &NameCache::default());
         assert_eq!((row.quality, row.inventory_type), (Some(4), 13));
         // The icon is the template's display's, the question mark when that row is missing, and
         // left to the getter while the template is unanswered.
@@ -1283,28 +1272,12 @@ mod tests {
             Some("Interface\\Icons\\INV_Misc_QuestionMark")
         );
         assert_eq!(
-            resolve_slot(
-                &wire_item(1236),
-                &items,
-                None,
-                &NameCache::default(),
-            )
-            .texture,
+            resolve_slot(&wire_item(1236), &items, None, &NameCache::default(),).texture,
             None
         );
-        let row = resolve_slot(
-            &wire_item(1235),
-            &items,
-            None,
-            &NameCache::default(),
-        );
+        let row = resolve_slot(&wire_item(1235), &items, None, &NameCache::default());
         assert_eq!((row.quality, row.inventory_type), (Some(1), 0));
-        let row = resolve_slot(
-            &wire_item(1236),
-            &items,
-            None,
-            &NameCache::default(),
-        );
+        let row = resolve_slot(&wire_item(1236), &items, None, &NameCache::default());
         assert_eq!((row.quality, row.inventory_type), (None, 0));
     }
 

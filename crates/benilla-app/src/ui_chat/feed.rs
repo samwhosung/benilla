@@ -753,7 +753,9 @@ pub(super) fn feed_chat(
                     );
                     if clean {
                         Some(text)
-                    } else if subject_guid == 0 || names.peek(subject_guid).is_some() {
+                    } else if subject_guid == 0
+                        || names.resolve_unit(subject_guid, None, Ask::Read).is_some()
+                    {
                         debug!(
                             "chat: dropping unexpandable [{:#04x}] {:?} (subject {subject_guid:#x})",
                             msg.chat_type, msg.text

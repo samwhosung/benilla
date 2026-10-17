@@ -174,12 +174,9 @@ impl GuildState {
         self.dirty = true;
     }
 
-    /// Reads `guild_id` as `ask` says, sending `CMSG_GUILD_QUERY` on an ask. Guild 0 is no guild
-    /// (`0x560e3d`).
+    /// Reads `guild_id` as `ask` says, sending `CMSG_GUILD_QUERY` on an ask. Guild 0 is no guild,
+    /// never asked.
     fn resolve_identity(&self, guild_id: u32, ask: Ask<'_>) -> Option<&Identity> {
-        if guild_id == 0 {
-            return None;
-        }
         self.identities.read(guild_id, ask, |commands| {
             let _ = commands.0.send(ClientCommand::GuildQuery { guild_id });
         })
@@ -206,11 +203,6 @@ impl GuildState {
     /// is no guild, and so known.
     pub(crate) fn identity_known(&self, guild_id: u32) -> bool {
         guild_id == 0 || self.identities.knows(guild_id)
-    }
-
-    /// A guild's identity if we hold one; `None` while in flight and for no such guild.
-    fn identity(&self, guild_id: u32) -> Option<&Identity> {
-        self.identities.get(guild_id)
     }
 
     /// The landed-identity counter the unit feeds watch.
@@ -472,58 +464,32 @@ pub(crate) fn unit_guild_name<'a>(
         .map(|identity| identity.name.as_str())
 }
 
-/// A unit's guild crest for the body composite, off its public `PLAYER_GUILDID`, asking on a miss
-/// like [`unit_guild`]. `None` keeps a Guild Tabard's own `Tabard_A_05Default` art, as the
+/// A unit's guild crest for the body composite, off its public `PLAYER_GUILDID`, its guild record
+/// looked up as `ask` says. `None` keeps a Guild Tabard's own `Tabard_A_05Default` art, as the
 /// reference never enters its install (`0x47a610`) for a guildless wearer (`0x560e30` returns NULL
 /// at `0x560e3f`), a creature, a query in flight (re-dressed when
 /// [`GuildState::identity_generation`] moves; the reference's callback is `0x5e0650`) or an
 /// undesigned `-1` crest, which would paint blank.
 pub(crate) fn unit_guild_emblem(
     fields: &ObjectFields,
-    guild: &mut GuildState,
-    commands: &NetCommands,
-) -> Option<GuildEmblem> {
-    guild_emblem(fields.player_guild_id(), guild, commands)
-}
-
-/// [`unit_guild_emblem`] as the tabard's put-on looks it up (`0x5e078f` → `0x6d6d20`), with a
-/// callback: a refused guild is asked again at once.
-pub(crate) fn unit_guild_emblem_lookup(
-    fields: &ObjectFields,
     guild: &GuildState,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<GuildEmblem> {
-    let emblem = guild
-        .resolve_identity(fields.player_guild_id(), Ask::Event(commands))?
-        .emblem;
-    emblem.is_designed().then_some(emblem)
-}
-
-/// [`unit_guild_emblem`] without the ask: the crest of a guild record already held.
-pub(crate) fn unit_guild_emblem_cached(
-    fields: &ObjectFields,
-    guild: &GuildState,
-) -> Option<GuildEmblem> {
-    let emblem = guild.identity(fields.player_guild_id())?.emblem;
-    emblem.is_designed().then_some(emblem)
+    guild_emblem(fields.player_guild_id(), guild, ask)
 }
 
 /// The same crest for a corpse, off its own `CORPSE_FIELD_GUILD` (`0x5d6edf`) through the same
 /// lookup (`0x5d6ec0`), with the same `None` cases.
 pub(crate) fn corpse_guild_emblem(
     fields: &ObjectFields,
-    guild: &mut GuildState,
-    commands: &NetCommands,
+    guild: &GuildState,
+    ask: Ask<'_>,
 ) -> Option<GuildEmblem> {
-    guild_emblem(fields.corpse_guild(), guild, commands)
+    guild_emblem(fields.corpse_guild(), guild, ask)
 }
 
-fn guild_emblem(
-    guild_id: u32,
-    guild: &mut GuildState,
-    commands: &NetCommands,
-) -> Option<GuildEmblem> {
-    let emblem = guild.resolve_identity(guild_id, Ask::New(commands))?.emblem;
+fn guild_emblem(guild_id: u32, guild: &GuildState, ask: Ask<'_>) -> Option<GuildEmblem> {
+    let emblem = guild.resolve_identity(guild_id, ask)?.emblem;
     emblem.is_designed().then_some(emblem)
 }
 

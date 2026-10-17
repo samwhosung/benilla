@@ -19,6 +19,7 @@ use benilla_world::view::WorldCamera;
 use super::ProbeClock;
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, SelfPlayer};
+use crate::query_cache::Ask;
 
 /// `WOW_JITTER`'s parsed knobs plus the two-frame history the differences are taken over.
 #[derive(Resource)]
@@ -213,7 +214,7 @@ fn sample_jitter(
             !is_self
                 && (want.is_empty()
                     || names
-                        .peek(guid.0)
+                        .resolve_unit(guid.0, None, Ask::Read)
                         .is_some_and(|n| n.to_lowercase().contains(&want)))
         })
         .min_by(|a, b| {
@@ -332,7 +333,10 @@ fn sample_jitter(
         || meter.prev_pal.len() != pal.len()
         || meter.prev_scr.len() != scr.len()
     {
-        let name = names.peek(guid.0).unwrap_or("?").to_string();
+        let name = names
+            .resolve_unit(guid.0, None, Ask::Read)
+            .unwrap_or("?")
+            .to_string();
         println!(
             "JIT# t=<s> dt=<ms> dist=<yd> pxyd=<px/yd> | camd1 camd2 (mm) | rootd1 rootd2 (mm) \
              | bone=<max bone> d1 d2 (mm) d1px d2px | flesh=<bone> d1 d2 (mm) d1px d2px v(mm/s) | \

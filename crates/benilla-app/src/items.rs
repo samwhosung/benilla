@@ -516,11 +516,6 @@ impl Items {
         self.template(entry, 0, ask).map(HeldTemplate::of)
     }
 
-    /// [`Self::template`] without the ask: the cached record only.
-    pub(crate) fn template_cached(&self, entry: u32) -> Option<&ItemInfo> {
-        self.templates.get(entry)
-    }
-
     /// Record a template answer (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`); `None` = a refusal.
     pub(crate) fn insert_template(&mut self, entry: u32, info: Option<ItemInfo>) {
         match info {
@@ -677,7 +672,7 @@ pub(crate) fn disarmed_equipment_slot(
     let class_of = |slot: u8| -> Option<u8> {
         let guid = store.0.player_inv_slot(slot).filter(|&g| g != 0)?;
         let entry = objects.object(guid).and_then(|o| o.object_entry())?;
-        Some(items.template_cached(entry)?.class as u8)
+        Some(items.template(entry, 0, Ask::Read)?.class as u8)
     };
     crate::creature_anim::disarmed_hand(
         class_of(EQUIPMENT_SLOT_MAINHAND),
@@ -938,7 +933,10 @@ mod tests {
             "the redisplay counter moves"
         );
         assert!(items.template_answered_unknown(9999));
-        assert!(items.template_cached(9999).is_none(), "and nothing is kept");
+        assert!(
+            items.template(9999, 0, Ask::Read).is_none(),
+            "and nothing is kept"
+        );
         assert!(items.cached_template_ids().is_empty());
 
         for _ in 0..600 {
@@ -1125,7 +1123,11 @@ mod tests {
         names.insert_player(5, "Santa".to_string(), None);
         assert_eq!(gift_creator_name(&giver(0, 5), &names), None, "unwrapped");
         assert_eq!(gift_creator_name(&giver(0x8, 0), &names), None, "no giver");
-        assert_eq!(gift_creator_name(&giver(0x8, 6), &names), None, "not answered");
+        assert_eq!(
+            gift_creator_name(&giver(0x8, 6), &names),
+            None,
+            "not answered"
+        );
         assert_eq!(
             gift_creator_name(&giver(0x8, 5), &names).as_deref(),
             Some("Santa")

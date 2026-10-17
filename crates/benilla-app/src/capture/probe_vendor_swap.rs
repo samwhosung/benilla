@@ -230,7 +230,10 @@ fn vendor_swap_probe(
         }
         Phase::Open { since } => {
             let brog = probe.brog.expect("set at Settle");
-            let expect = names.peek(brog).unwrap_or("").to_string();
+            let expect = names
+                .resolve_unit(brog, None, Ask::Read)
+                .unwrap_or("")
+                .to_string();
             match (merchant.vendor == Some(brog), first_show(&script)) {
                 (true, Some((npc, title))) => {
                     if npc == expect && title == expect {
@@ -288,7 +291,10 @@ fn vendor_swap_probe(
         }
         Phase::Swap { since } => {
             let dobbins = probe.dobbins.expect("set at Settle");
-            let expect = names.peek(dobbins).unwrap_or("").to_string();
+            let expect = names
+                .resolve_unit(dobbins, None, Ask::Read)
+                .unwrap_or("")
+                .to_string();
             match (merchant.vendor == Some(dobbins), first_show(&script)) {
                 (true, Some((npc, title))) => {
                     if npc == expect && title == expect {
@@ -323,7 +329,10 @@ fn vendor_swap_probe(
                 return;
             }
             let dobbins = probe.dobbins.expect("set at Settle");
-            let expect = names.peek(dobbins).unwrap_or("").to_string();
+            let expect = names
+                .resolve_unit(dobbins, None, Ask::Read)
+                .unwrap_or("")
+                .to_string();
             let title: String = script
                 .eval("return tostring(MerchantNameText:GetText())")
                 .unwrap_or_default();

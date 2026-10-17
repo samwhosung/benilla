@@ -185,9 +185,8 @@ fn feed_dressup(
     items: Res<Items>,
     commands: Res<NetCommands>,
     self_q: Query<(&ObjectStore, &NetEntity), With<SelfPlayer>>,
-    // `ResMut` because the guild cache is lazy: a miss sends the `CMSG_GUILD_QUERY` whose answer
-    // paints the tabard.
-    mut guilds: ResMut<crate::ui_guild::GuildState>,
+    // A miss sends the `CMSG_GUILD_QUERY` whose answer paints the tabard.
+    guilds: Res<crate::ui_guild::GuildState>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -210,7 +209,7 @@ fn feed_dressup(
     // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
     let look = match (room.open, self_q.single().ok()) {
         (true, Some((store, net))) => player_look(store, net, &room, &items).map(|l| DressUpLook {
-            emblem: crate::ui_guild::unit_guild_emblem(&store.0, &mut guilds, &commands),
+            emblem: crate::ui_guild::unit_guild_emblem(&store.0, &guilds, Ask::New(&commands)),
             ..l
         }),
         _ => None,

@@ -157,7 +157,11 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     let around = crate::field_watch::Around {
         me,
         // An entry of 0 has no key (`0x556aad`).
-        creature_lookup: &|entry| entry != 0 && names.lookup_creature(entry, guid, net),
+        creature_lookup: &|entry| {
+            names
+                .resolve_creature(entry, guid, Ask::Event(net))
+                .is_some()
+        },
         others: &others,
         pet_bar: sc.pet_bar.as_ref().map_or(0, |bar| bar.spells.pet_guid),
     };
@@ -251,7 +255,7 @@ fn compare_party_record(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
         .and_then(|&e| sc.stores.get(e).ok());
     let pet_name = pet_guid
         .zip(pet)
-        .and_then(|(g, p)| sc.names.peek_unit(g, Some(p)));
+        .and_then(|(g, p)| sc.names.resolve_unit(g, Some(p), Ask::Read));
     let mut live = old.clone();
     live.snapshot_descriptor(fields, pet.map(|p| &p.0), pet_name);
     let notices = crate::ui_party::record_notices(guid, &old, &live);
@@ -303,7 +307,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // The answer finishes the set-up of every item of ours waiting on it (`0x5d8390`); a
             // negative answer finishes nothing (its found byte is clear, `0x5d83b8`).
             let answered = info.is_some();
-            let landed = answered && sc.items.template_cached(entry).is_none();
+            let landed = answered && sc.items.template(entry, 0, Ask::Read).is_none();
             sc.items.insert_template(entry, info);
             // A negative answer releases the waiters with nothing run (`0x5d96bb`).
             let waiters = sc.items.take_entry_waiters(entry);

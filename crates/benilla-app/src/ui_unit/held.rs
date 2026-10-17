@@ -290,7 +290,9 @@ pub(crate) fn feed_name_candidates(
         let state = match store.as_deref() {
             // The name as the target feed reads it off the descriptor, from the cache alone.
             Some(store) => {
-                let named = names.peek_unit(guid, Some(store)).map(str::to_string);
+                let named = names
+                    .resolve_unit(guid, Some(store), Ask::Read)
+                    .map(str::to_string);
                 held.state_named(store, guid, named)
             }
             None => UnitState {

@@ -363,7 +363,7 @@ pub(crate) struct ActiveMover;
 pub(crate) struct NetEvents(Receiver<SessionEvent>);
 
 /// The outbound command channel.
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub(crate) struct NetCommands(pub(crate) Sender<ClientCommand>);
 
 /// The character-select channel to the IO thread parked at select: create and delete are served

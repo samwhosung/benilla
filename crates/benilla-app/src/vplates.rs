@@ -30,6 +30,7 @@ use benilla_ui::script::{
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::{ring_reaction, Factions, Hovered, Selection, TargetUpdate};
 use benilla_world::view::WorldCamera;
 
@@ -576,7 +577,7 @@ fn drive_vplates(
             bar_colour: [tint[0], tint[1], tint[2]],
             // Read, never asked: this runs every frame; the unit's create asks.
             name: names
-                .peek_unit(guid.0, store)
+                .resolve_unit(guid.0, store, Ask::Read)
                 .map(str::to_owned)
                 .unwrap_or_default(),
             // The skull (`0x7cbb40`): rank 3 through `gated_rank` (so a charmed boss shows its

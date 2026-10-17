@@ -20,6 +20,7 @@ use benilla_protocol::ObjectFields;
 use bevy::prelude::*;
 
 use crate::items::Items;
+use crate::query_cache::Ask;
 
 /// One run of a reference handler on the active player's items, in the order the packets ran
 /// them. Entries are `OBJECT_FIELD_ENTRY` values; an item the handler could not find has none.
@@ -220,7 +221,7 @@ where
                             guid,
                             old,
                             new: entry,
-                            new_cached: self.items.template_cached(entry).is_some(),
+                            new_cached: self.items.template(entry, 0, Ask::Read).is_some(),
                         },
                     ));
                 }
@@ -240,7 +241,7 @@ where
                 // active player, found live (`0x5d9acd`, `0x5d9ae8`).
                 let charter = self
                     .items
-                    .template_cached(entry)
+                    .template(entry, 0, Ask::Read)
                     .is_some_and(|t| t.flags & ITEM_FLAG_CHARTER != 0);
                 if moved(FIELD_ITEM_ENCHANTMENT..FIELD_ITEM_ENCHANTMENT + 21)
                     && !charter
@@ -352,7 +353,7 @@ where
     /// `0x5d8440`), for our item while in the world.
     pub(crate) fn created(&self, guid: u64, fields: &ObjectFields) -> Option<ItemNotice> {
         let entry = fields.object_entry()?;
-        (self.ours(fields) && self.in_world() && self.items.template_cached(entry).is_some())
+        (self.ours(fields) && self.in_world() && self.items.template(entry, 0, Ask::Read).is_some())
             .then_some(ItemNotice::Record { guid, entry })
     }
 

@@ -473,7 +473,7 @@ pub(super) fn feed_item_stats(
         script
             .take_item_stat_reads()
             .into_iter()
-            .filter(|&id| items.template_cached(id).is_some()),
+            .filter(|&id| items.template(id, 0, Ask::Read).is_some()),
     );
     if spell_mods.is_changed() || reads_changed {
         pending.extend(mod_sensitive.iter().copied());
@@ -487,7 +487,7 @@ pub(super) fn feed_item_stats(
     let ready: Vec<u32> = pending
         .iter()
         .copied()
-        .filter(|&id| items.template_cached(id).is_some())
+        .filter(|&id| items.template(id, 0, Ask::Read).is_some())
         .collect();
     // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs mutably.
     let views: Vec<(u32, benilla_ui::script::ItemTemplateView)> = {
@@ -503,7 +503,7 @@ pub(super) fn feed_item_stats(
             .into_iter()
             .filter_map(|id| {
                 pending.remove(&id);
-                let t = items.template_cached(id)?.clone();
+                let t = items.template(id, 0, Ask::Read)?.clone();
                 if item_has_mod_tokens(&t, spell_res) {
                     mod_sensitive.insert(id);
                 } else {
@@ -916,8 +916,12 @@ pub(super) fn ask_item_build_lookups(
         return;
     };
     // The petition id rides enchantment slot 0 (`0x5ef337`).
-    let petition_id =
-        |item| objects.object(item).and_then(|f| f.item_enchant(0)).unwrap_or(0) as u32;
+    let petition_id = |item| {
+        objects
+            .object(item)
+            .and_then(|f| f.item_enchant(0))
+            .unwrap_or(0) as u32
+    };
     let asks = (script.take_item_name_asks(), script.take_petition_asks());
     ask_build_lookups(asks, petition_id, &names, &petitions, &commands);
 }
@@ -1601,7 +1605,11 @@ mod tests {
             ask_build_lookups((vec![0x5], vec![0x99]), |_| 7, names, &petitions, &commands);
             crate::query_cache::queries(&rx).len()
         };
-        assert_eq!(run(&names), 2, "the first build asks the name and the record");
+        assert_eq!(
+            run(&names),
+            2,
+            "the first build asks the name and the record"
+        );
         for _ in 0..600 {
             assert_eq!(run(&names), 0, "in flight: no build asks again");
         }

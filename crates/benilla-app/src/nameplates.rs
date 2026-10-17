@@ -35,6 +35,7 @@ use benilla_ui::script::{JustifyH, JustifyV, Outline};
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::query_cache::Ask;
 use crate::target::{selection_variant, CombatFlash, Factions, RingVariant, Selection};
 use crate::ui_text::{layout_text_quads, FontSpec, Justify, TextSeat, UiFontAtlas};
 use benilla_world::view::WorldCamera;
@@ -489,7 +490,7 @@ pub(crate) fn drive_nameplates(
         // Read, never asked: this runs every frame, where the reference builds the text only when
         // the plate is dirty (`0x6c6f80`). The unit's create asks for its name
         // (`crate::net::objects`), and its landing redisplays.
-        let Some(name) = names.peek_unit(guid.0, store) else {
+        let Some(name) = names.resolve_unit(guid.0, store, Ask::Read) else {
             continue;
         };
         // The player flag prefixes (a1-a3), glued onto the name with no space.

@@ -552,7 +552,7 @@ pub(crate) mod net {
     /// `MSG_PETITION_DECLINE` inbound: a line only if the decliner's name is already cached, with
     /// no query or retry (`0x5ef12a`/`0x5ef139`), so this arm takes no command channel.
     pub(crate) fn declined(petition: &mut PetitionState, names: &NameCache, player: u64) {
-        if let Some(name) = names.peek(player) {
+        if let Some(name) = names.resolve_unit(player, None, Ask::Read) {
             let line = lines::declined_line(name);
             petition.lines.push(line);
         }

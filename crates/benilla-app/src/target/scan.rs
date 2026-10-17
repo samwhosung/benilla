@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use crate::creature_anim::{Engaged, SwingMessage};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::query_cache::Ask;
 use benilla_assets::{LockRecover, WorldAssets};
 
 use super::relations::{can_assist, can_attack, Assist};
@@ -335,7 +336,9 @@ impl TargetScan<'_, '_> {
             }
             info!(
                 "tab-trace:   {guid:#x} \"{}\" {:.1} yd — {verdict}",
-                self.names.peek(guid).unwrap_or("?"),
+                self.names
+                    .resolve_unit(guid, None, Ask::Read)
+                    .unwrap_or("?"),
                 (tf.translation - self_tf.translation).length()
             );
         };
@@ -409,7 +412,9 @@ impl TargetScan<'_, '_> {
                 info!(
                     "tab-trace: list[{i}] {:#x} \"{}\" {} score {:+.2}",
                     c.guid,
-                    self.names.peek(c.guid).unwrap_or("?"),
+                    self.names
+                        .resolve_unit(c.guid, None, Ask::Read)
+                        .unwrap_or("?"),
                     if c.on_screen { "on-screen" } else { "fallback" },
                     c.score
                 );
@@ -607,7 +612,9 @@ pub(super) fn cycle(
     if trace {
         info!(
             "tab-trace: pick {guid:#x} \"{}\"{} — {}",
-            scan.names.peek(guid).unwrap_or("?"),
+            scan.names
+                .resolve_unit(guid, None, Ask::Read)
+                .unwrap_or("?"),
             if wrapped { " (wrapped)" } else { "" },
             if out.changed {
                 "selection changed"
