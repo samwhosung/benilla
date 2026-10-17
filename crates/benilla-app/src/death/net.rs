@@ -185,6 +185,12 @@ fn resurrect_request(
     death_net.resurrect_generation = death_net.resurrect_generation.wrapping_add(1);
 }
 
+/// A player caster's offer, its name empty on the wire, as [`resurrect_request`] records it.
+#[cfg(test)]
+pub(super) fn resurrect_request_for_tests(caster: u64, death_net: &mut DeathNet) {
+    resurrect_request(caster, String::new(), false, true, death_net);
+}
+
 /// `SMSG_SPIRIT_HEALER_CONFIRM`: the healer's gossip re-sends it on every ask, and the reference
 /// fires `CONFIRM_XP_LOSS` per arrival.
 fn spirit_healer_confirm(npc: u64, death_net: &mut DeathNet) {

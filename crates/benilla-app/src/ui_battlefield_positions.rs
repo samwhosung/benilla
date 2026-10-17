@@ -35,12 +35,16 @@ pub(crate) struct BattlefieldPositions {
     last_request: Option<Instant>,
     /// Guids whose name the cache has not answered yet.
     pending_names: Vec<u64>,
+    /// A packet the feed has not read: the getter's lookups with the callback `0x4ac190`
+    /// (`0x4ac118`) stand for its first read.
+    fresh: bool,
 }
 
 impl BattlefieldPositions {
     /// `MSG_BATTLEGROUND_PLAYER_POSITIONS` in: kept as sent, as the handler (`0x4aad40`) does.
     pub(crate) fn apply(&mut self, packet: PositionsPacket) {
         self.packet = Some(packet);
+        self.fresh = true;
     }
 
     fn clear(&mut self) {
@@ -112,8 +116,10 @@ fn feed_battlefield_positions(
     let BattlefieldPositions {
         packet,
         pending_names,
+        fresh,
         ..
     } = &mut *state;
+    let ask = Ask::at(std::mem::take(fresh), &commands);
     let (Some(map), Some(packet)) = (active, packet.as_ref()) else {
         let key = Some((false, icon_scale.to_bits()));
         let last = last_empty.get(&script);
@@ -138,9 +144,7 @@ fn feed_battlefield_positions(
             continue;
         }
         let (x, y) = live_or_packet(p, &guids, &unit_pos);
-        let name = names
-            .resolve_player(p.guid, Ask::New(&commands))
-            .map(str::to_string);
+        let name = names.resolve_player(p.guid, ask).map(str::to_string);
         match name {
             None => {
                 if !pending_names.contains(&p.guid) {
@@ -246,6 +250,67 @@ impl Plugin for BattlefieldPositionsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The map's getter looks each position's name up with the callback `0x4ac190` (`0x4ac118`),
+    /// asked here at the packet's first read; the frames after it read. A refused name is asked
+    /// by no frame after it, only by the next packet.
+    #[test]
+    fn a_refused_position_name_is_asked_by_the_next_packet_never_by_a_frame() {
+        use benilla_protocol::messages::BattlefieldStatus;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut queue = BattlefieldQueue::default();
+        queue.apply(BattlefieldStatus {
+            slot: 0,
+            map_id: 489,
+            bracket: 0,
+            instance_id: 3,
+            status: 3,
+            time_ms: None,
+            in_progress: Some((0, 0)),
+            queued: None,
+        });
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(queue)
+            .init_resource::<BattlefieldPositions>()
+            .init_resource::<SelfGuid>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<NameCache>()
+            .add_systems(Update, feed_battlefield_positions);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let packet = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<BattlefieldPositions>()
+                .apply(PositionsPacket {
+                    players: vec![BattlefieldPosition {
+                        guid: 0x9,
+                        x: 0.0,
+                        y: 0.0,
+                    }],
+                    carrier: None,
+                });
+            app.update();
+        };
+        packet(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x9, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        packet(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next packet asks again"
+        );
+    }
 
     #[test]
     fn the_request_throttle_is_the_references_five_seconds() {

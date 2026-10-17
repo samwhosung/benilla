@@ -44,6 +44,9 @@ pub(crate) struct Battlefield {
     verdicts: Vec<u32>,
     /// Joined (`true`) or left guids awaiting a name.
     players: Vec<(u64, bool)>,
+    /// How many of `players`, from the front, a feed has looked up: the rest arrived since, each
+    /// in a packet whose handler looks the name up with a callback (`0x4aae50`).
+    players_asked: usize,
 }
 
 impl Battlefield {
@@ -70,6 +73,7 @@ impl Battlefield {
         self.anchor = None;
         self.verdicts.clear();
         self.players.clear();
+        self.players_asked = 0;
     }
 
     /// The last list's battlemaster. A character under the bracket floor gets no list at all
@@ -245,9 +249,10 @@ fn feed_battlefield(
         lines.extend(line);
     }
     let pending = std::mem::take(&mut state.players);
-    for (guid, joined) in pending {
+    let asked = std::mem::take(&mut state.players_asked);
+    for (i, (guid, joined)) in pending.into_iter().enumerate() {
         let Some(name) = names
-            .resolve_player(guid, Ask::New(&commands))
+            .resolve_player(guid, Ask::at(i >= asked, &commands))
             .map(str::to_string)
         else {
             state.players.push((guid, joined));
@@ -260,6 +265,7 @@ fn feed_battlefield(
         };
         lines.extend(line);
     }
+    state.players_asked = state.players.len();
     if !lines.is_empty() {
         crate::ui_action::show_messages(&mut script, &mut sink, "ui_battlefield", lines);
     }
@@ -382,6 +388,48 @@ impl Plugin for BattlefieldPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A joined or left packet looks its player's name up with a callback (`0x4aae50`); the
+    /// frames its line waits through read. A refused name is asked by no frame after it, only by
+    /// the next packet that names its player.
+    #[test]
+    fn a_refused_joiner_is_asked_by_the_next_packet_never_by_a_frame() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<Battlefield>()
+            .init_resource::<BattlefieldQueue>()
+            .init_resource::<Player>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_battlefield);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let joined = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Battlefield>()
+                .apply_player(0x9, true);
+            app.update();
+        };
+        joined(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x9, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        joined(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next packet asks again"
+        );
+    }
 
     fn status(slot: u32, map_id: u32, status: u32) -> BattlefieldStatus {
         BattlefieldStatus {

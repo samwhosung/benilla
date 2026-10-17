@@ -84,9 +84,10 @@ fn feed_summon(
     }
 
     // A miss asks and reports `""` this frame; a zero guid names nobody and is never asked about.
+    // The packet's frame stands for the popup's getter calls (`0x48b6e1`, callback `0x48b710`).
     let summoner_name = match summon.pending() {
         Some(guid) => names
-            .resolve_player(guid, Ask::New(&commands))
+            .resolve_player(guid, Ask::at(summon.ask, &commands))
             .unwrap_or_default()
             .to_string(),
         None => String::new(),
@@ -257,6 +258,45 @@ impl Plugin for UiSummonPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The summon packet's frame stands for the popup's getter lookups (`0x48b6e1`, callback
+    /// `0x48b710`); the frames after it read. A refused summoner is asked by no frame after it,
+    /// only by the next summon.
+    #[test]
+    fn a_refused_summoner_is_asked_by_the_next_summon_never_by_a_frame() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<SummonState>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time<Real>>()
+            .add_systems(Update, feed_summon);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let summon = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<SummonState>()
+                .latch(0x2a, 1519, 120_000, 0.0);
+            app.update();
+        };
+        summon(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(0x2a, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        summon(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next summon asks again"
+        );
+    }
 
     /// A decline leaves the guid latched, so only a per-packet flag sees the second summon.
     #[test]
