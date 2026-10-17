@@ -1,7 +1,7 @@
 //! The anti-aliased raster of a glyph: the reference loads it unhinted (`0x5d1300`, load flags
 //! `0x208a`, which carry `FT_LOAD_NO_HINTING`) and renders it in FreeType's normal mode
 //! (`0x7cec20`, mode 0), the smooth rasterizer's exact-area coverage over the 26.6 outline. `zeno`'s
-//! scan converter is a port of that rasterizer, at its 1/256 px precision.
+//! scan converter ports a later version of that rasterizer, at its 1/256 px precision.
 
 use zeno::{Command, Format, Mask, Origin, Point, Vector};
 

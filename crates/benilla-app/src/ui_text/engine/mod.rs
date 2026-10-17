@@ -552,7 +552,7 @@ impl TextEngine {
     ///
     /// The cell's left edge sits at `ceil(horiBearingX)` from the pen, the quad x of `0x5ccbe0`
     /// (`0x5cb080` mode 0, `0x5cd099`), not at the bitmap's `floor(xMin)`; the bakes put the ink
-    /// `pad` columns in (`0x5cf237` plain, `0x5ce481`/`0x5ce48a` and `0x5cea7e` one more for THICK).
+    /// `pad` columns in (`0x5cf237` plain, `0x5ce481`/`0x5cea7e` outlined, `0x5ce48a`/`0x5cea87` one more for THICK).
     /// Its top sits `pad` rows over FreeType's `bitmap_top`, which the reference's vertical seat
     /// (`0x5d1360`) hangs from the ascender, so the ink keeps the bitmap's own row.
     fn ensure_cell(&mut self, face_id: fontdb::ID, ppem: u16, bake: Bake, g: &GlyphRef) {
@@ -1595,7 +1595,7 @@ mod ppem_tests {
 
     /// A cell's left edge is the pen plus `ceil(horiBearingX)`, the quad x of `0x5ccbe0` (`0x5cb080`
     /// mode 0, `0x5cd099`), with no padding taken off, and its bake puts the ink 0, 1 or 2 columns
-    /// in for plain, NORMAL and THICK (`0x5cf237`; `0x5ce481`/`0x5ce48a`, `0x5cea7e`), monochrome
+    /// in for plain, NORMAL and THICK (`0x5cf237`; `0x5ce481`/`0x5cea7e`, `0x5ce48a`/`0x5cea87`), monochrome
     /// or not. Arial Narrow at 14 px: `a`'s bearing is 25/64 px and `1`'s 79/64 (FreeType,
     /// unhinted), so their bitmaps' `floor(xMin)` columns 0 and 1 land at 1 and 2.
     #[test]
