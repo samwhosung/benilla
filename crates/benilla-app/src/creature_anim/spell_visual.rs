@@ -1024,6 +1024,12 @@ pub(crate) fn arm_aura_state_fx(
         // Occupied slots in ascending order, deduped by first slot: one state instance per spell
         // however many casters hold it. `0x604d00` removes first, then adds by slot ascending
         // (`0x604e7b`-`0x604e85`), so the highest new slot's effect ends at the head.
+        //
+        // Deviation: a spell's state kit and body procs are reaped only once no slot holds the
+        // spell. The reference's removal of one slot (`0x612320` → `0x5ff290`) stops every
+        // effect of that spell on the unit (`0x614150(spell, 1)` at `0x5ff2d2`, and its procs
+        // through `0x60d150` and `0x5ff320`), even while another slot holds the same spell: it
+        // drops a visual the server says still holds.
         let mut cur: Vec<u32> = Vec::new();
         for a in store.0.unit_auras() {
             if !cur.contains(&a.spell_id) {
