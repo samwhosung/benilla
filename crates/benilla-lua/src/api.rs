@@ -21,7 +21,9 @@ pub fn c_integer(n: f64) -> i64 {
     }
 }
 
-/// 5.1's `luaL_checkint`: `(int)` of [`c_integer`], its low 32 bits.
+/// 5.1's `luaL_checkint`: `(int)` of [`c_integer`], its low 32 bits. The client's `__ftol`
+/// (`0x40a2b0`) answers the same: a `fistp` to a qword, rounding set to chop, and the low dword,
+/// 0 for what the qword cannot hold.
 pub fn c_int(n: f64) -> i32 {
     c_integer(n) as i32
 }

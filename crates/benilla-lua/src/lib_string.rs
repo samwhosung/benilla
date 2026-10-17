@@ -145,26 +145,20 @@ fn rep(vm: &mut Vm, nargs: usize) -> R<usize> {
     r
 }
 
-/// 5.1's `byte`: the bytes from `i` (1) to `j` (`i`), each a number.
+/// The client's `str_byte` (`0x7fc210`): the byte at one position, `luaL_optnumber` (default 1,
+/// `0x7fc238`) truncated to 32 bits by `__ftol` and counted from the end when negative
+/// (`0x7fc247`), or nothing outside 1 to the length (`0x7fc24c`-`0x7fc252`). A third argument is
+/// never read.
 fn byte(vm: &mut Vm, nargs: usize) -> R<usize> {
     let s = vm.check_str(nargs, 1)?;
     let l = vm.heap.str(s).len();
-    let posi = posrelat(vm.opt_integer(nargs, 2, 1)?, l);
-    let pose = posrelat(vm.opt_integer(nargs, 3, posi)?, l);
-    let posi = posi.max(1);
-    let pose = pose.min(l as i64);
-    if posi > pose {
+    let pos = crate::api::c_int(vm.opt_number(nargs, 2, 1.0)?) as i64;
+    let pos = if pos < 0 { pos + l as i64 + 1 } else { pos };
+    if pos <= 0 || pos > l as i64 {
         return Ok(0);
     }
-    let n = (pose - posi + 1) as usize;
-    if !vm.check_stack(n) {
-        return Err(vm.error_at(1, "stack overflow (string slice too long)"));
-    }
-    for i in 0..n {
-        let b = vm.heap.str(s)[posi as usize - 1 + i];
-        vm.push(Value::Num(b as f64));
-    }
-    Ok(n)
+    let b = vm.heap.str(s)[pos as usize - 1];
+    Ok(vm.ret1(Value::Num(b as f64)))
 }
 
 /// 5.1's `dump`: a Lua function becomes a binary chunk, a native one cannot. The chunk carries
