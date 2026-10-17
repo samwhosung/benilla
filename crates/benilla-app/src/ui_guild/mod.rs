@@ -225,13 +225,10 @@ impl GuildState {
     }
 
     /// Our guild's five tabard fields for the tabard designer, `-1`s when undesigned as the wire
-    /// carries them; a miss sends the query.
-    pub(crate) fn own_emblem_record(
-        &self,
-        guild_id: u32,
-        commands: &NetCommands,
-    ) -> Option<[i32; 5]> {
-        let e = self.resolve_identity(guild_id, Ask::New(commands))?.emblem;
+    /// carries them. Only read, as the designer's seed and its save test read it (`0x502921`,
+    /// `0x5f0856`).
+    pub(crate) fn own_emblem_record(&self, guild_id: u32) -> Option<[i32; 5]> {
+        let e = self.resolve_identity(guild_id, Ask::Read)?.emblem;
         Some([
             e.emblem_style,
             e.emblem_color,
@@ -1295,6 +1292,54 @@ mod tests {
             s.resolve();
             assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0, "{id}/{rank}");
         }
+    }
+
+    /// The roster rebuild stands for the stock frame's `GetGuildRosterInfo`, whose lookup passes
+    /// the callback `0x4d1480` (`0x4d1291`): a refused guild is asked by no frame that rebuilds
+    /// nothing, only by the next change.
+    #[test]
+    fn a_refused_own_guild_is_asked_by_the_next_roster_change_never_by_a_frame() {
+        use crate::net::ObjectStore;
+        use benilla_ui::script::UiScript;
+        const PLAYER_GUILDID: u16 = 191;
+        let (commands, rx) = net_commands();
+        let mut app = App::new();
+        app.init_resource::<GuildState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(commands)
+            .add_systems(Update, feed::feed_guild);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut().spawn((
+            crate::net::SelfPlayer,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                PLAYER_GUILDID,
+                7,
+            )])),
+        ));
+        let feed = |app: &mut App| app.update();
+        feed(&mut app);
+        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+        app.world_mut()
+            .resource_mut::<GuildState>()
+            .identities
+            .refuse(7);
+        for _ in 0..600 {
+            feed(&mut app);
+        }
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "no frame asks a refusal"
+        );
+        app.world_mut()
+            .resource_mut::<GuildState>()
+            .note_roster_update(RosterUpdate::Applied);
+        feed(&mut app);
+        assert_eq!(
+            crate::query_cache::queries(&rx).len(),
+            1,
+            "the next change asks again"
+        );
     }
 
     fn net_commands() -> (NetCommands, crossbeam_channel::Receiver<ClientCommand>) {

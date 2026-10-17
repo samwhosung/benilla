@@ -64,11 +64,12 @@ pub(super) fn feed_guild(
     }
     guild.dirty = false;
 
-    // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss, and the
-    // answer fires a bare `GUILD_ROSTER_UPDATE`.
+    // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss with the
+    // callback `0x4d1480` (`0x4d1291`), and the answer fires a bare `GUILD_ROSTER_UPDATE`. This
+    // rebuild runs on a change, which stands for the stock frame's call.
     let guild_id = guild.guild_id;
     let identity = guild
-        .resolve_identity(guild_id, crate::query_cache::Ask::New(&commands))
+        .resolve_identity(guild_id, crate::query_cache::Ask::Event(&commands))
         .cloned();
     let identity = identity.as_ref();
 

@@ -166,7 +166,6 @@ fn feed_tabard(
     mut design: ResMut<TabardDesign>,
     guilds: Res<GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
     mut last_host: Local<crate::ui_script::VmMemo<Option<TabardHost>>>,
     mut last_identity: Local<crate::ui_script::VmMemo<Option<u64>>>,
     mut sink: crate::ui_action::MessageSink,
@@ -174,10 +173,10 @@ fn feed_tabard(
     let Some(mut script) = script else {
         return;
     };
-    // Our guild's cached record (a miss sends the query) and the latch, pushed on change.
+    // Our guild's cached record and the latch, pushed on change.
     let guild_id = self_q.iter().next().map_or(0, |s| s.0.player_guild_id());
     let host = TabardHost {
-        guild_record: guilds.own_emblem_record(guild_id, &commands),
+        guild_record: guilds.own_emblem_record(guild_id),
         save_pending: open.save_pending,
     };
     let last = last_host.get(&script);
@@ -242,7 +241,7 @@ fn drain_tabard(
                 };
                 let store = self_q.iter().next();
                 let guild_id = store.map_or(0, |s| s.0.player_guild_id());
-                let record = guilds.own_emblem_record(guild_id, &commands);
+                let record = guilds.own_emblem_record(guild_id);
                 let rank = store.map_or(0, |s| s.0.player_guild_rank());
                 let purse = store.and_then(|s| s.0.player_money()).unwrap_or(0);
                 match preflight(design, record, rank, purse) {
