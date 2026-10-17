@@ -90,22 +90,105 @@ fn sub(vm: &mut Vm, nargs: usize) -> R<usize> {
     }
 }
 
+/// The client's `str_lower` (`0x7fbdf0`): each UTF-8 code point through `LowerCodepoint`
+/// (`0x7fc0a0`), `A`-`Z` and U+00C0-U+00DE up by 32.
 fn lower(vm: &mut Vm, nargs: usize) -> R<usize> {
+    case_map(vm, nargs, |c| match c {
+        0x41..=0x5a | 0xc0..=0xde => c + 0x20,
+        _ => c,
+    })
+}
+
+/// The client's `str_upper` (`0x7fc0c0`): the same walk through `UpperCodepoint` (`0x7fc180`),
+/// `a`-`z` and U+00E0-U+00FE down by 32.
+fn upper(vm: &mut Vm, nargs: usize) -> R<usize> {
+    case_map(vm, nargs, |c| match c {
+        0x61..=0x7a | 0xe0..=0xfe => c - 0x20,
+        _ => c,
+    })
+}
+
+/// `str_lower`'s loop: decode a code point, map it, encode it, advance by the bytes the decoder
+/// read (`0x7fbe8a`). A string of ASCII without a NUL maps byte by byte, as the loop would.
+///
+/// Deviation: the decoder reads a NUL as no bytes (`0x7fbeda`), so the client's loop never
+/// passes one and the call never returns; here the result ends there.
+fn case_map(vm: &mut Vm, nargs: usize, map: fn(u32) -> u32) -> R<usize> {
     let s = vm.check_str(nargs, 1)?;
     let r = vm.heap.intern_with(|h, b| {
-        b.extend_from_slice(h.str(s));
-        b.make_ascii_lowercase();
+        let src = h.str(s);
+        if src.iter().all(|&c| c != 0 && c < 0x80) {
+            b.extend(src.iter().map(|&c| map(c as u32) as u8));
+            return;
+        }
+        let mut i = 0;
+        while i < src.len() {
+            let (c, n) = utf8_decode(src, i);
+            if n == 0 {
+                break;
+            }
+            utf8_encode(map(c), b);
+            i += n;
+        }
     });
     Ok(vm.ret1(Value::Str(r)))
 }
 
-fn upper(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let s = vm.check_str(nargs, 1)?;
-    let r = vm.heap.intern_with(|h, b| {
-        b.extend_from_slice(h.str(s));
-        b.make_ascii_uppercase();
-    });
-    Ok(vm.ret1(Value::Str(r)))
+/// The client's `Utf8DecodeChar` (`0x7fbeb0`) at `s[i]`: the code point and the bytes read, the
+/// string ending in the NUL a C string ends in. A lead byte gives its count of continuations by
+/// its masks (`0x7fbef2`-`0x7fbf4e`), up to five, with no check of the value; a byte that leads
+/// nothing, or a continuation that is not `10xxxxxx` (`0x7fbf7c`, counted first at `0x7fbf75`),
+/// is `0x80000000`; a NUL is `0xffffffff`, its own byte not read.
+fn utf8_decode(s: &[u8], i: usize) -> (u32, usize) {
+    let at = |k: usize| s.get(k).copied().unwrap_or(0);
+    let lead = at(i);
+    let (bits, n) = match lead {
+        0 => return (u32::MAX, 0),
+        _ if lead & 0xfe == 0xfc => (lead & 0x01, 5),
+        _ if lead & 0xfc == 0xf8 => (lead & 0x03, 4),
+        _ if lead & 0xf8 == 0xf0 => (lead & 0x07, 3),
+        _ if lead & 0xf0 == 0xe0 => (lead & 0x0f, 2),
+        _ if lead & 0xe0 == 0xc0 => (lead & 0x1f, 1),
+        _ if lead & 0x80 != 0 => return (0x8000_0000, 1),
+        _ => return (lead as u32, 1),
+    };
+    let mut c = bits as u32;
+    for k in 1..=n {
+        let x = at(i + k);
+        if x == 0 {
+            return (u32::MAX, k);
+        }
+        if x & 0xc0 != 0x80 {
+            return (0x8000_0000, k + 1);
+        }
+        c = c << 6 | (x & 0x3f) as u32;
+    }
+    (c, n + 1)
+}
+
+/// The client's `Utf8EncodeChar` (`0x7fbfb0`), by its limits (`0x7fbfb6`-`0x7fc05a`): one byte
+/// below 0x80, two below 0x800, three below 0x10000, four below 0x200000, five below 0x400000,
+/// six below 0x80000000, and none from there.
+fn utf8_encode(c: u32, out: &mut Vec<u8>) {
+    let cont = |shift: u32| 0x80 | (c >> shift) as u8 & 0x3f;
+    match c {
+        0..0x80 => out.push(c as u8),
+        0x80..0x800 => out.extend([0xc0 | (c >> 6) as u8, cont(0)]),
+        0x800..0x1_0000 => out.extend([0xe0 | (c >> 12) as u8, cont(6), cont(0)]),
+        0x1_0000..0x20_0000 => out.extend([0xf0 | (c >> 18) as u8, cont(12), cont(6), cont(0)]),
+        0x20_0000..0x40_0000 => {
+            out.extend([0xf8 | (c >> 24) as u8, cont(18), cont(12), cont(6), cont(0)])
+        }
+        0x40_0000..0x8000_0000 => out.extend([
+            0xfc | (c >> 30) as u8,
+            cont(24),
+            cont(18),
+            cont(12),
+            cont(6),
+            cont(0),
+        ]),
+        _ => {}
+    }
 }
 
 fn char_(vm: &mut Vm, nargs: usize) -> R<usize> {

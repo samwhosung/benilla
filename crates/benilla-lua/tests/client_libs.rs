@@ -95,3 +95,32 @@ fn gsub_replaces_as_5_0() {
         Err("t:1: bad argument #3 to `gsub' (string or function expected)".into())
     );
 }
+
+/// `str_lower` (`0x7fbdf0`) and `str_upper` (`0x7fc0c0`) case-map UTF-8 code points: ASCII and
+/// U+00C0-U+00FE, nothing else; an invalid sequence is dropped with the byte that broke it.
+#[test]
+fn lower_and_upper_map_utf8_code_points() {
+    let q = |call: &str| ok(&format!("return string.format('%q', {call})"));
+    assert_eq!(q("string.lower('ÉCOLE Ä')"), ["\"école ä\""]);
+    assert_eq!(q("string.upper('école ä')"), ["\"ÉCOLE Ä\""]);
+    // U+00D7 and U+00F7 sit inside the ranges and swap; U+00DF and U+00FF sit outside them.
+    assert_eq!(q("string.lower('×ß')"), ["\"÷ß\""]);
+    assert_eq!(q("string.upper('÷ÿ')"), ["\"×ÿ\""]);
+    // Cyrillic is outside both ranges.
+    assert_eq!(q("string.lower('ДОМ')"), ["\"ДОМ\""]);
+    // A Latin-1 byte leads a two-byte sequence that `a` breaks: both go.
+    assert_eq!(q(r#"string.lower("\201a!")"#), ["\"!\""]);
+    // A lone continuation byte, and 0xfe, decode to nothing.
+    assert_eq!(q(r#"string.upper("a\128b\254c")"#), ["\"ABC\""]);
+    // A sequence cut by the end of the string goes.
+    assert_eq!(q(r#"string.lower("A\195")"#), ["\"a\""]);
+    // An overlong NUL comes back as a NUL byte; a five-byte sequence above 0x3fffff as six bytes.
+    assert_eq!(q(r#"string.lower("\192\128A")"#), ["\"\\000a\""]);
+    assert_eq!(
+        ok(r#"return string.len(string.lower("\249\128\128\128\128"))"#),
+        ["6"]
+    );
+    // A NUL ends the result, where the client never returns.
+    assert_eq!(q(r#"string.lower("AB\0CD")"#), ["\"ab\""]);
+    assert_eq!(q(r#"string.upper("\195\0x")"#), ["\"\""]);
+}
