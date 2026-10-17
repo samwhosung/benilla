@@ -333,12 +333,13 @@ pub(super) fn periodic_aura_log(
                 ),
                 PeriodicTick::Heal { amount } => Some(CombatTextEvent {
                     message_type: "PERIODIC_HEAL",
+                    // Once per packet, the lookup with a callback: a refused name is asked again.
                     data: Some(
                         names
                             .resolve_unit(
                                 s.caster,
                                 streamed(index, stores, s.caster),
-                                Ask::New(net),
+                                Ask::Event(net),
                             )
                             .map(str::to_string)
                             .unwrap_or_default(),
@@ -489,9 +490,10 @@ pub(super) fn spell_heal_log(
     if self_guid.0 == Some(s.target) {
         center.write(CombatTextEvent {
             message_type: if s.critical { "HEAL_CRIT" } else { "HEAL" },
+            // Once per packet, the lookup with a callback: a refused name is asked again.
             data: Some(
                 names
-                    .resolve_unit(s.healer, streamed(index, stores, s.healer), Ask::New(net))
+                    .resolve_unit(s.healer, streamed(index, stores, s.healer), Ask::Event(net))
                     .map(str::to_string)
                     .unwrap_or_default(),
             ),

@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crate::names::NameCache;
 use crate::ui_chat::event::ChatEventKind;
 
-use crate::net::{GuidIndex, NetCommands, ObjectStore, Reputations, SelfGuid};
+use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid};
 use crate::query_cache::Ask;
 use crate::target::ring::Factions;
 use crate::ui_party::GroupState;
@@ -803,15 +803,13 @@ pub(crate) fn object_name(
     guid: u64,
     unit: Option<&ObjectStore>,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> Option<String> {
     // Guid 0 means the name is already in the fills; no wire endpoint is guid 0.
     if guid == 0 {
         return None;
     }
-    names
-        .resolve_unit(guid, unit, Ask::New(commands))
-        .map(str::to_owned)
+    names.resolve_unit(guid, unit, ask).map(str::to_owned)
 }
 
 // ────────────────────────────────── the families ──────────────────────────────────────

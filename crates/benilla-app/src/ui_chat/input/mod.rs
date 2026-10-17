@@ -27,8 +27,9 @@ fn target_player_name(
     if !benilla_protocol::guid::is_player(guid) {
         return None;
     }
+    // The command's lookup, as `UnitName`'s (`0x609210`) passes a callback.
     names
-        .resolve_player(guid, Ask::New(commands))
+        .resolve_player(guid, Ask::Event(commands))
         .map(str::to_string)
 }
 

@@ -251,3 +251,39 @@ fn our_own_join_notice_is_unchanged() {
     assert_eq!(f.lines(), before + 1);
     assert_eq!(f.last_added(), "Joined Channel: [3. Mychan]");
 }
+
+/// A chat line and a channel notice look their names up with the callback `0x49ccc0` at their
+/// packet (`0x49d77f`, `0x49c50d`); the drains they wait through read. A refused name is asked
+/// by no drain after it, only by the next packet that names its player.
+#[test]
+fn a_refused_chat_name_is_asked_by_the_next_packet_never_by_a_drain() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut f = Feed::new();
+    let packets = |f: &mut Feed| {
+        f.world.resource_mut::<super::ChatLog>().push_wire(
+            benilla_protocol::messages::ChatMessage {
+                chat_type: 0x00,
+                language: 0,
+                sender_guid: ANN,
+                target_guid: 0,
+                sender_name: None,
+                channel: None,
+                text: "hello".into(),
+                chat_tag: 0,
+            },
+        );
+        f.push(n::JOINED, "Mychan", ChannelNoticeTail::Guid(BOB));
+        f.drain();
+    };
+    let asked = |f: &Feed| crate::query_cache::queries(&f.sent).len();
+    packets(&mut f);
+    assert_eq!(asked(&f), 2, "the speaker and the joiner");
+    f.name(ANN, "");
+    f.name(BOB, "");
+    for _ in 0..600 {
+        f.drain();
+    }
+    assert_eq!(asked(&f), 0, "no drain asks a refusal");
+    packets(&mut f);
+    assert_eq!(asked(&f), 2, "the next packets ask again");
+}
