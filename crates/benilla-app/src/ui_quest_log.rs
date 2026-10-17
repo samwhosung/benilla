@@ -667,10 +667,8 @@ pub(crate) fn feed_quest_log(
     };
 
     let mut rows = Vec::new();
-    let mut slots = Vec::with_capacity(usize::from(PLAYER_QUEST_LOG_SLOTS));
-    let fields: LogFields = (0..PLAYER_QUEST_LOG_SLOTS)
-        .map(|slot| store.0.player_quest_log(slot))
-        .collect();
+    let fields: LogFields = std::array::from_fn(|slot| store.0.player_quest_log(slot as u8));
+    let slots: SlotStates = fields.map(|f| f.map_or((0, 0), |s| (s.quest_id, s.state)));
     // The log's fields changing is the reference's event: the watcher's rebuild looks each quest
     // up with a callback (`0x5dde4f`, `0x4de65f`), and the stock frames' update calls the
     // leaderboard and reward getters, which look up theirs (`0x4e0231`, `0x4e0461`, `0x4e039c`,
@@ -679,15 +677,11 @@ pub(crate) fn feed_quest_log(
         .as_ref()
         .is_none_or(|(_, prior)| *prior != fields);
     let ask = Ask::at(event, &commands);
-    for slot in 0..PLAYER_QUEST_LOG_SLOTS {
-        let Some(log_slot) = store.0.player_quest_log(slot) else {
-            slots.push((0, 0));
+    for (slot, log_slot) in (0..PLAYER_QUEST_LOG_SLOTS).zip(fields) {
+        // An empty slot, or one an abandon or turn-in cleared.
+        let Some(log_slot) = log_slot.filter(|l| l.quest_id != 0) else {
             continue;
         };
-        slots.push((log_slot.quest_id, log_slot.state));
-        if log_slot.quest_id == 0 {
-            continue; // a slot an abandon or turn-in cleared
-        }
         rows.push(Row {
             slot,
             quest_id: log_slot.quest_id,
@@ -931,10 +925,10 @@ fn show_item_toasts(
 }
 
 /// Every quest-log slot as `(quest id, state)`, the slot watcher's input.
-type SlotStates = Vec<(u32, u8)>;
+type SlotStates = [(u32, u8); PLAYER_QUEST_LOG_SLOTS as usize];
 
 /// The log's 20 `PLAYER_QUEST_LOG` slots as the descriptor holds them.
-type LogFields = Vec<Option<QuestLogSlot>>;
+type LogFields = [Option<QuestLogSlot>; PLAYER_QUEST_LOG_SLOTS as usize];
 
 /// The quests the slot watcher `0x5ddd80` announces, per slot as `(quest id, state)`: a quest in a
 /// slot that held none, or the same quest with its fail bit cleared (`0x5dde17`-`0x5dde34`). A slot
