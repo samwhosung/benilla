@@ -921,9 +921,11 @@ pub(super) fn drive_animations(
                 mount_body.is_none()
                     && route_oneshot(id, mv.flags, mv.stand_state) == OneShotRoute::Masked
             };
-            // The full-body route reaches bone 0, whose requested id `PlayTrack` compares first
-            // (`0x5fdcab cmp; je 0x5fdd71`): a Gait base already asking for `id` drops the request.
-            // A running key-bone clip is the current id instead (`0x5fe34c`), tested above.
+            // The full-body route reaches bone 0, whose own state `PlayTrack` compares first
+            // (`0x5febf6` → `0x5fec06`; `0x5fdcab cmp; je 0x5fdd71`): a Gait base already asking
+            // for `id` drops the request. A running key-bone clip is the current id instead
+            // (`0x5fe422`-`0x5fe446`); that case and its `0x5feb5c`/`0x5fe930` routing are not
+            // modelled, so it is excluded here.
             let key_bone_running = drv
                 .overlay
                 .is_some_and(|ov| player.animation(ov.node).is_some_and(|a| !a.is_finished()));
@@ -935,6 +937,25 @@ pub(super) fn drive_animations(
                     );
                 }
                 continue;
+            }
+            // The demotion drop (`0x5feb00`-`0x5feb56`): unmounted, route flag clear, request not a
+            // move id (`0x5fead7`), the current id (`0x5fe422`-`0x5fe446`, bone 0's with no key
+            // bone armed) a swing or ready stance and the request Stand or a ready stance, or a
+            // cast or spell-ready stance and the request Stand or spell-ready: with the key bone
+            // not armed `0x5feb54 je 0x5fe93d` drops the request. A kit's Stand over a melee
+            // swing or a ready stance keeps it.
+            if !masked && !key_bone_running && mount_body.is_none() {
+                if let Some(cur) = armed_id(&drv, &player, &tr, anims) {
+                    if select::demotion_drops(cur, id) {
+                        if benilla_assets::trace::enabled() {
+                            benilla_assets::trace::line(
+                                "fct",
+                                &format!("anim demotion-drop unit={entity} id={id} cur={cur}"),
+                            );
+                        }
+                        continue;
+                    }
+                }
             }
             // Resolve to a clip this model has, roll its variation and its replay budget (a clamp
             // one-shot authored `(min,max)` plays R times).
@@ -1085,12 +1106,12 @@ pub(super) fn drive_animations(
                         .map(|c| c.anim_id)
                 });
             if armed != Some(want) && matches!(drv.mode, Mode::Swing { .. } | Mode::Gait) {
+                // A Gait base already follows the per-frame pick, and `PlayTrack` drops a re-pick
+                // that asks for the id the track already asks for (`0x5fdcab cmp; je 0x5fdd71`),
+                // so only a clip the pick holds past its own target is re-picked: a turn shuffle
+                // and a pin outliving its aura. A Swing base was armed by a one-shot, and its
+                // stale gait id must not dedup the re-pick.
                 drv.deferred = None; // a normal arm clears the cache (`0x5fe48e`)
-                                     // A Gait base already follows the per-frame pick, and `PlayTrack` drops a re-pick
-                                     // that asks for the id the track already asks for (`0x5fdcab cmp; je 0x5fdd71`),
-                                     // so only a clip the pick holds past its own target is re-picked: a turn shuffle
-                                     // and a pin outliving its aura. A Swing base was armed by a one-shot, and its
-                                     // stale gait id must not dedup the re-pick.
                 let held = drv.gait.is_some_and(|g| {
                     matches!(g, select::SHUFFLE_LEFT | select::SHUFFLE_RIGHT)
                         || (drv.gait_pinned && kit_pin.is_none())

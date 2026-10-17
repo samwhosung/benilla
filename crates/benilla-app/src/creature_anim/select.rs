@@ -522,6 +522,18 @@ pub(super) fn is_cast_anim(id: u16) -> bool {
     matches!(id, 2 | 32 | 33 | 53 | 54)
 }
 
+/// The demotion drop of `PlayAnimation` for an unmounted request with the route flag clear and no
+/// key bone armed (`0x5feb00`-`0x5feb56`), over the current id: a swing (`0x5fcc10`) or ready
+/// stance (`0x5fde60`, 25-29) refuses Stand and a ready stance, a cast (`0x5fcbb0`) or spell-ready
+/// stance (`0x5fde40`, 51-52) refuses Stand and a spell-ready stance. Any other pair plays.
+pub(super) fn demotion_drops(current: u16, request: u16) -> bool {
+    let ready = |id: u16| matches!(id, 25..=29);
+    let spell_ready = |id: u16| matches!(id, 51 | 52);
+    ((is_combat_anim(current) || ready(current)) && (ready(request) || request == STAND))
+        || ((is_cast_anim(current) || spell_ready(current))
+            && (spell_ready(request) || request == STAND))
+}
+
 /// The state-emote resolver's verdict (`0x5fd770`): the row's `AnimID` for the unit's
 /// `UNIT_NPC_EMOTESTATE`, `None` when it passes over. A state with no row passes over, a row
 /// whose `AnimID` is 0 claims the base for Stand (`0x5fd816` stores `row+8` as it is), and the

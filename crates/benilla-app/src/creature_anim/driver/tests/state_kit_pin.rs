@@ -370,11 +370,13 @@ fn a_still_units_jump_plays_the_pin() {
 const RUN: u16 = 5;
 const ATTACK_UNARMED: u16 = 16;
 const READY_2H_LOOSE: u16 = 28;
+const READY_SPELL: u16 = 51;
+const SPELL_CAST_DIRECTED: u16 = 53;
 
-/// Stand, Run, a one-shot AttackUnarmed and the staff Ready idle, on real clip assets. Nodes in
-/// that order.
-fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 4]) {
-    let handles: Vec<_> = (0..4)
+/// Stand, Run, a one-shot AttackUnarmed, the staff Ready idle, the spell-ready stance and a cast,
+/// on real clip assets. Nodes in that order.
+fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 6]) {
+    let handles: Vec<_> = (0..6)
         .map(|_| {
             let mut c = AnimationClip::default();
             c.set_duration(SPAN);
@@ -402,6 +404,8 @@ fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 4]) {
             seq(RUN, nodes[1], true),
             seq(ATTACK_UNARMED, nodes[2], false),
             seq(READY_2H_LOOSE, nodes[3], true),
+            seq(READY_SPELL, nodes[4], false),
+            seq(SPELL_CAST_DIRECTED, nodes[5], false),
         ],
         hand_close: [None, None],
         playable_animation_lookup: Vec::new(),
@@ -421,7 +425,10 @@ fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 4]) {
             MovementState::default(),
         ))
         .id();
-    (unit, [nodes[0], nodes[1], nodes[2], nodes[3]])
+    (
+        unit,
+        [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4], nodes[5]],
+    )
 }
 
 /// `0x5fd9e0(-1)` re-picks Run for a running unit, and `PlayTrack` drops the request for the id
@@ -478,10 +485,10 @@ fn a_stand_request_leaves_an_idle_units_clip_running() {
     );
 }
 
-/// A Stand request over a live one-shot is a play (`0x5fe2f0` routes it onto bone 0): the unit
-/// returns to Stand, as a Stand impact kit's id does.
+/// The demotion drop (`0x5feb00`-`0x5feb56`): with no key bone armed, a Stand request over a swing
+/// is dropped, so a Stand impact kit does not cut a melee swing.
 #[test]
-fn a_stand_request_returns_a_unit_mid_one_shot_to_stand() {
+fn a_stand_request_over_a_swing_is_dropped() {
     let mut app = app();
     let (unit, nodes) = spawn_runner(&mut app);
     app.update();
@@ -493,6 +500,7 @@ fn a_stand_request_returns_a_unit_mid_one_shot_to_stand() {
     });
     advance(&mut app, 100);
     assert_eq!(main_node(&app, unit), Some(nodes[2]), "the swing plays");
+    let before = elapsed(&app, unit, nodes[2]);
 
     app.world_mut().write_message(EmoteAnim {
         entity: unit,
@@ -501,14 +509,13 @@ fn a_stand_request_returns_a_unit_mid_one_shot_to_stand() {
         via_player: false,
     });
     advance(&mut app, 50);
-    assert_eq!(main_node(&app, unit), Some(nodes[0]), "back to Stand");
+    assert_eq!(main_node(&app, unit), Some(nodes[2]), "the swing is kept");
+    assert!(elapsed(&app, unit, nodes[2]) > before, "and runs on");
 }
 
-/// A looping Stand set on bone 0 by a kit ends with its window, `span · R` (`0x712784`): the
-/// sequence-end callback sends id 0 to the default case of `0x5fc3f0` (`0x5fc416 ja 0x5fc45a`),
-/// which re-picks the base (`0x5fd9e0(-1)`). A unit in its ready stance returns to it then.
+/// The same drop over a ready stance: an engaged unit keeps its Ready idle through a Stand kit.
 #[test]
-fn a_stand_request_over_a_ready_stance_ends_with_its_window() {
+fn a_stand_request_over_a_ready_stance_is_dropped() {
     let mut app = app();
     let (unit, nodes) = spawn_runner(&mut app);
     app.world_mut().entity_mut(unit).insert((
@@ -526,6 +533,95 @@ fn a_stand_request_over_a_ready_stance_ends_with_its_window() {
         Some(nodes[3]),
         "engaged: the ready idle"
     );
+    let before = elapsed(&app, unit, nodes[3]);
+
+    app.world_mut().write_message(EmoteAnim {
+        entity: unit,
+        anim_id: STAND,
+        seq: 1,
+        via_player: false,
+    });
+    advance(&mut app, 50);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[3]),
+        "the ready stance is kept"
+    );
+    assert!(elapsed(&app, unit, nodes[3]) > before, "and not restarted");
+}
+
+/// The cast arm (`0x5feb26`-`0x5feb49`): over a cast or spell-ready stance Stand and a spell-ready
+/// stance are dropped, and any other request plays.
+#[test]
+fn a_stand_request_over_a_cast_or_spell_ready_stance_is_dropped() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.update();
+    let play = |app: &mut App, anim_id: u16| {
+        app.world_mut().write_message(EmoteAnim {
+            entity: unit,
+            anim_id,
+            seq: 1,
+            via_player: false,
+        });
+        advance(app, 50);
+    };
+    play(&mut app, SPELL_CAST_DIRECTED);
+    assert_eq!(main_node(&app, unit), Some(nodes[5]), "the cast plays");
+    play(&mut app, STAND);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[5]),
+        "Stand over a cast is dropped"
+    );
+    play(&mut app, READY_SPELL);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[5]),
+        "so is a spell-ready stance"
+    );
+    play(&mut app, ATTACK_UNARMED);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[2]),
+        "a swing over a cast plays"
+    );
+
+    play(&mut app, READY_SPELL);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[4]),
+        "a spell-ready stance over a swing plays"
+    );
+    play(&mut app, STAND);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[4]),
+        "Stand over a spell-ready stance is dropped"
+    );
+    play(&mut app, SPELL_CAST_DIRECTED);
+    assert_eq!(
+        main_node(&app, unit),
+        Some(nodes[5]),
+        "a cast over a spell-ready stance plays"
+    );
+}
+
+/// Where Stand really plays, over a run, a looping Stand set on bone 0 ends with its window,
+/// `span · R` (`0x712784`): the sequence-end callback sends id 0 to the default case of `0x5fc3f0`
+/// (`0x5fc416 ja 0x5fc45a`), which re-picks the base (`0x5fd9e0(-1)`) back to Run.
+#[test]
+fn a_stand_request_over_a_run_ends_with_its_window() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.world_mut().entity_mut(unit).insert(MovementState {
+        flags: move_flags::FORWARD,
+        speed: 7.0,
+        ..Default::default()
+    });
+    app.update();
+    advance(&mut app, 100);
+    assert_eq!(main_node(&app, unit), Some(nodes[1]), "running");
 
     app.world_mut().write_message(EmoteAnim {
         entity: unit,
@@ -553,7 +649,7 @@ fn a_stand_request_over_a_ready_stance_ends_with_its_window() {
     }
     assert_eq!(
         main_node(&app, unit),
-        Some(nodes[3]),
-        "the window's end re-picks the ready stance"
+        Some(nodes[1]),
+        "the window's end re-picks Run"
     );
 }

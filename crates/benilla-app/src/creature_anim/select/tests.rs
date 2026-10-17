@@ -1095,3 +1095,19 @@ fn the_prowl_creep_is_not_rate_scaled() {
     assert_eq!(playback_rate(&clip(STEALTH_WALK, 2.5), 7.0, 1.0), 1.0);
     assert_ne!(playback_rate(&clip(4, 2.5), 7.0, 1.0), 1.0);
 }
+
+#[test]
+fn the_demotion_drop_pairs_swings_and_ready_stances_with_stand_and_their_kin() {
+    // Swing or ready stance over Stand or a ready stance (`0x5feb05`-`0x5feb24`).
+    assert!(demotion_drops(16, 0) && demotion_drops(28, 0) && demotion_drops(16, 26));
+    assert!(
+        !demotion_drops(16, 51),
+        "a spell-ready request over a swing plays"
+    );
+    assert!(!demotion_drops(16, 17), "another swing plays");
+    // Cast or spell-ready stance over Stand or a spell-ready stance (`0x5feb26`-`0x5feb4b`).
+    assert!(demotion_drops(53, 0) && demotion_drops(51, 0) && demotion_drops(53, 52));
+    assert!(!demotion_drops(53, 28), "a ready stance over a cast plays");
+    // Neither: a run, an emote, Stand over Stand's neighbours.
+    assert!(!demotion_drops(5, 0) && !demotion_drops(68, 0) && !demotion_drops(0, 28));
+}
