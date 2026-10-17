@@ -441,11 +441,13 @@ fn xpcall(vm: &mut Vm, nargs: usize) -> R<usize> {
     }
 }
 
-/// 1.12's `collectgarbage([kb])` (`0x703250`): sets 5.0's threshold, answers nothing.
+/// 1.12's `collectgarbage([kb])` (`0x703250`): sets 5.0's threshold, answers nothing. The count
+/// is `__ftol`'s low word (`0x703261`), which `lua_setgcthreshold` (`0x6f4400`) compares unsigned:
+/// past `0x3fffff` KB, a negative count among them, the threshold is `0xffffffff` bytes; a count
+/// the quadword cannot hold, a NaN or an infinity, is 0. A count at the threshold collects.
 fn collectgarbage(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let n = vm.opt_number(nargs, 1, 0.0)?;
-    let kb = n.trunc();
-    vm.heap.threshold = if !(0.0..=0x3f_ffff as f64).contains(&kb) {
+    let kb = c_int(vm.opt_number(nargs, 1, 0.0)?) as u32;
+    vm.heap.threshold = if kb > 0x3f_ffff {
         u32::MAX as usize
     } else {
         kb as usize * 1024
@@ -462,9 +464,10 @@ fn gcinfo(vm: &mut Vm, _nargs: usize) -> R<usize> {
     Ok(2)
 }
 
-/// `luaB_loadstring`: the chunk named by its own source unless named; a failure answers nil and
-/// the message. The client's `luaL_loadbuffer` strips a UTF-8 BOM, and 5.0's lexer skips a
-/// leading `#` line.
+/// `luaB_loadstring` (`0x703280`): the chunk named by its own source unless named (`0x70329a`),
+/// one value on success and nil and the message on failure (`0x7032d8`). The client's
+/// `luaL_loadbuffer` strips a UTF-8 BOM (`0x6f5699`), after the name was taken, and 5.0's lexer
+/// skips a leading `#` line.
 fn loadstring(vm: &mut Vm, nargs: usize) -> R<usize> {
     let s = vm.check_str(nargs, 1)?;
     let src = vm.heap.str(s).to_vec();

@@ -74,11 +74,15 @@ pub fn open(vm: &mut Vm) {
         .set(k, Value::Num(std::f64::consts::PI))
         .unwrap();
     vm.set_global("math", Value::Table(t));
-    // The client's `luaopen_math` registers `math_pow` as the global `__pow` (`0x7fb4c4`), which
-    // its `^` calls.
-    let pow = vm.new_native("__pow", |vm, n| bin(vm, n, pow));
+    let pow = vm.new_native("__pow", math_pow());
     vm.set_global("__pow", pow);
     open_bit(vm);
+}
+
+/// `math_pow` (`0x7fb050`), which the client's `luaopen_math` also registers as the global
+/// `__pow` (`0x7fb4c4`), the function its `^` on two numbers calls (`0x6f9b52`).
+pub fn math_pow() -> crate::heap::NativeFn {
+    |vm, n| bin(vm, n, pow)
 }
 
 /// 5.1's `RADIANS_PER_DEGREE`, `PI/180.0`.

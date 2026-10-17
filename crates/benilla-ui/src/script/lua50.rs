@@ -76,14 +76,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set("print", Value::Nil)?;
     g.set("_VERSION", Value::Nil)?;
 
-    // `__pow` is a 1.12 global (`0x7fb4c4`), which `^` on two numbers calls (`0x6f9b52`).
+    // `__pow` is a 1.12 global, `luaopen_math`'s `math_pow` (`0x7fb4c4`), which `^` on two
+    // numbers calls (`0x6f9b52`).
     g.set(
         "__pow",
-        lua.create_function(|_, (a, b): (f64, f64)| Ok(a.powf(b)))?,
+        lua.create_native("__pow", mlua::benilla_lua::math_pow())?,
     )?;
 
     install_bit(lua)?;
-    install_gc(lua)?;
 
     Ok(())
 }
@@ -96,111 +96,6 @@ fn install_bit(lua: &Lua) -> mlua::Result<()> {
         bit.set(name, lua.create_native(name, f)?)?;
     }
     lua.globals().set("bit", bit)
-}
-
-/// `gcinfo` and `collectgarbage` in their 5.0 shapes. `gcinfo` (`0x703200`) takes nothing and
-/// answers `(count_KB, threshold_KB)` (`lua_getgccount 0x6f43f0`, `lua_getgcthreshold
-/// 0x6f43e0`); `collectgarbage` (`0x703250`) takes an optional number, sets the threshold to that
-/// many KB (`lua_setgcthreshold 0x6f4400`) and answers nothing, so 5.1's string options raise.
-/// 5.1's collector has no threshold, so it is kept here by 5.0's rules against the VM's heap: a
-/// live count that reaches it collects, and a collection resets it to twice the live count.
-fn install_gc(lua: &Lua) -> mlua::Result<()> {
-    /// 5.0's `GCthreshold` (`[G+0x24]`), in bytes.
-    const REG_GC_THRESHOLD: &str = "__benilla_gc_threshold";
-    /// `lua_setgcthreshold 0x6f4400`'s unsigned bound, in kilobytes.
-    const MAX_THRESHOLD_KB: i64 = 0x3f_ffff;
-
-    fn live_bytes(lua: &Lua) -> usize {
-        lua.used_memory()
-    }
-    /// 5.0's post-collection rule, `luaC_collectgarbage`: `GCthreshold = 2 * nblocks`.
-    fn settle(lua: &Lua) -> mlua::Result<()> {
-        let t = u64::try_from(live_bytes(lua))
-            .unwrap_or(u64::MAX)
-            .saturating_mul(2);
-        lua.set_named_registry_value(REG_GC_THRESHOLD, t as f64)
-    }
-
-    settle(lua)?;
-
-    // `gcinfo()`: no argument, two numbers, never raises.
-    lua.globals().set(
-        "gcinfo",
-        lua.create_function(|lua, ()| {
-            let live = live_bytes(lua);
-            let mut threshold: f64 = lua.named_registry_value(REG_GC_THRESHOLD).unwrap_or(0.0);
-            // 5.0 collects the moment the live count reaches the threshold (`luaC_checkGC`), so a
-            // script never sees a threshold at or below the count. With no allocation hook here,
-            // the same rule runs on read.
-            if (live as f64) >= threshold {
-                settle(lua)?;
-                threshold = lua.named_registry_value(REG_GC_THRESHOLD).unwrap_or(0.0);
-            }
-            // Both in KB, the reference's `shr eax,0xa`.
-            Ok(((live >> 10) as f64, (threshold as u64 >> 10) as f64))
-        })?,
-    )?;
-
-    // `collectgarbage([n])`: a number, no return values, and a raise on anything else.
-    lua.globals().set(
-        "collectgarbage",
-        lua.create_function(|lua, arg: Value| {
-            // `luaL_optnumber(L, 1, 0.0)`: absent or nil is the default, a numeric string is
-            // coerced (`lua_tonumber` runs `strtod`), anything else is a type error.
-            let n = match &arg {
-                Value::Nil => 0.0,
-                Value::Integer(i) => *i as f64,
-                Value::Number(n) => *n,
-                Value::String(s) => {
-                    match s.to_str().ok().and_then(|t| t.trim().parse::<f64>().ok()) {
-                        Some(v) => v,
-                        None => {
-                            return Err(mlua::Error::RuntimeError(format!(
-                                "bad argument #1 to `collectgarbage' (number expected, got {})",
-                                type_name(&arg)
-                            )))
-                        }
-                    }
-                }
-                other => {
-                    return Err(mlua::Error::RuntimeError(format!(
-                        "bad argument #1 to `collectgarbage' (number expected, got {})",
-                        type_name(other)
-                    )))
-                }
-            };
-            // `_ftol` truncates toward zero; `0x6f4400`'s unsigned compare saturates a negative
-            // or oversized count to `0xffffffff` bytes.
-            let kb = n.trunc();
-            let threshold_bytes: f64 = if !(0.0..=MAX_THRESHOLD_KB as f64).contains(&kb) {
-                u32::MAX as f64
-            } else {
-                kb * 1024.0
-            };
-            lua.set_named_registry_value(REG_GC_THRESHOLD, threshold_bytes)?;
-            // `luaC_checkGC`: a live count at the threshold collects, and the collection
-            // re-settles it to `2 * nblocks`.
-            if (live_bytes(lua) as f64) >= threshold_bytes {
-                lua.gc_collect()?;
-                settle(lua)?;
-            }
-            Ok(())
-        })?,
-    )?;
-    Ok(())
-}
-
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Nil => "no value",
-        Value::Boolean(_) => "boolean",
-        Value::Integer(_) | Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Table(_) => "table",
-        Value::Function(_) => "function",
-        Value::Thread(_) => "thread",
-        _ => "userdata",
-    }
 }
 
 #[cfg(test)]
@@ -269,6 +164,54 @@ mod tests {
                 "local c = gcinfo() collectgarbage(c * 4) local _, t = gcinfo() return t >= c"
             )
             .unwrap());
+    }
+
+    /// `collectgarbage(n)` sets the collector's own threshold (`lua_setgcthreshold 0x6f4400`): one
+    /// far above the count lets garbage pile up uncollected, and `gcinfo` counts it.
+    #[test]
+    fn collectgarbage_paces_the_collector_itself() {
+        let s = UiScript::new().unwrap();
+        let grown: f64 = s
+            .eval(
+                "collectgarbage(1000000) local a = gcinfo() \
+                 for i = 1, 400000 do local t = {i, i, i, i} end \
+                 local b = gcinfo() return b - a",
+            )
+            .unwrap();
+        assert!(
+            grown > 30_000.0,
+            "400000 uncollected tables of 96 bytes, counted as {grown} KB"
+        );
+        // A threshold at or below the count collects now.
+        assert!(s
+            .eval::<bool>("local a = gcinfo() collectgarbage(0) return gcinfo() < a - 30000")
+            .unwrap());
+    }
+
+    /// `^` calls the global `__pow`, `luaopen_math`'s `math_pow` (`0x7fb4c4`): the client's `pow`
+    /// answers the indefinite for `1 ^ inf`, and its argument check words the error.
+    #[test]
+    fn pow_is_the_clients_math_pow() {
+        let s = UiScript::new().unwrap();
+        assert!(
+            s.eval::<bool>("local x = 1 ^ (1/0) return x ~= x").unwrap(),
+            "C99's 1 is not the client's `-1.#IND`"
+        );
+        let e: String = s
+            .eval("local ok, e = pcall(function() return __pow('x', 2) end) return e")
+            .unwrap();
+        assert!(
+            e.ends_with("bad argument #1 to `__pow' (number expected, got string)"),
+            "{e}"
+        );
+    }
+
+    /// `loadstring` answers the function alone on success (`mov eax,1` at `0x7032ba`).
+    #[test]
+    fn loadstring_answers_one_value() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.arity("loadstring('x = 1')").unwrap(), 1);
+        assert_eq!(s.arity("loadstring('x = ')").unwrap(), 2);
     }
 
     /// `luaB_loadstring 0x703280` names a chunk by its source unless given a name (`0x70329a`),

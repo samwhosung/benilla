@@ -39,6 +39,30 @@ fn pow_calls_the_global_pow() {
     );
 }
 
+/// `collectgarbage` (`0x703250`) hands `__ftol`'s low word (`0x703261`) to `lua_setgcthreshold`
+/// (`0x6f4400`), which saturates past `0x3fffff` KB unsigned; `gcinfo` (`0x703200`) answers the
+/// threshold back. A count the quadword cannot hold is a word of 0: a collection now.
+#[test]
+fn collectgarbage_takes_the_low_word_of_its_count() {
+    assert_eq!(
+        run("collectgarbage(2^32 + 100000) local _, t = gcinfo() return t"),
+        "100000"
+    );
+    assert_eq!(
+        run("collectgarbage(-1) local _, t = gcinfo() return t"),
+        "4194303"
+    );
+    assert_eq!(
+        run("collectgarbage(4194304) local _, t = gcinfo() return t"),
+        "4194303"
+    );
+    assert_eq!(
+        run("collectgarbage(0/0) local c, t = gcinfo() return t > c and t < 4194303"),
+        "true",
+        "a NaN is a threshold of 0, so a collection and the threshold after it"
+    );
+}
+
 fn compile_error(src: &str) -> String {
     benilla_lua::check(src.as_bytes(), b"=t")
         .err()

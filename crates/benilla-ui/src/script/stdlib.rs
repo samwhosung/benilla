@@ -1,8 +1,8 @@
 //! The sandbox and the 1.12 stdlib layer on top of stock Lua 5.1.
 //!
 //! - [`sandbox`]: no filesystem, OS or native reach (`io`, `os`, `package`, `require`, `dofile`,
-//!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed), the reference's `debugstack`,
-//!   and a text-only `loadstring`.
+//!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed) and the reference's
+//!   `debugstack`.
 //! - [`install`]: the 1.12 bare globals (string, table and math aliases, the `debug*` family, the
 //!   error-handler pair), `time` and `date`.
 
@@ -26,8 +26,7 @@ pub fn lua_message(e: &mlua::Error) -> String {
     }
 }
 
-/// Sandbox the VM: no filesystem, OS or native reach, the reference's `debugstack`, and text-only
-/// chunk loading.
+/// Sandbox the VM: no filesystem, OS or native reach, and the reference's `debugstack`.
 pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -59,39 +58,6 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
             Ok(traceback_frames(lua, start, count1, count2))
         })?,
     )?;
-
-    // `loadstring` compiles every chunk as source, so a binary one fails at its `\27` like text
-    // (`0x6f6a15`). The BOM strip and `#`-line skip apply,
-    // as in the reference they live inside `luaL_loadbuffer`/`luaX_setinput`.
-    let loadstring = lua.create_function(
-        |lua, (src, chunkname): (mlua::String, Option<mlua::String>)| {
-            let raw = src.as_bytes();
-            let bytes = crate::source::chunk(&raw).to_vec();
-            // The chunk name is the caller's string verbatim, defaulting to the source itself
-            // (`luaB_loadstring` `0x703280`, `0x70329a`), which `luaO_chunkid` `0x6f5c40` renders
-            // as `[string "…"]`. It comes from the raw bytes: `luaL_loadbuffer` `0x6f5690` strips
-            // a BOM only after `0x703296` took the name. It is a C string, its bytes as they are:
-            // `lua_load` ends it at its first NUL, and the source still compiles whole.
-            let name: Vec<u8> = match &chunkname {
-                Some(n) => n.as_bytes().to_vec(),
-                None => raw.to_vec(),
-            };
-            let chunk = lua
-                .load(bytes)
-                .set_name(name)
-                .set_mode(mlua::ChunkMode::Text);
-            match chunk.into_function() {
-                Ok(f) => Ok((Value::Function(f), Value::Nil)),
-                // The failure leg returns nil and Lua's own message, unprefixed (`0x7032c6`,
-                // `0x7032d2`).
-                Err(e) => Ok((
-                    Value::Nil,
-                    Value::String(lua.create_string(e.lua_bytes(lua))?),
-                )),
-            }
-        },
-    )?;
-    g.set("loadstring", loadstring)?;
 
     Ok(())
 }
