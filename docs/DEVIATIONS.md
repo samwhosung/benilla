@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 225
+- [benilla-app](#benilla-app): 224
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
@@ -376,10 +376,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A wrong field count is no invoice, because the reference would read the missing fields uninitialised. ([`src/ui_mail/invoice.rs:76`](../crates/benilla-app/src/ui_mail/invoice.rs#L76))
 - An open mailbox also re-lists at once, past `CheckInbox`'s 60 s throttle, because a mail announced while the player stands there should show; the reference waits for the close. ([`src/ui_mail/net.rs:232`](../crates/benilla-app/src/ui_mail/net.rs#L232))
 
-#### ui_memory
-
-- The count is benilla-lua's collector estimate (`mlua::Lua::used_memory`), which sizes objects as a 64-bit 5.1 build lays them out, not 5.0's `nblocks` (`[G+0x28]`) of the 32-bit client's allocations, so the same interface reads heavier here. ([`src/ui_memory.rs:13`](../crates/benilla-app/src/ui_memory.rs#L13))
-
 #### ui_merchant
 
 - The row is matched by item entry, where the reference matches its vendor slot word (`+0x00`), because vmangos writes the entry in that field (`Player.cpp:11718`). ([`src/ui_merchant/net.rs:81`](../crates/benilla-app/src/ui_merchant/net.rs#L81))
@@ -555,7 +551,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### heap
 
-- C Lua has no such bound; past it the string is `not enough memory`, as C's would be when memory runs out. ([`src/heap.rs:627`](../crates/benilla-lua/src/heap.rs#L627))
+- C Lua has no such bound; past it the string is `not enough memory`, as C's would be when memory runs out. ([`src/heap.rs:638`](../crates/benilla-lua/src/heap.rs#L638))
 
 #### lib_string
 
@@ -704,7 +700,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Skipped because it is no command; the reference raises. ([`src/script/slash.rs:64`](../crates/benilla-ui/src/script/slash.rs#L64))
 - The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:9`](../crates/benilla-ui/src/script/spellbook.rs#L9))
-- `date` formats UTC where the reference uses local time, because the tree has no timezone database. ([`src/script/stdlib.rs:282`](../crates/benilla-ui/src/script/stdlib.rs#L282))
+- `date` formats UTC where the reference uses local time, because the tree has no timezone database. ([`src/script/stdlib.rs:248`](../crates/benilla-ui/src/script/stdlib.rs#L248))
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:103`](../crates/benilla-ui/src/script/tabard.rs#L103))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:138`](../crates/benilla-ui/src/script/taxi.rs#L138))
 - A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:30`](../crates/benilla-ui/src/script/tick.rs#L30))
