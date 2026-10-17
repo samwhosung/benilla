@@ -1304,10 +1304,11 @@ impl Table {
         let lua = &self.lua();
         let ((kx, vx), _held) = lua.raw_pair(key, value)?;
         let t = self.tref();
-        lua.vm().heap.table_mut(t).set(kx, vx).map_err(|e| match e {
-            benilla_lua::table::KeyError::Nil => Error::runtime("table index is nil"),
-            benilla_lua::table::KeyError::NaN => Error::runtime("table index is NaN"),
-        })
+        lua.vm()
+            .heap
+            .table_mut(t)
+            .set(kx, vx)
+            .map_err(|e| Error::runtime(e.message()))
     }
 
     pub fn raw_get<V2: FromLua>(&self, key: impl IntoLua) -> Result<V2> {

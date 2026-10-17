@@ -403,11 +403,7 @@ fn rawset(vm: &mut Vm, nargs: usize) -> R<usize> {
     let k = vm.check_any(nargs, 2)?;
     let v = vm.check_any(nargs, 3)?;
     if let Err(e) = vm.heap.table_mut(t).set(k, v) {
-        let msg = match e {
-            crate::table::KeyError::Nil => "table index is nil",
-            crate::table::KeyError::NaN => "table index is NaN",
-        };
-        return Err(vm.rt_error(msg));
+        return Err(vm.rt_error(e.message()));
     }
     Ok(vm.ret1(Value::Table(t)))
 }

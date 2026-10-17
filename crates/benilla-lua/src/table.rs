@@ -172,6 +172,30 @@ pub struct InvalidKey;
 pub enum KeyError {
     Nil,
     NaN,
+    /// `table overflow` (`0x871af8`): a hash part past `2^MAXBITS` nodes (`setnodevector`,
+    /// `0x6fa5e2`).
+    Overflow,
+}
+
+impl KeyError {
+    /// The message the client raises for it.
+    pub fn message(self) -> &'static str {
+        match self {
+            KeyError::Nil => "table index is nil",
+            KeyError::NaN => "table index is NaN",
+            KeyError::Overflow => "table overflow",
+        }
+    }
+}
+
+/// `setnodevector`'s bound (`0x6fa5e2`): a log node count above `MAXBITS` raises `table
+/// overflow`.
+pub fn check_lsize(lsize: u8) -> Result<u8, KeyError> {
+    if u32::from(lsize) > MAXBITS {
+        Err(KeyError::Overflow)
+    } else {
+        Ok(lsize)
+    }
 }
 
 impl Table {
@@ -221,6 +245,7 @@ impl Table {
     /// 5.0's `setnodevector` (`0x6fa5d0`): `2^lsize` nil nodes, the dummy node for 0, and
     /// `firstfree` at the last one (`0x6fa67c`).
     fn set_node_vector(&mut self, lsize: u8) {
+        debug_assert!(check_lsize(lsize).is_ok(), "a log node count past MAXBITS");
         let size = 1usize << lsize;
         self.node.clear();
         self.node.resize(size, EMPTY);
@@ -432,12 +457,13 @@ impl Table {
         Ok(())
     }
 
-    pub fn set_int(&mut self, k: i32, val: Value) {
+    pub fn set_int(&mut self, k: i32, val: Value) -> Result<(), KeyError> {
         let s = match self.find_int(k) {
             Some(s) => s,
-            None => self.newkey(Value::Num(k as f64)),
+            None => self.newkey(Value::Num(k as f64))?,
         };
         *self.slot_mut(s) = val;
+        Ok(())
     }
 
     /// `luaH_set`: the slot for `key`, made if absent. 5.0 makes a key even to store `nil`. A
@@ -453,7 +479,7 @@ impl Table {
         match key.unpack() {
             V::Nil => Err(KeyError::Nil),
             V::Num(n) if n.is_nan() => Err(KeyError::NaN),
-            _ => Ok(self.newkey(key)),
+            _ => self.newkey(key),
         }
     }
 
@@ -462,7 +488,7 @@ impl Table {
     /// when there is none the table is full: the new key holds `false` while `rehash` counts and
     /// moves it with the rest (`0x6fa974`, `0x6fa98c`), and is found again in the new layout
     /// (`0x6fa995`).
-    fn newkey(&mut self, key: Value) -> Slot {
+    fn newkey(&mut self, key: Value) -> Result<Slot, KeyError> {
         // A new key may move another one (the colliding-node move), and a rehash moves all.
         self.hint_key.set(Value::Nil);
         let mut mp = self.mainposition(key);
@@ -490,7 +516,7 @@ impl Table {
         self.node[mp].dead = false;
         loop {
             if self.node[self.firstfree].key.is_nil() {
-                return Slot::Node(mp);
+                return Ok(Slot::Node(mp));
             }
             if self.firstfree == 0 {
                 break;
@@ -498,17 +524,34 @@ impl Table {
             self.firstfree -= 1;
         }
         self.node[mp].val = Value::Bool(false);
-        self.rehash();
+        // A `table overflow` leaves the key in the table holding `false`, as the client's.
+        self.rehash()?;
         let s = self.find(key).expect("a rehash keeps the new key");
         *self.slot_mut(s) = Value::Nil;
-        s
+        Ok(s)
     }
 
     /// 5.0's `rehash` (`0x6fa9c0`): the sizes `numuse` counts, the hash part `luaO_log2(n) + 1`
     /// for `n` keys (`0x6fa9e5`).
-    fn rehash(&mut self) {
+    fn rehash(&mut self) -> Result<(), KeyError> {
         let (nasize, nhsize) = self.numuse();
-        self.resize(nasize, lsize_for(nhsize));
+        self.resize_to(nasize, nhsize)
+    }
+
+    /// `rehash`'s tail: the parts resized to `nasize` slots and room for `nhsize` keys.
+    fn resize_to(&mut self, nasize: usize, nhsize: usize) -> Result<(), KeyError> {
+        let lsize = lsize_for(nhsize);
+        if check_lsize(lsize).is_err() {
+            // `resize` grows the array part (`0x6fac1f`) before `setnodevector` raises.
+            if nasize > self.array.len() {
+                let before = self.bytes() as isize;
+                self.array.resize(nasize, Value::Nil);
+                self.growth.add(self.bytes() as isize - before);
+            }
+            return Err(KeyError::Overflow);
+        }
+        self.resize(nasize, lsize);
+        Ok(())
     }
 
     /// 5.0's `numuse` (`0x6faa00`): the live entries, those that are integer keys counted per
@@ -596,7 +639,8 @@ impl Table {
             let vanishing: Vec<Value> = self.array.drain(nasize..).collect();
             for (j, v) in vanishing.into_iter().enumerate() {
                 if !v.is_nil() {
-                    self.set_int((nasize + j + 1) as i32, v);
+                    self.set_int((nasize + j + 1) as i32, v)
+                        .expect("the new hash part has room for every key");
                 }
             }
         }
@@ -778,6 +822,20 @@ mod tests {
             k = nk;
         }
         assert_eq!(order, [10.0, 30.0, 20.0]);
+    }
+
+    /// `setnodevector` (`0x6fa5e2`) raises past a log of 24, after `resize` grew the array part
+    /// (`0x6fac1f`) and before it touched the nodes.
+    #[test]
+    fn a_hash_part_past_maxbits_is_a_table_overflow() {
+        assert_eq!(check_lsize(lsize_for((1 << 24) - 1)), Ok(24));
+        assert_eq!(check_lsize(lsize_for(1 << 24)), Err(KeyError::Overflow));
+        assert_eq!(KeyError::Overflow.message(), "table overflow");
+        let mut t = Table::new(0, 1);
+        t.set(n(0.5), n(1.0)).unwrap();
+        assert_eq!(t.resize_to(4, 1 << 24), Err(KeyError::Overflow));
+        assert_eq!((t.array.len(), t.lsizenode), (4, 1));
+        assert!(t.get(n(0.5)).raw_eq(n(1.0)));
     }
 
     #[test]

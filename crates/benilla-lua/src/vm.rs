@@ -7,7 +7,6 @@ use crate::heap::{FuncObj, Heap, LuaFunc, NativeFn, UpvalObj, UserObj};
 use crate::number::str2d;
 use crate::pools::Block;
 use crate::proto::{Arith, Cmp, Op, Proto, Reg, Rk, RK_CONST};
-use crate::table::KeyError;
 use crate::value::{FuncRef, StrRef, TableRef, Value, V};
 
 /// An error in flight: the error object, which `pcall` answers.
@@ -1162,8 +1161,7 @@ impl Vm {
                 V::Table(tr) => {
                     let slot = match self.heap.table_mut(tr).slot_for(key) {
                         Ok(s) => s,
-                        Err(KeyError::Nil) => return Err(self.rt_error("table index is nil")),
-                        Err(KeyError::NaN) => return Err(self.rt_error("table index is NaN")),
+                        Err(e) => return Err(self.rt_error(e.message())),
                     };
                     let tab = self.heap.table(tr);
                     let tm = if tab.slot(slot).is_nil() {
@@ -1671,7 +1669,10 @@ impl Vm {
                     let t = self.heap.new_table(extra, 1);
                     for i in 0..extra {
                         let v = self.stack[base + np + i];
-                        self.heap.table_mut(t).set_int(i as i32 + 1, v);
+                        self.heap
+                            .table_mut(t)
+                            .set_int(i as i32 + 1, v)
+                            .expect("the presized array part holds every extra");
                     }
                     let n = Value::Str(self.names.n);
                     self.heap
@@ -2895,6 +2896,11 @@ impl Vm {
                         slow!(self.setindex(t, key, v, Some(a as usize)))?;
                     }
                     Op::NewTable(a, b, c) => {
+                        // `luaH_new`'s `setnodevector` (`0x6fa549`) raises past `MAXBITS`.
+                        if let Err(e) = crate::table::check_lsize(c) {
+                            save!();
+                            return Err(self.rt_error(e.message()));
+                        }
                         let t = self.heap.new_table(b as usize, c);
                         r!(a) = Value::Table(t);
                         save!();
@@ -3368,9 +3374,14 @@ impl Vm {
                         };
                         for i in (1..=n as usize).rev() {
                             let v = r!(a as usize + i);
-                            self.heap
+                            if let Err(e) = self
+                                .heap
                                 .table_mut(t)
-                                .set_int((first as usize + i) as i32, v);
+                                .set_int((first as usize + i) as i32, v)
+                            {
+                                save!();
+                                return Err(self.rt_error(e.message()));
+                            }
                         }
                     }
                     Op::SetListTop(a, first) => {
@@ -3380,9 +3391,14 @@ impl Vm {
                         let n = self.top - (base!() + a as usize) - 1;
                         for i in (1..=n).rev() {
                             let v = self.stack[base!() + a as usize + i];
-                            self.heap
+                            if let Err(e) = self
+                                .heap
                                 .table_mut(t)
-                                .set_int((first as usize + i) as i32, v);
+                                .set_int((first as usize + i) as i32, v)
+                            {
+                                save!();
+                                return Err(self.rt_error(e.message()));
+                            }
                         }
                         self.top = base!() + maxstack!();
                     }
