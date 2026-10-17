@@ -921,6 +921,21 @@ pub(super) fn drive_animations(
                 mount_body.is_none()
                     && route_oneshot(id, mv.flags, mv.stand_state) == OneShotRoute::Masked
             };
+            // The full-body route reaches bone 0, whose requested id `PlayTrack` compares first
+            // (`0x5fdcab cmp; je 0x5fdd71`): a Gait base already asking for `id` drops the request.
+            // A running key-bone clip is the current id instead (`0x5fe34c`), tested above.
+            let key_bone_running = drv
+                .overlay
+                .is_some_and(|ov| player.animation(ov.node).is_some_and(|a| !a.is_finished()));
+            if !masked && !key_bone_running && drv.mode == Mode::Gait && drv.gait == Some(id) {
+                if benilla_assets::trace::enabled() {
+                    benilla_assets::trace::line(
+                        "fct",
+                        &format!("anim dedup-eat unit={entity} id={id} gait=true"),
+                    );
+                }
+                continue;
+            }
             // Resolve to a clip this model has, roll its variation and its replay budget (a clamp
             // one-shot authored `(min,max)` plays R times).
             let picked =
@@ -1071,8 +1086,19 @@ pub(super) fn drive_animations(
                 });
             if armed != Some(want) && matches!(drv.mode, Mode::Swing { .. } | Mode::Gait) {
                 drv.deferred = None; // a normal arm clears the cache (`0x5fe48e`)
-                drv.mode = Mode::Gait;
-                drv.gait = None; // recompute a fresh gait next frame
+                                     // A Gait base already follows the per-frame pick, and `PlayTrack` drops a re-pick
+                                     // that asks for the id the track already asks for (`0x5fdcab cmp; je 0x5fdd71`),
+                                     // so only a clip the pick holds past its own target is re-picked: a turn shuffle
+                                     // and a pin outliving its aura. A Swing base was armed by a one-shot, and its
+                                     // stale gait id must not dedup the re-pick.
+                let held = drv.gait.is_some_and(|g| {
+                    matches!(g, select::SHUFFLE_LEFT | select::SHUFFLE_RIGHT)
+                        || (drv.gait_pinned && kit_pin.is_none())
+                });
+                if drv.mode != Mode::Gait || held {
+                    drv.mode = Mode::Gait;
+                    drv.gait = None; // recompute a fresh gait next frame
+                }
             }
         }
 

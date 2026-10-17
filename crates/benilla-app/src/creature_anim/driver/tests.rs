@@ -4583,8 +4583,8 @@ mod emote_state {
 }
 
 /// The emote player's armed-id test (`0x5fcd56`, `0x5fdb50`): an id already running on bone 0 is
-/// not played again, whether it is the gait clip or an earlier one-shot; a different id is, and a
-/// kit anim (`0x5fe2f0` directly) takes no such test.
+/// not played again, whether it is the gait clip or an earlier one-shot; a different id is. A kit
+/// anim (`0x5fe2f0` directly) takes no such test, only `PlayTrack`'s same-id drop.
 #[test]
 fn the_emote_player_skips_an_id_already_armed_but_plays_a_different_one() {
     use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
@@ -4654,9 +4654,14 @@ fn the_emote_player_skips_an_id_already_armed_but_plays_a_different_one() {
     // The gait's own id over itself: nothing arms.
     play(&mut app, 0, true);
     assert_eq!(swing(&app), None, "Stand over Stand is skipped");
-    // A kit anim has no such test: it arms the same id.
+    // A kit anim has no emote-player test, but `PlayTrack` drops the id the track already asks
+    // for (`0x5fdcab cmp; je 0x5fdd71`).
     play(&mut app, 0, false);
-    assert_eq!(swing(&app), Some(0), "a kit anim is not skipped");
+    assert_eq!(
+        swing(&app),
+        None,
+        "a kit anim over the gait's id is dropped"
+    );
     // A different id arms and runs.
     play(&mut app, 69, true);
     assert_eq!(swing(&app), Some(69), "a different id plays");

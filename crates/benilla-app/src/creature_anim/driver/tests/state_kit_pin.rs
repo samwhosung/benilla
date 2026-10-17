@@ -366,3 +366,137 @@ fn a_still_units_jump_plays_the_pin() {
     );
     assert_eq!(main_node(&app, unit), Some(nodes[1]));
 }
+
+const RUN: u16 = 5;
+const ATTACK_UNARMED: u16 = 16;
+
+/// Stand, Run and a one-shot AttackUnarmed, on real clip assets. Nodes in that order.
+fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 3]) {
+    let handles: Vec<_> = (0..3)
+        .map(|_| {
+            let mut c = AnimationClip::default();
+            c.set_duration(SPAN);
+            app.world_mut()
+                .resource_mut::<Assets<AnimationClip>>()
+                .add(c)
+        })
+        .collect();
+    let (graph, nodes) = AnimationGraph::from_clips(handles);
+    let graph_handle = app
+        .world_mut()
+        .resource_mut::<Assets<AnimationGraph>>()
+        .add(graph);
+    let seq = |id: u16, node, looping| AnimClip {
+        node,
+        duration: SPAN,
+        blend_time: 0.0,
+        replay: (0, 0),
+        ..clip(id, 0, looping)
+    };
+    let anims = ModelAnimations {
+        graph: graph_handle.clone(),
+        clips: vec![
+            seq(STAND, nodes[0], true),
+            seq(RUN, nodes[1], true),
+            seq(ATTACK_UNARMED, nodes[2], false),
+        ],
+        hand_close: [None, None],
+        playable_animation_lookup: Vec::new(),
+        animation_lookup: Vec::new(),
+        global_bones: Vec::new(),
+        first_seq: None,
+        pose: Default::default(),
+    };
+    let unit = app
+        .world_mut()
+        .spawn((
+            anims,
+            AnimationPlayer::default(),
+            AnimationTransitions::new(),
+            AnimationGraphHandle(graph_handle),
+            AnimDriver::default(),
+            MovementState::default(),
+        ))
+        .id();
+    (unit, [nodes[0], nodes[1], nodes[2]])
+}
+
+/// `0x5fd9e0(-1)` re-picks Run for a running unit, and `PlayTrack` drops the request for the id
+/// the track already asks for (`0x5fdcab`): a Stand state kit landing on a runner restarts nothing.
+#[test]
+fn a_state_kit_recompute_leaves_a_running_units_clip_running() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.world_mut().entity_mut(unit).insert(MovementState {
+        flags: move_flags::FORWARD,
+        speed: 7.0,
+        ..Default::default()
+    });
+    app.update();
+    advance(&mut app, 300);
+    assert_eq!(base(&app, unit), Some(RUN));
+    let before = elapsed(&app, unit, nodes[1]);
+    assert!(before > 0.25, "the run is under way ({before})");
+
+    app.world_mut().write_message(BaseAnimRecompute {
+        entity: unit,
+        anim_id: STAND,
+    });
+    advance(&mut app, 50);
+    assert_eq!(base(&app, unit), Some(RUN));
+    assert_eq!(main_node(&app, unit), Some(nodes[1]));
+    assert!(
+        elapsed(&app, unit, nodes[1]) > before,
+        "the re-pick asked for Run again, so the clip kept its time"
+    );
+}
+
+/// A Stand request on a standing unit asks for what the base already asks for and plays nothing.
+#[test]
+fn a_stand_request_leaves_an_idle_units_clip_running() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.update();
+    advance(&mut app, 300);
+    let before = elapsed(&app, unit, nodes[0]);
+    assert!(before > 0.25, "the idle is under way ({before})");
+
+    app.world_mut().write_message(EmoteAnim {
+        entity: unit,
+        anim_id: STAND,
+        seq: 1,
+        via_player: false,
+    });
+    advance(&mut app, 50);
+    assert_eq!(main_node(&app, unit), Some(nodes[0]));
+    assert!(
+        elapsed(&app, unit, nodes[0]) > before,
+        "the idle was not restarted"
+    );
+}
+
+/// A Stand request over a live one-shot is a play (`0x5fe2f0` routes it onto bone 0): the unit
+/// returns to Stand, as a Stand impact kit's id does.
+#[test]
+fn a_stand_request_returns_a_unit_mid_one_shot_to_stand() {
+    let mut app = app();
+    let (unit, nodes) = spawn_runner(&mut app);
+    app.update();
+    app.world_mut().write_message(EmoteAnim {
+        entity: unit,
+        anim_id: ATTACK_UNARMED,
+        seq: 1,
+        via_player: false,
+    });
+    advance(&mut app, 100);
+    assert_eq!(main_node(&app, unit), Some(nodes[2]), "the swing plays");
+
+    app.world_mut().write_message(EmoteAnim {
+        entity: unit,
+        anim_id: STAND,
+        seq: 2,
+        via_player: false,
+    });
+    advance(&mut app, 50);
+    assert_eq!(main_node(&app, unit), Some(nodes[0]), "back to Stand");
+}
