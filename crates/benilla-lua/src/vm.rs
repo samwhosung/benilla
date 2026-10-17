@@ -18,8 +18,9 @@ pub struct LuaError {
 /// 5.1.5's `LUAI_MAXCCALLS`: nested host-level calls (a host call, a metamethod, a library
 /// callback); past it by an eighth, an error handler's own calls are refused too.
 const MAXCCALLS: u32 = 200;
-/// 5.1.5's `LUAI_MAXCALLS`: the call-info array may not grow past it.
-const MAXCALLS: usize = 20000;
+/// The client's `LUA_MAXCALLS`, 5.0's 4096: `luaD_growCI` (`0x6f61c0`) refuses a call-info
+/// array past it (`0x6f61c7`, `0x6f61e4`).
+const MAXCALLS: usize = 4096;
 /// 5.1.5's `BASIC_CI_SIZE`: the call-info array's first size.
 const BASIC_CI_SIZE: usize = 8;
 /// Rust stack the nested host-level calls under one entry may use. C counts only levels, its
@@ -136,10 +137,9 @@ pub struct Vm {
     pub registry: TableRef,
     pub names: Names,
     c_depth: u32,
-    /// 5.1.5's `L->size_ci`: frames fit while `frames.len() + 1 < ci_size`. 5.1 doubles the array
-    /// as calls nest and raises "stack overflow" once a doubling passes `LUAI_MAXCALLS`, so the
-    /// first overflow comes at 16384 frames and, the array cut back to 20000, later ones at
-    /// 20000; the doubled array leaves the error's handler room to run.
+    /// `L->size_ci`: frames fit while `frames.len() + 1 < ci_size`. The array doubles as calls
+    /// nest and a doubling past [`MAXCALLS`] raises "stack overflow", so every overflow comes at
+    /// 4096 frames; the doubled array leaves the error's handler room to run.
     ci_size: usize,
     /// `ci_size - 1`: a call is made while `frames.len()` is below it, one compare on the call
     /// path.
@@ -1643,9 +1643,9 @@ impl Vm {
         Ok(nargs + 1)
     }
 
-    /// 5.1.5's `growCI`: the call-info array doubles; past `LUAI_MAXCALLS` the call is refused
-    /// with "stack overflow", and a call while it is past the limit (the overflow's handler
-    /// recursing) with no handler at all.
+    /// `luaD_growCI` (`0x6f61c0`): the call-info array doubles; past [`MAXCALLS`] the call is
+    /// refused with "stack overflow" (`0x6f61f2`), and a call while it is past the limit (the
+    /// overflow's handler recursing) with no handler at all (`0x6f61d3`).
     #[cold]
     #[inline(never)]
     fn grow_ci(&mut self) -> Result<(), LuaError> {

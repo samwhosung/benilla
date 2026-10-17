@@ -21,9 +21,9 @@ fn a_panic_through_the_vm_leaves_it_usable() {
     }
     // No frame, depth or handler leaked: a chunk still compiles and deep calls still run.
     let r = vm
-        .exec(b"local function f(n) if n == 0 then return 0 end return 1 + f(n - 1) end return f(5000)", b"=t")
+        .exec(b"local function f(n) if n == 0 then return 0 end return 1 + f(n - 1) end return f(4000)", b"=t")
         .unwrap();
-    assert_eq!(vm.display(r[0]), "5000");
+    assert_eq!(vm.display(r[0]), "4000");
     let caught = vm.exec(b"return pcall(error, 'x')", b"=t").unwrap();
     assert_eq!(vm.display(caught[0]), "false");
 }

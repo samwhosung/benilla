@@ -466,13 +466,14 @@ b]])"#),
     ("fix-libs byte_c_stack", r#"local s = string.rep("a", 9000)
         return S(E(function() return table.getn({string.byte(s, 1, -1)}) end), E(function() return table.getn({string.byte(s, 1, 7997)}) end), E(function() return table.getn({string.byte(s, 1, 7998)}) end), E(function() local n = table.getn({string.byte(s, 1, 7990)}) return n end))"#),
     // ── fix-vm: call depth, 5.1.5's `LUAI_MAXCALLS` and `LUAI_MAXCCALLS` ──
+    // The depth cases overflow at 4096 call records, the client's `luaD_growCI` (`0x6f61c0`).
     ("fix-vm depth_lua", r#"local n = 0
         local function f() n = n + 1 f() end
         local o = {}
         for i = 1, 3 do n = 0 local ok, e = pcall(f) table.insert(o, tostring(ok) .. ":" .. n .. ":" .. e) end
         return table.concat(o, " ")"#),
     ("fix-vm depth_deep_ok", r#"local function f(n) if n == 0 then return 0 end return 1 + f(n - 1) end
-        return S(f(5000), f(15000))"#),
+        return S(f(4000), f(4093))"#),
     ("fix-vm depth_pcall", r#"local m = 0
         local function g() m = m + 1 local ok, e = pcall(g) if not ok then error(e, 0) end end
         local ok, e = pcall(g) return S(ok, m, e)"#),
@@ -672,6 +673,7 @@ b]])"#),
     // ── r2-vm: tail calls through `__call`, and the depth they are counted at ──
     ("r2-vm tailcall_call_tm", r#"local t = setmetatable({}, {__call = function(self, n) if n == 0 then return "done" end return self(n - 1) end})
         return S(E(function() return t(30000) end), E(function() local u = setmetatable({}, {}) return u(1) end))"#),
+    // Overflows at 4096 call records, the client's `luaD_growCI` (`0x6f61c0`).
     ("r2-vm tailcall_depth", r#"local n = 0
         local f
         local function h() return f() end

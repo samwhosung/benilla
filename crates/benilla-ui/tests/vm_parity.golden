@@ -179,13 +179,13 @@ fix-libs format_ulong@macos-aarch64	ok \"ffffffffffffffff 18446744073709551615 1
 fix-libs foreach_invalid_key	\"err invalid key to `next\'\",\"err invalid key to `next\'\"
 fix-libs chunkid_cr	err [string \"error(\'e\')...\"]:1: e|err [string \"error(\'e\')...\"]:1: e|err [string \"error(\'e\')...\"]:1: e|err [string \"error(\'e\') --yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy...\"]:1: e|err [string \"...\"]:2: e|err [string \"error(\'e\')\"]:1: e|invalid name: nul byte found in provided data at position: 10|[string \"x = = 1...\"]:1: unexpected symbol near `=\'
 fix-libs byte_c_stack	\"err t:33: stack overflow (string slice too long)\",\"ok 7997\",\"err t:33: stack overflow (string slice too long)\",\"ok 7990\"
-fix-vm depth_lua	false:16381:t:33: stack overflow false:19997:t:33: stack overflow false:19997:t:33: stack overflow
-fix-vm depth_deep_ok	5000,15000
+fix-vm depth_lua	false:4093:t:33: stack overflow false:4093:t:33: stack overflow false:4093:t:33: stack overflow
+fix-vm depth_deep_ok	4000,4093
 fix-vm depth_pcall	false,198,\"C stack overflow\"
 fix-vm depth_index	err t:32: C stack overflow
 fix-vm depth_gsub	false,198,\"C stack overflow\"
-fix-vm depth_xpcall	false,16381,\"H:t:33: stack overflow\"
-fix-vm depth_xpcall_handler_recurses	false,16381,\"error in error handling\"
+fix-vm depth_xpcall	false,4093,\"H:t:33: stack overflow\"
+fix-vm depth_xpcall_handler_recurses	false,4093,\"error in error handling\"
 fix-vm depth_concat_tm	err t:33: C stack overflow
 fix-vm depth_tostring_tm	err C stack overflow
 fix-vm depth_sort	err C stack overflow
@@ -214,7 +214,7 @@ r2-vm handler_raises_once	false,\"H:again\",2
 r2-vm handler_not_function	false,\"error in error handling\",false,\"error in error handling\",true,1
 r2-vm handler_runtime_error	false,\"H:t:33: attempt to index local `x\' (a nil value)\",1
 r2-vm tailcall_call_tm	\"ok \\\"done\\\"\",\"err t:33: attempt to call local `u\' (a table value)\"
-r2-vm tailcall_depth	16380:t:34: stack overflow 19996:t:34: stack overflow 19996:t:34: stack overflow
+r2-vm tailcall_depth	4092:t:34: stack overflow 4092:t:34: stack overflow 4092:t:34: stack overflow
 r2-vm loadstring_binary	nil,nil,\"attempt to load a binary chunk (mode is \'t\')\"
 sweep string.byte	err bad argument #1 to `?\' (string expected, got no value) | err bad argument #1 to `?\' (string expected, got no value) | ok 97 | ok 98 | ok 98 | ok 98,99 | ok 97,98,99 | ok  | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | ok 49 | ok 45 | ok 48 | ok 49 | err bad argument #1 to `?\' (string expected, got table) | err bad argument #1 to `?\' (string expected, got table) | err bad argument #1 to `?\' (string expected, got table) | err bad argument #1 to `?\' (string expected, got table) | err bad argument #1 to `?\' (string expected, got table) | ok  | ok 46 | err bad argument #2 to `?\' (number expected, got string) | err bad argument #2 to `?\' (number expected, got string) | err bad argument #1 to `?\' (string expected, got boolean) | err bad argument #2 to `?\' (number expected, got string) | ok  | ok  | ok  | err bad argument #1 to `?\' (string expected, got table)
 sweep string.char@linux-x86_64	ok \"\" | ok \"\" | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | ok \"\u{1}\" | err bad argument #1 to `?\' (invalid value) | ok \"\\000\" | ok \"\\\n\" | err bad argument #1 to `?\' (number expected, got table) | err bad argument #1 to `?\' (number expected, got table) | err bad argument #1 to `?\' (number expected, got table) | err bad argument #1 to `?\' (number expected, got table) | err bad argument #1 to `?\' (number expected, got table) | ok \"\u{2}\u{3}\" | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got string) | err bad argument #1 to `?\' (number expected, got boolean) | err bad argument #1 to `?\' (number expected, got string) | ok \"\\000\\000\" | err bad argument #1 to `?\' (invalid value) | err bad argument #3 to `?\' (invalid value) | err bad argument #1 to `?\' (number expected, got table)

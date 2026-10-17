@@ -231,8 +231,8 @@ fn a_destructor_that_moves_the_stack_leaves_the_running_frame_sound() {
     impl Drop for Grow {
         fn drop(&mut self) {
             let deep = "local function r(n) if n > 0 then return 1 + r(n - 1) end return 0 end \
-                        return r(10000)";
-            assert_eq!(self.0.load(deep).eval::<i64>().unwrap(), 10000);
+                        return r(4000)";
+            assert_eq!(self.0.load(deep).eval::<i64>().unwrap(), 4000);
         }
     }
     let lua = Lua::new();

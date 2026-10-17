@@ -1,4 +1,4 @@
-//! Call depth: 5.1.5's limits raise catchable errors, and no script reaches the end of the Rust
+//! Call depth: the client's limits raise catchable errors, and no script reaches the end of the Rust
 //! stack. Each case runs in a debug build on a 2 MB thread, recursing through Lua frames,
 //! metamethods, protected calls and library callbacks, mixed.
 
@@ -22,22 +22,27 @@ fn small_stack(src: &'static str) -> String {
         .unwrap()
 }
 
+/// The client's `luaD_growCI` (`0x6f61c0`) doubles the call-info array from 8 and raises once it
+/// passes 4096 (`0x6f61c7`, `0x6f61e4`): the main chunk and 4094 nested calls fit, one more is
+/// refused, and every later overflow comes at the same depth.
 #[test]
-fn lua_recursion_goes_20000_deep_then_raises() {
-    assert_eq!(
-        small_stack(
+fn lua_recursion_goes_4096_deep_then_raises() {
+    let depth = |n: u32| {
+        let src = format!(
             "local function f(n) if n == 0 then return 0 end return 1 + f(n - 1) end \
-             return f(16000)"
-        ),
-        "16000"
-    );
+             local r = f({n}) return r"
+        );
+        small_stack(Box::leak(src.into_boxed_str()))
+    };
+    assert_eq!(depth(4093), "4093");
+    assert_eq!(depth(4094), "<raised> t:1: stack overflow");
     assert_eq!(
         small_stack(
             "local n = 0 local function f() n = n + 1 f() end \
              local o = {} for i = 1, 3 do n = 0 local ok, e = pcall(f) o[i] = n .. ' ' .. e end \
              return table.concat(o, ', ')"
         ),
-        "16381 t:1: stack overflow, 19997 t:1: stack overflow, 19997 t:1: stack overflow"
+        "4093 t:1: stack overflow, 4093 t:1: stack overflow, 4093 t:1: stack overflow"
     );
 }
 
