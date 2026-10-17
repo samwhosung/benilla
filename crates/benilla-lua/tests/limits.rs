@@ -30,15 +30,15 @@ fn run_with(
 #[test]
 fn a_huge_string_rep_is_not_enough_memory() {
     assert_eq!(
-        run(r#"return pcall(string.rep, string.rep("x", 1024), 2^31 - 1)"#),
+        run(r#"return pcall(string.rep, string.rep("x", 1024), 2147483647)"#),
         Ok(vec!["false".into(), "not enough memory".into()])
     );
     assert_eq!(
-        run(r#"return pcall(string.rep, "xy", 2^31 - 1)"#),
+        run(r#"return pcall(string.rep, "xy", 2147483647)"#),
         Ok(vec!["false".into(), "not enough memory".into()])
     );
     assert_eq!(
-        run(r#"return string.rep("ab", 3), string.rep("", 2^31 - 1), string.rep("x", -1)"#),
+        run(r#"return string.rep("ab", 3), string.rep("", 2147483647), string.rep("x", -1)"#),
         Ok(vec!["ababab".into(), "".into(), "".into()])
     );
 }

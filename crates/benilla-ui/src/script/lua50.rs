@@ -77,8 +77,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set("print", Value::Nil)?;
     g.set("_VERSION", Value::Nil)?;
 
-    // `__pow` is a 1.12 global, which 5.0 calls to implement `^`; nothing here calls it, but an
-    // addon can see it.
+    // `__pow` is a 1.12 global (`0x7fb4c4`), which `^` on two numbers calls (`0x6f9b52`).
     g.set(
         "__pow",
         lua.create_function(|_, (a, b): (f64, f64)| Ok(a.powf(b)))?,

@@ -458,7 +458,8 @@ fn is_k(x: Rk) -> bool {
 }
 
 /// 5.1's `constfolding`: two numerals fold unless the result would be a NaN or a division by
-/// zero is asked for.
+/// zero is asked for. `^` never folds: the client's `^` calls the global `__pow` (`0x6f9b52`),
+/// which a script may replace, so `2 ^ 3` in source calls it too.
 fn fold(op: BinOpr, a: f64, b: f64) -> Option<f64> {
     let r = match op {
         BinOpr::Add => a + b,
@@ -470,8 +471,6 @@ fn fold(op: BinOpr, a: f64, b: f64) -> Option<f64> {
             }
             a / b
         }
-        // `luai_numpow`: C's `pow`, as the VM computes it.
-        BinOpr::Pow => a.powf(b),
         _ => return None,
     };
     (!r.is_nan()).then_some(r)

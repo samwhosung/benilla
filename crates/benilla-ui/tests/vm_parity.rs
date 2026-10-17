@@ -133,6 +133,7 @@ const CASES: &[(&str, &str)] = &[
     ("call_mt", "local t = setmetatable({}, {__call = function(self, a, b) return a + b end}) return S(t(2, 3))"),
     ("tostring_mt", "local t = setmetatable({}, {__tostring = function() return 'custom' end}) return tostring(t)"),
     ("protected_mt", "local t = setmetatable({}, {__metatable = 'locked'}) return S(getmetatable(t)) .. E(function() setmetatable(t, {}) end)"),
+    // `^` on numbers calls the global `__pow`, the client's `Arith` (`0x6f9b52`).
     ("pow_global", "local old = __pow __pow = function(a, b) return 'p' end local r = 2 ^ 3 __pow = old return S(r, 2 ^ 3)"),
     ("varargs", "local function f(...) return arg.n, arg[1], arg[2] end return S(f()) .. '|' .. S(f(1, nil, 3)) .. '|' .. S(f('a'))"),
     ("varargs_named", "local function f(a, ...) return a, arg.n end return S(f(1, 2, 3))"),

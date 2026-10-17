@@ -43,8 +43,10 @@ fn a_host_index_through_a_bad_index_metamethod_raises() {
 fn numbers_read_as_mlua_reads_them() {
     use benilla_mlua::Value;
     let lua = Lua::new();
-    let (a, b, c, d): (Value, Value, Value, Value) =
-        lua.load("return 2^63, -2^63, -(0), 2^53").eval().unwrap();
+    let (a, b, c, d): (Value, Value, Value, Value) = lua
+        .load("return 9223372036854775808, -9223372036854775808, -(0), 9007199254740992")
+        .eval()
+        .unwrap();
     assert!(
         matches!(a, Value::Number(n) if n == 9_223_372_036_854_775_808.0),
         "{a:?}"

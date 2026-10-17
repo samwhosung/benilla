@@ -68,7 +68,7 @@ lt_mt	true,false,false,true
 call_mt	5
 tostring_mt	custom
 protected_mt	\"locked\"err t:32: cannot change a protected metatable
-pow_global	8,8
+pow_global	\"p\",8
 varargs	0,nil,nil|3,1,nil|1,\"a\",nil
 varargs_named	1,2
 multret	4,1,0

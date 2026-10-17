@@ -1073,8 +1073,8 @@ impl Vm {
         Err(self.rt_error("loop in settable"))
     }
 
-    /// 5.1's `Arith`. Numbers (and numeric strings) compute, `^` with C's `pow`; anything else
-    /// tries the operands' metamethods, `__pow` for `^`.
+    /// The client's `Arith` (`0x6f9a80`). Numbers (and numeric strings) compute, `^` through the
+    /// global `__pow`; anything else tries the operands' metamethods, `__pow` for `^`.
     #[cold]
     #[inline(never)]
     fn arith(
@@ -1090,8 +1090,7 @@ impl Vm {
                 Arith::Sub => x - y,
                 Arith::Mul => x * y,
                 Arith::Div => x / y,
-                // 5.1's `luai_numpow`: C's `pow`; a non-number goes to `__pow` below.
-                Arith::Pow => x.powf(y),
+                Arith::Pow => return self.pow_global(x, y),
             }));
         }
         let name = match op {
@@ -1113,6 +1112,20 @@ impl Vm {
                 Err(self.type_error(bad, reg, "perform arithmetic on"))
             }
         }
+    }
+
+    /// `x ^ y` on numbers, as the client's `Arith` computes it: the global `__pow`, read raw from
+    /// the globals (`0x6f9b5e`), must be a function (`0x6f9b72`) and is called with the two
+    /// numbers (`0x6f9b8c`); its first result is the answer.
+    fn pow_global(&mut self, x: f64, y: f64) -> Result<Value, LuaError> {
+        let f = self
+            .heap
+            .table(self.globals)
+            .get_str(Value::Str(self.names.pow));
+        if !matches!(f.unpack(), V::Func(_)) {
+            return Err(self.rt_error("`__pow' (`^' operator) is not a function"));
+        }
+        self.call_tm_res(f, Value::Num(x), Value::Num(y))
     }
 
     /// `luaV_equalObj`: tables and userdata consult a shared `__eq`.
@@ -2709,7 +2722,8 @@ impl Vm {
                     Op::JmpCmpK(cj, b, kx, off) => cmpk!(cj.cmp(), cj.cond(), r!(b), kv!(kx), off),
                     Op::JmpCmpKR(cj, kx, c, off) => cmpk!(cj.cmp(), cj.cond(), kv!(kx), r!(c), off),
                     Op::Pow(a, b, c) => {
-                        // 5.1's `OP_POW`: always `Arith`, numbers through `pow`.
+                        // The client's `OP_POW` (`0x6f8e47`): always `Arith`, which calls
+                        // the global `__pow` for numbers.
                         let (x, y) = (rk!(b), rk!(c));
                         let v = slow!(self.arith(Arith::Pow, x, y, (rkreg!(b), rkreg!(c))))?;
                         r!(a) = v;
