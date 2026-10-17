@@ -314,3 +314,38 @@ fn a_value_handed_over_by_value_survives_a_collecting_newindex() {
     let back: Table = t.raw_get("a fresh key").unwrap();
     assert_eq!(back.get::<i64>("inner").unwrap(), 5);
 }
+
+/// An error that carries a Lua value prints, `{:?}` and `Display`, after its state is gone: the
+/// value waits out of the error, which is `Send` and `Sync` as mlua's is.
+#[test]
+fn an_error_outliving_its_state_prints() {
+    fn send_sync<T: Send + Sync>() {}
+    send_sync::<benilla_mlua::Error>();
+    let e = {
+        let lua = Lua::new();
+        lua.load("error({})").exec().unwrap_err()
+    };
+    assert!(format!("{e:?}").contains("LuaValue"));
+    assert!(e.to_string().starts_with("runtime error: "));
+    let e2 = e.clone();
+    drop(e);
+    assert!(format!("{e2:?}").contains("LuaValue"));
+}
+
+/// The value an error carries comes back to its own state, and goes when the error does.
+#[test]
+fn an_error_carries_its_value_back_to_its_state() {
+    let lua = Lua::new();
+    let t = lua.create_table().unwrap();
+    lua.globals().set("E", t.clone()).unwrap();
+    let e = lua.load("error(E)").exec().unwrap_err();
+    match e.lua_value(&lua) {
+        Some(Value::Table(v)) => assert!(v.equals(&t).unwrap()),
+        other => panic!("{other:?}"),
+    }
+    let other = Lua::new();
+    assert!(
+        e.lua_value(&other).is_none(),
+        "another state's value stays its own"
+    );
+}

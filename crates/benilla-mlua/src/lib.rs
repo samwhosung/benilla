@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::c_void;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use benilla_lua::heap::HostFn;
 use benilla_lua::value::V;
@@ -232,8 +233,15 @@ fn take_panic(vm: &Vm, e: benilla_lua::Value) -> Option<Box<dyn Any + Send>> {
 fn raise(lua: &Lua, nargs: usize, e: Error) -> LuaError {
     let vm = lua.vm();
     match e {
-        Error::LuaValue { value: Some(v), .. } => {
-            let x = lua.unwrap(&v);
+        Error::LuaValue {
+            value: Some(v),
+            message,
+        } => {
+            // Another family's value, or one gone with its thread, raises its text.
+            let x = match v.get(lua) {
+                Some(v) => lua.unwrap(&v),
+                None => vm.str(message.as_bytes()),
+            };
             vm.throw(x)
         }
         Error::LuaValue {
@@ -277,6 +285,69 @@ fn lua_type(rust: &str) -> Option<&'static str> {
         | "usize" | "f32" | "f64" => "number",
         _ => return None,
     })
+}
+
+thread_local! {
+    /// Each Lua error value an [`Error::LuaValue`] carries, by its tag: the value, rooted, and
+    /// the family of the state that made it. An entry goes when the last copy of its error does.
+    static RAISED: RefCell<HashMap<u64, (u64, Value)>> = RefCell::new(HashMap::new());
+}
+
+static NEXT_RAISED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The Lua value an [`Error::LuaValue`] carries, held out of the error on its state's thread so
+/// the error stays `Send` and `Sync` and prints without its state: the error holds only this tag.
+#[derive(Clone)]
+pub struct ErrorValue(Arc<RaisedTag>);
+
+struct RaisedTag(u64);
+
+impl Drop for RaisedTag {
+    fn drop(&mut self) {
+        // `try_with`: the thread may be ending. The value drops outside the borrow.
+        let gone = RAISED
+            .try_with(|r| r.borrow_mut().remove(&self.0))
+            .ok()
+            .flatten();
+        drop(gone);
+    }
+}
+
+impl std::fmt::Debug for ErrorValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ErrorValue({})", self.0 .0)
+    }
+}
+
+impl ErrorValue {
+    fn new(family: u64, v: Value) -> ErrorValue {
+        let tag = NEXT_RAISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        RAISED.with(|r| r.borrow_mut().insert(tag, (family, v)));
+        ErrorValue(Arc::new(RaisedTag(tag)))
+    }
+
+    /// The value, for a state of the family that made it, on the thread that made it.
+    pub fn get(&self, lua: &Lua) -> Option<Value> {
+        RAISED.with(|r| {
+            r.borrow()
+                .get(&self.0 .0)
+                .filter(|(family, _)| *family == lua.0.family)
+                .map(|(_, v)| v.clone())
+        })
+    }
+}
+
+impl Error {
+    /// The Lua value this error carries, when it came out of Lua: [`ErrorValue::get`].
+    pub fn lua_value(&self, lua: &Lua) -> Option<Value> {
+        match self {
+            Error::LuaValue { value: Some(v), .. } => v.get(lua),
+            Error::CallbackError { cause, .. } | Error::WithContext { cause, .. } => {
+                cause.lua_value(lua)
+            }
+            _ => None,
+        }
+    }
 }
 
 const DESTROYED: &str = "Lua instance is destroyed";
@@ -865,7 +936,7 @@ impl Lua {
         }
         Error::LuaValue {
             message: self.vm().display(e),
-            value: Some(Box::new(self.wrap(e))),
+            value: Some(ErrorValue::new(self.0.family, self.wrap(e))),
         }
     }
 }

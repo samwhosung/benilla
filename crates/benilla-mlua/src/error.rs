@@ -1,9 +1,8 @@
-//! mlua's `Error`, the variants benilla's code builds or matches, with mlua's `Display`. An error
-//! may hold a Lua value of its state ([`Error::LuaValue`]), so it stays on the state's thread, and
-//! a wrapped cause is an `Rc` where mlua's is an `Arc`.
+//! mlua's `Error`, the variants benilla's code builds or matches, with mlua's `Display`. It is
+//! `Send` and `Sync`, as mlua's is: a Lua error value it carries waits on its state's thread
+//! ([`crate::ErrorValue`]), and the error holds only its tag.
 
 use std::fmt;
-use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -21,7 +20,7 @@ pub enum Error {
     /// [`Error::RuntimeError`]'s.
     LuaValue {
         message: String,
-        value: Option<Box<crate::Value>>,
+        value: Option<crate::ErrorValue>,
     },
     MemoryError(String),
     /// A callback's arguments and results overflow the stack a C function may use.
@@ -30,7 +29,7 @@ pub enum Error {
         to: Option<String>,
         pos: usize,
         name: Option<String>,
-        cause: Rc<Error>,
+        cause: Arc<Error>,
     },
     ToLuaConversionError {
         from: String,
@@ -44,11 +43,11 @@ pub enum Error {
     },
     CallbackError {
         traceback: String,
-        cause: Rc<Error>,
+        cause: Arc<Error>,
     },
     WithContext {
         context: String,
-        cause: Rc<Error>,
+        cause: Arc<Error>,
     },
     ExternalError(Arc<dyn std::error::Error + Send + Sync>),
 }
@@ -153,14 +152,14 @@ impl<T> ErrorContext for Result<T> {
     fn context<C: fmt::Display>(self, context: C) -> Self {
         self.map_err(|e| Error::WithContext {
             context: context.to_string(),
-            cause: Rc::new(e),
+            cause: Arc::new(e),
         })
     }
 
     fn with_context<C: fmt::Display>(self, f: impl FnOnce(&Error) -> C) -> Self {
         self.map_err(|e| Error::WithContext {
             context: f(&e).to_string(),
-            cause: Rc::new(e),
+            cause: Arc::new(e),
         })
     }
 }
