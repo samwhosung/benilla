@@ -150,6 +150,9 @@ pub(crate) struct AuctionOpen {
     /// Messages queued for [`feed_auction`]; [`Self::clear`] keeps them, since a sale notice can
     /// land after a close.
     pub(crate) messages: Vec<AuctionMessage>,
+    /// How many of `messages`, from the front, a feed has read: the rest came since, each with its
+    /// notification's lookup with a callback (`0x4ccfa2`, `0x4cd41f`, `0x4cd51a`).
+    messages_asked: usize,
     /// A list we hold went stale (a sale, an outbid, a cancel): the drain re-asks its page 0.
     pending_owner_refresh: bool,
     pending_bidder_refresh: bool,
@@ -355,7 +358,7 @@ fn high_bidder(
     entry: &AuctionListEntry,
     self_guid: Option<u64>,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
 ) -> AuctionHighBidder {
     let owned = list == OWNER && self_guid.is_some_and(|g| g == entry.owner_guid);
     if owned {
@@ -363,7 +366,7 @@ fn high_bidder(
             return AuctionHighBidder::Nil;
         }
         return names
-            .resolve_player(entry.bidder_guid, Ask::New(commands))
+            .resolve_player(entry.bidder_guid, ask)
             .map_or(AuctionHighBidder::Nil, |n| {
                 AuctionHighBidder::Name(n.to_string())
             });
@@ -377,6 +380,8 @@ fn high_bidder(
 
 /// One wire entry of `list` as a display row, through the ask-once template and name caches; a
 /// `None` fills in when its answer lands. The link carries the row's enchant, property and suffix.
+/// Read as `ask` says: the list's packet looks each item up with a callback (`0x4cc9bf`,
+/// `0x4ccbff`, `0x4cce4f`), and `GetAuctionItemInfo` each name (`0x4cf167`, `0x4cf1c8`).
 fn resolve_row(
     list: usize,
     entry: &AuctionListEntry,
@@ -384,10 +389,10 @@ fn resolve_row(
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
 ) -> AuctionRow {
-    let template = items.template(entry.item_entry, 0, Ask::New(commands));
+    let template = items.template(entry.item_entry, 0, ask);
     let roll = entry.random_property_id as u32;
     let name = template.map(|t| rolls.name(&t.name, roll));
     let quality = template.map(|t| t.quality);
@@ -419,9 +424,9 @@ fn resolve_row(
         current_bid: entry.current_bid,
         time_left: time_left_bucket(entry.time_left_ms),
         player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
-        high_bidder: high_bidder(list, entry, self_guid, names, commands),
+        high_bidder: high_bidder(list, entry, self_guid, names, ask),
         owner: names
-            .resolve_player(entry.owner_guid, Ask::New(commands))
+            .resolve_player(entry.owner_guid, ask)
             .map(str::to_string),
         link,
     }
@@ -474,13 +479,13 @@ fn rows_for(
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
-    commands: &NetCommands,
+    ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
 ) -> Vec<AuctionRow> {
     let mut rows: Vec<AuctionRow> = slot
         .entries
         .iter()
-        .map(|e| resolve_row(list, e, self_guid, items, icons, names, commands, rolls))
+        .map(|e| resolve_row(list, e, self_guid, items, icons, names, ask, rolls))
         .collect();
     slot.sort.apply(&mut rows);
     rows
@@ -560,10 +565,14 @@ fn feed_auction(
     {
         let mut deferred = Vec::new();
         let mut lines = Vec::new();
-        for msg in std::mem::take(&mut auction.messages) {
+        let asked = std::mem::take(&mut auction.messages_asked);
+        for (i, msg) in std::mem::take(&mut auction.messages)
+            .into_iter()
+            .enumerate()
+        {
             let fill = match msg.item {
                 None => None,
-                Some(entry) => match items.template(entry, 0, Ask::New(&commands)) {
+                Some(entry) => match items.template(entry, 0, Ask::at(i >= asked, &commands)) {
                     Some(t) => Some(t.name.clone()),
                     None => {
                         deferred.push(msg);
@@ -580,6 +589,7 @@ fn feed_auction(
                 lines.push(Shown::keyed(msg.key, text));
             }
         }
+        auction.messages_asked = deferred.len();
         auction.messages = deferred;
         show_messages(&mut script, &mut sink, "ui_auction", lines);
     }
@@ -589,9 +599,12 @@ fn feed_auction(
         props: catalogs.2.as_deref(),
         enchants: catalogs.3.as_deref(),
     };
+    // A list's result, and the window's show, are the frames the stock tabs call their getters on.
+    let shown = last_open.is_none() || auction.show_requested;
     let fresh = auction.auctioneer.map(|_| {
         let lists = [LIST, BIDDER, OWNER].map(|i| {
             let slot = &auction.lists[i];
+            let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
             let rows = rows_for(
                 i,
                 slot,
@@ -599,7 +612,7 @@ fn feed_auction(
                 &items,
                 icons.as_deref(),
                 &names,
-                &commands,
+                ask,
                 rolls,
             );
             AuctionListState {
@@ -744,7 +757,8 @@ fn drain_auction(
         });
     }
 
-    // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included.
+    // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included,
+    // reading the caches as the verbs do (`0x4cf879`).
     let self_guid = self_q.iter().next().map(|g| g.0);
     let bids = script.take_auction_bids();
     let cancels = script.take_auction_cancels();
@@ -757,7 +771,7 @@ fn drain_auction(
                 &items,
                 icons.as_deref(),
                 &names,
-                &commands,
+                Ask::Read,
                 rolls,
             );
             if let Some(auction_id) = AuctionOpen::auction_id_at(bid.index, &rows) {
@@ -776,7 +790,7 @@ fn drain_auction(
                 &items,
                 icons.as_deref(),
                 &names,
-                &commands,
+                Ask::Read,
                 rolls,
             );
             if let Some(auction_id) = AuctionOpen::auction_id_at(index, &rows) {
@@ -985,7 +999,13 @@ mod tests {
         let mut names = NameCache::default();
         names.insert_player(BIDDER_GUID, "Bidder".into(), None);
         assert_eq!(
-            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            high_bidder(
+                OWNER,
+                &entry(ME, BIDDER_GUID),
+                Some(ME),
+                &names,
+                Ask::New(&commands)
+            ),
             AuctionHighBidder::Name("Bidder".into())
         );
         assert!(name_queries(&rx).is_empty(), "a cached name asks nothing");
@@ -998,7 +1018,13 @@ mod tests {
         let commands = NetCommands(tx);
         let mut names = NameCache::default();
         assert_eq!(
-            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            high_bidder(
+                OWNER,
+                &entry(ME, BIDDER_GUID),
+                Some(ME),
+                &names,
+                Ask::New(&commands)
+            ),
             AuctionHighBidder::Nil
         );
         assert_eq!(
@@ -1008,14 +1034,20 @@ mod tests {
         );
 
         assert_eq!(
-            high_bidder(OWNER, &entry(ME, 0), Some(ME), &names, &commands),
+            high_bidder(OWNER, &entry(ME, 0), Some(ME), &names, Ask::New(&commands)),
             AuctionHighBidder::Nil
         );
         assert!(name_queries(&rx).is_empty(), "no bidder, no query");
 
         names.insert_player(BIDDER_GUID, "Bidder".into(), None);
         assert_eq!(
-            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            high_bidder(
+                OWNER,
+                &entry(ME, BIDDER_GUID),
+                Some(ME),
+                &names,
+                Ask::New(&commands)
+            ),
             AuctionHighBidder::Name("Bidder".into())
         );
     }
@@ -1031,7 +1063,13 @@ mod tests {
         const SELLER: u64 = 0x55;
         for list in [LIST, BIDDER] {
             assert_eq!(
-                high_bidder(list, &entry(SELLER, ME), Some(ME), &names, &commands),
+                high_bidder(
+                    list,
+                    &entry(SELLER, ME),
+                    Some(ME),
+                    &names,
+                    Ask::New(&commands)
+                ),
                 AuctionHighBidder::Player
             );
             assert_eq!(
@@ -1040,23 +1078,41 @@ mod tests {
                     &entry(SELLER, BIDDER_GUID),
                     Some(ME),
                     &names,
-                    &commands
+                    Ask::New(&commands)
                 ),
                 AuctionHighBidder::Nil
             );
             assert_eq!(
-                high_bidder(list, &entry(SELLER, 0), Some(ME), &names, &commands),
+                high_bidder(
+                    list,
+                    &entry(SELLER, 0),
+                    Some(ME),
+                    &names,
+                    Ask::New(&commands)
+                ),
                 AuctionHighBidder::Nil
             );
             // The player's own auction, seen on a browse page, is not named either.
             assert_eq!(
-                high_bidder(list, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+                high_bidder(
+                    list,
+                    &entry(ME, BIDDER_GUID),
+                    Some(ME),
+                    &names,
+                    Ask::New(&commands)
+                ),
                 AuctionHighBidder::Nil
             );
         }
         // The owner list gates on the row's owner, not the list alone (`0x4cf131`).
         assert_eq!(
-            high_bidder(OWNER, &entry(SELLER, ME), Some(ME), &names, &commands),
+            high_bidder(
+                OWNER,
+                &entry(SELLER, ME),
+                Some(ME),
+                &names,
+                Ask::New(&commands)
+            ),
             AuctionHighBidder::Player
         );
         assert_eq!(
@@ -1065,7 +1121,7 @@ mod tests {
                 &entry(SELLER, BIDDER_GUID),
                 Some(ME),
                 &names,
-                &commands
+                Ask::New(&commands)
             ),
             AuctionHighBidder::Nil
         );
@@ -1140,6 +1196,51 @@ mod tests {
         let (seen, bidder) = step(&mut app);
         assert_eq!(bidder.as_deref(), Some("Bidder"));
         assert_eq!(seen, vec!["AUCTION_OWNED_LIST_UPDATE".to_string()]);
+    }
+
+    /// A list's packet looks its items up with a callback (`0x4ccbff`), and `GetAuctionItemInfo`
+    /// the bidder's name (`0x4cf167`), on the list's update; the frames between read. A refused
+    /// bidder is asked by no frame, and again by the list's next result.
+    #[test]
+    fn a_refused_bidder_is_asked_at_the_next_list_result_never_by_a_frame() {
+        let mut app = App::new();
+        app.init_resource::<AuctionOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_auction);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(ME, "Seller".into(), None);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
+        app.world_mut()
+            .resource_mut::<AuctionOpen>()
+            .open(0x1234, 1);
+        let list = |app: &mut App| {
+            app.world_mut().resource_mut::<AuctionOpen>().set_list(
+                OWNER,
+                vec![entry(ME, BIDDER_GUID)],
+                1,
+            );
+        };
+        list(&mut app);
+        app.update();
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(BIDDER_GUID, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(name_queries(&rx).is_empty(), "no frame asks the refusal");
+        list(&mut app);
+        app.update();
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID], "the next result does");
     }
 
     #[test]
