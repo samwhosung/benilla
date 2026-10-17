@@ -1184,8 +1184,8 @@ fn seat_a_session(script: &mut UiScript) {
     // A spellbook (seated below) and a quest log. An empty book fails `TheoryCraftEngine.lua:306`
     // (`for i=1, numSpells` off `GetSpellTabInfo(1)`); two tabs, four spells, `Attack` in slot 1.
     // The quest log is a zone header row (`isHeader`), an in-progress quest with one objective done
-    // and one not, and a complete one (`complete = 1`), rows by level (`0x4decd9`); failed (-1) and
-    // timed quests are not seated.
+    // and one not, and a complete one (`complete = 1`) with its one objective met, rows by level
+    // (`0x4decd9`); failed (-1) and timed quests are not seated.
     {
         use benilla_ui::script::{QuestObjectiveView, QuestRecordView, QuestSlotView};
         let kill = |entry: u32, need: u32| QuestObjectiveView {
@@ -1204,9 +1204,12 @@ fn seat_a_session(script: &mut UiScript) {
         in_progress.objectives[0] = kill(40, 12);
         in_progress.objectives[1] = kill(475, 6);
         script.seed_quest_record(62, in_progress);
-        script.seed_quest_record(176, record("Kobold Candles", 8));
+        let mut complete = record("Kobold Candles", 8);
+        complete.objectives[0] = kill(476, 8);
+        script.seed_quest_record(176, complete);
         script.set_quest_creature_name(40, "Kobold Miner".into());
         script.set_quest_creature_name(475, "Kobold Vermin".into());
+        script.set_quest_creature_name(476, "Kobold Laborer".into());
         let mut slots = [QuestSlotView::default(); benilla_ui::script::QUEST_LOG_SLOTS];
         slots[0] = QuestSlotView {
             quest_id: 62,
@@ -1215,9 +1218,11 @@ fn seat_a_session(script: &mut UiScript) {
         };
         slots[1] = QuestSlotView {
             quest_id: 176,
+            counters: [8, 0, 0, 0],
             state: 0x01,
             ..Default::default()
         };
+        script.set_quest_log_player(true);
         script.quest_log_changed(slots);
         script.flush_quest_log_refires();
     }

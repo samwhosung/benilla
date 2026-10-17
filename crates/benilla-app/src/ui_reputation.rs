@@ -132,6 +132,25 @@ pub(crate) fn delta_lines(
     lines
 }
 
+/// Whether `SMSG_SET_FACTION_STANDING` moves any faction's rank (`0x4d5880`), `HIDDEN` or not,
+/// which the handler answers with one `0x4de510(0)` after its entries (`0x4d58ea`-`0x4d58f3`).
+pub(crate) fn rank_moved(
+    deltas: &[(u32, i32)],
+    store: &Reputations,
+    catalog: &benilla_formats::FactionCatalog,
+    race: u8,
+    class: u8,
+) -> bool {
+    deltas.iter().any(|&(list_id, standing)| {
+        faction_of_slot(catalog, list_id, race, class).is_some_and(|(_, info)| {
+            let base = info.base_for(race, class);
+            let old = store.slots.get(list_id as usize).map_or(0, |&(_, s)| s);
+            benilla_formats::reputation_rank(base + old)
+                != benilla_formats::reputation_rank(base + standing)
+        })
+    })
+}
+
 /// Park the lines in the chat log, after whatever the same packet already queued. The faction's
 /// name is the row's (`0x62c670` reads the name column), and `female` picks the label's gender.
 pub(crate) fn queue_standing_lines(
@@ -648,6 +667,29 @@ mod tests {
         );
         // A slot the player's race and class do not list, or no faction names: nothing.
         assert_eq!(visible_line(63, &Reputations::default(), &cat, 1, 1), None);
+    }
+
+    /// `0x4d5880`: any entry whose rank moves owes the quest log's `0x4de510(0)`, `HIDDEN` or not
+    /// listed alike; a move inside a rank owes nothing.
+    #[test]
+    fn a_rank_move_in_any_entry_owes_the_quest_log_its_update() {
+        use benilla_formats::faction_flags as flag;
+        let Some((cat, slot)) = stormwind() else {
+            return;
+        };
+        let moved = |flags: u8, old: i32, new: i32| {
+            rank_moved(
+                &[(63, 1), (slot, new)],
+                &store(slot, flags, old),
+                &cat,
+                1,
+                1,
+            )
+        };
+        assert!(moved(flag::VISIBLE, 0, 5000));
+        assert!(moved(flag::VISIBLE | flag::HIDDEN, 0, 5000));
+        assert!(moved(0, 0, -1001));
+        assert!(!moved(flag::VISIBLE, 0, 100));
     }
 
     /// `0x4d5760`: a rank change prints the new rank, an unchanged rank prints nothing, `HIDDEN`

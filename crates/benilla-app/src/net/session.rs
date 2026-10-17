@@ -381,6 +381,7 @@ fn on_reputation_delta(
     factions: Option<Res<crate::target::ring::Factions>>,
     mut chat_log: ResMut<crate::ui_chat::ChatLog>,
     mut quest: ResMut<QuestGiver>,
+    quest_log: Option<ResMut<crate::ui_quest_log::QuestLog>>,
 ) {
     if let SessionEvent::ReputationDelta { standings } = ev {
         crate::combat_log::chat::faction_standing(
@@ -390,6 +391,16 @@ fn on_reputation_delta(
             &mut chat_log,
         );
         if let (Some(f), Some(me)) = (factions.as_deref(), self_facts(&b)) {
+            let moved = crate::ui_reputation::rank_moved(
+                &standings,
+                &b.reputations,
+                f.catalog(),
+                me.race,
+                me.class,
+            );
+            if let (true, Some(mut quest_log)) = (moved, quest_log) {
+                quest_log.note_faction_rank_move();
+            }
             let lines = crate::ui_reputation::delta_lines(
                 &standings,
                 &b.reputations,

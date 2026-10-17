@@ -633,6 +633,8 @@ pub(crate) struct WallClockSample {
     /// The server's `time(nullptr)` at `received`.
     base_unix: u32,
     received: Instant,
+    /// The responses of the session so far, this one included.
+    count: u64,
 }
 
 impl ServerWallClock {
@@ -641,7 +643,13 @@ impl ServerWallClock {
         self.0 = Some(WallClockSample {
             base_unix: unix_time,
             received: Instant::now(),
+            count: self.samples() + 1,
         });
+    }
+
+    /// The responses sampled so far.
+    pub(crate) fn samples(&self) -> u64 {
+        self.0.map_or(0, |s| s.count)
     }
 
     /// Server unix seconds now, fractional.
