@@ -2143,10 +2143,13 @@ mod tests {
         assert_eq!(failed(&mut glue), Vec::<String>::new(), "the glue");
     }
 
-    /// The anchor loop (`0x767800`) and the XML length readers (`0x6f1eb0`, `0x6f1d60`,
-    /// `0x6f20a0`) log a node they refuse. The stock interface and benilla's layer write none, so
-    /// a line here is a read stricter than the reference's, or a layer file the reference would
-    /// refuse.
+    /// The anchor loop (`0x767800`), the XML length readers (`0x6f1eb0`, `0x6f1d60`, `0x6f20a0`),
+    /// the Backdrop's child loop (`0x77e875`), a text frame's `font=` (`0x879bc8`) and
+    /// `<FontString>` child (`0x879b3c`) and a model's `scale` (`0x8788d8`) log a node they refuse.
+    /// The core and glue the default load reads, and benilla's layer, write none of these in
+    /// 1.12.1, so a line here is a read stricter than the reference's, or a layer file the
+    /// reference would refuse. (The one stock line among them, BrowseName's font override, is in
+    /// the load-on-demand Blizzard_AuctionUI, which `tests/auction_frame.rs` holds to it.)
     #[test]
     fn every_anchor_and_length_the_stock_interface_writes_reads() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -2162,6 +2165,9 @@ mod tests {
                     "attributes in element",
                     "attribute in element",
                     "Unknown child node in",
+                    "Couldn't find font object named",
+                    "Invalid model scale",
+                    "FontString element overriding font",
                 ]
                 .iter()
                 .any(|t| l.contains(t))
