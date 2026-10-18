@@ -323,7 +323,7 @@ fn the_pages_close_button_sits_where_the_reference_seats_it_and_closes_the_windo
              return b:GetTop(), b:GetBottom(), b:GetLeft(), b:GetRight()",
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (
             (left + right) / 2.0 - page_left,
             (top + bottom) / 2.0 - page_top,
@@ -347,7 +347,7 @@ fn the_pages_close_button_sits_where_the_reference_seats_it_and_closes_the_windo
             _ => None,
         })
         .expect("the Close label draws");
-    assert_eq!(
+    benilla_ui::assert_near!(
         label,
         Some(benilla_ui::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
         "GameFontNormal — the UIPanelButtonTemplate face's own normal font"
@@ -387,7 +387,7 @@ fn the_collapse_all_fold_wears_the_row_font_and_the_references_seat() {
             _ => None,
         })
         .expect("the All label draws");
-    assert_eq!(
+    benilla_ui::assert_near!(
         label,
         (Some([1.0, 1.0, 1.0, 1.0]), Some(12.0)),
         "GameFontHighlight — the SAME face every SkillTypeLabel row wears"
@@ -404,7 +404,7 @@ fn the_collapse_all_fold_wears_the_row_font_and_the_references_seat() {
              return b:GetTop(), b:GetBottom(), b:GetLeft()",
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (tab_top + tab_bottom) / 2.0 - (btn_top + btn_bottom) / 2.0,
         3.0,
         "the fold sits 3px BELOW the cap's centre (ref's -3); +3 above was the bug"
@@ -412,7 +412,7 @@ fn the_collapse_all_fold_wears_the_row_font_and_the_references_seat() {
     let cap_right = s
         .eval::<f64>("return SkillFrameExpandTabLeft:GetRight()")
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         btn_left - cap_right,
         -3.0,
         "and 3px back over the cap (ref's -3 on x)"
@@ -426,7 +426,7 @@ fn the_collapse_all_fold_wears_the_row_font_and_the_references_seat() {
 fn the_expand_tab_fits_its_label_at_load() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = shown_skills_page_with(Some(Box::new(super::FixedWidthFont(7.0))));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return SkillFrameExpandButtonFrame:GetWidth()")
             .unwrap(),
         7.0 * 3.0 + 45.0,
@@ -439,15 +439,15 @@ fn the_expand_tab_fits_its_label_at_load() {
              SkillFrameExpandTabRight:GetLeft()",
         )
         .unwrap();
-    assert_eq!(mid_r, cap_r_l, "the middle stretches to the right cap");
-    assert_eq!(
+    benilla_ui::assert_near!(mid_r, cap_r_l, "the middle stretches to the right cap");
+    benilla_ui::assert_near!(
         mid_r - mid_l,
         66.0 - 16.0,
         "and carries the whole span minus the two caps"
     );
     s.run("SkillFrame_UpdateSkills()").unwrap();
     s.resolve();
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return SkillFrameExpandButtonFrame:GetWidth()")
             .unwrap(),
         66.0
@@ -538,7 +538,7 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     let n = s.eval::<i64>("return GetNumSkillLines()").unwrap();
-    assert_eq!(n, 25, "22 lines under 3 headers");
+    benilla_ui::assert_near!(n, 25, "22 lines under 3 headers");
     let (last_name, last_is_header) = s
         .eval::<(String, Option<i64>)>(&format!("local n, h = GetSkillLineInfo({n}) return n, h"))
         .unwrap();
@@ -551,7 +551,7 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
     let (_, bar_max) = s
         .eval::<(f64, f64)>("return SkillListScrollFrameScrollBar:GetMinMaxValues()")
         .unwrap();
-    assert_eq!(bar_max, f64::from((n as i32 - 12) * 15));
+    benilla_ui::assert_near!(bar_max, f64::from((n as i32 - 12) * 15));
     // The overflow as geometry: the stored range is not re-measured for a child's resize.
     let overflow = s
         .eval::<f64>(
@@ -559,7 +559,7 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
              - SkillListScrollFrame:GetHeight()",
         )
         .unwrap();
-    assert_eq!(overflow, f64::from(n as i32 * 15 - 220));
+    benilla_ui::assert_near!(overflow, f64::from(n as i32 * 15 - 220));
     assert!(
         overflow < bar_max,
         "the frame is taller than its twelve rows"
@@ -572,13 +572,13 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
     )
     .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return FauxScrollFrame_GetOffset(SkillListScrollFrame)")
             .unwrap(),
         n - 12,
         "the row offset reaches the bar's end, not the overflow's"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<String>("return SkillRankFrame12SkillName:GetText()")
             .unwrap(),
         last_name,

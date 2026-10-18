@@ -164,9 +164,9 @@ fn update_paints_a_static_frame_by_name_and_resizes_it() {
 
     s.run("MoneyFrame_Update(\"TestPurse\", 20304)").unwrap(); // 2g 3s 4c
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    assert_eq!(coins(&s, "TestPurse"), ("2".into(), "3".into(), "4".into()));
-    assert_eq!(shown(&s, "TestPurse"), (true, true, true));
-    assert_eq!(
+    benilla_ui::assert_near!(coins(&s, "TestPurse"), ("2".into(), "3".into(), "4".into()));
+    benilla_ui::assert_near!(shown(&s, "TestPurse"), (true, true, true));
+    benilla_ui::assert_near!(
         s.eval::<i64>("return TestPurse.staticMoney").unwrap(),
         20_304
     );
@@ -174,17 +174,17 @@ fn update_paints_a_static_frame_by_name_and_resizes_it() {
     // A coin is one 8 px digit plus the 13 px small icon, 21; the frame packs three with the -4
     // spacing: 13 + 21 * 3 + 4 * 2 = 84. The text measure answers inside the Lua call, so this
     // holds on the first pass.
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return TestPurseGoldButton:GetWidth()")
             .unwrap(),
         21.0
     );
-    assert_eq!(s.eval::<f64>("return TestPurse:GetWidth()").unwrap(), 84.0);
+    benilla_ui::assert_near!(s.eval::<f64>("return TestPurse:GetWidth()").unwrap(), 84.0);
 
     // Collapse away two denominations and the frame shrinks to match: 13 + 21 = 34.
     s.run("MoneyFrame_Update(\"TestPurse\", 9)").unwrap();
-    assert_eq!(shown(&s, "TestPurse"), (false, false, true));
-    assert_eq!(s.eval::<f64>("return TestPurse:GetWidth()").unwrap(), 34.0);
+    benilla_ui::assert_near!(shown(&s, "TestPurse"), (false, false, true));
+    benilla_ui::assert_near!(s.eval::<f64>("return TestPurse:GetWidth()").unwrap(), 34.0);
 }
 
 /// `this.small` unset picks `MONEY_ICON_WIDTH` (19) and `MONEY_BUTTON_SPACING` (-4).
@@ -192,22 +192,22 @@ fn update_paints_a_static_frame_by_name_and_resizes_it() {
 fn the_large_template_measures_with_the_nineteen_pixel_icon() {
     benilla_formats::wow_data_or_skip!();
     let s = harness(20_304);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return TestBigPurseGoldButton:GetWidth()")
             .unwrap(),
         8.0 + 19.0
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return TestBigPurse:GetWidth()").unwrap(),
         19.0 + 27.0 * 3.0 + 8.0,
         "19 base + three 27px coins, packed with two -4px gaps"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return MONEY_ICON_WIDTH").unwrap(),
         19,
         "the reference's own constants ship with the kit — addons read them"
     );
-    assert_eq!(s.eval::<i64>("return COPPER_PER_GOLD").unwrap(), 10_000);
+    benilla_ui::assert_near!(s.eval::<i64>("return COPPER_PER_GOLD").unwrap(), 10_000);
 }
 
 /// `MoneyFrame_SetType` returns on an unknown type before touching anything (`MoneyFrame.lua:144`).

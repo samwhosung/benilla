@@ -490,13 +490,13 @@ fn managed_positions_engage_for_the_bare_frame_name() {
     // No bars: the row's base, 60, which the XML anchor also gives.
     s.run("UIParent_ManageFramePositions()").unwrap();
     s.resolve();
-    assert_eq!(bottom(&s), 60.0, "baseY");
+    benilla_ui::assert_near!(bottom(&s), 60.0, "baseY");
 
     // The pass reads `SHOW_MULTI_ACTIONBAR_1`/`_2`, not the bars (`UIParent.lua:1599-1606`).
     s.run("SHOW_MULTI_ACTIONBAR_1 = 1 SHOW_MULTI_ACTIONBAR_2 = 1 UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s), 102.0, "60 + bottomEither 42 — the row engaged");
+    benilla_ui::assert_near!(bottom(&s), 102.0, "60 + bottomEither 42 — the row engaged");
 
     // The stance bar shows too. The pass touches its three shelf textures by name, unguarded
     // (`UIParent.lua:1705-1732`), so the stand-in bar needs stand-in textures.
@@ -511,12 +511,12 @@ fn managed_positions_engage_for_the_bare_frame_name() {
     )
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s), 144.0, "60 + 42 + pet 42");
+    benilla_ui::assert_near!(bottom(&s), 144.0, "60 + 42 + pet 42");
 
     s.run("ShapeshiftBarFrame:Hide() UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s), 102.0, "back to the multibar-only stack");
+    benilla_ui::assert_near!(bottom(&s), 102.0, "back to the multibar-only stack");
 }
 
 /// The roll icon's OnClick (`LootFrame.xml:353-361`): ctrl dresses up the item and shift posts

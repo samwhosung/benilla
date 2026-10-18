@@ -76,14 +76,14 @@ fn the_window_follows_the_timed_quests() {
     // The reference's timers read 1 s short, formatted by `SecondsToTime` (`UIParent.lua:1004`).
     assert_eq!(row_text(&s, 1), "14 Mins 19 Secs ");
     assert_eq!(row_text(&s, 2), "44 Secs ");
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return QuestTimerFrame:GetHeight()").unwrap(),
         45.0 + 16.0 * 2.0
     );
 
     // Timer 2 maps to the fourth log row: the header, then the quests by title (`0x4decfb`), the
     // untimed one between the two timed.
-    assert_eq!(s.eval::<i64>("return GetQuestIndexForTimer(2)").unwrap(), 4);
+    benilla_ui::assert_near!(s.eval::<i64>("return GetQuestIndexForTimer(2)").unwrap(), 4);
 
     // The clock alone moves; OnUpdate repaints with no QUEST_LOG_UPDATE (`QuestTimerFrame.lua:35`).
     s.set_server_unix_time(1_000_030.0);

@@ -216,12 +216,12 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
     s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return BenillaOptionsFrameCategoryListRowControlsBg:GetWidth()")
             .unwrap(),
         187.0
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return BenillaOptionsFrameCategoryListRowControlsBg:GetHeight()")
             .unwrap(),
         21.0
@@ -255,7 +255,7 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
     };
 
     let before = washes(&mut s);
-    assert_eq!(
+    benilla_ui::assert_near!(
         before.len(),
         1,
         "exactly one wash shows: the locked selection"
@@ -266,7 +266,7 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
     s.run("BenillaOptionsFrameCategoryListRowAudio:Click()")
         .unwrap();
     let after = washes(&mut s);
-    assert_eq!(after.len(), 1, "the wash moved, not multiplied");
+    benilla_ui::assert_near!(after.len(), 1, "the wash moved, not multiplied");
     assert!(gold(&after[0].1), "still the gold tint: {:?}", after[0].1);
     assert!(
         after[0].0.top < before[0].0.top,
@@ -292,13 +292,13 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
     };
     s.mouse_move(cx, cy);
     let hovered = washes(&mut s);
-    assert_eq!(
+    benilla_ui::assert_near!(
         hovered.len(),
         2,
         "hover adds its wash beside the locked gold"
     );
-    assert_eq!(hovered.iter().filter(|w| gold(&w.1)).count(), 1);
-    assert_eq!(
+    benilla_ui::assert_near!(hovered.iter().filter(|w| gold(&w.1)).count(), 1);
+    benilla_ui::assert_near!(
         hovered.iter().filter(|w| blue(&w.1)).count(),
         1,
         "the hover tint is 1.14's steel-blue: {:?}",
@@ -307,7 +307,7 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
 
     s.mouse_move(5.0, 5.0);
     let left = washes(&mut s);
-    assert_eq!(left.len(), 1);
+    benilla_ui::assert_near!(left.len(), 1);
     assert!(gold(&left[0].1));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

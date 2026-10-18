@@ -79,12 +79,12 @@ fn the_window_opens_on_friends_with_the_guild_tab_disabled() {
             .unwrap(),
         "Friends List"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return IsInGuild() and 1 or 0").unwrap(),
         0,
         "no guild is seated, which is what makes the next assertion mean something"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return FriendsFrameTab3.isDisabled or 0")
             .unwrap(),
         1,
@@ -100,13 +100,13 @@ fn the_window_opens_on_friends_with_the_guild_tab_disabled() {
         .eval::<bool>("return FriendsListFrame:IsVisible()")
         .unwrap());
     // Big window tabs (20px ends) along the bottom; the Friends/Ignore pair is compact (16px).
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return FriendsFrameTab1Left:GetWidth()")
             .unwrap(),
         20.0,
         "the window tab strip keeps the big tab art"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return FriendsFrameToggleTab1Left:GetWidth()")
             .unwrap(),
         16.0,
@@ -139,7 +139,7 @@ fn the_social_tabs_fit_their_labels_on_the_first_show() {
             ))
             .unwrap();
         assert!(label > 0.0, "tab {i} measured its label");
-        assert_eq!(
+        benilla_ui::assert_near!(
             width,
             label + SIDES,
             "tab {i} is its text plus the two end slices, from the base template's OnShow"
@@ -767,21 +767,22 @@ fn the_who_list_reaches_its_last_row_at_the_bars_end() {
     let (_, bar_max) = s
         .eval::<(f64, f64)>("return WhoListScrollFrameScrollBar:GetMinMaxValues()")
         .unwrap();
-    assert_eq!(bar_max, 512.0, "(49 − 17) × 16");
+    benilla_ui::assert_near!(bar_max, 512.0, "(49 − 17) × 16");
     // The overflow as geometry: the stored range is not re-measured for a child's resize.
     let overflow = s
         .eval::<f64>(
             "return WhoListScrollFrameScrollChildFrame:GetHeight() - WhoListScrollFrame:GetHeight()",
         )
         .unwrap();
-    assert_eq!(
-        overflow, 497.0,
+    benilla_ui::assert_near!(
+        overflow,
+        497.0,
         "49 × 16 − 287: the frame is taller than its rows"
     );
 
     s.run("WhoListScrollFrameScrollBar:SetValue(512)").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return FauxScrollFrame_GetOffset(WhoListScrollFrame)")
             .unwrap(),
         32

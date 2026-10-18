@@ -82,7 +82,7 @@ fn a_landmark_draws_its_poi_icon_at_its_map_position() {
     s.set_world_map_landmark_sources(vec![landmark("Stormwind Warrior Trainer", 6, (0.25, 0.5))]);
     s.run("WorldMapFrame_Update()").unwrap();
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return GetNumMapLandmarks()").unwrap(),
         1,
         "the host reports the one landmark"
@@ -98,7 +98,7 @@ fn a_landmark_draws_its_poi_icon_at_its_map_position() {
     let (l, t, _, b, r, ..): (f32, f32, f32, f32, f32, f32, f32, f32) = s
         .eval("return WorldMapFramePOI1Texture:GetTexCoord()")
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (l, r, t, b),
         (0.75, 0.875, 0.0, 0.125),
         "POIIcons cell 6 — the red flag"
@@ -111,7 +111,7 @@ fn a_landmark_draws_its_poi_icon_at_its_map_position() {
              return ox, oy",
         )
         .unwrap();
-    assert_eq!((x, y), (0.25 * 1002.0, -0.5 * 668.0));
+    benilla_ui::assert_near!((x, y), (0.25 * 1002.0, -0.5 * 668.0));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -848,7 +848,7 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
              GetScreenWidth(), GetScreenHeight()",
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (w, h),
         (sw, sh),
         "the stale row seated nothing — the map is still the screen, as its setAllPoints authored it"
@@ -871,7 +871,7 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     let (w, h) = s
         .eval::<(f64, f64)>("return WorldMapFrame:GetWidth(), WorldMapFrame:GetHeight()")
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (w, h),
         (1024.0, 768.0),
         "a movable+resizable frame takes it"
@@ -882,7 +882,7 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
         "and the position arm stamps the bit it was written under"
     );
     let saved = s.user_placed_layouts();
-    assert_eq!(saved.len(), 1, "which is what puts the row back: {saved:?}");
+    benilla_ui::assert_near!(saved.len(), 1, "which is what puts the row back: {saved:?}");
     assert_eq!(
         benilla_ui::script::FrameLayout {
             level: None,
@@ -917,7 +917,7 @@ fn the_fullscreen_quads_follow_a_resize() {
     s.resolve();
 
     let width = |s: &UiScript, f: &str| s.eval::<f64>(&format!("return {f}:GetWidth()")).unwrap();
-    assert_eq!(width(&s, "BlackoutWorld"), 1600.0, "the load edge sized it");
+    benilla_ui::assert_near!(width(&s, "BlackoutWorld"), 1600.0, "the load edge sized it");
 
     // Grown, still wider than 4:3, so all three take their recompute branch.
     assert!(s.set_screen_size(1920.0, 1080.0), "the size changed");
@@ -925,15 +925,15 @@ fn the_fullscreen_quads_follow_a_resize() {
     s.resolve();
 
     let screen = s.eval::<f64>("return GetScreenWidth()").unwrap();
-    assert_eq!(screen, 1920.0);
+    benilla_ui::assert_near!(screen, 1920.0);
     for quad in ["BlackoutWorld", "UpperBlackBar", "LowerBlackBar"] {
-        assert_eq!(
+        benilla_ui::assert_near!(
             width(&s, quad),
             screen,
             "{quad} still spans the OLD screen after a resize — the world shows through beside it"
         );
     }
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return BlackoutWorld:GetHeight()").unwrap(),
         1080.0,
         "…and the blackout is the new height too"

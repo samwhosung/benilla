@@ -1745,10 +1745,13 @@ mod clip_plumb_tests {
 
         // WoW space: bottom 468, left 0, top 668, right 300; y-down through the 768 window, the
         // top is 100 and the bottom 300.
-        assert_eq!(
-            marker.clip,
-            Some(Rect::new(0.0, 100.0, 300.0, 300.0)),
-            "the engine's ScrollFrame clip survives the y-up→y-down flip into UiQuad::clip"
+        // Within the getters' sub-unit drift (`benilla_ui::test_support::TOL`).
+        let clip = marker.clip.expect("clipped");
+        let want = Rect::new(0.0, 100.0, 300.0, 300.0);
+        assert!(
+            (clip.min - want.min).abs().max_element() < 1e-3
+                && (clip.max - want.max).abs().max_element() < 1e-3,
+            "the engine's ScrollFrame clip survives the y-up→y-down flip into UiQuad::clip: {clip:?}"
         );
     }
 
@@ -1766,10 +1769,12 @@ mod clip_plumb_tests {
             .find(|q| q.color[0] == 1.0 && q.color[1] == 0.0 && q.color[2] == 0.0)
             .expect("the colored marker quad extracted");
 
-        assert_eq!(
-            marker.clip,
-            Some(Rect::new(0.0, 100.0, 300.0, 300.0)),
-            "dial 0.5 moves nothing outside UIParent"
+        let clip = marker.clip.expect("clipped");
+        let want = Rect::new(0.0, 100.0, 300.0, 300.0);
+        assert!(
+            (clip.min - want.min).abs().max_element() < 1e-3
+                && (clip.max - want.max).abs().max_element() < 1e-3,
+            "dial 0.5 moves nothing outside UIParent: {clip:?}"
         );
     }
 

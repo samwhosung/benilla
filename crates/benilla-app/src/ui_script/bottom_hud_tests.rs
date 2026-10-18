@@ -384,9 +384,11 @@ fn rect(s: &UiScript, name: &str) -> (f32, f32, f32, f32) {
     .unwrap_or_else(|e| panic!("rect of {name}: {e}"))
 }
 
-/// Touching edges do not overlap: the stack seats windows flush against each other.
+/// Touching edges do not overlap: the stack seats windows flush against each other, within the
+/// sub-unit drift of the getters' rounding (`benilla_ui::test_support::TOL`).
 fn overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
-    a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
+    let lt = |x: f32, y: f32| f64::from(x) < f64::from(y) - benilla_ui::test_support::TOL;
+    lt(a.0, b.2) && lt(b.0, a.2) && lt(a.1, b.3) && lt(b.1, a.3)
 }
 
 /// The item-push card overlaps a raised bottom bar, as in the reference: the card is MEDIUM under

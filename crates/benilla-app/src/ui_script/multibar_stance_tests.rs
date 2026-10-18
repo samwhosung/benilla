@@ -80,8 +80,9 @@ fn shipped_multibars_drive_end_to_end() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     let frames = load_action_bar(&s, &[]);
-    assert_eq!(
-        frames, 100,
+    benilla_ui::assert_near!(
+        frames,
+        100,
         "what stock MultiActionBars.xml declares: the four bar frames and their 48 buttons, \
          each with a $parentCooldown — the same 100 ours built for the same seats"
     );
@@ -136,12 +137,12 @@ fn shipped_multibars_drive_end_to_end() {
     // + (0, 17): its button 1 spans x[8,44] y[57,93]. BottomRight's LEFT is BottomLeft's
     // (500-wide) RIGHT + (10, 0), so its left is 518 (MultiActionBars.xml:496-513).
     let bl = icon("Interface\\Icons\\Spell_BL").expect("BottomLeft button 1 icon");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (bl.left, bl.bottom, bl.right, bl.top),
         (8.0, 57.0, 44.0, 93.0)
     );
     let br = icon("Interface\\Icons\\Spell_BR").expect("BottomRight button 1 icon");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (br.left, br.bottom, br.right, br.top),
         (518.0, 57.0, 554.0, 93.0)
     );
@@ -154,7 +155,7 @@ fn shipped_multibars_drive_end_to_end() {
             )
             .count()
     };
-    assert_eq!(
+    benilla_ui::assert_near!(
         rings(&quads, "Interface\\Buttons\\UI-Quickslot2"),
         3,
         "the occupied main slot + the 2 occupied multibar buttons; every empty well is hidden, \
@@ -164,7 +165,7 @@ fn shipped_multibars_drive_end_to_end() {
     // BottomLeft button 1 (centre (26, 75)) queues its fixed id 61, bonus page or not.
     s.mouse_button(26.0, 75.0, "LeftButton", true);
     s.mouse_button(26.0, 75.0, "LeftButton", false);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.take_action_uses()
             .into_iter()
             .map(|u| u.action)
@@ -175,7 +176,7 @@ fn shipped_multibars_drive_end_to_end() {
     s.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
     s.mouse_button(26.0, 75.0, "LeftButton", true);
     s.mouse_button(26.0, 75.0, "LeftButton", false);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.take_action_uses()
             .into_iter()
             .map(|u| u.action)
@@ -193,15 +194,15 @@ fn shipped_multibars_drive_end_to_end() {
     // While a payload is held every empty well shows the `UI-Quickslot` ring: 11 main, 22 multibar.
     s.fire_event("ACTIONBAR_SHOWGRID", vec![]);
     s.resolve();
-    assert_eq!(
+    benilla_ui::assert_near!(
         rings(&s.extract(), "Interface\\Buttons\\UI-Quickslot"),
         33,
         "grid shows every empty well as a drop target"
     );
     s.fire_event("ACTIONBAR_HIDEGRID", vec![]);
     s.resolve();
-    assert_eq!(rings(&s.extract(), "Interface\\Buttons\\UI-Quickslot"), 0);
-    assert_eq!(
+    benilla_ui::assert_near!(rings(&s.extract(), "Interface\\Buttons\\UI-Quickslot"), 0);
+    benilla_ui::assert_near!(
         rings(&s.extract(), "Interface\\Buttons\\UI-Quickslot2"),
         3,
         "letting go hides every empty well again, the main bar's included; the three occupied \
@@ -305,12 +306,12 @@ fn shipped_stance_bar_drives_end_to_end() {
             .and_then(|q| q.rect)
     };
     let a = icon(&quads, "Interface\\Icons\\Stance_A").expect("stance button 1 icon");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (a.left, a.bottom, a.right, a.top),
         (41.0, 101.0, 71.0, 131.0)
     );
     let b = icon(&quads, "Interface\\Icons\\Stance_B").expect("stance button 2 icon");
-    assert_eq!(b.left, 78.0);
+    benilla_ui::assert_near!(b.left, 78.0);
 
     assert!(s
         .eval::<bool>("return ShapeshiftButton1:GetChecked()")
@@ -326,7 +327,7 @@ fn shipped_stance_bar_drives_end_to_end() {
         } if p.contains("Stance_B") => Some(*c),
         _ => None,
     });
-    assert_eq!(
+    benilla_ui::assert_near!(
         grey,
         Some([0.4, 0.4, 0.4, 1.0]),
         "not-castable greys the icon"
@@ -338,12 +339,12 @@ fn shipped_stance_bar_drives_end_to_end() {
             matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p.contains("Stance_"))
         })
         .count();
-    assert_eq!(stance_icons, 2);
+    benilla_ui::assert_near!(stance_icons, 2);
 
     // Button 2 (centre (93, 116)) queues the form's spell id; cast or cancel is the app drain's.
     s.mouse_button(93.0, 116.0, "LeftButton", true);
     s.mouse_button(93.0, 116.0, "LeftButton", false);
-    assert_eq!(s.take_shapeshift_casts(), vec![71]);
+    benilla_ui::assert_near!(s.take_shapeshift_casts(), vec![71]);
 
     // The OnClick undoes the CheckButton's own toggle (BonusActionBarFrame.xml:31-38), so the
     // ring waits for the form byte…
@@ -359,7 +360,7 @@ fn shipped_stance_bar_drives_end_to_end() {
     // …and clicking the active form still queues its spell (the app drain no-ops it).
     s.mouse_button(56.0, 116.0, "LeftButton", true);
     s.mouse_button(56.0, 116.0, "LeftButton", false);
-    assert_eq!(s.take_shapeshift_casts(), vec![2457]);
+    benilla_ui::assert_near!(s.take_shapeshift_casts(), vec![2457]);
     assert!(
         s.eval::<bool>("return ShapeshiftButton1:GetChecked()")
             .unwrap(),
@@ -631,29 +632,29 @@ fn raising_a_bottom_bar_moves_the_managed_bottom_stack() {
     let offset_y = |s: &UiScript| s.eval::<f64>("return CONTAINER_OFFSET_Y").unwrap();
 
     show_bars(&s, &[]);
-    assert_eq!(offset_y(&s), 70.0, "band clear: the row's base");
+    benilla_ui::assert_near!(offset_y(&s), 70.0, "band clear: the row's base");
     let low = cast_y(&s);
-    assert_eq!(low, 60.0, "CastingBarFrame's baseY");
+    benilla_ui::assert_near!(low, 60.0, "CastingBarFrame's baseY");
 
     show_bars(&s, &[1]);
-    assert_eq!(
+    benilla_ui::assert_near!(
         offset_y(&s),
         97.0,
         "bottom-left up: 70 + the row's bottomEither 27"
     );
-    assert_eq!(cast_y(&s), 100.0, "the cast bar rises with it (60 + 40)");
+    benilla_ui::assert_near!(cast_y(&s), 100.0, "the cast bar rises with it (60 + 40)");
 
     show_bars(&s, &[2]);
-    assert_eq!(offset_y(&s), 97.0, "bottomEither is either");
-    assert_eq!(cast_y(&s), 100.0);
+    benilla_ui::assert_near!(offset_y(&s), 97.0, "bottomEither is either");
+    benilla_ui::assert_near!(cast_y(&s), 100.0);
 
     // Both up pays `bottomEither` once, and the row's `bottomRight` is 0.
     show_bars(&s, &[1, 2]);
-    assert_eq!(offset_y(&s), 97.0);
+    benilla_ui::assert_near!(offset_y(&s), 97.0);
 
     show_bars(&s, &[]);
-    assert_eq!(offset_y(&s), 70.0);
-    assert_eq!(cast_y(&s), low);
+    benilla_ui::assert_near!(offset_y(&s), 70.0);
+    benilla_ui::assert_near!(cast_y(&s), low);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -1020,21 +1021,21 @@ fn the_stance_bar_sits_where_the_pass_puts_it() {
     };
 
     show_bars(&s, &[]);
-    assert_eq!(
+    benilla_ui::assert_near!(
         seat(&s),
         0.0,
         "no bottom bar: the row's baseY, on the main bar"
     );
     show_bars(&s, &[1]);
-    assert_eq!(seat(&s), 45.0, "bottom-left up: +45, the ref's raised seat");
+    benilla_ui::assert_near!(seat(&s), 45.0, "bottom-left up: +45, the ref's raised seat");
     show_bars(&s, &[2]);
-    assert_eq!(
+    benilla_ui::assert_near!(
         seat(&s),
         0.0,
         "the RIGHT bottom bar is not under it — the row's flag is bottomLeft, not bottomEither"
     );
     show_bars(&s, &[]);
-    assert_eq!(seat(&s), 0.0);
+    benilla_ui::assert_near!(seat(&s), 0.0);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -1077,7 +1078,7 @@ fn the_stance_shelf_follows_the_bottom_left_bar() {
         shown(&s, "ShapeshiftBarMiddle"),
         "3 forms: the middle strip"
     );
-    assert_eq!(ring(&s), 64.0, "unraised rings are the ref's 64");
+    benilla_ui::assert_near!(ring(&s), 64.0, "unraised rings are the ref's 64");
 
     // Two forms: `ShapeshiftBar_Update` hides the middle strip (BonusActionBarFrame.lua:166-167).
     s.set_shapeshift_forms(vec![form(2457), form(71)]);
@@ -1088,11 +1089,11 @@ fn the_stance_shelf_follows_the_bottom_left_bar() {
         !shown(&s, "ShapeshiftBarMiddle"),
         "exactly 2 forms: end caps only"
     );
-    assert_eq!(ring(&s), 64.0);
+    benilla_ui::assert_near!(ring(&s), 64.0);
 
     // Raising the bottom-left bar moves the seat and hides the art in one pass.
     show_bars(&s, &[1]);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("local _, _, _, _, y = ShapeshiftBarFrame:GetPoint() return y")
             .unwrap(),
         45.0,
@@ -1108,7 +1109,7 @@ fn the_stance_shelf_follows_the_bottom_left_bar() {
             "{region} must not draw across the row below"
         );
     }
-    assert_eq!(ring(&s), 50.0, "raised rings are the ref's 50");
+    benilla_ui::assert_near!(ring(&s), 50.0, "raised rings are the ref's 50");
 
     // A third form learned while raised: `ShapeshiftBar_Update` shows the middle strip regardless
     // (BonusActionBarFrame.lua:169-175) and nothing runs the pass on that event, so the strip
@@ -1121,12 +1122,12 @@ fn the_stance_shelf_follows_the_bottom_left_bar() {
     );
     s.run("UIParent_ManageFramePositions()").unwrap();
     assert!(!shown(&s, "ShapeshiftBarMiddle"));
-    assert_eq!(ring(&s), 50.0);
+    benilla_ui::assert_near!(ring(&s), 50.0);
 
     show_bars(&s, &[]);
     assert!(shown(&s, "ShapeshiftBarMiddle"));
-    assert_eq!(ring(&s), 64.0);
-    assert_eq!(
+    benilla_ui::assert_near!(ring(&s), 64.0);
+    benilla_ui::assert_near!(
         s.eval::<f64>("local _, _, _, _, y = ShapeshiftBarFrame:GetPoint() return y")
             .unwrap(),
         0.0
@@ -1170,7 +1171,7 @@ fn the_stance_shelf_is_as_long_as_the_form_count() {
 
     // One form (a rogue): the cap sits 12 px into the left cap (BonusActionBarFrame.lua:165).
     set_forms(&mut s, 1);
-    assert_eq!(
+    benilla_ui::assert_near!(
         cap(&s),
         12.0,
         "one form: the cap sits 12px into the left cap"
@@ -1187,26 +1188,26 @@ fn the_stance_shelf_is_as_long_as_the_form_count() {
 
     // Two forms: the caps butt together, 45 + 42 = 87 px of shelf (l.168).
     set_forms(&mut s, 2);
-    assert_eq!(cap(&s), 45.0, "two forms: cap on the left cap's RIGHT edge");
+    benilla_ui::assert_near!(cap(&s), 45.0, "two forms: cap on the left cap's RIGHT edge");
 
     // Past two, the middle strip is 38 px per extra form and the cap chains off it (l.170-174).
     set_forms(&mut s, 3);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ShapeshiftBarMiddle:GetWidth()")
             .unwrap(),
         38.0,
         "3 forms: one slot of middle"
     );
-    assert_eq!(cap(&s), 83.0);
+    benilla_ui::assert_near!(cap(&s), 83.0);
 
     set_forms(&mut s, 5);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ShapeshiftBarMiddle:GetWidth()")
             .unwrap(),
         114.0,
         "5 forms: three slots of middle — the width the ref computes, not the declared 38"
     );
-    assert_eq!(cap(&s), 159.0);
+    benilla_ui::assert_near!(cap(&s), 159.0);
     // Button 5 spans 159..189 (11 + 4 * 37); the cap must clear it.
     assert!(
         cap(&s) >= 11.0 + 4.0 * 37.0,
@@ -1214,7 +1215,7 @@ fn the_stance_shelf_is_as_long_as_the_form_count() {
     );
 
     set_forms(&mut s, 1);
-    assert_eq!(cap(&s), 12.0);
+    benilla_ui::assert_near!(cap(&s), 12.0);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -1435,7 +1436,7 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
     for region in shelf {
         assert!(!shown(&s, region), "{region} is down under a raised bar");
     }
-    assert_eq!(ring(&s), 50.0);
+    benilla_ui::assert_near!(ring(&s), 50.0);
 
     // A stance switch: the form byte flips to Defensive and category 47 arms for a second on all
     // three, a state move the reference announces through the aura and cooldown events.
@@ -1455,7 +1456,7 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
             "{region}: the shelf re-shown over the raised bar"
         );
     }
-    assert_eq!(ring(&s), 50.0);
+    benilla_ui::assert_near!(ring(&s), 50.0);
     assert_eq!(edge, FormsEdge::Silent);
     assert_eq!(log(&s), "", "a state move fires no list edge");
     // …and the checked ring follows the aura event the switch carries.

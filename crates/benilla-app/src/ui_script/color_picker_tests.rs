@@ -117,7 +117,7 @@ fn has_opacity_shows_the_slider_and_widens_the_window() {
     assert!(!s
         .eval::<bool>("return OpacitySliderFrame:IsVisible()")
         .unwrap());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ColorPickerFrame:GetWidth()").unwrap(),
         305.0
     );
@@ -130,12 +130,12 @@ fn has_opacity_shows_the_slider_and_widens_the_window() {
     assert!(s
         .eval::<bool>("return OpacitySliderFrame:IsVisible()")
         .unwrap());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return OpacitySliderFrame:GetValue()")
             .unwrap(),
         0.25
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ColorPickerFrame:GetWidth()").unwrap(),
         365.0
     );
@@ -509,13 +509,13 @@ fn the_shipped_window_carries_the_wheel_at_the_references_geometry() {
              return r:GetLeft(), r:GetBottom(), r:GetWidth(), r:GetHeight()",
         )
         .unwrap();
-    assert_eq!((ww, wh), (128.0, 128.0), "ref l.186-195: a 128 square");
+    benilla_ui::assert_near!((ww, wh), (128.0, 128.0), "ref l.186-195: a 128 square");
     // The window is 365x200 centred on a 1024x768 screen; the wheel is TOPLEFT (16, -32) in it.
     let (fl, ft): (f32, f32) = s
         .eval("return ColorPickerFrame:GetLeft(), ColorPickerFrame:GetTop()")
         .unwrap();
-    assert_eq!(wl, fl + 16.0);
-    assert_eq!(wb, ft - 32.0 - 128.0);
+    benilla_ui::assert_near!(wl, fl + 16.0);
+    benilla_ui::assert_near!(wb, ft - 32.0 - 128.0);
 
     let (sl, sw, sh): (f32, f32, f32) = s
         .eval(
@@ -523,8 +523,8 @@ fn the_shipped_window_carries_the_wheel_at_the_references_geometry() {
              return r:GetLeft(), r:GetWidth(), r:GetHeight()",
         )
         .unwrap();
-    assert_eq!((sw, sh), (32.0, 128.0), "ref l.203-215");
-    assert_eq!(
+    benilla_ui::assert_near!((sw, sh), (32.0, 128.0), "ref l.203-215");
+    benilla_ui::assert_near!(
         sl,
         wl + ww + 24.0,
         "the strip anchors LEFT to the wheel's RIGHT at +24 — BY NAME"
@@ -540,7 +540,7 @@ fn the_shipped_window_carries_the_wheel_at_the_references_geometry() {
                 "local r = ColorPickerFrame:{getter}(); return r:GetWidth(), r:GetHeight()"
             ))
             .unwrap();
-        assert_eq!((w, h), (want_w, want_h), "{getter}");
+        benilla_ui::assert_near!((w, h), (want_w, want_h), "{getter}");
         let file: String = s
             .eval(&format!("return ColorPickerFrame:{getter}():GetTexture()"))
             .unwrap();

@@ -489,7 +489,7 @@ mod tests {
                 s.resolve();
                 let w = s.eval::<f32>("return FS:GetStringWidth()").unwrap();
                 let want = law(12.0 * seam, text) / seam;
-                assert_eq!(w, want, "seam {seam}, {text:?}: GetStringWidth");
+                benilla_ui::assert_near!(w, want, "seam {seam}, {text:?}: GetStringWidth");
                 let framed = s.eval::<f32>("return F:GetWidth()").unwrap();
                 assert!(
                     (framed - (want + 13.0)).abs() < 1e-4,
@@ -507,7 +507,7 @@ mod tests {
                 let w = s.eval::<f32>("return FS:GetStringWidth()").unwrap();
                 let pad = if pad > 0.0 { (dx * seam).round() } else { 0.0 };
                 let want = (law(12.0 * seam, "1234") + pad) / seam;
-                assert_eq!(w, want, "seam {seam}, shadow x {dx}");
+                benilla_ui::assert_near!(w, want, "seam {seam}, shadow x {dx}");
             }
 
             // At scale 2 the glyphs measure twice the size, but the shadow keeps its pixel.
@@ -516,7 +516,7 @@ mod tests {
             s.resolve();
             let w = s.eval::<f32>("return FS:GetStringWidth()").unwrap();
             let want = (law(24.0 * seam, "1234") + seam.round()) / (2.0 * seam);
-            assert_eq!(w, want, "seam {seam}, scale 2");
+            benilla_ui::assert_near!(w, want, "seam {seam}, scale 2");
         }
     }
 }

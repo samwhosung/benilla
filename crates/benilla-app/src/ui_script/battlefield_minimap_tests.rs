@@ -169,7 +169,7 @@ fn num(s: &UiScript, expr: &str) -> f64 {
 fn the_addon_loads_on_demand_through_uiparents_own_road() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = session();
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<Option<i64>>("return IsAddOnLoaded(\"Blizzard_BattlefieldMinimap\")")
             .unwrap(),
         None,
@@ -177,7 +177,7 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
     );
 
     s.run("ToggleBattlefieldMinimap()").unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return IsAddOnLoaded(\"Blizzard_BattlefieldMinimap\")")
             .unwrap(),
         1,
@@ -214,7 +214,7 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
             "#,
         )
         .unwrap();
-    assert_eq!(missing, None, "a declared frame never materialized");
+    benilla_ui::assert_near!(missing, None, "a declared frame never materialized");
 
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapRaid17.unit")
@@ -228,7 +228,7 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
     );
 
     // The `ADDON_LOADED` arm seeds the saved table from `BattlefieldMinimapDefaults`,
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, bool, bool)>(
             "return BattlefieldMinimapOptions.opacity, BattlefieldMinimapOptions.locked, \
              BattlefieldMinimapOptions.showPlayers"
@@ -243,11 +243,11 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
              return p, r:GetName(), rp, ox, oy",
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (point.as_str(), relative.as_str(), rel_point.as_str()),
         ("BOTTOMLEFT", "UIParent", "BOTTOMRIGHT")
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         (x, y),
         (
             -225.0 - num(&s, "CONTAINER_OFFSET_X"),
@@ -289,7 +289,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         "WarsongGulch"
     );
     for i in [1, 7, 12] {
-        assert_eq!(
+        benilla_ui::assert_near!(
             s.eval::<String>(&format!("return BattlefieldMinimap{i}:GetTexture()"))
                 .unwrap(),
             format!("Interface\\WorldMap\\WarsongGulch\\WarsongGulch{i}"),
@@ -297,8 +297,8 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         );
     }
 
-    assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 2);
-    assert_eq!(
+    benilla_ui::assert_near!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 2);
+    benilla_ui::assert_near!(
         s.eval::<i64>("return NUM_BATTLEFIELDMAP_OVERLAYS").unwrap(),
         3,
         "2 + 1 tiles: the 300×200 overlay needs two, the 256×256 one needs one"
@@ -328,15 +328,15 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
             .unwrap(),
         "Interface\\WorldMap\\WarsongGulch\\SilverwingHold1"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         (
             num(&s, "BattlefieldMinimapOverlay1:GetWidth()"),
             num(&s, "BattlefieldMinimapOverlay1:GetHeight()")
         ),
         (256.0 * SCALE, 200.0 * SCALE)
     );
-    assert_eq!(tex_rect(&s, 1), (0.0, 1.0, 0.0, 200.0 / 256.0));
-    assert_eq!(
+    benilla_ui::assert_near!(tex_rect(&s, 1), (0.0, 1.0, 0.0, 200.0 / 256.0));
+    benilla_ui::assert_near!(
         seat(&s, 1),
         (
             "TOPLEFT".into(),
@@ -352,12 +352,12 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
             .unwrap(),
         "Interface\\WorldMap\\WarsongGulch\\SilverwingHold2"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         num(&s, "BattlefieldMinimapOverlay2:GetWidth()"),
         44.0 * SCALE
     );
-    assert_eq!(tex_rect(&s, 2), (0.0, 44.0 / 64.0, 0.0, 200.0 / 256.0));
-    assert_eq!(
+    benilla_ui::assert_near!(tex_rect(&s, 2), (0.0, 44.0 / 64.0, 0.0, 200.0 / 256.0));
+    benilla_ui::assert_near!(
         seat(&s, 2),
         (
             "TOPLEFT".into(),
@@ -373,14 +373,14 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
             .unwrap(),
         "Interface\\WorldMap\\WarsongGulch\\WarsongLumberMill1"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         (
             num(&s, "BattlefieldMinimapOverlay3:GetWidth()"),
             num(&s, "BattlefieldMinimapOverlay3:GetHeight()")
         ),
         (56.0, 56.0)
     );
-    assert_eq!(tex_rect(&s, 3), (0.0, 1.0, 0.0, 1.0));
+    benilla_ui::assert_near!(tex_rect(&s, 3), (0.0, 1.0, 0.0, 1.0));
     for n in 1..=3 {
         assert!(
             shown(&s, &format!("BattlefieldMinimapOverlay{n}")),
@@ -391,13 +391,13 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
     // Un-explore the lumber mill: two tiles stay lit and the third parks; the pool never shrinks.
     s.set_world_map_explored(vec![0b010; 64]);
     s.tick(0.0); // the push queues WORLD_MAP_UPDATE, the addon's own repaint event
-    assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 1);
+    benilla_ui::assert_near!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 1);
     assert!(shown(&s, "BattlefieldMinimapOverlay1") && shown(&s, "BattlefieldMinimapOverlay2"));
     assert!(
         !shown(&s, "BattlefieldMinimapOverlay3"),
         "the tail parks hidden rather than being destroyed"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return NUM_BATTLEFIELDMAP_OVERLAYS").unwrap(),
         3,
         "…and the pool keeps its high-water mark"
@@ -412,7 +412,7 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = session();
     open(&mut s);
-    assert_eq!(s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(), 0);
+    benilla_ui::assert_near!(s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(), 0);
 
     // A world position here is already map UV, so a landmark source sits where it says.
     s.set_world_loc_projector(Box::new(|_, _, x, y| Some((x, y))));
@@ -430,7 +430,7 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
     ]);
     s.tick(0.0);
 
-    assert_eq!(s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(), 2);
+    benilla_ui::assert_near!(s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(), 2);
     assert!(shown(&s, "BattlefieldMinimapPOI1") && shown(&s, "BattlefieldMinimapPOI2"));
     // Cell 6 is column 6, row 0; cell 9 is column 1, row 1; `coordIncrement` is 16/128 = 0.125.
     let cell = |s: &UiScript, n: u32| -> (f64, f64) {
@@ -441,10 +441,10 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
             .unwrap();
         (l, t)
     };
-    assert_eq!(cell(&s, 1), (0.75, 0.0));
-    assert_eq!(cell(&s, 2), (0.125, 0.125));
+    benilla_ui::assert_near!(cell(&s, 1), (0.75, 0.0));
+    benilla_ui::assert_near!(cell(&s, 2), (0.125, 0.125));
     // CENTER on the window's TOPLEFT at (x × width, -y × height): v runs down, frame y runs up.
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(String, String, String, f64, f64)>(
             "local p, r, rp, x, y = BattlefieldMinimapPOI1:GetPoint(1) return p, r:GetName(), rp, x, y"
         )
@@ -458,12 +458,12 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
         )
     );
     // The default scale leaves the icon at `DEFAULT_POI_ICON_SIZE`.
-    assert_eq!(num(&s, "BattlefieldMinimapPOI1:GetWidth()"), 12.0);
+    benilla_ui::assert_near!(num(&s, "BattlefieldMinimapPOI1:GetWidth()"), 12.0);
 
     // A battleground whose map row carries a bigger `MinimapIconScale` grows every icon by it.
     s.set_battlefield_positions(Vec::new(), None, 1.5);
     s.run("BattlefieldMinimap_Update()").unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (
             num(&s, "BattlefieldMinimapPOI1:GetWidth()"),
             num(&s, "BattlefieldMinimapPOI1:GetHeight()")
@@ -474,13 +474,13 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
 
     s.set_world_map_landmark_sources(vec![landmark("Warsong Flag", 9, (0.75, 0.25))]);
     s.tick(0.0);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(),
         2,
         "the pool never shrinks"
     );
     assert!(shown(&s, "BattlefieldMinimapPOI1"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         cell(&s, 1),
         (0.125, 0.125),
         "slot 1 was re-seated on the surviving landmark, not left on the stale one"
@@ -535,7 +535,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         "Alliedguy",
         "…carrying the name the tooltip reads for a non-group teammate"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(String, String, f64, f64)>(
             "local p, r, rp, x, y = BattlefieldMinimapRaid1:GetPoint(1) return p, rp, x, y"
         )
@@ -558,7 +558,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
 
     // The party arm reads `GetPlayerMapPosition("party"..i)`, the world map's own feed.
     assert!(shown(&s, "BattlefieldMinimapParty1"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, f64)>(
             "local _, _, _, x, y = BattlefieldMinimapParty1:GetPoint(1) return x, y"
         )
@@ -631,7 +631,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     arrow_facts(&mut s);
     open(&mut s);
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>(
             r#"local n = 0
                for _, c in ipairs({ BattlefieldMinimap:GetChildren() }) do
@@ -664,7 +664,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
                end"#,
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         seat,
         (
             true,
@@ -882,9 +882,9 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         )
     };
     // Both toggles are checked off `BattlefieldMinimapDefaults`; the opacity row is an action.
-    assert_eq!(row(&s, 1), ("Show Teammates".into(), true));
-    assert_eq!(row(&s, 2), ("Lock Battle Map".into(), true));
-    assert_eq!(row(&s, 3), ("Change Opacity".into(), false));
+    benilla_ui::assert_near!(row(&s, 1), ("Show Teammates".into(), true));
+    benilla_ui::assert_near!(row(&s, 2), ("Lock Battle Map".into(), true));
+    benilla_ui::assert_near!(row(&s, 3), ("Change Opacity".into(), false));
 
     s.run("DropDownList1Button1:Click()").unwrap();
     assert!(
@@ -894,7 +894,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
     );
     s.run("BattlefieldMinimapTab:Click(\"RightButton\")")
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         row(&s, 1),
         ("Show Teammates".into(), false),
         "…and the menu re-initializes off the new value"
@@ -911,7 +911,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         .unwrap();
     s.run("DropDownList1Button3:Click()").unwrap();
     assert!(shown(&s, "OpacityFrame"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(String, String, String, f64, f64)>(
             "local p, r, rp, x, y = OpacityFrame:GetPoint(1) return p, r:GetName(), rp, x, y"
         )

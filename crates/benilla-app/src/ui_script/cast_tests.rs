@@ -449,20 +449,20 @@ fn managed_positions_track_the_bottom_bar_stack() {
     // The load-time pass with no bars shown: the bare bases.
     s.run("UIParent_ManageFramePositions()").unwrap();
     s.resolve();
-    assert_eq!(
+    benilla_ui::assert_near!(
         bottom(&s, "CastingBarFrame"),
         60.0,
         "baseY replaces the XML 55"
     );
-    assert_eq!(bottom(&s, "ChatFrame1"), 85.0, "chat baseY");
+    benilla_ui::assert_near!(bottom(&s, "ChatFrame1"), 85.0, "chat baseY");
 
     // Both bottom multibars on: `bottomEither` for the cast bar, `bottomLeft` for chat. The flags
     // come from `SHOW_MULTI_ACTIONBAR_1`/`_2`, not the frames (`UIParent.lua:1599-1607`).
     s.run("SHOW_MULTI_ACTIONBAR_1 = 1 SHOW_MULTI_ACTIONBAR_2 = 1 UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s, "CastingBarFrame"), 100.0, "60 + bottomEither 40");
-    assert_eq!(bottom(&s, "ChatFrame1"), 102.0, "85 + bottomLeft 17");
+    benilla_ui::assert_near!(bottom(&s, "CastingBarFrame"), 100.0, "60 + bottomEither 40");
+    benilla_ui::assert_near!(bottom(&s, "ChatFrame1"), 102.0, "85 + bottomLeft 17");
 
     // The stance bar shows: the pet term, plus chat's both-flags extra. The pass's stance-bar arm
     // (`UIParent.lua:1705-1732`) shows and hides the bar's three shelf textures by name, unguarded.
@@ -477,8 +477,8 @@ fn managed_positions_track_the_bottom_bar_stack() {
     )
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s, "CastingBarFrame"), 140.0, "60 + 40 + pet 40");
-    assert_eq!(
+    benilla_ui::assert_near!(bottom(&s, "CastingBarFrame"), 140.0, "60 + 40 + pet 40");
+    benilla_ui::assert_near!(
         bottom(&s, "ChatFrame1"),
         142.0,
         "85 + 17 + pet 17 + both-flags 23"
@@ -487,8 +487,8 @@ fn managed_positions_track_the_bottom_bar_stack() {
     s.run("ShapeshiftBarFrame:Hide() UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
-    assert_eq!(bottom(&s, "CastingBarFrame"), 100.0);
-    assert_eq!(bottom(&s, "ChatFrame1"), 102.0);
+    benilla_ui::assert_near!(bottom(&s, "CastingBarFrame"), 100.0);
+    benilla_ui::assert_near!(bottom(&s, "ChatFrame1"), 102.0);
 }
 
 /// `CastingBarFrame_OnLoad` publishes `CastingBarFrameStatusBar` as an alias of the bar itself

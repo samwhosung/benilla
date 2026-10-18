@@ -315,7 +315,7 @@ fn xp_loss_cancel_then_reconfirm_reshows_with_the_alert_dress() {
     });
     s.fire_event("CONFIRM_XP_LOSS", vec![]);
     assert!(s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return StaticPopup1:GetWidth()").unwrap(),
         420.0,
         "showAlert widens the dialog to the ref's 420"
@@ -340,7 +340,7 @@ fn xp_loss_cancel_then_reconfirm_reshows_with_the_alert_dress() {
         "whileDead = 1 } StaticPopup_Show(\"TEST_PLAIN\")"
     ))
     .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return StaticPopup1:GetWidth()").unwrap(),
         320.0,
         "a non-alert Show resets the width"

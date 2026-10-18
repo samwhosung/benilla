@@ -316,7 +316,7 @@ fn the_stock_ui_menu_is_the_stock_menu_and_every_rung_opens_its_stock_window() {
             "GameMenuButtonContinue",
         ]
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, f64)>("return GameMenuFrame:GetWidth(), GameMenuFrame:GetHeight()")
             .unwrap(),
         (195.0, 246.0)
@@ -340,7 +340,7 @@ fn the_stock_ui_menu_is_the_stock_menu_and_every_rung_opens_its_stock_window() {
              LOGOUT, EXIT_GAME, RETURN_TO_GAME }",
         )
         .unwrap();
-    assert_eq!(labels, globals);
+    benilla_ui::assert_near!(labels, globals);
     assert!(!s
         .eval::<bool>("return BenillaGameMenuButtonEditMode ~= nil")
         .unwrap());

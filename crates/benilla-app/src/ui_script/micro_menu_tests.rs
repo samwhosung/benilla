@@ -73,19 +73,19 @@ fn the_micro_row_sits_where_the_reference_puts_it() {
                 "return {name}:GetLeft(), {name}:GetBottom(), {name}:GetWidth(), {name}:GetHeight()"
             ))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!((w, h), (29.0, 58.0), "{name} size");
-        assert_eq!(
+        benilla_ui::assert_near!((w, h), (29.0, 58.0), "{name} size");
+        benilla_ui::assert_near!(
             left,
             552.0 + 26.0 * i as f64,
             "{name} left edge, as declared"
         );
-        assert_eq!(bottom, 2.0, "{name} sits 2 above the bar's bottom");
+        benilla_ui::assert_near!(bottom, 2.0, "{name} sits 2 above the bar's bottom");
     }
 
     set_player_level(&mut s, 60);
     s.resolve();
     for (i, name) in ROW.iter().enumerate().skip(3) {
-        assert_eq!(
+        benilla_ui::assert_near!(
             left_of(&s, name),
             553.0 + 26.0 * i as f64,
             "{name} after the talent gate's own −2"
@@ -187,8 +187,8 @@ fn the_talent_button_appears_at_level_ten_and_the_row_closes_up_below_it() {
         "no talents before 10"
     );
     // The quest log takes the talent button's seat: slot 3, not 4.
-    assert_eq!(left_of(&s, "QuestLogMicroButton"), 552.0 + 26.0 * 2.0);
-    assert_eq!(
+    benilla_ui::assert_near!(left_of(&s, "QuestLogMicroButton"), 552.0 + 26.0 * 2.0);
+    benilla_ui::assert_near!(
         left_of(&s, "HelpMicroButton"),
         552.0 + 26.0 * 6.0,
         "the whole tail moves up one slot with it"
@@ -201,7 +201,7 @@ fn the_talent_button_appears_at_level_ten_and_the_row_closes_up_below_it() {
             .unwrap(),
         "the button returns at 10"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         left_of(&s, "QuestLogMicroButton"),
         553.0 + 26.0 * 3.0,
         "…and the tail goes back out, at the gate's own −2"

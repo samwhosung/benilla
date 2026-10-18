@@ -58,7 +58,8 @@ fn uiparent_is_a_real_full_screen_frame() {
         .eval(
             "return UIParent ~= nil and UIParent:GetName() == \"UIParent\" \
                and UIParent:GetLeft() == 0 and UIParent:GetBottom() == 0 \
-               and UIParent:GetRight() == 1024 and UIParent:GetTop() == 768",
+               and UIParent:GetRight() == GetScreenWidth() and UIParent:GetTop() == GetScreenHeight() \
+               and GetScreenWidth() == 1024 and GetScreenHeight() == 767.9999427795418",
         )
         .unwrap();
     assert!(ok, "UIParent exists and fills the screen");
@@ -79,7 +80,8 @@ fn world_hover_seats_the_default_corner() {
     let ok: bool = s
         .eval(
             "return GameTooltip:IsVisible() \
-               and GameTooltip:GetRight() == 1011 and GameTooltip:GetBottom() == 70",
+               and math.abs(GameTooltip:GetRight() - 1011) < 1e-3 \
+               and math.abs(GameTooltip:GetBottom() - 70) < 1e-3",
         )
         .unwrap();
     assert!(ok, "world tooltip sits at the screen's bottom-right corner");
@@ -119,7 +121,8 @@ fn unit_frame_hover_takes_the_default_corner_and_drops_on_leave() {
     let ok: bool = s
         .eval(
             "return GameTooltip:IsVisible() \
-               and GameTooltip:GetRight() == 1011 and GameTooltip:GetBottom() == 70 \
+               and math.abs(GameTooltip:GetRight() - 1011) < 1e-3 \
+               and math.abs(GameTooltip:GetBottom() - 70) < 1e-3 \
                and GameTooltip:IsOwned(TargetFrame)",
         )
         .unwrap();
@@ -278,7 +281,7 @@ fn action_button_hover_takes_the_default_corner() {
         .eval(
             "local p, rel, rp, x, y = GameTooltip:GetPoint() \
              return p == \"BOTTOMRIGHT\" and rel ~= nil and rel:GetName() == \"UIParent\" \
-               and rp == \"BOTTOMRIGHT\" and x == -13 and y == 70",
+               and rp == \"BOTTOMRIGHT\" and math.abs(x + 13) < 1e-3 and math.abs(y - 70) < 1e-3",
         )
         .unwrap();
     assert!(

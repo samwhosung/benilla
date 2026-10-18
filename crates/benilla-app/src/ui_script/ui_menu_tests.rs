@@ -62,7 +62,7 @@ fn chat_menu_rows_left_align_their_label_and_right_align_their_shortcut() {
     );
     // `UIMenu_Initialize` fixes the row at 104 wide (`UIMenu.lua:16`).
     let (row_l, row_r) = edges(&mut s, "ChatMenuButton10");
-    assert_eq!(row_r - row_l, 104.0, "UIMENU_BUTTON_WIDTH");
+    benilla_ui::assert_near!(row_r - row_l, 104.0, "UIMENU_BUTTON_WIDTH");
 
     // The label's implicit anchor is LEFT to LEFT (0, 0), from `<NormalFont justifyH="LEFT"/>`.
     let (p, rp, x, y): (String, String, f32, f32) = s
@@ -71,16 +71,16 @@ fn chat_menu_rows_left_align_their_label_and_right_align_their_shortcut() {
              return p, rp, x, y",
         )
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (p.as_str(), rp.as_str(), x, y),
         ("LEFT", "LEFT", 0.0, 0.0),
         "the label is anchored by the normal font's justify"
     );
     let (label_l, label_r) = edges(&mut s, "ChatMenuButton10:GetFontString()");
-    assert_eq!(label_l, row_l, "the label starts at the row's left edge");
+    benilla_ui::assert_near!(label_l, row_l, "the label starts at the row's left edge");
     // The template anchors the shortcut string RIGHT.
     let (short_l, short_r) = edges(&mut s, "ChatMenuButton10ShortcutText");
-    assert_eq!(short_r, row_r, "the shortcut ends at the row's right edge");
+    benilla_ui::assert_near!(short_r, row_r, "the shortcut ends at the row's right edge");
     // With 8 px glyphs "Macro" spans 40 and "/macro" 48 of 104; a centred label (32..72) overlaps.
     assert!(
         label_r <= short_l,
@@ -91,7 +91,7 @@ fn chat_menu_rows_left_align_their_label_and_right_align_their_shortcut() {
         let row = format!("ChatMenuButton{i}");
         let (rl, _) = edges(&mut s, &row);
         let (ll, _) = edges(&mut s, &format!("{row}:GetFontString()"));
-        assert_eq!(ll, rl, "row {i}'s label starts at its left edge");
+        benilla_ui::assert_near!(ll, rl, "row {i}'s label starts at its left edge");
     }
 }
 

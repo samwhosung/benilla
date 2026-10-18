@@ -120,7 +120,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
 
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&s.extract(), "Interface\\PetActionBar\\UI-PetBar"),
         0,
         "no pet, no shelf"
@@ -133,45 +133,45 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     s.resolve();
     let quads = s.extract();
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\PetActionBar\\UI-PetBar"),
         2,
         "the two shelf strips"
     );
 
     // A token slot's texture names a global, resolved by `getglobal` (PetActionBarFrame.lua:102).
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Icons\\Ability_GhoulFrenzy"),
         1,
         "Attack's icon came from PET_ATTACK_TEXTURE"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Icons\\Ability_Defend"),
         1,
         "Defensive's icon came from PET_DEFENSIVE_TEXTURE"
     );
-    assert_eq!(textures(&quads, "Interface\\Icons\\Ability_Druid_Rake"), 1);
+    benilla_ui::assert_near!(textures(&quads, "Interface\\Icons\\Ability_Druid_Rake"), 1);
 
     // An unnamed slot's button hides outright (PetActionBarFrame.lua:122-128).
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Buttons\\UI-Quickslot2"),
         3,
         "one filled ring per occupied slot"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Buttons\\UI-Quickslot"),
         0,
         "an unnamed pet slot hides; it does not draw the empty ring"
     );
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Buttons\\CheckButtonHilight"),
         2,
         "Attack + Defensive are lit; Claw is not"
     );
 
     // The shine is the `$parentAutoCast` model; a hidden pane is not extracted.
-    assert_eq!(
+    benilla_ui::assert_near!(
         textures(&quads, "Interface\\Buttons\\UI-AutoCastableOverlay"),
         1,
         "only Claw can autocast"
@@ -182,7 +182,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         .filter(|q| matches!(&q.content, QuadContent::ModelPane { model: Some(p), model_scale, .. }
             if p == "Interface\\Buttons\\UI-AutoCastButton.mdx" && (*model_scale - 1.2).abs() < 1e-6))
         .collect();
-    assert_eq!(
+    benilla_ui::assert_near!(
         shines.len(),
         1,
         "the shine pane on Claw alone — enabled, not merely allowed"
@@ -192,7 +192,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     // frame spans y[54,97], and button 1 at (36, 2) in it is x[72,102] y[56,86].
     let attack =
         texture_rect(&quads, "Interface\\Icons\\Ability_GhoulFrenzy").expect("Attack icon");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (attack.left, attack.bottom, attack.right, attack.top),
         (72.0, 56.0, 102.0, 86.0)
     );
@@ -205,7 +205,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     }
     s.resolve();
     let gone = s.extract();
-    assert_eq!(textures(&gone, "Interface\\PetActionBar\\UI-PetBar"), 0);
+    benilla_ui::assert_near!(textures(&gone, "Interface\\PetActionBar\\UI-PetBar"), 0);
     assert!(
         !gone.iter().any(
             |q| matches!(&q.content, QuadContent::ModelPane { model: Some(p), .. }

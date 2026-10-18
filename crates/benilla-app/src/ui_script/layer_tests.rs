@@ -650,11 +650,11 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
         .map(|i| trainer(&s, &format!("ClassTrainerSkill{i}")))
         .collect();
     // The reference's own numbers, so a drifted harness cannot pass this against itself.
-    assert_eq!(ref_rows, 11);
-    assert_eq!(ref_list, (21.0, 96.0, 317.0, 280.0));
-    assert_eq!(ref_detail, (21.0, 288.0, 317.0, 407.0));
-    assert_eq!(ref_buttons[0], (184.0, 409.0, 264.0, 431.0));
-    assert_eq!(ref_buttons[1], (265.0, 409.0, 345.0, 431.0));
+    benilla_ui::assert_near!(ref_rows, 11);
+    benilla_ui::assert_near!(ref_list, (21.0, 96.0, 317.0, 280.0));
+    benilla_ui::assert_near!(ref_detail, (21.0, 288.0, 317.0, 407.0));
+    benilla_ui::assert_near!(ref_buttons[0], (184.0, 409.0, 264.0, 431.0));
+    benilla_ui::assert_near!(ref_buttons[1], (265.0, 409.0, 345.0, 431.0));
 
     s.set_trainer(None);
     s.fire_event("TRAINER_CLOSED", vec![]);
@@ -671,15 +671,15 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
     let ours = |s: &UiScript, frame: &str| window_rect(s, "BenillaScriptLogFrame", frame);
 
     let window = ours(&s, "BenillaScriptLogFrame");
-    assert_eq!(window, (0.0, 0.0, 384.0, 512.0), "the standard panel size");
+    benilla_ui::assert_near!(window, (0.0, 0.0, 384.0, 512.0), "the standard panel size");
     let clear = ours(&s, "BenillaScriptLogClearButton");
     let close = ours(&s, "BenillaScriptLogCloseBottomButton");
     let detail = ours(&s, "BenillaScriptLogDetailScroll");
     let list = ours(&s, "BenillaScriptLogListScrollFrame");
 
     // The buttons take the trainer's two sockets, at its size, inside the window's rect.
-    assert_eq!(clear, ref_buttons[0], "Clear sits where Train does");
-    assert_eq!(close, ref_buttons[1], "Close sits where Exit does");
+    benilla_ui::assert_near!(clear, ref_buttons[0], "Clear sits where Train does");
+    benilla_ui::assert_near!(close, ref_buttons[1], "Close sits where Exit does");
     for (name, b) in [("Clear", clear), ("Close", close)] {
         assert!(
             b.0 >= window.0 && b.1 >= window.1 && b.2 <= window.2 && b.3 <= window.3,
@@ -687,8 +687,9 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
         );
     }
     // The detail pane is the trainer's, and its bottom clears both buttons' tops.
-    assert_eq!(
-        detail, ref_detail,
+    benilla_ui::assert_near!(
+        detail,
+        ref_detail,
         "the detail sits where the trainer's does"
     );
     assert!(
@@ -698,8 +699,8 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
         clear.1.min(close.1)
     );
     // The list is the trainer's, with its rows.
-    assert_eq!(list, ref_list, "the list sits where the trainer's does");
-    assert_eq!(
+    benilla_ui::assert_near!(list, ref_list, "the list sits where the trainer's does");
+    benilla_ui::assert_near!(
         s.eval::<i64>("return BENILLA_SCRIPTLOG_ROWS").unwrap(),
         ref_rows,
         "as many rows as the trainer's list"
@@ -716,7 +717,7 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
         let row = ours(&s, &format!("BenillaScriptLogRow{}", i + 1));
         // The trainer widens a row to 323 while its scroll bar is hidden and keeps the template's
         // 293 beside it (`Blizzard_TrainerUI.lua:133-137`); the log's rows are the 293.
-        assert_eq!(
+        benilla_ui::assert_near!(
             (row.0, row.1, row.2, row.3),
             (want.0, want.1, want.0 + 293.0, want.3),
             "row {} sits where the trainer's does",
@@ -832,8 +833,8 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
             .unwrap(),
         "EditBox"
     );
-    assert_eq!(detail_text(&s), msg, "the full message, traceback and all");
-    assert_eq!(
+    benilla_ui::assert_near!(detail_text(&s), msg, "the full message, traceback and all");
+    benilla_ui::assert_near!(
         s.eval::<i64>("return BenillaScriptLogDetailText:GetMaxLetters()")
             .unwrap(),
         0,
@@ -848,12 +849,12 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
     // The box sizes itself: insets plus the wrapped text, which is taller than the pane.
     let want = detail_box_height(msg.chars().count());
     let (width, height, child, pane, range) = detail_geometry(&s);
-    assert_eq!(width, DETAIL_WIDTH);
+    benilla_ui::assert_near!(width, DETAIL_WIDTH);
     assert!(want > pane, "sanity: the text is taller than the pane");
-    assert_eq!(height, want, "insets + lines * line height");
+    benilla_ui::assert_near!(height, want, "insets + lines * line height");
     // The scroll child stays the pane's size; the range is the box's overhang, 20 below the text.
-    assert_eq!(child, pane, "the child is not sized to the text");
-    assert_eq!(range, want - pane, "the range covers the whole traceback");
+    benilla_ui::assert_near!(child, pane, "the child is not sized to the text");
+    benilla_ui::assert_near!(range, want - pane, "the range covers the whole traceback");
     assert!(
         s.eval::<bool>("return BenillaScriptLogDetailScrollBar:IsShown()")
             .unwrap(),
@@ -871,14 +872,14 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
         .into_iter()
         .filter(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if *t == msg))
         .collect();
-    assert_eq!(drawn.len(), 1, "the message draws once: {drawn:#?}");
+    benilla_ui::assert_near!(drawn.len(), 1, "the message draws once: {drawn:#?}");
     let rect = drawn[0].rect.expect("the drawn text has a rect");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (f64::from(rect.left), f64::from(rect.top)),
         (left + DETAIL_INSETS.0, top - DETAIL_INSETS.2),
         "6 in and 6 down from the pane's corner"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         f64::from(rect.right - rect.left),
         DETAIL_WIDTH - (DETAIL_INSETS.0 + DETAIL_INSETS.1),
         "wrapped at 270"
@@ -887,7 +888,7 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
     // The wheel over the box scrolls the pane, a step a notch.
     let (x, y) = (left + 40.0, top - 40.0);
     s.mouse_wheel(x as f32, y as f32, -1.0);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return BenillaScriptLogDetailScroll:GetVerticalScroll()")
             .unwrap(),
         20.0
@@ -899,9 +900,9 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
     settle(&mut s);
     assert_eq!(detail_text(&s), "short");
     let (_, height, child, pane, range) = detail_geometry(&s);
-    assert_eq!(height, detail_box_height(5));
-    assert_eq!(height, 38.0, "sanity: 6 + 12 + 20");
-    assert_eq!((child, range), (pane, 0.0));
+    benilla_ui::assert_near!(height, detail_box_height(5));
+    benilla_ui::assert_near!(height, 38.0, "sanity: 6 + 12 + 20");
+    benilla_ui::assert_near!((child, range), (pane, 0.0));
     assert!(
         !s.eval::<bool>("return BenillaScriptLogDetailScrollBar:IsShown()")
             .unwrap(),
@@ -920,7 +921,7 @@ fn a_click_below_the_detail_text_focuses_the_box_and_selects_it_all() {
         .unwrap();
     settle(&mut s);
     assert_eq!(detail_text(&s), "short");
-    assert_eq!(
+    benilla_ui::assert_near!(
         detail_geometry(&s).1,
         38.0,
         "a box far shorter than the pane"

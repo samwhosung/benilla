@@ -841,7 +841,7 @@ fn the_inheritable_reference_templates_confer_their_shape() {
     .unwrap();
     s.resolve();
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, f64)>("return BuffProbe:GetWidth(), BuffProbe:GetHeight()")
             .unwrap(),
         (21.0, 21.0),
@@ -857,7 +857,7 @@ fn the_inheritable_reference_templates_confer_their_shape() {
         "the tooltip script comes with the template"
     );
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, f64)>("return MicroProbe:GetWidth(), MicroProbe:GetHeight()")
             .unwrap(),
         (29.0, 58.0)

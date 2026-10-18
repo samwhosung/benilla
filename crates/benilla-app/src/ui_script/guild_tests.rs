@@ -472,7 +472,7 @@ fn the_officer_note_pane_resizes_the_card() {
     open(&s);
     s.run("GuildFrameButton2:Click()").unwrap();
     assert!(visible(&s, "GuildMemberDetailOfficerNoteLabel"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return GuildMemberDetailFrame:GetHeight()")
             .unwrap(),
         255.0
@@ -481,14 +481,14 @@ fn the_officer_note_pane_resizes_the_card() {
     // Can view but not edit: grey text, a mouse-dead pane, no placeholder.
     s.run("BenillaGuildFixture.rights.editOfficerNote = nil; GuildStatus_Update()")
         .unwrap();
-    assert_eq!(colour(&s, "OfficerNoteText"), (0.65, 0.65, 0.65));
+    benilla_ui::assert_near!(colour(&s, "OfficerNoteText"), (0.65, 0.65, 0.65));
 
     // Cannot view: the pane goes, and the card shrinks.
     s.run("BenillaGuildFixture.rights.viewOfficerNote = nil; GuildStatus_Update()")
         .unwrap();
     assert!(!visible(&s, "GuildMemberDetailOfficerNoteLabel"));
     assert!(!visible(&s, "GuildMemberOfficerNoteBackground"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return GuildMemberDetailFrame:GetHeight()")
             .unwrap(),
         195.0
@@ -538,7 +538,7 @@ fn the_note_pane_opens_the_wide_dialog_and_sends_it() {
         !visible(&s, "StaticPopup1EditBox"),
         "…and the narrow one is hidden, never both"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return StaticPopup1:GetWidth()").unwrap(),
         420.0,
         "a guild message dialog is the wide one"
@@ -622,7 +622,7 @@ fn the_pane_buttons_follow_the_rights() {
     s.run("GuildFrameAddMemberButton:Click()").unwrap();
     assert!(visible(&s, "StaticPopup1EditBox"));
     assert!(!visible(&s, "StaticPopup1WideEditBox"));
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return StaticPopup1:GetWidth()").unwrap(),
         320.0
     );

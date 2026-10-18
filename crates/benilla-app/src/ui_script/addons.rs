@@ -1955,18 +1955,18 @@ mod tests {
             s.eval::<f64>("return CreateFrame('Frame', nil, nil, 'ClaimTemplate'):GetWidth()")
                 .unwrap()
         };
-        assert_eq!(
+        benilla_ui::assert_near!(
             script
                 .eval::<String>("local _, _, _, _, _, _, s = GetAddOnInfo('Zclaim') return s")
                 .ok(),
             Some("INSECURE".to_string())
         );
-        assert_eq!(width(&script), 10.0, "the claim replaced Plain's template");
+        benilla_ui::assert_near!(width(&script), 10.0, "the claim replaced Plain's template");
         // A context-0 registration replaces it, which a SECURE entry would refuse.
         let doc = benilla_ui::framexml::parse(&tmpl(30)).unwrap();
         let report = benilla_ui::loader::load(&script, &doc, &|_| None);
         assert!(report.status.is_empty(), "{:?}", report.status.lines());
-        assert_eq!(width(&script), 30.0);
+        benilla_ui::assert_near!(width(&script), 30.0);
         let _ = home;
     }
 

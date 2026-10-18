@@ -231,7 +231,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
         };
 
         // QuestItemTemplate's <Size>.
-        assert_eq!(
+        benilla_ui::assert_near!(
             (
                 num(&format!("{w}1:GetWidth()")),
                 num(&format!("{w}1:GetHeight()"))
@@ -241,20 +241,20 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
         );
 
         // Reagent2 anchors LEFT to Reagent1's RIGHT at zero offset, so the pitch is the row width,
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}2:GetLeft()")) - num(&format!("{w}1:GetLeft()")),
             147.0,
             "{w} column pitch"
         );
         // and row 2 drops one row height plus a 2px gutter.
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}3:GetTop()")) - num(&format!("{w}1:GetTop()")),
             -43.0,
             "{w} row step"
         );
 
         // `$parentIconTexture`: 39×39, flush in the row's TOPLEFT corner.
-        assert_eq!(
+        benilla_ui::assert_near!(
             (
                 num(&format!("{w}1IconTexture:GetWidth()")),
                 num(&format!("{w}1IconTexture:GetHeight()"))
@@ -262,12 +262,12 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             (39.0, 39.0),
             "{w}1 icon"
         );
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1IconTexture:GetLeft()")),
             num(&format!("{w}1:GetLeft()")),
             "{w}1 icon flush left"
         );
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1IconTexture:GetTop()")),
             num(&format!("{w}1:GetTop()")),
             "{w}1 icon flush top"
@@ -280,7 +280,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             "Interface\\QuestFrame\\UI-QuestItemNameFrame",
             "{w}1 name plate art"
         );
-        assert_eq!(
+        benilla_ui::assert_near!(
             (
                 num(&format!("{w}1NameFrame:GetWidth()")),
                 num(&format!("{w}1NameFrame:GetHeight()"))
@@ -288,14 +288,14 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             (128.0, 64.0),
             "{w}1 plate size"
         );
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1NameFrame:GetLeft()")) - num(&format!("{w}1IconTexture:GetRight()")),
             -10.0,
             "{w}1 plate rides the icon's right edge"
         );
 
         // The name sits on the plate, 15 from its left, vertically centred.
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1Name:GetLeft()")) - num(&format!("{w}1NameFrame:GetLeft()")),
             15.0,
             "{w}1 name inset"
@@ -312,12 +312,12 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
         );
 
         // The count sits on the icon's bottom-right corner (-4, +1).
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1Count:GetRight()")) - num(&format!("{w}1IconTexture:GetRight()")),
             -4.0,
             "{w}1 count x"
         );
-        assert_eq!(
+        benilla_ui::assert_near!(
             num(&format!("{w}1Count:GetBottom()")) - num(&format!("{w}1IconTexture:GetBottom()")),
             1.0,
             "{w}1 count y"

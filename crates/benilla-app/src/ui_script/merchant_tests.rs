@@ -687,7 +687,7 @@ fn shipped_merchant_hover_scopes_highlight_and_anchors_item_tooltip() {
         hl.width(),
         hl.height()
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         (hl.left, hl.top),
         (sword_icon.left, sword_icon.top),
         "highlight sits on the icon, not the row"
@@ -735,7 +735,7 @@ fn shipped_merchant_hover_scopes_highlight_and_anchors_item_tooltip() {
     let (tip_left, tip_bottom): (f32, f32) = s
         .eval("return GameTooltip:GetLeft(), GameTooltip:GetBottom()")
         .unwrap();
-    assert_eq!(
+    benilla_ui::assert_near!(
         (tip_left, tip_bottom),
         (sword_icon.right, sword_icon.top),
         "tooltip BOTTOMLEFT sits on the icon's TOPRIGHT"
@@ -920,12 +920,12 @@ fn merchant_tabs_fit_their_labels() {
         )
         .unwrap();
     assert!(l1 > 0.0 && l2 > 0.0, "both labels measured synchronously");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (w1, w2),
         (l1 + SIDES, l2 + SIDES),
         "text + 40, not the fixed 115"
     );
-    assert_eq!((m1, m2), (l1, l2), "middle slices stretch to the text");
+    benilla_ui::assert_near!((m1, m2), (l1, l2), "middle slices stretch to the text");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

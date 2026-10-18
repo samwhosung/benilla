@@ -145,8 +145,8 @@ fn the_widened_realmlist_box_has_a_border_between_its_caps() {
         .unwrap()
     };
     let (box_left, box_right, mid_left, mid_right) = span(&s);
-    assert_eq!(box_right - box_left, 300.0);
-    assert_eq!(
+    benilla_ui::assert_near!(box_right - box_left, 300.0);
+    benilla_ui::assert_near!(
         (mid_left - box_left, box_right - mid_right),
         (65.0, 65.0),
         "the middle starts where the left cap ends and ends where the right one starts"
@@ -160,10 +160,10 @@ fn the_widened_realmlist_box_has_a_border_between_its_caps() {
     assert!(!s
         .eval::<bool>("return BenillaRealmlist_Middle:IsShown() == 1")
         .unwrap());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return GlueDialogEditBox:GetWidth()")
             .unwrap(),
         130.0
     );
-    assert_eq!(s.take_errors(), Vec::<String>::new());
+    benilla_ui::assert_near!(s.take_errors(), Vec::<String>::new());
 }

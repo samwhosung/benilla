@@ -207,7 +207,7 @@ fn the_ticket_text_grows_with_its_lines_and_its_scroll_frame_ranges_over_them() 
     s.resolve();
     s.tick(0.016);
     s.resolve();
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return HelpFrameOpenTicketText:GetHeight()")
             .unwrap(),
         12.0,
@@ -220,17 +220,17 @@ fn the_ticket_text_grows_with_its_lines_and_its_scroll_frame_ranges_over_them() 
     s.resolve();
     // Wrapped at the box's own 541: no insets.
     let height = (400.0 * GLYPH / 541.0).ceil() * 12.0;
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return HelpFrameOpenTicketText:GetHeight()")
             .unwrap(),
         height
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return HelpFrameOpenTicketScrollFrame:GetVerticalScrollRange()")
             .unwrap(),
         height - 378.0
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>(
             "local _, max = HelpFrameOpenTicketScrollFrameScrollBar:GetMinMaxValues() return max"
         )

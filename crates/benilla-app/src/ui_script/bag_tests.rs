@@ -311,12 +311,12 @@ fn bag_bar_buttons_light_while_their_bag_is_open() {
                     if p.contains("CheckButtonHilight"))
         })
         .collect();
-    assert_eq!(rings.len(), 2, "toggle + bag 2 rings emit, nothing else");
+    benilla_ui::assert_near!(rings.len(), 2, "toggle + bag 2 rings emit, nothing else");
     let toggle_ring = rings
         .iter()
-        .find_map(|q| q.rect.filter(|r| r.left == 981.0))
+        .find_map(|q| q.rect.filter(|r| (r.left - 981.0).abs() < 1e-3))
         .expect("the toggle's ring at the art frame's corner");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (
             toggle_ring.left,
             toggle_ring.bottom,

@@ -69,7 +69,7 @@ fn the_menu_has_the_era_frame_and_button_ladder() {
     let (w, h) = s
         .eval::<(f64, f64)>("return GameMenuFrame:GetWidth(), GameMenuFrame:GetHeight()")
         .unwrap();
-    assert_eq!((w, h), (200.0, 267.0), "the era frame size");
+    benilla_ui::assert_near!((w, h), (200.0, 267.0), "the era frame size");
 
     let top = s.eval::<f64>("return GameMenuFrame:GetTop()").unwrap();
     let left = s.eval::<f64>("return GameMenuFrame:GetLeft()").unwrap();
@@ -80,7 +80,7 @@ fn the_menu_has_the_era_frame_and_button_ladder() {
                 "return {name}:GetWidth(), {name}:GetHeight(), {name}:GetTop(), {name}:GetLeft()"
             ))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(
+        benilla_ui::assert_near!(
             (bw, bh),
             (144.0, 21.0),
             "{name} is a GameMenuButtonTemplate"

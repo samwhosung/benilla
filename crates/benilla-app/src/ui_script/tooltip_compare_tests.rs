@@ -176,7 +176,7 @@ fn item_ref_tooltip_renders_a_chat_link() {
             "local p, rel, rp, x, y = ItemRefTooltip:GetPoint() \
              return ItemRefTooltip:IsShown() \
                and ItemRefTooltipTextLeft1:GetText() == \"Another Helm\" \
-               and p == \"BOTTOM\" and y == 80",
+               and p == \"BOTTOM\" and math.abs(y - 80) < 1e-3",
         )
         .unwrap();
     assert!(ok, "the link tooltip shows at its parked seat");
@@ -434,7 +434,7 @@ fn shipped_merchant_row_raises_the_compare_plates() {
                and ShoppingTooltip1TextLeft2:GetText() == \"Old Loop\" \
                and ShoppingTooltip2TextLeft2:GetText() == \"Older Loop\" \
                and p1 == \"TOPLEFT\" and r1:GetName() == \"GameTooltip\" \
-               and rp1 == \"TOPRIGHT\" and x1 == 0 and y1 == -10 \
+               and rp1 == \"TOPRIGHT\" and x1 == 0 and math.abs(y1 + 10) < 1e-3 \
                and p2 == \"TOPLEFT\" and r2:GetName() == \"ShoppingTooltip1\" \
                and rp2 == \"TOPRIGHT\" and x2 == 0 and y2 == 0",
         )

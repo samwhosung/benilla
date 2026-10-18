@@ -893,7 +893,7 @@ fn reward_rows_follow_the_refs_two_per_row_layout() {
         .unwrap(),
         "TOPLEFT|QuestLogItem1|BOTTOMLEFT"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<(f64, f64)>(
             "local _, _, _, x, y = QuestLogItemReceiveText:GetPoint() return x, y"
         )

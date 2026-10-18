@@ -144,7 +144,7 @@ fn a_hostile_target_draws_debuffs_first_with_tint_and_count() {
 
     // Hostile: debuffs open at BOTTOMLEFT (5, 32), buffs under Debuff7 (`TargetFrame.lua:329`).
     let (p, rel, rp, x, y) = anchor(&s, "TargetFrameDebuff1");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (p.as_str(), rel.as_str(), rp.as_str(), x, y),
         ("TOPLEFT", "TargetFrame", "BOTTOMLEFT", 5.0, 32.0),
         "hostile: debuffs first"
@@ -153,9 +153,9 @@ fn a_hostile_target_draws_debuffs_first_with_tint_and_count() {
     assert_eq!(rel, "TargetFrameDebuff7", "hostile: buffs below row 2");
 
     // Under the wrap (2 < 6): full 21px icons, 23px borders.
-    assert_eq!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
-    assert_eq!(size(&s, "TargetFrameDebuff1Border"), (23.0, 23.0));
-    assert_eq!(size(&s, "TargetFrameBuff1"), (21.0, 21.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1Border"), (23.0, 23.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameBuff1"), (21.0, 21.0));
 
     // Stack count shows only above 1.
     assert_eq!(
@@ -212,13 +212,13 @@ fn a_friendly_target_puts_the_buff_row_first() {
     );
 
     let (p, rel, rp, x, y) = anchor(&s, "TargetFrameBuff1");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (p.as_str(), rel.as_str(), rp.as_str(), x, y),
         ("TOPLEFT", "TargetFrame", "BOTTOMLEFT", 5.0, 32.0),
         "friendly: buffs first"
     );
     let (p, rel, rp, x, y) = anchor(&s, "TargetFrameDebuff1");
-    assert_eq!(
+    benilla_ui::assert_near!(
         (p.as_str(), rel.as_str(), rp.as_str(), x, y),
         ("TOPLEFT", "TargetFrameBuff1", "BOTTOMLEFT", 0.0, -2.0),
         "friendly: debuffs under the buff row"
@@ -236,15 +236,15 @@ fn reaching_the_wrap_shrinks_the_first_row_to_17px() {
     target(&mut s, 2, debuffs);
 
     // 6 debuffs reach the wrap: 17px icons, 19px borders, first row only (`TargetFrame.lua:349`).
-    assert_eq!(size(&s, "TargetFrameDebuff1"), (17.0, 17.0));
-    assert_eq!(size(&s, "TargetFrameDebuff1Border"), (19.0, 19.0));
-    assert_eq!(size(&s, "TargetFrameBuff1"), (17.0, 17.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1"), (17.0, 17.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1Border"), (19.0, 19.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameBuff1"), (17.0, 17.0));
 
     // Below the wrap they grow back; the feed re-fires UNIT_AURA on the change.
     s.set_unit_auras(TARGET, Some(vec![debuff(1000, "D0", 1, None)]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
-    assert_eq!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
-    assert_eq!(size(&s, "TargetFrameDebuff1Border"), (23.0, 23.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
+    benilla_ui::assert_near!(size(&s, "TargetFrameDebuff1Border"), (23.0, 23.0));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

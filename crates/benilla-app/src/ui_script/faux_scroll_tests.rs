@@ -214,14 +214,14 @@ fn the_shrink_widen_tail_resizes_the_rows_and_the_highlight() {
     .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     for i in 1..=5 {
-        assert_eq!(
+        benilla_ui::assert_near!(
             s.eval::<f64>(&format!("return TestRow{i}:GetWidth()"))
                 .unwrap(),
             280.0,
             "row {i} narrowed for the bar"
         );
     }
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return TestHighlight:GetWidth()").unwrap(),
         276.0
     );
@@ -231,14 +231,14 @@ fn the_shrink_widen_tail_resizes_the_rows_and_the_highlight() {
     )
     .unwrap();
     for i in 1..=5 {
-        assert_eq!(
+        benilla_ui::assert_near!(
             s.eval::<f64>(&format!("return TestRow{i}:GetWidth()"))
                 .unwrap(),
             300.0,
             "row {i} widened back"
         );
     }
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return TestHighlight:GetWidth()").unwrap(),
         296.0
     );
@@ -338,7 +338,7 @@ fn the_reference_on_vertical_scroll_path_runs_once_a_scroll_child_exists() {
     s.resolve();
     s.run("AddonScroll:UpdateScrollChildRect()").unwrap();
     s.tick(0.016);
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return AddonScroll:GetVerticalScrollRange()")
             .unwrap(),
         112.0,
@@ -349,7 +349,7 @@ fn the_reference_on_vertical_scroll_path_runs_once_a_scroll_child_exists() {
         .unwrap();
     s.run("AddonScrollScrollBar:SetValue(48)").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<i64>("return FauxScrollFrame_GetOffset(AddonScroll)")
             .unwrap(),
         3,

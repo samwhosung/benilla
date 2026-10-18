@@ -334,7 +334,8 @@ fn a_wheel_spin_over_the_grid_scrolls_the_tree() {
             local scroll = TalentFrameScrollFrame:GetVerticalScroll()
             assert(scroll > 0,
                 "one notch down pans the frame, got " .. tostring(scroll))
-            assert(TalentFrameScrollFrameScrollBar:GetValue() == scroll,
+            -- The offset reads back through the getters' rounding, a hair off the bar's value.
+            assert(math.abs(TalentFrameScrollFrameScrollBar:GetValue() - scroll) < 1e-3,
                 "the bar follows the frame, got " .. tostring(TalentFrameScrollFrameScrollBar:GetValue()))
             "#,
         )

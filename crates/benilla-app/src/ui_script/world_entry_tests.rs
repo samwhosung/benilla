@@ -1619,7 +1619,7 @@ fn a_placed_window_comes_back_after_a_reload() {
     world
         .run_system_once(crate::ui_layout::load_layout)
         .expect("the layout loader ran");
-    assert_eq!(
+    benilla_ui::assert_near!(
         window_geometry(&world),
         placed,
         "the window the player placed is back where they left it"
