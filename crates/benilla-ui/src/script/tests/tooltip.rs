@@ -1389,6 +1389,19 @@ fn append_text_formats_line_one_without_showing_it() {
         assert(AppTTTextLeft1:GetText() == "a50.33333333333333", AppTTTextLeft1:GetText())
         AppTT:AppendText(string.rep("b", 300))
         assert(string.len(AppTTTextLeft1:GetText()) == 255)
+
+        -- The colour is the cell's own, untouched (`0x53060e` is `SetText` alone).
+        AppTT:ClearLines()
+        AppTT:AddLine("red", 1, 0, 0)
+        AppTT:AppendText("!")
+        local r, g, b = AppTTTextLeft1:GetTextColor()
+        assert(r > 0.99 and g == 0 and b == 0, r .. " " .. g .. " " .. b)
+
+        -- A cut inside a UTF-8 character drops its partial bytes: 254 + 2 bytes keep 254.
+        AppTT:ClearLines()
+        AppTT:AddLine(string.rep("a", 254))
+        AppTT:AppendText("\195\169")
+        assert(string.len(AppTTTextLeft1:GetText()) == 254, string.len(AppTTTextLeft1:GetText()))
     "#,
     )
     .unwrap();

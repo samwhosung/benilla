@@ -173,8 +173,9 @@ pub fn name_v(j: JustifyV) -> &'static str {
 }
 
 /// The `Usage:` line `SetJustifyH` raises for a non-string or a token that does not parse
-/// (`0x87c77c`), `name` being the object's own name or `<unnamed>`: the helper `0x79fc20` takes it
-/// in `ecx` from each of the six bindings' `[vt+0x4]` call (FontString `0x79e7bb` inlines it).
+/// (`0x87c77c`), `name` being the object's own name or `<unnamed>`, read by each binding's
+/// `[vt+0x4]` call: five pass it in `ecx` to the helper `0x79fc20`, and the FontString's binding
+/// inlines the same raise (`0x79e7bb`-`0x79e7d7`).
 pub fn usage_h(name: &str) -> mlua::Error {
     mlua::Error::runtime(format!("Usage: {name}:SetJustifyH(\"justify\")"))
 }

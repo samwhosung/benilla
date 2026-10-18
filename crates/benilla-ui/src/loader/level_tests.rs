@@ -179,7 +179,8 @@ fn a_slider_reads_its_values_and_orientation_like_the_reference() {
         &s,
         r#"<Ui>
             <Slider name="SlPercent" minValue="0" maxValue="100%" valueStep="5x" defaultValue="40"/>
-            <Slider name="SlEmptyMax" minValue="0" maxValue="" defaultValue="40"/>
+            <Slider name="SlSpace" minValue=" 5" maxValue="10"/>
+            <Slider name="SlEmptyMax" minValue="5" maxValue="" defaultValue="40"/>
             <Slider name="SlDiagonal" orientation="DIAGONAL"/>
             <Slider name="SlBlank" orientation=""/>
             <Slider name="SlFlat" orientation="horizontal"/>
@@ -198,6 +199,9 @@ fn a_slider_reads_its_values_and_orientation_like_the_reference() {
         .unwrap()
     };
     assert_eq!(state("SlPercent"), (0.0, 100.0, 5.0, 40.0));
+    // `SStrToFloat` skips no whitespace (`0x64aad3` reads the first byte), so `" 5"` is 0.
+    let (lo, hi, _, _) = state("SlSpace");
+    assert_eq!((lo, hi), (0.0, 10.0));
     let fresh = s
         .eval::<(f32, f32)>("return CreateFrame('Slider'):GetMinMaxValues()")
         .unwrap();
@@ -210,6 +214,11 @@ fn a_slider_reads_its_values_and_orientation_like_the_reference() {
     assert_eq!(orientation("SlDiagonal"), "VERTICAL", "the ctor's stands");
     assert_eq!(orientation("SlBlank"), "VERTICAL");
     assert_eq!(orientation("SlFlat"), "HORIZONTAL");
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("SlBlank")),
+        "an empty orientation is skipped, not logged: {:?}",
+        report.warnings
+    );
     assert!(has_line(
         &report,
         "Frame SlDiagonal: Unknown orientation DIAGONAL in element Slider"
