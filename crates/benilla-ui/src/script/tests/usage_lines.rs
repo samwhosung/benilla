@@ -140,3 +140,43 @@ fn edit_box_max_setters_name_the_box() {
         assert!(e.contains(line), "`{call}` -> {e}");
     }
 }
+
+/// `SetVerticalScroll` (`0x791400`) and `SetHorizontalScroll` (`0x7912f0`) gate on `lua_isnumber`
+/// (`0x791490`, `0x791380`), so a numeric string scrolls, and anything else raises
+/// `Usage: %s:SetVerticalScroll(offset)` (`0x87b59c`) or the horizontal line (`0x87b574`).
+#[test]
+fn scroll_setters_raise_their_usage_lines() {
+    let s = script();
+    s.run(r#"ScrollUse = CreateFrame("ScrollFrame", "ScrollUse")"#)
+        .unwrap();
+    for (call, line) in [
+        (
+            "ScrollUse:SetVerticalScroll(nil)",
+            "Usage: ScrollUse:SetVerticalScroll(offset)",
+        ),
+        (
+            "ScrollUse:SetVerticalScroll({})",
+            "Usage: ScrollUse:SetVerticalScroll(offset)",
+        ),
+        (
+            "ScrollUse:SetVerticalScroll('x')",
+            "Usage: ScrollUse:SetVerticalScroll(offset)",
+        ),
+        (
+            "ScrollUse:SetHorizontalScroll()",
+            "Usage: ScrollUse:SetHorizontalScroll(offset)",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        ScrollUse:SetVerticalScroll("12")
+        assert(ScrollUse:GetVerticalScroll() == 12)
+        ScrollUse:SetHorizontalScroll("3")
+        assert(ScrollUse:GetHorizontalScroll() == 3)
+    "#,
+    )
+    .unwrap();
+}

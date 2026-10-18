@@ -8,6 +8,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi;
 use super::object::{decode_id, frame_handle_of, frame_wrapper};
 use super::{event, Model};
 use crate::widget::{FrameHandle, KindState, ScrollFrameState};
@@ -171,14 +172,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetVerticalScroll(px) (`0x786db0`): stores the offset unclamped (`[+0x328]`), re-anchors the
-    // child (`0x787100`) and fires `OnVerticalScroll(self, offset)`, all only on a change: one
-    // under 2⁻²² in the reference's layout units (`0x786dc2`, [`Model::size_eps`] in ours) is
-    // dropped whole, and a NaN, unordered, always stores and fires (`0x786dcd`). The range is
-    // never read here: every clamp is FrameXML's, through the scroll bar's min and max.
+    // SetVerticalScroll(px) (`0x791400`): `lua_isnumber` (`0x791490`) else
+    // `Usage: %s:SetVerticalScroll(offset)` (`0x87b59c`) naming the frame. Then `0x786db0` stores
+    // the offset unclamped (`[+0x328]`), re-anchors the child (`0x787100`) and fires
+    // `OnVerticalScroll(self, offset)`, all only on a change: one under 2⁻²² in the reference's
+    // layout units (`0x786dc2`, [`Model::size_eps`] in ours) is dropped whole, and a NaN,
+    // unordered, always stores and fires (`0x786dcd`). The range is never read here: every clamp
+    // is FrameXML's, through the scroll bar's min and max.
     m.set(
         "SetVerticalScroll",
-        lua.create_function(|lua, (this, px): (Table, f32)| {
+        lua.create_function(|lua, (this, px): (Table, Value)| {
+            with_scroll(lua, &this, |_| ())?;
+            let Some(px) = lua.coerce_number(px)? else {
+                return Err(binding_abi::usage(lua, &this, "SetVerticalScroll(offset)"));
+            };
+            let px = px as f32;
             let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
             let changed = with_scroll(lua, &this, |s| {
                 let changed = moved(s.vertical, px, eps);
@@ -207,12 +215,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The horizontal axis ──
-    // SetHorizontalScroll(px) (`0x7912f0` → `0x786d30`) is the vertical setter's byte-clone on
-    // `[+0x324]`, firing `OnHorizontalScroll`. The sign is the reference's: `0x787100` anchors the
-    // child at `(+hScroll, +vScroll)`, so a positive x moves it right, where a positive y lifts it.
+    // SetHorizontalScroll(px) (`0x7912f0` → `0x786d30`, `Usage: %s:SetHorizontalScroll(offset)`
+    // `0x87b574`) is the vertical setter's byte-clone on `[+0x324]`, firing `OnHorizontalScroll`.
+    // The sign is the reference's: `0x787100` anchors the child at `(+hScroll, +vScroll)`, so a
+    // positive x moves it right, where a positive y lifts it.
     m.set(
         "SetHorizontalScroll",
-        lua.create_function(|lua, (this, px): (Table, f32)| {
+        lua.create_function(|lua, (this, px): (Table, Value)| {
+            with_scroll(lua, &this, |_| ())?;
+            let Some(px) = lua.coerce_number(px)? else {
+                return Err(binding_abi::usage(
+                    lua,
+                    &this,
+                    "SetHorizontalScroll(offset)",
+                ));
+            };
+            let px = px as f32;
             let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
             let changed = with_scroll(lua, &this, |s| {
                 let changed = moved(s.horizontal, px, eps);
