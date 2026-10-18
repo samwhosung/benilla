@@ -500,19 +500,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // SetLootMethod("method" [,master] [,threshold]), the reference's usage string (`0x84c42c`).
+    // Only "master" (a case-insensitive compare, `0x4e9340`..`0x4e93bd`) reads a master name, as
+    // argument 2, and moves the threshold to argument 3 (`edi` 2 -> 3 at `0x4e93e3`); every other
+    // method reads its threshold as argument 2 (`0x4e9469`). The threshold is `lua_isnumber`-gated
+    // (`0x4e9472`) and `_ftol`ed; a miss is no threshold here, never a raise.
     g.set(
         "SetLootMethod",
-        lua.create_function(
-            |lua, (method, master_name, threshold): (String, Option<String>, Option<u32>)| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.party_requests.push(PartyRequest::LootMethod {
-                    method,
-                    master_name,
-                    threshold,
-                });
-                Ok(())
-            },
-        )?,
+        lua.create_function(|lua, (method, second, third): (String, Value, Value)| {
+            let master = method.eq_ignore_ascii_case("master");
+            let (master_name, threshold) = if master {
+                (binding_abi::optional_string(lua, &second), third)
+            } else {
+                (None, second)
+            };
+            let threshold =
+                binding_abi::is_number(lua, threshold).map(|n| binding_abi::ftol(n) as u32);
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model.party_requests.push(PartyRequest::LootMethod {
+                method,
+                master_name,
+                threshold,
+            });
+            Ok(())
+        })?,
     )?;
     g.set(
         "SetLootThreshold",
@@ -1171,17 +1181,39 @@ mod tests {
                 threshold: None,
             }]
         );
+    }
 
-        // The third argument is read for every method.
-        s.run(r#"SetLootMethod("group", nil, 4)"#).unwrap();
-        assert_eq!(
-            s.take_party_requests(),
-            vec![PartyRequest::LootMethod {
-                method: "group".into(),
-                master_name: None,
-                threshold: Some(4),
-            }]
-        );
+    /// `0x4e92a0`: every method but "master" reads its threshold as argument 2 (`0x4e9469`); "master"
+    /// reads the name as argument 2 and the threshold as argument 3 (`0x4e93e3`). The threshold is
+    /// `lua_isnumber`-gated (`0x4e9472`), and a miss is no threshold, never a raise.
+    #[test]
+    fn the_threshold_is_argument_two_unless_the_method_is_master() {
+        let mut s = UiScript::new().unwrap();
+        for (call, name, threshold) in [
+            (r#"SetLootMethod("group", 4)"#, None, Some(4)),
+            (r#"SetLootMethod("roundrobin", "5")"#, None, Some(5)),
+            (r#"SetLootMethod("group", 3.9)"#, None, Some(3)),
+            (r#"SetLootMethod("group", nil, 4)"#, None, None),
+            (r#"SetLootMethod("group", "x")"#, None, None),
+            (r#"SetLootMethod("group", {})"#, None, None),
+            (r#"SetLootMethod("master", "Bob", 3)"#, Some("Bob"), Some(3)),
+            (r#"SetLootMethod("MASTER", "Bob", "x")"#, Some("Bob"), None),
+            (r#"SetLootMethod("master", "Bob")"#, Some("Bob"), None),
+        ] {
+            s.run(call).unwrap();
+            let got = s.take_party_requests();
+            assert_eq!(got.len(), 1, "{call}");
+            let PartyRequest::LootMethod {
+                master_name,
+                threshold: asked,
+                ..
+            } = &got[0]
+            else {
+                panic!("{call}: {got:?}");
+            };
+            assert_eq!(master_name.as_deref(), name, "{call}");
+            assert_eq!(*asked, threshold, "{call}");
+        }
     }
 
     #[test]
