@@ -103,10 +103,14 @@ impl CharacterPane {
 
     /// Ask the host for a fresh copy of the subject, as a builder call on a visible pane does. A
     /// pane with no subject asks nothing: the lookup of GUID 0 finds no unit (`0x505b8d`), and the
-    /// old copy stays.
+    /// old copy stays. A new build is a new copy: what was held for the one it replaces (an arm,
+    /// a `SetCamera`) is dropped, since the new copy arrives with Stand (`0x505a2f`) and the
+    /// pane's own camera (`0x505b30` → `0x50589c`).
     pub fn request_build(&mut self) {
         if self.has_subject() {
             self.builds += 1;
+            self.queued = None;
+            self.queued_camera = None;
         }
     }
 

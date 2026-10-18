@@ -749,6 +749,42 @@ fn an_arm_waits_for_the_copy_on_its_way_and_a_missed_unit_is_spent() {
     );
 }
 
+/// A `SetCamera` or an arm held for build 1 is not build 2's: the second request's copy arrives
+/// with the pane's own camera (`0x505b30` → `0x50589c`) and Stand (`0x505a2f`). Build 1 answered
+/// before build 2 is asked still takes both.
+#[test]
+fn a_held_camera_and_arm_die_with_the_request_they_wait_for() {
+    use crate::widget::{CopyCamera, ANIM_STAND};
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, 0));
+    s.run(r#"p = CreateFrame("PlayerModel", "Held", UIParent) p:SetUnit("target") p:SetCamera(0) p:SetSequence(60) p:RefreshUnit()"#)
+        .unwrap();
+    let h = s.frame_handle("Held").unwrap();
+    assert_eq!(char_state(&s, "Held").builds, 2);
+    assert_eq!(row_camera(&s, "Held"), CopyCamera::Pane);
+    s.character_copy_built(h, 1);
+    assert!(char_state(&s, "Held").copy.is_none(), "build 1 is stale");
+    s.character_copy_built(h, 2);
+    let c = char_state(&s, "Held");
+    assert_eq!(c.camera, CopyCamera::Pane);
+    assert_eq!(c.copy.unwrap().arm.anim_id, ANIM_STAND);
+
+    // Answered before the next request, a build takes what it waited for.
+    s.run("p:SetUnit('target') p:SetCamera(0) p:SetSequence(61)")
+        .unwrap();
+    let b = char_state(&s, "Held").builds;
+    s.character_copy_built(h, b);
+    let c = char_state(&s, "Held");
+    assert_eq!(c.camera, CopyCamera::Raw(0));
+    assert_eq!(c.copy.unwrap().arm.anim_id, 61);
+    s.run("p:RefreshUnit()").unwrap();
+    s.character_copy_built(h, b + 1);
+    let c = char_state(&s, "Held");
+    assert_eq!(c.camera, CopyCamera::Pane);
+    assert_eq!(c.copy.unwrap().arm.anim_id, ANIM_STAND);
+}
+
 /// Hiding drops the copy and keeps the subject (`0x505ce0`); showing asks for a fresh copy
 /// (`0x505d00`); a build answered for a replaced request is dropped.
 #[test]
