@@ -191,8 +191,9 @@ fn shipped_unit_frames_drive_end_to_end() {
         "neutral name plate is yellow, got {plate:?}"
     );
 
-    // The health fill is 30/50 of the 119px bar (`TargetFrame.xml:253-255`).
-    s.resolve();
+    // The health fill is 30/50 of the 119px bar (`TargetFrame.xml:253-255`), written by the bar's
+    // update in the tick's walk (`0x7833c0`).
+    s.tick(0.0);
     let quads = s.extract();
     let bar_rect = quads
         .iter()
