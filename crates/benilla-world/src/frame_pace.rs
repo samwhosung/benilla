@@ -4,8 +4,6 @@
 //! 26.4 and 8.0 ms, and every bone of a standing model jitters at once. When recent deltas look
 //! vsync'd, each is snapped to a whole number of refresh periods and the remainder carried, so
 //! elapsed time still matches the wall clock; otherwise (uncapped, a real stall) it passes through.
-//! The refresh period is the display's, from the monitor under the window, so a frame really shown
-//! two refreshes after the last keeps both; the deltas' median stands in only while it is unknown.
 //!
 //! The paced step is [`FrameStep`], the one the interface sees: 1.12.1 hands every `OnUpdate` the
 //! loop's frame time unclamped (`0x420f70` → `0x442330` → `0x442350` → `0x764330` → `0x76b2c0`).
@@ -18,19 +16,13 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::time::{Real, TimeSystems, TimeUpdateStrategy, Virtual};
-use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow};
 
-/// Recent raw deltas the cadence tests read, about a third of a second at 60 Hz.
+/// Recent raw deltas the refresh-period median is taken over, about a third of a second at 60 Hz.
 const WINDOW: usize = 20;
-/// A sample counts as "on cadence" when it is within this fraction of a period of its mark.
+/// A sample counts as "on cadence" when it is within this fraction of the median.
 const TIGHT: f64 = 0.15;
 /// Pacing engages only when at least this share of the window is on cadence.
 const TIGHT_SHARE: f64 = 0.6;
-/// A frame counts one more refresh from this far past a whole number of them, with the display's
-/// period known: a mis-split's long half (26.4 ms, 1.58 periods) stays one, and a frame shown two
-/// refreshes later still counts two when measured up to a quarter period short. A measured median
-/// carries its own error, so without the display's period the multiple is a plain floor.
-const SNAP_BIAS: f64 = 0.25;
 /// The largest remainder, in periods, still worked off in whole refreshes; beyond it the frame is
 /// a stall and passes through raw.
 const CARRY_MAX: f64 = 1.5;
@@ -42,10 +34,8 @@ const BLEED: f64 = 0.05;
 
 #[derive(Resource)]
 pub(crate) struct FramePacer {
-    /// Recent raw deltas (seconds), for the cadence tests.
+    /// Recent raw deltas (seconds), for the refresh-period median.
     hist: VecDeque<f64>,
-    /// The display's refresh period (seconds), from [`track_display`]; `None` while unknown.
-    grid: Option<f64>,
     /// Time measured but not yet handed out (negative: handed out ahead of the wall clock), about
     /// [`CARRY_MAX`] periods at most and drained by [`BLEED`]. Every step is
     /// `raw + old carry − new carry`, so the paced clock is always the wall clock less this.
@@ -61,7 +51,6 @@ impl Default for FramePacer {
     fn default() -> Self {
         Self {
             hist: VecDeque::with_capacity(WINDOW),
-            grid: None,
             carry: 0.0,
             total: None,
             off: std::env::var("WOW_NO_FRAME_PACE").as_deref() == Ok("1"),
@@ -70,65 +59,33 @@ impl Default for FramePacer {
 }
 
 impl FramePacer {
-    /// Takes the display's refresh period; a new one (the window moved to another display, or
-    /// the rate is first known) starts the cadence history over, since its deltas were shown on
-    /// the old refresh.
-    fn set_grid(&mut self, grid: Option<f64>) {
-        if self.grid != grid {
-            self.grid = grid;
-            self.hist.clear();
-        }
-    }
-
-    /// The period this stream is shown at, or `None` when it does not look vsync'd.
-    ///
-    /// With the display's refresh known, the unit is the whole number of refreshes nearest the
-    /// window's 40th percentile (a 60 fps stream on a 120 Hz display is shown every second
-    /// refresh), and the stream is vsync'd when most deltas sit on its multiples, or, for a run of
-    /// mis-splits, when most adjacent pairs add up to two of it. A frame of one refresh and one of
-    /// two alternating keep the unit one refresh, since the percentile sits below their median.
-    /// An uncapped or variable-refresh stream, shown whenever a frame is ready and the display's
-    /// rate only its ceiling, sits on neither and passes through. Unknown, the unit is the median
-    /// of the deltas when most sit on it.
-    fn unit(&self) -> Option<f64> {
+    /// The refresh period this stream looks like, or `None` when it does not look vsync'd: the
+    /// window's median when enough deltas sit on it, else half the median of adjacent pairs, since
+    /// a run of mis-split frames fails the first test while each pair still adds up to two
+    /// refreshes.
+    fn cadence(&self) -> Option<f64> {
         if self.hist.len() < WINDOW {
             return None;
         }
         let v: Vec<f64> = self.hist.iter().copied().collect();
-        let Some(grid) = self.grid else {
-            return on_cadence(&v);
-        };
-        let mut sorted = v.clone();
-        sorted.sort_by(f64::total_cmp);
-        let unit = grid * (sorted[v.len() * 2 / 5] / grid).round().max(1.0);
-        let near = |d: f64, target: f64| (d - target).abs() < TIGHT * unit;
-        let on_grid = v
-            .iter()
-            .filter(|&&d| {
-                let k = (d / unit).round();
-                k >= 1.0 && near(d, k * unit)
-            })
-            .count();
-        let split_pairs = v
-            .windows(2)
-            .filter(|w| near(w[0] + w[1], 2.0 * unit))
-            .count();
-        let share = |n: usize, of: usize| n as f64 >= TIGHT_SHARE * of as f64;
-        (share(on_grid, v.len()) || share(split_pairs, v.len() - 1)).then_some(unit)
+        on_cadence(&v).or_else(|| {
+            let pairs: Vec<f64> = v.windows(2).map(|w| w[0] + w[1]).collect();
+            on_cadence(&pairs).map(|p| p / 2.0)
+        })
     }
 
-    /// Snaps `raw` to the presentation cadence, carrying the remainder; a stream that is not
-    /// vsync'd passes through with any time still owed added, and a stall with the whole carry.
-    /// One call is one presented frame, so it is at least one refresh: a frame shorter than the
-    /// unit (a 120 fps stretch of a stream the window shows at 60) snaps on the display's own
-    /// refresh. No time is created or lost, and every branch drains the carry by [`BLEED`].
+    /// Snaps `raw` to the presentation cadence, carrying the remainder; a stream that is not vsync'd
+    /// passes through with any time still owed added, and a stall with the whole carry. One call is one presented frame,
+    /// so the multiple is 1 until `raw` plus the carry reaches 1.5 periods, then a floor: rounding
+    /// would pace the 26.4 ms long half of a mis-split pair (1.58 periods) as two frames. No time is
+    /// created or lost, and every branch drains the carry by [`BLEED`].
     fn pace(&mut self, raw: f64) -> f64 {
         if self.hist.len() == WINDOW {
             self.hist.pop_front();
         }
         self.hist.push_back(raw);
         let want = raw + self.carry;
-        let Some(unit) = self.unit() else {
+        let Some(period) = self.cadence() else {
             return self.pass(raw, want);
         };
         if want < 0.0 {
@@ -136,15 +93,13 @@ impl FramePacer {
             // the lead drains.
             return self.settle(want, raw);
         }
-        let bias = if self.grid.is_some() { SNAP_BIAS } else { 0.0 };
-        let mult = (want / unit + bias).floor().min(MAX_MULT);
-        let snapped = if mult >= 1.0 {
-            mult * unit
+        let mult = if want >= 1.5 * period {
+            (want / period).floor().min(MAX_MULT)
         } else {
-            let refresh = self.grid.unwrap_or(unit);
-            (want / refresh + bias).floor().max(1.0) * refresh
+            1.0
         };
-        if (want - snapped).abs() > CARRY_MAX * unit {
+        let snapped = mult * period;
+        if (want - snapped).abs() > CARRY_MAX * period {
             // A real stall, not a mis-split: report it as it happened, the carry settled with it.
             self.carry = 0.0;
             return want;
@@ -179,50 +134,6 @@ impl FramePacer {
     /// Drops the carry, for a frame whose clock is not paced (pacing off, a manual clock).
     fn reset(&mut self) {
         self.carry = 0.0;
-    }
-}
-
-/// The refresh period of the display under the primary window: the monitor holding the window's
-/// centre, else the primary monitor; `None` when neither reports a rate.
-fn display_period(window: &Window, monitors: &[(&Monitor, bool)]) -> Option<f64> {
-    let centre = match window.position {
-        bevy::window::WindowPosition::At(p) => Some(
-            p + IVec2::new(
-                window.physical_width() as i32,
-                window.physical_height() as i32,
-            ) / 2,
-        ),
-        _ => None,
-    };
-    let under = centre.and_then(|c| {
-        monitors.iter().find(|(m, _)| {
-            let min = m.physical_position;
-            let max = min + IVec2::new(m.physical_width as i32, m.physical_height as i32);
-            c.x >= min.x && c.x < max.x && c.y >= min.y && c.y < max.y
-        })
-    });
-    let monitor = under.or_else(|| monitors.iter().find(|(_, primary)| *primary))?;
-    let mhz = monitor.0.refresh_rate_millihertz.filter(|&r| r > 0)?;
-    Some(1000.0 / f64::from(mhz))
-}
-
-/// Follows the primary window to its display's refresh period, logging each change.
-fn track_display(
-    windows: Query<&Window, With<PrimaryWindow>>,
-    monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
-    mut pacer: ResMut<FramePacer>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let monitors: Vec<(&Monitor, bool)> = monitors.iter().collect();
-    let grid = display_period(window, &monitors);
-    if grid != pacer.grid {
-        match grid {
-            Some(p) => info!("frame_pace: display refresh {:.3} Hz", 1.0 / p),
-            None => info!("frame_pace: display refresh unknown; pacing on the measured cadence"),
-        }
-        pacer.set_grid(grid);
     }
 }
 
@@ -393,10 +304,7 @@ pub fn plugin(app: &mut App) {
     }
     app.init_resource::<FramePacer>()
         .init_resource::<FrameStep>()
-        .add_systems(
-            First,
-            (track_display, pace_frame_time).chain().after(TimeSystems),
-        );
+        .add_systems(First, pace_frame_time.after(TimeSystems));
 }
 
 #[cfg(test)]
@@ -577,23 +485,9 @@ mod tests {
             .collect()
     }
 
-    /// A pacer that knows the display refreshes every `period` seconds.
-    fn on_display(period: f64) -> FramePacer {
-        let mut p = pacer();
-        p.set_grid(Some(period));
-        p
-    }
-
-    /// A small deterministic jitter, within ±`ms` milliseconds.
-    fn jitter(i: usize, ms: f64) -> f64 {
-        let x = ((i as u64).wrapping_mul(2_654_435_761) % 2001) as f64 / 1000.0 - 1.0;
-        x * ms / 1000.0
-    }
-
     /// 22 s of `Time<Real>` deltas from a 60 Hz run on Metal, in milliseconds. Its median sits off
     /// the true refresh, which a carry that never drains turns into a lead parked near -14.6 ms,
-    /// from which a short-first split leaks raw. Paced on the display's 60 Hz, every step is even;
-    /// on the median alone, time is still exact and the carry bounded.
+    /// from which a short-first split leaks raw.
     #[test]
     fn a_measured_stream_keeps_its_carry_drained_and_its_steps_even() {
         let raws: Vec<f64> = include_str!("../tests/data/frame_pace_stream.txt")
@@ -601,107 +495,15 @@ mod tests {
             .map(|l| l.trim().parse::<f64>().unwrap() / 1000.0)
             .collect();
         assert_eq!(raws.len(), 1319);
-        let steps = replay(&mut on_display(P), &raws, 0.011);
+        let steps = replay(&mut pacer(), &raws, 0.011);
         for (i, d) in steps.iter().enumerate().skip(WINDOW) {
             assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
         }
-        replay(&mut pacer(), &raws, 0.011);
     }
 
-    /// A frame shown one refresh after the last, then one shown two after, alternating (a
-    /// GPU-bound 40 fps on a 60 Hz display): the steps are those intervals, not their 25 ms mean.
-    #[test]
-    fn a_real_one_and_two_refresh_alternation_steps_one_and_two_refreshes() {
-        let truth: Vec<f64> = (0..400)
-            .map(|i| if i % 2 == 0 { P } else { 2.0 * P })
-            .collect();
-        for ms in [0.0, 1.0] {
-            let raws: Vec<f64> = truth
-                .iter()
-                .enumerate()
-                .map(|(i, t)| t + jitter(i, ms))
-                .collect();
-            let steps = replay(&mut on_display(P), &raws, CARRY_MAX * P);
-            for (i, (d, t)) in steps.iter().zip(&truth).enumerate().skip(WINDOW) {
-                assert!(
-                    (d - t).abs() < EVEN,
-                    "±{ms} ms, frame {i}: a step of {d} s for a frame shown {t} s after the last"
-                );
-            }
-        }
-    }
-
-    /// Five mis-split pairs in a row put half the window off the refresh; each pair still adds up
-    /// to two refreshes, so the run stays paced, on a 60 Hz display and at 60 fps on a 120 Hz one.
-    #[test]
-    fn a_burst_of_mis_splits_stays_paced() {
-        let mut raws = vec![P; 40];
-        for _ in 0..5 {
-            raws.extend([0.0264, 2.0 * P - 0.0264]);
-        }
-        raws.extend([P; 40]);
-        for display in [P, P / 2.0] {
-            let steps = replay(&mut on_display(display), &raws, CARRY_MAX * P);
-            for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-                assert!(
-                    (d - P).abs() < EVEN,
-                    "{display} s display, frame {i}: a step of {d} s"
-                );
-            }
-        }
-    }
-
-    /// Every frame mis-split on a 60 Hz display: halves that add up to two refreshes step one
-    /// each; the measured 26.4 / 8.0 ms, which add up to more, step whole refreshes.
-    #[test]
-    fn an_every_frame_mis_split_on_a_known_display_steps_whole_refreshes() {
-        let paired: Vec<f64> = (0..400)
-            .map(|i| if i % 2 == 0 { 0.0264 } else { 2.0 * P - 0.0264 })
-            .collect();
-        let steps = replay(&mut on_display(P), &paired, CARRY_MAX * P);
-        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
-        }
-        let measured: Vec<f64> = (0..400)
-            .map(|i| if i % 2 == 0 { 0.0264 } else { 0.0080 })
-            .collect();
-        let steps = replay(&mut on_display(P), &measured, CARRY_MAX * P);
-        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-            let periods = d / P;
-            assert!(
-                periods.round() >= 1.0 && (periods - periods.round()).abs() < EVEN / P,
-                "frame {i}: a step of {d} s is not whole refreshes"
-            );
-        }
-    }
-
-    /// The window moves from a 60 Hz display to a 120 Hz one: once a window of frames shown on the
-    /// new refresh is in, it paces on it, a mis-split at the new rate included, and no lead is
-    /// left behind.
-    #[test]
-    fn a_move_to_a_faster_display_paces_on_its_refresh() {
-        let fast = P / 2.0;
-        let mut p = on_display(P);
-        replay(&mut p, &[P; 200], CARRY_MAX * P);
-        p.set_grid(Some(fast));
-        let raws: Vec<f64> = (0..600)
-            .map(|i| match i % 6 {
-                4 => 0.0125,
-                5 => 2.0 * fast - 0.0125,
-                _ => fast,
-            })
-            .collect();
-        let steps = replay(&mut p, &raws, CARRY_MAX * fast);
-        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-            assert!(
-                (d - fast).abs() < EVEN / 2.0,
-                "frame {i}: a step of {d} s at 120 Hz"
-            );
-        }
-    }
-
-    /// With the display's rate unknown, a 60 to 120 Hz rise snaps the first fast frames on the old
-    /// median and leaves a lead; it drains, and a mis-split at the new rate is paced again.
+    /// A 60 to 120 Hz switch (a variable-refresh display): the old period snaps the first fast
+    /// frames to 16.7 ms and leaves a lead below the new period. It drains, and a mis-split at the
+    /// new rate is paced again.
     #[test]
     fn a_refresh_rate_rise_drains_its_lead_and_paces_the_new_cadence() {
         let fast = P / 2.0;
@@ -722,68 +524,32 @@ mod tests {
         assert!(p.carry.abs() < EVEN, "the lead drained: {}", p.carry);
     }
 
-    /// Uncapped frames, and a variable-refresh stream shown whenever a frame is ready under a
-    /// 120 Hz ceiling, sit on no refresh grid and pass through raw.
+    /// Five mis-split pairs in a row put half the window off cadence; each pair still adds up to
+    /// two refreshes, so the run stays paced.
     #[test]
-    fn an_uncapped_or_variable_refresh_stream_passes_raw_on_a_known_display() {
-        let uncapped = [0.004, 0.011, 0.0031, 0.019, 0.0072, 0.0155, 0.0028, 0.0093];
-        for display in [P, P / 2.0] {
-            let mut p = on_display(display);
-            for i in 0..WINDOW * 4 {
-                let raw = uncapped[i % uncapped.len()];
-                assert_eq!(p.pace(raw), raw, "{display} s display, frame {i}");
-            }
+    fn a_burst_of_mis_splits_stays_paced() {
+        let mut raws = vec![P; 40];
+        for _ in 0..5 {
+            raws.extend([0.0264, 2.0 * P - 0.0264]);
         }
-        let mut p = on_display(P / 2.0);
-        for i in 0..400 {
-            let raw = 0.012 + jitter(i, 1.5);
-            assert_eq!(p.pace(raw), raw, "variable refresh, frame {i}");
+        raws.extend([P; 40]);
+        let steps = replay(&mut pacer(), &raws, CARRY_MAX * P);
+        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
+            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
         }
     }
 
-    fn monitor(x: i32, hz: u32) -> Monitor {
-        Monitor {
-            name: None,
-            physical_height: 1080,
-            physical_width: 1920,
-            physical_position: IVec2::new(x, 0),
-            refresh_rate_millihertz: Some(hz * 1000),
-            scale_factor: 1.0,
-            video_modes: Vec::new(),
-        }
-    }
-
-    /// The period follows the window's centre from one display to the next, and falls back to the
-    /// primary display while the window has no position.
+    /// Every frame mis-split at the measured 26.4 / 8.0 ms: the pairs' 34.4 ms is the cadence,
+    /// two steps of 17.2 ms.
     #[test]
-    fn the_display_period_follows_the_window_to_its_monitor() {
-        use bevy::ecs::system::RunSystemOnce;
-        let mut world = World::new();
-        world.insert_resource(pacer());
-        world.spawn((monitor(0, 60), PrimaryMonitor));
-        world.spawn(monitor(1920, 120));
-        let window = world.spawn((Window::default(), PrimaryWindow)).id();
-        let period = |world: &mut World| {
-            world.run_system_once(track_display).unwrap();
-            world.resource::<FramePacer>().grid
-        };
-        assert_eq!(
-            period(&mut world),
-            Some(1.0 / 60.0),
-            "no position: the primary"
-        );
-        world.resource_mut::<FramePacer>().hist.push_back(P);
-        world.get_mut::<Window>(window).unwrap().position =
-            bevy::window::WindowPosition::At(IVec2::new(2400, 200));
-        assert_eq!(
-            period(&mut world),
-            Some(1.0 / 120.0),
-            "moved onto the 120 Hz display"
-        );
-        assert!(
-            world.resource::<FramePacer>().hist.is_empty(),
-            "the old display's deltas are dropped"
-        );
+    fn an_every_frame_alternation_is_paced_at_half_its_pairs() {
+        let raws: Vec<f64> = (0..400)
+            .map(|i| if i % 2 == 0 { 0.0264 } else { 0.0080 })
+            .collect();
+        let steps = replay(&mut pacer(), &raws, CARRY_MAX * 0.0172);
+        for (i, d) in steps.iter().enumerate().skip(2 * WINDOW) {
+            assert!((d - 0.0172).abs() < EVEN, "frame {i}: a step of {d} s");
+        }
     }
 
     #[test]
