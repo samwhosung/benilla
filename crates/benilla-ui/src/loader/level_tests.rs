@@ -783,3 +783,43 @@ fn a_region_reads_no_alpha() {
     assert_eq!(alpha("AlphaText"), 1.0);
     assert!((alpha("AlphaHost") - 0.5).abs() < 0.01, "a frame reads it");
 }
+
+/// `0x783f47`-`0x783fd8`, `0x77129f`-`0x771366`: an XML justify token is matched as `0x6f1990`
+/// does. One that matches nothing is skipped and clears no bit, so the axis still follows its
+/// font; the other axis's token zeroes the axis; neither raises.
+#[test]
+fn an_xml_justify_token_is_matched_and_a_miss_skipped() {
+    let s = ui();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Font name="JustParent" inherits="LevelTestFont" justifyH="LEFT" virtual="true"/>
+            <Font name="JustBogus" inherits="JustParent" justifyH="BOGUS" justifyV="NOPE"
+                  virtual="true"/>
+            <Font name="JustCross" inherits="JustParent" justifyH="TOP" justifyV="LEFT"
+                  virtual="true"/>
+            <Frame name="JustHost">
+                <Layers><Layer>
+                    <FontString name="JustString" inherits="JustParent" justifyH="BOGUS"/>
+                    <FontString name="JustStringCross" inherits="JustParent" justifyV="RIGHT"/>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    let justify = |name: &str| {
+        s.eval::<String>(&format!(
+            "return {name}:GetJustifyH() .. ' ' .. {name}:GetJustifyV()"
+        ))
+        .unwrap()
+    };
+    assert_eq!(justify("JustBogus"), "LEFT MIDDLE");
+    assert_eq!(justify("JustCross"), "UNKNOWN UNKNOWN");
+    assert_eq!(justify("JustString"), "LEFT MIDDLE");
+    assert_eq!(justify("JustStringCross"), "LEFT UNKNOWN");
+    s.run(r#"JustParent:SetJustifyH("RIGHT")"#).unwrap();
+    assert_eq!(justify("JustBogus"), "RIGHT MIDDLE", "still following");
+    assert_eq!(justify("JustString"), "RIGHT MIDDLE", "still following");
+    assert_eq!(justify("JustCross"), "UNKNOWN UNKNOWN");
+}

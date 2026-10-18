@@ -312,11 +312,16 @@ impl Loader<'_> {
         if let Some(sp) = node.attr("spacing").filter(|v| !v.is_empty()) {
             self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
         }
-        if let Some(j) = node.attr("justifyV").filter(|v| !v.is_empty()) {
-            self.call_region(wrapper, "SetJustifyV", j.to_string(), dbg);
-        }
-        if let Some(j) = node.attr("justifyH").filter(|v| !v.is_empty()) {
-            self.call_region(wrapper, "SetJustifyH", j.to_string(), dbg);
+        // A justify token is matched first (`0x6f1990`) and one that matches nothing is skipped
+        // (`0x7712c3`, `0x771327`); a match is the setter's write, which zeroes the axis for the
+        // other axis's token (`0x7712e1`-`0x7712e7`).
+        for (attr, setter) in [("justifyV", "SetJustifyV"), ("justifyH", "SetJustifyH")] {
+            if let Some(j) = node
+                .attr(attr)
+                .filter(|j| crate::justify::parse_bits(j).is_some())
+            {
+                self.call_region(wrapper, setter, j.to_string(), dbg);
+            }
         }
         // Each `<Color>` is the text colour (`0x77f750`) and each `<Shadow>` the shadow
         // (`0x7722a0`), both local to the string, so they outlast the font object's.

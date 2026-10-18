@@ -13,7 +13,8 @@ use std::collections::HashSet;
 use mlua::{Function, ObjectLike, Table, Value};
 
 use crate::framexml::{self, Element, ParsedDocument, ScriptRef, TopLevel};
-use crate::script::{JustifyH, JustifyV, Outline, UiScript};
+use crate::justify;
+use crate::script::{Outline, UiScript};
 use crate::status;
 
 mod backdrop;
@@ -701,25 +702,16 @@ impl Loader<'_> {
                 fo.spacing = Some(sp)
             });
         }
-        // Each axis writes its bits of the one justify word (`0x783f90`, `0x783fd8`).
-        if let Some(j) = el.attr("justifyV").filter(|v| !v.is_empty()) {
-            let jv = match j.to_ascii_uppercase().as_str() {
-                "TOP" => JustifyV::Top,
-                "BOTTOM" => JustifyV::Bottom,
-                _ => JustifyV::Middle,
+        // Each axis matches its token as `0x6f1990` does and writes its own bits of the one justify
+        // word, none for the other axis's token (`0x783f75`-`0x783f7c`, `0x783fbd`-`0x783fc4`); a
+        // token that matches nothing is skipped and clears no bit (`0x783f6d`, `0x783fb5`).
+        for (attr, mask) in [("justifyV", justify::V_MASK), ("justifyH", justify::H_MASK)] {
+            let Some(bits) = el.attr(attr).and_then(justify::parse_bits) else {
+                continue;
             };
             font::set(&mut model, id, FontMask::JUSTIFY, |fo| {
-                fo.justify.get_or_insert_with(Default::default).set_v(jv)
-            });
-        }
-        if let Some(j) = el.attr("justifyH").filter(|v| !v.is_empty()) {
-            let jh = match j.to_ascii_uppercase().as_str() {
-                "LEFT" => JustifyH::Left,
-                "RIGHT" => JustifyH::Right,
-                _ => JustifyH::Center,
-            };
-            font::set(&mut model, id, FontMask::JUSTIFY, |fo| {
-                fo.justify.get_or_insert_with(Default::default).set_h(jh)
+                let word = fo.justify.get_or_insert_with(Default::default);
+                word.0 = justify::set_axis(word.0, mask, bits);
             });
         }
         for child in &el.children {
