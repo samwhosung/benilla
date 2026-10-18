@@ -963,31 +963,27 @@ impl UiScript {
 
     /// Seed the two zoom cells from the persisted CVars before the world entry reseeds them, so a
     /// new VM's file scope reads the live level.
-    pub fn set_minimap_zoom(&mut self, zoom: u8, inside_zoom: u8) {
-        let top = crate::widget::MINIMAP_ZOOM_LEVELS - 1;
+    pub fn set_minimap_zoom(&mut self, zoom: u32, inside_zoom: u32) {
         let mut model = self.model_mut();
-        model.minimap.zoom = zoom.min(top);
-        model.minimap.inside_zoom = inside_zoom.min(top);
+        model.minimap.zoom = zoom;
+        model.minimap.inside_zoom = inside_zoom;
     }
 
     /// The minimap initializer every world entry runs (`0x4ed9d0`, from `0x49096f`): its blip
     /// set-up (`0x6d8e10`) copies each zoom CVar's integer into its cell, `minimapZoom` into
     /// `0x86f698` and `minimapInsideZoom` into `0x86f69c` (`0x6d9008`-`0x6d901f`), and signals
-    /// `MINIMAP_UPDATE_ZOOM` (`0x6d902a`), on which the stock buttons re-sync. Deviation: a level
-    /// past the six-entry tables is capped at 5 as `SetZoom` caps one, where the raw copy reads past
-    /// them.
+    /// `MINIMAP_UPDATE_ZOOM` (`0x6d902a`), on which the stock buttons re-sync. The copy is raw, so a
+    /// negative or out-of-range level stands in the cell for `GetZoom` to answer.
     pub(crate) fn minimap_enter_world(&mut self) {
         let outdoor = self.cvar_int("minimapZoom");
         let indoor = self.cvar_int("minimapInsideZoom");
         {
-            let cap =
-                |v: i32| (v as u32).min(u32::from(crate::widget::MINIMAP_ZOOM_LEVELS - 1)) as u8;
             let mut model = self.model_mut();
             if let Some(v) = outdoor {
-                model.minimap.zoom = cap(v);
+                model.minimap.zoom = v as u32;
             }
             if let Some(v) = indoor {
-                model.minimap.inside_zoom = cap(v);
+                model.minimap.inside_zoom = v as u32;
             }
         }
         self.fire_event("MINIMAP_UPDATE_ZOOM", Vec::new());

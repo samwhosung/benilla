@@ -49,7 +49,7 @@ const TILE_YARDS: f32 = 533.333_3;
 /// middle two-thirds, `0x4ec440`), and the same `c` sizes the selection box (`0x6d96b6`); the
 /// `10.0f` at `0x4ed9eb` is only the field's static initializer, which `0x6d98f5` rewrites from
 /// the table whenever the zoom or indoor state changes.
-fn view_radius_yd(zoom: u8, inside_zoom: u8, inside: bool) -> f32 {
+fn view_radius_yd(zoom: u32, inside_zoom: u32, inside: bool) -> f32 {
     benilla_ui::widget::minimap_radius_yd(zoom, inside_zoom, inside)
 }
 
@@ -152,24 +152,25 @@ pub(crate) struct MinimapInside(pub(crate) bool);
 #[derive(Resource)]
 pub(crate) struct MinimapZoom {
     /// `minimapZoom`, the outdoor index.
-    pub(crate) outdoor: u8,
+    pub(crate) outdoor: u32,
     /// `minimapInsideZoom`, the indoor index, persisted apart from the outdoor level.
-    pub(crate) inside: u8,
+    pub(crate) inside: u32,
 }
 
-/// The app's mirror of the two zoom CVars, each on its own field and clamped into the six-entry
-/// zoom tables (`0x8116d0`, `0x8116e8`), which the reference's raw copy (`0x6d9013`) indexes.
+/// The app's mirror of the two zoom CVars, each on its own field: the record's integer as the
+/// reference's raw copy takes it into the zoom cell (`0x6d9013`), unclamped.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut zoom: ResMut<MinimapZoom>) {
     match ev.key().as_str() {
-        "minimapzoom" => zoom.outdoor = zoom_index(ev.num()),
-        "minimapinsidezoom" => zoom.inside = zoom_index(ev.num()),
+        "minimapzoom" => zoom.outdoor = zoom_index(&ev.new),
+        "minimapinsidezoom" => zoom.inside = zoom_index(&ev.new),
         _ => {}
     }
 }
 
-/// A stored zoom level to an index, truncated and clamped into `[0, MINIMAP_ZOOM_LEVELS)`.
-fn zoom_index(v: f32) -> u8 {
-    v.clamp(0.0, f32::from(benilla_ui::widget::MINIMAP_ZOOM_LEVELS - 1)) as u8
+/// A stored zoom level as its cell holds it: the record's integer (`rec+0x28`, `SStrToInt` at
+/// `0x63e127`) as an unsigned 32-bit value.
+fn zoom_index(text: &str) -> u32 {
+    benilla_ui::script::s_str_to_int(text) as u32
 }
 
 impl Default for MinimapZoom {
@@ -186,8 +187,8 @@ pub(crate) struct MinimapSlot {
     pub(crate) rect: Rect,
     pub(crate) z: u128,
     /// The outdoor zoom index; `inside_zoom` is the indoor one, picked by WMO containment.
-    pub(crate) zoom: u8,
-    pub(crate) inside_zoom: u8,
+    pub(crate) zoom: u32,
+    pub(crate) inside_zoom: u32,
     pub(crate) alpha: f32,
 }
 
@@ -398,11 +399,11 @@ fn emit_minimap(
         return; // the composite rig's Startup system has not run yet
     };
     // `WOW_MM_ZOOM=0..5` forces both zoom indices, a capture instrument.
-    static ZOOM_OVERRIDE: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    static ZOOM_OVERRIDE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
     let zoom_override = *ZOOM_OVERRIDE.get_or_init(|| {
         std::env::var("WOW_MM_ZOOM")
             .ok()
-            .and_then(|s| s.parse::<u8>().ok())
+            .and_then(|s| s.parse::<u32>().ok())
     });
     let zoom = zoom_override.unwrap_or(slot.zoom);
     let inside_zoom = zoom_override.unwrap_or(slot.inside_zoom);

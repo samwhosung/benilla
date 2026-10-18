@@ -754,9 +754,10 @@ pub const MINIMAP_ARROW_SCALE: f32 = 0.6;
 /// with no `this` lookup (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MinimapStatics {
-    /// The outdoor zoom index, 0 widest to 5 tightest.
-    pub zoom: u8,
-    pub inside_zoom: u8,
+    /// The outdoor zoom index, 0 widest to 5 tightest; the world entry copies the CVar's integer
+    /// in raw (`0x6d9013`), so it can hold any `u32`, and `GetZoom` answers it unsigned (`0x4eec31`).
+    pub zoom: u32,
+    pub inside_zoom: u32,
     /// Inside a WMO interior, which picks the index; pushed by the app, which owns that test.
     pub inside: bool,
     /// What each texture setter last left in its handle, with the call's stamp, so the host
@@ -774,7 +775,7 @@ pub struct MinimapStatics {
 
 /// Both zoom CVars register with `"3"` (`0x48fc5a`/`0x48fc76`) and the reset copies the CVar in;
 /// a higher index zooms in, 3 being a 60 yd indoor radius and a 133.3 yd outdoor half-extent.
-pub const MINIMAP_DEFAULT_ZOOM: u8 = 3;
+pub const MINIMAP_DEFAULT_ZOOM: u32 = 3;
 
 impl Default for MinimapStatics {
     fn default() -> Self {
@@ -792,7 +793,7 @@ impl Default for MinimapStatics {
 
 impl MinimapStatics {
     /// The index `GetZoom`/`SetZoom` act on now (`0x6da980`).
-    pub fn active_zoom(&self) -> u8 {
+    pub fn active_zoom(&self) -> u32 {
         if self.inside {
             self.inside_zoom
         } else {
@@ -837,7 +838,7 @@ impl MinimapStatics {
     /// 5. Only a change writes, and names the CVar the reference then sets with `%d`
     /// (`minimapInsideZoom` or `minimapZoom`, `0x6da909`).
     pub fn set_zoom_index(&mut self, level: i32) -> Option<&'static str> {
-        let index = (level as u32).min(u32::from(MINIMAP_ZOOM_LEVELS - 1)) as u8;
+        let index = (level as u32).min(u32::from(MINIMAP_ZOOM_LEVELS - 1));
         let (cell, cvar) = if self.inside {
             (&mut self.inside_zoom, "minimapInsideZoom")
         } else {
@@ -890,9 +891,11 @@ pub const MINIMAP_INDOOR_RADII: [f32; 6] = [150.0, 120.0, 90.0, 60.0, 40.0, 25.0
 
 /// The minimap's radius in yards (`0x6da9b0`): with the indoor byte set the indoor table at the
 /// indoor index (`0x6da9bf`), else the outdoor chunk count times 0.5 and 33.333332 (`0x6da9e9`,
-/// `0x6da9ef`). The ping, the blips and the dots all use it; an index past 5 reads the last entry.
-pub fn minimap_radius_yd(zoom: u8, inside_zoom: u8, inside: bool) -> f32 {
-    let at = |z: u8| usize::from(z.min(MINIMAP_ZOOM_LEVELS - 1));
+/// `0x6da9ef`). The ping, the blips and the dots all use it. Deviation: an index past 5 reads the
+/// last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client
+/// fault a hand-edited CVar reaches.
+pub fn minimap_radius_yd(zoom: u32, inside_zoom: u32, inside: bool) -> f32 {
+    let at = |z: u32| z.min(u32::from(MINIMAP_ZOOM_LEVELS - 1)) as usize;
     if inside {
         MINIMAP_INDOOR_RADII[at(inside_zoom)]
     } else {

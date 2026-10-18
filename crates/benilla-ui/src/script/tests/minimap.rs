@@ -19,7 +19,7 @@ fn minimap_zoom_api_and_extract() {
 
     // Both indices seed from the CVar default "3", not 0.
     assert_eq!(
-        s.eval::<u8>("return m:GetZoom()").unwrap(),
+        s.eval::<u32>("return m:GetZoom()").unwrap(),
         MINIMAP_DEFAULT_ZOOM
     );
     assert_eq!(
@@ -87,7 +87,7 @@ fn minimap_indoor_and_outdoor_zoom_indices_are_independent() {
 
     s.set_minimap_inside(true);
     assert_eq!(
-        s.eval::<u8>("return m:GetZoom()").unwrap(),
+        s.eval::<u32>("return m:GetZoom()").unwrap(),
         MINIMAP_DEFAULT_ZOOM,
         "indoors reads the separate indoor index, not the outdoor 2"
     );
@@ -154,13 +154,10 @@ fn setzoom_persists_the_level_through_the_cvar_it_belongs_to() {
     s.run("m:SetZoom(0)").unwrap();
     assert!(s.take_cvar_changes().is_empty());
 
-    // The seed clamps like `set_zoom`.
+    // The seed is the CVar's integer, raw, as the world entry copies it (`0x6d9013`).
     s.set_minimap_zoom(99, 99);
     s.set_minimap_inside(false);
-    assert_eq!(
-        s.eval::<u8>("return m:GetZoom()").unwrap(),
-        MINIMAP_ZOOM_LEVELS - 1
-    );
+    assert_eq!(s.eval::<u32>("return m:GetZoom()").unwrap(), 99);
 }
 
 /// With no host CVars (a bare harness, a glue-only run) the engine-side write is a silent no-op.
@@ -601,6 +598,39 @@ fn every_world_entry_reseeds_the_zoom_from_its_cvars_and_signals_it() {
     s.run("m:SetZoom(2)").unwrap();
     s.fire_world_enter();
     assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 2);
+}
+
+/// The world entry's copy is raw (`0x6d9013`): a CVar of `-1` or `9` stands in its cell, and
+/// `GetZoom` answers the cell as unsigned (`fild` of the cell over a zero high dword, `0x4eec31`).
+/// Only the radius read caps (a `Deviation:`, `0x6da9d5`); `SetZoom` then caps as it always does.
+#[test]
+fn the_zoom_cell_keeps_the_raw_cvar_integer_and_only_the_radius_read_caps() {
+    let mut s = script();
+    s.register_cvars([("minimapZoom", "3"), ("minimapInsideZoom", "3")]);
+    s.run(
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+           SetCVar("minimapZoom", "-1")
+           SetCVar("minimapInsideZoom", "9")"#,
+    )
+    .unwrap();
+    s.fire_world_enter();
+    assert_eq!(
+        s.eval::<f64>("return m:GetZoom()").unwrap(),
+        4_294_967_295.0
+    );
+    assert_eq!(
+        s.minimap_radius_yd(),
+        crate::widget::minimap_radius_yd(5, 3, false),
+        "the outdoor table's last entry"
+    );
+    s.set_minimap_inside(true);
+    assert_eq!(s.eval::<f64>("return m:GetZoom()").unwrap(), 9.0);
+    assert_eq!(s.minimap_radius_yd(), 25.0, "the indoor table's last entry");
+    // `SetZoom`'s compare is against the raw cell, so 5 is a change and writes.
+    s.take_cvar_changes();
+    s.run("m:SetZoom(5)").unwrap();
+    assert_eq!(s.eval::<f64>("return m:GetZoom()").unwrap(), 5.0);
+    assert_eq!(s.cvar("minimapInsideZoom").as_deref(), Some("5"));
 }
 
 /// `SetIconTexture` (`0x4ee640`) and `SetBlipTexture` (`0x4ee7e0`) are `SetMaskTexture`'s body on

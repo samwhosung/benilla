@@ -60,10 +60,10 @@ pub enum QuadContent {
     /// A `Minimap` widget's content hole, which the app fills with the map; emitted at the
     /// frame's own z, so the widget's children (border art, buttons) paint above it.
     Minimap {
-        /// The outdoor zoom index, `0..MINIMAP_ZOOM_LEVELS`, 0 the widest.
-        zoom: u8,
+        /// The outdoor zoom cell, 0 the widest; raw, so the reader caps it as the radius read does.
+        zoom: u32,
         /// The indoor zoom index (`0x86f69c`), sent too so the renderer picks by its own test.
-        inside_zoom: u8,
+        inside_zoom: u32,
     },
     /// A `Model` or `PlayerModel` widget's 3D pane: a `model` file draws as a tile, a character
     /// pane its own copy of its subject, an empty pane nothing. The host memoizes on this

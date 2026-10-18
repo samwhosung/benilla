@@ -1193,7 +1193,6 @@ mod tests {
     use crate::ui_script::{UiScaleCvar, DEFAULT_UI_SCALE};
     use crate::video::VideoConfig;
     use crate::world_backdrop::{RenderScale, RENDER_SCALE_RANGE};
-    use benilla_ui::widget::MINIMAP_ZOOM_LEVELS;
     use benilla_world::clutter::ClutterConfig;
     use benilla_world::view::{MsaaSetting, ViewDistance, FARCLIP_RANGE, MSAA_RANGE};
 
@@ -1515,8 +1514,8 @@ mod tests {
         assert_eq!(d["ChatBubblesParty"] != 0.0, bubbles.party);
         assert!(bubbles.all && !bubbles.party, "the binary's own pair");
         let zoom = MinimapZoom::default();
-        assert_eq!(d["minimapZoom"], f32::from(zoom.outdoor));
-        assert_eq!(d["minimapInsideZoom"], f32::from(zoom.inside));
+        assert_eq!(d["minimapZoom"], zoom.outdoor as f32);
+        assert_eq!(d["minimapInsideZoom"], zoom.inside as f32);
         assert_eq!(zoom.outdoor, benilla_ui::widget::MINIMAP_DEFAULT_ZOOM);
         // `video::tests` welds `VideoConfig::vsync` to the window's boot present mode.
         assert_eq!(d["gxVSync"] != 0.0, VideoConfig::default().vsync);
@@ -1932,10 +1931,17 @@ mod tests {
             3,
             "the two indices are independent"
         );
+        // The zoom cell takes the record's integer raw (`0x6d9013`): past 5 and below 0 stand.
         apply(&mut app, "minimapinsidezoom", "9");
-        assert_eq!(res::<MinimapZoom>(&app).inside, MINIMAP_ZOOM_LEVELS - 1);
+        assert_eq!(res::<MinimapZoom>(&app).inside, 9);
         apply(&mut app, "minimapZoom", "-2");
-        assert_eq!(res::<MinimapZoom>(&app).outdoor, 0);
+        assert_eq!(res::<MinimapZoom>(&app).outdoor, (-2_i32) as u32);
+        apply(&mut app, "minimapZoom", "4.9");
+        assert_eq!(
+            res::<MinimapZoom>(&app).outdoor,
+            4,
+            "SStrToInt stops at the point"
+        );
         // Text that is no number is stored (`0x63e0b0`) and reads as the record's float, 0,
         // which the knob holds to its floor.
         assert_eq!(apply(&mut app, "uiScale", "banana"), SetOutcome::Changed);
