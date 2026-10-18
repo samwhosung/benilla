@@ -10,7 +10,17 @@ use super::common::script;
 /// with `luaL_error`'s position.
 #[test]
 fn a_non_number_index_raises_the_bindings_own_usage_line() {
-    let s = script();
+    let mut s = script();
+    // `SetLootThreshold` reads its argument only as a group's leader (`0x4e9500`).
+    s.set_party(crate::script::PartyState {
+        members: vec![crate::script::PartyMemberInfo {
+            name: "Mate".into(),
+            guid: 0x1,
+        }],
+        leader_guid: 0x5E1F,
+        own_guid: 0x5E1F,
+        ..Default::default()
+    });
     s.run(r#"IdxTip = CreateFrame("GameTooltip", "IdxTip"); IdxTex = IdxTip:CreateTexture()"#)
         .unwrap();
     for (call, usage) in [
@@ -941,7 +951,17 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
 /// 32-bit pattern `_ftol` leaves; it never raises a conversion error.
 #[test]
 fn a_negative_index_is_read_and_never_a_conversion_error() {
-    let s = script();
+    let mut s = script();
+    // `SetLootThreshold` reads its argument only as a group's leader (`0x4e9500`).
+    s.set_party(crate::script::PartyState {
+        members: vec![crate::script::PartyMemberInfo {
+            name: "Mate".into(),
+            guid: 0x1,
+        }],
+        leader_guid: 0x5E1F,
+        own_guid: 0x5E1F,
+        ..Default::default()
+    });
     s.run(r#"IdxTip = CreateFrame("GameTooltip", "IdxTip"); IdxTex = IdxTip:CreateTexture()"#)
         .unwrap();
     for call in [

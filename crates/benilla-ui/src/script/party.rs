@@ -352,6 +352,29 @@ fn closest_group_member(model: &Model, name: &str) -> Option<u64> {
     best.guid
 }
 
+/// The checks both loot setters open with: not in a group (the first party guid and the raid
+/// count, `0x4e92a6`, `0x4e92b8`; `0x4e9500`, `0x4e9512`) shows game error 0x48, then not the
+/// group leader (`0x4e92d4`..`0x4e92eb`; `0x4e952b`..`0x4e9542`) 0x4b. `false` once one was shown.
+fn loot_gates(lua: &Lua) -> bool {
+    let (grouped, leads) = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let party = &model.party;
+        (
+            party.members.first().is_some_and(|m| m.guid != 0) || !party.raid.is_empty(),
+            party.own_guid != 0 && party.own_guid == party.leader_guid,
+        )
+    };
+    if !grouped {
+        chat_error(lua, "ERR_NOT_IN_GROUP", &[]);
+        return false;
+    }
+    if !leads {
+        chat_error(lua, "ERR_NOT_LEADER", &[]);
+        return false;
+    }
+    true
+}
+
 /// A catalog row of kind 0, game error `key` shown through `0x496720` from inside a verb: the
 /// template from the VM's globals filled with `args`, a chat line when it is not empty.
 fn chat_error(lua: &Lua, key: &'static str, args: &[Arg<'_>]) {
@@ -622,20 +645,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetLootMethod",
         lua.create_function(|lua, args: mlua::Variadic<Value>| {
-            let (grouped, leads) = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let party = &model.party;
-                (
-                    party.members.first().is_some_and(|m| m.guid != 0) || !party.raid.is_empty(),
-                    party.own_guid != 0 && party.own_guid == party.leader_guid,
-                )
-            };
-            if !grouped {
-                chat_error(lua, "ERR_NOT_IN_GROUP", &[]);
-                return Ok(());
-            }
-            if !leads {
-                chat_error(lua, "ERR_NOT_LEADER", &[]);
+            if !loot_gates(lua) {
                 return Ok(());
             }
             let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Nil);
@@ -686,9 +696,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // SetLootThreshold(threshold) (`0x4e9500`): the same group and leader checks as SetLootMethod
+    // (game errors 0x48 and 0x4b, `0x4e9505`..`0x4e9553`) before the argument is read.
     g.set(
         "SetLootThreshold",
         lua.create_function(|lua, n: Value| {
+            if !loot_gates(lua) {
+                return Ok(());
+            }
             // `is-number` else `Usage: SetLooThreshold(threshold)` (`0x84c464`, `0x4e9564`).
             let n = binding_abi::index_arg32(lua, n, "Usage: SetLooThreshold(threshold)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -1454,6 +1469,37 @@ mod tests {
             assert!(e.contains("Invalid loot method"), "{call}: {e}");
         }
         assert!(s.take_party_requests().is_empty());
+    }
+
+    /// `SetLootThreshold` (`0x4e9500`) opens with the same two checks, then wants a number
+    /// (`0x84c464`, the reference's own spelling of its name).
+    #[test]
+    fn set_loot_threshold_needs_a_group_and_its_leader_then_a_number() {
+        let mut solo = loot_vm(PartyState::default());
+        solo.run("SetLootThreshold(nil)").unwrap();
+        assert!(solo.take_party_requests().is_empty());
+        assert_eq!(
+            solo.take_shown_chat_lines(),
+            vec![("ERR_NOT_IN_GROUP", "You aren't in a group.".to_string())]
+        );
+        let mut member = loot_vm(two_member_party());
+        member.run("SetLootThreshold(3)").unwrap();
+        assert!(member.take_party_requests().is_empty());
+        assert_eq!(
+            member.take_shown_chat_lines(),
+            vec![(
+                "ERR_NOT_LEADER",
+                "You are not the group leader.".to_string()
+            )]
+        );
+        let mut leader = loot_vm(led_party());
+        let e = leader.run("SetLootThreshold('x')").unwrap_err().to_string();
+        assert!(e.contains("Usage: SetLooThreshold(threshold)"), "{e}");
+        leader.run("SetLootThreshold('4')").unwrap();
+        assert_eq!(
+            leader.take_party_requests(),
+            vec![PartyRequest::LootThreshold(4)]
+        );
     }
 
     /// "master" with no name shows game error 0xed (`0x4e9453`); a name nobody in the party, the
