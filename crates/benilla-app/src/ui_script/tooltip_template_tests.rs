@@ -208,8 +208,8 @@ fn an_addon_may_call_gametooltip_onload_the_reference_way_with_no_argument() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     // The tint, quantized: `SetBackdropColor` (`0x777d30`) stores a byte per channel, truncating
-    // `x * 255 + 0.5`, so 0.09 reads back as 23/255.
-    let q = |x: f32| f32::from((x * 255.0 + 0.5) as u8) / 255.0;
+    // `x * 255 + 0.5`, and the getter reads the byte through the float scale (`0x777c98`).
+    let q = benilla_ui::color::quant::read32;
     let (r, g, b) = s
         .eval::<(f32, f32, f32)>("return MyTip:GetBackdropColor()")
         .unwrap();

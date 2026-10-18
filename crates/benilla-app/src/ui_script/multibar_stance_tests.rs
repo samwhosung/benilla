@@ -837,13 +837,19 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
         "11 empty main wells swap art + MultiBarBottomLeft's 12 appear"
     );
     assert!(
-        ghosts.iter().all(|a| *a == 0.5),
+        ghosts
+            .iter()
+            .all(|a| *a == benilla_ui::color::quant::drawn([1.0, 1.0, 1.0, 0.5])[3]),
         "every grid ring is the ref's half-alpha ghost, not an opaque plate: {ghosts:?}"
     );
 
     // …and the occupied ring with it: `ActionButton_ShowGrid` dims every button, occupied or not.
     let occupied = ring_alphas(&s, quickslot2);
-    assert_eq!(occupied, vec![0.5], "the occupied ring ghosts too");
+    assert_eq!(
+        occupied,
+        vec![benilla_ui::color::quant::drawn([1.0, 1.0, 1.0, 0.5])[3]],
+        "the occupied ring ghosts too"
+    );
 
     // Filling a ghosted well runs `ActionButton_Update` (ActionButton.lua:162, 170). Its
     // `SetNormalTexture(path)` (`0x781960` -> `0x781970`) reuses the XML-defined region in
@@ -870,7 +876,7 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     s.resolve();
     assert_eq!(
         ring_alphas(&s, quickslot2),
-        vec![0.5, 0.5],
+        vec![benilla_ui::color::quant::drawn([1.0, 1.0, 1.0, 0.5])[3]; 2],
         "the filled well's UpdateUsable keeps the ghost alpha, as the occupied ring's does"
     );
 
@@ -880,14 +886,17 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     let after = ring_alphas(&s, quickslot2);
     assert_eq!(
         after,
-        vec![0.5, 0.5],
+        vec![benilla_ui::color::quant::drawn([1.0, 1.0, 1.0, 0.5])[3]; 2],
         "HideGrid touches no colour (ActionButton.lua:251-258): every ring the grid ghosted stays \
          dim past the payload"
     );
     // A later `ActionButton_UpdateUsable` (a target change fires it) keeps the dim alpha too.
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     s.resolve();
-    assert_eq!(ring_alphas(&s, quickslot2), vec![0.5, 0.5]);
+    assert_eq!(
+        ring_alphas(&s, quickslot2),
+        vec![benilla_ui::color::quant::drawn([1.0, 1.0, 1.0, 0.5])[3]; 2]
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

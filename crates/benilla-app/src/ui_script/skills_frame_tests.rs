@@ -3,6 +3,7 @@
 //! the server) and for single-rank lines (`mono`), whose max the reference forces to 1 off
 //! `SkillRaceClassInfo.flags & 0x400` whatever the server sends (`0x4d3610`, branch `0x4d38b1`).
 
+use benilla_ui::color::quant::read32;
 use benilla_ui::script::{QuadContent, SkillEntry, SkillsState, UiScript, UnitState};
 
 fn skill(
@@ -101,6 +102,11 @@ fn page_quads(s: &UiScript) -> Vec<benilla_ui::script::ExtractedQuad> {
 }
 
 /// Row slot `i`'s trough colour (`SkillFrame.lua:158` normal, `:167` proficiency).
+/// Whether `c` is `want` to within a byte, as a colour drawn through the packed bytes is.
+fn near(c: [f32; 4], want: [f32; 4]) -> bool {
+    c.iter().zip(want).all(|(c, w)| (c - w).abs() < 1.0 / 255.0)
+}
+
 fn row_bg(s: &mut UiScript, i: u32) -> [f32; 4] {
     let c = s
         .eval::<(f32, f32, f32, f32)>(&format!(
@@ -125,24 +131,28 @@ fn a_single_rank_line_paints_gray_with_no_rank_text() {
         text, "",
         "Beast Mastery is single-rank: no rank text, though the server said 300/300"
     );
-    assert_eq!(color, [0.5, 0.5, 0.5, 1.0], "and a gray bar");
+    assert_eq!(color, [0.5, 0.5, 0.5, 1.0].map(read32), "and a gray bar");
     assert_eq!(
         row_bg(&mut s, 2),
-        [1.0, 1.0, 1.0, 0.5],
+        [1.0, 1.0, 1.0, 0.5].map(read32),
         "over the proficiency branch's WHITE trough (ref SkillFrame.lua:167)"
     );
 
     let (text, color) = row(&mut s, 6);
     assert_eq!(text, "", "Cloth is 1/1: no rank text");
-    assert_eq!(color, [0.5, 0.5, 0.5, 1.0], "gray too");
-    assert_eq!(row_bg(&mut s, 6), [1.0, 1.0, 1.0, 0.5], "white trough too");
+    assert_eq!(color, [0.5, 0.5, 0.5, 1.0].map(read32), "gray too");
+    assert_eq!(
+        row_bg(&mut s, 6),
+        [1.0, 1.0, 1.0, 0.5].map(read32),
+        "white trough too"
+    );
 
     let (text, color) = row(&mut s, 4);
     assert_eq!(text, "12/60", "Defense keeps its rank text");
-    assert_eq!(color, [0.0, 0.0, 1.0, 0.5], "and the blue fill");
+    assert_eq!(color, [0.0, 0.0, 1.0, 0.5].map(read32), "and the blue fill");
     assert_eq!(
         row_bg(&mut s, 4),
-        [0.0, 0.0, 0.75, 0.5],
+        [0.0, 0.0, 0.75, 0.5].map(read32),
         "over the normal branch's DARK BLUE trough (ref SkillFrame.lua:158)"
     );
 
@@ -160,15 +170,15 @@ fn a_single_rank_line_paints_gray_with_no_rank_text() {
         })
         .collect();
     assert!(
-        solids.contains(&[1.0, 1.0, 1.0, 0.1]),
+        solids.iter().any(|c| near(*c, [1.0, 1.0, 1.0, 0.1])),
         "a proficiency trough draws white at 0.1; got {solids:?}"
     );
     assert!(
-        solids.contains(&[0.0, 0.0, 0.75, 0.1]),
+        solids.iter().any(|c| near(*c, [0.0, 0.0, 0.75, 0.1])),
         "a normal row's trough draws dark blue at 0.1; got {solids:?}"
     );
     assert!(
-        !solids.iter().any(|c| c[3] == 0.5),
+        !solids.iter().any(|c| (c[3] - 0.5).abs() < 1.0 / 255.0),
         "nothing draws at the raw vertex alpha — that was the replace bug; got {solids:?}"
     );
 
@@ -184,7 +194,7 @@ fn a_single_rank_line_paints_gray_with_no_rank_text() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return SkillDetailStatusBarBackground:GetVertexColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 0.5),
+        (read32(1.0), read32(1.0), read32(1.0), read32(0.5)),
         "including its trough (the shared PaintBar; ref SkillFrame.lua:376)"
     );
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
@@ -339,7 +349,7 @@ fn the_pages_close_button_sits_where_the_reference_seats_it_and_closes_the_windo
         .expect("the Close label draws");
     assert_eq!(
         label,
-        Some([1.0, 0.82, 0.0, 1.0]),
+        Some(benilla_ui::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
         "GameFontNormal — the UIPanelButtonTemplate face's own normal font"
     );
 

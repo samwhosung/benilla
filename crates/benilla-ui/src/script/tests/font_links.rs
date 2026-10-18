@@ -191,8 +191,14 @@ fn a_change_on_a_parent_font_reaches_its_chain() {
     assert_eq!(font_of(&s, "B"), want);
     assert_eq!(font_of(&s, "fs"), want);
     s.run("A:SetTextColor(0, 1, 0)").unwrap();
-    assert_eq!(color_of(&s, "B"), (1.0, 0.0, 0.0));
-    assert_eq!(color_of(&s, "fs"), (1.0, 0.0, 0.0));
+    assert_eq!(
+        color_of(&s, "B"),
+        (crate::color::quant::read32(1.0), 0.0, 0.0)
+    );
+    assert_eq!(
+        color_of(&s, "fs"),
+        (crate::color::quant::read32(1.0), 0.0, 0.0)
+    );
 }
 
 /// A font's own setter clears its bit (`0x79f33a`): the parent's later font no longer reaches it.
@@ -223,7 +229,10 @@ fn a_push_carries_only_the_group_that_changed() {
     s.run("fs:SetTextHeight(20); B:SetTextColor(0, 0, 1)")
         .unwrap();
     assert_eq!(font_of(&s, "fs").1, 20.0);
-    assert_eq!(color_of(&s, "fs"), (0.0, 0.0, 1.0));
+    assert_eq!(
+        color_of(&s, "fs"),
+        (0.0, 0.0, crate::color::quant::read32(1.0))
+    );
 }
 
 /// `GameFontHighlight` is declared from `GameFontNormal` (`Fonts.xml:76`), so restyling the base
@@ -251,7 +260,14 @@ fn restyling_game_font_normal_reaches_game_font_highlight() {
     let want = ("Fonts\\ARIALN.TTF".to_string(), 20.0);
     assert_eq!(font_of(&s, "GameFontHighlight"), want);
     assert_eq!(font_of(&s, "HostText"), want);
-    assert_eq!(color_of(&s, "HostText"), (1.0, 1.0, 1.0));
+    assert_eq!(
+        color_of(&s, "HostText"),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        )
+    );
 }
 
 /// `GetFontObject` on a Font answers its parent (`0x7a00f0`); nil unlinks and keeps the block; a
@@ -293,7 +309,10 @@ fn a_redeclared_font_keeps_its_followers() {
         &s,
         r#"<Ui><Font name="B" inherits="A"><Color r="0" g="1" b="0"/></Font></Ui>"#,
     );
-    assert_eq!(color_of(&s, "fs"), (0.0, 1.0, 0.0));
+    assert_eq!(
+        color_of(&s, "fs"),
+        (0.0, crate::color::quant::read32(1.0), 0.0)
+    );
 }
 
 /// The font hash folds case (`SStrHashHT 0x64b3f0`, `SStrCmpI` at `0x7838c7`): a name in any

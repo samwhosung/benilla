@@ -72,7 +72,8 @@ fn a_declared_font_is_published_as_a_global_object() {
     let (r, g, b, _) = s
         .eval::<(f32, f32, f32, f32)>("return GameFontNormal:GetTextColor()")
         .unwrap();
-    assert_eq!((r, g, b), (1.0, 0.82, 0.0));
+    let read = crate::color::quant::read32;
+    assert_eq!((r, g, b), (read(1.0), read(0.82), 0.0));
     assert_eq!(
         s.eval::<(f32, f32)>("return GameFontNormal:GetShadowOffset()")
             .unwrap(),
@@ -81,7 +82,7 @@ fn a_declared_font_is_published_as_a_global_object() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return GameFontNormal:GetShadowColor()")
             .unwrap(),
-        (0.0, 0.0, 0.0, 1.0)
+        (0.0, 0.0, 0.0, read(1.0))
     );
     assert_eq!(
         s.eval::<String>("return GameFontNormal:GetJustifyH()")
@@ -147,7 +148,10 @@ fn an_inheriting_font_holds_its_parents_groups_under_its_own() {
     let derived = s.font_object("DerivedFont").expect("registered");
     assert_eq!(derived.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
     assert_eq!(derived.height, Some(18.0));
-    assert_eq!(derived.color, Some([1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(
+        derived.color,
+        Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0]))
+    );
     assert_eq!(derived.outline, Outline::Normal);
     assert_eq!(derived.justify.map(|j| j.name_h()), Some("CENTER"));
     assert!(derived.shadow.is_some(), "the shadow inherits too");
@@ -228,7 +232,7 @@ fn set_font_object_takes_the_object_or_the_name() {
         FontObject {
             font: Some("Fonts\\ARIALN.TTF".into()),
             height: Some(11.0),
-            color: Some([0.25, 0.5, 0.75, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([0.25, 0.5, 0.75, 1.0])),
             outline: Outline::Thick,
             monochrome: false,
             justify: None,
@@ -256,7 +260,7 @@ fn set_font_object_takes_the_object_or_the_name() {
         (
             Some("Fonts\\ARIALN.TTF".into()),
             Some(11.0),
-            Some([0.25, 0.5, 0.75, 1.0])
+            Some(crate::color::quant::drawn([0.25, 0.5, 0.75, 1.0]))
         )
     );
     assert!(s
@@ -289,7 +293,7 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(10.0),
-            color: Some([1.0, 1.0, 1.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
             justify: None,
@@ -325,7 +329,7 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
-            color: Some([1.0, 1.0, 1.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
             justify: None,
@@ -403,7 +407,7 @@ fn propagation_is_scoped_to_the_object_that_changed() {
             FontObject {
                 font: Some(face.into()),
                 height: Some(12.0),
-                color: Some([1.0, 1.0, 1.0, 1.0]),
+                color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
                 ..FontObject::default()
             },
         );
@@ -452,7 +456,7 @@ fn create_font_mints_publishes_and_paints() {
         (
             Some("Fonts\\SKURRI.TTF".into()),
             Some(10.0),
-            Some([0.0, 0.5, 1.0, 1.0])
+            Some(crate::color::quant::drawn([0.0, 0.5, 1.0, 1.0]))
         )
     );
 
@@ -506,13 +510,14 @@ fn create_font_mints_publishes_and_paints() {
 /// The sequence at `FonzAppraiser/mods/gui/gui.lua:27-30`.
 #[test]
 fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
+    let read = crate::color::quant::read32;
     let s = script();
     s.register_font_object(
         "GameFontHighlightSmall",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(10.0),
-            color: Some([1.0, 1.0, 1.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
             justify: Some({
@@ -540,7 +545,7 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return small_number_font:GetTextColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 1.0)
+        (read(1.0), read(1.0), read(1.0), read(1.0))
     );
     assert_eq!(
         s.eval::<String>("return small_number_font:GetJustifyH()")
@@ -579,7 +584,7 @@ fn button_state_fonts_take_the_object_and_follow_its_mutation() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
-            color: Some([1.0, 0.82, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             ..FontObject::default()
         },
     );
@@ -603,7 +608,7 @@ fn button_state_fonts_take_the_object_and_follow_its_mutation() {
         (
             Some("Fonts\\MORPHEUS.TTF".into()),
             Some(22.0),
-            Some([1.0, 0.82, 0.0, 1.0])
+            Some(crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0]))
         )
     );
 
@@ -621,7 +626,7 @@ fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(14.0),
-            color: Some([0.2, 0.4, 0.6, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([0.2, 0.4, 0.6, 1.0])),
             ..FontObject::default()
         },
     );
@@ -1027,8 +1032,9 @@ fn msbt_paints_its_own_face_size_outline_and_fade_over_the_font_object_it_inheri
         .find(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "-64"))
         .expect("MSBT's text quad");
     assert_eq!(
-        q.alpha, 0.5,
-        "the scroll animation's fade is the quad's alpha"
+        q.alpha,
+        127.0 / 255.0,
+        "the scroll animation's fade is the quad's alpha, the byte `SetAlpha(0.5)` stores"
     );
     match q.content {
         QuadContent::Text {

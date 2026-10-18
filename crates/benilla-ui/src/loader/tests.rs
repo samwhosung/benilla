@@ -1002,7 +1002,7 @@ mod loader_tests {
             return mn == 0 and mx == 100 and XmlBar:GetValue() == 50
                 and XmlBar:GetOrientation() == "HORIZONTAL"
                 and XmlBar:GetStatusBarTexture() ~= nil
-                and r < 0.2 and g > 0.8 and a == 1
+                and r < 0.2 and g > 0.8 and a > 0.99
         "#,
             )
             .unwrap();
@@ -1553,14 +1553,20 @@ mod loader_tests {
         let base = s.font_object("Base").expect("Base registered");
         assert_eq!(base.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
         assert_eq!(base.height, Some(12.0));
-        assert_eq!(base.color, Some([1.0, 0.82, 0.0, 1.0]));
+        assert_eq!(
+            base.color,
+            Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0]))
+        );
 
         // Leaf: Base's face and height through Mid, and Mid's white; its own `<FontHeight>` has
         // no `font=` beside it, so it is never read (`0x783cf1`).
         let leaf = s.font_object("Leaf").expect("Leaf registered");
         assert_eq!(leaf.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
         assert_eq!(leaf.height, Some(12.0));
-        assert_eq!(leaf.color, Some([1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(
+            leaf.color,
+            Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0]))
+        );
     }
 
     #[test]
@@ -1616,7 +1622,7 @@ mod loader_tests {
         assert!(matches!(
             &small.content,
             QuadContent::Text { font: Some(f), color: Some(c), .. }
-                if f == "Fonts\\FRIZQT__.TTF" && *c == [1.0, 0.82, 0.0, 1.0]
+                if f == "Fonts\\FRIZQT__.TTF" && *c == crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0])
         ));
     }
 
@@ -1659,7 +1665,7 @@ mod loader_tests {
         assert!(matches!(
             &a.content,
             QuadContent::Text { color: Some(c), font_height: Some(h), .. }
-                if *c == [0.1, 0.2, 0.3, 1.0] && *h == 12.0
+                if *c == crate::color::quant::drawn([0.1, 0.2, 0.3, 1.0]) && *h == 12.0
         ));
         // B's unknown font object leaves it with no font: it holds its text and draws none
         // (`0x7724f8`).
@@ -1982,7 +1988,7 @@ mod loader_tests {
             .expect("the <NormalText> label must paint");
         assert_eq!(
             label,
-            Some([0.9, 0.8, 0.1, 1.0]),
+            Some(crate::color::quant::drawn([0.9, 0.8, 0.1, 1.0])),
             "<NormalText inherits=> must reach the button's Normal-state font"
         );
     }
@@ -2239,13 +2245,14 @@ mod loader_tests {
         let green = s
             .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"H1\")")
             .unwrap();
-        assert_eq!(green, (0.0, 1.0, 0.0, 1.0));
+        let one = crate::color::quant::read32(1.0);
+        assert_eq!(green, (0.0, one, 0.0, one));
         let p = s
             .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor()")
             .unwrap();
         assert_ne!(
             p,
-            (1.0, 0.0, 0.0, 1.0),
+            (one, 0.0, 0.0, one),
             "the refused element's Color is not read"
         );
     }
@@ -2497,7 +2504,7 @@ mod loader_tests {
                 "CENTER".to_string(),
                 20.0,
                 16.0,
-                0.25,
+                63.0 / 255.0,
                 vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
             )
         );
@@ -2595,7 +2602,8 @@ mod loader_tests {
                 "Interface\\After".to_string(),
                 vec![0.25, 0.25, 0.25, 0.75, 0.75, 0.25, 0.75, 0.75],
                 "MOD".to_string(),
-                0.5,
+                // `SetAlpha(0.5)` is the byte 127 (`0x79b638`).
+                127.0 / 255.0,
                 1,
                 "TOPLEFT".to_string(),
             )

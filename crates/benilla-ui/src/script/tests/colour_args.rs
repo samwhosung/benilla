@@ -12,19 +12,26 @@ use super::common::script;
 /// Numeric strings and a hostile one; each reads as the number on the right.
 const CHANNELS: &str = r#""1", "0.5", "abc""#;
 
-/// `set(r, g, b)` with string channels, read back through `get` as three numbers.
+/// `set(r, g, b)` with string channels, read back through `get` as three numbers: each channel
+/// a byte read back times the float at `0x81c6b4`.
 fn check(setup: &str, call: &str, get: &str) {
-    check_as(setup, call, get, (1.0, 0.5, 0.0));
+    let read = crate::color::quant::read;
+    check_as(setup, call, get, (read(1.0), read(0.5), 0.0));
 }
 
 fn check_as(setup: &str, call: &str, get: &str, want: (f64, f64, f64)) {
     let s = script();
     s.run(setup).unwrap();
     s.run(&call.replace("ARGS", CHANNELS)).unwrap();
+    // As `f32`s: `FontString:GetTextColor` rounds green and blue to them (`0x79d958`).
     let (r, g, b) = s
-        .eval::<(f64, f64, f64)>(&format!("local r, g, b = {get} return r, g, b"))
+        .eval::<(f32, f32, f32)>(&format!("local r, g, b = {get} return r, g, b"))
         .unwrap();
-    assert_eq!((r, g, b), want, "{call}");
+    assert_eq!(
+        (r, g, b),
+        (want.0 as f32, want.1 as f32, want.2 as f32),
+        "{call}"
+    );
 }
 
 #[test]
@@ -117,20 +124,32 @@ fn tex_coord_and_gradients_coerce_numeric_strings() {
         .unwrap();
     assert_eq!(
         gradient(),
-        ([1.0, 0.5, 0.0, 1.0], [0.25, 0.75, 1.0, 1.0]),
+        (
+            crate::color::Rgba8::from_f32([1.0, 0.5, 0.0, 1.0]),
+            crate::color::Rgba8::from_f32([0.25, 0.75, 1.0, 1.0])
+        ),
         "SetGradient"
     );
     s.run(r#"T:SetGradientAlpha("HORIZONTAL", "1", "0.5", "abc", "0.5", "0.25", "0.75", "1", "0.25")"#)
         .unwrap();
     assert_eq!(
         gradient(),
-        ([1.0, 0.5, 0.0, 0.5], [0.25, 0.75, 1.0, 0.25]),
+        (
+            crate::color::Rgba8::from_f32([1.0, 0.5, 0.0, 0.5]),
+            crate::color::Rgba8::from_f32([0.25, 0.75, 1.0, 0.25])
+        ),
         "SetGradientAlpha"
     );
     // The alphas are `lua_isnumber`-gated with default 1 (`0x79b30d`), not a bare read.
     s.run(r#"T:SetGradientAlpha("VERTICAL", 0, 0, 0, nil, 1, 1, 1, "x")"#)
         .unwrap();
-    assert_eq!(gradient(), ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(
+        gradient(),
+        (
+            crate::color::Rgba8::from_f32([0.0, 0.0, 0.0, 1.0]),
+            crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])
+        )
+    );
 }
 
 /// `SetTexture`'s colour form (`0x79bb40`): g and b are a bare read, alpha `lua_isnumber`-gated,
@@ -148,7 +167,7 @@ fn texture_colour_form_coerces_numeric_strings() {
             .region_data
             .get(&rh)
             .and_then(|d| d.tex.fill()),
-        Some([1.0, 0.5, 0.0, 0.25])
+        Some(crate::color::Rgba8::from_f32([1.0, 0.5, 0.0, 0.25]))
     );
 }
 
@@ -263,9 +282,9 @@ fn colour_alphas_are_gated_not_raised() {
             s.run(&call.replace("ARG", arg))
                 .unwrap_or_else(|e| panic!("{call} with {arg} raised: {e}"));
             let a = s
-                .eval::<f64>(&format!("local _, _, _, a = {get} return a"))
+                .eval::<f32>(&format!("local _, _, _, a = {get} return a"))
                 .unwrap();
-            assert_eq!(a, want, "{call} with {arg}");
+            assert_eq!(a, crate::color::quant::read32(want), "{call} with {arg}");
         }
     }
     // A Font object's colour is replaced whole (`0x79f5f5`...`0x79f65f`): a bare call resets the
@@ -275,7 +294,7 @@ fn colour_alphas_are_gated_not_raised() {
     assert_eq!(
         s.eval::<f64>("local _, _, _, a = Fnt:GetTextColor() return a")
             .unwrap(),
-        1.0
+        crate::color::quant::read(1.0)
     );
 }
 
@@ -290,15 +309,16 @@ fn set_vertex_color_keeps_the_alpha_unless_given_a_number() {
         s.eval::<f64>("local _, _, _, a = T:GetVertexColor() return a")
             .unwrap()
     };
+    let read = crate::color::quant::read;
     s.run("T:SetVertexColor(1, 1, 1, 0.5)").unwrap();
-    assert_eq!(alpha(), 0.5);
+    assert_eq!(alpha(), read(0.5));
     for arg in ["", ", nil", ", {}", ", true", r#", "x""#] {
         s.run(&format!("T:SetVertexColor(0, 0, 0{arg})"))
             .unwrap_or_else(|e| panic!("SetVertexColor(0, 0, 0{arg}) raised: {e}"));
-        assert_eq!(alpha(), 0.5, "SetVertexColor(0, 0, 0{arg}) keeps it");
+        assert_eq!(alpha(), read(0.5), "SetVertexColor(0, 0, 0{arg}) keeps it");
     }
     s.run(r#"T:SetVertexColor(0, 0, 0, "0.25")"#).unwrap();
-    assert_eq!(alpha(), 0.25, "a numeric string is a number");
+    assert_eq!(alpha(), read(0.25), "a numeric string is a number");
 }
 
 /// `lua_isnumber` on the first argument picks `SetTexture`'s colour form (`0x79bbd5`), so a
@@ -313,7 +333,10 @@ fn set_texture_takes_a_numeric_string_as_a_colour() {
     let rh = crate::script::region::region_handle_of(s.lua(), &t).unwrap();
     let m = s.model_ref();
     let d = m.region_data.get(&rh).unwrap();
-    assert_eq!(d.tex.fill(), Some([1.0, 0.5, 0.0, 1.0]));
+    assert_eq!(
+        d.tex.fill(),
+        Some(crate::color::Rgba8::from_f32([1.0, 0.5, 0.0, 1.0]))
+    );
     assert_eq!(*d.tex.path(), None, "a numeric string is not a path");
 }
 
@@ -325,14 +348,14 @@ fn tooltip_set_text_alpha_accepts_a_numeric_string() {
         .unwrap();
     s.run(r#"TT:SetText("x", 1, 1, 1, "0.5")"#).unwrap();
     assert_eq!(
-        s.eval::<f64>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
+        s.eval::<f32>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
             .unwrap(),
-        0.5
+        crate::color::quant::read32(0.5)
     );
     s.run(r#"TT:SetText("x", 1, 1, 1, {})"#).unwrap();
     assert_eq!(
-        s.eval::<f64>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
+        s.eval::<f32>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
             .unwrap(),
-        1.0
+        crate::color::quant::read32(1.0)
     );
 }

@@ -757,7 +757,7 @@ fn an_idle_dock_stops_rewriting_the_tab_alpha_every_frame() {
 
     let alpha: f64 = s.eval("return ChatFrame1Tab:GetAlpha()").unwrap();
     assert!(
-        (alpha - 0.42).abs() < 1e-6,
+        alpha == benilla_ui::color::alpha_f64(benilla_ui::color::frame_alpha_byte(0.42)),
         "a settled dock must not rewrite its tab alpha — got {alpha}"
     );
 }
@@ -1056,7 +1056,7 @@ fn a_glass_windows_plate_fades_in_on_every_hover() {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
         let a = bg(&mut s);
         assert!(
-            (a - 0.25).abs() < 1e-6,
+            a == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
             "hover {round}: the plate fades to DEFAULT_CHATFRAME_ALPHA — got {a} (oldAlpha={:?})",
             s.eval::<Option<f64>>("return ChatFrame1.oldAlpha").unwrap()
         );
@@ -1132,13 +1132,13 @@ fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
         });
         assert!(
             over_frame1.is_some_and(|(_, a, c)| {
-                (a - 0.25).abs() < 1e-3 && c.is_some_and(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0)
+                (a - 0.25).abs() < 1.0 / 255.0 && c.is_some_and(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0)
             }),
             "hover {round}: the extracted plate quad over ChatFrame1 ({left}, {bottom}) — {plates:?}"
         );
         let a = bg(&mut s);
         assert!(
-            (a - 0.25).abs() < 1e-6,
+            a == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
             "hover {round}: the plate fades to DEFAULT_CHATFRAME_ALPHA — got {a} (oldAlpha={:?}, hover={:?}, hasBeenFaded={:?}, init={:?})",
             s.eval::<Option<f64>>("return ChatFrame1.oldAlpha").unwrap(),
             s.eval::<Option<f64>>("return ChatFrame1.hover").unwrap(),
@@ -1216,7 +1216,10 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     // The control: the reference's Lua alone.
     let mut bare = chat_frame();
     let (first, reentry, later) = drive(&mut bare);
-    assert!((first - 0.25).abs() < 1e-6, "control, first hover: {first}");
+    assert!(
+        first == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
+        "control, first hover: {first}"
+    );
     assert!(
         reentry.abs() < 1e-6 && later.abs() < 1e-6,
         "the control must trap — the reference's Lua nils oldAlpha under a live hover \
@@ -1238,13 +1241,16 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     super::fire_chat_login(&mut shipped);
     shipped.resolve();
     let (first, reentry, later) = drive(&mut shipped);
-    assert!((first - 0.25).abs() < 1e-6, "shipped, first hover: {first}");
     assert!(
-        (reentry - 0.25).abs() < 1e-6,
+        first == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
+        "shipped, first hover: {first}"
+    );
+    assert!(
+        reentry == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
         "shipped: the plate comes back on the quick re-entry — got {reentry}"
     );
     assert!(
-        (later - 0.25).abs() < 1e-6,
+        later == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
         "shipped: and on every hover after — got {later}"
     );
 }

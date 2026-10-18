@@ -30,11 +30,12 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
         .extract()
         .into_iter()
         .filter_map(|q| match q.content {
+            // An untinted piece (white on an empty slot stores nothing, `0x77f766`) draws white.
             QuadContent::Texture {
                 path: Some(path),
-                color: Some(color),
+                color,
                 ..
-            } => Some((path, color)),
+            } => Some((path, color.unwrap_or([1.0; 4]))),
             _ => None,
         })
         .collect();
@@ -215,23 +216,25 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
     .unwrap();
 
     s.run("f:SetBackdropBorderColor(nil, 1, 1, 1)").unwrap();
+    // Each byte reads back times the float at `0x81c6b4` (`0x777c98`): 255 is 0.9999978.
+    let one = crate::color::quant::read32(1.0);
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return f:GetBackdropBorderColor()")
             .unwrap(),
-        (0.0, 1.0, 1.0, 1.0)
+        (0.0, one, one, one)
     );
 
     s.run("f:SetBackdropColor(0.2, 0.4, 0.6)").unwrap();
     let (_, _, _, a) = s
         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
         .unwrap();
-    assert_eq!(a, 1.0, "a missing alpha is opaque");
+    assert_eq!(a, one, "a missing alpha is opaque");
     s.run("f:SetBackdropColor(0.2, 0.4, 0.6, nil)").unwrap();
     let (_, _, _, a) = s
         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
         .unwrap();
     assert_eq!(
-        a, 1.0,
+        a, one,
         "an explicit nil alpha is opaque too — the isnumber gate"
     );
 
@@ -240,9 +243,9 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
     let (r, g, b, a) = s
         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
         .unwrap();
-    assert_eq!((r, g, b), (1.0, 0.0, 0.0));
-    // Stored as a byte: 0.5 reads back as 128/255.
-    assert_eq!(a, 128.0 / 255.0);
+    assert_eq!((r, g, b), (one, 0.0, 0.0));
+    // Stored as a byte: 0.5 is 128, read back as 128 times the float scale.
+    assert_eq!(a, crate::color::quant::read32(0.5));
 }
 
 /// The pieces are textures anchored and sized in the frame's own units (`0x77e8d0`), so the layout
@@ -592,11 +595,11 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     let c = s
                         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
                         .unwrap();
-                    b.bg_color = [c.0, c.1, c.2, c.3];
+                    b.bg_color = crate::color::Rgba8::from_f32([c.0, c.1, c.2, c.3]);
                     let c = s
                         .eval::<(f32, f32, f32, f32)>("return f:GetBackdropBorderColor()")
                         .unwrap();
-                    b.border_color = [c.0, c.1, c.2, c.3];
+                    b.border_color = crate::color::Rgba8::from_f32([c.0, c.1, c.2, c.3]);
                     b
                 };
                 let mut want = pieces(fr, &spec, eff);
@@ -644,7 +647,7 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     } else {
                         spec.border_color
                     };
-                    assert_eq!(*color, Some(want_color), "{ctx} piece {k} colour");
+                    assert_eq!(*color, Some(want_color.to_f32()), "{ctx} piece {k} colour");
                     assert_eq!(
                         *alpha,
                         127.0 / 255.0,
@@ -791,15 +794,16 @@ fn a_resize_repaints_a_piece_over_its_own_vertex_colour() {
     let left = "local r = { f:GetRegions() } return r[2]:GetVertexColor()";
     s.run("local r = { f:GetRegions() } r[2]:SetVertexColor(0, 1, 0)")
         .unwrap();
+    let one = crate::color::quant::read32(1.0);
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>(left).unwrap(),
-        (0.0, 1.0, 0.0, 1.0)
+        (0.0, one, 0.0, one)
     );
     s.run("f:SetWidth(120)").unwrap();
     s.resolve();
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>(left).unwrap(),
-        (1.0, 0.0, 0.0, 1.0),
+        (one, 0.0, 0.0, one),
         "the resize put the border colour back"
     );
 }

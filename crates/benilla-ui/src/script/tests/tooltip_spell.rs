@@ -620,6 +620,16 @@ fn action_hover_on_a_macro_slot_shows_its_name_in_white() {
             ..Default::default()
         }),
     );
+    // 255 read back times the float at `0x81c6b4`; `FontString:GetTextColor` rounds green and
+    // blue to `f32`s (`0x79d958`).
+    s.lua()
+        .globals()
+        .set("ONE", crate::color::channel(255))
+        .unwrap();
+    s.lua()
+        .globals()
+        .set("ONE32", f64::from(crate::color::channel(255) as f32))
+        .unwrap();
     s.run(
         r#"
         local a = CreateFrame("Button", "AB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -630,7 +640,7 @@ fn action_hover_on_a_macro_slot_shows_its_name_in_white() {
         assert(tt:NumLines() == 1, "exactly one line, got " .. tt:NumLines())
         assert(TTTextLeft1:GetText() == "spawn", "the macro's name")
         local r, g, b = TTTextLeft1:GetTextColor()
-        assert(r == 1 and g == 1 and b == 1, "white — the normal line colour, not the spell title gold")
+        assert(r == ONE and g == ONE32 and b == ONE32, "white — the normal line colour, not the spell title gold")
         assert(not TTTextRight1:IsShown(), "no right column")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetAction(25)
@@ -1473,7 +1483,7 @@ fn a_line_rewritten_in_place_ends_the_wait() {
             "local r, g = COLTextLeft1:GetTextColor(); return COL:NumLines(), r, g"
         )
         .unwrap(),
-        (1, 1.0, 0.0)
+        (1, crate::color::quant::read32(1.0), 0.0)
     );
     assert_eq!(s.eval::<i64>("return SAM:NumLines()").unwrap(), 1);
     assert!(s.take_errors().is_empty());

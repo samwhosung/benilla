@@ -1003,7 +1003,10 @@ fn set_text_color_tints_the_text_region() {
             _ => None,
         })
         .expect("the edit box text renders");
-    assert_eq!(color, Some([1.0, 0.5, 0.25, 1.0]));
+    assert_eq!(
+        color,
+        Some(crate::color::quant::drawn([1.0, 0.5, 0.25, 1.0]))
+    );
 }
 
 // ── the host text-UI seam: advances, caret/selection geometry, mouse, clipboard ─────────────

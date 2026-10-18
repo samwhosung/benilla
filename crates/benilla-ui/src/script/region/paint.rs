@@ -13,12 +13,26 @@ use super::region_handle_of;
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetAlpha/GetAlpha: the region's own alpha, not the owner frame's; stock
     // `CastingBarFrame.lua:133` reads it back to ramp its flash. `RegionData::alpha` has the draw.
+    // `Texture:SetAlpha` (`0x79b580`) and `FontString:SetAlpha` (`0x79cb70`) take a
+    // `lua_isnumber` or raise the usage line (`0x87c51c`), and store `__ftol(a * 255)`'s low byte,
+    // unclamped (`0x79b638`, `0x79cc28`); `GetAlpha` reads it times the double 1/255 (`0x79b754`).
     m.set(
         "SetAlpha",
-        lua.create_function(|lua, (this, alpha): (Table, f32)| {
+        lua.create_function(|lua, (this, alpha): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let Some(alpha) = lua.coerce_number(alpha)? else {
+                let model = lua.app_data_ref::<Model>().expect("model");
+                let who = crate::script::object::decode_id(&this)
+                    .ok()
+                    .and_then(|id| super::region_name_of(&model, id));
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetAlpha(alpha)",
+                    who.as_deref().unwrap_or("<unnamed>")
+                )));
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            model.region_data.entry(rh).or_default().alpha = Some(alpha.clamp(0.0, 1.0));
+            model.region_data.entry(rh).or_default().alpha =
+                Some(crate::color::wrap_alpha_byte(alpha));
             Ok(())
         })?,
     )?;
@@ -32,7 +46,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 .region_data
                 .get(&rh)
                 .and_then(|d| d.alpha)
-                .unwrap_or(1.0))
+                .map_or(1.0, crate::color::alpha_f64))
         })?,
     )?;
 
@@ -46,17 +60,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetVertexColor",
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = lua.coerce_number(a).ok().flatten().map(|n| n as f32);
-                let (r, g, b) = (
-                    tonumber_f32(lua, &r),
-                    tonumber_f32(lua, &g),
-                    tonumber_f32(lua, &b),
-                );
+                let given = crate::script::object::alpha_arg(lua, &a).is_some();
+                let c = crate::script::object::colour_args(lua, &r, &g, &b, &a);
                 let rh = region_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
-                let kept = d.vertex_color.map_or(1.0, |c| c[3]);
-                d.set_vertex_color(Some([r, g, b, a.unwrap_or(kept)]));
+                let kept = d.vertex_color_or_white().a;
+                d.set_vertex_color(Some(if given { c } else { c.with_alpha(kept) }));
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
                 d.font_mask.clear(super::super::FontMask::COLOR);
                 Ok(())
@@ -74,9 +84,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let c = model
                 .region_data
                 .get(&rh)
-                .and_then(|d| d.vertex_color)
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
+            Ok(crate::script::object::colour_values(c))
         })?,
     )?;
 
@@ -114,31 +123,18 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(vertical) = vertical else {
                     return Err(self::usage(lua, &this, &format!("{name}{usage}")));
                 };
+                // Every channel is a bare `lua_tonumber` (`0x79aef3`-`0x79b083`, `0x79b242`-
+                // `0x79b490`) except the two alphas, which are `lua_isnumber`-gated with default
+                // 1 (`0x79b30d`, `0x79b480`); each stop packs as every colour setter does
+                // (`0x79b353`-`0x79b3ad`). SetGradient has no alpha stops: both ends are opaque.
                 let n = if with_alpha { 8 } else { 6 };
-                let mut c = [0.0f32; 8];
-                for (i, slot) in c.iter_mut().take(n).enumerate() {
-                    let v = it.next();
-                    // Every channel is a bare `lua_tonumber` (`0x79aef3`-`0x79b083`, `0x79b242`-
-                    // `0x79b490`) except the two alphas, which are `lua_isnumber`-gated with
-                    // default 1 (`0x79b30d`, `0x79b480`).
-                    let raw = match v {
-                        Some(v) if with_alpha && matches!(i, 3 | 7) => lua
-                            .coerce_number(v)
-                            .ok()
-                            .flatten()
-                            .map_or(1.0, |n| n as f32),
-                        Some(v) => tonumber_f32(lua, &v),
-                        None if with_alpha && matches!(i, 3 | 7) => 1.0,
-                        None => 0.0,
-                    };
-                    *slot = clamp_channel(raw);
-                }
-                let (start, end) = if with_alpha {
-                    ([c[0], c[1], c[2], c[3]], [c[4], c[5], c[6], c[7]])
-                } else {
-                    // SetGradient has no alpha stops: both ends are opaque.
-                    ([c[0], c[1], c[2], 1.0], [c[3], c[4], c[5], 1.0])
+                let v: Vec<Value> = (0..n).map(|_| it.next().unwrap_or(Value::Nil)).collect();
+                let nil = Value::Nil;
+                let stop = |at: usize| {
+                    let alpha = if with_alpha { &v[at + 3] } else { &nil };
+                    crate::script::object::colour_args(lua, &v[at], &v[at + 1], &v[at + 2], alpha)
                 };
+                let (start, end) = (stop(0), stop(if with_alpha { 4 } else { 3 }));
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
                 d.gradient = Some(crate::script::Gradient {
@@ -606,17 +602,7 @@ fn set_texture(
             // The solid writes the one texture slot (`+0xcc`), so it clears a file; neither form
             // touches the vertex colour (`+0xb8`) or the shader slot, so a tint and a grey outlive
             // the art.
-            let alpha = lua
-                .coerce_number(a.clone())
-                .ok()
-                .flatten()
-                .map_or(1.0, |n| n as f32);
-            let fill = [
-                tonumber_f32(lua, &arg),
-                tonumber_f32(lua, &g),
-                tonumber_f32(lua, &b),
-                alpha,
-            ];
+            let fill = crate::script::object::colour_args(lua, &arg, &g, &b, &a);
             model.set_texel(rh, TexSet::Fill(fill));
             model.note_art(rh);
             true
@@ -644,15 +630,5 @@ pub(crate) fn orientation(token: &str) -> Option<bool> {
         Some(false)
     } else {
         None
-    }
-}
-
-/// A gradient channel's clamp to `0..=1` (`0x79af05`-`0x79af2d`): the two `fcom`s fall through an
-/// unordered compare, so NaN lands on 1.
-fn clamp_channel(v: f32) -> f32 {
-    if v.is_nan() {
-        1.0
-    } else {
-        v.clamp(0.0, 1.0)
     }
 }

@@ -142,7 +142,8 @@ fn the_text_is_the_line_in_its_colour_and_the_frame_hugs_it() {
         )
         .unwrap();
     assert_eq!(text, "Well met!");
-    assert_eq!((r, g, b), (1.0, 0.25, 0.25));
+    let read = crate::color::quant::read32;
+    assert_eq!((r, g, b), (read(1.0), read(0.25), read(0.25)));
 
     let rect = |s: &UiScript, what: &str| -> (f32, f32, f32, f32) {
         s.eval(&format!(

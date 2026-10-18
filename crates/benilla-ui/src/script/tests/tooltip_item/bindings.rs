@@ -216,6 +216,16 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
 #[test]
 fn set_inventory_item_name_only_is_the_trimmed_build() {
     let mut s = script();
+    // 255 read back times the float at `0x81c6b4`; `FontString:GetTextColor` rounds green and
+    // blue to `f32`s (`0x79d958`).
+    s.lua()
+        .globals()
+        .set("ONE", crate::color::channel(255))
+        .unwrap();
+    s.lua()
+        .globals()
+        .set("ONE32", f64::from(crate::color::channel(255) as f32))
+        .unwrap();
     s.set_screen_size(800.0, 600.0);
     let mut inv: InventorySlots = Default::default();
     inv[16] = Some(InvSlotView {
@@ -279,7 +289,7 @@ fn set_inventory_item_name_only_is_the_trimmed_build() {
         assert(tt:SetInventoryItem("player", 16, 1) == 1, "nameOnly still answers 1")
         assert(TTTextLeft1:GetText() == "Sealed Blade")
         local r2, g2, b2 = TTTextLeft1:GetTextColor()
-        assert(r2 == 1 and g2 == 1 and b2 == 1, "nameOnly: the NAME goes white (0x52b8b3)")
+        assert(r2 == ONE and g2 == ONE32 and b2 == ONE32, "nameOnly: the NAME goes white (0x52b8b3)")
         assert(not has("[ITEM_CONJURED]") and not has("[ITEM_BIND_ON_PICKUP]")
                and not has("[ITEM_UNIQUE]") and not has("[LOCKED]"),
                "nameOnly: the bind/lock region is cut (0x52bac3)")

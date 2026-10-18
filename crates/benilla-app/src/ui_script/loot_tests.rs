@@ -1089,9 +1089,9 @@ fn loot_row_awaiting_its_template_opens_clean() {
     assert_eq!(miss, (1.0, 1.0, 1.0), "the cache-miss row is Common/white");
     // f32 region storage against the binding's f64: compare within a tolerance.
     assert!(
-        (painted.0 - miss.0).abs() < 1e-6
-            && (painted.1 - miss.1).abs() < 1e-6
-            && (painted.2 - miss.2).abs() < 1e-6,
+        (painted.0 - miss.0).abs() < 1.0 / 255.0
+            && (painted.1 - miss.1).abs() < 1.0 / 255.0
+            && (painted.2 - miss.2).abs() < 1.0 / 255.0,
         "LootFrame_Update:85 must paint the -1 colour, got {painted:?} want {miss:?}"
     );
 

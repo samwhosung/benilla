@@ -53,7 +53,11 @@ fn item_line_law_and_red_requirements() {
         ],
         "the reference's line order"
     );
-    assert_eq!(lines[0].1, [0.0, 0.439, 0.867, 1.0], "rare-blue name");
+    assert_eq!(
+        lines[0].1,
+        crate::color::quant::drawn([0.0, 0.439, 0.867, 1.0]),
+        "rare-blue name"
+    );
     let class_line = &lines[10];
     assert_eq!(
         class_line.1,

@@ -665,9 +665,9 @@ fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
         .eval("local r, g, b = GetItemQualityColor(1)\nreturn r, g, b")
         .unwrap();
     assert!(
-        (painted.0 - common.0).abs() < 1e-6
-            && (painted.1 - common.1).abs() < 1e-6
-            && (painted.2 - common.2).abs() < 1e-6,
+        (painted.0 - common.0).abs() < 1.0 / 255.0
+            && (painted.1 - common.1).abs() < 1.0 / 255.0
+            && (painted.2 - common.2).abs() < 1.0 / 255.0,
         "the stock roll popup paints the miss tail's Common, got {painted:?} want {common:?}"
     );
 }

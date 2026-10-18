@@ -400,7 +400,7 @@ fn set_line(
     let line = model.localized_text(state.text.clone());
     let data = model.region_data.entry(text).or_default();
     data.text = Some(line);
-    data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
+    data.set_vertex_color(Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0])));
     // koKR left-justifies the text (`0x4b16e7` compares the locale with 1): the word's horizontal
     // bits set to LEFT and the same bits of its inherit mask cleared, as `SetJustifyH` does
     // (`0x4b1704`-`0x4b1717`, `0x79e776`-`0x79e788`), before the width is measured (`0x4b175d`).

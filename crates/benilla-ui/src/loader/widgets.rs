@@ -65,8 +65,7 @@ impl Loader<'_> {
             }
         }
         for bc in children_named(el, "BarColor") {
-            let c = color_of(bc);
-            self.call(wrapper, "SetStatusBarColor", (c[0], c[1], c[2], c[3]), dbg);
+            self.call(wrapper, "SetStatusBarColor", color_of(bc).fractions(), dbg);
         }
         for level in levels {
             // Each value with `atof`, present and non-empty: the range needs both bounds on the
@@ -278,8 +277,7 @@ impl Loader<'_> {
             .into_iter()
             .find(|(t, _)| tag.eq_ignore_ascii_case(t));
             if let Some((_, method)) = color {
-                let c = color_of(child);
-                self.call(wrapper, method, (c[0], c[1], c[2], c[3]), dbg);
+                self.call(wrapper, method, color_of(child).fractions(), dbg);
             }
         }
     }
@@ -553,16 +551,13 @@ impl Loader<'_> {
             None => {}
         }
         if let Some(c) = children_named(el, "Color").last().map(color_of) {
-            self.call(wrapper, "SetTextColor", (name, c[0], c[1], c[2], c[3]), dbg);
+            let (r, g, b, a) = c.fractions();
+            self.call(wrapper, "SetTextColor", (name, r, g, b, a), dbg);
         }
         if let Some(sh) = children_named(el, "Shadow").last() {
             if let Some(c) = children_named(sh, "Color").next().map(color_of) {
-                self.call(
-                    wrapper,
-                    "SetShadowColor",
-                    (name, c[0], c[1], c[2], c[3]),
-                    dbg,
-                );
+                let (r, g, b, a) = c.fractions();
+                self.call(wrapper, "SetShadowColor", (name, r, g, b, a), dbg);
             }
             if let Some((x, y)) = children_named(sh, "Offset").next().map(abs_dim) {
                 self.call(

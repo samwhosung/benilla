@@ -641,41 +641,49 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetTextColor",
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
                 // Alpha is staged 1.0 (`0x79f59b`) and never read back, so a bare colour call
-                // resets it.
-                edit(lua, &this, FontMask::COLOR, |fo| {
-                    fo.color = Some([r, g, b, a])
-                })
+                // resets it; packed as every colour setter packs.
+                let c = super::object::colour_args(lua, &r, &g, &b, &a);
+                edit(lua, &this, FontMask::COLOR, |fo| fo.color = Some(c))
             },
         )?,
     )?;
     m.set(
         "GetTextColor",
         lua.create_function(|lua, this: Table| {
-            let c = read(lua, &this)?.color.unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            Ok((c[0], c[1], c[2], c[3]))
+            let c = read(lua, &this)?
+                .color
+                .unwrap_or(crate::color::Rgba8::WHITE);
+            Ok(super::object::colour_values(c))
         })?,
     )?;
     // SetAlpha/GetAlpha are the text colour's alpha: a FontInstance has one packed colour
-    // (`+0x58`) and no alpha of its own.
+    // (`+0x58`) and no alpha of its own. `SetAlpha` (`0x79f420`) takes a `lua_isnumber` or raises
+    // the usage line (`0x79f47f`), and stores `__ftol(a * 255)`'s low byte at `+0x5b`, unclamped
+    // (`0x79f449`-`0x79f464`); `GetAlpha` reads it times the float at `0x81c6b4` (`0x79f4b4`).
     m.set(
         "SetAlpha",
-        lua.create_function(|lua, (this, a): (Table, f32)| {
+        lua.create_function(|lua, (this, a): (Table, Value)| {
+            let Some(a) = lua.coerce_number(a)? else {
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetAlpha(alpha)",
+                    super::font_block::usage_name(&this)
+                )));
+            };
+            let a = crate::color::wrap_alpha_byte(a);
             edit(lua, &this, FontMask::COLOR, |fo| {
-                let c = fo.color.unwrap_or([1.0, 1.0, 1.0, 1.0]);
-                fo.color = Some([c[0], c[1], c[2], a]);
+                let c = fo.color.unwrap_or(crate::color::Rgba8::WHITE);
+                fo.color = Some(c.with_alpha(a));
             })
         })?,
     )?;
     m.set(
         "GetAlpha",
-        lua.create_function(|lua, this: Table| Ok(read(lua, &this)?.color.map_or(1.0, |c| c[3])))?,
+        lua.create_function(|lua, this: Table| {
+            Ok(read(lua, &this)?
+                .color
+                .map_or(crate::color::channel(255), |c| crate::color::channel(c.a)))
+        })?,
     )?;
 
     // ── shadow ──────────────────────────────────────────────────────────────────────────────
@@ -684,18 +692,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(
             // Shape C on r, g, b (`Font:SetShadowColor 0x79f730`): never raises.
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                let (r, g, b) = (
-                    crate::script::object::tonumber_f32(lua, &r),
-                    crate::script::object::tonumber_f32(lua, &g),
-                    crate::script::object::tonumber_f32(lua, &b),
-                );
+                let color = super::object::colour_args(lua, &r, &g, &b, &a);
                 edit(lua, &this, FontMask::SHADOW, |fo| {
                     let offset = fo.shadow.map_or([0.0, 0.0], |s| s.offset);
-                    fo.shadow = Some(FontShadow {
-                        offset,
-                        color: [r, g, b, a],
-                    });
+                    fo.shadow = Some(FontShadow { offset, color });
                 })
             },
         )?,
@@ -705,15 +705,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let c = read(lua, &this)?
                 .shadow
-                .map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+            Ok(super::object::colour_values(c))
         })?,
     )?;
     m.set(
         "SetShadowOffset",
         lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
             edit(lua, &this, FontMask::SHADOW, |fo| {
-                let color = fo.shadow.map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
+                let color = fo.shadow.map_or(crate::color::Rgba8::BLACK, |s| s.color);
                 fo.shadow = Some(FontShadow {
                     offset: [x, y],
                     color,

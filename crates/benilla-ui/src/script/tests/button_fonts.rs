@@ -79,14 +79,47 @@ fn the_label_follows_the_states_font() {
         s.eval::<(f32, f32, f32)>("return B:GetFontString():GetTextColor()")
             .unwrap()
     };
-    assert_eq!(color(&s), (1.0, 0.82, 0.0));
+    assert_eq!(
+        color(&s),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(0.82),
+            0.0
+        )
+    );
     hover(&mut s, true);
-    assert_eq!(color(&s), (1.0, 1.0, 1.0), "hovered: the highlight font");
-    assert_eq!(drawn_color(&mut s), Some([1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(
+        color(&s),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        ),
+        "hovered: the highlight font"
+    );
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 1.0, 1.0, 1.0]))
+    );
     hover(&mut s, false);
-    assert_eq!(color(&s), (1.0, 0.82, 0.0));
+    assert_eq!(
+        color(&s),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(0.82),
+            0.0
+        )
+    );
     s.run("B:Disable()").unwrap();
-    assert_eq!(color(&s), (0.5, 0.5, 0.5), "disabled: the disabled font");
+    assert_eq!(
+        color(&s),
+        (
+            crate::color::quant::read32(0.5),
+            crate::color::quant::read32(0.5),
+            crate::color::quant::read32(0.5)
+        ),
+        "disabled: the disabled font"
+    );
 }
 
 /// The link and the push obey the label's mask (`0x770800`): a colour the label set itself
@@ -97,9 +130,15 @@ fn a_labels_own_colour_outlasts_the_buttons() {
     fixture(&mut s);
     s.run("B:GetFontString():SetTextColor(1, 0, 0); B:SetTextColor(0, 1, 0)")
         .unwrap();
-    assert_eq!(drawn_color(&mut s), Some([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 0.0, 0.0, 1.0]))
+    );
     hover(&mut s, true);
-    assert_eq!(drawn_color(&mut s), Some([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 0.0, 0.0, 1.0]))
+    );
 }
 
 /// A state colour with no state font of its own still paints: the label links to that font
@@ -131,11 +170,23 @@ fn a_state_colour_paints_without_a_state_font() {
     )
     .unwrap();
     hover(&mut s, true);
-    assert_eq!(drawn_color(&mut s), Some([1.0, 0.0, 0.0, 1.0]), "hovered");
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 0.0, 0.0, 1.0])),
+        "hovered"
+    );
     hover(&mut s, false);
-    assert_eq!(drawn_color(&mut s), Some([1.0, 0.82, 0.0, 1.0]), "rest");
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
+        "rest"
+    );
     s.run("B:Disable()").unwrap();
-    assert_eq!(drawn_color(&mut s), Some([0.0, 0.0, 1.0, 1.0]), "disabled");
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([0.0, 0.0, 1.0, 1.0])),
+        "disabled"
+    );
 }
 
 /// A restyle of the base font reaches a button's label two hops down: `GameFontNormal` → the
@@ -174,12 +225,22 @@ fn the_state_font_getters_read_the_three_fonts() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return B:GetHighlightTextColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 1.0)
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        )
     );
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return B:GetDisabledTextColor()")
             .unwrap(),
-        (0.5, 0.5, 0.5, 1.0)
+        (
+            crate::color::quant::read32(0.5),
+            crate::color::quant::read32(0.5),
+            crate::color::quant::read32(0.5),
+            crate::color::quant::read32(1.0)
+        )
     );
     s.run(
         r#"
@@ -197,7 +258,12 @@ fn the_state_font_getters_read_the_three_fonts() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return fresh:GetDisabledTextColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 1.0),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        ),
         "the constructor's white"
     );
 }
@@ -281,9 +347,33 @@ fn the_state_colour_elements_colour_their_fonts() {
         s.eval::<(f32, f32, f32, f32)>(&format!("return Tinted:{verb}()"))
             .unwrap()
     };
-    assert_eq!(get("GetTextColor"), (1.0, 0.0, 0.0, 1.0));
-    assert_eq!(get("GetHighlightTextColor"), (0.0, 1.0, 0.0, 1.0));
-    assert_eq!(get("GetDisabledTextColor"), (0.0, 0.0, 1.0, 0.5));
+    assert_eq!(
+        get("GetTextColor"),
+        (
+            crate::color::quant::read32(1.0),
+            0.0,
+            0.0,
+            crate::color::quant::read32(1.0)
+        )
+    );
+    assert_eq!(
+        get("GetHighlightTextColor"),
+        (
+            0.0,
+            crate::color::quant::read32(1.0),
+            0.0,
+            crate::color::quant::read32(1.0)
+        )
+    );
+    assert_eq!(
+        get("GetDisabledTextColor"),
+        (
+            0.0,
+            0.0,
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(0.5)
+        )
+    );
 }
 
 /// A `<ButtonText>` builds its string first, its own `inherits=` linking it, and is installed
@@ -313,7 +403,10 @@ fn a_button_text_with_its_own_font_follows_the_normal_font() {
            </Ui>"#,
     );
     s.run("B:SetTextColor(1, 0, 0)").unwrap();
-    assert_eq!(drawn_color(&mut s), Some([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 0.0, 0.0, 1.0]))
+    );
 }
 
 /// The hover refresh runs after the base enter and its `OnEnter` (`0x76b6a0`, then `0x7794ab`):
@@ -340,7 +433,10 @@ fn the_hover_refresh_follows_on_enter() {
     );
     s.run(r#"B:SetText("Label")"#).unwrap();
     hover(&mut s, true);
-    assert_eq!(drawn_color(&mut s), Some([1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(
+        drawn_color(&mut s),
+        Some(crate::color::quant::drawn([1.0, 1.0, 1.0, 1.0]))
+    );
 }
 
 /// `SetChecked` moves no state, so it relinks nothing: a label left on its own font by a direct

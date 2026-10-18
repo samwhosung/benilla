@@ -576,13 +576,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
             // No backdrop pushes nothing (`0x777c68`/`0x778008`: `+0x1ac` null returns 0).
+            // With one, each byte times the float at `0x81c6b4` (`0x777c98`).
             Ok(match model.backdrops.get(&h).map(|i| &i.spec) {
-                Some(bd) => mlua::MultiValue::from_vec(
-                    bd.bg_color
-                        .iter()
-                        .map(|c| Value::Number(f64::from(*c)))
-                        .collect(),
-                ),
+                Some(bd) => crate::script::object::colour_values(bd.bg_color),
                 None => mlua::MultiValue::new(),
             })
         })?,
@@ -594,12 +590,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model");
             // No backdrop pushes nothing (`0x777c68`/`0x778008`: `+0x1ac` null returns 0).
             Ok(match model.backdrops.get(&h).map(|i| &i.spec) {
-                Some(bd) => mlua::MultiValue::from_vec(
-                    bd.border_color
-                        .iter()
-                        .map(|c| Value::Number(f64::from(*c)))
-                        .collect(),
-                ),
+                Some(bd) => crate::script::object::colour_values(bd.border_color),
                 None => mlua::MultiValue::new(),
             })
         })?,
@@ -853,29 +844,13 @@ fn frame_name(lua: &Lua, h: crate::widget::FrameHandle) -> String {
         .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
-/// One backdrop colour channel as `SetBackdropColor` (`0x777d30`) and `SetBackdropBorderColor`
-/// (`0x7780d0`) convert it: r, g, b through a bare `lua_tonumber` (nil is 0), alpha gated by
-/// `lua_isnumber` with 1.0 staged (`0x778220`, `0x778227`); clamped to 0..1 with NaN at 1, then
-/// stored as a byte, rounded half up (`×255 + 0.5`, `__ftol`).
-fn backdrop_channel(lua: &Lua, v: Option<Value>, gated: bool) -> f32 {
-    let x = if gated {
-        v.and_then(|v| lua.coerce_number(v).ok().flatten())
-            .unwrap_or(1.0)
-    } else {
-        crate::script::binding_abi::coerced_number(lua, v)
-    };
-    let clamped = if x.is_nan() { 1.0 } else { x.clamp(0.0, 1.0) };
-    let byte = (clamped * 255.0 + 0.5) as u8;
-    f32::from(byte) / 255.0
-}
-
-/// A backdrop colour setter's four channels; a missing argument and an explicit nil read alike.
-fn backdrop_color(lua: &Lua, args: mlua::MultiValue) -> [f32; 4] {
+/// A backdrop colour setter's four channels (`SetBackdropColor` `0x777d30`,
+/// `SetBackdropBorderColor` `0x7780d0`): r, g and b through a bare `lua_tonumber` (nil is 0),
+/// alpha gated by `lua_isnumber` over a staged 1.0 (`0x778220`, `0x778227`), packed as every
+/// colour setter packs ([`crate::color::Rgba8::pack`]). A missing argument and an explicit nil
+/// read alike.
+fn backdrop_color(lua: &Lua, args: mlua::MultiValue) -> crate::color::Rgba8 {
     let a: Vec<Value> = args.into_iter().collect();
-    [
-        backdrop_channel(lua, a.first().cloned(), false),
-        backdrop_channel(lua, a.get(1).cloned(), false),
-        backdrop_channel(lua, a.get(2).cloned(), false),
-        backdrop_channel(lua, a.get(3).cloned(), true),
-    ]
+    let arg = |i: usize| a.get(i).cloned().unwrap_or(Value::Nil);
+    crate::script::object::colour_args(lua, &arg(0), &arg(1), &arg(2), &arg(3))
 }

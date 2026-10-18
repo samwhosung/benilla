@@ -166,7 +166,7 @@ fn the_character_button_carries_the_player_portrait_through_the_reference_crop()
     assert_eq!(
         s.eval::<f64>("return MicroButtonPortrait:GetAlpha()")
             .unwrap(),
-        0.5,
+        benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.5)),
         "…and the face dims while the button is down"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -356,7 +356,7 @@ fn a_micro_button_pushes_while_its_panel_is_open_and_the_talent_button_pulses_on
     );
     assert_eq!(
         face(&s),
-        0.5,
+        benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.5)),
         "…and the face dims (CharacterMicroButton_SetPushed)"
     );
     s.run("ToggleCharacter(\"PaperDollFrame\")").unwrap();

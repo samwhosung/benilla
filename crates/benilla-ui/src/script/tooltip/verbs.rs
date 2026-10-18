@@ -144,9 +144,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let (current, color) = match model.region_data.get(&lh) {
                 Some(d) => (
                     d.text.clone().unwrap_or_default(),
-                    d.vertex_color.unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                    d.vertex_color_or_white(),
                 ),
-                None => (String::new(), [1.0, 1.0, 1.0, 1.0]),
+                None => (String::new(), crate::color::Rgba8::WHITE),
             };
             write_cell(&mut model, lh, &(current + &extra), color);
             // `0x5305b0` sizes the tooltip again (`0x530615`).

@@ -474,7 +474,7 @@ fn clicking_an_occupied_doll_slot_picks_it_up_and_locks_it() {
     s.resolve();
     let head_icon_dim = s.extract().iter().any(|q| {
         matches!(&q.content, QuadContent::Texture { path: Some(p), color: Some(c), desaturated, .. }
-            if p.contains("INV_Helmet_01") && *desaturated && c[0] == 0.5 && c[1] == 0.5 && c[2] == 0.5)
+            if p.contains("INV_Helmet_01") && *desaturated && c[..3] == benilla_ui::color::quant::drawn([0.5, 0.5, 0.5, 1.0])[..3])
     });
     assert!(head_icon_dim, "the picked slot's icon dims");
 
@@ -627,7 +627,7 @@ fn broken_equipped_item_tints_its_doll_slot_red() {
             _ => None,
         })
     }
-    let red = [0.9, 0.0, 0.0, 1.0];
+    let red = benilla_ui::color::quant::drawn([0.9, 0.0, 0.0, 1.0]);
     let white = [1.0, 1.0, 1.0, 1.0];
     assert_eq!(
         slot_color(&mut s, "CharacterHeadSlot", "Quickslot2"),

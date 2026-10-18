@@ -300,8 +300,8 @@ pub(crate) fn monochrome_flag(s: &str) -> bool {
 pub struct FontShadow {
     /// Pixels, y up: `y="-1"` is 1 px down.
     pub offset: [f32; 2],
-    /// Alpha defaults to 1.
-    pub color: [f32; 4],
+    /// The packed colour; a `<Shadow>` with no `<Color>` is opaque black (`0x78405f`).
+    pub color: crate::color::Rgba8,
 }
 
 /// A named `<Font>` object's paint, its own over what its `inherits=` parent had; a field the chain
@@ -313,7 +313,8 @@ pub struct FontObject {
     /// Logical px (`<FontHeight>`).
     pub height: Option<f32>,
     pub shadow: Option<FontShadow>,
-    pub color: Option<[f32; 4]>,
+    /// The packed text colour (`+0x58`), alpha in its top byte; unset reads white (`0x783a8e`).
+    pub color: Option<crate::color::Rgba8>,
     pub outline: Outline,
     /// `monochrome=` (font flag bit 1).
     pub monochrome: bool,
@@ -351,10 +352,10 @@ pub struct ExtractedQuad {
 pub struct Gradient {
     /// `VERTICAL` (1) rather than `HORIZONTAL` (0), the `0x811b00` enum.
     pub vertical: bool,
-    /// `MinColor`, RGBA in `0..=1`; `SetGradient`, which takes no alpha, sets both alphas to 1.
-    pub start: [f32; 4],
+    /// `MinColor`, packed; `SetGradient`, which takes no alpha, sets both alphas to 255.
+    pub start: crate::color::Rgba8,
     /// `MaxColor`.
-    pub end: [f32; 4],
+    pub end: crate::color::Rgba8,
 }
 
 impl Gradient {
@@ -363,7 +364,7 @@ impl Gradient {
     /// max on the right (`0x77f9c3`), VERTICAL the min on the bottom pair and the max on the top
     /// (`0x77fa2c`).
     pub fn vertex_colors(&self) -> [[f32; 4]; 4] {
-        let (min, max) = (self.start, self.end);
+        let (min, max) = (self.start.to_f32(), self.end.to_f32());
         if self.vertical {
             [max, max, min, min]
         } else {
@@ -376,14 +377,15 @@ impl Gradient {
 pub(crate) struct RegionData {
     /// `Show`/`Hide` and XML `hidden=`: a hidden region emits no quad, whatever its owner's state.
     pub(crate) hidden: bool,
-    /// `SetAlpha`, XML `alpha=`; `None` is 1. Drawn times the owner frame's alpha, one hop only:
-    /// frame `SetAlpha` (`0x76a690`) cascades to child frames and only invalidates regions.
+    /// `SetAlpha`'s byte, XML `alpha=`; `None` is 255. Drawn times the owner frame's alpha, one
+    /// hop only: frame `SetAlpha` (`0x76a690`) cascades to child frames and only invalidates
+    /// regions.
     ///
     /// Deviation: kept apart from [`Self::vertex_color`], which the reference's `Texture:SetAlpha`
     /// (`0x79b580`) rewrites, because the drawn product differs only on a region that sets both,
     /// or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then
     /// keeps its font colour.
-    pub(crate) alpha: Option<f32>,
+    pub(crate) alpha: Option<u8>,
     /// The texture slot (`+0xcc`): a path (`SetTexture("Interface\\...")`) or a solid fill
     /// (`SetTexture(r, g, b, a)`, an XML `<Color>` with no `file=`), each clearing the other. The
     /// reference makes an 8×8 texture of a fill (`0x770360` → `0x44a9c0` → `0x5c5350`), so its alpha
@@ -396,7 +398,7 @@ pub(crate) struct RegionData {
     /// `SetVertexColor` (`0x79abd0` → `0x77f750`, `+0xb8`), `SetStatusBarColor` or a text colour,
     /// drawn as `texel × colour` per channel, alpha included: a `<Color 1,1,1,0.2>` tinted
     /// `(0, 0, 0.75, 0.5)` draws at alpha 0.1, as `SkillFrame`'s row trough does.
-    pub(crate) vertex_color: Option<[f32; 4]>,
+    pub(crate) vertex_color: Option<crate::color::Rgba8>,
     /// A portrait (`SetPortraitToTexture`, `SetPortraitTexture`), masked to the inscribed circle.
     pub(crate) circular: bool,
     /// A live unit portrait's unit, drawn from the app's bake instead of the texture or colour;
@@ -574,9 +576,22 @@ impl MeasuredText {
 
 impl RegionData {
     /// Write the one vertex colour (`0x77f750`), which collapses a gradient's four (`0x77f87f`).
-    pub(crate) fn set_vertex_color(&mut self, color: Option<[f32; 4]>) {
+    /// With no colour yet, white at alpha 254 or more stores nothing (`0x77f766`-`0x77f77c`), so
+    /// the slot keeps reading opaque white.
+    pub(crate) fn set_vertex_color(&mut self, color: Option<crate::color::Rgba8>) {
+        if let Some(c) = color {
+            let unset = self.vertex_color.is_none() && self.gradient.is_none();
+            if unset && c.a >= 0xfe && (c.r, c.g, c.b) == (255, 255, 255) {
+                return;
+            }
+        }
         self.vertex_color = color;
         self.gradient = None;
+    }
+
+    /// The one vertex colour as `0x77f8c0` answers it: white unless the slot holds exactly one.
+    pub(crate) fn vertex_color_or_white(&self) -> crate::color::Rgba8 {
+        self.vertex_color.unwrap_or(crate::color::Rgba8::WHITE)
     }
 
     /// The gap a line string lays its lines out by: [`Self::spacing`] clamped at 0, as a line

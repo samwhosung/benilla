@@ -264,25 +264,21 @@ fn set_state_color(
     which: LabelFont,
     (r, g, b, a): (Value, Value, Value, Value),
 ) -> mlua::Result<()> {
-    let a = super::object::alpha_f32(lua, &a);
-    // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
-    let (r, g, b) = (
-        super::object::tonumber_f32(lua, &r),
-        super::object::tonumber_f32(lua, &g),
-        super::object::tonumber_f32(lua, &b),
-    );
+    // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`), packed as
+    // every colour setter packs.
+    let c = super::object::colour_args(lua, &r, &g, &b, &a);
     let (_, f) = fonts_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     super::font::set(&mut model, which.of(f), super::FontMask::COLOR, |fo| {
-        fo.color = Some([r, g, b, a]);
+        fo.color = Some(c);
     });
     Ok(())
 }
 
 /// `Get{Text,Highlight,Disabled}TextColor()` (`0x781100`, `0x781800`, `0x781480`): four numbers,
 /// the embedded font's colour (`+0x58`), its own or what its font pushed, else the constructor's
-/// white.
-fn state_color(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<(f32, f32, f32, f32)> {
+/// white; each byte times the float at `0x81c6b4`.
+fn state_color(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<mlua::MultiValue> {
     let (_, f) = fonts_of(lua, this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     let c = model
@@ -290,8 +286,8 @@ fn state_color(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<(f32, 
         .get(which.of(f))
         .block
         .color
-        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-    Ok((c[0], c[1], c[2], c[3]))
+        .unwrap_or(crate::color::Rgba8::WHITE);
+    Ok(super::object::colour_values(c))
 }
 
 /// Run `f` over a frame's Button state under one short write borrow. It moves no state, only an

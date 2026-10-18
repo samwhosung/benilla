@@ -19,12 +19,15 @@ impl Loader<'_> {
         };
         self.call(wrapper, "SetBackdrop", table, dbg);
         if let Some(c) = children_named(bd, "Color").next() {
-            let [r, g, b, a] = color_of(c);
-            self.call(wrapper, "SetBackdropColor", (r, g, b, a), dbg);
+            self.call(wrapper, "SetBackdropColor", color_of(c).fractions(), dbg);
         }
         if let Some(c) = children_named(bd, "BorderColor").next() {
-            let [r, g, b, a] = color_of(c);
-            self.call(wrapper, "SetBackdropBorderColor", (r, g, b, a), dbg);
+            self.call(
+                wrapper,
+                "SetBackdropBorderColor",
+                color_of(c).fractions(),
+                dbg,
+            );
         }
     }
 

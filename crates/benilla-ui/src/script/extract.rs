@@ -239,7 +239,7 @@ impl UiScript {
                     // One hop (region combine `0x772180`): the region's alpha times its owner's
                     // byte, which `SetAlpha 0x76a690` already carries down the tree.
                     let alpha = owner_frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha))
-                        * data.alpha.unwrap_or(1.0);
+                        * data.alpha.map_or(1.0, crate::color::alpha_f32);
                     // A region draws at its resolved rect: drawable regions carry anchors
                     // (authored, or `region::implicit_creation_anchor`), so a region that never
                     // resolved draws nowhere, as in the reference. After a failed resolve
@@ -291,9 +291,12 @@ impl UiScript {
                     } else if is_text {
                         let spacing = data.line_gap();
                         let text_height = data.text_height();
+                        let text_color = data.vertex_color_or_white();
                         QuadContent::Text {
                             text: data.text,
-                            color: data.vertex_color,
+                            // The slot's colour as `0x77f8c0` answers it: an empty one, or one
+                            // set to white that stored nothing (`0x77f766`), draws white.
+                            color: Some(text_color.to_f32()),
                             // The gx translator's answer, not the getter's: a cleared axis draws
                             // CENTER/MIDDLE (`0x44d420`), where `GetJustifyH` says "UNKNOWN".
                             justify_h: data.justify.paint_h(),
@@ -327,7 +330,17 @@ impl UiScript {
                         QuadContent::Texture {
                             path: std::mem::take(&mut data.tex).into_path(),
                             color: has_texture
-                                .then(|| texture_color(fill, data.vertex_color))
+                                .then(|| {
+                                    let mut tint =
+                                        data.vertex_color.map(crate::color::Rgba8::to_f32);
+                                    if let (Some(t), Some(k)) = (
+                                        tint.as_mut(),
+                                        super::nameplate::lit_fill_boost(&model, rh),
+                                    ) {
+                                        t[..3].iter_mut().for_each(|c| *c *= k);
+                                    }
+                                    texture_color(fill.map(crate::color::Rgba8::to_f32), tint)
+                                })
                                 .flatten(),
                             // The quad record carries the four colours with stride 4
                             // (`0x77304d`), one per vertex, each times the texel.
@@ -337,9 +350,9 @@ impl UiScript {
                                 .map(|g| g.vertex_colors()),
                             blend: drawn_blend(
                                 data.blend,
-                                owner_frame.map_or(1.0, |f| f.effective_alpha),
-                                data.alpha.unwrap_or(1.0),
-                                data.vertex_color,
+                                owner_frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha)),
+                                data.alpha.map_or(1.0, crate::color::alpha_f32),
+                                data.vertex_color.map(crate::color::Rgba8::to_f32),
                                 data.gradient.map(|g| g.vertex_colors()),
                             ),
                             tex_coords: data.tex_coords,

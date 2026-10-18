@@ -209,7 +209,15 @@ fn a_powerless_pet_wears_the_no_mana_plate() {
         )
         .unwrap();
     assert!(visible);
-    assert_eq!((r, g, b), (1.0, 0.5, 0.25), "FOCUS, not the mana default");
+    assert_eq!(
+        (r, g, b),
+        (
+            benilla_ui::color::quant::read(1.0),
+            benilla_ui::color::quant::read(0.5),
+            benilla_ui::color::quant::read(0.25)
+        ),
+        "FOCUS, not the mana default"
+    );
     assert!(draws(&mut s, PLAIN), "the plate with a mana rail");
     assert!(!draws(&mut s, NO_MANA));
 

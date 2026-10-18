@@ -38,7 +38,7 @@ fn a_started_fade_ramps_off_uiparents_tick_and_completes() {
     s.resolve();
     let mid = s.eval::<f64>("return BenillaFadeProbe:GetAlpha()").unwrap();
     assert!(
-        (mid - 0.5).abs() < 1e-3,
+        (mid - 0.5).abs() < 1.0 / 255.0,
         "half the timeToFade in, half the ramp: {mid}"
     );
 

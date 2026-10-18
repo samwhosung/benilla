@@ -332,7 +332,11 @@ fn region_shadow_accessors_round_trip_four_values() {
     let (r, g, b, a) = s
         .eval::<(f32, f32, f32, f32)>("return SHFText:GetShadowColor()")
         .unwrap();
-    assert_eq!((r, g, b, a), (0.0, 0.0, 0.0, 0.3), "the alpha survives");
+    assert_eq!(
+        (r, g, b, a),
+        (0.0, 0.0, 0.0, crate::color::quant::read32(0.3)),
+        "the alpha survives"
+    );
     assert_eq!(
         s.eval::<(f32, f32)>("return SHFText:GetShadowOffset()")
             .unwrap(),
@@ -343,7 +347,7 @@ fn region_shadow_accessors_round_trip_four_values() {
     assert_eq!(
         s.eval::<f32>("local _,_,_,a = SHFText:GetShadowColor() return a")
             .unwrap(),
-        0.3,
+        crate::color::quant::read32(0.3),
         "setting the offset alone keeps the colour"
     );
 }
@@ -690,7 +694,7 @@ fn editbox_font_block_return_shapes_are_the_shared_implementations() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return EBShape:GetShadowColor()")
             .unwrap(),
-        (0.0, 0.0, 0.0, 0.3)
+        (0.0, 0.0, 0.0, crate::color::quant::read32(0.3))
     );
     assert_eq!(
         s.eval::<(f32, f32)>("return EBShape:GetShadowOffset()")
@@ -738,7 +742,14 @@ fn the_dewdrop_editbox_font_shape_resolves_and_paints() {
     let (r, g, b, _) = s
         .eval::<(f32, f32, f32, f32)>("return DewdropEBFrame.editBox:GetTextColor()")
         .unwrap();
-    assert_eq!((r, g, b), (0.9, 0.9, 0.9));
+    assert_eq!(
+        (r, g, b),
+        (
+            crate::color::quant::read32(0.9),
+            crate::color::quant::read32(0.9),
+            crate::color::quant::read32(0.9)
+        )
+    );
 
     // `AceGUIWidget-Slider.lua:204-210` ends the same shape with this.
     s.run(r#"DewdropEBFrame.editBox:SetJustifyH("CENTER")"#)
@@ -880,7 +891,12 @@ fn set_desaturated_reports_shader_support_and_does_not_raise() {
         .eval::<(f32, f32, f32)>("return DsTex:GetVertexColor()")
         .unwrap();
     assert!(
-        (r - 0.65).abs() < 1e-6 && (g - 0.65).abs() < 1e-6 && (b - 0.65).abs() < 1e-6,
+        (r, g, b)
+            == (
+                crate::color::quant::read32(0.65),
+                crate::color::quant::read32(0.65),
+                crate::color::quant::read32(0.65)
+            ),
         "the shader arm keeps the caller's tint, got {r},{g},{b}"
     );
 

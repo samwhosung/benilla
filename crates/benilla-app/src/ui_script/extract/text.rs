@@ -220,11 +220,12 @@ pub(super) fn emit(
             draw_rect.max.y + dy,
         );
         let shadow_spec = crate::ui_text::FontSpec { ..spec };
+        let shadow_color = sh.color.to_f32();
         let mut sq = layout_text_quads(
             &mut atlas.lock(),
             draw_text,
             srect,
-            sh.color,
+            shadow_color,
             draw_justify,
             host.z,
             shadow_spec,
@@ -233,9 +234,9 @@ pub(super) fn emit(
         for q in &mut sq {
             // Markup tints ride the fill only; the alpha is [`shadow_alpha`].
             q.color = [
-                sh.color[0],
-                sh.color[1],
-                sh.color[2],
+                shadow_color[0],
+                shadow_color[1],
+                shadow_color[2],
                 shadow_alpha(q.color[3], base_color[3], host.alpha),
             ];
             q.clip = text_clip;
@@ -612,7 +613,7 @@ mod caret_tests {
         ] {
             let (c, g) = single_line_caret(before, after);
             assert_eq!(c.color, g.color, "the glyph's colour is the control");
-            let want = [1.0, 0.5, 0.25, 0.5];
+            let want = benilla_ui::color::quant::drawn([1.0, 0.5, 0.25, 0.5]);
             for (got, want) in c.color.iter().zip(want) {
                 assert!((got - want).abs() < 1e-3, "{:?}", c.color);
             }

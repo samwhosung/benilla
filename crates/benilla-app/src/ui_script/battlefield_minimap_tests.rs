@@ -257,7 +257,9 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
     // and runs `BattlefieldMinimap_SetOpacity()` off the seeded slider, so the default 0.7 opacity
     // (alpha `1 - value`) is on before the window first shows.
     assert!(
-        (num(&s, "BattlefieldMinimapBackground:GetAlpha()") - 0.3).abs() < 1e-6,
+        // A texture's alpha is the byte `__ftol(a * 255)` (`0x79b638`).
+        num(&s, "BattlefieldMinimapBackground:GetAlpha()")
+            == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(1.0 - 0.7)),
         "the load-time opacity pass reached the border texture"
     );
 
@@ -773,7 +775,10 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
         "part way through the 0.15 s fade, got {part_way}"
     );
     s.tick(0.2);
-    assert_eq!(num(&s, "BattlefieldMinimapTab:GetAlpha()"), 0.75);
+    assert_eq!(
+        num(&s, "BattlefieldMinimapTab:GetAlpha()"),
+        benilla_ui::color::alpha_f64(benilla_ui::color::frame_alpha_byte(0.75))
+    );
 
     s.mouse_move(5.0, 5.0);
     update(&mut s, 0.1);
@@ -921,13 +926,15 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
     // The slider's `<OnValueChanged>` repaints through `OpacityFrame.opacityFunc`.
     s.run("OpacityFrameSlider:SetValue(0.25)").unwrap();
     let alpha = |s: &UiScript, f: &str| num(s, &format!("{f}:GetAlpha()"));
+    // Each alpha is stored as a byte, so it reads back within one step of 1/255.
+    let step = 1.0 / 255.0;
     for f in [
         "BattlefieldMinimapBackground",
         "BattlefieldMinimap1",
         "BattlefieldMinimap12",
     ] {
         assert!(
-            (alpha(&s, f) - 0.75).abs() < 1e-6,
+            (alpha(&s, f) - 0.75).abs() < step,
             "{f} takes the plain 1 - value"
         );
     }
@@ -937,16 +944,16 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         "BattlefieldMinimapCorner",
     ] {
         assert!(
-            (alpha(&s, f) - 0.6).abs() < 1e-6,
+            (alpha(&s, f) - 0.6).abs() < step,
             "{f} takes a further 0.15 off, got {}",
             alpha(&s, f)
         );
     }
     // At the bottom of the second tier the subtraction stops rather than going negative.
     s.run("OpacityFrameSlider:SetValue(0.9)").unwrap();
-    assert!((alpha(&s, "BattlefieldMinimapBackground") - 0.1).abs() < 1e-6);
+    assert!((alpha(&s, "BattlefieldMinimapBackground") - 0.1).abs() < step);
     assert!(
-        (alpha(&s, "BattlefieldMinimapOverlay1") - 0.1).abs() < 1e-6,
+        (alpha(&s, "BattlefieldMinimapOverlay1") - 0.1).abs() < step,
         "under 0.15 the overlays keep the plain alpha"
     );
 

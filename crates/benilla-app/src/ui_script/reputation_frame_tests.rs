@@ -251,7 +251,11 @@ fn a_bar_row_paints_name_standing_and_the_faction_bar_colour() {
         .unwrap();
     assert_eq!(
         (r, g, b),
-        (0.0, 0.6, 0.1),
+        (
+            0.0,
+            benilla_ui::color::quant::read32(0.6),
+            benilla_ui::color::quant::read32(0.1)
+        ),
         "FACTION_BAR_COLORS[5] — the green every friendly-and-better rank shares"
     );
 
@@ -407,7 +411,11 @@ fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
         .unwrap();
     assert_eq!(
         (r, g, b),
-        (0.5, 0.5, 0.5),
+        (
+            benilla_ui::color::quant::read32(0.5),
+            benilla_ui::color::quant::read32(0.5),
+            benilla_ui::color::quant::read32(0.5)
+        ),
         "and its label greys with it (GRAY_FONT_COLOR)"
     );
     assert!(!checked(&mut s, "ReputationDetailInactiveCheckBox"));
@@ -552,7 +560,15 @@ fn the_watch_bar_shows_the_watched_factions_progress_and_swaps_at_max_level() {
     let (r, g, b) = s
         .eval::<(f32, f32, f32)>("return ReputationWatchStatusBar:GetStatusBarColor()")
         .unwrap();
-    assert_eq!((r, g, b), (0.0, 0.6, 0.1), "FACTION_BAR_COLORS[5] again");
+    assert_eq!(
+        (r, g, b),
+        (
+            0.0,
+            benilla_ui::color::quant::read32(0.6),
+            benilla_ui::color::quant::read32(0.1)
+        ),
+        "FACTION_BAR_COLORS[5] again"
+    );
     assert_eq!(
         s.eval::<(f64, f64)>("return ReputationWatchStatusBar:GetMinMaxValues()")
             .unwrap(),

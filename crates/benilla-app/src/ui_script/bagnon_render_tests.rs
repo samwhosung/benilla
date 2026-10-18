@@ -424,7 +424,7 @@ fn the_item_button_helpers_paint_a_slots_icon_and_count() {
         .expect("GetVertexColor");
     assert_eq!(
         &tint[..3],
-        &[0.5, 0.5, 0.5],
+        &[benilla_ui::color::quant::read32(0.5); 3],
         "a locked item keeps the caller's 0.5 grey (ref: with a shader, r, g, b stay as passed)"
     );
 
@@ -951,7 +951,10 @@ fn a_texture_gradient_tints_the_art_it_sits_on() {
         unreachable!("filtered to Texture above")
     };
     // VERTICAL, MinColor (0,0,0,0.9) on the bottom pair and MaxColor (0.2,0.2,0.2,0.9) on the top.
-    let (min, max) = ([0.0, 0.0, 0.0, 0.9], [0.2, 0.2, 0.2, 0.9]);
+    let (min, max) = (
+        benilla_ui::color::quant::drawn([0.0, 0.0, 0.0, 0.9]),
+        benilla_ui::color::quant::drawn([0.2, 0.2, 0.2, 0.9]),
+    );
     assert_eq!(color, None, "the art carries no one-colour tint");
     assert_eq!(
         gradient,

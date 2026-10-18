@@ -57,7 +57,7 @@ pub(crate) struct ElementFont {
     /// `SetFont`'s flags / XML `outline=`.
     pub(crate) outline: Outline,
     /// `SetTextColor` / `<Color>`.
-    pub(crate) color: Option<[f32; 4]>,
+    pub(crate) color: Option<crate::color::Rgba8>,
     /// `SetShadowColor`/`SetShadowOffset` / `<Shadow>`.
     pub(crate) shadow: Option<FontShadow>,
     /// `CSimpleFont+0x54`, ctor `0x212` (`0x783a98`): CENTER, MIDDLE and the one-to-one bit.
@@ -98,7 +98,7 @@ struct BlockPaint {
     font_path: Option<String>,
     font_height: Option<f32>,
     outline: Outline,
-    color: Option<[f32; 4]>,
+    color: Option<crate::color::Rgba8>,
     shadow: Option<FontShadow>,
     justify: Justify,
     spacing: f32,
@@ -596,8 +596,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let elem = take_element(&mut rest);
             let c = read_font(lua, &this, elem)?
                 .color
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            Ok((c[0], c[1], c[2], c[3]))
+                .unwrap_or(crate::color::Rgba8::WHITE);
+            Ok(crate::script::object::colour_values(c))
         })?,
     )?;
 
@@ -622,8 +622,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let elem = take_element(&mut rest);
             let c = read_font(lua, &this, elem)?
                 .shadow
-                .map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+            Ok(crate::script::object::colour_values(c))
         })?,
     )?;
     // Both arguments are required: the shared code raises its usage line (`0x87c6e8`).
@@ -634,7 +634,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let x = f32::from_lua(arg(&rest, 0), lua)?;
             let y = f32::from_lua(arg(&rest, 1), lua)?;
             edit_font(lua, &this, elem, |ef| {
-                let color = ef.shadow.map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
+                let color = ef.shadow.map_or(crate::color::Rgba8::BLACK, |s| s.color);
                 ef.shadow = Some(FontShadow {
                     offset: [x, y],
                     color,
@@ -776,15 +776,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 /// `(r, g, b [, a])` after the element argument, as the shared colour setters take it: r, g and b
 /// required, alpha 1 unless a number.
-fn rgba(lua: &Lua, rest: &MultiValue) -> mlua::Result<[f32; 4]> {
-    let r = f32::from_lua(arg(rest, 0), lua)?;
-    let g = f32::from_lua(arg(rest, 1), lua)?;
-    let b = f32::from_lua(arg(rest, 2), lua)?;
+fn rgba(lua: &Lua, rest: &MultiValue) -> mlua::Result<crate::color::Rgba8> {
+    let r = f64::from_lua(arg(rest, 0), lua)?;
+    let g = f64::from_lua(arg(rest, 1), lua)?;
+    let b = f64::from_lua(arg(rest, 2), lua)?;
     let a = match arg(rest, 3) {
-        v @ (Value::Number(_) | Value::Integer(_)) => f32::from_lua(v, lua)?,
+        v @ (Value::Number(_) | Value::Integer(_)) => f64::from_lua(v, lua)?,
         _ => 1.0,
     };
-    Ok([r, g, b, a])
+    // Packed as every colour setter packs (`0x79f4d0`).
+    Ok(crate::color::Rgba8::pack(r, g, b, a))
 }
 
 /// The per-frame [`SimpleHtmlState`] store `Model` holds.

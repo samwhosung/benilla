@@ -97,7 +97,7 @@ fn the_line_fades_out_over_the_reference_s_second_and_a_half() {
     s.tick(0.75);
     let half = alpha(&s);
     assert!(
-        (half - 0.5).abs() < 1e-3,
+        (half - 0.5).abs() < 1.0 / 255.0,
         "halfway through 1.5 s the line is at half alpha, got {half}"
     );
 

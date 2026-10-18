@@ -1041,14 +1041,16 @@ pub(super) fn abs_dim(el: &Element) -> (Option<f32>, Option<f32>) {
     (x, y)
 }
 
-/// Read an RGBA colour from a `<Color r= g= b= a=/>` element (`a` defaults to 1.0).
-pub(super) fn color_of(el: &Element) -> [f32; 4] {
-    let c = |k: &str, d: f32| {
+/// A `<Color r= g= b= a=/>` element as `0x6f23d0` packs it: each attribute that is present and
+/// non-empty through `SStrToFloat` (`0x64aaa0`, so text with no number is 0), else 0 for r, g and b
+/// and 1 for a (`0x6f23e2`-`0x6f23f7`), then clamped and rounded as every colour setter does.
+pub(super) fn color_of(el: &Element) -> crate::color::Rgba8 {
+    let c = |k: &str, d: f64| {
         el.attr(k)
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .unwrap_or(d)
+            .filter(|v| !v.is_empty())
+            .map_or(d, crate::script::binding_abi::s_str_to_float)
     };
-    [c("r", 0.0), c("g", 0.0), c("b", 0.0), c("a", 1.0)]
+    crate::color::Rgba8::pack(c("r", 0.0), c("g", 0.0), c("b", 0.0), c("a", 1.0))
 }
 
 /// A `<TexCoords>` element's edges `(l, r, t, b)`: each starts at 0, 1, 0, 1 and is read with
@@ -1086,7 +1088,7 @@ pub(super) fn shadow_of(sh: &Element) -> crate::script::FontShadow {
         });
     let color = children_named(sh, "Color")
         .next()
-        .map_or([0.0, 0.0, 0.0, 1.0], color_of);
+        .map_or(crate::color::Rgba8::BLACK, color_of);
     crate::script::FontShadow { offset, color }
 }
 

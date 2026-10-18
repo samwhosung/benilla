@@ -191,7 +191,7 @@ pub(crate) struct SpellWait {
 }
 
 /// Each shown line's left and right cell as `(text, colour)`.
-type Drawn = Vec<(Option<String>, Option<[f32; 4]>)>;
+type Drawn = Vec<(Option<String>, Option<crate::color::Rgba8>)>;
 
 fn drawn_lines(model: &mut Model, h: FrameHandle) -> mlua::Result<Drawn> {
     let t = tip_mut(model, h)?;

@@ -316,12 +316,11 @@ impl Loader<'_> {
         // (`0x7722a0`), both local to the string, so they outlast the font object's.
         for child in &node.children {
             if child.tag.eq_ignore_ascii_case("Color") {
-                let c = color_of(child);
-                self.call_region(wrapper, "SetVertexColor", (c[0], c[1], c[2], c[3]), dbg);
+                let c = color_of(child).fractions();
+                self.call_region(wrapper, "SetVertexColor", c, dbg);
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
                 let sh = super::shadow_of(child);
-                let c = sh.color;
-                self.call_region(wrapper, "SetShadowColor", (c[0], c[1], c[2], c[3]), dbg);
+                self.call_region(wrapper, "SetShadowColor", sh.color.fractions(), dbg);
                 self.call_region(
                     wrapper,
                     "SetShadowOffset",
@@ -379,8 +378,7 @@ impl Loader<'_> {
                 wrap |= [l, r, t, b].into_iter().any(out_of_range);
                 self.call_region(wrapper, "SetTexCoord", (l, r, t, b), dbg);
             } else if child.tag.eq_ignore_ascii_case("Color") {
-                let c = color_of(child);
-                self.call_region(wrapper, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
+                self.call_region(wrapper, "SetTexture", color_of(child).fractions(), dbg);
             } else if child.tag.eq_ignore_ascii_case("Gradient") {
                 self.apply_gradient(child, wrapper, dbg);
             }
@@ -412,8 +410,12 @@ impl Loader<'_> {
     /// stops as 0 (`0x7700d8`), so a missing one is transparent black, and reads a missing
     /// orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported.
     fn apply_gradient(&mut self, g: &Element, wrapper: &Table, dbg: &str) {
-        let stop = |tag: &str| children_named(g, tag).next().map_or([0.0; 4], color_of);
-        let (min, max) = (stop("MinColor"), stop("MaxColor"));
+        let stop = |tag: &str| {
+            children_named(g, tag)
+                .next()
+                .map_or(crate::color::Rgba8::default(), color_of)
+        };
+        let (min, max) = (stop("MinColor").fractions(), stop("MaxColor").fractions());
         let token = g.attr("orientation").unwrap_or_default();
         let vertical = match crate::script::region::orientation(token) {
             Some(v) => v,
@@ -429,14 +431,14 @@ impl Loader<'_> {
             "SetGradientAlpha",
             (
                 if vertical { "VERTICAL" } else { "HORIZONTAL" },
-                min[0],
-                min[1],
-                min[2],
-                min[3],
-                max[0],
-                max[1],
-                max[2],
-                max[3],
+                min.0,
+                min.1,
+                min.2,
+                min.3,
+                max.0,
+                max.1,
+                max.2,
+                max.3,
             ),
             dbg,
         );

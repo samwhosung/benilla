@@ -44,9 +44,9 @@ pub struct Backdrop {
     /// `BackgroundInsets` (`+0x50..0x5c`).
     pub insets: Insets,
     /// The background's vertex colour (`+0x60`, `SetBackdropColor`).
-    pub bg_color: [f32; 4],
+    pub bg_color: crate::color::Rgba8,
     /// All 8 border pieces' vertex colour (`+0x64`, `SetBackdropBorderColor`).
-    pub border_color: [f32; 4],
+    pub border_color: crate::color::Rgba8,
 }
 
 impl Default for Backdrop {
@@ -59,8 +59,8 @@ impl Default for Backdrop {
             tile_size: 0.0,
             edge_size: DEFAULT_EDGE_SIZE,
             insets: Insets::default(),
-            bg_color: [1.0, 1.0, 1.0, 1.0],
-            border_color: [1.0, 1.0, 1.0, 1.0],
+            bg_color: crate::color::Rgba8::WHITE,
+            border_color: crate::color::Rgba8::WHITE,
         }
     }
 }
@@ -504,7 +504,12 @@ fn paint(inst: &Installed, region_data: &mut HashMap<RegionHandle, RegionData>) 
 
 /// `SetBackdropColor` (`0x77f410`) or, with `border`, `SetBackdropBorderColor` (`0x77f440`): store
 /// the colour in the spec and tint that colour's pieces.
-pub(crate) fn set_color(model: &mut Model, fh: FrameHandle, border: bool, color: [f32; 4]) {
+pub(crate) fn set_color(
+    model: &mut Model,
+    fh: FrameHandle,
+    border: bool,
+    color: crate::color::Rgba8,
+) {
     let Model {
         backdrops,
         region_data,

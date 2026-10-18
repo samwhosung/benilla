@@ -368,14 +368,18 @@ fn a_fontstrings_own_shadow_element_is_read() {
         ))
         .unwrap()
     };
-    assert_eq!(shadow("Shadowed"), vec![2.0, -3.0, 1.0, 0.0, 0.0, 0.5]);
+    let read = crate::color::quant::read32;
+    assert_eq!(
+        shadow("Shadowed"),
+        vec![2.0, -3.0, read(1.0), 0.0, 0.0, read(0.5)]
+    );
     assert_eq!(
         shadow("BareShadow"),
-        vec![0.001, -0.001, 0.0, 0.0, 0.0, 1.0]
+        vec![0.001, -0.001, 0.0, 0.0, 0.0, read(1.0)]
     );
     assert_eq!(
         shadow("HalfOffset"),
-        vec![2.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        vec![2.0, 0.0, 0.0, 0.0, 0.0, read(1.0)],
         "an <Offset> zeroes the coordinate it leaves out"
     );
 }

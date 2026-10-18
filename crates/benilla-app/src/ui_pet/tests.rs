@@ -902,7 +902,11 @@ fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
     );
     assert_eq!(
         (r, g, b),
-        (1.0, 0.5, 0.25),
+        (
+            benilla_ui::color::quant::read(1.0),
+            benilla_ui::color::quant::read(0.5),
+            benilla_ui::color::quant::read(0.25)
+        ),
         "FOCUS, not the disconnected grey"
     );
     let errors = script.errors();

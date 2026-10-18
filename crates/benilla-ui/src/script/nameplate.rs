@@ -140,6 +140,8 @@ pub(crate) struct NamePlates {
     /// The verbs' writes to the two script bits, drained by
     /// [`UiScript::take_nameplate_bit_writes`].
     bit_writes: PlateBitWrites,
+    /// The fills of the lit plates, which draw boosted ([`lit_fill_boost`]).
+    lit_fills: std::collections::HashSet<RegionHandle>,
 }
 
 impl NamePlates {
@@ -620,7 +622,7 @@ impl Plate {
         for rh in [name, level] {
             model.region_data.entry(rh).or_default().font_shadow = Some(FontShadow {
                 offset: [g.shadow_offset, -g.shadow_offset],
-                color: [0.0, 0.0, 0.0, 1.0],
+                color: crate::color::Rgba8::BLACK,
             });
         }
 
@@ -721,10 +723,16 @@ impl Plate {
             .as_ref()
             .is_none_or(|l| l.bar_colour != state.bar_colour || l.lit != state.lit)
         {
-            let boost = if state.lit { LIT_BOOST } else { 1.0 };
+            // The boost rides the draw ([`lit_fill_boost`]): it can pass 1, which the packed
+            // colour cannot hold.
+            if state.lit {
+                model.nameplates.lit_fills.insert(fill);
+            } else {
+                model.nameplates.lit_fills.remove(&fill);
+            }
             let c = state.bar_colour;
             model.region_data.entry(fill).or_default().vertex_color =
-                Some([c[0] * boost, c[1] * boost, c[2] * boost, 1.0]);
+                Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0]));
         }
 
         if last.as_ref().is_none_or(|l| l.name != state.name) {
@@ -738,9 +746,9 @@ impl Plate {
         }
         if last.as_ref().is_none_or(|l| l.hovered != state.hovered) {
             let c = if state.hovered {
-                [1.0, 1.0, 0.0, 1.0]
+                crate::color::Rgba8::rgba(255, 255, 0, 255)
             } else {
-                [1.0, 1.0, 1.0, 1.0]
+                crate::color::Rgba8::WHITE
             };
             model
                 .region_data
@@ -766,7 +774,9 @@ impl Plate {
                     let shown = model.localized_text(n.to_string());
                     let data = model.region_data.entry(level).or_default();
                     data.text = Some(shown);
-                    data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
+                    data.set_vertex_color(Some(crate::color::Rgba8::from_f32([
+                        c[0], c[1], c[2], 1.0,
+                    ])));
                     model.set_region_hidden(level, false);
                     model.set_region_hidden(skull, true);
                     model.touch_measure(level);
@@ -881,6 +891,15 @@ pub(super) fn is_world_seated(model: &Model, frame: FrameHandle) -> bool {
 /// pipeline. The art has no alpha and is mostly black, so as BLEND it would be an opaque box.
 pub(super) fn is_unpainted_glow(data: &RegionData) -> bool {
     data.blend == BlendMode::Add && data.tex.path().as_deref() == Some(GLOW_TEXTURE)
+}
+
+/// The draw-time multiply of plate fill `rh`'s tint: [`LIT_BOOST`] while its plate is lit.
+pub(super) fn lit_fill_boost(model: &Model, rh: RegionHandle) -> Option<f32> {
+    model
+        .nameplates
+        .lit_fills
+        .contains(&rh)
+        .then_some(LIT_BOOST)
 }
 
 /// The lit bar's brighten, a multiply of the fill tint in encoded sRGB like the client's modulate:

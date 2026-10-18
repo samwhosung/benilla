@@ -14,13 +14,15 @@
 
 use std::collections::HashMap;
 
+use crate::color::Rgba8;
+
 /// A region's texture slot: the file or solid fill it shows, and its texture's place in [`Texels`].
 /// Only [`Texels::set`] and [`Texels::release`] write it, so every holder is counted. A clone (the
 /// extract's working copy) carries the id uncounted, which is sound while the original holds it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct TexSlot {
     path: Option<String>,
-    fill: Option<[f32; 4]>,
+    fill: Option<Rgba8>,
     id: Option<TexId>,
     /// The wrap flag the file loaded with (`0x770200`'s second argument, bits 3 and 4 of the
     /// texture's flags word): the image repeats on both axes, else clamps. Fixed at load, never
@@ -35,7 +37,7 @@ impl TexSlot {
     }
 
     /// The solid fill (`SetTexture(r, g, b, a)`, `<Color>` with no `file=`).
-    pub(crate) fn fill(&self) -> Option<[f32; 4]> {
+    pub(crate) fn fill(&self) -> Option<Rgba8> {
         self.fill
     }
 
@@ -73,8 +75,8 @@ pub(crate) enum TexSet {
     /// `<TexCoords>` leave [0, 1] (`0x77012d`), a backdrop's sides and its tiled background
     /// (`0x77ea9e`..`0x77ec9c`, `0x77e9f1`).
     WrapFile(String),
-    /// A solid fill, shared by colour.
-    Fill([f32; 4]),
+    /// A solid fill, shared by its packed colour.
+    Fill(Rgba8),
     /// A `SetPortraitToTexture` image, generated and shared by its exact name (the portrait cache
     /// compares case-sensitively, `0x64a480`).
     Portrait(String),
@@ -117,7 +119,7 @@ pub(crate) struct Texels {
 }
 
 /// The solid the cache falls back to for a file the install lacks.
-const MISSING_FILL: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const MISSING_FILL: Rgba8 = Rgba8::rgba(0, 255, 0, 255);
 
 impl Texels {
     /// Point `slot` at `set`'s texture: the same texture keeps its entry and stamp, another one is
@@ -263,13 +265,9 @@ fn cache_name(path: &str) -> Box<str> {
     stem.to_ascii_uppercase().into_boxed_str()
 }
 
-/// A colour as the solid cache keys it, a byte a channel, `×255 + 0.5` truncated after a clamp.
-fn pack(c: [f32; 4]) -> u32 {
-    c.iter().enumerate().fold(0, |acc, (i, v)| {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let byte = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
-        acc | byte << (8 * i)
-    })
+/// A colour as the solid cache keys it, its packed dword (`0x44aa20`).
+fn pack(c: Rgba8) -> u32 {
+    u32::from_be_bytes([c.a, c.r, c.g, c.b])
 }
 
 #[cfg(test)]
@@ -302,8 +300,16 @@ mod tests {
             TexSet::File("interface\\glues\\BORDER1.blp".into()),
         );
         assert_eq!(x, y);
-        let f = set(&mut t, &mut c, TexSet::Fill([0.0, 0.0, 0.0, 1.0]));
-        let g = set(&mut t, &mut d, TexSet::Fill([0.0, 0.0, 0.001, 1.0]));
+        let f = set(
+            &mut t,
+            &mut c,
+            TexSet::Fill(Rgba8::from_f32([0.0, 0.0, 0.0, 1.0])),
+        );
+        let g = set(
+            &mut t,
+            &mut d,
+            TexSet::Fill(Rgba8::from_f32([0.0, 0.0, 0.001, 1.0])),
+        );
         assert_eq!(f, g, "one byte apart is one colour");
         assert_ne!(x, f);
     }
@@ -315,7 +321,7 @@ mod tests {
         let mut t = Texels::default();
         let (mut file, mut solid) = (TexSlot::default(), TexSlot::default());
         t.set(&mut file, TexSet::File("Border1".into()), none);
-        t.set(&mut solid, TexSet::Fill([0.0; 4]), none);
+        t.set(&mut solid, TexSet::Fill(Rgba8::default()), none);
         assert_eq!(t.stamp(file.id().unwrap()), u64::MAX, "pending");
         t.flush();
         assert!(t.stamp(solid.id().unwrap()) < t.stamp(file.id().unwrap()));
@@ -341,7 +347,7 @@ mod tests {
     fn a_missing_file_ranks_as_the_green_solid() {
         let mut t = Texels::default();
         let (mut green, mut lost) = (TexSlot::default(), TexSlot::default());
-        t.set(&mut green, TexSet::Fill([0.0, 1.0, 0.0, 1.0]), none);
+        t.set(&mut green, TexSet::Fill(Rgba8::rgba(0, 255, 0, 255)), none);
         t.set(&mut lost, TexSet::File("Nowhere".into()), |_| true);
         assert_eq!(green.id(), lost.id());
         assert_eq!(lost.path().as_deref(), Some("Nowhere"));

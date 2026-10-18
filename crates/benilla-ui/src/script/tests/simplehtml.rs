@@ -739,13 +739,25 @@ fn the_paint_setters_land_on_the_element_and_reach_the_next_parse() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"H1\")")
             .unwrap(),
-        (1.0, 0.0, 0.0, 1.0)
+        (
+            crate::color::quant::read32(1.0),
+            0.0,
+            0.0,
+            crate::color::quant::read32(1.0)
+        )
     );
     // `P` keeps the font object's colour: the element argument scoped the write.
     let (r, g, b, _) = s
         .eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"P\")")
         .unwrap();
-    assert_eq!((r, g, b), (0.18, 0.12, 0.06));
+    assert_eq!(
+        (r, g, b),
+        (
+            crate::color::quant::read32(0.18),
+            crate::color::quant::read32(0.12),
+            crate::color::quant::read32(0.06)
+        )
+    );
     assert_eq!(
         s.eval::<(f32, f32)>("return Page:GetShadowOffset()")
             .unwrap(),
@@ -754,7 +766,7 @@ fn the_paint_setters_land_on_the_element_and_reach_the_next_parse() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return Page:GetShadowColor()")
             .unwrap(),
-        (0.0, 0.0, 0.0, 0.5)
+        (0.0, 0.0, 0.0, crate::color::quant::read32(0.5))
     );
 }
 
@@ -777,11 +789,16 @@ fn an_element_with_no_font_of_its_own_loses_its_own_colour_too() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return Page:GetTextColor(\"H1\")")
             .unwrap(),
-        (1.0, 0.0, 0.0, 1.0)
+        (
+            crate::color::quant::read32(1.0),
+            0.0,
+            0.0,
+            crate::color::quant::read32(1.0)
+        )
     );
     assert_eq!(
         block_color(&s, "Page", 0),
-        Some([0.18, 0.12, 0.06, 1.0]),
+        Some(crate::color::quant::drawn([0.18, 0.12, 0.06, 1.0])),
         "the block took elementFont[0] wholesale, so H1's red never reaches it"
     );
 
@@ -802,7 +819,11 @@ fn block_color(s: &UiScript, name: &str, i: usize) -> Option<[f32; 4]> {
     let model = lua.app_data_ref::<Model>().expect("model");
     let fh = model.arena.lookup(name).expect("frame");
     let st = model.simple_html.get(&fh).expect("state");
-    model.region_data.get(&st.blocks[i])?.vertex_color
+    model
+        .region_data
+        .get(&st.blocks[i])?
+        .vertex_color
+        .map(crate::color::Rgba8::to_f32)
 }
 
 /// `SetFontObject` on an element font: a re-point keeps what a local setter set (the inheritMask
@@ -830,7 +851,7 @@ fn set_font_object_keeps_local_overrides_and_the_nil_form_leaves_the_paint_stand
     assert_eq!(
         s.eval::<(f32, f32, f32)>("local r, g, b = H:GetTextColor(); return r, g, b")
             .unwrap(),
-        (0.0, 1.0, 0.0),
+        (0.0, crate::color::quant::read32(1.0), 0.0),
         "the colour was never set locally, so it re-reads from the new object"
     );
 
@@ -839,7 +860,7 @@ fn set_font_object_keeps_local_overrides_and_the_nil_form_leaves_the_paint_stand
     assert_eq!(
         s.eval::<(f32, f32, f32)>("local r, g, b = H:GetTextColor(); return r, g, b")
             .unwrap(),
-        (0.0, 1.0, 0.0),
+        (0.0, crate::color::quant::read32(1.0), 0.0),
         "severing the link leaves the resolved paint standing, it does not blank the element"
     );
 }

@@ -283,8 +283,8 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
     });
     let c = icon_color.expect("icon quad").expect("vertex color set");
     assert_eq!(
-        (c[0], c[1], c[2]),
-        (0.5, 0.5, 1.0),
+        [c[0], c[1], c[2], 1.0],
+        benilla_ui::color::quant::drawn([0.5, 0.5, 1.0, 1.0]),
         "the ref's out-of-power blue-grey"
     );
 
@@ -1390,7 +1390,7 @@ fn state_events_leave_empty_wells_untinted() {
     }
     assert_eq!(
         oom_icon,
-        Some([0.5, 0.5, 1.0, 1.0]),
+        Some(benilla_ui::color::quant::drawn([0.5, 0.5, 1.0, 1.0])),
         "the occupied button still tints OOM blue"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

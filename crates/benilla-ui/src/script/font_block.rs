@@ -317,29 +317,26 @@ pub(super) fn install(
     // ── the text colour ──
     // SetTextColor(r, g, b [, a]) → nothing (`0x79f4d0`). r, g and b are a bare `lua_tonumber`
     // (`0x79d9c0`), so nil reads 0.0 and the call never raises; alpha defaults to 1.0
-    // (`lua_isnumber`-gated). The colour is the region's vertex colour, the `+0xb8` slot
-    // `SetVertexColor` writes.
+    // (`lua_isnumber`-gated); packed as every colour setter packs. The colour is the region's
+    // vertex colour, the `+0xb8` slot `SetVertexColor` writes.
     m.set(
         "SetTextColor",
         lua.create_function(
             move |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
+                let c = super::object::colour_args(lua, &r, &g, &b, &a);
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
-                d.set_vertex_color(Some([r, g, b, a]));
+                d.set_vertex_color(Some(c));
                 // Clears the colour inherit bit (`0x79dbd0`): it survives a font-object repaint.
                 d.font_mask.clear(super::FontMask::COLOR);
                 Ok(())
             },
         )?,
     )?;
-    // GetTextColor() → r, g, b, a (`0x79f680`); white when never set.
+    // GetTextColor() → r, g, b, a (`0x79f680`), each byte times the float at `0x81c6b4`; white
+    // when never set. A FontString's own (`0x79d840`) rounds green, blue and alpha to `f32`s
+    // before it pushes them (`0x79d92a`, `0x79d958`, `0x79d969`), red alone the double product.
     m.set(
         "GetTextColor",
         lua.create_function(move |lua, this: Table| {
@@ -348,9 +345,14 @@ pub(super) fn install(
             let c = model
                 .region_data
                 .get(&rh)
-                .and_then(|d| d.vertex_color)
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
+            let (r, g, b, a) = c.channels();
+            Ok(if kind == FontKind::FontString {
+                let f = |x: f64| f64::from(x as f32);
+                (r, f(g), f(b), f(a))
+            } else {
+                (r, g, b, a)
+            })
         })?,
     )?;
 
@@ -363,20 +365,12 @@ pub(super) fn install(
         lua.create_function(
             // r, g and b are a bare `lua_tonumber` (`0x79dd40`), as in `SetTextColor`.
             move |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
+                let color = super::object::colour_args(lua, &r, &g, &b, &a);
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
                 let offset = d.font_shadow.map_or([0.0, 0.0], |s| s.offset);
-                d.font_shadow = Some(FontShadow {
-                    offset,
-                    color: [r, g, b, a],
-                });
+                d.font_shadow = Some(FontShadow { offset, color });
                 d.font_mask.clear(super::FontMask::SHADOW);
                 Ok(())
             },
@@ -391,8 +385,8 @@ pub(super) fn install(
                 .region_data
                 .get(&rh)
                 .and_then(|d| d.font_shadow)
-                .map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+            Ok(super::object::colour_values(c))
         })?,
     )?;
     // SetShadowOffset(x, y): both required, else `Usage: %s:SetShadowOffset(x, y)` (`0x87c6e8`).
@@ -402,7 +396,9 @@ pub(super) fn install(
             let rh = resolve(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
-            let color = d.font_shadow.map_or([0.0, 0.0, 0.0, 1.0], |s| s.color);
+            let color = d
+                .font_shadow
+                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
             d.font_shadow = Some(FontShadow {
                 offset: [x, y],
                 color,

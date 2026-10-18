@@ -421,7 +421,7 @@ fn the_grip_art_follows_the_windows_reveal_and_tint() {
             .eval(&format!("return ChatFrame1{piece}:GetAlpha()"))
             .unwrap();
         assert!(
-            (alpha - 0.25).abs() < 1e-6,
+            alpha == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
             "{piece} reveals with the box (DEFAULT_CHATFRAME_ALPHA): {alpha}"
         );
     }
@@ -429,7 +429,7 @@ fn the_grip_art_follows_the_windows_reveal_and_tint() {
     let (r, g, b): (f64, f64, f64) = s
         .eval("return ChatFrame1ResizeTopTexture:GetVertexColor()")
         .unwrap();
-    assert_eq!((r, g, b), (1.0, 0.0, 0.0));
+    assert_eq!((r, g, b), (benilla_ui::color::quant::read(1.0), 0.0, 0.0));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -453,7 +453,7 @@ fn a_drag_in_flight_holds_the_chrome_visible() {
     }
     let alpha: f64 = s.eval("return ChatFrame1Background:GetAlpha()").unwrap();
     assert!(
-        (alpha - 0.25).abs() < 1e-6,
+        alpha == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
         "the resize holds the reveal open with the cursor off the window (`or chatFrame.resizing`): {alpha}"
     );
     s.mouse_button(1500.0, 820.0, "LeftButton", false);

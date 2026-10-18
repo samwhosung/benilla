@@ -1977,7 +1977,11 @@ mod tests {
 
         party(&mut app, 1, true);
         frame(&mut app);
-        assert_eq!(bar(&mut app), (0.0, 0.0, 1.0), "the mana colour");
+        assert_eq!(
+            bar(&mut app),
+            (0.0, 0.0, benilla_ui::color::quant::read(1.0)),
+            "the mana colour"
+        );
         assert_eq!(
             flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"),
             Some(1.0)
@@ -1987,12 +1991,17 @@ mod tests {
         resend(&mut app, &[OFF], ME, None);
         frame(&mut app);
         assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), None);
-        assert_eq!(bar(&mut app), (0.5, 0.5, 0.5), "the disconnected grey");
+        let grey = benilla_ui::color::quant::read(0.5);
+        assert_eq!(bar(&mut app), (grey, grey, grey), "the disconnected grey");
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
 
         resend(&mut app, &[ON], ME, None);
         frame(&mut app);
-        assert_eq!(bar(&mut app), (0.0, 0.0, 1.0), "back online");
+        assert_eq!(
+            bar(&mut app),
+            (0.0, 0.0, benilla_ui::color::quant::read(1.0)),
+            "back online"
+        );
         assert_eq!(
             flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"),
             Some(1.0)

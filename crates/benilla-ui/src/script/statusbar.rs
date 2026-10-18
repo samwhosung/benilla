@@ -236,12 +236,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetStatusBarColor",
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = crate::script::object::alpha_f32(lua, &a);
-                let (r, g, b) = (
-                    crate::script::object::tonumber_f32(lua, &r),
-                    crate::script::object::tonumber_f32(lua, &g),
-                    crate::script::object::tonumber_f32(lua, &b),
-                );
+                let c = crate::script::object::colour_args(lua, &r, &g, &b, &a);
                 // `0x78fc20` hands the colour to the bar (`0x782dd0`), which sets its vertex colour
                 // (`0x77f750`, collapsing a gradient) only if a bar exists and keeps nothing
                 // otherwise.
@@ -253,7 +248,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .region_data
                     .entry(rh)
                     .or_default()
-                    .set_vertex_color(Some([r, g, b, a]));
+                    .set_vertex_color(Some(c));
                 Ok(())
             },
         )?,
@@ -263,11 +258,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let bar = with_bar(lua, &this, |sb| sb.bar)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // Each byte times the float at `0x81c6b4` (`0x78fab0`).
             let c = bar
                 .and_then(|rh| model.region_data.get(&rh))
-                .and_then(|d| d.vertex_color)
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            Ok((c[0], c[1], c[2], c[3]))
+                .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white());
+            Ok(crate::script::object::colour_values(c))
         })?,
     )?;
 

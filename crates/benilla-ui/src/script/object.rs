@@ -8,7 +8,7 @@
 
 use std::ffi::c_void;
 
-use mlua::{LightUserData, Lua, ObjectLike, Table, Value};
+use mlua::{LightUserData, Lua, MultiValue, ObjectLike, Table, Value};
 
 use super::binding_abi::optional_string;
 use super::glue::VmKind;
@@ -341,13 +341,36 @@ pub(super) fn tonumber_f32(lua: &Lua, v: &Value) -> f32 {
     super::binding_abi::coerced_number(lua, Some(v.clone())) as f32
 }
 
-/// A colour's alpha argument: `lua_isnumber`-gated (`0x781037`, `0x79f5a2`, ...), so a numeric
-/// string counts and anything else, a table or boolean included, stages 1.0 without raising.
-pub(super) fn alpha_f32(lua: &Lua, v: &Value) -> f32 {
-    lua.coerce_number(v.clone())
-        .ok()
-        .flatten()
-        .map_or(1.0, |n| n as f32)
+/// A colour setter's four arguments as every one reads them: r, g and b by [`tonumber_f64`],
+/// alpha by [`alpha_arg`] over a staged 1.0 (`0x79f59b`), packed
+/// ([`crate::color::Rgba8::pack`]).
+pub(crate) fn colour_args(
+    lua: &Lua,
+    r: &Value,
+    g: &Value,
+    b: &Value,
+    a: &Value,
+) -> crate::color::Rgba8 {
+    crate::color::Rgba8::pack(
+        tonumber_f64(lua, r),
+        tonumber_f64(lua, g),
+        tonumber_f64(lua, b),
+        alpha_arg(lua, a).unwrap_or(1.0),
+    )
+}
+
+/// A colour's alpha argument as a double: `lua_isnumber`-gated (`0x781037`, `0x79f5a2`, ...), so a
+/// numeric string counts, and `None` for anything else, a table or boolean included, which never
+/// raises.
+pub(crate) fn alpha_arg(lua: &Lua, a: &Value) -> Option<f64> {
+    lua.coerce_number(a.clone()).ok().flatten()
+}
+
+/// The four values a colour getter pushes: each byte times the float at `0x81c6b4`, red first
+/// ([`crate::color::Rgba8::channels`]).
+pub(crate) fn colour_values(c: crate::color::Rgba8) -> MultiValue {
+    let (r, g, b, a) = c.channels();
+    MultiValue::from_vec([r, g, b, a].into_iter().map(Value::Number).collect())
 }
 
 /// [`tonumber_f32`] in `f64`, for `ColorSelect:SetColorRGB`, whose quantizer an `f32` detour could

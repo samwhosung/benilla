@@ -597,7 +597,7 @@ fn button_label_repaints_by_state_font_object() {
     s.register_font_object(
         "GoldFont",
         FontObject {
-            color: Some([1.0, 0.82, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
@@ -606,7 +606,7 @@ fn button_label_repaints_by_state_font_object() {
     s.register_font_object(
         "GrayFont",
         FontObject {
-            color: Some([0.5, 0.5, 0.5, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([0.5, 0.5, 0.5, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
@@ -640,26 +640,27 @@ fn button_label_repaints_by_state_font_object() {
 
     assert_eq!(
         label_color(&mut s),
-        Some([1.0, 0.82, 0.0, 1.0]),
+        Some(crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
         "enabled: gold"
     );
     s.run("b:Disable()").unwrap();
     assert_eq!(
         label_color(&mut s),
-        Some([0.5, 0.5, 0.5, 1.0]),
+        Some(crate::color::quant::drawn([0.5, 0.5, 0.5, 1.0])),
         "disabled: gray"
     );
     s.run("b:Enable()").unwrap();
     assert_eq!(
         label_color(&mut s),
-        Some([1.0, 0.82, 0.0, 1.0]),
+        Some(crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
         "re-enabled: gold again"
     );
 
     s.run("b:GetFontString():SetTextColor(0.1, 0.2, 0.3)")
         .unwrap();
     let c = label_color(&mut s).expect("colored");
-    assert!((c[0] - 0.1).abs() < 1e-6 && (c[1] - 0.2).abs() < 1e-6);
+    let want = crate::color::quant::drawn([0.1, 0.2, 0.3, 1.0]);
+    assert_eq!((c[0], c[1]), (want[0], want[1]));
 }
 
 /// The highlight label is its own font instance, put in force by a hover or `LockHighlight`, so the
@@ -673,7 +674,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
     s.register_font_object(
         "RowNormal",
         FontObject {
-            color: Some([1.0, 0.82, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
@@ -682,7 +683,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
     s.register_font_object(
         "RowHighlight",
         FontObject {
-            color: Some([1.0, 1.0, 1.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
@@ -720,7 +721,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
     s.mouse_move(400.0, 300.0); // nowhere near the row
     assert_eq!(
         label_color(&mut s),
-        Some([1.0, 0.5, 0.25, 1.0]),
+        Some(crate::color::quant::drawn([1.0, 0.5, 0.25, 1.0])),
         "at rest the row wears the difficulty colour SetTextColor gave it"
     );
 
@@ -743,7 +744,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
     s.run("b:UnlockHighlight()").unwrap();
     assert_eq!(
         label_color(&mut s),
-        Some([1.0, 0.5, 0.25, 1.0]),
+        Some(crate::color::quant::drawn([1.0, 0.5, 0.25, 1.0])),
         "unlocked: back to the difficulty colour"
     );
 
@@ -1057,7 +1058,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
-            color: Some([1.0, 0.82, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             outline: Outline::None,
             ..Default::default()
         },
@@ -1122,7 +1123,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
         .expect("label text quad");
     assert_eq!(
         color,
-        Some([1.0, 0.82, 0.0, 1.0]),
+        Some(crate::color::quant::drawn([1.0, 0.82, 0.0, 1.0])),
         "a group the label never set still inherits: the mask is per group"
     );
 }
@@ -1371,7 +1372,7 @@ fn button_get_text_color_answers_four_values_through_the_state_font() {
     s.register_font_object(
         "BtnGold",
         FontObject {
-            color: Some([1.0, 0.82, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             height: Some(12.0),
             ..Default::default()
         },
@@ -1408,7 +1409,8 @@ fn button_get_text_color_answers_four_values_through_the_state_font() {
             .unwrap()
         })
         .collect();
-    assert_eq!(plain, vec![1.0, 1.0, 1.0, 1.0]);
+    let one = crate::color::quant::read32(1.0);
+    assert_eq!(plain, vec![one, one, one, one]);
 
     // Unset locally, it reads through the normal state's font object, as `Button:GetFont` does.
     let themed: Vec<f32> = (1..=4)
@@ -1420,7 +1422,15 @@ fn button_get_text_color_answers_four_values_through_the_state_font() {
             .unwrap()
         })
         .collect();
-    assert_eq!(themed, vec![1.0, 0.82, 0.0, 1.0]);
+    assert_eq!(
+        themed,
+        vec![
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(0.82),
+            0.0,
+            crate::color::quant::read32(1.0)
+        ]
+    );
 
     s.run("ThemedBtn:SetTextColor(0.1, 0.2, 0.3, 0.4)").unwrap();
     let set: Vec<f32> = (1..=4)
@@ -1432,7 +1442,15 @@ fn button_get_text_color_answers_four_values_through_the_state_font() {
             .unwrap()
         })
         .collect();
-    assert_eq!(set, vec![0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(
+        set,
+        vec![
+            crate::color::quant::read32(0.1),
+            crate::color::quant::read32(0.2),
+            crate::color::quant::read32(0.3),
+            crate::color::quant::read32(0.4)
+        ]
+    );
 
     // A CheckButton reaches it through Button's table.
     s.run(r#"CreateFrame("CheckButton", "ChkColorBtn")"#)

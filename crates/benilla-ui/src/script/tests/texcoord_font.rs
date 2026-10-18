@@ -86,7 +86,7 @@ fn set_font_object_repoints_fontstring() {
         FontObject {
             font: Some("Fonts\\MORPHEUS.TTF".into()),
             height: Some(18.0),
-            color: Some([0.0, 0.0, 0.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([0.0, 0.0, 0.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
             justify: None,
@@ -99,7 +99,7 @@ fn set_font_object_repoints_fontstring() {
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(10.0),
-            color: Some([1.0, 1.0, 1.0, 1.0]),
+            color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
             justify: None,

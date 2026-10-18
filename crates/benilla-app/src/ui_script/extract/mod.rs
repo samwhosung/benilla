@@ -2015,7 +2015,8 @@ mod extract_gate_tests {
             .iter()
             .find(|q| q.texture.is_none() && q.corner_colors.is_some())
             .expect("the fade draws, with its corners");
-        let (top, bottom) = ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.5]);
+        let half = benilla_ui::color::alpha_f32(benilla_ui::color::frame_alpha_byte(0.5));
+        let (top, bottom) = ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, half]);
         assert_eq!(fade.corner_colors, Some([top, top, bottom, bottom]));
     }
 

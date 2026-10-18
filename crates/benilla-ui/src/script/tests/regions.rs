@@ -407,20 +407,22 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
     };
     assert_eq!(quad_alpha(&s), 1.0);
 
+    // `Texture:SetAlpha(0.5)` stores the byte 127 (`0x79b638`), read times the double 1/255.
+    let half = 127.0 / 255.0;
     s.run("tex:SetAlpha(0.5)").unwrap();
-    assert_eq!(s.eval::<f32>("return tex:GetAlpha()").unwrap(), 0.5);
-    assert_eq!(quad_alpha(&s), 0.5);
+    assert_eq!(s.eval::<f64>("return tex:GetAlpha()").unwrap(), half);
+    assert_eq!(quad_alpha(&s), half as f32);
 
     s.run("f:SetAlpha(0.5)").unwrap();
     assert_eq!(
-        s.eval::<f32>("return tex:GetAlpha()").unwrap(),
-        0.5,
+        s.eval::<f64>("return tex:GetAlpha()").unwrap(),
+        half,
         "the frame's SetAlpha leaves the region's own alpha alone"
     );
     assert_eq!(
         quad_alpha(&s),
-        0.5 * (127.0 / 255.0),
-        "0.5 region × the frame's byte 127"
+        (127.0 / 255.0) * (127.0 / 255.0),
+        "the region's byte 127 × the frame's byte 127"
     );
 
     s.run("tex:SetAlpha(1); tex:Hide()").unwrap();
@@ -469,16 +471,24 @@ fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
     );
 
     s.run("trough:SetVertexColor(0, 0, 0.75, 0.5)").unwrap();
+    // Each a byte: 0.75 is 191, 0.5 is 128 and the texel's 0.2 is 51.
+    let tint = crate::color::quant::drawn([0.0, 0.0, 0.75, 0.5]);
+    let texel_a = crate::color::quant::drawn([1.0, 1.0, 1.0, 0.2])[3];
     assert_eq!(
         solid(&s),
-        Some([0.0, 0.0, 0.75, 0.1]),
+        Some([0.0, 0.0, tint[2], texel_a * tint[3]]),
         "texel x vertex, alpha included: 0.2 x 0.5 = 0.1, NOT 0.5"
     );
     // `GetVertexColor` reads the vertex slot, not the product.
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return trough:GetVertexColor()")
             .unwrap(),
-        (0.0, 0.0, 0.75, 0.5)
+        (
+            0.0,
+            0.0,
+            crate::color::quant::read32(0.75),
+            crate::color::quant::read32(0.5)
+        )
     );
 
     // Art and a solid colour share `+0xcc`: a path releases the texel and leaves the tint.
@@ -497,7 +507,7 @@ fn a_solid_colour_texel_multiplies_with_the_vertex_colour() {
         .expect("art quad");
     assert_eq!(
         tinted,
-        Some([0.0, 0.0, 0.75, 0.5]),
+        Some(tint),
         "the vertex colour outlives the texel it was multiplying"
     );
 }
@@ -713,7 +723,12 @@ fn a_vertex_colour_without_a_texture_draws_nothing() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return icon:GetVertexColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 1.0),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        ),
         "the tint survives the clear"
     );
     assert_eq!(
@@ -786,7 +801,10 @@ fn a_gradient_tints_each_vertex_over_the_texture_and_alone_draws_nothing() {
         "a gradient alone fills no texture slot, so nothing draws"
     );
 
-    let (min, max) = ([0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.05]);
+    let (min, max) = (
+        [0.0, 0.0, 0.0, 0.0],
+        crate::color::quant::drawn([1.0, 1.0, 1.0, 0.05]),
+    );
     s.run("t:SetTexture(1, 1, 1, 1)").unwrap();
     assert_eq!(
         gradient_probe(&mut s).unwrap(),
@@ -817,7 +835,7 @@ fn a_gradient_tints_each_vertex_over_the_texture_and_alone_draws_nothing() {
     s.run("t:SetVertexColor(0.5, 0.5, 0.5)").unwrap();
     assert_eq!(
         gradient_probe(&mut s).unwrap().1,
-        Some([0.5, 0.5, 0.5, 1.0]),
+        Some(crate::color::quant::drawn([0.5, 0.5, 0.5, 1.0])),
         "SetVertexColor collapses the four colours to one (`0x77f87f`), its alpha unlent"
     );
     assert_eq!(gradient_probe(&mut s).unwrap().2, None);
@@ -832,7 +850,12 @@ fn a_gradient_tints_each_vertex_over_the_texture_and_alone_draws_nothing() {
     assert_eq!(
         s.eval::<(f32, f32, f32, f32)>("return t:GetVertexColor()")
             .unwrap(),
-        (1.0, 1.0, 1.0, 1.0),
+        (
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0),
+            crate::color::quant::read32(1.0)
+        ),
         "GetVertexColor answers white under four colours (`0x77f8c0`)"
     );
     let (red, blue) = ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]);
@@ -864,10 +887,10 @@ fn a_gradient_rejects_an_unknown_orientation_and_clamps_its_channels() {
     assert_eq!(
         kept,
         Some([
-            [1.0, 0.0, 0.5, 1.0],
+            crate::color::quant::drawn([1.0, 0.0, 0.5, 1.0]),
             [0.0, 0.0, 0.0, 1.0],
             [0.0, 0.0, 0.0, 1.0],
-            [1.0, 0.0, 0.5, 1.0]
+            crate::color::quant::drawn([1.0, 0.0, 0.5, 1.0])
         ]),
         "each channel clamps to 0..=1"
     );

@@ -240,7 +240,7 @@ fn the_shipped_window_still_fades_zero_to_a_quarter() {
     reveal_dock(&mut s);
     let alpha: f64 = s.eval("return ChatFrame1Background:GetAlpha()").unwrap();
     assert!(
-        (alpha - 0.25).abs() < 1e-6,
+        alpha == benilla_ui::color::alpha_f64(benilla_ui::color::wrap_alpha_byte(0.25)),
         "hovered: DEFAULT_CHATFRAME_ALPHA — got {alpha}"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -394,7 +394,11 @@ fn the_restore_event_repaints_the_window_from_the_store() {
     let (r, g, b): (f64, f64, f64) = s
         .eval("return ChatFrame1Background:GetVertexColor()")
         .unwrap();
-    assert_eq!((r, g, b), (1.0, 0.0, 0.0), "and the restored tint");
+    assert_eq!(
+        (r, g, b),
+        (benilla_ui::color::quant::read(1.0), 0.0, 0.0),
+        "and the restored tint"
+    );
     // The restore paints without saving, but the dock pass after it (`FCF_DockFrame`,
     // `FCF_SaveDock`, `SetChatWindowDocked`) writes windows 1 and 2 itself.
     assert_eq!(s.take_chat_window_changes(), vec![0, 1]);

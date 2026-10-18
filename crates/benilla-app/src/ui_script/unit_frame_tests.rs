@@ -90,7 +90,7 @@ fn shipped_unit_frames_drive_end_to_end() {
             local r, g, b = pb:GetStatusBarColor()
             return hb:GetValue() == 72 and hmax == 100
                and pb:GetValue() == 45 and pmax == 80 and pb:IsVisible()
-               and b == 1 and r == 0 -- mana blue
+               and math.abs(b - 1) < 1/255 and r == 0 -- mana blue
         "#,
         )
         .unwrap();

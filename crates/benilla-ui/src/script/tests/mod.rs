@@ -14,6 +14,7 @@ mod channel;
 mod chat_bubble;
 mod clear_points;
 mod colour_args;
+mod colour_bytes;
 pub(in crate::script) mod common;
 mod cooldown;
 mod create_frame_template;

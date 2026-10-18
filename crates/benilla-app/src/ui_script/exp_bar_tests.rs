@@ -120,7 +120,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
             return tick:IsVisible() and fill:IsShown()
                and math.abs((x - MainMenuExpBar:GetLeft()) - expected) < 0.5
                and math.abs((fill:GetRight() - fill:GetLeft()) - expected) < 0.5
-               and r == 0.0 and math.abs(g - 0.39) < 0.001 and math.abs(b - 0.88) < 0.001
+               and r == 0.0 and math.abs(g - 0.39) < 1/255 and math.abs(b - 0.88) < 1/255
         "#,
         )
         .unwrap();
@@ -176,7 +176,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
             local r, g, b = MainMenuExpBar:GetStatusBarColor()
             return not ExhaustionTick:IsShown()
                and not ExhaustionLevelFillBar:IsShown()
-               and math.abs(g - 0.39) < 0.001
+               and math.abs(g - 0.39) < 1/255
         "#,
         )
         .unwrap();
