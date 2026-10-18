@@ -356,9 +356,9 @@ fn seat_raster_seam_for_load(world: &mut World, script: &mut UiScript) {
     };
     let s = super::seam_scale(h);
     if w > 0.0 && h > 0.0 {
-        // The VM lives in a 768-tall root, so logical size over the seam scale is its screen. No
+        // The VM lives in a 768-tall root, `768·a` wide for the window's aspect `a`. No
         // `UIParent_ManageFramePositions` here, unlike `tick_script`: nothing is laid out yet.
-        script.set_screen_size(w / s, h / s);
+        script.set_window_size(w, h);
     }
     let Some(atlas) = world.get_resource::<crate::ui_text::UiFontAtlas>() else {
         return;

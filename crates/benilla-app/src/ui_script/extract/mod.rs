@@ -514,7 +514,7 @@ pub(super) fn tick_script(
     };
     {
         let _span = bevy::log::info_span!("ui_script: tick").entered();
-        let resized = script.set_screen_size(w / s, if h > 0.0 { h / s } else { 768.0 });
+        let resized = script.set_window_size(w, h);
         // The UI scale is `UIParent`'s, which only the in-game state has; the glue lays out on
         // the root alone (`0x46dd30`).
         if script.vm_kind() == benilla_ui::script::VmKind::InGame {
