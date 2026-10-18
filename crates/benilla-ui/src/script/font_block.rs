@@ -4,8 +4,9 @@
 //! The 1.12 client has no `FontInstance` class: each text type re-declares the font names in its
 //! own flat method table, and each binding is a shim that tail-calls one shared implementation.
 //! This module is that shared layer, installed by the FontString, EditBox, MessageFrame and
-//! ScrollingMessageFrame tables; the `<Font>` object and `SimpleHTML` write their own records and
-//! share only the argument gates ([`set_font_args`], [`spacing_arg`]).
+//! ScrollingMessageFrame tables; the `<Font>` object and `SimpleHTML` share their sixteen through
+//! [`super::font::install_shared`] over font nodes, and only the argument gates
+//! ([`set_font_args`], [`spacing_arg`]) with this layer.
 //!
 //! `EditBox`'s table (`0x87bb68`, 48 entries) opens with these twelve, then the four justify
 //! methods. Its shims (`0x797090` on) leave `eax` alone, so each returns what the shared

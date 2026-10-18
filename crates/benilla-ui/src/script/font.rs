@@ -17,12 +17,12 @@
 
 use std::collections::HashMap;
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi;
 use super::object::publish_global;
 use crate::justify;
-use crate::widget::RegionHandle;
+use crate::widget::{FrameHandle, RegionHandle};
 
 use super::{FontMask, FontObject, FontShadow, Model, RegionData};
 
@@ -54,6 +54,8 @@ pub(crate) struct FontNode {
     font_followers: Vec<FontId>,
     /// The FontStrings that follow it: each region whose [`RegionData::font_object`] is this font.
     region_followers: Vec<RegionHandle>,
+    /// The SimpleHTML an element font belongs to (`+0x7c`, `0x789e81`), told of each change.
+    html: Option<FrameHandle>,
 }
 
 /// Every font, by id, and the named ones by their case-folded name: the font hash `0x783870`
@@ -88,6 +90,13 @@ impl Fonts {
     /// A new unnamed font, a widget's own.
     pub(crate) fn anonymous(&mut self) -> FontId {
         self.push_node(None)
+    }
+
+    /// A new unnamed element font of SimpleHTML `html` (`0x789e7c`).
+    pub(crate) fn element_of(&mut self, html: FrameHandle) -> FontId {
+        let id = self.push_node(None);
+        self.get_mut(id).html = Some(html);
+        id
     }
 
     fn push_node(&mut self, name: Option<String>) -> FontId {
@@ -344,7 +353,9 @@ fn merge_into(model: &mut Model, id: FontId, src: &FontObject, groups: FontMask)
 
 /// `PushChanges 0x784180`: hand the groups of font `id` that `changed` names to every follower, a
 /// font merging and pushing on (`0x77e4b0`), a FontString applying them (`0x773530`). Nothing
-/// runs for no change, so an equal set costs one compare.
+/// runs for no change, so an equal set costs one compare. A SimpleHTML's element font then tells
+/// its frame (`0x77e530`), which a new face or spacing sends to rebuild its link buttons
+/// (`0x78a380`).
 pub(crate) fn push(model: &mut Model, id: FontId, changed: FontMask) {
     if changed.is_empty() {
         return;
@@ -353,12 +364,18 @@ pub(crate) fn push(model: &mut Model, id: FontId, changed: FontMask) {
     let src = node.block.clone();
     let fonts = node.font_followers.clone();
     let regions = node.region_followers.clone();
+    let html = node.html;
     for f in fonts {
         let took = merge_into(model, f, &src, changed);
         push(model, f, took);
     }
     for rh in regions {
         apply_to_region(model, rh, id, &src, changed);
+    }
+    if let Some(h) = html.filter(|_| !(changed & (FontMask::FONT | FontMask::SPACING)).is_empty()) {
+        if let Some(st) = model.simple_html.get_mut(&h) {
+            st.links_dirty = true;
+        }
     }
 }
 
@@ -467,23 +484,31 @@ pub(crate) fn replace_block(model: &mut Model, id: FontId, block: FontObject) {
     push(model, id, changed);
 }
 
-/// Run `f` on the receiver's block as [`set`] does: every setter's one write path.
-fn edit<R>(
-    lua: &Lua,
-    this: &Table,
-    group: FontMask,
-    f: impl FnOnce(&mut FontObject) -> R,
-) -> mlua::Result<R> {
-    let id = id_of(lua, this)?;
+/// Run `f` on font `id`'s block as [`set`] does: every setter's one write path.
+fn edit<R>(lua: &Lua, id: FontId, group: FontMask, f: impl FnOnce(&mut FontObject) -> R) -> R {
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    Ok(set(&mut model, id, group, f))
+    set(&mut model, id, group, f)
 }
 
-/// A copy of the receiver's block.
-fn read(lua: &Lua, this: &Table) -> mlua::Result<FontObject> {
-    let id = id_of(lua, this)?;
+/// A copy of font `id`'s block.
+fn read(lua: &Lua, id: FontId) -> FontObject {
     let model = lua.app_data_ref::<Model>().expect("model");
-    Ok(model.fonts.get(id).block.clone())
+    model.fonts.get(id).block.clone()
+}
+
+/// How a method table finds the font a shared method acts on: a Font is its own receiver, and a
+/// SimpleHTML takes one of its element fonts by the optional leading name it removes from the
+/// arguments (`0x795d80`). An error means the wrong receiver.
+pub(super) type ResolveFont = fn(&Lua, &Table, &mut MultiValue) -> mlua::Result<FontId>;
+
+/// [`ResolveFont`] for a Font's own table.
+fn own_font(lua: &Lua, this: &Table, _args: &mut MultiValue) -> mlua::Result<FontId> {
+    id_of(lua, this)
+}
+
+/// Argument `i` of what the resolve left, or nil.
+fn arg(args: &MultiValue, i: usize) -> Value {
+    args.get(i).cloned().unwrap_or(Value::Nil)
 }
 
 // ── install: the method table, the metatable and CreateFont ──────────────────────────────────
@@ -517,31 +542,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── the font-object-on-font-object pair ─────────────────────────────────────────────────
-    // SetFontObject(font | "font" | nil) (`0x7a0030` → `0x79ef10`): follow that font, raising on
-    // a loop (`0x79f045`, `0x87c8b0`); nil unlinks and keeps the block.
-    m.set(
-        "SetFontObject",
-        lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
-            let who = super::binding_abi::name_of(lua, &this);
-            let to = font_arg(lua, &who, Verb::SetFontObject, args.front())?;
-            let id = id_of(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            if to.is_some_and(|to| would_loop(&model, id, to)) {
-                return Err(mlua::Error::runtime(format!(
-                    "{who}:SetFontObject(): Can't create a font object loop"
-                )));
-            }
-            link_font(&mut model, id, to);
-            Ok(())
-        })?,
-    )?;
     // CopyFontObject(font | "font") (`0x7a01b0` → `0x79f0e0`): nil is a usage error. The copy is
     // the source's block taken whole and pushed; what `0x7841d0` does to the mask and the parent
     // is not modelled.
     m.set(
         "CopyFontObject",
-        lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
             let who = super::binding_abi::name_of(lua, &this);
             let src = font_arg(lua, &who, Verb::CopyFontObject, args.front())?
                 .expect("CopyFontObject refuses nil");
@@ -552,11 +558,81 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // GetFontObject() (`0x7a00f0` → `0x79f090`): the font this one follows, or nil.
+
+    // SetAlpha/GetAlpha are the text colour's alpha: a FontInstance has one packed colour
+    // (`+0x58`) and no alpha of its own. `SetAlpha` (`0x79f420`) takes a `lua_isnumber` or raises
+    // the usage line (`0x79f47f`), and stores `__ftol(a * 255)`'s low byte at `+0x5b`, unclamped
+    // (`0x79f449`-`0x79f464`); `GetAlpha` reads it times the float at `0x81c6b4` (`0x79f4b4`).
     m.set(
-        "GetFontObject",
+        "SetAlpha",
+        lua.create_function(|lua, (this, a): (Table, Value)| {
+            let id = id_of(lua, &this)?;
+            let Some(a) = lua.coerce_number(a)? else {
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetAlpha(alpha)",
+                    super::binding_abi::name_of(lua, &this)
+                )));
+            };
+            let a = crate::color::wrap_alpha_byte(a);
+            edit(lua, id, FontMask::COLOR, |fo| {
+                let c = fo.color.unwrap_or(crate::color::Rgba8::WHITE);
+                fo.color = Some(c.with_alpha(a));
+            });
+            Ok(())
+        })?,
+    )?;
+    m.set(
+        "GetAlpha",
         lua.create_function(|lua, this: Table| {
             let id = id_of(lua, &this)?;
+            Ok(read(lua, id)
+                .color
+                .map_or(crate::color::channel(255), |c| crate::color::channel(c.a)))
+        })?,
+    )?;
+
+    install_shared(lua, &m, own_font)?;
+
+    let meta = lua.create_table()?;
+    // `__index` is the method table itself, not a function: a table index costs ~9 ns against
+    // ~200 ns through a Rust dispatcher, and nothing mutates the table after this point.
+    meta.set("__index", m.clone())?;
+    lua.set_named_registry_value(REG_FONT_METHODS, m)?;
+    lua.set_named_registry_value(REG_FONT_META, meta)?;
+
+    lua.globals()
+        .set("CreateFont", lua.create_function(create_font)?)?;
+    Ok(())
+}
+
+/// The sixteen methods a Font's table (`0x87c7c8`) and a SimpleHTML's (`0x87ba80`) share: each
+/// binding is a shim over one implementation (`0x79ef10` to `0x79fd70`) that takes the font and
+/// the receiver's name, so `resolve` finds the font and every usage line names the receiver.
+pub(super) fn install_shared(lua: &Lua, m: &Table, resolve: ResolveFont) -> mlua::Result<()> {
+    // ── the font-object pair ────────────────────────────────────────────────────────────────
+    // SetFontObject(font | "font" | nil) (`0x79ef10`): follow that font, raising on a loop
+    // (`0x79f045`, `0x87c8b0`); nil unlinks and keeps the block.
+    m.set(
+        "SetFontObject",
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let who = super::binding_abi::name_of(lua, &this);
+            let to = font_arg(lua, &who, Verb::SetFontObject, args.front())?;
+            let mut model = lua.app_data_mut::<Model>().expect("model");
+            if to.is_some_and(|to| would_loop(&model, id, to)) {
+                return Err(mlua::Error::runtime(format!(
+                    "{who}:SetFontObject(): Can't create a font object loop"
+                )));
+            }
+            link_font(&mut model, id, to);
+            Ok(())
+        })?,
+    )?;
+    // GetFontObject() (`0x79f090`): the font this one follows, or nil.
+    m.set(
+        "GetFontObject",
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
             let parent = lua
                 .app_data_ref::<Model>()
                 .expect("model")
@@ -575,35 +651,40 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // and writes nothing: an empty path, one the host's probe refuses, or a height of 0 or less.
     m.set(
         "SetFont",
-        lua.create_function(
-            |lua, (this, file, height, flags): (Table, Value, Value, Value)| {
-                // The argument gate every kind shares (`0x79f210`); a bad path or height raises
-                // (`0x87c69c`), and anything but a string or a number is no flags.
-                let super::font_block::FontArgs {
-                    path,
-                    height,
-                    flags,
-                    monochrome,
-                } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
-                if !super::font_block::instance_loads(lua, &path, height) {
-                    return Ok(Value::Nil);
-                }
-                edit(lua, &this, FontMask::FONT, |fo| {
-                    fo.font = Some(path);
-                    fo.outline = flags;
-                    fo.monochrome = monochrome;
-                    fo.height = Some(height);
-                })?;
-                Ok(Value::Number(1.0))
-            },
-        )?,
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            // The argument gate every kind shares (`0x79f210`); a bad path or height raises
+            // (`0x87c69c`), and anything but a string or a number is no flags.
+            let super::font_block::FontArgs {
+                path,
+                height,
+                flags,
+                monochrome,
+            } = super::font_block::set_font_args(
+                lua,
+                &this,
+                &arg(&args, 0),
+                &arg(&args, 1),
+                &arg(&args, 2),
+            )?;
+            if !super::font_block::instance_loads(lua, &path, height) {
+                return Ok(Value::Nil);
+            }
+            edit(lua, id, FontMask::FONT, |fo| {
+                fo.font = Some(path);
+                fo.outline = flags;
+                fo.monochrome = monochrome;
+                fo.height = Some(height);
+            });
+            Ok(Value::Number(1.0))
+        })?,
     )?;
     // GetFont() → path, height, flags. An unset Font answers nil, 0, "": the constructor
     // `0x783a40` zeroes the height and stores a NULL path (`0x41e3a0`), which pushes as nil.
     m.set(
         "GetFont",
-        lua.create_function(|lua, this: Table| {
-            let fo = read(lua, &this)?;
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let fo = read(lua, resolve(lua, &this, &mut args)?);
             let path = match fo.font {
                 Some(p) => Value::String(lua.create_string(&p)?),
                 None => Value::Nil,
@@ -616,54 +697,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ── colour, and the alpha that is its fourth channel ────────────────────────────────────
+    // ── colour ──────────────────────────────────────────────────────────────────────────────
     // Shape C on r, g, b (`SetTextColor 0x79f4d0`): nil or a non-number is 0, never a raise.
     m.set(
         "SetTextColor",
-        lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                // Alpha is staged 1.0 (`0x79f59b`) and never read back, so a bare colour call
-                // resets it; packed as every colour setter packs.
-                let c = super::object::colour_args(lua, &r, &g, &b, &a);
-                edit(lua, &this, FontMask::COLOR, |fo| fo.color = Some(c))
-            },
-        )?,
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            // Alpha is staged 1.0 (`0x79f59b`) and never read back, so a bare colour call resets
+            // it; packed as every colour setter packs.
+            let c = super::object::colour_args(
+                lua,
+                &arg(&args, 0),
+                &arg(&args, 1),
+                &arg(&args, 2),
+                &arg(&args, 3),
+            );
+            edit(lua, id, FontMask::COLOR, |fo| fo.color = Some(c));
+            Ok(())
+        })?,
     )?;
     m.set(
         "GetTextColor",
-        lua.create_function(|lua, this: Table| {
-            let c = read(lua, &this)?
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let c = read(lua, resolve(lua, &this, &mut args)?)
                 .color
                 .unwrap_or(crate::color::Rgba8::WHITE);
             Ok(super::object::colour_values(c))
-        })?,
-    )?;
-    // SetAlpha/GetAlpha are the text colour's alpha: a FontInstance has one packed colour
-    // (`+0x58`) and no alpha of its own. `SetAlpha` (`0x79f420`) takes a `lua_isnumber` or raises
-    // the usage line (`0x79f47f`), and stores `__ftol(a * 255)`'s low byte at `+0x5b`, unclamped
-    // (`0x79f449`-`0x79f464`); `GetAlpha` reads it times the float at `0x81c6b4` (`0x79f4b4`).
-    m.set(
-        "SetAlpha",
-        lua.create_function(|lua, (this, a): (Table, Value)| {
-            let Some(a) = lua.coerce_number(a)? else {
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {}:SetAlpha(alpha)",
-                    super::binding_abi::name_of(lua, &this)
-                )));
-            };
-            let a = crate::color::wrap_alpha_byte(a);
-            edit(lua, &this, FontMask::COLOR, |fo| {
-                let c = fo.color.unwrap_or(crate::color::Rgba8::WHITE);
-                fo.color = Some(c.with_alpha(a));
-            })
-        })?,
-    )?;
-    m.set(
-        "GetAlpha",
-        lua.create_function(|lua, this: Table| {
-            Ok(read(lua, &this)?
-                .color
-                .map_or(crate::color::channel(255), |c| crate::color::channel(c.a)))
         })?,
     )?;
 
@@ -672,30 +731,42 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // reads (`0x79f910`) and `SetShadowOffset` keeps (`0x79fa4a`-`0x79fa92`).
     m.set(
         "SetShadowColor",
-        lua.create_function(
-            // Shape C on r, g, b (`Font:SetShadowColor 0x79f730`): never raises.
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let color = super::object::colour_args(lua, &r, &g, &b, &a);
-                edit(lua, &this, FontMask::SHADOW, |fo| {
-                    let offset = fo.shadow.map_or([0.0, 0.0], |s| s.offset);
-                    fo.shadow = Some(FontShadow { offset, color });
-                })
-            },
-        )?,
+        // Shape C on r, g, b (`0x79f730`): never raises.
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let color = super::object::colour_args(
+                lua,
+                &arg(&args, 0),
+                &arg(&args, 1),
+                &arg(&args, 2),
+                &arg(&args, 3),
+            );
+            edit(lua, id, FontMask::SHADOW, |fo| {
+                let offset = fo.shadow.map_or([0.0, 0.0], |s| s.offset);
+                fo.shadow = Some(FontShadow { offset, color });
+            });
+            Ok(())
+        })?,
     )?;
     m.set(
         "GetShadowColor",
-        lua.create_function(|lua, this: Table| {
-            let c = read(lua, &this)?
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let c = read(lua, resolve(lua, &this, &mut args)?)
                 .shadow
                 .map_or(crate::color::Rgba8::TRANSPARENT, |s| s.color);
             Ok(super::object::colour_values(c))
         })?,
     )?;
+    // Both coordinates must pass `lua_isnumber` (`0x79f9d7`, `0x79f9eb`), else `Usage:
+    // %s:SetShadowOffset(x, y)` (`0x87c6e8`).
     m.set(
         "SetShadowOffset",
-        lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
-            edit(lua, &this, FontMask::SHADOW, |fo| {
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let line = "SetShadowOffset(x, y)";
+            let x = binding_abi::method_number(lua, &this, arg(&args, 0), line)? as f32;
+            let y = binding_abi::method_number(lua, &this, arg(&args, 1), line)? as f32;
+            edit(lua, id, FontMask::SHADOW, |fo| {
                 let color = fo
                     .shadow
                     .map_or(crate::color::Rgba8::TRANSPARENT, |s| s.color);
@@ -703,30 +774,39 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     offset: [x, y],
                     color,
                 });
-            })
+            });
+            Ok(())
         })?,
     )?;
     m.set(
         "GetShadowOffset",
-        lua.create_function(|lua, this: Table| {
-            let o = read(lua, &this)?.shadow.map_or([0.0, 0.0], |s| s.offset);
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let o = read(lua, resolve(lua, &this, &mut args)?)
+                .shadow
+                .map_or([0.0, 0.0], |s| s.offset);
             Ok((o[0], o[1]))
         })?,
     )?;
 
     // ── line spacing ────────────────────────────────────────────────────────────────────────
-    // The shared pair (`0x7a09f0` → `0x79fb40`, `0x7a0ab0` → `0x79fbe0`): `+0x50` as given, a
-    // negative included; a FontString that inherits it clamps it.
+    // The shared pair (`0x79fb40`, `0x79fbe0`): `+0x50` as given, a negative included; a
+    // FontString that follows it clamps it.
     m.set(
         "SetSpacing",
-        lua.create_function(|lua, (this, v): (Table, Value)| {
-            let sp = super::font_block::spacing_arg(lua, &this, &v)?;
-            edit(lua, &this, FontMask::SPACING, |fo| fo.spacing = Some(sp))
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let sp = super::font_block::spacing_arg(lua, &this, &arg(&args, 0))?;
+            edit(lua, id, FontMask::SPACING, |fo| fo.spacing = Some(sp));
+            Ok(())
         })?,
     )?;
     m.set(
         "GetSpacing",
-        lua.create_function(|lua, this: Table| Ok(read(lua, &this)?.spacing.unwrap_or(0.0)))?,
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            Ok(read(lua, resolve(lua, &this, &mut args)?)
+                .spacing
+                .unwrap_or(0.0))
+        })?,
     )?;
 
     // ── justification ───────────────────────────────────────────────────────────────────────
@@ -737,60 +817,62 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x79fc5d`-`0x79fc84`).
     m.set(
         "SetJustifyH",
-        lua.create_function(|lua, (this, j): (Table, Value)| {
-            id_of(lua, &this)?;
-            let parsed = match binding_abi::optional_string(lua, &j).map(|j| justify::parse_h(&j)) {
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let parsed = match binding_abi::optional_string(lua, &arg(&args, 0))
+                .map(|j| justify::parse_h(&j))
+            {
                 Some(p) if p != justify::Set::NoMatch => p,
                 _ => return Err(justify::usage_h(&binding_abi::name_of(lua, &this))),
             };
-            edit(lua, &this, FontMask::JUSTIFY, |fo| {
+            edit(lua, id, FontMask::JUSTIFY, |fo| {
                 let word = fo.justify.get_or_insert_with(Default::default);
                 match parsed {
                     justify::Set::To(jh) => word.set_h(jh),
                     _ => word.clear_h(),
                 }
-            })
+            });
+            Ok(())
         })?,
     )?;
     m.set(
         "GetJustifyH",
-        lua.create_function(|lua, this: Table| {
-            Ok(read(lua, &this)?.justify.unwrap_or_default().name_h())
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            Ok(read(lua, resolve(lua, &this, &mut args)?)
+                .justify
+                .unwrap_or_default()
+                .name_h())
         })?,
     )?;
     m.set(
         "SetJustifyV",
-        lua.create_function(|lua, (this, j): (Table, Value)| {
-            id_of(lua, &this)?;
-            let parsed = match binding_abi::optional_string(lua, &j).map(|j| justify::parse_v(&j)) {
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            let id = resolve(lua, &this, &mut args)?;
+            let parsed = match binding_abi::optional_string(lua, &arg(&args, 0))
+                .map(|j| justify::parse_v(&j))
+            {
                 Some(p) if p != justify::Set::NoMatch => p,
                 _ => return Err(justify::usage_v(&binding_abi::name_of(lua, &this))),
             };
-            edit(lua, &this, FontMask::JUSTIFY, |fo| {
+            edit(lua, id, FontMask::JUSTIFY, |fo| {
                 let word = fo.justify.get_or_insert_with(Default::default);
                 match parsed {
                     justify::Set::To(jv) => word.set_v(jv),
                     _ => word.clear_v(),
                 }
-            })
+            });
+            Ok(())
         })?,
     )?;
     m.set(
         "GetJustifyV",
-        lua.create_function(|lua, this: Table| {
-            Ok(read(lua, &this)?.justify.unwrap_or_default().name_v())
+        lua.create_function(move |lua, (this, mut args): (Table, MultiValue)| {
+            Ok(read(lua, resolve(lua, &this, &mut args)?)
+                .justify
+                .unwrap_or_default()
+                .name_v())
         })?,
     )?;
-
-    let meta = lua.create_table()?;
-    // `__index` is the method table itself, not a function: a table index costs ~9 ns against
-    // ~200 ns through a Rust dispatcher, and nothing mutates the table after this point.
-    meta.set("__index", m.clone())?;
-    lua.set_named_registry_value(REG_FONT_METHODS, m)?;
-    lua.set_named_registry_value(REG_FONT_META, meta)?;
-
-    lua.globals()
-        .set("CreateFont", lua.create_function(create_font)?)?;
     Ok(())
 }
 

@@ -605,20 +605,6 @@ impl Loader<'_> {
         }
     }
 
-    /// [`Loader::expand`] for a region, only when `inherits=` names a registered element template:
-    /// a FontString's `inherits=` usually names a font object, which passes through unwarned.
-    pub(super) fn expand_region(&mut self, el: &Element) -> Element {
-        // One verbatim name, matched case-insensitively, as `framexml::expand` looks it up.
-        let hit = el.attr("inherits").is_some_and(|name| {
-            !name.is_empty() && self.model().framexml_templates.borrow().contains(name)
-        });
-        if hit {
-            self.expand(el)
-        } else {
-            el.clone()
-        }
-    }
-
     /// A top-level `<Font name=…>`: the named object, made if new and kept with its followers if
     /// re-declared (`0x783870`, `0x7839ab`), loads the node ([`Self::load_font_node`]) and is
     /// published whether or not its own font was refused.

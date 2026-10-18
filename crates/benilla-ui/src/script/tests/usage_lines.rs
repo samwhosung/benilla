@@ -497,3 +497,39 @@ fn is_frame_type_raises_is_object_type_line() {
         "{e}"
     );
 }
+
+/// The shared `SetShadowOffset` (`0x79f9c0`) behind the Font's and the SimpleHTML's bindings needs
+/// both coordinates to pass `lua_isnumber` (`0x79f9d7`, `0x79f9eb`), a numeric string included,
+/// else it raises `Usage: %s:SetShadowOffset(x, y)` (`0x87c6e8`) naming the receiver.
+#[test]
+fn set_shadow_offset_raises_its_usage_line_on_a_font_and_a_simplehtml() {
+    let s = script();
+    s.run(r#"ShadowFont = CreateFont("ShadowFont"); ShadowHTML = CreateFrame("SimpleHTML", "ShadowHTML")"#)
+        .unwrap();
+    for (call, line) in [
+        (
+            "ShadowFont:SetShadowOffset(1)",
+            "Usage: ShadowFont:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowHTML:SetShadowOffset({}, 1)",
+            "Usage: ShadowHTML:SetShadowOffset(x, y)",
+        ),
+        (
+            "ShadowHTML:SetShadowOffset('H1', 1)",
+            "Usage: ShadowHTML:SetShadowOffset(x, y)",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        ShadowFont:SetShadowOffset("2", -1); local x, y = ShadowFont:GetShadowOffset()
+        assert(x == 2 and y == -1)
+        ShadowHTML:SetShadowOffset("H2", 3, "-4"); x, y = ShadowHTML:GetShadowOffset("H2")
+        assert(x == 3 and y == -4)
+    "#,
+    )
+    .unwrap();
+}

@@ -225,11 +225,11 @@ fn a_fontstrings_refused_load_changes_nothing_and_a_zero_height_frees_its_font()
 
 /// `0x6f1a90` ORs in every name of `0x811b10` found as a case-insensitive substring, so `THICK`
 /// alone sets nothing, and `GetFont` (`0x6f1ad0`) joins every set bit's name in table order with
-/// `", "`. SimpleHTML's element fonts hold no MONOCHROME yet, so it sits out the monochrome rows.
+/// `", "`.
 #[test]
 fn get_font_joins_every_set_flag_in_table_order() {
     let s = receivers();
-    for &(obj, kind) in KINDS.iter().filter(|(_, kind)| *kind != "SimpleHTML") {
+    for &(obj, kind) in KINDS {
         for (arg, want) in [
             ("MONOCHROME", "MONOCHROME"),
             ("OUTLINE,MONOCHROME", "OUTLINE, MONOCHROME"),

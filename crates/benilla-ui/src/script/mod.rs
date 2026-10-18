@@ -327,7 +327,7 @@ pub use reputation::{FactionEntry, ReputationSend, ReputationState};
 pub use session::SessionRequest;
 pub use shapeshift::ShapeshiftFormView;
 pub(crate) use simplehtml::{
-    apply_element_font_parts as apply_simplehtml_font_parts,
+    element_fonts_lua as simplehtml_element_fonts_lua,
     element_of_xml_tag as simplehtml_element_of_xml_tag,
 };
 pub use skills::{SkillEntry, SkillsState};
@@ -1455,7 +1455,8 @@ impl UiScript {
     }
 
     /// Whether `name` is a registered font object, the other namespace an `inherits=` may name
-    /// (`loader::expand_region` forks on it), so a census counts no font as a missing template.
+    /// (a FontString's `inherits=` links it, `0x770f69`), so a census counts no font as a missing
+    /// template.
     pub fn has_font_object(&self, name: &str) -> bool {
         self.model_ref().font_object(name).is_some()
     }

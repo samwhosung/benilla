@@ -279,8 +279,7 @@ impl Loader<'_> {
 
     /// `font=` on an EditBox, a MessageFrame or a ScrollingMessageFrame (`0x779fcb`, `0x78592b`,
     /// `0x787b3b`): a non-empty name found in the font table (`0x783870`) links the frame's own
-    /// font to it (`0x770c60`); any other is logged as `%s %s: Couldn't find font object named %s`
-    /// (`0x879bc8`) with the frame's type (vtable slot 7), its name or `<unnamed>`, and the value.
+    /// font to it (`0x770c60`); any other is logged ([`Self::report_font_miss`]).
     pub(super) fn apply_frame_font(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         let Some(font) = el.attr("font").filter(|f| !f.is_empty()) else {
             return;
@@ -293,14 +292,20 @@ impl Loader<'_> {
                 Err(e) => self.report.fault(format!("{dbg}: font=: {e}")),
             }
         } else {
-            let kind: String = wrapper
-                .call_method("GetObjectType", ())
-                .unwrap_or_else(|_| el.tag.clone());
-            let name = self.object_name(wrapper);
-            self.status_warning(format!(
-                "{kind} {name}: Couldn't find font object named {font}"
-            ));
+            self.report_font_miss(el, wrapper, font);
         }
+    }
+
+    /// A frame's `font=` that names no font: `%s %s: Couldn't find font object named %s`
+    /// (`0x879bc8`) with the frame's type (vtable slot 7), its name or `<unnamed>`, and the value.
+    fn report_font_miss(&mut self, el: &Element, wrapper: &Table, font: &str) {
+        let kind: String = wrapper
+            .call_method("GetObjectType", ())
+            .unwrap_or_else(|_| el.tag.clone());
+        let name = self.object_name(wrapper);
+        self.status_warning(format!(
+            "{kind} {name}: Couldn't find font object named {font}"
+        ));
     }
 
     /// An EditBox's, a MessageFrame's or a ScrollingMessageFrame's `<FontString>` children, each
@@ -580,11 +585,13 @@ impl Loader<'_> {
         }
     }
 
-    /// `<SimpleHTML>` (`0x78a130`): `font=` for all four element fonts (`0x78a17a`), the
-    /// `<FontString>` and `<FontStringHeader1..3>` children one each (`0x78a1fe`, through
-    /// `0x783c30`), `hyperlinkFormat` (`0x78a540`), and `file=`, a document whose whole text is
-    /// set as the frame's (`0x78a2a0` loads it through Storm, the attribute verbatim; `0x78a2b2`
-    /// sets it). A file that does not open leaves the frame empty.
+    /// `<SimpleHTML>` (`0x78a130`): `font=` links all four element fonts (`0x78a17a`-`0x78a18f`)
+    /// or is logged as a miss (`0x78a193`-`0x78a1d0`), then each `<FontString>` and
+    /// `<FontStringHeader1..3>` child loads into its element font with the Font loader
+    /// (`0x78a1fe`-`0x78a26e` → `0x783c30`), with no template walk. `hyperlinkFormat`
+    /// (`0x78a2d4`) and `file=`, a document whose whole text is set as the frame's (`0x78a2a0`
+    /// loads it through Storm, the attribute verbatim; `0x78a2b2` sets it), are read too. A file
+    /// that does not open leaves the frame empty.
     pub(super) fn apply_simplehtml(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if !el.tag.eq_ignore_ascii_case("SimpleHTML") {
             return;
@@ -592,100 +599,34 @@ impl Loader<'_> {
         if let Some(fmt) = el.attr("hyperlinkFormat") {
             self.call(wrapper, "SetHyperlinkFormat", fmt.to_string(), dbg);
         }
-        // Read before the children (`0x78a152`), which may override it.
-        if let Some(name) = el.attr("font").filter(|n| !n.is_empty()) {
-            if self.is_font_object(name) {
-                for elem in ["P", "H1", "H2", "H3"] {
-                    self.call(wrapper, "SetFontObject", (elem, name.to_string()), dbg);
+        let fonts = match crate::script::simplehtml_element_fonts_lua(self.lua, wrapper) {
+            Ok(fonts) => fonts,
+            Err(e) => {
+                self.report.fault(format!("{dbg}: <SimpleHTML> fonts: {e}"));
+                return;
+            }
+        };
+        if let Some(font) = el.attr("font").filter(|n| !n.is_empty()) {
+            let to = self.model().fonts.id(font);
+            match to {
+                Some(to) => {
+                    for id in fonts {
+                        self.link_font_node(id, to, "<unnamed>");
+                    }
                 }
-            } else {
-                self.warn_once(
-                    &format!("shtmlfont:{name}"),
-                    format!("{dbg}: <SimpleHTML font=\"{name}\">: couldn't find font object"),
-                );
+                None => self.report_font_miss(el, wrapper, font),
             }
         }
         for child in &el.children {
-            let Some(elem) = crate::script::simplehtml_element_of_xml_tag(&child.tag) else {
-                continue;
-            };
-            let child = &self.expand_region(child);
-            self.apply_element_font(child, wrapper, elem, dbg);
+            if let Some(elem) = crate::script::simplehtml_element_of_xml_tag(&child.tag) {
+                self.load_font_node(child, fonts[elem], "<unnamed>");
+            }
         }
         if let Some(raw) = el.attr("file") {
             if let Some(bytes) = (self.files)(raw) {
                 let text = crate::source::decode(&bytes).into_owned();
                 self.call(wrapper, "SetText", text, dbg);
             }
-        }
-    }
-
-    /// One `<SimpleHTML>` font child's element font, with the same `font=` gate as
-    /// [`Self::load_fontstring_level`].
-    fn apply_element_font(&mut self, el: &Element, wrapper: &Table, elem: usize, dbg: &str) {
-        let name = ["P", "H1", "H2", "H3"][elem];
-        if let Some(inherits) = el.attr("inherits").filter(|n| !n.is_empty()) {
-            let resolved = self
-                .font_object_through_templates(inherits)
-                .unwrap_or_else(|| inherits.to_string());
-            self.call(wrapper, "SetFontObject", (name, resolved), dbg);
-        }
-        match el.attr("font") {
-            Some(f) if self.is_font_object(f) => {
-                self.call(wrapper, "SetFontObject", (name, f.to_string()), dbg);
-            }
-            Some(path) => {
-                // As a FontString's file, `CSimpleFont::LoadXML` needs a height above 0
-                // (`0x783d6d`-`0x783d78`); else it reports `0x87a4f0` and returns (`0x783dae`)
-                // before `outline=`, `<Color>`, `<Shadow>`, the justifies and `spacing=`.
-                let height = children_named(el, "FontHeight")
-                    .last()
-                    .map(|h| self.value(h))
-                    .filter(|h| *h > 0.0);
-                let Some(height) = height else {
-                    self.report_missing_font_height("Font", "<unnamed>", &el.tag);
-                    return;
-                };
-                let outline = el.attr("outline").map(str::to_string);
-                if let Err(e) = crate::script::apply_simplehtml_font_parts(
-                    self.lua,
-                    wrapper,
-                    elem,
-                    Some(path.to_string()),
-                    Some(height),
-                    outline,
-                ) {
-                    self.report
-                        .fault(format!("{dbg}: <SimpleHTML> {name} font attrs: {e}"));
-                }
-            }
-            None => {}
-        }
-        if let Some(c) = children_named(el, "Color").last().map(color_of) {
-            let (r, g, b, a) = c.fractions();
-            self.call(wrapper, "SetTextColor", (name, r, g, b, a), dbg);
-        }
-        if let Some(sh) = children_named(el, "Shadow").last() {
-            if let Some(c) = children_named(sh, "Color").next().map(color_of) {
-                let (r, g, b, a) = c.fractions();
-                self.call(wrapper, "SetShadowColor", (name, r, g, b, a), dbg);
-            }
-            if let Some(o) = children_named(sh, "Offset").next() {
-                let [x, y] = self.dimension(o).v;
-                self.call(wrapper, "SetShadowOffset", (name, x, y), dbg);
-            }
-        }
-        if let Some(j) = el.attr("justifyH") {
-            self.call(wrapper, "SetJustifyH", (name, j.to_string()), dbg);
-        }
-        if let Some(j) = el.attr("justifyV") {
-            self.call(wrapper, "SetJustifyV", (name, j.to_string()), dbg);
-        }
-        if let Some(sp) = el
-            .attr("spacing")
-            .and_then(|v| v.trim().parse::<f32>().ok())
-        {
-            self.call(wrapper, "SetSpacing", (name, sp), dbg);
         }
     }
 }

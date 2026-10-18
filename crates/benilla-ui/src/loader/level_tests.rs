@@ -1629,3 +1629,91 @@ fn a_text_frames_fontstring_child_loads_into_its_own_font() {
     }
     assert!(!report.status.lines().iter().any(|l| l.starts_with("TfSmf")));
 }
+
+/// A `<SimpleHTML>`'s `font=` links all four element fonts (`0x78a17a`-`0x78a18f`) or logs its miss
+/// (`0x879bc8`), and each font child loads into its element font through the Font loader
+/// (`0x78a26e` → `0x783c30`): `inherits=` names a font, never a template (`0x87a51c`), the first
+/// `<FontHeight>` counts, `spacing=` reads with `SStrToFloat`, `monochrome=` sets its flag and a bare `<Shadow/>` is opaque black at the default offset.
+#[test]
+fn a_simplehtml_font_child_loads_as_a_font_element() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="HtmlBase" font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></Font>
+            <FontString name="HtmlTmpl" inherits="HtmlBase" virtual="true"/>
+            <Font name="HtmlShadowRef"><Shadow/></Font>
+            <SimpleHTML name="HtmlLeg">
+                <FontString inherits="HtmlTmpl" spacing="2px"/>
+                <FontStringHeader1 font="Fonts\SKURRI.TTF" monochrome="1">
+                    <FontHeight val="10"/><FontHeight val="20"/><Shadow/>
+                </FontStringHeader1>
+            </SimpleHTML>
+            <SimpleHTML name="HtmlLinked" font="HtmlBase"/>
+            <SimpleHTML name="HtmlMiss" font="NoSuchFont"/>
+        </Ui>"#,
+    );
+    let truthy = |code: &str| s.eval::<bool>(code).unwrap();
+    assert!(truthy(
+        "return HtmlLeg:GetFont() == nil and HtmlLeg:GetFontObject() == nil"
+    ));
+    assert!(truthy("return HtmlLeg:GetSpacing() == 2"));
+    assert_eq!(
+        s.eval::<(String, f32, String)>("return HtmlLeg:GetFont('H1')")
+            .unwrap(),
+        (
+            "Fonts\\SKURRI.TTF".to_string(),
+            10.0,
+            "MONOCHROME".to_string()
+        )
+    );
+    assert_eq!(
+        s.eval::<(f32, f32, f32, f32)>("return HtmlLeg:GetShadowColor('H1')")
+            .unwrap(),
+        (0.0, 0.0, 0.0, crate::color::quant::read32(1.0))
+    );
+    assert!(truthy(
+        "local x, y = HtmlLeg:GetShadowOffset('H1'); local rx, ry = HtmlShadowRef:GetShadowOffset()
+         return x == rx and y == ry and x > 0"
+    ));
+    s.run(r"HtmlBase:SetFont('Fonts\\MORPHEUS.TTF', 9)")
+        .unwrap();
+    for elem in ["P", "H1", "H2", "H3"] {
+        assert!(
+            truthy(&format!(
+                "local p, h = HtmlLinked:GetFont('{elem}'); return p == 'Fonts\\\\MORPHEUS.TTF' and h == 9"
+            )),
+            "{elem} follows"
+        );
+    }
+    for line in [
+        "Couldn't find inherited font: HtmlTmpl",
+        "SimpleHTML HtmlMiss: Couldn't find font object named NoSuchFont",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+}
+
+/// A SimpleHTML font child's justify token that matches nothing is skipped, with no bit cleared
+/// (`0x783f6d`, `0x783fb5`), never raised.
+#[test]
+fn a_simplehtml_font_child_skips_a_bad_justify_token() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <SimpleHTML name="HtmlJustify">
+                <FontString justifyH="BOGUS" justifyV="TOP"/>
+            </SimpleHTML>
+        </Ui>"#,
+    );
+    assert_eq!(
+        s.eval::<(String, String)>("return HtmlJustify:GetJustifyH(), HtmlJustify:GetJustifyV()")
+            .unwrap(),
+        ("CENTER".to_string(), "TOP".to_string())
+    );
+}

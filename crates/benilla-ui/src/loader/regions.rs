@@ -417,32 +417,6 @@ impl Loader<'_> {
         );
     }
 
-    /// The font object a FontString's `inherits=` names, directly or through virtual FontString
-    /// templates; `None` when the chain ends without one. Bounded, as a registry can hold a cycle.
-    pub(super) fn font_object_through_templates(&self, inherits: &str) -> Option<String> {
-        const MAX_HOPS: usize = 8;
-        let model = self.model();
-        let templates = model.framexml_templates.borrow();
-        // One name, not a comma list: 1.12's lookup has no splitter.
-        for entry in [inherits] {
-            let mut name = entry.to_string();
-            for _ in 0..MAX_HOPS {
-                if model.fonts.id(&name).is_some() {
-                    return Some(name);
-                }
-                let Some(next) = templates
-                    .get(&name)
-                    .and_then(|t| t.attr("inherits"))
-                    .map(str::to_string)
-                else {
-                    break;
-                };
-                name = next;
-            }
-        }
-        None
-    }
-
     /// Whether `name` is a named font object, declared by `<Font>` or made by `CreateFont`: the
     /// reference's one font table (`0x783870`, which `CreateFont` fills too, `0x706077`), looked
     /// up flat and ignoring case, with no template walk.
