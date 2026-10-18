@@ -15,6 +15,7 @@ pub mod loader;
 pub mod markup;
 pub mod messages;
 pub mod order;
+pub mod screencoord;
 pub mod script;
 pub mod source;
 pub mod status;

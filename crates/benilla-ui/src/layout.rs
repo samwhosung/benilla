@@ -10,6 +10,8 @@
 
 use std::collections::VecDeque;
 
+pub use crate::screencoord::{LayoutSpace, LayoutUnits};
+
 // ── Constants ────────────────────────────────────────────────────────────────────────────────
 
 /// The unset-coordinate sentinel, `+Inf` (`0xcf550c`, set at runtime from `0x81d56c`).
@@ -149,40 +151,6 @@ impl Anchor {
             && self.relative_point == other.relative_point
             && self.x_off.to_bits() == other.x_off.to_bits()
             && self.y_off.to_bits() == other.y_off.to_bits()
-    }
-}
-
-/// The client's aspect globals, both written only by `0x41ad10(a)`: `[0x832a4c] = f32(a · 0.75)`
-/// (`0x41ad24`) and `[0x832a44] = f32(a / √(a² + 1))`, the quotient kept unrounded before its
-/// multiply (`0x41ad3e` `fst`, `0x41ad44`, `0x41ad47`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LayoutUnits {
-    g3: f32,
-    g44: f32,
-}
-
-impl LayoutUnits {
-    /// From the screen aspect `a`, width over height.
-    pub fn from_aspect(a: f32) -> LayoutUnits {
-        let a64 = f64::from(a);
-        LayoutUnits {
-            g3: (a64 * 0.75) as f32,
-            g44: ((1.0 / (a64 * a64 + 1.0).sqrt()) * a64) as f32,
-        }
-    }
-
-    /// A Lua offset as `SetPoint`'s binding stores it, in layout units (`0x7a28a3`..`0x7a28e3`):
-    /// `f32(f32(v / ([0x832a4c] · 1024)) · [0x832a44])`.
-    pub fn store(self, v: f32) -> f32 {
-        let q = (f64::from(v) / (f64::from(self.g3) * 1024.0)) as f32;
-        (f64::from(self.g44) * f64::from(q)) as f32
-    }
-
-    /// A stored length as a getter pushes it, the inverse of [`Self::store`]
-    /// (`GetPushedTextOffset` `0x782237`..`0x782251`): `f32(g3 · 1024 · v) / g44` as an f64.
-    pub fn load(self, v: f32) -> f64 {
-        let q = (f64::from(self.g3) * 1024.0 * f64::from(v)) as f32;
-        f64::from(q) / f64::from(self.g44)
     }
 }
 
@@ -1229,17 +1197,6 @@ mod tests {
     const SCREEN: Handle = 0;
     fn screen_rect() -> Rect {
         Rect::new(0.0, 0.0, 600.0, 800.0)
-    }
-
-    /// `0x41ad10` at 4:3: `[0x832a4c] = 1.0` and `[0x832a44] = 0.8` (as `f32`), so an offset
-    /// stores as `f32(f32(v / 1024) · 0.8)`.
-    #[test]
-    fn layout_units_at_four_thirds() {
-        let u = LayoutUnits::from_aspect(4.0 / 3.0);
-        assert_eq!(u, LayoutUnits { g3: 1.0, g44: 0.8 });
-        assert_eq!(u.store(1280.0), (1.25_f64 * f64::from(0.8_f32)) as f32);
-        // `GetPushedTextOffset` of the ctor's 0.001 (`0x3a83126f`).
-        assert!((u.load(f32::from_bits(0x3a83_126f)) - 1.28).abs() < 1e-6);
     }
 
     fn bits(r: Rect) -> [u32; 4] {
