@@ -377,14 +377,10 @@ impl Loader<'_> {
         crate::script::event::invoke_with_globals(self.lua, wrapper.clone(), func, Vec::new())
     }
 
-    /// An object's name as the reference's load lines print it: `GetName`, else `<unnamed>`
-    /// (`0x84c7f0`).
+    /// An object's name as the reference's load lines print it: its own name (vtable `+4`), else
+    /// `<unnamed>` (`0x84c7f0`).
     pub(super) fn object_name(&self, wrapper: &Table) -> String {
-        wrapper
-            .call_method::<Option<String>>("GetName", ())
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "<unnamed>".to_string())
+        crate::script::binding_abi::name_of(self.lua, wrapper)
     }
 
     /// A severity-1 line into the document's record, the status object's `+0xc` slot every
