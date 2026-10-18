@@ -931,14 +931,14 @@ pub const MINIMAP_DEFAULT_PLAYER_MODEL: &str = "Interface\\Minimap\\MinimapArrow
 pub struct ScrollFrameState {
     /// `SetScrollChild`'s frame, which pans within this frame's rect.
     pub child: Option<FrameHandle>,
-    /// `[+0x31c]`, `[+0x320]`: the horizontal and vertical ranges in the frame's own units, as the
-    /// last recompute stored them (`0x786eaa`, `0x786ed1`); the getters answer these.
+    /// `[+0x31c]`, `[+0x320]`: the horizontal and vertical ranges in layout units over the frame's
+    /// scale, as the last recompute stored them (`0x786eaa`, `0x786ed1`); the getters convert them.
     pub range: [f32; 2],
     /// `[+0x314]`: the ranges are out of date. `UpdateScrollChildRect`, `SetScrollChild` and a
     /// change in the frame's size set it; the frame's update recomputes and clears it.
     pub range_dirty: bool,
-    /// The frame's width and height in px when its update last ran, from which that update sees a
-    /// resize (`0x7871f0`'s mark); the ctor's empty rect until then.
+    /// The frame's width and height in layout units when its update last ran, from which that
+    /// update sees a resize (`0x7871f0`'s mark); the ctor's empty rect until then.
     pub seen_size: [f32; 2],
     /// `SetHorizontalScroll`'s offset in px, unclamped; `0x787100` anchors the child at
     /// `(+horizontal, +vertical)`, so scrolling right takes a negative offset, down a positive.

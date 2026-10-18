@@ -11,6 +11,7 @@ use mlua::{Lua, Table, Value};
 use super::binding_abi;
 use super::object::{decode_id, frame_handle_of, frame_wrapper};
 use super::{event, Model};
+use crate::layout::SIZE_EPS;
 use crate::widget::{FrameHandle, KindState, ScrollFrameState};
 
 /// Registry key of the ScrollFrame method table.
@@ -42,13 +43,15 @@ fn with_scroll<T>(
 /// (`0x786e5d`, `0x786e64`). Each range is the box's extent less the frame's (`0x786e84`), raised to 0
 /// when not above it, NaN included (`0x786e8f`), times the reciprocal of the scroll frame's own
 /// effective scale (`+0x7c`): at full precision for the horizontal (`0x786e9f`-`0x786eaa`), rounded
-/// to f32 for the vertical (`0x786ea5`, `0x786ece`). The child's own scale is never read.
+/// to f32 for the vertical (`0x786ea5`, `0x786ece`). The child's own scale is never read. All of it
+/// is in layout units, the rects' own, as the ranges are stored.
 fn scroll_ranges(model: &Model, h: FrameHandle) -> [f32; 2] {
     let child = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Scroll(s)) => s.child,
         _ => None,
     };
-    let (Some(child), Some(frame), Some(rect)) = (child, model.arena.frame(h), model.frame_rect(h))
+    let (Some(child), Some(frame), Some(&rect)) =
+        (child, model.arena.frame(h), model.frame_rects.get(&h))
     else {
         return [0.0, 0.0];
     };
@@ -94,15 +97,15 @@ fn join_subtree(model: &Model, f: FrameHandle, content: &mut SpanBox) {
     let Some(frame) = model.arena.frame(f) else {
         return;
     };
-    if let Some(r) = model.frame_rect(f) {
-        content.join(&r);
+    if let Some(r) = model.frame_rects.get(&f) {
+        content.join(r);
     }
     for &rh in &frame.regions {
         if model.region_data.get(&rh).is_some_and(|d| d.hidden) {
             continue;
         }
-        if let Some(r) = model.region_rect(rh) {
-            content.join(&r);
+        if let Some(r) = model.region_rects.get(&rh) {
+            content.join(r);
         }
     }
     for &ch in &frame.children {
@@ -174,9 +177,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetVerticalScroll(px) (`0x791400`): `lua_isnumber` (`0x791490`) else
     // `Usage: %s:SetVerticalScroll(offset)` (`0x87b59c`) naming the frame. Then `0x786db0` stores
     // the offset unclamped (`[+0x328]`), re-anchors the child (`0x787100`) and fires
-    // `OnVerticalScroll(self, offset)`, all only on a change: one under 2⁻²² in the reference's
-    // layout units (`0x786dc2`, [`Model::size_eps`] in ours) is dropped whole, and a NaN,
-    // unordered, always stores and fires (`0x786dcd`). The range is never read here: every clamp
+    // `OnVerticalScroll(self, offset)`, all only on a change: one under 2⁻²² layout units between
+    // the offsets as stored (`S`, `0x7914a8`; `0x786dc2`) is dropped whole, and a NaN, unordered,
+    // always stores and fires (`0x786dcd`). The range is never read here: every clamp
     // is FrameXML's, through the scroll bar's min and max.
     m.set(
         "SetVerticalScroll",
@@ -186,9 +189,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Err(binding_abi::usage(lua, &this, "SetVerticalScroll(offset)"));
             };
             let px = px as f32;
-            let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
+            let units = script_units(lua);
             let changed = with_scroll(lua, &this, |s| {
-                let changed = moved(s.vertical, px, eps);
+                let changed = moved(units.store(s.vertical), units.store(px), SIZE_EPS);
                 if changed {
                     s.vertical = px;
                 }
@@ -204,13 +207,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "GetVerticalScroll",
-        lua.create_function(|lua, this: Table| with_scroll(lua, &this, |s| s.vertical))?,
+        lua.create_function(|lua, this: Table| {
+            let v = with_scroll(lua, &this, |s| s.vertical)?;
+            let units = script_units(lua);
+            Ok(units.load(units.store(v)))
+        })?,
     )?;
-    // The stored range (`0x7917d0` reads `[+0x320]` at `0x791873`), stale while the frame is
-    // hidden or its range unmarked.
+    // The stored range (`0x7917d0` reads `[+0x320]` at `0x791873`) through the getter steps,
+    // stale while the frame is hidden or its range unmarked.
     m.set(
         "GetVerticalScrollRange",
-        lua.create_function(|lua, this: Table| with_scroll(lua, &this, |s| s.range[1]))?,
+        lua.create_function(|lua, this: Table| {
+            let range = with_scroll(lua, &this, |s| s.range[1])?;
+            Ok(script_units(lua).load(range))
+        })?,
     )?;
 
     // ── The horizontal axis ──
@@ -230,9 +240,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ));
             };
             let px = px as f32;
-            let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
+            let units = script_units(lua);
             let changed = with_scroll(lua, &this, |s| {
-                let changed = moved(s.horizontal, px, eps);
+                let changed = moved(units.store(s.horizontal), units.store(px), SIZE_EPS);
                 if changed {
                     s.horizontal = px;
                 }
@@ -247,11 +257,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "GetHorizontalScroll",
-        lua.create_function(|lua, this: Table| with_scroll(lua, &this, |s| s.horizontal))?,
+        lua.create_function(|lua, this: Table| {
+            let v = with_scroll(lua, &this, |s| s.horizontal)?;
+            let units = script_units(lua);
+            Ok(units.load(units.store(v)))
+        })?,
     )?;
     m.set(
         "GetHorizontalScrollRange",
-        lua.create_function(|lua, this: Table| with_scroll(lua, &this, |s| s.range[0]))?,
+        lua.create_function(|lua, this: Table| {
+            let range = with_scroll(lua, &this, |s| s.range[0])?;
+            Ok(script_units(lua).load(range))
+        })?,
     )?;
     // UpdateScrollChildRect() (`0x7918b0`) marks the range and does nothing else (`0x791943`):
     // the frame's next update while shown recomputes it.
@@ -262,6 +279,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.set_named_registry_value(REG_SCROLLFRAME_METHODS, m)?;
     Ok(())
+}
+
+/// The screen-scale cells the range getters convert through (`0x7916f0`, `0x7917d0`).
+fn script_units(lua: &Lua) -> crate::layout::LayoutUnits {
+    lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .layout_units()
 }
 
 /// Whether `new` is a change from `old` by the reference's `fabs; fcomp [0x8029d4]; test ah,5`
@@ -294,9 +318,8 @@ fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Resul
 /// marked range is recomputed (`0x787152`–`0x7871a0`, `0x786e30`) unless the frame has no rect
 /// (`0x787186`) or no scroll child (`0x786e42`), and the mark is cleared either way, after the
 /// notify (`0x7871a5`). The recompute stores both ranges (`0x786eaa`, `0x786ed1`) and fires
-/// `OnScrollRangeChanged(self, xRange, yRange)` when either moved by 2⁻²² (`[0x8029d4]`) or more
-/// in the reference's units (the screen diagonal as 1) (`0x786ed7`–`0x786efd`), which is that times the
-/// layout unit in ours.
+/// `OnScrollRangeChanged(self, xRange, yRange)` when either moved by 2⁻²² (`[0x8029d4]`) layout
+/// units or more (`0x786ed7`–`0x786efd`), each range through the getter steps.
 ///
 /// The rects it reads are the ones the pump's drain before the walk (`0x7656ba`) resolved: the
 /// recompute reads them through `0x768320`, which never resolves, so a resize made earlier in the
@@ -304,8 +327,9 @@ fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Resul
 pub(super) fn update(lua: &Lua, h: FrameHandle) {
     let notify = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let rect = model.frame_rect(h);
-        let eps = model.size_eps();
+        let rect = model.frame_rects.get(&h).copied();
+        let eps = SIZE_EPS;
+        let units = model.layout_units();
         let Some(s) = scroll_state(&mut model, h) else {
             return;
         };
@@ -326,7 +350,7 @@ pub(super) fn update(lua: &Lua, h: FrameHandle) {
         if moved.is_none() {
             s.range_dirty = false;
         }
-        moved.map(|range| (model.frame_id(h), range))
+        moved.map(|range| (model.frame_id(h), range.map(|r| units.load(r))))
     };
     let Some((id, [x_range, y_range])) = notify else {
         return;
@@ -337,10 +361,7 @@ pub(super) fn update(lua: &Lua, h: FrameHandle) {
         lua,
         id,
         "OnScrollRangeChanged",
-        vec![
-            Value::Number(f64::from(x_range)),
-            Value::Number(f64::from(y_range)),
-        ],
+        vec![Value::Number(x_range), Value::Number(y_range)],
     ) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
@@ -360,9 +381,9 @@ fn scroll_state(model: &mut Model, h: FrameHandle) -> Option<&mut ScrollFrameSta
     }
 }
 
-/// Note the frame's resolved size; a change since the last note marks the range, by the width or
-/// height move that fires `OnSizeChanged` ([`crate::layout::size_changed`] at `eps`,
-/// [`Model::size_eps`]). No rect, no note.
+/// Note the frame's resolved size in layout units; a change since the last note marks the range, by
+/// the width or height move that fires `OnSizeChanged` ([`crate::layout::size_changed`] at `eps`,
+/// [`crate::layout::SIZE_EPS`]). No rect, no note.
 fn see_size(s: &mut ScrollFrameState, rect: Option<crate::layout::Rect>, eps: f64) {
     let Some(r) = rect else { return };
     let size = [r.width(), r.height()];
