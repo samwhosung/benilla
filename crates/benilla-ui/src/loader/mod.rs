@@ -916,7 +916,12 @@ impl Loader<'_> {
                 self.apply_backdrop(child, wrapper, dbg_name);
             }
         }
-        // 5·b · a direct-child `<FontString>`: the widget's own text font (EditBox, message frame).
+        // 5·b · an EditBox's `font=`, read before its `<FontString>` child loads into the same font
+        //       (`0x779fcb`, `0x77a220`), then a direct-child `<FontString>`: the widget's own text
+        //       font (EditBox, message frame).
+        if el.tag.eq_ignore_ascii_case("EditBox") {
+            self.apply_frame_font(el, wrapper, dbg_name);
+        }
         self.apply_special_fontstrings(el, wrapper, self_name, dbg_name);
         // 5a' · <TitleRegion>: the drag handle, through the API's own CreateTitleRegion.
         self.apply_title_region(el, wrapper, self_name, dbg_name);

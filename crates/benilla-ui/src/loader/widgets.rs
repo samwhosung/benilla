@@ -281,6 +281,27 @@ impl Loader<'_> {
     /// rest off (`0x779a29`, `0x77a0b3`), so flags are read presence-aware: `autoFocus="false"`
     /// clears. The reference also skips an empty `autoFocus` (`0x77a0b8`), which clears here.
     /// `blinkSpeed` is the caret half-period (`E+0x370`).
+    /// `font=` on an EditBox, a MessageFrame or a ScrollingMessageFrame (`0x779fcb`, `0x78592b`,
+    /// `0x787b3b`): a non-empty name found in the font table (`0x783870`) links the frame's own
+    /// font to it (`0x770c60`); any other is logged as `%s %s: Couldn't find font object named %s`
+    /// (`0x879bc8`) with the frame's type (vtable slot 7), its name or `<unnamed>`, and the value.
+    pub(super) fn apply_frame_font(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
+        let Some(font) = el.attr("font").filter(|f| !f.is_empty()) else {
+            return;
+        };
+        if self.is_font_object(font) {
+            self.call(wrapper, "SetFontObject", font.to_string(), dbg);
+        } else {
+            let kind: String = wrapper
+                .call_method("GetObjectType", ())
+                .unwrap_or_else(|_| el.tag.clone());
+            let name = self.object_name(wrapper);
+            self.status_warning(format!(
+                "{kind} {name}: Couldn't find font object named {font}"
+            ));
+        }
+    }
+
     pub(super) fn apply_editbox(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if !el.tag.eq_ignore_ascii_case("EditBox") {
             return;
@@ -363,6 +384,11 @@ impl Loader<'_> {
         if !scrolling && !plain {
             return;
         }
+        // `font=`, which the reference links before its `<FontString>` child loads into the same
+        // font (`0x78592b`, `0x785af5`). Here that child is the frame's font region, made in step
+        // 5·b, so the link comes after it: the child's own attributes stand, as after the
+        // reference's load, but a child's `inherits` gives way to `font=`, where there it wins.
+        self.apply_frame_font(el, wrapper, dbg);
         // A non-empty `maxLines` through `SStrToInt`, above 0 (`0x787c5e`-`0x787c71`).
         if scrolling {
             if let Some(v) = el.attr("maxLines").filter(|v| !v.is_empty()) {

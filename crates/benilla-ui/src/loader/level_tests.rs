@@ -1314,3 +1314,51 @@ fn the_xml_length_readers_read_the_first_child_only() {
         );
     }
 }
+
+/// `font=` on an EditBox, a MessageFrame and a ScrollingMessageFrame links the frame's font to
+/// that font object (`0x779fcb`, `0x78592b`, `0x787b3b` → `0x770c60`), so it follows later
+/// changes; a name the font table lacks logs `%s %s: Couldn't find font object named %s`
+/// (`0x879bc8`) with the frame's type and name.
+#[test]
+fn a_text_frame_links_its_font_attribute() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="FrameAttrFont" font="Fonts\ARIALN.TTF">
+                <FontHeight><AbsValue val="17"/></FontHeight>
+            </Font>
+            <EditBox name="FontBox" font="FrameAttrFont"/>
+            <MessageFrame name="FontMf" font="FrameAttrFont"/>
+            <ScrollingMessageFrame name="FontSmf" font="FrameAttrFont"/>
+            <EditBox name="FontBoxMiss" font="NoSuchFont"/>
+            <ScrollingMessageFrame font="NoSuchFont"/>
+        </Ui>"#,
+    );
+    let font = |s: &UiScript, f: &str| {
+        s.eval::<(String, f32)>(&format!("local p, h = {f}:GetFont() return p, h"))
+            .unwrap()
+    };
+    for f in ["FontBox", "FontMf", "FontSmf"] {
+        assert_eq!(font(&s, f), ("Fonts\\ARIALN.TTF".into(), 17.0), "{f}");
+    }
+    s.run(r"FrameAttrFont:SetFont('Fonts\\FRIZQT__.TTF', 9)")
+        .unwrap();
+    for f in ["FontBox", "FontMf", "FontSmf"] {
+        assert_eq!(
+            font(&s, f),
+            ("Fonts\\FRIZQT__.TTF".into(), 9.0),
+            "{f} follows"
+        );
+    }
+    for line in [
+        "EditBox FontBoxMiss: Couldn't find font object named NoSuchFont",
+        "ScrollingMessageFrame <unnamed>: Couldn't find font object named NoSuchFont",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+}
