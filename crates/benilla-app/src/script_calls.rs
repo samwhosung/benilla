@@ -774,6 +774,15 @@ mod tests {
                 ..Default::default()
             });
             script.set_unit(
+                "player",
+                Some(benilla_ui::script::UnitState {
+                    exists: true,
+                    has_object: true,
+                    guid: ME,
+                    ..Default::default()
+                }),
+            );
+            script.set_unit(
                 "party1",
                 Some(benilla_ui::script::UnitState {
                     exists: true,

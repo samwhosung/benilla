@@ -11,7 +11,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, number_arg};
-use super::by_name::{self, Filter, Kinds, Match, RosterEntry, Search};
+use super::by_name::Filter;
 use super::Model;
 use crate::strings::{fill, global, Arg};
 
@@ -258,37 +258,6 @@ impl super::UiScript {
 
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
-
-/// `SetLootMethod`'s master name through the shared resolver ([`by_name::resolve`]), as
-/// `0x4e9418` calls `0x493aa0`: players only, mode 2 (`CanAssist` and alive), whole name or longest
-/// prefix. The roster is the party slots (`0x493b22`) then the raid (`0x493ba7`); our own row is
-/// held, as the active player object always is, and is offered by the object pass at distance 0.
-fn closest_group_member(model: &Model, name: &str) -> Option<u64> {
-    let party = &model.party;
-    let held = |token: String| model.unit(&token).is_some_and(|u| u.has_object);
-    let members = party
-        .members
-        .iter()
-        .take(4)
-        .enumerate()
-        .map(|(i, m)| RosterEntry {
-            name: &m.name,
-            guid: m.guid,
-            held: held(format!("party{}", i + 1)),
-        });
-    let raid = party.raid.iter().enumerate().map(|(i, m)| RosterEntry {
-        name: &m.name,
-        guid: m.guid,
-        held: (party.own_guid != 0 && m.guid == party.own_guid) || held(format!("raid{}", i + 1)),
-    });
-    let search = Search {
-        query: name,
-        kinds: Kinds::PlayerOnly,
-        filter: Filter::AssistableAlive,
-        exact: Match::PrefixOk,
-    };
-    by_name::resolve(search, members, raid, model.held_candidates()).map(|pick| pick.guid)
-}
 
 /// Whether `guid` is ourselves or on the party slots (`0x4e7f70`), or on the raid roster
 /// (`0x4baee0`); a zero guid is neither.
@@ -624,7 +593,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    closest_group_member(&model, &name)
+                    model.closest_player(&name, Filter::AssistableAlive)
                 };
                 // The pick must be ourselves (`0x4e7f70`, which also tests the four party slots)
                 // or in the raid (`0x4baee0`); a stranger the resolver preferred is refused with
@@ -1274,6 +1243,7 @@ mod tests {
     #[test]
     fn intent_natives_queue_the_exact_request_sequence() {
         let mut s = UiScript::new().unwrap();
+        hold(&mut s, "player", 0x5E1F, "Me");
         s.set_party(led_party());
         assert!(s.take_party_requests().is_empty());
 
@@ -1310,6 +1280,8 @@ mod tests {
 
     fn loot_vm(party: PartyState) -> UiScript {
         let mut s = UiScript::new().unwrap();
+        // The active player object, without which the resolver finds nobody (`0x493ae0`).
+        hold(&mut s, "player", party.own_guid, "Me");
         s.set_party(party);
         s.run(
             r#"
@@ -1648,6 +1620,19 @@ mod tests {
         s.set_name_candidate(0xF130_0001, Some(cat));
         s.run(r#"SetLootMethod("master", "Bobc")"#).unwrap();
         assert_eq!(s.take_party_requests(), vec![loot_request(2, 0xB0B, 2)]);
+    }
+
+    /// `0x493ae0`: with no active player object the resolver finds nobody, a groupmate with no
+    /// object included, so the binding shows game error 0x49.
+    #[test]
+    fn without_the_player_object_the_master_name_finds_nobody() {
+        let mut s = UiScript::new().unwrap();
+        s.set_party(led_party());
+        s.run(r#"ERR_NOT_LEADER = "x" ERR_TARGET_NOT_IN_GROUP_S = "%s is not in your group.""#)
+            .unwrap();
+        s.run(r#"SetLootMethod("master", "Bob")"#).unwrap();
+        assert!(s.take_party_requests().is_empty());
+        assert_eq!(s.take_shown_chat_lines().len(), 1);
     }
 
     /// Of two held groupmates with an equal prefix the nearer wins (`0x493cfc`, strictly below the

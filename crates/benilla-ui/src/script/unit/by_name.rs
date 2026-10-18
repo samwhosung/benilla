@@ -10,16 +10,19 @@
 //! held for it (`0x468460` NULL, `0x493b4d`, `0x493be5`), at the placeholder distance
 //! `0x4f1502f9` (`0x493b74`, `0x493c0c`); then every held object of the typemask that the mode's
 //! filter `0x493e40` passes, at its squared distance (`0x468380` with `0x493d30`). No pass is gated
-//! on the typemask: `0x493aa0` skips them only for the filter modes 1 and 3, which no caller passes.
-//! The whole resolver returns nothing without an active player object (`0x493ae0`), which the
-//! caller answers by offering no objects.
+//! on the typemask. The filter mode gates the roster instead: mode 1 skips both passes (`0x493b1a`)
+//! and mode 3 only the raid pass (`0x493b93`); no caller passes either, so neither is modelled.
+//! Without an active player object the whole resolver returns nothing (`0x493ae0`), roster passes
+//! included ([`Search::active_player`]).
 //!
-//! Deviation: the reference ends the object walk at the first whole-string hit (`0x493ca2`), so its
-//! pick follows the object list's order; we rank exact, then longer prefix, then nearest
-//! ([`Rank::beats`]), because the nearest namesake is the better pick, and a full tie between held
-//! objects goes to the lower guid ([`Rank::beats_at`]), so the VM's walk and the app's scan pick the
-//! same unit whatever order each walks in. The roster passes keep the reference's order: of equal
-//! ranks the first member offered stays.
+//! Deviation: the reference's matcher takes a whole-string hit at once only when it is nearer than
+//! the best so far (`0x493c88`-`0x493ca2`); an exact hit that is not nearer competes on prefix
+//! length alone (`0x493cf8`-`0x493d09`), so a nearer "Bobby" walked first beats an exact "Bob", and
+//! the pick follows the object list's order. We rank exact, then longer prefix, then nearest
+//! ([`Rank::beats`]), because the namesake is the better pick, and a full tie between held objects
+//! goes to the lower guid ([`Rank::beats_at`]), so the VM's walk and the app's scan pick the same
+//! unit whatever order each walks in. The roster passes keep the reference's order: of equal ranks
+//! the first member offered stays.
 
 use std::cmp::Ordering;
 
@@ -135,6 +138,8 @@ pub struct Search<'q> {
     pub filter: Filter,
     /// The exact-only flag.
     pub exact: Match,
+    /// An object is held for the active player; `0x493aa0` returns nothing without one (`0x493ae0`).
+    pub active_player: bool,
 }
 
 /// A roster member as passes 1 and 2 see it.
@@ -188,6 +193,9 @@ pub fn resolve<'a, T>(
     raid: impl IntoIterator<Item = RosterEntry<'a>>,
     held: impl IntoIterator<Item = Held<'a, T>>,
 ) -> Option<Pick<'a, T>> {
+    if !search.active_player {
+        return None;
+    }
     let mut best: Option<Pick<'a, T>> = None;
     for member in party.into_iter().chain(raid) {
         if member.held || member.guid == 0 || member.name.is_empty() {
@@ -304,6 +312,8 @@ impl Model {
             } else {
                 Match::PrefixOk
             },
+            // The app pushes candidates only while it holds the active player.
+            active_player: true,
         };
         // No roster: the app selects a held unit only (`Selection::target` is an entity).
         resolve(
@@ -325,6 +335,39 @@ impl Model {
             is_player: c.state.is_player,
             assistable_alive: c.assistable_alive,
         })
+    }
+
+    /// The guid `0x493aa0` resolves for a player's name typed to a binding (typemask 0x10, no
+    /// exact-only flag, `filter` the binding's mode): the party slots, then the raid roster, each
+    /// member offered while no object is held for it, then the pushed candidates. Our own row is
+    /// held, as the active player object always is, and is offered by the object pass at distance 0.
+    pub(crate) fn closest_player(&self, name: &str, filter: Filter) -> Option<u64> {
+        let party = &self.party;
+        let held = |token: String| self.unit(&token).is_some_and(|u| u.has_object);
+        let members = party
+            .members
+            .iter()
+            .take(4)
+            .enumerate()
+            .map(|(i, m)| RosterEntry {
+                name: &m.name,
+                guid: m.guid,
+                held: held(format!("party{}", i + 1)),
+            });
+        let raid = party.raid.iter().enumerate().map(|(i, m)| RosterEntry {
+            name: &m.name,
+            guid: m.guid,
+            held: (party.own_guid != 0 && m.guid == party.own_guid)
+                || held(format!("raid{}", i + 1)),
+        });
+        let search = Search {
+            query: name,
+            kinds: Kinds::PlayerOnly,
+            filter,
+            exact: Match::PrefixOk,
+            active_player: held("player".to_string()),
+        };
+        resolve(search, members, raid, self.held_candidates()).map(|pick| pick.guid)
     }
 
     /// What `TargetUnit(token)` shows as `"target"`: the unit the token names when the object
@@ -399,6 +442,7 @@ mod tests {
             kinds: Kinds::PlayerOnly,
             filter: Filter::AcceptAll,
             exact: Match::PrefixOk,
+            active_player: true,
         }
     }
 
@@ -529,5 +573,21 @@ mod tests {
         assert_eq!(guid_of(search("Bob"), vec![], vec![], near_far), Some(4));
         let tie = vec![held("Bob", 5, 4.0), held("Bob", 4, 4.0)];
         assert_eq!(guid_of(search("Bob"), vec![], vec![], tie), Some(4));
+    }
+
+    /// `0x493ae0`: without an active player object the resolver returns nothing, the roster passes
+    /// included.
+    #[test]
+    fn no_active_player_resolves_nothing() {
+        let none = Search {
+            active_player: false,
+            ..search("Bob")
+        };
+        let party = || vec![roster("Bob", 1, false)];
+        assert_eq!(
+            guid_of(none, party(), vec![], vec![held("Bob", 2, 1.0)]),
+            None
+        );
+        assert_eq!(guid_of(search("Bob"), party(), vec![], vec![]), Some(1));
     }
 }

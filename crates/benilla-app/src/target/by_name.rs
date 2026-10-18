@@ -306,6 +306,8 @@ fn scan_units<'a>(
             kinds: search.kinds(),
             filter,
             exact: mode,
+            // The `origin` test above is `0x493ae0`.
+            active_player: true,
         },
         std::iter::empty(),
         std::iter::empty(),
