@@ -610,7 +610,7 @@ pub(super) fn drain_chat_input(
                 if let Some(name) =
                     name.or_else(|| target_player_name(&selection, &names, &commands))
                 {
-                    script.queue_duel_request(benilla_ui::script::DuelRequest::StartByName(name));
+                    script.start_duel_by_name(&name);
                 }
             }
             ParsedChat::Forfeit => {

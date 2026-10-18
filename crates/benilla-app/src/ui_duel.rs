@@ -373,7 +373,6 @@ fn drain_duel(
     selection: Res<Selection>,
     index: Res<GuidIndex>,
     self_q: Query<&Guid, With<SelfPlayer>>,
-    names: Res<NameCache>,
     commands: Res<NetCommands>,
 ) {
     let Some(mut script) = script else {
@@ -410,12 +409,9 @@ fn drain_duel(
                 };
                 challenge(guid, self_guid, &index, &spells, &actions, &commands);
             }
-            DuelRequest::StartByName(name) => {
-                // `/duel <name>`: `StartDuel` (`0x4d4c40`) matches the name through `0x493aa0`
-                // with typemask `0x10` (`0x4d4c66`), players only; here, the streamed guid index
-                // named through the cache.
-                let guid = streamed_player_named(&name, &index, &names);
-                challenge(guid, self_guid, &index, &spells, &actions, &commands);
+            DuelRequest::StartByGuid(guid) => {
+                // `/duel <name>`: the binding resolved the name through `0x493aa0` (`0x4d4c6d`).
+                challenge(Some(guid), self_guid, &index, &spells, &actions, &commands);
             }
         }
     }

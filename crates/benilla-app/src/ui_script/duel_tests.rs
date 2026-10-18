@@ -119,6 +119,21 @@ fn finishing_sweeps_both_dialogs_silently() {
 fn the_era_globals_queue_their_intents() {
     benilla_formats::wow_data_or_skip!();
     let mut s = setup();
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            has_object: true,
+            ..Default::default()
+        }),
+    );
+    s.set_party(benilla_ui::script::PartyState {
+        members: vec![benilla_ui::script::PartyMemberInfo {
+            name: "Onerogue".into(),
+            guid: 0x0E,
+        }],
+        ..Default::default()
+    });
     s.run("AcceptDuel(); CancelDuel(); StartDuel('Onerogue'); StartDuelUnit('target')")
         .unwrap();
     assert_eq!(
@@ -126,7 +141,7 @@ fn the_era_globals_queue_their_intents() {
         vec![
             DuelRequest::Accept,
             DuelRequest::Cancel,
-            DuelRequest::StartByName("Onerogue".into()),
+            DuelRequest::StartByGuid(0x0E),
             DuelRequest::StartByUnit("target".into()),
         ]
     );
