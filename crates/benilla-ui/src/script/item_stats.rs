@@ -413,7 +413,7 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
     let mut fields = rest
         .splitn(4, ':')
         .map(crate::script::binding_abi::s_str_to_int);
-    let id = fields.next().unwrap_or(0);
+    let id = i64::from(fields.next().unwrap_or(0));
     let mut next = || u32::try_from(fields.next().unwrap_or(0)).unwrap_or(0);
     Ok((id, next(), next(), next()))
 }

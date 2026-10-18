@@ -278,7 +278,7 @@ pub(crate) fn on_cvar(
         // (`0x688de0`); the callback hands on `SStrToInt`'s integer (`0x688dfa`), so "48.9" is 48.
         // The loaded tiles re-scatter off the change.
         "frilldensity" => {
-            clutter.set_frill_density(benilla_ui::script::sstr_to_int(&ev.new) as f32);
+            clutter.set_frill_density(benilla_ui::script::s_str_to_int(&ev.new) as f32);
             cvars.mirror(
                 benilla_ui::script::CVAR_WORLD_DETAIL,
                 &(clutter.density - 1.0).to_string(),
@@ -293,7 +293,7 @@ pub(crate) fn on_cvar(
         // `particleDensity`. The reference runs it on every write, an unchanged one included; an
         // observer fires only on a change.
         "spelleffectlevel" => {
-            spell_effect_level.0 = benilla_ui::script::sstr_to_int(&ev.new);
+            spell_effect_level.0 = benilla_ui::script::s_str_to_int(&ev.new);
             let level = spell_effect_level.0.clamp(0, 2);
             if let Some(console) = console.as_mut() {
                 console.print(format!("Spell effect level set to {level}."));

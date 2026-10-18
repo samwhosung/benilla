@@ -9,7 +9,8 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::cvars::{format_f, sstr_to_int, write_cvar};
+use super::binding_abi::s_str_to_int;
+use super::cvars::{format_f, write_cvar};
 use super::Model;
 
 /// The CVars these pairs read and write, which the host must register: a missing row would make a
@@ -156,7 +157,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Read::Zero => 0.0,
                     Read::Float(name) => record_float(&record_value(&model, name, default)),
                     Read::OneMinusInt(name) => {
-                        1.0 - f64::from(sstr_to_int(&record_value(&model, name, default)))
+                        1.0 - f64::from(s_str_to_int(&record_value(&model, name, default)))
                     }
                     Read::OneMinusFloat(name) => {
                         1.0 - record_float(&record_value(&model, name, default))

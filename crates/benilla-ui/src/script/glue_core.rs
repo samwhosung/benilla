@@ -8,7 +8,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::{flag, string_arg};
+use super::binding_abi::{flag, s_str_to_int, string_arg};
 use super::{Model, ScriptValue};
 
 /// One of the four user agreements the login screen walks before it shows the login boxes
@@ -57,9 +57,9 @@ pub struct NoticeState {
 }
 
 impl NoticeState {
-    /// The flags for a CVar value, read as `atoi` reads it: anything unparseable is 0.
+    /// The flags for a CVar value, read as its record's integer ([`s_str_to_int`]).
     pub fn from_cvar(value: &str) -> Self {
-        let n = leading_int(value);
+        let n = s_str_to_int(value);
         NoticeState {
             accepted: n == 1,
             show_notice: n < 0,
@@ -67,8 +67,9 @@ impl NoticeState {
     }
 }
 
-/// `atoi`: an optional sign and the leading digits, 0 when there are none.
-pub(super) fn leading_int(s: &str) -> i64 {
+/// The first `%d` of the CRT's `sscanf` (`0x73fb5d`): leading whitespace skipped, an optional sign
+/// and the leading digits; 0 when there are none, and for a number past `i64`.
+fn scanf_d(s: &str) -> i64 {
     let s = s.trim_start();
     let (sign, digits) = match s.as_bytes().first() {
         Some(b'-') => (-1, &s[1..]),
@@ -993,7 +994,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let on = model
                 .cvars
                 .get("moviesubtitle")
-                .is_some_and(|c| leading_int(&c.value) != 0);
+                .is_some_and(|c| s_str_to_int(&c.value) != 0);
             Ok(flag(on))
         })?,
     )?;
@@ -1007,7 +1008,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let width = model
                 .cvars
                 .get("gxresolution")
-                .map_or(0, |c| leading_int(&c.value));
+                .map_or(0, |c| scanf_d(&c.value));
             Ok(width as f64)
         })?,
     )?;
@@ -1230,6 +1231,20 @@ mod tests {
         assert!(s.take_glue_calls().is_empty());
     }
 
+    /// An agreement's flags come off its record's integer (`0x46a41a` reads `+0x28`), Storm's
+    /// `SStrToInt`: no whitespace skip, no `+`, a 32-bit wrap.
+    #[test]
+    fn an_agreement_reads_its_cvar_as_the_records_integer() {
+        let accepted = |text: &str| NoticeState::from_cvar(text).accepted;
+        assert!(accepted("1"));
+        assert!(accepted("1abc"));
+        assert!(!accepted(" 1"), "no whitespace skip");
+        assert!(!accepted("+1"), "no unary plus");
+        assert!(accepted("4294967297"), "the register wraps");
+        assert!(NoticeState::from_cvar("-1").show_notice);
+        assert!(!NoticeState::from_cvar(" -1").show_notice);
+    }
+
     /// `AcceptEULA` sets its flag pair and its CVar in the call (`0x46af20`).
     #[test]
     fn the_agreements_answer_their_seeded_flags_and_accept_sets_them() {
@@ -1448,6 +1463,28 @@ mod tests {
         );
         s.set_cvar_host("gxResolution", "800x600");
         assert_eq!(s.eval::<f64>("return GetMovieResolution()").unwrap(), 800.0);
+        // `GetMovieSubtitles` reads the record's integer (`0x46dbc5`, `+0x28`), `SStrToInt`: a
+        // leading space or `+` is 0. `GetMovieResolution` scans the text with `sscanf`
+        // (`0x46cf34`), which skips whitespace and takes a sign.
+        for text in [" 1", "+1"] {
+            s.set_cvar_host("movieSubtitle", text);
+            assert!(
+                s.eval::<bool>("return GetMovieSubtitles() == nil").unwrap(),
+                "{text:?}"
+            );
+        }
+        s.set_cvar_host("movieSubtitle", "1x");
+        assert_eq!(
+            s.eval::<Option<i64>>("return GetMovieSubtitles()").unwrap(),
+            Some(1)
+        );
+        s.set_cvar_host("gxResolution", " 640x480");
+        assert_eq!(s.eval::<f64>("return GetMovieResolution()").unwrap(), 640.0);
+        s.set_cvar_host("gxResolution", "+1280x960");
+        assert_eq!(
+            s.eval::<f64>("return GetMovieResolution()").unwrap(),
+            1280.0
+        );
         assert!(s
             .eval::<bool>("return table.getn({GetMovieResolution()}) == 1")
             .unwrap());

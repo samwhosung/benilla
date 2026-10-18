@@ -65,6 +65,9 @@ impl super::UiScript {
     }
 }
 
+/// `0x850d18`, verbatim.
+const USAGE_CONSOLE_EXEC: &str = "Usage: ConsoleExec(\"console_command\")";
+
 /// `ConsoleExec` (`0x515f10`) is in the registrar both states call (`0x51bb20`, from the glue
 /// registrar `0x46abb0` and the in-game `0x51bb60`), so it installs apart from this file's in-game
 /// verbs.
@@ -74,10 +77,11 @@ pub(super) fn install_console_exec(lua: &Lua) -> mlua::Result<()> {
     // `CVar "%s" is "%s"`, `0x63dde0`), goes to the app's command registry.
     lua.globals().set(
         "ConsoleExec",
-        lua.create_function(|lua, line: Option<String>| {
-            let Some(line) = line.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()) else {
-                return Ok(());
-            };
+        lua.create_function(|lua, line: Value| {
+            // `lua_isstring(1)` (`0x515f18`): a string or a number runs, an empty one too; anything
+            // else raises the usage line (`0x850d18`) and runs nothing.
+            let line = super::binding_abi::string_arg(lua, line, USAGE_CONSOLE_EXEC)?;
+            let line = line.trim().to_string();
             let (name, value) = line
                 .split_once(char::is_whitespace)
                 .map_or((line.as_str(), ""), |(n, v)| (n, v.trim()));
@@ -265,7 +269,7 @@ mod tests {
     fn console_exec_writes_a_registered_cvar_and_queues_anything_else() {
         let mut s = UiScript::new().unwrap();
         s.register_cvars([("uiScale", "1")]);
-        s.run("ConsoleExec('uiscale 0.8') ConsoleExec('reloadui') ConsoleExec('  ') ConsoleExec('uiScale')")
+        s.run("ConsoleExec('uiscale 0.8') ConsoleExec('reloadui') ConsoleExec('uiScale')")
             .unwrap();
         assert_eq!(
             s.eval::<String>("return GetCVar('uiScale')").unwrap(),
@@ -281,6 +285,32 @@ mod tests {
             s.take_cvar_changes(),
             vec![("uiScale".to_string(), "0.8".to_string())],
             "a bare name writes nothing"
+        );
+    }
+
+    /// `lua_isstring(1)` (`0x515f18`) passes a string or a number, an empty string included,
+    /// and `luaL_error` (`0x515f27`) raises the usage line for anything else, running nothing.
+    #[test]
+    fn console_exec_takes_a_string_or_a_number_and_raises_its_usage_otherwise() {
+        let mut s = UiScript::new().unwrap();
+        for call in [
+            "ConsoleExec()",
+            "ConsoleExec(nil)",
+            "ConsoleExec({})",
+            "ConsoleExec(true)",
+        ] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(
+                err.contains("Usage: ConsoleExec(\"console_command\")"),
+                "{call}: {err}"
+            );
+        }
+        assert!(s.take_console_lines().is_empty(), "nothing ran");
+        s.run("ConsoleExec(5) ConsoleExec('')").unwrap();
+        assert_eq!(
+            s.take_console_lines(),
+            vec!["5".to_string(), String::new()],
+            "a number is its text, and an empty line still runs"
         );
     }
 

@@ -22,7 +22,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{flag, number_arg, string_arg};
-use super::glue_core::{call, glue_status_key, leading_int, GlueCall};
+use super::glue_core::{call, glue_status_key, GlueCall};
 use super::{check_char_name, Model, ScriptValue, CHAR_NAME_SUCCESS};
 
 /// The record flag a server sets on a character it wants renamed (`[rec+0xfc]` bit `0x4000`,
@@ -297,9 +297,7 @@ impl super::UiScript {
     /// otherwise the cell is set to 0 (`0x472556`), the `lastCharacterIndex` CVar's integer is
     /// selected (`0x472550`-`0x472563`) and `CHARACTER_LIST_UPDATE` fires.
     pub fn load_glue_roster(&mut self, roster: Vec<GlueCharacter>) -> bool {
-        let last = self
-            .cvar("lastCharacterIndex")
-            .map_or(0, |v| i32::try_from(leading_int(&v)).unwrap_or(0));
+        let last = self.cvar_int("lastCharacterIndex").unwrap_or(0);
         let count = roster.len();
         {
             let mut model = self.model_mut();
@@ -1182,6 +1180,18 @@ mod tests {
         s.set_cvar_engine("lastCharacterIndex", "-3");
         assert!(!s.load_glue_roster(three()));
         assert_eq!(fired(&s)[0], "UPDATE_SELECTED_CHARACTER 1");
+        // The record's integer is `SStrToInt` (`0x472560` reads `+0x28`): no whitespace skip and
+        // no `+`, so these read 0, and the 32-bit wrap makes `4294967298` 2.
+        for (text, picked) in [(" 2", "1"), ("+2", "1"), ("2x", "3"), ("4294967298", "3")] {
+            s.run("FIRED = {}").unwrap();
+            s.set_cvar_engine("lastCharacterIndex", text);
+            assert!(!s.load_glue_roster(three()));
+            assert_eq!(
+                fired(&s)[0],
+                format!("UPDATE_SELECTED_CHARACTER {picked}"),
+                "{text:?}"
+            );
+        }
     }
 
     /// A VM over `three()` with Bravo flagged for a rename, `FIRED` also logging

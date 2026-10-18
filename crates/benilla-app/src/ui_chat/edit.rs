@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::sstr_to_int;
+use benilla_ui::script::s_str_to_int;
 
 use crate::net::ChatKind;
 
@@ -203,7 +203,7 @@ impl ChannelState {
     /// (`0x49be50`), and a hole, an out-of-range number or a suspended slot make the whole call a
     /// no-op (`None`). Anything else is already the wire name.
     pub(crate) fn leave_target(&self, arg: &str) -> Option<String> {
-        match sstr_to_int(arg) {
+        match s_str_to_int(arg) {
             0 => Some(arg.to_string()),
             n => self.confirmed_slot_name(n).map(str::to_string),
         }
@@ -213,7 +213,7 @@ impl ChannelState {
     /// `0x49be50`, with no name leg, so only a number naming a confirmed slot sends, and the
     /// packet carries that slot's name. Anything else, a name included, sends nothing.
     pub(crate) fn send_target(&self, arg: &str) -> Option<String> {
-        self.confirmed_slot_name(sstr_to_int(arg))
+        self.confirmed_slot_name(s_str_to_int(arg))
             .map(str::to_string)
     }
 

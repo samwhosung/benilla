@@ -210,6 +210,7 @@ pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
 pub use battlefield_queue::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
 pub use battlefield_score::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStatColumn};
 pub use bind_confirm::PendingEquipAnswer;
+pub use binding_abi::{s_str_to_float, s_str_to_int};
 pub use calls::{NearestMode, QueuedCall, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
 pub use channel::{ChannelCommand, RecruitmentPlan, RecruitmentRun, ZoneChannelRow};
@@ -239,7 +240,7 @@ pub use cvar_checks::{
     check_camera_yaw, check_farclip, check_frill_density, check_refresh, check_shadow_level,
     check_small_cull, check_tex_lod_bias, check_triple_buffer, CvarCheck, CvarVerdict,
 };
-pub use cvars::{small_cull_text, sstr_to_int};
+pub use cvars::small_cull_text;
 pub use cvars::{
     MultisampleFormat, ScreenResolution, SeededCvar, VideoCaps, CVAR_FRILL_DENSITY, CVAR_GAMMA,
     CVAR_SMALL_CULL, CVAR_WORLD_DETAIL, IN_WORLD_READ_ONLY_CVARS, LUA_CVAR_LIMIT,

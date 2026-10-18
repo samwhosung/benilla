@@ -142,9 +142,10 @@ pub(crate) fn lua_number_text(v: f64) -> String {
 /// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits
 /// up to the first other byte, with no whitespace skip; none is 0. The accumulator is a 32-bit
 /// register that wraps (`0x64ac98`-`0x64aca5`) and `neg` wraps too, so `"4294967297"` is 1.
-/// `RemoveChatWindowChannel` and `LeaveChannelByName` key on it (`0x49e880`), and the `item:` link
-/// fields and `SStrToFloat`'s exponent read it.
-pub(crate) fn s_str_to_int(s: &str) -> i64 {
+/// It is a CVar record's integer (`rec+0x28`, stored at `0x63e127`), which change callbacks and the
+/// glue read; `RemoveChatWindowChannel` and `LeaveChannelByName` key on it (`0x49e880`), and the
+/// `item:` link fields and `SStrToFloat`'s exponent read it.
+pub fn s_str_to_int(s: &str) -> i32 {
     let b = s.as_bytes();
     let (neg, mut i) = match b.first() {
         Some(b'-') => (true, 1),
@@ -158,7 +159,11 @@ pub(crate) fn s_str_to_int(s: &str) -> i64 {
         n = n.wrapping_mul(10).wrapping_add(i32::from(c - b'0'));
         i += 1;
     }
-    i64::from(if neg { n.wrapping_neg() } else { n })
+    if neg {
+        n.wrapping_neg()
+    } else {
+        n
+    }
 }
 
 /// Storm's `SStrToFloat` (`0x64aaa0`), which `EditBox:GetNumber` (`0x798790`) pushes: a prefix
@@ -184,7 +189,7 @@ pub(crate) fn s_str_to_int(s: &str) -> i64 {
 /// until it is stored, so an exponent past +-308 against a value that pulls it back in range
 /// (`"0.000...1e320"`) is reached here only by scaling in steps of 300 digits, which rounds more
 /// often; `"0e999"` is 0 as there, and only an exponent past +-4932 makes 0 * inf, NaN.
-pub(crate) fn s_str_to_float(s: &str) -> f64 {
+pub fn s_str_to_float(s: &str) -> f64 {
     let b = s.as_bytes();
     let at = |i: usize| b.get(i).copied().unwrap_or(0);
     let neg = at(0) == b'-';
@@ -215,7 +220,7 @@ pub(crate) fn s_str_to_float(s: &str) -> f64 {
         if at(i) == b'+' {
             i += 1;
         }
-        value = scale_by_pow10(value, s_str_to_int(&s[i..]) as i32);
+        value = scale_by_pow10(value, s_str_to_int(&s[i..]));
     }
     if neg {
         -value

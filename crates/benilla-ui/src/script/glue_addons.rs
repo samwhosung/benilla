@@ -342,7 +342,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let kb = model(lua)
                 .cvars
                 .get(&CVAR_SCRIPT_MEMORY.to_ascii_lowercase())
-                .map_or(0, |slot| s_str_to_int(&slot.value) as i32);
+                .map_or(0, |slot| s_str_to_int(&slot.value));
             Ok(f64::from(kb.wrapping_add((kb >> 31) & 0x3ff) >> 10))
         })?,
     )?;

@@ -11,7 +11,7 @@
 //! ignores its answer (`0x63dc58`).
 
 use super::binding_abi::s_str_to_float;
-use super::cvars::sstr_to_int;
+use super::binding_abi::s_str_to_int;
 
 /// What a [`CvarCheck`] answers a write: whether it may be stored, and the line the callback
 /// prints to the console (`0x63cb50`), refused or not.
@@ -65,7 +65,7 @@ pub fn check_small_cull(value: &str, _applied: &str) -> CvarVerdict {
 /// mip level must be in range 0 - 1." (`0x869998`), else accepted with "Shadow mip level changed
 /// upon restart." (`0x869970`). The test is signed and has no lower bound.
 pub fn check_shadow_level(value: &str, _applied: &str) -> CvarVerdict {
-    if sstr_to_int(value) > 1 {
+    if s_str_to_int(value) > 1 {
         CvarVerdict::refuse("Shadow mip level must be in range 0 - 1.")
     } else {
         CvarVerdict::accept_saying("Shadow mip level changed upon restart.")
@@ -95,8 +95,8 @@ pub fn check_tex_lod_bias(value: &str, _applied: &str) -> CvarVerdict {
 /// two differ only after a saved out-of-range value, which the reference keeps without applying,
 /// and then only in the console line.
 pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
-    let level = sstr_to_int(value);
-    if level == sstr_to_int(applied) {
+    let level = s_str_to_int(value);
+    if level == s_str_to_int(applied) {
         CvarVerdict::accept()
     } else if !(0..=1).contains(&level) {
         CvarVerdict::refuse("BaseMip must be 0 or 1")
@@ -112,7 +112,7 @@ const GX_PENDING: &str = "set pending gxRestart";
 /// `gxTripleBuffer`'s callback (`0x63afe0`): `SStrToInt` (`0x64ac60`), refused unless 0 or 1 with
 /// "TripleBuffer must be 0 or 1" (`0x8650b8`), else taken with [`GX_PENDING`].
 pub fn check_triple_buffer(value: &str, _applied: &str) -> CvarVerdict {
-    if matches!(sstr_to_int(value), 0 | 1) {
+    if matches!(s_str_to_int(value), 0 | 1) {
         CvarVerdict::accept_saying(GX_PENDING)
     } else {
         CvarVerdict::refuse("TripleBuffer must be 0 or 1")
@@ -127,7 +127,7 @@ const REFRESH_RATES: [i32; 11] = [60, 70, 72, 75, 85, 90, 100, 120, 160, 180, 20
 /// (`0x86508c`) and the rates as `%d` joined by ", " (`0x84480c`); a hit is taken with
 /// [`GX_PENDING`].
 pub fn check_refresh(value: &str, _applied: &str) -> CvarVerdict {
-    if REFRESH_RATES.contains(&sstr_to_int(value)) {
+    if REFRESH_RATES.contains(&s_str_to_int(value)) {
         return CvarVerdict::accept_saying(GX_PENDING);
     }
     let rates: Vec<String> = REFRESH_RATES.iter().map(i32::to_string).collect();
@@ -155,7 +155,7 @@ pub fn check_farclip(value: &str, _applied: &str) -> CvarVerdict {
 /// 256 (`0x688dec`-`0x688df6`), so a negative is refused too, with "Frill Density must be in
 /// range 1 - 256." (`0x869ae4`).
 pub fn check_frill_density(value: &str, _applied: &str) -> CvarVerdict {
-    if (1..=256).contains(&(sstr_to_int(value) as u32)) {
+    if (1..=256).contains(&(s_str_to_int(value) as u32)) {
         CvarVerdict::accept()
     } else {
         CvarVerdict::refuse("Frill Density must be in range 1 - 256.")
