@@ -3,7 +3,9 @@
 //! where the C library decides it (`PLATFORM_CASES`), with mlua's `runtime error: ` and
 //! `stack traceback:` wrapper taken out. A new case's answer comes from the reference, written in
 //! by hand, and so does the answer of a case where benilla-lua follows 1.12.1's Lua 5.0 against
-//! 5.1: a comment at the case names the client's address.
+//! 5.1: a comment at the case names the client's address. One such rule spans many cases: a
+//! function the calling instruction does not name takes the name of a global holding it
+//! (`travglobals`, `0x6fbe11`), so `bad argument #1 to `strfind'' where 5.1 printed `?`.
 //!
 //! The cases that list every global answer with each binding the script host has, not with the
 //! VM, so they live in `vm_parity_surface.golden`, which `BENILLA_BLESS=1` rewrites when a
