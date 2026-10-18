@@ -100,7 +100,7 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
         })
         .expect("bar fill quad");
     let r = bar.rect.expect("bar rect resolved");
-    assert_eq!(
+    crate::assert_near!(
         (r.left, r.right, r.bottom, r.top),
         (100.0, 150.0, 100.0, 120.0),
         "horizontal fill: left-pinned, 25% of 200px"
@@ -123,7 +123,7 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
         })
         .expect("bar fill quad");
     let r = bar.rect.expect("bar rect resolved");
-    assert_eq!(
+    crate::assert_near!(
         (r.left, r.right, r.bottom, r.top),
         (100.0, 300.0, 100.0, 105.0),
         "vertical fill: bottom-pinned, 25% of 20px"

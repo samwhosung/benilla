@@ -211,7 +211,7 @@ fn a_center_grip_moves_the_frame_and_ignores_the_bounds() {
     s.run("Sizer:StartSizing(\"CENTER\")").unwrap();
     s.mouse_move(340.0, 130.0);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         (
             s.eval::<f32>("return Sizer:GetWidth()").unwrap(),
             s.eval::<f32>("return Sizer:GetHeight()").unwrap()

@@ -203,7 +203,7 @@ fn blocks_chain_bottom_to_top_and_are_flush_at_spacing_zero() {
     // The frame top is the screen top, 600; three 16 px lines run down to 552.
     measure_at_16px(&mut s);
     let tops = resolved_tops(&s, "Page");
-    assert_eq!(tops, [(600.0, 584.0), (584.0, 568.0), (568.0, 552.0)]);
+    crate::assert_near!(tops, vec![(600.0, 584.0), (584.0, 568.0), (568.0, 552.0)]);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -249,9 +249,9 @@ fn a_body_level_br_is_exactly_one_blank_line() {
         .unwrap();
     assert_eq!(texts(&s, "Page"), ["a", "\n", "b"]);
     measure_at_16px(&mut s);
-    assert_eq!(
+    crate::assert_near!(
         resolved_tops(&s, "Page"),
-        [(600.0, 584.0), (584.0, 568.0), (568.0, 552.0)],
+        vec![(600.0, 584.0), (584.0, 568.0), (568.0, 552.0)],
         "the BR block is one line tall and pushes `b` down by exactly that"
     );
 }
@@ -395,7 +395,7 @@ fn the_page_text_body_renders_the_block_list_a_reader_would_draw() {
     measure_at_16px(&mut s);
     let tops = resolved_tops(&s, "Page");
     assert_eq!(tops.first(), Some(&(600.0, 584.0)));
-    assert_eq!(tops.last(), Some(&(536.0, 520.0)));
+    crate::assert_near!(tops.last(), Some(&(536.0, 520.0)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -556,7 +556,7 @@ fn the_books_unsized_crest_is_its_arts_texel_square_not_the_whole_page() {
     );
 
     let rect = resolved_rect(&s, "Page", img);
-    assert_eq!(
+    crate::assert_near!(
         (rect.right - rect.left, rect.top - rect.bottom),
         (128.0, 128.0),
         "a texel is a FrameXML unit: the 128x128 crest is a 128-unit square, not the page"

@@ -71,7 +71,7 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
         .iter()
         .find(|q| matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p.ends_with("Parent.blp")))
         .unwrap();
-    assert_eq!(parent_bg.rect, Some(Rect::new(300.0, 0.0, 600.0, 400.0)));
+    crate::assert_near!(parent_bg.rect, Some(Rect::new(300.0, 0.0, 600.0, 400.0)));
 
     let zs: Vec<u128> = quads.iter().map(|q| q.z).collect();
     let mut sorted = zs.clone();

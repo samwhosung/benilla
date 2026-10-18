@@ -25,8 +25,9 @@ fn get_locale_and_set_all_points() {
     let ok: bool = s
         .eval(
             r#"
-        return c:GetWidth() == 200 and c:GetHeight() == 50
-           and f:GetWidth() == 200 and f:GetHeight() == 50
+        local function near(a, b) return math.abs(a - b) < 1e-3 end -- the spans through the law
+        return near(c:GetWidth(), 200) and near(c:GetHeight(), 50)
+           and near(f:GetWidth(), 200) and near(f:GetHeight(), 50)
     "#,
         )
         .unwrap();
@@ -51,7 +52,9 @@ fn getpoint_reads_back_anchors() {
         .eval(
             r#"
         local p, rel, rp, x, y = GP_A:GetPoint()
-        return p == "BOTTOMLEFT" and rel == nil and rp == "BOTTOMLEFT" and x == 100 and y == 100
+        -- The offsets read back as `G(S(100))`, 99.99999850988391 at 4:3.
+        return p == "BOTTOMLEFT" and rel == nil and rp == "BOTTOMLEFT"
+            and x == 99.99999850988391 and y == 99.99999850988391
     "#,
         )
         .unwrap();

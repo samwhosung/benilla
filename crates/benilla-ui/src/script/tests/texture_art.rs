@@ -68,31 +68,31 @@ fn a_failed_texture_stays_failed_when_its_art_arrives() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(num(&mut s, "T:GetLeft()"), None, "no art, no span");
-    assert_eq!(num(&mut s, "C:GetLeft()"), None);
+    crate::assert_near!(num(&mut s, "T:GetLeft()"), None, "no art, no span");
+    crate::assert_near!(num(&mut s, "C:GetLeft()"), None);
 
     s.run(r#"T:SetTexture("Art"); C:SetTexture(1, 1, 1)"#)
         .unwrap();
     resolve_matches_scratch(&mut s, "art on failed textures");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetLeft()"),
         None,
         "SetTexture queued no resolve"
     );
-    assert_eq!(num(&mut s, "C:GetLeft()"), None);
-    assert_eq!(drawn(&s, "T"), None, "and it draws nothing");
-    assert_eq!(drawn(&s, "C"), None);
+    crate::assert_near!(num(&mut s, "C:GetLeft()"), None);
+    crate::assert_near!(drawn(&s, "T"), None, "and it draws nothing");
+    crate::assert_near!(drawn(&s, "C"), None);
     // The size getter reads the art live (`0x770720`), resolved or not.
-    assert_eq!(num(&mut s, "T:GetWidth()"), Some(64.0));
+    crate::assert_near!(num(&mut s, "T:GetWidth()"), Some(64.0));
 
     s.run(
         r#"T:SetPoint("TOPLEFT", f, "TOPLEFT", 1, 0); C:SetPoint("TOPLEFT", f, "TOPLEFT", 2, 0)"#,
     )
     .unwrap();
     resolve_matches_scratch(&mut s, "their own invalidates");
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(165.0), "the art's 64");
-    assert_eq!(num(&mut s, "T:GetBottom()"), Some(168.0), "and its 32");
-    assert_eq!(num(&mut s, "C:GetRight()"), Some(110.0), "the solid's 8");
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(165.0), "the art's 64");
+    crate::assert_near!(num(&mut s, "T:GetBottom()"), Some(168.0), "and its 32");
+    crate::assert_near!(num(&mut s, "C:GetRight()"), Some(110.0), "the solid's 8");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -107,14 +107,14 @@ fn a_resolved_texture_keeps_its_rect_when_its_art_changes() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0));
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(164.0));
     let before = drawn(&s, "T").expect("drawn");
 
     s.run(r#"T:SetTexture("Big")"#).unwrap();
     resolve_matches_scratch(&mut s, "new art");
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0), "the rect stands");
-    assert_eq!(drawn(&s, "T"), Some(before), "and draws there");
-    assert_eq!(
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(164.0), "the rect stands");
+    crate::assert_near!(drawn(&s, "T"), Some(before), "and draws there");
+    crate::assert_near!(
         num(&mut s, "T:GetWidth()"),
         Some(128.0),
         "the getter reads the art"
@@ -123,12 +123,12 @@ fn a_resolved_texture_keeps_its_rect_when_its_art_changes() {
     // The owner's new rect reaches the texture, whose resolve reads the art it holds now.
     s.run("f:SetHeight(120)").unwrap();
     resolve_matches_scratch(&mut s, "the target moved");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(228.0),
         "the new art's 128"
     );
-    assert_eq!(num(&mut s, "T:GetTop()"), Some(220.0));
+    crate::assert_near!(num(&mut s, "T:GetTop()"), Some(220.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -143,17 +143,17 @@ fn a_same_value_invalidate_after_new_art_takes_the_art() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0));
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(164.0));
     s.run(r#"T:SetTexture("Big")"#).unwrap();
     resolve_matches_scratch(&mut s, "new art");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(164.0),
         "nothing reached it"
     );
     s.run("T:SetWidth(0)").unwrap();
     resolve_matches_scratch(&mut s, "the same width");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(228.0),
         "the invalidate read the new art"
@@ -173,7 +173,7 @@ fn new_art_and_an_unnamed_touch_in_one_frame_leave_the_rect_standing() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0));
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(164.0));
     let before = drawn(&s, "T").expect("drawn");
 
     let derives = s.model_ref().layout_derives;
@@ -184,12 +184,12 @@ fn new_art_and_an_unnamed_touch_in_one_frame_leave_the_rect_standing() {
         s.model_ref().layout_derives > derives,
         "the run took the full derivation, the path whose fingerprint leaves the art out"
     );
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0), "the rect stands");
-    assert_eq!(drawn(&s, "T"), Some(before));
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(164.0), "the rect stands");
+    crate::assert_near!(drawn(&s, "T"), Some(before));
 
     s.run("f:SetHeight(120)").unwrap();
     resolve_matches_scratch(&mut s, "the target moved");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(228.0),
         "the next resolve that reaches it reads the new art"

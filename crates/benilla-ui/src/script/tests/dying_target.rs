@@ -43,8 +43,8 @@ fn a_replaced_label_leaves_its_dependents_anchors() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(s.eval::<i64>("return t:GetNumPoints()").unwrap(), 2);
-    assert_eq!(
+    crate::assert_near!(s.eval::<i64>("return t:GetNumPoints()").unwrap(), 2);
+    crate::assert_near!(
         num(&mut s, "t:GetLeft()"),
         Some(225.0),
         "right of the label"
@@ -52,12 +52,12 @@ fn a_replaced_label_leaves_its_dependents_anchors() {
 
     s.run(r#"b:SetFontString(b:CreateFontString("New", "ARTWORK"))"#)
         .unwrap();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<i64>("return t:GetNumPoints()").unwrap(),
         1,
         "the anchor to the destroyed label is freed"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<i64>("return table.getn({ t:GetPoint(2) })")
             .unwrap(),
         0,
@@ -70,7 +70,7 @@ fn a_replaced_label_leaves_its_dependents_anchors() {
         .unwrap());
 
     resolve_matches_scratch(&mut s, "the label replaced");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "t:GetLeft()"),
         Some(225.0),
         "the unhook queued no resolve"
@@ -78,7 +78,7 @@ fn a_replaced_label_leaves_its_dependents_anchors() {
     // Its own invalidate resolves it from the anchor left: centred under the button's top.
     s.run("t:SetWidth(12)").unwrap();
     resolve_matches_scratch(&mut s, "the texture's own invalidate");
-    assert_eq!(num(&mut s, "t:GetLeft()"), Some(194.0));
+    crate::assert_near!(num(&mut s, "t:GetLeft()"), Some(194.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -159,7 +159,7 @@ fn a_scroll_child_holds_no_anchor_to_a_label_it_was_placed_on() {
     .unwrap();
     s.resolve();
     let left = num(&mut s, "c:GetLeft()");
-    assert_eq!(left, Some(10.0), "placed by the override");
+    crate::assert_near!(left, Some(10.0), "placed by the override");
 
     assert_eq!(s.eval::<i64>("return c:GetNumPoints()").unwrap(), 1);
     s.run(r#"b:SetFontString(b:CreateFontString("New", "ARTWORK"))"#)
@@ -192,17 +192,17 @@ fn a_region_reowned_keeps_its_rect_until_its_own_invalidate() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(num(&mut s, "T:GetRight()"), Some(108.0));
+    crate::assert_near!(num(&mut s, "T:GetRight()"), Some(108.0));
     s.run("t:SetParent(b)").unwrap();
     resolve_matches_scratch(&mut s, "re-owned");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(54.0),
         "the rect it had, read in the new owner's units"
     );
     s.run("t:SetWidth(8)").unwrap();
     resolve_matches_scratch(&mut s, "its own invalidate");
-    assert_eq!(
+    crate::assert_near!(
         num(&mut s, "T:GetRight()"),
         Some(58.0),
         "8 units at scale 2, from 100"

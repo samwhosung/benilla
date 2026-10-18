@@ -27,7 +27,7 @@ fn setpoint_explicit_nil_relative_to_keeps_offsets() {
         })
         .expect("resolved frame rect");
     // screen [0,0,600,800], TOPLEFT+(40,-40): left 40, top 560, size 300×200.
-    assert_eq!(rect, Rect::new(360.0, 40.0, 560.0, 340.0));
+    crate::assert_near!(rect, Rect::new(360.0, 40.0, 560.0, 340.0));
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn a_region_resolves_even_when_its_owner_frame_has_no_rect() {
         Some(105.0),
         "a fully-anchored region needs nothing from its owner"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<Option<f32>>("return BareMark:GetBottom()")
             .unwrap(),
         Some(57.0)
@@ -378,25 +378,31 @@ fn get_width_answers_the_set_size_else_the_rect_span_unscaled() {
     .unwrap();
     s.resolve();
     let num = |e: &str| s.eval::<f64>(&format!("return {e}")).unwrap();
+    // Each through the law at 4:3: `G(S(100))`, and the spans `G(S(400))` and `G(S(200))`.
+    let (w100, w400, h200) = (99.99999850988391, 399.99999403953564, 199.99999701976782);
     assert_eq!(
         num("SizeSet:GetWidth()"),
-        100.0,
+        w100,
         "the set width, not the span"
     );
-    assert_eq!(num("SizeSet:GetRight() - SizeSet:GetLeft()"), 400.0);
-    assert_eq!(num("SizeSet:GetHeight()"), 200.0, "no set height: the span");
+    assert_eq!(num("SizeSet:GetRight() - SizeSet:GetLeft()"), w400);
+    assert_eq!(num("SizeSet:GetHeight()"), h200, "no set height: the span");
     assert_eq!(
         num("SizeTex:GetWidth()"),
-        400.0,
+        w400,
         "a size-less texture: its rect"
     );
-    assert_eq!(num("SizeTex:GetHeight()"), 200.0);
+    assert_eq!(num("SizeTex:GetHeight()"), h200);
     assert_eq!(
         num("SizeHalf:GetWidth()"),
-        400.0,
+        w400,
         "the span, not over the scale"
     );
-    assert_eq!(num("SizeHalf:GetRight() - SizeHalf:GetLeft()"), 800.0);
+    assert_eq!(
+        num("SizeHalf:GetRight() - SizeHalf:GetLeft()"),
+        2.0 * w400,
+        "the edges over the scale"
+    );
     assert_eq!(num("SizeLoose:GetWidth()"), 0.0, "no size and no rect");
     assert_eq!(num("SizeLooseTex:GetHeight()"), 0.0);
 }
@@ -435,13 +441,14 @@ fn get_width_resolves_only_at_a_zero_size() {
     "#,
     )
     .unwrap();
+    // The set width and the span through the law, as 1.12.1 prints them at 4:3.
     assert_eq!(
         s.eval::<String>("return table.concat(log, ',')").unwrap(),
-        "w 20,span,w 200"
+        "w 19.999999701977,span,w 199.99999701977"
     );
     s.resolve();
     assert_eq!(
         s.eval::<String>("return table.concat(log, ',')").unwrap(),
-        "w 20,span,w 200,fixed"
+        "w 19.999999701977,span,w 199.99999701977,fixed"
     );
 }

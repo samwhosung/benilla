@@ -66,7 +66,7 @@ fn a_method_pulled_off_a_frame_works_on_a_texture_and_a_fontstring() {
     assert_eq!((tw, sw), (64.0, 50.0));
 
     s.run("local _SetW = Host.SetWidth _SetW(Tex, 99)").unwrap();
-    assert_eq!(s.eval::<f32>("return Tex:GetWidth()").unwrap(), 99.0);
+    crate::assert_near!(s.eval::<f32>("return Tex:GetWidth()").unwrap(), 99.0);
 }
 
 #[test]

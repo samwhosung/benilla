@@ -385,7 +385,7 @@ fn region_set_parent_relinks_the_draw_owner_and_leaves_anchors_alone() {
     s.resolve();
     // A is [bottom 0, left 0, top 50, right 100]: TOPLEFT +(4,-4), 24x24 ⇒ 4..28 x 22..46.
     let before = tex_rect(&s, "SPGlow").expect("the spark draws under A");
-    assert_eq!(before, crate::layout::Rect::new(22.0, 4.0, 46.0, 28.0));
+    crate::assert_near!(before, crate::layout::Rect::new(22.0, 4.0, 46.0, 28.0));
 
     assert_eq!(
         s.arity("Spark:SetParent(B)").unwrap(),

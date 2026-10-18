@@ -47,7 +47,7 @@ fn setpoint_relative_to_resolves_an_alias_global() {
         let bottom: f32 = s
             .eval(&format!("return StockButton{i}:GetBottom()"))
             .unwrap();
-        assert_eq!(
+        crate::assert_near!(
             left,
             105.0 + 32.0 * (i - 1) as f32,
             "button {i} must sit one pitch past its predecessor, not stacked on the bar"

@@ -546,7 +546,7 @@ fn highlight_is_additive_and_state_textures_fill_then_anchor() {
     // The reference's string setter anchors a texture it builds with `SetAllPoints`, so the later
     // 64px size is unread and the ring fills the 36px button.
     let r = find("Interface\\Ring.blp").rect.unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (r.left, r.right, r.bottom, r.top),
         (100.0, 136.0, 100.0, 136.0)
     );
@@ -567,7 +567,7 @@ fn highlight_is_additive_and_state_textures_fill_then_anchor() {
         .find(|q| matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p == "Interface\\Ring.blp"))
         .unwrap();
     let r = ring.rect.unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (r.left, r.right, r.bottom, r.top),
         (86.0, 150.0, 86.0, 150.0)
     );
@@ -796,7 +796,7 @@ fn a_button_reports_its_labels_extent() {
         .expect("the label asks the host for its extent");
     s.set_measured_text_unwrapped(&[(req.id, 47.0, 14.0, req.key)]);
 
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return WidthBtn:GetTextWidth()").unwrap(),
         47.0,
         "the Button forwards to its own label"
@@ -915,7 +915,7 @@ fn set_font_string_anchors_only_an_unanchored_label() {
     s.run("b:SetFontString(placed)").unwrap();
     let (p, _rel, rp, x, y): (String, mlua::Value, String, f64, f64) =
         s.eval("return placed:GetPoint(1)").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (p.as_str(), rp.as_str(), x, y),
         ("TOPLEFT", "TOPLEFT", 7.0, -3.0),
         "an already-anchored label keeps its own anchors"

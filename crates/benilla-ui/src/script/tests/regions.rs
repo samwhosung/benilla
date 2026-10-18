@@ -45,7 +45,7 @@ fn region_texture_anchored_topleft_resolves_exact_rect() {
     .unwrap();
     s.resolve();
     // TOPLEFT +(4,-4), 24×24 in the owner: left 4, top 46, right 28, bottom 22.
-    assert_eq!(
+    crate::assert_near!(
         region_tex_rect(&s, "Interface\\Icon"),
         Rect::new(22.0, 4.0, 46.0, 28.0)
     );
@@ -71,7 +71,7 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
     .unwrap();
     s.resolve();
     // Unmeasured: x runs 5..6 from the pinned left; LEFT pins the y centre (25), so y is ±0.5.
-    assert_eq!(
+    crate::assert_near!(
         region_text_rect(&s, "Name"),
         Rect::new(24.5, 5.0, 25.5, 6.0)
     );
@@ -83,7 +83,7 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
         .collect();
     s.set_measured_text_unwrapped(&answers);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         region_text_rect(&s, "Name"),
         Rect::new(19.0, 5.0, 31.0, 45.0)
     );
@@ -114,9 +114,11 @@ fn a_zero_width_solid_spans_eight_units_and_its_artless_twin_gets_no_rect() {
     s.resolve();
     s.run(
         r#"
-        assert(Fill:GetLeft() == 0 and Fill:GetRight() == 8,
+        local function near(a, b) return math.abs(a - b) < 1e-3 end -- edges through the law
+        assert(Fill:GetLeft() == 0 and near(Fill:GetRight(), 8),
                "the solid spans its 8 texels, got " .. tostring(Fill:GetRight()))
-        assert(Fill:GetTop() == 50 and Fill:GetBottom() == 37, "and its authored 13 of height")
+        assert(near(Fill:GetTop(), 50) and near(Fill:GetBottom(), 37),
+               "and its authored 13 of height")
         assert(Bare:GetLeft() == nil, "no art, no span, no rect — not the owner's width")
     "#,
     )
@@ -168,7 +170,7 @@ fn region_set_all_points_fills_owner() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         region_tex_rect(&s, "Interface\\Fill"),
         Rect::new(0.0, 0.0, 50.0, 100.0)
     );
@@ -212,7 +214,7 @@ fn region_anchors_to_sibling_region_by_name() {
     };
     // The row's TOPLEFT (100, 144) plus (-13, 13): the slot spans 87..151 by 93..157.
     let slot = rect("RowSlot");
-    assert_eq!(
+    crate::assert_near!(
         (slot.left, slot.top),
         (87.0, 157.0),
         "slot at row TOPLEFT (-13,13)"
@@ -226,7 +228,7 @@ fn region_anchors_to_sibling_region_by_name() {
         "plate spans its 128 width from the slot edge"
     );
     // A LEFT point centres the plate vertically: the slot's centre 125, -18 = 107, ±39.
-    assert_eq!((plate.bottom, plate.top), (68.0, 146.0));
+    crate::assert_near!((plate.bottom, plate.top), (68.0, 146.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -312,7 +314,7 @@ fn long_region_chain_resolves_and_a_frame_binds_to_its_tail() {
     // Screen top 600; Line1 top = 600−5 = 595; each link steps 12 (10 height + 2 gap).
     for i in 1..=12u32 {
         let top = 595.0 - 12.0 * (i as f32 - 1.0);
-        assert_eq!(
+        crate::assert_near!(
             region_tex_rect(&s, &format!("Interface\\Line{i}")),
             Rect::new(top - 10.0, 5.0, top, 305.0),
             "link {i} must resolve at its true chain position, not an owner-edge fallback"
@@ -327,7 +329,7 @@ fn long_region_chain_resolves_and_a_frame_binds_to_its_tail() {
             _ => None,
         })
         .expect("the tail-anchored button resolved a rect (not dropped to origin)");
-    assert_eq!(
+    crate::assert_near!(
         button,
         Rect::new(406.0, 5.0, 447.0, 152.0),
         "the frame binds to the CHAIN TAIL's resolved rect"
@@ -1060,11 +1062,12 @@ fn the_size_getters_take_the_author_first_then_the_natural_width_and_wrapped_hei
     s.set_measured_text(&answers);
     s.run(
         r#"
-        assert(Sized:GetWidth() == 300, "the AUTHORED width wins, got " .. tostring(Sized:GetWidth()))
-        assert(Sized:GetHeight() == 24, "and the un-authored height is the measure, got " .. tostring(Sized:GetHeight()))
-        assert(Auto:GetWidth() == 90, "no author ⇒ the NATURAL width, got " .. tostring(Auto:GetWidth()))
+        -- Each through the law at 4:3: `G(S(300))`, `G(S(24))`, `G(S(90))`.
+        assert(Sized:GetWidth() == 299.9999955296517, "the AUTHORED width wins, got " .. tostring(Sized:GetWidth()))
+        assert(Sized:GetHeight() == 24.00000059604644, "and the un-authored height is the measure, got " .. tostring(Sized:GetHeight()))
+        assert(Auto:GetWidth() == 89.9999986588955, "no author ⇒ the NATURAL width, got " .. tostring(Auto:GetWidth()))
         assert(Auto:GetWidth() == Auto:GetStringWidth(), "which is GetStringWidth's own cell")
-        assert(Auto:GetHeight() == 24, "and the WRAPPED height, got " .. tostring(Auto:GetHeight()))
+        assert(Auto:GetHeight() == 24.00000059604644, "and the WRAPPED height, got " .. tostring(Auto:GetHeight()))
     "#,
     )
     .unwrap();
@@ -1111,8 +1114,9 @@ fn a_textures_getters_report_its_texel_span_on_an_unsized_axis() {
         Half:SetTexture("Interface\\Crest"); Half:SetPoint("TOPLEFT", 0, 0); Half:SetHeight(13)
         Bare = f:CreateTexture("Bare", "ARTWORK")
         Bare:SetPoint("TOPLEFT", 0, 0)
-        assert(Art:GetWidth() == 128 and Art:GetHeight() == 96, "the art's own texels")
-        assert(Half:GetWidth() == 128 and Half:GetHeight() == 13, "per AXIS: authored 13 wins, width still derived")
+        -- Each through the law at 4:3: `G(S(128))` is 128, `G(S(96))` and `G(S(13))` are not whole.
+        assert(Art:GetWidth() == 128 and Art:GetHeight() == 96.00000238418576, "the art's own texels")
+        assert(Half:GetWidth() == 128 and Half:GetHeight() == 13.000000521540635, "per AXIS: authored 13 wins, width still derived")
         assert(Bare:GetWidth() == 0, "no art, no span — and no floor on a texture")
     "#,
     )

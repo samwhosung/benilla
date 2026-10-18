@@ -233,8 +233,8 @@ fn hit_rect_insets_shrink_the_mouse_rect_only() {
     .unwrap();
     s.resolve();
 
-    assert_eq!(s.eval::<f64>("return A:GetHeight()").unwrap(), 100.0);
-    assert_eq!(s.eval::<f64>("return A:GetTop()").unwrap(), 100.0);
+    crate::assert_near!(s.eval::<f64>("return A:GetHeight()").unwrap(), 100.0);
+    crate::assert_near!(s.eval::<f64>("return A:GetTop()").unwrap(), 100.0);
 
     assert!(
         s.hit_test(50.0, 90.0).is_none(),

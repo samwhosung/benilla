@@ -645,7 +645,7 @@ mod tests {
         assert_eq!((w, h), (128.0, 128.0), "the wheel is 128 square");
         // TOPLEFT (16, −32) inside a 365×200 frame seated at the screen's bottom-left.
         assert_eq!(l, 16.0);
-        assert_eq!(b, 200.0 - 32.0 - 128.0);
+        crate::assert_near!(b, 200.0 - 32.0 - 128.0);
         let (sl, sw, sh): (f32, f32, f32) = s
             .eval(
                 "local r = TestPicker:GetColorValueTexture(); \
@@ -653,7 +653,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!((sw, sh), (32.0, 128.0), "the strip is 32×128");
-        assert_eq!(sl, 16.0 + 128.0 + 24.0, "seated 24 right of the wheel");
+        crate::assert_near!(sl, 16.0 + 128.0 + 24.0, "seated 24 right of the wheel");
         // The thumbs exist and carry the one BLP in the window.
         let file: String = s
             .eval("return TestPicker:GetColorWheelThumbTexture():GetTexture()")

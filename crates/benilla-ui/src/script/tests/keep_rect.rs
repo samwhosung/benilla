@@ -53,14 +53,14 @@ fn set_right(s: &mut UiScript, x: f64) {
 fn a_jitter_under_the_keep_threshold_keeps_the_rect() {
     let mut s = panel();
     set_right(&mut s, 300.0 + KEEP / 10.0);
-    assert_eq!(right(&mut s, "Panel"), 300.0, "the cached rect stands");
+    crate::assert_near!(right(&mut s, "Panel"), 300.0, "the cached rect stands");
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 1, "no ApplyRect");
     assert_eq!(
         s.hit_test_name(300.0006, 120.0),
         None,
         "the hit rect is the kept rect's"
     );
-    assert_eq!(
+    crate::assert_near!(
         right(&mut s, "Pin"),
         310.0,
         "a kept rect moves no dependent"
@@ -73,7 +73,7 @@ fn a_jitter_under_the_keep_threshold_keeps_the_rect() {
 fn a_move_just_over_the_threshold_applies() {
     let mut s = panel();
     set_right(&mut s, 300.0125);
-    assert_eq!(right(&mut s, "Panel"), 300.0, "0.0125 is under 0.0128");
+    crate::assert_near!(right(&mut s, "Panel"), 300.0, "0.0125 is under 0.0128");
     set_right(&mut s, 300.0131);
     let r = right(&mut s, "Panel");
     assert!((r - 300.0131).abs() < 1e-4, "0.0131 applies: {r}");
@@ -94,7 +94,7 @@ fn a_slow_drift_accumulates_and_applies_once_it_crosses() {
     let mut s = panel();
     for x in [300.004, 300.008, 300.012] {
         set_right(&mut s, x);
-        assert_eq!(right(&mut s, "Panel"), 300.0, "{x}: under the threshold");
+        crate::assert_near!(right(&mut s, "Panel"), 300.0, "{x}: under the threshold");
     }
     set_right(&mut s, 300.016);
     let r = right(&mut s, "Panel");
@@ -122,11 +122,11 @@ fn a_region_keeps_its_rect_under_the_threshold() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(right(&mut s, "Tex"), 300.0);
+    crate::assert_near!(right(&mut s, "Tex"), 300.0);
     s.run(r#"Tex:SetPoint("TOPRIGHT", Holder, "BOTTOMLEFT", 300.005, 150)"#)
         .unwrap();
     s.resolve();
-    assert_eq!(right(&mut s, "Tex"), 300.0, "kept");
+    crate::assert_near!(right(&mut s, "Tex"), 300.0, "kept");
     s.run(r#"Tex:SetPoint("TOPRIGHT", Holder, "BOTTOMLEFT", 300.02, 150)"#)
         .unwrap();
     s.resolve();
@@ -152,12 +152,12 @@ fn a_scale_move_stores_the_rect_without_the_keep_test() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Mark:GetLeft()").unwrap(),
         100.0,
         "the region reads the kept rect"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Panel:GetLeft()").unwrap(),
         100.0,
         "kept"
@@ -195,11 +195,11 @@ fn a_new_measure_stores_the_fontstring_rect_without_the_keep_test() {
     let r = s.fontstrings_needing_measure()[0].clone();
     s.set_measured_text_unwrapped(&[(r.id, 50.0, 12.0, r.key)]);
     s.resolve();
-    assert_eq!(right(&mut s, "Label"), 150.0);
+    crate::assert_near!(right(&mut s, "Label"), 150.0);
     s.run(r#"Label:SetPoint("BOTTOMLEFT", Holder, "BOTTOMLEFT", 100.004, 100)"#)
         .unwrap();
     s.resolve();
-    assert_eq!(right(&mut s, "Label"), 150.0, "kept");
+    crate::assert_near!(right(&mut s, "Label"), 150.0, "kept");
     s.run(r#"Label:SetText("abd")"#).unwrap();
     s.resolve();
     let r = s.fontstrings_needing_measure()[0].clone();

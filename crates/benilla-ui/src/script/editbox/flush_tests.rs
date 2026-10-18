@@ -582,7 +582,7 @@ fn an_unfocused_box_holds_the_window_its_caret_left() {
     let mut s = script();
     long_box(&mut s);
     assert_eq!(window(&s), &ALPHA40[19..]);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64, i64)>(
             "local t = W:GetRegions() return t:GetWidth(), t:GetHeight(), t:GetNumPoints()"
         )

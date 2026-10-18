@@ -46,7 +46,7 @@ fn measured_fontstring_height_feeds_frame_anchors() {
             _ => None,
         })
         .expect("greeting rect");
-    assert_eq!((g.top, g.bottom, g.left), (409.0, 361.0, 33.0));
+    crate::assert_near!((g.top, g.bottom, g.left), (409.0, 361.0, 33.0));
     // Row1: TOPLEFT → Greeting BOTTOMLEFT +(-10,-20) ⇒ top 341, left 23, bound in round 2.
     let row = quads
         .iter()
@@ -55,7 +55,7 @@ fn measured_fontstring_height_feeds_frame_anchors() {
             _ => None,
         })
         .expect("row rect");
-    assert_eq!((row.top, row.left), (341.0, 23.0));
+    crate::assert_near!((row.top, row.left), (341.0, 23.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -82,7 +82,7 @@ fn a_changed_text_reads_zero_until_its_own_measure_lands() {
     let r = reqs[0].clone();
     assert_eq!(r.text, "Say: ");
     s.set_measured_text_unwrapped(&[(r.id, 30.0, 16.0, r.key)]);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>(r#"return getglobal("Header"):GetWidth()"#)
             .unwrap(),
         30.0
@@ -103,7 +103,7 @@ fn a_changed_text_reads_zero_until_its_own_measure_lands() {
     assert_eq!(r2.text, "Tell Alice: ");
     assert_ne!(r2.key, r.key, "the key tracks the text");
     s.set_measured_text_unwrapped(&[(r2.id, 72.0, 16.0, r2.key)]);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>(r#"return getglobal("Header"):GetWidth()"#)
             .unwrap(),
         72.0
@@ -154,10 +154,10 @@ fn zero_width_fontstring_autosizes_to_its_line() {
     let (l_left, l_right, l_w): (f32, f32, f32) = s
         .eval("return FromLabel:GetLeft(), FromLabel:GetRight(), FromLabel:GetStringWidth()")
         .unwrap();
-    assert_eq!((l_left, l_right, l_w), (74.0, 114.0, 40.0));
+    crate::assert_near!((l_left, l_right, l_w), (74.0, 114.0, 40.0));
     // Value: 5 past the label's measured right edge.
     let v_left: f32 = s.eval("return FromValue:GetLeft()").unwrap();
-    assert_eq!(v_left, 119.0);
+    crate::assert_near!(v_left, 119.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -230,7 +230,7 @@ fn invalidate_text_measures_reopens_the_round_trip() {
     s.set_measured_text_unwrapped(&[(id, 74.0, 12.0, key)]);
     s.resolve();
     assert!(s.fontstrings_needing_measure().is_empty(), "cache warm");
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Label:GetStringWidth()").unwrap(),
         74.0
     );
@@ -273,21 +273,21 @@ fn get_string_width_is_the_natural_width_not_the_box() {
 
     // 1 · A fully declared box still requests a measure, for the natural width.
     let reqs = s.fontstrings_needing_measure();
-    assert_eq!(reqs.len(), 1, "a fully-sized FontString still measures");
+    crate::assert_near!(reqs.len(), 1, "a fully-sized FontString still measures");
     let r = &reqs[0];
-    assert_eq!(r.wrap_width, Some(60.0), "the request carries the box");
+    crate::assert_near!(r.wrap_width, Some(60.0), "the request carries the box");
 
     // The host answers with both: laid out inside 60, natural 200.
     s.set_measured_text(&[(r.id, 60.0, 39.0, 200.0, r.key)]);
     s.resolve();
 
     // 2 · The two getters answer different questions.
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Label:GetStringWidth()").unwrap(),
         200.0,
         "GetStringWidth is the natural, unwrapped extent"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Label:GetWidth()").unwrap(),
         60.0,
         "GetWidth is the laid-out box the auto-size path depends on"
@@ -297,10 +297,10 @@ fn get_string_width_is_the_natural_width_not_the_box() {
     s.run("Label:SetWidth(30)").unwrap();
     s.resolve();
     let reqs = s.fontstrings_needing_measure();
-    assert_eq!(reqs.len(), 1, "a new box is a new measure key");
+    crate::assert_near!(reqs.len(), 1, "a new box is a new measure key");
     s.set_measured_text(&[(reqs[0].id, 30.0, 91.0, 200.0, reqs[0].key)]);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return Label:GetStringWidth()").unwrap(),
         200.0,
         "the string did not change, so neither did its natural width"
@@ -551,7 +551,7 @@ fn an_emptied_fontstring_drops_to_the_floor_and_a_restored_one_regains_its_box()
     );
     assert_eq!(step(&mut s, r#"Label:SetText("")"#), 11.0, "the floor");
     // Swept for another reason while empty: still the floor.
-    assert_eq!(
+    crate::assert_near!(
         step(&mut s, r#"Label:SetPoint("BOTTOMLEFT", 20, 10)"#),
         21.0
     );
@@ -560,7 +560,7 @@ fn an_emptied_fontstring_drops_to_the_floor_and_a_restored_one_regains_its_box()
         20.0 + 5.0 * PER_CHAR,
         "the same text again, under its old measure key"
     );
-    assert_eq!(
+    crate::assert_near!(
         step(&mut s, r#"Label:SetText(nil)"#),
         21.0,
         "nil empties too"

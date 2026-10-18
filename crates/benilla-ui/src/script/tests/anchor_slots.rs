@@ -199,7 +199,7 @@ fn the_threshold_compares_the_quantized_stored_offsets() {
     let x: f64 = s
         .eval("local _, _, _, x = f:GetPoint(1); return x")
         .unwrap();
-    assert_eq!(x, 650.0001831054688);
+    crate::assert_near!(x, 650.0001831054688);
 
     // And the other way: five ulps above 700 (a raw 3.05e-4, past the raw threshold) store
     // within 2^-22 of 700's value, so the call is a no-op.

@@ -57,9 +57,9 @@ fn drawn(s: &UiScript, name: &str) -> Option<Rect> {
 fn a_cleared_frame_answers_its_old_left() {
     let mut s = host();
     s.run("Host:ClearAllPoints()").unwrap();
-    assert_eq!(left(&mut s, "Host"), Some(100.0), "the cached rect stands");
+    crate::assert_near!(left(&mut s, "Host"), Some(100.0), "the cached rect stands");
     s.resolve();
-    assert_eq!(left(&mut s, "Host"), Some(100.0), "and outlasts a resolve");
+    crate::assert_near!(left(&mut s, "Host"), Some(100.0), "and outlasts a resolve");
     assert_eq!(s.eval::<i64>("return Host:GetNumPoints()").unwrap(), 0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -72,7 +72,7 @@ fn a_cleared_texture_still_draws_and_keeps_its_left() {
     s.run("Tex:ClearAllPoints()").unwrap();
     s.resolve();
     assert_eq!(drawn(&s, "Tex"), Some(before), "the same quad");
-    assert_eq!(left(&mut s, "Tex"), Some(110.0));
+    crate::assert_near!(left(&mut s, "Tex"), Some(110.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -91,17 +91,17 @@ fn a_child_of_a_cleared_frame_keeps_its_rect() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Host"), Some(100.0));
+    crate::assert_near!(left(&mut s, "Host"), Some(100.0));
     s.run("Host:ClearAllPoints()").unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Child"), Some(300.0), "the child stands");
-    assert_eq!(left(&mut s, "Tex"), Some(110.0), "and so does the region");
+    crate::assert_near!(left(&mut s, "Child"), Some(300.0), "the child stands");
+    crate::assert_near!(left(&mut s, "Tex"), Some(110.0), "and so does the region");
     s.run(r#"Outer:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 40, 0)"#)
         .unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Outer"), Some(40.0));
-    assert_eq!(left(&mut s, "Host"), Some(100.0), "the old target's move");
-    assert_eq!(left(&mut s, "Child"), Some(300.0));
+    crate::assert_near!(left(&mut s, "Outer"), Some(40.0));
+    crate::assert_near!(left(&mut s, "Host"), Some(100.0), "the old target's move");
+    crate::assert_near!(left(&mut s, "Child"), Some(300.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -113,19 +113,19 @@ fn a_cleared_frame_fails_on_its_own_invalidate_and_its_dependents_stand() {
     let mut s = host();
     let tex = drawn(&s, "Tex").expect("drawn");
     s.run("Host:ClearAllPoints(); Host:SetWidth(100)").unwrap();
-    assert_eq!(left(&mut s, "Host"), None, "the failed resolve");
+    crate::assert_near!(left(&mut s, "Host"), None, "the failed resolve");
     s.resolve();
-    assert_eq!(left(&mut s, "Host"), None);
-    assert_eq!(left(&mut s, "Child"), Some(300.0), "the child stands");
-    assert_eq!(left(&mut s, "Tex"), Some(110.0), "the region stands");
-    assert_eq!(drawn(&s, "Tex"), Some(tex), "and draws");
+    crate::assert_near!(left(&mut s, "Host"), None);
+    crate::assert_near!(left(&mut s, "Child"), Some(300.0), "the child stands");
+    crate::assert_near!(left(&mut s, "Tex"), Some(110.0), "the region stands");
+    crate::assert_near!(drawn(&s, "Tex"), Some(tex), "and draws");
     // A re-anchor resolves it again, and its rect change reaches what anchors to it.
     s.run(r#"Host:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0)"#)
         .unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Host"), Some(0.0));
-    assert_eq!(left(&mut s, "Child"), Some(100.0), "the child follows");
-    assert_eq!(left(&mut s, "Tex"), Some(10.0));
+    crate::assert_near!(left(&mut s, "Host"), Some(0.0));
+    crate::assert_near!(left(&mut s, "Child"), Some(100.0), "the child follows");
+    crate::assert_near!(left(&mut s, "Tex"), Some(10.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -135,7 +135,7 @@ fn a_same_width_still_invalidates_a_cleared_frame() {
     let mut s = host();
     s.run("Host:ClearAllPoints()").unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Host"), Some(100.0));
+    crate::assert_near!(left(&mut s, "Host"), Some(100.0));
     s.run("Host:SetWidth(200)").unwrap();
     assert_eq!(left(&mut s, "Host"), None);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
@@ -154,7 +154,7 @@ fn a_clear_behind_a_queued_resolve_fails_it() {
     )
     .unwrap();
     assert_eq!(left(&mut s, "Host"), None);
-    assert_eq!(left(&mut s, "Child"), Some(300.0), "nothing moved under it");
+    crate::assert_near!(left(&mut s, "Child"), Some(300.0), "nothing moved under it");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -206,7 +206,7 @@ fn a_failed_texture_keeps_its_quad_and_a_failed_fontstring_does_not() {
     s.run(r#"Tex:SetPoint("BOTTOMLEFT", Host, "BOTTOMLEFT", 30, 30)"#)
         .unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "Tex"), Some(130.0));
+    crate::assert_near!(left(&mut s, "Tex"), Some(130.0));
     assert_eq!(drawn(&s, "Tex").map(|r| r.left), Some(130.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -233,11 +233,11 @@ fn stale_reader_of_a_label() -> UiScript {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(left(&mut s, "T"), Some(110.0));
+    crate::assert_near!(left(&mut s, "T"), Some(110.0));
     s.run("X:ClearAllPoints(); X:SetWidth(10)").unwrap();
     s.resolve();
     assert_eq!(left(&mut s, "X"), None);
-    assert_eq!(left(&mut s, "T"), Some(110.0), "not reached");
+    crate::assert_near!(left(&mut s, "T"), Some(110.0), "not reached");
     s
 }
 
@@ -260,15 +260,15 @@ fn a_labels_new_text_font_or_spacing_reaches_what_anchors_to_it() {
         s.resolve();
         let want = if reaches { None } else { Some(110.0) };
         let got = left(&mut s, "T");
-        if got != want {
+        if !crate::test_support::Near::near(&got, &want, crate::test_support::TOL) {
             wrong.push(format!("{write}: T:GetLeft() {got:?}, want {want:?}"));
         }
-        assert_eq!(
+        crate::assert_near!(
             left(&mut s, "FS"),
             Some(110.0),
             "{write}: the label resolves"
         );
-        assert_eq!(drawn(&s, "T"), Some(quad), "{write}: the quad stays");
+        crate::assert_near!(drawn(&s, "T"), Some(quad), "{write}: the quad stays");
         assert!(s.errors().is_empty(), "{write}: {:?}", s.errors());
     }
     assert!(wrong.is_empty(), "{wrong:#?}");

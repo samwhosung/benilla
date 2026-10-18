@@ -662,7 +662,8 @@ fn world_hover_drive_and_health_watcher() {
     s.set_measured_text_unwrapped(&answers);
     s.resolve();
     s.run(
-        r#"assert(GameTooltip:GetRight() == 787 and GameTooltip:GetBottom() == 70,
+        r#"assert(math.abs(GameTooltip:GetRight() - 787) < 1e-3
+                  and math.abs(GameTooltip:GetBottom() - 70) < 1e-3,
                   "plate at the default corner, got " .. tostring(GameTooltip:GetRight()) .. "," .. tostring(GameTooltip:GetBottom()))"#,
     )
     .unwrap();
@@ -747,7 +748,7 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
     s.run(
         r#"
         assert(GameTooltipTextLeft1:GetText() == "Stormwind", "content survives a move")
-        assert(GameTooltip:GetBottom() == 300, "the plate follows the cursor")
+        assert(math.abs(GameTooltip:GetBottom() - 300) < 1e-3, "the plate follows the cursor")
         "#,
     )
     .unwrap();

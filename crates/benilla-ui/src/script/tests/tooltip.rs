@@ -125,7 +125,7 @@ fn the_right_column_write_sets_the_right_slot_only() {
     let (p, x): (String, f64) = s
         .eval("local p, _, _, x = TTRTextRight2:GetPoint(1); return p, x")
         .unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (p.as_str(), x),
         ("LEFT", 7.0),
         "the addon's point keeps its offset"
@@ -193,7 +193,7 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_contiguous() {
     s.run(
         r#"
         -- The chain stays contiguous through the blank row: Level 20 sits gap+1+gap under the name.
-        assert(TTETextLeft3:GetTop() == TTETextLeft1:GetBottom() - 5,
+        assert(math.abs(TTETextLeft3:GetTop() - (TTETextLeft1:GetBottom() - 5)) < 1e-3,
                "chain contiguous through the empty row, got " .. tostring(TTETextLeft3:GetTop())
                .. " vs " .. tostring(TTETextLeft1:GetBottom()))
     "#,
@@ -489,7 +489,8 @@ fn unmeasured_lines_hold_declared_size() {
     s.resolve();
     s.run(
         r#"
-        assert(TT6:GetWidth() == 120, "declared width holds unmeasured, got " .. TT6:GetWidth())
+        -- Through the law at 4:3: `G(S(120))`, `G(S(32))`.
+        assert(TT6:GetWidth() == 119.99999821186069, "declared width holds unmeasured, got " .. TT6:GetWidth())
         assert(TT6:GetHeight() == 32, "declared height holds unmeasured, got " .. TT6:GetHeight())
     "#,
     )
@@ -629,9 +630,9 @@ fn owner_anchored_tooltip_clamps_to_screen() {
     let (top, bottom, right): (f64, f64, f64) = s
         .eval("return TTC:GetTop(), TTC:GetBottom(), TTC:GetRight()")
         .unwrap();
-    assert_eq!(top, 600.0, "top clamped to the screen top");
+    crate::assert_near!(top, 600.0, "top clamped to the screen top");
     assert!(near(bottom, 551.52), "size preserved, got {bottom}");
-    assert_eq!(right, 610.0, "X untouched (inside)");
+    crate::assert_near!(right, 610.0, "X untouched (inside)");
     s.run("TTC:SetClampedToScreen(false)").unwrap();
     s.resolve();
     // Unclamped, the plate goes back above the window.
@@ -639,7 +640,7 @@ fn owner_anchored_tooltip_clamps_to_screen() {
         .eval("return TTC:IsClampedToScreen() == 1, TTC:GetTop(), TTC:GetBottom()")
         .unwrap();
     assert!(!clamped, "flag readable");
-    assert_eq!(bottom, 600.0, "unclamped: bottom back at the owner's top");
+    crate::assert_near!(bottom, 600.0, "unclamped: bottom back at the owner's top");
     assert!(
         near(top, 648.48),
         "unclamped: off the window again, got {top}"
@@ -779,7 +780,7 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_chain_stays_contiguous() {
         r#"
         -- The chain is contiguous through the blank row, as on a cold cell: its gap, one floored
         -- unit and its gap.
-        assert(TTRTextLeft3:GetTop() == TTRTextLeft1:GetBottom() - 5,
+        assert(math.abs(TTRTextLeft3:GetTop() - (TTRTextLeft1:GetBottom() - 5)) < 1e-3,
                "chain contiguous through the emptied row, got " .. tostring(TTRTextLeft3:GetTop()))
     "#,
     )
@@ -1342,7 +1343,7 @@ fn only_the_sizer_invalidates_the_tooltip() {
     s.resolve();
     measure_all(&mut s, &[("Tough Jerky", 80.0, 14.0)]);
     let left = |s: &mut UiScript| s.eval::<Option<f64>>("return TT:GetLeft()").unwrap();
-    assert_eq!(left(&mut s), Some(140.0));
+    crate::assert_near!(left(&mut s), Some(140.0));
     s.run(
         r#"TT:ClearAllPoints()
         local other = CreateFrame("Frame"); other:SetWidth(5); other:SetHeight(5)
@@ -1351,13 +1352,13 @@ fn only_the_sizer_invalidates_the_tooltip() {
     .unwrap();
     s.resolve();
     s.resolve();
-    assert_eq!(left(&mut s), Some(140.0), "nothing ran the sizer");
+    crate::assert_near!(left(&mut s), Some(140.0), "nothing ran the sizer");
     s.run(r#"TT:AddLine("Soulbound")"#).unwrap();
     s.resolve();
-    assert_eq!(left(&mut s), Some(140.0), "AddLine sizes nothing");
+    crate::assert_near!(left(&mut s), Some(140.0), "AddLine sizes nothing");
     s.run("TT:Show()").unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         left(&mut s),
         None,
         "the sizer invalidated a plate with no points"

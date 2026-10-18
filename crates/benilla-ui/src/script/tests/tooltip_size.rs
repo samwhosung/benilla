@@ -223,7 +223,7 @@ fn an_authored_line_height_counts_and_the_clear_keeps_it() {
     let (w, h): (f64, f64) = s
         .eval("return TSTextLeft2:GetWidth(), TSTextLeft2:GetHeight()")
         .unwrap();
-    assert_eq!((w, h), (1.0, 24.0), "the clear zeroes the width alone");
+    crate::assert_near!((w, h), (1.0, 24.0), "the clear zeroes the width alone");
     s.run(r#"TS:AddLine("a") TS:AddLine("b") TS:Show()"#)
         .unwrap();
     assert!(
@@ -335,7 +335,7 @@ fn an_ownerless_show_hides_and_sizes_nothing() {
     let (shown, w, h): (bool, f64, f64) = s
         .eval("return Bare:IsShown() == 1, Bare:GetWidth(), Bare:GetHeight()")
         .unwrap();
-    assert_eq!((shown, w, h), (false, 77.0, 33.0));
+    crate::assert_near!((shown, w, h), (false, 77.0, 33.0));
 }
 
 /// The sizer re-applies the anchor without its clear (`0x530a49` → `0x52fe90(0)`): an owner mode
@@ -355,7 +355,7 @@ fn the_show_re_anchors_the_owner_modes_only() {
             return TS:GetNumPoints(), p, rel == O, rp, x, y",
         )
         .unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (n, p.as_str(), rel, rp.as_str(), x, y),
         (1, "BOTTOMLEFT", true, "TOPRIGHT", 3.0, 4.0)
     );

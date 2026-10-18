@@ -49,7 +49,7 @@ fn a_second_template_of_a_registered_name_is_refused_and_the_first_kept() {
     assert!(load_doc(&s, &template("DupTemplate", 10)).is_empty());
     let lines = load_doc(&s, &template("DupTemplate", 20));
     assert_eq!(lines, vec![REFUSED.to_string()]);
-    assert_eq!(width_through(&s, "DupTemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 10.0);
 }
 
 /// Within one document too: the registrar is called per top-level element (`0x6ee1bd`).
@@ -61,7 +61,7 @@ fn a_repeat_within_one_document_is_refused_as_well() {
         <Frame name="DupTemplate" virtual="true"><Size><AbsDimension x="20" y="5"/></Size></Frame>
     </Ui>"#;
     assert_eq!(load_doc(&s, xml), vec![REFUSED.to_string()]);
-    assert_eq!(width_through(&s, "DupTemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 10.0);
 }
 
 /// The hash upper-cases and the compare folds case, so a name differing only in case is the same
@@ -75,8 +75,8 @@ fn a_name_differing_only_in_case_is_the_same_name() {
         lines,
         vec!["Virtual object named DUPTEMPLATE already exists".to_string()]
     );
-    assert_eq!(width_through(&s, "duptemplate"), 10.0);
-    assert_eq!(width_through(&s, "DUPTEMPLATE"), 10.0);
+    crate::assert_near!(width_through(&s, "duptemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DUPTEMPLATE"), 10.0);
 }
 
 /// Severity 1 is above a trace, so the refused document's record opens under its banner in
@@ -185,7 +185,7 @@ fn an_addon_cannot_replace_a_template_of_the_ui_s_own() {
     load_doc(&s, &template("DupTemplate", 10));
     assert!(refused_in(&load_addon(&mut s, "Probe")));
     assert!(refused_in(&load_addon(&mut s, "Blizzard_Probe")));
-    assert_eq!(width_through(&s, "DupTemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 10.0);
 }
 
 /// Two insecure addons: both contexts are non-zero, so the second is refused.
@@ -194,7 +194,7 @@ fn of_two_insecure_addons_the_first_keeps_the_name() {
     let mut s = with_addons(&[("ProbeA", false, 10), ("ProbeB", false, 20)]);
     assert!(!refused_in(&load_addon(&mut s, "ProbeA")));
     assert!(refused_in(&load_addon(&mut s, "ProbeB")));
-    assert_eq!(width_through(&s, "DupTemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 10.0);
 }
 
 /// The one replacing case: an entry from a non-zero context, a registration under context 0.
@@ -203,7 +203,7 @@ fn a_secure_addon_replaces_an_insecure_addons_template() {
     let mut s = with_addons(&[("Probe", false, 10), ("Blizzard_Probe", true, 20)]);
     assert!(!refused_in(&load_addon(&mut s, "Probe")));
     assert!(!refused_in(&load_addon(&mut s, "Blizzard_Probe")));
-    assert_eq!(width_through(&s, "DupTemplate"), 20.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 20.0);
 }
 
 /// And never the reverse: a secure addon's entry is context 0.
@@ -212,7 +212,7 @@ fn an_insecure_addon_cannot_replace_a_secure_addons_template() {
     let mut s = with_addons(&[("Blizzard_Probe", true, 10), ("Probe", false, 20)]);
     assert!(!refused_in(&load_addon(&mut s, "Blizzard_Probe")));
     assert!(refused_in(&load_addon(&mut s, "Probe")));
-    assert_eq!(width_through(&s, "DupTemplate"), 10.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 10.0);
 }
 
 /// The context is the loading addon's, set and restored around its load (`0x51f36d`, `0x51f584`):
@@ -223,7 +223,7 @@ fn the_context_is_restored_after_an_addon_loads() {
     load_addon(&mut s, "Probe");
     let lines = load_doc(&s, &template("DupTemplate", 20));
     assert!(lines.is_empty(), "{lines:?}");
-    assert_eq!(width_through(&s, "DupTemplate"), 20.0);
+    crate::assert_near!(width_through(&s, "DupTemplate"), 20.0);
 }
 
 /// A top-level `virtual` element with no name, or an empty one (the first-byte test at

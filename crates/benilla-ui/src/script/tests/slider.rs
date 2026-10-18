@@ -37,14 +37,14 @@ fn slider_thumb_draws_at_value_fraction_along_the_track() {
     s.resolve();
     // value=min puts the thumb flush at the track top (a scrollbar at 0 is scrolled up); travel
     // 100 - 16 = 84, thumb centered on x=108 -> [100,116], top edge at 200.
-    assert_eq!(
+    crate::assert_near!(
         thumb_rect(&s.extract(), "Knob"),
         (100.0, 116.0, 184.0, 200.0),
         "value=min: thumb flush at track top, centered on the cross-axis"
     );
 
     s.run(r#"SlRender:SetValue(100)"#).unwrap();
-    assert_eq!(
+    crate::assert_near!(
         thumb_rect(&s.extract(), "Knob"),
         (100.0, 116.0, 100.0, 116.0),
         "value=max: thumb flush at track bottom"
@@ -52,7 +52,7 @@ fn slider_thumb_draws_at_value_fraction_along_the_track() {
 
     s.run(r#"SlRender:SetValue(50)"#).unwrap();
     let (_, _, bottom, top) = thumb_rect(&s.extract(), "Knob");
-    assert_eq!(
+    crate::assert_near!(
         (bottom, top),
         (142.0, 158.0),
         "value=mid: thumb centered in the track"
@@ -82,18 +82,19 @@ fn slider_thumb_drag_maps_cursor_to_value() {
     s.mouse_button(108.0, 192.0, "LeftButton", true);
     s.mouse_move(108.0, 150.0);
     let v: f32 = s.eval("return SlDrag:GetValue()").unwrap();
-    assert_eq!(v, 50.0, "cursor halfway down the track -> value 50");
+    crate::assert_near!(v, 50.0, "cursor halfway down the track -> value 50");
     s.mouse_move(108.0, 108.0);
     let v: f32 = s.eval("return SlDrag:GetValue()").unwrap();
-    assert_eq!(
-        v, 100.0,
+    crate::assert_near!(
+        v,
+        100.0,
         "cursor at the track bottom -> value 100 (clamped)"
     );
 
     s.mouse_button(108.0, 108.0, "LeftButton", false);
     s.mouse_move(108.0, 192.0);
     let v: f32 = s.eval("return SlDrag:GetValue()").unwrap();
-    assert_eq!(v, 100.0, "no capture after release");
+    crate::assert_near!(v, 100.0, "no capture after release");
 }
 
 #[test]
@@ -299,7 +300,8 @@ fn slider_scrollbar_wiring_does_not_recurse() {
         r#"
         bar:SetValue(50)
         assert(bar:GetValue() == 50, "slider settled at 50")
-        assert(SlSF:GetVerticalScroll() == 50, "scroll followed the slider")
+        -- The offset reads back through the law, `G(S(50))` at 4:3.
+        assert(SlSF:GetVerticalScroll() == 49.999999254941955, "scroll followed the slider")
     "#,
     )
     .unwrap();
@@ -416,7 +418,7 @@ fn a_thumb_with_no_authored_size_takes_its_arts_texel_span_and_still_drags() {
 
     // host y ∈ [100, 270] ⇒ the bar is centred on y=185, 128 tall ⇒ track y ∈ [121, 249];
     // x: host left 100 + 15 ⇒ [115, 131], so the thumb centres on x=123.
-    assert_eq!(
+    crate::assert_near!(
         thumb_rect(&s.extract(), "UI-SliderBar-Button-Vertical"),
         (107.0, 139.0, 217.0, 249.0),
         "a sizeless thumb is its art's 32×32, flush at the track top — not the whole 16×128 track"
@@ -651,7 +653,7 @@ fn a_scaled_sliders_thumb_scales_with_it() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         thumb_rect(&s.extract(), "Knob"),
         (50.0, 58.0, 92.0, 100.0),
         "a 16-unit thumb of a half-scale slider is 8 on screen, flush at the track top"

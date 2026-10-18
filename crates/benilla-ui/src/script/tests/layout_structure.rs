@@ -427,7 +427,7 @@ fn a_child_two_scrollframes_claim_holds_the_last_re_anchor() {
     assert!(s
         .eval::<bool>("local p, r = c:GetPoint(1); return c:GetNumPoints() == 1 and r == b")
         .unwrap());
-    assert_eq!(s.eval::<f64>("return c:GetLeft()").unwrap(), 200.0);
+    crate::assert_near!(s.eval::<f64>("return c:GetLeft()").unwrap(), 200.0);
 }
 
 /// A frame whose id is minted after a region on it joined the graph (the engine builds some

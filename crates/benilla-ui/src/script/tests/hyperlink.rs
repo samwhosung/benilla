@@ -69,7 +69,7 @@ fn a_link_click_fires_on_hyperlink_click_and_leaves_the_window_alone() {
     let (point, x, y) = s
         .eval::<(String, f64, f64)>("local p, _, _, x, y = CF:GetPoint() return p, x, y")
         .unwrap();
-    assert_eq!(
+    crate::assert_near!(
         (point.as_str(), x, y),
         ("BOTTOMLEFT", 100.0, 100.0),
         "never pinned"
@@ -136,7 +136,7 @@ fn a_hittable_body_title_drags_but_its_link_still_clicks() {
     s.mouse_move(350.0, 170.0);
     s.mouse_button(350.0, 170.0, "LeftButton", false);
     s.resolve();
-    assert_eq!(s.eval::<f64>("return CF:GetLeft()").unwrap(), 150.0);
+    crate::assert_near!(s.eval::<f64>("return CF:GetLeft()").unwrap(), 150.0);
     assert!(s.eval::<bool>("return CF:IsUserPlaced()").unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

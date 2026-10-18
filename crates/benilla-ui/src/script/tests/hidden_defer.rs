@@ -129,8 +129,8 @@ fn a_getter_on_a_hidden_frame_answers_the_new_size_and_leaves_it_deferred() {
     assert_eq!(int(&s, "fires"), 1);
 
     s.run("DeferRead:Hide(); DeferRead:SetWidth(20)").unwrap();
-    assert_eq!(num(&s, "DeferRead:GetRight() - DeferRead:GetLeft()"), 20.0);
-    assert_eq!(num(&s, "DeferRead:GetWidth()"), 20.0);
+    crate::assert_near!(num(&s, "DeferRead:GetRight() - DeferRead:GetLeft()"), 20.0);
+    crate::assert_near!(num(&s, "DeferRead:GetWidth()"), 20.0);
     s.resolve();
     assert_eq!(
         int(&s, "fires"),
@@ -199,13 +199,13 @@ fn a_visible_frame_anchored_to_a_hidden_one_resolves_through_it() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         int(&s, "read_fires"),
         1,
         "the reader's anchor read resolved it"
     );
-    assert_eq!(int(&s, "unread_fires"), 0, "nothing read this one");
-    assert_eq!(int(&s, "link_fires"), 0, "the link only moved");
+    crate::assert_near!(int(&s, "unread_fires"), 0, "nothing read this one");
+    crate::assert_near!(int(&s, "link_fires"), 0, "the link only moved");
 
     s.run(
         r#"
@@ -214,9 +214,9 @@ fn a_visible_frame_anchored_to_a_hidden_one_resolves_through_it() {
     "#,
     )
     .unwrap();
-    assert_eq!(num(&s, "reader_left"), num(&s, "target_right") + 5.0);
-    assert_eq!(num(&s, "root_left - DeferRoot:GetRight()"), -300.0);
-    assert_eq!(
+    crate::assert_near!(num(&s, "reader_left"), num(&s, "target_right") + 5.0);
+    crate::assert_near!(num(&s, "root_left - DeferRoot:GetRight()"), -300.0);
+    crate::assert_near!(
         num(&s, "tail_right"),
         num(&s, "root_left") - 20.0,
         "the tail reads through the hidden link to the hidden root"
@@ -225,7 +225,7 @@ fn a_visible_frame_anchored_to_a_hidden_one_resolves_through_it() {
     // The read cleared the target's deferral for good: hidden, it now resolves at the drain.
     s.run("DeferTarget:SetWidth(250)").unwrap();
     s.resolve();
-    assert_eq!(int(&s, "read_fires"), 2);
+    crate::assert_near!(int(&s, "read_fires"), 2);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -249,15 +249,15 @@ fn a_region_of_a_hidden_frame_waits_with_it() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(int(&s, "fires"), 1);
-    assert_eq!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 100.0);
+    crate::assert_near!(int(&s, "fires"), 1);
+    crate::assert_near!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 100.0);
 
     s.run("DeferOwner:Hide(); DeferOwner:SetWidth(60)").unwrap();
     s.resolve();
-    assert_eq!(int(&s, "fires"), 1, "the frame waits");
-    assert_eq!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 60.0);
+    crate::assert_near!(int(&s, "fires"), 1, "the frame waits");
+    crate::assert_near!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 60.0);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         int(&s, "fires"),
         2,
         "the region's read resolved its anchor target, the frame"
@@ -265,14 +265,14 @@ fn a_region_of_a_hidden_frame_waits_with_it() {
 
     s.run("DeferOwner:SetWidth(80)").unwrap();
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         int(&s, "fires"),
         3,
         "that anchor read cleared the frame's deferral for good"
     );
     s.run("DeferOwner:Show()").unwrap();
     s.resolve();
-    assert_eq!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 80.0);
+    crate::assert_near!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 80.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -388,7 +388,7 @@ fn a_region_hidden_on_a_visible_frame_waits_and_its_show_resolves_it() {
     let held = s.extract().len();
     s.run("DeferMark:Show()").unwrap();
     s.resolve();
-    assert_eq!(num(&s, "DeferMark:GetLeft() - DeferBase:GetLeft()"), 7.0);
+    crate::assert_near!(num(&s, "DeferMark:GetLeft() - DeferBase:GetLeft()"), 7.0);
     assert!(s.extract().len() > held, "it draws again");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

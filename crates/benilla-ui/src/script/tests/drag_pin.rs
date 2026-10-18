@@ -56,25 +56,25 @@ fn pinned_at(x: f32, y: f32) -> (i64, String, bool, String, f32, f32) {
 fn a_move_pins_one_topleft_anchor_against_the_screen() {
     let mut s = centred_box();
     s.run("Box:StartMoving()").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         anchor(&s),
         pinned_at(300.0, -250.0),
         "the drag entry pins before any cursor move: top 350 on a 600 screen is y -250"
     );
     s.mouse_move(430.0, 280.0);
-    assert_eq!(edges(&mut s), (330.0, 530.0, 230.0, 330.0));
-    assert_eq!(
+    crate::assert_near!(edges(&mut s), (330.0, 530.0, 230.0, 330.0));
+    crate::assert_near!(
         anchor(&s),
         pinned_at(330.0, -270.0),
         "the move rides that anchor"
     );
     s.run("Box:StopMovingOrSizing()").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         anchor(&s),
         pinned_at(330.0, -270.0),
         "the stop writes nothing"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Box:GetWidth(), Box:GetHeight()")
             .unwrap(),
         (200.0, 100.0),
@@ -83,7 +83,7 @@ fn a_move_pins_one_topleft_anchor_against_the_screen() {
 
     // The old target no longer carries it.
     s.run("Holder:SetPoint(\"BOTTOMLEFT\", 50, 0)").unwrap();
-    assert_eq!(edges(&mut s), (330.0, 530.0, 230.0, 330.0));
+    crate::assert_near!(edges(&mut s), (330.0, 530.0, 230.0, 330.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -105,7 +105,7 @@ fn a_bare_start_and_stop_pins_a_stretched_frame_at_its_rect() {
     )
     .unwrap();
     assert_eq!(anchor(&s), pinned_at(100.0, -400.0));
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Box:GetWidth(), Box:GetHeight()")
             .unwrap(),
         (200.0, 100.0)
@@ -142,8 +142,8 @@ fn each_grip_moves_only_its_own_edges() {
             _ => (0.0, 0.0),
         };
         let want = (300.0 + dl, 500.0 + dr, 250.0 + db, 350.0 + dt);
-        assert_eq!(edges(&mut s), want, "{grip}");
-        assert_eq!(
+        crate::assert_near!(edges(&mut s), want, "{grip}");
+        crate::assert_near!(
             anchor(&s),
             pinned_at(want.0, want.3 - 600.0),
             "{grip} leaves the one TOPLEFT pin"
@@ -169,13 +169,13 @@ fn the_bounds_clamp_and_the_anchored_edge_stops_on_them() {
     let mut s = bounded();
     s.run("Box:StartSizing(\"LEFT\")").unwrap();
     s.mouse_move(480.0, 300.0);
-    assert_eq!(
+    crate::assert_near!(
         edges(&mut s),
         (350.0, 500.0, 250.0, 350.0),
         "LEFT at the min"
     );
     s.mouse_move(460.0, 300.0);
-    assert_eq!(
+    crate::assert_near!(
         edges(&mut s),
         (330.0, 500.0, 250.0, 350.0),
         "and back at once"
@@ -223,12 +223,12 @@ fn a_missing_or_unknown_grip_is_bottomright() {
         let mut s = centred_box();
         s.run(call).unwrap();
         s.mouse_move(420.0, 290.0);
-        assert_eq!(edges(&mut s), (300.0, 520.0, 240.0, 350.0), "{call}");
+        crate::assert_near!(edges(&mut s), (300.0, 520.0, 240.0, 350.0), "{call}");
     }
     let mut s = centred_box();
     s.run("Box:StartSizing(\"left\")").unwrap();
     s.mouse_move(420.0, 290.0);
-    assert_eq!(
+    crate::assert_near!(
         edges(&mut s),
         (320.0, 500.0, 250.0, 350.0),
         "a lower-case name"
@@ -253,7 +253,7 @@ fn a_frame_with_no_rect_starts_no_drag() {
     assert_eq!(s.eval::<i64>("return Lost:GetNumPoints()").unwrap(), 0);
     s.run("Box:StartMoving()").unwrap();
     s.mouse_move(410.0, 300.0);
-    assert_eq!(
+    crate::assert_near!(
         edges(&mut s),
         (310.0, 510.0, 250.0, 350.0),
         "the slot was free"
@@ -284,7 +284,7 @@ fn the_layout_cache_round_trips_the_pin() {
 
     let mut fresh = centred_box();
     fresh.restore_user_placed_layouts(saved);
-    assert_eq!(edges(&mut fresh), (330.0, 530.0, 230.0, 330.0));
+    crate::assert_near!(edges(&mut fresh), (330.0, 530.0, 230.0, 330.0));
     assert_eq!(anchor(&fresh), pinned_at(330.0, -270.0));
     assert_eq!(
         fresh.eval::<i64>("return Box:GetFrameLevel()").unwrap(),
@@ -303,7 +303,7 @@ fn a_sub_unit_drag_saves_and_restores_rounded() {
     s.run("Box:StartMoving()").unwrap();
     s.mouse_move(430.25, 279.5);
     s.run("Box:StopMovingOrSizing()").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         anchor(&s),
         pinned_at(330.25, -270.5),
         "the live pin is exact"

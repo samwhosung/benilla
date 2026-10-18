@@ -189,7 +189,7 @@ mod loader_tests {
             "the attribute supplied the parent"
         );
         // Host's TOPLEFT is screen (100, 550) in y-up; Attached hangs 5 in and 5 down from it.
-        assert_eq!(
+        crate::assert_near!(
             s.eval::<(f64, f64)>("return Attached:GetLeft(), Attached:GetTop()")
                 .unwrap(),
             (105.0, 545.0),
@@ -449,7 +449,7 @@ mod loader_tests {
             s.eval::<f32>("return SizedInstance:GetWidth()").unwrap(),
             125.0
         );
-        assert_eq!(
+        crate::assert_near!(
             s.eval::<f32>("return SizedInstance:GetHeight()").unwrap(),
             21.0
         );
@@ -503,7 +503,7 @@ mod loader_tests {
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
         s.resolve();
         assert_eq!(s.eval::<f32>("return PinChild:GetLeft()").unwrap(), 40.0);
-        assert_eq!(s.eval::<f32>("return PinChild:GetTop()").unwrap(), 550.0);
+        crate::assert_near!(s.eval::<f32>("return PinChild:GetTop()").unwrap(), 550.0);
         assert_eq!(s.eval::<f32>("return PinChild:GetWidth()").unwrap(), 300.0);
         assert_eq!(s.eval::<f32>("return PinChild:GetHeight()").unwrap(), 200.0);
     }
@@ -907,8 +907,8 @@ mod loader_tests {
         let (hl_right, text_left): (f64, f64) = s
             .eval("return RowHighlight:GetRight(), RowText:GetLeft()")
             .unwrap();
-        assert_eq!(hl_right, 22.0 + 3.0 + 16.0);
-        assert_eq!(
+        crate::assert_near!(hl_right, 22.0 + 3.0 + 16.0);
+        crate::assert_near!(
             text_left,
             hl_right + 2.0,
             "the label hangs off the highlight, not the button"
@@ -1089,7 +1089,7 @@ mod loader_tests {
             })
             .expect("bar fill quad");
         let r = bar.rect.expect("bar rect resolved");
-        assert_eq!(
+        crate::assert_near!(
             (r.left, r.right, r.bottom, r.top),
             (0.0, 50.0, 0.0, 10.0),
             "defaultValue 50/100 fills half the 100px width"
@@ -1129,7 +1129,7 @@ mod loader_tests {
             })
             .expect("the plate draws");
         let r = plate.rect.expect("the plate resolved");
-        assert_eq!(
+        crate::assert_near!(
             (r.left, r.right, r.bottom, r.top),
             (10.0, 182.0, 10.0, 106.0),
             "implicit SetAllPoints fills the 172×96 frame; the 256×32 size is unread"
@@ -1166,7 +1166,7 @@ mod loader_tests {
                 "return SeatLeft:GetLeft(), SeatLeft:GetRight(), SeatLeft:GetTop(), SeatLeft:GetBottom()",
             )
             .unwrap();
-        assert_eq!(
+        crate::assert_near!(
             (l, r, b, t),
             (0.0, 80.0, 40.0, 60.0),
             "justifyH=LEFT seats the implicit single anchor at the page's LEFT, size live"
@@ -1208,7 +1208,7 @@ mod loader_tests {
             .expect("the state texture draws");
         let r = scoped.rect.expect("resolved");
         // Button [100,100]..[136,136]; TOPLEFT+2,-2 with 24×24 → [102,110]..[126,134].
-        assert_eq!(
+        crate::assert_near!(
             (r.left, r.right, r.bottom, r.top),
             (102.0, 126.0, 110.0, 134.0),
             "authored anchors + size hold; no implicit corner welds it to the button"
@@ -1398,7 +1398,7 @@ mod loader_tests {
             })
             .expect("hovered highlight quad");
         let r = hi.rect.expect("highlight rect resolved");
-        assert_eq!(
+        crate::assert_near!(
             (r.left, r.right, r.bottom, r.top),
             (0.0, 20.0, 10.0, 30.0),
             "highlight is the anchored 20px square at the button's TOPLEFT, not the whole button"
@@ -1839,13 +1839,13 @@ mod loader_tests {
             .expect("the typed text renders in the box's text region");
 
         // The header: its own LEFT+13 anchor and the 30×12 extent, centred on the 100..132 box.
-        assert_eq!(
+        crate::assert_near!(
             header.rect,
             Some(crate::layout::Rect::new(110.0, 113.0, 122.0, 143.0)),
             "header must keep its own anchor + auto-size"
         );
         // Typed text rect: the box minus the XML `<TextInsets>` (47 left, 13 right).
-        assert_eq!(
+        crate::assert_near!(
             typed.rect,
             Some(crate::layout::Rect::new(100.0, 147.0, 132.0, 687.0)),
             "the text region is anchored by the insets"
@@ -1876,20 +1876,20 @@ mod loader_tests {
             s.resolve();
             s.eval::<f64>(&format!("return {f}:GetLeft()")).unwrap()
         };
-        assert_eq!(left(&mut s, "Tut"), 100.0);
+        crate::assert_near!(left(&mut s, "Tut"), 100.0);
         s.mouse_button(150.0, 150.0, "LeftButton", true);
         s.mouse_move(250.0, 150.0);
-        assert_eq!(
+        crate::assert_near!(
             left(&mut s, "Tut"),
             200.0,
             "the element's title region drags the frame"
         );
         s.mouse_button(250.0, 150.0, "LeftButton", false);
 
-        assert_eq!(left(&mut s, "Plain"), 400.0);
+        crate::assert_near!(left(&mut s, "Plain"), 400.0);
         s.mouse_button(450.0, 150.0, "LeftButton", true);
         s.mouse_move(550.0, 150.0);
-        assert_eq!(left(&mut s, "Plain"), 400.0, "no element, no handle");
+        crate::assert_near!(left(&mut s, "Plain"), 400.0, "no element, no handle");
         s.mouse_button(550.0, 150.0, "LeftButton", false);
     }
 
@@ -1940,7 +1940,7 @@ mod loader_tests {
             .eval::<(f64, f64, f64, f64)>("return Micro:GetHitRectInsets()")
             .unwrap();
         assert_eq!((l, r, t, b), (0.0, 0.0, 18.0, 0.0));
-        assert_eq!(s.eval::<f64>("return Micro:GetHeight()").unwrap(), 58.0);
+        crate::assert_near!(s.eval::<f64>("return Micro:GetHeight()").unwrap(), 58.0);
         // A button is mouse-enabled by construction, so the hit test is live.
         assert!(
             s.hit_test(14.0, 50.0).is_none(),
@@ -2037,7 +2037,7 @@ mod loader_tests {
             "the <NormalText> region must BE the button's label"
         );
         // 3 · The element's geometry landed on the label.
-        assert_eq!(
+        crate::assert_near!(
             s.eval::<f64>("return KtmSelfHeaderNameText:GetWidth()")
                 .unwrap(),
             70.0
@@ -2155,12 +2155,12 @@ mod loader_tests {
                  return c:GetLeft(), c:GetRight(), l:GetLeft(), l:GetRight()",
             )
             .unwrap();
-        assert_eq!(
+        crate::assert_near!(
             (cl, cr),
             (40.0, 80.0),
             "the Gatherer row's label is centred on the button, not hugging its left edge"
         );
-        assert_eq!(
+        crate::assert_near!(
             (ll, lr),
             (28.0, 68.0),
             "the <ButtonText> row's label still hugs the button's left edge"

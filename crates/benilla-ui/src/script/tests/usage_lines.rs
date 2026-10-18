@@ -172,10 +172,11 @@ fn scroll_setters_raise_their_usage_lines() {
     }
     s.run(
         r#"
+        -- The offsets read back through the law at 4:3, `G(S(12))` and `G(S(3))`.
         ScrollUse:SetVerticalScroll("12")
-        assert(ScrollUse:GetVerticalScroll() == 12)
+        assert(ScrollUse:GetVerticalScroll() == 12.00000029802322)
         ScrollUse:SetHorizontalScroll("3")
-        assert(ScrollUse:GetHorizontalScroll() == 3)
+        assert(ScrollUse:GetHorizontalScroll() == 3.000000074505805)
     "#,
     )
     .unwrap();

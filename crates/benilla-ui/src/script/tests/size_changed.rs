@@ -27,7 +27,7 @@ fn a_resize_fires_on_size_changed_and_a_move_does_not() {
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 1);
     assert_eq!(s.eval::<f64>("return w").unwrap(), 200.0);
-    assert_eq!(s.eval::<f64>("return h").unwrap(), 50.0);
+    crate::assert_near!(s.eval::<f64>("return h").unwrap(), 50.0);
 
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 1);
@@ -107,7 +107,7 @@ fn a_handler_that_resizes_its_own_frame_settles_instead_of_spinning() {
     // The next resolve fires once for the handler's own 200×200.
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 2);
-    assert_eq!(s.eval::<f64>("return Sq:GetHeight()").unwrap(), 200.0);
+    crate::assert_near!(s.eval::<f64>("return Sq:GetHeight()").unwrap(), 200.0);
     for _ in 0..5 {
         s.resolve();
     }

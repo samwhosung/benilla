@@ -472,7 +472,7 @@ fn a_resize_re_runs_the_edge_texcoords() {
         .eval::<(f32, f32, f32, f32, f32, f32, f32, f32)>(left)
         .unwrap();
     // 100 / 16 - 2 = 4.25 periods down the LEFT edge, slice 0.
-    assert_eq!(uv, (0.0, 0.0, 0.0, 4.25, 0.125, 0.0, 0.125, 4.25));
+    crate::assert_near!(uv, (0.0, 0.0, 0.0, 4.25, 0.125, 0.0, 0.125, 4.25));
     s.run("f:SetHeight(64)").unwrap();
     s.resolve();
     let uv = s
@@ -815,6 +815,7 @@ fn the_bg_bottomright_anchor_answers_the_top_inset() {
     let s = script();
     s.run(
         r#"
+        local function near(a, b) return math.abs(a - b) < 1e-3 end -- G(S(v)) of each inset
         local f = CreateFrame("Frame")
         f:SetBackdrop({ bgFile = "bg", insets = { left = 3, right = 4, top = 7, bottom = 9 } })
         local bg = f:GetRegions()
@@ -823,10 +824,10 @@ fn the_bg_bottomright_anchor_answers_the_top_inset() {
             local point, rel, relPoint, x, y = bg:GetPoint(i)
             if point == "BOTTOMRIGHT" then
                 assert(rel == f and relPoint == "BOTTOMRIGHT", "on the frame's corner")
-                assert(x == -4 and y == 7, "x " .. x .. ", y " .. y .. ": the top inset")
+                assert(near(x, -4) and near(y, 7), "x " .. x .. ", y " .. y .. ": the top inset")
                 found = true
             elseif point == "BOTTOMLEFT" then
-                assert(x == 3 and y == 9, "the bottom-left takes the bottom inset")
+                assert(near(x, 3) and near(y, 9), "the bottom-left takes the bottom inset")
             end
         end
         assert(found, "a BOTTOMRIGHT anchor")
@@ -928,8 +929,10 @@ fn backdrop_pieces_load_with_the_reference_wrap_flags() {
                         },
                         Some(r),
                     ) if *p == file => {
-                        // A corner is one edge size square; a side is a strip.
-                        Some((r.width() == 16.0 && r.height() == 16.0, *wrap))
+                        // A corner is one edge size square, through the law's sub-unit drift; a
+                        // side is a strip.
+                        let edge = |v: f32| (v - 16.0).abs() < 1e-3;
+                        Some((edge(r.width()) && edge(r.height()), *wrap))
                     }
                     _ => None,
                 })
@@ -942,7 +945,7 @@ fn backdrop_pieces_load_with_the_reference_wrap_flags() {
         );
         let edges = wraps(format!("edge{i}"));
         assert_eq!(edges.len(), 8);
-        assert_eq!(edges.iter().filter(|(corner, _)| *corner).count(), 4);
+        crate::assert_near!(edges.iter().filter(|(corner, _)| *corner).count(), 4);
         assert!(
             edges.iter().all(|(corner, wrap)| *wrap == !*corner),
             "sides wrap and corners clamp: {edges:?}"

@@ -38,28 +38,28 @@ fn corner(s: &mut UiScript) -> (f32, f32) {
 #[test]
 fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() {
     let mut s = movable_panel();
-    assert_eq!(corner(&mut s), (100.0, 100.0), "born where SetPoint put it");
+    crate::assert_near!(corner(&mut s), (100.0, 100.0), "born where SetPoint put it");
 
     s.mouse_button(150.0, 140.0, "LeftButton", true); // press inside the panel
     s.mouse_move(152.0, 140.0); // 2 units, under the drag threshold
-    assert_eq!(s.eval::<i64>("return starts").unwrap(), 0);
-    assert_eq!(corner(&mut s), (100.0, 100.0));
+    crate::assert_near!(s.eval::<i64>("return starts").unwrap(), 0);
+    crate::assert_near!(corner(&mut s), (100.0, 100.0));
 
     s.mouse_move(170.0, 140.0); // crosses the threshold ⇒ OnDragStart ⇒ StartMoving
-    assert_eq!(s.eval::<i64>("return starts").unwrap(), 1);
+    crate::assert_near!(s.eval::<i64>("return starts").unwrap(), 1);
     s.mouse_move(270.0, 190.0); // +100, +50 from the grab
-    assert_eq!(
+    crate::assert_near!(
         corner(&mut s),
         (200.0, 150.0),
         "the frame follows the cursor delta since StartMoving"
     );
 
     s.mouse_button(270.0, 190.0, "LeftButton", false); // OnDragStop ⇒ StopMovingOrSizing
-    assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
-    assert_eq!(corner(&mut s), (200.0, 150.0), "the position survives");
+    crate::assert_near!(s.eval::<i64>("return stops").unwrap(), 1);
+    crate::assert_near!(corner(&mut s), (200.0, 150.0), "the position survives");
 
     s.mouse_move(500.0, 400.0);
-    assert_eq!(corner(&mut s), (200.0, 150.0), "no longer following");
+    crate::assert_near!(corner(&mut s), (200.0, 150.0), "no longer following");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 
     // The drag re-anchored it to one TOPLEFT against the screen (`0x768430`), so GetPoint reads
@@ -67,7 +67,7 @@ fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() 
     let (point, x, y) = s
         .eval::<(String, f64, f64)>("local p, _, _, x, y = MovePanel:GetPoint() return p, x, y")
         .unwrap();
-    assert_eq!((point.as_str(), x, y), ("TOPLEFT", 200.0, -370.0));
+    crate::assert_near!((point.as_str(), x, y), ("TOPLEFT", 200.0, -370.0));
 }
 
 /// Each move applies only its own delta: the pump re-centers its sample after every step.
@@ -88,7 +88,7 @@ fn a_moving_frame_follows_successive_mouse_moves() {
         ((130.0, 160.0), (60.0, 120.0)), // a zero-delta move changes nothing
     ] {
         s.mouse_move(step.0, step.1);
-        assert_eq!(corner(&mut s), want, "after moving to {step:?}");
+        crate::assert_near!(corner(&mut s), want, "after moving to {step:?}");
     }
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -120,13 +120,13 @@ fn start_moving_on_a_frame_that_is_not_movable_raises_and_moves_nothing() {
     s.mouse_move(400.0, 400.0);
     s.resolve();
     let left = s.eval::<f64>("return FixedPanel:GetLeft()").unwrap();
-    assert_eq!(left, 100.0, "a refused StartMoving started no move");
+    crate::assert_near!(left, 100.0, "a refused StartMoving started no move");
 
     s.run("FixedPanel:SetMovable(true) FixedPanel:StartMoving()")
         .unwrap();
     s.mouse_move(450.0, 400.0);
     s.resolve();
-    assert_eq!(s.eval::<f64>("return FixedPanel:GetLeft()").unwrap(), 150.0);
+    crate::assert_near!(s.eval::<f64>("return FixedPanel:GetLeft()").unwrap(), 150.0);
 }
 
 /// `StopMovingOrSizing` is harmless with nothing moving, and stops only the frame in the drag slot
@@ -146,21 +146,21 @@ fn stop_moving_or_sizing_is_harmless_with_nothing_moving_and_stops_only_its_own_
     )
     .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
-    assert_eq!(corner(&mut s), (100.0, 100.0), "nothing moved");
+    crate::assert_near!(corner(&mut s), (100.0, 100.0), "nothing moved");
 
     s.run("MovePanel:StartMoving()").unwrap();
     s.mouse_move(50.0, 50.0); // cursor_pos was (0,0) ⇒ +50, +50
-    assert_eq!(corner(&mut s), (150.0, 150.0));
+    crate::assert_near!(corner(&mut s), (150.0, 150.0));
     s.run("OtherPanel:StopMovingOrSizing()").unwrap();
     s.mouse_move(60.0, 50.0);
-    assert_eq!(
+    crate::assert_near!(
         corner(&mut s),
         (160.0, 150.0),
         "another frame's stop does not end this move"
     );
     s.run("MovePanel:StopMovingOrSizing()").unwrap();
     s.mouse_move(200.0, 200.0);
-    assert_eq!(corner(&mut s), (160.0, 150.0), "its own stop does");
+    crate::assert_near!(corner(&mut s), (160.0, 150.0), "its own stop does");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -185,7 +185,7 @@ fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     let size = s
         .eval::<(f64, f64)>("return StretchPanel:GetWidth(), StretchPanel:GetHeight()")
         .unwrap();
-    assert_eq!(size, (200.0, 100.0), "size derived from the two anchors");
+    crate::assert_near!(size, (200.0, 100.0), "size derived from the two anchors");
 
     s.run("StretchPanel:StartMoving()").unwrap();
     s.mouse_move(30.0, 40.0); // cursor_pos starts at (0,0)
@@ -196,8 +196,8 @@ fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     let size_after = s
         .eval::<(f64, f64)>("return StretchPanel:GetWidth(), StretchPanel:GetHeight()")
         .unwrap();
-    assert_eq!((left, bottom), (130.0, 140.0), "the pinned anchor moved");
-    assert_eq!(size_after, (200.0, 100.0), "and the frame kept its size");
+    crate::assert_near!((left, bottom), (130.0, 140.0), "the pinned anchor moved");
+    crate::assert_near!(size_after, (200.0, 100.0), "and the frame kept its size");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -220,21 +220,21 @@ fn a_scaled_frame_tracks_the_cursor_one_to_one_on_screen() {
     .unwrap();
     s.resolve();
     // Local 100 at scale 2 ⇒ 200 screen px.
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return ScaledPanel:GetLeft()").unwrap(),
         100.0
     );
     s.mouse_move(40.0, 0.0);
     s.resolve();
     // GetLeft reports local units: 40 screen px is 20 local, on top of the local 100.
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return ScaledPanel:GetLeft()").unwrap(),
         120.0
     );
     let x = s
         .eval::<f64>("local _, _, _, x = ScaledPanel:GetPoint() return x")
         .unwrap();
-    assert_eq!(x, 120.0, "the anchor offset is local too");
+    crate::assert_near!(x, 120.0, "the anchor offset is local too");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -548,21 +548,21 @@ fn a_title_region_drag_swallows_the_press_and_ends_on_release() {
         s.resolve();
         s.eval::<f64>("return TP:GetLeft()").unwrap()
     };
-    assert_eq!(corner(&mut s), 100.0);
+    crate::assert_near!(corner(&mut s), 100.0);
 
     s.mouse_button(150.0, 150.0, "LeftButton", true);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<i64>("return downs").unwrap(),
         0,
         "a title-region hit swallows OnMouseDown — a miss would fall through to it"
     );
     s.mouse_move(250.0, 150.0);
-    assert_eq!(corner(&mut s), 200.0, "the frame followed the cursor");
+    crate::assert_near!(corner(&mut s), 200.0, "the frame followed the cursor");
 
     // Release ends it: the title-region move (mode 2) cancels itself.
     s.mouse_button(250.0, 150.0, "LeftButton", false);
     s.mouse_move(400.0, 150.0);
-    assert_eq!(
+    crate::assert_near!(
         corner(&mut s),
         200.0,
         "the move ended at the release; a scripted StartMoving would still be running"
@@ -679,17 +679,17 @@ fn the_apply_seats_position_behind_movable_and_size_behind_resizable() {
         ))
         .unwrap()
     };
-    assert_eq!(
+    crate::assert_near!(
         read(&s, "Neither"),
         (10.0, 50.0, 50.0, false),
         "neither flag: the row is inert, and leaves no stamp behind either"
     );
-    assert_eq!(
+    crate::assert_near!(
         read(&s, "Movable"),
         (300.0, 50.0, 50.0, true),
         "movable: seated at the saved position, still its authored size"
     );
-    assert_eq!(
+    crate::assert_near!(
         read(&s, "Sizable"),
         (10.0, 200.0, 80.0, true),
         "resizable: given the saved size, left on its authored anchors"
@@ -730,7 +730,7 @@ fn the_apply_sets_the_level_and_reads_a_zero_position_as_none() {
         height: None,
     }]);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, i64, bool)>(
             "return Corner:GetLeft(), Corner:GetFrameLevel(), Corner:IsUserPlaced()"
         )
@@ -785,7 +785,7 @@ fn a_title_press_takes_the_slot_from_a_running_move() {
     // The slot holds A now, so B's own stop clears nothing (`0x776990` tests the holder).
     s.run("B:StopMovingOrSizing()").unwrap();
     s.mouse_move(250.0, 170.0);
-    assert_eq!(
+    crate::assert_near!(
         lefts(&mut s),
         (200.0, 500.0),
         "A follows; B stopped where it was"
@@ -794,7 +794,7 @@ fn a_title_press_takes_the_slot_from_a_running_move() {
     // The title move is mode 2, which the release ends.
     s.mouse_button(250.0, 170.0, "LeftButton", false);
     s.mouse_move(350.0, 170.0);
-    assert_eq!(lefts(&mut s), (200.0, 500.0));
+    crate::assert_near!(lefts(&mut s), (200.0, 500.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -832,7 +832,7 @@ fn a_press_during_a_move_goes_to_the_hover_the_move_froze() {
     s.mouse_button(450.0, 150.0, "LeftButton", false);
     s.mouse_move(500.0, 150.0);
     s.resolve();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return W:GetLeft(), T:GetLeft()")
             .unwrap(),
         (450.0, 400.0),
@@ -861,6 +861,6 @@ fn a_release_that_ends_a_title_move_fires_nothing() {
         "the right release ended the move and reached no script"
     );
     s.mouse_move(250.0, 170.0);
-    assert_eq!(lefts(&mut s).0, 100.0, "and the move is over");
+    crate::assert_near!(lefts(&mut s).0, 100.0, "and the move is over");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

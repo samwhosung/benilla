@@ -279,7 +279,7 @@ fn a_chorded_press_over_another_title_region_starts_no_move() {
     s.mouse_button(500.0, 300.0, "RightButton", true);
     s.mouse_move(560.0, 300.0);
     s.resolve();
-    assert_eq!(s.eval::<f64>("return B:GetLeft()").unwrap(), 400.0);
+    crate::assert_near!(s.eval::<f64>("return B:GetLeft()").unwrap(), 400.0);
     assert!(log_of(&mut s).ends_with("A:down:RightButton"));
 }
 
