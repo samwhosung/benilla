@@ -22,7 +22,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_protocol::guid;
-use benilla_ui::script::by_name::{resolve, Filter, Held, Kinds, Match, Search};
+use benilla_ui::script::by_name::{resolve, Filter, Held, Kinds, Match, RosterEntry, Search};
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
@@ -220,8 +220,11 @@ impl ByNameScan<'_, '_> {
             search,
             filter,
             mode,
+            Roster::default(),
             |store| self.assistable_alive(store),
         )
+        // With no roster every pick is a held unit.
+        .and_then(|(e, g, n)| Some((e?, g, n)))
     }
 }
 
@@ -259,6 +262,15 @@ type UnitQuery<'w, 's> = Query<
     ),
 >;
 
+/// The roster passes' input (`0x493b22`, `0x493ba7`): the party slots and the raid members, by the
+/// name the wire gave and whether the object manager holds them. Empty for the callers that
+/// select ([`Selection::target`] is an entity); a pick from it has a guid and no entity.
+#[derive(Default)]
+pub(super) struct Roster<'a> {
+    party: Vec<RosterEntry<'a>>,
+    raid: Vec<RosterEntry<'a>>,
+}
+
 /// The resolver's walk (`0x493aa0`): a name to a unit, logging one `by-name:` line per call,
 /// ungated since it runs per command: the candidates counted, the winner and on what. `filter` is
 /// the mode argument and `assistable` its mode-2 test; `origin` is the active player's position,
@@ -272,8 +284,9 @@ fn scan_units<'a>(
     search: NameSearch,
     filter: Filter,
     mode: Match,
+    roster: Roster<'_>,
     assistable: impl Fn(Option<&ObjectStore>) -> bool,
-) -> Option<(Entity, u64, String)> {
+) -> Option<(Option<Entity>, u64, String)> {
     let query = query.trim();
     if query.is_empty() {
         return None;
@@ -299,7 +312,6 @@ fn scan_units<'a>(
         }
     }
     let considered = held.len();
-    // No roster: see the module doc.
     let best = resolve(
         Search {
             query,
@@ -309,8 +321,8 @@ fn scan_units<'a>(
             // The `origin` test above is `0x493ae0`.
             active_player: true,
         },
-        std::iter::empty(),
-        std::iter::empty(),
+        roster.party,
+        roster.raid,
         held,
     );
     match &best {
@@ -328,7 +340,7 @@ fn scan_units<'a>(
              ({nameless} unnamed, {mode:?}); target left untouched"
         ),
     }
-    best.and_then(|p| Some((p.object?, p.guid, p.name.to_string())))
+    best.map(|p| (p.object, p.guid, p.name.to_string()))
 }
 
 /// The player-only name search for a caller that holds the [`NameCache`] mutably and so cannot
@@ -339,13 +351,39 @@ pub(crate) struct PlayerLookup<'w, 's> {
     /// would put it in an undeclared order against every system that moves a unit.
     units: Query<'w, 's, (Entity, &'static Guid, &'static GlobalTransform)>,
     self_q: Query<'w, 's, &'static GlobalTransform, With<SelfPlayer>>,
+    /// The roster passes' members, and the object manager's answer for each.
+    group: Res<'w, crate::ui_party::GroupState>,
+    index: Res<'w, GuidIndex>,
 }
 
 impl PlayerLookup<'_, '_> {
     /// `0x493aa0` with typemask `0x10`, filter mode 0 and no exact-only flag, as `/assist <name>`
-    /// calls it: any player in the object list, whole name or longest prefix. Selects nothing.
-    pub(crate) fn find(&self, names: &NameCache, name: &str) -> Option<(Entity, u64)> {
+    /// calls it: the party slots and the raid members with no object held, then any player in the
+    /// object list, whole name or longest prefix. Selects nothing, so the pick is only a guid.
+    pub(crate) fn find(&self, names: &NameCache, name: &str) -> Option<u64> {
         let origin = self.self_q.single().ok().map(|tf| tf.translation());
+        let index = &self.index;
+        fn entry<'a>(
+            m: &'a benilla_protocol::messages::GroupMemberEntry,
+            index: &GuidIndex,
+        ) -> RosterEntry<'a> {
+            RosterEntry {
+                name: &m.name,
+                guid: m.guid,
+                held: index.0.contains_key(&m.guid),
+            }
+        }
+        let in_raid = self.group.group_type == crate::ui_party::GROUPTYPE_RAID;
+        let roster = Roster {
+            party: self.group.party_slots().map(|m| entry(m, index)).collect(),
+            raid: self
+                .group
+                .members
+                .iter()
+                .filter(|_| in_raid)
+                .map(|m| entry(m, index))
+                .collect(),
+        };
         scan_units(
             self.units
                 .iter()
@@ -356,9 +394,10 @@ impl PlayerLookup<'_, '_> {
             NameSearch::PlayerOnly,
             Filter::AcceptAll,
             Match::PrefixOk,
+            roster,
             |_| true,
         )
-        .map(|(e, g, _)| (e, g))
+        .map(|(_, g, _)| g)
     }
 }
 
@@ -798,5 +837,64 @@ mod tests {
             Some(&me),
             |_| None
         ));
+    }
+
+    /// `DoEmote`'s search (`0x49fde9`, typemask 0x10, mode 0) runs the roster passes: a groupmate
+    /// with no object answers to a prefix, and a streamed player nearer than the roster's
+    /// placeholder distance with an equal prefix answers instead.
+    #[test]
+    fn the_emote_search_finds_a_groupmate_with_no_object() {
+        use benilla_protocol::messages::GroupMemberEntry;
+        use bevy::ecs::system::RunSystemOnce;
+        const ME: u64 = 0x10;
+        const BOB: u64 = 0x20;
+        const BOBBY: u64 = 0x30;
+        let mut world = World::new();
+        world.init_resource::<crate::ui_party::GroupState>();
+        world.init_resource::<GuidIndex>();
+        world.spawn((
+            SelfPlayer,
+            Guid(ME),
+            GlobalTransform::from_translation(Vec3::ZERO),
+        ));
+        world
+            .resource_mut::<crate::ui_party::GroupState>()
+            .members
+            .push(GroupMemberEntry {
+                name: "Bob".into(),
+                guid: BOB,
+                status: 1,
+                flags: 0,
+            });
+        world.init_resource::<NameCache>();
+        world
+            .resource_mut::<NameCache>()
+            .insert_player(ME, "Me".into(), None);
+        let find = |world: &mut World, query: &'static str| {
+            world
+                .run_system_once(move |lookup: PlayerLookup, names: Res<NameCache>| {
+                    lookup.find(&names, query)
+                })
+                .expect("the lookup runs as a one-shot system")
+        };
+        assert_eq!(find(&mut world, "Bo"), Some(BOB));
+        assert_eq!(find(&mut world, "Zed"), None);
+        // Bobby is streamed and named: nearer than the placeholder, an equal prefix.
+        let bobby = world
+            .spawn((
+                Guid(BOBBY),
+                GlobalTransform::from_translation(Vec3::new(9.0, 0.0, 0.0)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(BOBBY, bobby);
+        world
+            .resource_mut::<NameCache>()
+            .insert_player(BOBBY, "Bobby".into(), None);
+        assert_eq!(find(&mut world, "Bo"), Some(BOBBY));
+        // Once Bob is streamed too, the roster leaves him to the object pass; unnamed, he is
+        // nobody's candidate.
+        let bob = world.spawn((Guid(BOB), GlobalTransform::default())).id();
+        world.resource_mut::<GuidIndex>().0.insert(BOB, bob);
+        assert_eq!(find(&mut world, "Bob"), Some(BOBBY));
     }
 }

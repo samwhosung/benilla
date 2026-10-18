@@ -153,72 +153,55 @@ fn text_emote_lines_are_verbatim_and_never_wear_the_senders_name() {
 /// `DoEmote` sends a self-target as guid 0 (`0x5ef611`), so 1.12 has no self-emote sentence.
 #[test]
 fn emoting_at_your_own_selection_sends_an_untargeted_emote() {
-    let _data = benilla_formats::wow_data_or_skip!();
     use crate::target::Selection;
-    use bevy::prelude::Entity;
-
-    let me = Entity::from_raw_u32(7).unwrap();
-    let them = Entity::from_raw_u32(9).unwrap();
 
     let sel = Selection {
-        target: Some(me),
-        guid: Some(0xdead_beef),
+        guid: Some(0x111),
         ..Default::default()
     };
-    assert_eq!(emote_target(None, &sel, no_name, Some(me)), 0);
+    assert_eq!(emote_target(None, &sel, no_name, Some(0x111)), 0);
+    assert_eq!(emote_target(None, &sel, no_name, Some(0x222)), 0x111);
 
-    let sel = Selection {
-        target: Some(them),
-        guid: Some(0xdead_beef),
-        ..Default::default()
-    };
-    assert_eq!(emote_target(None, &sel, no_name, Some(me)), 0xdead_beef);
-
-    // No selection is untargeted, and with no self entity yet a selection goes out untouched.
+    // No selection is untargeted, and with no self guid yet a selection goes out untouched.
     assert_eq!(
-        emote_target(None, &Selection::default(), no_name, Some(me)),
+        emote_target(None, &Selection::default(), no_name, Some(0x111)),
         0
     );
-    let sel = Selection {
-        target: Some(them),
-        guid: Some(0xdead_beef),
-        ..Default::default()
-    };
-    assert_eq!(emote_target(None, &sel, no_name, None), 0xdead_beef);
+    assert_eq!(emote_target(None, &sel, no_name, None), 0x111);
 }
 
-fn no_name(_: &str) -> Option<(bevy::prelude::Entity, u64)> {
+fn no_name(_: &str) -> Option<u64> {
     None
 }
 
-/// `0x49fdb1`: a word not starting with `%` names a player and replaces the selection; a miss is
-/// guid 0; no argument or a `%` word is the selection.
+/// `0x49fdb1`: a word not starting with `%` (`0x49fdd4`) names a player and replaces the
+/// selection; a miss is guid 0; no argument or a `%` word is the selection.
 #[test]
 fn an_emote_argument_targets_the_named_player_and_not_the_selection() {
     use crate::target::Selection;
-    use bevy::prelude::Entity;
 
-    let me = Entity::from_raw_u32(7).unwrap();
-    let bob = Entity::from_raw_u32(9).unwrap();
     let sel = Selection {
-        target: Some(Entity::from_raw_u32(11).unwrap()),
         guid: Some(0x5e1),
         ..Default::default()
     };
-    let find = |n: &str| (n == "Bob").then_some((bob, 0xb0b));
-    assert_eq!(emote_target(Some("Bob"), &sel, find, Some(me)), 0xb0b);
+    let find = |n: &str| (n == "Bob").then_some(0xb0b);
+    assert_eq!(emote_target(Some("Bob"), &sel, find, Some(0x111)), 0xb0b);
     assert_eq!(
-        emote_target(Some("Nobody"), &sel, find, Some(me)),
+        emote_target(Some("Nobody"), &sel, find, Some(0x111)),
         0,
         "a miss is untargeted"
     );
     for arg in [None, Some(""), Some("%t"), Some("%x")] {
-        let panics = |_: &str| -> Option<(Entity, u64)> { panic!("no search for {arg:?}") };
-        assert_eq!(emote_target(arg, &sel, panics, Some(me)), 0x5e1, "{arg:?}");
+        let panics = |_: &str| -> Option<u64> { panic!("no search for {arg:?}") };
+        assert_eq!(
+            emote_target(arg, &sel, panics, Some(0x111)),
+            0x5e1,
+            "{arg:?}"
+        );
     }
     // Naming yourself is the self-target edge: untargeted.
-    let own = |_: &str| Some((me, 0x111));
-    assert_eq!(emote_target(Some("Me"), &sel, own, Some(me)), 0);
+    let own = |_: &str| Some(0x111);
+    assert_eq!(emote_target(Some("Me"), &sel, own, Some(0x111)), 0);
 }
 
 #[test]
