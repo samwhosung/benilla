@@ -28,17 +28,6 @@ pub(super) type ResolveRegion = fn(&Lua, &Table) -> mlua::Result<RegionHandle>;
 /// `0x77e4d7` call, which the EditBox answers (`0x77e2a0`).
 pub(super) type FontChanged = fn(&Lua, &Table) -> mlua::Result<()>;
 
-/// The `%s` of a font verb's `Usage:` line: every shim passes the receiver's `GetName()`, or
-/// `<unnamed>` (`0x84c7f0`) when it has none (`0x79d652`, `0x7a0315`, `0x780919`). Runs Lua, so a
-/// caller asks before it borrows the model.
-pub(super) fn usage_name(this: &Table) -> String {
-    this.get::<mlua::Function>("GetName")
-        .and_then(|f| f.call::<Option<String>>(this.clone()))
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "<unnamed>".to_string())
-}
-
 /// Whether FontString `rh` has a font, the reference's non-null `CSimpleFontString+0xe0`. A
 /// string starts with none (`0x770d30`) and gets one only from its own `SetFont` or XML `font=`,
 /// or from the font it follows (`inherits=`, `font=`, `SetFontObject`, a Button's state font);
@@ -95,7 +84,7 @@ pub(super) fn set_font_args(
     let usage = || {
         mlua::Error::runtime(format!(
             "Usage: {}:SetFont(\"font\", fontHeight [, flags])",
-            usage_name(this)
+            binding_abi::name_of(lua, this)
         ))
     };
     let Some(path) = binding_abi::optional_string(lua, file) else {
@@ -122,7 +111,7 @@ pub(super) fn spacing_arg(lua: &Lua, this: &Table, v: &Value) -> mlua::Result<f3
         Some(n) => Ok(n as f32),
         None => Err(mlua::Error::runtime(format!(
             "Usage: {}:SetSpacing(spacing)",
-            usage_name(this)
+            binding_abi::name_of(lua, this)
         ))),
     }
 }
@@ -188,7 +177,7 @@ pub(super) fn install(
     m.set(
         "SetFontObject",
         lua.create_function(move |lua, (this, args): (Table, mlua::MultiValue)| {
-            let who = super::font::c_name(lua, &this);
+            let who = super::binding_abi::name_of(lua, &this);
             let to =
                 super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
             let rh = resolve(lua, &this)?;

@@ -2,7 +2,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::script::binding_abi::bool_or_default;
+use crate::script::binding_abi::{self, bool_or_default};
 
 use crate::script::region_map::{set_shared, Side};
 
@@ -136,16 +136,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Value::Number(n) => n.to_string(),
                 Value::Integer(i) => i.to_string(),
                 _ => {
-                    let h = frame_handle_of(lua, &this)?;
-                    let model = lua.app_data_ref::<Model>().expect("model");
-                    let who = model
-                        .arena
-                        .frame(h)
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_else(|| "<unnamed>".to_string());
-                    return Err(mlua::Error::runtime(format!(
-                        "Usage: {who}:IsObjectType(\"TYPE\")"
-                    )));
+                    frame_handle_of(lua, &this)?;
+                    return Err(binding_abi::usage(lua, &this, "IsObjectType(\"TYPE\")"));
                 }
             };
             Ok(if chain.iter().any(|t| want.eq_ignore_ascii_case(t)) {
@@ -176,16 +168,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Value::Number(n) => n.to_string(),
                 Value::Integer(i) => i.to_string(),
                 _ => {
-                    let h = frame_handle_of(lua, &this)?;
-                    let model = lua.app_data_ref::<Model>().expect("model");
-                    let who = model
-                        .arena
-                        .frame(h)
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_else(|| "<unnamed>".to_string());
-                    return Err(mlua::Error::runtime(format!(
-                        "Usage: {who}:IsFrameType(\"TYPE\")"
-                    )));
+                    frame_handle_of(lua, &this)?;
+                    return Err(binding_abi::usage(lua, &this, "IsFrameType(\"TYPE\")"));
                 }
             };
             Ok(if chain.iter().any(|t| want.eq_ignore_ascii_case(t)) {
@@ -264,14 +248,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 _ => return Err(mlua::Error::runtime("expected a frame")),
             };
             let h = frame_handle_of(lua, &this)?;
-            let who = {
-                let model = lua.app_data_ref::<Model>().expect("model");
-                model
-                    .arena
-                    .frame(h)
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_else(|| "<unnamed>".to_string())
-            };
+            let who = binding_abi::frame_name(&lua.app_data_ref::<Model>().expect("model"), h);
             let parent_arg = it.next();
             // `_G[name]` is read with no guard alive and no `$parent` expansion: `0x7a1550` calls
             // `0x76c760` directly, and only the layout path's `0x76c700` expands the token.
@@ -322,11 +299,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if let Some(np) = new_parent {
                 let model = lua.app_data_ref::<Model>().expect("model");
                 if np == h || model.arena.is_ancestor(h, np) {
-                    let pname = model
-                        .arena
-                        .frame(np)
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_else(|| "<unnamed>".to_string());
+                    let pname = binding_abi::frame_name(&model, np);
                     return Err(mlua::Error::runtime(format!(
                         "{who}:SetParent(): Would create a loop parenting to {pname}"
                     )));
@@ -365,13 +338,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // A name off the table raises, naming the frame or `<unnamed>` (`0x774450`), and the
             // stratum stays.
             let Some(s) = strata_from_str(&strata) else {
-                let name = lua
-                    .app_data_ref::<Model>()
-                    .expect("model")
-                    .arena
-                    .frame(h)
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_else(|| "<unnamed>".to_string());
+                let name = binding_abi::name_of(lua, &this);
                 return Err(mlua::Error::runtime(format!(
                     "{name}:SetFrameStrata(): Unknown frame strata: {strata}"
                 )));
@@ -424,15 +391,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // (`fcomp 0.0; test ah,1`, `0x7751e9`, on the double) raises and stores nothing
             // (`0x77520b`); 0 passes. The store is the f32 (`0x7751e6`).
             let Some(scale) = lua.coerce_number(scale)? else {
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {}:SetScale(scale)",
-                    frame_name(lua, h)
-                )));
+                return Err(binding_abi::usage(lua, &this, "SetScale(scale)"));
             };
             if scale < 0.0 || scale.is_nan() {
                 return Err(mlua::Error::runtime(format!(
                     "{}:SetScale(): Scale must be > 0",
-                    frame_name(lua, h)
+                    binding_abi::name_of(lua, &this)
                 )));
             }
             lua.app_data_mut::<Model>()
@@ -456,10 +420,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // `0x774e90`: `lua_isnumber` else the usage line (`0x774f76`), then the clamped,
             // truncated byte; stock fade code passing a 0..255 alpha relies on the clamp.
             let Some(alpha) = lua.coerce_number(alpha)? else {
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {}:SetAlpha(alpha 0 to 1)",
-                    frame_name(lua, h)
-                )));
+                return Err(binding_abi::usage(lua, &this, "SetAlpha(alpha 0 to 1)"));
             };
             lua.app_data_mut::<Model>()
                 .expect("model")
@@ -831,17 +792,6 @@ fn regions_of(lua: &Lua, this: &Table) -> mlua::Result<Vec<u32>> {
         .filter(|r| model.arena.region(*r).is_some_and(|reg| !reg.detached))
         .collect();
     Ok(live.into_iter().map(|r| model.region_id(r)).collect())
-}
-
-/// Frame `h`'s name as the reference's usage lines print it (the frame's own name, vtable slot 1),
-/// or `<unnamed>` (`0x84c7f0`).
-fn frame_name(lua: &Lua, h: crate::widget::FrameHandle) -> String {
-    let model = lua.app_data_ref::<Model>().expect("model");
-    model
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
 /// A backdrop colour setter's four channels (`SetBackdropColor` `0x777d30`,

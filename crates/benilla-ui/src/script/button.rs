@@ -226,7 +226,7 @@ fn link_state_font(
     which: LabelFont,
     args: &MultiValue,
 ) -> mlua::Result<()> {
-    let who = super::font::c_name(lua, this);
+    let who = super::binding_abi::name_of(lua, this);
     let to = super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
     let (_, f) = fonts_of(lua, this)?;
     let id = which.of(f);
@@ -719,12 +719,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let who = {
                 let h = frame_handle_of(lua, &this)?;
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .arena
-                    .frame(h)
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_else(|| "<unnamed>".to_string())
+                super::binding_abi::frame_name(&lua.app_data_ref::<Model>().expect("model"), h)
             };
             let Some(Value::Table(fs)) = it.next() else {
                 return Err(mlua::Error::runtime(format!(
@@ -922,16 +917,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (this, x, y): (Table, Value, Value)| {
             let num = |v: Value| lua.coerce_number(v).ok().flatten();
             let (Some(x), Some(y)) = (num(x), num(y)) else {
-                let h = frame_handle_of(lua, &this)?;
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let who = model
-                    .arena
-                    .frame(h)
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_else(|| "<unnamed>".to_string());
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {who}:SetPushedTextOffset(x, y)"
-                )));
+                frame_handle_of(lua, &this)?;
+                return Err(super::binding_abi::usage(
+                    lua,
+                    &this,
+                    "SetPushedTextOffset(x, y)",
+                ));
             };
             let units = lua
                 .app_data_ref::<Model>()

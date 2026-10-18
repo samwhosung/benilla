@@ -78,11 +78,7 @@ pub(crate) fn post_load(lua: &Lua, wrapper: &Table) {
         ) {
             return;
         }
-        model
-            .arena
-            .frame(h)
-            .and_then(|f| f.name.clone())
-            .unwrap_or_else(|| "<unnamed>".to_string())
+        crate::script::binding_abi::frame_name(&model, h)
     };
     let mut pairs = Vec::new();
     loop {

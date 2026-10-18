@@ -53,7 +53,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if !fonted {
                 return Err(mlua::Error::runtime(format!(
                     "{}:SetText(): Font not set",
-                    crate::script::font_block::usage_name(&this)
+                    crate::script::binding_abi::name_of(lua, &this)
                 )));
             }
             // `text_arg`, since a Lua string is bytes and a slice of one need not be valid UTF-8.

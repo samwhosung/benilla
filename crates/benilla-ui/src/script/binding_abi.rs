@@ -14,7 +14,10 @@
 //!    `xor eax,eax; ret` that skips `0x6f4940` (`GetDefaultLanguage`'s failure edges);
 //! 3. raise.
 
-use mlua::{Lua, MultiValue, Value};
+use mlua::{Lua, MultiValue, Table, Value};
+
+use super::Model;
+use crate::widget::{FrameHandle, RegionHandle};
 
 /// `_ftol` (`0x40a2b0`) as the bindings consume it: the x87 rounding control set to chop, a
 /// `fistp` to a qword, and its low dword. What the qword cannot hold (an infinity, NaN, ±2^63 and
@@ -137,6 +140,60 @@ pub(crate) fn text_arg(lua: &Lua, v: Option<Value>) -> mlua::Result<Option<Strin
 /// (`0x7984c0`). The exponent has at least three digits: `1e20` prints `1e+020`.
 pub(crate) fn lua_number_text(v: f64) -> String {
     mlua::benilla_lua::fmt_g14(v)
+}
+
+/// The name an object without one prints as (`0x84c7f0`).
+pub(crate) const UNNAMED: &str = "<unnamed>";
+
+/// The `%s` a method's error line names: the object's own name, its vtable `+4` (`GetName`), or
+/// [`UNNAMED`] when that is NULL. Read off the model, never through a Lua `GetName` an addon can
+/// override. A frame, a region or a Font object; any other table is unnamed.
+pub(crate) fn object_name(model: &Model, this: &Table) -> String {
+    let name = match this.raw_get::<Value>(0) {
+        Ok(Value::LightUserData(l)) => {
+            let id = l.0 as usize as u32;
+            if let Some(&h) = model.id_to_frame.get(&id) {
+                model.arena.frame(h).and_then(|f| f.name.clone())
+            } else if let Some(&rh) = model.id_to_region.get(&id) {
+                model.arena.region(rh).and_then(|r| r.name.clone())
+            } else {
+                None
+            }
+        }
+        Ok(Value::Integer(_)) => {
+            super::font::id_of_table(model, this).and_then(|id| model.fonts.get(id).name.clone())
+        }
+        _ => None,
+    };
+    name.unwrap_or_else(|| UNNAMED.to_string())
+}
+
+/// [`object_name`] for a frame already resolved.
+pub(crate) fn frame_name(model: &Model, h: FrameHandle) -> String {
+    model
+        .arena
+        .frame(h)
+        .and_then(|f| f.name.clone())
+        .unwrap_or_else(|| UNNAMED.to_string())
+}
+
+/// [`object_name`] for a region already resolved.
+pub(crate) fn region_name(model: &Model, rh: RegionHandle) -> String {
+    model
+        .arena
+        .region(rh)
+        .and_then(|r| r.name.clone())
+        .unwrap_or_else(|| UNNAMED.to_string())
+}
+
+/// [`object_name`], borrowing the model; a caller holding a borrow uses that instead.
+pub(crate) fn name_of(lua: &Lua, this: &Table) -> String {
+    object_name(&lua.app_data_ref::<Model>().expect("model"), this)
+}
+
+/// `Usage: <name>:<line>`, the raise of a method whose format string is `Usage: %s:<line>`.
+pub(crate) fn usage(lua: &Lua, this: &Table, line: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("Usage: {}:{line}", name_of(lua, this)))
 }
 
 /// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits

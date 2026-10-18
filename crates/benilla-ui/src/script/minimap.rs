@@ -109,19 +109,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i) => lua_number_text(i as f64),
                 Value::Number(n) => lua_number_text(n),
                 _ => {
-                    let name = with_minimap(lua, &this, |_| ())
-                        .and_then(|()| frame_handle_of(lua, &this))
-                        .map(|h| {
-                            lua.app_data_ref::<Model>()
-                                .expect("model app_data")
-                                .arena
-                                .frame(h)
-                                .and_then(|f| f.name.clone())
-                        })?;
-                    let name = name.unwrap_or_else(|| "<unnamed>".to_string());
-                    return Err(mlua::Error::runtime(format!(
-                        "Usage: {name}:SetMaskTexture(\"file\")"
-                    )));
+                    with_minimap(lua, &this, |_| ())?;
+                    return Err(super::binding_abi::usage(
+                        lua,
+                        &this,
+                        "SetMaskTexture(\"file\")",
+                    ));
                 }
             };
             let path = Some(path).filter(|p| !p.is_empty());

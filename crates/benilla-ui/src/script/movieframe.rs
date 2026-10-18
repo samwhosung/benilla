@@ -12,7 +12,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::bool_or_default;
-use super::font_block::usage_name;
+use super::binding_abi::name_of;
 use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::FrameKind;
@@ -49,7 +49,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             ) {
                 return Err(mlua::Error::runtime(format!(
                     "Usage: {}:StartMovie(\"filename\")",
-                    usage_name(&this)
+                    name_of(lua, &this)
                 )));
             }
             Ok(Value::Nil)

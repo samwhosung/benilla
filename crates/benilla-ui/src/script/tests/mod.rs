@@ -89,6 +89,7 @@ mod tooltip_spell;
 mod tooltip_unit;
 mod toplevel;
 mod update_walk;
+mod usage_lines;
 mod visibility;
 mod wheel;
 mod widget_args;

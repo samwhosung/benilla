@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use super::binding_abi::usage;
 use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::{model_key, FrameHandle, KindState, ModelFileFacts, ModelLight, ModelState};
@@ -315,18 +316,6 @@ fn string_arg(v: &Value) -> Option<std::borrow::Cow<'_, str>> {
         Value::Integer(i) => Some(std::borrow::Cow::Owned(i.to_string())),
         _ => None,
     }
-}
-
-/// The client's `Usage:` error, naming the receiver by `GetName()` or `<unnamed>` (`0x84c7f0`).
-fn usage(lua: &Lua, this: &Table, call: &str) -> mlua::Error {
-    let name = this
-        .get::<mlua::Function>("GetName")
-        .and_then(|f| f.call::<Option<String>>(this.clone()))
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "<unnamed>".to_string());
-    let _ = lua;
-    mlua::Error::runtime(format!("Usage: {name}:{call}"))
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {

@@ -148,7 +148,7 @@ pub(crate) fn publish(lua: &Lua, id: FontId, name: &str) -> mlua::Result<()> {
 }
 
 /// The font a handle holds in `T[0]`; `None` for any other table.
-fn id_of_table(model: &Model, t: &Table) -> Option<FontId> {
+pub(super) fn id_of_table(model: &Model, t: &Table) -> Option<FontId> {
     match t.raw_get::<Value>(0).ok()? {
         Value::Integer(i) => u32::try_from(i)
             .ok()
@@ -165,29 +165,6 @@ fn id_of(lua: &Lua, this: &Table) -> mlua::Result<FontId> {
         .ok_or_else(|| mlua::Error::runtime("not a font object (missing T[0] font identity)"))
 }
 
-/// The `%s` an object's error line names: its C-side name, never a Lua `GetName` an addon could
-/// override, or `<unnamed>` (`0x84c7f0`).
-pub(super) fn c_name(lua: &Lua, this: &Table) -> String {
-    let model = lua.app_data_ref::<Model>().expect("model");
-    let name = match this.raw_get::<Value>(0) {
-        Ok(Value::LightUserData(l)) => {
-            let id = l.0 as usize as u32;
-            if let Some(&h) = model.id_to_frame.get(&id) {
-                model.arena.frame(h).and_then(|f| f.name.clone())
-            } else if let Some(&rh) = model.id_to_region.get(&id) {
-                model.arena.region(rh).and_then(|r| r.name.clone())
-            } else {
-                None
-            }
-        }
-        Ok(Value::Integer(_)) => {
-            id_of_table(&model, this).and_then(|id| model.fonts.get(id).name.clone())
-        }
-        _ => None,
-    };
-    name.unwrap_or_else(|| "<unnamed>".to_string())
-}
-
 /// Which font verb an argument error names.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Verb {
@@ -198,8 +175,8 @@ pub(super) enum Verb {
 }
 
 /// A font argument as the reference reads it (`0x79ef10`, `0x79d1a0`, `0x79f0e0`), `who` being the
-/// receiver's [`c_name`]: a table must hold a font in `this` (`0x87c664`), not another object
-/// (`0x87c62c`); a string, and only a string (`lua_type` 4, so not a number), names a font
+/// receiver's [`super::binding_abi::object_name`]: a table must hold a font in `this`
+/// (`0x87c664`), not another object (`0x87c62c`); a string, and only a string (`lua_type` 4, so not a number), names a font
 /// (`0x783870`), a miss raising (`0x87c5fc`); nil is `None` for `SetFontObject`; anything else,
 /// no argument included, raises the usage line (`0x87c5cc`, `0x87c8e4`).
 pub(super) fn font_arg(
@@ -546,7 +523,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetFontObject",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
-            let who = c_name(lua, &this);
+            let who = super::binding_abi::name_of(lua, &this);
             let to = font_arg(lua, &who, Verb::SetFontObject, args.front())?;
             let id = id_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -565,7 +542,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "CopyFontObject",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
-            let who = c_name(lua, &this);
+            let who = super::binding_abi::name_of(lua, &this);
             let src = font_arg(lua, &who, Verb::CopyFontObject, args.front())?
                 .expect("CopyFontObject refuses nil");
             let id = id_of(lua, &this)?;
@@ -667,7 +644,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(a) = lua.coerce_number(a)? else {
                 return Err(mlua::Error::runtime(format!(
                     "Usage: {}:SetAlpha(alpha)",
-                    super::font_block::usage_name(&this)
+                    super::binding_abi::name_of(lua, &this)
                 )));
             };
             let a = crate::color::wrap_alpha_byte(a);

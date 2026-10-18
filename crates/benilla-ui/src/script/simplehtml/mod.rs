@@ -475,7 +475,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetFontObject",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let who = super::font::c_name(lua, &this);
+            let who = super::binding_abi::name_of(lua, &this);
             let name =
                 super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, rest.front())?;
             // nil severs the link and keeps the paint, as the reference stores a null parent; an

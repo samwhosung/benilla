@@ -89,11 +89,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 };
                 let (Some(w), Some(hgt)) = (num(&pair.0), num(&pair.1)) else {
                     let model = lua.app_data_ref::<Model>().expect("model");
-                    let who = model
-                        .arena
-                        .frame(h)
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_else(|| "<unnamed>".to_string());
+                    let who = crate::script::binding_abi::frame_name(&model, h);
                     let (verb, a, b) = if upper {
                         ("SetMaxResize", "maxWidth", "maxHeight")
                     } else {

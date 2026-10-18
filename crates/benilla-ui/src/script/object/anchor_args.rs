@@ -9,8 +9,7 @@ use crate::script::{Model, SCREEN};
 
 use super::{decode_id, point_from_str, prefetch_named_target, resolve_named_target, NamedTarget};
 
-/// The name the reference prints for a widget that has none (the literal at `0x84c7f0`).
-pub(crate) const UNNAMED: &str = "<unnamed>";
+pub(crate) use crate::script::binding_abi::UNNAMED;
 
 /// `relativeTo` by the four tags `lua_type(L,3)` accepts (`0x7a25e6`..`0x7a2620`); any other tag,
 /// absent included, raises Usage in `SetPoint`.

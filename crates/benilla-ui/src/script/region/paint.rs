@@ -3,6 +3,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use crate::script::binding_abi::usage;
 use crate::script::object::{draw_layer_from_str, draw_layer_name, tonumber_f32};
 use crate::script::texel::TexSet;
 use crate::script::{BlendMode, Model, TexCoords};
@@ -21,14 +22,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, alpha): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
             let Some(alpha) = lua.coerce_number(alpha)? else {
-                let model = lua.app_data_ref::<Model>().expect("model");
-                let who = crate::script::object::decode_id(&this)
-                    .ok()
-                    .and_then(|id| super::region_name_of(&model, id));
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {}:SetAlpha(alpha)",
-                    who.as_deref().unwrap_or("<unnamed>")
-                )));
+                return Err(usage(lua, &this, "SetAlpha(alpha)"));
             };
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model.region_data.entry(rh).or_default().alpha =
@@ -427,19 +421,6 @@ pub(crate) fn load_blend_mode(lua: &Lua, this: &Table, mode: &str) -> mlua::Resu
     let mut model = lua.app_data_mut::<Model>().expect("model");
     model.region_data.entry(rh).or_default().blend = blend;
     Ok(())
-}
-
-/// `Usage: <name>:<line>`, the raise a region method makes over its own format string, naming the
-/// region by its `GetName` (vtable `+4`) or `<unnamed>` (`0x84c7f0`).
-fn usage(lua: &Lua, this: &Table, line: &str) -> mlua::Error {
-    let model = lua.app_data_ref::<Model>().expect("model");
-    let name = crate::script::object::decode_id(this)
-        .ok()
-        .and_then(|id| super::region_name_of(&model, id));
-    mlua::Error::runtime(format!(
-        "Usage: {}:{line}",
-        name.as_deref().unwrap_or("<unnamed>")
-    ))
 }
 
 impl crate::script::UiScript {
