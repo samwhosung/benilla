@@ -109,49 +109,6 @@ impl Loader<'_> {
         Some(region_wrapper)
     }
 
-    /// A frame's direct-child `<FontString>`, on the OVERLAY layer; a text frame's loads into its
-    /// own font instead ([`Loader::apply_text_font_children`]).
-    pub(super) fn apply_special_fontstrings(
-        &mut self,
-        el: &Element,
-        wrapper: &Table,
-        parent_name: &str,
-        dbg: &str,
-    ) {
-        // A `<SimpleHTML>`'s direct `<FontString>` declares its `P` font, not a region
-        // (`0x78a1fe`); `apply_simplehtml` owns it.
-        if el.tag.eq_ignore_ascii_case("SimpleHTML") {
-            return;
-        }
-        for region in &el.children {
-            if !region.tag.eq_ignore_ascii_case("FontString") {
-                continue;
-            }
-            let levels = self.fontstring_levels(region);
-            let rname: Option<String> = region
-                .name()
-                .map(|raw| framexml::resolve_name(raw, parent_name));
-            let region_wrapper: Table = match wrapper
-                .call_method("CreateFontString", (rname, Some("OVERLAY".to_string())))
-            {
-                Ok(w) => w,
-                Err(e) => {
-                    self.report
-                        .fault(format!("{dbg}: CreateFontString (special): {e}"));
-                    continue;
-                }
-            };
-            for node in &levels {
-                let attrs = FontAttrs::Own;
-                self.load_fontstring_level(node, &region_wrapper, parent_name, attrs, true, dbg);
-            }
-            // The implicit creation anchor, as in `apply_layers`.
-            if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
-                self.report.fault(format!("{dbg}: implicit anchor: {e}"));
-            }
-        }
-    }
-
     /// `"<kind> <name>: Missing font height in <tag> element"` at severity 1 into the document's
     /// record: `0x878e10` for a FontString (`0x77117d`), `0x87a4f0` for a Font or a SimpleHTML
     /// element font (`0x783d9a`), with the object's name or `<unnamed>` (`0x84c7f0`) and the node's tag.

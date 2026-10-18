@@ -1717,3 +1717,29 @@ fn a_simplehtml_font_child_skips_a_bad_justify_token() {
         ("CENTER".to_string(), "TOP".to_string())
     );
 }
+
+/// The base frame loader's child loop (`0x769b27`-`0x769d22`) matches TitleRegion, ResizeBounds,
+/// Backdrop, HitRectInsets, Layers and Scripts alone, so a `<FontString>` directly under a plain
+/// frame or a Button builds no region and publishes no global (`0x769d1d`).
+#[test]
+fn a_fontstring_directly_under_a_plain_frame_builds_nothing() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Font name="DirectFont" font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></Font>
+            <Frame name="DirectHost">
+                <FontString name="$parentLabel" inherits="DirectFont" text="hi"/>
+            </Frame>
+            <Button name="DirectButton">
+                <FontString name="$parentLabel" inherits="DirectFont"/>
+            </Button>
+        </Ui>"#,
+    );
+    assert!(s
+        .eval::<bool>(
+            "return DirectHostLabel == nil and DirectButtonLabel == nil
+                and DirectHost:GetNumRegions() == 0 and DirectButton:GetNumRegions() == 0"
+        )
+        .unwrap());
+}
