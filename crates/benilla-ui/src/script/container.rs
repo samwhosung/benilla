@@ -413,6 +413,12 @@ pub enum UiCursorMode {
     /// UnableCast (22), `SetCursor("CAST_ERROR_CURSOR")`: a unit frame the armed spell cannot
     /// target, and leaving one while still targeting.
     CastError,
+    /// Attack (4), `SetCursor("ATTACK_CURSOR")`.
+    Attack,
+    /// UnablePoint (21), `SetCursor("POINT_ERROR_CURSOR")`.
+    UnablePoint,
+    /// UnableAttack (24), `SetCursor("ATTACK_ERROR_CURSOR")`.
+    UnableAttack,
 }
 
 /// `UseContainerItem` past its clear. An empty slot or a locked item ends it, repair mode
@@ -997,27 +1003,44 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })
         })?,
     )?;
-    // SetCursor(name) (`0x489490`): POINT, CAST, BUY and ATTACK are modes 1-4, each `*_ERROR` 20
-    // higher, and no argument is a `ResetCursor`. The stock UI calls it only from the unit-frame
-    // hover (`UnitFrame.lua:50`).
+    // SetCursor(name) (`0x489490`) returns nothing for nil, after the reset to the base mode
+    // (`0x489518`); anything `lua_tostring` cannot convert, no argument included, raises its usage
+    // line (`0x489537`). A number converts to its text. The name matches one of eight pairs
+    // ignoring case (`0x48955b`), POINT, CAST, BUY and ATTACK as modes 1-4 and each `*_ERROR` 20
+    // higher, and answers 1 (`0x48958f` → `0x489575`). Any other name is a custom cursor
+    // (`0x48956c`), which is not built: it answers as one that fails to load, nil with the cursor
+    // unchanged (`0x48959c`).
     lua.globals().set(
         "SetCursor",
-        lua.create_function(|lua, name: Option<String>| {
-            let mode = match name.as_deref() {
-                None => None, // no-arg == ResetCursor
-                Some("POINT_CURSOR") => Some(UiCursorMode::Point),
-                Some("CAST_CURSOR") => Some(UiCursorMode::Cast),
-                Some("CAST_ERROR_CURSOR") => Some(UiCursorMode::CastError),
-                Some("BUY_CURSOR") => Some(UiCursorMode::Buy),
-                Some("BUY_ERROR_CURSOR") => Some(UiCursorMode::UnableBuy),
-                // Ignored: the reference loads an unknown name as a custom cursor bitmap, which is
-                // not built.
-                Some(_) => return Ok(()),
+        lua.create_function(|lua, args: MultiValue| {
+            let first = args.into_iter().next();
+            if matches!(first, Some(Value::Nil)) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.ui_cursor = None;
+                model.ui_cursor_dirty = true;
+                return Ok(MultiValue::new());
+            }
+            let name = first
+                .as_ref()
+                .and_then(|v| super::binding_abi::optional_string(lua, v))
+                .ok_or_else(|| mlua::Error::runtime("Usage: SetCursor(\"cursor\" or nil)"))?;
+            const NAMED: [(&str, UiCursorMode); 8] = [
+                ("POINT_CURSOR", UiCursorMode::Point),
+                ("CAST_CURSOR", UiCursorMode::Cast),
+                ("BUY_CURSOR", UiCursorMode::Buy),
+                ("ATTACK_CURSOR", UiCursorMode::Attack),
+                ("POINT_ERROR_CURSOR", UiCursorMode::UnablePoint),
+                ("CAST_ERROR_CURSOR", UiCursorMode::CastError),
+                ("BUY_ERROR_CURSOR", UiCursorMode::UnableBuy),
+                ("ATTACK_ERROR_CURSOR", UiCursorMode::UnableAttack),
+            ];
+            let Some(&(_, mode)) = NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) else {
+                return Ok(MultiValue::from_vec(vec![Value::Nil]));
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.ui_cursor = mode;
+            model.ui_cursor = Some(mode);
             model.ui_cursor_dirty = true;
-            Ok(())
+            Ok(MultiValue::from_vec(vec![Value::Integer(1)]))
         })?,
     )?;
     // ResetCursor() (`0x48ac70` → `0x523d30`): back to the base mode, whatever set the override.
@@ -1038,6 +1061,50 @@ mod tests {
     use super::{ContainerMove, ContainerSlot, ContainerState, PendingWrap, UiCursorMode};
     use crate::script::cursor::split_container_item;
     use crate::script::{MerchantItem, MerchantState, UiScript};
+
+    /// `SetCursor` (`0x489490`): nil resets and returns nothing, no argument or a value with no
+    /// text raises the usage line, the eight names match without case and answer 1, and any other
+    /// name answers nil and leaves the cursor alone.
+    #[test]
+    fn set_cursor_takes_the_eight_names_and_raises_its_usage_line() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.arity("SetCursor(\"attack_cursor\")").unwrap(), 1);
+        assert_eq!(
+            s.eval::<i64>("return SetCursor(\"attack_cursor\")")
+                .unwrap(),
+            1
+        );
+        assert_eq!(s.ui_cursor(), Some(UiCursorMode::Attack));
+        for (name, mode) in [
+            ("POINT_CURSOR", UiCursorMode::Point),
+            ("Point_Error_Cursor", UiCursorMode::UnablePoint),
+            ("CAST_CURSOR", UiCursorMode::Cast),
+            ("cast_error_cursor", UiCursorMode::CastError),
+            ("BUY_CURSOR", UiCursorMode::Buy),
+            ("BUY_ERROR_CURSOR", UiCursorMode::UnableBuy),
+            ("ATTACK_ERROR_CURSOR", UiCursorMode::UnableAttack),
+        ] {
+            s.run(&format!("R = SetCursor(\"{name}\")")).unwrap();
+            assert_eq!(s.eval::<i64>("return R").unwrap(), 1, "{name}");
+            assert_eq!(s.ui_cursor(), Some(mode), "{name}");
+        }
+        // Another name is a custom cursor; this one does not load: nil, the cursor as it was.
+        assert_eq!(s.arity("SetCursor(\"Nope\")").unwrap(), 1);
+        assert!(s.eval::<bool>("return SetCursor(\"Nope\") == nil").unwrap());
+        assert!(s.eval::<bool>("return SetCursor(5) == nil").unwrap());
+        assert_eq!(s.ui_cursor(), Some(UiCursorMode::UnableAttack));
+        // Nil is the reset, with no value back.
+        assert_eq!(s.arity("SetCursor(nil)").unwrap(), 0);
+        assert_eq!(s.ui_cursor(), None);
+        for bad in ["SetCursor()", "SetCursor({})", "SetCursor(true)"] {
+            let err = s.run(bad).unwrap_err().to_string();
+            assert!(
+                err.contains("Usage: SetCursor(\"cursor\" or nil)"),
+                "{bad}: {err}"
+            );
+        }
+        assert_eq!(s.ui_cursor(), None, "a raise changes nothing");
+    }
 
     fn backpack() -> ContainerState {
         let mut slots = std::collections::HashMap::new();

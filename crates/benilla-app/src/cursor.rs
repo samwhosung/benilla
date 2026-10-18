@@ -250,6 +250,18 @@ fn drive_displayed_cursor(
                     unable: true,
                 },
                 Some(UiCursorMode::Point) => WorldCursor::default(),
+                Some(UiCursorMode::UnablePoint) => WorldCursor {
+                    kind: CursorKind::Point,
+                    unable: true,
+                },
+                Some(UiCursorMode::Attack) => WorldCursor {
+                    kind: CursorKind::Attack,
+                    unable: false,
+                },
+                Some(UiCursorMode::UnableAttack) => WorldCursor {
+                    kind: CursorKind::Attack,
+                    unable: true,
+                },
                 // `ResetCursor`: back to the base mode, Repair included.
                 None => base,
             };
