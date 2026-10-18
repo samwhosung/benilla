@@ -620,3 +620,30 @@ fn the_world_enter_cascade_spends_the_login_arm_once_and_plays_nothing() {
         "and the bracket closed behind them"
     );
 }
+
+/// The cascade collects in full before its events (`0x490941`-`0x490946` → `0x703bc0`, the
+/// threshold set to 0 at `0x703bd6`), so a `PLAYER_LOGIN` handler's `gcinfo()` counts no garbage
+/// the load left.
+#[test]
+fn the_world_enter_cascade_collects_before_player_login() {
+    let mut s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_LOGIN")
+        f:SetScript("OnEvent", function() AtLogin = gcinfo() end)
+        Junk = {}
+        for i = 1, 20000 do Junk[i] = { i } end
+        Junk = nil
+        Before = gcinfo()
+        "#,
+    )
+    .unwrap();
+    s.arm_player_login();
+    s.fire_world_enter();
+    let (before, at_login) = s.eval::<(i64, i64)>("return Before, AtLogin").unwrap();
+    assert!(
+        at_login + 256 < before,
+        "the load's garbage is collected: {before} KB, then {at_login} KB at PLAYER_LOGIN"
+    );
+}

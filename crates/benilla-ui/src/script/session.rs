@@ -50,8 +50,9 @@ impl super::UiScript {
         self.model_mut().player_login_armed = true;
     }
 
-    /// The world-enter cascade's events (`0x4908c0`): `PLAYER_LOGIN` (270, `0x490959`) only if a
-    /// load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
+    /// The world-enter cascade's events (`0x4908c0`): a full collection
+    /// (`FrameScriptCollectGarbage(1)`, `0x490946`), then `PLAYER_LOGIN` (270, `0x490959`) only if
+    /// a load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
     /// (272, `0x49096a`) every time, then the minimap's zoom reseed
     /// ([`Self::minimap_enter_world`]) and the quest log's rebuild and its `QUEST_LOG_UPDATE`
     /// ([`Self::quest_log_enter_world`]). The cascade runs with the player object in the world, so its
@@ -60,6 +61,8 @@ impl super::UiScript {
     pub fn fire_world_enter(&mut self) {
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
+        // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.
+        self.lua.set_gc_threshold_kb(0);
         if armed {
             self.fire_event("PLAYER_LOGIN", Vec::new());
         }
