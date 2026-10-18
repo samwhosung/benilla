@@ -3606,6 +3606,9 @@ fn a_saved_hover_delay_is_applied_when_the_variables_land() {
 fn the_status_bar_text_row_pins_the_numerals_the_moment_it_is_clicked() {
     benilla_formats::wow_data_or_skip!();
     let mut s = interface_harness();
+    // The login's `UPDATE_FACTION` shows the strip the load hid while `UnitXPMax` was 0
+    // (`ReputationWatchBar_Update`); a hidden strip's `OnValueChanged` returns at once.
+    s.fire_event("UPDATE_FACTION", vec![]);
     // A real span first: the bar's update hides the numerals while `valueMax` is 0.
     s.set_player_xp(1000, 10000);
     s.run("this = MainMenuExpBar; MainMenuExpBar_Update()")

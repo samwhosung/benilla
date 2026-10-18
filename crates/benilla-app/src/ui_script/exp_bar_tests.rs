@@ -30,6 +30,10 @@ fn exp_bar_harness() -> UiScript {
     }
     // The stock default, detailed tips on (`UIOptionsFrame.lua:100`); no options file loads here.
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
+    // The load's `MainMenuExpBar_Update` stores a first value with `UnitXPMax` 0, whose
+    // `OnValueChanged` hides the strip (`TextStatusBar_UpdateTextString`); the login's first
+    // faction list then fires `UPDATE_FACTION`, whose `ReputationWatchBar_Update` shows it again.
+    s.fire_event("UPDATE_FACTION", vec![]);
     s
 }
 
