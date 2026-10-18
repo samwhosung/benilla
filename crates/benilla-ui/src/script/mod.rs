@@ -863,10 +863,12 @@ impl UiScript {
     /// with no area reads as 4/3. Returns whether anything moved, as [`Self::set_screen_size`].
     ///
     /// Deviation: the reference sets the cells only when glue or the interface is built, `0x41ad10`
-    /// from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), from `gxResolution`'s aspect while
-    /// `widescreen` is on and 4/3 while it is off, and a resize reaches them only through the
-    /// rebuild or reload it requests past a change of 0.01 in glue and 0.001 in game (`0x492e90`,
-    /// `0x491380`); here every resize sets them from the window, as that rebuild would, because the
+    /// from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only
+    /// through the rebuild it asks for. In glue `0x46abe0` sets the rebuild flag `0xb41d8c` when
+    /// the aspect moves by 0.01 or more (`fcomp` at `0x46ac66`); in game `0x492e90` reloads the
+    /// interface (`0x491380`) past 0.001 (`0x492f26`, `0x492f31`). The gate and the rebuild both
+    /// take the aspect from `gxResolution` (`0x46ab40`, `0x4901e0`; 4/3 while `widescreen` is
+    /// off), never the live window. Here every resize sets the cells from the window, because the
     /// UI is kept live across a resize, and `widescreen` off keeps the window's aspect, as a 4:3
     /// root over a wider window would take a seam stretched on one axis.
     pub fn set_window_size(&mut self, width: f32, height: f32) -> bool {
