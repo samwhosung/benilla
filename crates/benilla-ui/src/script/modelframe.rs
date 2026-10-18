@@ -31,29 +31,43 @@ impl Model {
     /// holds `1/√(a²+1)`): the unit of `SetPosition` and of the implicit rect. `a` is 4/3 before a
     /// screen exists.
     pub(crate) fn layout_unit(&self) -> f32 {
-        let (w, h) = (self.screen.width(), self.screen.height());
-        let a = if h > 0.0 && w > 0.0 { w / h } else { 4.0 / 3.0 };
+        let a = self.screen_aspect();
         768.0 * (a * a + 1.0).sqrt()
     }
 
-    /// `ApplyRect`'s size threshold, 2⁻²² in the reference's layout units (`0x76b5e7`,
-    /// `0x76b602`, `[0x8029d4]`), in ours: [`crate::layout::SIZE_EPS`] times the layout unit.
+    /// The aspect the screen-scale cells are set from: the window's, as
+    /// [`crate::script::UiScript::set_window_size`] gave it, else the root's own width over height,
+    /// else 4/3.
+    pub(crate) fn screen_aspect(&self) -> f32 {
+        if let Some(a) = self.aspect {
+            return a;
+        }
+        let (w, h) = (self.screen.width(), self.screen.height());
+        if h > 0.0 && w > 0.0 {
+            w / h
+        } else {
+            4.0 / 3.0
+        }
+    }
+
+    /// `ApplyRect`'s size threshold, 2⁻²² layout units (`0x76b5e7`, `0x76b602`, `[0x8029d4]`), in
+    /// the root's units, for a reader that compares root-unit rects: [`crate::layout::SIZE_EPS`]
+    /// times the layout unit. The resolver compares its layout rects against the constant itself.
     pub(crate) fn size_eps(&self) -> f64 {
         crate::layout::SIZE_EPS * f64::from(self.layout_unit())
     }
 
-    /// The aspect globals `SetPoint`'s unchanged-anchor test quantizes offsets by
-    /// ([`crate::layout::Anchors::set`]), for the screen aspect [`Self::layout_unit`] reads.
+    /// The screen-scale cells (`0x41ad10`) for [`Self::screen_aspect`].
+    #[inline]
     pub(crate) fn layout_units(&self) -> crate::layout::LayoutUnits {
-        let (w, h) = (self.screen.width(), self.screen.height());
-        let a = if h > 0.0 && w > 0.0 { w / h } else { 4.0 / 3.0 };
-        crate::layout::LayoutUnits::from_aspect(a)
+        self.space.units()
     }
 
-    /// The drain's keep threshold, 1e-5 in the reference's layout units (`[0x80c5c8]`, tested in
-    /// `0x768d20`), in ours: [`crate::layout::RESOLVE_EPS`] times the layout unit.
-    pub(crate) fn resolve_eps(&self) -> f64 {
-        crate::layout::RESOLVE_EPS * f64::from(self.layout_unit())
+    /// The layout space of the screen root under [`Self::layout_units`]: the root's extent in
+    /// layout units and the map back to its own units.
+    #[inline]
+    pub(crate) fn layout_space(&self) -> crate::layout::LayoutSpace {
+        self.space
     }
 
     /// `SetModel` on the pane `h` (`0x76cce0`): the file, seeded now if its facts are held (else

@@ -169,7 +169,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         settle_frame(lua, h);
         let model = lua.app_data_ref::<Model>().expect("model");
         let inv = 1.0 / eff_scale(&model, h);
-        Ok(match model.resolved.get(&h) {
+        Ok(match model.frame_rect(h) {
             Some(r) => (
                 Value::Number(f64::from((r.left + r.right) * 0.5 * inv)),
                 Value::Number(f64::from((r.bottom + r.top) * 0.5 * inv)),
@@ -203,7 +203,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             settle_frame(lua, h);
             let model = lua.app_data_mut::<Model>().expect("model");
             let inv = 1.0 / eff_scale(&model, h);
-            Ok(model.resolved.get(&h).map(|r| {
+            Ok(model.frame_rect(h).map(|r| {
                 inv * match pick {
                     0 => r.left,
                     1 => r.right,
@@ -285,8 +285,7 @@ fn size_read(lua: &Lua, h: FrameHandle, width: bool) -> f32 {
     settle_frame(lua, h);
     let model = lua.app_data_ref::<Model>().expect("model");
     model
-        .resolved
-        .get(&h)
+        .frame_rect(h)
         .map_or(0.0, |r| if width { r.width() } else { r.height() })
 }
 

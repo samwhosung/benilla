@@ -115,13 +115,7 @@ impl UiScript {
                         },
                         _ => QuadContent::Frame,
                     };
-                    (
-                        model.resolved.get(&fh).copied(),
-                        alpha,
-                        content,
-                        clip,
-                        scale,
-                    )
+                    (model.frame_rect(fh), alpha, content, clip, scale)
                 }
                 ZTarget::Region(rh) => {
                     let region = model.arena.region(rh);
@@ -134,7 +128,7 @@ impl UiScript {
                             continue;
                         }
                     }
-                    let mut rect = owner.and_then(|o| model.resolved.get(&o).copied());
+                    let mut rect = owner.and_then(|o| model.frame_rect(o));
                     // A StatusBar's fill has no anchors: `bar_fill_rect` places it.
                     let mut bar_fill: Option<&crate::widget::StatusBarState> = None;
                     if let Some(crate::widget::KindState::StatusBar(sb)) =
@@ -177,18 +171,16 @@ impl UiScript {
                         if cs.wheel_thumb == Some(rh) {
                             rect = cs
                                 .wheel
-                                .and_then(|w| model.region_resolved.get(&w).copied())
+                                .and_then(|w| model.region_rect(w))
                                 .map(|w| colorselect::wheel_thumb_rect(w, tsize, cs.hsv));
                             color_thumb = true;
                         } else if cs.value_thumb == Some(rh) {
                             // The strip anchors it and the wheel scales it: the client's unguarded
                             // `[this+0x318]` read.
-                            let wheel = cs
-                                .wheel
-                                .and_then(|w| model.region_resolved.get(&w).copied());
+                            let wheel = cs.wheel.and_then(|w| model.region_rect(w));
                             rect = cs
                                 .value_strip
-                                .and_then(|v| model.region_resolved.get(&v).copied())
+                                .and_then(|v| model.region_rect(v))
                                 .map(|v| colorselect::value_thumb_rect(v, wheel, tsize, cs.hsv));
                             color_thumb = true;
                         } else if cs.wheel == Some(rh) {
@@ -263,11 +255,9 @@ impl UiScript {
                         continue;
                     }
                     if bar_fill.is_none() && !thumb_fill && !color_thumb {
-                        rect = model.region_resolved.get(&rh).copied().or_else(|| {
-                            (!is_text)
-                                .then(|| model.region_kept.get(&rh).copied())
-                                .flatten()
-                        });
+                        rect = model
+                            .region_rect(rh)
+                            .or_else(|| (!is_text).then(|| model.region_kept_rect(rh)).flatten());
                     }
                     // A pushed label's text moves by its offset, `x · scale + left`,
                     // `y · scale + bottom` (`0x772100`); its rect, anchors and edges stay.

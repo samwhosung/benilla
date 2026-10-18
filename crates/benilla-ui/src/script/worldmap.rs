@@ -586,7 +586,7 @@ impl super::UiScript {
         while model.arena.frame(fh)?.name.as_deref() != Some("WorldMapButton") {
             fh = model.arena.frame(fh)?.parent?;
         }
-        let r = model.resolved.get(&fh)?;
+        let r = model.frame_rect(fh)?;
         let (w, h) = (r.right - r.left, r.top - r.bottom);
         (w > 0.0 && h > 0.0).then(|| ((x - r.left) / w, (r.top - y) / h))
     }

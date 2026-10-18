@@ -306,7 +306,7 @@ pub(crate) fn start_layout_drag(
 /// `0x7653ab`). None when the frame has no rect (`0x765379`).
 fn grid_grip(model: &mut Model, h: FrameHandle, (x, y): (f32, f32)) -> Option<Point> {
     UiScript::resolve_layout(model);
-    let r = *model.resolved.get(&h)?;
+    let r = model.frame_rect(h)?;
     let dx = f64::from(x) - f64::from(r.left);
     let quarter_w = (f64::from(r.right) - f64::from(r.left)) * 0.25;
     let dy = f64::from((f64::from(y) - f64::from(r.bottom)) as f32);
@@ -377,7 +377,7 @@ fn pin_top_left(
     travel: (f32, f32),
 ) -> Option<bool> {
     UiScript::resolve_layout(model);
-    let r = *model.resolved.get(&h)?;
+    let r = model.frame_rect(h)?;
     let root = model.screen;
     let scale = f64::from(eff_scale(model, h));
     let inv = 1.0 / scale;

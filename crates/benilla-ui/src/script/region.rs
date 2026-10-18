@@ -740,8 +740,8 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
                 model.fonts.drop_region(font, rh);
             }
         }
-        model.region_resolved.remove(&rh);
-        model.region_kept.remove(&rh);
+        model.region_rects.remove(&rh);
+        model.region_kept_rects.remove(&rh);
         let name = model.arena.region(rh).and_then(|r| r.name.clone());
         if let Some(id) = model.region_to_id.remove(&rh) {
             model.id_to_region.remove(&id);

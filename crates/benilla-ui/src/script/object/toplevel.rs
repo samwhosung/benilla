@@ -126,7 +126,7 @@ fn overlapped(model: &Model, t: FrameHandle) -> bool {
         return false;
     };
     let (strata, level) = (tf.strata, tf.level);
-    let Some(t_rect) = model.resolved.get(&t).copied() else {
+    let Some(t_rect) = model.frame_rect(t) else {
         // No resolved rect: not on screen, so nothing overlaps it.
         return false;
     };
@@ -137,9 +137,8 @@ fn overlapped(model: &Model, t: FrameHandle) -> bool {
             && f.level >= level
             && !model.arena.is_ancestor(t, h)
             && model
-                .resolved
-                .get(&h)
-                .is_some_and(|r| rects_overlap(t_rect, *r))
+                .frame_rect(h)
+                .is_some_and(|r| rects_overlap(t_rect, r))
     })
 }
 

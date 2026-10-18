@@ -383,7 +383,7 @@ fn hit_rects(model: &Model, h: FrameHandle) -> (Option<Rect>, Option<Rect>) {
         Some(KindState::ColorSelect(s)) => (s.wheel, s.value_strip),
         _ => (None, None),
     };
-    let rect = |rh: Option<RegionHandle>| rh.and_then(|rh| model.region_resolved.get(&rh).copied());
+    let rect = |rh: Option<RegionHandle>| rh.and_then(|rh| model.region_rect(rh));
     (rect(wheel), rect(strip))
 }
 

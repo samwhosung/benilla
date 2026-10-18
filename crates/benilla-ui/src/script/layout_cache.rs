@@ -94,11 +94,11 @@ impl super::UiScript {
         candidates.sort_unstable_by_key(|c| c.0);
         let mut out = Vec::with_capacity(candidates.len());
         for (_, h, name) in candidates {
-            if !self.model_ref().resolved.contains_key(&h) {
+            if !self.model_ref().frame_rects.contains_key(&h) {
                 settle_frame(self.lua(), h);
             }
             let model = self.model_ref();
-            let Some(r) = model.resolved.get(&h).copied() else {
+            let Some(r) = model.frame_rect(h) else {
                 continue;
             };
             let Some((movable, resizable, level)) = model

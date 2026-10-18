@@ -48,8 +48,7 @@ fn scroll_ranges(model: &Model, h: FrameHandle) -> [f32; 2] {
         Some(KindState::Scroll(s)) => s.child,
         _ => None,
     };
-    let (Some(child), Some(frame), Some(rect)) =
-        (child, model.arena.frame(h), model.resolved.get(&h))
+    let (Some(child), Some(frame), Some(rect)) = (child, model.arena.frame(h), model.frame_rect(h))
     else {
         return [0.0, 0.0];
     };
@@ -95,15 +94,15 @@ fn join_subtree(model: &Model, f: FrameHandle, content: &mut SpanBox) {
     let Some(frame) = model.arena.frame(f) else {
         return;
     };
-    if let Some(r) = model.resolved.get(&f) {
-        content.join(r);
+    if let Some(r) = model.frame_rect(f) {
+        content.join(&r);
     }
     for &rh in &frame.regions {
         if model.region_data.get(&rh).is_some_and(|d| d.hidden) {
             continue;
         }
-        if let Some(r) = model.region_resolved.get(&rh) {
-            content.join(r);
+        if let Some(r) = model.region_rect(rh) {
+            content.join(&r);
         }
     }
     for &ch in &frame.children {
@@ -305,7 +304,7 @@ fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Resul
 pub(super) fn update(lua: &Lua, h: FrameHandle) {
     let notify = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let rect = model.resolved.get(&h).copied();
+        let rect = model.frame_rect(h);
         let eps = model.size_eps();
         let Some(s) = scroll_state(&mut model, h) else {
             return;

@@ -168,8 +168,10 @@ pub(crate) struct Model {
     pub(crate) arena: WidgetArena,
     /// Per-frame anchors, size and scale; every live frame has one from creation on.
     pub(crate) layout_inputs: HashMap<FrameHandle, LayoutInput>,
-    /// Each resolvable frame's rect from the last resolve.
-    pub(crate) resolved: HashMap<FrameHandle, Rect>,
+    /// Each resolvable frame's rect from the last resolve, in layout units: the resolver's own,
+    /// which its keep test, its getters and its anchors read; everything else reads
+    /// [`Self::frame_rect`].
+    pub(crate) frame_rects: HashMap<FrameHandle, Rect>,
     /// The anchor solver, kept across resolves so a steady round allocates nothing; scratch only.
     pub(crate) solver: LayoutSolver,
     /// Tier 2 of the resolve gate, the last converged inputs' fingerprint; `None` forces a resolve.
@@ -265,12 +267,13 @@ pub(crate) struct Model {
     pub(crate) fonts: super::font::Fonts,
     /// Each region's rect while its valid bit is set: what its getters and a FontString's draw
     /// read (`GetRect 0x768320`, `0x7730b7`). A cleared region keeps its rect until its own next
-    /// invalidate, as `ClearAllPoints` queues no resolve (`0x767620`).
-    pub(crate) region_resolved: HashMap<RegionHandle, Rect>,
+    /// invalidate, as `ClearAllPoints` queues no resolve (`0x767620`). In layout units, as
+    /// [`Self::frame_rects`]; [`Self::region_rect`] reads it in the root's.
+    pub(crate) region_rects: HashMap<RegionHandle, Rect>,
     /// A Texture whose resolve failed: the rect its last good resolve placed it at, which it keeps
     /// drawing, as the failed resolve (`0x768d55`) leaves the quad `0x770670` wrote and its emit
-    /// checks only its texture (`0x7706e0`). Dropped when it resolves again.
-    pub(crate) region_kept: HashMap<RegionHandle, Rect>,
+    /// checks only its texture (`0x7706e0`). Dropped when it resolves again. In layout units.
+    pub(crate) region_kept_rects: HashMap<RegionHandle, Rect>,
 
     /// The next object id to mint; ids start at 1, since 0 is `SCREEN`.
     pub(crate) next_id: u32,
@@ -361,6 +364,11 @@ pub(crate) struct Model {
     /// The screen-root rect (`[bottom, left, top, right]`), the anchor base for top-level frames:
     /// 768 tall at scale 1, whatever the UI scale ([`super::ui_scale`]).
     pub(crate) screen: Rect,
+    /// The window aspect the screen-scale cells were set from ([`super::UiScript::set_window_size`]),
+    /// or `None` for a root the host gave in its own units, whose ratio sets them.
+    pub(crate) aspect: Option<f32>,
+    /// The layout space of `screen` under the cells `aspect` sets, kept with them.
+    pub(crate) space: crate::layout::LayoutSpace,
     /// The host's `uiScale`, which [`super::UiScript::apply_ui_scale`] makes `UIParent`'s scale.
     pub(crate) ui_scale_request: Option<f32>,
 
@@ -1394,15 +1402,15 @@ impl Model {
             layout_solves: 0,
             layout_gate_walks: 0,
             layout_rounds: 0,
-            resolved: HashMap::new(),
+            frame_rects: HashMap::new(),
             link_buttons: HashMap::new(),
             region_data: HashMap::new(),
             texels: super::texel::Texels::default(),
             backdrops: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),
             fonts: super::font::Fonts::default(),
-            region_resolved: HashMap::new(),
-            region_kept: HashMap::new(),
+            region_rects: HashMap::new(),
+            region_kept_rects: HashMap::new(),
             next_id: 1,
             id_to_frame: IdMap::default(),
             frame_to_id: HashMap::new(),
@@ -1445,6 +1453,12 @@ impl Model {
             warnings: Vec::new(),
             // 1024x768 until the host calls `set_screen_size`; y-up `[bottom, left, top, right]`.
             screen: Rect::new(0.0, 0.0, 768.0, 1024.0),
+            aspect: None,
+            space: crate::layout::LayoutSpace::new(
+                crate::layout::LayoutUnits::from_aspect(1024.0 / 768.0),
+                1024.0,
+                768.0,
+            ),
             ui_scale_request: None,
             units_by_lower: HashMap::new(),
             units_by_guid: HashMap::new(),
@@ -2077,6 +2091,22 @@ impl Model {
         }
     }
 
+    /// Clear every node's resolved bit: new screen-scale cells are a new interface build, the only
+    /// place `0x41ad10` runs (`0x46a828`, `0x48fe2b`), so each node resolves afresh under them, a
+    /// deferred one when its deferral ends.
+    pub(crate) fn force_every_layout_node(&mut self) {
+        let mut ids: Vec<u32> = self
+            .frame_to_id
+            .values()
+            .chain(self.region_to_id.values())
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            self.queue_force(id);
+        }
+    }
+
     /// A deferred node's invalidate: it sets `0x4` and passes on (`0x768169`–`0x76819c`); one
     /// already pending only writes the drain's retry counter, `+0x38 = 6` (`0x76814b`–`0x768166`).
     pub(super) fn hold_invalidated(&mut self, id: u32, force: bool) {
@@ -2533,6 +2563,33 @@ impl Model {
         }
     }
 
+    /// Frame `h`'s rect in the screen root's units, y up, as the renderer, the hit tests and every
+    /// other reader outside the resolver take it: its layout rect through
+    /// [`crate::layout::LayoutSpace::rect_to_root`].
+    #[inline]
+    pub(crate) fn frame_rect(&self, h: FrameHandle) -> Option<Rect> {
+        self.frame_rects
+            .get(&h)
+            .map(|&r| self.space.rect_to_root(r))
+    }
+
+    /// [`Self::frame_rect`] for region `rh`.
+    #[inline]
+    pub(crate) fn region_rect(&self, rh: RegionHandle) -> Option<Rect> {
+        self.region_rects
+            .get(&rh)
+            .map(|&r| self.space.rect_to_root(r))
+    }
+
+    /// The rect a Texture whose resolve failed keeps drawing at ([`Self::region_kept_rects`]), in
+    /// the root's units.
+    #[inline]
+    pub(crate) fn region_kept_rect(&self, rh: RegionHandle) -> Option<Rect> {
+        self.region_kept_rects
+            .get(&rh)
+            .map(|&r| self.space.rect_to_root(r))
+    }
+
     /// Whether frame `h` holds a state its inputs would not resolve to now: a write moved them
     /// without invalidating it ([`Self::layout_unsettled`]), or it holds a rect with no anchors
     /// or reading a target with no rect, which stands only because nothing invalidated it since.
@@ -2544,7 +2601,7 @@ impl Model {
         {
             return true;
         }
-        if !self.resolved.contains_key(&h) {
+        if !self.frame_rects.contains_key(&h) {
             return false;
         }
         self.layout_inputs
@@ -2561,7 +2618,7 @@ impl Model {
         {
             return true;
         }
-        if !self.region_resolved.contains_key(&rh) {
+        if !self.region_rects.contains_key(&rh) {
             return false;
         }
         self.region_data
@@ -2578,8 +2635,8 @@ impl Model {
                     return region;
                 }
                 match (self.id_to_frame.get(&t), self.id_to_region.get(&t)) {
-                    (Some(f), _) => !self.resolved.contains_key(f),
-                    (_, Some(r)) => !self.region_resolved.contains_key(r),
+                    (Some(f), _) => !self.frame_rects.contains_key(f),
+                    (_, Some(r)) => !self.region_rects.contains_key(r),
                     _ => true,
                 }
             })

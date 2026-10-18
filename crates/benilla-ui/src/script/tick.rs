@@ -453,7 +453,7 @@ fn paints(model: &super::Model, h: FrameHandle, f: &crate::widget::Frame) -> boo
     if !has_model_file(f) {
         return false;
     }
-    let Some(r) = model.resolved.get(&h) else {
+    let Some(r) = model.frame_rect(h) else {
         return false;
     };
     let screen = model.screen;

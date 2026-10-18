@@ -99,7 +99,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             crate::script::object::settle_region(lua, rh);
             let model = lua.app_data_ref::<Model>().expect("model");
             let inv = 1.0 / owner_scale(&model, rh);
-            Ok(model.region_resolved.get(&rh).map(|r| {
+            Ok(model.region_rect(rh).map(|r| {
                 inv * match pick {
                     0 => r.left,
                     1 => r.right,
@@ -183,7 +183,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         crate::script::object::settle_region(lua, rh);
         let model = lua.app_data_ref::<Model>().expect("model");
         let inv = 1.0 / owner_scale(&model, rh);
-        Ok(match model.region_resolved.get(&rh) {
+        Ok(match model.region_rect(rh) {
             Some(r) => (
                 Value::Number(f64::from(inv * (r.left + r.right) * 0.5)),
                 Value::Number(f64::from(inv * (r.bottom + r.top) * 0.5)),
@@ -267,7 +267,6 @@ fn region_size_read(lua: &Lua, this: &Table, width: bool) -> mlua::Result<f32> {
     crate::script::object::settle_region(lua, rh);
     let model = lua.app_data_ref::<Model>().expect("model");
     Ok(model
-        .region_resolved
-        .get(&rh)
+        .region_rect(rh)
         .map_or(0.0, |r| if width { r.width() } else { r.height() }))
 }

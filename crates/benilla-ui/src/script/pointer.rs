@@ -278,8 +278,8 @@ impl UiScript {
             .arena
             .frame(h)
             .and_then(|f| f.title_region)
-            .and_then(|rh| model.region_resolved.get(&rh))
-            .is_some_and(|r| point_in_rect(*r, x, y))
+            .and_then(|rh| model.region_rect(rh))
+            .is_some_and(|r| point_in_rect(r, x, y))
     }
 
     /// `0x765490`'s walk: strata FULLSCREEN_DIALOG down to WORLD, never TOOLTIP (the loop starts
@@ -715,9 +715,8 @@ pub(super) fn frame_contains(model: &Model, fh: FrameHandle, x: f32, y: f32) -> 
         return false;
     };
     model
-        .resolved
-        .get(&fh)
-        .is_some_and(|r| point_in_rect(hit_rect(model, fh, *r), x, y))
+        .frame_rect(fh)
+        .is_some_and(|r| point_in_rect(hit_rect(model, fh, r), x, y))
         && clip.is_none_or(|c| point_in_rect(c, x, y))
 }
 

@@ -5,8 +5,11 @@
 //! only at its stores (each sub-edge before a `combine_*`, each final edge, the `width * scale`
 //! span), so the arithmetic here runs in `f64` with an explicit `as f32` at exactly those sites.
 //!
-//! Rects are `[bottom, left, top, right]` (frame `+0x64..+0x70`, `GetRect` `0x768320`) in screen
-//! pixels, y-up.
+//! Rects are `[bottom, left, top, right]` (frame `+0x64..+0x70`, `GetRect` `0x768320`) in layout
+//! units, y-up: the space whose screen is `K1` by `K2` ([`crate::screencoord`]). The resolver reads
+//! sizes and offsets in the same units, as the setters store them (`S`), multiplies them by the
+//! layout scale `+0x58` and keeps the result in screen layout units (benilla-re
+//! `screencoord#layout-units-in-the-resolver`).
 
 use std::collections::VecDeque;
 
@@ -18,14 +21,13 @@ pub use crate::screencoord::{LayoutSpace, LayoutUnits};
 const UNSET: f64 = f64::INFINITY;
 
 /// The least width or height change that fires `OnSizeChanged`: 2^-22, bits `0x34800000` at
-/// `0x8029d4`, tested in `ApplyRect` (`0x76b5e7`, `0x76b602`) in the reference's layout units, the
-/// screen diagonal as 1; in benilla's units that is this times the layout unit
-/// (`Model::size_eps`).
+/// `0x8029d4`, tested in `ApplyRect` (`0x76b5e7`, `0x76b602`) in layout units, the screen diagonal
+/// as 1.
 pub const SIZE_EPS: f64 = 2.384_185_791_015_625e-7;
 
 /// The least edge move against the cached rect for the drain's resolve to store the new rect and
-/// `ApplyRect`, 1e-5 (`0x3727c5ac` at `0x80c5c8`, tested in `0x768d20`), in the reference's layout
-/// units; in benilla's, this times the layout unit (`Model::resolve_eps`). See [`keeps_rect`].
+/// `ApplyRect`, 1e-5 layout units (`0x3727c5ac` at `0x80c5c8`, tested in `0x768d20`). See
+/// [`keeps_rect`].
 pub const RESOLVE_EPS: f64 = f32::from_bits(0x3727_c5ac) as f64;
 
 /// Point id to X column: left 0, center 1, right 2.
@@ -76,7 +78,7 @@ impl Point {
 /// An anchor target, which the caller maps to a frame or an external rect (`CAnchor+0xc`).
 pub type Handle = u32;
 
-/// A resolved rect, `[bottom, left, top, right]` in screen pixels, y-up.
+/// A resolved rect, `[bottom, left, top, right]`, y-up.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub bottom: f32,
@@ -269,6 +271,17 @@ impl Anchors {
             .filter_map(|(_, a)| a.map(|a| a.relative_to))
     }
 
+    /// These anchors with each offset as `SetPoint` stores it, in layout units
+    /// ([`LayoutUnits::store`], `0x7a28a3`..`0x7a28e3`).
+    pub fn stored(&self, units: LayoutUnits) -> Anchors {
+        let mut out = *self;
+        for a in out.0.iter_mut().flatten() {
+            a.x_off = units.store(a.x_off);
+            a.y_off = units.store(a.y_off);
+        }
+        out
+    }
+
     /// Slot-for-slot [`Anchor::bits_eq`].
     pub fn bits_eq(&self, other: &Anchors) -> bool {
         self.0.iter().zip(&other.0).all(|(a, b)| match (a, b) {
@@ -307,7 +320,8 @@ impl<'a> IntoIterator for &'a Anchors {
 
 /// A frame's layout input, the geometry fields the client's resolver reads: `anchorPoints[9]`
 /// (`G+0x4`), `width` (`G+0x50`), `height` (`G+0x54`), `layoutScale` (`G+0x58`) and the clamp flag
-/// (mask `0x10` of `G+0x3c`, `0x768ccd`).
+/// (mask `0x10` of `G+0x3c`, `0x768ccd`). The model keeps the size and offsets as the script numbers
+/// they were set from; the resolver reads them in layout units ([`LayoutInput::stored`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutInput {
     pub anchors: Anchors,
@@ -340,6 +354,23 @@ impl Default for LayoutInput {
 }
 
 impl LayoutInput {
+    /// This input as the layout part holds it: the size and every offset through the setter steps
+    /// ([`LayoutUnits::store`]), and the clamp bounded by the root's layout extent, `K1` by `K2` at
+    /// the interface's root (`0x41ae60(1.0)` and `0x41ae70(1.0)` at `0x767aea`, `0x767b19`).
+    pub fn stored(&self, space: &LayoutSpace) -> LayoutInput {
+        let units = space.units();
+        let (extent_x, extent_y) = space.extent();
+        LayoutInput {
+            anchors: self.anchors.stored(units),
+            width: units.store(self.width),
+            height: units.store(self.height),
+            scale: self.scale,
+            clamp: self.clamp,
+            extent_x,
+            extent_y,
+        }
+    }
+
     /// A frame with the given anchors and explicit size, scale `1.0`, no clamp.
     pub fn sized(
         anchors: impl IntoIterator<Item = Anchor>,
@@ -540,8 +571,9 @@ struct AnchorRel {
 
 struct EdgeInput {
     anchors: [Option<AnchorRel>; 9],
-    width: f32,
-    height: f32,
+    /// The size slots' answers (`0x1c`, `0x20`), at the precision they return.
+    width: f64,
+    height: f64,
     scale: f32,
     clamp: bool,
     extent_x: f32,
@@ -598,11 +630,12 @@ fn anchor_scan_y(ids: &[usize; 3], f: &EdgeInput) -> f64 {
 }
 
 /// The edge resolvers' span, `size * scale` narrowed to `f32`, negated for LEFT and BOTTOM. The
-/// client reads `size` through a virtual getter: a frame's is the authored field (`0x768420`), but
-/// a texture (`0x770720`) and a font string (`0x772930`) replace an authored `0.0` with their
-/// content's extent, so a region's [`LayoutInput`] must already carry that extent.
-fn size_span(size: f32, scale: f32, negate: bool) -> f32 {
-    let span = (f64::from(size) * f64::from(scale)) as f32;
+/// client reads `size` through a virtual getter: a frame's is the stored field (`0x768420`), but
+/// a texture (`0x770720`) and a font string (`0x772930`) replace a stored `0.0` with their content's
+/// extent, returned at 53 bits, which a region's resolve passes in
+/// ([`resolve_rect_edges_reads_sized`]).
+fn size_span(size: f64, scale: f32, negate: bool) -> f32 {
+    let span = (size * f64::from(scale)) as f32;
     if negate {
         -span
     } else {
@@ -753,7 +786,12 @@ pub fn resolve_rect(
     frame: &LayoutInput,
     target_rect: impl FnMut(Handle) -> Option<Rect>,
 ) -> ResolveOutcome {
-    resolve_edges(&build_edge_input(frame, target_rect))
+    resolve_edges(&build_edge_input(frame, stored_size(frame), target_rect))
+}
+
+/// A frame's size slots, its stored fields as floats (`0x768420`, `0x768410`).
+fn stored_size(frame: &LayoutInput) -> (f64, f64) {
+    (f64::from(frame.width), f64::from(frame.height))
 }
 
 /// [`resolve_rect`] with the anchors its scans read, a bit per point id ([`Anchors::read_targets`]).
@@ -763,13 +801,14 @@ pub fn resolve_rect_reads(
     frame: &LayoutInput,
     target_rect: impl FnMut(Handle) -> Option<Rect>,
 ) -> (ResolveOutcome, u16) {
-    let input = build_edge_input(frame, target_rect);
+    let input = build_edge_input(frame, stored_size(frame), target_rect);
     let outcome = resolve_edges(&input);
     (outcome, input.reads.get())
 }
 
 fn build_edge_input(
     frame: &LayoutInput,
+    (width, height): (f64, f64),
     mut target_rect: impl FnMut(Handle) -> Option<Rect>,
 ) -> EdgeInput {
     let mut slots: [Option<AnchorRel>; 9] = [None; 9];
@@ -785,8 +824,8 @@ fn build_edge_input(
     }
     EdgeInput {
         anchors: slots,
-        width: frame.width,
-        height: frame.height,
+        width,
+        height,
         scale: frame.scale,
         clamp: frame.clamp,
         extent_x: frame.extent_x,
@@ -805,12 +844,22 @@ pub fn resolve_rect_edges(
 }
 
 /// [`resolve_rect_edges`] with the anchors its scans read, as [`resolve_rect_reads`].
-#[allow(clippy::float_cmp)]
 pub fn resolve_rect_edges_reads(
     frame: &LayoutInput,
     target_rect: impl FnMut(Handle) -> Option<Rect>,
 ) -> ([Option<f32>; 4], u16) {
-    let input = build_edge_input(frame, target_rect);
+    resolve_rect_edges_reads_sized(frame, stored_size(frame), target_rect)
+}
+
+/// [`resolve_rect_edges_reads`] with the size slots' answers `size` in place of `frame`'s fields,
+/// for a region whose slot returns its content's extent at 53 bits (`0x770720`, `0x772930`).
+#[allow(clippy::float_cmp)]
+pub fn resolve_rect_edges_reads_sized(
+    frame: &LayoutInput,
+    size: (f64, f64),
+    target_rect: impl FnMut(Handle) -> Option<Rect>,
+) -> ([Option<f32>; 4], u16) {
+    let input = build_edge_input(frame, size, target_rect);
     let mut guard = 0u32;
     let left = resolve_left(&input, &mut guard);
     let bottom = resolve_bottom(&input, &mut guard);
@@ -947,7 +996,8 @@ impl LayoutSolver {
         self.rect[h as usize] = Some(rect);
     }
 
-    /// Register a frame to solve, copying `src` into its slot; a steady round allocates nothing.
+    /// Register a frame to solve, copying `src`, in layout units, into its slot; a steady round
+    /// allocates nothing.
     pub fn set_frame(&mut self, h: Handle, src: &LayoutInput) {
         self.ensure(h);
         self.touch(h);

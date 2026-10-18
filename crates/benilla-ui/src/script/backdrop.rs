@@ -401,7 +401,7 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
             ran_for: None,
         },
     );
-    if let Some(rect) = model.resolved.get(&fh).copied() {
+    if let Some(rect) = model.frame_rect(fh) {
         run_texcoords(model, fh, rect);
     }
 }
@@ -454,7 +454,7 @@ pub(crate) fn set_metrics(
     for rh in pieces.iter().flatten() {
         model.invalidate_region(*rh, true);
     }
-    if let Some(rect) = model.resolved.get(&fh).copied() {
+    if let Some(rect) = model.frame_rect(fh) {
         run_texcoords(model, fh, rect);
     }
 }
@@ -537,14 +537,15 @@ pub(crate) fn set_color(
 /// rect application `0x76b580` calls `0x77f0c0` (at `0x76b61e`); a move alone re-runs nothing.
 pub(crate) fn after_resolve(model: &mut Model) {
     let eps = model.size_eps();
+    let space = model.layout_space();
     let Model {
         backdrops,
-        resolved,
+        frame_rects,
         region_data,
         ..
     } = model;
     for (fh, inst) in backdrops.iter_mut() {
-        let Some(&rect) = resolved.get(fh) else {
+        let Some(rect) = frame_rects.get(fh).map(|&r| space.rect_to_root(r)) else {
             continue;
         };
         if inst

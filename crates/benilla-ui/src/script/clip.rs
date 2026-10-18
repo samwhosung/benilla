@@ -68,9 +68,8 @@ impl<'a> DrawClips<'a> {
         }
         let own = self
             .model
-            .resolved
-            .get(&sf)
-            .map(|&r| hit_rect(self.model, sf, r));
+            .frame_rect(sf)
+            .map(|r| hit_rect(self.model, sf, r));
         let outer = self.scope_of.get(&sf).copied();
         let clip = match (own, outer) {
             (None, _) => None,
@@ -100,9 +99,8 @@ pub(super) fn hit_clip(model: &Model, h: FrameHandle) -> Option<Option<Rect>> {
         let pf = model.arena.frame(p)?;
         if !pf.scroll_member {
             let rect = model
-                .resolved
-                .get(&p)
-                .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |&r| hit_rect(model, p, r));
+                .frame_rect(p)
+                .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |r| hit_rect(model, p, r));
             return Some(Some(rect));
         }
         cur = pf.parent;

@@ -547,7 +547,7 @@ fn a_scale_change_clears_a_deferred_anchorless_regions_rect() {
         let m = s.model_ref();
         let host = m.arena.lookup("ScaleHost").expect("host");
         let rh = m.arena.frame(host).expect("frame").regions[0];
-        m.region_resolved.get(&rh).copied()
+        m.region_rect(rh)
     };
     assert!(rect(&s).is_some());
     s.run("ScaleTex:ClearAllPoints(); ScaleHost:Hide()")

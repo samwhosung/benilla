@@ -164,8 +164,7 @@ fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;
     let size = model
-        .resolved
-        .get(&owner)
+        .frame_rect(owner)
         .map(|r| (r.right - r.left, r.top - r.bottom));
     let flagged = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
         Some(KindState::ScrollingMessage(smf)) => std::mem::take(&mut smf.links_dirty),

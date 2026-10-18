@@ -902,7 +902,7 @@ fn resolved_tops(s: &UiScript, name: &str) -> Vec<(f32, f32)> {
     st.blocks
         .iter()
         .map(|rh| {
-            let r = model.region_resolved.get(rh).expect("block rect");
+            let r = model.region_rect(*rh).expect("block rect");
             (r.top, r.bottom)
         })
         .collect()
@@ -913,7 +913,7 @@ fn maybe_resolved_rect(s: &UiScript, name: &str, block: usize) -> Option<crate::
     let model = lua.app_data_ref::<Model>().expect("model");
     let fh = model.arena.lookup(name).expect("frame");
     let st = model.simple_html.get(&fh).expect("state");
-    model.region_resolved.get(&st.blocks[block]).copied()
+    model.region_rect(st.blocks[block])
 }
 
 fn resolved_rect(s: &UiScript, name: &str, block: usize) -> crate::layout::Rect {
@@ -921,10 +921,7 @@ fn resolved_rect(s: &UiScript, name: &str, block: usize) -> crate::layout::Rect 
     let model = lua.app_data_ref::<Model>().expect("model");
     let fh = model.arena.lookup(name).expect("frame");
     let st = model.simple_html.get(&fh).expect("state");
-    *model
-        .region_resolved
-        .get(&st.blocks[block])
-        .expect("block rect")
+    model.region_rect(st.blocks[block]).expect("block rect")
 }
 
 /// The text of every quad the extract emits: what is on screen.

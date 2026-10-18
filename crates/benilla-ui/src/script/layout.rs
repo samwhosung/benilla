@@ -215,6 +215,35 @@ const SOLID_TEXTURE_TEXELS: f32 = 8.0;
 /// `0x772a60`) returns at least one FrameXML unit, not one line, so empty text reads back 1, not 0.
 pub(super) const FONTSTRING_MIN_SPAN: f32 = 1.0;
 
+/// A font string's size slot (`0x772930`, height `0x772a60`) in layout units: its stored size, or
+/// when that is 0 its text's extent (`0x772890`), raised to `S(1)`, at 53 bits, when not above it or
+/// a NaN (`0x772971`, `0x77297a`), so a single anchor always fixes the opposite edge.
+fn fontstring_slot(units: layout::LayoutUnits, authored: f32, measure: Option<f32>) -> f64 {
+    let stored = units.store(authored);
+    let candidate = if stored == 0.0 {
+        measure.map_or(0.0, |m| f64::from(units.store(m)))
+    } else {
+        f64::from(stored)
+    };
+    let floor = units.store_wide(FONTSTRING_MIN_SPAN);
+    if floor >= candidate || candidate.is_nan() {
+        floor
+    } else {
+        candidate
+    }
+}
+
+/// A texture's size slot (`0x770720`, height `0x770790`) in layout units: its stored size `stored`,
+/// or when that is 0 and it has art, the art's texel extent through the setter steps, returned at
+/// 53 bits (`0x77074e`); 0 with no art.
+fn texture_slot(units: layout::LayoutUnits, stored: f32, content: Option<f32>) -> f64 {
+    if stored == 0.0 {
+        content.map_or(0.0, |t| units.store_wide(t))
+    } else {
+        f64::from(stored)
+    }
+}
+
 /// Marks a [`LayoutScope::node_of`] index as one into `regions` rather than `plan`.
 const REGION_TAG: u32 = 0x8000_0000;
 
@@ -663,26 +692,26 @@ fn first_rect_diff(
     regions: &HashMap<RegionHandle, Rect>,
 ) -> Option<u32> {
     let mut ids: Vec<u32> = Vec::new();
-    for (h, r) in &model.resolved {
+    for (h, r) in &model.frame_rects {
         if frames.get(h) != Some(r) {
             ids.extend(model.frame_to_id.get(h));
         }
     }
-    for h in frames.keys().filter(|h| !model.resolved.contains_key(h)) {
+    for h in frames.keys().filter(|h| !model.frame_rects.contains_key(h)) {
         ids.extend(model.frame_to_id.get(h));
     }
-    for (h, r) in &model.region_resolved {
+    for (h, r) in &model.region_rects {
         if regions.get(h) != Some(r) {
             ids.extend(model.region_to_id.get(h));
         }
     }
     for h in regions
         .keys()
-        .filter(|h| !model.region_resolved.contains_key(h))
+        .filter(|h| !model.region_rects.contains_key(h))
     {
         ids.extend(model.region_to_id.get(h));
     }
-    let differs = frames != &model.resolved || regions != &model.region_resolved;
+    let differs = frames != &model.frame_rects || regions != &model.region_rects;
     ids.into_iter().min().or(differs.then_some(u32::MAX))
 }
 
@@ -810,14 +839,15 @@ impl PreambleProf {
 }
 
 /// `OnSizeChanged`'s "after": queue `(id, width, height)` for each watched frame whose size moved
-/// by the `ApplyRect 0x76b580` test ([`crate::layout::size_changed`] at [`Model::size_eps`]), so a
-/// pure move never fires. A frame with no rect at entry compares against the zero rect
+/// by the `ApplyRect 0x76b580` test ([`crate::layout::size_changed`] at [`layout::SIZE_EPS`] on the
+/// layout rects), so a pure move never fires; the size is the rect's in the root's units. A frame with no rect at entry compares against the zero rect
 /// `CSimpleFrame`'s ctor leaves; one that loses its rect had no `ApplyRect` and fires nothing.
 fn queue_size_changes(
     watched: &[(FrameHandle, Option<Rect>)],
     resolved: &HashMap<FrameHandle, Rect>,
     frame_to_id: &HashMap<FrameHandle, u32>,
     eps: f64,
+    space: &layout::LayoutSpace,
     out: &mut Vec<(u32, f32, f32)>,
 ) {
     for &(h, before) in watched {
@@ -831,6 +861,7 @@ fn queue_size_changes(
         let Some(&id) = frame_to_id.get(&h) else {
             continue;
         };
+        let now = space.rect_to_root(now);
         out.push((id, now.right - now.left, now.top - now.bottom));
     }
 }
@@ -864,8 +895,8 @@ impl UiScript {
     /// by step, not reset at each; the meters keep the incremental pass's values.
     pub(super) fn scratch_divergence(model: &mut Model) -> Option<String> {
         let cached = std::mem::take(&mut model.layout_scope);
-        let before = (model.resolved.clone(), model.region_resolved.clone());
-        let kept_before = model.region_kept.clone();
+        let before = (model.frame_rects.clone(), model.region_rects.clone());
+        let kept_before = model.region_kept_rects.clone();
         let meters = (
             model.layout_solves,
             model.layout_rounds,
@@ -914,7 +945,7 @@ impl UiScript {
                  First rect to differ: {}, incremental {:?}, fresh {:?}. Graph: {}",
                 report(id),
                 rect(&before.0, &before.1),
-                rect(&model.resolved, &model.region_resolved),
+                rect(&model.frame_rects, &model.region_rects),
                 graph.as_deref().unwrap_or("same as fresh"),
             ));
         }
@@ -925,11 +956,11 @@ impl UiScript {
                 graph.as_deref().unwrap_or("same as fresh"),
             ));
         }
-        if kept_before != model.region_kept {
+        if kept_before != model.region_kept_rects {
             return Some(format!(
                 "an INCREMENTAL layout pass kept failed textures' quads {kept_before:?}, a full \
                  derivation {:?}. Graph: {}",
-                model.region_kept,
+                model.region_kept_rects,
                 graph.as_deref().unwrap_or("same as fresh"),
             ));
         }
@@ -975,10 +1006,12 @@ impl UiScript {
         let watched: Vec<(FrameHandle, Option<Rect>)> = model
             .on_size_changed_frames
             .iter()
-            .map(|&h| (h, model.resolved.get(&h).copied()))
+            .map(|&h| (h, model.frame_rects.get(&h).copied()))
             .collect();
-        let size_eps = model.size_eps();
-        let resolve_eps = model.resolve_eps();
+        // Both thresholds in the layout units the rects are in (`0x8029d4`, `0x80c5c8`).
+        let size_eps = layout::SIZE_EPS;
+        let resolve_eps = layout::RESOLVE_EPS;
+        let space = model.layout_space();
         pre.watched = pre.lap();
         // The graph's own clears of a resolved bit (a moved effective scale) are writes made now.
         let forced_mark = model.layout_force.len();
@@ -995,14 +1028,13 @@ impl UiScript {
         let Model {
             arena,
             layout_inputs,
-            resolved,
+            frame_rects: resolved,
             region_data,
-            region_resolved,
-            region_kept,
+            region_rects: region_resolved,
+            region_kept_rects: region_kept,
             frame_to_id,
             id_to_frame,
             id_to_region,
-            screen,
             warnings,
             diagnostics,
             solver,
@@ -1028,6 +1060,8 @@ impl UiScript {
             ..
         } = model;
         let mut full_scope = false;
+        // The screen root in layout units, `K1` by `K2` at the interface's root (`0x764284`).
+        let screen = &space.root();
         // The nodes this resolve stores without the keep test; a write that cleared the resolved
         // bit of no node (an unanchored region's measure) leaves nothing to store.
         let mut forced = std::mem::take(layout_force);
@@ -1402,7 +1436,7 @@ impl UiScript {
                 let Some(input) = layout_inputs.get(&h) else {
                     continue;
                 };
-                solver.set_frame(id, input);
+                solver.set_frame(id, &input.stored(&space));
                 let cached = (!scope.has(id, MARK_FORCED)).then_some(raw).flatten();
                 solver.set_entry(id, cached, scope.has(id, MARK_INVALID));
                 let (d, held) = deferral(scope, arena, layout_hold, id);
@@ -1478,46 +1512,30 @@ impl UiScript {
                 }
                 // The owner supplies the region's scale and nothing else: no fallback edges.
                 let scale = arena.frame(owner).map(|f| f.effective_scale).unwrap_or(1.0);
-                // An axis authored 0, width or height, takes the host-measured extent: the
-                // reference sizes a zero width to the unwrapped line.
-                let measured = effective_measure(data);
-                let mut height = data.size.map_or(0.0, |s| s.1);
-                let mut width = data.size.map_or(0.0, |s| s.0);
-                if let Some(m) = &measured {
-                    if height == 0.0 {
-                        height = m.h;
-                    }
-                    if width == 0.0 {
-                        width = m.w;
-                    }
-                }
-                // Then the floor: `CSimpleFontString::GetWidth 0x772930` (height `0x772a60`)
-                // returns at least one unit on both legs, past the `jp 0x772957` that skips the
-                // measure, so a FontString's span is never 0 and a single anchor resolves it.
-                if is_fontstring {
-                    width = width.max(FONTSTRING_MIN_SPAN);
-                    height = height.max(FONTSTRING_MIN_SPAN);
-                }
-                // A texture's unset axis takes its texel extent (`content_span`): the reference's
-                // size getter is virtual for both region classes. It must apply before the
-                // resolve, as `combine_edge` reads a zero span as no size and leaves an edge unset.
-                // The getter runs in the resolve (`0x767579`, `0x7675e9`), loading the art first if
-                // it must (`0x44b3b0`), so only a resolve that reaches the node reads it.
-                if !is_fontstring && (width == 0.0 || height == 0.0) {
-                    if let Some((cw, ch)) = content_span(data, texture_size_probe.as_ref()) {
-                        if width == 0.0 {
-                            width = cw;
-                        }
-                        if height == 0.0 {
-                            height = ch;
-                        }
-                    }
-                }
-                scratch.anchors = data.anchors;
-                scratch.width = width;
-                scratch.height = height;
+                // The size slots the resolver calls (`0x767579`, `0x7675e9`), each class its own,
+                // in layout units. A texture reads its art only for an axis stored 0, loading it
+                // first if it must (`0x44b3b0`), so only a resolve that reaches the node reads it.
+                let units = space.units();
+                let (aw, ah) = data.size.unwrap_or((0.0, 0.0));
+                let size = if is_fontstring {
+                    let measured = effective_measure(data);
+                    (
+                        fontstring_slot(units, aw, measured.map(|m| m.w)),
+                        fontstring_slot(units, ah, measured.map(|m| m.h)),
+                    )
+                } else {
+                    let (sw, sh) = (units.store(aw), units.store(ah));
+                    let content = (sw == 0.0 || sh == 0.0)
+                        .then(|| content_span(data, texture_size_probe.as_ref()))
+                        .flatten();
+                    (
+                        texture_slot(units, sw, content.map(|c| c.0)),
+                        texture_slot(units, sh, content.map(|c| c.1)),
+                    )
+                };
+                scratch.anchors = data.anchors.stored(units);
                 scratch.scale = scale;
-                let (edges, reads) = layout::resolve_rect_edges_reads(&scratch, |id| {
+                let (edges, reads) = layout::resolve_rect_edges_reads_sized(&scratch, size, |id| {
                     // The screen root is a frame-pass external only: a region anchor to id 0 finds
                     // no rect here, though the solver holds one.
                     (id != SCREEN).then(|| solver.rect(id)).flatten()
@@ -1674,6 +1692,7 @@ impl UiScript {
                     resolved,
                     frame_to_id,
                     size_eps,
+                    &space,
                     pending_size_changed,
                 );
                 return;
@@ -1698,6 +1717,7 @@ impl UiScript {
             resolved,
             frame_to_id,
             size_eps,
+            &space,
             pending_size_changed,
         );
     }
@@ -1706,17 +1726,17 @@ impl UiScript {
     /// the tier-2 fingerprint. Runs only when the ledger cannot vouch for the cache.
     fn derive_layout_graph(model: &mut Model, pre: &mut PreambleProf) -> InputFingerprint {
         model.layout_derives = model.layout_derives.wrapping_add(1);
+        let space = model.layout_space();
         let Model {
             arena,
             layout_inputs,
             region_data,
-            region_resolved,
-            region_kept,
+            region_rects: region_resolved,
+            region_kept_rects: region_kept,
             frame_to_id,
             id_to_region,
             region_to_id,
             next_id,
-            screen,
             layout_scope: scope,
             layout_force,
             ..
@@ -1744,12 +1764,8 @@ impl UiScript {
             }
             input.scale = scale;
             // Clamp-to-screen is a frame property (geometry flags `0x10`), so every placement path
-            // clamps alike, against the live window size.
+            // clamps alike, against the root's layout extent ([`LayoutInput::stored`]).
             input.clamp = clamp;
-            if clamp {
-                input.extent_x = screen.right;
-                input.extent_y = screen.top;
-            }
         }
         pre.ids = pre.lap();
 
@@ -1776,7 +1792,12 @@ impl UiScript {
         scope.begin_full(*next_id as usize + region_data.len() + 1);
         pre.begin = pre.lap();
         let mut fp = InputFingerprint::default();
-        fp.rect(*screen);
+        // The root and the cells, which every stored size and offset is read under.
+        fp.rect(space.root());
+        let units = space.units();
+        fp.f32(units.k1());
+        fp.f32(units.k2());
+        fp.f32(units.store(1.0));
         for &(h, id) in &ids {
             let Some(input) = layout_inputs.get(&h) else {
                 continue;
@@ -1875,13 +1896,12 @@ impl UiScript {
             arena,
             layout_inputs,
             region_data,
-            region_resolved,
-            region_kept,
+            region_rects: region_resolved,
+            region_kept_rects: region_kept,
             frame_to_id,
             id_to_frame,
             id_to_region,
             next_id,
-            screen,
             layout_scope: scope,
             layout_force,
             layout_hold,
@@ -1926,10 +1946,6 @@ impl UiScript {
                 }
                 input.scale = scale;
                 input.clamp = clamp;
-                if clamp {
-                    input.extent_x = screen.right;
-                    input.extent_y = screen.top;
-                }
                 targets.clear();
                 targets.extend(input.anchors.iter().map(|a| a.relative_to));
                 let hash = frame_node_hash(input);

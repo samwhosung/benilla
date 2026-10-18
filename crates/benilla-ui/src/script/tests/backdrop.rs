@@ -555,7 +555,7 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                 let (fr, eff) = {
                     let model = s.model_ref();
                     let fh = *model.backdrops.keys().next().unwrap();
-                    let fr = model.resolved[&fh];
+                    let fr = model.frame_rect(fh).expect("rect");
                     (fr, crate::script::object::eff_scale(&model, fh))
                 };
                 let quads: Vec<_> = s
@@ -869,7 +869,7 @@ fn a_teardown_leaves_what_anchored_to_a_piece_in_place() {
     s.resolve();
     let incremental = {
         let m = s.model_ref();
-        (m.resolved.clone(), m.region_resolved.clone())
+        (m.frame_rects.clone(), m.region_rects.clone())
     };
     {
         let mut m = s.model_mut();
@@ -879,7 +879,7 @@ fn a_teardown_leaves_what_anchored_to_a_piece_in_place() {
     s.resolve();
     let full = {
         let m = s.model_ref();
-        (m.resolved.clone(), m.region_resolved.clone())
+        (m.frame_rects.clone(), m.region_rects.clone())
     };
     assert!(
         incremental == full,

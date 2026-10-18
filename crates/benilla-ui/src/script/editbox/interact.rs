@@ -18,8 +18,8 @@ fn index_at_screen_pos(lua: &Lua, h: FrameHandle, x: f32, y: f32) -> usize {
             _ => None,
         };
         // An unanchored text region draws over its owner, so the frame's own corner stands in.
-        rh.and_then(|rh| model.region_resolved.get(&rh))
-            .or_else(|| model.resolved.get(&h))
+        rh.and_then(|rh| model.region_rect(rh))
+            .or_else(|| model.frame_rect(h))
             .map(|r| (r.left, r.top))
     };
     with_eb(lua, h, |eb| {

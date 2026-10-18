@@ -854,12 +854,44 @@ impl UiScript {
     /// re-runs `UIParent_ManageFramePositions()`: the window resizes freely, and a seat computed
     /// from `GetScreenHeight()`, like the open-bag stack's column wrap, does not follow anchors.
     pub fn set_screen_size(&mut self, width: f32, height: f32) -> bool {
-        let new = Rect::new(0.0, 0.0, height, width);
+        self.set_root(Rect::new(0.0, 0.0, height, width), None)
+    }
+
+    /// Set the screen root for a window of `width` by `height` pixels: the screen-scale cells from
+    /// its aspect `a = RN24(width / height)`, as `0x41ad10` takes it, and the root `768·a` by 768
+    /// script units, whose layout extent is exactly the cells' `K1` by `K2` (`0x764284`). A window
+    /// with no area reads as 4/3. Returns whether anything moved, as [`Self::set_screen_size`].
+    ///
+    /// Deviation: the reference sets the cells only when glue or the interface is built, `0x41ad10`
+    /// from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), from `gxResolution`'s aspect while
+    /// `widescreen` is on and 4/3 while it is off, and a resize reaches them only through the
+    /// rebuild or reload it requests past a change of 0.01 in glue and 0.001 in game (`0x492e90`,
+    /// `0x491380`); here every resize sets them from the window, as that rebuild would, because the
+    /// UI is kept live across a resize, and `widescreen` off keeps the window's aspect, as a 4:3
+    /// root over a wider window would take a seam stretched on one axis.
+    pub fn set_window_size(&mut self, width: f32, height: f32) -> bool {
+        let a = if width > 0.0 && height > 0.0 {
+            width / height
+        } else {
+            4.0 / 3.0
+        };
+        self.set_root(Rect::new(0.0, 0.0, 768.0, 768.0 * a), Some(a))
+    }
+
+    fn set_root(&mut self, new: Rect, aspect: Option<f32>) -> bool {
         let mut model = self.model_mut();
-        if model.screen == new {
+        if model.screen == new && model.aspect.map(f32::to_bits) == aspect.map(f32::to_bits) {
             return false;
         }
+        let before = model.layout_units();
         model.screen = new;
+        model.aspect = aspect;
+        let units = crate::layout::LayoutUnits::from_aspect(model.screen_aspect());
+        model.space = crate::layout::LayoutSpace::new(units, new.width(), new.height());
+        if units != before {
+            // New cells are a new interface build (`0x41ad10`): every node resolves afresh.
+            model.force_every_layout_node();
+        }
         model.touch_layout();
         drop(model);
         // The implicit rects are in layout units, which follow the aspect.

@@ -297,7 +297,7 @@ pub(super) fn begin_drag(
     y: f32,
 ) -> Option<(u32, f32)> {
     let h = hit?;
-    let r = model.resolved.get(&h).copied()?;
+    let r = model.frame_rect(h)?;
     let (vertical, fraction, thumb) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Slider(s)) => (s.vertical, s.fraction(), s.thumb),
         _ => return None,
@@ -355,7 +355,7 @@ pub(super) fn drag_move(model: &mut Model, x: f32, y: f32) -> Option<(u32, f32)>
         slider,
         grab_offset,
     } = *model.slider_drag.as_ref()?;
-    let r = model.resolved.get(&slider).copied()?;
+    let r = model.frame_rect(slider)?;
     let (min, max, vertical, thumb) = match model.arena.frame(slider).map(|f| &f.kind_state) {
         Some(KindState::Slider(s)) => (s.min, s.max, s.vertical, s.thumb),
         _ => return None, // slider destroyed mid-drag

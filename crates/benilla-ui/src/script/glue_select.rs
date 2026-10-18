@@ -381,8 +381,7 @@ fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueSceneP
     Some(GlueScenePane {
         handle: h,
         rect: model
-            .resolved
-            .get(&h)
+            .frame_rect(h)
             .filter(|_| sw > 0.0 && sh > 0.0)
             .map(|r| {
                 [

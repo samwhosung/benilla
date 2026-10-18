@@ -482,12 +482,7 @@ fn an_owner_minted_after_its_region_joined_takes_the_owner_edge() {
         m.frame_id(host);
     }
     resolve_matches_scratch(&mut s, "the owner's id minted");
-    let r = s
-        .model_ref()
-        .region_resolved
-        .get(&rh)
-        .copied()
-        .expect("rect");
+    let r = s.model_ref().region_rect(rh).expect("rect");
     assert!(
         ((r.right - r.left) - 16.0).abs() < 1e-3,
         "the region takes its now-known owner's scale: {r:?}"

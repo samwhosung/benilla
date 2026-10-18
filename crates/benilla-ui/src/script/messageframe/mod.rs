@@ -345,7 +345,7 @@ impl UiScript {
         if pitch <= 0.0 {
             return 0;
         }
-        model.resolved.get(&fh).map_or(0, |r| {
+        model.frame_rect(fh).map_or(0, |r| {
             ((r.top - r.bottom) / pitch).floor().max(0.0) as usize
         })
     }
@@ -357,8 +357,7 @@ impl UiScript {
         let font = Self::message_frame_font(model, fh);
         let scale = model.arena.frame(fh).map_or(1.0, |f| f.effective_scale);
         let height = model
-            .resolved
-            .get(&fh)
+            .frame_rect(fh)
             .map_or(0.0, |r| (r.top - r.bottom).max(0.0));
         font.viewport(height, scale)
     }
@@ -368,7 +367,7 @@ impl UiScript {
         use std::hash::{Hash, Hasher};
         let font = Self::message_frame_font(model, fh);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        if let Some(r) = model.resolved.get(&fh) {
+        if let Some(r) = model.frame_rect(fh) {
             (r.right - r.left).to_bits().hash(&mut hasher);
             (r.top - r.bottom).to_bits().hash(&mut hasher);
         }
@@ -388,8 +387,9 @@ impl UiScript {
         let model = &mut *model;
         let mut out = Vec::new();
         let european = model.european_numbers;
+        let space = model.layout_space();
         let frames: Vec<(FrameHandle, Rect)> = model
-            .resolved
+            .frame_rects
             .iter()
             .filter(|(&fh, _)| {
                 model
@@ -397,7 +397,7 @@ impl UiScript {
                     .frame(fh)
                     .is_some_and(|f| f.kind_state.message_lines().is_some() && f.effective_visible)
             })
-            .map(|(&fh, &fr)| (fh, fr))
+            .map(|(&fh, &fr)| (fh, space.rect_to_root(fr)))
             .collect();
         for (fh, fr) in frames {
             let wrap_width = fr.right - fr.left;

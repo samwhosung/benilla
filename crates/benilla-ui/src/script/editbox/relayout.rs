@@ -19,7 +19,7 @@ use crate::widget::{EditBoxState, FrameHandle, KindState, RegionHandle};
 ///
 /// benilla writes the point before the box has a rect too, keeping the size.
 pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
-    let resolved = model.resolved.contains_key(&h);
+    let resolved = model.frame_rects.contains_key(&h);
     let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
         return;
     };
@@ -61,7 +61,7 @@ pub(in crate::script) fn reseat_resized(model: &mut Model) -> bool {
     let eps = model.size_eps();
     for i in 0..model.arena.editbox_kinds().len() {
         let h = model.arena.editbox_kinds()[i];
-        let Some(&now) = model.resolved.get(&h) else {
+        let Some(now) = model.frame_rect(h) else {
             continue; // no rect, no `ApplyRect`
         };
         let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state)
@@ -92,7 +92,7 @@ fn inset_text_size(
     [l, r, t, b]: [f32; 4],
     multi_line: bool,
 ) -> Option<(f32, f32)> {
-    let rect = model.resolved.get(&h)?;
+    let rect = model.frame_rect(h)?;
     let k = crate::script::object::eff_scale(model, h);
     let width = rect.width() / k - (r + l);
     let height = if multi_line {

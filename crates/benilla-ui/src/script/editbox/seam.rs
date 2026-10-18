@@ -175,9 +175,8 @@ fn stale_advances(
     let wrap_width = multi_line
         .then(|| {
             model
-                .region_resolved
-                .get(&rh)
-                .or_else(|| model.resolved.get(&h))
+                .region_rect(rh)
+                .or_else(|| model.frame_rect(h))
                 .map(|r| r.right - r.left)
         })
         .flatten()
