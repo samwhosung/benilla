@@ -152,20 +152,22 @@ fn new_vm<E: std::fmt::Display>(
 }
 
 /// Start the new VM's `GetTime()` where the process already is and re-anchor [`UiClock`] to it,
-/// both off the [`FrameStep`] the VM ticks on. The reference's `GetTime` is `GetTickCount` × 0.001
+/// both off the [`FrameStep`] the VM ticks on, before this frame's step: every VM is built ahead
+/// of the frame's tick (`Startup`, `PreUpdate`, a state edge), which then adds the step. The reference's `GetTime` is `GetTickCount` × 0.001
 /// (`0x515ea0`, via `0x42c010` → `0x42b790`), an OS clock that never restarts; ours lives in the
 /// VM, rebuilt at every login and `ReloadUI`, and a clock back at zero puts every converted
 /// cooldown start in the past, which stock `CooldownFrame_SetTimer` hides (`Cooldown.lua:3`).
 fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
-    let step = world
+    let (anchor, now) = world
         .get_resource::<FrameStep>()
         .copied()
-        .unwrap_or_default();
-    script.set_now(step.elapsed_secs_f64());
+        .unwrap_or_default()
+        .before_step();
+    script.set_now(now);
     if let Some(mut clock) = world.get_resource_mut::<UiClock>() {
         *clock = UiClock {
-            anchor: step.at,
-            ui_now: step.elapsed_secs_f64(),
+            anchor,
+            ui_now: now,
         };
     }
 }
@@ -1431,12 +1433,13 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<UiClock>();
-        // The process has been up 90 s, on the frame step's clock and on the dying VM alike.
+        // The process has been up 90 s on the dying VM, and this frame's step, which the new VM's
+        // first tick adds, takes the frame step's clock 16 ms past that.
         let startup = Instant::now() - Duration::from_secs(90);
         world.insert_resource(FrameStep {
             delta: Duration::from_millis(16),
-            at: startup + Duration::from_secs(90),
-            elapsed: Duration::from_secs(90),
+            at: startup + Duration::from_millis(90_016),
+            elapsed: Duration::from_millis(90_016),
         });
         let mut dying = UiScript::new().unwrap();
         dying.set_now(90.0);

@@ -28,14 +28,17 @@ const TIGHT_SHARE: f64 = 0.6;
 const CARRY_MAX: f64 = 1.5;
 /// The largest multiple snapped to; a longer frame is a stall, not a mis-split.
 const MAX_MULT: f64 = 4.0;
+/// The share of the carry each frame hands out besides its snapped step, so a median that sits a
+/// little off the true refresh, or a lead left by a refresh-rate drop, drains instead of parking.
+const BLEED: f64 = 0.05;
 
 #[derive(Resource)]
 pub(crate) struct FramePacer {
     /// Recent raw deltas (seconds), for the refresh-period median.
     hist: VecDeque<f64>,
-    /// Time measured but not yet handed out (negative: handed out ahead of the wall clock), within
-    /// [`CARRY_MAX`] periods. Every step is `raw + old carry − new carry`, so the paced clock is
-    /// always the wall clock less this.
+    /// Time measured but not yet handed out (negative: handed out ahead of the wall clock), about
+    /// [`CARRY_MAX`] periods at most and drained by [`BLEED`]. Every step is
+    /// `raw + old carry − new carry`, so the paced clock is always the wall clock less this.
     carry: f64,
     /// What `Time<Virtual>::elapsed` is rewritten to; `None` until the first paced frame adopts
     /// Bevy's own, so the clock never jumps.
@@ -56,29 +59,26 @@ impl Default for FramePacer {
 }
 
 impl FramePacer {
-    /// The refresh period this stream looks like, or `None` when it does not look vsync'd.
+    /// The refresh period this stream looks like, or `None` when it does not look vsync'd: the
+    /// window's median when enough deltas sit on it, else half the median of adjacent pairs, since
+    /// a run of mis-split frames fails the first test while each pair still adds up to two
+    /// refreshes.
     fn cadence(&self) -> Option<f64> {
         if self.hist.len() < WINDOW {
             return None;
         }
-        let mut v: Vec<f64> = self.hist.iter().copied().collect();
-        v.sort_by(f64::total_cmp);
-        let period = v[v.len() / 2];
-        if period <= 0.0 {
-            return None;
-        }
-        let tight = v
-            .iter()
-            .filter(|d| (*d - period).abs() < TIGHT * period)
-            .count();
-        (tight as f64 >= TIGHT_SHARE * v.len() as f64).then_some(period)
+        let v: Vec<f64> = self.hist.iter().copied().collect();
+        on_cadence(&v).or_else(|| {
+            let pairs: Vec<f64> = v.windows(2).map(|w| w[0] + w[1]).collect();
+            on_cadence(&pairs).map(|p| p / 2.0)
+        })
     }
 
     /// Snaps `raw` to the presentation cadence, carrying the remainder; a stream that is not vsync'd
-    /// and a stall pass through, with any time still owed added. One call is
-    /// one presented frame, so the multiple is 1 until `raw` plus the carry reaches 1.5 periods,
-    /// then a floor: rounding would pace the 26.4 ms long half of a mis-split pair (1.58 periods)
-    /// as two frames. No time is created or lost: a carry the step cannot absorb waits.
+    /// passes through with any time still owed added, and a stall with the whole carry. One call is one presented frame,
+    /// so the multiple is 1 until `raw` plus the carry reaches 1.5 periods, then a floor: rounding
+    /// would pace the 26.4 ms long half of a mis-split pair (1.58 periods) as two frames. No time is
+    /// created or lost, and every branch drains the carry by [`BLEED`].
     fn pace(&mut self, raw: f64) -> f64 {
         if self.hist.len() == WINDOW {
             self.hist.pop_front();
@@ -86,12 +86,12 @@ impl FramePacer {
         self.hist.push_back(raw);
         let want = raw + self.carry;
         let Some(period) = self.cadence() else {
-            return self.pass(raw);
+            return self.pass(raw, want);
         };
         if want < 0.0 {
             // Ahead of the wall clock by more than this frame is worth: the frame passes raw and
-            // the lead waits for a longer one.
-            return raw;
+            // the lead drains.
+            return self.settle(want, raw);
         }
         let mult = if want >= 1.5 * period {
             (want / period).floor().min(MAX_MULT)
@@ -99,30 +99,57 @@ impl FramePacer {
             1.0
         };
         let snapped = mult * period;
-        let carry = want - snapped;
-        if carry.abs() > CARRY_MAX * period {
-            // A real stall, not a mis-split: report it as it happened.
-            return self.pass(raw);
+        if (want - snapped).abs() > CARRY_MAX * period {
+            // A real stall, not a mis-split: report it as it happened, the carry settled with it.
+            self.carry = 0.0;
+            return want;
         }
-        self.carry = carry;
-        snapped
+        self.settle(want, snapped)
     }
 
-    /// An unpaced frame: `raw` plus any time still owed; a lead (negative carry) is kept, so the
-    /// step never falls below what the frame measured.
-    fn pass(&mut self, raw: f64) -> f64 {
+    /// An unpaced frame: `raw` plus any time still owed; a lead (negative carry) drains instead,
+    /// so the step never falls far below what the frame measured.
+    fn pass(&mut self, raw: f64, want: f64) -> f64 {
         if self.carry > 0.0 {
-            let owed = std::mem::take(&mut self.carry);
-            raw + owed
+            self.carry = 0.0;
+            want
         } else {
-            raw
+            self.settle(want, raw)
         }
+    }
+
+    /// Hands out `ideal` plus [`BLEED`] of the carry it leaves, never below zero; `want` is the
+    /// frame's raw delta plus the old carry.
+    fn settle(&mut self, want: f64, ideal: f64) -> f64 {
+        let carry = (want - ideal) * (1.0 - BLEED);
+        let step = want - carry;
+        if step < 0.0 {
+            self.carry = want;
+            return 0.0;
+        }
+        self.carry = carry;
+        step
     }
 
     /// Drops the carry, for a frame whose clock is not paced (pacing off, a manual clock).
     fn reset(&mut self) {
         self.carry = 0.0;
     }
+}
+
+/// The median of `v` when at least [`TIGHT_SHARE`] of it sits within [`TIGHT`] of it.
+fn on_cadence(v: &[f64]) -> Option<f64> {
+    let mut v = v.to_vec();
+    v.sort_by(f64::total_cmp);
+    let period = v[v.len() / 2];
+    if period <= 0.0 {
+        return None;
+    }
+    let tight = v
+        .iter()
+        .filter(|d| (*d - period).abs() < TIGHT * period)
+        .count();
+    (tight as f64 >= TIGHT_SHARE * v.len() as f64).then_some(period)
 }
 
 /// The frame's time step as the display showed it: what the interface's `OnUpdate` receives as
@@ -175,6 +202,15 @@ impl FrameStep {
     /// [`Self::elapsed`] in seconds, the base a `Time<Real>` stamp maps onto `GetTime` from.
     pub fn elapsed_secs_f64(&self) -> f64 {
         self.elapsed.as_secs_f64()
+    }
+
+    /// The paced clock before this frame's step, as (instant, seconds): where `GetTime` stands for
+    /// a system that runs ahead of the UI's tick, which then adds [`Self::delta`].
+    pub fn before_step(&self) -> (Instant, f64) {
+        (
+            self.at.checked_sub(self.delta).unwrap_or(self.at),
+            self.elapsed.saturating_sub(self.delta).as_secs_f64(),
+        )
     }
 }
 
@@ -282,6 +318,10 @@ mod tests {
         }
     }
 
+    /// How far a paced step may sit off whole refreshes: [`BLEED`] of a mis-split's carry, where
+    /// the raw halves sit 9.7 ms off.
+    const EVEN: f64 = 1.0e-3;
+
     #[test]
     fn a_mis_split_pair_is_restored_to_the_cadence_the_display_showed() {
         let mut p = pacer();
@@ -293,11 +333,11 @@ mod tests {
         let a = p.pace(0.0264);
         let b = p.pace(0.0080);
         assert!(
-            (a - period).abs() < 1.0e-6,
+            (a - period).abs() < EVEN,
             "long half snapped to one period: {a}"
         );
         assert!(
-            (b - period).abs() < 1.0e-6,
+            (b - period).abs() < EVEN,
             "short half snapped to one period: {b}"
         );
         assert!(
@@ -387,12 +427,12 @@ mod tests {
             let d = p.pace(raw);
             paced_sum += d;
             assert!(
-                (d - P).abs() < 1.0e-9,
+                (d - P).abs() < EVEN,
                 "frame {i}: a step of {d} s, not one period"
             );
         }
         assert!(
-            (raw_sum - paced_sum).abs() < 1.0e-9,
+            (raw_sum - paced_sum - p.carry).abs() < 1.0e-9 && p.carry.abs() < 0.011,
             "the paced clock ends on the wall clock: drift {} s",
             raw_sum - paced_sum
         );
@@ -410,7 +450,7 @@ mod tests {
             paced_sum += d;
             let periods = d / P;
             assert!(
-                periods >= 1.0 - 1.0e-9 && (periods - periods.round()).abs() < 1.0e-9,
+                periods >= 1.0 - EVEN / P && (periods - periods.round()).abs() < EVEN / P,
                 "frame {i}: a step of {d} s is not whole refreshes"
             );
             assert!(
@@ -425,11 +465,98 @@ mod tests {
         }
     }
 
+    /// Runs `raws` through a pacer, checking on every frame that no time is created or lost and
+    /// that the carry stays within `bound`; returns the steps.
+    fn replay(p: &mut FramePacer, raws: &[f64], bound: f64) -> Vec<f64> {
+        let (mut raw_sum, mut paced_sum) = (0.0, 0.0);
+        raws.iter()
+            .enumerate()
+            .map(|(i, &raw)| {
+                let d = p.pace(raw);
+                raw_sum += raw;
+                paced_sum += d;
+                assert!(
+                    (raw_sum - paced_sum - p.carry).abs() < 1.0e-9,
+                    "frame {i}: time created or lost"
+                );
+                assert!(p.carry.abs() <= bound, "frame {i}: carry {} s", p.carry);
+                d
+            })
+            .collect()
+    }
+
+    /// 22 s of `Time<Real>` deltas from a 60 Hz run on Metal, in milliseconds. Its median sits off
+    /// the true refresh, which a carry that never drains turns into a lead parked near -14.6 ms,
+    /// from which a short-first split leaks raw.
+    #[test]
+    fn a_measured_stream_keeps_its_carry_drained_and_its_steps_even() {
+        let raws: Vec<f64> = include_str!("../tests/data/frame_pace_stream.txt")
+            .lines()
+            .map(|l| l.trim().parse::<f64>().unwrap() / 1000.0)
+            .collect();
+        assert_eq!(raws.len(), 1319);
+        let steps = replay(&mut pacer(), &raws, 0.011);
+        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
+            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
+        }
+    }
+
+    /// A 60 to 120 Hz switch (a variable-refresh display): the old period snaps the first fast
+    /// frames to 16.7 ms and leaves a lead below the new period. It drains, and a mis-split at the
+    /// new rate is paced again.
+    #[test]
+    fn a_refresh_rate_rise_drains_its_lead_and_paces_the_new_cadence() {
+        let fast = P / 2.0;
+        let mut raws = vec![P; 200];
+        raws.extend((0..600).map(|i| match i % 6 {
+            4 => 0.0125,
+            5 => 2.0 * fast - 0.0125,
+            _ => fast,
+        }));
+        let mut p = pacer();
+        let steps = replay(&mut p, &raws, CARRY_MAX * P);
+        for (i, d) in steps.iter().enumerate().skip(400) {
+            assert!(
+                (d - fast).abs() < EVEN / 2.0,
+                "frame {i}: a step of {d} s at 120 Hz"
+            );
+        }
+        assert!(p.carry.abs() < EVEN, "the lead drained: {}", p.carry);
+    }
+
+    /// Five mis-split pairs in a row put half the window off cadence; each pair still adds up to
+    /// two refreshes, so the run stays paced.
+    #[test]
+    fn a_burst_of_mis_splits_stays_paced() {
+        let mut raws = vec![P; 40];
+        for _ in 0..5 {
+            raws.extend([0.0264, 2.0 * P - 0.0264]);
+        }
+        raws.extend([P; 40]);
+        let steps = replay(&mut pacer(), &raws, CARRY_MAX * P);
+        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
+            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
+        }
+    }
+
+    /// Every frame mis-split at the measured 26.4 / 8.0 ms: the pairs' 34.4 ms is the cadence,
+    /// two steps of 17.2 ms.
+    #[test]
+    fn an_every_frame_alternation_is_paced_at_half_its_pairs() {
+        let raws: Vec<f64> = (0..400)
+            .map(|i| if i % 2 == 0 { 0.0264 } else { 0.0080 })
+            .collect();
+        let steps = replay(&mut pacer(), &raws, CARRY_MAX * 0.0172);
+        for (i, d) in steps.iter().enumerate().skip(2 * WINDOW) {
+            assert!((d - 0.0172).abs() < EVEN, "frame {i}: a step of {d} s");
+        }
+    }
+
     #[test]
     fn a_stall_passes_through_with_the_time_still_owed() {
         let mut p = warm();
         // The long half of a split leaves most of a period owed.
-        assert!((p.pace(0.0264) - P).abs() < 1.0e-9);
+        assert!((p.pace(0.0264) - P).abs() < EVEN);
         let owed = p.carry;
         assert!(owed > 0.0, "the long half carries {owed}");
         let stall = 1.82;
@@ -500,7 +627,7 @@ mod tests {
             );
             if i >= WINDOW {
                 assert!(
-                    close(step.delta, secs(P)),
+                    (step.delta.as_secs_f64() - P).abs() < EVEN,
                     "frame {i}: an uneven step {:?}",
                     step.delta
                 );
@@ -514,8 +641,8 @@ mod tests {
         t += secs(1.82);
         let (step, virt) = frame(&mut world, t);
         assert!(
-            step.delta >= secs(1.82),
-            "a stall reaches the interface whole: {:?}",
+            (step.delta.as_secs_f64() - 1.82).abs() <= CARRY_MAX * P,
+            "a stall reaches the interface whole, less only the carry: {:?}",
             step.delta
         );
         let max = world.resource::<Time<Virtual>>().max_delta();

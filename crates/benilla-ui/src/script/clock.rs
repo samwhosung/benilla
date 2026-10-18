@@ -49,9 +49,10 @@ pub(crate) fn now(lua: &Lua) -> f64 {
 /// Register `GetTime` and `GetGameTime`.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
-    // GetTime() (`0x515ea0`): one number, `GetTickCount` times the f64 0.001 at `0x801608`. Ours is
-    // the session clock the tick advances, so `GetTime()` deltas and the `elapsed` handed to
-    // OnUpdate agree; reference FrameXML (CastingBarFrame and kin) anchors cast windows on it.
+    // GetTime() (`0x515ea0`): one number, `GetTickCount` times the f64 0.001 at `0x801608`.
+    // Deviation: the reference reads the clock live at each call (`0x42c010`); ours is the session
+    // clock the tick advances by the paced frame step, one value per frame, so `GetTime()` deltas
+    // and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame and kin) assumes.
     g.set("GetTime", lua.create_function(|lua, ()| Ok(now(lua)))?)?;
     // GetGameTime() (`0x515ee0`): two numbers, the hour `[0xce853c]` then the minute `[0xce8538]`,
     // the clock `SMSG_LOGIN_SETTIMESPEED` seeds; minute resolution, no seconds.

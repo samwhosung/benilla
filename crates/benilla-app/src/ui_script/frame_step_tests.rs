@@ -1,7 +1,7 @@
 //! The UI's clock through the real UI pass: `OnUpdate(self, elapsed)` gets the frame time the
-//! loop measured (`0x420f70` → `0x442330` → `0x442350` → `0x764330` → `0x76b2c0`) and `GetTime`
-//! advances by it, so a mis-split pair of real deltas reaches the script as two even steps, and a
-//! stall reaches it whole.
+//! loop measured (`0x420f70` → `0x442330` → `0x442350` → `0x764330` → `0x76b2c0`), here the paced
+//! frame step, so a mis-split pair of real deltas reaches the script as two even steps and a stall
+//! reaches it whole. benilla's `GetTime` advances by the same step (a deviation, `script/clock.rs`).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -113,6 +113,7 @@ fn mis_split_real_deltas_reach_on_update_and_gettime_as_even_steps_and_a_stall_w
         frame(&mut app, t);
     }
     let (_, start) = last(&app);
+    let step_start = app.world().resource::<FrameStep>().elapsed_secs_f64();
     let wall_start = t;
     let mut prev_time = start;
     // Every third pair mis-split at 26.4 ms, the halves still two refreshes apart on the wall.
@@ -125,7 +126,7 @@ fn mis_split_real_deltas_reach_on_update_and_gettime_as_even_steps_and_a_stall_w
         frame(&mut app, t);
         let (elapsed, now) = last(&app);
         assert!(
-            (elapsed - P).abs() < 1.0e-6,
+            (elapsed - P).abs() < 1.0e-3,
             "frame {i}: OnUpdate got {elapsed} s, not one refresh"
         );
         assert!(
@@ -142,9 +143,10 @@ fn mis_split_real_deltas_reach_on_update_and_gettime_as_even_steps_and_a_stall_w
         );
     }
     let wall = (t - wall_start).as_secs_f64();
+    let paced = app.world().resource::<FrameStep>().elapsed_secs_f64() - step_start;
     assert!(
-        (prev_time - start - wall).abs() < 1.0e-5,
-        "GetTime advanced {} s over {wall} s of wall clock",
+        (prev_time - start - paced).abs() < 1.0e-5 && (paced - wall).abs() < 0.011,
+        "GetTime advanced {} s, the frame step {paced} s, over {wall} s of wall clock",
         prev_time - start
     );
     // A real stall, longer than the virtual clock's 250 ms ceiling.
@@ -152,11 +154,11 @@ fn mis_split_real_deltas_reach_on_update_and_gettime_as_even_steps_and_a_stall_w
     frame(&mut app, t);
     let (elapsed, now) = last(&app);
     assert!(
-        (elapsed - 1.82).abs() < 1.0e-5,
+        (elapsed - 1.82).abs() < 0.011,
         "the stall reached OnUpdate as {elapsed} s"
     );
     assert!(
-        (now - prev_time - 1.82).abs() < 1.0e-5,
+        (now - prev_time - elapsed).abs() < 1.0e-5,
         "and GetTime by the same step"
     );
 }
