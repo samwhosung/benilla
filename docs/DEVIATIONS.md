@@ -396,7 +396,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_models
 
-- The reference's paint (`0x76d240`) reads the eye before it rebuilds the root, so a facing change draws one frame late; not reproduced, because it is an ordering quirk. ([`src/ui_models/mod.rs:1440`](../crates/benilla-app/src/ui_models/mod.rs#L1440))
+- The reference's paint (`0x76d240`) reads the eye before it rebuilds the root, so a facing change draws one frame late; not reproduced, because it is an ordering quirk. ([`src/ui_models/mod.rs:1450`](../crates/benilla-app/src/ui_models/mod.rs#L1450))
 
 #### ui_pet
 
@@ -716,7 +716,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:286`](../crates/benilla-ui/src/script/macros.rs#L286))
 - The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:825`](../crates/benilla-ui/src/script/mod.rs#L825))
 - The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:876`](../crates/benilla-ui/src/script/mod.rs#L876))
-- A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:330`](../crates/benilla-ui/src/script/modelframe.rs#L330))
+- A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:334`](../crates/benilla-ui/src/script/modelframe.rs#L334))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:431`](../crates/benilla-ui/src/script/nameplate.rs#L431))
 - The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:889`](../crates/benilla-ui/src/script/nameplate.rs#L889))
@@ -773,9 +773,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1129`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1129))
 - The reference has one field, the font's, but ours is the holder region's (`message_frame_font`), kept apart; so the holder's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:41`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L41))
 - Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:706`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L706))
-- An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:947`](../crates/benilla-ui/src/widget/kinds/mod.rs#L947))
-- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:1049`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1049))
-- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1503`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1503))
+- An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:948`](../crates/benilla-ui/src/widget/kinds/mod.rs#L948))
+- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:1050`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1050))
+- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1504`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1504))
 - Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:180`](../crates/benilla-ui/src/widget/propagation.rs#L180))
 - The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:284`](../crates/benilla-ui/src/widget/propagation.rs#L284))
 ### benilla-world
