@@ -2,7 +2,7 @@ use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
 
-use super::{abs_dim, children_named, Loader};
+use super::{abs_dim, children_named, Levels, Loader};
 
 impl Loader<'_> {
     /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
@@ -10,7 +10,7 @@ impl Loader<'_> {
     pub(super) fn apply_attrs(
         &mut self,
         el: &Element,
-        levels: &[Element],
+        levels: &Levels,
         wrapper: &Table,
         dbg: &str,
     ) {
@@ -165,9 +165,9 @@ impl Loader<'_> {
                 return;
             }
         };
-        for level in self.levels(tr) {
-            self.apply_geometry(&level, &region, true, self_name, dbg);
-        }
+        // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
+        // `0x769b8a`), which never re-enters `inherits`: the node alone.
+        self.apply_geometry(tr, &region, true, self_name, dbg);
     }
 
     /// One node's geometry, the CLayoutFrame part of every frame and region `LoadXML` (`0x767800`),

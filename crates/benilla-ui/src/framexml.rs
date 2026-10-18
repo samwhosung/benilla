@@ -141,7 +141,8 @@ pub struct Templates {
 
 #[derive(Debug, Clone)]
 struct Template {
-    element: Element,
+    /// Shared, so a load's per-level reads hold the node without copying it.
+    element: std::rc::Rc<Element>,
     /// The context word at registration (`[entry+0x1c]`, `0x6ee6be`); `None` is the reference's 0.
     context: Option<String>,
 }
@@ -169,7 +170,7 @@ impl Templates {
         context: Option<&str>,
     ) -> Registration {
         let template = Template {
-            element,
+            element: std::rc::Rc::new(element),
             context: context.map(str::to_owned),
         };
         match self.entries.entry(name.to_ascii_lowercase()) {
@@ -192,7 +193,32 @@ impl Templates {
     pub fn get(&self, name: &str) -> Option<&Element> {
         self.entries
             .get(&name.to_ascii_lowercase())
-            .map(|t| &t.element)
+            .map(|t| &*t.element)
+    }
+
+    /// The templates `element`'s load runs before its own body, in the order the reference runs
+    /// them: each level's `inherits` template is loaded through its own recursive load first
+    /// (`0x76fe5b`), the most distant first. [`expand`] flattens the same chain into one element,
+    /// losing the boundaries that per-level state (a texture's wrap flag, `0x76fec6`) follows. A
+    /// cycle stops at the repeated name.
+    pub fn inherited_levels(&self, element: &Element) -> Vec<std::rc::Rc<Element>> {
+        let mut out: Vec<std::rc::Rc<Element>> = Vec::new();
+        let mut active: Vec<String> = Vec::new();
+        let mut name = element.attr("inherits").map(str::to_string);
+        while let Some(n) = name.filter(|n| !n.is_empty()) {
+            let key = n.to_ascii_lowercase();
+            if active.contains(&key) {
+                break;
+            }
+            let Some(t) = self.entries.get(&key) else {
+                break;
+            };
+            active.push(key);
+            name = t.element.attr("inherits").map(str::to_string);
+            out.push(t.element.clone());
+        }
+        out.reverse();
+        out
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -491,34 +517,6 @@ fn expand_inner(
         Some(base) => merge(&base, element),
         None => element.clone(),
     }
-}
-
-/// The elements `element`'s load runs, in the order the reference runs them: each level's
-/// `inherits` template is loaded through its own recursive load first (`0x76fe5b`), then the
-/// level's own body. [`expand`] flattens the same chain into one element, losing the boundaries
-/// that per-level state (a texture's wrap flag, `0x76fec6`) follows.
-pub fn inherit_chain<'a>(element: &'a Element, templates: &'a dyn Inheritable) -> Vec<&'a Element> {
-    fn walk<'a>(
-        el: &'a Element,
-        templates: &'a dyn Inheritable,
-        active: &mut Vec<String>,
-        out: &mut Vec<&'a Element>,
-    ) {
-        if let Some(name) = el.attr("inherits").filter(|n| !n.is_empty()) {
-            let key = name.to_ascii_lowercase();
-            if !active.contains(&key) {
-                if let Some(template) = templates.find(name) {
-                    active.push(key);
-                    walk(template, templates, active, out);
-                    active.pop();
-                }
-            }
-        }
-        out.push(el);
-    }
-    let mut out = Vec::new();
-    walk(element, templates, &mut Vec::new(), &mut out);
-    out
 }
 
 /// [`expand`]'s merge; `over`'s tag wins, and its body when it has one. `base`'s `name` and `id`

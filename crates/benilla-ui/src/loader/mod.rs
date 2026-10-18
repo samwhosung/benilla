@@ -286,6 +286,45 @@ struct Loader<'a> {
     pub(super) deferred_anchors: Vec<DeferredAnchor>,
 }
 
+/// The nodes an element's `LoadXML` reads, in the order it reads them: the reference merges no
+/// template into an instance, but re-enters `LoadXML` on each `inherits` node first (`0x76985c`
+/// for a frame, `0x76fe5b` for a texture, `0x770f9e` for a FontString), then reads the node's own
+/// attributes and its own first child of each kind (`0x6f2c50`). So an attribute whose rule is
+/// local to a node (`setAllPoints` beside the node's own `<Anchors>`, a `font=` with its own
+/// `<FontHeight>`) is read level by level, the template first and the element last;
+/// [`Loader::expand`]'s merged element serves the rest. The templates are shared with the
+/// registry, not copied.
+pub(super) struct Levels<'a> {
+    inherited: Vec<std::rc::Rc<Element>>,
+    own: &'a Element,
+}
+
+type LevelIter<'l> = std::iter::Chain<
+    std::iter::Map<
+        std::slice::Iter<'l, std::rc::Rc<Element>>,
+        fn(&std::rc::Rc<Element>) -> &Element,
+    >,
+    std::iter::Once<&'l Element>,
+>;
+
+impl Levels<'_> {
+    pub(super) fn iter(&self) -> LevelIter<'_> {
+        let shared: fn(&std::rc::Rc<Element>) -> &Element = |e| e;
+        self.inherited
+            .iter()
+            .map(shared)
+            .chain(std::iter::once(self.own))
+    }
+}
+
+impl<'l> IntoIterator for &'l Levels<'_> {
+    type Item = &'l Element;
+    type IntoIter = LevelIter<'l>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// One `SetPoint` held until its target exists.
 pub(super) struct DeferredAnchor {
     pub(super) wrapper: Table,
@@ -535,20 +574,17 @@ impl Loader<'_> {
         out
     }
 
-    /// The nodes `raw`'s `LoadXML` reads, in the order it reads them: the reference merges no
-    /// template into an instance, but re-enters `LoadXML` on each `inherits` node first
-    /// (`0x76985c` for a frame, `0x76fe5b` for a texture, `0x770f9e` for a FontString), then reads
-    /// the node's own attributes and its own first child of each kind (`0x6f2c50`). So an
-    /// attribute whose rule is local to a node (`setAllPoints` beside the node's own `<Anchors>`,
-    /// a `font=` with its own `<FontHeight>`) is read here, level by level, the template first and
-    /// `raw` last; [`Loader::expand`]'s merged element serves the rest.
-    pub(super) fn levels(&self, raw: &Element) -> Vec<Element> {
-        let model = self.model();
-        let templates = model.framexml_templates.borrow();
-        framexml::inherit_chain(raw, &*templates)
-            .into_iter()
-            .cloned()
-            .collect()
+    /// The nodes `raw`'s `LoadXML` reads ([`Levels`]).
+    pub(super) fn levels<'a>(&self, raw: &'a Element) -> Levels<'a> {
+        let inherited = self
+            .model()
+            .framexml_templates
+            .borrow()
+            .inherited_levels(raw);
+        Levels {
+            inherited,
+            own: raw,
+        }
     }
 
     /// [`Loader::expand`] for a region, only when `inherits=` names a registered element template:
@@ -737,7 +773,7 @@ impl Loader<'_> {
     pub(super) fn decorate(
         &mut self,
         el: &Element,
-        levels: &[Element],
+        levels: &Levels,
         wrapper: &Table,
         self_name: &str,
         parent_name: &str,
@@ -954,18 +990,20 @@ pub(super) fn abs_value(el: &Element) -> Option<f32> {
 }
 
 /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
-/// (`0xff000000`) and its first `<Offset>` over (0.001, -0.001) (`0x3a83126f`, `0xba83126f`).
+/// (`0xff000000`), and its first `<Offset>`, else (0.001, -0.001) (`0x3a83126f`, `0xba83126f`).
+/// The offset reader zeroes both coordinates first (`0x6f1ebe`, `0x6f1ece`), so a coordinate an
+/// `<Offset>` leaves out is 0.
 pub(super) fn shadow_of(sh: &Element) -> crate::script::FontShadow {
-    let (x, y) = children_named(sh, "Offset")
+    let offset = children_named(sh, "Offset")
         .next()
-        .map_or((None, None), abs_dim);
+        .map_or([0.001, -0.001], |o| {
+            let (x, y) = abs_dim(o);
+            [x.unwrap_or(0.0), y.unwrap_or(0.0)]
+        });
     let color = children_named(sh, "Color")
         .next()
         .map_or([0.0, 0.0, 0.0, 1.0], color_of);
-    crate::script::FontShadow {
-        offset: [x.unwrap_or(0.001), y.unwrap_or(-0.001)],
-        color,
-    }
+    crate::script::FontShadow { offset, color }
 }
 
 /// One `<Font>` node's own attributes over `font`, what it inherited (`0x783cee`-`0x784111`):

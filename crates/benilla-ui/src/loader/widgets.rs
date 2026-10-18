@@ -4,7 +4,7 @@ use crate::framexml::{self, Element};
 use crate::script::LabelFont;
 
 use super::regions::FontAttrs;
-use super::{abs_dim, abs_value, children_named, children_named_any, color_of, Loader};
+use super::{abs_dim, abs_value, children_named, children_named_any, color_of, Levels, Loader};
 
 impl Loader<'_> {
     /// `<ScrollFrame>`'s `<ScrollChild>` (`LoadXML 0x786bc0`): after the base load (`0x769820`) it
@@ -47,7 +47,7 @@ impl Loader<'_> {
     pub(super) fn apply_statusbar(
         &mut self,
         el: &Element,
-        levels: &[Element],
+        levels: &Levels,
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
@@ -70,8 +70,8 @@ impl Loader<'_> {
         }
         for level in levels {
             // Each value with `atof`, present and non-empty: the range needs both bounds on the
-            // node, and `defaultValue` is read only after it (`0x782fb0`-`0x783021`); a reversed
-            // pair is swapped, as `SetMinMaxValues` also does.
+            // node, and `defaultValue` is read only after it (`0x782fb0`-`0x783021`). The setter
+            // `0x783270` clamps a min above the max down to it.
             let value = |attr: &str| {
                 level
                     .attr(attr)
@@ -110,7 +110,7 @@ impl Loader<'_> {
     pub(super) fn apply_button(
         &mut self,
         el: &Element,
-        levels: &[Element],
+        levels: &Levels,
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
@@ -504,7 +504,7 @@ impl Loader<'_> {
     }
 
     /// One `<SimpleHTML>` font child's element font, with the same `font=` gate as
-    /// [`Self::apply_fontstring_font`].
+    /// [`Self::load_fontstring_level`].
     fn apply_element_font(&mut self, el: &Element, wrapper: &Table, elem: usize, dbg: &str) {
         let name = ["P", "H1", "H2", "H3"][elem];
         if let Some(inherits) = el.attr("inherits").filter(|n| !n.is_empty()) {

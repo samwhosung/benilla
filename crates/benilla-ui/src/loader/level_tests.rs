@@ -336,7 +336,7 @@ fn a_fontstring_font_file_needs_its_own_nodes_height_and_a_refusal_stops_the_lev
 }
 
 /// `0x7713ca`-`0x771454`: a FontString's own `<Shadow>` takes its first `<Color>` over opaque black
-/// and its first `<Offset>` over (0.001, -0.001).
+/// and its first `<Offset>`, whose missing coordinate is 0 (`0x6f1ebe`), else (0.001, -0.001).
 #[test]
 fn a_fontstrings_own_shadow_element_is_read() {
     let s = ui();
@@ -353,6 +353,9 @@ fn a_fontstrings_own_shadow_element_is_read() {
                         </Shadow>
                     </FontString>
                     <FontString name="BareShadow" inherits="LevelTestFont"><Shadow/></FontString>
+                    <FontString name="HalfOffset" inherits="LevelTestFont">
+                        <Shadow><Offset><AbsDimension x="2"/></Offset></Shadow>
+                    </FontString>
                 </Layer></Layers>
             </Frame>
         </Ui>"#
@@ -369,6 +372,11 @@ fn a_fontstrings_own_shadow_element_is_read() {
     assert_eq!(
         shadow("BareShadow"),
         vec![0.001, -0.001, 0.0, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        shadow("HalfOffset"),
+        vec![2.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        "an <Offset> zeroes the coordinate it leaves out"
     );
 }
 
