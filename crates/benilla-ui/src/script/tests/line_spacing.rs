@@ -507,18 +507,23 @@ fn a_scrolling_frames_fit_is_per_message() {
     assert_eq!(texts(34.2), ["wrapped", "new"]);
 }
 
-/// `spacing=` is read with `atof` (`0x64aaa0`): the numeric prefix, 0 for none.
+/// `spacing=` is read with `SStrToFloat` (`0x783ef6`, `0x77126d`): the numeric prefix, with no
+/// whitespace skip and an exponent's optional `+` (`0x64aaa0`), 0 for none.
 #[test]
-fn the_spacing_attribute_is_read_with_atof() {
+fn the_spacing_attribute_is_read_with_s_str_to_float() {
     let s = script();
     let doc = crate::framexml::parse(
         r#"<Ui>
              <Font name="AtofFont" font="Fonts\FRIZQT__.TTF" spacing=" 3px">
                <FontHeight><AbsValue val="12"/></FontHeight>
              </Font>
+             <Font name="ExpFont" font="Fonts\FRIZQT__.TTF" spacing="1e+-1">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+             </Font>
              <Frame name="AtofHost">
                <Layers><Layer level="ARTWORK">
                  <FontString name="AtofOwn" spacing="2.5em"/>
+                 <FontString name="AtofPlus" spacing="+2"/>
                </Layer></Layers>
              </Frame>
            </Ui>"#,
@@ -526,6 +531,8 @@ fn the_spacing_attribute_is_read_with_atof() {
     .expect("valid FrameXML");
     let report = crate::loader::load(&s, &doc, &|_| None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    assert_eq!(spacing(&s, "AtofFont"), 3.0);
+    assert_eq!(spacing(&s, "AtofFont"), 0.0, "no whitespace skip");
+    assert!((spacing(&s, "ExpFont") - 0.1).abs() < 1e-6, "1e+-1 is 0.1");
     assert_eq!(spacing(&s, "AtofOwn"), 2.5);
+    assert_eq!(spacing(&s, "AtofPlus"), 0.0, "no leading plus");
 }

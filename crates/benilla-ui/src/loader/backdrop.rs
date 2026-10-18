@@ -54,7 +54,7 @@ impl Loader<'_> {
             let src = children_named(ins, "AbsInset").next().unwrap_or(ins);
             let it = self.lua().create_table()?;
             for k in ["left", "right", "top", "bottom"] {
-                if let Some(v) = src.attr(k).and_then(|v| v.trim().parse::<f32>().ok()) {
+                if let Some(v) = src.attr(k).filter(|v| !v.is_empty()).map(super::xml_float) {
                     it.set(k, v)?;
                 }
             }

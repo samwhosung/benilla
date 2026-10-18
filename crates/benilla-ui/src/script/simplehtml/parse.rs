@@ -207,8 +207,11 @@ fn image(node: roxmltree::Node) -> Block {
     }
     Block::Image {
         src: attr_ci(node, "src").map(str::to_string),
-        width: crate::framexml::atof(attr_ci(node, "width").unwrap_or("")),
-        height: crate::framexml::atof(attr_ci(node, "height").unwrap_or("")),
+        // `SStrToFloat` (`0x78abad`, `0x78abe5`).
+        width: crate::script::binding_abi::s_str_to_float(attr_ci(node, "width").unwrap_or(""))
+            as f32,
+        height: crate::script::binding_abi::s_str_to_float(attr_ci(node, "height").unwrap_or(""))
+            as f32,
         align,
         floated,
     }
@@ -532,6 +535,21 @@ mod tests {
                 }
                 other => panic!("{tag}: {other:?}"),
             }
+        }
+    }
+
+    /// `<IMG>`'s `width` and `height` through `SStrToFloat` (`0x78abad`, `0x78abe5`): no
+    /// whitespace skip, no leading `+`, the numeric prefix.
+    #[test]
+    fn img_sizes_read_as_the_references_prefix_parse() {
+        let p = parse_markup(
+            "<HTML><BODY><IMG src=\"a\" width=\" 20\" height=\"30px\"/></BODY></HTML>",
+            "F",
+            DEFAULT_HYPERLINK_FORMAT,
+        );
+        match &p.blocks[..] {
+            [Block::Image { width, height, .. }] => assert_eq!((*width, *height), (0.0, 30.0)),
+            other => panic!("{other:?}"),
         }
     }
 

@@ -307,10 +307,10 @@ impl Loader<'_> {
             }
             None => {}
         }
-        // `spacing=` (`0x771257`) goes through the setter and clears inherit bit `0x10`
+        // `spacing=` (`0x771257`, `SStrToFloat` at `0x77126d`) goes through the setter and clears inherit bit `0x10`
         // (`0x771298`), so it outlasts the font object's.
         if let Some(sp) = node.attr("spacing").filter(|v| !v.is_empty()) {
-            self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
+            self.call_region(wrapper, "SetSpacing", super::xml_float(sp), dbg);
         }
         // A justify token is matched first (`0x6f1990`) and one that matches nothing is skipped
         // (`0x7712c3`, `0x771327`). A match writes its axis's bits of the justify word inline, none

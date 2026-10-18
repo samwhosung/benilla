@@ -638,7 +638,7 @@ impl Loader<'_> {
     /// links it there instead (`0x783d22`), and any other `font=` is a file that needs the node's
     /// own first `<FontHeight>` above 0 and sets the flags word whole from `outline=` and
     /// `monochrome=` (`0x783db1`-`0x783ea3`) when it loads; without the height the load stops
-    /// (`0x783dae`). Then `spacing=` with `atof` (`0x783ee0`), `justifyV`, `justifyH` and each
+    /// (`0x783dae`). Then `spacing=` with `SStrToFloat` (`0x783ef6`), `justifyV`, `justifyH` and each
     /// `<Color>` and `<Shadow>` child, the last of each winning. Each attribute is a setter's write,
     /// clearing its inherit bit (`0x783ea9`-`0x784100`) and pushing to what already follows the
     /// font.
@@ -705,7 +705,7 @@ impl Loader<'_> {
         }
         let mut model = self.model();
         if let Some(sp) = el.attr("spacing").filter(|v| !v.is_empty()) {
-            let sp = crate::framexml::atof(sp);
+            let sp = xml_float(sp);
             font::set(&mut model, id, FontMask::SPACING, |fo| {
                 fo.spacing = Some(sp)
             });
@@ -1068,12 +1068,21 @@ fn is_global_string_key(s: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// An XML number as every loader reads one, `SStrToFloat` (`0x64aaa0`): a prefix parse with no
+/// whitespace skip and no leading `+`, narrowed to the `f32` the reference stores.
+pub(super) fn xml_float(s: &str) -> f32 {
+    crate::script::binding_abi::s_str_to_float(s) as f32
+}
+
+/// [`xml_float`] of a present, non-empty attribute, as the readers take one (`0x6f1ed9`-`0x6f1ee0`).
+fn xml_float_attr(el: &Element, key: &str) -> Option<f32> {
+    el.attr(key).filter(|v| !v.is_empty()).map(xml_float)
+}
+
 /// An `x`/`y` pair from a `<Size>`/`<Offset>`: its `<AbsDimension>` child, else its own attributes.
 pub(super) fn abs_dim(el: &Element) -> (Option<f32>, Option<f32>) {
     let src = children_named(el, "AbsDimension").next().unwrap_or(el);
-    let x = src.attr("x").and_then(|v| v.trim().parse::<f32>().ok());
-    let y = src.attr("y").and_then(|v| v.trim().parse::<f32>().ok());
-    (x, y)
+    (xml_float_attr(src, "x"), xml_float_attr(src, "y"))
 }
 
 /// A `<Color r= g= b= a=/>` element as `0x6f23d0` packs it: each attribute that is present and
@@ -1089,13 +1098,9 @@ pub(super) fn color_of(el: &Element) -> crate::color::Rgba8 {
 }
 
 /// A `<TexCoords>` element's edges `(l, r, t, b)`: each starts at 0, 1, 0, 1 and is read with
-/// `atof` only when present and non-empty (`0x76fef5`-`0x76ff70`).
+/// `SStrToFloat` only when present and non-empty (`0x76fef5`-`0x76ff70`).
 pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
-    let edge = |k: &str, default: f32| {
-        tc.attr(k)
-            .filter(|v| !v.is_empty())
-            .map_or(default, crate::framexml::atof)
-    };
+    let edge = |k: &str, default: f32| xml_float_attr(tc, k).unwrap_or(default);
     (
         edge("left", 0.0),
         edge("right", 1.0),
@@ -1107,7 +1112,7 @@ pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
 /// A `<FontHeight>`-style scalar: its `<AbsValue val=>` child, else its own `val=`.
 pub(super) fn abs_value(el: &Element) -> Option<f32> {
     let src = children_named(el, "AbsValue").next().unwrap_or(el);
-    src.attr("val").and_then(|v| v.trim().parse::<f32>().ok())
+    xml_float_attr(src, "val")
 }
 
 /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black

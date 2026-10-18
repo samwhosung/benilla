@@ -1122,3 +1122,96 @@ fn an_editbox_tints_its_selection_with_its_highlight_color() {
     assert_eq!(tint("TintInherited"), (0, 255, 0, 255));
     assert_eq!(tint("TintNone"), (0x60, 0x60, 0x60, 0xff));
 }
+
+/// Every XML number reads as `SStrToFloat` (`0x64aaa0`) or `SStrToInt` (`0x64ac60`) reads it: a
+/// prefix parse with no whitespace skip and no leading `+`, so `" 0.5"` and `"+5"` are 0 and
+/// `"10px"` is 10 (`<TexCoords>` `0x76ff14`, StatusBar `0x782fc6`, `<PushedTextOffset>` and
+/// `<Size>` through `0x6f1eb0`, `<FontHeight>` through `0x6f1d60`, `<HitRectInsets>` through
+/// `0x6f20a0`, model `scale` and fog `0x76cb4f`-`0x76cbee`, `id` `0x7697ae`).
+#[test]
+fn xml_numbers_read_as_the_references_prefix_parse() {
+    let mut s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="NumHost" id=" 3">
+                <Size><AbsDimension x="10px" y="+20"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <HitRectInsets><AbsInset left="5px" right=" 6" top="7" bottom="8"/></HitRectInsets>
+                <Layers><Layer>
+                    <Texture name="NumTex">
+                        <TexCoords left=" 0.5" right="0.75x" top="+0.25" bottom="1e0"/>
+                    </Texture>
+                    <FontString name="NumText" font="Fonts\FRIZQT__.TTF">
+                        <FontHeight><AbsValue val="12px"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+            <Frame name="NumNegId" id="-2"/>
+            <StatusBar name="NumBar" minValue="+5" maxValue="10" defaultValue="7x"/>
+            <Button name="NumButton">
+                <PushedTextOffset x=" 2" y="3"/>
+            </Button>
+            <Model name="NumModel" scale="2x" fogNear="2m" fogFar=" 9">
+                <FogColor r="2" g="0.5" b="-1"/>
+            </Model>
+            <Model name="NumModelZero" scale="0"/>
+            <Model name="NumModelEmpty" scale=""/>
+        </Ui>"#,
+    );
+    s.resolve();
+    let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
+    assert_eq!(got("NumHost:GetWidth(), NumHost:GetHeight()"), [10.0, 0.0]);
+    assert_eq!(got("NumHost:GetID(), NumNegId:GetID()"), [0.0, 0.0]);
+    assert_eq!(got("NumHost:GetHitRectInsets()"), [5.0, 0.0, 7.0, 8.0]);
+    let tc = got("NumTex:GetTexCoord()");
+    assert_eq!(
+        (tc[0], tc[4], tc[1], tc[3]),
+        (0.0, 0.75, 0.0, 1.0),
+        "{tc:?}"
+    );
+    let (_, height): (String, f32) = s.eval("return NumText:GetFont()").unwrap();
+    assert_eq!(height, 12.0);
+    assert_eq!(got("NumBar:GetMinMaxValues()"), [0.0, 10.0]);
+    assert_eq!(got("NumBar:GetValue()"), [7.0]);
+    assert_eq!(got("NumButton:GetPushedTextOffset()"), [0.0, 3.0]);
+    assert_eq!(got("NumModel:GetModelScale()"), [2.0]);
+    assert_eq!(
+        got("NumModel:GetFogNear(), NumModel:GetFogFar()"),
+        [2.0, 0.0]
+    );
+    let fc = got("NumModel:GetFogColor()");
+    assert_eq!(&fc[..3], [1.0, 128.0 / 255.0, 0.0], "{fc:?}");
+    assert!(has_line(
+        &report,
+        "Frame NumModelZero: Invalid model scale: 0"
+    ));
+    assert!(!report.warnings.iter().any(|w| w.contains("NumModelEmpty")));
+}
+
+/// The EditBox and message-frame numbers: `letters` and `historyLines` through `SStrToInt`,
+/// `historyLines` and `blinkSpeed` at 0 unless above it (`0x77a046`-`0x77a18d`); `maxLines`,
+/// `displayDuration` and `fadeDuration` above 0 only (`0x787bd8`-`0x787c71`).
+#[test]
+fn widget_numbers_read_as_the_references_prefix_parse() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <EditBox name="NumBox" letters="5a" historyLines=" 3" blinkSpeed="-1"/>
+            <EditBox name="NumBoxNeg" historyLines="-4"/>
+            <ScrollingMessageFrame name="NumSmf" maxLines="5x" displayDuration="2s"
+                                   fadeDuration="+4"/>
+        </Ui>"#,
+    );
+    let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
+    assert_eq!(
+        got("NumBox:GetMaxLetters(), NumBox:GetHistoryLines(), NumBox:GetBlinkSpeed()"),
+        [5.0, 0.0, 0.0]
+    );
+    assert_eq!(got("NumBoxNeg:GetHistoryLines()"), [0.0]);
+    assert_eq!(
+        got("NumSmf:GetMaxLines(), NumSmf:GetTimeVisible(), NumSmf:GetFadeDuration()"),
+        [5.0, 2.0, 3.0]
+    );
+}

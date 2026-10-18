@@ -1,9 +1,10 @@
 use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
+use crate::script::binding_abi::{s_str_to_float, s_str_to_int};
 use crate::script::object;
 
-use super::{abs_dim, children_named, Levels, Loader};
+use super::{abs_dim, children_named, color_of, Levels, Loader};
 
 impl Loader<'_> {
     /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
@@ -30,14 +31,14 @@ impl Loader<'_> {
                     .push(format!("{dbg}: Unknown frame strata: {strata}"));
             }
         }
-        // `frameLevel=` per level, read with `atoi` (`0x7699c5`): above 0 it is set (`0x76a4f0`,
+        // `frameLevel=` per level, read with `SStrToInt` (`0x7699c5`): above 0 it is set (`0x76a4f0`,
         // the setter `SetFrameLevel` calls), else logged (`0x878628`) and the level kept, so an
         // instance's `"0"` leaves its template's level.
         for level in levels {
             let Some(value) = level.attr("frameLevel").filter(|v| !v.is_empty()) else {
                 continue;
             };
-            let n = framexml::atoi(value);
+            let n = s_str_to_int(value);
             if n > 0 {
                 self.call(wrapper, "SetFrameLevel", n, dbg);
             } else {
@@ -60,44 +61,40 @@ impl Loader<'_> {
                 self.call(wrapper, "SetModel", text, dbg);
             }
         }
-        // A model pane's `scale=` is the model's scale, the field `SetModelScale` writes
-        // (`0x76cb61`); a value of 0 or less is refused, never clamped (`0x76cb92`). A plain
-        // frame's `scale=` is ignored; whether `0x769820` reads one is untraced.
-        if let Some(scale) = el.attr("scale") {
+        // A model pane's non-empty `scale=` through `SStrToFloat` is the model's scale, the field
+        // `SetModelScale` writes (`0x76cb61`); a value of 0 or less is logged (`0x8788d8`), never
+        // clamped (`0x76cb92`). A plain frame's `scale=` is ignored; whether `0x769820` reads one
+        // is untraced.
+        if let Some(scale) = el.attr("scale").filter(|v| !v.is_empty()) {
             if model_kind {
-                match scale.trim().parse::<f32>() {
-                    Ok(s) if s > 0.0 => self.call(wrapper, "SetModelScale", s, dbg),
-                    _ => self.warn_once(
-                        &format!("model-scale:{dbg}"),
-                        format!("Frame {dbg}: Invalid model scale: {scale}"),
-                    ),
+                let s = s_str_to_float(scale) as f32;
+                if s > 0.0 {
+                    self.call(wrapper, "SetModelScale", s, dbg);
+                } else {
+                    let name = self.object_name(wrapper);
+                    self.status_warning(format!("Frame {name}: Invalid model scale: {scale}"));
                 }
             }
         }
-        // A model pane's fog: `fogNear`/`fogFar` clamp at 0 here only (`0x76cbbb`, `0x76cbf3`),
-        // where the Lua setters store raw; `<FogColor>` is `SetFogColor`, fog bit included.
+        // A model pane's fog: a non-empty `fogNear`/`fogFar` through `SStrToFloat`, clamped at 0
+        // here only (`0x76cbbb`, `0x76cbf3`), where the Lua setters store raw; `<FogColor>` is
+        // read as a `<Color>` (`0x6f23d0`, `0x76cc43`) and set with `SetFogColor`, fog bit
+        // included.
         if model_kind {
             for (attr, verb) in [("fogNear", "SetFogNear"), ("fogFar", "SetFogFar")] {
-                if let Some(v) = el.attr(attr).and_then(|v| v.trim().parse::<f32>().ok()) {
+                if let Some(v) = el.attr(attr).filter(|v| !v.is_empty()) {
+                    let v = s_str_to_float(v) as f32;
                     self.call(wrapper, verb, v.max(0.0), dbg);
                 }
             }
             if let Some(fc) = children_named(el, "FogColor").next() {
-                let ch = |k: &str, d: f32| {
-                    fc.attr(k)
-                        .and_then(|v| v.trim().parse::<f32>().ok())
-                        .unwrap_or(d)
-                };
-                self.call(
-                    wrapper,
-                    "SetFogColor",
-                    (ch("r", 0.0), ch("g", 0.0), ch("b", 0.0), ch("a", 1.0)),
-                    dbg,
-                );
+                self.call(wrapper, "SetFogColor", color_of(fc).fractions(), dbg);
             }
         }
-        if let Some(id) = el.attr("id") {
-            if let Ok(n) = id.parse::<i64>() {
+        // A non-empty `id` through `SStrToInt`, a negative one skipped (`0x7697ae`-`0x7697b7`).
+        if let Some(id) = el.attr("id").filter(|v| !v.is_empty()) {
+            let n = s_str_to_int(id);
+            if n >= 0 {
                 self.call(wrapper, "SetID", n, dbg);
             }
         }
@@ -113,8 +110,8 @@ impl Loader<'_> {
             let src = children_named(ins, "AbsInset").next().unwrap_or(ins);
             let side = |k: &str| {
                 src.attr(k)
-                    .and_then(|v| v.trim().parse::<f32>().ok())
-                    .unwrap_or(0.0)
+                    .filter(|v| !v.is_empty())
+                    .map_or(0.0, |v| s_str_to_float(v) as f32)
             };
             self.call(
                 wrapper,
