@@ -47,6 +47,9 @@ pub(crate) enum CursorKind {
     /// Cast(2): the spell-targeting cursor (`0x4820f0`), which pre-empts the whole object
     /// classifier while a spell awaits a target; the classifier here never sets it.
     Cast,
+    /// Custom(41): the texture FrameXML's `SetCursor` loaded by name (`0x523c40`), never set by
+    /// the classifier; its picture is [`crate::cursor::CustomCursorName`]'s path.
+    Custom,
 }
 
 impl CursorKind {
@@ -70,6 +73,8 @@ impl CursorKind {
             CursorKind::GatherHerbs => "GatherHerbs",
             CursorKind::PickLock => "PickLock",
             CursorKind::Cast => "Cast",
+            // No `Interface\Cursor` stem: the platform drivers key it by its path.
+            CursorKind::Custom => "Custom",
         }
     }
 }

@@ -378,6 +378,12 @@ impl super::UiScript {
     /// which must leave the cursor as it was, so an armed spell keeps its cast cursor over a
     /// spellbook button.
     #[allow(clippy::option_option)]
+    /// The path [`UiCursorMode::Custom`] shows: the name `SetCursor` loaded it by, as the script
+    /// gave it (`0xbe2c70`).
+    pub fn custom_cursor_name(&self) -> String {
+        self.model_ref().custom_cursor_name.clone()
+    }
+
     pub fn take_cursor_write(&mut self) -> Option<Option<UiCursorMode>> {
         let mut model = self.model_mut();
         std::mem::take(&mut model.ui_cursor_dirty).then_some(model.ui_cursor)
@@ -419,6 +425,40 @@ pub enum UiCursorMode {
     UnablePoint,
     /// UnableAttack (24), `SetCursor("ATTACK_ERROR_CURSOR")`.
     UnableAttack,
+    /// Custom (41): the texture `SetCursor` loaded by any other name (`0x523c40`), its image
+    /// [`super::UiScript::custom_cursor_name`].
+    Custom,
+}
+
+/// `CursorSetCustom` (`0x523c40`): the name as it stands is a texture path (`0x449610`, `.blp` put
+/// on, `0x523c86`) that must be 32×32 (`0x523cb9`, `0x523cbd`); it becomes mode 41 (`0x523cc9`),
+/// its image the slot-41 picture (`0xc0bd80`), and its name is kept (`0x523cf5`, 259 bytes and a
+/// NUL), answering true. A load failure or another size answers false and changes nothing. The
+/// same name, ignoring case, while mode 41 shows answers true at once (`0x523c46`-`0x523c6d`);
+/// here it also re-asserts the mode, since the world classifier, the other writer of the shown
+/// mode, lives in the host.
+fn custom_cursor(model: &mut super::Model, name: &str) -> bool {
+    if model.ui_cursor == Some(UiCursorMode::Custom)
+        && model.custom_cursor_name.eq_ignore_ascii_case(name)
+    {
+        model.ui_cursor_dirty = true;
+        return true;
+    }
+    let size = model
+        .texture_size_probe
+        .as_ref()
+        .and_then(|probe| probe(name));
+    if size != Some((32, 32)) {
+        return false;
+    }
+    model.ui_cursor = Some(UiCursorMode::Custom);
+    model.ui_cursor_dirty = true;
+    let mut end = name.len().min(0x103);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    model.custom_cursor_name = name[..end].to_string();
+    true
 }
 
 /// `UseContainerItem` past its clear. An empty slot or a locked item ends it, repair mode
@@ -1008,8 +1048,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // line (`0x489537`). A number converts to its text. The name matches one of eight pairs
     // ignoring case (`0x48955b`), POINT, CAST, BUY and ATTACK as modes 1-4 and each `*_ERROR` 20
     // higher, and answers 1 (`0x48958f` → `0x489575`). Any other name is a custom cursor
-    // (`0x48956c`), which is not built: it answers as one that fails to load, nil with the cursor
-    // unchanged (`0x48959c`).
+    // (`0x48956c`, [`custom_cursor`]): 1 when it loads, else nil with the cursor unchanged
+    // (`0x48959c`).
     lua.globals().set(
         "SetCursor",
         lua.create_function(|lua, args: MultiValue| {
@@ -1035,7 +1075,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ("ATTACK_ERROR_CURSOR", UiCursorMode::UnableAttack),
             ];
             let Some(&(_, mode)) = NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let loaded = custom_cursor(&mut model, &name);
+                return Ok(MultiValue::from_vec(vec![if loaded {
+                    Value::Integer(1)
+                } else {
+                    Value::Nil
+                }]));
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.ui_cursor = Some(mode);
@@ -1104,6 +1150,42 @@ mod tests {
             );
         }
         assert_eq!(s.ui_cursor(), None, "a raise changes nothing");
+    }
+
+    /// Any other name is a texture path (`0x523c40` → `0x449610`, no folder put on): a 32×32 one
+    /// becomes mode 41 under its name and answers 1; a missing one or another size answers nil and
+    /// leaves the cursor and the name as they were; the shown name again answers 1 at once.
+    #[test]
+    fn set_cursor_loads_any_other_name_as_a_32_by_32_texture() {
+        let mut s = UiScript::new().unwrap();
+        s.set_texture_size_probe(Box::new(|path| match path {
+            "Interface\\AddOns\\Mine\\Sword" | "5" => Some((32, 32)),
+            "Interface\\Icons\\Big" => Some((64, 64)),
+            _ => None,
+        }));
+        let set = |s: &UiScript, name: &str| {
+            s.eval::<Option<i64>>(&format!("return SetCursor({name})"))
+                .unwrap()
+        };
+        assert_eq!(set(&s, r#""Interface\\AddOns\\Mine\\Sword""#), Some(1));
+        assert_eq!(s.ui_cursor(), Some(UiCursorMode::Custom));
+        assert_eq!(s.custom_cursor_name(), "Interface\\AddOns\\Mine\\Sword");
+        assert_eq!(s.take_cursor_write(), Some(Some(UiCursorMode::Custom)));
+        // The shown name, ignoring case, answers 1 without a load.
+        assert_eq!(set(&s, r#""INTERFACE\\ADDONS\\MINE\\SWORD""#), Some(1));
+        assert_eq!(s.custom_cursor_name(), "Interface\\AddOns\\Mine\\Sword");
+        s.run("SetCursor(\"ATTACK_CURSOR\")").unwrap();
+        for bad in [
+            r#""Interface\\Icons\\Big""#,
+            r#""Interface\\Cursor\\Nothing""#,
+        ] {
+            assert_eq!(set(&s, bad), None, "{bad}");
+            assert_eq!(s.ui_cursor(), Some(UiCursorMode::Attack), "{bad}");
+            assert_eq!(s.custom_cursor_name(), "Interface\\AddOns\\Mine\\Sword");
+        }
+        // A number is its text (`0x6f36b4`), a path like any other.
+        assert_eq!(set(&s, "5"), Some(1));
+        assert_eq!(s.custom_cursor_name(), "5");
     }
 
     fn backpack() -> ContainerState {

@@ -768,6 +768,9 @@ pub(crate) struct Model {
     /// A FrameXML cursor call ran. The mode is a write, not a level: `0xbe2c2c` keeps its value
     /// until the world or a hover handler writes it, so a handler-less frame leaves it be.
     pub(crate) ui_cursor_dirty: bool,
+    /// The name the last custom cursor loaded under (`0xbe2c70`, copied at `0x523cf5`), which
+    /// [`container::UiCursorMode::Custom`] shows; kept across every other mode.
+    pub(crate) custom_cursor_name: String,
     /// `AutoEquipCursorItem`'s `(bag, slot)` sources, sent as `CMSG_AUTOEQUIP_ITEM`.
     pub(crate) container_autoequips: Vec<(i64, u32)>,
     /// `AutoEquipCursorItem`'s bind-on-equip questions, `(bag, slot, guid)`: the item stays held.
@@ -1638,6 +1641,7 @@ impl Model {
             container_wraps: Vec::new(),
             ui_cursor: None,
             ui_cursor_dirty: false,
+            custom_cursor_name: String::new(),
             container_autoequips: Vec::new(),
             container_equip_asks: Vec::new(),
             bag_autostores: Vec::new(),
