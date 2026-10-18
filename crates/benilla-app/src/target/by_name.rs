@@ -13,10 +13,9 @@
 //! guid, so the chunk shows the unit the commit picks. The reference's walk follows the object
 //! list's order (a tail append, `0x4646c3`-`0x4646d4`), the deviation documented there.
 //!
-//! Not built: the roster passes (party `0x493b20`, raid `0x493b9d`) that select a groupmate with no
-//! object held. Their pick would be a guid with no entity, and the selection is an entity
-//! ([`Selection::target`], which the target frame, the ring, the clear and the despawn paths
-//! all read) beside its guid, so the roster is offered to the resolver empty.
+//! Not built for these selecting callers: the roster passes (party `0x493b20`, raid `0x493b9d`),
+//! because the selection holds an entity, not a guid, and `0x493540` stores a guid with no object
+//! (`0x493605`). `DoEmote`'s [`PlayerLookup`] needs only a guid and runs them.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
