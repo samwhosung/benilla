@@ -43,10 +43,9 @@ fn this_minimap(lua: &Lua, this: &Value) -> mlua::Result<FrameHandle> {
 /// at its stratum and its level plus one: five party and pet arrows (`0x4ede72`), three rim
 /// arrows (`0x4edf1f`) and the player arrow (`0x4edfae`). Each is anchored CENTER on the
 /// minimap's CENTER (`0x767c70(4, minimap, 4, x, y)`): the eight at offset 0 (`0x4ede8b`,
-/// `0x4edf38`), each the disc's size (`[0xbc7970]` through slots 5 and 6, `0x4ede9e`, `0x4edeaf`),
-/// model scale 0.6 (`0x4edeba`) and hidden (`0x4edece`, `0x4edf7b`); the five relevelled to the
-/// minimap's level plus 2 (`0x4edee0`); the player arrow at offset 0.001 each way (`0x4edfd1`),
-/// sized by its file, at model scale `G48 · 5/3` (`0x4edfec`) and left shown.
+/// `0x4edf38`), model scale 0.6 (`0x4edeba`) and hidden (`0x4edece`, `0x4edf7b`); the five
+/// relevelled to the minimap's level plus 2 (`0x4edee0`); the player arrow sized by its file and
+/// left shown. What the ctor takes from the screen-scale cells is [`seat_engine_children`]'s.
 pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
     use crate::layout::{Anchor, Point};
     let hide = {
@@ -54,11 +53,8 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
         let Some((strata, level)) = model.arena.frame(minimap).map(|f| (f.strata, f.level)) else {
             return;
         };
-        let base = super::worldmap_arrow::g48(&model) * (5.0 / 3.0);
-        let unit = model.layout_unit();
         let units = model.layout_units();
         let minimap_id = model.frame_id(minimap);
-        let disc = crate::widget::MINIMAP_DISC * base * unit;
         let mut children = Vec::with_capacity(crate::widget::MINIMAP_ENGINE_CHILDREN);
         for i in 0..crate::widget::MINIMAP_ENGINE_CHILDREN {
             let child = model.arena.create(FrameKind::Model, None, Some(minimap));
@@ -72,25 +68,17 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
                 .arena
                 .set_frame_level(child, level.saturating_add(lift), false);
             let player = i + 1 == crate::widget::MINIMAP_ENGINE_CHILDREN;
-            let offset = if player { 0.001 * unit } else { 0.0 };
-            let input = model.layout_inputs.entry(child).or_default();
-            input.anchors.set(
-                Anchor::new(Point::Center, minimap_id, Point::Center, offset, offset),
-                units,
-            );
             if !player {
-                input.width = disc;
-                input.height = disc;
-            }
-            model.invalidate_frame(child, true);
-            if let Some(KindState::Model(m)) =
-                model.arena.frame_mut(child).map(|f| &mut f.kind_state)
-            {
-                m.scale = if player {
-                    base
-                } else {
-                    crate::widget::MINIMAP_ARROW_SCALE
-                };
+                let input = model.layout_inputs.entry(child).or_default();
+                input.anchors.set(
+                    Anchor::new(Point::Center, minimap_id, Point::Center, 0.0, 0.0),
+                    units,
+                );
+                if let Some(KindState::Model(m)) =
+                    model.arena.frame_mut(child).map(|f| &mut f.kind_state)
+                {
+                    m.scale = crate::widget::MINIMAP_ARROW_SCALE;
+                }
             }
             children.push(child);
         }
@@ -102,12 +90,59 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
             m.rim_arrows = arrows[crate::widget::MINIMAP_GROUP_ARROWS..].to_vec();
             m.player_arrow = player.first().copied();
             m.level_base = i32::from(level) + 3;
-            m.base = base;
         }
+        seat_engine_children(&mut model, minimap);
         arrows.to_vec()
     };
     for child in hide {
         super::visibility::set_shown(lua, child, false);
+    }
+}
+
+/// What the `CMinimap` ctor takes from the screen-scale cells: `base = G48 · 5/3` (`0x4edc42`,
+/// `0x4edc47`), 1.0 at 4:3; the eight arrow frames' width and height, the disc (`[0xbc7970]`,
+/// `0x4edca9`, through slots 5 and 6 at `0x4ede9e`, `0x4edeaf`); the player arrow's offset of
+/// 0.001 layout units each way (`0x4edfd1`) and its model scale `base` (`0x4edfec`). The reference
+/// fixes these at the build; a change of cells rebuilds the interface, so the ctor runs again
+/// with the new `G48`, and [`super::UiScript`]'s live resize re-seats them here instead.
+pub(crate) fn seat_engine_children(model: &mut Model, minimap: FrameHandle) {
+    use crate::layout::{Anchor, Point};
+    let Some(KindState::Minimap(state)) = model.arena.frame(minimap).map(|f| &f.kind_state) else {
+        return;
+    };
+    let arrows: Vec<FrameHandle> = state
+        .group_arrows
+        .iter()
+        .chain(&state.rim_arrows)
+        .copied()
+        .collect();
+    let player = state.player_arrow;
+    let units = model.layout_units();
+    let unit = model.layout_unit();
+    let base = units.k2() * (5.0 / 3.0);
+    let disc = crate::widget::MINIMAP_DISC * base * unit;
+    for h in arrows {
+        let input = model.layout_inputs.entry(h).or_default();
+        let changed = input.width.to_bits() != disc.to_bits();
+        input.width = disc;
+        input.height = disc;
+        model.invalidate_frame(h, changed);
+    }
+    if let Some(h) = player {
+        let minimap_id = model.frame_id(minimap);
+        let offset = 0.001 * unit;
+        let input = model.layout_inputs.entry(h).or_default();
+        let moved = input.anchors.set(
+            Anchor::new(Point::Center, minimap_id, Point::Center, offset, offset),
+            units,
+        );
+        model.invalidate_frame(h, moved);
+        if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            m.scale = base;
+        }
+    }
+    if let Some(KindState::Minimap(m)) = model.arena.frame_mut(minimap).map(|f| &mut f.kind_state) {
+        m.base = base;
     }
 }
 

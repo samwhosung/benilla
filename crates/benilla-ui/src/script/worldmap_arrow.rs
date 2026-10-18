@@ -79,17 +79,30 @@ impl Arrow {
     }
 }
 
-/// `G48` (`0x832a48`), the Y half-extent of the reference's layout space: `1/√(A² + 1)` for the
-/// screen's aspect `A`, 0.6 at 4:3.
-pub(super) fn g48(model: &Model) -> f32 {
-    let (w, h) = (model.screen.width(), model.screen.height());
-    let a = if h > 0.0 { w / h } else { 4.0 / 3.0 };
-    1.0 / (a * a + 1.0).sqrt()
+/// The arrow's model scale for this screen: `G48`, the cell `K2` (`0x41ae70(1.0)` reads
+/// `[0x832a48]`), times its factor (`0x4a7ad3`, `0x4a7ad8`).
+fn arrow_scale(model: &Model, which: Arrow) -> f32 {
+    model.layout_units().k2() * which.scale_over_g48()
 }
 
-/// The arrow's model scale for this screen.
-fn arrow_scale(model: &Model, which: Arrow) -> f32 {
-    g48(model) * which.scale_over_g48()
+/// Both arrows' model scale for new cells. The reference fixes it at creation, which a change of
+/// cells repeats, as the rebuilt interface runs `CreateWorldMapArrowFrame` again
+/// (`WorldMapFrame.lua:15`); a live resize sets it here instead.
+pub(super) fn rescale(model: &mut Model) {
+    for which in [Arrow::World, Arrow::Mini] {
+        let Some(id) = which.slot(model) else {
+            continue;
+        };
+        let scale = arrow_scale(model, which);
+        let Some(&h) = model.id_to_frame.get(&id) else {
+            continue;
+        };
+        if let Some(crate::widget::KindState::Model(m)) =
+            model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+        {
+            m.scale = scale;
+        }
+    }
 }
 
 /// `lua_isstring`: a string, or a number (which `lua_tostring` would print).

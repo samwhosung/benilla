@@ -891,8 +891,14 @@ impl UiScript {
         let units = crate::layout::LayoutUnits::from_aspect(model.screen_aspect());
         model.space = crate::layout::LayoutSpace::new(units, new.width(), new.height());
         if units != before {
-            // New cells are a new interface build (`0x41ad10`): every node resolves afresh.
+            // New cells are a new interface build (`0x41ad10`): every node resolves afresh, and
+            // what the build's constructors took from the cells is taken again.
             model.force_every_layout_node();
+            let minimaps = model.arena.minimap_kinds().to_vec();
+            for h in minimaps {
+                minimap::seat_engine_children(&mut model, h);
+            }
+            worldmap_arrow::rescale(&mut model);
         }
         model.touch_layout();
         drop(model);
