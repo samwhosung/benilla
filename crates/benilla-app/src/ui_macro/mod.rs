@@ -59,8 +59,8 @@ impl Plugin for UiMacroPlugin {
     }
 }
 
-/// Give the world-entry VM what lists the icon chooser, over the patch chain
-/// ([`benilla_formats::load_macro_icons`]). The VM runs it on first use: only the in-game state
+/// Give the world-entry VM what lists the icon chooser, over the patch chain and the install's
+/// loose `Interface\Icons\` folders ([`benilla_formats::load_macro_icons`]). The VM runs it on first use: only the in-game state
 /// registers the macro verbs (`RegisterMacroFunctions` `0x4f1b90`, from `0x490297`), so the glue
 /// and boot VMs get none. A failed listing builds an empty list, and
 /// `MacroPopupOkayButton_Update` then keeps OKAY disabled.
@@ -68,16 +68,20 @@ pub(crate) fn install_icon_source(world: &World, script: &mut UiScript) {
     let Some(assets) = world.get_resource::<WorldAssets>() else {
         return;
     };
-    script.set_macro_icon_source(icon_source(assets.chain.clone()));
+    script.set_macro_icon_source(icon_source(
+        assets.chain.clone(),
+        benilla_formats::wow_data(),
+    ));
 }
 
-/// The icon chooser's lister over `chain`.
+/// The icon chooser's lister over `chain` and the `Data` folder `data`.
 fn icon_source(
     chain: std::sync::Arc<std::sync::Mutex<benilla_formats::Chain>>,
+    data: Option<std::path::PathBuf>,
 ) -> Box<dyn Fn() -> Vec<String>> {
     Box::new(move || {
         let start = std::time::Instant::now();
-        match benilla_formats::load_macro_icons(&chain.lock_recover()) {
+        match benilla_formats::load_macro_icons(&chain.lock_recover(), data.as_deref()) {
             Ok(icons) => {
                 info!(
                     "ui_macro: {} macro icons in the chooser, listed in {:.0} ms",

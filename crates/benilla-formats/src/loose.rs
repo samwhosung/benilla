@@ -429,7 +429,7 @@ pub fn install_loose_interface_folders() -> Vec<&'static str> {
 }
 
 /// `dir`'s folder named `name` without regard to case, as `OsMoveFile` finds it on Windows.
-fn child_dir_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn child_dir_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .flatten()
