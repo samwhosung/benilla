@@ -2911,7 +2911,7 @@ mod tests {
     #[test]
     fn a_non_number_watches_the_selected_quest() {
         for arg in ["", "nil", "'x'", "{}", "true"] {
-            let mut s = two_quests();
+            let s = two_quests();
             s.run("SelectQuestLogEntry(3)").unwrap(); // quest 7
             s.run(&format!("AddQuestWatch({arg})")).unwrap();
             assert_eq!(s.quest_log_watched(), vec![7], "AddQuestWatch({arg})");
@@ -2923,7 +2923,7 @@ mod tests {
             assert!(s.quest_log_watched().is_empty(), "RemoveQuestWatch({arg})");
         }
         // A number is a row whatever is selected; a numeric string counts as one.
-        let mut s = two_quests();
+        let s = two_quests();
         s.run("SelectQuestLogEntry(2)").unwrap();
         s.run("AddQuestWatch('3')").unwrap();
         assert_eq!(s.quest_log_watched(), vec![7]);
