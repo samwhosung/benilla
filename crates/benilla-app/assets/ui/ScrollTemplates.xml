@@ -86,7 +86,9 @@
             return sf:GetVerticalScrollRange()
         end
 
-        -- Hides the bar when the content fits (reference: ScrollFrame_OnScrollRangeChanged).
+        -- Hides the bar when the content fits, a range under a whole unit: the reference's
+        -- `ScrollFrame_OnScrollRangeChanged` tests `floor(scrollrange) == 0`
+        -- (UIPanelTemplates.lua:265).
         function BenillaScroll_SyncBar(sf)
             local bar = getglobal(sf:GetName() .. "Bar")
             if not bar then return end
@@ -95,7 +97,7 @@
             bar:SetMinMaxValues(0, range)
             bar:SetValue(sf:GetVerticalScroll())
             BenillaScrollBar_UpdateArrows(bar)
-            BenillaScrollBar_SetShown(bar, range > 0)
+            BenillaScrollBar_SetShown(bar, floor(range) ~= 0)
         end
 
         -- Clamped here: SetVerticalScroll stores any value, as the reference's does.

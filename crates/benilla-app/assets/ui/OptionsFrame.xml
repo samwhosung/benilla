@@ -272,14 +272,12 @@
         end
 
         -- The page's range is the body's overhang, the content Fit measures: the engine's range
-        -- also counts the Keybindings list's faux scroll child, which is sized to every row. Under
-        -- half a unit, Fit's own step, is none: a body Fit sized to the frame reads back through
-        -- the getters' rounding a hair off the frame's edges.
+        -- also counts the Keybindings list's faux scroll child, which is sized to every row.
         function BenillaOptionsScroll_Range(sf)
             local _, fh = BenillaOptionsScroll_Size(sf)
             if not fh then return 0 end
             local range = BenillaOptionsFrameContainerBody:GetHeight() - fh
-            if range >= 0.5 then return range end
+            if range > 0 then return range end
             return 0
         end
 
