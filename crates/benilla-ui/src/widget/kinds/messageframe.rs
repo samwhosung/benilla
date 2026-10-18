@@ -744,6 +744,24 @@ impl Default for MessageFrameState {
 }
 
 impl MessageFrameState {
+    /// `SetTimeVisible(s)`'s store (`0x785c20`): every line whose time left is not 0 takes `s`
+    /// (`0x785c3d`-`0x785c50`), then the frame (`0x785c65`); `s` is not clamped.
+    pub fn set_time_visible(&mut self, s: f32) {
+        for line in self.lines.iter_mut().filter(|l| l.time_left != 0.0) {
+            line.time_left = s;
+        }
+        self.time_visible = s;
+    }
+
+    /// `SetFadeDuration(s)`'s store (`0x785c80`): the same over the lines' fade time, then the
+    /// frame (`0x785cc5`).
+    pub fn set_fade_duration(&mut self, s: f32) {
+        for line in self.lines.iter_mut().filter(|l| l.fade_left != 0.0) {
+            line.fade_left = s;
+        }
+        self.fade_duration = s;
+    }
+
     /// `AddMessage(text, r, g, b, a)` (`0x795590`, `0x785d00`): the fourth number is the line's
     /// starting alpha, where the scrolling class takes an id and forces opaque.
     pub fn add(&mut self, text: String, r: f32, g: f32, b: f32, a: f32) {

@@ -96,6 +96,7 @@ mod toplevel;
 mod update_walk;
 mod usage_lines;
 mod usage_number_args;
+mod usage_range_gates;
 mod visibility;
 mod wheel;
 mod widget_args;

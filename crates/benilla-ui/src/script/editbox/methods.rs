@@ -195,15 +195,19 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // SetHistoryLines (`0x799450`), SetBlinkSpeed (`0x798250`) and SetTextInsets (`0x798a60`) gate
     // their numbers with `lua_isnumber` after the receiver checks, else raise their usage line
-    // (`0x87bf50`, `0x87be90`, `0x87bef0`; `0x799521`, `0x7982ff`, `0x798c11`).
+    // (`0x87bf50`, `0x87be90`, `0x87bef0`; `0x799521`, `0x7982ff`, `0x798c11`). SetHistoryLines
+    // also raises for an `_ftol`ed count not above 0 (`jle`, `0x7994f9`).
     m.set(
         "SetHistoryLines",
         lua.create_function(|lua, (this, n): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
             let n = binding_abi::method_number(lua, &this, n, "SetHistoryLines(numLines)")?;
-            let n = i64::from(binding_abi::ftol(n));
+            let n = binding_abi::ftol(n);
+            if n <= 0 {
+                return Err(binding_abi::usage(lua, &this, "SetHistoryLines(numLines)"));
+            }
             with_eb(lua, h, |eb| {
-                eb.history_max = n.max(0) as usize;
+                eb.history_max = n as usize;
                 let over = eb.history.len().saturating_sub(eb.history_max);
                 if over > 0 {
                     eb.history.drain(..over);

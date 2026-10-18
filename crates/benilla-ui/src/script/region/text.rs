@@ -230,7 +230,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (`+0xe4`, `0x77163b`), so `GetFont` answers it and the next font push replaces it; a height
     // within 2^-22 of the current one changes nothing (`0x77161c`), the bit included. No inherit
     // bit is cleared. A `lua_isnumber` miss raises `Usage: %s:SetTextHeight(pixelHeight)`
-    // (`0x87c728`, `0x79e4f9`).
+    // (`0x87c728`, `0x79e4f9`); a height that compares not above 0 (`0x79e469`, `fcomp` against
+    // `0x7ffd74` = 0.0, taken on greater or unordered only) raises `%s:SetTextHeight(): invalid
+    // text height: %f` (`0x87c750`, `0x79e49f`), the `%f` a Lua number printed `%.14g`.
     m.set(
         "SetTextHeight",
         lua.create_function(|lua, (this, height): (Table, Value)| {
@@ -238,6 +240,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let height =
                 binding_abi::method_number(lua, &this, height, "SetTextHeight(pixelHeight)")?
                     as f32;
+            if height <= 0.0 {
+                return Err(mlua::Error::runtime(format!(
+                    "{}:SetTextHeight(): invalid text height: {}",
+                    binding_abi::name_of(lua, &this),
+                    binding_abi::lua_number_text(f64::from(height))
+                )));
+            }
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let model_units = model.layout_units();
             let d = model.region_data.entry(rh).or_default();

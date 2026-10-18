@@ -364,14 +364,22 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, level): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
             // `lua_isnumber` (`0x7745ec`), else `Usage: %s:SetFrameLevel(level)` (`0x879608`,
-            // `0x774669`); the number is `_ftol`ed (`0x774601`).
+            // `0x774669`); the number is `_ftol`ed (`0x774601`), and a negative one (`jl`,
+            // `0x77460c`) raises `%s:SetFrameLevel(): Passed negative frame level: %d` (`0x879628`,
+            // `0x77463b`).
             let level = i64::from(binding_abi::ftol(binding_abi::method_number(
                 lua,
                 &this,
                 level,
                 "SetFrameLevel(level)",
             )?));
-            let lvl = level.clamp(0, i64::from(u16::MAX)) as u16;
+            if level < 0 {
+                return Err(mlua::Error::runtime(format!(
+                    "{}:SetFrameLevel(): Passed negative frame level: {level}",
+                    binding_abi::name_of(lua, &this)
+                )));
+            }
+            let lvl = level.min(i64::from(u16::MAX)) as u16;
             // A script level change moves no children: `0x774560` calls `set_frame_level 0x76a4f0`
             // with `propagate = 0`, which stock `BonusActionButtonTemplate` relies on.
             lua.app_data_mut::<Model>()
