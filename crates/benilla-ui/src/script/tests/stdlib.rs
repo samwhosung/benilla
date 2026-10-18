@@ -425,6 +425,64 @@ fn time_is_epoch_seconds_and_date_formats_them() {
     assert_eq!(leap, "2000-02-29 Tuesday");
 }
 
+/// `time` with a table converts it (`0x7035a0`): its fields through `lua_gettable` and `__ftol`,
+/// `hour` 12 by default, `day`, `month` and `year` required, then the runtime's `_mktime`
+/// (`0x74066b`): the month folded into the year, years 1969 to 2039 only, a 32-bit overflow or a
+/// negative time nil.
+#[test]
+fn time_converts_a_date_table() {
+    let s = script();
+    let time = |t: &str| -> String {
+        s.eval::<mlua::Value>(&format!("return time({t})"))
+            .map(|v| match v {
+                mlua::Value::Nil => "nil".to_string(),
+                v => format!("{}", v.as_f64().unwrap()),
+            })
+            .unwrap_or_else(|e| format!("error: {e}"))
+    };
+    for (t, want) in [
+        (
+            "{year=2001, month=9, day=9, hour=1, min=46, sec=40}",
+            "1000000000",
+        ),
+        ("{year=1970, month=1, day=1}", "43200"),
+        ("{year=2000, month=14, day=1, hour=0}", "980985600"),
+        ("{year=2001, month=2, day=1, hour=0}", "980985600"),
+        (
+            "{year=2001, month=9, day=9, hour=1, min=46, sec=40, isdst=true}",
+            "1000000000",
+        ),
+        (
+            r#"{year="2001", month="9", day=9.9, hour=1.5, min=46, sec=40}"#,
+            "1000000000",
+        ),
+        (
+            "setmetatable({}, {__index = {year=2001, month=9, day=9, hour=1, min=46, sec=40}})",
+            "1000000000",
+        ),
+        (
+            "{year=2038, month=1, day=19, hour=3, min=14, sec=7}",
+            "2147483647",
+        ),
+        ("{year=2038, month=1, day=19, hour=3, min=14, sec=8}", "nil"),
+        ("{year=1969, month=12, day=31, hour=0}", "nil"),
+        ("{year=1968, month=12, day=31}", "nil"),
+        ("{year=2040, month=1, day=1}", "nil"),
+        ("{year=2001, month=-11, day=1, hour=0}", "946684800"),
+    ] {
+        assert_eq!(time(t), want, "time({t})");
+    }
+    assert!(time("{year=2001, month=9}").ends_with("field `day' missing in date table"));
+    assert!(time("{day=1}").ends_with("field `month' missing in date table"));
+    assert!(time("5").ends_with("bad argument #1 to `time' (table expected, got number)"));
+    let round: bool = s
+        .eval(
+            "local t = date('*t', 1000000000) return time(t) == 1000000000 and time(nil) == time()",
+        )
+        .unwrap();
+    assert!(round, "a date table converts back");
+}
+
 // ── RunScript ──
 
 /// `RunScript` hands its string to `FrameScript_Execute` (`0x704cd0`) as both code and chunk name

@@ -233,17 +233,27 @@ end
 format = string.format
 "#;
 
-/// `time()` and `date([format [, when]])`: 1.12 engine globals (`0x7035a0`, `0x7033a0`), Lua 5.0's
-/// `os.time`/`os.date` hoisted. `time` is wall-clock epoch seconds, as addons persist it across
-/// sessions.
+/// `time([t])` and `date([format [, when]])`: 1.12 engine globals (`0x7035a0`, `0x7033a0`), Lua
+/// 5.0's `os.time`/`os.date` hoisted, over the client's statically linked MSVC runtime. `time` is
+/// wall-clock epoch seconds, as addons persist it across sessions.
 ///
-/// Deviation: `date` formats UTC where the reference uses local time, because the tree has no
-/// timezone database.
+/// Deviation: both read and format time as UTC where the reference uses local time, because the
+/// tree has no timezone database: the reference as it runs in a zone with no offset and no
+/// daylight saving.
 fn install_time(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set(
         "time",
-        lua.create_function(|_, ()| Ok(crate::civil::unix_seconds()))?,
+        lua.create_function(|lua, t: Option<mlua::Table>| {
+            // Any argument but nil takes the table path (`0x7035b5`), `luaL_checktype` first.
+            let Some(t) = t else {
+                return Ok(mlua::Value::Number(crate::civil::unix_seconds() as f64));
+            };
+            Ok(match mktime(&date_fields(lua, &t)?) {
+                Some(secs) => mlua::Value::Number(f64::from(secs)),
+                None => mlua::Value::Nil,
+            })
+        })?,
     )?;
     g.set(
         "date",
@@ -279,6 +289,83 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+/// The `struct tm` fields `time` reads from its table (`0x7035f3`..`0x703666`), in its order:
+/// `sec`, `min`, `hour`, `day`, `month` less 1 and `year` less 1900, as `int`s.
+struct TmFields {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    mday: i32,
+    mon: i32,
+    year: i32,
+}
+
+/// 5.0's `getfield` (`0x7036f0`) for each field: `lua_gettable`, so `__index` answers; a number
+/// or numeric string through `__ftol`, else the default, and `day`, `month` and `year` have none.
+/// `isdst` (`getboolfield`, `0x7036b0`) is read last and moves nothing in a zone without daylight
+/// saving (`_dstbias` 0, `0x41465d`).
+fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<TmFields> {
+    let field = |key: &str, default: Option<i32>| -> mlua::Result<i32> {
+        let v: mlua::Value = t.get(key)?;
+        match (lua.coerce_number(v)?, default) {
+            (Some(n), _) => Ok(super::binding_abi::ftol(n)),
+            (None, Some(d)) => Ok(d),
+            (None, None) => Err(mlua::Error::RuntimeError(format!(
+                "field `{key}' missing in date table"
+            ))),
+        }
+    };
+    let f = TmFields {
+        sec: field("sec", Some(0))?,
+        min: field("min", Some(0))?,
+        hour: field("hour", Some(12))?,
+        mday: field("day", None)?,
+        mon: field("month", None)?.wrapping_sub(1),
+        year: field("year", None)?.wrapping_sub(1900),
+    };
+    let _isdst: mlua::Value = t.get("isdst")?;
+    Ok(f)
+}
+
+/// The runtime's `_mktime` (`0x74066b`, through `0x740687`) at a zero `_timezone`: `tm_year` in
+/// 69..=139, the month folded into the year, then days, hours, minutes and seconds, each step
+/// refused on a 32-bit overflow; `localtime` then refuses a negative time. `None` is its -1.
+fn mktime(f: &TmFields) -> Option<i32> {
+    // `_days` (`0x832834`): the days before each month, less one.
+    const DAYS: [i32; 13] = [-1, 30, 58, 89, 119, 150, 180, 211, 242, 272, 303, 333, 364];
+    let years = 69..=139;
+    let (mut year, mut mon) = (f.year, f.mon);
+    if !years.contains(&year) {
+        return None;
+    }
+    if !(0..=11).contains(&mon) {
+        year += mon / 12;
+        mon %= 12;
+        if mon < 0 {
+            mon += 12;
+            year -= 1;
+        }
+        if !years.contains(&year) {
+            return None;
+        }
+    }
+    let mut before = DAYS[mon as usize];
+    if year & 3 == 0 && mon > 1 {
+        before += 1;
+    }
+    // Days since 1970 less one: `(y - 70) * 365 + ((y - 1) >> 2) - 17` (`0x740701`-`0x74070c`).
+    let days = year * 365 + ((year - 1) >> 2) + before - 25_567;
+    let secs = days
+        .checked_add(f.mday)?
+        .checked_mul(24)?
+        .checked_add(f.hour)?
+        .checked_mul(60)?
+        .checked_add(f.min)?
+        .checked_mul(60)?
+        .checked_add(f.sec)?;
+    (secs >= 0).then_some(secs)
 }
 
 const DAYS: [&str; 7] = [
