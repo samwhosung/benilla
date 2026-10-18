@@ -208,7 +208,8 @@ fn outside(v: f64, min: f32, max: f32) -> bool {
 /// (`[0x810218]`), both against the parse as is, with "DistCull must be in range 1.0 - %f." of
 /// that bound as a double (`0x869928`, `0x688ba2`).
 pub fn check_dist_cull(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
-    if outside(s_str_to_float(value), 1.0, 888.888_916) {
+    // The float nearest 888.8889 is the bound, 888.888916015625.
+    if outside(s_str_to_float(value), 1.0, 888.888_9) {
         CvarVerdict::refuse("DistCull must be in range 1.0 - 888.888916.")
     } else {
         CvarVerdict::accept()
