@@ -578,26 +578,28 @@ fn set_script_on_double_click_is_accepted_because_something_fires_it() {
     assert!(s.eval::<bool>("return ran").unwrap(), "…and it FIRED");
 }
 
-/// Script names nothing fires still raise; a name leaves this list only when something fires it.
+/// A name no 1.12 resolver has raises by name; the EditBox's `OnInputLanguageChanged`
+/// (`0x77a40d`, `+0x430`) is accepted and kept, though nothing here fires it (`0x77abb0`).
 #[test]
-fn the_unfired_script_kinds_still_raise_rather_than_silently_accepting() {
+fn a_2_0_script_kind_raises_and_the_input_language_slot_is_kept() {
     let s = script();
     s.run(r#"Raiser = CreateFrame("EditBox", "RaiserBox")"#)
         .unwrap();
-    for name in [
-        // A 2.0 secure-frame slot; no 1.12 resolver has it.
-        "OnAttributeChanged",
-        // A real 1.12 slot that benilla does not fire.
-        "OnInputLanguageChanged",
-    ] {
-        let err = s
-            .run(&format!(r#"Raiser:SetScript("{name}", function() end)"#))
-            .unwrap_err();
-        assert!(
-            err.to_string().contains(name),
-            "{name} must raise by name, got {err}"
-        );
-    }
+    let err = s
+        .run(r#"Raiser:SetScript("OnAttributeChanged", function() end)"#)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("OnAttributeChanged"),
+        "OnAttributeChanged must raise by name, got {err}"
+    );
+    s.run(
+        r#"
+        local f = function() end
+        Raiser:SetScript("OnInputLanguageChanged", f)
+        assert(Raiser:GetScript("OnInputLanguageChanged") == f, "the handler is kept")
+    "#,
+    )
+    .unwrap();
 }
 
 /// Hiding the hovered frame fires its `OnLeave` inside the hide, before its `OnHide` (`0x764ba0`'s

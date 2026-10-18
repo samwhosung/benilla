@@ -1645,9 +1645,8 @@ fn a_clean_world_entry_raises_only_the_warnings_we_have_named() {
         .get_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
 
-    // Deviation: the `OnInputLanguageChanged` script slot (`ChatFrame.xml:121`, the IME language
-    // indicator) is refused, because benilla has no IME to fire it.
-    const KNOWN: [&str; 1] = ["OnInputLanguageChanged"];
+    // Every gap of ours this entry still warns about, by a fragment of its line; none now.
+    const KNOWN: [&str; 0] = [];
 
     let unexpected: Vec<String> = script
         .diagnostics()

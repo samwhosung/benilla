@@ -232,10 +232,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `SetScript(name, func)`: stores the closure under one of [`SCRIPT_KINDS`], else raises.
-/// Deviation: a real 1.12 kind nothing fires yet raises too (`OnInputLanguageChanged`), because
-/// an accepted handler that never runs fails silently. The movie frame's three are accepted all the same: the stock XML sets them, and its player ([`super::super::movieframe`])
-/// is the one thing that fires them. `OnAttributeChanged` is 2.0's, with no 1.12 slot.
+/// `SetScript(name, func)`: stores the closure under one of [`SCRIPT_KINDS`], else raises. The
+/// movie frame's three are accepted: the stock XML sets them, and its player
+/// ([`super::super::movieframe`]) is the one thing that fires them. `OnAttributeChanged` is 2.0's,
+/// with no 1.12 slot.
 fn set_script(lua: &Lua, this: &Table, name: &str, func: Option<Function>) -> mlua::Result<()> {
     let kind = SCRIPT_KINDS
         .iter()

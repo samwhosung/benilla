@@ -502,7 +502,7 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// ScrollFrame's three scroll kinds are `+0x32c`/`+0x334`/`+0x33c` (script-name map `0x786c40`).
 /// The EditBox's vtable (`0x81c910`) replaces the key and char slots: an EditBox never fires
 /// `OnKeyDown`, and fires `OnChar` only from `Insert`, with the inserted text (`0x77c13c`).
-const SCRIPT_KINDS: [&str; 45] = [
+const SCRIPT_KINDS: [&str; 46] = [
     "OnLoad",
     "OnEvent",
     "OnUpdate",
@@ -532,6 +532,10 @@ const SCRIPT_KINDS: [&str; 45] = [
     "OnCursorChanged",
     "OnEditFocusGained",
     "OnEditFocusLost",
+    // The EditBox's input-method slot (script map `0x77a310`, `0x77a40d`, `+0x430`), fired only
+    // when an input-method event changes the box's language (`0x77abb0`, stored at `0x77abf2`).
+    // benilla has no input method, so it is stored and never runs, as on a western layout.
+    "OnInputLanguageChanged",
     "OnHorizontalScroll",
     "OnVerticalScroll",
     "OnScrollRangeChanged",
