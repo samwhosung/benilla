@@ -385,11 +385,10 @@ fn a_drawn_pane_composites_its_own_target_at_its_own_rect() {
                 layer: 1,
                 camera: Entity::PLACEHOLDER,
                 size: UVec2::ONE,
-                aimed: None,
+                view: None,
                 built: None,
                 stand_in: None,
                 turn: Turn::default(),
-                pose: None,
             },
         );
         requests.insert(
@@ -400,6 +399,7 @@ fn a_drawn_pane_composites_its_own_target_at_its_own_rect() {
                 alpha: 0.6,
                 clip: Some(Rect::new(0.0, 0.0, 100.0, 100.0)),
                 size_px: UVec2::new(233, 224),
+                units: Default::default(),
             },
         );
     }
@@ -544,6 +544,7 @@ impl Harness {
                     alpha: 1.0,
                     clip: None,
                     size_px: UVec2::new(233, 224),
+                    units: Default::default(),
                 },
             );
         }
@@ -637,12 +638,47 @@ fn a_pane_is_aimed_on_the_frame_it_opens() {
     h.pass();
     let world = h.app.world_mut();
     let booth = &world.resource::<PaneBooths>().panes[&pane];
-    let (entity, aimed) = (booth.camera, booth.aimed);
-    assert!(aimed.is_some(), "the opening pass records the aim");
+    let (entity, aimed) = (booth.camera, booth.view.is_some());
+    assert!(aimed, "the opening pass records the aim");
     assert!(
         matches!(world.get::<Projection>(entity), Some(Projection::Custom(_))),
         "the camera wears the body frame on the opening frame, not its spawn pose"
     );
+}
+
+/// The leg pane `h`'s booth camera draws through: orthographic or not.
+fn ortho_leg(h: &mut Harness, pane: FrameHandle) -> bool {
+    let world = h.app.world_mut();
+    let camera = world.resource::<PaneBooths>().panes[&pane].camera;
+    match world.get::<Projection>(camera) {
+        Some(Projection::Orthographic(_)) => true,
+        Some(Projection::Custom(_)) => false,
+        other => panic!("not an aimed camera: {other:?}"),
+    }
+}
+
+/// `SetCamera(n)` after `SetUnit` installs raw camera `n` on the copy (`0x76cec0`); past the
+/// copy's table (this one has none) there is no camera, so the booth takes the orthographic leg
+/// (`0x76d5f0`). `RefreshUnit`'s build installs the pane's own camera again (`0x505890`).
+#[test]
+fn set_camera_aims_the_booth_through_the_copys_camera_until_the_next_build() {
+    let mut h = Harness::new(
+        r#"m = CreateFrame("PlayerModel", "Portrait3D", UIParent) m:SetUnit("player") m:SetCamera(99)"#,
+    );
+    let pane = h.handle(Some("Portrait3D"));
+    h.frame();
+    assert!(
+        ortho_leg(&mut h, pane),
+        "no camera 99: the orthographic leg"
+    );
+
+    h.run("m:RefreshUnit()");
+    h.frame();
+    assert!(!ortho_leg(&mut h, pane), "the build's own camera");
+
+    h.run("m:SetCamera(0)");
+    h.frame();
+    assert!(ortho_leg(&mut h, pane), "on the copy that stands, at once");
 }
 
 /// The hide hook drops the copy (`0x505ce0`) and the booth with it; the show hook builds again

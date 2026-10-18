@@ -5,9 +5,13 @@
 //! - [`body_frame`]: a `<PlayerModel>` pane, raw `cameras[1]` verbatim, else the client's fixed
 //!   rig (`0x505890`).
 
+use std::sync::Arc;
+
 use bevy::camera::{CameraProjection, PerspectiveProjection, Projection, SubCameraView};
 use bevy::math::Vec3A;
 use bevy::prelude::*;
+
+use benilla_ui::widget::CopyCamera;
 
 /// Vertical FOV (radians, about 29°) of the heuristic camera for a camera-less model.
 pub(super) const PORTRAIT_FOV: f32 = 0.5;
@@ -63,7 +67,7 @@ pub(super) fn stock_pane_view(full_w: u32, full_h: u32, pane: [f32; 4]) -> Optio
 /// custom [`CameraProjection`] because Bevy re-derives `aspect_ratio` from the square render
 /// target on every write; `update` is a no-op, as the client's bake emits the same matrix at any
 /// window size.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WowPortraitProjection {
     /// The M2 record's fov (radians), a diagonal angle, not fovy.
     pub(super) fov: f32,
@@ -125,8 +129,9 @@ impl CameraProjection for WowPortraitProjection {
 pub(crate) struct PortraitAnchors {
     /// The round portrait's authored camera, `cameraLookup[0]`; `None` uses the heuristic fields.
     pub(crate) camera: Option<benilla_assets::PortraitCamera>,
-    /// The body pane's authored camera, raw index 1; `None` uses [`body_frame`]'s fixed rig.
-    pub(crate) pane_camera: Option<benilla_assets::PortraitCamera>,
+    /// The model's camera table by raw index, each record at rest: index 1 is the body pane's own
+    /// camera (`0x505890`), else [`body_frame`]'s fixed rig; `SetCamera(n)` names any.
+    pub(crate) cameras: Arc<[benilla_assets::PortraitCamera]>,
     /// The MD20 header bbox centre, the fixed pane camera's look-at target.
     pub(crate) bbox_center: Vec3,
     /// The bind-pose head anchor ([`head_anchor`]) the heuristic framing aims at.
@@ -135,6 +140,13 @@ pub(crate) struct PortraitAnchors {
     pub(crate) pivot_height: f32,
     /// Footprint radius, a size hint for the heuristic standoff.
     pub(crate) ground_radius: f32,
+}
+
+impl PortraitAnchors {
+    /// Raw camera `idx` of the table (`0x713590`), not through `cameraLookup`.
+    pub(crate) fn raw_camera(&self, idx: u32) -> Option<benilla_assets::PortraitCamera> {
+        self.cameras.get(usize::try_from(idx).ok()?).copied()
+    }
 }
 
 /// A bone's bind-pose position in Bevy space: the rest skeleton is pure translations, so summing
@@ -275,7 +287,7 @@ pub(super) fn body_frame(a: &PortraitAnchors, aspect: f32) -> (Transform, Projec
 /// re-latches it without a re-bake. 1.0 with an authored camera, where [`pane_model_scale`]
 /// cancels.
 pub(super) fn pane_root_scale(a: &PortraitAnchors, display_aspect: f32) -> f32 {
-    if a.pane_camera.is_some() {
+    if a.raw_camera(1).is_some() {
         1.0
     } else {
         pane_model_scale(display_aspect)
@@ -284,7 +296,7 @@ pub(super) fn pane_root_scale(a: &PortraitAnchors, display_aspect: f32) -> f32 {
 
 /// The camera a body pane renders through: authored `cameras[1]`, else the fixed rig.
 pub(super) fn pane_camera(a: &PortraitAnchors) -> benilla_assets::PortraitCamera {
-    a.pane_camera.unwrap_or(benilla_assets::PortraitCamera {
+    a.raw_camera(1).unwrap_or(benilla_assets::PortraitCamera {
         eye: benilla_assets::coords::wow_to_bevy(PANE_FIXED_EYE_WOW),
         target: a.bbox_center,
         roll: 0.0,
@@ -308,6 +320,106 @@ pub(crate) fn pane_projection(
         near: cam.near,
         far: cam.far,
         aspect,
+    }
+}
+
+/// A body pane's model-unit ladder, the tile's own (`crate::ui_models::TileRequest`): where the
+/// live and orthographic legs put the root (`0x76d1a0`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct PaneUnits {
+    /// The orthographic leg's device px per model unit, `1280 · modelScale · layoutScale`.
+    pub(crate) px_per_unit: f32,
+    /// Device px per `SetPosition` unit, `768 · √(a²+1) · layoutScale`.
+    pub(crate) pos_px_per_unit: f32,
+    /// `SetPosition`, layout units.
+    pub(crate) position: Vec3,
+    /// The perspective root's scale, `G48 · (5/3) · modelScale · layoutScale`.
+    pub(crate) root_scale: f32,
+    /// The perspective root's translation, `SetPosition · layoutScale`, model units.
+    pub(crate) root_pos: Vec3,
+}
+
+/// What a body pane's camera projects through.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum BodyProjection {
+    Perspective(WowPortraitProjection),
+    /// The orthographic leg over a target this many pixels wide and high.
+    Ortho(Vec2),
+}
+
+/// A body pane's root and camera, as the booth applies them.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct BodyView {
+    pub(super) root: Transform,
+    pub(super) camera: Transform,
+    pub(super) projection: BodyProjection,
+}
+
+impl BodyView {
+    pub(super) fn bevy_projection(&self) -> Projection {
+        match &self.projection {
+            BodyProjection::Perspective(p) => Projection::custom(p.clone()),
+            BodyProjection::Ortho(size) => crate::ui_models::ortho_camera(*size).1,
+        }
+    }
+}
+
+/// A body pane's view through the camera its copy holds (`+0x31c`), the paint's leg (`0x76d5f0`):
+///
+/// - the pane's own ([`CopyCamera::Pane`]): [`body_frame`], frozen in the model's unrotated
+///   frame, so the facing turns the figure, and the root takes [`pane_root_scale`];
+/// - a raw camera the table holds: live, its eye and target riding the root
+///   ([`crate::ui_models::live_camera_rig`]), so facing, `SetModelScale` and `SetPosition` cancel;
+/// - an index past the table: no camera, the orthographic leg over the `target`-pixel target,
+///   at `scale` target pixels per device pixel.
+///
+/// The perspective legs run at the target's aspect, the pane's own.
+pub(super) fn body_view(
+    a: &PortraitAnchors,
+    camera: CopyCamera,
+    facing: f32,
+    display_aspect: f32,
+    units: &PaneUnits,
+    target: Vec2,
+    scale: f32,
+) -> BodyView {
+    let aspect = target.x / target.y;
+    match camera {
+        CopyCamera::Pane => {
+            let (camera, _) = body_frame(a, aspect);
+            BodyView {
+                root: Transform::from_rotation(Quat::from_rotation_y(facing))
+                    .with_scale(Vec3::splat(pane_root_scale(a, display_aspect))),
+                camera,
+                projection: BodyProjection::Perspective(pane_projection(&pane_camera(a), aspect)),
+            }
+        }
+        CopyCamera::Raw(idx) => match a.raw_camera(idx) {
+            Some(record) => {
+                let root =
+                    crate::ui_models::perspective_root(units.root_pos, facing, units.root_scale);
+                let rig = crate::ui_models::live_camera_rig(&record, root, aspect);
+                BodyView {
+                    root: rig.root,
+                    camera: rig.camera,
+                    projection: BodyProjection::Perspective(rig.projection),
+                }
+            }
+            None => {
+                let (camera, _) = crate::ui_models::ortho_camera(target);
+                BodyView {
+                    root: crate::ui_models::ortho_root(
+                        Vec2::ZERO,
+                        units.position,
+                        units.pos_px_per_unit * scale,
+                        facing,
+                        units.px_per_unit * scale,
+                    ),
+                    camera,
+                    projection: BodyProjection::Ortho(target),
+                }
+            }
+        },
     }
 }
 
@@ -341,6 +453,11 @@ mod tests {
         pane_camera: Option<benilla_assets::PortraitCamera>,
         bbox_center: Vec3,
     ) -> PortraitAnchors {
+        // Camera 0 is a portrait record a pane rig must not read in place of camera 1.
+        let cameras: Arc<[_]> = match pane_camera {
+            Some(c) => vec![cam([1.0, 0.0, 1.7], [0.0, 0.0, 1.7], 0.6), c].into(),
+            None => Arc::new([]),
+        };
         PortraitAnchors {
             // The heuristic fields are populated so a pane rig that reads them fails these tests.
             camera: Some(cam(
@@ -348,7 +465,7 @@ mod tests {
                 [0.0627, 0.0343, 1.8636],
                 0.785,
             )),
-            pane_camera,
+            cameras,
             bbox_center,
             head: Some(Vec3::new(0.0, 1.75, 0.0)),
             pivot_height: 1.90,
@@ -492,6 +609,125 @@ mod tests {
                 "the fixed fallback camera does not"
             );
         }
+    }
+
+    /// The clip-space position of model-local `p` through a body view.
+    fn view_ndc(v: &BodyView, p: Vec3) -> Vec2 {
+        let BodyProjection::Perspective(proj) = &v.projection else {
+            panic!("not a perspective leg");
+        };
+        let clip = proj.get_clip_from_view()
+            * v.camera.to_matrix().inverse()
+            * v.root.to_matrix()
+            * p.extend(1.0);
+        Vec2::new(clip.x / clip.w, clip.y / clip.w)
+    }
+
+    /// `SetCamera(0)` on a body pane installs raw camera 0 live (`0x76cec0` → `0x713590`): the
+    /// picture is camera 0's, and the facing, `SetModelScale` and `SetPosition` cancel in it
+    /// (`0x718960`), where the pane's own frozen camera 1 shows the facing.
+    #[test]
+    fn a_raw_camera_frames_the_pane_live_and_the_root_cancels() {
+        let human = cam([3.6585, 0.0338, 0.9227], [-0.3644, 0.0291, 0.9873], 0.97991);
+        let a = anchors_with(Some(human), Vec3::ZERO);
+        let head = cam([1.0, 0.0, 1.7], [0.0, 0.0, 1.7], 0.6);
+        let target = Vec2::new(233.0, 224.0);
+        let units = |scale: f32, pos: Vec3| PaneUnits {
+            root_scale: scale,
+            root_pos: pos,
+            ..PaneUnits::default()
+        };
+        let view = |camera, facing, u: &PaneUnits| {
+            body_view(&a, camera, facing, 16.0 / 9.0, u, target, 1.0)
+        };
+        let probes = [Vec3::new(0.0, 1.7, 0.0), Vec3::new(0.2, 1.5, 0.1)];
+
+        let base = view(CopyCamera::Raw(0), 0.0, &units(1.0, Vec3::ZERO));
+        assert!(
+            base.camera.translation.distance(head.eye) < 1e-5,
+            "through camera 0's eye, not camera 1's: {:?}",
+            base.camera.translation
+        );
+        assert_eq!(
+            base.projection,
+            BodyProjection::Perspective(pane_projection(&head, target.x / target.y))
+        );
+        for (facing, u) in [
+            (1.1, units(1.0, Vec3::ZERO)),
+            (-0.4, units(0.817_102, Vec3::ZERO)),
+            (0.7, units(2.5, Vec3::new(0.3, -0.2, 0.5))),
+        ] {
+            let moved = view(CopyCamera::Raw(0), facing, &u);
+            for p in probes {
+                let (a, b) = (view_ndc(&base, p), view_ndc(&moved, p));
+                assert!(
+                    a.distance(b) < 1e-4,
+                    "facing {facing}, root {:?} moved the picture: {a} vs {b}",
+                    u.root_pos
+                );
+            }
+        }
+
+        // The pane's own camera is frozen: the facing turns the figure in it.
+        let own = view(CopyCamera::Pane, 0.0, &units(1.0, Vec3::ZERO));
+        let turned = view(CopyCamera::Pane, 1.1, &units(1.0, Vec3::ZERO));
+        assert_eq!(
+            (own.camera, own.root.scale),
+            (body_frame(&a, target.x / target.y).0, Vec3::ONE)
+        );
+        assert!(view_ndc(&own, probes[1]).distance(view_ndc(&turned, probes[1])) > 1e-3);
+    }
+
+    /// An index at or past the camera count installs no camera (`0x76ceeb` → `0x76ce80(NULL)`),
+    /// so the pane takes the orthographic leg (`0x76d5f0`): `1280 · modelScale · layoutScale`
+    /// units per model unit, from the pane's bottom-left plus `SetPosition`.
+    #[test]
+    fn a_camera_past_the_table_draws_the_orthographic_leg() {
+        let human = cam([3.6585, 0.0338, 0.9227], [-0.3644, 0.0291, 0.9873], 0.97991);
+        let units = PaneUnits {
+            px_per_unit: 1280.0,
+            pos_px_per_unit: 1280.0,
+            position: Vec3::new(0.01, 0.02, 0.0),
+            root_scale: 1.0,
+            root_pos: Vec3::ZERO,
+        };
+        let target = Vec2::new(233.0, 224.0);
+        for a in [
+            anchors_with(Some(human), Vec3::ZERO),
+            anchors_with(None, Vec3::ZERO),
+        ] {
+            for idx in [2, 99, u32::MAX] {
+                let v = body_view(
+                    &a,
+                    CopyCamera::Raw(idx),
+                    0.3,
+                    4.0 / 3.0,
+                    &units,
+                    target,
+                    0.5,
+                );
+                assert_eq!(v.projection, BodyProjection::Ortho(target), "camera {idx}");
+                assert_eq!(
+                    v.root.scale,
+                    Vec3::splat(640.0),
+                    "the ladder at the target's pixels"
+                );
+                assert!(v.root.translation.distance(Vec3::new(6.4, 12.8, 0.0)) < 1e-4);
+                assert_eq!(v.camera.translation, Vec3::new(116.5, 112.0, 1000.0));
+            }
+        }
+        // A model with no camera 0 has none to name either.
+        let none = anchors_with(None, Vec3::ZERO);
+        let v = body_view(
+            &none,
+            CopyCamera::Raw(0),
+            0.0,
+            4.0 / 3.0,
+            &units,
+            target,
+            1.0,
+        );
+        assert_eq!(v.projection, BodyProjection::Ortho(target));
     }
 
     /// The pet pane (318×224), the character pane (233×224) and the round portrait (1:1).

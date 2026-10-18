@@ -1222,12 +1222,30 @@ fn convert_entry(
                 });
                 return;
             }
+            // The model-unit ladder `0x76d1a0` derives, shared by a file's tile and a copy's
+            // booth.
+            let dpi = booths.tiles.dpi.max(0.01);
+            let aspect = if h > 0.0 { w / h } else { 4.0 / 3.0 };
+            let diag = (aspect * aspect + 1.0).sqrt();
+            let layout = eq.scale;
+            let units = crate::portrait::PaneUnits {
+                // 1 model unit is `1280 · modelScale · layoutScale` FrameXML units (`0x76d1a0`).
+                px_per_unit: 1280.0 * model_scale * layout * s * dpi,
+                // `SetPosition` is in layout units: `768 · √(a²+1)` FrameXML per unit.
+                pos_px_per_unit: 768.0 * diag * layout * s * dpi,
+                position: Vec3::new(position.0, position.1, position.2),
+                // The perspective root, in model units: translate `pos · layoutScale`, rotate
+                // `facing`, scale `G48 · (5/3) · modelScale · layoutScale`, where `G48 · (5/3)` is
+                // the 4:3 renormalizer `√((4/3)²+1)/√(a²+1)` (`0x80655c`); the near and far planes
+                // do not scale with it.
+                root_scale: (5.0 / 3.0) / diag * model_scale * layout,
+                root_pos: Vec3::new(position.0, position.1, position.2) * layout,
+            };
             // A character pane publishes an idempotent request; `portrait::panes` builds the
             // pane's booth and draws its quad each frame the engine lists the pane with a copy.
             // Published with a file too: a `SetUnit` pending over it builds the copy that
             // replaces the file.
             if character && rect.width() > 0.0 && rect.height() > 0.0 {
-                let dpi = booths.tiles.dpi.max(0.01);
                 booths.character.insert(
                     handle,
                     crate::portrait::PaneRequest {
@@ -1240,6 +1258,7 @@ fn convert_entry(
                             (rect.width() * dpi).round().max(1.0) as u32,
                             (rect.height() * dpi).round().max(1.0) as u32,
                         ),
+                        units,
                     },
                 );
             }
@@ -1247,10 +1266,6 @@ fn convert_entry(
             // its quad each frame, so a cell packed later needs no re-conversion.
             if let Some(path) = model.as_deref() {
                 let tiles = &mut booths.tiles;
-                let dpi = tiles.dpi.max(0.01);
-                let aspect = if h > 0.0 { w / h } else { 4.0 / 3.0 };
-                let diag = (aspect * aspect + 1.0).sqrt();
-                let layout = eq.scale;
                 let size_px = UVec2::new(
                     (rect.width() * dpi).round().max(1.0) as u32,
                     (rect.height() * dpi).round().max(1.0) as u32,
@@ -1260,21 +1275,14 @@ fn convert_entry(
                     crate::ui_models::TileRequest {
                         path: path.to_string(),
                         size_px,
-                        // 1 model unit is `1280 · modelScale · layoutScale` FrameXML units
-                        // (`0x76d1a0`).
-                        px_per_unit: 1280.0 * model_scale * layout * s * dpi,
-                        // `SetPosition` is in layout units: `768 · √(a²+1)` FrameXML per unit.
-                        pos_px_per_unit: 768.0 * diag * layout * s * dpi,
+                        px_per_unit: units.px_per_unit,
+                        pos_px_per_unit: units.pos_px_per_unit,
                         // A particle's half-extent: eye space, neither scale (`0x7b2a50`).
                         star_px_per_unit: 768.0 * diag * s * dpi,
                         facing,
-                        position: Vec3::new(position.0, position.1, position.2),
-                        // The perspective root, in model units: translate `pos · layoutScale`,
-                        // rotate `facing`, scale `G48 · (5/3) · modelScale · layoutScale`, where
-                        // `G48 · (5/3)` is the 4:3 renormalizer `√((4/3)²+1)/√(a²+1)`
-                        // (`0x80655c`); the near and far planes do not scale with it.
-                        root_scale: (5.0 / 3.0) / diag * model_scale * layout,
-                        root_pos: Vec3::new(position.0, position.1, position.2) * layout,
+                        position: units.position,
+                        root_scale: units.root_scale,
+                        root_pos: units.root_pos,
                         camera,
                         light,
                         fog,

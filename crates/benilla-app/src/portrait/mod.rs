@@ -40,7 +40,8 @@ use benilla_assets::materials::WowModelMaterial;
 
 mod framing;
 pub(crate) use framing::{
-    attachment_point, head_anchor, pane_projection, PortraitAnchors, WowPortraitProjection,
+    attachment_point, head_anchor, pane_projection, PaneUnits, PortraitAnchors,
+    WowPortraitProjection,
 };
 use framing::{body_frame, frame, PORTRAIT_FOV};
 mod booth;
@@ -431,7 +432,7 @@ fn booth_anchors(
     let Some(display_id) = display_id else {
         return Some(PortraitAnchors {
             camera: None,
-            pane_camera: None,
+            cameras: std::sync::Arc::new([]),
             bbox_center: Vec3::ZERO,
             head: None,
             pivot_height: 0.0,

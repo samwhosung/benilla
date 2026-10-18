@@ -1079,22 +1079,7 @@ fn sync_tiles(
                 .add(new_target_image_sized(atlas_size.x, atlas_size.y));
             for (_, mut target, mut proj, mut tf) in &mut cams {
                 *target = RenderTarget::Image(image.clone().into());
-                *proj = Projection::Orthographic(OrthographicProjection {
-                    near: 0.1,
-                    far: 2000.0,
-                    scaling_mode: ScalingMode::Fixed {
-                        width: atlas_size.x as f32,
-                        height: atlas_size.y as f32,
-                    },
-                    ..OrthographicProjection::default_3d()
-                });
-                // The camera looks down `−Z` at the atlas plane, centred; a tile at world
-                // `(x, y)` lands at texel `(x, H − y)`.
-                *tf = Transform::from_xyz(
-                    atlas_size.x as f32 * 0.5,
-                    atlas_size.y as f32 * 0.5,
-                    1000.0,
-                );
+                (*tf, *proj) = ortho_camera(atlas_size.as_vec2());
             }
             bridge.atlas = Some(image);
         }
@@ -1190,20 +1175,17 @@ fn sync_tiles(
                 );
             }
         } else {
-            // The root: the cell's bottom-left plus `SetPosition` (layout units), in camera space.
             let cell_bl = Vec2::new(
                 cell.origin.x as f32,
                 atlas_h - (cell.origin.y + cell.size.y) as f32,
             );
-            let pos = Vec2::new(req.position.x, req.position.y) * req.pos_px_per_unit;
-            let depth = req.position.z * req.pos_px_per_unit;
-            // `T(pos) · R(facing about WoW +Z) · S(px per unit)`: the facing turns about bevy
-            // `+Y` (WoW's `+Z`), then the axis fix, then the scale.
-            *tf = Transform {
-                translation: Vec3::new(cell_bl.x + pos.x, cell_bl.y + pos.y, depth),
-                rotation: wow_to_screen() * Quat::from_rotation_y(req.facing),
-                scale: Vec3::splat(req.px_per_unit),
-            };
+            *tf = ortho_root(
+                cell_bl,
+                req.position,
+                req.pos_px_per_unit,
+                req.facing,
+                req.px_per_unit,
+            );
             *vis = Visibility::Visible;
         }
         if let Some(mut player) = player {
@@ -1381,15 +1363,50 @@ fn sync_tiles(
     );
 }
 
+/// The orthographic leg's root in camera space, pixels, `y` up: the pane's bottom-left `origin`
+/// plus `SetPosition` (layout units), then `T(pos) · R(facing about WoW +Z) · S(px per unit)`;
+/// the facing turns about bevy `+Y` (WoW's `+Z`), then the axis fix, then the scale.
+pub(crate) fn ortho_root(
+    origin: Vec2,
+    position: Vec3,
+    pos_px_per_unit: f32,
+    facing: f32,
+    px_per_unit: f32,
+) -> Transform {
+    let pos = position * pos_px_per_unit;
+    Transform {
+        translation: Vec3::new(origin.x + pos.x, origin.y + pos.y, pos.z),
+        rotation: wow_to_screen() * Quat::from_rotation_y(facing),
+        scale: Vec3::splat(px_per_unit),
+    }
+}
+
+/// The orthographic leg's camera over a `size`-pixel target, looking down `−Z` from its centre,
+/// so a root at `(x, y)` lands at texel `(x, H − y)`.
+pub(crate) fn ortho_camera(size: Vec2) -> (Transform, Projection) {
+    (
+        Transform::from_xyz(size.x * 0.5, size.y * 0.5, 1000.0),
+        Projection::Orthographic(OrthographicProjection {
+            near: 0.1,
+            far: 2000.0,
+            scaling_mode: ScalingMode::Fixed {
+                width: size.x,
+                height: size.y,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
+    )
+}
+
 /// The perspective leg's rig, pure so the reference's worked numbers test without a world.
-struct PerspectiveRig {
+pub(crate) struct PerspectiveRig {
     /// The model's root, `T(pos · layoutScale) · R(facing, +Z) · S(s)` in Bevy model space:
     /// `0x76d1a0`'s `model+0xbc` without the orthographic leg's pixel ladder.
-    root: Transform,
+    pub(crate) root: Transform,
     /// The camera, `lookAt(eye, target, up)`, with the eye as the view origin.
-    camera: Transform,
+    pub(crate) camera: Transform,
     /// The record's projection at the pane's own width/height.
-    projection: WowPortraitProjection,
+    pub(crate) projection: WowPortraitProjection,
 }
 
 /// Build the rig. The authored eye and target ride the root transform (`0x718960` publishes
@@ -1408,11 +1425,29 @@ fn perspective_rig(
     req: &TileRequest,
     aspect: f32,
 ) -> PerspectiveRig {
-    let root = Transform {
-        translation: benilla_assets::coords::wow_to_bevy(req.root_pos.to_array()),
-        rotation: Quat::from_rotation_y(req.facing),
-        scale: Vec3::splat(req.root_scale),
-    };
+    live_camera_rig(
+        record,
+        perspective_root(req.root_pos, req.facing, req.root_scale),
+        aspect,
+    )
+}
+
+/// The perspective leg's root, `T(root_pos) · R(facing about WoW +Z) · S(root_scale)`, with
+/// `root_pos` in WoW model units.
+pub(crate) fn perspective_root(root_pos: Vec3, facing: f32, root_scale: f32) -> Transform {
+    Transform {
+        translation: benilla_assets::coords::wow_to_bevy(root_pos.to_array()),
+        rotation: Quat::from_rotation_y(facing),
+        scale: Vec3::splat(root_scale),
+    }
+}
+
+/// [`perspective_rig`] on any root: a live camera, whose eye and target ride `root`.
+pub(crate) fn live_camera_rig(
+    record: &benilla_assets::PortraitCamera,
+    root: Transform,
+    aspect: f32,
+) -> PerspectiveRig {
     let m = root.to_matrix();
     let (eye, target) = (
         m.transform_point3(record.eye),

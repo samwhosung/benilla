@@ -1777,7 +1777,7 @@ pub(super) fn sync_glue_booth(
         // bake's aspect, as it shows only for the frames before the scene's camera takes over.
         let (t, _) = body_frame(&anchors, 1.0);
         let record_fov = anchors
-            .pane_camera
+            .raw_camera(1)
             .map_or(super::framing::PANE_FIXED_FOV, |c| c.fov);
         if !scene.as_deref().is_some_and(|s| s.spawned) {
             aim(

@@ -33,6 +33,25 @@ pub struct CharacterPane {
     /// The last arm made while a copy is on its way: the reference builds inside `SetUnit` and the
     /// show hook, so an arm in the same chunk lands on the new copy, after its Stand.
     pub queued: Option<QueuedArm>,
+    /// The camera the copy draws through (`+0x31c`): every build's ready hook installs the pane's
+    /// own, and `SetCamera` on a resident copy a raw one.
+    pub camera: CopyCamera,
+    /// The last `SetCamera` made while a copy is on its way, installed on it after its ready hook,
+    /// as the reference's synchronous build orders them.
+    pub queued_camera: Option<CopyCamera>,
+}
+
+/// What a character pane's copy is drawn through ([`CharacterPane::camera`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CopyCamera {
+    /// The ready hook's (`0x505b30` → `0x505890`): a frozen copy of raw camera 1, else the fixed
+    /// camera. Every build installs it, over any index `SetCamera` left pending (`0x50589c`).
+    #[default]
+    Pane,
+    /// `SetCamera(n)`'s raw camera `n`, live (`0x76cec0` → `0x713590`); at or past the copy's
+    /// camera count, none, the orthographic leg. Held unsigned, as the bound's `jae` compares
+    /// (`0x76ceeb`), so a negative `n` is past the count.
+    Raw(u32),
 }
 
 /// An arm held for the copy on its way ([`CharacterPane::queued`]).
@@ -117,6 +136,7 @@ impl CharacterPane {
         if let Some(q) = self.queued.take() {
             self.arm(q.anim_id, q.blend, q.offset_ms);
         }
+        self.camera = self.queued_camera.take().unwrap_or(CopyCamera::Pane);
         true
     }
 
@@ -127,6 +147,10 @@ impl CharacterPane {
         if build == self.builds && build > self.answered {
             self.answered = build;
             self.queued = None;
+            // With no build, a `SetCamera` after the call reached the copy that stays.
+            if let Some(camera) = self.queued_camera.take().filter(|_| self.copy.is_some()) {
+                self.camera = camera;
+            }
         }
     }
 
@@ -136,6 +160,31 @@ impl CharacterPane {
         self.copy = None;
         self.answered = self.builds;
         self.queued = None;
+        self.queued_camera = None;
+    }
+
+    /// `SetCamera(idx)` on the copy (`0x76cec0` with the model resident): installed on the copy
+    /// that stands, or held for the copy on its way. False with neither: `+0x318` is empty, so
+    /// the call only stores the index, which the next build's ready hook overwrites.
+    pub fn set_camera(&mut self, idx: i32) -> bool {
+        let camera = CopyCamera::Raw(idx as u32);
+        if self.pending() {
+            self.queued_camera = Some(camera);
+        } else if self.copy.is_some() {
+            self.camera = camera;
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// The camera the copy at `+0x318` draws through: a copy on its way first, the one queued
+    /// for it else the pane's own it arrives with.
+    pub fn view_camera(&self) -> CopyCamera {
+        if self.pending() {
+            return self.queued_camera.unwrap_or(CopyCamera::Pane);
+        }
+        self.camera
     }
 
     /// What key bone 0 of the copy plays (`0x712090(−1)`): a copy on its way first, its queued arm

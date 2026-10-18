@@ -129,7 +129,7 @@ fn bake_test(
         .unwrap_or((0.0, 0.0));
     let anchors = PortraitAnchors {
         camera: model.portrait_camera,
-        pane_camera: model.pane_camera,
+        cameras: model.cameras.iter().map(|c| c.still).collect(),
         bbox_center: model.bounds.map_or(Vec3::ZERO, |b| {
             benilla_assets::coords::wow_to_bevy([
                 (b.bbox_min[0] + b.bbox_max[0]) * 0.5,

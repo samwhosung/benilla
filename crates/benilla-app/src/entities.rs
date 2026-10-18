@@ -336,8 +336,8 @@ impl Creatures {
     }
 
     /// A built display's booth framing (model-local, pre-scale): its authored cameras, index 0 of
-    /// `cameraLookup` for the round portrait (`0x713540`) and raw index 1 for a `<PlayerModel>`
-    /// pane (`0x505890`), with each path's fallback for a model that has none.
+    /// `cameraLookup` for the round portrait (`0x713540`) and the raw table for a `<PlayerModel>`
+    /// pane (`0x505890`, `SetCamera`), with each path's fallback for a model that has none.
     pub(crate) fn display_anchors(
         &self,
         display_id: u32,
@@ -346,7 +346,7 @@ impl Creatures {
         dm.parts.as_ref()?; // not yet built
         Some(crate::portrait::PortraitAnchors {
             camera: dm.portrait_camera,
-            pane_camera: dm.pane_camera,
+            cameras: dm.cameras.clone(),
             bbox_center: dm.bake_center_local,
             head: crate::portrait::head_anchor(&dm.skeleton, &dm.attachments),
             pivot_height: dm.pivot_height_local,

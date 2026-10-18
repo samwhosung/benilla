@@ -73,10 +73,16 @@ impl Model {
         self.apply_implicit_rect(h);
     }
 
-    /// `SetCamera(idx)` on the pane `h` (`0x76cec0`), against the facts of the file it holds.
+    /// `SetCamera(idx)` on the pane `h` (`0x76cec0`): on a character pane's copy, else against
+    /// the facts of the file it holds.
     pub(crate) fn set_pane_camera(&mut self, h: FrameHandle, idx: i32) {
-        let path = match self.arena.frame(h).map(|f| &f.kind_state) {
-            Some(KindState::Model(m)) => m.path.clone(),
+        let path = match self.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            Some(KindState::Model(m)) => {
+                if m.character.as_mut().is_some_and(|c| c.set_camera(idx)) {
+                    return;
+                }
+                m.path.clone()
+            }
             _ => return,
         };
         let facts = path.and_then(|p| self.model_facts_for(&p));
@@ -414,7 +420,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // `SetCamera(n)` (`0x76e0e0` → `0x76cec0`) picks a camera by raw table index, not through
     // `cameraLookup`; past the table it installs the NULL (orthographic) camera, and until the
-    // facts arrive the pane draws nothing.
+    // facts arrive the pane draws nothing. `PlayerModel` adds no `SetCamera` (`0x84f1fc`), so a
+    // character pane's copy takes this one, until its next build installs the pane's own.
     m.set(
         "SetCamera",
         lua.create_function(|lua, (this, c): (Table, Value)| {
@@ -703,6 +710,7 @@ impl crate::script::UiScript {
                     pending: c.pending(),
                     copy: c.copy,
                     file: m.path.is_some(),
+                    camera: c.view_camera(),
                     facing: m.facing,
                     light: m.light,
                     fog: m.scene_fog(),
@@ -897,6 +905,8 @@ pub struct CharacterPaneFrame {
     pub copy: Option<crate::widget::PaneCopy>,
     /// A file `SetModel` put at `+0x318` since the last copy: the pane draws that, not a copy.
     pub file: bool,
+    /// The camera the copy draws through (`+0x31c`).
+    pub camera: crate::widget::CopyCamera,
     /// The facing, the root's yaw (`+0x39c`).
     pub facing: f32,
     /// The pane's light and the fog its scene draws with.

@@ -4,8 +4,9 @@
 //! The copy duplicates a unit's model (`0x5059a0` → `0x707400`) or a creature display (`0x505a70`).
 //! The engine keeps the pane's state ([`benilla_ui::widget::CharacterPane`]) and the feed lists the
 //! panes ([`crate::ui_panes`]); [`sync_panes`] builds each copy, plays its arms and answers.
-//! The camera is the pane's own (`0x505b30` → `0x505890`, [`super::framing::body_frame`]), the light
-//! its `CGLight` and fog ([`crate::ui_models::PaneLights`]), the target its size in device pixels.
+//! The camera is the one the copy holds (`0x505b30` → `0x505890`, `SetCamera`,
+//! [`super::framing::body_view`]), the light its `CGLight` and fog
+//! ([`crate::ui_models::PaneLights`]), the target its size in device pixels.
 
 use std::collections::HashMap;
 
@@ -24,7 +25,7 @@ use super::booth::{
     spawn_booth_effects, spawn_booth_model, BoothBillboardSpec, BoothEffects, BoothInstance,
     BoothMotion, BoothPart, BoothRider, BoothTwins,
 };
-use super::framing::{body_frame, pane_root_scale, PortraitAnchors, PORTRAIT_FOV};
+use super::framing::{body_view, BodyView, PaneUnits, PortraitAnchors, PORTRAIT_FOV};
 use super::{
     booth_anchors, hand_grip, log_bake, new_target_image_sized, wake_booth, Booth, BoothCam,
     BoothPanes, Booths, DressUpBake, DressedLook, GxAspect, PortraitStandIn, SnapKey,
@@ -63,6 +64,8 @@ pub(crate) struct PaneRequest {
     pub(crate) clip: Option<Rect>,
     /// The rect in whole device pixels: the target's size.
     pub(crate) size_px: UVec2,
+    /// The model-unit ladder the live and orthographic legs place the root by.
+    pub(crate) units: PaneUnits,
 }
 
 /// The extract-to-booth bridge for the character panes, and the VM whose handles key it: a new
@@ -128,15 +131,13 @@ struct PaneBooth {
     camera: Entity,
     /// The target's size in device pixels.
     size: UVec2,
-    /// The aspect the camera is aimed at.
-    aimed: Option<f32>,
+    /// The root's pose and the camera's aim, as last applied.
+    view: Option<BodyView>,
     /// The copy standing in the booth.
     built: Option<Built>,
     /// The display stand-in a display subject is mirrored from.
     stand_in: Option<StandIn>,
     turn: Turn,
-    /// The root's applied `(yaw, scale)`.
-    pose: Option<(f32, f32)>,
 }
 
 /// What a booth's copy was built from.
@@ -482,6 +483,20 @@ pub(super) fn sync_panes(
             booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
         }
         let aspect = size.x as f32 / size.y as f32;
+        // The view through the copy's camera; the target's pixels per device pixel scale the
+        // orthographic ladder of a capped target.
+        let display_aspect = render.gx.0;
+        let view_of = move |anchors: &PortraitAnchors| {
+            body_view(
+                anchors,
+                pane.camera,
+                pane.facing,
+                display_aspect,
+                &req.units,
+                size.as_vec2(),
+                size.x as f32 / req.size_px.x as f32,
+            )
+        };
 
         // ── The subject the latest request names ────────────────────────────────────────
         let subject = if pane.guid != 0 {
@@ -541,14 +556,14 @@ pub(super) fn sync_panes(
                     &source,
                     scene,
                 ) {
-                    aim(&mut commands, booth_pane, &anchors, aspect);
+                    booth_pane.view = None;
+                    place(&mut commands, booth_pane, booth, view_of(&anchors));
                     booth_pane.built = Some(Built {
                         build: pane.builds,
                         look,
                         scene,
                         anchors,
                     });
-                    booth_pane.pose = None;
                     spawned = true;
                     // The copy goes to `+0x318` with Stand armed (`0x5059a0`). A re-dress or a
                     // new light keeps the engine's copy, whose arm the fresh player replays.
@@ -560,30 +575,18 @@ pub(super) fn sync_panes(
         }
 
         // ── Draw: the copy the engine holds, posed, played and composited ───────────────────
-        let Some((built_for, anchors)) = booth_pane
+        let Some((built_for, view)) = booth_pane
             .built
             .as_ref()
-            .map(|b| (b.build, b.anchors.clone()))
+            .map(|b| (b.build, view_of(&b.anchors)))
         else {
             continue;
         };
         let Some(copy) = pane.copy.filter(|c| c.build <= built_for) else {
             continue; // the engine holds no copy (`ClearModel`): nothing at `+0x318`
         };
-        if booth_pane.aimed != Some(aspect) {
-            aim(&mut commands, booth_pane, &anchors, aspect);
-        }
-        // The root, the widget's `T(pos)·R(facing)·S(s)` with `pos` at the origin; `s` is the 4:3
-        // renormalizer on the fixed camera ([`pane_root_scale`]).
-        let scale = pane_root_scale(&anchors, render.gx.0);
-        if booth_pane.pose != Some((pane.facing, scale)) {
-            commands.entity(booth.root).insert(
-                Transform::from_rotation(Quat::from_rotation_y(pane.facing))
-                    .with_scale(Vec3::splat(scale)),
-            );
-            booth_pane.pose = Some((pane.facing, scale));
-            booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
-        }
+        // The root, the widget's `T(pos)·R(facing)·S(s)`, and the camera it is seen through.
+        place(&mut commands, booth_pane, booth, view);
         // The arms, once the copy's player is up (the frame after its spawn).
         if let (false, Ok((mut player, anims)), Some(anim_data)) = (
             spawned,
@@ -684,11 +687,10 @@ fn open(
         layer,
         camera,
         size,
-        aimed: None,
+        view: None,
         built: None,
         stand_in: None,
         turn: Turn::default(),
-        pose: None,
     }
 }
 
@@ -1023,13 +1025,19 @@ fn build(
     Some(anchors)
 }
 
-/// Aim a pane's camera through its copy's rig at the pane's aspect. The pose goes in as a command,
-/// so a camera spawned through `Commands` this pass takes it with its spawn and the pane's first
-/// frame composites an aimed view; `try_insert` leaves a camera already despawned alone.
-fn aim(commands: &mut Commands, pane: &mut PaneBooth, anchors: &PortraitAnchors, aspect: f32) {
-    let (tf, proj) = body_frame(anchors, aspect);
-    commands.entity(pane.camera).try_insert((tf, proj));
-    pane.aimed = Some(aspect);
+/// Pose a pane's root and aim its camera at `view`, unless they hold it. The aim goes in as a
+/// command, so a camera spawned through `Commands` this pass takes it with its spawn and the pane's
+/// first frame composites an aimed view; `try_insert` leaves a camera already despawned alone.
+fn place(commands: &mut Commands, pane: &mut PaneBooth, booth: &mut Booth, view: BodyView) {
+    if pane.view.as_ref() == Some(&view) {
+        return;
+    }
+    commands.entity(booth.root).insert(view.root);
+    commands
+        .entity(pane.camera)
+        .try_insert((view.camera, view.bevy_projection()));
+    booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
+    pane.view = Some(view);
 }
 
 /// The composite: each drawn pane's target at the pane's rect, premultiplied, at the frame's own
