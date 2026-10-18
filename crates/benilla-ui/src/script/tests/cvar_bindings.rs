@@ -116,8 +116,8 @@ fn get_cvar_default_raises_the_reference_usage_without_a_name() {
     assert_eq!(s.eval::<String>("return GetCVarDefault(5)").unwrap(), "a");
 }
 
-/// Flag bit2 (`0x488c67`-`0x488c78`): the in-game session flags three rows (`0x48f566`), and
-/// only the Lua binding tests it; before the flag the same write lands.
+/// Flag bit2 (`0x488c67`-`0x488c78`): the in-game session flags three rows (`0x48f566`); `SetCVar`
+/// raises on one and every other write stores nothing; before the flag the same write lands.
 #[test]
 fn set_cvar_refuses_a_read_only_row_only_once_flagged() {
     let mut s = script_with(&[
@@ -169,17 +169,45 @@ fn set_cvar_refuses_a_read_only_row_only_once_flagged() {
     s.run("SetCVar(\"MusicVolume\", 0.5)").unwrap();
     assert_eq!(get(&s, "MusicVolume"), "0.5", "other rows stay writable");
 
-    // The host's and the console's writes go through `CVar::Set` (`0x63df50`), which never
-    // tests the flag.
+    s.take_cvar_changes();
+    // Every other write goes through `CVar::Set` (`0x63df50`) into `InternalSet`, which returns at
+    // the flag (`0x63e0ba`): an engine write and every console form store nothing, and raise
+    // nothing.
     s.set_cvar_engine("realmList", "logon.example.org");
-    assert_eq!(get(&s, "realmList"), "logon.example.org");
-    s.run("ConsoleExec(\"realmName Elsewhere\")").unwrap();
-    assert_eq!(get(&s, "realmName"), "Elsewhere");
+    s.run(
+        "ConsoleExec(\"realmName Elsewhere\") ConsoleExec(\"set realmName Elsewhere\") \
+         ConsoleExec(\"cvar_default scriptMemory\")",
+    )
+    .unwrap();
+    for name in crate::script::IN_WORLD_READ_ONLY_CVARS {
+        assert_eq!(get(&s, name), "before", "{name} kept its value");
+    }
+    assert!(s.take_cvar_changes().is_empty(), "nothing was written");
+    // The host's mirror sync is not a write.
+    s.set_cvar_host("realmName", "Synced");
+    assert_eq!(get(&s, "realmName"), "Synced");
 
     // `ShutdownGame`'s clear (`0x491252`).
     s.set_cvar_read_only("realmList", false);
     s.run("SetCVar(\"realmList\", \"again\")").unwrap();
     assert_eq!(get(&s, "realmList"), "again");
+}
+
+/// `InternalSet` (`0x63e0b0`) compares with `SStrCmpI` (`0x63e0ec`), so a change of case only
+/// stores and queues nothing; and it never parse-checks, so text on a numeric row is kept.
+#[test]
+fn set_cvar_compares_case_blind_and_keeps_any_text() {
+    let mut s = script_with(&[("myKnob", "foo"), ("MasterVolume", "1.0")]);
+    s.run("SetCVar('myKnob', 'Foo') ConsoleExec('myKnob FOO') ConsoleExec('set myknob fOO')")
+        .unwrap();
+    assert_eq!(get(&s, "myKnob"), "foo");
+    assert!(s.take_cvar_changes().is_empty(), "nothing moved");
+    s.run("SetCVar('MasterVolume', 'wat')").unwrap();
+    assert_eq!(get(&s, "MasterVolume"), "wat");
+    assert_eq!(
+        s.take_cvar_changes(),
+        [("MasterVolume".to_string(), "wat".to_string())]
+    );
 }
 
 /// A re-seed from the host replaces every row, and the flag outlives it, as the reference's

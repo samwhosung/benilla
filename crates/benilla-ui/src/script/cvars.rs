@@ -246,10 +246,11 @@ impl super::UiScript {
         self.model_mut().cvar_lua_created
     }
 
-    /// Flag a CVar read-only to Lua, or clear it: `CVar::SetReadOnly` (`0x63e030`). A flagged name
-    /// makes `SetCVar` raise `"%s" is read-only` (`0x488c67`-`0x488c78`); host and engine writes,
-    /// and `ConsoleExec`, still land, as the reference's `CVar::Set` (`0x63df50`) never tests the
-    /// flag. The name need not be registered yet.
+    /// Flag a CVar read-only, or clear it: `CVar::SetReadOnly` (`0x63e030`). A flagged name makes
+    /// `SetCVar` raise `"%s" is read-only` (`0x488c67`-`0x488c78`), and every other write to it
+    /// (`ConsoleExec`, an engine write) stores nothing, as `CVar::Set` (`0x63df50`) stores through
+    /// `InternalSet`, which returns at the flag (`0x63e0ba`). The host's mirror sync
+    /// ([`Self::set_cvar_host`]) is not a write and passes. The name need not be registered yet.
     pub fn set_cvar_read_only(&mut self, name: &str, read_only: bool) {
         let key = name.to_ascii_lowercase();
         let mut model = self.model_mut();
@@ -319,7 +320,9 @@ pub(super) fn set_from_engine(model: &mut Model, name: &str, value: String) {
 /// and the change was queued. The row's check runs first and may refuse the write, as the
 /// reference's `Set 0x63df50` calls the callback before anything else (`0x63df7d`). A latched
 /// slot stages the write, as `Set` stores `latchedValue` and skips `InternalSet`; writing back the
-/// applied value unstages it.
+/// applied value unstages it. Otherwise it is `InternalSet` (`0x63e0b0`): nothing for a read-only
+/// row (`0x63e0ba`-`0x63e0c2`), nothing for text equal to the value case-blind (`SStrCmpI`,
+/// `0x63e0ec`), and any other text stored as it is, a number or not.
 fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
     let slot = model.cvars.get_mut(key)?;
     if let Some(check) = slot.check {
@@ -330,7 +333,7 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
         }
     }
     if slot.latched {
-        let staged = (value != slot.value).then_some(value.clone());
+        let staged = (!value.eq_ignore_ascii_case(&slot.value)).then_some(value.clone());
         if slot.pending == staged && staged.is_some() {
             return None;
         }
@@ -339,7 +342,7 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
         }
         slot.pending = staged;
     } else {
-        if slot.value == value {
+        if model.cvars_read_only.contains(key) || slot.value.eq_ignore_ascii_case(&value) {
             return None;
         }
         slot.value = value.clone();
@@ -424,7 +427,7 @@ const TOO_MANY_CVARS: &str = "Attempted to register too many CVars";
 /// The CVars `CGGameUI::InitializeGame` flags read-only for the whole world session, the table
 /// at `0x83de4c` walked by `0x48f566`-`0x48f584`; `ShutdownGame` clears them again
 /// (`0x491240`-`0x49125d`). The host flags them on each in-game VM before its UI loads, as
-/// `InitializeGame` does before `UI_Init`.
+/// `InitializeGame` does before `UI_Init`, and on its own registry for the session.
 pub const IN_WORLD_READ_ONLY_CVARS: [&str; 3] = ["realmList", "realmName", "scriptMemory"];
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {

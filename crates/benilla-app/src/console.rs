@@ -174,10 +174,9 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
     );
     lines.extend(match outcome {
         SetOutcome::Unknown => vec![benilla_ui::script::no_such_cvar(name)],
-        SetOutcome::Refused => vec![format!(
-            "console: '{value}' is not a number, and {name} takes one"
-        )],
-        SetOutcome::Unchanged | SetOutcome::Changed | SetOutcome::Vetoed => Vec::new(),
+        SetOutcome::ReadOnly | SetOutcome::Unchanged | SetOutcome::Changed | SetOutcome::Vetoed => {
+            Vec::new()
+        }
         SetOutcome::Staged => vec![format!(
             "{name} staged as \"{value}\" — applies at the next RestartGx"
         )],
@@ -333,9 +332,16 @@ mod tests {
             vec!["console: no CVar named 'nosuchthing'".to_string()],
             "the stated divergence: no record conjured at the console"
         );
+        // `InternalSet` stores text as it is (`0x63e0b0`): no parse check, and the record's float
+        // reads 0.
+        assert!(run(&mut app, "MusicVolume wat").is_empty());
         assert_eq!(
-            run(&mut app, "MusicVolume wat"),
-            vec!["console: 'wat' is not a number, and MusicVolume takes one".to_string()]
+            app.world().resource::<Cvars>().get("MusicVolume"),
+            Some("wat")
+        );
+        assert_eq!(
+            app.world().resource::<Cvars>().num("MusicVolume"),
+            Some(0.0)
         );
         assert_eq!(
             run(&mut app, "  "),

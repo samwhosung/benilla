@@ -379,6 +379,13 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
     crate::minimap::restore_default_mask(world);
     // `InitializeGame` arms the play-time warning before it jumps to `UI_Init` (`0x48f636`-`0x48f681`).
     crate::ui_billing::arm_at_world_entry(world);
+    // `InitializeGame` flags the world session's read-only rows whether or not a UI then loads
+    // (`0x48f566`-`0x48f584`); `end_ui_session` is `ShutdownGame`'s clear. A `/reload` keeps them.
+    if let Some(mut cvars) = world.get_resource_mut::<crate::cvars::Cvars>() {
+        for name in benilla_ui::script::IN_WORLD_READ_ONLY_CVARS {
+            cvars.set_read_only(name, true);
+        }
+    }
     load_ingame_ui_seated(world, LoadSeat::Roster);
 }
 
@@ -437,9 +444,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         script.set_billing_time_rested(billing.0.time_rested);
     }
     // `CGGameUI::InitializeGame` flags these read-only before `UI_Init` loads anything
-    // (`0x48f566`-`0x48f584`), so an in-game `SetCVar` of one raises, logout handlers included;
-    // `ShutdownGame` clears them (`0x491240`), and here the flags die with this VM. The host's
-    // own realm writes are engine writes, which the flag does not stop.
+    // (`0x48f566`-`0x48f584`), so an in-game `SetCVar` of one raises, logout handlers included,
+    // and no other write stores; `ShutdownGame` clears them (`0x491240`). The VM's flags die with
+    // it (the registry's are [`load_ingame_ui_on_world_entry`]'s). After `set_realm_name`, whose
+    // write is the world entry's own.
     for name in benilla_ui::script::IN_WORLD_READ_ONLY_CVARS {
         script.set_cvar_read_only(name, true);
     }
@@ -816,6 +824,13 @@ pub(crate) fn shutdown_ui_state(script: &mut UiScript, identity: Option<&(String
 /// character screen runs on a state of its own. Ours is a fresh glue VM ([`install_glue_side_vm`]).
 pub(crate) fn end_ui_session(world: &mut World) {
     close_ui_session(world, ShutdownRoot::WorldTeardown);
+    // `ShutdownGame`'s clear of the world session's read-only flags (`0x491240`-`0x49125d`); a
+    // `/reload` never comes here.
+    if let Some(mut cvars) = world.get_resource_mut::<crate::cvars::Cvars>() {
+        for name in benilla_ui::script::IN_WORLD_READ_ONLY_CVARS {
+            cvars.set_read_only(name, false);
+        }
+    }
     // The session's end drops what the fold just carried, as the disconnect handler, a frame
     // earlier, dropped the rest: only a `/reload` seats it again.
     if let Some(mut log) = world.get_resource_mut::<crate::ui_quest_log::QuestLog>() {
@@ -1258,6 +1273,33 @@ mod tests {
         run_pending_reload(&mut world);
         assert!(!world.resource::<ReloadUiPending>().0, "the reload ran");
         assert_eq!(*world.resource::<VPlateMode>(), on, "a reload keeps them");
+    }
+
+    /// `InitializeGame` flags the world session's read-only rows on the registry before the UI gate
+    /// (`0x48f566`-`0x48f584`), so a capture world that builds no UI has them too; a `/reload`
+    /// keeps them, and the world's end clears them (`0x491240`).
+    #[test]
+    fn the_world_entry_flags_the_registry_read_only_with_or_without_a_ui() {
+        let mut world = World::new();
+        world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        world.insert_resource(crate::run_mode::CaptureMode);
+        world.init_resource::<crate::cvars::Cvars>();
+        world.insert_resource(PendingEntryUiLoad);
+        run_pending_entry_load(&mut world);
+        let set = |world: &mut World, name: &str| {
+            world
+                .resource_mut::<crate::cvars::Cvars>()
+                .set(name, "x.example.org")
+        };
+        use crate::cvars::SetOutcome;
+        for name in benilla_ui::script::IN_WORLD_READ_ONLY_CVARS {
+            assert_eq!(set(&mut world, name), SetOutcome::ReadOnly, "{name}");
+        }
+        world.insert_resource(ReloadUiPending(true));
+        run_pending_reload(&mut world);
+        assert_eq!(set(&mut world, "realmName"), SetOutcome::ReadOnly);
+        end_ui_session(&mut world);
+        assert_eq!(set(&mut world, "realmName"), SetOutcome::Changed);
     }
 
     /// A `ReloadUI()` runs the leave-world sweep (`0x490c20`, past the armed latch) and then

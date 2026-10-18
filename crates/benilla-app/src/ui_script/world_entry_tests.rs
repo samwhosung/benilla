@@ -2352,7 +2352,9 @@ fn hog_world(tag: &str, limit_kb: &str) -> (World, std::path::PathBuf, EnvGuard,
     log_in_as(&mut world, "Onehunter", 1);
     let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
     s.register_cvars(crate::cvars::registered_pairs());
-    s.set_cvar_engine("scriptMemory", limit_kb);
+    // The limit as the saved file holds it: in the world the row is read-only (`0x48f566`), so
+    // only the mirror sync moves it.
+    s.set_cvar_host("scriptMemory", limit_kb);
     assert!(
         s.eval::<bool>("return MemoryHog ~= nil").unwrap(),
         "the hog loaded"
@@ -2419,7 +2421,7 @@ fn a_state_over_script_memory_shows_the_stock_warning_and_recovers() {
     let stock_kb = collected_kb(&world);
     world
         .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .set_cvar_engine("scriptMemory", &(stock_kb + 1024).to_string());
+        .set_cvar_host("scriptMemory", &(stock_kb + 1024).to_string());
     watch_frame(&mut world);
     assert_eq!(memory_popup(&world), None, "MEMORY_RECOVERED hides it");
     assert!(world.resource::<Messages<AppExit>>().is_empty());

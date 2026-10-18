@@ -70,17 +70,31 @@ impl CvarChanged {
         self.name.to_ascii_lowercase()
     }
 
-    /// The new value as a number; `0` on a string row, whose observer reads [`Self::new`]. The
-    /// registry refuses an unparseable write to a numeric row ([`Cvars::set`]).
+    /// The new value as the record's float (`rec+0x24`, `SStrToFloat` at `0x63e130`): text that
+    /// is no number reads as 0, and a string row's observer reads [`Self::new`].
     pub(crate) fn num(&self) -> f32 {
-        self.new.trim().parse().unwrap_or(0.0)
+        record_float(&self.new)
     }
 
-    /// The new value as the client's flag: int-parse, then `!= 0`.
+    /// The new value as the record's integer (`rec+0x28`, `SStrToInt` at `0x63e127`), `!= 0`.
     pub(crate) fn flag(&self) -> bool {
-        self.num() != 0.0
+        benilla_ui::script::s_str_to_int(&self.new) != 0
     }
 }
+
+/// A record's float as `InternalSet` stores it: `SStrToFloat` (`0x63e130`) kept as a single
+/// (`fstp dword [esi+0x24]`, `0x63e135`).
+pub(crate) fn record_float(text: &str) -> f32 {
+    benilla_ui::script::s_str_to_float(text) as f32
+}
+
+/// `SStrCmpI` (`0x64a4c0`), the compare `InternalSet` (`0x63e0ec`) and `SaveConfig` (`0x63da4a`)
+/// make: ASCII case-blind.
+fn same_text(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+impl CvarChanged {}
 
 /// One row of the live registry: the parts of the reference's `CVar` record benilla keeps.
 #[derive(Clone, Debug)]
@@ -101,20 +115,14 @@ pub(crate) struct Row {
     check: Option<CvarCheck>,
 }
 
-impl Row {
-    /// A row whose default parses as a number refuses a write that does not ([`Cvars::set`]).
-    fn numeric(&self) -> bool {
-        self.default.trim().parse::<f32>().is_ok()
-    }
-}
-
 /// What a write did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SetOutcome {
     /// No such row (warned).
     Unknown,
-    /// A numeric row and a value that does not parse: refused, the applied value stands (warned).
-    Refused,
+    /// The row is read-only (flag bit2, `CVar::SetReadOnly` `0x63e030`): `InternalSet` returns
+    /// before storing anything (`0x63e0ba`-`0x63e0c2`).
+    ReadOnly,
     /// The row's change callback refused it ([`table::Registered::check`]): the applied value
     /// stands, and the callback's own line says why.
     Vetoed,
@@ -155,6 +163,9 @@ pub(crate) struct Cvars {
     /// here because it outlives every VM, and counted by the VM
     /// ([`benilla_ui::script::LUA_CVAR_LIMIT`]).
     lua_created: u32,
+    /// Lowercased names flagged read-only (flag bit2): the world session's
+    /// [`benilla_ui::script::IN_WORLD_READ_ONLY_CVARS`], flagged and cleared with the VM's copy.
+    read_only: HashSet<String>,
 }
 
 impl Default for Cvars {
@@ -180,6 +191,7 @@ impl Cvars {
             last_change: None,
             console: Vec::new(),
             lua_created: 0,
+            read_only: HashSet::new(),
         };
         for r in all_rows() {
             let default = r.default_for(locale);
@@ -252,13 +264,28 @@ impl Cvars {
         self.row(name).map(|r| r.value.as_str())
     }
 
+    /// The applied value as the record's float ([`CvarChanged::num`]).
+    #[cfg(test)]
     pub(crate) fn num(&self, name: &str) -> Option<f32> {
-        self.get(name).and_then(|v| v.trim().parse().ok())
+        self.get(name).map(record_float)
     }
 
-    /// The applied value as the client's flag (int-parse, `!= 0`).
+    /// The applied value as the record's integer, `!= 0` ([`CvarChanged::flag`]).
     pub(crate) fn flag(&self, name: &str) -> Option<bool> {
-        self.num(name).map(|v| v != 0.0)
+        self.get(name)
+            .map(|v| benilla_ui::script::s_str_to_int(v) != 0)
+    }
+
+    /// Flag a row read-only, or clear it: `CVar::SetReadOnly` (`0x63e030`). A flagged row takes no
+    /// host write ([`SetOutcome::ReadOnly`]); a Lua write meets the VM's copy of the flag first
+    /// ([`benilla_ui::script::UiScript::set_cvar_read_only`]).
+    pub(crate) fn set_read_only(&mut self, name: &str, read_only: bool) {
+        let key = name.to_ascii_lowercase();
+        if read_only {
+            self.read_only.insert(key);
+        } else {
+            self.read_only.remove(&key);
+        }
     }
 
     pub(crate) fn default_of(&self, name: &str) -> Option<&str> {
@@ -295,24 +322,15 @@ impl Cvars {
         value
     }
 
-    /// A write from either side of the VM boundary. A `from_vm` write is not echoed back, but a
-    /// refusal is, because the mirror already stored the refused value.
+    /// A write from either side of the VM boundary, `CVar::Set` (`0x63df50`) then `InternalSet`
+    /// (`0x63e0b0`): the text is stored as given, a number or not, and reads as its
+    /// `SStrToInt`/`SStrToFloat` forms. A `from_vm` write is not echoed back.
     fn write(&mut self, name: &str, value: &str, from_vm: bool) -> SetOutcome {
         let Some(i) = self.slot(name) else {
             warn!("cvar {name}: not registered — write ignored");
             return SetOutcome::Unknown;
         };
         let row = &mut self.rows[i];
-        if row.numeric() && value.trim().parse::<f32>().is_err() {
-            warn!(
-                "cvar {}: unparseable value '{value}' refused (still {:?})",
-                row.name, row.value
-            );
-            if from_vm {
-                self.outbox.push((row.name.clone(), row.value.clone()));
-            }
-            return SetOutcome::Refused;
-        }
         // The change callback, before anything is stored (`0x63df7d`). A VM write was checked
         // by the VM's own mirror, which refused it there or printed its line already.
         if let (Some(check), false) = (row.check, from_vm) {
@@ -326,7 +344,7 @@ impl Cvars {
             // The reference's `Set 0x63df50` on flag bit1 stores `latchedValue` and skips
             // `InternalSet`: no dirty, no callback. The stage lives here, not in the mirror, which
             // only ever learns applied values.
-            let staged = (value != row.value).then(|| value.to_string());
+            let staged = (!same_text(value, &row.value)).then(|| value.to_string());
             if row.pending == staged {
                 return SetOutcome::Unchanged;
             }
@@ -337,7 +355,12 @@ impl Cvars {
                 SetOutcome::Unchanged // the stage cleared: the boundary has nothing to do
             };
         }
-        if row.value == value {
+        // The read-only flag stops a host write in `InternalSet`, after the callback ran; a VM
+        // write met the VM's copy of the flag.
+        if !from_vm && self.read_only.contains(&row.name.to_ascii_lowercase()) {
+            return SetOutcome::ReadOnly;
+        }
+        if same_text(&row.value, value) {
             return SetOutcome::Unchanged;
         }
         let old = std::mem::replace(&mut row.value, value.to_string());
@@ -375,7 +398,7 @@ impl Cvars {
             return false;
         };
         let row = &mut self.rows[i];
-        if row.value == value {
+        if same_text(&row.value, value) {
             return false;
         }
         row.value = value.to_string();
@@ -403,7 +426,7 @@ impl Cvars {
             let Some(staged) = row.pending.take() else {
                 continue;
             };
-            if staged == row.value {
+            if same_text(&staged, &row.value) {
                 continue;
             }
             let old = std::mem::replace(&mut row.value, staged.clone());
@@ -479,14 +502,12 @@ impl Cvars {
                 continue;
             }
             let row = &mut self.rows[i];
-            if row.numeric() && value.trim().parse::<f32>().is_err() {
-                warn!("config: {name}: unparseable value '{value}' ignored");
-                continue;
-            }
-            // The callback runs on the saved value and its answer is not tested: the file is read
-            // before these rows are registered (`0x402375`), and `CVar::Register` on the record it
-            // made calls the callback and ignores the result (`0x63dc58`), so the value stands.
-            // A refusing callback applied nothing, so no observer fires for it.
+            // The saved text stands as it is, a number or not: `set` made the record from it
+            // (`0x63d582`) and `Register` keeps it (`0x63dc6c`). The callback runs on the saved
+            // value and its answer is not tested: the file is read before these rows are
+            // registered (`0x402375`), and `CVar::Register` on the record it made calls the
+            // callback and ignores the result (`0x63dc58`), so the value stands. A refusing
+            // callback applied nothing, so no observer fires for it.
             let applies = row.check.is_none_or(|check| {
                 let verdict = check(value, &row.value);
                 self.console.extend(verdict.line);
@@ -607,7 +628,8 @@ impl Cvars {
                 .keys()
                 .find(|k| k.eq_ignore_ascii_case(&row.name))
                 .cloned();
-            if row.value == row.default {
+            // `SaveConfig` skips a value equal to its default case-blind (`0x63da4a`).
+            if same_text(&row.value, &row.default) {
                 if let Some(k) = existing {
                     out.remove(&k);
                 }
@@ -1557,7 +1579,10 @@ mod tests {
         assert_eq!(res::<ZoomLimit>(&app).max, 50.0);
         apply(&mut app, "cameraDistanceMaxFactor", "-1");
         assert_eq!(res::<ZoomLimit>(&app).max, 0.0);
+        // `SStrToFloat` reads "nan" as 0; a NaN takes an exponent past 4932.
         apply(&mut app, "cameraDistanceMaxFactor", "nan");
+        assert_eq!(res::<ZoomLimit>(&app).max, 0.0);
+        apply(&mut app, "cameraDistanceMaxFactor", "0e5000");
         assert_eq!(res::<ZoomLimit>(&app).max, 50.0);
         // Out of `cameraDistanceMax`'s validator range (`0x50b310`): refused, 25 stands.
         apply(&mut app, "cameraDistanceMaxFactor", "1");
@@ -1758,8 +1783,10 @@ mod tests {
         assert_eq!(res::<MinimapZoom>(&app).inside, MINIMAP_ZOOM_LEVELS - 1);
         apply(&mut app, "minimapZoom", "-2");
         assert_eq!(res::<MinimapZoom>(&app).outdoor, 0);
-        assert_eq!(apply(&mut app, "uiScale", "banana"), SetOutcome::Refused);
-        assert_eq!(res::<UiScaleCvar>(&app).0, 0.9);
+        // Text that is no number is stored (`0x63e0b0`) and reads as the record's float, 0,
+        // which the knob holds to its floor.
+        assert_eq!(apply(&mut app, "uiScale", "banana"), SetOutcome::Changed);
+        assert_eq!(res::<UiScaleCvar>(&app).0, 0.5);
         assert_eq!(apply(&mut app, "bogus", "1"), SetOutcome::Unknown);
     }
 
@@ -2497,28 +2524,126 @@ mod tests {
         assert_eq!(cvars.take_events().len(), 1);
     }
 
+    /// `InternalSet` (`0x63e0b0`) has no parse check: text that is no number is stored as it is,
+    /// on either side of the VM boundary, and reads as the record's `SStrToFloat`/`SStrToInt`
+    /// forms (`0x63e130`, `0x63e127`). A saved one loads, as `set` made the record from it.
     #[test]
-    fn a_numeric_row_refuses_what_does_not_parse_and_corrects_the_mirror() {
+    fn a_numeric_row_keeps_text_that_is_no_number() {
         let mut cvars = Cvars::default();
-        assert_eq!(cvars.set_from_vm("uiScale", "banana"), SetOutcome::Refused);
-        assert_eq!(cvars.get("uiScale"), Some("0.9"));
-        assert!(!cvars.has_events());
-        assert!(!cvars.dirty);
-        assert_eq!(
-            cvars.take_outbox(),
-            vec![("uiScale".to_string(), "0.9".to_string())],
-            "the VM stored 'banana' synchronously; the host writes the truth back"
-        );
-        assert_eq!(cvars.set("uiScale", "banana"), SetOutcome::Refused);
+        assert_eq!(cvars.set_from_vm("uiScale", "banana"), SetOutcome::Changed);
+        assert_eq!(cvars.get("uiScale"), Some("banana"));
+        assert_eq!(cvars.num("uiScale"), Some(0.0));
         assert!(
             cvars.take_outbox().is_empty(),
-            "a host write has no mirror to correct"
+            "the mirror already holds it"
         );
         assert_eq!(
-            cvars.set("realmList", "not an address"),
-            SetOutcome::Changed
+            cvars.compose().get("uiScale").map(String::as_str),
+            Some("banana")
+        );
+        assert_eq!(cvars.set("MusicVolume", "wat"), SetOutcome::Changed);
+        assert_eq!(
+            cvars.take_outbox(),
+            vec![("MusicVolume".to_string(), "wat".to_string())]
         );
         assert_eq!(cvars.set("nosuchrow", "1"), SetOutcome::Unknown);
+
+        let cvars = registry(&[("MasterVolume", "wat"), ("farclip", " 400")]);
+        assert_eq!(cvars.get("MasterVolume"), Some("wat"), "a saved text loads");
+        assert_eq!(cvars.num("MasterVolume"), Some(0.0));
+        assert_eq!(cvars.get("farclip"), Some(" 400"));
+        assert_eq!(cvars.num("farclip"), Some(0.0), "no whitespace skip");
+    }
+
+    /// The numeric readers are the record's: `SStrToFloat` for the float, `SStrToInt != 0` for a
+    /// flag, so "0.5" is off where a float test would call it on, and "12abc" is 12.
+    #[test]
+    fn the_numeric_readers_are_the_records_own() {
+        let event = |new: &str| CvarChanged {
+            name: "x".into(),
+            old: String::new(),
+            new: new.into(),
+        };
+        assert!(!event("0.5").flag());
+        assert!(event("1.0").flag());
+        assert!(event("-1").flag());
+        assert!(!event(" 1").flag());
+        assert_eq!(event("12abc").num(), 12.0);
+        assert_eq!(event("+5").num(), 0.0);
+        assert_eq!(event("nan").num(), 0.0);
+        let cvars = registry(&[("autoClearAFK", "0.5"), ("farclip", "400yd")]);
+        assert_eq!(cvars.flag("autoClearAFK"), Some(false));
+        assert_eq!(cvars.num("farclip"), Some(400.0));
+    }
+
+    /// `InternalSet` compares with `SStrCmpI` (`0x63e0ec`): a change of case only is no change,
+    /// so nothing is stored, fired, mirrored or saved; `SaveConfig` skips a value equal to its
+    /// default case-blind (`0x63da4a`), so a saved spelling of the default leaves the file.
+    #[test]
+    fn a_change_of_case_only_is_no_change() {
+        let mut cvars = Cvars::default();
+        cvars.learn_addon_row("myAddonKnob", "foo");
+        assert_eq!(cvars.set("myAddonKnob", "FOO"), SetOutcome::Unchanged);
+        assert_eq!(
+            cvars.set_from_vm("MYADDONKNOB", "Foo"),
+            SetOutcome::Unchanged
+        );
+        assert_eq!(cvars.get("myAddonKnob"), Some("foo"));
+        assert!(!cvars.has_events() && !cvars.has_outbox() && !cvars.dirty);
+        assert_eq!(cvars.set("gxVSync", "0"), SetOutcome::Staged);
+        assert_eq!(
+            cvars.set(
+                "gxResolution",
+                &cvars.get("gxResolution").unwrap().to_uppercase()
+            ),
+            SetOutcome::Unchanged,
+            "a stage of the applied value in another case stages nothing"
+        );
+
+        let mut cvars = registry(&[("realmName", "Nostalrius")]);
+        cvars.learn_addon_row("myAddonKnob", "foo");
+        assert_eq!(cvars.set("realmName", "NOSTALRIUS"), SetOutcome::Unchanged);
+        assert_eq!(cvars.get("realmName"), Some("Nostalrius"));
+        let mut cvars = registry(&[("myAddonKnob", "FOO")]);
+        cvars.learn_addon_row("myAddonKnob", "foo");
+        assert_eq!(
+            cvars.get("myAddonKnob"),
+            Some("FOO"),
+            "the saved text loads"
+        );
+        assert!(
+            !cvars.compose().contains_key("myAddonKnob"),
+            "and leaves the file, equal to its default case-blind"
+        );
+    }
+
+    /// Flag bit2 (`CVar::SetReadOnly` `0x63e030`) stops every host write in `InternalSet`
+    /// (`0x63e0ba`), after the callback ran; the console's included. A VM write met the VM's own
+    /// copy of the flag, so the registry takes it.
+    #[test]
+    fn a_read_only_row_takes_no_host_write() {
+        let mut app = cvar_app();
+        app.add_plugins(crate::console::ConsolePlugin);
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .set_read_only("realmList", true);
+        let before = res::<Cvars>(&app).get("realmList").unwrap().to_string();
+        assert_eq!(
+            apply(&mut app, "REALMLIST", "x.example.org"),
+            SetOutcome::ReadOnly
+        );
+        assert!(crate::console::execute(app.world_mut(), "realmList y.example.org").is_empty());
+        assert!(crate::console::execute(app.world_mut(), "set realmList z.example.org").is_empty());
+        assert!(crate::console::execute(app.world_mut(), "cvar_default realmList").is_empty());
+        let cvars = res::<Cvars>(&app);
+        assert_eq!(cvars.get("realmList"), Some(before.as_str()));
+        assert!(!cvars.has_events() && !cvars.has_outbox() && !cvars.dirty);
+
+        let mut cvars = Cvars::default();
+        cvars.set_read_only("realmName", true);
+        assert_eq!(cvars.set_from_vm("realmName", "Here"), SetOutcome::Changed);
+        cvars.set_read_only("realmName", false);
+        assert_eq!(cvars.set("realmName", "There"), SetOutcome::Changed);
     }
 
     #[test]
