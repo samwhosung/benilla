@@ -2396,8 +2396,9 @@ mod loader_tests {
     /// state-texture element builds a new region through the `<Layers>` adder (`0x6f26f0`) that the
     /// slot store installs, destroying the one it displaces (`0x778fd0` via `0x77900a`, the
     /// highlight's `0x779110`, the checked pair's `0x785330`/`0x785440`). So an instance's element
-    /// keeps nothing of the template's: the fresh region's TexCoords, alpha and BLEND (`0x76fc40`;
-    /// the highlight keeps its own, `0x7789a4`), and `SetAllPoints` with no anchors (`0x7701c0`).
+    /// keeps nothing of the template's: the fresh region's TexCoords and BLEND (`0x76fc40`; the
+    /// highlight keeps its own, `0x7789a4`), and `SetAllPoints` with no anchors (`0x7701c0`). No
+    /// texture level reads `alpha` (`0x76fe20`), so every alpha stays 1.
     #[test]
     fn an_instance_state_texture_replaces_the_templates() {
         const TAGS: [(&str, &str); 6] = [
@@ -2489,7 +2490,8 @@ mod loader_tests {
             "one region per slot, none of the template's left over"
         );
 
-        // An instance element's own size, anchors and alpha lay the fresh region out.
+        // An instance element's own size and anchors lay the fresh region out; its `alpha=` is not
+        // read.
         let laid: (i64, String, f32, f32, f32, Vec<f32>) = s
             .eval(
                 r#"local t = LaidOutInst:GetNormalTexture()
@@ -2504,7 +2506,7 @@ mod loader_tests {
                 "CENTER".to_string(),
                 20.0,
                 16.0,
-                63.0 / 255.0,
+                1.0,
                 vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
             )
         );

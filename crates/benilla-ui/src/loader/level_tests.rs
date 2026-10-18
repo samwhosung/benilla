@@ -759,3 +759,27 @@ fn a_fontstring_inheriting_nothing_is_logged() {
         .eval::<bool>("return NothingKid:GetFontObject() == nil")
         .unwrap());
 }
+
+/// The one reader of `alpha` (`0x873fe8`) is the frame loader (`0x769a10`): the texture
+/// (`0x76fe20`) and FontString (`0x770f40`) loaders never read it.
+#[test]
+fn a_region_reads_no_alpha() {
+    let s = ui();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Frame name="AlphaHost" alpha="0.5">
+                <Layers><Layer>
+                    <Texture name="AlphaTexture" file="Interface\Good" alpha="0.5"/>
+                    <FontString name="AlphaText" inherits="LevelTestFont" alpha="0.25"/>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    let alpha = |name: &str| s.eval::<f32>(&format!("return {name}:GetAlpha()")).unwrap();
+    assert_eq!(alpha("AlphaTexture"), 1.0);
+    assert_eq!(alpha("AlphaText"), 1.0);
+    assert!((alpha("AlphaHost") - 0.5).abs() < 0.01, "a frame reads it");
+}

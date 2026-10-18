@@ -391,6 +391,11 @@ fn search_reflows_live_rows_and_restores_the_page() {
     let authored_top: f32 = s
         .eval("return BenillaOptionsFrameContainerBodyAudioRowMaster:GetTop()")
         .unwrap();
+    // The clear button's icon rests at half alpha, set by its `OnLoad`: no region reads `alpha=`.
+    let icon: f32 = s
+        .eval("return BenillaOptionsFrameSearchBoxClearButtonIcon:GetAlpha()")
+        .unwrap();
+    assert!((icon - 0.5).abs() < 0.01, "the clear icon at rest: {icon}");
 
     s.run("BenillaOptionsFrameSearchBox:SetText(\"music\")")
         .unwrap();

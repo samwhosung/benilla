@@ -217,7 +217,8 @@ impl Loader<'_> {
     }
 
     /// One level of a `<FontString>`'s `LoadXML` (`0x770f40`), after its `inherits` level: an
-    /// `inherits` font object, the geometry, `hidden`, `text`, the wrap attributes, then, when the
+    /// `inherits` font object, the geometry, `hidden`, `text`, the wrap attributes (no `alpha`,
+    /// which only the frame loader reads, `0x769a10`), then, when the
     /// string owns its font attributes ([`FontAttrs`], `0x7710db`), `font=`, `spacing`,
     /// `justifyV`, `justifyH` and the `<Color>` and `<Shadow>` children, in that order. A `font=`
     /// file needs this node's own first `<FontHeight>` above 0 (`0x77112f`-`0x771154`); without
@@ -252,12 +253,6 @@ impl Loader<'_> {
             Some(true) => self.call_region(wrapper, "Hide", (), dbg),
             Some(false) => self.call_region(wrapper, "Show", (), dbg),
             None => {}
-        }
-        if let Some(a) = node
-            .attr("alpha")
-            .and_then(|v| v.trim().parse::<f32>().ok())
-        {
-            self.call_region(wrapper, "SetAlpha", a, dbg);
         }
         // An empty `text` is skipped (`0x77101b`), so a template's text stands. The string's own
         // `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on a string with no font
@@ -353,7 +348,8 @@ impl Loader<'_> {
     }
 
     /// One level of a `<Texture>`'s `LoadXML` (`0x76fe20`), after its `inherits` level: the
-    /// geometry, `hidden`, each child in order, then `file=` and `alphaMode`. A `<TexCoords>` sets
+    /// geometry, `hidden`, each child in order, then `file=` and `alphaMode`, and no `alpha`, which
+    /// only the frame loader reads (`0x769a10`). A `<TexCoords>` sets
     /// all eight coordinates from its own edges over 0, 1, 0, 1, so the last one applied wins whole
     /// (`0x76fef5`, `0x76ffe8`), and any edge outside [0, 1] sets the level's wrap flag, which the
     /// file load takes (`0x770071`, `0x77012d`); a later `SetTexCoord` leaves it, and `SetTexture`
@@ -372,12 +368,6 @@ impl Loader<'_> {
             Some(true) => self.call_region(wrapper, "Hide", (), dbg),
             Some(false) => self.call_region(wrapper, "Show", (), dbg),
             None => {}
-        }
-        if let Some(a) = node
-            .attr("alpha")
-            .and_then(|v| v.trim().parse::<f32>().ok())
-        {
-            self.call_region(wrapper, "SetAlpha", a, dbg);
         }
         let mut wrap = false;
         for child in &node.children {

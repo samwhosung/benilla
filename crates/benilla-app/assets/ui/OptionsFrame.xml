@@ -3042,13 +3042,14 @@
                         <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-3" y="0"/></Offset></Anchor></Anchors>
                         <Layers>
                             <Layer level="ARTWORK">
-                                <Texture name="$parentIcon" file="Interface\Buttons\UI-Panel-MinimizeButton-Up" alpha="0.5">
+                                <Texture name="$parentIcon" file="Interface\Buttons\UI-Panel-MinimizeButton-Up">
                                     <Size><AbsDimension x="17" y="17"/></Size>
                                     <Anchors><Anchor point="CENTER"/></Anchors>
                                 </Texture>
                             </Layer>
                         </Layers>
                         <Scripts>
+                            <OnLoad>getglobal(this:GetName() .. "Icon"):SetAlpha(0.5)</OnLoad>
                             <OnClick>
                                 BenillaOptionsFrameSearchBox:SetText("")
                                 BenillaOptionsFrameSearchBox:ClearFocus()
