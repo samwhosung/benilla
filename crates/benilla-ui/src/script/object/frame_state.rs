@@ -550,15 +550,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
-            match model.backdrops.get(&h).map(|i| &i.spec) {
-                Some(bd) => Ok((
-                    bd.bg_color[0],
-                    bd.bg_color[1],
-                    bd.bg_color[2],
-                    bd.bg_color[3],
-                )),
-                None => Ok((1.0, 1.0, 1.0, 1.0)),
-            }
+            // No backdrop pushes nothing (`0x777c68`/`0x778008`: `+0x1ac` null returns 0).
+            Ok(match model.backdrops.get(&h).map(|i| &i.spec) {
+                Some(bd) => mlua::MultiValue::from_vec(
+                    bd.bg_color
+                        .iter()
+                        .map(|c| Value::Number(f64::from(*c)))
+                        .collect(),
+                ),
+                None => mlua::MultiValue::new(),
+            })
         })?,
     )?;
     m.set(
@@ -566,15 +567,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
-            match model.backdrops.get(&h).map(|i| &i.spec) {
-                Some(bd) => Ok((
-                    bd.border_color[0],
-                    bd.border_color[1],
-                    bd.border_color[2],
-                    bd.border_color[3],
-                )),
-                None => Ok((1.0, 1.0, 1.0, 1.0)),
-            }
+            // No backdrop pushes nothing (`0x777c68`/`0x778008`: `+0x1ac` null returns 0).
+            Ok(match model.backdrops.get(&h).map(|i| &i.spec) {
+                Some(bd) => mlua::MultiValue::from_vec(
+                    bd.border_color
+                        .iter()
+                        .map(|c| Value::Number(f64::from(*c)))
+                        .collect(),
+                ),
+                None => mlua::MultiValue::new(),
+            })
         })?,
     )?;
     // Mouse interaction: `EnableMouse` gates hit-testing.

@@ -179,6 +179,28 @@ fn set_backdrop_nil_tears_down() {
         .all(|q| !matches!(q.content, QuadContent::Texture { .. })));
 }
 
+/// Both colour getters push nothing for a frame with no backdrop (`0x777c68`, `0x778008`), before
+/// one is set and after `SetBackdrop(nil)`.
+#[test]
+fn backdrop_colour_getters_answer_nothing_without_a_backdrop() {
+    let s = script();
+    s.run(
+        r#"
+        local function count(...) return arg.n end
+        local f = CreateFrame("Frame", "Bare")
+        assert(count(f:GetBackdropColor()) == 0, "bare GetBackdropColor")
+        assert(count(f:GetBackdropBorderColor()) == 0, "bare GetBackdropBorderColor")
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        assert(count(f:GetBackdropColor()) == 4, "with a backdrop")
+        assert(count(f:GetBackdropBorderColor()) == 4, "with a backdrop")
+        f:SetBackdrop(nil)
+        assert(count(f:GetBackdropColor()) == 0, "removed GetBackdropColor")
+        assert(count(f:GetBackdropBorderColor()) == 0, "removed GetBackdropBorderColor")
+    "#,
+    )
+    .unwrap();
+}
+
 /// The colour setters (`0x777d30`, `0x7780d0`) read r/g/b with a bare `lua_tonumber` (nil is 0.0)
 /// and gate alpha on `lua_isnumber` (`0x778227`) over a staged 1.0 (`0x778220`).
 #[test]
