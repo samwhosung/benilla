@@ -190,7 +190,7 @@ pub(crate) fn feed_stock_glue_preview(
     if preview.root != root {
         preview.root = root;
     }
-    let camera = pane.as_ref().map_or(Some(0), |p| p.camera);
+    let camera = pane.as_ref().and_then(|p| p.camera.clone());
     if preview.camera != camera {
         preview.camera = camera;
     }

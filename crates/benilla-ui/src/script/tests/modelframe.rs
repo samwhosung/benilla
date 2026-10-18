@@ -402,6 +402,44 @@ fn the_light_tuple_is_opaque_and_survives_the_round_trip() {
 
 /// `SetCamera(n)` picks by raw index, checked against the file's camera count once the file is
 /// known, and the pane waits to draw until then (`0x76cec0`, `0x76ce80`, `0x76ce00`, `0x76d5f0`).
+/// `SetCamera` resolves the camera on the file held then (`0x76ceef` → `0x713590`) and the pane
+/// holds it: `SetModel` leaves `+0x31c` (`0x76cd30`) and the new file's ready hook installs
+/// nothing while none is pending (`0x76ce44`-`0x76ce47`), so the pane keeps aiming through the
+/// old file's camera until the next `SetCamera`.
+#[test]
+fn set_model_without_set_camera_keeps_the_old_files_camera() {
+    use super::model_clock::pane;
+    use crate::widget::{InstalledCamera, ModelFileFacts};
+
+    let facts = |cameras: u32| ModelFileFacts {
+        sequences: Vec::new(),
+        bbox: ([0.0; 3], [0.0; 3]),
+        cameras,
+    };
+    let camera = |s: &UiScript| pane(s, "MSwap").camera;
+    let on = |file: &str, index| {
+        Some(InstalledCamera {
+            file: file.to_string(),
+            index,
+        })
+    };
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_model_facts("a.mdx", facts(2));
+    s.set_model_facts("b.mdx", facts(3));
+    s.run(r#"m = CreateFrame("Model", "MSwap", UIParent) m:SetModel("a.mdx") m:SetCamera(1)"#)
+        .unwrap();
+    assert_eq!(camera(&s), on("a.mdx", 1));
+    s.run(r#"MSwap:SetModel("b.mdx")"#).unwrap();
+    assert_eq!(
+        camera(&s),
+        on("a.mdx", 1),
+        "b's ready hook installs nothing"
+    );
+    s.run("MSwap:SetCamera(2)").unwrap();
+    assert_eq!(camera(&s), on("b.mdx", 2));
+}
+
 /// A camera draws in perspective; none, or an index past the count, draws orthographic.
 #[test]
 fn set_camera_is_a_raw_index_bounds_checked_against_the_file() {
@@ -419,7 +457,7 @@ fn set_camera_is_a_raw_index_bounds_checked_against_the_file() {
     };
     let state = |s: &UiScript, name: &str| {
         let m = pane(s, name);
-        (m.camera_pending, m.camera)
+        (m.camera_pending, m.camera.as_ref().map(|c| c.index))
     };
     const FILE: &str = r"Creature\Wolf\Wolf.mdx";
 

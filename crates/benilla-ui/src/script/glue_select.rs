@@ -108,12 +108,11 @@ pub struct GlueScenePane {
     pub layout_scale: f32,
     pub position: [f32; 3],
     pub facing: f32,
-    /// The camera the scene is aimed by, a raw index into the file's camera table (`0x713590`):
-    /// the installed one (`+0x31c`), or while one is pending (`+0x320`) the index that installs
-    /// once the file is ready (`0x76ce49`). `SetModel` leaves both (`0x76cd30`), so a new file
-    /// keeps the camera chosen before it until the next `SetCamera`. `None` is the NULL camera
-    /// an index past the table installs (`0x76cf08`), the orthographic leg.
-    pub camera: Option<u32>,
+    /// The camera the scene is aimed by: the installed one ([`crate::widget::InstalledCamera`]),
+    /// or while one is pending (`+0x320`) that index of the file the pane holds, which installs
+    /// it once ready (`0x76ce49`). `None` is the NULL camera an index past the table installs
+    /// (`0x76cf08`), the orthographic leg.
+    pub camera: Option<crate::widget::InstalledCamera>,
 }
 
 /// A record of the array: the character and whether `+0x110`, the built composite, is set.
@@ -407,8 +406,11 @@ fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueSceneP
         position: m.position.into(),
         facing: m.facing,
         camera: match m.camera_pending {
-            Some(idx) => u32::try_from(idx).ok(),
-            None => m.camera,
+            Some(idx) => u32::try_from(idx)
+                .ok()
+                .zip(m.path.clone())
+                .map(|(index, file)| crate::widget::InstalledCamera { file, index }),
+            None => m.camera.clone(),
         },
     })
 }
@@ -1121,19 +1123,37 @@ mod tests {
             bbox: ([0.0; 3], [1.0; 3]),
             cameras,
         };
-        let camera = |s: &UiScript| s.glue_scene().expect("the shown pane").camera;
+        let camera = |s: &UiScript| {
+            s.glue_scene()
+                .expect("the shown pane")
+                .camera
+                .map(|c| (c.file, c.index))
+        };
+        let on = |file: &str, index| Some((file.to_string(), index));
         s.run("CreateFrame('ModelFFX', 'Scene'):SetModel('a.mdx')")
             .unwrap();
-        assert_eq!(camera(&s), Some(0), "the ctor's pending camera 0");
+        assert_eq!(camera(&s), on("a.mdx", 0), "the ctor's pending camera 0");
         s.run("Scene:SetCamera(1)").unwrap();
-        assert_eq!(camera(&s), Some(1), "pending until the file is ready");
+        assert_eq!(
+            camera(&s),
+            on("a.mdx", 1),
+            "pending until the file is ready"
+        );
         s.set_model_facts("a.mdx", facts(2));
-        assert_eq!(camera(&s), Some(1));
+        assert_eq!(camera(&s), on("a.mdx", 1));
         s.set_model_facts("b.mdx", facts(3));
         s.run("Scene:SetModel('b.mdx')").unwrap();
-        assert_eq!(camera(&s), Some(1), "a new file keeps the chosen camera");
+        assert_eq!(
+            camera(&s),
+            on("a.mdx", 1),
+            "a new file keeps the old file's camera"
+        );
         s.run("Scene:SetCamera(2)").unwrap();
-        assert_eq!(camera(&s), Some(2));
+        assert_eq!(
+            camera(&s),
+            on("b.mdx", 2),
+            "the next SetCamera resolves on b"
+        );
         s.run("Scene:SetCamera(3)").unwrap();
         assert_eq!(camera(&s), None, "past the table, the NULL camera");
     }
@@ -1159,7 +1179,7 @@ mod tests {
             let model = s.model_ref();
             let h = model.arena.lookup("Scene").unwrap();
             match &model.arena.frame(h).unwrap().kind_state {
-                crate::widget::KindState::Model(m) => m.camera,
+                crate::widget::KindState::Model(m) => m.camera.as_ref().map(|c| c.index),
                 _ => unreachable!(),
             }
         };

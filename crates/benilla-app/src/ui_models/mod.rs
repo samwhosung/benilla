@@ -77,9 +77,11 @@ pub(crate) struct TileRequest {
     pub root_scale: f32,
     /// The perspective leg's root translation: `SetPosition · layoutScale`, model units.
     pub root_pos: Vec3,
-    /// The installed camera index (ctor 0, `SetCamera(n)`); `None` is the NULL camera an index
-    /// past the file's cameras installs (`0x76cec0`), the orthographic leg of every shipped pane.
-    pub camera: Option<u32>,
+    /// The installed camera ([`benilla_ui::widget::InstalledCamera`]): a raw index into the camera
+    /// table of the file it was resolved from, which a later `SetModel` keeps; `None` is the NULL
+    /// camera an index past the file's cameras installs (`0x76cec0`), the orthographic leg of
+    /// every shipped pane.
+    pub camera: Option<benilla_ui::widget::InstalledCamera>,
     /// The pane's embedded `CGLight`, disabled on a fresh `<Model>`; it adds to the file's own lights.
     pub light: ModelLight,
     pub fog: Option<ModelFog>,
@@ -1089,6 +1091,8 @@ fn sync_tiles(
     let atlas_h = atlas_size.y as f32;
 
     // ── 5. Place every drawing tile: cell, unit ladder, facing, play head ───────────────
+    // Split the borrow: a tile is written while the residency map is read.
+    let state = &mut *state;
     let mut aimed = [false; UI_MODEL_CAM_LAYERS];
     for (i, (handle, req, pane)) in drawing.iter().enumerate() {
         let Some(cell) = cells.get(i).copied() else {
@@ -1112,12 +1116,17 @@ fn sync_tiles(
 
         // ── The leg ────────────────────────────────────────────────────────────────────
         // Perspective (`0x7ac640`): the file's camera frames the pane from this tile's camera,
-        // viewport the cell, and the eye and target ride the model's root (`0x718960`).
+        // viewport the cell, and the eye and target ride the model's root (`0x718960`). The
+        // camera is read from the file it was installed from, resident since its facts landed.
         // Orthographic: one model unit is `1280 · modelScale · layoutScale` FrameXML units.
-        let perspective = tile.cam_slot.zip(req.camera).and_then(|(slot, idx)| {
-            let cam = assets.m2s.get(&tile.m2)?.cameras.get(idx as usize)?;
-            Some((slot, cam.clone()))
-        });
+        let perspective = tile
+            .cam_slot
+            .zip(req.camera.as_ref())
+            .and_then(|(slot, c)| {
+                let (src, _) = state.loaded.get(&benilla_ui::widget::model_key(&c.file))?;
+                let cam = assets.m2s.get(src)?.cameras.get(c.index as usize)?;
+                Some((slot, cam.clone()))
+            });
         let mut leg_trace = String::from("ortho");
         if let Some((slot, cam)) = perspective {
             // Camera tracks read the file's absolute timeline and the play head is a cursor in
@@ -2365,7 +2374,10 @@ mod tests {
             position: Vec3::ZERO,
             root_scale,
             root_pos,
-            camera: Some(0),
+            camera: Some(benilla_ui::widget::InstalledCamera {
+                file: String::new(),
+                index: 0,
+            }),
             light: ModelLight::default(),
             fog: None,
             icon: None,

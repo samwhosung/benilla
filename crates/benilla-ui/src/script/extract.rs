@@ -108,7 +108,7 @@ impl UiScript {
                             position: m.position,
                             own_alpha: frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha)),
                             icon: m.icon.clone(),
-                            camera: m.camera,
+                            camera: m.camera.clone(),
                             light: m.light,
                             fog: m.scene_fog(),
                             ffx: m.ffx,

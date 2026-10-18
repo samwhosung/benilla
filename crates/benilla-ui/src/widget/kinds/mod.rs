@@ -378,9 +378,9 @@ pub struct ModelState {
     /// The camera index still to install (`+0x320`): the ctor's `Some(0)`, or a `SetCamera` made
     /// before the facts (`0x76cec0`). While it is `Some` the pane draws nothing (`0x76d5f0`).
     pub camera_pending: Option<i32>,
-    /// The installed camera (`+0x31c`): a raw camera-table index, never via `cameraLookup`, drawn
-    /// in perspective; `None`, the NULL camera an out-of-range index installs, draws orthographic.
-    pub camera: Option<u32>,
+    /// The installed camera (`+0x31c`), drawn in perspective; `None`, the NULL camera an
+    /// out-of-range index installs, draws orthographic.
+    pub camera: Option<InstalledCamera>,
     /// `SetPosition`: the model's offset within the pane's scene.
     pub position: (f32, f32, f32),
     pub light: ModelLight,
@@ -542,6 +542,17 @@ pub struct SequenceFacts {
     pub looping: bool,
 }
 
+/// A pane's installed camera (`+0x31c`): raw record `index` of the camera table (never via
+/// `cameraLookup`) of `file`, the file the pane held when the camera was resolved (`0x76ceef` →
+/// `0x713590`). The pane holds the camera itself, so a later `SetModel` keeps aiming through the
+/// old file's camera (`0x76cd30` leaves `+0x31c`, and the new file's ready hook installs nothing
+/// while none is pending, `0x76ce44`-`0x76ce47`) until the next `SetCamera`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledCamera {
+    pub file: String,
+    pub index: u32,
+}
+
 /// What a pane needs from its model file, which the reference reads off the resident `MD20`; the
 /// host hands it over (`UiScript::set_model_facts`), keyed by [`model_key`].
 #[derive(Clone, Debug, PartialEq)]
@@ -701,11 +712,15 @@ impl ModelState {
     }
 
     /// `SetCamera` by raw index (`0x76cec0`): deferred until the facts are known, then installed
-    /// or answered with the NULL camera, either clearing the pending index (`0x76ce80`).
+    /// from the file held now (`0x713590`) or answered with the NULL camera, either clearing the
+    /// pending index (`0x76ce80`). The facts are always those of [`Self::path`].
     pub fn install_camera(&mut self, idx: i32, facts: Option<&ModelFileFacts>) {
         match facts {
             Some(f) => {
-                self.camera = f.camera_at(idx);
+                self.camera = f
+                    .camera_at(idx)
+                    .zip(self.path.clone())
+                    .map(|(index, file)| InstalledCamera { file, index });
                 self.camera_pending = None;
             }
             None => self.camera_pending = Some(idx),

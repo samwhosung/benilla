@@ -3092,11 +3092,12 @@ fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
         assert!((got - want).abs() < 1.0 / 255.0, "{:?}", fog.rgb);
     }
     // The booth aims by the camera the pane chose, not the file's camera 0.
-    assert_eq!(p.camera, Some(0));
+    let index = |p: &crate::portrait::GluePreview| p.camera.as_ref().map(|c| c.index);
+    assert_eq!(index(p), Some(0));
     vm(&app).run("AccountLogin:SetCamera(1)").unwrap();
     app.update();
     let chosen = vm(&app).glue_scene().expect("the login pane").camera;
-    assert_ne!(chosen, Some(0));
+    assert_ne!(chosen.as_ref().map(|c| c.index), Some(0));
     assert_eq!(preview(&app).camera, chosen);
 }
 
