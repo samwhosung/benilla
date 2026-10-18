@@ -252,7 +252,7 @@ fn xml_insert_mode_is_bottom_or_top_without_a_raise() {
     let s = script();
     let doc = crate::framexml::parse(
         r#"<Ui>
-            <MessageFrame name="XmlMF1" insertMode="bottom"/>
+            <MessageFrame name="XmlMF1" insertMode="top"/>
             <MessageFrame name="XmlMF2" insertMode="SIDEWAYS"/>
             <MessageFrame name="XmlMF3" insertMode=" BOTTOM"/>
         </Ui>"#,
@@ -262,7 +262,7 @@ fn xml_insert_mode_is_bottom_or_top_without_a_raise() {
     assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
     s.run(
         r#"
-        assert(XmlMF1:GetInsertMode() == "BOTTOM")
+        assert(XmlMF1:GetInsertMode() == "TOP", "off the ctor's BOTTOM")
         assert(XmlMF2:GetInsertMode() == "TOP")
         assert(XmlMF3:GetInsertMode() == "TOP")
     "#,
@@ -325,8 +325,16 @@ fn create_frame_raises_in_the_reference_order() {
             "CreateFrame: Wrong parent object type, expected frame",
         ),
         (
+            r#"CreateFrame("Frame", nil, {}, "NoSuchTemplate")"#,
+            "CreateFrame: Couldn't find 'this' in parent object",
+        ),
+        (
             r#"CreateFrame("Bogus", nil, nil, "NoSuchTemplate")"#,
             r#"CreateFrame(): Couldn't find inherited node "NoSuchTemplate""#,
+        ),
+        (
+            r#"CreateFrame("Frame", "EmptyTemplate", nil, "")"#,
+            r#"CreateFrame(): Couldn't find inherited node """#,
         ),
         (
             r#"CreateFrame("Bogus")"#,
@@ -340,6 +348,7 @@ fn create_frame_raises_in_the_reference_order() {
     s.run(
         r#"
         assert(ByName == nil and NoThis == nil and OnTexture == nil and OnFont == nil)
+        assert(EmptyTemplate == nil)
         local child = CreateFrame("Frame", "UnderHost", ParentHost)
         assert(child:GetParent() == ParentHost)
     "#,

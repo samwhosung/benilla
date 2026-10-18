@@ -644,8 +644,9 @@ pub(super) fn create_frame(
     // The template lookup comes before anything is built: a miss (`0x7061dd` → `0x6ee6f0`) raises
     // at `0x7061ed`, before the node build (`0x706208`) and the name store (`0x70622d`), so it
     // leaves no partial widget and no global. The raise never returns and `pcall` catches it, as
-    // the widget dispatcher (`0x704f10`) does for every handler.
-    if let Some(t) = template.as_deref().filter(|t| !t.is_empty()) {
+    // the widget dispatcher (`0x704f10`) does for every handler. Any string fourth argument is
+    // looked up (`lua_type` 4, `0x7061cb`), the empty one included, which no template names.
+    if let Some(t) = template.as_deref() {
         // One name, verbatim, case-folded, as `framexml::expand` resolves it.
         let known = lua
             .app_data_ref::<Model>()
