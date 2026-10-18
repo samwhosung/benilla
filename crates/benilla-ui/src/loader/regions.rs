@@ -331,7 +331,7 @@ impl Loader<'_> {
                 let c = color_of(child).fractions();
                 self.call_region(wrapper, "SetVertexColor", c, dbg);
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
-                let sh = super::shadow_of(child);
+                let sh = super::shadow_of(child, self.model().layout_unit());
                 self.call_region(wrapper, "SetShadowColor", sh.color.fractions(), dbg);
                 self.call_region(
                     wrapper,

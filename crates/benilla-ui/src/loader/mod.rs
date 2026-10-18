@@ -727,7 +727,7 @@ impl Loader<'_> {
                 let c = color_of(child);
                 font::set(&mut model, id, FontMask::COLOR, |fo| fo.color = Some(c));
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
-                let sh = shadow_of(child);
+                let sh = shadow_of(child, model.layout_unit());
                 font::set(&mut model, id, FontMask::SHADOW, |fo| fo.shadow = Some(sh));
             }
         }
@@ -1113,11 +1113,15 @@ pub(super) fn abs_value(el: &Element) -> Option<f32> {
 /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
 /// (`0xff000000`), and its first `<Offset>`, else (0.001, -0.001) (`0x3a83126f`, `0xba83126f`).
 /// The offset reader zeroes both coordinates first (`0x6f1ebe`, `0x6f1ece`), so a coordinate an
-/// `<Offset>` leaves out is 0.
-pub(super) fn shadow_of(sh: &Element) -> crate::script::FontShadow {
+/// `<Offset>` leaves out is 0. The default is stored raw, in layout units, where an `<Offset>` is
+/// converted from FrameXML units (`0x6f1ee3`-`0x6f1efd`), so in FrameXML units it is 0.001 times
+/// `unit`, [`crate::script::Model::layout_unit`]. Deviation: it is taken at load, so a later
+/// aspect change keeps it, where the reference reloads the UI on one (`0x492f13`).
+pub(super) fn shadow_of(sh: &Element, unit: f32) -> crate::script::FontShadow {
+    let raw = 0.001_f32 * unit;
     let offset = children_named(sh, "Offset")
         .next()
-        .map_or([0.001, -0.001], |o| {
+        .map_or([raw, -raw], |o| {
             let (x, y) = abs_dim(o);
             [x.unwrap_or(0.0), y.unwrap_or(0.0)]
         });

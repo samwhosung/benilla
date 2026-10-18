@@ -422,7 +422,8 @@ fn a_fontstring_font_file_needs_its_own_nodes_height_and_a_refusal_stops_the_lev
 }
 
 /// `0x7713ca`-`0x771454`: a FontString's own `<Shadow>` takes its first `<Color>` over opaque black
-/// and its first `<Offset>`, whose missing coordinate is 0 (`0x6f1ebe`), else (0.001, -0.001).
+/// and its first `<Offset>`, whose missing coordinate is 0 (`0x6f1ebe`), else (0.001, -0.001) in
+/// layout units (`0x7713eb`).
 #[test]
 fn a_fontstrings_own_shadow_element_is_read() {
     let s = ui();
@@ -459,10 +460,13 @@ fn a_fontstrings_own_shadow_element_is_read() {
         shadow("Shadowed"),
         vec![2.0, -3.0, read(1.0), 0.0, 0.0, read(0.5)]
     );
-    assert_eq!(
-        shadow("BareShadow"),
-        vec![0.001, -0.001, 0.0, 0.0, 0.0, read(1.0)]
+    // 0.001 layout units at the 4:3 screen: 0.001 · 768 · 5/3.
+    let bare = shadow("BareShadow");
+    assert!(
+        (bare[0] - 1.28).abs() < 1e-5 && (bare[1] + 1.28).abs() < 1e-5,
+        "{bare:?}"
     );
+    assert_eq!(bare[2..], [0.0, 0.0, 0.0, read(1.0)]);
     assert_eq!(
         shadow("HalfOffset"),
         vec![2.0, 0.0, 0.0, 0.0, 0.0, read(1.0)],
@@ -1035,4 +1039,40 @@ fn a_bad_anchor_is_logged_and_skipped() {
         )
         .unwrap();
     assert_eq!(got, (1, "BOTTOMLEFT".into(), true, "BOTTOMLEFT".into()));
+}
+
+/// A bare `<Shadow/>`'s offset is 0.001 layout units on both readers (`0x7713eb`, `0x784066`), so
+/// `GetShadowOffset` (`0x79fad0`) answers 0.001 · 768 · √(a² + 1): 1.28 at 4:3, 1.5665 at 16:9.
+#[test]
+fn a_bare_shadow_is_a_thousandth_of_a_layout_unit() {
+    let xml = |n: &str| {
+        format!(
+            r#"<Ui>
+            <Font name="BareFont{n}" font="Fonts\FRIZQT__.TTF" virtual="true">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+                <Shadow/>
+            </Font>
+            <Frame name="BareHost{n}">
+                <Layers><Layer>
+                    <FontString name="BareString{n}" inherits="BareFont{n}"><Shadow/></FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        )
+    };
+    for (n, (w, h), want) in [
+        ("A", (1024.0, 768.0), 1.28_f32),
+        ("B", (1920.0, 1080.0), 1.5665),
+    ] {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(w, h);
+        load_str(&s, &xml(n));
+        for obj in [format!("BareFont{n}"), format!("BareString{n}")] {
+            let (x, y): (f32, f32) = s.eval(&format!("return {obj}:GetShadowOffset()")).unwrap();
+            assert!(
+                (x - want).abs() < 1e-4 && (y + want).abs() < 1e-4,
+                "{obj}: {x}, {y}"
+            );
+        }
+    }
 }

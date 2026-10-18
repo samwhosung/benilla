@@ -391,17 +391,13 @@ fn band_clip_slack(shadow_dy: Option<f32>) -> f32 {
     crate::ui_text::UI_SEAT_NUDGE + shadow_dy.map_or(0.0, |dy| dy.max(0.0))
 }
 
-/// One axis of the drop shadow's offset in the rect's px space, rounded to a whole pixel but
-/// never to zero, as the reference's shadow shows at any window size. Fill and shadow each take
-/// the client's vertical snap, `ceil(y − 0.5)`, which commutes only with an integer translate: a
-/// fractional offset makes the gap between them alternate between 1 and 2 px.
+/// One axis of the drop shadow's offset in the rect's px space, rounded half away from zero to a
+/// whole pixel (`0x5c6fa0`, `0x5c7010`, at `0x5c877e`, `0x5c878b`; the `floor` after, `0x5c8796`,
+/// is then a no-op), so an offset under half a pixel is 0 and the shadow sits under the text. Fill
+/// and shadow each take the client's vertical snap, `ceil(y − 0.5)`, which commutes only with an
+/// integer translate: a fractional offset makes the gap between them alternate between 1 and 2 px.
 fn shadow_offset_px(scaled: f32) -> f32 {
-    let rounded = scaled.round();
-    if rounded == 0.0 && scaled != 0.0 {
-        scaled.signum()
-    } else {
-        rounded
-    }
+    scaled.round()
 }
 
 /// A shadow glyph's alpha, every scalar the fill rides plus its own: `layout` (the `<Shadow>`
@@ -436,16 +432,19 @@ mod tests {
         assert_eq!(band_clip_slack(Some(2.0)), 3.0);
     }
 
-    /// `1.0546875` is a 1600×900 window's seam times the 0.9 UI scale.
+    /// `1.0546875` is a 1600×900 window's seam times the 0.9 UI scale; 0.4418 a 377-tall window's
+    /// 1-unit offset at 0.9, which 1.12.1 rounds to nothing.
     #[test]
-    fn a_shadow_offset_is_a_whole_pixel_and_never_vanishes() {
+    fn a_shadow_offset_rounds_half_away_from_zero_to_a_whole_pixel() {
         assert_eq!(shadow_offset_px(1.0), 1.0);
         assert_eq!(shadow_offset_px(1.0546875), 1.0);
         assert_eq!(shadow_offset_px(-1.0546875), -1.0);
         assert_eq!(shadow_offset_px(2.109375), 2.0);
-        // 377-tall capture window × 0.9: 0.44 px would round to nothing.
-        assert_eq!(shadow_offset_px(0.4418), 1.0);
-        assert_eq!(shadow_offset_px(-0.4418), -1.0);
+        assert_eq!(shadow_offset_px(1.5), 2.0);
+        assert_eq!(shadow_offset_px(0.5), 1.0);
+        assert_eq!(shadow_offset_px(-0.5), -1.0);
+        assert_eq!(shadow_offset_px(0.4418), 0.0);
+        assert_eq!(shadow_offset_px(-0.4418), 0.0);
         assert_eq!(shadow_offset_px(0.0), 0.0);
     }
 
