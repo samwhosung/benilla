@@ -445,6 +445,34 @@ fn ping_location_pings_the_world_point_its_fractions_name_inside_the_call() {
     );
 }
 
+/// The two places the ping's numbers round to a float: `MINIMAP_PING`'s first number is rounded
+/// before it is negated (`0x4ee473`) and its second stays a double (`0x4ee476`); `GetPingPosition`
+/// rounds its second (`0x4ef05b`) and not its first.
+#[test]
+fn the_ping_numbers_round_to_a_float_where_the_reference_stores_one() {
+    let mut s = script();
+    s.run(
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+           local f = CreateFrame("Frame")
+           f:RegisterEvent("MINIMAP_PING")
+           f:SetScript("OnEvent", function() a1, a2 = arg2, arg3 end)"#,
+    )
+    .unwrap();
+    s.set_minimap_player(Some((0.0, 0.0)));
+    s.apply_minimap_ping((10.0, -7.0), "party1");
+    let k = 1.0 / (2.0 * f64::from(crate::widget::minimap_radius_yd(3, 3, false)));
+    let (first, second) = (7.0 * k, 10.0 * k);
+    let rounded = |v: f64| f64::from(v as f32);
+    assert!(
+        rounded(first) != first && rounded(second) != second,
+        "the case tells them apart"
+    );
+    let (a1, a2) = s.eval::<(f64, f64)>("return a1, a2").unwrap();
+    assert_eq!((a1, a2), (rounded(first), second), "the event");
+    let (g1, g2) = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
+    assert_eq!((g1, g2), (first, rounded(second)), "the getter");
+}
+
 /// The zoom cells, the indoor byte and the mask are statics (`0x86f698`, `0x86f69c`, `0xceaa60`,
 /// `0xbc7968`): every Minimap frame shows the one zoom and the one mask, and the zoom and ping
 /// getters take no `this` (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`).

@@ -410,19 +410,7 @@ fn emit_minimap(
     // The drawn family's world-to-px scale, for the point blips drawn after the tiles.
     let mut blip_px_per_yd = 0.0_f32;
 
-    // The outdoor tile binds the mask to stage 1 with preset 1, modulate on colour and alpha
-    // (`0x4eae74`, `0x4eae83`), so the tile's colour is times the mask's RGB too. The interior
-    // blit binds it (`0x4ec668`) without setting the stage's preset, which it inherits, untraced,
-    // so it keeps the coverage alone.
-    let mask = assets.tex(MinimapArtSlot::Mask).map(|m| UiQuadMask {
-        texture: m.clone(),
-        rect: slot.rect,
-        modulate_rgb: false,
-    });
-    let tile_mask = mask.clone().map(|m| UiQuadMask {
-        modulate_rgb: true,
-        ..m
-    });
+    let (mask, tile_mask) = stage_masks(assets.tex(MinimapArtSlot::Mask), slot.rect);
 
     let interior = minimap_interior(&player, &instances, &wmos, &world, &asset_server);
 
@@ -809,6 +797,26 @@ fn feed_minimap_art(
     }
 }
 
+/// The mask as the interior blit and the outdoor tiles bind it, in that order. The outdoor tile
+/// binds it to stage 1 with preset 1, modulate on colour and alpha (`0x4eae74`, `0x4eae83`), so
+/// the tile's colour is times the mask's RGB too. The interior blit binds it (`0x4ec668`) without
+/// setting the stage's preset, which it inherits, untraced, so it keeps the coverage alone.
+fn stage_masks(
+    mask: Option<&Handle<Image>>,
+    rect: Rect,
+) -> (Option<UiQuadMask>, Option<UiQuadMask>) {
+    let blit = mask.map(|m| UiQuadMask {
+        texture: m.clone(),
+        rect,
+        modulate_rgb: false,
+    });
+    let tile = blit.clone().map(|m| UiQuadMask {
+        modulate_rgb: true,
+        ..m
+    });
+    (blit, tile)
+}
+
 /// The corpse's static blip while the corpse is on the player's map, set by
 /// [`feed_minimap_arrows`] (which reads its `CORPSE_RED` name off the VM) for the landmark draw.
 #[derive(Resource, Default)]
@@ -816,7 +824,7 @@ pub(crate) struct MinimapCorpse(pub(crate) Option<benilla_formats::AreaPoi>);
 
 /// Aim the minimap's arrow children, the arrow half of its render (`0x4ec950`), after the tick and
 /// before the paint that draws them: the landmark selection's three records (rebuilt when its
-/// identities change) and the party records, by bearing. With an empty mask name the render
+/// identities change) and the party and pet records, by bearing. With an empty mask name the render
 /// returns before any of it (`0x4ec968`), so the arrows keep what they had.
 fn feed_minimap_arrows(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
@@ -1018,6 +1026,24 @@ pub(crate) fn mask_for_test(world: &World) -> Option<Handle<Image>> {
     world.resource::<MinimapAssets>().art[MinimapArtSlot::Mask as usize]
         .current
         .clone()
+}
+
+#[cfg(test)]
+mod stage_mask_tests {
+    use super::*;
+
+    /// The tiles' mask modulates colour (`0x4eae74`); the interior blit's keeps coverage alone.
+    #[test]
+    fn the_tiles_mask_modulates_colour_and_the_blits_does_not() {
+        let tex = Handle::<Image>::default();
+        let rect = Rect::new(0.0, 0.0, 140.0, 140.0);
+        let (blit, tile) = stage_masks(Some(&tex), rect);
+        assert!(!blit.unwrap().modulate_rgb, "the interior blit");
+        let tile = tile.unwrap();
+        assert!(tile.modulate_rgb, "the outdoor tiles");
+        assert_eq!(tile.rect, rect);
+        assert!(matches!(stage_masks(None, rect), (None, None)));
+    }
 }
 
 #[cfg(test)]
