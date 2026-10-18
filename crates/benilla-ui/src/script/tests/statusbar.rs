@@ -112,7 +112,7 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
     "#,
     )
     .unwrap();
-    s.resolve();
+    s.tick(0.0);
     let quads = s.extract();
     // The bar-fill texture: a solid-color region whose rect is 25% of the frame width.
     let bar = quads
@@ -137,6 +137,7 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
 
     // Vertical: fills bottom-up.
     s.run(r#"SbFill:SetOrientation("VERTICAL")"#).unwrap();
+    s.tick(0.0);
     let quads = s.extract();
     let bar = quads
         .iter()
@@ -159,8 +160,9 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
     );
 }
 
-/// The fill crops its art, never squeezes it (`0x770410`): `SetValue` sets the UV `u1` to the fill
-/// fraction `(value - min) / (max - min)` and shrinks the quad by the same fraction.
+/// The fill crops its art, never squeezes it: the bar's update builds the coordinates from scratch
+/// (`0x7833c0` → `0x770410`), 0 to the fill across when HORIZONTAL and 0 to the fill down when
+/// VERTICAL, so a vertical bar shows the top of its art; the texture's rect follows them.
 #[test]
 fn statusbar_bar_region_crops_its_texture_rather_than_stretching_it() {
     let mut s = script();
@@ -189,26 +191,87 @@ fn statusbar_bar_region_crops_its_texture_rather_than_stretching_it() {
             })
             .expect("the bar fill always carries its crop")
     };
-    s.resolve();
+    s.tick(0.0);
     assert_eq!(
         uv(&s),
         [0.0, 0.25, 0.0, 1.0],
         "horizontal: u cropped to the fill fraction, v whole"
     );
 
-    // Vertical fills bottom-up, so the art's bottom edge is pinned.
+    // Vertical: `{0, 0, fill, 1}` (`0x78342f`-`0x783436`), v from the art's top.
     s.run(r#"SbCrop:SetOrientation("VERTICAL")"#).unwrap();
+    s.tick(0.0);
     assert_eq!(
         uv(&s),
-        [0.0, 1.0, 0.75, 1.0],
-        "vertical: v cropped up from the bottom, u whole"
+        [0.0, 1.0, 0.0, 0.25],
+        "vertical: v cut to the fill from the top, u whole"
     );
 
     // An empty bar samples nothing; a full one samples everything.
     s.run("SbCrop:SetValue(0)").unwrap();
-    assert_eq!(uv(&s), [0.0, 1.0, 1.0, 1.0], "empty");
+    s.tick(0.0);
+    assert_eq!(uv(&s), [0.0, 1.0, 0.0, 0.0], "empty");
     s.run("SbCrop:SetValue(100)").unwrap();
+    s.tick(0.0);
     assert_eq!(uv(&s), [0.0, 1.0, 0.0, 1.0], "full");
+}
+
+/// The update writes the coordinates from scratch (`0x770410` stores all four corners), so an
+/// authored or addon `SetTexCoord` on the bar holds only until the next update that marks the fill
+/// (`+0x314 & 1`): a range, a stored value, the orientation or a texture.
+#[test]
+fn statusbar_fill_replaces_a_set_tex_coord_at_its_next_marked_update() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        local b = CreateFrame("StatusBar", "SbOwn")
+        b:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0)
+        b:SetWidth(200); b:SetHeight(20)
+        b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        b:GetStatusBarTexture():SetTexCoord(0.5, 1, 0.25, 0.75)
+        b:SetMinMaxValues(0, 100)
+        b:SetValue(40)
+    "#,
+    )
+    .unwrap();
+    let fill = |s: &UiScript| -> ([f32; 4], f32) {
+        s.extract()
+            .iter()
+            .find_map(|q| match &q.content {
+                QuadContent::Texture {
+                    path: Some(_),
+                    tex_coords,
+                    ..
+                } => Some((
+                    tex_coords.map_or([0.0, 1.0, 0.0, 1.0], |tc| tc.edges()),
+                    (q.rect.expect("bar rect resolved").width() * 100.0).round() / 100.0,
+                )),
+                _ => None,
+            })
+            .expect("the bar quad")
+    };
+    s.tick(0.0);
+    assert_eq!(fill(&s), ([0.0, 0.4, 0.0, 1.0], 80.0), "the base is not kept");
+    s.run("SbOwn:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1)").unwrap();
+    s.tick(0.0);
+    assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "unmarked: the addon's holds");
+    s.run("SbOwn:SetValue(40)").unwrap();
+    s.tick(0.0);
+    assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "an equal value stores nothing");
+    s.run("SbOwn:SetValue(60)").unwrap();
+    s.tick(0.0);
+    assert_eq!(fill(&s), ([0.0, 0.6, 0.0, 1.0], 120.0), "a stored value marks it");
+    s.run("SbOwn:Hide(); SbOwn:SetValue(10); SbOwn:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1)")
+        .unwrap();
+    s.tick(0.0);
+    s.run("SbOwn:Show()").unwrap();
+    s.tick(0.0);
+    assert_eq!(
+        fill(&s),
+        ([0.0, 0.1, 0.0, 1.0], 20.0),
+        "a hidden bar is not walked; the mark waits for it to show"
+    );
 }
 
 /// `0x7833c0` sets the bar texture's coordinates only with a range and a value (`0x7833e6`,
@@ -242,21 +305,24 @@ fn statusbar_without_a_range_and_a_value_draws_its_whole_texture() {
             })
             .expect("the bar quad")
     };
-    s.resolve();
+    s.tick(0.0);
     assert_eq!(
         fill(&s),
         ([0.0, 1.0, 0.0, 1.0], 200.0),
         "no range, no value"
     );
     s.run("SbWhole:SetValue(25)").unwrap();
+    s.tick(0.0);
     assert_eq!(
         fill(&s),
         ([0.0, 1.0, 0.0, 1.0], 200.0),
         "a value before a range"
     );
     s.run("SbWhole:SetMinMaxValues(0, 100)").unwrap();
+    s.tick(0.0);
     assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "a range, no value");
     s.run("SbWhole:SetValue(25)").unwrap();
+    s.tick(0.0);
     assert_eq!(fill(&s), ([0.0, 0.25, 0.0, 1.0], 50.0), "both: the fill");
 }
 

@@ -1024,3 +1024,56 @@ fn a_unit_with_guid_zero_is_no_unit() {
     .unwrap();
     assert!(s.take_errors().is_empty());
 }
+
+/// A unit with a maximum of 0 seeds the bar's range as `(0, 0)` (`0x52a0eb`, no floor), whose fill
+/// is 0 (`0x783394`): after the bar's update (`0x7833c0`) its texture is cut to nothing across.
+#[test]
+fn a_unit_with_no_maximum_health_draws_an_empty_tooltip_bar() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit("target", Some(wolf()));
+    s.run(
+        r#"
+        EmptyHost = CreateFrame("Frame", "EmptyHost")
+        EmptyTip = CreateFrame("GameTooltip", "EmptyTip", nil, "TestTooltipTemplate")
+        local bar = CreateFrame("StatusBar", "EmptyTipStatusBar", EmptyTip)
+        bar:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 10, 10)
+        bar:SetWidth(100); bar:SetHeight(8)
+        bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        EmptyTip:SetOwner(EmptyHost, "ANCHOR_RIGHT")
+        assert(EmptyTip:SetUnit("target") == 1)
+    "#,
+    )
+    .unwrap();
+    let fill = |s: &UiScript| -> Option<([f32; 4], f32)> {
+        s.extract().iter().find_map(|q| match &q.content {
+            QuadContent::Texture {
+                path: Some(p),
+                tex_coords,
+                ..
+            } if p.contains("UI-StatusBar") => Some((
+                tex_coords.map_or([0.0, 1.0, 0.0, 1.0], |tc| tc.edges()),
+                (q.rect.expect("bar rect resolved").width() * 100.0).round() / 100.0,
+            )),
+            _ => None,
+        })
+    };
+    s.tick(0.0);
+    assert_eq!(fill(&s), Some(([0.0, 0.6, 0.0, 1.0], 60.0)), "30 of 50");
+    let mut spent = wolf();
+    spent.guid += 1;
+    spent.health = 0;
+    spent.max_health = 0;
+    s.set_unit("target", Some(spent));
+    s.run(
+        r#"
+        assert(EmptyTip:SetUnit("target") == 1)
+        local mn, mx = EmptyTipStatusBar:GetMinMaxValues()
+        assert(mn == 0 and mx == 0, "the raw maximum: " .. mn .. "," .. mx)
+    "#,
+    )
+    .unwrap();
+    s.tick(0.0);
+    assert_eq!(fill(&s), Some(([0.0, 0.0, 0.0, 1.0], 0.0)), "empty across");
+    assert!(s.take_errors().is_empty());
+}

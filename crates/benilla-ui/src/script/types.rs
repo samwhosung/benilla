@@ -447,9 +447,9 @@ pub(crate) struct RegionData {
     /// The `<TexCoords>`/`SetTexCoord` mapping; `None` is the full texture.
     pub(crate) tex_coords: Option<TexCoords>,
     /// The reference's `+0x124`: `SetTexCoordModifiesRect` writes it (`0x79c113`, in `0x79c080`)
-    /// and installing the texture as a StatusBar's bar sets it (`0x783220`, in `0x7831f0`). Stored,
-    /// not applied: there a set flag makes `SetTexCoord` re-derive the rect from the UV quad
-    /// (`0x770462`); no stock or corpus code sets it.
+    /// and installing the texture as a StatusBar's bar sets it (`0x783220`, in `0x7831f0`). A set
+    /// flag scales the drawn rect by the coordinates' spans (`0x770570`, the extract's
+    /// `modified_rect`).
     pub(crate) tex_coord_modifies_rect: bool,
     /// Rotation about the centre, radians counterclockwise; always 0: 1.12 has no Texture setter.
     pub(crate) rotation: f32,

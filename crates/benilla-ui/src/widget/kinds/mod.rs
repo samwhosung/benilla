@@ -68,6 +68,8 @@ pub enum KindUpdate {
     MessageFrame,
     /// `CSimpleMessageScrollFrame`'s `0x788460` (slot `0x81ce50`): the line fades.
     ScrollingMessageFrame,
+    /// `CSimpleStatusBar`'s `0x7833c0`: the bar texture's coordinates, when the fill is marked.
+    StatusBar,
     /// `CSimpleScrollFrame`'s `0x787140` (slot `0x81cd78`): a marked range's recompute.
     ScrollFrame,
 }
@@ -93,6 +95,7 @@ impl FrameKind {
             FrameKind::MessageFrame => Some(KindUpdate::MessageFrame),
             FrameKind::ScrollingMessageFrame => Some(KindUpdate::ScrollingMessageFrame),
             FrameKind::ScrollFrame => Some(KindUpdate::ScrollFrame),
+            FrameKind::StatusBar => Some(KindUpdate::StatusBar),
             k if k.is_model() => Some(KindUpdate::Model),
             _ => None,
         }
@@ -1349,10 +1352,14 @@ pub struct StatusBarState {
     range_valid: bool,
     /// `+0x314 & 4`, set by the first stored value (`0x783347`).
     has_value: bool,
-    /// VERTICAL fills bottom-up; HORIZONTAL, the default, left to right (enum `0x811b00`).
-    pub vertical: bool,
-    /// The fill texture (`<BarTexture>`), cropped to [`Self::drawn_fraction`] along the
-    /// orientation axis.
+    /// `+0x314 & 1`, the fill to redo: set by the range (`0x78329a`), a stored value (`0x783347`),
+    /// the orientation (`0x78325c`) and a bar texture installed (`0x783230`); cleared by the
+    /// update that writes the coordinates ([`Self::take_fill`], `0x78344e`).
+    fill_dirty: bool,
+    /// `+0x328`: VERTICAL fills bottom-up; HORIZONTAL, the default, left to right (enum
+    /// `0x811b00`).
+    vertical: bool,
+    /// The fill texture (`<BarTexture>`, `+0x324`), whose coordinates the update writes.
     pub bar: Option<RegionHandle>,
 }
 
@@ -1376,6 +1383,7 @@ impl StatusBarState {
         self.min = if min > max { max } else { min };
         self.max = max;
         self.range_valid = true;
+        self.fill_dirty = true;
         if !self.has_value {
             return None;
         }
@@ -1398,7 +1406,26 @@ impl StatusBarState {
         }
         self.value = v;
         self.has_value = true;
+        self.fill_dirty = true;
         Some(v)
+    }
+
+    /// VERTICAL, as `GetOrientation` answers it.
+    pub fn vertical(&self) -> bool {
+        self.vertical
+    }
+
+    /// `CSimpleStatusBar::SetOrientation` (`0x783250`): stores it and marks the fill.
+    pub fn set_orientation(&mut self, vertical: bool) {
+        self.vertical = vertical;
+        self.fill_dirty = true;
+    }
+
+    /// `InstallBarTexture` (`0x7831f0`) past its same-texture return (`0x783202`): the slot takes
+    /// `bar` and the fill is marked (`0x783230`).
+    pub fn install_bar(&mut self, bar: Option<RegionHandle>) {
+        self.bar = bar;
+        self.fill_dirty = true;
     }
 
     /// The fill fraction `(value − min) / (max − min)` (`0x783380`), `0.0` when `max − min` is not
@@ -1411,15 +1438,24 @@ impl StatusBarState {
         }
     }
 
-    /// The fraction the bar texture is cut to. The update `0x7833c0` sets the texture's
-    /// coordinates only with a range and a value (`0x7833e6`, `0x7833ea`) and otherwise returns,
-    /// leaving the texture whole across the bar: `1.0` until both are set.
-    pub fn drawn_fraction(&self) -> f32 {
-        if self.range_valid && self.has_value {
-            self.fraction()
-        } else {
-            1.0
+    /// The update `CSimpleStatusBar::OnFrameUpdate` (`0x7833c0`) runs after the frame's
+    /// `OnUpdate`: with the fill marked, a bar texture, a range and a value (`0x7833d8`-`0x7833ea`)
+    /// it clears the mark (`0x78344e`) and answers the coordinates it builds from scratch for
+    /// `SetTexCoordRect` (`0x770410`), `[left, right, top, bottom]`: 0 to the fill across and 0 to
+    /// 1 down when HORIZONTAL (`0x78340e`-`0x78341e`), 0 to 1 across and 0 to the fill down when
+    /// VERTICAL (`0x78342f`-`0x783436`), so a vertical bar shows the top of its art. Otherwise it
+    /// answers `None` and the texture keeps whatever coordinates it holds.
+    pub fn take_fill(&mut self) -> Option<[f32; 4]> {
+        if !(self.fill_dirty && self.bar.is_some() && self.range_valid && self.has_value) {
+            return None;
         }
+        self.fill_dirty = false;
+        let f = self.fraction();
+        Some(if self.vertical {
+            [0.0, 1.0, 0.0, f]
+        } else {
+            [0.0, f, 0.0, 1.0]
+        })
     }
 }
 

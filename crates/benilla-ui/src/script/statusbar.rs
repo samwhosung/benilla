@@ -63,7 +63,7 @@ fn install_bar_model(
         },
         |ks, rh| {
             if let KindState::StatusBar(sb) = ks {
-                sb.bar = rh;
+                sb.install_bar(rh);
             }
         },
     )?;
@@ -122,6 +122,19 @@ fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::
     Ok(())
 }
 
+/// The kind's update after the frame's `OnUpdate` (`0x7833c0`): a marked fill writes the bar
+/// texture's coordinates ([`StatusBarState::take_fill`]), replacing any the texture held, so an
+/// addon's `SetTexCoord` on the bar lasts until the next range, value, orientation or texture.
+pub(super) fn update(model: &mut Model, h: crate::widget::FrameHandle) {
+    let Some(KindState::StatusBar(sb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
+        return;
+    };
+    let (Some(bar), Some(edges)) = (sb.bar, sb.take_fill()) else {
+        return;
+    };
+    model.region_data.entry(bar).or_default().tex_coords = Some(super::TexCoords::Rect(edges));
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -162,13 +175,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (this, o): (Table, Value)| {
             with_bar(lua, &this, |_| ())?;
             let vertical = binding_abi::orientation_arg(lua, &this, &o)?;
-            with_bar(lua, &this, |sb| sb.vertical = vertical)
+            with_bar(lua, &this, |sb| sb.set_orientation(vertical))
         })?,
     )?;
     m.set(
         "GetOrientation",
         lua.create_function(|lua, this: Table| {
-            let v = with_bar(lua, &this, |sb| sb.vertical)?;
+            let v = with_bar(lua, &this, |sb| sb.vertical())?;
             Ok(if v { "VERTICAL" } else { "HORIZONTAL" }.to_string())
         })?,
     )?;

@@ -129,15 +129,13 @@ impl UiScript {
                         }
                     }
                     let mut rect = owner.and_then(|o| model.frame_rect(o));
-                    // A StatusBar's fill has no anchors: `bar_fill_rect` places it.
-                    let mut bar_fill: Option<&crate::widget::StatusBarState> = None;
+                    // A StatusBar's bar texture fills the bar (`0x7831bf` pins it to every point);
+                    // its coordinates cut it to the fill (`0x7833c0`, `modified_rect` below).
+                    let mut bar_fill = false;
                     if let Some(crate::widget::KindState::StatusBar(sb)) =
                         owner_frame.map(|f| &f.kind_state)
                     {
-                        if sb.bar == Some(rh) {
-                            rect = rect.map(|r| bar_fill_rect(r, sb));
-                            bar_fill = Some(sb);
-                        }
+                        bar_fill = sb.bar == Some(rh);
                     }
                     // A Slider's thumb likewise: at the value fraction along the track.
                     let mut thumb_fill = false;
@@ -239,9 +237,6 @@ impl UiScript {
                     // (`0x768d55`) a FontString stops (`0x7730b7` needs the valid bit) and a
                     // Texture keeps the quad its last good resolve wrote (`0x7706e0`). The bar
                     // fill and thumbs keep their fraction geometry.
-                    if let Some(sb) = bar_fill {
-                        data.tex_coords = Some(bar_fill_uv(data.tex_coords, sb));
-                    }
                     let is_text = matches!(
                         region.map(|r| r.kind),
                         Some(crate::widget::RegionKind::FontString)
@@ -254,10 +249,13 @@ impl UiScript {
                     {
                         continue;
                     }
-                    if bar_fill.is_none() && !thumb_fill && !color_thumb {
+                    if !bar_fill && !thumb_fill && !color_thumb {
                         rect = model
                             .region_rect(rh)
                             .or_else(|| (!is_text).then(|| model.region_kept_rect(rh)).flatten());
+                    }
+                    if !is_text && data.tex_coord_modifies_rect {
+                        rect = rect.map(|r| modified_rect(r, data.tex_coords));
                     }
                     // A pushed label's text moves by its offset, `x · scale + left`,
                     // `y · scale + bottom` (`0x772100`); its rect, anchors and edges stay.
@@ -470,29 +468,21 @@ fn texture_color(fill: Option<[f32; 4]>, vertex: Option<[f32; 4]>) -> Option<[f3
     }
 }
 
-/// A StatusBar's fill rect: the frame rect scaled by the drawn fraction, rightward from the left
-/// edge or upward from the bottom (1.12 has no reverse fill).
-fn bar_fill_rect(r: Rect, sb: &crate::widget::StatusBarState) -> Rect {
-    let f = sb.drawn_fraction();
-    if sb.vertical {
-        Rect::new(r.bottom, r.left, r.bottom + r.height() * f, r.right)
-    } else {
-        Rect::new(r.bottom, r.left, r.top, r.left + r.width() * f)
-    }
-}
-
-/// A StatusBar's fill UVs: `base` (its `<TexCoords>`/`SetTexCoord`, or the full texture) cut to
-/// the value fraction along the fill axis, `[left, right, top, bottom]` in 0..1 from top-left. The
-/// client crops rather than scales: `SetValue` (`0x7cc450` → `0x7833c0`) drives `0x770410`, which
-/// writes the 4-corner UV block (`+0x104..+0x120`) with `u1` set to the fill fraction. Vertical
-/// mirrors it up `v`, pinning the art's bottom edge (inferred, not traced).
-fn bar_fill_uv(base: Option<TexCoords>, sb: &crate::widget::StatusBarState) -> TexCoords {
-    // An affine base contributes its bounding edges (no live StatusBar uses one).
-    let [l, r, t, b] = base.map(|tc| tc.edges()).unwrap_or([0.0, 1.0, 0.0, 1.0]);
-    let f = sb.drawn_fraction();
-    TexCoords::Rect(if sb.vertical {
-        [l, r, b - (b - t) * f, b]
-    } else {
-        [l, l + (r - l) * f, t, b]
-    })
+/// A texture's rect under `SetTexCoordModifiesRect` (`+0x124`), as `0x770570` derives it at every
+/// layout (`0x7706ad`) and coordinate change (`0x770498`): from the bottom-left, the width times
+/// `|URx − ULx|` and the height times `|LLy − ULy|`. A StatusBar's bar texture carries the flag
+/// (`0x783220`), so its fill coordinates also cut its rect.
+fn modified_rect(r: Rect, tex_coords: Option<TexCoords>) -> Rect {
+    let (across, down) = match tex_coords {
+        None => (1.0, 1.0),
+        Some(TexCoords::Rect([l, rt, t, b])) => ((rt - l).abs(), (b - t).abs()),
+        // Stored `[TL, TR, BR, BL]`: UL is TL, UR is TR, LL is BL.
+        Some(TexCoords::Corners(c)) => ((c[1][0] - c[0][0]).abs(), (c[3][1] - c[0][1]).abs()),
+    };
+    Rect::new(
+        r.bottom,
+        r.left,
+        r.bottom + r.height() * down,
+        r.left + r.width() * across,
+    )
 }

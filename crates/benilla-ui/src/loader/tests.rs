@@ -1079,7 +1079,8 @@ mod loader_tests {
             .unwrap();
         assert!(ok, "XML attributes + children landed in the widget state");
 
-        s.resolve();
+        // The fill's coordinates are the bar's update (`0x7833c0`), in the tick's walk.
+        s.tick(0.0);
         let bar = s
             .extract()
             .into_iter()
