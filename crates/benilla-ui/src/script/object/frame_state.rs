@@ -451,13 +451,20 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "SetAlpha",
-        lua.create_function(|lua, (this, alpha): (Table, f32)| {
+        lua.create_function(|lua, (this, alpha): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
-            // The reference clamps to 0..1; stock fade code passing a 0..255 alpha relies on it.
+            // `0x774e90`: `lua_isnumber` else the usage line (`0x774f76`), then the clamped,
+            // truncated byte; stock fade code passing a 0..255 alpha relies on the clamp.
+            let Some(alpha) = lua.coerce_number(alpha)? else {
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetAlpha(alpha 0 to 1)",
+                    frame_name(lua, h)
+                )));
+            };
             lua.app_data_mut::<Model>()
                 .expect("model")
                 .arena
-                .set_alpha(h, alpha.clamp(0.0, 1.0));
+                .set_alpha(h, crate::color::frame_alpha_byte(alpha));
             Ok(())
         })?,
     )?;
@@ -466,7 +473,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.arena.frame(h).map(|f| f.alpha).unwrap_or(1.0))
+            Ok(model
+                .arena
+                .frame(h)
+                .map_or(1.0, |f| crate::color::alpha_f64(f.alpha)))
         })?,
     )?;
     // `SetBackdrop(table|nil)` (`0x7776e0` → `0x76a5d0`) installs or removes the tiled background

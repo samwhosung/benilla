@@ -87,7 +87,7 @@ impl UiScript {
             let (rect, alpha, content, clip, scale) = match target {
                 ZTarget::Frame(fh) => {
                     let frame = model.arena.frame(fh);
-                    let alpha = frame.map(|f| f.effective_alpha).unwrap_or(1.0);
+                    let alpha = frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha));
                     let scale = frame.map(|f| f.effective_scale).unwrap_or(1.0);
                     let content = match frame.map(|f| &f.kind_state) {
                         Some(crate::widget::KindState::Minimap(m)) => QuadContent::Minimap {
@@ -105,7 +105,7 @@ impl UiScript {
                             facing: m.facing,
                             model_scale: m.scale,
                             position: m.position,
-                            own_alpha: frame.map_or(1.0, |f| f.alpha),
+                            own_alpha: frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha)),
                             icon: m.icon.clone(),
                             camera: m.camera,
                             light: m.light,
@@ -237,8 +237,8 @@ impl UiScript {
                     let mut data = data_ref.cloned().unwrap_or_default();
                     region_tex = data.tex.id();
                     // One hop (region combine `0x772180`): the region's alpha times its owner's
-                    // `effective_alpha`, which `SetAlpha 0x76a690` already carries down the tree.
-                    let alpha = owner_frame.map(|f| f.effective_alpha).unwrap_or(1.0)
+                    // byte, which `SetAlpha 0x76a690` already carries down the tree.
+                    let alpha = owner_frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha))
                         * data.alpha.unwrap_or(1.0);
                     // A region draws at its resolved rect: drawable regions carry anchors
                     // (authored, or `region::implicit_creation_anchor`), so a region that never

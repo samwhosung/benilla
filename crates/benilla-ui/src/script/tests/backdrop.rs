@@ -645,7 +645,11 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                         spec.border_color
                     };
                     assert_eq!(*color, Some(want_color), "{ctx} piece {k} colour");
-                    assert_eq!(*alpha, 0.5, "{ctx} piece {k}: the frame's alpha");
+                    assert_eq!(
+                        *alpha,
+                        127.0 / 255.0,
+                        "{ctx} piece {k}: the frame's alpha byte"
+                    );
                     // An untiled background keeps the whole texture (no `SetTexCoord`).
                     let uvs = match tc {
                         Some(TexCoords::Corners(c)) => *c,

@@ -44,10 +44,11 @@ impl Loader<'_> {
                 self.status_warning(format!("Frame {name}: Unknown frame level: {value}"));
             }
         }
-        if let Some(alpha) = el.attr("alpha") {
-            if let Ok(a) = alpha.parse::<f32>() {
-                self.call(wrapper, "SetAlpha", a, dbg);
-            }
+        // `0x769a10`: a non-empty `alpha` through `SStrToFloat` (`0x64aaa0`), clamped with NaN
+        // at 1 and handed to the alpha walk as Lua's `SetAlpha` hands it (`0x769a76`-`0x769a8a`).
+        if let Some(alpha) = el.attr("alpha").filter(|v| !v.is_empty()) {
+            let a = crate::script::binding_abi::s_str_to_float(alpha);
+            self.call(wrapper, "SetAlpha", a, dbg);
         }
 
         // A model pane's `file=` is `SetModel` (`0x76cac0`).

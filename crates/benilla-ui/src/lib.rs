@@ -7,6 +7,7 @@ pub extern crate benilla_mlua as mlua;
 
 pub mod bindings_xml;
 pub mod civil;
+pub mod color;
 pub mod framexml;
 pub mod justify;
 pub mod layout;

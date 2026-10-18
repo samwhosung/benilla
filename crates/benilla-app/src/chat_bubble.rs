@@ -554,7 +554,7 @@ fn drive_bubbles(
                 text: b.text.clone(),
                 colour: b.color,
                 shown: b.fade.shown,
-                alpha: f32::from(b.fade.alpha) / 255.0,
+                alpha: b.fade.alpha,
                 seat: match seat {
                     Some((_, p)) => (p.x / seam, (viewport.y - p.y) / seam),
                     // Short of the near plane (behind the camera) the projection writes no point

@@ -166,11 +166,10 @@ pub struct Frame {
     pub strata: Strata,
     /// The level within the stratum (`frameLevel +0xc4`, default 0).
     pub level: u16,
-    /// This frame's own alpha, 0.0..=1.0 (`alpha +0xc8`, default 1.0).
-    pub alpha: f32,
-    /// Always equal to [`Frame::alpha`]: alpha cascades at set time, and at draw a region
-    /// multiplies only its owner frame's alpha (`0x772180`/`0x77fac0`).
-    pub effective_alpha: f32,
+    /// This frame's alpha byte (`+0xc8`, default 255). It cascades at set time
+    /// ([`WidgetArena::set_alpha`]), and at draw a region multiplies only its owner frame's
+    /// (`0x772180`/`0x77fac0`).
+    pub alpha: u8,
     /// The frame's own Show/Hide bit (`+0xd0`, default true).
     pub shown: bool,
     /// `shown` and every ancestor effectively visible (`+0xd4`).
@@ -554,9 +553,8 @@ impl WidgetArena {
 
         let shown = true;
         let scale = 1.0f32;
-        // 1.0 whatever the parent's: only `SetAlpha` pushes alpha down the tree.
-        let alpha = 1.0f32;
-        let effective_alpha = alpha;
+        // Opaque whatever the parent's: only `SetAlpha` pushes alpha down the tree.
+        let alpha = 255u8;
 
         let frame = Frame {
             disabled_layers: 0,
@@ -574,7 +572,6 @@ impl WidgetArena {
             },
             level: 0,
             alpha,
-            effective_alpha,
             shown,
             effective_visible: shown && parent_visible,
             load_window: false,

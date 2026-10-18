@@ -257,12 +257,16 @@ impl WidgetArena {
 
     // ── Alpha ────────────────────────────────────────────────────────────────────────────────────
 
-    /// `SetAlpha` (`0x76a690`): write the raw value to `h` and every descendant frame (`+0xc8`),
-    /// with no draw-time product, so a child's own later `SetAlpha` holds until an ancestor's next.
-    pub fn set_alpha(&mut self, h: FrameHandle, alpha: f32) {
+    /// The alpha walk (`0x76a690`, vtable slot 0x28): write the byte to `h` and every descendant
+    /// frame (`+0xc8`), with no draw-time product, so a child's own later `SetAlpha` holds until an
+    /// ancestor's next. A frame whose byte is already `alpha` ends the walk there, its subtree
+    /// untouched (`0x76a69a`), at every level.
+    pub fn set_alpha(&mut self, h: FrameHandle, alpha: u8) {
         let Some(f) = self.frame_mut(h) else { return };
+        if f.alpha == alpha {
+            return;
+        }
         f.alpha = alpha;
-        f.effective_alpha = alpha;
         let children = self.frame(h).expect("just wrote it").children.clone();
         for c in children {
             self.set_alpha(c, alpha);

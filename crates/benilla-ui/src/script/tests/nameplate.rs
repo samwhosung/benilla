@@ -48,7 +48,7 @@ fn plate(name: &str, health: f32, max: f32) -> PlateState {
         skull: false,
         level_colour: [1.0, 1.0, 0.0],
         raid_icon: None,
-        alpha: 1.0,
+        alpha: 255,
         lit: false,
         hovered: false,
     }
@@ -278,8 +278,8 @@ fn the_target_plate_is_the_opaque_one() {
     let mut s = vm();
     let mut target = plate("Wolf", 30.0, 40.0);
     let mut other = plate("Bear", 10.0, 90.0);
-    target.alpha = 1.0;
-    other.alpha = 0.5;
+    target.alpha = 255;
+    other.alpha = 127;
     drive(&mut s, &[target, other]);
     assert!(s
         .eval::<bool>(

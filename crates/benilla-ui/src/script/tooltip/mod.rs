@@ -409,7 +409,7 @@ fn full_alpha(model: &mut Model, h: FrameHandle) {
     if let Ok(t) = tip_mut(model, h) {
         t.fade_left = None;
     }
-    model.arena.set_alpha(h, 1.0);
+    model.arena.set_alpha(h, 255);
 }
 
 /// Shows or hides as the Lua verbs do, handlers included.
@@ -659,14 +659,14 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, elapsed: f32) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
             .arena
-            .set_alpha(h, 1.0);
+            .set_alpha(h, 255);
         set_shown(lua, h, false);
     }
 }
 
-/// The fade's alpha with `left` seconds to go, in whole 255ths as the reference's `SetAlpha`
-/// takes them. The product is formed in f64, where `left × 255` is exact as in the x87 original.
-fn fade_alpha(left: f32) -> f32 {
+/// The fade's alpha byte with `left` seconds to go, as the reference hands the alpha walk whole
+/// 255ths. The product is formed in f64, where `left × 255` is exact as in the x87 original.
+fn fade_alpha(left: f32) -> u8 {
     let half = f64::from(TOOLTIP_FADE_SECS) * 0.5;
     let left = f64::from(left);
     let units = if left < half {
@@ -674,5 +674,5 @@ fn fade_alpha(left: f32) -> f32 {
     } else {
         255.0
     };
-    (units / 255.0) as f32
+    units as u8
 }

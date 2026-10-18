@@ -120,7 +120,7 @@ const PLATE_LIFT: f32 = 2.0 / 3.0;
 const MAX_DIST_SQ: f32 = 20.0 * 20.0;
 /// Deviation: the reference dims non-target plates to `0x7F`; raised because that fades them too
 /// far to read.
-const DIM_ALPHA: f32 = 178.0 / 255.0;
+const DIM_ALPHA: u8 = 178;
 
 /// The bar-fill palette, the dwords at `0xcf60d0`/`e8`/`c8`/`dc`, in sRGB.
 const PLATE_HOSTILE: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
@@ -483,7 +483,7 @@ fn drive_vplates(
         plates.0.insert(entity);
 
         let alpha = if !has_target || world.selection.target == Some(entity) {
-            1.0
+            255
         } else {
             DIM_ALPHA
         };

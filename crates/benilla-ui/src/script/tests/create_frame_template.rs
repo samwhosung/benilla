@@ -158,7 +158,11 @@ fn a_comma_list_is_one_name_and_a_single_name_still_chains() {
             .unwrap(),
         (50.0, 60.0)
     );
-    assert_eq!(s.eval::<f32>("return One:GetAlpha()").unwrap(), 0.25);
+    // `alpha="0.25"` is the byte 63 (`0x769a82`).
+    assert_eq!(
+        s.eval::<f64>("return One:GetAlpha()").unwrap(),
+        63.0 / 255.0
+    );
     assert!(s.take_errors().is_empty());
     assert!(s.take_warnings().is_empty());
 

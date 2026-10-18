@@ -334,7 +334,7 @@ pub struct ExtractedQuad {
     pub z: u128,
     /// `None` when the owning frame's anchors do not resolve; a renderer skips it.
     pub rect: Option<Rect>,
-    /// A frame's `effective_alpha`, or a region's alpha times its owner's, one hop only.
+    /// A frame's alpha, or a region's alpha times its owner's, one hop only.
     pub alpha: f32,
     pub content: QuadContent,
     /// The ScrollFrame clip of a scroll child and its descendants, nested ones intersecting.

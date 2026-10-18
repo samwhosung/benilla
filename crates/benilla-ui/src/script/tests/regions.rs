@@ -417,7 +417,11 @@ fn region_alpha_is_its_own_and_multiplies_the_owner_frames() {
         0.5,
         "the frame's SetAlpha leaves the region's own alpha alone"
     );
-    assert_eq!(quad_alpha(&s), 0.25, "0.5 region × 0.5 frame");
+    assert_eq!(
+        quad_alpha(&s),
+        0.5 * (127.0 / 255.0),
+        "0.5 region × the frame's byte 127"
+    );
 
     s.run("tex:SetAlpha(1); tex:Hide()").unwrap();
     assert!(

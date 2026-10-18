@@ -25,7 +25,7 @@ mod battlefield_queue;
 mod battlefield_score;
 mod bind_confirm;
 mod binder;
-mod binding_abi;
+pub(crate) mod binding_abi;
 mod dialog_verbs;
 mod tutorial;
 mod worldmap_arrow;
@@ -1045,7 +1045,7 @@ impl UiScript {
             .arena
             .iter_frames()
             .find(|(_, f)| f.name.as_deref() == Some(name) && f.effective_visible)
-            .map(|(_, f)| f.effective_alpha)
+            .map(|(_, f)| crate::color::alpha_f32(f.alpha))
     }
 
     /// The layout drain (`0x768ed0`), which [`Self::tick`] runs before and after its walk: resolve

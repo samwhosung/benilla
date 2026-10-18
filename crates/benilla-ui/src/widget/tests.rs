@@ -349,19 +349,49 @@ fn set_alpha_overwrites_the_subtree() {
     let root = a.create(FrameKind::Frame, None, None);
     let child = a.create(FrameKind::Frame, None, Some(root));
     let grandchild = a.create(FrameKind::Frame, None, Some(child));
-    a.set_alpha(root, 0.5);
+    a.set_alpha(root, 127);
     for h in [root, child, grandchild] {
-        assert_eq!(a.frame(h).unwrap().alpha, 0.5);
-        assert_eq!(a.frame(h).unwrap().effective_alpha, 0.5);
+        assert_eq!(a.frame(h).unwrap().alpha, 127);
     }
     // Last write wins: the child's own SetAlpha holds until the parent sets again.
-    a.set_alpha(child, 1.0);
-    assert_eq!(a.frame(root).unwrap().effective_alpha, 0.5);
-    assert_eq!(a.frame(child).unwrap().effective_alpha, 1.0);
-    assert_eq!(a.frame(grandchild).unwrap().effective_alpha, 1.0);
-    // A frame created under a dimmed parent starts at 1.0.
+    a.set_alpha(child, 255);
+    assert_eq!(a.frame(root).unwrap().alpha, 127);
+    assert_eq!(a.frame(child).unwrap().alpha, 255);
+    assert_eq!(a.frame(grandchild).unwrap().alpha, 255);
+    // A frame created under a dimmed parent starts opaque.
     let late = a.create(FrameKind::Frame, None, Some(root));
-    assert_eq!(a.frame(late).unwrap().effective_alpha, 1.0);
+    assert_eq!(a.frame(late).unwrap().alpha, 255);
+}
+
+/// The walk ends at a frame whose byte is already the new one (`0x76a69a`), at every level: the
+/// root re-set to its own byte leaves a child's later write alone, and a child already at the new
+/// byte shields its subtree.
+#[test]
+fn set_alpha_stops_at_an_unchanged_byte() {
+    let mut a = arena();
+    let root = a.create(FrameKind::Frame, None, None);
+    let child = a.create(FrameKind::Frame, None, Some(root));
+    let grandchild = a.create(FrameKind::Frame, None, Some(child));
+    a.set_alpha(root, 127);
+    a.set_alpha(child, 255);
+    a.set_alpha(root, 127);
+    assert_eq!(
+        a.frame(child).unwrap().alpha,
+        255,
+        "the root was already 127"
+    );
+    assert_eq!(a.frame(grandchild).unwrap().alpha, 255);
+
+    a.set_alpha(child, 64);
+    a.set_alpha(grandchild, 200);
+    a.set_alpha(root, 64);
+    assert_eq!(a.frame(root).unwrap().alpha, 64);
+    assert_eq!(a.frame(child).unwrap().alpha, 64);
+    assert_eq!(
+        a.frame(grandchild).unwrap().alpha,
+        200,
+        "the child was already 64, so the walk ended there"
+    );
 }
 
 // ── The per-kind registries ──────────────────────────────────────────────────────────────────

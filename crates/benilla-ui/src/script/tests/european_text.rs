@@ -181,7 +181,7 @@ fn a_chat_bubble_line_swaps_its_separators() {
         text: "I have 1.5 gold".into(),
         colour: [1.0, 1.0, 1.0],
         shown: true,
-        alpha: 1.0,
+        alpha: 255,
         seat: (500.0, 300.0),
     };
     s.sync_chat_bubbles(geometry, &[line]);
@@ -228,7 +228,7 @@ fn a_nameplate_name_and_level_swap_their_separators() {
         skull: false,
         level_colour: [1.0, 1.0, 0.0],
         raid_icon: None,
-        alpha: 1.0,
+        alpha: 255,
         lit: false,
         hovered: false,
     };

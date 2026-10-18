@@ -83,9 +83,9 @@ pub struct PlateState {
     pub level_colour: [f32; 3],
     /// The raid-target mark, 0-based, or `None`.
     pub raid_icon: Option<u8>,
-    /// The plate's alpha: exactly 1.0 for the target, dimmed otherwise. Addons find the target
+    /// The plate's alpha byte: 255 for the target, dimmed otherwise. Addons find the target
     /// plate by `GetAlpha() == 1`.
-    pub alpha: f32,
+    pub alpha: u8,
     /// Mouseover or target: the bar brightens.
     pub lit: bool,
     /// The pointer is on the plate: the name goes yellow (`0x7cb850`) and the glow region shows.

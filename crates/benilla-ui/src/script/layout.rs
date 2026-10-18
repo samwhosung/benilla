@@ -45,7 +45,7 @@ fn node_anchors(
         .unwrap_or_default()
 }
 
-/// A frame's `effective_alpha` and `effective_scale`, worn by the quads it emits itself.
+/// A frame's alpha and `effective_scale`, worn by the quads it emits itself.
 #[derive(Clone, Copy)]
 pub(super) struct FramePaint {
     pub(super) alpha: f32,

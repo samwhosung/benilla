@@ -65,8 +65,8 @@ pub struct BubbleState {
     /// The own-shown bit: a line is shown when it spawns and while it fades, hidden when an
     /// out-of-range fade ends (`0x4b0d9f`), shown again on the way back (`0x4b0ea0`).
     pub shown: bool,
-    /// The fade's frame alpha (`0x4b0d4f`, `0x4b0dc3`).
-    pub alpha: f32,
+    /// The fade's frame alpha byte, the one `0x4b0d4f` and `0x4b0dc3` hand the alpha walk.
+    pub alpha: u8,
     /// The projected speaker point the text's BOTTOM sits on, from the `WorldFrame`'s
     /// BOTTOMLEFT (`0x4b157a`).
     pub seat: (f32, f32),

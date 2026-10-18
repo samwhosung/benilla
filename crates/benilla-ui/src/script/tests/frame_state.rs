@@ -98,3 +98,96 @@ fn set_scale_gates_its_argument_as_the_client_does() {
     s.resolve();
     let _ = s.extract();
 }
+
+/// `Frame:SetAlpha` (`0x774e90`) stores `trunc(clamp(a) * 255)`, NaN as 1, and `GetAlpha`
+/// (`0x774dc0`) reads the byte times the `f64` 1/255; a non-number raises the usage line
+/// (`0x774f76`). The byte reaches the draw.
+#[test]
+fn frame_alpha_is_the_clients_truncated_byte() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame", "Faded")
+        f:SetPoint("CENTER", 0, 0); f:SetWidth(10); f:SetHeight(10)
+        local t = f:CreateTexture(nil, "ARTWORK"); t:SetAllPoints(f); t:SetTexture("Art")
+        u = CreateFrame("Frame")
+    "#,
+    )
+    .unwrap();
+    let alpha = |s: &UiScript, a: &str| -> f64 {
+        s.run(&format!("f:SetAlpha({a})")).unwrap();
+        s.eval::<f64>("return f:GetAlpha()").unwrap()
+    };
+    assert_eq!(alpha(&s, "0.5"), 0.4980392156862745);
+    assert_eq!(alpha(&s, "1"), 1.0);
+    assert_eq!(alpha(&s, "0.999"), 254.0 * (1.0 / 255.0));
+    assert_eq!(alpha(&s, "0"), 0.0);
+    assert_eq!(alpha(&s, "0/0"), 1.0);
+    assert_eq!(alpha(&s, "2"), 1.0);
+    assert_eq!(alpha(&s, "-1"), 0.0);
+    assert_eq!(alpha(&s, "\"0.5\""), 0.4980392156862745);
+
+    s.resolve();
+    let drawn: Vec<f32> = s
+        .extract()
+        .iter()
+        .filter(|q| s.quad_owner_name(q.target).as_deref() == Some("Faded"))
+        .filter(|q| matches!(q.content, QuadContent::Texture { .. }))
+        .map(|q| q.alpha)
+        .collect();
+    assert_eq!(drawn, vec![127.0 / 255.0]);
+
+    let e = s.run("f:SetAlpha(nil)").unwrap_err().to_string();
+    assert!(e.contains("Usage: Faded:SetAlpha(alpha 0 to 1)"), "{e}");
+    let e = s.run("u:SetAlpha({})").unwrap_err().to_string();
+    assert!(e.contains("Usage: <unnamed>:SetAlpha(alpha 0 to 1)"), "{e}");
+}
+
+/// Re-setting a parent's alpha to the byte it holds leaves a child's own later alpha alone, in
+/// Lua as in the walk (`0x76a69a`).
+#[test]
+fn a_parents_unchanged_alpha_does_not_recascade() {
+    let s = script();
+    s.run(
+        r#"
+        p = CreateFrame("Frame", "AlphaP")
+        c = CreateFrame("Frame", "AlphaC", p)
+        g = CreateFrame("Frame", "AlphaG", c)
+        p:SetAlpha(0.5)
+        c:SetAlpha(1)
+        p:SetAlpha(0.5)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64, f64)>("return p:GetAlpha(), c:GetAlpha(), g:GetAlpha()")
+            .unwrap(),
+        (0.4980392156862745, 1.0, 1.0)
+    );
+}
+
+/// A frame's XML `alpha` (`0x769a10`) is skipped when empty, otherwise read by `SStrToFloat`, so
+/// text with no number is 0, and handed to the alpha walk clamped and truncated as Lua's is.
+#[test]
+fn xml_alpha_takes_the_reference_parse_and_byte() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Frame name="XmlQuarter" alpha="0.25"/>
+             <Frame name="XmlWord" alpha="half"/>
+             <Frame name="XmlEmpty" alpha=""/>
+             <Frame name="XmlOver" alpha="3"/>
+           </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(
+        s.eval::<(f64, f64, f64, f64)>(
+            "return XmlQuarter:GetAlpha(), XmlWord:GetAlpha(), XmlEmpty:GetAlpha(), XmlOver:GetAlpha()"
+        )
+        .unwrap(),
+        (63.0 / 255.0, 0.0, 1.0, 1.0)
+    );
+}
