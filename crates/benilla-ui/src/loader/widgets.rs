@@ -195,6 +195,11 @@ impl Loader<'_> {
                 if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region) {
                     self.report.fault(format!("{dbg}: implicit anchor: {e}"));
                 }
+                // Then the install's refresh (`0x778daa`): the label follows the state's font,
+                // not the font its own `inherits=` or `font=` linked.
+                if let Err(e) = crate::script::refresh_label_lua(self.lua, wrapper) {
+                    self.report.fault(format!("{dbg}: label refresh: {e}"));
+                }
                 // Published both ways, like a named state texture.
                 if let Some(rname) = bt_name {
                     crate::script::region::publish_region_name(self.lua(), &rname, &region);

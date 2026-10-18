@@ -137,6 +137,16 @@ fn fonts_of(lua: &Lua, this: &Table) -> mlua::Result<(FrameHandle, ButtonFonts)>
     Ok((h, f))
 }
 
+/// The label refresh for the loader, after a `<ButtonText>` or `<NormalText>` label has loaded
+/// its own levels: the reference builds the string first (`0x7789d0` → `0x6f2780` → `0x770f40`)
+/// and installs it after (`0x7789d9` → `0x778d20` → `0x778daa`), so the state's font is linked
+/// over whatever font the string's own XML linked.
+pub(crate) fn refresh_label_lua(lua: &Lua, wrapper: &Table) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, wrapper)?;
+    refresh_label(&mut lua.app_data_mut::<Model>().expect("model app_data"), h);
+    Ok(())
+}
+
 /// The loader's handle on one embedded font, which `<NormalFont>` and kin load into (`0x778baf`,
 /// `0x778bf4` → `0x783c30`).
 pub(crate) fn state_font_lua(lua: &Lua, wrapper: &Table, which: LabelFont) -> mlua::Result<FontId> {
@@ -161,6 +171,7 @@ fn adopt_label(model: &mut Model, owner: FrameHandle, rh: RegionHandle) {
 pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
     if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         bs.refresh_label();
+        bs.take_relink();
     }
     relink_label(model, h);
 }
@@ -171,7 +182,7 @@ pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
 /// through the label's mask, so a state font that holds no colour leaves the colour the last one
 /// gave, and a label's own setter outlasts every state. Here the layer is on while the cursor is
 /// over the button or `LockHighlight` holds, as the highlight texture draws. Relinking the font it
-/// already follows does nothing (`0x770c6a`), so the edges that move nothing cost one compare.
+/// already follows does nothing (`0x770c6a`).
 fn relink_label(model: &mut Model, h: FrameHandle) {
     let (rh, state, locked) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Button(bs)) => match bs.text {
@@ -191,6 +202,18 @@ fn relink_label(model: &mut Model, h: FrameHandle) {
         f.normal
     };
     super::font::link_region(model, rh, Some(to));
+}
+
+/// The font relink a real state change owes the label (`0x7797fc` → `0x779810`); nothing for a
+/// state that held (`0x7797a9`) or a call that moved no state, such as `SetChecked`.
+fn relink_after_change(model: &mut Model, h: FrameHandle) {
+    let due = match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        Some(KindState::Button(bs)) => bs.take_relink(),
+        _ => false,
+    };
+    if due {
+        relink_label(model, h);
+    }
 }
 
 /// `Set{Text,Highlight,Disabled}FontObject(font | "font" | nil)` (`0x780400`, `0x780700`,
@@ -301,8 +324,7 @@ fn with_button_shown(
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     super::region::apply_shown_writes(&mut model, writes);
-    // A state change ends in the label refresh (`0x7797fc`).
-    relink_label(&mut model, h);
+    relink_after_change(&mut model, h);
     Ok(())
 }
 
@@ -329,7 +351,7 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
         frame.disabled_layers |= bit;
     }
     super::region::apply_shown_writes(&mut model, writes);
-    relink_label(&mut model, h);
+    relink_after_change(&mut model, h);
     Ok(())
 }
 
@@ -346,7 +368,7 @@ pub(super) fn edge(
         _ => return,
     };
     super::region::apply_shown_writes(model, writes);
-    relink_label(model, h);
+    relink_after_change(model, h);
 }
 
 /// Whether a hover edge on `h` reaches the base notify, the HIGHLIGHT layer and the Lua

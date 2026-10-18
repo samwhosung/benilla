@@ -536,7 +536,7 @@ impl std::ops::BitOr for FontMask {
 
 /// A FontString's per-bit justify mask (`+0x124`, `0x3f` from the constructor, `0x770ddd`): the
 /// justify group writes `(word & !mask) | (font & mask)` (`0x770859`-`0x770876`). `SetJustifyH`
-/// clears its three bits (`0x79e779`) and `SetJustifyV` its three (`0x79e96c`), each with the
+/// clears its three bits (`0x79e779`) and `SetJustifyV` its three (`0x79e979`), each with the
 /// group bit; the koKR chat bubble clears the horizontal three alone (`0x4b1707`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct JustifyMask(pub(crate) u32);

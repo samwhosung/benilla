@@ -285,3 +285,85 @@ fn the_state_colour_elements_colour_their_fonts() {
     assert_eq!(get("GetHighlightTextColor"), (0.0, 1.0, 0.0, 1.0));
     assert_eq!(get("GetDisabledTextColor"), (0.0, 0.0, 1.0, 0.5));
 }
+
+/// A `<ButtonText>` builds its string first, its own `inherits=` linking it, and is installed
+/// after (`0x7789d0` → `0x770f40`, then `0x7789d9` → `0x778daa`), so the label follows the normal
+/// font and the button's colour reaches it with no hover.
+#[test]
+fn a_button_text_with_its_own_font_follows_the_normal_font() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    load(
+        &s,
+        r#"<Ui>
+             <Font name="GameFontNormalSmall" font="Fonts\FRIZQT__.TTF">
+               <FontHeight><AbsValue val="10"/></FontHeight>
+               <Color r="1.0" g="0.82" b="0"/>
+             </Font>
+             <Font name="GameFontHighlight" font="Fonts\FRIZQT__.TTF">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+               <Color r="1.0" g="1.0" b="1.0"/>
+             </Font>
+             <Button name="B">
+               <Size><AbsDimension x="100" y="20"/></Size>
+               <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="100" y="100"/></Offset></Anchor></Anchors>
+               <ButtonText name="$parentText" text="Label" inherits="GameFontNormalSmall"/>
+               <NormalFont inherits="GameFontHighlight"/>
+             </Button>
+           </Ui>"#,
+    );
+    s.run("B:SetTextColor(1, 0, 0)").unwrap();
+    assert_eq!(drawn_color(&mut s), Some([1.0, 0.0, 0.0, 1.0]));
+}
+
+/// The hover refresh runs after the base enter and its `OnEnter` (`0x76b6a0`, then `0x7794ab`):
+/// the script's normal colour still reaches the label, which then moves to an empty highlight
+/// font that changes nothing.
+#[test]
+fn the_hover_refresh_follows_on_enter() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    load(
+        &s,
+        r#"<Ui>
+             <Font name="Plain" font="Fonts\FRIZQT__.TTF">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+               <Color r="1.0" g="0.82" b="0"/>
+             </Font>
+             <Button name="B">
+               <Size><AbsDimension x="100" y="20"/></Size>
+               <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="100" y="100"/></Offset></Anchor></Anchors>
+               <NormalFont inherits="Plain"/>
+               <Scripts><OnEnter>this:SetTextColor(1, 1, 1)</OnEnter></Scripts>
+             </Button>
+           </Ui>"#,
+    );
+    s.run(r#"B:SetText("Label")"#).unwrap();
+    hover(&mut s, true);
+    assert_eq!(drawn_color(&mut s), Some([1.0, 1.0, 1.0, 1.0]));
+}
+
+/// `SetChecked` moves no state, so it relinks nothing: a label left on its own font by a direct
+/// `SetFontObject` stays there.
+#[test]
+fn set_checked_does_not_relink_the_label() {
+    let mut s = script();
+    fixture(&mut s);
+    load(
+        &s,
+        r#"<Ui><CheckButton name="Box">
+             <NormalFont inherits="GameFontNormal"/>
+           </CheckButton></Ui>"#,
+    );
+    s.run(
+        r#"
+        Box:SetText("x")
+        Box:GetFontString():SetFontObject(GameFontDisable)
+        Box:SetChecked(1)
+    "#,
+    )
+    .unwrap();
+    assert!(s
+        .eval::<bool>("return Box:GetFontString():GetFontObject() == GameFontDisable")
+        .unwrap());
+}

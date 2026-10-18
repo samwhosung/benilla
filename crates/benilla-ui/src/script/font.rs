@@ -815,7 +815,8 @@ pub(super) fn nameplate_font(lua: &Lua) -> Option<String> {
 /// use both. An existing name returns that object unchanged and unrepublished (`0x7839ab`).
 ///
 /// The reference's gate (`0x706048`) takes a number or any string, the empty one included, and
-/// raises on anything else. A fresh object holds nothing, so it copies nothing ([`repaint`]).
+/// raises on anything else. A fresh object holds nothing, so a link to it applies nothing
+/// ([`apply`]).
 fn create_font(lua: &Lua, name: Option<String>) -> mlua::Result<Table> {
     let name = name.ok_or_else(|| {
         mlua::Error::runtime("CreateFont: a font name is required (it becomes a global)")

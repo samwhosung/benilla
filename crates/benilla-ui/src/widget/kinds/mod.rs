@@ -898,6 +898,8 @@ pub struct ButtonState {
     /// The label's text offset (`CSimpleFontString::SetTextOffset` `0x772100`, `+0x110`/`+0x114`)
     /// in layout units: it moves the drawn text, never the label's rect.
     label_offset: [f32; 2],
+    /// A real state change happened since the label last relinked ([`Self::take_relink`]).
+    relink_due: bool,
     /// The shown state texture (`+0x4c4`), written only by `set_state` and `set_state_slot`.
     shown: Option<RegionHandle>,
     /// The state (`+0x328`), a latch moved only by edges: the enter and leave notifies
@@ -924,6 +926,7 @@ impl Default for ButtonState {
             locked_highlight: false,
             pushed_text_offset: [f32::from_bits(0x3a83_126f), f32::from_bits(0xba83_126f)],
             label_offset: [0.0, 0.0],
+            relink_due: false,
             shown: None,
             state: ButtonVisualState::Normal,
         }
@@ -956,9 +959,17 @@ impl ButtonState {
             self.shown = Some(slot);
             w.show(Some(slot));
         }
-        // The label refresh closes every real change (`0x7797fc`).
+        // The label refresh closes every real change (`0x7797fc`); its font half is the model's.
         self.refresh_label();
+        self.relink_due = true;
         w
+    }
+
+    /// Whether a real state change since the last call owes the label its font relink, the half
+    /// of the refresh (`0x779878`) that needs the model; an unchanged state returns before it
+    /// (`0x7797a9`).
+    pub(crate) fn take_relink(&mut self) -> bool {
+        std::mem::take(&mut self.relink_due)
     }
 
     /// The label refresh's offset half (`0x779810`): PUSHED puts the pushed text offset on the

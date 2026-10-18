@@ -41,13 +41,17 @@ fn leave_class(model: &Model, h: FrameHandle) -> LeaveClass {
 /// a motion leave and 1 for a removal, only clears the drag arm (`0x76b725`); `OnLeave` runs
 /// through the plain runner (`0x76b753` → `0x702690`), which sets no arg global.
 pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
-    // An enabled Button's leave refreshes its label (`0x779502`).
-    if script.is_some() {
-        super::button::refresh_label(&mut model(lua), h);
-    }
+    // An enabled Button's leave refreshes its label after the base leave and its `OnLeave`
+    // (`0x7794f4` → `0x76b6f0`, then `0x779502`).
+    let refresh = |lua: &Lua| {
+        if script.is_some() {
+            super::button::refresh_label(&mut model(lua), h);
+        }
+    };
     // A hyperlink button's leave is its text frame's `OnHyperlinkLeave` (`0x7a34e0`), in place of
     // the Button's.
     if super::hyperlink::hover(lua, h, false) {
+        refresh(lua);
         return;
     }
     let class = leave_class(&model(lua), h);
@@ -65,6 +69,7 @@ pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
             model(lua).record_lua_error(&e);
         }
     }
+    refresh(lua);
     // `0x483b1d` runs the base leave first; then, only while the WorldFrame's own last publish is
     // not empty (`0x483b30`), the empty one (`0x483b46`).
     if let LeaveClass::World = class {
