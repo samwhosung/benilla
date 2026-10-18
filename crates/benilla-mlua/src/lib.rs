@@ -1222,7 +1222,13 @@ impl Value {
             Value::Integer(i) => i.to_string(),
             Value::Number(n) => benilla_lua::fmt_g14(*n),
             Value::String(s) => s.to_string_lossy(),
-            other => format!("{}: {:p}", other.type_name(), other.to_pointer()),
+            // The text the VM's `tostring` gives the same object.
+            Value::Table(t) => benilla_lua::object_text(t.0.get()),
+            Value::Function(f) => benilla_lua::object_text(f.0.get()),
+            Value::LightUserData(l) => {
+                benilla_lua::object_text(benilla_lua::Value::Light(l.0 as usize))
+            }
+            other => other.type_name().into(),
         })
     }
 

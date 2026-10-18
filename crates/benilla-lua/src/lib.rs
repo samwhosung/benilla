@@ -22,7 +22,7 @@ pub mod vm;
 
 pub use compile::compile;
 pub use lex::SyntaxError;
-pub use lib_base::tostring_value;
+pub use lib_base::{object_text, tostring_value};
 pub use lib_math::{bit_library, math_pow};
 pub use number::fmt_g14;
 pub use value::Value;

@@ -161,3 +161,23 @@ fn a_binary_chunk_is_lexed_as_source() {
         assert_eq!(message, "bin:1: invalid control char near `char(27)'");
     }
 }
+
+/// `Value::to_string` of a table or function is the text Lua's `tostring` gives it: the type and
+/// MSVC's `%p`, eight uppercase hex digits with no `0x`.
+#[test]
+fn an_objects_text_is_the_vms_tostring() {
+    let lua = Lua::new();
+    let (t, f, ts, fs): (benilla_mlua::Value, benilla_mlua::Value, String, String) = lua
+        .load("local t, f = {}, function() end return t, f, tostring(t), tostring(f)")
+        .eval()
+        .unwrap();
+    assert_eq!(t.to_string().unwrap(), ts);
+    assert_eq!(f.to_string().unwrap(), fs);
+    let hex = ts.strip_prefix("table: ").unwrap();
+    assert_eq!(hex.len(), 8, "{ts}");
+    assert!(
+        hex.bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)),
+        "{ts}"
+    );
+}

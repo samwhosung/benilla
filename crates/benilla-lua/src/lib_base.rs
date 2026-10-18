@@ -318,11 +318,14 @@ pub fn tostring_value(vm: &mut Vm, v: Value) -> R<Value> {
         V::Str(_) => v,
         V::Bool(b) => vm.str(if b { b"true" } else { b"false" }),
         V::Nil => vm.str(b"nil"),
-        _ => {
-            let s = format!("{}: {:08X}", v.type_name(), address(v));
-            vm.str(s.as_bytes())
-        }
+        _ => vm.str(object_text(v).as_bytes()),
     })
+}
+
+/// `tostring` of a table, function or userdata: its type and MSVC's `%p`, eight uppercase hex
+/// digits with no prefix (`0x74301d`, precision 8, the upper-case digits).
+pub fn object_text(v: Value) -> String {
+    format!("{}: {:08X}", v.type_name(), address(v))
 }
 
 fn tostring(vm: &mut Vm, nargs: usize) -> R<usize> {
