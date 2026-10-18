@@ -23,7 +23,7 @@ use bevy::render::renderer::{RenderDevice, RenderQueue};
 use benilla_assets::materials::WowModelMaterial;
 use benilla_assets::{m2_url_on, quantize, M2Model, WorldAssets, MPQ_LOOSE_SOURCE};
 use benilla_formats::{SeqLoops, UvAnim};
-use benilla_ui::script::{ModelPaneFrame, UiScript};
+use benilla_ui::script::{ModelPaneFrame, ModelWanted, UiScript};
 use benilla_ui::widget::{FrameHandle, ModelFileFacts, ModelFog, ModelLight, SequenceFacts};
 use benilla_world::doodad_anim::spawn_anim_host;
 use benilla_world::lighting::LightBlob;
@@ -531,25 +531,34 @@ struct TileState {
     frame: u64,
 }
 
+/// The asset a wanted file loads. A model frame's `SetModel` creates the model with flags 5
+/// (`0x76ccf5`), so the `.m2` and its textures open loose-flagged. The pane's own path goes through
+/// the extension rule (`0x706a50`): `.mdx` and `.mdl` become `.m2`, and a name it refuses stands the
+/// error cube (`0x70737f`). The key is only the match key and names no file.
+fn facts_url(want: &ModelWanted) -> String {
+    m2_url_on(MPQ_LOOSE_SOURCE, &want.path)
+}
+
 impl TileState {
-    /// Hand the engine the facts it asked for and return the keys still to load. Every ask is
+    /// Hand the engine the facts it asked for and return the files still to load. Every ask is
     /// answered, whichever VM asks: `model_facts_wanted` drains and only `SetModel` re-pushes, so
     /// a skipped want keeps that VM's panes on the file off [`UiScript::visible_model_panes`].
-    fn answer_facts(&mut self, script: &mut UiScript) -> Vec<String> {
+    fn answer_facts(&mut self, script: &mut UiScript) -> Vec<ModelWanted> {
         let mut to_load = Vec::new();
-        for key in script.model_facts_wanted() {
-            if let Some((_, facts)) = self.loaded.get(&key) {
+        for want in script.model_facts_wanted() {
+            let key = &want.key;
+            if let Some((_, facts)) = self.loaded.get(key) {
                 if trace_on() {
                     info!("tile-trace: facts for {key} answered from residency");
                 }
-                script.set_model_facts(&key, facts.clone());
+                script.set_model_facts(key, facts.clone());
                 continue;
             }
             // Already in flight: its landing answers whichever VM is asking by then.
-            if self.pending_facts.contains_key(&key) {
+            if self.pending_facts.contains_key(key) {
                 continue;
             }
-            to_load.push(key);
+            to_load.push(want);
         }
         to_load
     }
@@ -847,15 +856,16 @@ fn sync_tiles(
     };
 
     // ── 1. Facts: answered now if the file is resident, else when it lands ───────────────────
-    for key in state.answer_facts(&mut script) {
+    for want in state.answer_facts(&mut script) {
         if trace_on() {
-            info!("tile-trace: facts for {key} wanted — loading the file");
+            info!(
+                "tile-trace: facts for {} wanted — loading the file",
+                want.key
+            );
         }
-        // A model frame's `SetModel` creates the model with flags 5 (`0x76ccf5`), so the `.m2` and
-        // its textures open loose-flagged.
-        let url = m2_url_on(MPQ_LOOSE_SOURCE, &key);
+        let url = facts_url(&want);
         let handle = assets.asset_server.load::<M2Model>(url);
-        state.pending_facts.insert(key, handle);
+        state.pending_facts.insert(want.key, handle);
     }
     let landed: Vec<(String, Handle<M2Model>)> = state
         .pending_facts
@@ -2291,7 +2301,14 @@ mod tests {
             first.visible_model_panes().is_empty(),
             "no facts yet ⇒ the pane is not on the paint list (the reference's draw gate)"
         );
-        assert_eq!(state.answer_facts(&mut first), vec![key.clone()]);
+        let wanted = state.answer_facts(&mut first);
+        assert_eq!(
+            wanted,
+            vec![ModelWanted {
+                key: key.clone(),
+                path: COOLDOWN_FILE.into()
+            }]
+        );
         // …the asset lands: the facts are handed over and cached beside the handle.
         state
             .loaded
@@ -2688,5 +2705,66 @@ mod tests {
             * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
             * benilla_assets::coords::wow_to_bevy([1.0, 0.0, 0.0]);
         assert!((turned - Vec3::Y).length() < 1e-5, "{turned}");
+    }
+    /// The host opens a pane's own path through the extension rule, never its match key: the
+    /// `.mdx`, `.mdl` and `.m2` spellings load one file, and a name the rule refuses stands the
+    /// error cube (#1873) whatever else shares its key.
+    #[test]
+    fn a_wanted_model_loads_through_the_extension_rule_not_the_key() {
+        let want = |path: &str| ModelWanted {
+            key: benilla_ui::widget::model_key(path),
+            path: path.into(),
+        };
+        let arrow = "mpq-loose://interface/minimap/minimaparrow.m2";
+        for path in [
+            r"Interface\Minimap\MinimapArrow.mdx",
+            r"Interface\Minimap\MinimapArrow.MDL",
+            r"Interface\Minimap\MinimapArrow.m2",
+        ] {
+            assert_eq!(facts_url(&want(path)), arrow, "{path}");
+        }
+        let cube = "mpq://spells/errorcube.m2";
+        for path in [r"Creature\Wolf\Wolf", "Foo.blp"] {
+            assert_eq!(facts_url(&want(path)), cube, "{path}");
+        }
+    }
+
+    /// A pane's `SetModel` queues its own spelling beside the key, and the minimap's nine engine
+    /// children queue their stock models, each of which loads its `.m2`.
+    #[test]
+    fn the_queue_carries_the_original_path_and_the_minimap_children_load_their_models() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        s.run(
+            r#"m = CreateFrame("Model", "Pane", UIParent)
+               m:SetModel("Interface\\Minimap\\MinimapArrow.mdx")
+               mm = CreateFrame("Minimap", "Mini")"#,
+        )
+        .unwrap();
+        s.resolve();
+        s.tick(0.0);
+        let mut state = TileState::default();
+        let wanted = state.answer_facts(&mut s);
+        let urls: Vec<(String, String)> = wanted
+            .iter()
+            .map(|w| (w.path.clone(), facts_url(w)))
+            .collect();
+        assert!(
+            urls.contains(&(
+                r"Interface\Minimap\MinimapArrow.mdx".to_string(),
+                "mpq-loose://interface/minimap/minimaparrow.m2".to_string()
+            )),
+            "{urls:?}"
+        );
+        assert!(
+            urls.contains(&(
+                r"Interface\Minimap\Rotating-MinimapArrow.mdx".to_string(),
+                "mpq-loose://interface/minimap/rotating-minimaparrow.m2".to_string()
+            )),
+            "{urls:?}"
+        );
+        assert!(urls
+            .iter()
+            .all(|(_, u)| u.ends_with(".m2") && !u.contains("errorcube")));
     }
 }

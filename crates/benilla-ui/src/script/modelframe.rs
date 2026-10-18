@@ -152,14 +152,18 @@ impl Model {
         }
     }
 
-    /// The host's facts for `path`; on a miss the path is queued, once, for the host to load.
+    /// The host's facts for `path`; on a miss the path is queued, once per key, for the host to
+    /// load.
     pub(crate) fn model_facts_for(&mut self, path: &str) -> Option<Arc<ModelFileFacts>> {
         let key = model_key(path);
         match self.model_facts.get(&key) {
             Some(facts) => Some(facts.clone()),
             None => {
-                if !self.model_facts_wanted.contains(&key) {
-                    self.model_facts_wanted.push(key);
+                if !self.model_facts_wanted.iter().any(|w| w.key == key) {
+                    self.model_facts_wanted.push(ModelWanted {
+                        key,
+                        path: path.to_string(),
+                    });
                 }
                 None
             }
@@ -791,7 +795,7 @@ impl crate::script::UiScript {
         let facts = Arc::new(facts);
         let mut model = self.model_mut();
         model.model_facts.insert(key.clone(), facts.clone());
-        model.model_facts_wanted.retain(|k| *k != key);
+        model.model_facts_wanted.retain(|w| w.key != key);
         // The panes holding this file: the waiters the reference links on its streaming drain
         // (`0x71d640`).
         let handles: Vec<_> = model
@@ -831,9 +835,9 @@ impl crate::script::UiScript {
         }
     }
 
-    /// Drain the model files panes named with no facts yet, as [`crate::widget::model_key`]s; the
-    /// host loads each once and answers through [`Self::set_model_facts`].
-    pub fn model_facts_wanted(&mut self) -> Vec<String> {
+    /// Drain the model files panes named with no facts yet; the host loads each once and answers
+    /// through [`Self::set_model_facts`].
+    pub fn model_facts_wanted(&mut self) -> Vec<ModelWanted> {
         std::mem::take(&mut self.model_mut().model_facts_wanted)
     }
 
@@ -901,6 +905,15 @@ pub struct CharacterPaneFrame {
     /// The pane's light and the fog its scene draws with.
     pub light: ModelLight,
     pub fog: Option<crate::widget::ModelFog>,
+}
+
+/// A model file a pane named whose facts the host has yet to load. `key` ([`model_key`]) is only
+/// the match key, `.mdx`, `.mdl` and `.m2` spellings alike; `path` is the pane's own, as given to
+/// `SetModel` or `file=`, which the host opens through the cache's extension rule (`0x706a50`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelWanted {
+    pub key: String,
+    pub path: String,
 }
 
 /// One row of [`UiScript::visible_model_panes`].

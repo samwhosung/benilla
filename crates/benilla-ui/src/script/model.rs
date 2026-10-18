@@ -302,8 +302,8 @@ pub(crate) struct Model {
     pub(crate) on_update_model_frames: Vec<FrameHandle>,
     /// Per model file, a pane clock's sequences and bounds, read by the host off the `MD20`.
     pub(crate) model_facts: HashMap<String, std::sync::Arc<crate::widget::ModelFileFacts>>,
-    /// Model files still waiting for their facts, for the host to load; deduplicated.
-    pub(crate) model_facts_wanted: Vec<String>,
+    /// Model files still waiting for their facts, for the host to load; one per key.
+    pub(crate) model_facts_wanted: Vec<super::ModelWanted>,
     /// The model instances `SetModel` has made in this state, the last one's number.
     pub(crate) model_instances: u64,
     /// Event name to its frames in registration order, never a set: `SignalEvent` (`0x703e50`)
