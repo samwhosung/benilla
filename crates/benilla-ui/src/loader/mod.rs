@@ -348,8 +348,8 @@ impl Loader<'_> {
             .unwrap_or_else(|| "<unnamed>".to_string())
     }
 
-    /// A severity-1 line into the document's record (the `[status+0xc]` call every `LoadXML` logs
-    /// through), retained as a warning too.
+    /// A severity-1 line into the document's record, the status object's `+0xc` slot every
+    /// `LoadXML` logs through, retained as a warning too.
     pub(super) fn status_warning(&mut self, line: String) {
         self.report.status.report(status::WARNING, line.clone());
         self.report.warnings.push(line);

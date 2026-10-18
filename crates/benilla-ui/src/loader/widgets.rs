@@ -159,9 +159,9 @@ impl Loader<'_> {
             // `SetText` creates the label even with no text, so its layout lands on a real region;
             // `text=` is each level's, a global-string key (`0x703bf0`), an empty one skipped
             // (`0x77101b`).
-            let levels = self.levels(bt);
+            let label_levels = self.levels(bt);
             let mut label = String::new();
-            for level in &levels {
+            for level in &label_levels {
                 if let Some(raw) = level.attr("text").filter(|t| !t.is_empty()) {
                     label = self.resolve_text(raw, dbg);
                 }
@@ -189,7 +189,7 @@ impl Loader<'_> {
                 // Both load as any FontString does (`0x6f2780` → `0x770f40`, `0x778b8f`), each
                 // level in turn; `<NormalText>` skips its font attributes (`0x778b7b`).
                 self.call_region(&region, "ClearAllPoints", (), dbg);
-                for level in &levels {
+                for level in &label_levels {
                     self.load_fontstring_level(level, &region, self_name, font_attrs, false, dbg);
                 }
                 if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region) {
