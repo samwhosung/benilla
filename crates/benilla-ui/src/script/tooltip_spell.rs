@@ -981,7 +981,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // is a visible row, headers included; a header is a no-op.
     m.set(
         "SetTrainerService",
-        lua.create_function(|lua, (this, index): (Table, usize)| {
+        lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `is-number` else `Invalid trainer service in SetTrainerService(index)` (`0x8553a4`,
+            // `0x533968`).
+            let index = binding_abi::index_arg(
+                lua,
+                index,
+                "Invalid trainer service in SetTrainerService(index)",
+            )?;
             let subject = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 match super::trainer::service(&model, index) {
@@ -1018,7 +1025,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // recipe position: the craft list has no headers.
     m.set(
         "SetCraftSpell",
-        lua.create_function(|lua, (this, craft_index): (Table, usize)| {
+        lua.create_function(|lua, (this, craft_index): (Table, Value)| {
+            // `is-number` else `Invalid craft in SetCraftSpell(index)` (`0x85544c`, `0x533f54`).
+            let craft_index =
+                binding_abi::index_arg(lua, craft_index, "Invalid craft in SetCraftSpell(index)")?;
             let subject = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let Some(c) = &model.craft else {

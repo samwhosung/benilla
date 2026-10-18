@@ -253,13 +253,23 @@ pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
         .is_some_and(|s| s.item_id != 0 && item_locked(model, s.guid))
 }
 
+/// The 1-based slot through the slot reader `0x4c8520`, which raises `message` for a non-number or
+/// a slot outside its whitelist; 0 for the ammo leg.
+fn inventory_slot(lua: &Lua, v: Value, message: &'static str) -> mlua::Result<u32> {
+    let slot0 = crate::script::inventory_verbs::inventory_slot_arg(lua, v, message)?;
+    Ok((slot0 + 1) as u32)
+}
+
 /// Register the paper-doll verbs as globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     g.set(
         "PickupInventoryItem",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, id: Value| {
+            // The slot reader (`0x4c8db3`) else `Invalid inventory slot in PickupInventoryItem`
+            // (`0x848af8`); Lua 0, the ammo leg, passes.
+            let id = inventory_slot(lua, id, "Invalid inventory slot in PickupInventoryItem")?;
             pickup_inventory_item(lua, id);
             Ok(())
         })?,
@@ -275,7 +285,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "CursorCanGoInSlot",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, id: Value| {
+            // The slot reader (`0x4c9003`) else `Invalid inventory slot in CursorCanGoInSlot`
+            // (`0x848bd0`).
+            let id = inventory_slot(lua, id, "Invalid inventory slot in CursorCanGoInSlot")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(cursor_can_go_in_slot(&model, id)))
         })?,
@@ -289,7 +302,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "UseInventoryItem",
-        lua.create_function(|lua, (id, rest): (u32, mlua::MultiValue)| {
+        lua.create_function(|lua, (id, rest): (Value, mlua::MultiValue)| {
+            // The slot reader (`0x4c8df6`) else `Invalid inventory slot in UseInventoryItem`
+            // (`0x848b28`).
+            let id = inventory_slot(lua, id, "Invalid inventory slot in UseInventoryItem")?;
             // `onSelf` through the client's flag coercion (`0x4c8e37`, `0x6f1c10`, default 0).
             let on_self = crate::script::binding_abi::bool_or_default(rest.front(), false);
             use_inventory_item(lua, id, on_self);

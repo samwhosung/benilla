@@ -399,7 +399,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `GetQuestItemInfo`'s; an unknown type or index leaves the tooltip empty, as in the reference.
     m.set(
         "SetQuestItem",
-        lua.create_function(|lua, (this, kind, index): (Table, String, usize)| {
+        lua.create_function(|lua, (this, kind, index): (Table, Value, Value)| {
+            // `is-number-or-string` on the type and `is-number` on the index, else `Invalid quest
+            // item in SetQuestItem("type", index)` (`0x855338`, `0x5336c8`-`0x53373f`).
+            const LINE: &str = r#"Invalid quest item in SetQuestItem("type", index)"#;
+            let kind = binding_abi::string_arg(lua, kind, LINE)?;
+            let index = binding_abi::index_arg(lua, index, LINE)?;
             let item = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.quest.as_ref().and_then(|q| {
@@ -413,7 +418,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "SetQuestLogItem",
-        lua.create_function(|lua, (this, kind, index): (Table, String, usize)| {
+        lua.create_function(|lua, (this, kind, index): (Table, Value, Value)| {
+            // As `SetQuestItem`, with `Invalid quest item in SetQuestLogItem("type", index)`
+            // (`0x85536c`, `0x533818`-`0x533894`).
+            const LINE: &str = r#"Invalid quest item in SetQuestLogItem("type", index)"#;
+            let kind = binding_abi::string_arg(lua, kind, LINE)?;
+            let index = binding_abi::index_arg(lua, index, LINE)?;
             let item = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 crate::script::quest_log::selected_quest_item(&model, &kind, index)
@@ -725,8 +735,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `ITEM_FIELD_ENCHANTMENT`. `slot` is the 1-based row; coin and cleared rows have no tooltip.
     m.set(
         "SetLootItem",
-        lua.create_function(|lua, (this, slot): (Table, usize)| {
+        lua.create_function(|lua, (this, slot): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `is-number` else the client's `Invalid loot slot in SetInventoryItem`, its text
+            // naming the other method (`0x855310`, `0x533528`).
+            let slot = binding_abi::index_arg(lua, slot, "Invalid loot slot in SetInventoryItem")?;
             let row = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 model
@@ -1125,7 +1138,16 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetTradeSkillItem",
         lua.create_function(
-            |lua, (this, skill_index, reagent_index): (Table, usize, Option<usize>)| {
+            |lua, (this, skill_index, reagent_index): (Table, Value, Value)| {
+                // `is-number` on the index else `Invalid trade skill item in
+                // SetTradeSkillItem(index [,reagent])` (`0x8553d8`, `0x533b78`); a non-number
+                // reagent is absent (`0x533be7`).
+                let skill_index = binding_abi::index_arg(
+                    lua,
+                    skill_index,
+                    "Invalid trade skill item in SetTradeSkillItem(index [,reagent])",
+                )?;
+                let reagent_index = binding_abi::index_or(lua, reagent_index)?.map(|i| i as usize);
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     // A visible-row index, headers included (`0x4fca20`); a header is None.
@@ -1154,7 +1176,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetCraftItem",
         lua.create_function(
-            |lua, (this, craft_index, reagent_index): (Table, usize, usize)| {
+            |lua, (this, craft_index, reagent_index): (Table, Value, Value)| {
+                // `is-number` on both else `Invalid craft item in SetCraftItem(index, reagent)`
+                // (`0x855418`, `0x533d88`, `0x533d9c`).
+                const LINE: &str = "Invalid craft item in SetCraftItem(index, reagent)";
+                let craft_index = binding_abi::index_arg(lua, craft_index, LINE)?;
+                let reagent_index = binding_abi::index_arg(lua, reagent_index, LINE)?;
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     let Some(c) = &model.craft else {

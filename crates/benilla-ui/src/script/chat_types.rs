@@ -2,8 +2,9 @@
 //! `ResetChatColors`: the reference's runtime table (`0xb4e518`), which the `COLORS` block of
 //! `chat-cache.txt` overwrites in place at load; the app owns that file.
 
-use mlua::{Lua, MultiValue};
+use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// The fixed segment: 94 entries, in the reference's order (index = position + 1).
@@ -209,36 +210,37 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "ChangeChatColor",
-        lua.create_function(
-            |lua, (name, r, g, b): (String, Option<f64>, Option<f64>, Option<f64>)| {
-                let written = {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    let Some(i) = position(&model.chat_colors, &name) else {
-                        return Ok(());
-                    };
-                    let rgb = [
-                        to_byte(r.unwrap_or(0.0)),
-                        to_byte(g.unwrap_or(0.0)),
-                        to_byte(b.unwrap_or(0.0)),
-                    ];
-                    model.chat_colors[i].rgb = rgb;
-                    model.chat_colors_changed = true;
-                    (model.chat_colors[i].name.clone(), rgb)
+        lua.create_function(|lua, (name, r, g, b): (Value, Value, Value, Value)| {
+            // `is-number-or-string` on the type, `is-number` on r, g and b, else the client's
+            // own `Usage(ChangeChatColor(chatType, r, g, b)` (`0x844d28`, `0x4a07fe`-`0x4a09d0`).
+            const USAGE: &str = "Usage(ChangeChatColor(chatType, r, g, b)";
+            let name = binding_abi::string_arg(lua, name, USAGE)?;
+            let r = binding_abi::float_arg(lua, r, USAGE)?;
+            let g = binding_abi::float_arg(lua, g, USAGE)?;
+            let b = binding_abi::float_arg(lua, b, USAGE)?;
+            let written = {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let Some(i) = position(&model.chat_colors, &name) else {
+                    return Ok(());
                 };
-                let (name, rgb) = written;
-                super::tick::fire_event_into(
-                    lua,
-                    "UPDATE_CHAT_COLOR",
-                    vec![
-                        super::ScriptValue::Str(name),
-                        super::ScriptValue::Number(from_byte(rgb[0])),
-                        super::ScriptValue::Number(from_byte(rgb[1])),
-                        super::ScriptValue::Number(from_byte(rgb[2])),
-                    ],
-                );
-                Ok(())
-            },
-        )?,
+                let rgb = [to_byte(r), to_byte(g), to_byte(b)];
+                model.chat_colors[i].rgb = rgb;
+                model.chat_colors_changed = true;
+                (model.chat_colors[i].name.clone(), rgb)
+            };
+            let (name, rgb) = written;
+            super::tick::fire_event_into(
+                lua,
+                "UPDATE_CHAT_COLOR",
+                vec![
+                    super::ScriptValue::Str(name),
+                    super::ScriptValue::Number(from_byte(rgb[0])),
+                    super::ScriptValue::Number(from_byte(rgb[1])),
+                    super::ScriptValue::Number(from_byte(rgb[2])),
+                ],
+            );
+            Ok(())
+        })?,
     )?;
 
     g.set(

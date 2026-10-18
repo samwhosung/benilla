@@ -2,7 +2,7 @@
 //! pushes to `luaL_error` (`0x6f4940`) after `is-number` (`0x6f34d0`) fails, the client's typos
 //! included, and for a non-string where `is-number-or-string` (`0x6f3510`) gates a name beside it;
 //! the inventory slot reader (`0x4c8520`) raises its binding's `Invalid inventory slot` line. A
-//! negative index is a number and never a conversion error; the three that branch never raise.
+//! negative index is a number and never a conversion error; the ones that branch never raise.
 
 use super::common::script;
 
@@ -836,6 +836,101 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
             r#"IdxTip:SetInventoryItem("player", 30)"#,
             "Invalid inventory slot in SetInventoryItem",
         ),
+        (
+            "ChangeChatColor({}, 1, 1, 1)",
+            "Usage(ChangeChatColor(chatType, r, g, b)",
+        ),
+        (
+            r#"ChangeChatColor("SAY", {}, 1, 1)"#,
+            "Usage(ChangeChatColor(chatType, r, g, b)",
+        ),
+        (
+            r#"ChangeChatColor("SAY", 1, {}, 1)"#,
+            "Usage(ChangeChatColor(chatType, r, g, b)",
+        ),
+        (
+            r#"ChangeChatColor("SAY", 1, 1, {})"#,
+            "Usage(ChangeChatColor(chatType, r, g, b)",
+        ),
+        (
+            "PickupInventoryItem({})",
+            "Invalid inventory slot in PickupInventoryItem",
+        ),
+        (
+            "PickupInventoryItem(30)",
+            "Invalid inventory slot in PickupInventoryItem",
+        ),
+        (
+            "CursorCanGoInSlot({})",
+            "Invalid inventory slot in CursorCanGoInSlot",
+        ),
+        (
+            "CursorCanGoInSlot(30)",
+            "Invalid inventory slot in CursorCanGoInSlot",
+        ),
+        (
+            "UseInventoryItem({})",
+            "Invalid inventory slot in UseInventoryItem",
+        ),
+        (
+            "UseInventoryItem(30)",
+            "Invalid inventory slot in UseInventoryItem",
+        ),
+        ("PutItemInBag({})", "Invalid bag slot in PutItemInBag"),
+        ("PutItemInBag(19)", "Invalid bag slot in PutItemInBag"),
+        ("PutItemInBag(30)", "Invalid bag slot in PutItemInBag"),
+        (
+            "PickupBagFromSlot({})",
+            "Invalid bag slot in PickupBagFromSlot",
+        ),
+        (
+            "PickupBagFromSlot(19)",
+            "Invalid bag slot in PickupBagFromSlot",
+        ),
+        (
+            "PickupBagFromSlot(30)",
+            "Invalid bag slot in PickupBagFromSlot",
+        ),
+        (
+            "IdxTip:SetTrainerService({})",
+            "Invalid trainer service in SetTrainerService(index)",
+        ),
+        (
+            "IdxTip:SetCraftSpell({})",
+            "Invalid craft in SetCraftSpell(index)",
+        ),
+        (
+            "IdxTip:SetQuestItem({}, 1)",
+            r#"Invalid quest item in SetQuestItem("type", index)"#,
+        ),
+        (
+            r#"IdxTip:SetQuestItem("reward", {})"#,
+            r#"Invalid quest item in SetQuestItem("type", index)"#,
+        ),
+        (
+            "IdxTip:SetQuestLogItem({}, 1)",
+            r#"Invalid quest item in SetQuestLogItem("type", index)"#,
+        ),
+        (
+            r#"IdxTip:SetQuestLogItem("reward", {})"#,
+            r#"Invalid quest item in SetQuestLogItem("type", index)"#,
+        ),
+        (
+            "IdxTip:SetLootItem({})",
+            "Invalid loot slot in SetInventoryItem",
+        ),
+        (
+            "IdxTip:SetTradeSkillItem({})",
+            "Invalid trade skill item in SetTradeSkillItem(index [,reagent])",
+        ),
+        (
+            "IdxTip:SetCraftItem({}, 1)",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
+        (
+            "IdxTip:SetCraftItem(1, {})",
+            "Invalid craft item in SetCraftItem(index, reagent)",
+        ),
     ] {
         let e = s.run(call).expect_err(call).to_string();
         assert!(e.contains(&format!(":1: {usage}")), "{call}: {e}");
@@ -1017,4 +1112,7 @@ fn the_index_reads_that_branch_never_raise() {
         s.eval::<i64>("return GetNumQuestLeaderBoards()").unwrap()
     );
     s.run("GetQuestLogLeaderBoard(1, {})").unwrap();
+    // `SetTradeSkillItem`'s reagent is absent when not a number (`0x533be7`).
+    s.run(r#"CreateFrame("GameTooltip", "IdxTip2"):SetTradeSkillItem(1, {})"#)
+        .unwrap();
 }

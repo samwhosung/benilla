@@ -227,6 +227,15 @@ fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
         .filter(is_container)
 }
 
+/// The 1-based slot of a bag verb: the slot reader `0x4c8520` passes it and its 0-based slot is
+/// `0x13` or more, else `message`.
+fn bag_slot(lua: &Lua, v: Value, message: &'static str) -> mlua::Result<u32> {
+    match crate::script::inventory_verbs::inventory_slot_arg(lua, v, message) {
+        Ok(slot0) if slot0 >= 0x13 => Ok((slot0 + 1) as u32),
+        _ => Err(mlua::Error::RuntimeError(message.into())),
+    }
+}
+
 /// Register the three verbs as globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -242,7 +251,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "PutItemInBag",
-        lua.create_function(|lua, live: u32| {
+        lua.create_function(|lua, live: Value| {
+            // `Invalid bag slot in PutItemInBag` (`0x848b84`) unless the slot reader passes and
+            // the slot is a bag's or beyond, Lua 20 up (`0x4c8f13`, `0x4c8f1f`).
+            let live = bag_slot(lua, live, "Invalid bag slot in PutItemInBag")?;
             consumed(verb(lua, |model| put_item_in_bag(model, live)))
         })?,
     )?;
@@ -252,7 +264,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "PickupBagFromSlot",
-        lua.create_function(|lua, live: u32| {
+        lua.create_function(|lua, live: Value| {
+            // `Invalid bag slot in PickupBagFromSlot` (`0x848ba8`) on the same two tests
+            // (`0x4c8fb3`, `0x4c8fbf`).
+            let live = bag_slot(lua, live, "Invalid bag slot in PickupBagFromSlot")?;
             pickup_bag_from_slot(lua, live);
             Ok(())
         })?,
@@ -608,8 +623,14 @@ mod tests {
         s.set_inventory_slots(doll);
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(s.eval::<bool>("return PutItemInBag(16) == nil").unwrap());
-        assert!(s.eval::<bool>("return PutItemInBag(0) == nil").unwrap());
+        // Below Lua 20 the verb raises before any move (`0x4c8f1f`, `0x848b84`).
+        for slot in [16, 0] {
+            let e = s
+                .run(&format!("PutItemInBag({slot})"))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("Invalid bag slot in PutItemInBag"), "{e}");
+        }
         assert!(s.cursor_item().is_some(), "untouched");
         assert!(s.take_container_moves().is_empty());
         assert!(s.take_bag_autostores().is_empty());
