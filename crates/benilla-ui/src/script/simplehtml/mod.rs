@@ -738,18 +738,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // SetHyperlinkFormat(s) raises its usage line (`0x87bb40`) on a non-string
-    // (`0x796bcc`-`0x796c29`); it applies from the next parse.
+    // SetHyperlinkFormat(s) takes any `lua_isstring` value (`0x796bcc`), a number as its `%.14g`
+    // text, and raises `Usage: %s:SetHyperlinkFormat("format")` (`0x87bb40`) naming the frame
+    // otherwise (`0x796bef`-`0x796c21`); it applies from the next parse.
     m.set(
         "SetHyperlinkFormat",
         lua.create_function(|lua, (this, fmt): (Table, Value)| {
-            let Value::String(s) = &fmt else {
-                return Err(mlua::Error::runtime(
-                    "Usage: <SimpleHTML>:SetHyperlinkFormat(\"format\")",
+            let h = html_handle(lua, &this)?;
+            let Some(fmt) = binding_abi::optional_string(lua, &fmt) else {
+                return Err(binding_abi::usage(
+                    lua,
+                    &this,
+                    "SetHyperlinkFormat(\"format\")",
                 ));
             };
-            let fmt = s.to_str()?.to_string();
-            let h = html_handle(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model.simple_html.entry(h).or_default().hyperlink_format = fmt;
             Ok(())

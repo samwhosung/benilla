@@ -180,3 +180,35 @@ fn scroll_setters_raise_their_usage_lines() {
     )
     .unwrap();
 }
+
+/// `SetHyperlinkFormat` (`0x796b40`) stores any `lua_isstring` value (`0x796bcc`), so a number
+/// stores its text, and raises `Usage: %s:SetHyperlinkFormat("format")` (`0x87bb40`) naming the
+/// frame (`0x796bf3`) for anything else.
+#[test]
+fn set_hyperlink_format_takes_a_number_and_names_the_frame() {
+    let s = script();
+    s.run(
+        r#"
+        LinkHTML = CreateFrame("SimpleHTML", "LinkHTML")
+        LinkAnon = CreateFrame("SimpleHTML")
+        LinkHTML:SetHyperlinkFormat(5)
+        assert(LinkHTML:GetHyperlinkFormat() == "5", LinkHTML:GetHyperlinkFormat())
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "LinkHTML:SetHyperlinkFormat({})",
+            r#"Usage: LinkHTML:SetHyperlinkFormat("format")"#,
+        ),
+        (
+            "LinkAnon:SetHyperlinkFormat()",
+            r#"Usage: <unnamed>:SetHyperlinkFormat("format")"#,
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(r#"assert(LinkHTML:GetHyperlinkFormat() == "5")"#)
+        .unwrap();
+}

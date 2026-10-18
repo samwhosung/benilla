@@ -719,8 +719,8 @@ fn the_hyperlink_format_shapes_the_a_splice() {
         .unwrap();
     assert_eq!(texts(&s, "Page"), ["see |cff33ff99|Hitem:1|h[this]|h|r"]);
 
-    // A non-string argument raises the reference's usage string.
-    assert!(s.run("Page:SetHyperlinkFormat(7)").is_err());
+    // A value `lua_isstring` refuses raises the reference's usage line (`0x796bcc`).
+    assert!(s.run("Page:SetHyperlinkFormat({})").is_err());
 }
 
 #[test]
