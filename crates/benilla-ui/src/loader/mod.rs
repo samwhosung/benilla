@@ -337,6 +337,9 @@ pub(super) struct DeferredAnchor {
     /// A region wrapper (`call_region`) rather than a frame's (`call`).
     pub(super) region: bool,
     pub(super) args: (String, Option<String>, String, f32, f32),
+    /// `relativeTo` as spelled, before `$parent` expands: what the anchor lines print (`0x76796f`,
+    /// `0x767984`).
+    pub(super) rel_raw: String,
     pub(super) dbg: String,
 }
 
@@ -950,21 +953,30 @@ impl Loader<'_> {
     }
 
     /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.
+    /// A target still missing (`0x878440`) or the object itself (`0x878420`, `0x76797d`) is logged
+    /// and the anchor skipped.
     pub(super) fn apply_anchor(&mut self, d: DeferredAnchor, may_defer: bool) {
         let rel: Value = match d.args.1.as_deref() {
             Some(name) => {
                 match crate::script::object::anchor_args::resolve_xml_relative_to(self.lua(), name)
                 {
-                    Some(t) => Value::Table(t),
+                    Some(t) => {
+                        let id = crate::script::object::decode_id;
+                        if id(&t).ok().is_some_and(|i| id(&d.wrapper).ok() == Some(i)) {
+                            let raw = &d.rel_raw;
+                            self.status_warning(format!("Frame anchored to itself: {raw}"));
+                            return;
+                        }
+                        Value::Table(t)
+                    }
                     // Not built yet: retry once the subtree is complete; a miss then is real.
                     None if may_defer => {
                         self.deferred_anchors.push(d);
                         return;
                     }
                     None => {
-                        self.report
-                            .warnings
-                            .push(format!("{}: Couldn't find relative frame: {name}", d.dbg));
+                        let raw = &d.rel_raw;
+                        self.status_warning(format!("Couldn't find relative frame: {raw}"));
                         return;
                     }
                 }
@@ -986,6 +998,7 @@ impl Loader<'_> {
             region,
             args: (point, _, rel_point, x, y),
             dbg,
+            ..
         } = d;
         let args = (point, rel, rel_point, x, y);
         if region {

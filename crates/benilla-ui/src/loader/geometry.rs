@@ -1,6 +1,7 @@
 use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
+use crate::script::object;
 
 use super::{abs_dim, children_named, Levels, Loader};
 
@@ -207,18 +208,30 @@ impl Loader<'_> {
         if set_all_points {
             self.status_warning("SETALLPOINTS set to true in frame with anchors (ignored)".into());
         }
-        for anchor in children_named(anchors, "Anchor") {
-            let Some(point) = anchor.attr("point") else {
-                let kind = if region { "region " } else { "" };
-                self.report
-                    .warnings
-                    .push(format!("{dbg}: {kind}<Anchor> without a point; skipped"));
+        // Every child of the first `<Anchors>`, whatever its tag (`[node+4]`, then `[child+0x1c]`,
+        // `0x7679e3`): its `point` through `0x6f1840`, a whole-string match ignoring case; a missing
+        // or unknown one is logged (`0x878470`, `0x7679cf`) and the child skipped, a missing one
+        // printing the CRT's `(null)` for the null `%s` (`0x742ffc`).
+        for anchor in &anchors.children {
+            let point = anchor.attr("point");
+            let Some(point) = point.filter(|p| object::point_from_str(p).is_some()) else {
+                let shown = point.unwrap_or("(null)");
+                self.status_warning(format!("Invalid anchor point in frame: {shown}"));
                 continue;
             };
-            let rel_point = anchor.attr("relativePoint").unwrap_or(point).to_string();
-            let rel_to: Option<String> = anchor
-                .attr("relativeTo")
-                .map(|r| framexml::resolve_name(r, parent_name));
+            // A non-empty `relativePoint` must parse too (`0x76792d`); an empty or absent one is
+            // `point` (`0x767940`).
+            let rel_point = match anchor.attr("relativePoint").filter(|r| !r.is_empty()) {
+                Some(r) if object::point_from_str(r).is_none() => {
+                    self.status_warning(format!("Invalid anchor point in frame: {r}"));
+                    continue;
+                }
+                Some(r) => r,
+                None => point,
+            };
+            // An empty `relativeTo` is the layout parent, as an absent one (`0x76795c`).
+            let rel_raw = anchor.attr("relativeTo").filter(|r| !r.is_empty());
+            let rel_to = rel_raw.map(|r| framexml::resolve_name(r, parent_name));
             let (x, y) = children_named(anchor, "Offset")
                 .next()
                 .map(abs_dim)
@@ -226,7 +239,7 @@ impl Loader<'_> {
             let args = (
                 point.to_string(),
                 rel_to,
-                rel_point,
+                rel_point.to_string(),
                 x.unwrap_or(0.0),
                 y.unwrap_or(0.0),
             );
@@ -234,6 +247,7 @@ impl Loader<'_> {
                 wrapper: wrapper.clone(),
                 region,
                 args,
+                rel_raw: rel_raw.unwrap_or_default().to_string(),
                 dbg: dbg.to_string(),
             };
             // Deferred while the enclosing subtree has not built its target yet.

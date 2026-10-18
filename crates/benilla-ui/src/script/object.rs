@@ -173,7 +173,7 @@ pub(crate) fn frame_parent_token_base(model: &Model, h: FrameHandle) -> String {
 // String → enum parsing
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-pub(super) fn point_from_str(s: &str) -> Option<Point> {
+pub(crate) fn point_from_str(s: &str) -> Option<Point> {
     Some(match s.to_ascii_uppercase().as_str() {
         "TOPLEFT" => Point::TopLeft,
         "TOP" => Point::Top,

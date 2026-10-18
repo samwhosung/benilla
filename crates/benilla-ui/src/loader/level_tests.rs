@@ -950,3 +950,89 @@ fn a_simplehtml_font_finds_a_font_made_by_create_font() {
         );
     }
 }
+
+/// `0x767800` reads `point` from every child of the first `<Anchors>`, whatever its tag (`[node+4]`,
+/// next `[child+0x1c]`, `0x7679e3`), so an `<Offset>` there with a point is an anchor too.
+#[test]
+fn every_child_of_anchors_with_a_point_is_an_anchor() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Host">
+                <Size><AbsDimension x="100" y="50"/></Size>
+                <Anchors>
+                    <Anchor point="TOPLEFT"/>
+                    <Offset point="BOTTOMRIGHT"/>
+                </Anchors>
+                <Layers><Layer>
+                    <Texture name="HostTex">
+                        <Anchors><Anchor point="TOP"/><Bogus point="BOTTOM"/></Anchors>
+                    </Texture>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    let (frame, tex): (i64, i64) = s
+        .eval("return Host:GetNumPoints(), HostTex:GetNumPoints()")
+        .unwrap();
+    assert_eq!((frame, tex), (2, 2));
+}
+
+/// A bad anchor is logged at severity 1 and skipped, never raised (`0x767800`): a missing or
+/// unknown `point` and a non-empty unknown `relativePoint` log `Invalid anchor point in frame: %s`
+/// (`0x7679cf`, `0x76792d`), the missing one's null `%s` printing `(null)`; a `relativeTo` naming
+/// the object itself logs `Frame anchored to itself: %s` (`0x767982`) and one that names nothing
+/// `Couldn't find relative frame: %s` (`0x767970`), each with the value as spelled. An empty
+/// `relativePoint` is `point` and an empty `relativeTo` the parent.
+#[test]
+fn a_bad_anchor_is_logged_and_skipped() {
+    let mut s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Host">
+                <Size><AbsDimension x="100" y="50"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <Frames>
+                    <Frame name="$parentKid">
+                        <Size><AbsDimension x="10" y="10"/></Size>
+                        <Anchors>
+                            <Anchor point="NOPE"/>
+                            <Anchor/>
+                            <Anchor point="TOP" relativePoint="MIDDLE"/>
+                            <Anchor point="LEFT" relativeTo="$parentKid"/>
+                            <Anchor point="RIGHT" relativeTo="$parentMissing"/>
+                            <Anchor point="bottomleft" relativePoint="" relativeTo=""/>
+                        </Anchors>
+                    </Frame>
+                </Frames>
+            </Frame>
+        </Ui>"#,
+    );
+    for line in [
+        "Invalid anchor point in frame: NOPE",
+        "Invalid anchor point in frame: (null)",
+        "Invalid anchor point in frame: MIDDLE",
+        "Frame anchored to itself: $parentKid",
+        "Couldn't find relative frame: $parentMissing",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+    assert!(!report
+        .warnings
+        .iter()
+        .any(|w| w.contains("without a point")));
+    s.resolve();
+    let got: (i64, String, bool, String) = s
+        .eval(
+            "local p, rel, rp = HostKid:GetPoint(1) \
+             return HostKid:GetNumPoints(), p, rel == Host, rp",
+        )
+        .unwrap();
+    assert_eq!(got, (1, "BOTTOMLEFT".into(), true, "BOTTOMLEFT".into()));
+}
