@@ -1552,3 +1552,80 @@ fn a_backdrop_takes_the_last_child_of_each_kind_and_logs_the_rest() {
         "Unknown child node in Backdrop element: EdgeSz"
     ));
 }
+
+const TEXT_FONTS: &str = r#"
+    <Font name="TextFontA" font="Fonts\ARIALN.TTF"><FontHeight><AbsValue val="11"/></FontHeight></Font>
+    <Font name="TextFontB" font="Fonts\FRIZQT__.TTF"><FontHeight><AbsValue val="15"/></FontHeight></Font>"#;
+
+/// An EditBox's, a MessageFrame's and a ScrollingMessageFrame's `<FontString>` child loads into
+/// the frame's own font through the Font loader (`0x783c30` at `0x77a220`, `0x785af5`,
+/// `0x787cfe`): no region, no global, and the frame's font follows the child's `inherits`. A
+/// child over a font that already follows one, from `font=` or a template's child, first logs
+/// `%s: FontString element overriding font %s` (`0x879b3c`).
+#[test]
+fn a_text_frames_fontstring_child_loads_into_its_own_font() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEXT_FONTS}
+            <EditBox name="TfTemplate" virtual="true"><FontString inherits="TextFontA"/></EditBox>
+            <EditBox name="TfBox" inherits="TfTemplate">
+                <FontString name="$parentText" inherits="TextFontB" bytes="9"/>
+            </EditBox>
+            <EditBox name="TfPlainBox"/>
+            <MessageFrame name="TfMf" font="TextFontA">
+                <Layers><Layer>
+                    <FontString name="TfMfLabel" inherits="TextFontA"/>
+                </Layer></Layers>
+                <FontString inherits="TextFontB" justifyH="RIGHT"/>
+            </MessageFrame>
+            <ScrollingMessageFrame name="TfSmf"><FontString inherits="TextFontB"/></ScrollingMessageFrame>
+        </Ui>"#
+        ),
+    );
+    let got = |code: &str| s.eval::<mlua::Value>(code).unwrap();
+    let truthy = |code: &str| s.eval::<bool>(code).unwrap();
+    for f in ["TfBox", "TfMf", "TfSmf"] {
+        let (path, h): (String, f32) = s
+            .eval(&format!("local p, h = {f}:GetFont() return p, h"))
+            .unwrap();
+        assert_eq!((path.as_str(), h), ("Fonts\\FRIZQT__.TTF", 15.0), "{f}");
+        assert!(
+            truthy(&format!("return {f}:GetFontObject() == TextFontB")),
+            "{f}"
+        );
+    }
+    assert!(
+        matches!(got("return TfBoxText"), mlua::Value::Nil),
+        "no global"
+    );
+    assert!(truthy(
+        "return TfBox:GetNumRegions() == TfPlainBox:GetNumRegions()"
+    ));
+    assert!(truthy(
+        "return TfMf:GetNumRegions() == 1 and TfSmf:GetNumRegions() == 0"
+    ));
+    assert!(truthy("return TfMf:GetJustifyH() == 'RIGHT'"));
+    let (label, _): (String, f32) = s.eval("return TfMfLabel:GetFont()").unwrap();
+    assert_eq!(
+        label, "Fonts\\ARIALN.TTF",
+        "a <Layers> string is not the lines' font"
+    );
+    assert!(truthy("return TfBox:GetMaxBytes() == 9"));
+    s.run("TextFontB:SetFont('Fonts\\\\MORPHEUS.TTF', 13)")
+        .unwrap();
+    let (path, _): (String, f32) = s.eval("return TfSmf:GetFont()").unwrap();
+    assert_eq!(path, "Fonts\\MORPHEUS.TTF", "the frame's font follows");
+    for line in [
+        "TfBox: FontString element overriding font TextFontA",
+        "TfMf: FontString element overriding font TextFontA",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+    assert!(!report.status.lines().iter().any(|l| l.starts_with("TfSmf")));
+}

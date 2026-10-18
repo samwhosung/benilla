@@ -342,27 +342,29 @@ impl MessageFont {
     }
 }
 
-/// The FontString region holding a message frame's font, made on the first font-block call when
-/// the frame declared none. It is made LEFT, not CENTER, so styling a frame never re-justifies it.
+/// The FontString holding a message frame's font, the font verbs' receiver, made on first use:
+/// detached, so it is in no layer and not in `GetRegions`, as the reference's font is no region.
+/// It is made LEFT, not CENTER, so styling a frame never re-justifies it.
 pub(super) fn ensure_font_region(
     lua: &mlua::Lua,
     fh: FrameHandle,
 ) -> Option<crate::widget::RegionHandle> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let existing = model.arena.frame(fh).and_then(|frame| {
-        frame
-            .regions
-            .iter()
-            .find(|&&rh| {
-                matches!(
-                    model.arena.region(rh).map(|r| r.kind),
-                    Some(crate::widget::RegionKind::FontString)
-                )
-            })
-            .copied()
-    });
-    if existing.is_some() {
-        return existing;
+    ensure_font_region_in(&mut model, fh)
+}
+
+/// [`ensure_font_region`] on a borrowed model.
+pub(crate) fn ensure_font_region_in(
+    model: &mut Model,
+    fh: FrameHandle,
+) -> Option<crate::widget::RegionHandle> {
+    let slot = model
+        .arena
+        .frame_mut(fh)?
+        .kind_state
+        .message_font_region_mut()?;
+    if let Some(rh) = *slot {
+        return Some(rh);
     }
     let rh = model.arena.create_region(
         fh,
@@ -370,11 +372,29 @@ pub(super) fn ensure_font_region(
         crate::order::DrawLayer::Overlay,
         0,
     )?;
+    if let Some(r) = model.arena.region_mut(rh) {
+        r.detached = true;
+    }
+    if let Some(slot) = model
+        .arena
+        .frame_mut(fh)
+        .and_then(|f| f.kind_state.message_font_region_mut())
+    {
+        *slot = Some(rh);
+    }
     let mut data = crate::script::RegionData::default();
     data.justify.set_h(JustifyH::Left);
     model.region_data.insert(rh, data);
-    model.touch_layout_region(rh);
     Some(rh)
+}
+
+/// The holder of message frame `fh`'s font, if it has one yet.
+fn font_region_of(model: &Model, fh: FrameHandle) -> Option<crate::widget::RegionHandle> {
+    match &model.arena.frame(fh)?.kind_state {
+        KindState::ScrollingMessage(smf) => smf.font_region,
+        KindState::Message(mf) => mf.font_region,
+        _ => None,
+    }
 }
 
 /// A message frame's lines' box: the frame's rect `r` less its text insets times its scale
@@ -445,20 +465,9 @@ impl UiScript {
             .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white())
     }
 
-    /// The FontString region a message frame's font lives on, if it has one.
+    /// The detached holder of a message frame's font ([`ensure_font_region`]), if it has one.
     fn message_font_region(model: &Model, fh: FrameHandle) -> Option<crate::widget::RegionHandle> {
-        model.arena.frame(fh).and_then(|frame| {
-            frame
-                .regions
-                .iter()
-                .find(|&&rh| {
-                    matches!(
-                        model.arena.region(rh).map(|r| r.kind),
-                        Some(crate::widget::RegionKind::FontString)
-                    )
-                })
-                .copied()
-        })
+        font_region_of(model, fh)
     }
 
     /// How many rows the plain frame `fh`'s resolved rect holds at its font's pitch, its capacity

@@ -16,8 +16,45 @@
 use mlua::{Lua, Table, Value};
 
 use super::binding_abi;
+use super::font::FontId;
 use super::{FontShadow, Model, Outline};
-use crate::widget::RegionHandle;
+use crate::widget::{FrameHandle, KindState, RegionHandle};
+
+/// The own font of an EditBox, a MessageFrame or a ScrollingMessageFrame (`+0x300`, `+0x320`,
+/// `+0x338`), which its XML `font=` links and its `<FontString>` child loads into, made on first
+/// use with the frame's font-verb region following it; `None` for any other frame.
+pub(crate) fn own_font(model: &mut Model, h: FrameHandle) -> Option<FontId> {
+    if let Some(&id) = model.own_fonts.get(&h) {
+        return Some(id);
+    }
+    let rh = match model.arena.frame(h)?.kind_state {
+        KindState::EditBox(_) => super::editbox::ensure_text_region_in(model, h)?,
+        KindState::Message(_) | KindState::ScrollingMessage(_) => {
+            super::messageframe::ensure_font_region_in(model, h)?
+        }
+        _ => return None,
+    };
+    let id = model.fonts.anonymous();
+    model.own_fonts.insert(h, id);
+    super::font::link_region(model, rh, Some(id));
+    Some(id)
+}
+
+/// [`own_font`] for the loader's frame wrapper.
+pub(crate) fn own_font_lua(lua: &Lua, frame: &Table) -> mlua::Result<Option<FontId>> {
+    let h = super::object::frame_handle_of(lua, frame)?;
+    Ok(own_font(
+        &mut lua.app_data_mut::<Model>().expect("model"),
+        h,
+    ))
+}
+
+/// The own font region `rh` follows, when `rh` is a frame's font-verb region following it: the
+/// font verbs of that frame act on the own font's link, as the reference's act on the font itself.
+fn followed_own_font(model: &Model, rh: RegionHandle) -> Option<FontId> {
+    let own = *model.own_fonts.get(&model.arena.region(rh)?.owner)?;
+    (model.region_data.get(&rh)?.font_object == Some(own)).then_some(own)
+}
 
 /// How a widget's method table finds the region its glyphs paint from: a `FontString` is one, an
 /// `EditBox` creates its own on demand. An error means the wrong receiver.
@@ -201,7 +238,20 @@ pub(super) fn install(
             let rh = resolve(lua, &this)?;
             let relinked = {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
-                super::font::link_region(&mut model, rh, to)
+                match followed_own_font(&model, rh) {
+                    // A frame's own font relinks (`0x79ef10`), refusing a loop (`0x79f045`).
+                    Some(own) => {
+                        if to.is_some_and(|to| super::font::would_loop(&model, own, to)) {
+                            return Err(mlua::Error::runtime(format!(
+                                "{who}:SetFontObject(): Can't create a font object loop"
+                            )));
+                        }
+                        let moved = model.fonts.get(own).parent != to;
+                        super::font::link_font(&mut model, own, to);
+                        moved
+                    }
+                    None => super::font::link_region(&mut model, rh, to),
+                }
             };
             if relinked && to.is_some() {
                 if let Some(changed) = on_font_change {
@@ -218,7 +268,11 @@ pub(super) fn install(
             let rh = resolve(lua, &this)?;
             let id = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                model.region_data.get(&rh).and_then(|d| d.font_object)
+                match followed_own_font(&model, rh) {
+                    // A frame's own font answers what it follows (`0x79f090`).
+                    Some(own) => model.fonts.get(own).parent,
+                    None => model.region_data.get(&rh).and_then(|d| d.font_object),
+                }
             };
             match id {
                 Some(id) => Ok(Value::Table(super::font::wrapper(lua, id)?)),

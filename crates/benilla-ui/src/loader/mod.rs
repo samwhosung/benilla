@@ -919,13 +919,18 @@ impl Loader<'_> {
                 self.apply_backdrop(child, wrapper, dbg_name);
             }
         }
-        // 5·b · an EditBox's `font=`, read before its `<FontString>` child loads into the same font
-        //       (`0x779fcb`, `0x77a220`), then a direct-child `<FontString>`: the widget's own text
-        //       font (EditBox, message frame).
-        if el.tag.eq_ignore_ascii_case("EditBox") {
+        // 5·b · a text frame's `font=`, then its `<FontString>` children, which load into the same
+        //       font (`0x779fcb` before `0x77a220`, `0x78592b` before `0x785af5`, `0x787b3b`
+        //       before `0x787cfe`); any other frame's direct `<FontString>` is a region.
+        if ["EditBox", "MessageFrame", "ScrollingMessageFrame"]
+            .iter()
+            .any(|t| el.tag.eq_ignore_ascii_case(t))
+        {
             self.apply_frame_font(el, wrapper, dbg_name);
+            self.apply_text_font_children(el, wrapper, dbg_name);
+        } else {
+            self.apply_special_fontstrings(el, wrapper, self_name, dbg_name);
         }
-        self.apply_special_fontstrings(el, wrapper, self_name, dbg_name);
         // 5a' · <TitleRegion>: the drag handle, through the API's own CreateTitleRegion.
         self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,

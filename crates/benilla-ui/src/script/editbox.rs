@@ -500,7 +500,7 @@ pub(super) fn ensure_text_region(lua: &Lua, h: FrameHandle) -> Option<RegionHand
 }
 
 /// [`ensure_text_region`] on a borrowed model.
-fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option<RegionHandle> {
+pub(super) fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option<RegionHandle> {
     let (existing, multi_line) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::EditBox(eb)) => (eb.text_region, eb.multi_line),
         _ => return None,

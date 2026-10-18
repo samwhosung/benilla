@@ -109,8 +109,8 @@ impl Loader<'_> {
         Some(region_wrapper)
     }
 
-    /// A frame's direct-child `<FontString>`, its "special" string (a message frame's line font, an
-    /// EditBox's text), on the OVERLAY layer.
+    /// A frame's direct-child `<FontString>`, on the OVERLAY layer; a text frame's loads into its
+    /// own font instead ([`Loader::apply_text_font_children`]).
     pub(super) fn apply_special_fontstrings(
         &mut self,
         el: &Element,
@@ -131,58 +131,23 @@ impl Loader<'_> {
             let rname: Option<String> = region
                 .name()
                 .map(|raw| framexml::resolve_name(raw, parent_name));
-            // An EditBox's `<FontString>` declares the text string its ctor built (`0x779fb0`,
-            // `0x779bee`), so it creates nothing: a second region would also shift `GetRegions`.
-            let existing_text = el
-                .tag
-                .eq_ignore_ascii_case("EditBox")
-                .then(|| crate::script::editbox_text_region_wrapper(self.lua(), wrapper))
-                .flatten();
-            let region_wrapper: Table = match existing_text {
-                Some(w) => {
-                    if let Some(n) = rname {
-                        crate::script::region::publish_region_name(self.lua(), &n, &w);
-                        if let Err(e) = self.lua().globals().set(n.clone(), w.clone()) {
-                            self.report
-                                .warnings
-                                .push(format!("{dbg}: embedded FontString global '{n}': {e}"));
-                        }
-                    }
-                    w
+            let region_wrapper: Table = match wrapper
+                .call_method("CreateFontString", (rname, Some("OVERLAY".to_string())))
+            {
+                Ok(w) => w,
+                Err(e) => {
+                    self.report
+                        .fault(format!("{dbg}: CreateFontString (special): {e}"));
+                    continue;
                 }
-                None => match wrapper
-                    .call_method("CreateFontString", (rname, Some("OVERLAY".to_string())))
-                {
-                    Ok(w) => w,
-                    Err(e) => {
-                        self.report
-                            .fault(format!("{dbg}: CreateFontString (special): {e}"));
-                        continue;
-                    }
-                },
             };
             for node in &levels {
                 let attrs = FontAttrs::Own;
                 self.load_fontstring_level(node, &region_wrapper, parent_name, attrs, true, dbg);
             }
-            // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
+            // The implicit creation anchor, as in `apply_layers`.
             if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
                 self.report.fault(format!("{dbg}: implicit anchor: {e}"));
-            }
-            // It is the EditBox's text region by slot, never found by a search, which could take a
-            // `<Layers>` string; the box's insets anchor it.
-            if el.tag.eq_ignore_ascii_case("EditBox") {
-                if let Err(e) =
-                    crate::script::adopt_text_region(self.lua(), wrapper, &region_wrapper)
-                {
-                    self.report
-                        .fault(format!("{dbg}: adopt special FontString: {e}"));
-                }
-                if let Some(bytes) = levels.iter().rev().find_map(|l| l.attr("bytes")) {
-                    if let Err(e) = crate::script::apply_xml_bytes(self.lua(), wrapper, bytes) {
-                        self.report.fault(format!("{dbg}: FontString bytes: {e}"));
-                    }
-                }
             }
         }
     }

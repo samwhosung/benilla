@@ -39,8 +39,8 @@ pub struct MessageLine {
 pub struct ScrollingMessageState {
     /// The frame's own `SetJustifyH`/`SetJustifyV` (method table `0x87b5c0`), `None` until called
     /// and then winning over the font's. Deviation: the reference has one field, the font's, but
-    /// our font is read off the first `<FontString>` region (`message_frame_font`), which a
-    /// `CreateFrame` frame lacks; so that FontString's own `GetJustifyH` does not see this.
+    /// ours is the holder region's (`message_frame_font`), kept apart; so the holder's own
+    /// `GetJustifyH` does not see this.
     pub justify: Option<crate::justify::Justify>,
 
     /// The line ring, newest at the back.
@@ -73,6 +73,9 @@ pub struct ScrollingMessageState {
     /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
     /// (`+0x37c`-`+0x388`); only XML `<TextInsets>` sets them (`0x787fb0`).
     pub insets: [f32; 4],
+    /// The detached FontString that holds the lines' font (the frame's own `+0x338`), the font
+    /// verbs' receiver; never in `GetRegions`, as the reference's font is no region.
+    pub font_region: Option<crate::widget::RegionHandle>,
     /// The link-button rebuild flag (`+0x3b8`, cleared by the ctor at `0x7878d0`): set by a
     /// relayout (`0x788a8e`), a line fading out (`0x788538`) and a fade re-arm (`0x788bf1`), and
     /// spent by the per-frame rebuild (`0x788595` → `0x788c00`).
@@ -105,6 +108,7 @@ impl Default for ScrollingMessageState {
             at_top: false,
             at_bottom: true,
             insets: [0.0; 4],
+            font_region: None,
             links_dirty: false,
             laid_font: None,
             laid_rect: None,
@@ -718,6 +722,8 @@ pub struct MessageFrameState {
     /// (`+0x330`-`+0x33c`, zeroed by the ctor at `0x785675`); only XML `<TextInsets>` sets them
     /// (`0x785b80`).
     pub insets: [f32; 4],
+    /// The lines' font holder (`+0x320`), as [`ScrollingMessageState::font_region`].
+    pub font_region: Option<crate::widget::RegionHandle>,
 }
 
 impl Default for MessageFrameState {
@@ -732,6 +738,7 @@ impl Default for MessageFrameState {
             fading_enabled: true,
             lines_gen: 0,
             insets: [0.0; 4],
+            font_region: None,
         }
     }
 }

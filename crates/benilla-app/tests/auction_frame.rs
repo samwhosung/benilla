@@ -962,3 +962,44 @@ fn a_row_hover_goes_through_the_reference_tooltip_verb() {
     s.run("GameTooltip:SetAuctionSellItem()").unwrap();
     assert!(s.take_errors().is_empty());
 }
+
+/// BrowseName's own `<FontString>` loads into the box's font over InputBoxTemplate's, which
+/// already linked it to ChatFontNormal, so 1.12.1 logs its override line (`0x879b3c`, `0x77a204`)
+/// once for it, and the child is no region of the box.
+#[test]
+fn browse_name_logs_the_references_font_override_line() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let s = UiScript::new().expect("VM");
+    let (auction, rest) = (FILES.len() - 2, FILES.len() - 1);
+    for file in &FILES[..auction] {
+        common::load_ui(&s, file);
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
+    let chain =
+        benilla_formats::open_chain(&benilla_formats::wow_data().expect("data")).expect("chain");
+    let read = |req: &str| -> Option<Vec<u8>> {
+        if req.contains('\\') || req.contains('/') {
+            return chain.read(req).ok();
+        }
+        std::fs::read(dir.join(req)).ok()
+    };
+    let entry = FILES[auction];
+    let doc = benilla_ui::framexml::parse(&benilla_ui::source::decode(&read(entry).unwrap()))
+        .expect("parse");
+    let report = benilla_ui::loader::load_in(&s, &doc, &entry.replace('\\', "/"), &read);
+    assert!(report.errors.is_empty(), "{:#?}", report.errors);
+    let overrides: Vec<&String> = report
+        .status
+        .lines()
+        .iter()
+        .filter(|l| l.contains("FontString element overriding font"))
+        .collect();
+    assert_eq!(
+        overrides,
+        ["BrowseName: FontString element overriding font ChatFontNormal"]
+    );
+    common::load_ui(&s, FILES[rest]);
+    assert!(s
+        .eval::<bool>("return BrowseName:GetFontObject() == ChatFontNormal")
+        .unwrap());
+}

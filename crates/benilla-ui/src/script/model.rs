@@ -261,6 +261,9 @@ pub(crate) struct Model {
     /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`):
     /// its spec and the nine Texture regions it built.
     pub(crate) backdrops: HashMap<FrameHandle, backdrop::Installed>,
+    /// The own font of each EditBox, MessageFrame and ScrollingMessageFrame whose XML made one
+    /// (`+0x300`, `+0x320`, `+0x338`; [`super::font_block::own_font`]).
+    pub(crate) own_fonts: HashMap<FrameHandle, super::font::FontId>,
     /// `CSimpleHTML`'s state: element fonts `+0x350`, link format `+0x360`, content nodes `+0x340`.
     pub(crate) simple_html: simplehtml::SimpleHtmlStates,
     /// Every font object, named or a widget's own, with its links ([`super::font::Fonts`]).
@@ -1408,6 +1411,7 @@ impl Model {
             region_data: HashMap::new(),
             texels: super::texel::Texels::default(),
             backdrops: HashMap::new(),
+            own_fonts: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),
             fonts: super::font::Fonts::default(),
             region_rects: HashMap::new(),

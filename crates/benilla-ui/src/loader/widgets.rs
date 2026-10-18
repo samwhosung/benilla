@@ -277,10 +277,6 @@ impl Loader<'_> {
         }
     }
 
-    /// `<EditBox>` (`0x779fb0`). An absent flag keeps the ctor's, where `autoFocus` is on and the
-    /// rest off (`0x779a29`, `0x77a0b3`), so flags are read presence-aware: `autoFocus="false"`
-    /// clears. The reference also skips an empty `autoFocus` (`0x77a0b8`), which clears here.
-    /// `blinkSpeed` is the caret half-period (`E+0x370`).
     /// `font=` on an EditBox, a MessageFrame or a ScrollingMessageFrame (`0x779fcb`, `0x78592b`,
     /// `0x787b3b`): a non-empty name found in the font table (`0x783870`) links the frame's own
     /// font to it (`0x770c60`); any other is logged as `%s %s: Couldn't find font object named %s`
@@ -289,8 +285,13 @@ impl Loader<'_> {
         let Some(font) = el.attr("font").filter(|f| !f.is_empty()) else {
             return;
         };
-        if self.is_font_object(font) {
-            self.call(wrapper, "SetFontObject", font.to_string(), dbg);
+        let to = self.model().fonts.id(font);
+        if let Some(to) = to {
+            match crate::script::own_font_lua(self.lua, wrapper) {
+                Ok(Some(own)) => self.link_font_node(own, to, "<unnamed>"),
+                Ok(None) => {}
+                Err(e) => self.report.fault(format!("{dbg}: font=: {e}")),
+            }
         } else {
             let kind: String = wrapper
                 .call_method("GetObjectType", ())
@@ -302,6 +303,57 @@ impl Loader<'_> {
         }
     }
 
+    /// An EditBox's, a MessageFrame's or a ScrollingMessageFrame's `<FontString>` children, each
+    /// loaded into the frame's own font by the Font loader (`0x783c30` at `0x77a220`, `0x785af5`,
+    /// `0x787cfe`), never a region: one over a font that already follows another first logs
+    /// `%s: FontString element overriding font %s` (`0x879b3c`) with the frame's name and the
+    /// followed font's. An EditBox's then caps its bytes (`0x77a225`).
+    pub(super) fn apply_text_font_children(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
+        for child in children_named(el, "FontString") {
+            let own = match crate::script::own_font_lua(self.lua, wrapper) {
+                Ok(Some(own)) => own,
+                Ok(None) => return,
+                Err(e) => {
+                    self.report.fault(format!("{dbg}: <FontString>: {e}"));
+                    return;
+                }
+            };
+            let followed = {
+                let model = self.model();
+                model.fonts.get(own).parent.map(|p| {
+                    model
+                        .fonts
+                        .get(p)
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "<unnamed>".to_string())
+                })
+            };
+            if let Some(font) = followed {
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("{name}: FontString element overriding font {font}"));
+            }
+            self.load_font_node(child, own, "<unnamed>");
+            if el.tag.eq_ignore_ascii_case("EditBox") {
+                let text = crate::script::editbox_text_region_wrapper(self.lua(), wrapper);
+                if let Some(text) = text {
+                    if let Err(e) = crate::script::adopt_text_region(self.lua(), wrapper, &text) {
+                        self.report.fault(format!("{dbg}: adopt text region: {e}"));
+                    }
+                }
+                if let Some(bytes) = child.attr("bytes") {
+                    if let Err(e) = crate::script::apply_xml_bytes(self.lua(), wrapper, bytes) {
+                        self.report.fault(format!("{dbg}: FontString bytes: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// `<EditBox>` (`0x779fb0`). An absent flag keeps the ctor's, where `autoFocus` is on and the
+    /// rest off (`0x779a29`, `0x77a0b3`), so flags are read presence-aware: `autoFocus="false"`
+    /// clears. The reference also skips an empty `autoFocus` (`0x77a0b8`), which clears here.
+    /// `blinkSpeed` is the caret half-period (`E+0x370`).
     pub(super) fn apply_editbox(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if !el.tag.eq_ignore_ascii_case("EditBox") {
             return;
@@ -385,11 +437,6 @@ impl Loader<'_> {
         if !scrolling && !plain {
             return;
         }
-        // `font=`, which the reference links before its `<FontString>` child loads into the same
-        // font (`0x78592b`, `0x785af5`). Here that child is the frame's font region, made in step
-        // 5·b, so the link comes after it: the child's own attributes stand, as after the
-        // reference's load, but a child's `inherits` gives way to `font=`, where there it wins.
-        self.apply_frame_font(el, wrapper, dbg);
         // A non-empty `maxLines` through `SStrToInt`, above 0 (`0x787c5e`-`0x787c71`).
         if scrolling {
             if let Some(v) = el.attr("maxLines").filter(|v| !v.is_empty()) {
