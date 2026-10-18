@@ -440,3 +440,29 @@ fn set_orientation_raises_the_reference_lines() {
     )
     .unwrap();
 }
+
+/// `CreateFont` (`0x706040`) gates its name on `lua_isstring` (`0x706048`), so a number names the
+/// object by its `%.14g` text, and raises `Usage: CreateFont("name")` (`0x872f40`) otherwise.
+#[test]
+fn create_font_raises_its_usage_line() {
+    let s = script();
+    for call in [
+        "CreateFont()",
+        "CreateFont(nil)",
+        "CreateFont({})",
+        "CreateFont(true)",
+    ] {
+        let e = err(&s, call);
+        assert!(
+            e.contains(r#"Usage: CreateFont("name")"#),
+            "`{call}` -> {e}"
+        );
+    }
+    s.run(
+        r#"
+        local f = CreateFont(12)
+        assert(f:GetName() == "12" and getglobal("12") == f)
+    "#,
+    )
+    .unwrap();
+}

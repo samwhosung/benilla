@@ -795,13 +795,13 @@ pub(super) fn nameplate_font(lua: &Lua) -> Option<String> {
 /// `CreateFont(name)`: mint a font object, publish it as the global `name` and return it; addons
 /// use both. An existing name returns that object unchanged and unrepublished (`0x7839ab`).
 ///
-/// The reference's gate (`0x706048`) takes a number or any string, the empty one included, and
-/// raises on anything else. A fresh object holds nothing, so a link to it applies nothing
-/// ([`apply`]).
-fn create_font(lua: &Lua, name: Option<String>) -> mlua::Result<Table> {
-    let name = name.ok_or_else(|| {
-        mlua::Error::runtime("CreateFont: a font name is required (it becomes a global)")
-    })?;
+/// The reference's gate (`0x706048`, `lua_isstring`) takes a number as its `%.14g` text or any
+/// string, the empty one included, and raises `Usage: CreateFont("name")` (`0x872f40`) on anything
+/// else. A fresh object holds nothing, so a link to it applies nothing ([`apply`]).
+fn create_font(lua: &Lua, name: Option<Value>) -> mlua::Result<Table> {
+    let name = name
+        .and_then(|v| binding_abi::optional_string(lua, &v))
+        .ok_or_else(|| mlua::Error::runtime(r#"Usage: CreateFont("name")"#))?;
     let id = lua
         .app_data_mut::<Model>()
         .expect("model")
