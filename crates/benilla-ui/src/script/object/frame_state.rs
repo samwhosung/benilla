@@ -2,6 +2,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use crate::layout::Len;
 use crate::script::binding_abi::{self, bool_or_default};
 
 use crate::script::region_map::{set_shared, Side};
@@ -456,17 +457,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // `GetBackdrop([table])` (`0x777370`) rebuilds the table from the stored struct: no backdrop is
     // zero values, not nil; an omitted key reads its ctor default (files `""`, `tileSize` 0,
-    // `edgeSize` 32; `0x77e5f0`); `tile` is 1 or absent, never a boolean; a table argument is
-    // filled in place, its `insets` reused (`0x77740e`). No colour keys.
+    // `edgeSize` 0.025 layout units; `0x77e5f0`); `tile` is 1 or absent, never a boolean; a table
+    // argument is filled in place, its `insets` reused (`0x77740e`). No colour keys. Each length
+    // is `G` of the stored one: `tileSize` `[+0x4c]` (`0x7774ec`), `edgeSize` `[+0x48]`
+    // (`0x77752e`) and the insets left `[+0x58]`, right `[+0x5c]`, top `[+0x50]` and bottom
+    // `[+0x54]` (`0x7775ec`..`0x7776a0`), which `SetBackdrop` stored by `S`.
     m.set(
         "GetBackdrop",
         lua.create_function(|lua, (this, target): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
             // Copied out before any Lua write: filling a caller's table can run a `__newindex` that
             // re-enters and would panic on the app-data borrow.
-            let bd = {
+            let (bd, u) = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                model.backdrops.get(&h).map(|i| i.spec.clone())
+                let u = model.layout_units();
+                (model.backdrops.get(&h).map(|i| i.spec.clone()), u)
             };
             let Some(bd) = bd else {
                 return Ok(mlua::MultiValue::new());
@@ -485,8 +490,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Value::Nil // erases the key from a reused table
                 },
             )?;
-            t.set("tileSize", f64::from(bd.tile_size))?;
-            t.set("edgeSize", f64::from(bd.edge_size))?;
+            t.set("tileSize", u.round_trip(bd.tile_size))?;
+            t.set("edgeSize", bd.edge_size.get(u))?;
             let insets = match t.get::<Value>("insets") {
                 Ok(Value::Table(existing)) => existing,
                 _ => {
@@ -495,10 +500,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     fresh
                 }
             };
-            insets.set("left", f64::from(bd.insets.left))?;
-            insets.set("right", f64::from(bd.insets.right))?;
-            insets.set("top", f64::from(bd.insets.top))?;
-            insets.set("bottom", f64::from(bd.insets.bottom))?;
+            insets.set("left", u.round_trip(bd.insets.left))?;
+            insets.set("right", u.round_trip(bd.insets.right))?;
+            insets.set("top", u.round_trip(bd.insets.top))?;
+            insets.set("bottom", u.round_trip(bd.insets.bottom))?;
             Ok(mlua::MultiValue::from_vec(vec![Value::Table(t)]))
         })?,
     )?;
@@ -720,9 +725,9 @@ fn backdrop_from_table(t: &Table) -> mlua::Result<Backdrop> {
         bd.tile_size = n as f32;
     }
     if let Ok(Value::Number(n)) = t.get::<Value>("edgeSize") {
-        bd.edge_size = n as f32;
+        bd.edge_size = Len::Script(n as f32);
     } else if let Ok(Value::Integer(n)) = t.get::<Value>("edgeSize") {
-        bd.edge_size = n as f32;
+        bd.edge_size = Len::Script(n as f32);
     }
     if let Ok(Value::Table(ins)) = t.get::<Value>("insets") {
         let num = |k: &str| -> f32 {

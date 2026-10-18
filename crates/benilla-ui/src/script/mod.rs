@@ -910,6 +910,7 @@ impl UiScript {
                 minimap::seat_engine_children(&mut model, h);
             }
             worldmap_arrow::rescale(&mut model);
+            backdrop::cells_changed(&mut model);
         }
         model.touch_layout();
         drop(model);

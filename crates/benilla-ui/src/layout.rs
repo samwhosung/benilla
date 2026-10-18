@@ -13,7 +13,7 @@
 
 use std::collections::VecDeque;
 
-pub use crate::screencoord::{LayoutSpace, LayoutUnits};
+pub use crate::screencoord::{LayoutSpace, LayoutUnits, Len};
 
 // ── Constants ────────────────────────────────────────────────────────────────────────────────
 

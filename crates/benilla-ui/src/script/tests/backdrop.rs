@@ -62,6 +62,8 @@ fn get_backdrop_reconstructs_from_the_struct() {
         -- How many values did that return? 5.0 answers with the implicit vararg table's `n`;
         -- `select` is 5.1's base library and is not a 1.12 global (`lua50::install`).
         local function count(...) return arg.n end
+        -- Lengths come back through the getter steps, `G(S(v))`, a hair off the number given.
+        local function near(a, b) return math.abs(a - b) < 1e-3 end
 
         -- TRAP 2: no backdrop => ZERO values, not nil. The count is the only way to see it.
         assert(count(f:GetBackdrop()) == 0, "unset backdrop must return no values at all")
@@ -79,9 +81,9 @@ fn get_backdrop_reconstructs_from_the_struct() {
         assert(b.alien == nil, "keys SetBackdrop never read cannot reappear")
         assert(b.insets ~= passed.insets, "the insets subtable is rebuilt too")
         assert(b.bgFile == "bg" and b.edgeFile == "edge", "files round-trip")
-        assert(b.tileSize == 16 and b.edgeSize == 24, "sizes round-trip")
-        assert(b.insets.left == 1 and b.insets.right == 2
-               and b.insets.top == 3 and b.insets.bottom == 4, "insets round-trip")
+        assert(near(b.tileSize, 16) and near(b.edgeSize, 24), "sizes round-trip")
+        assert(near(b.insets.left, 1) and near(b.insets.right, 2)
+               and near(b.insets.top, 3) and near(b.insets.bottom, 4), "insets round-trip")
 
         -- TRAP 4: `tile` is the NUMBER 1, never the boolean the caller passed.
         assert(type(b.tile) == "number", "tile must be a number, got " .. type(b.tile))
@@ -96,7 +98,7 @@ fn get_backdrop_reconstructs_from_the_struct() {
         f:SetBackdrop({ edgeFile = "onlyedge" })
         local p = f:GetBackdrop()
         assert(p.bgFile == "", "an omitted bgFile is the empty string, not nil")
-        assert(p.edgeSize == 32, "an omitted edgeSize is the ctor's 32, not the previous 24")
+        assert(near(p.edgeSize, 32), "an omitted edgeSize is the ctor's 32, not the previous 24")
         assert(p.tileSize == 0, "an omitted tileSize is 0, not the previous 16")
         assert(p.insets.left == 0 and p.insets.right == 0
                and p.insets.top == 0 and p.insets.bottom == 0, "omitted insets are 0, not 1/2/3/4")
@@ -112,7 +114,7 @@ fn get_backdrop_reconstructs_from_the_struct() {
         assert(mine.insets == ins, "an existing insets subtable is reused, not replaced")
         assert(mine.tile == nil, "a stale tile key is erased from a recycled table")
         assert(mine.stale == "kept", "keys it does not write are left alone")
-        assert(mine.edgeSize == 32 and ins.bottom == 0, "the recycled table is filled")
+        assert(near(mine.edgeSize, 32) and ins.bottom == 0, "the recycled table is filled")
 
         -- SetBackdrop(nil) is indistinguishable from never having set one: back to zero values.
         f:SetBackdrop(nil)
@@ -142,9 +144,10 @@ fn get_backdrop_round_trips_through_set_backdrop() {
         backdrop["edgeSize"] = 32
         f:SetBackdrop(backdrop)
         local b = f:GetBackdrop()
+        local function near(a, v) return math.abs(a - v) < 1e-3 end
         assert(b.bgFile == "bg" and b.edgeFile == "edge", "files survive the round trip")
-        assert(b.tile == 1 and b.tileSize == 32 and b.edgeSize == 32, "tiling survives")
-        assert(b.insets.left == 11 and b.insets.bottom == 11, "insets survive")
+        assert(b.tile == 1 and near(b.tileSize, 32) and near(b.edgeSize, 32), "tiling survives")
+        assert(near(b.insets.left, 11) and near(b.insets.bottom, 11), "insets survive")
     "#,
     )
     .unwrap();
@@ -579,7 +582,7 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                             edge_file: t.get("edgeFile").ok(),
                             tile: t.get::<Option<f32>>("tile").ok().flatten().is_some(),
                             tile_size: t.get("tileSize").unwrap(),
-                            edge_size: t.get("edgeSize").unwrap(),
+                            edge_size: crate::layout::Len::Script(t.get("edgeSize").unwrap()),
                             insets: {
                                 let ins: mlua::Table = t.get("insets").unwrap();
                                 Insets {
@@ -602,7 +605,8 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     b.border_color = crate::color::Rgba8::from_f32([c.0, c.1, c.2, c.3]);
                     b
                 };
-                let mut want = pieces(fr, &spec, eff);
+                let units = s.model_ref().layout_units();
+                let mut want = pieces(fr, &spec, units, eff);
                 // The four sides (wrap flag on) and the four corners (off) are two textures in one
                 // BORDER batch, the sides' made first, which its End sorts (`0x7731a0`) by the CRT's
                 // selection sort (`0x73f87b`): it swaps the first-found largest to the end each

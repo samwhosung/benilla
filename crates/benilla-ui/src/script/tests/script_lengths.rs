@@ -45,3 +45,45 @@ fn the_resize_bounds_and_hit_insets_answer_through_the_getter_steps() {
         (G_3, G_5, G_100, 0.0)
     );
 }
+
+/// `SetBackdrop` stores `S` of `tileSize`, `edgeSize` and each inset (`0x777934`, `0x77798d`,
+/// `0x777a2d`..`0x777b38`) and `GetBackdrop` answers `G` of each (`0x7774ec`, `0x77752e`,
+/// `0x7775ec`..`0x7776a0`). A missing `edgeSize` keeps the constructor's 0.025 layout units
+/// (`0x77e65d`), 32 at 4:3 and 39.16 at 16:9.
+#[test]
+fn the_backdrop_lengths_answer_through_the_getter_steps() {
+    let mut s = vm();
+    s.run(
+        r#"F = CreateFrame("Frame", "Plate")
+           F:SetBackdrop({ edgeFile = "e", tileSize = 100, edgeSize = 11,
+                           insets = { left = 3, right = 5, top = 12, bottom = 50 } })
+           G = CreateFrame("Frame", "Bare") G:SetBackdrop({ edgeFile = "e" })"#,
+    )
+    .unwrap();
+    let read = |s: &UiScript| {
+        s.eval::<(f64, f64, f64, f64, f64, f64, f64)>(
+            "local b, d = F:GetBackdrop(), G:GetBackdrop() local i = b.insets
+             return b.tileSize, b.edgeSize, i.left, i.right, i.top, i.bottom, d.edgeSize",
+        )
+        .unwrap()
+    };
+    assert_eq!(read(&s), (G_100, G_11, G_3, G_5, G_12, G_50, 32.0));
+    s.set_window_size(1920.0, 1080.0);
+    assert_eq!(
+        read(&s).6,
+        39.16279630224725,
+        "the default is a layout length"
+    );
+    // And it draws at that size: the default plate's corners are 39.16 units square.
+    s.run(r#"G:SetPoint("CENTER", 0, 0) G:SetWidth(200) G:SetHeight(200)"#)
+        .unwrap();
+    s.resolve();
+    let corner = s
+        .extract()
+        .into_iter()
+        .filter(|q| matches!(&q.content, crate::script::QuadContent::Texture { path: Some(p), .. } if p == "e"))
+        .filter_map(|q| q.rect)
+        .map(|r| r.right - r.left)
+        .fold(f32::INFINITY, f32::min);
+    crate::assert_near!(corner, 39.162796);
+}

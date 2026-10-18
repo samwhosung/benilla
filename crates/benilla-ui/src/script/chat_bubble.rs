@@ -291,7 +291,7 @@ fn create(
             edge_file: Some(EDGE_TEXTURE.to_string()),
             tile: true,
             tile_size: g.border,
-            edge_size: g.border,
+            edge_size: crate::layout::Len::Script(g.border),
             insets: uniform(g.border),
             ..Backdrop::default()
         }),
@@ -340,7 +340,13 @@ fn uniform(v: f32) -> Insets {
 fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
     let b = &model.chat_bubbles.bubbles[i];
     let (frame, tail, text) = (b.frame, b.tail, b.text);
-    backdrop::set_metrics(model, frame, g.border, g.border, uniform(g.border));
+    backdrop::set_metrics(
+        model,
+        frame,
+        crate::layout::Len::Script(g.border),
+        g.border,
+        uniform(g.border),
+    );
     let frame_id = model.frame_id(frame);
     let text_id = model.region_id(text);
 

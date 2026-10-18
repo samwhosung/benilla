@@ -106,6 +106,45 @@ impl LayoutUnits {
     }
 }
 
+/// A stored script length, as the reference keeps it in layout units: a number a script or an
+/// `<AbsValue>`/`<AbsDimension>` gave, kept as given and stored by `S` at each read, so new cells
+/// read as the rebuild they stand for would store it, or a value the engine or a `<RelValue>`
+/// wrote in layout units directly, as a constructor's default.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Len {
+    /// A script number, `S` taken at the read.
+    Script(f32),
+    /// A layout length, stored as it is.
+    Layout(f32),
+}
+
+impl Len {
+    /// The length in layout units, as the reference holds it.
+    #[inline]
+    pub fn layout(self, units: LayoutUnits) -> f32 {
+        match self {
+            Len::Script(v) => units.store(v),
+            Len::Layout(l) => l,
+        }
+    }
+
+    /// The length as its getter answers it, `G` of the stored value.
+    #[inline]
+    pub fn get(self, units: LayoutUnits) -> f64 {
+        units.load(self.layout(units))
+    }
+
+    /// The length in script units for a consumer that lays out or draws in them: a script number
+    /// as given, a layout length through `G`.
+    #[inline]
+    pub fn script(self, units: LayoutUnits) -> f32 {
+        match self {
+            Len::Script(v) => v,
+            Len::Layout(l) => units.load(l) as f32,
+        }
+    }
+}
+
 /// The layout space of a screen root `w` by `h` script units wide and tall: its extent in layout
 /// units, `S(w)` by `RN24(K2 · RN24(h / 768))`, and the map from layout units back to the root's,
 /// which the renderer and the hit tests read. The interface's own root is `768·a` by 768
