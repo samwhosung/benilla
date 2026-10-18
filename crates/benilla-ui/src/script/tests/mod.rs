@@ -41,6 +41,7 @@ mod host_state;
 mod hover_publish;
 mod hover_walk;
 mod hyperlink;
+mod index_usage;
 mod input;
 mod keep_rect;
 mod keyboard;

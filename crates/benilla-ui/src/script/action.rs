@@ -5,12 +5,12 @@
 //! wire's slot index. FrameXML's bonus bar shows actions `(6 + offset - 1) * 12 + i` for the
 //! app-pushed `GetBonusBarOffset`.
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
 use super::protected::{self, Tag};
 use super::Model;
-use crate::script::binding_abi::Idx32;
 
 /// The kind byte, bits 24-31 of the packed slot word (vmangos `Player.h:133`). Must match
 /// `benilla_protocol`'s `ACTION_KIND_*`; this crate has no protocol dependency.
@@ -184,7 +184,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "HasAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: HasAction(slot)` (`0x84c010`, `0x4e711f`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: HasAction(slot)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(model.actions.contains_key(&action)))
         })?,
@@ -234,7 +236,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetActionTexture",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: GetActionTexture(slot)` (`0x84bf78`, `0x4e6e5a`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: GetActionTexture(slot)")?;
             let tex = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.actions.get(&action).and_then(|s| s.texture.clone())
@@ -305,7 +309,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetActionCount",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: GetActionCount(slot)` (`0x84bf98`, `0x4e6ebb`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCount(slot)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model
                 .actions
@@ -346,7 +352,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "IsUsableAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsUsableAction(slot)` (`0x84c0f0`, `0x4e744f`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsUsableAction(slot)")?;
             Ok((
                 state_flag(lua, action, |s| s.usable),
                 state_flag(lua, action, |s| s.not_enough_mana),
@@ -356,7 +364,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "IsActionInRange",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // A non-number pushes nil (`0x4e7563` → `0x4e75be`); it never raises.
+            let Some(action) = binding_abi::index_or(lua, action)? else {
+                return Ok(Value::Nil);
+            };
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(
                 match model
@@ -378,26 +390,35 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsCurrentAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsCurrentAction(slot)` (`0x84c0b0`, `0x4e733f`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsCurrentAction(slot)")?;
             Ok(state_flag(lua, action, |s| s.current))
         })?,
     )?;
     g.set(
         "IsAutoRepeatAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsAutorepeatAction(slot)` (`0x84c0d0`, `0x4e73af`), the
+            // client's own text naming `IsAutorepeatAction`.
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsAutorepeatAction(slot)")?;
             Ok(state_flag(lua, action, |s| s.auto_repeat))
         })?,
     )?;
     g.set(
         "IsAttackAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsAttackAction(slot)` (`0x84c094`, `0x4e72cf`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsAttackAction(slot)")?;
             Ok(state_flag(lua, action, |s| s.is_attack))
         })?,
     )?;
     // From the slot, not the state map: `0x4e5250` depends only on the item template.
     g.set(
         "IsConsumableAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsConsumableAction(slot)` (`0x84c10c`, `0x4e74bf`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsConsumableAction(slot)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             match model.actions.get(&action) {
                 Some(s) if s.consumable => Ok(Value::Integer(1)),
@@ -407,7 +428,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsEquippedAction",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: IsEquippedAction(slot)` (`0x84c12c`, `0x4e752f`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: IsEquippedAction(slot)")?;
             Ok(state_flag(lua, action, |s| s.equipped))
         })?,
     )?;
@@ -417,7 +440,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // replay the sweep and its finish flash.
     g.set(
         "GetActionCooldown",
-        lua.create_function(|lua, Idx32(action): Idx32| {
+        lua.create_function(|lua, action: Value| {
+            // `is-number` else `Usage: GetActionCooldown(slot)` (`0x84bfb4`, `0x4e6f77`).
+            let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCooldown(slot)")?;
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(

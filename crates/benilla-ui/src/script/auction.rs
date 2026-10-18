@@ -5,12 +5,12 @@
 //! The wire carries no sort: each list keeps an 8-deep stack of `(key, reversed)`, where clicking
 //! the primary column toggles it and another column is promoted with the direction it remembers.
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::cursor;
 use super::Model;
-use crate::script::binding_abi::{Idx, Idx32};
 
 /// The three list types, in the order the app pushes them.
 pub const LIST: usize = 0;
@@ -408,7 +408,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // live countdown: it moves only when a new list lands.
     g.set(
         "GetAuctionItemTimeLeft",
-        lua.create_function(|lua, (kind, Idx(index)): (String, Idx)| {
+        lua.create_function(|lua, (kind, index): (Value, Value)| {
+            // `is-number-or-string` and `is-number` else `Usage: GetAuctionItemTimeLeft("type",
+            // index)` (`0x8494a0`, `0x4cf5f8`).
+            let kind = binding_abi::string_arg(
+                lua,
+                kind,
+                r#"Usage: GetAuctionItemTimeLeft("type", index)"#,
+            )?;
+            let index = binding_abi::index_arg(
+                lua,
+                index,
+                r#"Usage: GetAuctionItemTimeLeft("type", index)"#,
+            )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(row_at(&model, &kind, index).map_or(0, |r| i64::from(r.time_left)))
         })?,
@@ -460,7 +472,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetSelectedAuctionItem(type, index): remembers the auction at that row; out of range clears.
     g.set(
         "SetSelectedAuctionItem",
-        lua.create_function(|lua, (kind, Idx(index)): (String, Idx)| {
+        lua.create_function(|lua, (kind, index): (Value, Value)| {
+            // `is-number-or-string` and `is-number` else `Usage: SetSelectedAuctionItem("type",
+            // index)` (`0x8495b4`, `0x4cfeab`).
+            let kind = binding_abi::string_arg(
+                lua,
+                kind,
+                r#"Usage: SetSelectedAuctionItem("type", index)"#,
+            )?;
+            let index = binding_abi::index_arg(
+                lua,
+                index,
+                r#"Usage: SetSelectedAuctionItem("type", index)"#,
+            )?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(i) = list_index(&kind) else {
                 return Ok(());
@@ -754,7 +778,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CancelAuction(index), always an "owner" row.
     g.set(
         "CancelAuction",
-        lua.create_function(|lua, Idx32(index): Idx32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetSelectedAuctionItem(index)` (`0x84963c`, `0x4d0279`), the
+            // client's own text naming `SetSelectedAuctionItem`.
+            let index =
+                binding_abi::index_arg32(lua, index, "Usage: SetSelectedAuctionItem(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.auction_cancels.push(index);
             Ok(())

@@ -21,7 +21,6 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// One known skill line off the player's `PLAYER_SKILL_INFO` block, resolved by the app.
 #[derive(Clone, Debug, PartialEq)]
@@ -310,7 +309,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // stock `SkillFrame.lua:211`'s early return.
     g.set(
         "GetSkillLineInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetSkillLineInfo(index)` (`0x849eb4`, `0x4d3629`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetSkillLineInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(n) = index.checked_sub(1) else {
                 return out_of_range_tuple(lua);
@@ -402,7 +403,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetAdjustedSkillPoints() → 0 here; the reference answers `PLAYER_CHARACTER_POINTS2` less the
-    // cost of the points `AddSkillUp` has chosen (`0x4d3cb0`), 0 each (module doc). The stock pane reads it only under its
+    // cost of the points `AddSkillUp` has chosen (`0x4d3cb0`), 0 each (module doc). The stock pane
+    // reads it only under its
     // `stepCost` and `rankCost` branches, which 1.12 data never opens.
     g.set(
         "GetAdjustedSkillPoints",

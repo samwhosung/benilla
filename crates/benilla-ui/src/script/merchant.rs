@@ -7,13 +7,13 @@
 //! `numAvailable` -1; `isUsable` is 1 or nil, the [`super::item_stats::item_usable`] gate, and a
 //! template still in flight reads usable (`0x4fb298`).
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{flag, number_arg};
 use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// One vendor row, resolved by the app; its 1-based index is its place in [`MerchantState::items`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -219,7 +219,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetMerchantItemInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetMerchantItemInfo(index)` (`0x84dc48`, `0x4fb16b`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetMerchantItemInfo(index)")?;
             let (item, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let item = model
@@ -263,7 +265,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // arms accept a nil (`MerchantFrame.lua:303`, `:306`).
     g.set(
         "GetMerchantItemLink",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetMerchantItemLink(index)` (`0x84dc8c`, `0x4fb5b1`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetMerchantItemLink(index)")?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model
@@ -362,7 +366,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // same `0x5ea930` gate over the sold item (`0x4fb4f7`): one its seller cannot use reads red.
     g.set(
         "GetBuybackItemInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetBuybackItemInfo(slot)` (`0x84dc6c`, `0x4fb33e`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetBuybackItemInfo(slot)")?;
             let (item, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let item = model

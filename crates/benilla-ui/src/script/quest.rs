@@ -7,7 +7,6 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag};
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// Which questgiver panel a [`QuestState`] is for, set from the wire packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,10 +281,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    fn install_title(lua: &Lua, name: &str, active: bool) -> mlua::Result<()> {
+    fn install_title(lua: &Lua, name: &str, usage: &'static str, active: bool) -> mlua::Result<()> {
         lua.globals().set(
             name,
-            lua.create_function(move |lua, Idx(i): Idx| {
+            lua.create_function(move |lua, i: Value| {
+                let i = binding_abi::index_arg(lua, i, usage)?;
                 let title = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     model.quest.as_ref().and_then(|q| {
@@ -301,13 +301,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })?,
         )
     }
-    install_title(lua, "GetActiveTitle", true)?;
-    install_title(lua, "GetAvailableTitle", false)?;
+    // Each `is-number` else its own usage line (`0x84ecfc` at `0x501b87`, `0x84ecdc` at
+    // `0x501b17`).
+    install_title(lua, "GetActiveTitle", "Usage: GetActiveTitle(index)", true)?;
+    install_title(
+        lua,
+        "GetAvailableTitle",
+        "Usage: GetAvailableTitle(index)",
+        false,
+    )?;
 
-    // GetActiveLevel(index) (`0x501c20`) and GetAvailableLevel(index) (`0x501ba0`): the level stored
+    // GetActiveLevel(index) (`0x501c20`) and GetAvailableLevel(index) (`0x501ba0`): the level
+    // stored
     // beside the greeting row, 0 for an index outside the pool (`dec`, then an unsigned compare
     // against the count, so 0 and negatives miss too). The pools hold the rows of the last
-    // greeting, whether or not its panel is still open, and 0 before any. The usage texts are the exe's own,
+    // greeting, whether or not its panel is still open, and 0 before any. The usage texts are the
+    // exe's own,
     // `Get` twice (`0x84ed40`, `0x84ed1c`).
     fn install_level(lua: &Lua, name: &str, usage: &'static str, active: bool) -> mlua::Result<()> {
         lua.globals().set(

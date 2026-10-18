@@ -45,38 +45,23 @@ pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
 /// An index argument read as the reference reads one: a number or numeric string (`0x6f34d0`)
 /// truncated by `_ftol` ([`ftol`]) and then decremented and compared unsigned, so a zero or
 /// negative index is a huge one and falls out of range where a Rust integer parameter would raise
-/// in the conversion (`GetCraftInfo` `0x4f6ed8`). The inner value is the 32-bit pattern, the
-/// negative a value no table holds. A non-number raises, as the reference's usage error does.
-pub(crate) struct Idx(pub usize);
-
-/// [`Idx`] as a function, for a binding whose reference raises its own usage text for a
-/// non-number (`usage`); the value is the same 32-bit pattern, widened.
+/// in the conversion (`GetCraftInfo` `0x4f6ed8`). The value is the 32-bit pattern, widened, the
+/// negative a value no table holds. A non-number raises the binding's own `usage`, as each
+/// reference binding pushes its own literal to `luaL_error`.
 pub(crate) fn index_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<usize> {
-    number_arg(lua, v, usage).map(|n| n as u32 as usize)
+    index_arg32(lua, v, usage).map(|n| n as usize)
 }
 
-/// [`Idx`] for the parameters the bindings keep as `u32`.
-pub(crate) struct Idx32(pub u32);
-
-fn index_bits(lua: &Lua, v: Value) -> mlua::Result<u32> {
-    match lua.coerce_number(v)? {
-        Some(n) => Ok(ftol(n) as u32),
-        None => Err(mlua::Error::RuntimeError(
-            "bad argument: number expected".into(),
-        )),
-    }
+/// [`index_arg`] for the parameters the bindings keep as `u32`.
+pub(crate) fn index_arg32(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<u32> {
+    number_arg(lua, v, usage).map(|n| n as u32)
 }
 
-impl mlua::FromLua for Idx {
-    fn from_lua(v: Value, lua: &Lua) -> mlua::Result<Self> {
-        index_bits(lua, v).map(|n| Idx(n as usize))
-    }
-}
-
-impl mlua::FromLua for Idx32 {
-    fn from_lua(v: Value, lua: &Lua) -> mlua::Result<Self> {
-        index_bits(lua, v).map(Idx32)
-    }
+/// [`index_arg32`] for a binding whose failed `is-number` takes another branch instead of raising
+/// (`IsActionInRange` pushes nil, `0x4e7563`; `GetNumQuestLeaderBoards` reads the selection,
+/// `0x4e0056`): `None` for a non-number.
+pub(crate) fn index_or(lua: &Lua, v: Value) -> mlua::Result<Option<u32>> {
+    Ok(lua.coerce_number(v)?.map(|n| ftol(n) as u32))
 }
 
 /// Shape D: an `is-number`-gated flag whose failure keeps its zero instead of raising. The value

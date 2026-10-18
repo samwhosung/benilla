@@ -17,7 +17,6 @@ use mlua::{Lua, Value};
 
 use super::binding_abi::flag;
 use super::{binding_abi, Model};
-use crate::script::binding_abi::Idx;
 
 /// The `SkillLine.dbc` id behind weapon subclass `0..=20` (vmangos `Item.cpp:700-707`), `None`
 /// for the obsolete, exotic and misc rows; with no weapon the skill is [`SKILL_UNARMED`]
@@ -942,7 +941,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // 4 broken.
     g.set(
         "GetInventoryAlertStatus",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetInventoryAlertStatus(index)` (`0x848cbc`, `0x4c94c5`).
+            let index =
+                binding_abi::index_arg(lua, index, "Usage: GetInventoryAlertStatus(index)")?;
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             Ok(if (1..=12).contains(&index) {
                 i64::from(model.inventory_alerts[index - 1])

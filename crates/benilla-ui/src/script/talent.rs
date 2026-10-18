@@ -17,12 +17,12 @@
 //! rank. The spell builder writes the same lines around the full body (`0x52f735`); its next-rank
 //! pass, a second full body, never runs, as no 1.12 exceptional talent has a second rank.
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::flag;
 use super::tooltip_spell::{spell_view_of, TalentLines};
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// One talent page, a `TalentTab.dbc` row: `GetTalentTabInfo`'s source.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,7 +134,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // background (`0x4f30cb`-`0x4f3121`). Out of range answers nil, nil, 0, nil (`0x4f3132`).
     g.set(
         "GetTalentTabInfo",
-        lua.create_function(|lua, Idx(i): Idx| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: GetTalentTabInfo(index)` (`0x84cdd4`, `0x4f3059`).
+            let i = binding_abi::index_arg(lua, i, "Usage: GetTalentTabInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(tab) = i.checked_sub(1).and_then(|n| model.talents.tabs.get(n)) else {
                 return Ok(super::binding_abi::tuple(&[None, None, Some(0), None]));
@@ -153,7 +155,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetNumTalents",
-        lua.create_function(|lua, Idx(tab): Idx| {
+        lua.create_function(|lua, tab: Value| {
+            // `is-number` else `Usage: GetNumTalents(tabIndex)` (`0x84cdf4`, `0x4f3177`).
+            let tab = binding_abi::index_arg(lua, tab, "Usage: GetNumTalents(tabIndex)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let n = tab
                 .checked_sub(1)
@@ -165,7 +169,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetTalentInfo",
-        lua.create_function(|lua, (Idx(tab), Idx(i)): (Idx, Idx)| {
+        lua.create_function(|lua, (tab, i): (Value, Value)| {
+            // Both `is-number` else `Usage: GetTalentInfo(tabIndex, talentIndex)` (`0x84ce14`,
+            // `0x4f34ae`).
+            let tab =
+                binding_abi::index_arg(lua, tab, "Usage: GetTalentInfo(tabIndex, talentIndex)")?;
+            let i = binding_abi::index_arg(lua, i, "Usage: GetTalentInfo(tabIndex, talentIndex)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(t) = talent_at(&model, tab, i) else {
                 // `0x4f3454`: nil, nil, 1, 1, 0, 0, nil, nil.

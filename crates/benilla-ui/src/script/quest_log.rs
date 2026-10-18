@@ -32,6 +32,7 @@
 //! Not built: `GetAbandonQuestItems` answers nil; a GameObject objective's name, which wears the
 //! placeholder.
 
+use crate::script::binding_abi;
 use std::collections::{HashMap, HashSet};
 
 use mlua::{Lua, MultiValue, Value};
@@ -39,7 +40,6 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::{flag, number_arg};
 use super::quest::{QuestItemView, QuestRewardSpell};
 use super::Model;
-use crate::script::binding_abi::{Idx, Idx32};
 use crate::strings::{fill, global, Arg};
 
 /// The quest slots, `PLAYER_QUEST_LOG_1_1` on, 12 bytes each (`0x4de73e`).
@@ -1211,9 +1211,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`QuestLogFrame.lua:616`).
     g.set(
         "GetNumQuestLeaderBoards",
-        lua.create_function(|lua, i: Option<Idx32>| {
+        lua.create_function(|lua, i: Value| {
+            // A non-number reads the selection (`0x4e0056` → `0x4e0073`); it never raises.
+            let i = binding_abi::index_or(lua, i)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let index = i.map_or(model.quest_log_selection, |i| i.0) as usize;
+            let index = i.unwrap_or(model.quest_log_selection) as usize;
             Ok(model
                 .quest_row_parts(index)
                 .map_or(0, |(record, _)| lines(record).count() as i64))
@@ -1228,10 +1230,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // three nils. A format key the install lacks gives an empty line, not no line.
     g.set(
         "GetQuestLogLeaderBoard",
-        lua.create_function(|lua, (Idx(i), quest): (Idx, Option<Idx32>)| {
+        lua.create_function(|lua, (i, quest): (Value, Value)| {
+            // `is-number` else `Usage: GetQuestLogLeaderBoard(index)` (`0x84b650`, `0x4e0141`); the
+            // quest is the selection for a non-number (`0x4e01a2` → `0x4e01f6`).
+            let i = binding_abi::index_arg(lua, i, "Usage: GetQuestLogLeaderBoard(index)")?;
+            let quest = binding_abi::index_or(lua, quest)?;
             let parts = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let index = quest.map_or(model.quest_log_selection, |q| q.0) as usize;
+                let index = quest.unwrap_or(model.quest_log_selection) as usize;
                 line_parts(&mut model, index, i)
             };
             let Some(p) = parts else {
@@ -1560,7 +1566,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`QuestTimerFrame.lua:43`, `QuestTimerFrame.xml:20`).
     g.set(
         "GetQuestIndexForTimer",
-        lua.create_function(|lua, Idx(t): Idx| {
+        lua.create_function(|lua, t: Value| {
+            // `is-number` else `Usage: GetQuestIndexForTimer(index)` (`0x84b6fc`, `0x4e160c`).
+            let t = binding_abi::index_arg(lua, t, "Usage: GetQuestIndexForTimer(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             // Nil without a player (`0x4e165f`).
             let index = t
@@ -1705,7 +1713,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsQuestWatched",
-        lua.create_function(|lua, Idx32(i): Idx32| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: IsQuestWatched(index)` (`0x84b764`, `0x4e18a1`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: IsQuestWatched(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(
                 watch_id_at(&model, i).is_some_and(|id| model.quest_log_watched.contains(&id)),
@@ -1737,7 +1747,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The watched quest's current 1-based row, nil when it is not a visible row.
     g.set(
         "GetQuestIndexForWatch",
-        lua.create_function(|lua, Idx(w): Idx| {
+        lua.create_function(|lua, w: Value| {
+            // `is-number` else `Usage: GetQuestIndexForWatch(index)` (`0x84b784`, `0x4e19c9`).
+            let w = binding_abi::index_arg(lua, w, "Usage: GetQuestIndexForWatch(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let index = w
                 .checked_sub(1)

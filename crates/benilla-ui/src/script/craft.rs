@@ -12,7 +12,6 @@ use mlua::{Lua, MultiValue, Value, Variadic};
 use super::binding_abi::{self, number_arg};
 use super::item_stats::item_link;
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// One reagent a recipe consumes (`GetCraftReagentInfo`); name and icon are `None` until the item
 /// template answer lands.
@@ -304,7 +303,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `isExpanded` is always nil; Beast Training's cost and level answer 0, not built.
     g.set(
         "GetCraftInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetCraftInfo(index)` (`0x84d398`, `0x4f6ea9`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetCraftInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(r) = recipe(&model, index) else {
                 // `0x4f70a4`: nil, nil, nil, 0, nil, 0, 0.
@@ -333,7 +334,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetCraftIcon(index) → the icon path, nil while in flight or past the end.
     g.set(
         "GetCraftIcon",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetTradeSkillIcon(index)` (`0x84d3d0`, `0x4f7171`), the
+            // client's own text naming `GetTradeSkillIcon`.
+            let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillIcon(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             opt_str(lua, recipe(&model, index).and_then(|r| r.icon.as_ref()))
         })?,
@@ -343,7 +347,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // painting (`Blizzard_CraftUI.lua:312`).
     g.set(
         "GetCraftDescription",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetCraftDescription(index)` (`0x84d500`, `0x4f7aac`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetCraftDescription(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             opt_str(
                 lua,
@@ -355,7 +361,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetCraftNumReagents(index) → the reagent count, 0 past the end or when closed.
     g.set(
         "GetCraftNumReagents",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetCraftNumReagents(index)` (`0x84d454`, `0x4f7435`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetCraftNumReagents(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(recipe(&model, index).map_or(0, |r| r.reagents.len()) as i64)
         })?,
@@ -365,7 +373,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4f759b`).
     g.set(
         "GetCraftReagentInfo",
-        lua.create_function(|lua, (Idx(index), Idx(reagent_index)): (Idx, Idx)| {
+        lua.create_function(|lua, (index, reagent_index): (Value, Value)| {
+            // Both `is-number` else `Usage: GetCraftReagentInfo(index, reagentIndex)` (`0x84d478`,
+            // `0x4f76ef`).
+            let index = binding_abi::index_arg(
+                lua,
+                index,
+                "Usage: GetCraftReagentInfo(index, reagentIndex)",
+            )?;
+            let reagent_index = binding_abi::index_arg(
+                lua,
+                reagent_index,
+                "Usage: GetCraftReagentInfo(index, reagentIndex)",
+            )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(reagent) = recipe(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))

@@ -8,11 +8,11 @@
 //! app, on a picked row whose wire `slot_type` is `MASTER`, as the dispatcher branches on that byte
 //! before any Lua runs.
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::{bool_or_default, flag};
 use super::Model;
-use crate::script::binding_abi::{Idx, Idx32};
 
 /// `CLootButton`'s own Lua method table (`0x847ce4`): one entry, per the registrar's `mov edx,1`.
 pub(super) const REG_LOOTBUTTON_METHODS: &str = "__benilla_lootbutton_methods";
@@ -156,7 +156,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // template lands, and the app holds `LOOT_OPENED` back likewise.
     g.set(
         "GetLootSlotInfo",
-        lua.create_function(|lua, Idx(slot): Idx| {
+        lua.create_function(|lua, slot: Value| {
+            // `is-number` else `Usage: GetLootSlotInfo(slot)` (`0x848004`, `0x4c2c7a`).
+            let slot = binding_abi::index_arg(lua, slot, "Usage: GetLootSlotInfo(slot)")?;
             // `Some(Some(row))` live, `Some(None)` cleared, `None` no such slot.
             let slot_state = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -198,7 +200,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `ChatFrameEditBox:Insert` (`:152`), both of which take a nil.
     g.set(
         "GetLootSlotLink",
-        lua.create_function(|lua, Idx(slot): Idx| {
+        lua.create_function(|lua, slot: Value| {
+            // `is-number` else `Usage: GetLootSlotLink(slot)` (`0x848024`, `0x4c2d3a`).
+            let slot = binding_abi::index_arg(lua, slot, "Usage: GetLootSlotLink(slot)")?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model
@@ -307,7 +311,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // as nobody (`LootFrame.lua:168-232`).
     g.set(
         "GetMasterLootCandidate",
-        lua.create_function(|lua, Idx32(index): Idx32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetMasterLootCandidate(index)` (`0x848094`, `0x4c2f27`).
+            let index =
+                binding_abi::index_arg32(lua, index, "Usage: GetMasterLootCandidate(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let name = index.checked_sub(1).and_then(|i| {
                 model

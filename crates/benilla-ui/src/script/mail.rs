@@ -2,12 +2,12 @@
 //! (`UiScript::set_mail`), and the Lua verbs queue intents the app drains and sends. Indices are
 //! 1-based, as `MailFrame.lua` uses them.
 
+use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::cursor;
 use super::Model;
-use crate::script::binding_abi::Idx;
 
 /// `CheckInbox`'s throttle window, 60 000 ms (`0x4aeb06`).
 const CHECK_INBOX_WINDOW_SECS: f64 = 60.0;
@@ -388,7 +388,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4aeff0`..`0x4af05e`): four nils, 0 for money, COD amount and days left, six nils.
     g.set(
         "GetInboxHeaderInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetInboxHeaderInfo(index)` (`0x8463b8`, `0x4aebee`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetInboxHeaderInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, index)
@@ -435,7 +437,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:867`).
     g.set(
         "GetInboxText",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetInboxText(index)` (`0x8463dc`, `0x4af142`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetInboxText(index)")?;
             let row = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let row = row_at(&model, index);
@@ -471,7 +475,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // being three nils and four zeros (`0x4af559`).
     g.set(
         "GetInboxInvoiceInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetInboxInvoiceInfo(index)` (`0x84642c`, `0x4af38e`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetInboxInvoiceInfo(index)")?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, index)
@@ -506,7 +512,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the shared item-usable gate, true while the template is in flight.
     g.set(
         "GetInboxItem",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetInboxItem(index)` (`0x846450`, `0x4af5fe`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetInboxItem(index)")?;
             let (row, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let row = row_at(&model, index);
@@ -690,7 +698,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // An attached item whose object is gone (`0x4ae92e` resolves its guid):
                 // `ERR_ITEM_NOT_FOUND` (equip error 0x17, `0x4ae957`), the attachment dropped and
                 // `MAIL_SEND_INFO_UPDATE` (`0x4ae98d`), no packet. Checked before the money
-                // (`0x4ae917` ahead of `0x4ae99e`). The attachment is locked, so it cannot have moved.
+                // (`0x4ae917` ahead of `0x4ae99e`). The attachment is locked, so it cannot have
+                // moved.
                 if let Some(item) = model.mail_send_item.as_ref() {
                     let held = model
                         .containers
