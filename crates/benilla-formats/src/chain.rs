@@ -223,8 +223,9 @@ const LISTFILE_LINE_MAX: usize = 0x103;
 
 /// `EnumerateArchiveListfile` (`0x648fb0`) over one listfile, with `0x4014f0`'s prefix test: a line
 /// ends at a CR or LF (`0x649022`, `0x649026`); an empty one, and one whose text from its last dot
-/// is `.md5` without case (`0x865bd8`, `0x64905f`), is passed over. A last line with no CR or LF
-/// after it is never passed, as the walk ends at the buffer's end without a flush (`0x64907f`).
+/// is `.md5` without case (`0x865bd8`, `0x64905f`), is passed over. Deviation: a last line with no
+/// CR or LF after it is passed too, where `0x648fb0` ends at the buffer's end without a flush
+/// (`0x64907f`) and drops it, a bug that loses a listfile's last name when it lacks a newline.
 fn listfile_lines(listfile: &[u8], prefix: &str, out: &mut Vec<String>) {
     let mut line: Vec<u8> = Vec::with_capacity(LISTFILE_LINE_MAX);
     for &b in listfile {
@@ -234,16 +235,22 @@ fn listfile_lines(listfile: &[u8], prefix: &str, out: &mut Vec<String>) {
             }
             continue;
         }
-        let md5 = line
-            .iter()
-            .rposition(|&c| c == b'.')
-            .is_some_and(|dot| line[dot..].eq_ignore_ascii_case(b".md5"));
-        let under = line.len() >= prefix.len()
-            && line[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes());
-        if !line.is_empty() && !md5 && under {
-            out.push(String::from_utf8_lossy(&line).into_owned());
-        }
+        pass_line(&line, prefix, out);
         line.clear();
+    }
+    pass_line(&line, prefix, out);
+}
+
+/// One finished listfile line, passed unless empty, a `.md5` or outside the prefix.
+fn pass_line(line: &[u8], prefix: &str, out: &mut Vec<String>) {
+    let md5 = line
+        .iter()
+        .rposition(|&c| c == b'.')
+        .is_some_and(|dot| line[dot..].eq_ignore_ascii_case(b".md5"));
+    let under =
+        line.len() >= prefix.len() && line[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes());
+    if !line.is_empty() && !md5 && under {
+        out.push(String::from_utf8_lossy(line).into_owned());
     }
 }
 
@@ -252,7 +259,7 @@ mod tests {
     use super::*;
 
     /// Lines end at CR or LF; the prefix compares without case and reads `/` as itself; `.md5`
-    /// lines, empty lines and an unterminated last line are passed over; a long line is cut.
+    /// lines and empty lines are passed over, an unterminated last line is kept; a long line is cut.
     #[test]
     fn a_listfile_walk_passes_the_lines_under_the_prefix() {
         let long = format!("Interface\\Icons\\{}", "x".repeat(400));
@@ -262,10 +269,14 @@ mod tests {
         );
         let mut out = Vec::new();
         listfile_lines(text.as_bytes(), "Interface\\Icons\\", &mut out);
-        assert_eq!(out.len(), 3, "{out:?}");
+        assert_eq!(out.len(), 4, "{out:?}");
         assert_eq!(out[0], "Interface\\Icons\\Spell_A.blp");
         assert_eq!(out[1], "interface\\ICONS\\b.blp");
         assert_eq!(out[2].len(), LISTFILE_LINE_MAX);
+        assert_eq!(
+            out[3], "Interface\\Icons\\last.blp",
+            "the unterminated last line"
+        );
     }
 
     fn owned(names: &[&str]) -> Vec<String> {
