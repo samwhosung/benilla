@@ -77,6 +77,9 @@ pub struct ScrollingMessageState {
     /// A key of what the last relayout laid out against: the frame's size and font. A change is
     /// a resize (`0x788427`) or a font change (`0x788086`), each relayouting at the anchor.
     pub laid: Option<u64>,
+    /// Relayouts that moved the anchor since the binding last fired `OnMessageScrollChanged` for
+    /// them (`0x78877a`, `0x788a89`-`0x788aad`).
+    pub scroll_changes: u32,
 }
 
 impl Default for ScrollingMessageState {
@@ -97,6 +100,7 @@ impl Default for ScrollingMessageState {
             at_bottom: true,
             links_dirty: false,
             laid: None,
+            scroll_changes: 0,
         }
     }
 }
@@ -235,6 +239,10 @@ impl ScrollingMessageState {
         let viewport = viewport.into();
         if self.write_pos == -1 {
             return;
+        }
+        // A moved anchor fires `OnMessageScrollChanged` at the tail, hidden or not (`0x788a89`).
+        if anchor != self.anchor {
+            self.scroll_changes += 1;
         }
         self.lines_shown = 0;
         self.anchor = anchor;
@@ -562,7 +570,9 @@ impl ScrollingMessageState {
 
     /// `PageUp` (`0x7885b0`): `ScrollUp` once per line shown, the cached count read once up front
     /// (`0x7885b4`); a step that cannot move ends the page there (`0x7885ca`), else one `ScrollDown`
-    /// follows (`0x7885d4`). With no line shown the page is that step back alone.
+    /// follows (`0x7885d4`). With no line shown the page is that step back alone. The binding runs
+    /// this loop a step at a time, so each step's `OnMessageScrollChanged` fires in its place.
+    #[cfg(test)]
     pub fn page_up(&mut self, viewport: impl Into<Viewport>) {
         let viewport = viewport.into();
         for _ in 0..self.lines_shown {
@@ -575,6 +585,7 @@ impl ScrollingMessageState {
 
     /// `PageDown` (`0x7885e0`): the mirror, `ScrollDown` per line shown (`0x7885f3`), a refusal
     /// ending the page (`0x7885fa`), else one `ScrollUp` (`0x788604`).
+    #[cfg(test)]
     pub fn page_down(&mut self, viewport: impl Into<Viewport>) {
         let viewport = viewport.into();
         for _ in 0..self.lines_shown {

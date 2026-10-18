@@ -589,8 +589,7 @@ fn the_unfired_script_kinds_still_raise_rather_than_silently_accepting() {
     for name in [
         // A 2.0 secure-frame slot; no 1.12 resolver has it.
         "OnAttributeChanged",
-        // Real 1.12 slots that benilla does not fire.
-        "OnMessageScrollChanged",
+        // A real 1.12 slot that benilla does not fire.
         "OnInputLanguageChanged",
     ] {
         let err = s

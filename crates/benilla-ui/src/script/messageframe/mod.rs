@@ -99,6 +99,34 @@ pub(super) fn on_visibility(lua: &mlua::Lua, h: FrameHandle, visible: bool) {
         smf.laid = Some(layout_key);
         smf.relayout(viewport);
     }
+    drop(model);
+    fire_scroll_changes(lua, h);
+}
+
+/// Fire `OnMessageScrollChanged` on the scrolling frame `h` once per relayout that moved its
+/// anchor since the last call (`0x788a9a`-`0x788aad`), with no arguments; a handler error is
+/// recorded.
+pub(super) fn fire_scroll_changes(lua: &mlua::Lua, h: FrameHandle) {
+    let (n, id) = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let n = match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            Some(KindState::ScrollingMessage(smf)) => std::mem::take(&mut smf.scroll_changes),
+            _ => return,
+        };
+        if n == 0 {
+            return;
+        }
+        (n, model.frame_id(h))
+    };
+    for _ in 0..n {
+        if let Err(e) =
+            super::event::fire_widget_handler(lua, id, "OnMessageScrollChanged", Vec::new())
+        {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .record_lua_error(&e);
+        }
+    }
 }
 
 /// `lua_isnumber` (`0x6f34d0`) then `lua_tonumber` (`0x6f3620`): a number, or a string Lua reads

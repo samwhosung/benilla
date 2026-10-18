@@ -42,16 +42,40 @@ fn with_viewport<T>(
     f: impl FnOnce(&mut ScrollingMessageState, Viewport) -> T,
 ) -> mlua::Result<T> {
     let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let viewport_rows = UiScript::message_viewport(&model, h);
-    let frame = model
-        .arena
-        .frame_mut(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    match &mut frame.kind_state {
-        KindState::ScrollingMessage(smf) => Ok(f(smf, viewport_rows)),
-        _ => Err(mlua::Error::runtime("not a ScrollingMessageFrame")),
+    let out = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let viewport_rows = UiScript::message_viewport(&model, h);
+        let frame = model
+            .arena
+            .frame_mut(h)
+            .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+        match &mut frame.kind_state {
+            KindState::ScrollingMessage(smf) => f(smf, viewport_rows),
+            _ => return Err(mlua::Error::runtime("not a ScrollingMessageFrame")),
+        }
+    };
+    super::fire_scroll_changes(lua, h);
+    Ok(out)
+}
+
+/// `PageUp` (`up`) or `PageDown` as [`ScrollingMessageState::page_up`] runs it, one step per
+/// call, so an `OnMessageScrollChanged` fires after each step that moved the anchor.
+fn page(lua: &Lua, this: &Table, up: bool) -> mlua::Result<()> {
+    let n = with_smf(lua, this, |smf| smf.lines_shown)?;
+    let step = |smf: &mut ScrollingMessageState, v: Viewport, toward_top: bool| {
+        if toward_top {
+            smf.step_up(v)
+        } else {
+            smf.step_down(v)
+        }
+    };
+    for _ in 0..n {
+        if !with_viewport(lua, this, |smf, v| step(smf, v, up))? {
+            return Ok(());
+        }
     }
+    with_viewport(lua, this, |smf, v| step(smf, v, !up))?;
+    Ok(())
 }
 
 /// Run a scroll call: [`with_viewport`] for an op with no answer.
@@ -161,13 +185,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "PageUp",
-        lua.create_function(|lua, this: Table| scroll(lua, &this, ScrollingMessageState::page_up))?,
+        lua.create_function(|lua, this: Table| page(lua, &this, true))?,
     )?;
     m.set(
         "PageDown",
-        lua.create_function(|lua, this: Table| {
-            scroll(lua, &this, ScrollingMessageState::page_down)
-        })?,
+        lua.create_function(|lua, this: Table| page(lua, &this, false))?,
     )?;
     // AtTop (`0x793130`) pushes 1 (`0x7931c3`) or nil (`0x7931d6`) off the cached `+0x350`
     // (`0x7931b5`); AtBottom (`0x7931f0`) the same off `+0x354` (`0x793275`).
@@ -1096,6 +1118,44 @@ mod tests {
         assert_eq!(alphas(&s)[2..], [0.0, 0.0, 0.0]);
         s.run("CF:SetTimeVisible(5)").unwrap();
         assert_eq!(timers(&s)[4], (0.0, 0.0), "a hidden line is not rewritten");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// A relayout that moves the anchor fires `OnMessageScrollChanged` at its tail, hidden or not
+    /// (`0x78877a`, `0x788a9a`-`0x788aad`); one at the same anchor, or a refused scroll, fires
+    /// nothing. A page fires once per step, inside it.
+    #[test]
+    fn a_moved_anchor_fires_on_message_scroll_changed() {
+        let s = three_rows(10);
+        s.run(
+            "SEEN = {}\n\
+             CF:SetScript('OnMessageScrollChanged', function()\n\
+                 table.insert(SEEN, this:GetCurrentScroll())\n\
+             end)",
+        )
+        .unwrap();
+        let seen = |s: &UiScript| -> String {
+            s.eval(
+                "local t = {} for i, v in ipairs(SEEN) do t[i] = tostring(v) end \
+                    return table.concat(t, ' ')",
+            )
+            .unwrap()
+        };
+        s.run("CF:ScrollDown() CF:UpdateColorByID(1, 1, 0, 0)")
+            .unwrap();
+        assert_eq!(seen(&s), "", "refused, and a relayout in place");
+        s.run("CF:ScrollUp() CF:ScrollDown() CF:AddMessage('new')")
+            .unwrap();
+        assert_eq!(seen(&s), "1 0 0", "the add re-anchors on the new line");
+        s.run("SEEN = {} CF:PageUp()").unwrap();
+        assert_eq!(seen(&s), "1 2 3 2", "each step of the page, in place");
+        s.run("SEEN = {} CF:Hide() CF:ScrollUp() CF:Show()")
+            .unwrap();
+        assert_eq!(
+            seen(&s),
+            "3",
+            "a hidden relayout still fires; the show's does not move"
+        );
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 

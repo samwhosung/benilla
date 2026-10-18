@@ -499,7 +499,7 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// ScrollFrame's three scroll kinds are `+0x32c`/`+0x334`/`+0x33c` (script-name map `0x786c40`).
 /// The EditBox's vtable (`0x81c910`) replaces the key and char slots: an EditBox never fires
 /// `OnKeyDown`, and fires `OnChar` only from `Insert`, with the inserted text (`0x77c13c`).
-const SCRIPT_KINDS: [&str; 44] = [
+const SCRIPT_KINDS: [&str; 45] = [
     "OnLoad",
     "OnEvent",
     "OnUpdate",
@@ -541,6 +541,9 @@ const SCRIPT_KINDS: [&str; 44] = [
     "OnHyperlinkClick",
     "OnHyperlinkEnter",
     "OnHyperlinkLeave",
+    // The ScrollingMessageFrame's own (script map `0x787d90`, `+0x3bc`), fired by a relayout that
+    // moved its anchor (`0x788a9a`).
+    "OnMessageScrollChanged",
     // The GameTooltip's engine-fired scripts: money render, money clear and world-hover default
     // placement, all three wired by the stock template (`GameTooltipTemplate.xml:617-625`).
     "OnTooltipAddMoney",
@@ -1085,6 +1088,8 @@ impl UiScript {
         match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
             Some(crate::widget::KindState::ScrollingMessage(smf)) => {
                 smf.add_with_id(text.to_string(), r, g, b, 0, rows);
+                drop(model);
+                messageframe::fire_scroll_changes(&self.lua, h);
                 true
             }
             _ => false,

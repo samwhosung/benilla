@@ -146,7 +146,8 @@ impl UiScript {
             KindUpdate::Model => self.advance_pane(h, elapsed),
             // The line fades (`0x7862b0`, `0x788476`), counted only while the frame is shown.
             KindUpdate::MessageFrame | KindUpdate::ScrollingMessageFrame => {
-                messageframe::update(&mut self.model_mut(), h, elapsed)
+                messageframe::update(&mut self.model_mut(), h, elapsed);
+                messageframe::fire_scroll_changes(&self.lua, h);
             }
             // A marked range's recompute (`0x787152`), whose change fires `OnScrollRangeChanged`.
             KindUpdate::ScrollFrame => scrollframe::update(&self.lua, h),
