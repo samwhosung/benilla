@@ -206,7 +206,7 @@ pub struct Vm {
     /// the `&mut Vm` it is handed the one its API reaches, as for a callback.
     pub reentry: Option<Reentry>,
     /// `math.random`'s generator.
-    pub(crate) rand: crate::lib_math::GlibcRand,
+    pub(crate) rand: crate::lib_math::CrtRand,
     identity: crate::heap::Identity,
 }
 
@@ -455,7 +455,7 @@ impl Vm {
             profile: None,
             host: None,
             reentry: None,
-            rand: crate::lib_math::GlibcRand::seeded(1),
+            rand: crate::lib_math::CrtRand::from_clock(),
             identity: Default::default(),
         };
         vm.heap.charge(vm.state_bytes());

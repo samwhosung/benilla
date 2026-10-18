@@ -186,59 +186,42 @@ fn max(vm: &mut Vm, nargs: usize) -> R<usize> {
     Ok(vm.ret1(Value::Num(m)))
 }
 
-/// glibc's `rand()`: `random_r`'s additive feedback generator (`TYPE_3`, `r[i] = r[i-3] +
-/// r[i-31]`), as the script host's 5.1 build called it on Linux, on every platform. The client
-/// runs MSVC's clock-seeded `rand`, which is later work (#1258). Its state is the process's in C,
-/// shared by every VM; here it is the VM's own, so a fork or a clone draws its own sequence.
+/// MSVC's `rand` (`0x7400e5`): `s = s·214013 + 2531011`, answering `(s >> 16) & 0x7fff`, so
+/// `RAND_MAX` is 32767. The client's state is the main thread's, seeded with the millisecond
+/// clock before `WinMain` (`0x5b800b`); here each VM holds its own, seeded from the wall clock
+/// when it is built, so a fork or a clone draws its own sequence.
 #[derive(Clone)]
-pub(crate) struct GlibcRand {
-    r: [i32; 34],
-    i: usize,
-}
+pub(crate) struct CrtRand(u32);
 
-impl GlibcRand {
-    /// `srandom_r`: the 31 words from `seed` by `16807 * w % (2^31 - 1)`, then 310 outputs dropped.
-    pub(crate) fn seeded(seed: u32) -> GlibcRand {
-        let mut r = [0i32; 34];
-        let mut word = if seed == 0 { 1 } else { seed as i32 };
-        r[0] = word;
-        for slot in r.iter_mut().take(31).skip(1) {
-            let (hi, lo) = (word / 127_773, word % 127_773);
-            word = 16807i32
-                .wrapping_mul(lo)
-                .wrapping_sub(2836i32.wrapping_mul(hi));
-            if word < 0 {
-                word = word.wrapping_add(2_147_483_647);
-            }
-            *slot = word;
-        }
-        for k in 31..34 {
-            r[k] = r[k - 31];
-        }
-        let mut g = GlibcRand { r, i: 34 };
-        for _ in 0..310 {
-            g.next();
-        }
-        g
+impl CrtRand {
+    /// `srand` (`0x7400d8`): the state is the seed.
+    pub(crate) fn seeded(seed: u32) -> CrtRand {
+        CrtRand(seed)
     }
 
-    fn next(&mut self) -> u32 {
-        let v = self.r[(self.i + 34 - 31) % 34].wrapping_add(self.r[(self.i + 34 - 3) % 34]);
-        self.r[self.i % 34] = v;
-        self.i += 1;
-        (v as u32) >> 1
+    /// The start-up seed, `OsGetAsyncTimeMs` (`0x42c010`): milliseconds, as a 32-bit integer.
+    pub(crate) fn from_clock() -> CrtRand {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_millis() as u32);
+        CrtRand(ms)
+    }
+
+    fn next(&mut self) -> i32 {
+        self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
+        ((self.0 >> 16) & 0x7fff) as i32
     }
 }
 
-fn rand(vm: &mut Vm) -> u32 {
-    vm.rand.next()
-}
+/// MSVC's `RAND_MAX`.
+const RAND_MAX: i32 = 0x7fff;
 
-/// glibc's `RAND_MAX`.
-const RAND_MAX: u32 = 0x7fff_ffff;
-
+/// `math_random` (`0x7fb310`): `rand() % 32767` (`0x7fb324`) times the stored `1/32767`
+/// (`0x822d38`), a multiply; an interval's `floor` is taken to an `int` by `__ftol` and its low
+/// end added as an `int` (`0x7fb3bb`, `0x7fb419`).
 fn random(vm: &mut Vm, nargs: usize) -> R<usize> {
-    let r = (rand(vm) % RAND_MAX) as f64 / RAND_MAX as f64;
+    const RECIP: f64 = 1.0 / RAND_MAX as f64;
+    let r = f64::from(vm.rand.next() % RAND_MAX) * RECIP;
     let v = match nargs {
         0 => r,
         1 => {
@@ -246,7 +229,7 @@ fn random(vm: &mut Vm, nargs: usize) -> R<usize> {
             if u < 1 {
                 return Err(vm.arg_error(1, "interval is empty"));
             }
-            (r * u as f64).floor() + 1.0
+            f64::from(crate::api::c_int((r * f64::from(u)).floor()).wrapping_add(1))
         }
         2 => {
             let l = vm.check_int(nargs, 1)?;
@@ -254,41 +237,20 @@ fn random(vm: &mut Vm, nargs: usize) -> R<usize> {
             if l > u {
                 return Err(vm.arg_error(2, "interval is empty"));
             }
-            // `floor(r*(u-l+1))+l`: the width in C's `int`, which wraps.
-            (r * u.wrapping_sub(l).wrapping_add(1) as f64).floor() + l as f64
+            // The width in C's `int`, which wraps.
+            let w = u.wrapping_sub(l).wrapping_add(1);
+            f64::from(crate::api::c_int((r * f64::from(w)).floor()).wrapping_add(l))
         }
         _ => return Err(vm.error_at(1, "wrong number of arguments")),
     };
     Ok(vm.ret1(Value::Num(v)))
 }
 
+/// `math_randomseed` (`0x7fb450`): `srand` of argument 1 through `__ftol`.
 fn randomseed(vm: &mut Vm, nargs: usize) -> R<usize> {
     let s = vm.check_int(nargs, 1)?;
-    vm.rand = GlibcRand::seeded(s as u32);
+    vm.rand = CrtRand::seeded(s as u32);
     Ok(0)
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    use super::GlibcRand;
-
-    extern "C" {
-        fn srand(seed: u32);
-        fn rand() -> i32;
-    }
-
-    /// The emulation against the C library the build links.
-    #[test]
-    fn rand_is_glibcs() {
-        for seed in [1u32, 0, 42, 7, 123_456_789, u32::MAX, 0x8000_0000] {
-            let mut g = GlibcRand::seeded(seed);
-            // SAFETY: plain libc calls; no other test in this binary uses `rand`.
-            unsafe { srand(seed) };
-            for _ in 0..1000 {
-                assert_eq!(g.next() as i32, unsafe { rand() }, "seed {seed}");
-            }
-        }
-    }
 }
 
 // ── bit ──────────────────────────────────────────────────────────────────────────────────────

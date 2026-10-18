@@ -474,6 +474,8 @@ b]])"#),
     ("fix-libs deg_rad", r#"local bad = 0 for i = -720, 720 do if math.deg(math.rad(i)) ~= i then bad = bad + 1 end end
         local o = {} for _, x in {0.1, 1, 3, 0.7, 1e-300, 1e300, -2.5, 1/3} do table.insert(o, string.format("%.17g %.17g", math.deg(x), math.rad(x))) end
         return S(bad, math.deg(math.rad(3)) == 3, string.format("%.17g %.17g %.17g %.17g", asin(0.5), acos(0.3), atan(1), atan2(1, 2))) .. "|" .. table.concat(o, "|")"#),
+    // MSVC's `rand` (`0x7400e5`) on every platform, scaled as `math_random` (`0x7fb310`) does:
+    // the full range's width wraps to 0, so it answers its low end.
     ("fix-libs random_ranges", r#"math.randomseed(7) local o = {}
         for _ = 1, 4 do table.insert(o, math.random(-2^31, 2^31 - 1)) table.insert(o, math.random(2^31 - 2, 2^31 - 1)) table.insert(o, math.random(2^31 - 1)) table.insert(o, math.random(-5, 5)) end
         return table.concat(o, " ")"#),
@@ -940,7 +942,6 @@ fn unescape(s: &str) -> String {
 /// the platforms differ on go unchecked.
 const PLATFORM_CASES: &[&str] = &[
     "fix-libs deg_rad",
-    "fix-libs random_ranges",
     "sweep string.char",
     "sweep string.sub",
     "sweep strsub",
