@@ -840,14 +840,16 @@ impl PreambleProf {
 
 /// `OnSizeChanged`'s "after": queue `(id, width, height)` for each watched frame whose size moved
 /// by the `ApplyRect 0x76b580` test ([`crate::layout::size_changed`] at [`layout::SIZE_EPS`] on the
-/// layout rects), so a pure move never fires; the size is the rect's in the root's units. A frame with no rect at entry compares against the zero rect
-/// `CSimpleFrame`'s ctor leaves; one that loses its rect had no `ApplyRect` and fires nothing.
+/// layout rects), so a pure move never fires. The size is the layout rect's own, `right − left` and
+/// `top − bottom` rounded to f32 (`0x76b623`–`0x76b63e`), with no getter steps and no scale
+/// divide, which slot `+0x48` (`0x76b660`) pushes as doubles under `"%f%f"` (`0x878830`). A frame
+/// with no rect at entry compares against the zero rect `CSimpleFrame`'s ctor leaves; one that
+/// loses its rect had no `ApplyRect` and fires nothing.
 fn queue_size_changes(
     watched: &[(FrameHandle, Option<Rect>)],
     resolved: &HashMap<FrameHandle, Rect>,
     frame_to_id: &HashMap<FrameHandle, u32>,
     eps: f64,
-    space: &layout::LayoutSpace,
     out: &mut Vec<(u32, f32, f32)>,
 ) {
     for &(h, before) in watched {
@@ -861,7 +863,6 @@ fn queue_size_changes(
         let Some(&id) = frame_to_id.get(&h) else {
             continue;
         };
-        let now = space.rect_to_root(now);
         out.push((id, now.right - now.left, now.top - now.bottom));
     }
 }
@@ -1692,7 +1693,6 @@ impl UiScript {
                     resolved,
                     frame_to_id,
                     size_eps,
-                    &space,
                     pending_size_changed,
                 );
                 return;
@@ -1717,7 +1717,6 @@ impl UiScript {
             resolved,
             frame_to_id,
             size_eps,
-            &space,
             pending_size_changed,
         );
     }

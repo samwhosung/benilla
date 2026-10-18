@@ -234,9 +234,14 @@ fn on_size_changed_fires_when_the_text_moves_the_height() {
     .unwrap();
     frame(&mut s);
     let fires = |s: &UiScript| s.eval::<i64>("return table.getn(fires)").unwrap();
+    // The fired size is the layout rect's (`0x76b623`); over one root unit's store it reads in
+    // root units.
     let last = |s: &UiScript| {
-        s.eval::<(f64, f64)>("local f = fires[table.getn(fires)] return f.w, f.h")
-            .unwrap()
+        let (w, h) = s
+            .eval::<(f64, f64)>("local f = fires[table.getn(fires)] return f.w, f.h")
+            .unwrap();
+        let per = f64::from(s.model_ref().layout_units().store(1.0));
+        (w / per, h / per)
     };
     assert_eq!(fires(&s), 1, "the first flush replaces the authored height");
     crate::assert_near!(last(&s), (200.0, f64::from(5.0 + LH)));

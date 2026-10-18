@@ -4,6 +4,40 @@
 //! and after, because our solver settles the whole graph to a fixpoint.
 
 use super::common::script;
+use crate::script::UiScript;
+
+/// A fired size, in layout units, over one root unit's store: the root-unit size it carries.
+fn root(s: &UiScript, layout: f64) -> f64 {
+    layout / f64::from(s.model_ref().layout_units().store(1.0))
+}
+
+/// `0x76b623`–`0x76b63e` hand slot `+0x48` the layout rect's own `right − left` and `top − bottom`,
+/// rounded to f32, which `0x76b660` pushes as doubles: the stored size, with no getter steps and
+/// no divide by the frame's scale. At 4:3 the store is `v · 0.8 / 1024`.
+#[test]
+fn on_size_changed_passes_the_layout_rects_own_size() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        Plain = CreateFrame("Frame", "PlainPanel")
+        Plain:SetPoint("BOTTOMLEFT", 0, 0)
+        Plain:SetWidth(100); Plain:SetHeight(40)
+        Plain:SetScript("OnSizeChanged", function() PW, PH = arg1, arg2 end)
+        Big = CreateFrame("Frame", "ScaledPanel")
+        Big:SetScale(2)
+        Big:SetPoint("BOTTOMLEFT", 0, 0)
+        Big:SetWidth(100); Big:SetHeight(40)
+        Big:SetScript("OnSizeChanged", function() BW, BH = arg1, arg2 end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let fired: (f64, f64, f64, f64) = s.eval("return PW, PH, BW, BH").unwrap();
+    assert_eq!(fired, (0.078125, 0.03125, 0.15625, 0.0625));
+    crate::assert_near!(s.eval::<f64>("return Big:GetWidth()").unwrap(), 100.0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
 
 /// `OnSizeChanged(self, width, height)` carries the new size.
 #[test]
@@ -26,8 +60,8 @@ fn a_resize_fires_on_size_changed_and_a_move_does_not() {
     // The client's cached rect starts zeroed, so the first layout fires too.
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 1);
-    assert_eq!(s.eval::<f64>("return w").unwrap(), 200.0);
-    crate::assert_near!(s.eval::<f64>("return h").unwrap(), 50.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return w").unwrap()), 200.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return h").unwrap()), 50.0);
 
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 1);
@@ -43,8 +77,8 @@ fn a_resize_fires_on_size_changed_and_a_move_does_not() {
     s.run("Panel:SetHeight(120)").unwrap();
     s.resolve();
     assert_eq!(s.eval::<i64>("return fires").unwrap(), 2);
-    assert_eq!(s.eval::<f64>("return w").unwrap(), 200.0);
-    assert_eq!(s.eval::<f64>("return h").unwrap(), 120.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return w").unwrap()), 200.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return h").unwrap()), 120.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -67,7 +101,7 @@ fn an_anchor_driven_resize_fires_it_too() {
     )
     .unwrap();
     s.resolve();
-    assert_eq!(s.eval::<f64>("return w").unwrap(), 300.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return w").unwrap()), 300.0);
     let first = s.eval::<i64>("return fires").unwrap();
 
     s.run("Parent:SetWidth(500)").unwrap();
@@ -77,7 +111,7 @@ fn an_anchor_driven_resize_fires_it_too() {
         first + 1,
         "the child's own inputs never changed — only the parent's rect did"
     );
-    assert_eq!(s.eval::<f64>("return w").unwrap(), 500.0);
+    crate::assert_near!(root(&s, s.eval::<f64>("return w").unwrap()), 500.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -93,10 +127,10 @@ fn a_handler_that_resizes_its_own_frame_settles_instead_of_spinning() {
         Sq = CreateFrame("Frame", "SquarePanel")
         Sq:SetPoint("BOTTOMLEFT", 0, 0)
         Sq:SetWidth(200); Sq:SetHeight(50)
-        -- The idiom: "keep me square". It writes back into the very input that fired it.
+        -- "Keep me square": it writes back into the very input that fired it.
         Sq:SetScript("OnSizeChanged", function() local self, aw, ah = this, arg1, arg2
             fires = fires + 1
-            if ah ~= aw then self:SetHeight(aw) end
+            if ah ~= aw then self:SetHeight(200) end
         end)
     "#,
     )
@@ -200,7 +234,7 @@ fn a_resize_from_an_event_fires_on_size_changed_before_the_walk() {
         P:SetWidth(10); P:SetHeight(10)
         P:RegisterEvent("PLAYER_ENTERING_WORLD")
         P:SetScript("OnEvent", function() this:SetWidth(50) end)
-        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size" .. arg1) end)
+        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size") W = arg1 end)
         P:SetScript("OnUpdate", function() table.insert(LOG, "update") end)
     "#,
     )
@@ -212,8 +246,9 @@ fn a_resize_from_an_event_fires_on_size_changed_before_the_walk() {
     s.tick(0.016);
     assert_eq!(
         s.eval::<String>("return table.concat(LOG, ' ')").unwrap(),
-        "size50 update"
+        "size update"
     );
+    crate::assert_near!(root(&s, s.eval::<f64>("return W").unwrap()), 50.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -229,7 +264,7 @@ fn a_resize_from_on_update_fires_on_size_changed_in_the_same_tick() {
         P = CreateFrame("Frame", "DrainPanel")
         P:SetPoint("BOTTOMLEFT", 0, 0)
         P:SetWidth(10); P:SetHeight(10)
-        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size" .. arg1) end)
+        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size") W = arg1 end)
         P:SetScript("OnUpdate", function()
             table.insert(LOG, "update")
             if GROW then GROW = nil; this:SetWidth(70) end
@@ -243,14 +278,15 @@ fn a_resize_from_on_update_fires_on_size_changed_in_the_same_tick() {
     s.tick(0.016);
     assert_eq!(
         s.eval::<String>("return table.concat(LOG, ' ')").unwrap(),
-        "update size70"
+        "update size"
     );
+    crate::assert_near!(root(&s, s.eval::<f64>("return W").unwrap()), 70.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// `ApplyRect` compares the size move against 2⁻²² (`0x76b5e7`, `0x76b602`, `[0x8029d4]`) in the
-/// reference's layout units, where the screen diagonal is 1: in ours, 2⁻²² × the layout unit,
-/// about 3.05e-4 at 4:3. A jitter under it fires nothing; a real move fires.
+/// layout units its rects are in, where the screen diagonal is 1: about 3.05e-4 of a root unit at
+/// 4:3. A jitter under it fires nothing; a real move fires.
 #[test]
 fn a_sub_threshold_jitter_fires_nothing_and_a_real_move_fires() {
     let mut s = script();

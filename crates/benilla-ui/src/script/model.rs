@@ -345,7 +345,8 @@ pub(crate) struct Model {
     /// when a double fires, and nothing else clears it, not hide, disable or the cursor leaving.
     pub(crate) last_click: HashMap<FrameHandle, f64>,
 
-    /// Frames the last resolve resized, `(id, width, height)`, owed `OnSizeChanged` outside it.
+    /// Frames the last resolve resized, `(id, width, height)` in layout units, owed `OnSizeChanged`
+    /// outside it.
     pub(crate) pending_size_changed: Vec<(u32, f32, f32)>,
     /// Regions whose text emptied or filled ([`Model::touch_layout_text`]), or whose tooltip line
     /// width the clear or the sizer wrote ([`Model::note_line_width`]), since the last resolve,
