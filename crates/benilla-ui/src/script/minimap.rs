@@ -6,7 +6,7 @@
 
 use mlua::{Lua, Table, Value};
 
-use super::binding_abi::{lua_number_text, number_arg};
+use super::binding_abi::{frame_name, lua_number_text, number_arg, usage};
 use super::object::{decode_id, frame_handle_of};
 use super::Model;
 use crate::widget::{
@@ -37,16 +37,6 @@ fn this_minimap(lua: &Lua, this: &Value) -> mlua::Result<FrameHandle> {
         Some(FrameKind::Minimap) => Ok(h),
         _ => Err(wrong()),
     }
-}
-
-/// The frame's name for a usage or load error's `%s`, `<unnamed>` without one.
-fn frame_name(lua: &Lua, h: FrameHandle) -> String {
-    lua.app_data_ref::<Model>()
-        .expect("model app_data")
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
 /// The `CMinimap` ctor's nine `Model` children (`0x4edbc0`), made with the minimap as parent, so
@@ -222,10 +212,8 @@ fn set_model(
         Value::Integer(i) => lua_number_text(i as f64),
         Value::Number(n) => lua_number_text(n),
         _ => {
-            return Err(mlua::Error::runtime(format!(
-                "Usage: {}:{name}(\"file\")",
-                frame_name(lua, h)
-            )));
+            let this = this.as_table().expect("the prologue took a table");
+            return Err(usage(lua, this, &format!("{name}(\"file\")")));
         }
     };
     let loaded = load(
@@ -234,9 +222,9 @@ fn set_model(
         &path,
     );
     if !loaded {
+        let who = frame_name(&lua.app_data_ref::<Model>().expect("model app_data"), h);
         return Err(mlua::Error::runtime(format!(
-            "{}:{name}(): Couldn't load the file {path}",
-            frame_name(lua, h)
+            "{who}:{name}(): Couldn't load the file {path}"
         )));
     }
     Ok(())
@@ -286,10 +274,8 @@ fn set_art(
         Value::Integer(i) => lua_number_text(i as f64),
         Value::Number(n) => lua_number_text(n),
         _ => {
-            return Err(mlua::Error::runtime(format!(
-                "Usage: {}:{name}(\"file\")",
-                frame_name(lua, h)
-            )));
+            let this = this.as_table().expect("the prologue took a table");
+            return Err(usage(lua, this, &format!("{name}(\"file\")")));
         }
     };
     let art = if path.is_empty() {
@@ -309,9 +295,9 @@ fn set_art(
         .minimap
         .set_art(slot, art);
     if failed {
+        let who = frame_name(&lua.app_data_ref::<Model>().expect("model app_data"), h);
         return Err(mlua::Error::runtime(format!(
-            "{}:{name}(): Couldn't load the file {path}",
-            frame_name(lua, h)
+            "{who}:{name}(): Couldn't load the file {path}"
         )));
     }
     Ok(())
