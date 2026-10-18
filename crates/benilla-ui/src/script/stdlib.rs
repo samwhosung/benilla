@@ -257,16 +257,24 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "date",
-        lua.create_function(|lua, (fmt, when): (Option<String>, Option<i64>)| {
-            // Bare `date()` is `%c`, as in Lua.
-            let fmt = fmt.unwrap_or_else(|| "%c".to_string());
-            let secs = when.unwrap_or_else(crate::civil::unix_seconds);
-            // A leading `!` selects UTC, which every time here already is, so it is only consumed.
-            let body = fmt.strip_prefix('!').unwrap_or(&fmt);
-            // `*t` answers a table, as in Lua: an addon that loops until its `wday` matches
-            // (`Accountant_WeekStart`) spins forever on anything else.
-            if body == "*t" {
-                let c = crate::civil::from_unix(secs);
+        lua.create_function(|lua, (fmt, when): (Option<mlua::String>, Option<f64>)| {
+            // `luaL_optlstring(1, "%c")` read as a C string, `luaL_optnumber(2, -1)` through
+            // `__ftol` to the 32-bit `time_t`, and -1 is now (`0x7033db`).
+            let fmt = fmt.map_or_else(|| b"%c".to_vec(), |s| s.as_bytes().to_vec());
+            let fmt = fmt.split(|&b| b == 0).next().unwrap_or_default();
+            let secs = match when.map_or(-1, super::binding_abi::ftol) {
+                -1 => crate::civil::unix_seconds(),
+                s => i64::from(s),
+            };
+            // A leading `!` is `gmtime` (`0x7033f0`), else `localtime`: both UTC here.
+            let body = fmt.strip_prefix(b"!").unwrap_or(fmt);
+            // Either refuses a negative time (`0x7421ee`), and `date` answers nil (`0x70341d`).
+            if secs < 0 {
+                return Ok(mlua::Value::Nil);
+            }
+            let c = crate::civil::from_unix(secs);
+            // `*t` exactly, its NUL compared too (`0x70343c`), answers a table.
+            if body == b"*t" {
                 let t = lua.create_table()?;
                 // The client's `date` (`0x7033a0`) sets them in this order (`0x703452`..`0x7034e2`).
                 t.set("sec", c.sec)?;
@@ -283,9 +291,11 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
                 t.set("isdst", false)?;
                 return Ok(mlua::Value::Table(t));
             }
-            Ok(mlua::Value::String(
-                lua.create_string(format_epoch(secs, body))?,
-            ))
+            // An empty or 256-byte answer is `strftime`'s 0 (`0x70350d`).
+            match strftime(&c, body) {
+                Some(text) => Ok(mlua::Value::String(lua.create_string(text)?)),
+                None => Err(mlua::Error::RuntimeError("`date' format too long".into())),
+            }
         })?,
     )?;
     Ok(())
@@ -392,70 +402,210 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
-/// The `strftime` subset addons use; an unknown specifier is emitted verbatim.
-fn format_epoch(secs: i64, fmt: &str) -> String {
-    let crate::civil::Civil {
-        year,
-        month,
-        day,
-        hour,
-        min,
-        sec,
-        weekday: wday,
-        yearday: yday,
-    } = crate::civil::from_unix(secs);
-    let mut out = String::with_capacity(fmt.len() + 16);
-    let mut chars = fmt.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '%' {
-            out.push(c);
+/// The C locale's date and time patterns in the runtime's time record (`0x8323a0`): `%x`
+/// (`0x800aa0`), `%#x` (`0x800a8c`) and `%X` (`0x800a84`). `_setlocale` has no caller.
+const SHORT_DATE: &[u8] = b"M/d/yy";
+const LONG_DATE: &[u8] = b"dddd, MMMM dd, yyyy";
+const TIME_OF_DAY: &[u8] = b"H:mm:ss";
+
+/// `%z` and `%Z` (`0x413916`): `_tzname[isdst]`, which `__tzset` (`0x4145a5`) takes from the
+/// Windows zone's standard name; the UTC zone's.
+const ZONE_NAME: &[u8] = b"Coordinated Universal Time";
+
+/// The runtime's `strftime` (`0x4134e3`) into the 256-byte buffer `date` gives it (`0x7034fd`):
+/// `None` when it answers 0, its output empty or filling the buffer.
+fn strftime(c: &crate::civil::Civil, fmt: &[u8]) -> Option<Vec<u8>> {
+    let mut w = TimeWriter {
+        c,
+        out: Vec::with_capacity(64),
+        left: 256,
+        alternate: false,
+    };
+    let mut i = 0;
+    // A format that ends in `%` reads past its terminator in the client; here it ends.
+    while w.left > 0 && i < fmt.len() {
+        if fmt[i] != b'%' {
+            w.byte(fmt[i]);
+            i += 1;
             continue;
         }
-        let Some(spec) = chars.next() else {
-            out.push('%');
-            break;
-        };
-        let hour12 = match hour % 12 {
-            0 => 12,
-            h => h,
-        };
+        // Each `%` clears `#` (`0x413592`), which marks the conversion after it.
+        w.alternate = false;
+        i += 1;
+        if fmt.get(i) == Some(&b'#') {
+            w.alternate = true;
+            i += 1;
+        }
+        w.expand(fmt.get(i).copied().unwrap_or(0));
+        i += 1;
+    }
+    (w.left > 0 && !w.out.is_empty()).then_some(w.out)
+}
+
+/// `strftime`'s state: the output, the room left in the buffer, and `__alternate_form`
+/// (`0xcf7284`), the `#` mark.
+struct TimeWriter<'a> {
+    c: &'a crate::civil::Civil,
+    out: Vec<u8>,
+    left: usize,
+    alternate: bool,
+}
+
+impl TimeWriter<'_> {
+    fn byte(&mut self, b: u8) {
+        self.out.push(b);
+        self.left -= 1;
+    }
+
+    /// `_store_str` (`0x4139e7`): while there is room.
+    fn text(&mut self, s: &[u8]) {
+        for &b in s {
+            if self.left == 0 {
+                break;
+            }
+            self.byte(b);
+        }
+    }
+
+    /// `_store_num` (`0x413a0e`) after its case copied `#` into `_no_lead_zeros` (`0xcf7288`):
+    /// the number's last `digits` digits, zero-padded, or with `#` its digits alone
+    /// (`0x413a7d`). Too little room ends the output.
+    fn num(&mut self, mut n: i32, digits: usize) {
+        if self.alternate {
+            let start = self.out.len();
+            while self.left > 1 {
+                self.byte(b'0' + (n % 10) as u8);
+                n /= 10;
+                if n <= 0 {
+                    break;
+                }
+            }
+            self.out[start..].reverse();
+        } else if digits < self.left {
+            let mut d = vec![0u8; digits];
+            for slot in d.iter_mut().rev() {
+                *slot = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+            for b in d {
+                self.byte(b);
+            }
+        } else {
+            self.left = 0;
+        }
+    }
+
+    /// `_expandtime` (`0x4135f8`): one conversion; an unknown one writes nothing.
+    fn expand(&mut self, spec: u8) {
+        let c = self.c;
+        let (wday, yday) = (c.weekday as usize, c.yearday as i32 - 1);
+        let tm_year = (c.year - 1900) as i32;
         match spec {
-            'a' => out.push_str(&DAYS[wday as usize][..3]),
-            'A' => out.push_str(DAYS[wday as usize]),
-            'b' | 'h' => out.push_str(&MONTHS[(month - 1) as usize][..3]),
-            'B' => out.push_str(MONTHS[(month - 1) as usize]),
-            'c' => out.push_str(&format!(
-                "{} {} {:2} {:02}:{:02}:{:02} {}",
-                &DAYS[wday as usize][..3],
-                &MONTHS[(month - 1) as usize][..3],
-                day,
-                hour,
-                min,
-                sec,
-                year
-            )),
-            'd' => out.push_str(&format!("{day:02}")),
-            'H' => out.push_str(&format!("{hour:02}")),
-            'I' => out.push_str(&format!("{hour12:02}")),
-            'j' => out.push_str(&format!("{yday:03}")),
-            'm' => out.push_str(&format!("{month:02}")),
-            'M' => out.push_str(&format!("{min:02}")),
-            'p' => out.push_str(if hour < 12 { "AM" } else { "PM" }),
-            'S' => out.push_str(&format!("{sec:02}")),
-            'w' => out.push_str(&format!("{wday}")),
-            'x' => out.push_str(&format!("{month:02}/{day:02}/{:02}", year.rem_euclid(100))),
-            'X' => out.push_str(&format!("{hour:02}:{min:02}:{sec:02}")),
-            'y' => out.push_str(&format!("{:02}", year.rem_euclid(100))),
-            'Y' => out.push_str(&format!("{year}")),
-            '%' => out.push('%'),
-            other => {
-                out.push('%');
-                out.push(other);
+            b'a' => self.text(&DAYS[wday].as_bytes()[..3]),
+            b'A' => self.text(DAYS[wday].as_bytes()),
+            b'b' => self.text(&MONTHS[c.month as usize - 1].as_bytes()[..3]),
+            b'B' => self.text(MONTHS[c.month as usize - 1].as_bytes()),
+            // The short date, a space and the time; with `#` the long date (`0x413844`).
+            b'c' => {
+                let date = if std::mem::take(&mut self.alternate) {
+                    LONG_DATE
+                } else {
+                    SHORT_DATE
+                };
+                self.pattern(date);
+                if self.left == 0 {
+                    return;
+                }
+                self.byte(b' ');
+                self.pattern(TIME_OF_DAY);
+            }
+            b'd' => self.num(c.day as i32, 2),
+            b'H' => self.num(c.hour as i32, 2),
+            b'I' => self.num(
+                match c.hour % 12 {
+                    0 => 12,
+                    h => h as i32,
+                },
+                2,
+            ),
+            b'j' => self.num(yday + 1, 3),
+            b'm' => self.num(c.month as i32, 2),
+            b'M' => self.num(c.min as i32, 2),
+            b'p' => self.text(if c.hour > 11 { b"PM" } else { b"AM" }),
+            b'S' => self.num(c.sec as i32, 2),
+            // Weeks begun by a Sunday (`0x41377e`) or a Monday (`0x413760`), week 0 before it.
+            b'U' | b'W' => {
+                let first = match (spec, wday) {
+                    (b'U', d) => d as i32,
+                    (_, 0) => 6,
+                    (_, d) => d as i32 - 1,
+                };
+                let week = if yday < first {
+                    0
+                } else {
+                    yday / 7 + i32::from(yday % 7 >= first)
+                };
+                self.num(week, 2);
+            }
+            b'w' => self.num(wday as i32, 1),
+            b'x' => {
+                let date = if std::mem::take(&mut self.alternate) {
+                    LONG_DATE
+                } else {
+                    SHORT_DATE
+                };
+                self.pattern(date);
+            }
+            b'X' => {
+                self.alternate = false;
+                self.pattern(TIME_OF_DAY);
+            }
+            b'y' => self.num(tm_year % 100, 2),
+            b'Y' => self.num((tm_year / 100 + 19) * 100 + tm_year % 100, 4),
+            b'z' | b'Z' => self.text(ZONE_NAME),
+            b'%' => self.byte(b'%'),
+            _ => {}
+        }
+    }
+
+    /// `_store_winword` (`0x413ac6`) over a C-locale pattern: each run of one letter is a
+    /// conversion by its length (`M` `m`, `MMMM` `B`, `dddd` `A`, `yy` `y`, ...), anything else a
+    /// literal. The single letters' no-leading-zero mark (`0x413b9c`) is overwritten by the
+    /// conversion's own read of `#` (`0x4138e2`), so `M/d/yy` pads as `MM/dd/yy` does.
+    fn pattern(&mut self, p: &[u8]) {
+        let mut i = 0;
+        while i < p.len() && self.left > 0 {
+            let ch = p[i];
+            let run = p[i..].iter().take_while(|&&b| b == ch).count();
+            let spec = match (ch, run) {
+                (b'M', 1 | 2) => Some(b'm'),
+                (b'M', 3) => Some(b'b'),
+                (b'M', 4) => Some(b'B'),
+                (b'd', 1 | 2) => Some(b'd'),
+                (b'd', 3) => Some(b'a'),
+                (b'd', 4) => Some(b'A'),
+                (b'y', 2) => Some(b'y'),
+                (b'y', 4) => Some(b'Y'),
+                (b'h', 1 | 2) => Some(b'I'),
+                (b'H', 1 | 2) => Some(b'H'),
+                (b'm', 1 | 2) => Some(b'M'),
+                (b's', 1 | 2) => Some(b'S'),
+                _ => None,
+            };
+            match spec {
+                Some(s) => {
+                    self.expand(s);
+                    i += run;
+                }
+                None => {
+                    self.byte(ch);
+                    i += 1;
+                }
             }
         }
     }
-    out
 }
+
 /// `luaO_chunkid` (`0x6f5c40`), for `debugstack`'s `short_src`. An `@` name longer than
 /// [`CHUNKID_KEEP`] keeps only its tail behind `"..."`, so a long addon path loses the `\AddOns\`
 /// that corpus libraries search for.

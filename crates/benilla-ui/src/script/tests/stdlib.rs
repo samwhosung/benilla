@@ -402,10 +402,8 @@ fn time_is_epoch_seconds_and_date_formats_them() {
         ("%I:%M %p", "01:46 AM"),
         ("%j", "252"),
         ("%w", "0"),
-        ("%c", "Sun Sep  9 01:46:40 2001"),
         ("100%%", "100%"),
-        // An unknown specifier is emitted verbatim rather than swallowed.
-        ("%Q", "%Q"),
+        ("!%H", "01"),
     ] {
         let got: String = s
             .eval(&format!(r#"return date("{fmt}", 1000000000)"#))
@@ -423,6 +421,60 @@ fn time_is_epoch_seconds_and_date_formats_them() {
     // A leap day, the civil conversion's edge case.
     let leap: String = s.eval(r#"return date("%Y-%m-%d %A", 951782400)"#).unwrap();
     assert_eq!(leap, "2000-02-29 Tuesday");
+}
+
+/// `date` formats with the client's MSVC `strftime` (`0x4134e3`) in the C locale (`0x8323a0`):
+/// `%x` `M/d/yy` and `%X` `H:mm:ss`, zero-padded all the same (`0x4138e2`), `%c` both, `#` the
+/// long date and unpadded numbers, `%U`/`%W` weeks, `%z`/`%Z` the zone's name, and an unknown
+/// specifier writes nothing. An empty or 256-byte answer raises, a negative time answers nil.
+#[test]
+fn date_formats_as_msvcs_strftime() {
+    let s = script();
+    let date = |args: &str| -> String {
+        s.eval::<String>(&format!("return date({args})"))
+            .unwrap_or_else(|e| format!("error: {e}"))
+    };
+    // 1_000_000_000 is Sunday 2001-09-09 01:46:40, the next day a Monday.
+    for (args, want) in [
+        (r#""%c", 1000000000"#, "09/09/01 01:46:40"),
+        (r#""%x", 1000000000"#, "09/09/01"),
+        (r#""%X", 1000000000"#, "01:46:40"),
+        (
+            r#""%#c", 1000000000"#,
+            "Sunday, September 09, 2001 01:46:40",
+        ),
+        (r#""%#x", 1000000000"#, "Sunday, September 09, 2001"),
+        (r#""%#d.%#m %#H:%#M %#j", 1000000000"#, "9.9 1:46 252"),
+        (r#""%U %W", 1000086400"#, "36 37"),
+        (r#""%U %W", 1000000000"#, "36 36"),
+        (
+            r#""%Z|%z", 1000000000"#,
+            "Coordinated Universal Time|Coordinated Universal Time",
+        ),
+        (r#""a%Qb%hc%ed", 1000000000"#, "abcd"),
+        (r#""*tx", 1000000000"#, "*tx"),
+        (r#""%Y", "1000000000""#, "2001"),
+        (r#"20010909, 1000000000"#, "20010909"),
+    ] {
+        assert_eq!(date(args), want, "date({args})");
+    }
+    assert_eq!(date(r#"string.rep("a", 255), 0"#).len(), 255);
+    for args in [
+        r#""""#,
+        r#""%Q""#,
+        r#"string.rep("a", 256)"#,
+        r#"string.rep("%c", 16)"#,
+    ] {
+        assert!(
+            date(args).ends_with("`date' format too long"),
+            "date({args}): {}",
+            date(args)
+        );
+    }
+    let nil: bool = s
+        .eval(r#"return date("%c", -5) == nil and date("*t", -2) == nil"#)
+        .unwrap();
+    assert!(nil, "a negative time is no date");
 }
 
 /// `time` with a table converts it (`0x7035a0`): its fields through `lua_gettable` and `__ftol`,
