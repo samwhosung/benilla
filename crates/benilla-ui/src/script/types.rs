@@ -303,7 +303,7 @@ pub struct FontShadow {
     pub color: [f32; 4],
 }
 
-/// A named `<Font>` object's paint, flattened through its `inherits=` chain; a field the chain
+/// A named `<Font>` object's paint, its own over what its `inherits=` parent had; a field the chain
 /// never sets is `None`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FontObject {

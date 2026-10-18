@@ -317,10 +317,8 @@ fn a_fontstring_font_file_needs_its_own_nodes_height_and_a_refusal_stops_the_lev
     };
     assert_eq!(paint("Refused"), paint("Control"), "nothing after the font");
     let font = |name: &str| {
-        s.eval::<(String, f32)>(&format!(
-            "local f, h = {name}:GetFont() return f, h"
-        ))
-        .unwrap()
+        s.eval::<(String, f32)>(&format!("local f, h = {name}:GetFont() return f, h"))
+            .unwrap()
     };
     assert_eq!(font("LeansOnTemplate"), ("Fonts\\ARIALN.TTF".into(), 20.0));
     assert_eq!(font("OwnWins"), ("Fonts\\MORPHEUS.TTF".into(), 16.0));
@@ -368,7 +366,10 @@ fn a_fontstrings_own_shadow_element_is_read() {
         .unwrap()
     };
     assert_eq!(shadow("Shadowed"), vec![2.0, -3.0, 1.0, 0.0, 0.0, 0.5]);
-    assert_eq!(shadow("BareShadow"), vec![0.001, -0.001, 0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        shadow("BareShadow"),
+        vec![0.001, -0.001, 0.0, 0.0, 0.0, 1.0]
+    );
 }
 
 /// `0x771006`-`0x771032`, `0x778c07`-`0x778c31`: an empty `text=` is skipped, so a template's text
@@ -401,13 +402,75 @@ fn an_empty_text_is_skipped_and_an_empty_global_shows_its_key() {
         </Ui>"#
         ),
     );
-    let text = |expr: &str| {
-        s.eval::<Option<String>>(&format!("return {expr}"))
-            .unwrap()
-    };
-    assert_eq!(text("KeyShown:GetText()").as_deref(), Some("LEVEL_TEST_EMPTY"));
+    let text = |expr: &str| s.eval::<Option<String>>(&format!("return {expr}")).unwrap();
+    assert_eq!(
+        text("KeyShown:GetText()").as_deref(),
+        Some("LEVEL_TEST_EMPTY")
+    );
     assert_eq!(text("Kept:GetText()").as_deref(), Some("A"));
-    assert_eq!(text("KeyButton:GetText()").as_deref(), Some("LEVEL_TEST_EMPTY"));
+    assert_eq!(
+        text("KeyButton:GetText()").as_deref(),
+        Some("LEVEL_TEST_EMPTY")
+    );
     assert_eq!(text("KeptButton:GetText()").as_deref(), Some("A"));
     assert_eq!(text("LabelKept:GetText()").as_deref(), Some("A"));
+}
+
+/// `0x783c30`: a `<Font>` copies the object `inherits=` names, then reads `outline=` and
+/// `monochrome=` only beside its own `font=` file, whose own `<FontHeight>` it needs; a refused
+/// height skips the rest of the node.
+#[test]
+fn a_font_element_reads_its_flags_only_beside_its_own_font_file() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="LevelParentFont" font="Fonts\FRIZQT__.TTF" outline="NORMAL" virtual="true">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+                <Color r="1" g="0" b="0"/>
+            </Font>
+            <Font name="LevelOutlineOnly" inherits="LevelParentFont" outline="THICK"
+                  monochrome="1" virtual="true"/>
+            <Font name="LevelOwnFile" inherits="LevelParentFont" font="Fonts\ARIALN.TTF"
+                  virtual="true">
+                <FontHeight><AbsValue val="14"/></FontHeight>
+            </Font>
+            <Font name="LevelNoHeight" inherits="LevelParentFont" font="Fonts\ARIALN.TTF"
+                  justifyH="LEFT" virtual="true">
+                <Color r="0" g="1" b="0"/>
+            </Font>
+            <Font name="LevelNoParent" inherits="LevelNoSuchFont" virtual="true"/>
+        </Ui>"#,
+    );
+    let font = |name: &str| {
+        s.eval::<String>(&format!(
+            "local f, h, flags = {name}:GetFont() local r, g, b = {name}:GetTextColor() \
+             return table.concat({{f, h, flags or '', {name}:GetJustifyH(), r, g, b}}, ' ')"
+        ))
+        .unwrap()
+    };
+    let parent = font("LevelParentFont");
+    assert_eq!(
+        font("LevelOutlineOnly"),
+        parent,
+        "no file of its own, no flags of its own"
+    );
+    assert_eq!(
+        font("LevelOwnFile"),
+        parent.replacen("Fonts\\FRIZQT__.TTF 12 OUTLINE", "Fonts\\ARIALN.TTF 14 ", 1),
+        "its own file sets the whole flags word"
+    );
+    assert_eq!(
+        font("LevelNoHeight"),
+        parent,
+        "a refused height skips the node"
+    );
+    assert!(has_line(
+        &report,
+        "Font LevelNoHeight: Missing font height in Font element"
+    ));
+    assert!(has_line(
+        &report,
+        "Couldn't find inherited font: LevelNoSuchFont"
+    ));
 }

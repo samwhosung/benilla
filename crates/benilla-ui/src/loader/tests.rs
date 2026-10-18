@@ -1555,10 +1555,11 @@ mod loader_tests {
         assert_eq!(base.height, Some(12.0));
         assert_eq!(base.color, Some([1.0, 0.82, 0.0, 1.0]));
 
-        // Leaf: Base's face through Mid, Mid's white, its own height of 10.
+        // Leaf: Base's face and height through Mid, and Mid's white; its own `<FontHeight>` has
+        // no `font=` beside it, so it is never read (`0x783cf1`).
         let leaf = s.font_object("Leaf").expect("Leaf registered");
         assert_eq!(leaf.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
-        assert_eq!(leaf.height, Some(10.0));
+        assert_eq!(leaf.height, Some(12.0));
         assert_eq!(leaf.color, Some([1.0, 1.0, 1.0, 1.0]));
     }
 

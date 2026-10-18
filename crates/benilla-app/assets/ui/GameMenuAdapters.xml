@@ -6,8 +6,10 @@
         character-select AddOns screen is the only addon UI.
     -->
 
-    <!-- The era's header font, which 1.12's Fonts.xml lacks. -->
-    <Font name="BenillaGameFontNormalMed1" inherits="GameFontNormal" virtual="true">
+    <!-- The era's header font, which 1.12's Fonts.xml lacks. Its own font= carries the height:
+         1.12 reads a <FontHeight> only beside one. -->
+    <Font name="BenillaGameFontNormalMed1" inherits="GameFontNormal" font="Fonts\FRIZQT__.TTF"
+          virtual="true">
         <FontHeight><AbsValue val="13"/></FontHeight>
     </Font>
 

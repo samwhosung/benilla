@@ -8,7 +8,7 @@
 //! Lua handles are never accumulated breadth-wise (MAXCSTACK): a frame's wrapper and `OnLoad`
 //! live only across its own subtree build, and everything durable lives Lua-side.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use mlua::{Function, ObjectLike, Table, Value};
 
@@ -275,7 +275,7 @@ struct Loader<'a> {
     pub(super) status_root: &'a str,
     // The template and font registries live on the `Model` and persist across loads: the
     // reference's template table is global (`0x6ee500`), so `MerchantFrame.xml` inherits a template
-    // `CharacterFrameTemplates.xml` registered. Fonts are their own namespace, stored flattened.
+    // `CharacterFrameTemplates.xml` registered. Fonts are their own namespace.
     pub(super) report: LoadReport,
     /// Warn-once keys.
     pub(super) warned: HashSet<String>,
@@ -565,27 +565,34 @@ impl Loader<'_> {
         }
     }
 
-    /// A top-level `<Font name=…>`: flatten its `inherits=` chain (fonts inherit only fonts),
-    /// register the [`FontObject`] and store the flattened element for later fonts to inherit.
+    /// A top-level `<Font name=…>` (`CSimpleFont::LoadXML 0x783c30`): the font object `inherits=`
+    /// names is copied (`0x783ce6`; a miss is logged, `0x87a51c`), then the node's own attributes
+    /// apply over it ([`font_object_leg`]). The object is registered and published whether or not
+    /// its own font was refused.
     pub(super) fn do_font(&mut self, el: &Element) {
         let Some(name) = el.name().map(str::to_string) else {
             return;
         };
-        let merged = {
-            let model = self.model();
-            let fonts = model.framexml_fonts.borrow();
-            let view: HashMap<&str, &Element> =
-                fonts.iter().map(|(k, v)| (k.as_str(), v)).collect();
-            let mut warns = Vec::new();
-            let merged = framexml::expand(el, &view, &mut warns);
-            drop(view);
-            drop(fonts);
-            drop(model);
-            self.report.warnings.extend(warns);
-            merged
+        let lookup = |this: &Self, key: &str| {
+            this.model()
+                .font_objects_by_lower
+                .get(&key.to_ascii_lowercase())
+                .cloned()
         };
-
-        let font = font_object_from_element(&merged);
+        let mut font = FontObject::default();
+        if let Some(parent) = el.attr("inherits").filter(|n| !n.is_empty()) {
+            match lookup(self, parent) {
+                Some(f) => font = f,
+                None => self.status_warning(format!("Couldn't find inherited font: {parent}")),
+            }
+        }
+        let named = el
+            .attr("font")
+            .filter(|f| !f.is_empty())
+            .and_then(|f| lookup(self, f));
+        if !font_object_leg(el, &mut font, named) {
+            self.report_missing_font_height("Font", &name, &el.tag);
+        }
         {
             let mut model = self.model();
             model
@@ -594,7 +601,7 @@ impl Loader<'_> {
             model
                 .framexml_fonts
                 .borrow_mut()
-                .insert(name.clone(), merged);
+                .insert(name.clone(), el.clone());
         }
         // In 1.12 a named `<Font>` is also a Lua global, the object `SetFontObject` takes.
         if let Err(e) = crate::script::font::publish(self.lua(), &name) {
@@ -961,54 +968,61 @@ pub(super) fn shadow_of(sh: &Element) -> crate::script::FontShadow {
     }
 }
 
-/// A [`FontObject`] from a flattened `<Font>`. The merge appends inherited nodes first, so the last
-/// `<FontHeight>`, `<Color>` and `<Shadow>` win.
-pub(super) fn font_object_from_element(el: &Element) -> FontObject {
-    let justify_h = el
-        .attr("justifyH")
-        .map(|j| match j.to_ascii_uppercase().as_str() {
-            "LEFT" => JustifyH::Left,
-            "RIGHT" => JustifyH::Right,
-            _ => JustifyH::Center,
-        });
-    let justify_v = el
-        .attr("justifyV")
-        .map(|j| match j.to_ascii_uppercase().as_str() {
+/// One `<Font>` node's own attributes over `font`, what it inherited (`0x783cee`-`0x784111`):
+/// `font=` naming a font object (`named`) copies that object (`0x783d22`); any other `font=` is a
+/// file that needs the node's own first `<FontHeight>` above 0 and sets the flags word whole from
+/// the node's `outline=` and `monochrome=` (`0x783db1`-`0x783ea3`), so an `outline=` without its
+/// own file is never read. Then `spacing=` with `atof` (`0x783ee0`), `justifyV`, `justifyH` and
+/// each `<Color>` and `<Shadow>` child, the last of each winning. `false` when the height was
+/// refused, which returns before all of that (`0x783dae`).
+pub(super) fn font_object_leg(
+    el: &Element,
+    font: &mut FontObject,
+    named: Option<FontObject>,
+) -> bool {
+    match (el.attr("font").filter(|f| !f.is_empty()), named) {
+        (Some(_), Some(object)) => *font = object,
+        (Some(path), None) => {
+            let height = children_named(el, "FontHeight")
+                .next()
+                .and_then(abs_value)
+                .filter(|h| *h > 0.0);
+            let Some(height) = height else {
+                return false;
+            };
+            font.font = Some(path.to_string());
+            font.height = Some(height);
+            font.outline = el.attr("outline").map(Outline::parse).unwrap_or_default();
+            // Any non-empty `monochrome=` sets the flag (`0x783e01`-`0x783e14`), even "false".
+            font.monochrome = el.attr("monochrome").is_some_and(|v| !v.is_empty());
+        }
+        (None, _) => {}
+    }
+    if let Some(sp) = el.attr("spacing").filter(|v| !v.is_empty()) {
+        font.spacing = Some(crate::framexml::atof(sp));
+    }
+    if let Some(j) = el.attr("justifyV").filter(|v| !v.is_empty()) {
+        font.justify_v = Some(match j.to_ascii_uppercase().as_str() {
             "TOP" => JustifyV::Top,
             "BOTTOM" => JustifyV::Bottom,
             _ => JustifyV::Middle,
         });
-    // `<Shadow>` inherits like any child: `MasterFont`'s (1,-1) black reaches every `GameFont*`
-    // (`Fonts.xml:55`).
-    let shadow = children_named(el, "Shadow").last().map(|sh| {
-        let offset = children_named(sh, "Offset")
-            .next()
-            .map(abs_dim)
-            .map(|(x, y)| [x.unwrap_or(0.0), y.unwrap_or(0.0)])
-            .unwrap_or([0.0, 0.0]);
-        let color = children_named(sh, "Color")
-            .next()
-            .map(color_of)
-            .unwrap_or([0.0, 0.0, 0.0, 1.0]);
-        crate::script::FontShadow { offset, color }
-    });
-    FontObject {
-        font: el.attr("font").map(str::to_string),
-        height: children_named(el, "FontHeight").last().and_then(abs_value),
-        color: children_named(el, "Color").last().map(color_of),
-        outline: el.attr("outline").map(Outline::parse).unwrap_or_default(),
-        // Any non-empty `monochrome=` sets the flag (`0x783e01`-`0x783e14`), even "false".
-        monochrome: el.attr("monochrome").is_some_and(|v| !v.is_empty()),
-        justify_h,
-        justify_v,
-        shadow,
-        // `spacing=` (`0x783ee0`, read with `atof` when not empty), inherited down the flattened
-        // chain like the other attributes.
-        spacing: el
-            .attr("spacing")
-            .filter(|v| !v.is_empty())
-            .map(crate::framexml::atof),
     }
+    if let Some(j) = el.attr("justifyH").filter(|v| !v.is_empty()) {
+        font.justify_h = Some(match j.to_ascii_uppercase().as_str() {
+            "LEFT" => JustifyH::Left,
+            "RIGHT" => JustifyH::Right,
+            _ => JustifyH::Center,
+        });
+    }
+    for child in &el.children {
+        if child.tag.eq_ignore_ascii_case("Color") {
+            font.color = Some(color_of(child));
+        } else if child.tag.eq_ignore_ascii_case("Shadow") {
+            font.shadow = Some(shadow_of(child));
+        }
+    }
+    true
 }
 
 #[cfg(test)]

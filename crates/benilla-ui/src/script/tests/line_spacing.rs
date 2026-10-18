@@ -513,7 +513,9 @@ fn the_spacing_attribute_is_read_with_atof() {
     let s = script();
     let doc = crate::framexml::parse(
         r#"<Ui>
-             <Font name="AtofFont" font="Fonts\FRIZQT__.TTF" spacing=" 3px"/>
+             <Font name="AtofFont" font="Fonts\FRIZQT__.TTF" spacing=" 3px">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+             </Font>
              <Frame name="AtofHost">
                <Layers><Layer level="ARTWORK">
                  <FontString name="AtofOwn" spacing="2.5em"/>

@@ -15,7 +15,7 @@
 //! that mask. `+0x38` is not it; its high bits mark a held value, which the inheriting merge also
 //! sets (`0x7709d3`).
 //!
-//! Not built: a `<Font inherits=…>` chain is flattened at load (`Loader::do_font`), so mutating
+//! Not built: a `<Font inherits=…>` parent is copied at load (`Loader::do_font`), so mutating
 //! `MasterFont` does not reach `GameFontNormal`, where the reference links it live: `LoadXML
 //! 0x783c30` calls the `SetFontObject` link `0x770c60` for `inherits=` (`0x783ce6`) and `font=`
 //! (`0x783d22`). No corpus addon mutates a declared font object.

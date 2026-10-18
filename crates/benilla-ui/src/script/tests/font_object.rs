@@ -100,7 +100,7 @@ fn tablet_reads_the_tooltip_header_size_off_the_global() {
              <Font name="GameTooltipText" font="Fonts\FRIZQT__.TTF">
                <FontHeight><AbsValue val="12"/></FontHeight>
              </Font>
-             <Font name="GameTooltipHeaderText" inherits="GameTooltipText">
+             <Font name="GameTooltipHeaderText" inherits="GameTooltipText" font="Fonts\FRIZQT__.TTF">
                <FontHeight><AbsValue val="14"/></FontHeight>
              </Font>
            </Ui>"#,
@@ -126,7 +126,7 @@ fn tablet_reads_the_tooltip_header_size_off_the_global() {
     assert_eq!((header, normal), (14.0, 12.0));
 }
 
-/// `inherits=` is flattened once, at load, where the reference links it live (`0x770c60`), and
+/// `inherits=` is copied once, at load, where the reference links it live (`0x770c60`), and
 /// the published object carries the flattened values.
 #[test]
 fn an_inheriting_font_still_flattens_to_the_same_values() {
@@ -139,7 +139,7 @@ fn an_inheriting_font_still_flattens_to_the_same_values() {
                <Color r="1" g="1" b="1"/>
                <Shadow><Offset><AbsDimension x="1" y="-1"/></Offset><Color r="0" g="0" b="0"/></Shadow>
              </Font>
-             <Font name="DerivedFont" inherits="MasterFont" outline="NORMAL">
+             <Font name="DerivedFont" inherits="MasterFont" font="Fonts\FRIZQT__.TTF" outline="NORMAL">
                <FontHeight><AbsValue val="18"/></FontHeight>
              </Font>
            </Ui>"#,
