@@ -428,10 +428,16 @@ impl Cvars {
     /// ([`benilla_ui::script::CvarWrite::Restore`]): `InternalSet` called directly, so a latched
     /// row takes the value at once and keeps its stage, and the config is dirty.
     ///
-    /// Deviation: the observers fire, where the reference runs no callback here
-    /// (`0x63dff0`, `0x63e010`), because a knob moves only through its [`CvarChanged`] observer,
-    /// which also stands in for the reference's direct reads of the record; without it knob and
-    /// value would disagree until the next write.
+    /// A latched row fires nothing: the device runs on a working record only the gx callbacks
+    /// write (`0xc4eb98`, `gxWindow`'s `0x63b190`, `gxVSync`'s `0x63b160`), the record's value is
+    /// read only at device init (`0x63a41b`), and `RestartGx`'s commit (`0x639ec0`) reads only the
+    /// stage (`+0x38`). So the value reaches `GetCVar` and the save, and the knob at the next
+    /// launch.
+    ///
+    /// Deviation: for a row that is not latched the observers fire, where the reference runs no
+    /// callback here (`0x63dff0`, `0x63e010`), because a knob moves only through its
+    /// [`CvarChanged`] observer, which also stands in for the reference's direct reads of the
+    /// record; without it knob and value would disagree until the next write.
     fn restore_from_vm(&mut self, name: &str, value: &str) -> SetOutcome {
         let Some(i) = self.slot(name) else {
             warn!("cvar {name}: not registered — restore ignored");
@@ -442,11 +448,13 @@ impl Cvars {
             return SetOutcome::Unchanged;
         }
         let old = std::mem::replace(&mut row.value, value.to_string());
-        self.events.push(CvarChanged {
-            name: row.name.clone(),
-            old,
-            new: value.to_string(),
-        });
+        if !row.latched {
+            self.events.push(CvarChanged {
+                name: row.name.clone(),
+                old,
+                new: value.to_string(),
+            });
+        }
         self.touch();
         SetOutcome::Changed
     }
@@ -2759,6 +2767,46 @@ mod tests {
         console_exec(&mut app, "cvar_reset farclip");
         assert_eq!(res::<Cvars>(&app).get("farclip"), Some("500"));
         assert_eq!(res::<ViewDistance>(&app).farclip, 500.0);
+    }
+
+    /// A reset of a latched row moves the record, not the device: `GetCVar` and the save take
+    /// it, no observer fires, and a stage it found stays staged and is what the file holds.
+    #[test]
+    fn a_latched_reset_moves_the_value_and_not_the_window() {
+        let mut app = cvar_app();
+        app.world_mut()
+            .insert_resource(Cvars::with_value("gxVSync", "0"));
+        app.world_mut().resource_mut::<VideoConfig>().vsync = false;
+        console_exec(&mut app, "cvar_default gxVSync");
+        let cvars = res::<Cvars>(&app);
+        assert_eq!(cvars.get("gxVSync"), Some("1"));
+        assert!(!res::<VideoConfig>(&app).vsync, "the window is left alone");
+        assert!(cvars.dirty);
+        assert!(
+            !cvars.compose().contains_key("gxVSync"),
+            "the file takes the default"
+        );
+        // A staged row keeps its stage through the reset, and the save writes the stage.
+        app.world_mut()
+            .insert_resource(Cvars::with_value("gxResolution", "1024x768"));
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .set("gxResolution", "800x600");
+        let before = *res::<VideoConfig>(&app);
+        console_exec(&mut app, "cvar_default gxResolution");
+        let cvars = res::<Cvars>(&app);
+        let default = cvars.default_of("gxResolution").unwrap();
+        assert_eq!(cvars.get("gxResolution"), Some(default), "applied at once");
+        assert_eq!(
+            cvars.row("gxResolution").unwrap().pending.as_deref(),
+            Some("800x600")
+        );
+        assert_eq!(
+            cvars.compose().get("gxResolution").map(String::as_str),
+            Some("800x600"),
+            "the stage is saved"
+        );
+        assert_eq!(*res::<VideoConfig>(&app), before);
     }
 
     /// A reset of every row passes the rows the session owns, which the env set and the file never
