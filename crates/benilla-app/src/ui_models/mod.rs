@@ -2461,7 +2461,7 @@ mod tests {
         // On a's own tile: live, and kept.
         let last = eye(pane_camera_rig(
             &on("a.mdx", 1),
-            "a",
+            "a.m2",
             &mut frozen,
             || Some(rec(3.0)),
             &req,
@@ -2471,7 +2471,7 @@ mod tests {
         // b's tile, same camera: the frozen view, though a live evaluation would move it.
         let swapped = pane_camera_rig(
             &on("a.mdx", 1),
-            "b",
+            "b.m2",
             &mut frozen,
             || Some(rec(9.0)),
             &req,
@@ -2481,7 +2481,7 @@ mod tests {
         // `SetCamera` on b: live on b again.
         let b = eye(pane_camera_rig(
             &on("b.mdx", 0),
-            "b",
+            "b.m2",
             &mut frozen,
             || Some(rec(9.0)),
             &req,
@@ -2726,7 +2726,17 @@ mod tests {
         let cube = "mpq://spells/errorcube.m2";
         for path in [r"Creature\Wolf\Wolf", "Foo.blp"] {
             assert_eq!(facts_url(&want(path)), cube, "{path}");
+            assert_eq!(
+                want(path).key,
+                benilla_ui::widget::model_key(benilla_assets::ERROR_CUBE),
+                "a refused name keys as the cube it stands: {path}"
+            );
         }
+        assert_ne!(
+            want(r"Creature\Wolf\Wolf").key,
+            want(r"Creature\Wolf\Wolf.mdx").key,
+            "a refused name never shares a key with its valid twin"
+        );
     }
 
     /// A pane's `SetModel` queues its own spelling beside the key, and the minimap's nine engine

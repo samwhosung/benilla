@@ -603,15 +603,16 @@ impl ModelFileFacts {
     }
 }
 
-/// A model path's key: case-folded, forward slashes, no extension, so `.mdx` and `.m2` match.
+/// A model path's key, the file the model cache opens for it: case-folded, forward slashes, the
+/// extension at the last dot made `.m2` when it is `.mdx`, `.mdl` or `.m2` (`0x706a80`-`0x706adf`),
+/// so those spellings match. A path the cache refuses keys as the error cube it stands
+/// (`0x70737f`), never as a twin with a valid extension. A key is its own key.
 pub fn model_key(path: &str) -> String {
     let p = path.to_ascii_lowercase().replace('\\', "/");
-    let stem = p
-        .strip_suffix(".mdx")
-        .or_else(|| p.strip_suffix(".mdl"))
-        .or_else(|| p.strip_suffix(".m2"))
-        .unwrap_or(&p);
-    stem.to_string()
+    match p.rsplit_once('.') {
+        Some((stem, "mdx" | "mdl" | "m2")) => format!("{stem}.m2"),
+        _ => "spells/errorcube.m2".to_string(),
+    }
 }
 
 impl ModelState {
