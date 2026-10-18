@@ -526,6 +526,8 @@ struct TileState {
     /// Files whose facts are derived, beside the handle that keeps each resident. It records what
     /// the host has loaded, not what a VM has been told: every new VM is still owed the facts.
     loaded: HashMap<String, (Handle<M2Model>, ModelFileFacts)>,
+    /// Each pane's camera as its last paint on the camera's own file left it ([`pane_camera_rig`]).
+    frozen: HashMap<FrameHandle, FrozenCamera>,
     frame: u64,
 }
 
@@ -570,6 +572,7 @@ impl TileState {
         for (_, tile) in self.tiles.drain() {
             tile.retire(commands, table);
         }
+        self.frozen.clear();
         bridge.requests.clear();
         bridge.cells.clear();
     }
@@ -1117,27 +1120,34 @@ fn sync_tiles(
         // ── The leg ────────────────────────────────────────────────────────────────────
         // Perspective (`0x7ac640`): the file's camera frames the pane from this tile's camera,
         // viewport the cell, and the eye and target ride the model's root (`0x718960`). The
-        // camera is read from the file it was installed from, resident since its facts landed.
-        // Orthographic: one model unit is `1280 · modelScale · layoutScale` FrameXML units.
+        // camera is the one installed from its own file, frozen once the pane holds another
+        // ([`pane_camera_rig`]). Orthographic: one model unit is `1280 · modelScale ·
+        // layoutScale` FrameXML units.
+        // Camera tracks read the file's absolute timeline and the play head is a cursor in the
+        // armed band, so the band's start is added.
+        let file_ms = seq_slot
+            .and_then(|slot| assets.m2s.get(&tile.m2)?.sequences.get(slot))
+            .map_or(0, |seq| seq.start_ms)
+            + pane.play.map_or(0, |ph| ph.cursor_ms);
+        let aspect = req.size_px.x as f32 / req.size_px.y.max(1) as f32;
         let perspective = tile
             .cam_slot
             .zip(req.camera.as_ref())
             .and_then(|(slot, c)| {
-                let (src, _) = state.loaded.get(&benilla_ui::widget::model_key(&c.file))?;
-                let cam = assets.m2s.get(src)?.cameras.get(c.index as usize)?;
-                Some((slot, cam.clone()))
+                let live = || {
+                    let (src, _) = state.loaded.get(&benilla_ui::widget::model_key(&c.file))?;
+                    let cam = assets.m2s.get(src)?.cameras.get(c.index as usize)?;
+                    Some(cam.at(file_ms))
+                };
+                let mut frozen = state.frozen.remove(handle);
+                let rig = pane_camera_rig(c, &tile.key, &mut frozen, live, req, aspect);
+                if let Some(f) = frozen {
+                    state.frozen.insert(*handle, f);
+                }
+                Some((slot, rig?))
             });
         let mut leg_trace = String::from("ortho");
-        if let Some((slot, cam)) = perspective {
-            // Camera tracks read the file's absolute timeline and the play head is a cursor in
-            // the armed band, so the band's start is added.
-            let file_ms = seq_slot
-                .and_then(|slot| assets.m2s.get(&tile.m2)?.sequences.get(slot))
-                .map_or(0, |seq| seq.start_ms)
-                + pane.play.map_or(0, |ph| ph.cursor_ms);
-            let record = cam.at(file_ms);
-            let aspect = req.size_px.x as f32 / req.size_px.y.max(1) as f32;
-            let leg = perspective_rig(&record, req, aspect);
+        if let Some((slot, (leg, record))) = perspective {
             *tf = leg.root;
             *vis = Visibility::Visible;
             for (mut c, mut target_ref, mut proj, mut ctf, marker) in &mut pane_cams {
@@ -1439,6 +1449,52 @@ fn perspective_rig(
         perspective_root(req.root_pos, req.facing, req.root_scale),
         aspect,
     )
+}
+
+/// A pane's camera as its last paint on the camera's own file published it: `CM2Model::
+/// UpdateAfterAnimate` (`0x718960`) writes the eye, target and roll into the camera each paint
+/// (`0x718bc7`, `0x718c21`, `0x718c35`), and once `SetModel` releases that model nothing
+/// republishes them (`modelview#stale-camera-after-setmodel`).
+#[derive(Clone)]
+struct FrozenCamera {
+    camera: benilla_ui::widget::InstalledCamera,
+    /// The view as that paint left it, eye and target on the old model's root.
+    view: Transform,
+    /// The record the projection comes from.
+    record: benilla_assets::PortraitCamera,
+}
+
+/// The perspective rig of `chosen` on this paint, with the record its projection came from. On
+/// the camera's own file (`tile_key`) it is live, `live` evaluating the record, and the paint is
+/// kept in `frozen`; on another file the pane draws the frozen camera until the next `SetCamera`.
+/// A camera never painted on its own file published nothing, so it is evaluated live there too.
+fn pane_camera_rig(
+    chosen: &benilla_ui::widget::InstalledCamera,
+    tile_key: &str,
+    frozen: &mut Option<FrozenCamera>,
+    live: impl FnOnce() -> Option<benilla_assets::PortraitCamera>,
+    req: &TileRequest,
+    aspect: f32,
+) -> Option<(PerspectiveRig, benilla_assets::PortraitCamera)> {
+    let own_file = benilla_ui::widget::model_key(&chosen.file) == tile_key;
+    if let Some(f) = frozen.as_ref().filter(|f| !own_file && f.camera == *chosen) {
+        let rig = PerspectiveRig {
+            root: perspective_root(req.root_pos, req.facing, req.root_scale),
+            camera: f.view,
+            projection: pane_projection(&f.record, aspect),
+        };
+        return Some((rig, f.record));
+    }
+    let record = live()?;
+    let rig = perspective_rig(&record, req, aspect);
+    if own_file {
+        *frozen = Some(FrozenCamera {
+            camera: chosen.clone(),
+            view: rig.camera,
+            record,
+        });
+    }
+    Some((rig, record))
 }
 
 /// The perspective leg's root, `T(root_pos) · R(facing about WoW +Z) · S(root_scale)`, with
@@ -2360,6 +2416,62 @@ mod tests {
             Some(clip_slot),
             "the tile's mat-anim rows go back to the table"
         );
+    }
+
+    /// After `SetModel` the pane draws through the old file's camera frozen at its last paint
+    /// (`0x718960` publishes eye and target each paint; the released model publishes no more),
+    /// whatever the new file's timeline does, until a `SetCamera` installs on the new file.
+    #[test]
+    fn an_in_world_pane_after_a_swap_draws_the_frozen_old_camera() {
+        use benilla_ui::widget::InstalledCamera;
+        let rec = |x: f32| benilla_assets::PortraitCamera {
+            eye: Vec3::new(x, 1.0, 2.0),
+            target: Vec3::ZERO,
+            roll: 0.0,
+            fov: 0.7,
+            near: 0.1,
+            far: 50.0,
+        };
+        let on = |file: &str, index| InstalledCamera {
+            file: file.into(),
+            index,
+        };
+        let req = persp_req(UVec2::new(100, 100), 1.0, Vec3::ZERO, 0.0);
+        let eye = |rig: Option<(PerspectiveRig, benilla_assets::PortraitCamera)>| {
+            rig.map(|(r, _)| r.camera.translation)
+        };
+        let mut frozen = None;
+        // On a's own tile: live, and kept.
+        let last = eye(pane_camera_rig(
+            &on("a.mdx", 1),
+            "a",
+            &mut frozen,
+            || Some(rec(3.0)),
+            &req,
+            1.0,
+        ));
+        assert!(last.is_some());
+        // b's tile, same camera: the frozen view, though a live evaluation would move it.
+        let swapped = pane_camera_rig(
+            &on("a.mdx", 1),
+            "b",
+            &mut frozen,
+            || Some(rec(9.0)),
+            &req,
+            1.0,
+        );
+        assert_eq!(eye(swapped), last);
+        // `SetCamera` on b: live on b again.
+        let b = eye(pane_camera_rig(
+            &on("b.mdx", 0),
+            "b",
+            &mut frozen,
+            || Some(rec(9.0)),
+            &req,
+            1.0,
+        ));
+        assert_ne!(b, last);
+        assert!(frozen.is_some_and(|f| f.camera == on("b.mdx", 0)));
     }
 
     /// A perspective-leg `TileRequest` with only the terms the leg reads.
