@@ -14,6 +14,7 @@
 //! and material state, one `Mesh2d` draw each. A run never spans a quad of another state, so the
 //! total order holds and interleaved textures pay one draw per switch.
 
+use benilla_ui::script::BlendMode;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::CameraOutputMode;
@@ -28,7 +29,6 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{Material2d, Material2dKey, Material2dPlugin};
 use bevy::window::PrimaryWindow;
-use benilla_ui::script::BlendMode;
 
 /// One `(u, v)` per screen corner, in [`Run::push_quad`]'s winding (top-left, top-right,
 /// bottom-right, bottom-left), not a `(min, max)` rect: a `<TexCoords>` with `left > right` (the
@@ -334,8 +334,7 @@ impl Material2d for UiQuadMaterial {
                     // for BLEND, `(rgb·a, 0)` for ADD and `(rgb, 1)` for DISABLE and a passing
                     // ALPHAKEY texel, so this one state is EGxBlend 0 to 3, clamped at each write
                     // like the reference's 8-bit backbuffer.
-                    let premultiplied =
-                        component(BlendFactor::One, BlendFactor::OneMinusSrcAlpha);
+                    let premultiplied = component(BlendFactor::One, BlendFactor::OneMinusSrcAlpha);
                     BlendState {
                         color: premultiplied,
                         alpha: premultiplied,
@@ -1521,9 +1520,8 @@ mod tests {
                 }),
                 ..default()
             };
-            let layout = tile_quad_mesh().get_mesh_vertex_buffer_layout(
-                &mut bevy::mesh::MeshVertexBufferLayouts::default(),
-            );
+            let layout = tile_quad_mesh()
+                .get_mesh_vertex_buffer_layout(&mut bevy::mesh::MeshVertexBufferLayouts::default());
             UiQuadMaterial::specialize(
                 &mut descriptor,
                 &layout,

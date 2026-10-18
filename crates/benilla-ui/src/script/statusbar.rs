@@ -7,9 +7,7 @@
 use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
-use super::region::{
-    install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg,
-};
+use super::region::{install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg};
 use super::{event, Model};
 use crate::order::DrawLayer;
 use crate::widget::{KindState, RegionHandle, StatusBarState};

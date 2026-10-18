@@ -572,11 +572,16 @@ fn only_a_file_that_loads_clears_the_desaturation() {
     .unwrap();
     let grey = |s: &UiScript| {
         let read = s.eval::<bool>("return icon:IsDesaturated() == 1").unwrap();
-        assert_eq!(read, desaturated(s, "ClrIcon"), "IsDesaturated reads the flag");
+        assert_eq!(
+            read,
+            desaturated(s, "ClrIcon"),
+            "IsDesaturated reads the flag"
+        );
         read
     };
     assert!(
-        s.eval::<bool>("return icon:IsDesaturated() == nil").unwrap(),
+        s.eval::<bool>("return icon:IsDesaturated() == nil")
+            .unwrap(),
         "a fresh texture answers nil"
     );
     s.run("icon:SetDesaturated(1)").unwrap();
@@ -596,9 +601,15 @@ fn only_a_file_that_loads_clears_the_desaturation() {
         "and keeps the art"
     );
 
-    for clear in ["icon:SetTexture(nil)", "icon:SetTexture('')", "icon:SetTexture(true)"] {
-        s.run(&format!("icon:SetTexture('Interface\\\\Art') icon:SetDesaturated(1) {clear}"))
-            .unwrap();
+    for clear in [
+        "icon:SetTexture(nil)",
+        "icon:SetTexture('')",
+        "icon:SetTexture(true)",
+    ] {
+        s.run(&format!(
+            "icon:SetTexture('Interface\\\\Art') icon:SetDesaturated(1) {clear}"
+        ))
+        .unwrap();
         assert!(grey(&s), "{clear}: a null name skips the write");
     }
 
@@ -608,7 +619,8 @@ fn only_a_file_that_loads_clears_the_desaturation() {
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Fire_Fireball")"#)
         .unwrap();
     assert!(!grey(&s), "a file that loads clears it");
-    s.run("icon:SetDesaturated(1) icon:SetDesaturated(nil)").unwrap();
+    s.run("icon:SetDesaturated(1) icon:SetDesaturated(nil)")
+        .unwrap();
     assert!(!grey(&s), "SetDesaturated(nil) clears it");
 }
 

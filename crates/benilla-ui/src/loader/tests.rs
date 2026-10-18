@@ -2672,17 +2672,18 @@ mod layer_blend_tests {
         .unwrap();
         let report = load(&s, &doc, &no_files);
         assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
-        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+        assert!(
+            report.warnings.is_empty(),
+            "warnings: {:?}",
+            report.warnings
+        );
         let modes: (String, String, String) = s
             .eval(
                 "return ModeBogus:GetBlendMode(), ModeEmpty:GetBlendMode(), \
                  ModeMod:GetBlendMode()",
             )
             .unwrap();
-        assert_eq!(
-            modes,
-            ("BLEND".into(), "BLEND".into(), "MOD".into())
-        );
+        assert_eq!(modes, ("BLEND".into(), "BLEND".into(), "MOD".into()));
     }
 }
 

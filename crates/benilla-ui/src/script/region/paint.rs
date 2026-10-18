@@ -358,24 +358,23 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, args): (Table, mlua::Variadic<Value>)| {
             let rest: Vec<f32> = args.iter().map(|v| tonumber_f32(lua, v)).collect();
             let rh = region_handle_of(lua, &this)?;
-            let coords = match rest.len() {
-                4 => TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]]),
-                // The arguments come UL, LL, UR, LR; `TexCoords::Corners` stores TL, TR, BR, BL.
-                8 => TexCoords::Corners([
-                    [rest[0], rest[1]], // UL → TL
-                    [rest[4], rest[5]], // UR → TR
-                    [rest[6], rest[7]], // LR → BR
-                    [rest[2], rest[3]], // LL → BL
-                ]),
-                _ => {
-                    return Err(usage(
+            let coords =
+                match rest.len() {
+                    4 => TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]]),
+                    // The arguments come UL, LL, UR, LR; `TexCoords::Corners` stores TL, TR, BR, BL.
+                    8 => TexCoords::Corners([
+                        [rest[0], rest[1]], // UL → TL
+                        [rest[4], rest[5]], // UR → TR
+                        [rest[6], rest[7]], // LR → BR
+                        [rest[2], rest[3]], // LL → BL
+                    ]),
+                    _ => return Err(usage(
                         lua,
                         &this,
                         "SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, LLy, \
                          URx, URy, LRx, LRy)",
-                    ))
-                }
-            };
+                    )),
+                };
             lua.app_data_mut::<Model>()
                 .expect("model")
                 .region_data

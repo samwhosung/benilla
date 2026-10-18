@@ -10,9 +10,7 @@ use mlua::{Lua, Table, Value};
 
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
-use super::region::{
-    install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg,
-};
+use super::region::{install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg};
 use super::{event, Model};
 use crate::layout::Rect;
 use crate::order::DrawLayer;
