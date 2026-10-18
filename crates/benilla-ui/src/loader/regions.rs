@@ -3,7 +3,7 @@ use mlua::{ObjectLike, Table};
 use crate::framexml::{self, Element};
 use crate::status;
 
-use super::{abs_value, children_named, color_of, tex_coords_of, Loader};
+use super::{abs_value, children_named, color_of, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
@@ -91,43 +91,34 @@ impl Loader<'_> {
                     return None;
                 }
             };
-        if region.attr_bool("hidden") {
-            if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
-                self.report.fault(format!("{dbg}: region Hide: {e}"));
+        if is_texture {
+            for node in &levels {
+                self.load_texture_level(node, &region_wrapper, parent_name, dbg);
             }
-        }
-        if let Some(a) = region
-            .attr("alpha")
-            .and_then(|v| v.trim().parse::<f32>().ok())
-        {
-            self.call_region(&region_wrapper, "SetAlpha", a, dbg);
-        }
-        self.apply_region_layout(
-            region,
-            &levels,
-            &region_wrapper,
-            parent_name,
-            dbg,
-            FontAttrs::Own,
-        );
-        if !is_texture {
+        } else {
+            if region.attr_bool("hidden") {
+                if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
+                    self.report.fault(format!("{dbg}: region Hide: {e}"));
+                }
+            }
+            if let Some(a) = region
+                .attr("alpha")
+                .and_then(|v| v.trim().parse::<f32>().ok())
+            {
+                self.call_region(&region_wrapper, "SetAlpha", a, dbg);
+            }
+            self.apply_region_layout(
+                region,
+                &levels,
+                &region_wrapper,
+                parent_name,
+                dbg,
+                FontAttrs::Own,
+            );
             // Before the visual pass, so an explicit `<Color>` beats the font object's.
             self.apply_fontstring_font(region, &region_wrapper, dbg);
+            self.apply_region_visual(region, &region_wrapper, dbg);
         }
-        // Each level loads its own file with the wrap flag of its own `<TexCoords>` (the flag is a
-        // local of the level's load, zeroed before its children, `0x76fec6`), the template first.
-        let loads: Vec<(String, bool)> = if is_texture {
-            levels
-                .iter()
-                .filter_map(|level| {
-                    let file = level.attr("file").filter(|f| !f.is_empty())?;
-                    Some((file.to_string(), super::tex_coords_wrap(level)))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        self.apply_region_visual(region, &region_wrapper, is_texture, &loads, dbg);
         if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
             self.report.fault(format!("{dbg}: implicit anchor: {e}"));
         }
@@ -196,7 +187,7 @@ impl Loader<'_> {
                 FontAttrs::Own,
             );
             self.apply_fontstring_font(region, &region_wrapper, dbg);
-            self.apply_region_visual(region, &region_wrapper, false, &[], dbg);
+            self.apply_region_visual(region, &region_wrapper, dbg);
             // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
             if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
                 self.report.fault(format!("{dbg}: implicit anchor: {e}"));
@@ -278,97 +269,122 @@ impl Loader<'_> {
         }
     }
 
+    /// A FontString's text, wrap attributes and `<Color>`.
     pub(super) fn apply_region_visual(
         &mut self,
         region: &Element,
         region_wrapper: &Table,
-        is_texture: bool,
-        file_loads: &[(String, bool)],
         dbg: &str,
     ) {
         let color = children_named(region, "Color").next().map(color_of);
-        if is_texture {
-            if !file_loads.is_empty() {
-                // A `<Color>` beside `file=` is discarded, not a tint: `0x76fe20` applies it in its
-                // child loop, then the file, read after (`0x770102`), overwrites the same slot.
-                // Each `inherits` level loads its own file with the wrap flag of its own
-                // `<TexCoords>`, fixed here: a later `SetTexCoord` leaves it, and `SetTexture`
-                // loads with it off (`0x77012d`).
-                for (file, wrap) in file_loads {
-                    if let Err(e) =
-                        crate::script::load_texture_file(self.lua, region_wrapper, file, *wrap)
-                    {
-                        self.report.fault(format!("{dbg}: region SetTexture: {e}"));
-                    }
-                }
-            } else if let Some(c) = color {
-                // No file: a solid fill, an 8×8 texture in the reference, so its alpha multiplies
-                // with `SetVertexColor` rather than being replaced by it.
-                self.call_region(region_wrapper, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
-            }
-            // `<Gradient>` writes the vertex colours (`+0xb8`, `0x7700f2` → `0x77f910`), which
-            // `file=` leaves alone, so unlike `<Color>` it tints the art. `0x6f2630` stages both
-            // stops as 0 (`0x7700d8`), so a missing one is transparent black, and reads a missing
-            // orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported.
-            if let Some(g) = children_named(region, "Gradient").next() {
-                let stop = |tag: &str| children_named(g, tag).next().map_or([0.0; 4], color_of);
-                let (min, max) = (stop("MinColor"), stop("MaxColor"));
-                let token = g.attr("orientation").unwrap_or_default();
-                let vertical = match crate::script::region::orientation(token) {
-                    Some(v) => v,
-                    None if token.is_empty() => false,
-                    None => {
-                        let line = format!("Unknown orientation {token} in element {}", g.tag);
-                        self.report.status.report(status::WARNING, line.clone());
-                        self.report.warnings.push(line);
-                        false
-                    }
-                };
-                self.call_region(
-                    region_wrapper,
-                    "SetGradientAlpha",
-                    (
-                        if vertical { "VERTICAL" } else { "HORIZONTAL" },
-                        min[0],
-                        min[1],
-                        min[2],
-                        min[3],
-                        max[0],
-                        max[1],
-                        max[2],
-                        max[3],
-                    ),
-                    dbg,
-                );
-            }
-            if let Some(tc) = tex_coords_of(region) {
-                self.call_region(region_wrapper, "SetTexCoord", tc, dbg);
-            }
-            if let Some(mode) = region.attr("alphaMode") {
-                self.call_region(region_wrapper, "SetBlendMode", mode.to_string(), dbg);
-            }
-        } else {
-            if let Some(text) = region.attr("text") {
-                // A global-string key, not a literal (`0x703bf0`).
-                let text = self.resolve_text(text, dbg);
-                // The string's own `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on
-                // a string with no font (`0x79d7e5`); `LoadXML` sets the text before the font.
-                if let Err(e) =
-                    crate::script::region::store_text_of(self.lua, region_wrapper, Some(text))
-                {
-                    self.report.fault(format!("{dbg}: region SetText: {e}"));
-                }
-            }
-            self.apply_wrap_attrs(region, region_wrapper, dbg);
-            if let Some(c) = color {
-                self.call_region(
-                    region_wrapper,
-                    "SetVertexColor",
-                    (c[0], c[1], c[2], c[3]),
-                    dbg,
-                );
+        if let Some(text) = region.attr("text") {
+            // A global-string key, not a literal (`0x703bf0`).
+            let text = self.resolve_text(text, dbg);
+            // The string's own `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on
+            // a string with no font (`0x79d7e5`); `LoadXML` sets the text before the font.
+            if let Err(e) =
+                crate::script::region::store_text_of(self.lua, region_wrapper, Some(text))
+            {
+                self.report.fault(format!("{dbg}: region SetText: {e}"));
             }
         }
+        self.apply_wrap_attrs(region, region_wrapper, dbg);
+        if let Some(c) = color {
+            self.call_region(
+                region_wrapper,
+                "SetVertexColor",
+                (c[0], c[1], c[2], c[3]),
+                dbg,
+            );
+        }
+    }
+
+    /// One level of a `<Texture>`'s `LoadXML` (`0x76fe20`), after its `inherits` level: the
+    /// geometry, `hidden`, each child in order, then `file=` and `alphaMode`. A `<TexCoords>` sets
+    /// all eight coordinates from its own edges over 0, 1, 0, 1, so the last one applied wins whole
+    /// (`0x76fef5`, `0x76ffe8`), and any edge outside [0, 1] sets the level's wrap flag, which the
+    /// file load takes (`0x770071`, `0x77012d`); a later `SetTexCoord` leaves it, and `SetTexture`
+    /// loads with it off. A `<Color>` is a solid fill (`0x770360`), an 8×8 texture in the
+    /// reference, so its alpha multiplies with `SetVertexColor` rather than being replaced by it;
+    /// the level's `file=`, read after its children (`0x770102`), overwrites the same slot.
+    fn load_texture_level(
+        &mut self,
+        node: &Element,
+        wrapper: &Table,
+        parent_name: &str,
+        dbg: &str,
+    ) {
+        self.apply_geometry(node, wrapper, true, parent_name, dbg);
+        match node.attr_bool_opt("hidden") {
+            Some(true) => self.call_region(wrapper, "Hide", (), dbg),
+            Some(false) => self.call_region(wrapper, "Show", (), dbg),
+            None => {}
+        }
+        if let Some(a) = node
+            .attr("alpha")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            self.call_region(wrapper, "SetAlpha", a, dbg);
+        }
+        let mut wrap = false;
+        for child in &node.children {
+            if child.tag.eq_ignore_ascii_case("TexCoords") {
+                let (l, r, t, b) = super::tex_coords(child);
+                // Not `contains`: a NaN edge is in range here.
+                #[allow(clippy::manual_range_contains)]
+                let out_of_range = |edge: f32| edge < 0.0 || edge > 1.0;
+                wrap |= [l, r, t, b].into_iter().any(out_of_range);
+                self.call_region(wrapper, "SetTexCoord", (l, r, t, b), dbg);
+            } else if child.tag.eq_ignore_ascii_case("Color") {
+                let c = color_of(child);
+                self.call_region(wrapper, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
+            } else if child.tag.eq_ignore_ascii_case("Gradient") {
+                self.apply_gradient(child, wrapper, dbg);
+            }
+        }
+        if let Some(file) = node.attr("file").filter(|f| !f.is_empty()) {
+            if let Err(e) = crate::script::load_texture_file(self.lua, wrapper, file, wrap) {
+                self.report.fault(format!("{dbg}: region SetTexture: {e}"));
+            }
+        }
+        if let Some(mode) = node.attr("alphaMode") {
+            self.call_region(wrapper, "SetBlendMode", mode.to_string(), dbg);
+        }
+    }
+
+    /// A texture's `<Gradient>`: it writes the vertex colours (`+0xb8`, `0x7700f2` → `0x77f910`),
+    /// which `file=` leaves alone, so unlike `<Color>` it tints the art. `0x6f2630` stages both
+    /// stops as 0 (`0x7700d8`), so a missing one is transparent black, and reads a missing
+    /// orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported.
+    fn apply_gradient(&mut self, g: &Element, wrapper: &Table, dbg: &str) {
+        let stop = |tag: &str| children_named(g, tag).next().map_or([0.0; 4], color_of);
+        let (min, max) = (stop("MinColor"), stop("MaxColor"));
+        let token = g.attr("orientation").unwrap_or_default();
+        let vertical = match crate::script::region::orientation(token) {
+            Some(v) => v,
+            None if token.is_empty() => false,
+            None => {
+                let line = format!("Unknown orientation {token} in element {}", g.tag);
+                self.status_warning(line);
+                false
+            }
+        };
+        self.call_region(
+            wrapper,
+            "SetGradientAlpha",
+            (
+                if vertical { "VERTICAL" } else { "HORIZONTAL" },
+                min[0],
+                min[1],
+                min[2],
+                min[3],
+                max[0],
+                max[1],
+                max[2],
+                max[3],
+            ),
+            dbg,
+        );
     }
 
     /// The font object a FontString's `inherits=` names, directly or through virtual FontString

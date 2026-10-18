@@ -169,3 +169,43 @@ fn a_status_bar_reads_its_range_and_orientation_per_level() {
         "Frame Diagonal: Unknown orientation DIAGONAL in element StatusBar"
     ));
 }
+
+/// `0x76fe20`: every `<TexCoords>` child applies in order, each over 0, 1, 0, 1 with its edges read
+/// by `atof`, and the instance's level comes after its template's, so the last one wins whole.
+#[test]
+fn every_tex_coords_applies_in_order_over_the_default_edges() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Texture name="CropTemplate" file="Interface\A" virtual="true">
+                <TexCoords left="0" right="0.578125" top="0" bottom="0.75"/>
+            </Texture>
+            <Frame name="Host">
+                <Layers><Layer>
+                    <Texture name="Partial" file="Interface\A"><TexCoords left="0.5"/></Texture>
+                    <Texture name="Twice" file="Interface\A">
+                        <TexCoords left="0.1" right="0.2" top="0.3" bottom="0.4"/>
+                        <TexCoords left="0.5"/>
+                    </Texture>
+                    <Texture name="Trailing" file="Interface\A">
+                        <TexCoords left="0.25x" right="0.75" top="" bottom="1"/>
+                    </Texture>
+                    <Texture name="Cropped" inherits="CropTemplate">
+                        <TexCoords left="0.025" right="0.535" top="0" bottom="0.75"/>
+                    </Texture>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    let coords = |name: &str| {
+        s.eval::<Vec<f32>>(&format!("return {{{name}:GetTexCoord()}}"))
+            .unwrap()
+    };
+    // UL, LL, UR, LR: (l, t), (l, b), (r, t), (r, b).
+    let rect = |l: f32, r: f32, t: f32, b: f32| vec![l, t, l, b, r, t, r, b];
+    assert_eq!(coords("Partial"), rect(0.5, 1.0, 0.0, 1.0));
+    assert_eq!(coords("Twice"), rect(0.5, 1.0, 0.0, 1.0), "the second, whole");
+    assert_eq!(coords("Trailing"), rect(0.25, 0.75, 0.0, 1.0));
+    assert_eq!(coords("Cropped"), rect(0.025, 0.535, 0.0, 0.75), "the instance's crop");
+}

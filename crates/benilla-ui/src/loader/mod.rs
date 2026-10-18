@@ -923,32 +923,20 @@ pub(super) fn color_of(el: &Element) -> [f32; 4] {
     [c("r", 0.0), c("g", 0.0), c("b", 0.0), c("a", 1.0)]
 }
 
-/// A `<TexCoords>` child's UV rect `(l, r, t, b)`; one missing an edge is ignored (full UVs).
-pub(super) fn tex_coords_of(el: &Element) -> Option<(f32, f32, f32, f32)> {
-    let tc = children_named(el, "TexCoords").next()?;
-    let edge = |k: &str| tc.attr(k).and_then(|v| v.trim().parse::<f32>().ok());
-    Some((edge("left")?, edge("right")?, edge("top")?, edge("bottom")?))
-}
-
-/// Whether an XML `<Texture>` loads its file with the wrap flag on: some `<TexCoords>` child has
-/// an edge below 0 or above 1 (`0x76fff0`-`0x77006b` set the flag at `0x770071`, which `0x77012d`
-/// passes to `0x770200`). An edge left out or empty keeps its default 0, 1, 0, 1 (`0x76fef5`),
-/// and a NaN fails both tests.
-pub(super) fn tex_coords_wrap(el: &Element) -> bool {
-    children_named(el, "TexCoords").any(|tc| {
-        [("left", 0.0), ("right", 1.0), ("top", 0.0), ("bottom", 1.0)]
-            .into_iter()
-            .any(|(k, default)| {
-                // Not `contains`: a NaN edge is in range here.
-                #[allow(clippy::manual_range_contains)]
-                let out_of_range = |edge: f32| edge < 0.0 || edge > 1.0;
-                let edge = tc
-                    .attr(k)
-                    .filter(|v| !v.is_empty())
-                    .map_or(default, crate::framexml::atof);
-                out_of_range(edge)
-            })
-    })
+/// A `<TexCoords>` element's edges `(l, r, t, b)`: each starts at 0, 1, 0, 1 and is read with
+/// `atof` only when present and non-empty (`0x76fef5`-`0x76ff70`).
+pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
+    let edge = |k: &str, default: f32| {
+        tc.attr(k)
+            .filter(|v| !v.is_empty())
+            .map_or(default, crate::framexml::atof)
+    };
+    (
+        edge("left", 0.0),
+        edge("right", 1.0),
+        edge("top", 0.0),
+        edge("bottom", 1.0),
+    )
 }
 
 /// A `<FontHeight>`-style scalar: its `<AbsValue val=>` child, else its own `val=`.
