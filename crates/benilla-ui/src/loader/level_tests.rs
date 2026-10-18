@@ -1703,6 +1703,7 @@ fn a_text_frames_fontstring_child_loads_into_its_own_font() {
 #[test]
 fn a_simplehtml_font_child_loads_as_a_font_element() {
     let s = ui();
+    crate::test_support::install_law43(&s);
     let report = load_str(
         &s,
         r#"<Ui>
@@ -1747,7 +1748,7 @@ fn a_simplehtml_font_child_loads_as_a_font_element() {
     for elem in ["P", "H1", "H2", "H3"] {
         assert!(
             truthy(&format!(
-                "local p, h = HtmlLinked:GetFont('{elem}'); return p == 'Fonts\\\\MORPHEUS.TTF' and h == 9"
+                "local p, h = HtmlLinked:GetFont('{elem}'); return p == 'Fonts\\\\MORPHEUS.TTF' and h == law(9)"
             )),
             "{elem} follows"
         );
@@ -1863,6 +1864,8 @@ fn a_padded_frame_strata_attribute_misses() {
         "{:?}",
         report.warnings
     );
+}
+
 /// A `<Rel…>` child's numbers are layout units, stored as parsed (`0x6f2037`-`0x6f2060`), so each
 /// getter answers `G` of them: at 16:9, 0.1 reads 156.651185208989, where the number scaled to
 /// FrameXML units and stored by `S` would read 156.6511677018557.
