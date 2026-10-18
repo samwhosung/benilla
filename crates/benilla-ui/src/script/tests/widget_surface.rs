@@ -102,12 +102,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "the RGB pair is published; nothing measured asks for HSV",
     ),
     ("SetColorHSV", "ColorSelect", "the same"),
-    // ── One texture read-back ──
-    (
-        "IsDesaturated",
-        "Texture",
-        "`SetDesaturated` is here and not readable back; no caller measured",
-    ),
 ];
 
 /// Methods answered here that 1.12 does not register on that class, each with why it stays.

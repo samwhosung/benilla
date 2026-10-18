@@ -164,10 +164,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         // The path form reads one argument (`0x770200`), the colour form (`0x770360`) up to four,
         // and extras such as `SetTexture(path, true)` are ignored: the wrap flag is 0 always
         // (`0x79bda5`). It answers 1, or nil when the path form's file does not load, as the
-        // host's `Model::texture_probe` judges; with no probe the path form answers nil.
+        // host's `Model::texture_probe` judges ([`set_texture`]).
         lua.create_function(
             |lua, (this, arg, g, b, a): (Table, Value, Value, Value, Value)| {
-                set_texture(lua, this, arg, g, b, a, false)
+                set_texture(lua, this, arg, g, b, a)
             },
         )?,
     )?;
@@ -190,6 +190,20 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             model.region_data.entry(rh).or_default().desaturated = on;
             // 1, not true: the reference pushes the number 1 (`0x6f3810`).
             Ok(Value::Number(1.0))
+        })?,
+    )?;
+
+    // IsDesaturated (`0x79c2c0`), Texture only: 1 when the shader slot (`+0x128`) holds the
+    // desaturate shader (`0x770620(1)`, `0x79c354`), else nil. `SetDesaturated` answers the shader
+    // supported, so this is the stored flag, which a file that loads clears ([`load_texture_name`]).
+    m.set(
+        "IsDesaturated",
+        lua.create_function(|lua, this: Table| {
+            let rh = region_handle_of(lua, &this)?;
+            let model = lua.app_data_ref::<Model>().expect("model");
+            Ok(crate::script::binding_abi::flag(
+                model.region_data.get(&rh).is_some_and(|d| d.desaturated),
+            ))
         })?,
     )?;
 
@@ -454,154 +468,126 @@ impl crate::script::UiScript {
     }
 }
 
-/// What an XML `file=` load came to ([`load_texture_file`]).
+/// What `CSimpleTexture::SetTexture(name)` (`0x770200`) came to ([`load_texture_name`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileLoad {
-    /// The host's texture probe found the file.
+    /// It returned 1: the file it already shows, an empty name, or a file the probe found.
     Loaded,
-    /// The probe did not: `0x770200` returned 0 and the texture kept what it had (`0x7702ac`).
+    /// It returned 0: the probe did not find the file, and the texture kept what it had.
     Failed,
     /// No probe is installed (a test harness): the path is stored, with no verdict.
     Unprobed,
 }
 
-/// The XML `<Texture file=>` load of a region (`0x76fe20` → `0x770200`): the path form of
-/// [`set_texture`] with the wrap flag the element's `<TexCoords>` decide.
+/// `CSimpleTexture::SetTexture(name)` (`0x770200`) on region `rh`, the one load behind
+/// `SetTexture`'s path form, the XML `file=` and every widget's path leg. The file the texture
+/// already shows answers 1 untouched (`0x770225`). An empty name, which is how a null one arrives
+/// here, drops the image and answers 1 (`0x770235` → `0x7702cb`). A name the install lacks answers
+/// 0 and keeps the image and the shader slot (`0x7702ac`). A file that loads writes shader 0 to the
+/// slot (`0x7702c0`), so it clears any desaturation, and then the image. Each of these paths
+/// passes shader index 0 (`0x79bd89`, `0x783165`, `0x7897e5`, `0x78b7d5`, `0x778f3a`).
+pub(crate) fn load_texture_name(
+    model: &mut Model,
+    rh: crate::widget::RegionHandle,
+    name: &str,
+    wrap: bool,
+) -> FileLoad {
+    let verdict = {
+        let Model {
+            region_data,
+            texels,
+            texture_probe,
+            ..
+        } = &mut *model;
+        let data = region_data.entry(rh).or_default();
+        if !name.is_empty() && texels.holds_file(&data.tex, name) {
+            return FileLoad::Loaded;
+        }
+        if name.is_empty() {
+            FileLoad::Loaded
+        } else {
+            let verdict = match texture_probe {
+                None => FileLoad::Unprobed,
+                Some(probe) if probe(name) => FileLoad::Loaded,
+                Some(_) => return FileLoad::Failed,
+            };
+            data.desaturated = false;
+            verdict
+        }
+    };
+    let set = if name.is_empty() {
+        TexSet::None
+    } else if wrap {
+        TexSet::WrapFile(name.to_string())
+    } else {
+        TexSet::File(name.to_string())
+    };
+    model.set_texel(rh, set);
+    model.note_art(rh);
+    verdict
+}
+
+/// The XML `<Texture file=>` load of a region (`0x76fe20` → `0x770200`), with the wrap flag the
+/// element's `<TexCoords>` decide.
 pub(crate) fn load_texture_file(
     lua: &Lua,
     this: &Table,
     file: &str,
     wrap: bool,
 ) -> mlua::Result<FileLoad> {
-    let probed = lua
-        .app_data_ref::<Model>()
-        .expect("model")
-        .texture_probe
-        .is_some();
-    let path = Value::String(lua.create_string(file)?);
-    let answer = set_texture(
-        lua,
-        this.clone(),
-        path,
-        Value::Nil,
-        Value::Nil,
-        Value::Nil,
-        wrap,
-    )?;
-    Ok(match (probed, answer) {
-        (false, _) => FileLoad::Unprobed,
-        (true, Value::Nil) => FileLoad::Failed,
-        (true, _) => FileLoad::Loaded,
-    })
+    let rh = region_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    Ok(load_texture_name(&mut model, rh, file, wrap))
 }
 
-/// `Texture:SetTexture` (`0x79bb40`) and the XML `<Texture file=>` load (`0x76fe20`), the two
-/// callers of `0x770200` that differ in its wrap argument: the binding passes 0 (`0x79bda5`), the
-/// loader passes 1 only when the element's `<TexCoords>` leave [0, 1] (`0x77012d`).
-pub(crate) fn set_texture(
+/// `Texture:SetTexture` (`0x79bb40`). `lua_isnumber` (`0x79bbd5`, so a numeric string too) picks
+/// the colour form (`0x770360`); anything else is a name for `0x770200` with the wrap flag 0
+/// (`0x79bda5`): a string as it is, and every other value, nil and no argument included, as a null
+/// name (`0x79bdc8`), which clears. It answers 1 unless the load returns 0 (`0x79bdac` →
+/// `0x79bddc`); with no probe installed the path form answers nil.
+fn set_texture(
     lua: &Lua,
     this: Table,
     arg: Value,
     g: Value,
     b: Value,
     a: Value,
-    wrap: bool,
 ) -> mlua::Result<Value> {
     let rh = region_handle_of(lua, &this)?;
-    // `lua_isnumber` (`0x79bbd5`) picks the colour form, a numeric string included.
     let colour_form = lua.coerce_number(arg.clone()).ok().flatten().is_some();
-    // Scoped so the model borrow ends before the layout touch; the path arm drops it
-    // mid-way to call the host probe.
     let loaded = {
         let mut model = lua.app_data_mut::<Model>().expect("model");
-        {
-            let Model {
-                region_data,
-                texels,
-                ..
-            } = &mut *model;
-            // SetTexture drops any portrait mask and live-unit binding.
-            let data = region_data.entry(rh).or_default();
-            data.circular = false;
-            data.portrait_unit = None;
-            // SetTexture clears the desaturation: `0x770200` writes the shader slot
-            // (`+0x128`) from an argument the binding (`0x79bb40`) always passes NULL. The
-            // same file returns first (`0x770225`) and keeps it, nil or "" clear it, and
-            // the colour form (`0x770360`) never writes it.
-            let same_file = matches!(&arg, Value::String(s)
-                    if s.to_str().is_ok_and(|s| texels.holds_file(&data.tex, &s)));
-            if !same_file && !colour_form {
-                data.desaturated = false;
-            }
+        // SetTexture drops any portrait mask and live-unit binding.
+        let data = model.region_data.entry(rh).or_default();
+        data.circular = false;
+        data.portrait_unit = None;
+        if colour_form {
+            // g and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with default 1.
+            // The solid writes the one texture slot (`+0xcc`), so it clears a file; neither form
+            // touches the vertex colour (`+0xb8`) or the shader slot, so a tint and a grey outlive
+            // the art.
+            let alpha = lua
+                .coerce_number(a.clone())
+                .ok()
+                .flatten()
+                .map_or(1.0, |n| n as f32);
+            let fill = [
+                tonumber_f32(lua, &arg),
+                tonumber_f32(lua, &g),
+                tonumber_f32(lua, &b),
+                alpha,
+            ];
+            model.set_texel(rh, TexSet::Fill(fill));
+            model.note_art(rh);
+            true
+        } else {
+            let name = match &arg {
+                Value::String(s) => s.to_str()?.to_string(),
+                _ => String::new(),
+            };
+            load_texture_name(&mut model, rh, &name, false) == FileLoad::Loaded
         }
-        // Both forms write the one texture slot (`+0xcc`), a file or an 8×8 solid, so
-        // each clears the other; neither touches the vertex colour (`+0xb8`), so a
-        // tint outlives its art.
-        let (set, loaded) = match &arg {
-            // The colour form (`lua_isnumber`, `0x79bbd5`, so a numeric string too): g
-            // and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with
-            // default 1.
-            _ if colour_form => {
-                let alpha = lua
-                    .coerce_number(a.clone())
-                    .ok()
-                    .flatten()
-                    .map_or(1.0, |n| n as f32);
-                let fill = [
-                    tonumber_f32(lua, &arg),
-                    tonumber_f32(lua, &g),
-                    tonumber_f32(lua, &b),
-                    alpha,
-                ];
-                (Some(TexSet::Fill(fill)), true)
-            }
-            // "" clears, as nil does (stock `QuestLogFrame.lua:166`), and answers nil
-            // like a failed load; the reference's answer for "" is untraced.
-            Value::String(s) if s.to_str()?.is_empty() => (Some(TexSet::None), false),
-            // Ask the probe before writing: on a failed load the reference returns 0
-            // and keeps the texture it had (`0x770288`, `0x77028e`-`0x7702b2`). With
-            // no probe the path is stored, though the answer is nil.
-            Value::String(s) => {
-                let path = s.to_str()?.to_string();
-                drop(model);
-                let resolvable = {
-                    let model = lua.app_data_ref::<Model>().expect("model");
-                    model
-                        .texture_probe
-                        .as_ref()
-                        .is_none_or(|probe| probe(&path))
-                };
-                model = lua.app_data_mut::<Model>().expect("model");
-                let had_probe = model.texture_probe.is_some();
-                if resolvable {
-                    // Resolvable already: the probe need not run again.
-                    let Model {
-                        region_data,
-                        texels,
-                        ..
-                    } = &mut *model;
-                    let data = region_data.entry(rh).or_default();
-                    let set = if wrap {
-                        TexSet::WrapFile(path)
-                    } else {
-                        TexSet::File(path)
-                    };
-                    texels.set(&mut data.tex, set, |_| false);
-                }
-                (None, resolvable && had_probe)
-            }
-            // nil clears, so the region draws nothing, and answers 1 (`0x79bb40`).
-            Value::Nil => (Some(TexSet::None), true),
-            _ => (None, false),
-        };
-        if let Some(set) = set {
-            model.set_texel(rh, set);
-        }
-        loaded
     };
-    // The draw only (`0x77fdf0`); an art-sized texture now holds a state its next
-    // reaching resolve need not give back.
-    lua.app_data_mut::<Model>().expect("model").note_art(rh);
     Ok(if loaded {
         Value::Number(1.0)
     } else {

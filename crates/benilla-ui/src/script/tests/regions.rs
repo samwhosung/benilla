@@ -544,8 +544,8 @@ fn desaturation_rides_the_extract_for_art_and_never_for_a_solid() {
     assert!(!grey(&s, true), "clearing the flag restores full colour");
 }
 
-/// A Texture region's desaturation state, read off the model by name: `IsDesaturated`
-/// (`0x79c2c0`) is not built, and a cleared texture emits no quad to read it from.
+/// A Texture region's desaturation state, read off the model by name: a cleared texture emits no
+/// quad to read it from.
 fn desaturated(s: &UiScript, name: &str) -> bool {
     let lua = s.lua();
     let model = lua.app_data_ref::<crate::script::Model>().expect("model");
@@ -554,40 +554,84 @@ fn desaturated(s: &UiScript, name: &str) -> bool {
     model.region_data.get(&h).is_some_and(|d| d.desaturated)
 }
 
-/// The desaturation is the shader slot `+0x128`, which `CSimpleTexture::SetTexture` rewrites with
-/// the binding's always-NULL slot 0, except that the same path returns early (`0x770225`).
+/// The desaturation is the shader slot `+0x128`, which `0x770200` writes only for a file that
+/// loads (`0x7702c0`): the file the texture shows returns first (`0x770225`), a null or empty name
+/// skips the write (`0x77022f`, `0x770238`), a failed load returns before it (`0x7702ac`), and the
+/// colour form (`0x770360`) never writes it. `IsDesaturated` (`0x79c2c0`) reads it back.
 #[test]
-fn set_texture_clears_desaturation_unless_the_path_is_unchanged() {
-    let s = script();
+fn only_a_file_that_loads_clears_the_desaturation() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|path: &str| !path.contains("Missing")));
     s.run(
         r#"
         local f = CreateFrame("Frame", "ClrOwner")
         icon = f:CreateTexture("ClrIcon", "ARTWORK")
         icon:SetTexture("Interface\\Icons\\Spell_Nature_Sleep")
-        icon:SetDesaturated(1)
     "#,
     )
     .unwrap();
-    let grey = |s: &UiScript| desaturated(s, "ClrIcon");
+    let grey = |s: &UiScript| {
+        let read = s.eval::<bool>("return icon:IsDesaturated() == 1").unwrap();
+        assert_eq!(read, desaturated(s, "ClrIcon"), "IsDesaturated reads the flag");
+        read
+    };
+    assert!(
+        s.eval::<bool>("return icon:IsDesaturated() == nil").unwrap(),
+        "a fresh texture answers nil"
+    );
+    s.run("icon:SetDesaturated(1)").unwrap();
+    assert!(grey(&s));
 
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Nature_Sleep")"#)
         .unwrap();
-    assert!(grey(&s), "re-setting the SAME art keeps the grey");
+    assert!(grey(&s), "the same art returns before the write");
+
+    assert!(s
+        .eval::<bool>(r#"return icon:SetTexture("Interface\\Missing") == nil"#)
+        .unwrap());
+    assert!(grey(&s), "a failed load returns before the write");
+    assert_eq!(
+        s.eval::<String>("return icon:GetTexture()").unwrap(),
+        "Interface\\Icons\\Spell_Nature_Sleep",
+        "and keeps the art"
+    );
+
+    for clear in ["icon:SetTexture(nil)", "icon:SetTexture('')", "icon:SetTexture(true)"] {
+        s.run(&format!("icon:SetTexture('Interface\\\\Art') icon:SetDesaturated(1) {clear}"))
+            .unwrap();
+        assert!(grey(&s), "{clear}: a null name skips the write");
+    }
+
+    s.run("icon:SetTexture(1, 0, 0)").unwrap();
+    assert!(grey(&s), "the colour form does not touch the shader slot");
 
     s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Fire_Fireball")"#)
         .unwrap();
-    assert!(!grey(&s), "a texture CHANGE clears the desaturation");
+    assert!(!grey(&s), "a file that loads clears it");
+    s.run("icon:SetDesaturated(1) icon:SetDesaturated(nil)").unwrap();
+    assert!(!grey(&s), "SetDesaturated(nil) clears it");
+}
 
-    // nil takes the same leg (`test esi,esi` falls through to the write).
-    s.run("icon:SetDesaturated(1) icon:SetTexture(nil)")
+/// Every name but a string goes to `0x770200` as a null one (`0x79bdc8`), and so does `""`
+/// (`0x770235`): the image is dropped and the binding answers 1 (`0x79bdae`).
+#[test]
+fn set_texture_with_an_empty_or_non_string_name_clears_and_answers_one() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|_: &str| true));
+    s.run(r#"f = CreateFrame("Frame") t = f:CreateTexture()"#)
         .unwrap();
-    assert!(!grey(&s), "SetTexture(nil) clears it too");
-
-    // The colour form (`0x770360`) does not write the shader slot.
-    s.run(r#"icon:SetTexture("Interface\\Icons\\Spell_Nature_Sleep") icon:SetDesaturated(1)"#)
-        .unwrap();
-    s.run("icon:SetTexture(1, 0, 0)").unwrap();
-    assert!(grey(&s), "the colour form does not touch the shader slot");
+    for arg in ["''", "true", "{}", "nil", ""] {
+        let answer = s
+            .eval::<Option<f64>>(&format!(
+                r#"t:SetTexture("Interface\\Art") return t:SetTexture({arg})"#
+            ))
+            .unwrap();
+        assert_eq!(answer, Some(1.0), "SetTexture({arg}) answers 1");
+        assert!(
+            s.eval::<bool>("return t:GetTexture() == nil").unwrap(),
+            "SetTexture({arg}) drops the image"
+        );
+    }
 }
 
 /// `SetDesaturated` reads its flag with `0x6f1c10(L, 2, default=1)`: no argument (`LUA_TNONE`)
