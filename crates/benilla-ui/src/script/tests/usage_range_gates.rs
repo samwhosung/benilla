@@ -53,6 +53,9 @@ fn set_text_height_raises_for_a_height_not_above_zero() {
     // Greater, and unordered (NaN), go on.
     s.run("RgFS:SetTextHeight(12) RgFS:SetTextHeight(0.5) RgFS:SetTextHeight(0/0)")
         .unwrap();
+    // The compare is on the double (`0x79e466`): above 0 passes even where the float copy is 0.
+    s.run("RgFS:SetTextHeight(1e-46)").unwrap();
+    assert!(err(&s, "RgFS:SetTextHeight(-1e-46)").contains("invalid text height:"));
 }
 
 /// `SetFrameLevel` (`0x774560`) `_ftol`s the number and raises on a negative one (`jl`,

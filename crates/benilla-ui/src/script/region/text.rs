@@ -237,10 +237,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetTextHeight",
         lua.create_function(|lua, (this, height): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
-            let height =
-                binding_abi::method_number(lua, &this, height, "SetTextHeight(pixelHeight)")?
-                    as f32;
-            if height <= 0.0 {
+            let wide =
+                binding_abi::method_number(lua, &this, height, "SetTextHeight(pixelHeight)")?;
+            // The compare reads the double (`0x79e466` `fst` stores a float copy, `fcomp` tests the
+            // register), so a height too small for a float still passes; the text prints the copy.
+            let height = wide as f32;
+            if wide <= 0.0 {
                 return Err(mlua::Error::runtime(format!(
                     "{}:SetTextHeight(): invalid text height: {}",
                     binding_abi::name_of(lua, &this),
