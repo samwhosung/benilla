@@ -334,7 +334,7 @@ pub(crate) struct CreateScene {
     /// camera object (`+0x31c`), across scene swaps ([`resolve_camera`]).
     held_camera: Option<(InstalledCamera, Option<benilla_assets::PortraitCamera>)>,
     /// The camera's file while it loads, when it is not the standing scene's.
-    camera_src: Option<Handle<M2Model>>,
+    camera_src: Option<(GlueSceneFile, Handle<M2Model>)>,
     /// The stage's scene clock in milliseconds, the reference's per-`ModelFFX` scene clock
     /// (`CSimpleModel+0x314`): it steps in whole milliseconds, only while the pane shows
     /// ([`pace_glue_clock`]).
@@ -1280,12 +1280,9 @@ pub(super) fn sync_glue_scene(
         // The camera's file: the standing scene's, else loaded on its own (resident since the
         // pane's facts landed, so it answers at once).
         let file = GlueSceneFile::new(file);
-        let handle = match &standing {
-            Some((f, h)) if *f == file => h.clone(),
-            _ => camera_src
-                .get_or_insert_with(|| asset_server.load(file.url().to_string()))
-                .clone(),
-        };
+        let handle = camera_source(&file, standing.as_ref(), camera_src, |url| {
+            asset_server.load(url.to_string())
+        });
         let table = m2s
             .get(&handle)
             .map(|m| m.cameras.iter().map(|c| c.still).collect());
@@ -1329,6 +1326,27 @@ pub(super) fn sync_glue_scene(
             GLUE_SLOT,
             &ortho_scene_rig(window_px, rect, preview.root),
         );
+    }
+}
+
+/// The handle a camera's `file` is read from: the standing scene's, else the one `src` holds while
+/// it names the same file, else a new load of `file`, which `src` then holds.
+fn camera_source(
+    file: &GlueSceneFile,
+    standing: Option<&(GlueSceneFile, Handle<M2Model>)>,
+    src: &mut Option<(GlueSceneFile, Handle<M2Model>)>,
+    load: impl FnOnce(&str) -> Handle<M2Model>,
+) -> Handle<M2Model> {
+    if let Some((_, h)) = standing.filter(|(f, _)| f == file) {
+        return h.clone();
+    }
+    match src {
+        Some((f, h)) if f == file => h.clone(),
+        _ => {
+            let h = load(file.url());
+            *src = Some((file.clone(), h.clone()));
+            h
+        }
     }
 }
 
@@ -2467,6 +2485,32 @@ mod tests {
         ortho.update(rect.x, rect.y);
         let clip = ortho.get_clip_from_view() * rig.0.to_matrix().inverse() * p.extend(1.0);
         clip.truncate().truncate() / clip.w
+    }
+
+    /// A camera's file that is not the standing scene's loads on its own, keyed by file: a second
+    /// such file loads anew rather than reading the first's handle.
+    #[test]
+    fn a_camera_file_off_the_stage_loads_by_its_own_name() {
+        let (a, b, stage) = (
+            GlueSceneFile::new("a.mdx"),
+            GlueSceneFile::new("b.mdx"),
+            GlueSceneFile::new("s.mdx"),
+        );
+        let standing = Some((stage.clone(), Handle::<M2Model>::default()));
+        let mut src = None;
+        let mut loads = Vec::new();
+        let mut ask = |f: &GlueSceneFile, src: &mut _| {
+            camera_source(f, standing.as_ref(), src, |url| {
+                loads.push(url.to_string());
+                Handle::default()
+            });
+        };
+        ask(&a, &mut src);
+        ask(&a, &mut src);
+        ask(&b, &mut src);
+        ask(&stage, &mut src);
+        assert_eq!(loads, [a.url().to_string(), b.url().to_string()]);
+        assert_eq!(src.map(|(f, _)| f), Some(b));
     }
 
     /// The booth holds the camera it resolved from the file the pane installed it from: a scene
