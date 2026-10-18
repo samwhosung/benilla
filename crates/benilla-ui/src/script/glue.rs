@@ -107,21 +107,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetScreenWidth",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.width())
+            Ok(model.layout_space().screen_size(None).0)
         })?,
     )?;
     g.set(
         "GetScreenHeight",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.height())
+            Ok(model.layout_space().screen_size(None).1)
         })?,
     )?;
     g.set(
         "GetCursorPosition",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.cursor_pos)
+            Ok(super::pointer::cursor_position(&model))
         })?,
     )?;
     super::glue_core::install(lua)?;

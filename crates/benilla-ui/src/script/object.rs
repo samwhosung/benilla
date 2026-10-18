@@ -416,20 +416,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// state's `GetScreenWidth`/`GetScreenHeight` are other bindings (`0x46dd30`/`0x46dd80`), and it
 /// has no modifier-key or fullscreen-scale verb.
 pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
-    // `GetScreenWidth`/`GetScreenHeight` (`0x48b480`/`0x48b4d0`): the screen root's size divided by
-    // `UIParent`'s scale (`GetUiScale`, `0x494590`), so they answer in `UIParent`'s units.
+    // `GetScreenWidth`/`GetScreenHeight` (`0x48b480`/`0x48b4d0`): the screen root's layout extent
+    // divided by `UIParent`'s scale (`GetUiScale`, `0x494590`) as a float, through the getter steps,
+    // so they answer in `UIParent`'s units ([`crate::layout::LayoutSpace::screen_size`]).
     lua.globals().set(
         "GetScreenWidth",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.width() / super::ui_scale::ui_parent_scale(&model))
+            let u = super::ui_scale::ui_parent_scale(&model);
+            Ok(model.layout_space().screen_size(Some(u)).0)
         })?,
     )?;
     lua.globals().set(
         "GetScreenHeight",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.height() / super::ui_scale::ui_parent_scale(&model))
+            let u = super::ui_scale::ui_parent_scale(&model);
+            Ok(model.layout_space().screen_size(Some(u)).1)
         })?,
     )?;
 
