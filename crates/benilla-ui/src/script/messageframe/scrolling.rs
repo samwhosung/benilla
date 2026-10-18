@@ -157,7 +157,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "Clear",
-        lua.create_function(|lua, this: Table| scroll(lua, &this, ScrollingMessageState::clear))?,
+        // The relayout's `OnMessageScrollChanged` fires before at top and the write position are
+        // reset (`0x7882c9`, then `0x7882ce`, `0x7882d8`).
+        lua.create_function(|lua, this: Table| {
+            scroll(lua, &this, ScrollingMessageState::clear_layout)?;
+            with_smf(lua, &this, ScrollingMessageState::clear_finish)
+        })?,
     )?;
     m.set(
         "ScrollUp",
@@ -1163,6 +1168,15 @@ mod tests {
             "3",
             "a hidden relayout still fires; the show's does not move"
         );
+        // Clear's relayout fires inside it, before the write position goes back to -1.
+        s.run(
+            "SEEN = {} CF:SetScript('OnMessageScrollChanged', function()\n\
+                 table.insert(SEEN, this:GetCurrentLine())\n\
+             end) CF:Clear()",
+        )
+        .unwrap();
+        assert_eq!(seen(&s), "0");
+        assert_eq!(s.eval::<i64>("return CF:GetCurrentLine()").unwrap(), -1);
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 

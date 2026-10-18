@@ -408,10 +408,21 @@ impl ScrollingMessageState {
     /// then at top 0 and the write position −1 (`0x7882ce`, `0x7882d8`). The relayout runs on a
     /// ring it sees as holding a line at slot 0, so a visible frame lands at the bottom.
     pub fn clear(&mut self, viewport: impl Into<Viewport>) {
+        self.clear_layout(viewport);
+        self.clear_finish();
+    }
+
+    /// [`Self::clear`] up to its relayout, inside which `OnMessageScrollChanged` fires
+    /// (`0x7882c9`), so a handler reads the count and write position 0.
+    pub fn clear_layout(&mut self, viewport: impl Into<Viewport>) {
         self.lines_gen = self.lines_gen.wrapping_add(1);
         self.lines.clear();
         self.write_pos = 0;
         self.layout(0, viewport);
+    }
+
+    /// [`Self::clear`] after its relayout: at top 0 and the write position −1.
+    pub fn clear_finish(&mut self) {
         self.at_top = false;
         self.write_pos = -1;
     }
