@@ -162,7 +162,7 @@ fn parse_skybox(bytes: &[u8]) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    Some(crate::models::model_path(raw))
+    Some(crate::models::model_name(raw))
 }
 
 /// MOGI, stride 32: `flags: u32, bbox: 6 × f32, nameOff: i32`; the flags mirror each group's MOGP

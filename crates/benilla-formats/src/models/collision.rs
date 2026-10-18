@@ -9,7 +9,7 @@ use benilla_wmo::{parse_wmo, ParsedWmo};
 
 use crate::Chain;
 
-use super::model_path;
+use super::model_name;
 
 /// A collision triangle list in raw model-local coordinates, the space of
 /// [`super::RenderSubmesh::positions`]; empty when the source has no collision geometry.
@@ -32,7 +32,7 @@ impl CollisionMesh {
 /// `bounding_triangles` (`u16` indices): a coarse solid far smaller than the render mesh, so the
 /// trunk blocks and the canopy does not. A doodad with no hull does not collide.
 pub fn load_m2_collision_hull(chain: &mut Chain, raw_path: &str) -> Result<CollisionMesh> {
-    let path = model_path(raw_path);
+    let path = model_name(raw_path);
     let bytes = chain
         .read_file(&path)
         .with_context(|| format!("reading M2 {path}"))?;

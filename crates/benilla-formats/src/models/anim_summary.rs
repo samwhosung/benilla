@@ -8,7 +8,7 @@ use benilla_m2::parse_m2;
 
 use crate::Chain;
 
-use super::{le_u32, model_path, parse_m2_animations, parse_m2_global_sequence_bones};
+use super::{le_u32, model_name, parse_m2_animations, parse_m2_global_sequence_bones};
 
 /// The texture-transform (UV animation) array count, MD20 `0x74` (count) / `0x78` (offset), as
 /// the header walk `0x71cdf0` reads it: whether the model authors any UV animation.
@@ -203,7 +203,7 @@ pub fn parse_m2_animation_summary(bytes: &[u8]) -> Result<M2AnimSummary> {
 
 /// Read an M2's animation-channel summary from the chain, by model or doodad (`.mdx`/`.mdl`) path.
 pub fn load_m2_animation_summary(chain: &mut Chain, raw_path: &str) -> Result<M2AnimSummary> {
-    let path = model_path(raw_path);
+    let path = model_name(raw_path);
     let bytes = chain
         .read_file(&path)
         .with_context(|| format!("reading M2 {path}"))?;

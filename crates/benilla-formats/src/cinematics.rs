@@ -90,15 +90,11 @@ impl CinematicCatalog {
     }
 }
 
-/// The archive path for a camera row's model: the table ships `.mdx`, the MPQ holds `.m2`.
+/// The archive path for a camera row's model: `CCamera::LoadShot` creates it through `0x707350`
+/// (`0x50c8b9`), so the cache's rule maps `.mdx` to the MPQ's `.m2` and a refused name reads the
+/// error cube, which holds no camera.
 pub fn camera_model_path(model: &str) -> String {
-    let stem = model.rsplit_once('.').map_or(model, |(stem, ext)| {
-        match ext.to_ascii_lowercase().as_str() {
-            "mdx" | "mdl" | "m2" => stem,
-            _ => model,
-        }
-    });
-    format!("{stem}.m2")
+    crate::models::model_path(model)
 }
 
 fn sequences_schema() -> Schema {
@@ -320,12 +316,12 @@ mod tests {
     fn model_paths_map_mdx_to_the_archive_m2() {
         assert_eq!(
             camera_model_path("Cameras\\FlyByDwarf.mdx"),
-            "Cameras\\FlyByDwarf.m2"
+            "cameras\\flybydwarf.m2"
         );
-        assert_eq!(camera_model_path("Cameras\\X.MDX"), "Cameras\\X.m2");
-        assert_eq!(camera_model_path("Cameras\\X.m2"), "Cameras\\X.m2");
-        // A path with no extension still names an `.m2`.
-        assert_eq!(camera_model_path("Cameras\\X"), "Cameras\\X.m2");
+        assert_eq!(camera_model_path("Cameras\\X.MDX"), "cameras\\x.m2");
+        assert_eq!(camera_model_path("Cameras\\X.m2"), "cameras\\x.m2");
+        // A path with no extension is refused, and the shot reads the error cube.
+        assert_eq!(camera_model_path("Cameras\\X"), "spells\\errorcube.m2");
     }
 
     #[test]

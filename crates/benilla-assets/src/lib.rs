@@ -205,18 +205,15 @@ pub fn m2_url(raw: &str) -> String {
     m2_url_on(MPQ_SOURCE, raw)
 }
 
-/// The model `0x707350` creates in place of a file the cache refuses (`0x70737f`).
-pub const ERROR_CUBE: &str = "Spells\\ErrorCube.mdx";
+pub use benilla_formats::ERROR_CUBE;
 
 /// [`m2_url`] on the asset source `source`: [`MPQ_LOOSE_SOURCE`] for a model created with the
-/// loose flag. The cache takes the extension at the path's last dot (`strrchr`, `0x706a80`):
-/// `.mdx` and `.mdl`, any case, become `.m2`, `.m2` stands, and no dot or any other extension is
-/// refused (`0x706a8c`, `0x706adf`), which stands [`ERROR_CUBE`] with open flag 0, off the archives.
+/// loose flag. The file is the cache's ([`benilla_formats::m2_file_name`]); a path it refuses
+/// stands [`ERROR_CUBE`] with open flag 0, off the archives (`0x70737f`).
 pub fn m2_url_on(source: &str, raw: &str) -> String {
-    let p = raw.to_ascii_lowercase().replace('\\', "/");
-    match p.rsplit_once('.') {
-        Some((stem, "mdx" | "mdl" | "m2")) => format!("{source}://{stem}.m2"),
-        _ => m2_url_on(MPQ_SOURCE, ERROR_CUBE),
+    match benilla_formats::m2_file_name(raw) {
+        Some(file) => format!("{source}://{}", file.replace('\\', "/")),
+        None => m2_url_on(MPQ_SOURCE, ERROR_CUBE),
     }
 }
 

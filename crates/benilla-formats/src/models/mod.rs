@@ -105,16 +105,42 @@ fn remap_submesh(
     )
 }
 
-/// Normalize a model path for the chain: lowercase, with `.mdx`/`.mdl` as `.m2`.
+/// The model `0x707350` creates in place of a file the cache refuses (`0x70737f`).
+pub const ERROR_CUBE: &str = "Spells\\ErrorCube.mdx";
+
+/// The bytes of a model path the cache reads: `0x706a50` copies it into a 0x104-byte buffer with
+/// `SStrCopy` (`0x706a6e`), which stops one short of the size (`0x64a5cf`, `0x64a5e2`).
+const NAME_CAP: usize = 0x103;
+
+/// The archive file a model path names under the cache's rule (`0x706a50`), lowercased: the path
+/// cut to [`NAME_CAP`] bytes, its extension taken at the last dot (`strrchr`, `0x706a80`), `.mdx`
+/// and `.mdl` in any case made `.m2` and `.m2` kept (`0x706a92`-`0x706adf`). `None` for no dot or
+/// any other extension (`0x706a8c`, `0x706adf`), which the caller stands [`ERROR_CUBE`] for.
+pub fn m2_file_name(raw: &str) -> Option<String> {
+    let bytes = &raw.as_bytes()[..raw.len().min(NAME_CAP)];
+    let dot = bytes.iter().rposition(|&b| b == b'.')?;
+    let ext = &bytes[dot + 1..];
+    let known = ["mdx", "mdl", "m2"]
+        .iter()
+        .any(|e| ext.eq_ignore_ascii_case(e.as_bytes()));
+    known.then(|| {
+        format!(
+            "{}.m2",
+            String::from_utf8_lossy(&bytes[..dot]).to_ascii_lowercase()
+        )
+    })
+}
+
+/// The archive file a model created through `0x707350` reads: [`m2_file_name`], or the error cube
+/// for a refused path.
 pub(crate) fn model_path(raw: &str) -> String {
-    let lower = raw.to_ascii_lowercase();
-    match lower
-        .strip_suffix(".mdx")
-        .or_else(|| lower.strip_suffix(".mdl"))
-    {
-        Some(stem) => format!("{stem}.m2"),
-        None => lower,
-    }
+    m2_file_name(raw).unwrap_or_else(|| model_name(ERROR_CUBE))
+}
+
+/// A model name normalized for the chain by [`m2_file_name`], left as it is (lowercased) when the
+/// rule refuses it: for a name whose model is made later, from a longer path or not at all.
+pub(crate) fn model_name(raw: &str) -> String {
+    m2_file_name(raw).unwrap_or_else(|| raw.to_ascii_lowercase())
 }
 
 /// Panicking little-endian reads at a byte offset, for the raw walks not on
@@ -135,5 +161,44 @@ pub fn load_object_model(chain: &mut Chain, raw_path: &str) -> Result<Vec<Render
         load_wmo(chain, raw_path)
     } else {
         load_m2_mesh(chain, raw_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `0x706a50`: the last dot's extension, `.mdx`/`.mdl` in any case made `.m2`, `.m2` kept,
+    /// anything else refused; a creating lane reads the error cube, a name-only one keeps it.
+    #[test]
+    fn the_cache_takes_the_last_extension() {
+        assert_eq!(
+            m2_file_name("Creature\\Wolf\\Wolf.MDX").as_deref(),
+            Some("creature\\wolf\\wolf.m2")
+        );
+        assert_eq!(m2_file_name("a.Mdl").as_deref(), Some("a.m2"));
+        assert_eq!(m2_file_name("a.M2").as_deref(), Some("a.m2"));
+        for refused in ["a", "a.blp", "a.mdx.bak", "World\\a.mdx\\b", ""] {
+            assert_eq!(m2_file_name(refused), None, "{refused}");
+        }
+        assert_eq!(model_path("a.blp"), "spells\\errorcube.m2");
+        assert_eq!(model_name("A.blp"), "a.blp");
+    }
+
+    /// The name is cut to 0x103 bytes before the dot is looked for (`0x64a5a0` into the 0x104-byte
+    /// buffer): an extension that ends past the cut is refused, or read short.
+    #[test]
+    fn a_path_past_the_buffer_is_cut_before_its_extension() {
+        let at = |n: usize, ext: &str| format!("{}{ext}", "x".repeat(n - ext.len()));
+        assert_eq!(
+            m2_file_name(&at(0x103, ".mdx")),
+            Some(format!("{}.m2", "x".repeat(0x103 - 4)))
+        );
+        assert_eq!(m2_file_name(&at(0x104, ".mdx")), None, "cut to `.md`");
+        assert_eq!(
+            m2_file_name(&format!("{}.m2x", "x".repeat(0x100))),
+            Some(format!("{}.m2", "x".repeat(0x100))),
+            "cut to `.m2`"
+        );
     }
 }

@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, RecordSet, Schema, SchemaField};
 
 use crate::dbc::{parse, str_at, u32_at};
-use crate::models::model_path;
+use crate::models::model_name;
 
 const ITEM_DISPLAY_INFO: &str = "DBFilesClient\\ItemDisplayInfo.dbc";
 
@@ -21,7 +21,8 @@ const ITEM_DISPLAY_INFO: &str = "DBFilesClient\\ItemDisplayInfo.dbc";
 /// the inventory type, which is not a column here.
 #[derive(Debug, Clone, Default)]
 pub struct ItemDisplay {
-    /// Left and right model basenames, normalized by [`crate::models::model_path`].
+    /// Left and right model basenames, normalized by [`crate::models::model_name`]; the cache's
+    /// rule decides on the full path the model is made from.
     pub model: [Option<String>; 2],
     /// Left and right texture basenames, raw and extensionless; never derived from [`Self::model`].
     pub model_texture: [Option<String>; 2],
@@ -146,8 +147,8 @@ fn catalog_from_records(rs: RecordSet) -> ItemDisplayCatalog {
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
         let model = [
-            str_at(&rs, r, 1).map(|s| model_path(&s)),
-            str_at(&rs, r, 2).map(|s| model_path(&s)),
+            str_at(&rs, r, 1).map(|s| model_name(&s)),
+            str_at(&rs, r, 2).map(|s| model_name(&s)),
         ];
         let model_texture = [str_at(&rs, r, 3), str_at(&rs, r, 4)];
         let geoset_groups = [
