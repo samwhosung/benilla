@@ -317,7 +317,7 @@ pub(crate) fn feed_name_candidates(
                     factions.as_deref(),
                     &reputations,
                     me.and_then(|(_, _, s)| s),
-                    &by_guid,
+                    by_guid,
                 ),
             }),
         );
