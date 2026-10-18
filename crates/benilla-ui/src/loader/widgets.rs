@@ -588,16 +588,14 @@ impl Loader<'_> {
     /// `<SimpleHTML>` (`0x78a130`): `font=` links all four element fonts (`0x78a17a`-`0x78a18f`)
     /// or is logged as a miss (`0x78a193`-`0x78a1d0`), then each `<FontString>` and
     /// `<FontStringHeader1..3>` child loads into its element font with the Font loader
-    /// (`0x78a1fe`-`0x78a26e` → `0x783c30`), with no template walk. `hyperlinkFormat`
-    /// (`0x78a2d4`) and `file=`, a document whose whole text is set as the frame's (`0x78a2a0`
-    /// loads it through Storm, the attribute verbatim; `0x78a2b2` sets it), are read too. A file
-    /// that does not open leaves the frame empty.
+    /// (`0x78a1fe`-`0x78a26e` → `0x783c30`), with no template walk. Then `file=`, a document whose
+    /// whole text is set as the frame's (`0x78a2a0` loads it through Storm, the attribute
+    /// verbatim; `0x78a2b2` sets it), and only after it `hyperlinkFormat` (`0x78a2d4`), so the
+    /// document parses with the format the frame held before. A file that does not open leaves
+    /// the frame empty.
     pub(super) fn apply_simplehtml(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if !el.tag.eq_ignore_ascii_case("SimpleHTML") {
             return;
-        }
-        if let Some(fmt) = el.attr("hyperlinkFormat") {
-            self.call(wrapper, "SetHyperlinkFormat", fmt.to_string(), dbg);
         }
         let fonts = match crate::script::simplehtml_element_fonts_lua(self.lua, wrapper) {
             Ok(fonts) => fonts,
@@ -627,6 +625,9 @@ impl Loader<'_> {
                 let text = crate::source::decode(&bytes).into_owned();
                 self.call(wrapper, "SetText", text, dbg);
             }
+        }
+        if let Some(fmt) = el.attr("hyperlinkFormat") {
+            self.call(wrapper, "SetHyperlinkFormat", fmt.to_string(), dbg);
         }
     }
 }
