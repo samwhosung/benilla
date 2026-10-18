@@ -401,7 +401,9 @@ impl Loader<'_> {
             }
         }
         if let Some(mode) = node.attr("alphaMode") {
-            self.call_region(wrapper, "SetBlendMode", mode.to_string(), dbg);
+            if let Err(e) = crate::script::load_blend_mode(self.lua, wrapper, mode) {
+                self.report.fault(format!("{dbg}: region alphaMode: {e}"));
+            }
         }
     }
 

@@ -112,14 +112,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     _ => None,
                 };
                 let Some(vertical) = vertical else {
-                    let model = lua.app_data_ref::<Model>().expect("model");
-                    let who = crate::script::object::decode_id(&this)
-                        .ok()
-                        .and_then(|id| super::region_name_of(&model, id));
-                    return Err(mlua::Error::runtime(format!(
-                        "Usage: {}:{name}{usage}",
-                        who.as_deref().unwrap_or("<unnamed>")
-                    )));
+                    return Err(self::usage(lua, &this, &format!("{name}{usage}")));
                 };
                 let n = if with_alpha { 8 } else { 6 };
                 let mut c = [0.0f32; 8];
@@ -243,17 +236,25 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetBlendMode (`0x79a950`, the alphaMode enum `0x811aa8`) stores the mode as given; an
-    // unknown name leaves it alone, as the enum lookup does. Only ADD draws differently here, the
-    // others as straight alpha.
+    // SetBlendMode (`0x79a950`) looks a `lua_isstring` argument (`0x79a9e0`, a number too) up in
+    // the alphaMode enum, ignoring case (`0x6f1920` over `0x811aa8`), and stores it
+    // (`0x79aa13`); a miss or any other value raises the usage (`0x79aa20`, `0x87c44c`) and
+    // stores nothing.
     m.set(
         "SetBlendMode",
-        lua.create_function(|lua, (this, mode): (Table, String)| {
+        lua.create_function(|lua, (this, mode): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let blend = match &mode {
+                Value::String(_) | Value::Number(_) | Value::Integer(_) => lua
+                    .coerce_string(mode.clone())?
+                    .and_then(|m| BlendMode::parse(&m.to_string_lossy())),
+                _ => None,
+            };
+            let Some(blend) = blend else {
+                return Err(usage(lua, &this, "SetBlendMode(\"mode\")"));
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            if let Some(blend) = BlendMode::parse(&mode) {
-                model.region_data.entry(rh).or_default().blend = blend;
-            }
+            model.region_data.entry(rh).or_default().blend = blend;
             Ok(())
         })?,
     )?;
@@ -319,16 +320,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 _ => None,
             };
             let Some(dl) = dl else {
-                let name = {
-                    let model = lua.app_data_ref::<Model>().expect("model");
-                    crate::script::object::decode_id(&this)
-                        .ok()
-                        .and_then(|id| super::region_name_of(&model, id))
-                };
-                return Err(mlua::Error::runtime(format!(
-                    "Usage: {}:SetDrawLayer(\"layer\")",
-                    name.as_deref().unwrap_or("<unnamed>")
-                )));
+                return Err(usage(lua, &this, "SetDrawLayer(\"layer\")"));
             };
             let mut model = lua.app_data_mut::<Model>().expect("model");
             if let Some(region) = model.arena.region_mut(rh) {
@@ -361,26 +353,27 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetTexCoord",
         // Each coordinate is a bare `lua_tonumber` (`0x79beb0`), so nil or a table is 0; only the
-        // count is gated, 4 or 8 (`0x79bf5d`).
+        // count is gated, `lua_gettop` less the receiver (`0x79bf58`), so a trailing nil counts.
+        // Any count but 4 or 8, none included, raises the usage (`0x79bf6c`, `0x87c538`).
         lua.create_function(|lua, (this, args): (Table, mlua::Variadic<Value>)| {
             let rest: Vec<f32> = args.iter().map(|v| tonumber_f32(lua, v)).collect();
             let rh = region_handle_of(lua, &this)?;
             let coords = match rest.len() {
-                4 => Some(TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]])),
+                4 => TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]]),
                 // The arguments come UL, LL, UR, LR; `TexCoords::Corners` stores TL, TR, BR, BL.
-                8 => Some(TexCoords::Corners([
+                8 => TexCoords::Corners([
                     [rest[0], rest[1]], // UL → TL
                     [rest[4], rest[5]], // UR → TR
                     [rest[6], rest[7]], // LR → BR
                     [rest[2], rest[3]], // LL → BL
-                ])),
-                // No arguments resets to the full texture, which is not 1.12's: its gate takes 4
-                // or 8.
-                0 => None,
-                n => {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetTexCoord: expected 4 (edges) or 8 (corner pairs) args, got {n}"
-                    )))
+                ]),
+                _ => {
+                    return Err(usage(
+                        lua,
+                        &this,
+                        "SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, LLy, \
+                         URx, URy, LRx, LRy)",
+                    ))
                 }
             };
             lua.app_data_mut::<Model>()
@@ -388,7 +381,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 .region_data
                 .entry(rh)
                 .or_default()
-                .tex_coords = coords;
+                .tex_coords = Some(coords);
             Ok(())
         })?,
     )?;
@@ -428,6 +421,32 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+/// The XML `alphaMode=` of a texture (`0x770176`): read with the same enum lookup as
+/// `SetBlendMode` (`0x6f1920`), but an empty value skips and an unknown one is ignored, with no
+/// log (`0x770185`, `0x770195`).
+pub(crate) fn load_blend_mode(lua: &Lua, this: &Table, mode: &str) -> mlua::Result<()> {
+    let Some(blend) = BlendMode::parse(mode) else {
+        return Ok(());
+    };
+    let rh = region_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    model.region_data.entry(rh).or_default().blend = blend;
+    Ok(())
+}
+
+/// `Usage: <name>:<line>`, the raise a region method makes over its own format string, naming the
+/// region by its `GetName` (vtable `+4`) or `<unnamed>` (`0x84c7f0`).
+fn usage(lua: &Lua, this: &Table, line: &str) -> mlua::Error {
+    let model = lua.app_data_ref::<Model>().expect("model");
+    let name = crate::script::object::decode_id(this)
+        .ok()
+        .and_then(|id| super::region_name_of(&model, id));
+    mlua::Error::runtime(format!(
+        "Usage: {}:{line}",
+        name.as_deref().unwrap_or("<unnamed>")
+    ))
 }
 
 impl crate::script::UiScript {

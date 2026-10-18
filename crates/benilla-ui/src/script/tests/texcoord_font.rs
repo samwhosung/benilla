@@ -51,21 +51,27 @@ fn set_tex_coord_changes_extracted_uv() {
         "the affine form carries corners in screen winding, got {:?}",
         tex.content
     );
-    // A no-arg reset returns to the full texture.
-    s.run("t:SetTexCoord()").unwrap();
-    s.resolve();
-    let tex = s
-        .extract()
-        .into_iter()
-        .find(|q| matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p.contains("Foo")))
-        .unwrap();
-    assert!(matches!(
-        &tex.content,
-        QuadContent::Texture {
-            tex_coords: None,
-            ..
-        }
-    ));
+    // Every count but 4 and 8 raises the usage (`0x79bf6c`, `0x87c538`) naming the texture, and
+    // the coordinates stay; the count is `lua_gettop`, so a trailing nil counts.
+    let usage = "Usage: TcTex:SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, \
+                 LLy, URx, URy, LRx, LRy)";
+    for call in ["t:SetTexCoord()", "t:SetTexCoord(0, 1, 0, 1, nil)", "t:SetTexCoord(0, 1)"] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(usage), "{call}: {err}");
+    }
+    let unnamed = s
+        .run("f:CreateTexture():SetTexCoord()")
+        .expect_err("an unnamed texture raises too")
+        .to_string();
+    assert!(
+        unnamed.contains("Usage: <unnamed>:SetTexCoord("),
+        "{unnamed}"
+    );
+    let still: (f32, f32, f32, f32, f32, f32, f32, f32) =
+        s.eval("return t:GetTexCoord()").unwrap();
+    assert_eq!(still, (0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0), "unchanged");
+    s.run("t:SetTexCoord(0, 1, 0, 1, nil, nil, nil, nil)")
+        .expect("eight with trailing nils is the corner form");
 }
 
 #[test]

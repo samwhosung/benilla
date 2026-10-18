@@ -1345,12 +1345,23 @@ fn get_blend_mode_answers_one_string_and_defaults_to_the_ctors_blend() {
         s.eval::<String>("return BTex:GetBlendMode()").unwrap(),
         "ADD"
     );
-    s.run(r#"BTex:SetBlendMode("NOT_A_MODE")"#).unwrap();
-    assert_eq!(
-        s.eval::<String>("return BTex:GetBlendMode()").unwrap(),
-        "ADD",
-        "an unknown name changes nothing"
-    );
+    // A name off the enum, or a value that is no string or number, raises the usage
+    // (`0x79aa20`, `0x87c44c`) and stores nothing.
+    for bad in [r#""ADDITIVE""#, "nil", "true", "3", ""] {
+        let err = s
+            .run(&format!("BTex:SetBlendMode({bad})"))
+            .expect_err(bad)
+            .to_string();
+        assert!(
+            err.contains(r#"Usage: BTex:SetBlendMode("mode")"#),
+            "{bad}: {err}"
+        );
+        assert_eq!(
+            s.eval::<String>("return BTex:GetBlendMode()").unwrap(),
+            "ADD",
+            "{bad} changes nothing"
+        );
+    }
 
     assert!(s
         .eval::<bool>(
