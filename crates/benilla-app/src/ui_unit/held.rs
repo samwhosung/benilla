@@ -312,6 +312,13 @@ pub(crate) fn feed_name_candidates(
                 dist2,
                 state,
                 selectable: crate::target::is_selectable(store.as_deref(), self_guid),
+                assistable_alive: crate::target::assistable_alive(
+                    store.as_deref(),
+                    factions.as_deref(),
+                    &reputations,
+                    me.and_then(|(_, _, s)| s),
+                    &by_guid,
+                ),
             }),
         );
         memo.pushed.insert(guid, (name.to_string(), record));

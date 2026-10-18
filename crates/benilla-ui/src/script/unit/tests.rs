@@ -1063,6 +1063,7 @@ fn candidate(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate 
             ..Default::default()
         },
         selectable: true,
+        assistable_alive: true,
     }
 }
 

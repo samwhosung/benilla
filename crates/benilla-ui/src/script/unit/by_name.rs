@@ -1,14 +1,25 @@
-//! The by-name resolver's ranking (`0x493aa0`), shared by the app's scan, which commits the pick,
-//! and `TargetByName`, which shows it to the rest of its chunk: in the reference the binding
-//! (`0x489d60`) commits through `SetSelection 0x493540` before it returns, so `UnitName("target")`
-//! on the next line already names the new unit. A name matches whole-string first (`0x64a4c0` → CRT
+//! The by-name resolver (`CGGameUI::ClosestObjectMatch 0x493aa0`), shared by every caller: the app's
+//! `/target`, `/assist` and `/follow` scans, `TargetByName`, which shows the pick to the rest of its
+//! chunk (in the reference the binding `0x489d60` commits through `SetSelection 0x493540` before it
+//! returns, so `UnitName("target")` on the next line already names the new unit), and
+//! `SetLootMethod`'s master name (`0x4e9418`). A name matches whole-string first (`0x64a4c0` → CRT
 //! `0x414310`), else by the longest common prefix (`0x493cb6`-`0x493cf6`), both case-insensitive.
 //!
-//! Deviation: the reference ends the walk at the first whole-string hit (`0x493ca2`), so its pick
-//! follows the object list's order; we rank exact, then longer prefix, then nearest
-//! ([`Rank::beats`]), because the nearest namesake is the better pick, and a full tie goes to the
-//! lower guid ([`Rank::beats_at`]), so the VM's walk and the app's scan pick the same unit whatever
-//! order each walks in.
+//! [`resolve`] runs the reference's three passes over the one matcher `0x493c60`: the four party
+//! slots (`0x493b22`), then the raid roster (`0x493ba7`), each member offered only when no object is
+//! held for it (`0x468460` NULL, `0x493b4d`, `0x493be5`), at the placeholder distance
+//! `0x4f1502f9` (`0x493b74`, `0x493c0c`); then every held object of the typemask that the mode's
+//! filter `0x493e40` passes, at its squared distance (`0x468380` with `0x493d30`). No pass is gated
+//! on the typemask: `0x493aa0` skips them only for the filter modes 1 and 3, which no caller passes.
+//! The whole resolver returns nothing without an active player object (`0x493ae0`), which the
+//! caller answers by offering no objects.
+//!
+//! Deviation: the reference ends the object walk at the first whole-string hit (`0x493ca2`), so its
+//! pick follows the object list's order; we rank exact, then longer prefix, then nearest
+//! ([`Rank::beats`]), because the nearest namesake is the better pick, and a full tie between held
+//! objects goes to the lower guid ([`Rank::beats_at`]), so the VM's walk and the app's scan pick the
+//! same unit whatever order each walks in. The roster passes keep the reference's order: of equal
+//! ranks the first member offered stays.
 
 use std::cmp::Ordering;
 
@@ -92,6 +103,141 @@ pub fn rank(query: &str, name: &str, dist2: f32, mode: Match) -> Option<Rank> {
     })
 }
 
+/// The distance the roster passes hand the matcher for a member with no object (`0x4f1502f9`,
+/// pushed at `0x493b74` and `0x493c0c`), so any held object of an equal prefix is nearer.
+pub const ROSTER_DISTANCE: f32 = f32::from_bits(0x4f15_02f9);
+
+/// Which held objects a search admits, the typemask argument (`edx` of `0x493aa0`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kinds {
+    /// Typemask 8, creatures, pets and players (a player carries the UNIT bit): `TargetByName`.
+    AnyUnit,
+    /// Typemask 0x10, players only: `AssistByName`, `FollowByName`, `SetLootMethod`.
+    PlayerOnly,
+}
+
+/// The per-object filter, the mode argument `0x493d30` hands `0x493e40`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Filter {
+    /// Mode 0, which underflows the jump table's bound into accept-all: no range, facing, reaction,
+    /// liveness, visibility or self test.
+    AcceptAll,
+    /// Mode 2 (`0x493eca`): `CanAssist 0x6066f0` and `UNIT_FIELD_HEALTH > 0`.
+    AssistableAlive,
+}
+
+/// One by-name search: the arguments of `0x493aa0`.
+#[derive(Clone, Copy, Debug)]
+pub struct Search<'q> {
+    /// The name as typed; the callers trim, the resolver does not.
+    pub query: &'q str,
+    pub kinds: Kinds,
+    pub filter: Filter,
+    /// The exact-only flag.
+    pub exact: Match,
+}
+
+/// A roster member as passes 1 and 2 see it.
+#[derive(Clone, Copy, Debug)]
+pub struct RosterEntry<'a> {
+    /// The name cache's answer for the member's guid; empty when it has none, which the matcher
+    /// skips (`0x493c68`).
+    pub name: &'a str,
+    pub guid: u64,
+    /// The object manager holds an object for the guid, which the roster passes then leave to
+    /// the object pass (`0x493b4d`, `0x493be5`).
+    pub held: bool,
+}
+
+/// A held object as the object pass sees it; `id` is the caller's handle for it.
+#[derive(Clone, Copy, Debug)]
+pub struct Held<'a, T> {
+    pub id: T,
+    pub name: &'a str,
+    pub guid: u64,
+    /// Squared distance from the active player.
+    pub dist2: f32,
+    /// The guid is a player's, for [`Kinds::PlayerOnly`].
+    pub is_player: bool,
+    /// [`Filter::AssistableAlive`]'s test; [`Filter::AcceptAll`] never reads it.
+    pub assistable_alive: bool,
+}
+
+/// What [`resolve`] picked.
+#[derive(Clone, Copy, Debug)]
+pub struct Pick<'a, T> {
+    pub guid: u64,
+    pub name: &'a str,
+    pub rank: Rank,
+    /// The held object's handle; `None` for a roster member with no object.
+    pub object: Option<T>,
+}
+
+/// `CGGameUI::ClosestObjectMatch` (`0x493aa0`): the best guid for the search over the party
+/// slots, the raid roster and the held objects, in that order, or `None`.
+///
+/// The roster passes run the matcher `0x493c60` at one distance, so there it is the longest
+/// prefix with the first member offered keeping the place on a tie, and a whole-string hit ends the
+/// search at once only while nothing has been picked (`0x493c88` wants a distance below the best,
+/// which a roster pick has already lowered to [`ROSTER_DISTANCE`]); a later whole-string hit
+/// competes by its length like any prefix. A roster pick is therefore never ranked `exact`. The
+/// object pass ranks by [`Rank::beats_at`].
+pub fn resolve<'a, T>(
+    search: Search<'_>,
+    party: impl IntoIterator<Item = RosterEntry<'a>>,
+    raid: impl IntoIterator<Item = RosterEntry<'a>>,
+    held: impl IntoIterator<Item = Held<'a, T>>,
+) -> Option<Pick<'a, T>> {
+    let mut best: Option<Pick<'a, T>> = None;
+    for member in party.into_iter().chain(raid) {
+        if member.held || member.guid == 0 || member.name.is_empty() {
+            continue;
+        }
+        let Some(r) = rank(search.query, member.name, ROSTER_DISTANCE, search.exact) else {
+            continue;
+        };
+        let pick = Pick {
+            guid: member.guid,
+            name: member.name,
+            rank: Rank { exact: false, ..r },
+            object: None,
+        };
+        if r.exact && best.is_none() {
+            return Some(pick);
+        }
+        if best.as_ref().is_none_or(|b| pick.rank.beats(b.rank)) {
+            best = Some(pick);
+        }
+    }
+    for h in held {
+        let admitted = match search.kinds {
+            Kinds::AnyUnit => true,
+            Kinds::PlayerOnly => h.is_player,
+        } && match search.filter {
+            Filter::AcceptAll => true,
+            Filter::AssistableAlive => h.assistable_alive,
+        };
+        if !admitted {
+            continue;
+        }
+        let Some(r) = rank(search.query, h.name, h.dist2, search.exact) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|b| r.beats_at(h.guid, b.rank, b.guid))
+        {
+            best = Some(Pick {
+                guid: h.guid,
+                name: h.name,
+                rank: r,
+                object: Some(h.id),
+            });
+        }
+    }
+    best
+}
+
 /// One unit `TargetByName` can pick (typemask 8: a creature, pet or player whose name is cached),
 /// as the app's by-name scan sees it: the name it ranks, its distance, and the snapshot the
 /// `"target"` token reads once it is picked.
@@ -106,6 +252,9 @@ pub struct NameCandidate {
     /// `IsSelectable`, which `SetSelection` asks before it selects (`0x4935ee`): a pick that is not
     /// selectable leaves the selection and so the `"target"` view as it was.
     pub selectable: bool,
+    /// [`Filter::AssistableAlive`]'s test (`0x493eca`): `CanAssist` toward the active player and
+    /// `UNIT_FIELD_HEALTH > 0`.
+    pub assistable_alive: bool,
 }
 
 impl super::super::UiScript {
@@ -146,24 +295,36 @@ impl Model {
         if query.is_empty() {
             return None;
         }
-        let mode = if exact {
-            Match::ExactOnly
-        } else {
-            Match::PrefixOk
+        let search = Search {
+            query,
+            kinds: Kinds::AnyUnit,
+            filter: Filter::AcceptAll,
+            exact: if exact {
+                Match::ExactOnly
+            } else {
+                Match::PrefixOk
+            },
         };
-        let mut best: Option<(Rank, u64, &NameCandidate)> = None;
-        for (&guid, c) in &self.name_candidates {
-            let Some(r) = rank(query, &c.name, c.dist2, mode) else {
-                continue;
-            };
-            if best
-                .as_ref()
-                .is_none_or(|(b, g, _)| r.beats_at(guid, *b, *g))
-            {
-                best = Some((r, guid, c));
-            }
-        }
-        best.map(|(_, _, c)| c)
+        // No roster: the app selects a held unit only (`Selection::target` is an entity).
+        resolve(
+            search,
+            std::iter::empty(),
+            std::iter::empty(),
+            self.held_candidates(),
+        )
+        .and_then(|pick| pick.object)
+    }
+
+    /// The pushed candidates as the resolver's object pass sees them.
+    pub(crate) fn held_candidates(&self) -> impl Iterator<Item = Held<'_, &NameCandidate>> {
+        self.name_candidates.iter().map(|(&guid, c)| Held {
+            id: c,
+            name: &c.name,
+            guid,
+            dist2: c.dist2,
+            is_player: c.state.is_player,
+            assistable_alive: c.assistable_alive,
+        })
     }
 
     /// What `TargetUnit(token)` shows as `"target"`: the unit the token names when the object
@@ -210,5 +371,163 @@ impl Model {
             }
         }
         self.target_view_moved = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roster(name: &str, guid: u64, held: bool) -> RosterEntry<'_> {
+        RosterEntry { name, guid, held }
+    }
+
+    fn held(name: &str, guid: u64, dist2: f32) -> Held<'_, u64> {
+        Held {
+            id: guid,
+            name,
+            guid,
+            dist2,
+            is_player: true,
+            assistable_alive: true,
+        }
+    }
+
+    fn search(query: &str) -> Search<'_> {
+        Search {
+            query,
+            kinds: Kinds::PlayerOnly,
+            filter: Filter::AcceptAll,
+            exact: Match::PrefixOk,
+        }
+    }
+
+    fn guid_of<'a>(
+        search: Search<'_>,
+        party: Vec<RosterEntry<'a>>,
+        raid: Vec<RosterEntry<'a>>,
+        held: Vec<Held<'a, u64>>,
+    ) -> Option<u64> {
+        resolve(search, party, raid, held).map(|p| p.guid)
+    }
+
+    /// `0x493b4d` and `0x493be5` offer a member only when no object is held, and a name the cache
+    /// does not have, or a zero guid, is no candidate (`0x493c68`).
+    #[test]
+    fn the_roster_passes_offer_only_members_with_no_object() {
+        let party = vec![
+            roster("Bob", 1, true),
+            roster("", 2, false),
+            roster("Bobby", 0, false),
+        ];
+        assert_eq!(guid_of(search("Bo"), party, vec![], vec![]), None);
+        let party = vec![roster("Bob", 1, false)];
+        assert_eq!(guid_of(search("Bo"), party, vec![], vec![]), Some(1));
+    }
+
+    /// The matcher keeps the first of equal prefixes (`0x493cf8`, a strict distance compare), the
+    /// party slots before the raid; a whole-string hit ends the search only while nothing is
+    /// picked, and later competes by its length (`0x493c88` against the lowered best).
+    #[test]
+    fn the_roster_passes_keep_the_first_of_equal_prefixes() {
+        let both = |first: &'static str, second: &'static str| {
+            guid_of(
+                search("Bob"),
+                vec![roster(first, 1, false)],
+                vec![roster(second, 2, false)],
+                vec![],
+            )
+        };
+        assert_eq!(both("Bobby", "Bobbo"), Some(1), "party before raid");
+        assert_eq!(
+            both("Bobby", "Bob"),
+            Some(1),
+            "an exact name after a prefix of its length"
+        );
+        assert_eq!(both("Bo", "Bob"), Some(2), "a longer prefix");
+        assert_eq!(
+            both("Bob", "Bobby"),
+            Some(1),
+            "an exact name first ends the search"
+        );
+    }
+
+    /// The object pass runs after the roster passes at real distances, below the placeholder: an
+    /// equal prefix goes to the object, an exact name to the object over a roster prefix, and the
+    /// roster's exact name, first, ends the search before any object.
+    #[test]
+    fn the_object_pass_follows_the_roster_passes() {
+        let r = |name| vec![roster(name, 1, false)];
+        assert_eq!(
+            guid_of(search("Bo"), r("Bob"), vec![], vec![held("Bobby", 9, 1e9)]),
+            Some(9)
+        );
+        assert_eq!(
+            guid_of(search("Bob"), r("Bobby"), vec![], vec![held("Bob", 9, 1e9)]),
+            Some(9)
+        );
+        assert_eq!(
+            guid_of(search("Bob"), r("Bob"), vec![], vec![held("Bob", 9, 1.0)]),
+            Some(1)
+        );
+        assert_eq!(
+            guid_of(
+                search("Bobb"),
+                r("Bobby"),
+                vec![],
+                vec![held("Bobx", 9, 1.0)]
+            ),
+            Some(1),
+            "a longer prefix wins at the placeholder distance"
+        );
+    }
+
+    /// The typemask and the mode's filter bind the object pass alone; the roster passes ignore both.
+    #[test]
+    fn typemask_and_filter_bind_the_object_pass_only() {
+        let mut creature = held("Bobcat", 7, 1.0);
+        creature.is_player = false;
+        let mut dead = held("Bobby", 8, 1.0);
+        dead.assistable_alive = false;
+        let objects = || vec![creature, dead];
+        let mode2 = Search {
+            filter: Filter::AssistableAlive,
+            ..search("Bob")
+        };
+        assert_eq!(guid_of(mode2, vec![], vec![], objects()), None);
+        let any = Search {
+            kinds: Kinds::AnyUnit,
+            ..search("Bobc")
+        };
+        assert_eq!(guid_of(any, vec![], vec![], objects()), Some(7));
+        assert_eq!(guid_of(search("Bob"), vec![], vec![], objects()), Some(8));
+        // An unheld dead groupmate is still offered: the client cannot know.
+        assert_eq!(
+            guid_of(mode2, vec![roster("Bobby", 3, false)], vec![], objects()),
+            Some(3)
+        );
+    }
+
+    /// Exact-only applies to every pass (`0x493cab`), and between held namesakes the nearer wins,
+    /// a full tie going to the lower guid.
+    #[test]
+    fn exact_only_and_the_object_tiebreaks() {
+        let exact = Search {
+            exact: Match::ExactOnly,
+            ..search("Bob")
+        };
+        assert_eq!(
+            guid_of(
+                exact,
+                vec![roster("Bobby", 1, false)],
+                vec![],
+                vec![held("Bobbo", 2, 1.0)]
+            ),
+            None
+        );
+        let near_far = vec![held("Bob", 5, 9.0), held("Bob", 4, 4.0)];
+        assert_eq!(guid_of(search("Bob"), vec![], vec![], near_far), Some(4));
+        let tie = vec![held("Bob", 5, 4.0), held("Bob", 4, 4.0)];
+        assert_eq!(guid_of(search("Bob"), vec![], vec![], tie), Some(4));
     }
 }
