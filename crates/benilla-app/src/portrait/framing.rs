@@ -331,6 +331,9 @@ pub(crate) struct PaneUnits {
     pub(crate) px_per_unit: f32,
     /// Device px per `SetPosition` unit, `768 · √(a²+1) · layoutScale`.
     pub(crate) pos_px_per_unit: f32,
+    /// Device px per model unit of a particle's half-extent, `768 · √(a²+1)` FrameXML units: eye
+    /// space, carrying neither model scale nor layout scale (`0x7b2a50`).
+    pub(crate) star_px_per_unit: f32,
     /// `SetPosition`, layout units.
     pub(crate) position: Vec3,
     /// The perspective root's scale, `G48 · (5/3) · modelScale · layoutScale`.
@@ -353,6 +356,9 @@ pub(super) struct BodyView {
     pub(super) root: Transform,
     pub(super) camera: Transform,
     pub(super) projection: BodyProjection,
+    /// The particles' half-extent unit: device px per model unit on the orthographic leg, where a
+    /// quad's eye-space extent is the pane's pixels (`0x7b2a50`), and 1.0 under a perspective.
+    pub(super) star: f32,
 }
 
 impl BodyView {
@@ -392,6 +398,7 @@ pub(super) fn body_view(
                     .with_scale(Vec3::splat(pane_root_scale(a, display_aspect))),
                 camera,
                 projection: BodyProjection::Perspective(pane_projection(&pane_camera(a), aspect)),
+                star: 1.0,
             }
         }
         CopyCamera::Raw(idx) => match a.raw_camera(idx) {
@@ -403,6 +410,7 @@ pub(super) fn body_view(
                     root: rig.root,
                     camera: rig.camera,
                     projection: BodyProjection::Perspective(rig.projection),
+                    star: 1.0,
                 }
             }
             None => {
@@ -417,6 +425,7 @@ pub(super) fn body_view(
                     ),
                     camera,
                     projection: BodyProjection::Ortho(target),
+                    star: units.star_px_per_unit * scale,
                 }
             }
         },
@@ -687,6 +696,7 @@ mod tests {
         let units = PaneUnits {
             px_per_unit: 1280.0,
             pos_px_per_unit: 1280.0,
+            star_px_per_unit: 2000.0,
             position: Vec3::new(0.01, 0.02, 0.0),
             root_scale: 1.0,
             root_pos: Vec3::ZERO,
@@ -708,6 +718,10 @@ mod tests {
                 );
                 assert_eq!(v.projection, BodyProjection::Ortho(target), "camera {idx}");
                 assert_eq!(
+                    v.star, 1000.0,
+                    "particles at the ladder's px per unit, scaled"
+                );
+                assert_eq!(
                     v.root.scale,
                     Vec3::splat(640.0),
                     "the ladder at the target's pixels"
@@ -728,6 +742,14 @@ mod tests {
             1.0,
         );
         assert_eq!(v.projection, BodyProjection::Ortho(target));
+        assert_eq!(v.star, 2000.0);
+
+        // Under a perspective the half-extent is in model units.
+        let a = anchors_with(Some(human), Vec3::ZERO);
+        for camera in [CopyCamera::Pane, CopyCamera::Raw(0)] {
+            let v = body_view(&a, camera, 0.0, 4.0 / 3.0, &units, target, 0.5);
+            assert_eq!(v.star, 1.0, "{camera:?}");
+        }
     }
 
     /// The pet pane (318×224), the character pane (233×224) and the round portrait (1:1).

@@ -430,6 +430,8 @@ struct Harness {
     app: App,
     me_mesh: Handle<Mesh>,
     other_mesh: Handle<Mesh>,
+    /// The unit ladder every pane's request carries.
+    units: PaneUnits,
 }
 
 impl Harness {
@@ -493,6 +495,7 @@ impl Harness {
             app,
             me_mesh,
             other_mesh,
+            units: PaneUnits::default(),
         }
     }
 
@@ -532,6 +535,7 @@ impl Harness {
             .clear();
         let script = self.app.world().non_send_resource::<UiScript>();
         let (session, panes) = (script.session(), script.character_panes());
+        let units = self.units;
         let mut requests = self.app.world_mut().resource_mut::<PaneRequests>();
         requests.reset(session);
         for (i, p) in panes.iter().enumerate() {
@@ -544,7 +548,7 @@ impl Harness {
                     alpha: 1.0,
                     clip: None,
                     size_px: UVec2::new(233, 224),
-                    units: Default::default(),
+                    units,
                 },
             );
         }
@@ -679,6 +683,71 @@ fn set_camera_aims_the_booth_through_the_copys_camera_until_the_next_build() {
     h.run("m:SetCamera(0)");
     h.frame();
     assert!(ortho_leg(&mut h, pane), "on the copy that stands, at once");
+}
+
+/// A particle's half-extent is in eye space (`0x7b2a50`): the orthographic leg's is the pane's
+/// pixels per model unit, a perspective leg's is 1.0, and an emitter on the pane's layer follows
+/// the leg the pane draws through, whenever it was spawned.
+#[test]
+fn a_panes_emitters_take_the_half_extent_unit_of_the_leg_it_draws_through() {
+    let mut h = Harness::new(
+        r#"m = CreateFrame("PlayerModel", "Portrait3D", UIParent) m:SetUnit("player")"#,
+    );
+    h.units.star_px_per_unit = 2000.0;
+    let pane = h.handle(Some("Portrait3D"));
+    h.frame();
+    let layer = h.app.world().resource::<PaneBooths>().panes[&pane].layer;
+    let em = benilla_assets::ModelEmitter {
+        def: benilla_world::testing::plain_particle_def(),
+        texture: Some(Handle::default()),
+        bone_pivot: [0.0; 3],
+        billboard: None,
+        recursion: None,
+        geometry: None,
+        owner_reach: 0.0,
+        water_bound: (Vec3::ZERO, 0.0),
+        idle_seq: 0,
+    };
+    let world = h.app.world_mut();
+    let e = {
+        let mut commands = world.commands();
+        let e = benilla_world::particles::spawn_emitter(
+            &mut commands,
+            &em,
+            Transform::IDENTITY,
+            benilla_world::particles::EmitterFrames {
+                owner: None,
+                anchor: None,
+                alpha: None,
+                light_node: None,
+                on_owner_loss: benilla_world::particles::OwnerLoss::Free,
+            },
+            benilla_world::particles::EmitClock::Pinned,
+        )
+        .expect("an emitter");
+        commands.entity(e).insert(RenderLayers::layer(layer));
+        e
+    };
+    world.flush();
+    let star = |h: &mut Harness| {
+        h.app
+            .world()
+            .get::<benilla_world::particles::ParticleEmitter>(e)
+            .unwrap()
+            .size_scale()
+    };
+    h.frame();
+    assert_eq!(star(&mut h), 1.0, "the pane's own camera is a perspective");
+
+    h.run("m:SetCamera(99)");
+    h.frame();
+    assert!(ortho_leg(&mut h, pane));
+    assert_eq!(star(&mut h), 2000.0, "the orthographic leg's px per unit");
+
+    h.run("m:RefreshUnit()");
+    h.frame();
+    assert!(!ortho_leg(&mut h, pane));
+    assert_eq!(star(&mut h), 1.0, "and back under a perspective");
 }
 
 /// The hide hook drops the copy (`0x505ce0`) and the booth with it; the show hook builds again

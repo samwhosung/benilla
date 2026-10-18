@@ -234,6 +234,11 @@ impl ParticleEmitter {
         self.size_scale = size_scale;
     }
 
+    /// The half-extent unit as last set.
+    pub fn size_scale(&self) -> f32 {
+        self.size_scale
+    }
+
     /// Confine this cloud's quads to a UI tile's cell of the shared atlas, in pixels
     /// ([`crate::particles::buffer::EffectDrawSpec::clip`]), as the reference draws each `<Model>`
     /// with the widget's rect as its viewport; `None` draws over the whole target.

@@ -1233,6 +1233,8 @@ fn convert_entry(
                 px_per_unit: 1280.0 * model_scale * layout * s * dpi,
                 // `SetPosition` is in layout units: `768 · √(a²+1)` FrameXML per unit.
                 pos_px_per_unit: 768.0 * diag * layout * s * dpi,
+                // A particle's half-extent: eye space, neither scale (`0x7b2a50`).
+                star_px_per_unit: 768.0 * diag * s * dpi,
                 position: Vec3::new(position.0, position.1, position.2),
                 // The perspective root, in model units: translate `pos · layoutScale`, rotate
                 // `facing`, scale `G48 · (5/3) · modelScale · layoutScale`, where `G48 · (5/3)` is
@@ -1277,8 +1279,7 @@ fn convert_entry(
                         size_px,
                         px_per_unit: units.px_per_unit,
                         pos_px_per_unit: units.pos_px_per_unit,
-                        // A particle's half-extent: eye space, neither scale (`0x7b2a50`).
-                        star_px_per_unit: 768.0 * diag * s * dpi,
+                        star_px_per_unit: units.star_px_per_unit,
                         facing,
                         position: units.position,
                         root_scale: units.root_scale,

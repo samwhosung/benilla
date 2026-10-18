@@ -397,6 +397,10 @@ pub(super) fn sync_panes(
     mut render: PaneRender,
     mut cams: Query<(&mut Transform, &mut Projection, &mut RenderTarget), With<BoothCam>>,
     mut rigs: Query<(&mut AnimationPlayer, &benilla_assets::ModelAnimations)>,
+    mut emitters: Query<(
+        &mut benilla_world::particles::ParticleEmitter,
+        &RenderLayers,
+    )>,
 ) {
     let state = &mut *state;
     state.drawn.clear();
@@ -613,6 +617,24 @@ pub(super) fn sync_panes(
     for (h, pane) in &state.panes {
         if !state.drawn.contains(h) {
             marks.0.remove(&pane.key);
+        }
+    }
+    // A particle's half-extent unit follows the leg its pane draws through, for the emitters of
+    // the copy that stands and of any spawned since (`0x7b2a50`).
+    let stars: Vec<(usize, f32)> = state
+        .panes
+        .values()
+        .filter_map(|p| Some((p.layer, p.view.as_ref()?.star)))
+        .collect();
+    if !stars.is_empty() {
+        for (mut emitter, layers) in &mut emitters {
+            let star = stars
+                .iter()
+                .find(|(layer, _)| layers.intersects(&RenderLayers::layer(*layer)))
+                .map(|&(_, star)| star);
+            if let Some(star) = star.filter(|&s| s != emitter.size_scale()) {
+                emitter.set_size_scale(star);
+            }
         }
     }
     wanted_displays.sort_unstable();
