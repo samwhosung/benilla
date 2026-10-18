@@ -634,8 +634,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loader
 
-- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:370`](../crates/benilla-ui/src/loader/mod.rs#L370))
-- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:396`](../crates/benilla-ui/src/loader/mod.rs#L396))
+- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:429`](../crates/benilla-ui/src/loader/mod.rs#L429))
+- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:455`](../crates/benilla-ui/src/loader/mod.rs#L455))
 
 #### markup
 
