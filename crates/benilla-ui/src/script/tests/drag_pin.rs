@@ -299,29 +299,31 @@ fn the_layout_cache_round_trips_the_pin() {
 
 /// A drag that leaves the frame off the unit grid saves whole units: `X:`/`Y:` round to the
 /// nearest, a half away from zero (`0x490fc4`–`0x490fdf`), and the apply seats the rounded spot.
-/// The spot is off the half, where the getter steps on the rect decide which way it goes.
+/// The cursor travels -20.5 script units, but the pin moves by its layout delta, which `GetPoint`
+/// reads as -270.49995019286945 at 4:3, so the row rounds to -270, short of the half.
 #[test]
 fn a_sub_unit_drag_saves_and_restores_rounded() {
     let mut s = centred_box();
     s.run("Box:StartMoving()").unwrap();
-    s.mouse_move(430.25, 279.25);
+    s.mouse_move(430.25, 279.5);
     s.run("Box:StopMovingOrSizing()").unwrap();
-    crate::assert_near!(
-        anchor(&s),
-        pinned_at(330.25, -270.75),
-        "the live pin is exact"
+    assert_eq!(
+        s.eval::<(f64, f64)>("local _, _, _, x, y = Box:GetPoint(1) return x, y")
+            .unwrap(),
+        (330.249_972_190_708_3, -270.499_950_192_869_45),
+        "the live pin is the law's"
     );
     s.resolve();
     let saved = s.user_placed_layouts();
     assert_eq!(
         (saved[0].x, saved[0].y),
-        (Some(330), Some(-271)),
-        "330.25 rounds down, -270.75 away from zero"
+        (Some(330), Some(-270)),
+        "both round to the nearest"
     );
 
     let mut fresh = centred_box();
     fresh.restore_user_placed_layouts(saved);
-    assert_eq!(anchor(&fresh), pinned_at(330.0, -271.0));
+    assert_eq!(anchor(&fresh), pinned_at(330.0, -270.0));
 }
 
 /// A frame set user-placed without a drag keeps its authored anchors while it lives, but its row
@@ -524,5 +526,51 @@ fn a_drag_answers_the_layout_offsets_and_size_it_stored() {
         moved,
         "a far grip keeps the pin"
     );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// New cells are a reload: its teardown writes the layout cache under the old cells (`0x490e60`)
+/// and its build seats the user-placed frames from it under the new (`0x4905e0`). A frame dragged
+/// at 4:3 reads, after the window turns 16:9, as a fresh 16:9 build seated from that cache does,
+/// not its layout pin scaled by the new cells.
+#[test]
+fn an_aspect_change_reseats_a_dragged_frame_from_the_cache() {
+    let build = |w: f32| {
+        let mut s = script();
+        s.set_window_size(w, 768.0);
+        s.run(
+            r#"
+            Box = CreateFrame("Frame", "Box")
+            Box:SetPoint("BOTTOMLEFT", 300, 200); Box:SetWidth(200); Box:SetHeight(100)
+            Box:SetMovable(true); Box:SetResizable(true)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s
+    };
+    let read = |s: &mut UiScript| {
+        s.resolve();
+        s.eval::<(f64, f64, f64, f64)>(
+            "local _, _, _, x, y = Box:GetPoint(1) return x, y, Box:GetWidth(), Box:GetHeight()",
+        )
+        .unwrap()
+    };
+    let mut s = build(1024.0);
+    s.mouse_move(400.0, 300.0);
+    s.run("Box:StartMoving()").unwrap();
+    s.mouse_move(437.25, 289.5);
+    s.run("Box:StopMovingOrSizing()").unwrap();
+    s.resolve();
+    let rows = s.user_placed_layouts();
+    // The rect reads 337.2500178627667 by -478.49993946403356 under the 4:3 cells.
+    assert_eq!((rows[0].x, rows[0].y), (Some(337), Some(-478)));
+    s.set_window_size(1366.0, 768.0);
+
+    let mut fresh = build(1366.0);
+    fresh.restore_user_placed_layouts(rows);
+    let want = read(&mut fresh);
+    assert_eq!(read(&mut s), want);
+    crate::assert_near!(want, (337.0, -478.0, 200.0, 100.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

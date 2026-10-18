@@ -8,7 +8,7 @@
 //! to integers. The apply (`0x4905e0`) pins TOPLEFT on the screen there and sets the size, so the
 //! frame's authored anchors do not survive it.
 
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Len, Point};
 use crate::widget::FrameHandle;
 
 use super::object::point_from_str;
@@ -271,6 +271,44 @@ impl super::UiScript {
             }
             model.invalidate_frame(h, changed);
         }
+    }
+
+    /// New cells under a live interface: each frame with a row, its lengths a drag wrote in layout
+    /// units brought back to the script numbers they read as under the cells `before`, as the
+    /// reload rebuilds the frame from its script; then the rows seated under the new cells, as
+    /// the reload's build seats them (`0x4905e0`). The rows were written under `before`
+    /// ([`Self::user_placed_layouts`]), rounded, so a seated frame lands on whole units.
+    pub(super) fn reseat_user_placed(
+        &mut self,
+        rows: Vec<FrameLayout>,
+        before: crate::layout::LayoutUnits,
+    ) {
+        {
+            let mut model = self.model_mut();
+            let script = |l: &mut Len| {
+                if let Len::Layout(v) = *l {
+                    *l = Len::Script(before.load(v) as f32);
+                }
+            };
+            for row in &rows {
+                let Some(h) = model.arena.lookup(&row.name) else {
+                    continue;
+                };
+                let Some(input) = model.layout_inputs.get_mut(&h) else {
+                    continue;
+                };
+                script(&mut input.width);
+                script(&mut input.height);
+                for p in (0..9).filter_map(Point::from_id) {
+                    if let Some((x, y)) = input.anchors.offset_mut(p) {
+                        script(x);
+                        script(y);
+                    }
+                }
+                model.invalidate_frame(h, true);
+            }
+        }
+        self.restore_user_placed_layouts(rows);
     }
 
     /// Whether a user-placed frame moved or resized since the last call: the host's cue to persist.

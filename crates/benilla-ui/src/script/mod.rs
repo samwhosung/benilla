@@ -893,11 +893,21 @@ impl UiScript {
     }
 
     fn set_root(&mut self, new: Rect, aspect: Option<f32>) -> bool {
-        let mut model = self.model_mut();
-        if model.screen == new && model.aspect.map(f32::to_bits) == aspect.map(f32::to_bits) {
+        let (same, before) = {
+            let model = self.model_ref();
+            let same =
+                model.screen == new && model.aspect.map(f32::to_bits) == aspect.map(f32::to_bits);
+            (same, model.layout_units())
+        };
+        if same {
             return false;
         }
-        let before = model.layout_units();
+        // New cells are a reload, whose teardown writes the layout cache under the cells in force
+        // (`0x490e60`) and whose build seats the user-placed frames from it under the new
+        // (`0x4905e0`): the rows are taken before anything moves.
+        let next = crate::layout::LayoutUnits::from_aspect(Model::aspect_of(new, aspect));
+        let reseat = (next != before).then(|| self.user_placed_layouts());
+        let mut model = self.model_mut();
         model.screen = new;
         model.aspect = aspect;
         let units = crate::layout::LayoutUnits::from_aspect(model.screen_aspect());
@@ -917,6 +927,9 @@ impl UiScript {
         drop(model);
         // The implicit rects are in layout units, which follow the aspect.
         self.reapply_implicit_rects();
+        if let Some(rows) = reseat {
+            self.reseat_user_placed(rows, before);
+        }
         true
     }
 

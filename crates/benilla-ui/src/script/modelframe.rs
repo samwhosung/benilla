@@ -39,10 +39,15 @@ impl Model {
     /// [`crate::script::UiScript::set_window_size`] gave it, else the root's own width over height,
     /// else 4/3.
     pub(crate) fn screen_aspect(&self) -> f32 {
-        if let Some(a) = self.aspect {
+        Self::aspect_of(self.screen, self.aspect)
+    }
+
+    /// [`Self::screen_aspect`] for a root `screen` and a window aspect `aspect`.
+    pub(crate) fn aspect_of(screen: crate::layout::Rect, aspect: Option<f32>) -> f32 {
+        if let Some(a) = aspect {
             return a;
         }
-        let (w, h) = (self.screen.width(), self.screen.height());
+        let (w, h) = (screen.width(), screen.height());
         if h > 0.0 && w > 0.0 {
             w / h
         } else {
