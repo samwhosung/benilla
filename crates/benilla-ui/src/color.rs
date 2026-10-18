@@ -76,6 +76,9 @@ impl Rgba8 {
     pub const WHITE: Self = Self::rgba(255, 255, 255, 255);
     /// `0xff000000`, a FontString's own default shadow (`0x770da1`).
     pub const BLACK: Self = Self::rgba(0, 0, 0, 255);
+    /// `0x00000000`, the default shadow of every font `CSimpleFont`'s constructor builds
+    /// (`0x783a72`): a `CreateFont` or `<Font>` font and a widget's own.
+    pub const TRANSPARENT: Self = Self::rgba(0, 0, 0, 0);
 
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }

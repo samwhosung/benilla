@@ -664,6 +664,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── shadow ──────────────────────────────────────────────────────────────────────────────
+    // An unset shadow is the constructor's transparent black (`0x783a72`), which `GetShadowColor`
+    // reads (`0x79f910`) and `SetShadowOffset` keeps (`0x79fa4a`-`0x79fa92`).
     m.set(
         "SetShadowColor",
         lua.create_function(
@@ -682,7 +684,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let c = read(lua, &this)?
                 .shadow
-                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+                .map_or(crate::color::Rgba8::TRANSPARENT, |s| s.color);
             Ok(super::object::colour_values(c))
         })?,
     )?;
@@ -690,7 +692,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetShadowOffset",
         lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
             edit(lua, &this, FontMask::SHADOW, |fo| {
-                let color = fo.shadow.map_or(crate::color::Rgba8::BLACK, |s| s.color);
+                let color = fo
+                    .shadow
+                    .map_or(crate::color::Rgba8::TRANSPARENT, |s| s.color);
                 fo.shadow = Some(FontShadow {
                     offset: [x, y],
                     color,

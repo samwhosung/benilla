@@ -1188,3 +1188,40 @@ fn set_font_reads_and_clears_monochrome() {
     assert_eq!(flags_of(&s, "a"), (Outline::Normal, false));
     assert_eq!(flags_of(&s, "b"), (Outline::Normal, true));
 }
+
+/// `CSimpleFont`'s constructor zeroes the shadow colour (`0x783a72`): a `CreateFont` font, an
+/// EditBox's and a message frame's read transparent black, and `SetShadowOffset` keeps it, so a
+/// following string takes an invisible shadow. Only a FontString's own default is opaque
+/// (`0x770da1`).
+#[test]
+fn a_fonts_unset_shadow_is_transparent() {
+    let s = script();
+    s.run(
+        "F = CreateFont('UnsetShadowF')
+         host = CreateFrame('Frame') fs = host:CreateFontString() plain = host:CreateFontString()
+         eb = CreateFrame('EditBox') mf = CreateFrame('MessageFrame')
+         smf = CreateFrame('ScrollingMessageFrame')",
+    )
+    .unwrap();
+    let alpha = |obj: &str| {
+        s.eval::<Vec<f32>>(&format!("return {{ {obj}:GetShadowColor() }}"))
+            .unwrap()
+    };
+    for obj in ["F", "eb", "mf", "smf"] {
+        assert_eq!(alpha(obj), vec![0.0, 0.0, 0.0, 0.0], "{obj}");
+    }
+    assert_eq!(
+        alpha("plain")[3],
+        crate::color::quant::read32(1.0),
+        "a FontString's own shadow"
+    );
+    s.run("F:SetShadowOffset(1, -1) fs:SetFontObject(F) eb:SetShadowOffset(1, -1)")
+        .unwrap();
+    assert_eq!(alpha("F"), vec![0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(
+        alpha("fs"),
+        vec![0.0, 0.0, 0.0, 0.0],
+        "the follower's shadow"
+    );
+    assert_eq!(alpha("eb"), vec![0.0, 0.0, 0.0, 0.0]);
+}

@@ -128,6 +128,20 @@ pub(super) enum FontKind {
     Instance,
 }
 
+impl FontKind {
+    /// The shadow colour an unset shadow reads: a FontString's own default is opaque black
+    /// (`0x770da1`), a font instance's the transparent black `CSimpleFont`'s constructor writes
+    /// (`0x783a72`; the EditBox's `0x779ba8`, the message frames' `0x785700` and `0x78778f`). The
+    /// EditBox's font and its text string share one record here, so each answers its own default
+    /// until a set, which the reference pushes to the string too.
+    fn unset_shadow(self) -> crate::color::Rgba8 {
+        match self {
+            FontKind::FontString => crate::color::Rgba8::BLACK,
+            FontKind::Instance => crate::color::Rgba8::TRANSPARENT,
+        }
+    }
+}
+
 /// A `SetFont` load's outcome.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Load {
@@ -378,7 +392,7 @@ pub(super) fn install(
                 .region_data
                 .get(&rh)
                 .and_then(|d| d.font_shadow)
-                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+                .map_or(kind.unset_shadow(), |s| s.color);
             Ok(super::object::colour_values(c))
         })?,
     )?;
@@ -389,9 +403,7 @@ pub(super) fn install(
             let rh = resolve(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
-            let color = d
-                .font_shadow
-                .map_or(crate::color::Rgba8::BLACK, |s| s.color);
+            let color = d.font_shadow.map_or(kind.unset_shadow(), |s| s.color);
             d.font_shadow = Some(FontShadow {
                 offset: [x, y],
                 color,
