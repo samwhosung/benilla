@@ -439,10 +439,10 @@ pub(crate) struct RegionData {
     pub(crate) tex_coord_modifies_rect: bool,
     /// Rotation about the centre, radians counterclockwise; always 0: 1.12 has no Texture setter.
     pub(crate) rotation: f32,
-    /// The font object this FontString inherits (`FONTINSTANCE+0x028`, a FontString's `+0xd0`), a
-    /// live link: its paint is copied below, and
-    /// [`script::font::propagate`](super::font::propagate) repaints on a change.
-    pub(crate) font_object: Option<String>,
+    /// The font object this FontString follows (a FontString's `+0xd0`), a live link written only
+    /// by [`script::font::link_region`](super::font::link_region): the font's groups land below
+    /// and [`script::font::push`](super::font::push) brings each change.
+    pub(crate) font_object: Option<super::font::FontId>,
     /// The groups this region still takes from its font object, `+0xd4`; each local setter clears
     /// its own.
     pub(crate) font_mask: FontMask,
@@ -494,6 +494,7 @@ impl FontMask {
     /// The line spacing (`0x7708fd`).
     pub(crate) const SPACING: FontMask = FontMask(0x10);
     pub(crate) const ALL: FontMask = FontMask(0x1f);
+    pub(crate) const NONE: FontMask = FontMask(0);
 
     /// Whether every bit of `g` is set.
     pub(crate) fn has(self, g: FontMask) -> bool {
@@ -502,6 +503,14 @@ impl FontMask {
 
     pub(crate) fn clear(&mut self, g: FontMask) {
         self.0 &= !g.0;
+    }
+
+    pub(crate) fn set(&mut self, g: FontMask) {
+        self.0 |= g.0;
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 

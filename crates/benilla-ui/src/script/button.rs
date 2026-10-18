@@ -154,17 +154,9 @@ fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
         };
         (rh, bs.normal_font.clone(), bs.normal_justify_h)
     };
-    // The setter refuses an unknown name; a hand-made handle naming no font is ignored here.
-    let fo = name.as_deref().and_then(|n| model.font_object(n).cloned());
+    let to = name.as_deref().and_then(|n| model.fonts.id(n));
+    super::font::link_region(model, rh, to);
     let d = model.region_data.entry(rh).or_default();
-    match (&name, fo) {
-        (None, _) => d.font_object = None,
-        (Some(_), None) => {}
-        (Some(name), Some(fo)) => {
-            d.font_object = Some(name.clone());
-            super::font::repaint(d, &fo);
-        }
-    }
     if let Some(j) = local_justify {
         if d.font_mask.has(super::FontMask::JUSTIFY) {
             d.justify.set_h(j);
@@ -207,29 +199,11 @@ pub(crate) fn set_label_font_justify_h_lua(
 /// font object, nil, or a name looked up at once (`0x783870`, `0x79efe1`), a miss raising
 /// `<button>:SetFontObject(): Couldn't find font named <name>` (`0x87c5fc`, the button's name or
 /// `<unnamed>`, `0x84c7f0`), so no dead name is stored.
-fn state_font_arg(
-    lua: &Lua,
-    this: &Table,
-    verb: &str,
-    font: &Value,
-) -> mlua::Result<Option<String>> {
-    let name = super::font::resolve(verb, font)?;
-    let Some(n) = name.as_deref().filter(|_| matches!(font, Value::String(_))) else {
-        return Ok(name);
-    };
-    let h = frame_handle_of(lua, this)?;
+fn state_font_arg(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<Option<String>> {
+    let who = super::font::c_name(lua, this);
+    let id = super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    if model.font_object(n).is_some() {
-        return Ok(name);
-    }
-    let who = model
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_else(|| "<unnamed>".to_string());
-    Err(mlua::Error::runtime(format!(
-        "{who}:SetFontObject(): Couldn't find font named {n}"
-    )))
+    Ok(id.and_then(|id| model.fonts.get(id).name.clone()))
 }
 
 /// Run `f` over a frame's Button state under one short write borrow. It moves no state, only an
@@ -745,8 +719,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // frame, so a state change or a later edit to the object reaches the label.
     m.set(
         "SetTextFontObject",
-        lua.create_function(|lua, (this, font): (Table, Value)| {
-            let name = state_font_arg(lua, &this, "SetTextFontObject", &font)?;
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let name = state_font_arg(lua, &this, &args)?;
             let owner = frame_handle_of(lua, &this)?;
             with_button(lua, &this, |bs| bs.normal_font = name)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -756,15 +730,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetHighlightFontObject",
-        lua.create_function(|lua, (this, font): (Table, Value)| {
-            let name = state_font_arg(lua, &this, "SetHighlightFontObject", &font)?;
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let name = state_font_arg(lua, &this, &args)?;
             with_button(lua, &this, |bs| bs.highlight_font = name)
         })?,
     )?;
     m.set(
         "SetDisabledFontObject",
-        lua.create_function(|lua, (this, font): (Table, Value)| {
-            let name = state_font_arg(lua, &this, "SetDisabledFontObject", &font)?;
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let name = state_font_arg(lua, &this, &args)?;
             with_button(lua, &this, |bs| bs.disabled_font = name)
         })?,
     )?;

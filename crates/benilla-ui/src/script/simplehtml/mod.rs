@@ -46,7 +46,7 @@ pub(super) const REG_SIMPLEHTML_METHODS: &str = "__benilla_simplehtml_methods";
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ElementFont {
     /// `inherits=` or `SetFontObject`: the object this element resolves through.
-    pub(crate) font_object: Option<String>,
+    pub(crate) font_object: Option<super::font::FontId>,
     /// The groups this element still takes from its font object, its inherit mask
     /// (`FONTINSTANCE+0x2c`), which a block inherits.
     pub(crate) mask: super::FontMask,
@@ -93,7 +93,7 @@ impl Default for SimpleHtmlState {
 /// property groups at once (`0x770d06`), with the element's own sets on top.
 #[derive(Clone, Debug, Default)]
 struct BlockPaint {
-    font_object: Option<String>,
+    font_object: Option<super::font::FontId>,
     mask: super::FontMask,
     font_path: Option<String>,
     font_height: Option<f32>,
@@ -106,13 +106,9 @@ struct BlockPaint {
 
 /// Flatten one element font against the (live) font object it inherits.
 fn resolve_font(model: &Model, ef: &ElementFont) -> BlockPaint {
-    let fo: Option<FontObject> = ef
-        .font_object
-        .as_deref()
-        .and_then(|n| model.font_object(n))
-        .cloned();
+    let fo: Option<FontObject> = ef.font_object.map(|id| model.fonts.get(id).block.clone());
     let mut p = BlockPaint {
-        font_object: ef.font_object.clone(),
+        font_object: ef.font_object,
         mask: ef.mask,
         justify: Justify::default(),
         spacing: ef.spacing,
@@ -244,7 +240,6 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     // trip, as the client's font engine gives it (`0x7729b0`, `0x5c2070`).
                     size: Some((width, 0.0)),
                     text: Some(text),
-                    font_object: paint.font_object.clone(),
                     font_mask: paint.mask,
                     font_path: paint.font_path.clone(),
                     font_height: paint.font_height,
@@ -263,6 +258,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                 d.justify_mask.0 &= !justify::H_MASK;
                 d.font_mask.clear(super::FontMask::JUSTIFY);
                 model.region_data.insert(rh, d);
+                // It follows the element's font object, which re-lands only what it inherits.
+                super::font::link_region(model, rh, paint.font_object);
                 model.touch_measure(rh); // a text block arrives with its text
                 prev_block = Some(id);
                 // The block FontString's field, which its setter clamped (`0x78aeaf`).
@@ -478,15 +475,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetFontObject",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let name = super::font::resolve("SetFontObject", &arg(&rest, 0))?;
-            if let Some(n) = &name {
-                let model = lua.app_data_ref::<Model>().expect("model");
-                if model.font_object(n).is_none() {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetFontObject: no font object named '{n}' is registered"
-                    )));
-                }
-            }
+            let who = super::font::c_name(lua, &this);
+            let name =
+                super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, rest.front())?;
             // nil severs the link and keeps the paint, as the reference stores a null parent; an
             // element font resolves its object lazily, so the standing paint is pinned here.
             let standing = name
@@ -527,16 +518,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
             let h = html_handle(lua, &this)?;
-            let name = {
+            let id = {
                 let model = lua.app_data_ref::<Model>().expect("model");
                 model
                     .simple_html
                     .get(&h)
-                    .and_then(|s| s.fonts[elem].font_object.clone())
-                    .filter(|n| model.font_object(n).is_some())
+                    .and_then(|s| s.fonts[elem].font_object)
             };
-            match name {
-                Some(n) => Ok(Value::Table(super::font::wrapper(lua, &n)?)),
+            match id {
+                Some(id) => Ok(Value::Table(super::font::wrapper(lua, id)?)),
                 None => Ok(Value::Nil),
             }
         })?,

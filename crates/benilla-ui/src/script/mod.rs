@@ -1453,14 +1453,17 @@ impl UiScript {
         }
     }
 
-    /// Register a named [`FontObject`] (a resolved `<Font>`), replacing any of that name, and
-    /// publish it as the Lua global `name`, the same pair `Loader::do_font` performs.
+    /// Register a named [`FontObject`] (a resolved `<Font>`), its block replaced by `font` and the
+    /// change pushed to what follows it, and publish it as the Lua global `name`.
     pub fn register_font_object(&self, name: &str, font: FontObject) {
-        self.model_mut()
-            .font_objects_by_lower
-            .insert(name.to_ascii_lowercase(), font);
+        let id = {
+            let mut model = self.model_mut();
+            let id = model.fonts.named(name);
+            font::replace_block(&mut model, id, font);
+            id
+        };
         // Publishing a fresh table under a string key cannot fail; the record is in place anyway.
-        let _ = font::publish(&self.lua, name);
+        let _ = font::publish(&self.lua, id, name);
     }
 
     /// A registered [`FontObject`] by name: its resolved paint.

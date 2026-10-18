@@ -194,40 +194,21 @@ pub(super) fn install(
     on_font_change: Option<FontChanged>,
 ) -> mlua::Result<()> {
     // ── the font object ──
-    // SetFontObject(font | "font" | nil) → nothing (`0x79ef10`, usage string `0x87c5cc`). Any
-    // other argument or an unknown name raises: every rejection is `luaL_error` (`0x6f4940`).
+    // SetFontObject(font | "font" | nil) → nothing (the FontString's `0x79d1a0`, the shared
+    // `0x79ef10` behind the others), linking with `0x770c60`: every group the font holds lands
+    // through the region's mask, and later changes are pushed. nil unlinks and keeps the paint.
     m.set(
         "SetFontObject",
-        lua.create_function(move |lua, (this, font): (Table, Value)| {
-            let name = super::font::resolve("SetFontObject", &font)?;
+        lua.create_function(move |lua, (this, args): (Table, mlua::MultiValue)| {
+            let who = super::font::c_name(lua, &this);
+            let to =
+                super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
             let rh = resolve(lua, &this)?;
             let relinked = {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
-                // nil severs the link and keeps the paint; the reference only nulls the parent.
-                let Some(name) = name else {
-                    model.region_data.entry(rh).or_default().font_object = None;
-                    return Ok(());
-                };
-                let Some(fo) = model.font_object(&name).cloned() else {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetFontObject: no font object named '{name}' is registered"
-                    )));
-                };
-                let d = model.region_data.entry(rh).or_default();
-                // The same object again changes nothing (`0x770c6a`).
-                let relinked = d
-                    .font_object
-                    .as_deref()
-                    .is_none_or(|old| !old.eq_ignore_ascii_case(&name));
-                d.font_object = Some(name);
-                // The inherit mask stays: each local setter clears its bit (`FONTINSTANCE+0x2c`)
-                // and nothing restores it, so a property set locally survives a later
-                // `SetFontObject`.
-                super::font::repaint(d, &fo);
-                model.touch_measure(rh);
-                relinked
+                super::font::link_region(&mut model, rh, to)
             };
-            if relinked {
+            if relinked && to.is_some() {
                 if let Some(changed) = on_font_change {
                     changed(lua, &this)?;
                 }
@@ -235,21 +216,17 @@ pub(super) fn install(
             Ok(())
         })?,
     )?;
-    // GetFontObject() → the font object last set, never its name, or nil (`0x79f090`).
+    // GetFontObject() → the font object it follows, never its name, or nil (`0x79f090`).
     m.set(
         "GetFontObject",
         lua.create_function(move |lua, this: Table| {
             let rh = resolve(lua, &this)?;
-            let name = {
+            let id = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                model
-                    .region_data
-                    .get(&rh)
-                    .and_then(|d| d.font_object.clone())
-                    .filter(|n| model.font_object(n).is_some())
+                model.region_data.get(&rh).and_then(|d| d.font_object)
             };
-            match name {
-                Some(n) => Ok(Value::Table(super::font::wrapper(lua, &n)?)),
+            match id {
+                Some(id) => Ok(Value::Table(super::font::wrapper(lua, id)?)),
                 None => Ok(Value::Nil),
             }
         })?,

@@ -126,10 +126,10 @@ fn tablet_reads_the_tooltip_header_size_off_the_global() {
     assert_eq!((header, normal), (14.0, 12.0));
 }
 
-/// `inherits=` is copied once, at load, where the reference links it live (`0x770c60`), and
-/// the published object carries the flattened values.
+/// `inherits=` links the font to its parent (`0x783ce6`), and the published object's block holds
+/// the parent's groups merged under its own.
 #[test]
-fn an_inheriting_font_still_flattens_to_the_same_values() {
+fn an_inheriting_font_holds_its_parents_groups_under_its_own() {
     let s = script();
     load(
         &s,

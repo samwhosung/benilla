@@ -261,9 +261,8 @@ pub(crate) struct Model {
     pub(crate) backdrops: HashMap<FrameHandle, backdrop::Installed>,
     /// `CSimpleHTML`'s state: element fonts `+0x350`, link format `+0x360`, content nodes `+0x340`.
     pub(crate) simple_html: simplehtml::SimpleHtmlStates,
-    /// Named `<Font>` objects by lowercased name, as 1.12 matches them with `SStrCmpI` (`0x783870`,
-    /// `0x7838c7`); read them only through `font_object`, where the fold lives.
-    pub(crate) font_objects_by_lower: HashMap<String, FontObject>,
+    /// Every font object, named or a widget's own, with its links ([`super::font::Fonts`]).
+    pub(crate) fonts: super::font::Fonts,
     /// Each region's rect while its valid bit is set: what its getters and a FontString's draw
     /// read (`GetRect 0x768320`, `0x7730b7`). A cleared region keeps its rect until its own next
     /// invalidate, as `ClearAllPoints` queues no resolve (`0x767620`).
@@ -1281,11 +1280,7 @@ impl Model {
 
     /// A named font object, matched case-insensitively (ASCII) as the client's `SStrCmpI` does.
     pub(crate) fn font_object(&self, name: &str) -> Option<&FontObject> {
-        if name.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.font_objects_by_lower.get(&name.to_ascii_lowercase())
-        } else {
-            self.font_objects_by_lower.get(name)
-        }
+        self.fonts.block_of(name)
     }
 
     /// Records a caught script error for the host, the retained log and the Lua error handler: `log`
@@ -1401,7 +1396,7 @@ impl Model {
             texels: super::texel::Texels::default(),
             backdrops: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),
-            font_objects_by_lower: HashMap::new(),
+            fonts: super::font::Fonts::default(),
             region_resolved: HashMap::new(),
             region_kept: HashMap::new(),
             next_id: 1,

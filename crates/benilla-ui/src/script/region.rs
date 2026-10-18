@@ -734,6 +734,10 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
     for &rh in dying {
         if let Some(data) = model.region_data.remove(&rh) {
             model.texels.release(data.tex);
+            // A dying FontString leaves its font's list (`0x773490` → `0x770c60(0)`).
+            if let Some(font) = data.font_object {
+                model.fonts.drop_region(font, rh);
+            }
         }
         model.region_resolved.remove(&rh);
         model.region_kept.remove(&rh);
