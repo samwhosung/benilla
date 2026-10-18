@@ -65,25 +65,20 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Copy a chunk-era file whose lines the reader dropped to `saved-variables.lua.bak` before the
-/// shutdown write replaces it, once: an existing copy is never overwritten. With no copy made the
-/// file is held, so the write leaves it as it is.
+/// shutdown write replaces it, once: an existing copy is never overwritten. The copy is written
+/// whole beside it and then renamed into place, so a crash never leaves a partial one; if it cannot
+/// be written the file is held, so the write leaves it as it is.
 fn keep_chunk_era_copy(script: &UiScript, path: &std::path::Path, bytes: &[u8], lost: usize) {
     use std::io::Write as _;
     let bak = path.with_extension("lua.bak");
-    let copy = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&bak)
-    {
-        Ok(mut f) => f
-            .write_all(bytes)
-            .and_then(|()| f.sync_all())
-            .inspect_err(|_| {
-                let _ = std::fs::remove_file(&bak);
-            }),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return,
-        Err(e) => Err(e),
-    };
+    if bak.exists() {
+        return;
+    }
+    let tmp = path.with_extension("lua.bak.tmp");
+    let copy = std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| std::fs::rename(&tmp, &bak));
+    let _ = std::fs::remove_file(&tmp);
     match copy {
         Ok(()) => warn!(
             "saved variables: {} has {lost} line(s) this build no longer reads; the file as it \
@@ -188,7 +183,7 @@ mod tests {
         assert_eq!(
             fresh.eval::<i64>("return VL_SEEN").unwrap(),
             1,
-            "VARIABLES_LOADED fires exactly once, after the chunk"
+            "VARIABLES_LOADED fires exactly once, after the file is read"
         );
 
         // A line the reader ignores leaves the default, and the shutdown writes the file anew.

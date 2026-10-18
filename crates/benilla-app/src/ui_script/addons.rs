@@ -702,8 +702,8 @@ pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(Str
             }
         }
     }
-    // Any file written or removed empties the loose-file index (`0x51f85e` counts a delete,
-    // `0x51fa2f` tests the count, `0x51fa31`).
+    // A file created or removed empties the loose-file index (a flag set at `0x51f79b`, `0x51f85e`,
+    // tested at `0x51fa2f`, cleared at `0x51fa31`); clearing it on every write is a harmless superset.
     if written > 0 {
         benilla_formats::install_index().clear();
     }

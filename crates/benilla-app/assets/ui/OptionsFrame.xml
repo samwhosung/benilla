@@ -585,7 +585,7 @@
             SetCVar(row.partner.cvar, v)
         end
 
-        -- A uvar's default is captured at OnLoad, before the saved-variables chunk runs.
+        -- A uvar's default is captured at OnLoad, before the saved-variables file is read.
         function BenillaOptionsRow_Default(row)
             if row.uvar then return row.udefault end
             if row.getFunc then return row.fdefault end

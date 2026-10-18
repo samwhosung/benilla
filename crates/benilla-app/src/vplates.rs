@@ -265,7 +265,7 @@ pub(crate) fn take_legacy_settings(cvars: &mut crate::cvars::Cvars) -> LegacyPla
     )
 }
 
-/// Seat the legacy settings over the saved-variables chunk's values, before `VARIABLES_LOADED`,
+/// Seat the legacy settings over the saved-variables file's values, before `VARIABLES_LOADED`,
 /// as the number 1 or nil (a Lua 0 is truthy). Until now the setting was the CVar, which
 /// outranked the file.
 pub(crate) fn seat_legacy_settings(
