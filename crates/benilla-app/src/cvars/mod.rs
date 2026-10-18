@@ -12,8 +12,9 @@
 //!   registry applies nothing itself. A callback that can refuse a write is also the row's
 //!   [`CvarCheck`], which the registry and the VM's mirror run before storing.
 //! - A latched row's write is staged in [`Row::pending`] until [`Cvars::commit_latched`], the
-//!   reference's `0x639ec0` inside `RestartGx`. A stage never committed is dropped at exit, as the
-//!   reference's `SaveConfig` writes only the applied value (`rec+0x20`).
+//!   reference's `0x639ec0` inside `RestartGx`. A stage never committed is what the save writes,
+//!   as the reference's `SaveConfig` takes the latched text first (`rec+0x38`, `0x63da27`), so it
+//!   applies at the next launch.
 //! - Boot folds `benilla-config/config.toml` in and fires the observers before anything after
 //!   [`CvarLoad`]; each frame drains the VM's writes in and pushes the registry's out; a dirty
 //!   registry saves after one quiet second or at exit, writing only values off their default and
@@ -355,15 +356,18 @@ impl Cvars {
             }
         }
         if row.latched {
-            // The reference's `Set 0x63df50` on flag bit1 stores `latchedValue` and skips
-            // `InternalSet`: no dirty, no callback. The stage lives here, not in the mirror, which
-            // only ever learns applied values.
+            // The reference's `Set 0x63df50` on flag bit1 stores `latchedValue`, skips
+            // `InternalSet` and marks the config dirty (`0x63dfc4`), since the save writes the
+            // stage. The stage lives here, not in the mirror, which only ever learns applied
+            // values.
             let staged = (!same_text(value, &row.value)).then(|| value.to_string());
             if row.pending == staged {
                 return SetOutcome::Unchanged;
             }
             row.pending = staged;
-            return if row.pending.is_some() {
+            let staged = row.pending.is_some();
+            self.touch();
+            return if staged {
                 SetOutcome::Staged
             } else {
                 SetOutcome::Unchanged // the stage cleared: the boundary has nothing to do
@@ -466,9 +470,9 @@ impl Cvars {
     /// moved.
     ///
     /// Only `gx*` rows: `SoundBufferSize`'s register site (`0x4571ca`) discards its record, so
-    /// nothing commits it and its stage is lost at exit, as in the reference. The reference runs a
-    /// gx callback at `SetCVar` time (`0x63df50`); ours fire here, before the device rebuild reads
-    /// them.
+    /// nothing commits it; its stage is saved (`0x63da27`) and the sound init reads it at the next
+    /// launch. The reference runs a gx callback at `SetCVar` time (`0x63df50`); ours fire here,
+    /// before the device rebuild reads them.
     pub(crate) fn commit_latched(&mut self) -> usize {
         let mut moved = 0;
         for row in &mut self.rows {
@@ -683,9 +687,9 @@ impl Cvars {
         std::mem::take(&mut self.outbox)
     }
 
-    /// The file to save: the previous file as the merge base, each row off its default at its
-    /// applied value (a staged one is not the player's yet), each at its default removed;
-    /// session-owned and unknown keys untouched.
+    /// The file to save, `SaveConfig` (`0x63d980`): the previous file as the merge base, each row
+    /// at its staged value, else its applied one (`0x63da27`-`0x63da2e`), and a row whose text is
+    /// its default removed; session-owned and unknown keys untouched.
     fn compose(&self) -> BTreeMap<String, String> {
         let mut out = self.file.clone();
         for row in &self.rows {
@@ -698,16 +702,14 @@ impl Cvars {
                 .keys()
                 .find(|k| k.eq_ignore_ascii_case(&row.name))
                 .cloned();
+            let text = row.pending.as_ref().unwrap_or(&row.value);
             // `SaveConfig` skips a value equal to its default case-blind (`0x63da4a`).
-            if same_text(&row.value, &row.default) {
+            if same_text(text, &row.default) {
                 if let Some(k) = existing {
                     out.remove(&k);
                 }
             } else {
-                out.insert(
-                    existing.unwrap_or_else(|| row.name.clone()),
-                    row.value.clone(),
-                );
+                out.insert(existing.unwrap_or_else(|| row.name.clone()), text.clone());
             }
         }
         out
@@ -2137,9 +2139,15 @@ mod tests {
             out.get("cameraCustomViewSmoothing").map(String::as_str),
             Some("1")
         );
-        assert!(
-            !out.contains_key("SoundOutputSystem"),
+        assert_eq!(
+            cvars.get("SoundOutputSystem"),
+            Some("-1"),
             "a stage is not applied"
+        );
+        assert_eq!(
+            out.get("SoundOutputSystem").map(String::as_str),
+            Some("1"),
+            "but it is saved (`0x63da27`)"
         );
         cvars.set("cameraCustomViewSmoothing", "0");
         assert!(!cvars.compose().contains_key("cameraCustomViewSmoothing"));
@@ -2596,9 +2604,9 @@ mod tests {
         cvars
     }
 
-    /// A latched row's write is staged: the applied value stands and nothing fires or dirties (the
-    /// reference's `Set 0x63df50` stores `latchedValue` and skips `InternalSet`) until the commit
-    /// (`0x63e060`) applies, fires, persists and mirrors it.
+    /// A latched row's write is staged: the applied value stands and nothing fires (the
+    /// reference's `Set 0x63df50` stores `latchedValue`, skips `InternalSet` and dirties the file)
+    /// until the commit (`0x63e060`) applies, fires and mirrors it.
     #[test]
     fn a_latched_row_stages_the_write_until_the_boundary_commits_it() {
         let mut cvars = Cvars::default();
@@ -2610,15 +2618,16 @@ mod tests {
         assert_eq!(cvars.get("gxVSync"), Some("1"), "applied value stands");
         assert_eq!(cvars.row("gxVSync").unwrap().pending.as_deref(), Some("0"));
         assert!(!cvars.has_events(), "nothing fires before the boundary");
-        assert!(!cvars.dirty, "nothing to save before the boundary");
+        assert!(cvars.dirty, "the stage is saved (`0x63dfc4`)");
         assert_eq!(
             cvars.set("gxVSync", "0"),
             SetOutcome::Unchanged,
             "same stage"
         );
-        assert!(
-            !cvars.compose().contains_key("gxVSync"),
-            "a stage that is never committed never reaches the file"
+        assert_eq!(
+            cvars.compose().get("gxVSync").map(String::as_str),
+            Some("0"),
+            "the save takes the stage first (`0x63da27`)"
         );
         assert_eq!(cvars.commit_latched(), 1);
         assert_eq!(cvars.get("gxVSync"), Some("0"));
@@ -2652,10 +2661,41 @@ mod tests {
             cvars.row("SoundBufferSize").unwrap().pending.as_deref(),
             Some("200")
         );
-        assert!(!cvars.compose().contains_key("SoundBufferSize"));
+        assert_eq!(
+            cvars.compose().get("SoundBufferSize").map(String::as_str),
+            Some("200")
+        );
         assert_eq!(cvars.set("MusicVolume", "0.7"), SetOutcome::Changed);
         assert_eq!(cvars.get("MusicVolume"), Some("0.7"));
         assert_eq!(cvars.take_events().len(), 1);
+    }
+
+    /// A stage never committed is saved (`SaveConfig` takes `rec+0x38` first, `0x63da27`), so the
+    /// next launch boots at it; staging back to the applied value takes it out of the file.
+    #[test]
+    fn a_stage_never_committed_is_saved_and_boots_the_next_launch() {
+        let mut cvars = registry(&[("gxVSync", "1")]);
+        cvars.set("gxVSync", "0");
+        cvars.set("SoundBufferSize", "200");
+        let file = cvars.compose();
+        assert_eq!(file.get("gxVSync").map(String::as_str), Some("0"));
+        assert_eq!(file.get("SoundBufferSize").map(String::as_str), Some("200"));
+        let next = registry(
+            &file
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(next.get("gxVSync"), Some("0"), "applied at the next launch");
+        assert_eq!(next.get("SoundBufferSize"), Some("200"));
+        assert_eq!(next.row("gxVSync").unwrap().pending, None);
+        cvars.dirty = false;
+        cvars.set("gxVSync", "1");
+        assert!(cvars.dirty, "an unstage is a change to save");
+        assert!(
+            !cvars.compose().contains_key("gxVSync"),
+            "back at its default"
+        );
     }
 
     /// `InternalSet` (`0x63e0b0`) has no parse check: text that is no number is stored as it is,
