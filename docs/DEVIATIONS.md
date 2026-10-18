@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 123
+- [benilla-ui](#benilla-ui): 124
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -643,10 +643,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loader
 
-- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:431`](../crates/benilla-ui/src/loader/mod.rs#L431))
-- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:457`](../crates/benilla-ui/src/loader/mod.rs#L457))
-- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:733`](../crates/benilla-ui/src/loader/mod.rs#L733))
-- `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither could reach its state. ([`src/loader/widgets.rs:250`](../crates/benilla-ui/src/loader/widgets.rs#L250))
+- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:437`](../crates/benilla-ui/src/loader/mod.rs#L437))
+- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:463`](../crates/benilla-ui/src/loader/mod.rs#L463))
+- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:745`](../crates/benilla-ui/src/loader/mod.rs#L745))
+- It is taken at load, so a later aspect change keeps it, where the reference reloads the UI on a change above 0.001 (`0x491380`, called at `0x492f33` and `0x49303a`). ([`src/loader/mod.rs:1161`](../crates/benilla-ui/src/loader/mod.rs#L1161))
+- `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither could reach its state. ([`src/loader/widgets.rs:245`](../crates/benilla-ui/src/loader/widgets.rs#L245))
 
 #### markup
 
@@ -713,8 +714,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:297`](../crates/benilla-ui/src/script/keybind.rs#L297))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:286`](../crates/benilla-ui/src/script/macros.rs#L286))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:818`](../crates/benilla-ui/src/script/mod.rs#L818))
-- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:869`](../crates/benilla-ui/src/script/mod.rs#L869))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:821`](../crates/benilla-ui/src/script/mod.rs#L821))
+- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:872`](../crates/benilla-ui/src/script/mod.rs#L872))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:330`](../crates/benilla-ui/src/script/modelframe.rs#L330))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:431`](../crates/benilla-ui/src/script/nameplate.rs#L431))
@@ -735,7 +736,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The block step is not pixel-snapped (`0x766750`), because layout here is in logical units; the two differ by under a pixel, and not at all at the default spacing of 0. ([`src/script/simplehtml/mod.rs:13`](../crates/benilla-ui/src/script/simplehtml/mod.rs#L13))
 - A block of width 0, in a frame sized by anchors, gets its text's natural width where the reference keeps 0, because every width-less FontString here does. ([`src/script/simplehtml/mod.rs:15`](../crates/benilla-ui/src/script/simplehtml/mod.rs#L15))
 - The reference prints these to the console; here they are host warnings, because a malformed page is bad content, not a script error. ([`src/script/simplehtml/mod.rs:186`](../crates/benilla-ui/src/script/simplehtml/mod.rs#L186))
-- Only `%s` and `%%` are expanded and other specs copied, because the real `printf` would read the string pointers as other types. ([`src/script/simplehtml/parse.rs:244`](../crates/benilla-ui/src/script/simplehtml/parse.rs#L244))
+- Only `%s` and `%%` are expanded and other specs copied, because the real `printf` would read the string pointers as other types. ([`src/script/simplehtml/parse.rs:247`](../crates/benilla-ui/src/script/simplehtml/parse.rs#L247))
 - Skipped because it is no command; the reference raises. ([`src/script/slash.rs:64`](../crates/benilla-ui/src/script/slash.rs#L64))
 - The app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX channel, a missing file) come too late to answer, and a queued file answers 1. ([`src/script/sound.rs:68`](../crates/benilla-ui/src/script/sound.rs#L68))
 - `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file. ([`src/script/spellbook.rs:9`](../crates/benilla-ui/src/script/spellbook.rs#L9))
@@ -764,17 +765,17 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### widget
 
-- The history browses as a shell's does, a small everyday gain: the first UP stashes the line being typed and DOWN past the newest line brings it back, UP holds at the oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an empty line is not kept. ([`src/widget/kinds/editbox.rs:245`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L245))
-- A plain Left or Right (or Ctrl+B or F) with a selection collapses it to that edge, as every OS's own text fields do; the reference clears the selection and steps once from the caret (`0x77c6b0` from `0x77c70b`). ([`src/widget/kinds/editbox.rs:814`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L814))
-- Left reads the whole character before the caret, not the lone byte `caret - 1` the client reads (`0x77c8da`), which takes a multi-byte space for a non-space. ([`src/widget/kinds/editbox.rs:833`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L833))
-- On the last row a walk may end at the text's end, because the end starts no row; the reference steps back from it as from a row's start (its line table ends with the text's length, `0x77d6ef`), so DOWN onto a short last line stops before its last letter. ([`src/widget/kinds/editbox.rs:884`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L884))
-- The drag selects from its anchor, as every OS's own text fields do, where the reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). ([`src/widget/kinds/editbox.rs:997`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L997))
-- A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1127`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1127))
-- The reference has one field, the font's, but our font is read off the first `<FontString>` region (`message_frame_font`), which a `CreateFrame` frame lacks; so that FontString's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:41`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L41))
-- Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:698`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L698))
-- An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:897`](../crates/benilla-ui/src/widget/kinds/mod.rs#L897))
-- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:999`](../crates/benilla-ui/src/widget/kinds/mod.rs#L999))
-- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1357`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1357))
+- The history browses as a shell's does, a small everyday gain: the first UP stashes the line being typed and DOWN past the newest line brings it back, UP holds at the oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an empty line is not kept. ([`src/widget/kinds/editbox.rs:247`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L247))
+- A plain Left or Right (or Ctrl+B or F) with a selection collapses it to that edge, as every OS's own text fields do; the reference clears the selection and steps once from the caret (`0x77c6b0` from `0x77c70b`). ([`src/widget/kinds/editbox.rs:816`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L816))
+- Left reads the whole character before the caret, not the lone byte `caret - 1` the client reads (`0x77c8da`), which takes a multi-byte space for a non-space. ([`src/widget/kinds/editbox.rs:835`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L835))
+- On the last row a walk may end at the text's end, because the end starts no row; the reference steps back from it as from a row's start (its line table ends with the text's length, `0x77d6ef`), so DOWN onto a short last line stops before its last letter. ([`src/widget/kinds/editbox.rs:886`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L886))
+- The drag selects from its anchor, as every OS's own text fields do, where the reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). ([`src/widget/kinds/editbox.rs:999`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L999))
+- A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1129`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1129))
+- The reference has one field, the font's, but ours is the holder region's (`message_frame_font`), kept apart; so the holder's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:41`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L41))
+- Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:706`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L706))
+- An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:926`](../crates/benilla-ui/src/widget/kinds/mod.rs#L926))
+- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:1028`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1028))
+- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1386`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1386))
 - Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:180`](../crates/benilla-ui/src/widget/propagation.rs#L180))
 - The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:284`](../crates/benilla-ui/src/widget/propagation.rs#L284))
 ### benilla-world
