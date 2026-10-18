@@ -202,7 +202,6 @@ pub(super) const INERT: &[Registered] = &[
     same("SoundRolloffFactor", "4").latched(),        // 0x4572f6
     same("SoundSoftwareChannels", "12").latched(),    // 0x45729c
     // ── Everything else ──────────────────────────────────────────────────────────────────────
-    same("accountName", ""),                // 0x402bd2
     same("automoveturnspeednarrow", "800"), // 0x6039ee
     same("automoveturnspeedwide", "1200"),  // 0x6039d4
     same("bspcache", "1"),                  // 0x688868

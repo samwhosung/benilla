@@ -98,12 +98,13 @@ impl std::fmt::Debug for GlueCredentials {
     }
 }
 
+/// The `accountName` CVar's table key, its name lowercased.
+const CVAR_ACCOUNT_NAME_KEY: &str = "accountname";
+
 /// A glue verb's effect the host carries out on its next frame, drained by its glue manager: the
-/// account name's file, the glue music and the browser. None of them is anything Lua reads back.
+/// glue music and the browser. None of them is anything Lua reads back.
 #[derive(Clone, Debug)]
 pub enum GlueRequest {
-    /// `SetSavedAccountName(name)` (`0x46cdf0`): the `accountName` CVar's new value.
-    SetSavedAccountName(String),
     /// `PlayGlueMusic(file)` (`0x46ceb0` → `0x45aeb0`).
     PlayGlueMusic(String),
     /// `StopGlueMusic()` (`0x46cf00`): `0x45b050(1.0)`, a one-second fade.
@@ -508,8 +509,6 @@ pub(crate) struct GlueCore {
     host: Option<std::rc::Rc<dyn GlueHost>>,
     /// Calls made before any host was seated, for the one that seats this VM to run.
     calls: Vec<GlueCall>,
-    /// The `accountName` CVar (`[0x8826c8]`), which `GetSavedAccountName` (`0x46cdd0`) reads.
-    saved_account: String,
     /// The agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): read off their CVars when the glue
     /// starts, set by their accepts, and read by the getters and the login's first two tests.
     notices: [NoticeState; 4],
@@ -569,11 +568,6 @@ impl super::UiScript {
     /// Seat the lists the character name check searches (`0x6c91a0` compiles them at startup).
     pub fn set_glue_name_lists(&mut self, lists: std::rc::Rc<dyn super::NameLists>) {
         self.model_mut().glue.name_lists = Some(lists);
-    }
-
-    /// Seed the saved account name `GetSavedAccountName` answers.
-    pub fn set_glue_saved_account(&mut self, name: &str) {
-        self.model_mut().glue.saved_account = name.to_string();
     }
 
     /// Seed one agreement's flags.
@@ -766,25 +760,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The `accountName` CVar's string (`0x46cdd5`, `[cvar+0x20]`).
+    // The `accountName` CVar's string (`0x46cdd5`, `[[0x8826c8]+0x20]`), the saved, script-visible
+    // record registered at `0x402bd2`: `GetCVar("accountName")` reads the same text.
     g.set(
         "GetSavedAccountName",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            lua.create_string(&model.glue.saved_account)
+            let value = model
+                .cvars
+                .get(CVAR_ACCOUNT_NAME_KEY)
+                .map_or("", |slot| slot.value.as_str());
+            lua.create_string(value)
         })?,
     )?;
     // A string argument (`0x46cdf8`) or `Usage: SetSavedAccountName("accountName")` (`0x837c28`),
-    // then `CVar::Set` (`0x46ce2e`), so the next `GetSavedAccountName` reads it back at once.
+    // then `CVar::Set(s, 1, 0, 0, 1)` on that record (`0x46ce13`-`0x46ce2e`), a write like
+    // `SetCVar`'s that the host persists, so the next `GetSavedAccountName` reads it back at once.
     g.set(
         "SetSavedAccountName",
         lua.create_function(|lua, name: Value| {
             let name = string_arg(lua, name, "Usage: SetSavedAccountName(\"accountName\")")?;
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .glue
-                .saved_account = name.clone();
-            queue(lua, GlueRequest::SetSavedAccountName(name));
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            super::cvars::write_cvar(&mut model, "accountName", name);
             Ok(())
         })?,
     )?;
@@ -1276,23 +1273,30 @@ mod tests {
         assert!(s.take_glue_requests().is_empty() && s.take_glue_calls().is_empty());
     }
 
+    /// The saved account name is the `accountName` CVar (`0x46cdd0`, `0x46cdf0`): what one side
+    /// writes the other reads, and the write queues for the host like a `SetCVar`.
     #[test]
-    fn the_saved_account_reads_back_what_was_set() {
+    fn the_saved_account_is_the_account_name_cvar() {
         let mut s = UiScript::new_glue().unwrap();
-        s.set_glue_saved_account("PROBE");
+        s.register_cvars([("accountName", "")]);
+        s.set_cvar_host("accountName", "PROBE");
         assert_eq!(
             s.eval::<String>("return GetSavedAccountName()").unwrap(),
             "PROBE"
         );
+        s.run("SetSavedAccountName('Other')").unwrap();
+        assert_eq!(s.cvar("accountName").as_deref(), Some("Other"));
         s.run("SetSavedAccountName('')").unwrap();
         assert_eq!(
             s.eval::<String>("return GetSavedAccountName()").unwrap(),
             ""
         );
-        assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::SetSavedAccountName(n)] if n.is_empty()
-        ));
+        assert_eq!(
+            s.take_cvar_changes(),
+            [("accountName", "Other"), ("accountName", "")]
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+        );
+        assert!(s.take_glue_requests().is_empty());
         let err = s.run("SetSavedAccountName()").unwrap_err().to_string();
         assert!(
             err.contains("Usage: SetSavedAccountName(\"accountName\")"),

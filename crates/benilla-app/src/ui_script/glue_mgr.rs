@@ -1882,9 +1882,6 @@ pub(crate) fn drive_glue_mgr(
             }
             for request in s.take_glue_requests() {
                 match request {
-                    GlueRequest::SetSavedAccountName(name) => {
-                        crate::glue_session::login::save_account(&name)
-                    }
                     GlueRequest::PlayGlueMusic(file) => {
                         asks.music.write(crate::sound::GlueMusicRequest::Play(file));
                     }
@@ -2090,7 +2087,7 @@ fn pump(
 
 /// The glue build (`0x46a7b0`) on a new glue VM: state 0, then everything the manager holds that
 /// the reference keeps in C globals, which outlive the Lua state: the manager itself as the VM's
-/// host, the saved account, the realm list and select cells, the AddOn registry and the reply the
+/// host, the realm list and select cells, the AddOn registry and the reply the
 /// session has read, the name check's lists, the realm categories, a refused login's state 9
 /// (`0x402075`, set ahead of the screen) and the slots the verbs read.
 fn seat_glue(
@@ -2107,7 +2104,6 @@ fn seat_glue(
     mgr.state = ScreenState::Idle;
     mgr.cells = LoginCells::default();
     mgr.auth_final = false;
-    s.set_glue_saved_account(&crate::glue_session::login::load_saved_account());
     s.set_glue_realm_cells(mgr.realm_cells);
     s.set_glue_select_cells(mgr.select_cells);
     super::addons::seat_glue_addons(s, addon_reply);

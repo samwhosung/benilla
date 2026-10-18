@@ -183,6 +183,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // the session's realm when addons load. `Ace/AceState.lua:27` trims it at
     // PLAYER_ENTERING_WORLD, so a nil breaks every Ace addon.
     same("realmName", ""),
+    // `accountName` (`0x402bd2`, record `[0x8826c8]`): registered `""`, help "Saved account
+    // name", category 4. The login screen's remembered name: `GetSavedAccountName` (`0x46cdd0`)
+    // reads it and `SetSavedAccountName` (`0x46cdf0`) sets it.
+    same("accountName", ""),
     // The logon server address (register site `0x5ab6a6`), a string row judged by
     // `realmlist::on_cvar`.
     deviates(

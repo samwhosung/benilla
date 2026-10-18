@@ -171,6 +171,9 @@ pub(crate) struct Cvars {
     /// Lowercased names flagged read-only (flag bit2): the world session's
     /// [`benilla_ui::script::IN_WORLD_READ_ONLY_CVARS`], flagged and cleared with the VM's copy.
     read_only: HashSet<String>,
+    /// The old saved-account file, read into the `accountName` row at boot and deleted once a
+    /// save succeeds ([`Cvars::adopt_legacy_account`]).
+    legacy_account: Option<std::path::PathBuf>,
 }
 
 impl Default for Cvars {
@@ -197,6 +200,7 @@ impl Cvars {
             console: Vec::new(),
             lua_created: 0,
             read_only: HashSet::new(),
+            legacy_account: None,
         };
         for r in all_rows() {
             let default = r.default_for(locale);
@@ -722,6 +726,45 @@ impl Cvars {
         out
     }
 
+    /// The account name earlier builds kept in a file of its own
+    /// ([`crate::local_state::legacy_account_path`]), taken once into the `accountName` row (the
+    /// record `GetSavedAccountName` reads, `0x46cdd0`) when `config.toml` holds none: its value and
+    /// reset text, trimmed as the old reader trimmed it. The file goes only after the next save
+    /// succeeds ([`write_config`]), so a crash or a failed write leaves it for the next launch.
+    /// Beside a malformed `config.toml` (`can_save` false) the name only shows: nothing is
+    /// dirtied, so nothing saves over that file until a change, and the old file stays.
+    fn adopt_legacy_account(
+        &mut self,
+        path: Option<std::path::PathBuf>,
+        file_has_row: bool,
+        can_save: bool,
+    ) {
+        let Some(path) = path else {
+            return;
+        };
+        let name = match std::fs::read_to_string(&path) {
+            Ok(text) => text.trim().to_string(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!("config: cannot read {}: {e}", path.display());
+                return;
+            }
+        };
+        if !file_has_row && !name.is_empty() {
+            if let Some(i) = self.slot(CVAR_ACCOUNT_NAME) {
+                let row = &mut self.rows[i];
+                row.value = name.clone();
+                row.reset = Some(name.clone());
+                self.outbox.push((row.name.clone(), name));
+                info!("config: the saved account name moves into config.toml");
+            }
+        }
+        if can_save {
+            self.legacy_account = Some(path);
+            self.touch();
+        }
+    }
+
     /// A registry already holding one stored value, as if `config.toml` said so.
     #[cfg(test)]
     pub(crate) fn with_value(name: &str, value: &str) -> Self {
@@ -731,6 +774,9 @@ impl Cvars {
         cvars
     }
 }
+
+/// The saved account name's row (`0x402bd2`), which the login screen fills its name from.
+const CVAR_ACCOUNT_NAME: &str = "accountName";
 
 /// How long a dirty config waits before saving: long enough to coalesce a slider drag.
 const SAVE_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
@@ -848,6 +894,14 @@ fn load_config(world: &mut World) {
         // it is never persisted.
         cvars.own_for_session("gxApi", None);
         cvars.announce_locale_defaults();
+        let (file_has_account, can_save) = match &stored {
+            StoredConfig::Table(t) => (
+                t.keys().any(|k| k.eq_ignore_ascii_case(CVAR_ACCOUNT_NAME)),
+                true,
+            ),
+            StoredConfig::Absent => (false, true),
+            StoredConfig::Bad(_) => (false, false),
+        };
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {
@@ -857,6 +911,11 @@ fn load_config(world: &mut World) {
             }
             StoredConfig::Table(table) => cvars.load_file(table),
         }
+        cvars.adopt_legacy_account(
+            crate::local_state::legacy_account_path(),
+            file_has_account,
+            can_save,
+        );
         cvars.log_console_lines();
         cvars.take_events()
     };
@@ -1078,6 +1137,13 @@ fn write_config(cvars: &mut Cvars) {
         Ok(()) => {
             cvars.file = file;
             cvars.dirty = false;
+            if let Some(old) = cvars.legacy_account.take() {
+                if let Err(e) = std::fs::remove_file(&old) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        warn!("config: cannot remove {}: {e}", old.display());
+                    }
+                }
+            }
         }
         Err(e) => {
             warn!("config: cannot write {}: {e}", path.display());
@@ -2318,6 +2384,118 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    /// The old `benilla-config/account` file moves into `config.toml`'s `accountName` once: the
+    /// first boot reads it, the save writes the row and only then deletes the file, and the next
+    /// boot reads the row.
+    #[test]
+    fn the_old_saved_account_file_moves_into_config_toml_once() {
+        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-cvar-acct-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let old = tmp.join("account");
+        std::fs::write(&old, "PLAYER\n").unwrap();
+
+        let mut app = cvar_app();
+        app.update();
+        assert_eq!(res::<Cvars>(&app).get("accountName"), Some("PLAYER"));
+        let glue = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<String>("return GetCVar('accountName')")
+            .unwrap();
+        assert_eq!(glue, "PLAYER", "the VM's mirror has it");
+        assert!(old.exists(), "kept until the save");
+        app.world_mut().resource_mut::<Cvars>().last_change =
+            Instant::now().checked_sub(SAVE_QUIET * 2);
+        app.update();
+        let text = std::fs::read_to_string(tmp.join("config.toml")).unwrap();
+        assert!(text.contains("accountName = \"PLAYER\""), "{text}");
+        assert!(!old.exists(), "gone once the row is saved");
+
+        // The next boot reads the row; a stale file beside it is not read over it.
+        std::fs::write(&old, "STALE").unwrap();
+        let mut next = cvar_app();
+        next.update();
+        assert_eq!(res::<Cvars>(&next).get("accountName"), Some("PLAYER"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A save that fails keeps the old file, and a malformed `config.toml` is never saved over
+    /// for it: the name shows, and both files stay.
+    #[cfg(unix)]
+    #[test]
+    fn the_old_saved_account_file_outlives_a_failed_save() {
+        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+        use std::os::unix::fs::PermissionsExt;
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-cvar-acct2-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let old = tmp.join("account");
+        std::fs::write(&old, "PLAYER").unwrap();
+
+        let mut app = cvar_app();
+        app.update();
+        // The folder turns read-only: the write of `config.toml` fails (unless the run is root's,
+        // which no mode stops).
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let read_only = std::fs::write(tmp.join("probe"), "").is_err();
+        app.world_mut().resource_mut::<Cvars>().save();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if read_only {
+            assert!(!tmp.join("config.toml").exists());
+            assert!(old.exists(), "a failed save keeps the old file");
+        }
+        std::fs::remove_file(tmp.join("config.toml")).ok();
+        std::fs::write(&old, "PLAYER").unwrap();
+
+        std::fs::write(tmp.join("config.toml"), "not [ toml").unwrap();
+        let mut bad = cvar_app();
+        bad.update();
+        assert_eq!(res::<Cvars>(&bad).get("accountName"), Some("PLAYER"));
+        assert!(
+            !res::<Cvars>(&bad).dirty,
+            "nothing saves over the malformed file"
+        );
+        assert!(old.exists());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The saved account name is the `accountName` CVar: the login screen's write persists like
+    /// any CVar's, and a console write is what the login screen fills in next.
+    #[test]
+    fn the_saved_account_name_is_the_account_name_row() {
+        let mut app = cvar_app();
+        let world = app.world_mut();
+        let mut glue = UiScript::new_glue().unwrap();
+        world.resource::<Cvars>().seed_vm(&mut glue);
+        glue.run("SetSavedAccountName('Tester')").unwrap();
+        world.resource_mut::<Cvars>().drain_vm(&mut glue);
+        let cvars = world.resource::<Cvars>();
+        assert_eq!(cvars.get("accountName"), Some("Tester"));
+        assert_eq!(
+            cvars.compose().get("accountName").map(String::as_str),
+            Some("Tester")
+        );
+        console_exec(&mut app, "accountName Other");
+        let mut next = UiScript::new_glue().unwrap();
+        res::<Cvars>(&app).seed_vm(&mut next);
+        assert_eq!(
+            next.eval::<String>("return GetSavedAccountName()").unwrap(),
+            "Other"
+        );
+    }
+
     #[test]
     fn a_lua_setcvar_lands_in_config_toml_end_to_end() {
         use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
@@ -2680,8 +2858,8 @@ mod tests {
     }
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
-    /// (the reference's registered `""`, `0x882748`) and `gxApi` are empty until the session writes
-    /// them; `gxResolution` and `realmList` pass their observers' parsers
+    /// and `accountName` (the reference's registered `""`, `0x882748`) and `gxApi` are empty until
+    /// the session or the login screen writes them; `gxResolution` and `realmList` pass their observers' parsers
     /// ([`crate::video::parse_resolution`], [`crate::realmlist::normalize`]).
     #[test]
     fn the_string_valued_cvars_are_the_realm_and_the_windowed_size() {
@@ -2693,7 +2871,13 @@ mod tests {
         strings.sort_unstable(); // the list is the claim, not where the rows sit in the table
         assert_eq!(
             strings,
-            vec!["gxApi", "gxResolution", "realmList", "realmName"]
+            vec![
+                "accountName",
+                "gxApi",
+                "gxResolution",
+                "realmList",
+                "realmName"
+            ]
         );
         let default_of = |name: &str| {
             REGISTERED
@@ -2703,6 +2887,7 @@ mod tests {
                 .expect("registered")
         };
         assert_eq!(default_of("realmName"), "");
+        assert_eq!(default_of("accountName"), "");
         assert_eq!(default_of("gxApi"), "");
         assert_eq!(
             crate::video::parse_resolution(default_of("gxResolution")),
