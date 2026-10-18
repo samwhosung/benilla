@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 10
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 113
+- [benilla-ui](#benilla-ui): 112
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -692,13 +692,12 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:292`](../crates/benilla-ui/src/script/keybind.rs#L292))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
 - The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:787`](../crates/benilla-ui/src/script/mod.rs#L787))
-- A flag, not the reference's append to every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent` drop one event), because events register here by name and no list of every name exists. ([`src/script/model.rs:305`](../crates/benilla-ui/src/script/model.rs#L305))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:341`](../crates/benilla-ui/src/script/modelframe.rs#L341))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:429`](../crates/benilla-ui/src/script/nameplate.rs#L429))
 - The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:879`](../crates/benilla-ui/src/script/nameplate.rs#L879))
 - A wrapper that decodes to no live widget takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer. ([`src/script/object/anchor_args.rs:160`](../crates/benilla-ui/src/script/object/anchor_args.rs#L160))
-- Real 1.12 kinds nothing fires yet raise too (`OnMessageScrollChanged`, `OnInputLanguageChanged`), because an accepted handler that never runs fails silently. ([`src/script/object/events_regions.rs:222`](../crates/benilla-ui/src/script/object/events_regions.rs#L222))
+- Real 1.12 kinds nothing fires yet raise too (`OnMessageScrollChanged`, `OnInputLanguageChanged`), because an accepted handler that never runs fails silently. ([`src/script/object/events_regions.rs:236`](../crates/benilla-ui/src/script/object/events_regions.rs#L236))
 - An `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a Lua handler must not run in the middle of a level compaction. ([`src/script/object/toplevel.rs:74`](../crates/benilla-ui/src/script/object/toplevel.rs#L74))
 - A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:261`](../crates/benilla-ui/src/script/pvp/mod.rs#L261))
 - A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:508`](../crates/benilla-ui/src/script/pvp/mod.rs#L508))
