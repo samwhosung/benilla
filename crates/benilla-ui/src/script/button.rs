@@ -171,6 +171,17 @@ pub(crate) enum LabelFont {
     Disabled,
 }
 
+impl LabelFont {
+    /// The state's font object name and its own label colour.
+    fn of(self, bs: &ButtonState) -> (&Option<String>, &Option<[f32; 4]>) {
+        match self {
+            LabelFont::Normal => (&bs.normal_font, &bs.normal_color),
+            LabelFont::Highlight => (&bs.highlight_font, &bs.highlight_color),
+            LabelFont::Disabled => (&bs.disabled_font, &bs.disabled_color),
+        }
+    }
+}
+
 /// The loader's `<NormalFont justifyH=>` and kin: `LoadXML` (`0x7788c0`) runs the `<Font>` loader
 /// (`0x783c30`) on the embedded font, so the justify is its own, not inherited; no Lua verb
 /// writes it. An adopted label keeps its anchor and takes the new normal justify.
@@ -835,23 +846,56 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
-    // GetTextColor() (`0x781100`) → r, g, b, a, four values, off the normal font: its own colour,
-    // else the inherited object's (`<NormalFont>`, `SetTextFontObject`), else white.
-    m.set(
-        "GetTextColor",
-        lua.create_function(|lua, this: Table| {
-            let (own, inherits) =
-                with_button(lua, &this, |bs| (bs.normal_color, bs.normal_font.clone()))?;
-            let c = own.unwrap_or_else(|| {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                inherits
-                    .and_then(|n| model.font_object(&n))
-                    .and_then(|f| f.color)
-                    .unwrap_or([1.0, 1.0, 1.0, 1.0])
-            });
-            Ok((c[0], c[1], c[2], c[3]))
-        })?,
-    )?;
+    // GetTextColor() (`0x781100`, `+0x394`), GetHighlightTextColor() (`0x781800`, `+0x410`) and
+    // GetDisabledTextColor() (`0x781480`, `+0x48c`) → r, g, b, a, four values, off that state's
+    // embedded font: its own colour, else the object it follows (`<NormalFont>`,
+    // `SetTextFontObject` and kin), else the constructor's white.
+    for (name, which) in [
+        ("GetTextColor", LabelFont::Normal),
+        ("GetHighlightTextColor", LabelFont::Highlight),
+        ("GetDisabledTextColor", LabelFont::Disabled),
+    ] {
+        m.set(
+            name,
+            lua.create_function(move |lua, this: Table| {
+                let (own, inherits) = with_button(lua, &this, |bs| {
+                    let (font, color) = which.of(bs);
+                    (*color, font.clone())
+                })?;
+                let c = own.unwrap_or_else(|| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    inherits
+                        .and_then(|n| model.font_object(&n))
+                        .and_then(|f| f.color)
+                        .unwrap_or([1.0, 1.0, 1.0, 1.0])
+                });
+                Ok((c[0], c[1], c[2], c[3]))
+            })?,
+        )?;
+    }
+    // GetTextFontObject() (`0x7804c0`), GetHighlightFontObject() (`0x7807c0`) and
+    // GetDisabledFontObject() (`0x780640`) → the font object that state's font follows, the same
+    // handle as its global, or nil (`0x79f090`).
+    for (name, which) in [
+        ("GetTextFontObject", LabelFont::Normal),
+        ("GetHighlightFontObject", LabelFont::Highlight),
+        ("GetDisabledFontObject", LabelFont::Disabled),
+    ] {
+        m.set(
+            name,
+            lua.create_function(move |lua, this: Table| {
+                let font = with_button(lua, &this, |bs| which.of(bs).0.clone())?;
+                let font = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    font.filter(|n| model.font_object(n).is_some())
+                };
+                match font {
+                    Some(n) => Ok(Value::Table(super::font::wrapper(lua, &n)?)),
+                    None => Ok(Value::Nil),
+                }
+            })?,
+        )?;
+    }
     m.set(
         "SetHighlightTextColor",
         lua.create_function(

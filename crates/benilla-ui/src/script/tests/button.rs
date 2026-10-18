@@ -1666,3 +1666,72 @@ fn state_font_setters_raise_on_an_unknown_name() {
         report.warnings
     );
 }
+
+/// The state fonts read back (`0x7804c0`, `0x7807c0`, `0x780640` through `0x79f090`; the colours
+/// `0x781100`, `0x781800`, `0x781480`): the object each follows or nil, and the colour own, else
+/// the object's, else white.
+#[test]
+fn state_fonts_and_colours_read_back() {
+    let s = script();
+    for (name, color) in [
+        ("NormalF", [1.0, 0.82, 0.0, 1.0]),
+        ("HighF", [1.0, 1.0, 0.5, 1.0]),
+        ("GrayF", [0.5, 0.5, 0.5, 1.0]),
+    ] {
+        s.register_font_object(
+            name,
+            FontObject {
+                color: Some(color),
+                height: Some(12.0),
+                ..Default::default()
+            },
+        );
+    }
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <Button name="XmlFonts">
+                <NormalFont inherits="NormalF"/>
+                <HighlightFont inherits="HighF"/>
+                <DisabledFont inherits="GrayF"/>
+            </Button>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    s.run(
+        r#"
+        local function near(a, b) return math.abs(a - b) < 1e-6 end
+        local function colour(t, er, eg, eb, ea)
+            return near(t[1], er) and near(t[2], eg) and near(t[3], eb) and near(t[4], ea)
+        end
+        local x = XmlFonts
+        assert(x:GetTextFontObject() == x:GetTextFontObject(), "one handle")
+        assert(x:GetTextFontObject():GetName() == "NormalF", "normal object")
+        assert(x:GetHighlightFontObject():GetName() == "HighF", "highlight object")
+        assert(x:GetDisabledFontObject():GetName() == "GrayF", "disabled object")
+        assert(colour({x:GetHighlightTextColor()}, 1, 1, 0.5, 1), "highlight from the object")
+        assert(colour({x:GetDisabledTextColor()}, 0.5, 0.5, 0.5, 1), "disabled from the object")
+        x:SetHighlightTextColor(1, 0, 0)
+        x:SetDisabledTextColor(0, 1, 0, 0.5)
+        assert(colour({x:GetHighlightTextColor()}, 1, 0, 0, 1), "own highlight")
+        assert(colour({x:GetDisabledTextColor()}, 0, 1, 0, 0.5), "own disabled")
+
+        local b = CreateFrame("Button", "LuaFonts")
+        assert(b:GetTextFontObject() == nil, "fresh normal")
+        assert(b:GetHighlightFontObject() == nil, "fresh highlight")
+        assert(b:GetDisabledFontObject() == nil, "fresh disabled")
+        assert(colour({b:GetHighlightTextColor()}, 1, 1, 1, 1), "fresh white")
+        assert(colour({b:GetDisabledTextColor()}, 1, 1, 1, 1), "fresh white")
+        b:SetTextFontObject("NormalF")
+        assert(b:GetTextFontObject() == x:GetTextFontObject(), "same handle")
+        assert(b:GetTextFontObject() == NormalF, "its global")
+        b:SetHighlightFontObject(x:GetHighlightFontObject())
+        assert(b:GetHighlightFontObject():GetName() == "HighF", "by handle")
+        b:SetTextFontObject(nil)
+        assert(b:GetTextFontObject() == nil, "cleared")
+    "#,
+    )
+    .unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
