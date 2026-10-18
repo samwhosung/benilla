@@ -681,34 +681,33 @@ fn emit_minimap(
     let mut hover = blips::MinimapBlipHover::None;
     if let Some(ctx) = &blip_ctx {
         // The guard-directions marker rides this pass as a landmark, as the reference appends its
-        // static blip slot after the DBC scan, so it draws even without `AreaPOI.dbc`.
-        if assets.rim_arrows.any() {
-            blips::emit_landmarks(
-                ctx,
-                pois.as_ref().map(|p| &p.0),
-                poi_marker.on_map(map.0),
-                map.0,
-                &assets.rim_arrows,
-                assets.tex(MinimapArtSlot::Icons),
-                &mut quads,
-                &mut hover,
-            );
-            // The party and corpse rim arrows (the out-of-range half of `0x6dad10`), before the
-            // player arrow, in the reference's order.
-            let corpse = death_net
-                .corpse
-                .filter(|cp| cp.display_map == map.0 as i32)
-                .map(|cp| cp.position);
-            blips::emit_party_arrows(
-                ctx,
-                &group,
-                &guids,
-                &unit_pos,
-                corpse,
-                &assets.rim_arrows,
-                &mut quads,
-            );
-        }
+        // static blip slot after the DBC scan, so it draws even without `AreaPOI.dbc`. The icons
+        // need only their atlas (`0x4ed21f`); each arrow, its own art.
+        blips::emit_landmarks(
+            ctx,
+            pois.as_ref().map(|p| &p.0),
+            poi_marker.on_map(map.0),
+            map.0,
+            &assets.rim_arrows,
+            assets.tex(MinimapArtSlot::Icons),
+            &mut quads,
+            &mut hover,
+        );
+        // The party and corpse rim arrows (the out-of-range half of `0x6dad10`), before the
+        // player arrow, in the reference's order.
+        let corpse = death_net
+            .corpse
+            .filter(|cp| cp.display_map == map.0 as i32)
+            .map(|cp| cp.position);
+        blips::emit_party_arrows(
+            ctx,
+            &group,
+            &guids,
+            &unit_pos,
+            corpse,
+            &assets.rim_arrows,
+            &mut quads,
+        );
     }
 
     // The player arrow: centered, spun to the facing. WoW orientation 0 = north (screen up),
@@ -1080,6 +1079,25 @@ mod art_tests {
 
         restore_default_mask(app.world_mut());
         assert_eq!(drawn(&app, MinimapArtSlot::Mask), Some(DEFAULT));
+    }
+
+    /// The two atlases follow their own setters the same way, each slot apart.
+    #[test]
+    fn the_icon_and_blip_atlases_follow_their_setters() {
+        let mut app = art_app();
+        run(&mut app, r#"m:SetIconTexture("")"#);
+        assert_eq!(
+            drawn(&app, MinimapArtSlot::Icons),
+            None,
+            "no landmark icons"
+        );
+        assert_eq!(drawn(&app, MinimapArtSlot::Blips), Some(DEFAULT));
+        run(&mut app, r#"m:SetBlipTexture("Nope")"#);
+        assert_eq!(drawn(&app, MinimapArtSlot::Blips), Some(GREEN));
+        assert_eq!(drawn(&app, MinimapArtSlot::Mask), Some(DEFAULT));
+        restore_default_mask(app.world_mut());
+        assert_eq!(drawn(&app, MinimapArtSlot::Icons), Some(DEFAULT));
+        assert_eq!(drawn(&app, MinimapArtSlot::Blips), Some(DEFAULT));
     }
 }
 

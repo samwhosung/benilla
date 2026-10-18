@@ -131,11 +131,6 @@ impl RimArrowArt {
     pub(super) fn get(&self, kind: RimArrow) -> Option<&Handle<Image>> {
         self.0[kind as usize].as_ref()
     }
-
-    /// Any art at all: the landmark pass runs without `AreaPOI.dbc`, for the guard marker.
-    pub(super) fn any(&self) -> bool {
-        self.0.iter().any(Option::is_some)
-    }
 }
 /// An in-range POI icon's quad, 16 px (`[0xbc7658]`, frozen by the ctor).
 const POI_ICON_PX: f32 = 16.0;

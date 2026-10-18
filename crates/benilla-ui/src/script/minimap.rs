@@ -166,6 +166,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
+        // The landmark atlas `0xbc827c` (`0x4ee640`: store `0x4ee789`, texts `0x84c850`, `0x84c820`),
+        // drawn as a fixed 8×8 grid whatever its size.
+        "SetIconTexture",
+        lua.create_function(|lua, (this, path): (Value, Value)| {
+            set_art(lua, &this, path, MinimapArtSlot::Icons, "SetIconTexture")
+        })?,
+    )?;
+    m.set(
+        // The dot atlas `0xbc822c` (`0x4ee7e0`: store `0x4ee929`, texts `0x84c8a4`, `0x84c874`),
+        // drawn as a fixed 4×4 grid of quarters.
+        "SetBlipTexture",
+        lua.create_function(|lua, (this, path): (Value, Value)| {
+            set_art(lua, &this, path, MinimapArtSlot::Blips, "SetBlipTexture")
+        })?,
+    )?;
+    m.set(
         "GetZoomLevels",
         // The reference's constant (`0x6da9a0`), with no `this` lookup (`0x4eebe0`).
         lua.create_function(|_, _: mlua::MultiValue| Ok(MINIMAP_ZOOM_LEVELS))?,

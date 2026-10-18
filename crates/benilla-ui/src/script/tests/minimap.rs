@@ -601,3 +601,50 @@ fn every_world_entry_reseeds_the_zoom_from_its_cvars_and_signals_it() {
     s.fire_world_enter();
     assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 2);
 }
+
+/// `SetIconTexture` (`0x4ee640`) and `SetBlipTexture` (`0x4ee7e0`) are `SetMaskTexture`'s body on
+/// the landmark and dot atlases (`0xbc827c`, `0xbc822c`), each with its own texts.
+#[test]
+fn the_icon_and_blip_setters_replace_their_atlases_with_their_own_texts() {
+    use crate::widget::{MinimapArt, MinimapArtSlot};
+    let mut s = script();
+    s.set_texture_probe(Box::new(|path: &str| !path.contains("Nope")));
+    s.run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
+        .unwrap();
+    let art = |s: &UiScript, slot| s.minimap_art(slot).map(|(_, a)| a);
+    for (name, slot) in [
+        ("SetIconTexture", MinimapArtSlot::Icons),
+        ("SetBlipTexture", MinimapArtSlot::Blips),
+    ] {
+        s.run(&format!(r#"m:{name}("Interface\\AddOns\\X\\atlas")"#))
+            .unwrap();
+        assert_eq!(
+            art(&s, slot),
+            Some(MinimapArt::File("Interface\\AddOns\\X\\atlas".into())),
+            "{name}"
+        );
+        let err = s.run(&format!(r#"m:{name}("Nope")"#)).unwrap_err();
+        assert_eq!(
+            crate::script::lua_message(&err),
+            format!("[string \"(chunk)\"]:1: TestMinimap:{name}(): Couldn't load the file Nope")
+        );
+        assert_eq!(art(&s, slot), Some(MinimapArt::Missing), "{name}");
+        let err = s.run(&format!("m:{name}()")).unwrap_err();
+        assert_eq!(
+            crate::script::lua_message(&err),
+            format!("[string \"(chunk)\"]:1: Usage: TestMinimap:{name}(\"file\")")
+        );
+        s.run(&format!(r#"m:{name}("")"#)).unwrap();
+        assert_eq!(art(&s, slot), Some(MinimapArt::Null), "{name}");
+        let err = s
+            .run(&format!(r#"m.{name}(UIParent or {{}}, "x")"#))
+            .unwrap_err();
+        assert!(
+            crate::script::lua_message(&err)
+                .ends_with("Attempt to find 'this' in non-framescript object"),
+            "{name}: {err}"
+        );
+    }
+    // Each slot is its own: the mask stands.
+    assert_eq!(art(&s, MinimapArtSlot::Mask), None);
+}

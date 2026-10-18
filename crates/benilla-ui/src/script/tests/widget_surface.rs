@@ -67,15 +67,13 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "MovieFrame",
         "the same — `MovieFrame.lua:35` passes `GetMovieSubtitles()`",
     ),
-    // ── The Minimap's four content setters ──
-    // The app draws the minimap's blips and arrow itself, never through Lua.
+    // ── The Minimap's two model setters ──
+    // The app draws the minimap's arrows itself, never through Lua.
     (
         "SetArrowModel",
         "Minimap",
         "app-side art; no caller in the stock UI or either corpus",
     ),
-    ("SetBlipTexture", "Minimap", "the same"),
-    ("SetIconTexture", "Minimap", "the same"),
     ("SetPlayerModel", "Minimap", "the same"),
     // ── EditBox mode read-backs ──
     (
