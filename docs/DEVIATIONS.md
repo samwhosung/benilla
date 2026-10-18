@@ -32,11 +32,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-app](#benilla-app): 234
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
-- [benilla-formats](#benilla-formats): 17
+- [benilla-formats](#benilla-formats): 19
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 120
+- [benilla-ui](#benilla-ui): 121
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -507,6 +507,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### chain
 
 - An archive that fails to open is an error, where the reference logs `"Failed to open archive"` and goes on, because a skipped corrupt archive surfaces only as missing files far downstream. ([`src/chain.rs:67`](../crates/benilla-formats/src/chain.rs#L67))
+- A last line with no CR or LF after it is passed too, where `0x648fb0` ends at the buffer's end without a flush (`0x64907f`) and drops it, a bug that loses a listfile's last name when it lacks a newline. ([`src/chain.rs:233`](../crates/benilla-formats/src/chain.rs#L233))
 
 #### characters
 
@@ -528,6 +529,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### loose
 
 - A folder is listed the first time a key reaches it, where the reference lists every folder at the first open (`0x646ea0`), so a file added to a folder no key has reached is found before the index empties; the whole walk takes minutes and gigabytes where the install folder holds or links a large tree, as a Wine prefix's `z:` drive links `/`. ([`src/loose.rs:31`](../crates/benilla-formats/src/loose.rs#L31))
+
+#### macro_icons
+
+- Of names equal but for case, benilla keeps the first in source order, where the reference's survivor is whichever its CRT `qsort` (`0x73f727`, not stable) leaves last, as the dedup frees the earlier of each equal pair (`0x4f0163`-`0x4f0171`). ([`src/macro_icons.rs:65`](../crates/benilla-formats/src/macro_icons.rs#L65))
 
 #### models
 
@@ -707,7 +712,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A key rebound to the command it already has keeps a duplicate index in 1.12.1 (`0x4b7786` lowers the other keys' indices before `0x4b77ac` returns on the same name), so both getters there answer one key too few; that client fault is not reproduced. ([`src/script/keybind.rs:223`](../crates/benilla-ui/src/script/keybind.rs#L223))
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:297`](../crates/benilla-ui/src/script/keybind.rs#L297))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:799`](../crates/benilla-ui/src/script/mod.rs#L799))
+- A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:286`](../crates/benilla-ui/src/script/macros.rs#L286))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:800`](../crates/benilla-ui/src/script/mod.rs#L800))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:341`](../crates/benilla-ui/src/script/modelframe.rs#L341))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:431`](../crates/benilla-ui/src/script/nameplate.rs#L431))
