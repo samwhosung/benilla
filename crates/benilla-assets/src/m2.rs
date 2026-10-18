@@ -185,15 +185,10 @@ fn idle_pose_differs(anim: &benilla_formats::ModelAnimation) -> bool {
     !anim.is_rest_pose()
 }
 
-/// A model path inside an M2 record (`.mdx`/`.mdl`, backslashes) as its `mpq://….m2` URL.
+/// A model path inside an M2 record as its URL: an emitter's child model is created with flags 0
+/// (`0x7b1c99`, `0x7b5da7`), off the archives, under the cache's extension rule.
 fn m2_dep_url(raw: &str) -> String {
-    let p = raw.to_ascii_lowercase().replace('\\', "/");
-    let stem = p
-        .strip_suffix(".mdx")
-        .or_else(|| p.strip_suffix(".mdl"))
-        .or_else(|| p.strip_suffix(".m2"))
-        .unwrap_or(&p);
-    format!("mpq://{stem}.m2")
+    crate::m2_url(raw)
 }
 
 /// One ribbon emitter, riding its bone like [`ModelEmitter::bone_pivot`] (`0x718960`).

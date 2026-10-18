@@ -205,16 +205,19 @@ pub fn m2_url(raw: &str) -> String {
     m2_url_on(MPQ_SOURCE, raw)
 }
 
+/// The model `0x707350` creates in place of a file the cache refuses (`0x70737f`).
+pub const ERROR_CUBE: &str = "Spells\\ErrorCube.mdx";
+
 /// [`m2_url`] on the asset source `source`: [`MPQ_LOOSE_SOURCE`] for a model created with the
-/// loose flag.
+/// loose flag. The cache takes the extension at the path's last dot (`strrchr`, `0x706a80`):
+/// `.mdx` and `.mdl`, any case, become `.m2`, `.m2` stands, and no dot or any other extension is
+/// refused (`0x706a8c`, `0x706adf`), which stands [`ERROR_CUBE`] with open flag 0, off the archives.
 pub fn m2_url_on(source: &str, raw: &str) -> String {
     let p = raw.to_ascii_lowercase().replace('\\', "/");
-    let stem = p
-        .strip_suffix(".mdx")
-        .or_else(|| p.strip_suffix(".mdl"))
-        .or_else(|| p.strip_suffix(".m2"))
-        .unwrap_or(&p);
-    format!("{source}://{stem}.m2")
+    match p.rsplit_once('.') {
+        Some((stem, "mdx" | "mdl" | "m2")) => format!("{source}://{stem}.m2"),
+        _ => m2_url_on(MPQ_SOURCE, ERROR_CUBE),
+    }
 }
 
 /// A WMO root path as its `mpq://…wmo` URL, lowercased for handle dedup.
@@ -296,6 +299,35 @@ mod tests {
     use super::*;
     use bevy::camera::primitives::MeshAabb;
     use bevy::tasks::block_on;
+
+    /// `0x706a50`'s extension rule: the last dot's `.mdx`/`.mdl` in any case is `.m2`, `.m2`
+    /// stands, and anything else stands the error cube from the archives (`0x70737f`).
+    #[test]
+    fn a_model_path_is_taken_by_its_last_extension() {
+        assert_eq!(
+            m2_url_on(MPQ_LOOSE_SOURCE, "Creature\\Wolf\\Wolf.MDX"),
+            "mpq-loose://creature/wolf/wolf.m2"
+        );
+        assert_eq!(
+            m2_url("Creature\\Wolf\\Wolf.Mdl"),
+            "mpq://creature/wolf/wolf.m2"
+        );
+        assert_eq!(
+            m2_url("Creature\\Wolf\\Wolf.M2"),
+            "mpq://creature/wolf/wolf.m2"
+        );
+        let cube = "mpq://spells/errorcube.m2";
+        for refused in [
+            "Creature\\Wolf\\Wolf",
+            "Creature\\Wolf\\Wolf.blp",
+            "Creature\\Wolf\\Wolf.mdx.bak",
+            "World\\a.mdx\\Wolf",
+            "",
+        ] {
+            assert_eq!(m2_url(refused), cube, "{refused}");
+            assert_eq!(m2_url_on(MPQ_LOOSE_SOURCE, refused), cube, "{refused}");
+        }
+    }
 
     #[test]
     fn sampler_mode_rides_the_asset_path_and_round_trips() {

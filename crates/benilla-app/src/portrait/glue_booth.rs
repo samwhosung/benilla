@@ -2369,6 +2369,11 @@ mod tests {
             "mpq-loose://interface/glues/models/ui_orc/ui_orc.m2"
         );
         assert_eq!(stock_scene(7).0, stock_scene(3).0, "a gnome in Dwarf's");
+        // A file the cache refuses stands the error cube, off the archives (`0x70737f`).
+        assert_eq!(
+            GlueSceneFile::new("Interface\\Glues\\Models\\UI_Orc\\UI_Orc.blp").url(),
+            "mpq://spells/errorcube.m2"
+        );
     }
 
     /// Clip-space XY of a Bevy-space point through an orthographic rig.
