@@ -146,8 +146,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // ── GetFrameType / IsFrameType ──
     //
     // The frame script's own spellings of the pair above (`GetFrameType 0x773640`, `IsFrameType
-    // 0x773700`), reading the same per-class type slot: one name, or 1 or nil. An absent argument
-    // raises `Usage:` like `IsObjectType`; the reference's absent-argument branch is untraced.
+    // 0x773700`), reading the same per-class type slot: one name, or 1 or nil. A value
+    // `lua_isstring` refuses, none included (`0x77378c`), raises IsObjectType's own line,
+    // `Usage: %s:IsObjectType("TYPE")` (`0x8794e4`, pushed at `0x7737af`).
     m.set(
         "GetFrameType",
         lua.create_function(|lua, this: Table| {
@@ -160,7 +161,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let chain = chain_of(lua, &this)?;
             let Some(want) = binding_abi::optional_string(lua, &want) else {
                 frame_handle_of(lua, &this)?;
-                return Err(binding_abi::usage(lua, &this, "IsFrameType(\"TYPE\")"));
+                return Err(binding_abi::usage(lua, &this, "IsObjectType(\"TYPE\")"));
             };
             Ok(if chain.iter().any(|t| want.eq_ignore_ascii_case(t)) {
                 Value::Number(1.0)

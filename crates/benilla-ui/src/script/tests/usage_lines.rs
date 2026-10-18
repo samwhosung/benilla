@@ -466,3 +466,24 @@ fn create_font_raises_its_usage_line() {
     )
     .unwrap();
 }
+
+/// `IsFrameType` (`0x773700`) raises IsObjectType's line for a value `lua_isstring` refuses
+/// (`0x77378c`, `Usage: %s:IsObjectType("TYPE")` `0x8794e4` pushed at `0x7737af`).
+#[test]
+fn is_frame_type_raises_is_object_type_line() {
+    let s = script();
+    s.run(r#"TypeFrame = CreateFrame("Frame", "TypeFrame")"#)
+        .unwrap();
+    for call in ["TypeFrame:IsFrameType()", "TypeFrame:IsFrameType({})"] {
+        let e = err(&s, call);
+        assert!(
+            e.contains(r#"Usage: TypeFrame:IsObjectType("TYPE")"#),
+            "`{call}` -> {e}"
+        );
+    }
+    let e = err(&s, r#"CreateFrame("Frame"):IsFrameType(nil)"#);
+    assert!(
+        e.contains(r#"Usage: <unnamed>:IsObjectType("TYPE")"#),
+        "{e}"
+    );
+}
