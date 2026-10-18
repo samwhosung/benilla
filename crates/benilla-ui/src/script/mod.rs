@@ -882,7 +882,9 @@ impl UiScript {
     /// take the aspect from `gxResolution` (`0x46ab40`, `0x4901e0`; 4/3 while `widescreen` is
     /// off), never the live window. Here every resize sets the cells from the window, because the
     /// UI is kept live across a resize, and `widescreen` off keeps the window's aspect, as a 4:3
-    /// root over a wider window would take a seam stretched on one axis.
+    /// root over a wider window would take a seam stretched on one axis. A dragged frame with no
+    /// layout-cache row (unnamed, or `SetUserPlaced(false)`) keeps its drag pin in layout units,
+    /// where the rebuild would put it back where its script places it.
     pub fn set_window_size(&mut self, width: f32, height: f32) -> bool {
         let a = if width > 0.0 && height > 0.0 {
             width / height
