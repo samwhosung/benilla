@@ -1038,9 +1038,10 @@ impl UiScript {
             .any(|(_, f)| f.name.as_deref() == Some(name) && f.effective_visible)
     }
 
-    /// The named frame's effective alpha while it is effectively visible: the app's minimap ping
-    /// sprite follows the stock `MiniMapPing` `<Model>` this way.
-    pub fn frame_effective_alpha(&self, name: &str) -> Option<f32> {
+    /// The named frame's alpha byte as a fraction (`+0xc8`, which the walk `0x76a690` hands down
+    /// as the effective alpha) while it is effectively visible: the app's minimap ping sprite
+    /// follows the stock `MiniMapPing` `<Model>` this way.
+    pub fn frame_alpha(&self, name: &str) -> Option<f32> {
         self.model_ref()
             .arena
             .iter_frames()

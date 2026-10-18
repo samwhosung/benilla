@@ -285,21 +285,21 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
 
 /// The host-side alpha read for a frame the app draws itself, such as the stock `MiniMapPing`.
 #[test]
-fn frame_effective_alpha_reads_the_shown_frames_alpha() {
+fn frame_alpha_reads_the_shown_frames_alpha() {
     let s = UiScript::new().unwrap();
     s.run(
         r#"p = CreateFrame("Frame", "PingParent")
            f = CreateFrame("Model", "PingModel", p) f:SetAlpha(0.5) f:Hide()"#,
     )
     .unwrap();
-    assert_eq!(s.frame_effective_alpha("PingModel"), None, "hidden");
-    assert_eq!(s.frame_effective_alpha("NoSuchFrame"), None);
+    assert_eq!(s.frame_alpha("PingModel"), None, "hidden");
+    assert_eq!(s.frame_alpha("NoSuchFrame"), None);
     s.run("f:Show()").unwrap();
-    let a = s.frame_effective_alpha("PingModel").expect("shown");
+    let a = s.frame_alpha("PingModel").expect("shown");
     assert_eq!(a, 127.0 / 255.0, "the frame's alpha byte: {a}");
     s.run("p:Hide()").unwrap();
     assert_eq!(
-        s.frame_effective_alpha("PingModel"),
+        s.frame_alpha("PingModel"),
         None,
         "hidden through the parent"
     );
