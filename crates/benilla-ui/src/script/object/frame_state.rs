@@ -6,7 +6,7 @@ use crate::script::binding_abi::bool_or_default;
 
 use crate::script::region_map::{set_shared, Side};
 
-use crate::order::Strata;
+use crate::order::{DrawLayer, Strata};
 use crate::script::{visibility, Backdrop, Insets, Model};
 use crate::widget::FrameKind;
 
@@ -623,18 +623,18 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         })?,
     )?;
-    // EnableDrawLayer / DisableDrawLayer (`0x7755b0`/`0x775680`): the frame's layer mask. An
-    // unknown layer name is a no-op here; the reference's handling of one is untraced.
+    // EnableDrawLayer / DisableDrawLayer (`0x7755b0`/`0x775680`): the frame's layer mask. The
+    // layer starts at ARTWORK (`0x775640`) and a string naming a layer replaces it (`0x775662`
+    // writes only on a hit), so a missing, unknown or non-string argument means ARTWORK. A
+    // number passes `lua_isstring` but its text names no layer.
     for (name, disable) in [("EnableDrawLayer", false), ("DisableDrawLayer", true)] {
         m.set(
             name,
             lua.create_function(move |lua, (this, layer): (Table, Value)| {
-                let Some(l) = layer
+                let l = layer
                     .as_string()
                     .and_then(|s| s.to_str().ok().and_then(|s| draw_layer_from_str(&s)))
-                else {
-                    return Ok(());
-                };
+                    .unwrap_or(DrawLayer::Artwork);
                 let h = frame_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 if let Some(frame) = model.arena.frame_mut(h) {
