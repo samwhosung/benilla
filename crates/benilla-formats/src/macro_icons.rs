@@ -21,7 +21,7 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// (`0x4f0140`-`0x4f01a4`): the order is alphabetical, and a stock 5875 install yields 517 icons.
 pub fn load_macro_icons(chain: &Chain) -> Result<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
-    for entry in chain.list()? {
+    for entry in chain.list_prefix(ICON_DIR)? {
         let path = entry.name.replace('/', "\\");
         // Case-insensitive (`SStrCmpI`), as listfiles are not consistently cased.
         if path.len() <= ICON_DIR.len()

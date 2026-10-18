@@ -166,6 +166,17 @@ impl Chain {
     /// (most of `texture.MPQ`) is readable by name but not listed. Unions every archive's
     /// `(listfile)`, as each names only its own files; sizes come from the winning archive.
     pub fn list(&self) -> Result<Vec<ChainEntry>> {
+        self.list_where(|_| true)
+    }
+
+    /// [`Chain::list`] of the names that begin with `prefix` (any case, `/` and `\` alike), tested
+    /// before a name is resolved or sized, so listing one folder costs the listfiles' text and a
+    /// lookup per name in it, not one per name in the chain.
+    pub fn list_prefix(&self, prefix: &str) -> Result<Vec<ChainEntry>> {
+        self.list_where(|name| has_path_prefix(name, prefix))
+    }
+
+    fn list_where(&self, keep: impl Fn(&str) -> bool) -> Result<Vec<ChainEntry>> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for archive in &self.archives {
@@ -175,7 +186,10 @@ impl Chain {
             for raw in String::from_utf8_lossy(&listfile).split([';', '\r', '\n']) {
                 let name = raw.trim();
                 // Dedupe the way MPQ hashing compares names: any case, `/` and `\` alike.
-                if name.is_empty() || !seen.insert(name.replace('/', "\\").to_ascii_lowercase()) {
+                if name.is_empty()
+                    || !keep(name)
+                    || !seen.insert(name.replace('/', "\\").to_ascii_lowercase())
+                {
                     continue;
                 }
                 if let Some(a) = self.resolve(name) {
@@ -194,9 +208,61 @@ impl Chain {
     }
 }
 
+/// Whether `name` begins with `prefix`, without ASCII case and with `/` read as `\`.
+fn has_path_prefix(name: &str, prefix: &str) -> bool {
+    let fold = |b: &u8| match b {
+        b'/' => b'\\',
+        b => b.to_ascii_lowercase(),
+    };
+    name.len() >= prefix.len()
+        && name.as_bytes()[..prefix.len()]
+            .iter()
+            .map(fold)
+            .eq(prefix.as_bytes().iter().map(fold))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_prefix_matches_any_case_and_either_slash() {
+        assert!(has_path_prefix(
+            "Interface\\Icons\\Spell_Fire.blp",
+            "Interface\\Icons\\"
+        ));
+        assert!(has_path_prefix("interface/ICONS/x", "Interface\\Icons\\"));
+        assert!(has_path_prefix("Interface\\Icons\\", "Interface\\Icons\\"));
+        assert!(!has_path_prefix("Interface\\Icon", "Interface\\Icons\\"));
+        assert!(!has_path_prefix(
+            "Interface\\IconsX\\a",
+            "Interface\\Icons\\"
+        ));
+        assert!(!has_path_prefix("Textures\\Icons\\a", "Interface\\Icons\\"));
+    }
+
+    /// The narrowed listing is the whole listing filtered: the same names, sizes and order.
+    #[test]
+    fn a_prefix_listing_is_the_full_listing_filtered() {
+        let data = crate::wow_data_or_skip!();
+        let chain = Chain::open(&data).expect("open chain");
+        let prefix = "Interface\\Icons\\";
+        let full: Vec<(String, u64)> = chain
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|e| has_path_prefix(&e.name, prefix))
+            .map(|e| (e.name, e.size))
+            .collect();
+        let narrowed: Vec<(String, u64)> = chain
+            .list_prefix(prefix)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.name, e.size))
+            .collect();
+        assert!(!full.is_empty());
+        assert_eq!(narrowed, full);
+    }
 
     fn owned(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| n.to_string()).collect()
