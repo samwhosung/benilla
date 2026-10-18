@@ -462,6 +462,22 @@ fn verbs_world(security: AddonSecurity) -> UiScript {
             ..Default::default()
         }],
     });
+    // `StartDuel("Bob")` needs a name the resolver finds: the active player, and Bob in the party.
+    s.set_unit(
+        "player",
+        Some(crate::script::UnitState {
+            exists: true,
+            has_object: true,
+            ..Default::default()
+        }),
+    );
+    s.set_party(crate::script::PartyState {
+        members: vec![crate::script::PartyMemberInfo {
+            name: "Bob".into(),
+            guid: 0xB0B,
+        }],
+        ..Default::default()
+    });
     let slot = |name: &str, autocast| PetActionView {
         name: Some(name.into()),
         autocast_allowed: autocast,
