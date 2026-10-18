@@ -894,7 +894,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             Ok((
                 path,
-                block.height.map_or(0.0, |h| h.script(u)),
+                // The shared getter (`0x780a41` → `0x79f3b0`): `G` of the height (`0x79f3e3`).
+                block.height.map_or(0.0, |h| h.get(u)),
                 block.outline.flags_text(block.monochrome),
             ))
         })?,
