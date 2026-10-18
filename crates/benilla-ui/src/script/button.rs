@@ -930,18 +930,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Click([button]) (`0x7826c0`): the physical click's path, toggle and `OnClick` alike.
+    // Click([button]) (`0x7826c0`): the physical click's path, toggle and `OnClick` alike, with
+    // the argument mapped to the name the click fires ([`click_arg_name`]).
     m.set(
         "Click",
-        lua.create_function(|lua, (this, button): (Table, Option<String>)| {
+        lua.create_function(|lua, (this, button): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
             let id = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.frame_id(h)
             };
-            let btn = button.unwrap_or_else(|| "LeftButton".to_string());
             // A released click, flagged as scripted, which only a LootButton reads.
-            click_button(lua, id, &btn, false, true);
+            click_button(lua, id, click_arg_name(&button), false, true);
             Ok(())
         })?,
     )?;
@@ -975,6 +975,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.set_named_registry_value(REG_CHECKBUTTON_METHODS, c)?;
 
     Ok(())
+}
+
+/// `Click`'s argument as `0x7826c0` maps it, then named as the base click names its mask
+/// (`0x779540`, table `0x77960c`). A string is compared ignoring case (`0x64a4c0`) with
+/// `LeftButton`, `MiddleButton` and `RightButton` (1, 2, 4); any other string, `""` and
+/// `"Button4"` included, is 0, which fires `UNKNOWN`. A number passes `lua_isstring` (`0x6f3510`)
+/// and its decimal text matches none, so it is `UNKNOWN` too. No argument, nil, a boolean, a
+/// table or a function is `LeftButton` (`0x782766`).
+fn click_arg_name(arg: &Value) -> &'static str {
+    match arg {
+        Value::String(s) => {
+            let b = s.as_bytes();
+            ["LeftButton", "MiddleButton", "RightButton"]
+                .into_iter()
+                .find(|n| b.eq_ignore_ascii_case(n.as_bytes()))
+                .unwrap_or("UNKNOWN")
+        }
+        Value::Integer(_) | Value::Number(_) => "UNKNOWN",
+        _ => "LeftButton",
+    }
 }
 
 /// Whether `h` fires `OnClick` for the transition `name` (e.g. `"RightButtonDown"`): a Button

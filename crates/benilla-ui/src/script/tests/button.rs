@@ -1532,3 +1532,38 @@ fn button_set_font_writes_the_monochrome_bit_over_its_font_object() {
         .unwrap();
     assert!(mono(&mut s), "MONOCHROME sets it");
 }
+
+#[test]
+fn click_maps_its_argument_to_the_name_onclick_sees() {
+    let s = script();
+    s.run(
+        r#"
+        seen = {}
+        local b = CreateFrame("Button", "Mapper")
+        b:SetScript("OnClick", function() table.insert(seen, arg1) end)
+        b:Click(); b:Click(nil); b:Click(true); b:Click({})
+        b:Click("rightbutton"); b:Click("MIDDLEBUTTON"); b:Click("LeftButton")
+        b:Click("Button4"); b:Click(""); b:Click(1); b:Click("\255"); b:Click("LeftButtonUp")
+    "#,
+    )
+    .unwrap();
+    let seen: Vec<String> = s.eval("return seen").unwrap();
+    assert_eq!(
+        seen,
+        [
+            "LeftButton",
+            "LeftButton",
+            "LeftButton",
+            "LeftButton",
+            "RightButton",
+            "MiddleButton",
+            "LeftButton",
+            "UNKNOWN",
+            "UNKNOWN",
+            "UNKNOWN",
+            "UNKNOWN",
+            "UNKNOWN",
+        ]
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
