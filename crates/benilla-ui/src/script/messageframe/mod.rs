@@ -41,28 +41,36 @@ pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
             mf.tick(elapsed);
         }
         Some(KindState::ScrollingMessage(smf)) => {
-            // A resize or a font change relayouts at the current position (`0x788427`,
-            // `0x788086`), as a show does (`0x788451`, [`on_visibility`]).
+            // A resize or a font change relayouts at the anchor (`0x788427`, `0x788086`).
             if smf.laid.replace(layout_key) != Some(layout_key) {
                 smf.relayout(viewport);
             }
-            smf.tick(elapsed, viewport)
+            smf.tick(elapsed)
         }
         _ => {}
     }
 }
 
-/// A scrolling frame's show relayouts (`0x788451`): forget what it laid out against, so its next
-/// update does.
+/// A scrolling frame's show (`0x788440`) runs the OnShow script and then relayouts at the anchor
+/// (`0x788451`), inside the show, with the frame already marked visible.
 pub(super) fn on_visibility(lua: &mlua::Lua, h: FrameHandle, visible: bool) {
     if !visible {
         return;
     }
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if !matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(KindState::ScrollingMessage(_))
+    ) {
+        return;
+    }
+    let viewport = UiScript::message_viewport(&model, h);
+    let layout_key = UiScript::message_layout_key(&model, h);
     if let Some(KindState::ScrollingMessage(smf)) =
         model.arena.frame_mut(h).map(|f| &mut f.kind_state)
     {
-        smf.laid = None;
+        smf.laid = Some(layout_key);
+        smf.relayout(viewport);
     }
 }
 
@@ -244,13 +252,14 @@ impl MessageFont {
     }
 
     /// What the scrolling class's layout fits messages into: a frame `height` tall, drawn at
-    /// `scale`.
-    fn viewport(&self, height: f32, scale: f32) -> Viewport {
+    /// `scale`, visible or not.
+    fn viewport(&self, height: f32, scale: f32, visible: bool) -> Viewport {
         Viewport {
             height,
             line_h: self.height_or_default() * scale,
             row_gap: self.row_gap(scale),
             message_gap: self.message_gap(scale),
+            visible,
         }
     }
 
@@ -366,11 +375,13 @@ impl UiScript {
     /// quantity scaled; no rect yet is no height, which still shows the anchored message.
     pub(super) fn message_viewport(model: &Model, fh: FrameHandle) -> Viewport {
         let font = Self::message_frame_font(model, fh);
-        let scale = model.arena.frame(fh).map_or(1.0, |f| f.effective_scale);
+        let frame = model.arena.frame(fh);
+        let scale = frame.map_or(1.0, |f| f.effective_scale);
+        let visible = frame.is_some_and(|f| f.effective_visible);
         let height = model
             .frame_rect(fh)
             .map_or(0.0, |r| (r.top - r.bottom).max(0.0));
-        font.viewport(height, scale)
+        font.viewport(height, scale, visible)
     }
 
     /// What the scrolling frame `fh`'s relayout lays out against: its size and its font.
@@ -495,6 +506,7 @@ impl UiScript {
     /// The key is stored beside the rows, so a line that changed since its request re-requests.
     pub fn set_message_line_rows(&mut self, rows: &[(u32, u32, u16, u64)]) {
         let mut model = self.model_mut();
+        let mut moved: Vec<FrameHandle> = Vec::new();
         for &(frame_id, index, n, key) in rows {
             let Some(&fh) = model.id_to_frame.get(&frame_id) else {
                 continue;
@@ -506,8 +518,21 @@ impl UiScript {
                 continue;
             };
             if let Some(line) = lines.get_mut(index as usize) {
+                if line.rows != n.max(1) && !moved.contains(&fh) {
+                    moved.push(fh);
+                }
                 line.rows = n.max(1);
                 line.rows_key = key;
+            }
+        }
+        // The reference measures each line inside its relayout's walk; here the rows land after
+        // it, so a scrolling frame's cached count and at-top are re-counted from them.
+        for fh in moved {
+            let viewport = Self::message_viewport(&model, fh);
+            if let Some(KindState::ScrollingMessage(smf)) =
+                model.arena.frame_mut(fh).map(|f| &mut f.kind_state)
+            {
+                smf.recount(viewport);
             }
         }
     }
@@ -540,7 +565,7 @@ impl UiScript {
             match &frame.kind_state {
                 KindState::ScrollingMessage(smf) => (
                     &smf.lines,
-                    smf.lines.len().saturating_sub(1 + smf.scroll_offset),
+                    smf.lines.len().saturating_sub(1 + smf.scroll_offset()),
                     false,
                 ),
                 KindState::Message(mf) => (
@@ -561,7 +586,7 @@ impl UiScript {
         };
         // The resolved rect is scaled and the font is frame-local, so the height and gap scale.
         let line_h = font.height_or_default() * paint.scale;
-        let viewport = font.viewport(fr.top - fr.bottom, paint.scale);
+        let viewport = font.viewport(fr.top - fr.bottom, paint.scale, true);
         // A message's advance to the next: the scrolling class's block and snapped gap, the plain
         // class's own pitch per row.
         let advance = |rows: u16| match &frame.kind_state {

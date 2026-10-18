@@ -67,15 +67,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "MovieFrame",
         "the same — `MovieFrame.lua:35` passes `GetMovieSubtitles()`",
     ),
-    // ── ScrollingMessageFrame's line-position surface ──
-    (
-        "GetCurrentLine",
-        "ScrollingMessageFrame",
-        "the buffer's position is internal; no caller measured",
-    ),
-    ("GetCurrentScroll", "ScrollingMessageFrame", "the same"),
-    ("GetNumLinesDisplayed", "ScrollingMessageFrame", "the same"),
-    ("SetScrollFromBottom", "ScrollingMessageFrame", "the same"),
 ];
 
 /// Methods answered here that 1.12 does not register on that class, each with why it stays.
