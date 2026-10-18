@@ -1508,3 +1508,47 @@ fn each_child_element_applies_in_turn_and_the_instances_wins() {
     assert_eq!(got("EachBox:GetTextInsets()"), [4.0, 5.0, 6.0, 7.0]);
     assert_eq!(&got("EachModel:GetFogColor()")[..3], [0.0, 0.0, 1.0]);
 }
+
+/// A `<Backdrop>`'s children are one dispatch in document order (`0x77e757`-`0x77e895`): the last
+/// of each kind wins, and any other child logs `Unknown child node in %s element: %s`
+/// (`0x871464`) with the Backdrop's tag and its own.
+#[test]
+fn a_backdrop_takes_the_last_child_of_each_kind_and_logs_the_rest() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="BdHost">
+                <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background">
+                    <EdgeSize><AbsValue val="8"/></EdgeSize>
+                    <EdgeSz><AbsValue val="4"/></EdgeSz>
+                    <TileSize><AbsValue val="12"/></TileSize>
+                    <EdgeSize><AbsValue val="16"/></EdgeSize>
+                    <BackgroundInsets><AbsInset left="1" right="1" top="1" bottom="1"/></BackgroundInsets>
+                    <BackgroundInsets><AbsInset left="2" right="3" top="4" bottom="5"/></BackgroundInsets>
+                    <Color r="1" g="0" b="0"/>
+                    <Color r="0" g="1" b="0"/>
+                    <BorderColor r="0" g="0" b="1"/>
+                </Backdrop>
+            </Frame>
+        </Ui>"#,
+    );
+    let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
+    let bd = "local t = BdHost:GetBackdrop() local i = t.insets \
+              return t.edgeSize, t.tileSize, i.left, i.right, i.top, i.bottom";
+    assert_eq!(
+        s.eval::<Vec<f32>>(&format!("return {{(function() {bd} end)()}}"))
+            .unwrap(),
+        [16.0, 12.0, 2.0, 3.0, 4.0, 5.0]
+    );
+    let one = crate::color::quant::read32(1.0);
+    assert_eq!(&got("BdHost:GetBackdropColor()")[..3], [0.0, one, 0.0]);
+    assert_eq!(
+        &got("BdHost:GetBackdropBorderColor()")[..3],
+        [0.0, 0.0, one]
+    );
+    assert!(has_line(
+        &report,
+        "Unknown child node in Backdrop element: EdgeSz"
+    ));
+}
