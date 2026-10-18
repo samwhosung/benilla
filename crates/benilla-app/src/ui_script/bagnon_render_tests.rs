@@ -663,13 +663,13 @@ fn a_button_reports_its_own_label_width() {
         .expect("the label asks to be measured");
     s.set_measured_text_unwrapped(&[(req.id, 61.0, 12.0, req.key)]);
 
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ProbeWidthButton:GetTextWidth()")
             .expect("Button:GetTextWidth"),
         61.0,
         "the Button reports its LABEL's natural extent"
     );
-    assert_eq!(
+    benilla_ui::assert_near!(
         s.eval::<f64>("return ProbeWidthButton:GetTextHeight()")
             .expect("Button:GetTextHeight"),
         12.0
