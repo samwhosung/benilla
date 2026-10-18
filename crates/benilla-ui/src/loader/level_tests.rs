@@ -1465,3 +1465,46 @@ fn a_skipped_anchor_reads_no_offset() {
     );
     assert_eq!(offset_lines(&applied), 1);
 }
+
+/// `<HitRectInsets>`, `<ResizeBounds>` (the frame's child loop, `0x769b27`-`0x769d22`), an
+/// EditBox's `<TextInsets>` (`0x77a2a9`) and a model's `<FogColor>` (`0x76cc20`) each apply every
+/// matching child in turn, so the last wins, and an instance's own one wins over its template's.
+#[test]
+fn each_child_element_applies_in_turn_and_the_instances_wins() {
+    let mut s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="EachTemplate" virtual="true">
+                <HitRectInsets><AbsInset left="0" right="-100" top="0" bottom="0"/></HitRectInsets>
+                <ResizeBounds><minResize><AbsDimension x="5" y="5"/></minResize></ResizeBounds>
+            </Frame>
+            <Frame name="EachFrame" inherits="EachTemplate">
+                <HitRectInsets><AbsInset left="1" right="0" top="2" bottom="3"/></HitRectInsets>
+                <ResizeBounds><minResize><AbsDimension x="7" y="8"/></minResize></ResizeBounds>
+            </Frame>
+            <Frame name="EachTwice">
+                <HitRectInsets><AbsInset left="0" right="30" top="0" bottom="70"/></HitRectInsets>
+                <HitRectInsets><AbsInset left="13" right="115" top="10" bottom="13"/></HitRectInsets>
+            </Frame>
+            <EditBox name="EachBox">
+                <TextInsets><AbsInset left="1" right="1" top="1" bottom="1"/></TextInsets>
+                <TextInsets><AbsInset left="4" right="5" top="6" bottom="7"/></TextInsets>
+            </EditBox>
+            <Model name="EachModel">
+                <FogColor r="1" g="0" b="0"/>
+                <FogColor r="0" g="0" b="1"/>
+            </Model>
+        </Ui>"#,
+    );
+    s.resolve();
+    let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
+    assert_eq!(got("EachFrame:GetHitRectInsets()"), [1.0, 0.0, 2.0, 3.0]);
+    assert_eq!(got("EachFrame:GetMinResize()"), [7.0, 8.0]);
+    assert_eq!(
+        got("EachTwice:GetHitRectInsets()"),
+        [13.0, 115.0, 10.0, 13.0]
+    );
+    assert_eq!(got("EachBox:GetTextInsets()"), [4.0, 5.0, 6.0, 7.0]);
+    assert_eq!(&got("EachModel:GetFogColor()")[..3], [0.0, 0.0, 1.0]);
+}

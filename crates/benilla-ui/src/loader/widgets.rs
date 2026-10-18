@@ -319,8 +319,9 @@ impl Loader<'_> {
             let s = super::xml_float(v);
             self.call(wrapper, "SetBlinkSpeed", if s > 0.0 { s } else { 0.0 }, dbg);
         }
-        // `<TextInsets>` through the inset read (`0x77a2d5`), set when it succeeds (`0x77a2da`).
-        if let Some(ins) = children_named(el, "TextInsets").next() {
+        // Each `<TextInsets>` in the child loop (`0x77a2a9`), the last winning, through the inset
+        // read (`0x77a2d5`), set when it succeeds (`0x77a2da`).
+        for ins in children_named(el, "TextInsets") {
             if let Some([l, r, t, b]) = self.inset(ins) {
                 self.call(wrapper, "SetTextInsets", (l, r, t, b), dbg);
             }

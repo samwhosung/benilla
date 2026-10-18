@@ -77,9 +77,9 @@ impl Loader<'_> {
             }
         }
         // A model pane's fog: a non-empty `fogNear`/`fogFar` through `SStrToFloat`, clamped at 0
-        // here only (`0x76cbbb`, `0x76cbf3`), where the Lua setters store raw; `<FogColor>` is
-        // read as a `<Color>` (`0x6f23d0`, `0x76cc43`) and set with `SetFogColor`, fog bit
-        // included.
+        // here only (`0x76cbbb`, `0x76cbf3`), where the Lua setters store raw; each `<FogColor>`
+        // in the child loop (`0x76cc20`-`0x76cc5d`), the last winning, is read as a `<Color>`
+        // (`0x6f23d0`, `0x76cc43`) and set with `SetFogColor`, fog bit included.
         if model_kind {
             for (attr, verb) in [("fogNear", "SetFogNear"), ("fogFar", "SetFogFar")] {
                 if let Some(v) = el.attr(attr).filter(|v| !v.is_empty()) {
@@ -87,7 +87,7 @@ impl Loader<'_> {
                     self.call(wrapper, verb, v.max(0.0), dbg);
                 }
             }
-            if let Some(fc) = children_named(el, "FogColor").next() {
+            for fc in children_named(el, "FogColor") {
                 self.call(wrapper, "SetFogColor", color_of(fc).fractions(), dbg);
             }
         }
@@ -105,16 +105,20 @@ impl Loader<'_> {
         if el.attr_bool("enableMouse") {
             self.call(wrapper, "EnableMouse", true, dbg);
         }
+        // `<HitRectInsets>` and `<ResizeBounds>` are arms of the frame's child loop
+        // (`0x769b27`-`0x769d22`), so each one applies in turn and the last wins; the merged
+        // element holds a template's children first, so an instance's own one wins over it.
         // `<HitRectInsets>`: the mouse rect, inset from the frame's, when the inset read succeeds
         // (`0x769cb5`); a side it omits is 0.
-        if let Some(ins) = children_named(el, "HitRectInsets").next() {
+        for ins in children_named(el, "HitRectInsets") {
             if let Some([l, r, t, b]) = self.inset(ins) {
                 self.call(wrapper, "SetHitRectInsets", (l, r, t, b), dbg);
             }
         }
-        // `<ResizeBounds>` (`0x769baa`): both pairs are always written, an absent one as 0, so a
-        // lone `<minResize>` resets the max to unbounded. A `<Size>` outside them is not clamped.
-        if let Some(rb) = children_named(el, "ResizeBounds").next() {
+        // `<ResizeBounds>` (`0x769baa`): its first `<minResize>` and `<maxResize>`, both pairs
+        // always written, an absent one as 0, so a lone `<minResize>` resets the max to unbounded.
+        // A `<Size>` outside them is not clamped.
+        for rb in children_named(el, "ResizeBounds") {
             for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
                 let [x, y] = children_named(rb, tag)
                     .next()
@@ -148,19 +152,19 @@ impl Loader<'_> {
         self_name: &str,
         dbg: &str,
     ) {
-        let Some(tr) = children_named(el, "TitleRegion").next() else {
-            return;
-        };
-        let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
-            Ok(r) => r,
-            Err(e) => {
-                self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
-                return;
-            }
-        };
-        // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
-        // `0x769b8a`), which never re-enters `inherits`: the node alone.
-        self.apply_geometry(tr, &region, true, self_name, dbg);
+        // Each `<TitleRegion>` in the child loop (`0x769b2f`-`0x769ba5`) loads into the one region.
+        for tr in children_named(el, "TitleRegion") {
+            let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
+                    return;
+                }
+            };
+            // The title region's layout load is `0x767800` itself (`0x81c528[2]`, called at
+            // `0x769b8a`), which never re-enters `inherits`: the node alone.
+            self.apply_geometry(tr, &region, true, self_name, dbg);
+        }
     }
 
     /// One node's geometry, the CLayoutFrame part of every frame and region `LoadXML` (`0x767800`),

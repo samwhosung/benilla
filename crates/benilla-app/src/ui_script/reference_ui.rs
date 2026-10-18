@@ -2179,6 +2179,27 @@ mod tests {
         assert_eq!(refused(&mut glue), Vec::<String>::new(), "the glue");
     }
 
+    /// The frame loader's child loop applies each `<HitRectInsets>` in turn (`0x769c8c`), so the
+    /// reputation detail checkboxes' own `right="0"` wins over OptionsCheckButtonTemplate's -100,
+    /// and WorldStateScoreFrame's second element over its first.
+    #[test]
+    fn a_stock_frames_last_hit_rect_insets_win() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let core = UiScript::new().expect("VM");
+        super::super::manifest::load_default_ui(&core);
+        let insets = |f: &str| -> Vec<f32> {
+            core.eval(&format!("return {{{f}:GetHitRectInsets()}}"))
+                .unwrap_or_else(|e| panic!("{f}: {e}"))
+        };
+        for f in [
+            "ReputationDetailMainScreenCheckBox",
+            "ReputationDetailInactiveCheckBox",
+        ] {
+            assert_eq!(insets(f), [0.0; 4], "{f}");
+        }
+        assert_eq!(insets("WorldStateScoreFrame"), [13.0, 115.0, 10.0, 13.0]);
+    }
+
     fn seat_a_player(s: &mut UiScript) {
         s.set_unit(
             "player",
