@@ -804,6 +804,67 @@ mod tests {
         }
     }
 
+    /// Our own name resolves through the object pass at distance 0 (`0x493d30` measures from our
+    /// own object, which the roster passes skip as held), and passes mode 2 while its health is
+    /// above 0 (`0x493eca`): a ghost, at health 1, does; a corpse, at 0, does not.
+    #[test]
+    fn set_loot_method_resolves_our_own_name_through_the_feed() {
+        use benilla_ui::script::{PartyRequest, PartyState};
+        for (health, resolved) in [(100, true), (1, true), (0, false)] {
+            let mut f = frame(false);
+            with_factions(&mut f, FRIEND, &[]);
+            let world = f.app.world_mut();
+            let me = world.resource::<GuidIndex>().0[&ME];
+            world
+                .entity_mut(me)
+                .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (HEALTH, health),
+                    (28, 100),
+                    (FLAGS, 0x8),
+                    (TEMPLATE, OURS),
+                ])));
+            world
+                .resource_mut::<crate::names::NameCache>()
+                .insert_player(ME, "Kelvin".into(), None);
+            world
+                .run_system_once(crate::ui_unit::feed_name_candidates)
+                .expect("the candidate feed runs as a one-shot system");
+            let mut script = f.app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_party(PartyState {
+                members: vec![benilla_ui::script::PartyMemberInfo {
+                    name: "Olly".into(),
+                    guid: OLD,
+                }],
+                leader_guid: ME,
+                own_guid: ME,
+                ..Default::default()
+            });
+            script.set_unit(
+                "player",
+                Some(benilla_ui::script::UnitState {
+                    exists: true,
+                    has_object: true,
+                    guid: ME,
+                    ..Default::default()
+                }),
+            );
+            script
+                .run(r#"SetLootMethod("master", "kel")"#)
+                .expect("the script runs");
+            let expected = resolved.then_some(PartyRequest::LootMethod {
+                method: 2,
+                master: ME,
+                threshold: 2,
+            });
+            assert_eq!(
+                script.take_party_requests(),
+                expected.into_iter().collect::<Vec<_>>(),
+                "health {health}"
+            );
+        }
+    }
+
     /// The candidate feed marks a `UNIT_FLAG_NOT_SELECTABLE` unit as the commit's `IsSelectable`
     /// does (`0x4935ee`): the nearer namesake is the ranked pick and it is refused, so the chunk
     /// keeps the old target's view and the commit keeps its selection, not the farther namesake.
