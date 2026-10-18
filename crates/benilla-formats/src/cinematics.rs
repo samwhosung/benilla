@@ -324,6 +324,17 @@ mod tests {
         assert_eq!(camera_model_path("Cameras\\X"), "spells\\errorcube.m2");
     }
 
+    /// A refused camera name reads the error cube, which the install ships with no camera record
+    /// (its header's count at `0x124` is 0), so such a shot has no camera to fly.
+    #[test]
+    fn the_error_cube_holds_no_camera() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let path = camera_model_path("Cameras\\NoSuchShot");
+        let bytes = chain.read_file(&path).expect("the error cube ships");
+        assert!(benilla_m2::parse_cameras(&bytes).is_empty(), "{path}");
+    }
+
     #[test]
     fn real_cinematic_tables_are_the_shipped_shape() {
         let data = crate::wow_data_or_skip!();
