@@ -99,7 +99,7 @@ pub(crate) fn post_load(lua: &Lua, wrapper: &Table) {
     if let Ok(t) = tip_mut(&mut model, h) {
         t.left_lines = pairs.iter().map(|p| p.0).collect();
         t.right_lines = pairs.iter().map(|p| p.1).collect();
-        // The second pass stores 0 in each wrap flag (`0x5297f3`).
+        // The second pass stores 0 in each wrap flag (`0x529830`).
         t.wrapped = vec![false; pairs.len()];
     }
 }

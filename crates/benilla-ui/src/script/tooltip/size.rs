@@ -152,7 +152,8 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
         model.invalidate_frame(h, changed);
     }
     // The anchor again, without its clear (`0x530a49`), except for the cursor mode, which its
-    // update places (`0x530a3c`); then the plate is invalidated (`0x530a52`).
+    // update places (`0x530a3c`); then the plate is invalidated for the next resolve. Deviation:
+    // `0x530a52` lays it out at once; getters resolve first, so only OnSizeChanged fires later.
     if anchor != TooltipAnchor::Cursor {
         apply_anchor(model, h, owner, anchor, x, y, false);
     }
