@@ -111,6 +111,40 @@ fn tree_interleaves_headers_and_ordered_services() {
     assert_eq!(info(&mut s, 5), ("Bloodrage".into(), "unavailable".into()));
 }
 
+/// A service row whose spell has no rank answers the empty string for its subText (the DBC's
+/// `NameSubtext` pushed as it stands, `0x4d8b50` -> `0x4d8e13`), never nil: a client's
+/// FrameXML may `format` it before its nil guard, which throws on nil.
+#[test]
+fn a_rankless_service_answers_an_empty_string_for_its_subtext() {
+    let mut s = UiScript::new().unwrap();
+    let mut t = trainer();
+    t.services[0].subtext = None; // Heroic Strike, row 2
+    s.set_trainer(Some(t));
+
+    let (name, sub, ty) = s
+        .eval::<(String, mlua::Value, String)>(
+            "local n,s,t = GetTrainerServiceInfo(2) return n,s,t",
+        )
+        .unwrap();
+    assert_eq!((name.as_str(), ty.as_str()), ("Heroic Strike", "available"));
+    match sub {
+        mlua::Value::String(v) => assert_eq!(v.to_str().unwrap(), ""),
+        other => panic!("the rankless subText must be a string, got {other:?}"),
+    }
+    // A `format` over it must not throw.
+    assert_eq!(
+        s.eval::<String>("local _,sub = GetTrainerServiceInfo(2) return format(\"(%s)\", sub)")
+            .unwrap(),
+        "()"
+    );
+    // A ranked service is unchanged.
+    assert_eq!(
+        s.eval::<String>("local _,sub = GetTrainerServiceInfo(3) return sub")
+            .unwrap(),
+        "Rank 1"
+    );
+}
+
 /// The fourth value of a service row is 1 (`0x4d8e42`: the header test `0x4d8c30` answers 0 for a
 /// row that is no header, which pushes 1), not nil; a collapsed header's is nil.
 #[test]
