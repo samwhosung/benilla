@@ -22,7 +22,7 @@ pub(crate) mod anchor_args;
 mod events_regions;
 mod frame_state;
 mod layout_methods;
-pub(crate) use layout_methods::eff_scale;
+pub(crate) use layout_methods::{eff_scale, layout_scale};
 pub(in crate::script) use layout_methods::{settle_frame, settle_region};
 pub(crate) mod movable;
 pub(crate) mod toplevel;

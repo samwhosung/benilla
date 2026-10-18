@@ -207,10 +207,12 @@ pub(crate) fn get_point_index(lua: &Lua, n: Value) -> mlua::Result<usize> {
 }
 
 /// `GetPoint`'s answer for `anchor` (`0x7a2416`..`0x7a24d6`): point, `relativeTo`, relative point
-/// and the two offsets; no anchor at the index pushes no value at all (`0x7a240d`).
+/// and the two offsets as `SetPoint` stored them, through the getter steps (`0x7a2483`); no anchor
+/// at the index pushes no value at all (`0x7a240d`).
 pub(crate) fn get_point_values(
     lua: &Lua,
     anchor: Option<crate::layout::Anchor>,
+    units: crate::layout::LayoutUnits,
     rel: impl FnOnce(u32) -> mlua::Result<Value>,
 ) -> mlua::Result<MultiValue> {
     let Some(a) = anchor else {
@@ -220,7 +222,7 @@ pub(crate) fn get_point_values(
         Value::String(lua.create_string(super::point_name(a.point))?),
         rel(a.relative_to)?,
         Value::String(lua.create_string(super::point_name(a.relative_point))?),
-        Value::Number(f64::from(a.x_off)),
-        Value::Number(f64::from(a.y_off)),
+        Value::Number(units.load(units.store(a.x_off))),
+        Value::Number(units.load(units.store(a.y_off))),
     ]))
 }
