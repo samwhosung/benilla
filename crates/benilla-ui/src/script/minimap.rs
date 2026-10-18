@@ -8,7 +8,9 @@ use mlua::{Lua, Table, Value};
 use super::binding_abi::{lua_number_text, number_arg};
 use super::object::{decode_id, frame_handle_of};
 use super::Model;
-use crate::widget::{FrameHandle, FrameKind, KindState, MINIMAP_ZOOM_LEVELS};
+use crate::widget::{
+    FrameHandle, FrameKind, KindState, MinimapArt, MinimapArtSlot, MINIMAP_ZOOM_LEVELS,
+};
 
 /// Registry key of the Minimap method table.
 pub(super) const REG_MINIMAP_METHODS: &str = "__benilla_minimap_methods";
@@ -79,6 +81,56 @@ pub(crate) fn apply_model_attrs(
     Ok(())
 }
 
+/// The texture setters' one body (`SetMaskTexture` `0x4ee4a0`): the member prologue, then
+/// `lua_isstring(2)` (`0x4ee532`), whose failure raises `Usage: %s:<name>("file")` (`0x84c7fc`)
+/// with the frame's name or `<unnamed>`. Then `TextureCreate` on `lua_tostring(2)` (`0x4ee5e4`),
+/// its result stored over the old handle (`0x4ee5e9`) and, when the load logged at severity 2 or
+/// more (`0x4ee5ee`), `%s:<name>(): Couldn't load the file %s` (`0x84c7c0`, `0x4ee623`) after the
+/// store. An empty name loads nothing and logs nothing. With no host probe the file is taken.
+fn set_art(
+    lua: &Lua,
+    this: &Value,
+    path: Value,
+    slot: MinimapArtSlot,
+    name: &str,
+) -> mlua::Result<()> {
+    let h = this_minimap(lua, this)?;
+    let path = match path {
+        Value::String(s) => s.to_string_lossy(),
+        Value::Integer(i) => lua_number_text(i as f64),
+        Value::Number(n) => lua_number_text(n),
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "Usage: {}:{name}(\"file\")",
+                frame_name(lua, h)
+            )));
+        }
+    };
+    let art = if path.is_empty() {
+        MinimapArt::Null
+    } else {
+        match super::region::texture_name_verdict(
+            &lua.app_data_ref::<Model>().expect("model app_data"),
+            &path,
+        ) {
+            super::region::FileLoad::Failed => MinimapArt::Missing,
+            _ => MinimapArt::File(path.clone()),
+        }
+    };
+    let failed = art == MinimapArt::Missing;
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .minimap
+        .set_art(slot, art);
+    if failed {
+        return Err(mlua::Error::runtime(format!(
+            "{}:{name}(): Couldn't load the file {path}",
+            frame_name(lua, h)
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -108,31 +160,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
-        // The disc's mask art, write-only as in the reference (`0x4ee4a0`). The receiver is checked
-        // first, then `lua_isstring(2)` (`0x4ee532`): anything but a string or a number raises
-        // `Usage: %s:SetMaskTexture("file")` (`0x84c7fc`), naming the frame or `<unnamed>`. An
-        // empty path restores the default circle rather than unmasking the map; what the
-        // reference does with one is untraced.
         "SetMaskTexture",
         lua.create_function(|lua, (this, path): (Value, Value)| {
-            let h = this_minimap(lua, &this)?;
-            let path = match path {
-                Value::String(s) => s.to_string_lossy(),
-                Value::Integer(i) => lua_number_text(i as f64),
-                Value::Number(n) => lua_number_text(n),
-                _ => {
-                    return Err(mlua::Error::runtime(format!(
-                        "Usage: {}:SetMaskTexture(\"file\")",
-                        frame_name(lua, h)
-                    )));
-                }
-            };
-            let path = Some(path).filter(|p| !p.is_empty());
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .minimap
-                .mask_texture = path;
-            Ok(())
+            set_art(lua, &this, path, MinimapArtSlot::Mask, "SetMaskTexture")
         })?,
     )?;
     m.set(

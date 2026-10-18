@@ -926,10 +926,13 @@ impl UiScript {
         std::mem::take(&mut self.model_mut().minimap_pings_sent)
     }
 
-    /// `Minimap:SetMaskTexture`'s value, `None` until one is set, while the app keeps
-    /// [`crate::widget::MINIMAP_DEFAULT_MASK`].
-    pub fn minimap_mask_texture(&self) -> Option<String> {
-        self.model_ref().minimap.mask_texture.clone()
+    /// What this VM's texture setter for `slot` last stored, with the call's stamp; `None` while
+    /// this VM has not set it, when the process's texture stands.
+    pub fn minimap_art(
+        &self,
+        slot: crate::widget::MinimapArtSlot,
+    ) -> Option<(u64, crate::widget::MinimapArt)> {
+        self.model_ref().minimap.art[slot as usize].clone()
     }
 
     /// Seed the two zoom cells from the persisted CVars before the world entry reseeds them, so a

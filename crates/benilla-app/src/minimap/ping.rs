@@ -166,7 +166,7 @@ mod tests {
             .resource_mut::<MinimapPing>()
             .seat((100.0, 200.0 - 50.0), 0xDEAD);
         app.update();
-        let mut s = script(&mut app);
+        let s = script(&mut app);
         assert_eq!(s.eval::<String>("return seen[1]").unwrap(), "player");
         let (x, y) = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
         let d = 2.0 * f64::from(benilla_ui::widget::minimap_radius_yd(3, 3, false));

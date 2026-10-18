@@ -734,7 +734,7 @@ pub struct MinimapState {
 /// The minimap's statics, one set for every Minimap frame: the zoom cells, outdoor `0x86f698`
 /// (CVar `minimapZoom`) and indoor `0x86f69c` (CVar `minimapInsideZoom`, radii
 /// `{150,120,90,60,40,25}` yd), the indoor byte `0xceaa60` that picks between them, and the mask
-/// `0xbc7968`. `GetZoomLevels`, `GetZoom`, `SetZoom` and `GetPingPosition` read and write them
+/// `0xbc7968` with the icon atlases. `GetZoomLevels`, `GetZoom`, `SetZoom` and `GetPingPosition` read and write them
 /// with no `this` lookup (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MinimapStatics {
@@ -743,8 +743,11 @@ pub struct MinimapStatics {
     pub inside_zoom: u8,
     /// Inside a WMO interior, which picks the index; pushed by the app, which owns that test.
     pub inside: bool,
-    /// `Minimap:SetMaskTexture`'s mask, write-only from Lua; `None` is [`MINIMAP_DEFAULT_MASK`].
-    pub mask_texture: Option<String>,
+    /// What each texture setter last left in its handle, with the call's stamp, so the host
+    /// applies a call once; `None` until this VM sets that slot.
+    pub art: [Option<(u64, MinimapArt)>; 3],
+    /// The stamp the next setter call takes.
+    pub art_stamp: u64,
     /// The one ping, a WoW world `(x, y)` (`0xbc787c`, `0xbc7880`): zero from the static
     /// initializer (`0x4ea1f0`), never cleared.
     pub ping: (f32, f32),
@@ -763,7 +766,8 @@ impl Default for MinimapStatics {
             zoom: MINIMAP_DEFAULT_ZOOM,
             inside_zoom: MINIMAP_DEFAULT_ZOOM,
             inside: false,
-            mask_texture: None,
+            art: [None, None, None],
+            art_stamp: 0,
             ping: (0.0, 0.0),
             player: None,
         }
@@ -828,6 +832,37 @@ impl MinimapStatics {
         }
         *cell = index;
         Some(cvar)
+    }
+}
+
+/// One of the minimap's three process-wide textures, each loaded at world entry (`0x4ed810`) and
+/// replaced by its setter: the disc mask (`0xbc7968`), the landmark icon atlas (`0xbc827c`) and the
+/// dot atlas (`0xbc822c`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinimapArtSlot {
+    Mask = 0,
+    Icons = 1,
+    Blips = 2,
+}
+
+/// What a minimap texture setter left in its handle: `TextureCreate` (`0x449d90`) with a status
+/// object and file flag 1, so a loose file loads too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MinimapArt {
+    /// The file the setter named, which the host loads.
+    File(String),
+    /// A name that did not resolve: `TextureCreate`'s 8×8 solid `0xff00ff00` (`[0x90582c]`),
+    /// stored before the setter raises.
+    Missing,
+    /// An empty name: `TextureCreate` returns no texture and logs nothing (`0x449db1`).
+    Null,
+}
+
+impl MinimapStatics {
+    /// Store a setter's result in its slot under a fresh stamp.
+    pub fn set_art(&mut self, slot: MinimapArtSlot, art: MinimapArt) {
+        self.art_stamp += 1;
+        self.art[slot as usize] = Some((self.art_stamp, art));
     }
 }
 

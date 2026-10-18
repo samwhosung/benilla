@@ -235,25 +235,48 @@ fn a_minimap_is_born_with_nine_model_children_and_the_ninth_is_the_player_arrow(
         .is_none_or(|p| p.is_empty()));
 }
 
-/// A 1.12 method with no getter, so the test reads the arena; pfUI's `modules/minimap.lua:27`
-/// squares its minimap with it.
+/// `SetMaskTexture` (`0x4ee4a0`), a 1.12 method with no getter, so the test reads the statics;
+/// pfUI's `modules/minimap.lua:27` squares its minimap with it. The load runs inside the call: a
+/// file that does not resolve stores the green fallback and then raises, and an empty name stores
+/// no texture at all.
 #[test]
-fn set_mask_texture_is_state_and_empty_restores_the_default() {
-    let s = script();
+fn set_mask_texture_loads_inside_the_call_and_raises_on_a_missing_file() {
+    use crate::widget::{MinimapArt, MinimapArtSlot};
+    let mut s = script();
+    s.set_texture_probe(Box::new(|path: &str| !path.contains("Nope") && path != "5"));
     s.run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
         .unwrap();
-    assert_eq!(s.minimap_mask_texture(), None, "fresh = the engine default");
+    let mask = |s: &UiScript| s.minimap_art(MinimapArtSlot::Mask).map(|(_, a)| a);
+    assert_eq!(mask(&s), None, "fresh: the process's mask stands");
 
     s.run(r#"m:SetMaskTexture("Interface\\AddOns\\pfUI\\img\\minimap")"#)
         .unwrap();
     assert_eq!(
-        s.minimap_mask_texture().as_deref(),
-        Some("Interface\\AddOns\\pfUI\\img\\minimap")
+        mask(&s),
+        Some(MinimapArt::File(
+            "Interface\\AddOns\\pfUI\\img\\minimap".into()
+        ))
     );
 
-    // Empty restores the engine's circle, never "no mask".
+    // A missing file: the green solid is stored, then the error raises at the caller's line.
+    let err = s.run(r#"m:SetMaskTexture("Interface\\Nope")"#).unwrap_err();
+    assert_eq!(
+        crate::script::lua_message(&err),
+        "[string \"(chunk)\"]:1: TestMinimap:SetMaskTexture(): Couldn't load the file Interface\\Nope"
+    );
+    assert_eq!(mask(&s), Some(MinimapArt::Missing));
+    // A number is a name (`lua_isstring`), loaded as its text.
+    let err = s
+        .run(r#"CreateFrame("Minimap"):SetMaskTexture(5)"#)
+        .unwrap_err();
+    assert_eq!(
+        crate::script::lua_message(&err),
+        "[string \"(chunk)\"]:1: <unnamed>:SetMaskTexture(): Couldn't load the file 5"
+    );
+
+    // An empty name loads nothing and raises nothing: the map stops drawing (`0x4ec968`).
     s.run(r#"m:SetMaskTexture("")"#).unwrap();
-    assert_eq!(s.minimap_mask_texture(), None);
+    assert_eq!(mask(&s), Some(MinimapArt::Null));
 
     // `lua_isstring(2)` (`0x4ee532`): a missing or nil path raises `0x84c7fc` and keeps the mask.
     s.run(r#"m:SetMaskTexture("Interface\\Foo")"#).unwrap();
@@ -262,16 +285,13 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
         "m:SetMaskTexture(nil)",
         "m:SetMaskTexture({})",
     ] {
-        // Through `luaL_error` (`0x4ee555`), at the caller's line.
         assert_eq!(
             crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
             "[string \"(chunk)\"]:1: Usage: TestMinimap:SetMaskTexture(\"file\")",
             "{chunk}"
         );
     }
-    assert_eq!(s.minimap_mask_texture().as_deref(), Some("Interface\\Foo"));
-    s.run(r#"CreateFrame("Minimap"):SetMaskTexture(5)"#)
-        .unwrap();
+    assert_eq!(mask(&s), Some(MinimapArt::File("Interface\\Foo".into())));
     assert_eq!(
         crate::script::lua_message(
             &s.run(r#"CreateFrame("Minimap"):SetMaskTexture(false)"#)
@@ -279,6 +299,12 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
         ),
         "[string \"(chunk)\"]:1: Usage: <unnamed>:SetMaskTexture(\"file\")"
     );
+
+    // Each call is stamped, so the host applies it once.
+    let (a, _) = s.minimap_art(MinimapArtSlot::Mask).unwrap();
+    s.run(r#"m:SetMaskTexture("Interface\\Foo")"#).unwrap();
+    let (b, _) = s.minimap_art(MinimapArtSlot::Mask).unwrap();
+    assert!(b > a, "a repeat is a new call");
 
     assert!(s.eval::<bool>("return m.GetMaskTexture == nil").unwrap());
 }
@@ -461,7 +487,11 @@ fn the_minimap_state_is_one_set_of_statics_and_its_getters_take_no_receiver() {
     // One mask: the later frame's call wins.
     s.run(r#"a:SetMaskTexture("Interface\\A") b:SetMaskTexture("Interface\\B")"#)
         .unwrap();
-    assert_eq!(s.minimap_mask_texture().as_deref(), Some("Interface\\B"));
+    assert_eq!(
+        s.minimap_art(crate::widget::MinimapArtSlot::Mask)
+            .map(|(_, a)| a),
+        Some(crate::widget::MinimapArt::File("Interface\\B".into()))
+    );
 
     // The setters keep the member prologue, with the reference's three texts.
     for (chunk, want) in [

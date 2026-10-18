@@ -30,7 +30,7 @@ use benilla_formats::{tile_to_world, world_to_tile, MinimapTranslate};
 
 use interior::{interior_group_selection, wmo_minimap_stem};
 
-use benilla_ui::widget::MINIMAP_DEFAULT_ZOOM;
+use benilla_ui::widget::{MinimapArt, MinimapArtSlot, MINIMAP_DEFAULT_ZOOM};
 
 use crate::player::Player;
 use crate::ui_pass::{UiQuad, UiQuadAppend, UiQuadMask, UiQuads, UvRect};
@@ -195,23 +195,46 @@ pub(crate) struct MinimapSlot {
 #[derive(Resource, Default)]
 struct MinimapAssets {
     translate: MinimapTranslate,
-    /// The disc's mask, the reference's one process-wide texture (`0xbc7968`): the default until
-    /// `Minimap:SetMaskTexture` replaces it, and no VM owns it, so a new VM inherits it.
-    mask: Option<Handle<Image>>,
-    /// `Textures\MinimapMask`, which every world entry loads into [`Self::mask`] (`0x4ed810`).
-    default_mask: Option<Handle<Image>>,
+    /// The three process-wide textures by [`MinimapArtSlot`]: the disc's mask (`0xbc7968`), the
+    /// landmark atlas `Interface\Minimap\POIIcons` (`0xbc827c`) and the dot atlas
+    /// `Interface\Minimap\ObjectIcons` (`0xbc822c`). No VM owns them, so a new VM inherits them.
+    art: [MinimapTex; 3],
     arrow: Option<Handle<Image>>,
-    /// The POI atlas (`Interface\Minimap\POIIcons`), for the corpse skull.
-    poi: Option<Handle<Image>>,
     /// The four rim-arrow arts: the reference's one `minimapArrowModel`
     /// (`Rotating-MinimapArrow.mdx`) shows exactly one of these layers per blip source's looping
     /// sequence, so one flat sprite each draws the same ([`blips::RimArrow`]).
     rim_arrows: blips::RimArrowArt,
-    /// The unit-blip atlas (`Interface\Minimap\ObjectIcons`, five 32-px dot cells).
-    object_icons: Option<Handle<Image>>,
     /// `SpellShapeshiftForm.dbc`, the tracking dots' creature-type override (a cat-form druid is a
     /// Beast).
     forms: Option<HashMap<u32, benilla_formats::ShapeshiftForm>>,
+}
+
+/// One of the minimap's process-wide textures as drawn.
+#[derive(Default, Clone)]
+struct MinimapTex {
+    /// The handle the draw uses; `None` is the null handle an empty name leaves.
+    current: Option<Handle<Image>>,
+    /// What every world entry loads (`0x4ed810`): the default file, else the green solid.
+    default: Option<Handle<Image>>,
+    /// The 8×8 solid `0xff00ff00` a name that does not load gives (`[0x90582c]`).
+    missing: Option<Handle<Image>>,
+}
+
+impl MinimapAssets {
+    /// The texture drawn for `slot`, `None` for a null handle.
+    fn tex(&self, slot: MinimapArtSlot) -> Option<&Handle<Image>> {
+        self.art[slot as usize].current.as_ref()
+    }
+}
+
+/// `TextureCreate`'s green placeholder, `0xff00ff00` (`0x447c00`), as an 8×8 image (`0x44a900`).
+fn green_solid(mask: bool) -> Image {
+    let rgba = [0u8, 255, 0, 255].repeat(64);
+    if mask {
+        benilla_assets::mask_image(8, 8, rgba)
+    } else {
+        benilla_assets::sprite_image(8, 8, rgba)
+    }
 }
 
 /// Tile handles by ADT index for one [`CurrentMap`], `None` for a tile with no art (open ocean);
@@ -246,21 +269,36 @@ fn setup_minimap(
             // `CGMinimapFrame::LoadArrowModel` creates the models with flags 4 (`0x4ee181`), which
             // their textures' opens keep (`0x71da64`), so they open loose-flagged.
             let archives = LooseOpen::Archives;
-            let mask = assets.mask_texture("Textures\\MinimapMask", archives, &mut images);
             let arrow = assets.sprite_texture(blips::PLAYER_ARROW_TEXTURE, &mut images);
-            let poi =
-                assets.sprite_texture_opened("Interface\\Minimap\\POIIcons", archives, &mut images);
             let mut rim_arrows = blips::RimArrowArt::default();
             for kind in blips::RimArrow::ALL {
                 rim_arrows.set(kind, assets.sprite_texture(kind.texture(), &mut images));
             }
-            let object_icons = assets.sprite_texture_opened(
-                "Interface\\Minimap\\ObjectIcons",
-                archives,
-                &mut images,
-            );
-            if mask.is_none() {
-                warn!("minimap: MinimapMask.blp missing — the map will draw square");
+            // The three defaults (`0x84c6e4`, `0x84c6c8`, `0x84c6a8`); one that does not load is
+            // the green solid, as `TextureCreate` gives it.
+            let mut art: [MinimapTex; 3] = Default::default();
+            for slot in [
+                MinimapArtSlot::Mask,
+                MinimapArtSlot::Icons,
+                MinimapArtSlot::Blips,
+            ] {
+                let is_mask = slot == MinimapArtSlot::Mask;
+                let missing = images.add(green_solid(is_mask));
+                let path = default_art_path(slot);
+                let loaded = if is_mask {
+                    assets.mask_texture(path, archives, &mut images)
+                } else {
+                    assets.sprite_texture_opened(path, archives, &mut images)
+                };
+                if loaded.is_none() {
+                    warn!("minimap: {path} missing — the green placeholder stands in");
+                }
+                let default = Some(loaded.unwrap_or_else(|| missing.clone()));
+                art[slot as usize] = MinimapTex {
+                    current: default.clone(),
+                    default,
+                    missing: Some(missing),
+                };
             }
             let forms = {
                 let mut chain = assets.chain.lock_recover();
@@ -274,12 +312,9 @@ fn setup_minimap(
             };
             commands.insert_resource(MinimapAssets {
                 translate,
-                default_mask: mask.clone(),
-                mask,
+                art,
                 arrow,
-                poi,
                 rim_arrows,
-                object_icons,
                 forms,
             });
         }
@@ -393,7 +428,7 @@ fn emit_minimap(
     // The drawn family's world-to-px scale, for the point blips drawn after the tiles.
     let mut blip_px_per_yd = 0.0_f32;
 
-    let mask = assets.mask.as_ref().map(|m| UiQuadMask {
+    let mask = assets.tex(MinimapArtSlot::Mask).map(|m| UiQuadMask {
         texture: m.clone(),
         rect: slot.rect,
     });
@@ -403,7 +438,10 @@ fn emit_minimap(
     // For the dots' indoor test; the branch below consumes `interior`.
     let player_indoors = interior.is_some();
     let view_radius = view_radius_yd(zoom, inside_zoom, player_indoors);
-    if let Some((world_from_local, model, stem, in_group)) = interior {
+    if assets.tex(MinimapArtSlot::Mask).is_none() {
+        // An empty mask name leaves no texture, and the render returns at once (`0x4ec959`,
+        // `0x4ec968`): no tiles, and with no scale no landmarks, rim arrows or dots either.
+    } else if let Some((world_from_local, model, stem, in_group)) = interior {
         // Interior: the WMO's own per-group tiles, drawn white. They are baked in the model frame
         // (north = model +X), so each sits at its model-space centre through the placement and the
         // whole set turns by one placement yaw (`0x6da180`).
@@ -642,7 +680,7 @@ fn emit_minimap(
                 poi_marker.on_map(map.0),
                 map.0,
                 &assets.rim_arrows,
-                assets.poi.as_ref(),
+                assets.tex(MinimapArtSlot::Icons),
                 &mut quads,
                 &mut hover,
             );
@@ -689,7 +727,7 @@ fn emit_minimap(
     // The object dots draw last, above the player arrow (`0x4ed7b7`): tracking dots (cells 0/1),
     // then quest (3) and party (4) dots.
     if let Some(ctx) = &blip_ctx {
-        if let Some(icons) = &assets.object_icons {
+        if let Some(icons) = assets.tex(MinimapArtSlot::Blips) {
             blips::emit_tracking_dots(
                 ctx,
                 tracking,
@@ -727,7 +765,7 @@ fn emit_minimap(
     // The corpse blip in range: the POIIcons skull, the reference's world-map corpse art (its
     // in-range minimap art is untraced). Out of range it is the rim arrow above, the fifth slot
     // of `0x6dad10`. Same map only: a dungeon corpse's display coords are the entrance.
-    if let (Some(poi), Some(cp)) = (&assets.poi, death_net.corpse) {
+    if let (Some(poi), Some(cp)) = (assets.tex(MinimapArtSlot::Icons), death_net.corpse) {
         if cp.display_map == map.0 as i32 && blip_px_per_yd > 0.0 {
             let off = Vec2::new(
                 (wy - cp.position[1]) * blip_px_per_yd,
@@ -774,53 +812,74 @@ fn feed_minimap_inside(
     }
 }
 
-/// A world entry puts the default mask back before the interface loads: `CGGameUI::InitializeGame`
-/// (`0x48f480`, from `0x401570`, the glue's enter-world step at `0x46c236`) calls `0x4ed810` at
-/// `0x48f590`, which loads `Textures\MinimapMask` over the process-wide mask `0xbc7968`. So an
-/// addon's mask lasts to the next logout (`ClientDestroyGame` `0x401ee0` runs `ShutdownGame`, which
-/// releases it at `0x49118c`). A `ReloadUI` (`0x490bd0`, `0x48fbf0`) and a worldport (`0x401bc0`)
-/// reach neither, and keep it; an addon that sets its mask while it loads wins, being applied
-/// after this ([`feed_minimap_mask`]).
+/// A world entry puts the three default textures back before the interface loads:
+/// `CGGameUI::InitializeGame` (`0x48f480`, from `0x401570`, the glue's enter-world step at
+/// `0x46c236`) calls `0x4ed810` at `0x48f590`, which loads them over the process-wide handles. So
+/// an addon's texture lasts to the next logout (`ClientDestroyGame` `0x401ee0` runs
+/// `ShutdownGame`, which releases them at `0x49118c`). A `ReloadUI` (`0x490bd0`, `0x48fbf0`) and a
+/// worldport (`0x401bc0`) reach neither, and keep them; an addon that sets one while it loads wins,
+/// being applied after this ([`feed_minimap_art`]).
 pub(crate) fn restore_default_mask(world: &mut World) {
     if let Some(mut assets) = world.get_resource_mut::<MinimapAssets>() {
-        assets.mask = assets.default_mask.clone();
+        for tex in &mut assets.art {
+            tex.current = tex.default.clone();
+        }
     }
 }
 
-/// Swap the disc's mask for the one `Minimap:SetMaskTexture` names (a 1.12 method). Memoised on the
-/// path per VM, so a new VM whose Minimap has set nothing leaves the process-wide mask as it is
-/// ([`restore_default_mask`] owns the world-entry reset); a path that fails to load keeps the
-/// current mask and warns.
-fn feed_minimap_mask(
+/// The default file of each texture (`0x84c6e4`, `0x84c6c8`, `0x84c6a8`).
+fn default_art_path(slot: MinimapArtSlot) -> &'static str {
+    match slot {
+        MinimapArtSlot::Mask => benilla_ui::widget::MINIMAP_DEFAULT_MASK,
+        MinimapArtSlot::Icons => "Interface\\Minimap\\POIIcons",
+        MinimapArtSlot::Blips => "Interface\\Minimap\\ObjectIcons",
+    }
+}
+
+/// Apply each texture setter's call (`SetMaskTexture`, `SetIconTexture`, `SetBlipTexture`) to the
+/// process-wide handle, once per call: a file loads with the loose flag the setters pass
+/// (`0x4ee5ce`), and one the probe passed that still fails to load is the green solid, as
+/// `TextureCreate` gives; the VM's verdict of a miss is the green solid too, and an empty name the
+/// null handle. A new VM whose Minimap has set nothing leaves the handles as they are.
+fn feed_minimap_art(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     assets: Option<ResMut<MinimapAssets>>,
     world_assets: Option<ResMut<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
-    mut last: Local<crate::ui_script::VmMemo<Option<String>>>,
+    mut applied: Local<crate::ui_script::VmMemo<[u64; 3]>>,
 ) {
-    let (Some(script), Some(mut assets), Some(mut world_assets)) = (script, assets, world_assets)
-    else {
+    let (Some(script), Some(mut assets)) = (script, assets) else {
         return;
     };
-    let want = script.minimap_mask_texture();
-    let last = last.get(&script);
-    if *last == want {
-        return;
-    }
-    *last = want.clone();
-    // `SetMaskTexture` opens with the loose flag (`0x4ee5e4`); the default, with flag 0 (`0x4ed862`).
-    let (path, open) = match want.as_deref() {
-        Some(path) => (path, LooseOpen::Index),
-        None => (
-            benilla_ui::widget::MINIMAP_DEFAULT_MASK,
-            LooseOpen::Archives,
-        ),
-    };
-    match world_assets.mask_texture(path, open, &mut images) {
-        Some(handle) => assets.mask = Some(handle),
-        None => {
-            warn!("minimap: SetMaskTexture(\"{path}\") — no such texture; keeping the current mask")
+    let mut world_assets = world_assets;
+    let applied = applied.get(&script);
+    for slot in [
+        MinimapArtSlot::Mask,
+        MinimapArtSlot::Icons,
+        MinimapArtSlot::Blips,
+    ] {
+        let Some((stamp, art)) = script.minimap_art(slot) else {
+            continue;
+        };
+        if applied[slot as usize] == stamp {
+            continue;
         }
+        applied[slot as usize] = stamp;
+        let tex = &mut assets.art[slot as usize];
+        tex.current = match art {
+            MinimapArt::File(path) => {
+                let loaded = world_assets.as_mut().and_then(|w| {
+                    if slot == MinimapArtSlot::Mask {
+                        w.mask_texture(&path, LooseOpen::Index, &mut images)
+                    } else {
+                        w.sprite_texture_opened(&path, LooseOpen::Index, &mut images)
+                    }
+                });
+                loaded.or_else(|| tex.missing.clone())
+            }
+            MinimapArt::Missing => tex.missing.clone(),
+            MinimapArt::Null => None,
+        };
     }
 }
 
@@ -890,8 +949,8 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_inside.in_set(crate::ui_script::UiFeed),
                     // Before the script tick, so an addon's OnUpdate reads this frame's heading.
                     feed_minimap_player_facing.in_set(crate::ui_script::UiFeed),
-                    // After the tick that can set the mask, before the emit that draws with it.
-                    feed_minimap_mask
+                    // After the tick that can set the art, before the emit that draws with it.
+                    feed_minimap_art
                         .after(crate::ui_script::UiInput)
                         .before(UiQuadAppend),
                     // Before the script tick, after the indoor push the radius reads. Gated on the
@@ -926,17 +985,93 @@ pub(crate) fn seat_mask_for_test(
     default_mask: Handle<Image>,
     current: Handle<Image>,
 ) {
-    world.insert_resource(MinimapAssets {
-        default_mask: Some(default_mask),
-        mask: Some(current),
-        ..default()
-    });
+    let mut assets = MinimapAssets::default();
+    assets.art[MinimapArtSlot::Mask as usize] = MinimapTex {
+        current: Some(current),
+        default: Some(default_mask),
+        missing: None,
+    };
+    world.insert_resource(assets);
 }
 
 /// The mask now drawn.
 #[cfg(test)]
 pub(crate) fn mask_for_test(world: &World) -> Option<Handle<Image>> {
-    world.resource::<MinimapAssets>().mask.clone()
+    world.resource::<MinimapAssets>().art[MinimapArtSlot::Mask as usize]
+        .current
+        .clone()
+}
+
+#[cfg(test)]
+mod art_tests {
+    use super::*;
+    use benilla_ui::script::UiScript;
+
+    const DEFAULT: Handle<Image> =
+        bevy::asset::uuid_handle!("d0000000-0000-4000-8000-0000000000b1");
+    const GREEN: Handle<Image> = bevy::asset::uuid_handle!("d0000000-0000-4000-8000-0000000000b2");
+
+    fn art_app() -> App {
+        let mut app = App::new();
+        let mut assets = MinimapAssets::default();
+        for tex in &mut assets.art {
+            *tex = MinimapTex {
+                current: Some(DEFAULT),
+                default: Some(DEFAULT),
+                missing: Some(GREEN),
+            };
+        }
+        app.insert_resource(assets)
+            .init_resource::<Assets<Image>>()
+            .add_systems(Update, feed_minimap_art);
+        let mut script = UiScript::new().unwrap();
+        script.set_texture_probe(Box::new(|path: &str| !path.contains("Nope")));
+        script
+            .run(r#"m = CreateFrame("Minimap", "Minimap")"#)
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app
+    }
+
+    fn run(app: &mut App, chunk: &str) {
+        let _ = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(chunk);
+        app.update();
+    }
+
+    fn drawn(app: &App, slot: MinimapArtSlot) -> Option<Handle<Image>> {
+        app.world().resource::<MinimapAssets>().tex(slot).cloned()
+    }
+
+    /// A missing file draws the green solid the setter stored before it raised; an empty name
+    /// leaves the null handle, on which the render draws no map (`0x4ec968`); the next world
+    /// entry's load puts the default back, and a new VM that sets nothing changes nothing.
+    #[test]
+    fn the_mask_setter_s_result_is_what_the_map_draws_with() {
+        let mut app = art_app();
+        assert_eq!(drawn(&app, MinimapArtSlot::Mask), Some(DEFAULT));
+        run(&mut app, r#"m:SetMaskTexture("Interface\\Nope")"#);
+        assert_eq!(drawn(&app, MinimapArtSlot::Mask), Some(GREEN));
+        run(&mut app, r#"m:SetMaskTexture("")"#);
+        assert_eq!(
+            drawn(&app, MinimapArtSlot::Mask),
+            None,
+            "no texture, no map"
+        );
+
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.update();
+        assert_eq!(
+            drawn(&app, MinimapArtSlot::Mask),
+            None,
+            "the process's handle stands"
+        );
+
+        restore_default_mask(app.world_mut());
+        assert_eq!(drawn(&app, MinimapArtSlot::Mask), Some(DEFAULT));
+    }
 }
 
 #[cfg(test)]
