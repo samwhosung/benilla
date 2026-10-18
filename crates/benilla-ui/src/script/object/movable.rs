@@ -242,14 +242,10 @@ fn get_flag(lua: &Lua, this: &Table, which: Flag) -> mlua::Result<Value> {
     ))
 }
 
-/// The family's refusal, naming the frame as the reference does. The wording is ours: the strings
-/// at `0x879810`, `0x879828` and `0x879844` are unread, known only by their symbol names.
+/// The family's refusal: `Frame %s is not movable` (`0x879810`), `… resizable` (`0x879828`) or
+/// `… movable or resizable` (`0x879844`, `SetUserPlaced`), naming the frame (`0x77679b`).
 fn not_flagged(model: &Model, h: FrameHandle, want: &str) -> mlua::Error {
-    let who = model
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_else(|| "<anonymous>".into());
+    let who = crate::script::binding_abi::frame_name(model, h);
     mlua::Error::runtime(format!("Frame {who} is not {want}"))
 }
 

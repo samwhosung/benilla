@@ -269,3 +269,28 @@ fn xml_insert_mode_is_bottom_or_top_without_a_raise() {
     )
     .unwrap();
 }
+
+/// The not-movable family names the frame or `<unnamed>`: `Frame %s is not movable` (`0x879810`,
+/// `StartMoving` `0x77679b`-`0x7767cc`), `… resizable` (`0x879828`) and `… movable or resizable`
+/// (`0x879844`, `SetUserPlaced` `0x776ae5`).
+#[test]
+fn not_movable_errors_name_an_unnamed_frame_unnamed() {
+    let s = script();
+    for (call, line) in [
+        (
+            r#"CreateFrame("Frame"):StartMoving()"#,
+            "Frame <unnamed> is not movable",
+        ),
+        (
+            r#"CreateFrame("Frame"):SetUserPlaced(1)"#,
+            "Frame <unnamed> is not movable or resizable",
+        ),
+        (
+            r#"CreateFrame("Frame", "StuckFrame"):StartMoving()"#,
+            "Frame StuckFrame is not movable",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+}
