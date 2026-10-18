@@ -1362,3 +1362,67 @@ fn a_text_frame_links_its_font_attribute() {
         );
     }
 }
+
+/// A MessageFrame's and a ScrollingMessageFrame's `<TextInsets>` (`0x785b49`, `0x787d52`) set the
+/// insets their lines keep from the frame's rect (`0x785b80`, `0x787fb0`): the lines wrap and
+/// draw in the box less the insets times the scale (`0x78833c`-`0x78837e`). An inset element the
+/// read refuses, here one with no `bottom`, sets nothing.
+#[test]
+fn a_message_frame_lays_its_lines_out_inside_its_text_insets() {
+    let mut s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="InsetFont" font="Fonts\FRIZQT__.TTF">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </Font>
+            <ScrollingMessageFrame name="InsetSmf" font="InsetFont">
+                <Size><AbsDimension x="300" y="100"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
+                <TextInsets><AbsInset left="8" right="12" top="4" bottom="6"/></TextInsets>
+            </ScrollingMessageFrame>
+            <MessageFrame name="InsetMf" font="InsetFont" insertMode="BOTTOM">
+                <Size><AbsDimension x="300" y="100"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset x="0" y="200"/></Anchor></Anchors>
+                <TextInsets left="10" right="10" top="0" bottom="5"/>
+            </MessageFrame>
+            <ScrollingMessageFrame name="InsetRefused" font="InsetFont">
+                <Size><AbsDimension x="300" y="100"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset x="0" y="400"/></Anchor></Anchors>
+                <TextInsets left="8" right="8"/>
+            </ScrollingMessageFrame>
+        </Ui>"#,
+    );
+    for f in ["InsetSmf", "InsetMf", "InsetRefused"] {
+        s.run(&format!("{f}:AddMessage('{f} line', 1, 1, 1)"))
+            .unwrap();
+    }
+    s.resolve();
+    let reqs = s.message_lines_needing_measure();
+    let mut widths: Vec<f32> = reqs.iter().map(|r| r.wrap_width).collect();
+    widths.sort_by(f32::total_cmp);
+    assert_eq!(widths, [280.0, 280.0, 300.0], "{reqs:?}");
+    let answers: Vec<(u32, u32, u16, u64)> =
+        reqs.iter().map(|r| (r.frame, r.index, 1, r.key)).collect();
+    s.set_message_line_rows(&answers);
+    let rect = |text: &str| {
+        s.extract()
+            .into_iter()
+            .find_map(|q| match (&q.content, q.rect) {
+                (crate::script::QuadContent::Text { text: Some(t), .. }, Some(r)) if t == text => {
+                    Some((r.left, r.right, r.bottom))
+                }
+                _ => None,
+            })
+            .expect(text)
+    };
+    let near = |got: (f32, f32, f32), want: (f32, f32, f32)| {
+        let d = [got.0 - want.0, got.1 - want.1, got.2 - want.2];
+        assert!(d.iter().all(|d| d.abs() < 1e-3), "{got:?} vs {want:?}");
+    };
+    near(rect("InsetSmf line"), (8.0, 288.0, 6.0));
+    near(rect("InsetMf line"), (10.0, 290.0, 205.0));
+    near(rect("InsetRefused line"), (0.0, 300.0, 400.0));
+    let line = r#"No "right", "left", "top", or "bottom" attributes in element: TextInsets"#;
+    assert!(has_line(&report, line), "{:?}", report.status.lines());
+}

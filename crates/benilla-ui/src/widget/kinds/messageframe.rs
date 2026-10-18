@@ -70,6 +70,9 @@ pub struct ScrollingMessageState {
     /// At bottom (`+0x354`): the last visible relayout anchored the newest line (`0x7887aa`,
     /// `0x7887b6`); the ctor and `SetMaxLines` set it (`0x78776b`, `0x787ea7`).
     pub at_bottom: bool,
+    /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
+    /// (`+0x37c`-`+0x388`); only XML `<TextInsets>` sets them (`0x787fb0`).
+    pub insets: [f32; 4],
     /// The link-button rebuild flag (`+0x3b8`, cleared by the ctor at `0x7878d0`): set by a
     /// relayout (`0x788a8e`), a line fading out (`0x788538`) and a fade re-arm (`0x788bf1`), and
     /// spent by the per-frame rebuild (`0x788595` → `0x788c00`).
@@ -101,6 +104,7 @@ impl Default for ScrollingMessageState {
             lines_shown: 0,
             at_top: false,
             at_bottom: true,
+            insets: [0.0; 4],
             links_dirty: false,
             laid_font: None,
             laid_rect: None,
@@ -710,6 +714,10 @@ pub struct MessageFrameState {
     pub fade_duration: f32,
     /// `fadingEnabled` (ctor 1); while false only the vertical cap bounds the lines.
     pub fading_enabled: bool,
+    /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
+    /// (`+0x330`-`+0x33c`, zeroed by the ctor at `0x785675`); only XML `<TextInsets>` sets them
+    /// (`0x785b80`).
+    pub insets: [f32; 4],
 }
 
 impl Default for MessageFrameState {
@@ -723,6 +731,7 @@ impl Default for MessageFrameState {
             fade_duration: 3.0,
             fading_enabled: true,
             lines_gen: 0,
+            insets: [0.0; 4],
         }
     }
 }

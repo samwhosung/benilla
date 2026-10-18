@@ -426,6 +426,15 @@ impl Loader<'_> {
         if let Some(on) = el.attr_bool_opt("fade") {
             self.call(wrapper, "SetFading", on, dbg);
         }
+        // Each `<TextInsets>` in the child loop, through the inset read, set when it succeeds
+        // (`0x785b49`-`0x785b65`, `0x787d52`-`0x787d6e`).
+        for ins in children_named(el, "TextInsets") {
+            if let Some(insets) = self.inset(ins) {
+                if let Err(e) = crate::script::set_message_xml_insets(self.lua, wrapper, insets) {
+                    self.report.fault(format!("{dbg}: <TextInsets>: {e}"));
+                }
+            }
+        }
     }
 
     /// `<Slider>` (`0x789580`), VERTICAL from the ctor. Its frame load (`0x769820`) first re-enters

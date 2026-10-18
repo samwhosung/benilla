@@ -168,8 +168,8 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
 fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;
-    let size = model
-        .frame_rect(owner)
+    // A message frame's lines' box, which `0x788384`-`0x7883b2` compares.
+    let size = super::messageframe::message_rect(model, owner)
         .map(|r| (r.right - r.left, r.top - r.bottom));
     let (flagged, sized) = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
         Some(KindState::ScrollingMessage(smf)) => (std::mem::take(&mut smf.links_dirty), true),
