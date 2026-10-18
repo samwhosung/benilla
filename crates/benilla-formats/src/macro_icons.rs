@@ -106,18 +106,16 @@ enum LooseRule {
 
 /// Push the icon names a loose folder holds. `0x42ad10` passes every entry but a hidden one
 /// (`0x42addd`-`0x42adef`, its flag argument 0), and each callback skips a folder (`flags & 0x10`,
-/// `0x4f0359`, `0x4f04f0`); a name beginning with `.` stands for the hidden attribute, the
-/// convention of the hosts that have none. Listed in name order, which decides only between names
-/// equal but for case.
+/// `0x4f0359`, `0x4f04f0`). Listed in name order, which decides only between names equal but for
+/// case.
 fn loose_icons(dir: &Path, rule: LooseRule, out: &mut Vec<String>) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
     let mut files: Vec<String> = read
         .flatten()
-        .filter(|e| !e.path().is_dir())
+        .filter(|e| !e.path().is_dir() && !hidden(e))
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| !name.starts_with('.'))
         .collect();
     files.sort();
     for name in files {
@@ -138,6 +136,22 @@ fn loose_icons(dir: &Path, rule: LooseRule, out: &mut Vec<String>) {
             out.push(stem.to_string());
         }
     }
+}
+
+/// `FILE_ATTRIBUTE_HIDDEN`, the bit `0x42addd` tests in the find data's attributes.
+#[cfg(windows)]
+fn hidden(entry: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    entry
+        .metadata()
+        .is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+}
+
+/// A name beginning with `.`, the hidden file of a host with no hidden attribute.
+#[cfg(not(windows))]
+fn hidden(entry: &std::fs::DirEntry) -> bool {
+    entry.file_name().as_encoded_bytes().starts_with(b".")
 }
 
 #[cfg(test)]
@@ -211,6 +225,7 @@ mod tests {
             "Spell_V.mdx",
             "Other.blp",
             "Ability_Q",
+            #[cfg(not(windows))]
             ".Spell_Hidden.blp",
         ] {
             tree.touch(&format!("Icons/{f}"));
