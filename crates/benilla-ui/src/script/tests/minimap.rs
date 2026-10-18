@@ -434,3 +434,39 @@ fn set_zoom_truncates_caps_unsigned_and_writes_its_cvar_only_on_a_change() {
     assert!(s.take_cvar_changes().is_empty(), "no change, no write");
     assert_eq!(s.cvar("minimapZoom").as_deref(), Some("1"));
 }
+
+/// Every world entry runs the minimap initializer after `PLAYER_ENTERING_WORLD` (`0x4ed9d0` at
+/// `0x49096f`): each zoom CVar's integer goes into its cell (`0x6d9008`-`0x6d901f`) and
+/// `MINIMAP_UPDATE_ZOOM` fires (`0x6d902a`), so a `SetCVar` takes effect at the next entry.
+#[test]
+fn every_world_entry_reseeds_the_zoom_from_its_cvars_and_signals_it() {
+    let mut s = script();
+    s.register_cvars([("minimapZoom", "3"), ("minimapInsideZoom", "3")]);
+    s.run(
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+           seen = {}
+           local f = CreateFrame("Frame")
+           f:RegisterEvent("PLAYER_ENTERING_WORLD")
+           f:RegisterEvent("MINIMAP_UPDATE_ZOOM")
+           f:SetScript("OnEvent", function()
+               table.insert(seen, event .. " " .. m:GetZoom())
+           end)
+           SetCVar("minimapZoom", "0")
+           SetCVar("minimapInsideZoom", "4")"#,
+    )
+    .unwrap();
+    assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 3, "not yet");
+    s.fire_world_enter();
+    assert_eq!(
+        s.eval::<String>("return table.concat(seen, ',')").unwrap(),
+        "PLAYER_ENTERING_WORLD 3,MINIMAP_UPDATE_ZOOM 0"
+    );
+    s.set_minimap_inside(true);
+    assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 4);
+
+    // A worldport's entry reseeds again; the buttons' own writes keep the CVar, so it restores.
+    s.set_minimap_inside(false);
+    s.run("m:SetZoom(2)").unwrap();
+    s.fire_world_enter();
+    assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 2);
+}

@@ -539,8 +539,8 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     silenced_ui_load(&mut script, |script| {
         let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
         crate::ui_chat::commands::register_dev_commands(script, crate::run_mode::dev_affordances());
-        // The new Minimap's zoom indices from the persisted CVars, as the reference's minimap reset
-        // copies each CVar into its live index; `Minimap:SetZoom` owns them from here.
+        // The new VM's zoom cells from the persisted CVars, which the reference's statics hold
+        // across the load; the world entry's minimap initializer reseeds them from the CVars again.
         script.set_minimap_zoom(zoom.0, zoom.1);
         // The saved-variables file is read after the files set their defaults and before
         // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the

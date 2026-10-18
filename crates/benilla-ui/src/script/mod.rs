@@ -909,13 +909,36 @@ impl UiScript {
         self.model_ref().minimap.mask_texture.clone()
     }
 
-    /// Seed the two zoom cells from the persisted CVars, as the client's reset path does
-    /// (`[0x86f698] ← [[0xb4b410]+0x28]`, `[0x86f69c] ← [[0xb4d90c]+0x28]`).
+    /// Seed the two zoom cells from the persisted CVars before the world entry reseeds them, so a
+    /// new VM's file scope reads the live level.
     pub fn set_minimap_zoom(&mut self, zoom: u8, inside_zoom: u8) {
         let top = crate::widget::MINIMAP_ZOOM_LEVELS - 1;
         let mut model = self.model_mut();
         model.minimap.zoom = zoom.min(top);
         model.minimap.inside_zoom = inside_zoom.min(top);
+    }
+
+    /// The minimap initializer every world entry runs (`0x4ed9d0`, from `0x49096f`): its blip
+    /// set-up (`0x6d8e10`) copies each zoom CVar's integer into its cell, `minimapZoom` into
+    /// `0x86f698` and `minimapInsideZoom` into `0x86f69c` (`0x6d9008`-`0x6d901f`), and signals
+    /// `MINIMAP_UPDATE_ZOOM` (`0x6d902a`), on which the stock buttons re-sync. Deviation: a level
+    /// past the six-entry tables is capped at 5 as `SetZoom` caps one, where the raw copy reads past
+    /// them.
+    pub(crate) fn minimap_enter_world(&mut self) {
+        let outdoor = self.cvar_int("minimapZoom");
+        let indoor = self.cvar_int("minimapInsideZoom");
+        {
+            let cap =
+                |v: i32| (v as u32).min(u32::from(crate::widget::MINIMAP_ZOOM_LEVELS - 1)) as u8;
+            let mut model = self.model_mut();
+            if let Some(v) = outdoor {
+                model.minimap.zoom = cap(v);
+            }
+            if let Some(v) = indoor {
+                model.minimap.inside_zoom = cap(v);
+            }
+        }
+        self.fire_event("MINIMAP_UPDATE_ZOOM", Vec::new());
     }
 
     /// Load and run a text chunk; handler errors during events go to [`UiScript::errors`] instead.
