@@ -846,15 +846,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         _ => None,
                     }
                 };
-                let kind = match &kind {
-                    Value::String(s) => s.to_str()?.to_string(),
-                    Value::Integer(i) => i.to_string(),
-                    Value::Number(n) => n.to_string(),
-                    _ => {
-                        return Err(mlua::Error::runtime(
-                            "Usage: SetAuctionCompareItem(\"type\", index [, offset])",
-                        ))
-                    }
+                // `lua_isstring` then `lua_tostring` (`0x535e28`, `0x535e50`).
+                let Some(kind) = crate::script::binding_abi::optional_string(lua, &kind) else {
+                    return Err(mlua::Error::runtime(
+                        "Usage: SetAuctionCompareItem(\"type\", index [, offset])",
+                    ));
                 };
                 let Some(idx) = as_number(&index) else {
                     return Err(mlua::Error::runtime(

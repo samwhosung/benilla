@@ -78,13 +78,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.emote_requests.push(EmoteRequest {
                 token: token.to_ascii_uppercase(),
-                target: match target {
-                    Value::String(s) => Some(s.to_string_lossy()),
-                    Value::Integer(i) => Some(i.to_string()),
-                    Value::Number(n) => Some(n.to_string()),
-                    _ => None,
-                }
-                .filter(|t| !t.is_empty()),
+                // `lua_tostring(2)` (`0x49fdc5`): a number is its `%.14g` text.
+                target: crate::script::binding_abi::optional_string(lua, &target)
+                    .filter(|t| !t.is_empty()),
             });
             Ok(())
         })?,

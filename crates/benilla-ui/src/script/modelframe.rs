@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::usage;
+use super::binding_abi::{optional_string, usage};
 use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::{model_key, FrameHandle, KindState, ModelFileFacts, ModelLight, ModelState};
@@ -304,20 +304,6 @@ fn parse_set_light(a: &[Value]) -> SetLight {
     SetLight::Set(light)
 }
 
-/// A string argument as `lua_isstring` gates it: a string or a number (tags 3 and 4), the number
-/// rendered as decimal text.
-fn string_arg(v: &Value) -> Option<std::borrow::Cow<'_, str>> {
-    match v {
-        Value::String(s) => s
-            .to_str()
-            .ok()
-            .map(|t| std::borrow::Cow::Owned(t.to_string())),
-        Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
-        Value::Integer(i) => Some(std::borrow::Cow::Owned(i.to_string())),
-        _ => None,
-    }
-}
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -333,9 +319,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetModel",
         lua.create_function(|lua, (this, path): (Table, Value)| {
-            let path = string_arg(&path)
-                .ok_or_else(|| usage(lua, &this, "SetModel(\"file\")"))?
-                .to_string();
+            // `lua_isstring` then `lua_tostring` (`0x76d9dc`, `0x76d9ec`).
+            let path = optional_string(lua, &path)
+                .ok_or_else(|| usage(lua, &this, "SetModel(\"file\")"))?;
             // A pane of this kind, or the error.
             with_model(lua, &this, |_| ())?;
             let h = frame_handle_of(lua, &this)?;
@@ -553,10 +539,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "ReplaceIconTexture",
         lua.create_function(|lua, (this, path): (Table, Value)| {
-            let Some(path) = string_arg(&path) else {
+            // `lua_isstring` then `lua_tostring` (`0x76edfc`, `0x76ee0d`).
+            let Some(path) = optional_string(lua, &path) else {
                 return Err(usage(lua, &this, "ReplaceIconTexture(\"texture\")"));
             };
-            let path = path.to_string();
             with_model(lua, &this, |m| {
                 if m.path.is_some() {
                     m.icon = Some(path);
@@ -582,9 +568,9 @@ pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
         "SetUnit",
         lua.create_function(|lua, (this, unit): (Table, Value)| {
             with_model(lua, &this, |_| ())?;
-            let token = string_arg(&unit)
-                .ok_or_else(|| mlua::Error::runtime(SET_UNIT_USAGE))?
-                .to_string();
+            // `lua_isstring` then `lua_tostring` (`0x505dfc`, `0x505e20`).
+            let token =
+                optional_string(lua, &unit).ok_or_else(|| mlua::Error::runtime(SET_UNIT_USAGE))?;
             let h = frame_handle_of(lua, &this)?;
             let guid = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");

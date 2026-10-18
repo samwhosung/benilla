@@ -57,6 +57,7 @@ mod movable;
 mod name_targets;
 mod nameplate;
 mod no_font;
+mod number_text;
 mod numeric_shape_gate;
 mod object_model;
 mod one_or_nil_methods;

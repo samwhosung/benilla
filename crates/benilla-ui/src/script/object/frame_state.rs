@@ -131,14 +131,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "IsObjectType",
         |lua, (this, want): (Table, Value)| {
             let chain = chain_of(lua, &this)?;
-            let want = match &want {
-                Value::String(s) => s.to_str()?.to_string(),
-                Value::Number(n) => n.to_string(),
-                Value::Integer(i) => i.to_string(),
-                _ => {
-                    frame_handle_of(lua, &this)?;
-                    return Err(binding_abi::usage(lua, &this, "IsObjectType(\"TYPE\")"));
-                }
+            let Some(want) = binding_abi::optional_string(lua, &want) else {
+                frame_handle_of(lua, &this)?;
+                return Err(binding_abi::usage(lua, &this, "IsObjectType(\"TYPE\")"));
             };
             Ok(if chain.iter().any(|t| want.eq_ignore_ascii_case(t)) {
                 Value::Number(1.0)
@@ -163,14 +158,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "IsFrameType",
         lua.create_function(|lua, (this, want): (Table, Value)| {
             let chain = chain_of(lua, &this)?;
-            let want = match &want {
-                Value::String(s) => s.to_str()?.to_string(),
-                Value::Number(n) => n.to_string(),
-                Value::Integer(i) => i.to_string(),
-                _ => {
-                    frame_handle_of(lua, &this)?;
-                    return Err(binding_abi::usage(lua, &this, "IsFrameType(\"TYPE\")"));
-                }
+            let Some(want) = binding_abi::optional_string(lua, &want) else {
+                frame_handle_of(lua, &this)?;
+                return Err(binding_abi::usage(lua, &this, "IsFrameType(\"TYPE\")"));
             };
             Ok(if chain.iter().any(|t| want.eq_ignore_ascii_case(t)) {
                 Value::Number(1.0)
