@@ -359,9 +359,11 @@ impl Plugin for VideoPlugin {
         use crate::console::ConsoleCommandApp;
         app.init_resource::<SpellEffectLevel>();
         app.add_observer(on_cvar);
+        // Category 1 with no help (`0x66fae8`-`0x66faf5`).
         app.console_command(
             "detailDoodadAlpha",
-            "The ground-clutter cutout reference, 0-255 (128 = the default).",
+            crate::console::GRAPHICS,
+            None,
             detail_doodad_alpha,
         );
         app.init_resource::<VideoConfig>()

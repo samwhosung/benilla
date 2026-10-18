@@ -306,7 +306,13 @@ impl Plugin for UiScriptPlugin {
     fn build(&self, app: &mut App) {
         use crate::console::ConsoleCommandApp;
         app.add_observer(on_cvar);
-        app.console_command("reloadUI", "Reload the interface.", console_reload_ui);
+        // Category 1 with no help (`0x402ba6`-`0x402bb4`).
+        app.console_command(
+            "reloadUI",
+            crate::console::GRAPHICS,
+            None,
+            console_reload_ui,
+        );
         // The quit root runs in `Last`: the close button's `AppExit` is written in `PostUpdate`.
         crate::shutdown::on_app_exit(app, shutdown_on_exit.into_configs());
         app.insert_resource(UiScaleCvar(default_ui_scale()))

@@ -361,9 +361,7 @@ pub(crate) fn drain_glue_console(world: &mut World) {
         _ => return,
     };
     for line in lines {
-        for out in crate::console::execute(world, &line) {
-            info!("console: {out}");
-        }
+        crate::console::run(world, &line);
     }
 }
 
@@ -645,7 +643,12 @@ mod tests {
     fn glue_world() -> World {
         use crate::console::ConsoleCommandApp;
         let mut app = App::new();
-        app.console_command("reloadUI", "", super::super::console_reload_ui);
+        app.console_command(
+            "reloadUI",
+            crate::console::GRAPHICS,
+            None,
+            super::super::console_reload_ui,
+        );
         let commands = app
             .world_mut()
             .remove_resource::<crate::console::ConsoleCommands>()

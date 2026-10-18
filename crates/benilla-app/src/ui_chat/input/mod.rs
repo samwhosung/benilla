@@ -881,19 +881,12 @@ pub(super) fn drain_chat_input(
             ParsedChat::Quit => {
                 script.queue_session_request(benilla_ui::script::SessionRequest::Quit)
             }
-            // Deferred to the world, since a command is `fn(&mut World, &str)`; its lines print
-            // as system text.
+            // Deferred to the world, since a command is `fn(&mut World, &str)`; its lines go to
+            // the log, never to chat ([`crate::console::run`]).
             ParsedChat::Console { line } => {
-                chat_out.console.queue(move |world: &mut World| {
-                    let lines = crate::console::execute(world, &line);
-                    let mut log = world.resource_mut::<super::feed::ChatLog>();
-                    for text in lines {
-                        log.push_event(super::event::ChatEvent::text_only(
-                            super::event::ChatEventKind::System,
-                            text,
-                        ));
-                    }
-                });
+                chat_out
+                    .console
+                    .queue(move |world: &mut World| crate::console::run(world, &line));
             }
             // The reference's handler body, run in the VM.
             ParsedChat::Lua { body } => {

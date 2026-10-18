@@ -40,6 +40,7 @@ mod reference_table;
 mod table;
 #[cfg(test)]
 pub(crate) use listing::list_rank;
+pub(crate) use listing::reference_help;
 #[cfg(test)]
 use table::Reference;
 pub(crate) use table::{all_rows, registered_pairs, REGISTERED};
