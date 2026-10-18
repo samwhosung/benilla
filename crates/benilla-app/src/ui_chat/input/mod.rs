@@ -137,9 +137,9 @@ fn engine_verbs(
         out.push((String::new(), ParsedChat::Uninvite { name: Some(name) }));
     }
     for line in script.take_console_lines() {
-        // `ConsoleExec` already applied a valued CVar line; what reaches here is a console
-        // command (`detailDoodadAlpha`, registered by `0x63f9e0`, never persists) or a bare CVar
-        // name to print.
+        // `ConsoleExec` already ran the commands that write a CVar; what reaches here is a
+        // console command (`detailDoodadAlpha`, registered by `0x63f9e0`, never persists), a bare
+        // CVar name to print, or an unknown word.
         out.push((line.clone(), ParsedChat::Console { line }));
     }
     for cmd in script.take_channel_commands() {

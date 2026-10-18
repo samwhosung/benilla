@@ -1,6 +1,9 @@
 //! The console command registry: the reference's `ConsoleCommand` table
 //! (`ConsoleCommandRegister` `0x63f9e0`, runtime `[0x63f880, 0x640c50)`). Subsystems register
-//! from their plugins; `/console <line>` reaches [`execute`] through the chat drain.
+//! from their plugins. A line from Lua (`ConsoleExec`, and so the typed `/console`) runs its CVar
+//! writes on the VM's mirror inside the call, as the reference's runs inside `ConsoleExec`
+//! (`0x515f43`); the rest reaches [`execute`] through the chat drain, which reads it with the same
+//! split ([`benilla_ui::script::console_word`]).
 //!
 //! Each CVar is also a command under its own name (`0x63dde0`): a bare name prints
 //! `CVar "%s" is "%s"`, a name with a value sets it, looked up after the registered commands.
@@ -104,10 +107,7 @@ impl Plugin for ConsolePlugin {
 /// A CVar write runs its observers before this returns, as the callback runs inside `CVar::Set`
 /// in the reference.
 pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
-    let line = line.trim();
-    let (name, args) = line
-        .split_once(char::is_whitespace)
-        .map_or((line, ""), |(n, a)| (n, a.trim()));
+    let (name, args) = benilla_ui::script::console_word(line);
     if name.is_empty() {
         return vec!["console: no command given (`help` lists the commands)".to_string()];
     }
@@ -121,10 +121,12 @@ pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
         .get_resource::<Cvars>()
         .is_some_and(|c| c.row(name).is_some())
     {
-        return if args.is_empty() {
+        // `0x63dde0`: the rest past its spaces, untrimmed, is the value.
+        let value = args.trim_start_matches(' ');
+        return if value.is_empty() {
             vec![print_cvar(world, name)]
         } else {
-            set_cvar(world, name, args)
+            set_cvar(world, name, value)
         };
     }
     vec![format!(
@@ -171,7 +173,7 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
             .unwrap_or_default(),
     );
     lines.extend(match outcome {
-        SetOutcome::Unknown => vec![format!("console: no CVar named '{name}'")],
+        SetOutcome::Unknown => vec![benilla_ui::script::no_such_cvar(name)],
         SetOutcome::Refused => vec![format!(
             "console: '{value}' is not a number, and {name} takes one"
         )],
@@ -183,34 +185,31 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
     lines
 }
 
-/// `set <name> <value>` (`0x63d500`). Deviation: the reference registers an unknown name as a new
-/// category-5 record; this refuses it, because nothing would read the row and `config.toml`
-/// keeps an unknown key anyway.
+/// `set <name> <value>` (`0x63d500`), as [`benilla_ui::script::set_args`] reads it; an unknown
+/// name is refused ([`benilla_ui::script::no_such_cvar`]).
 fn set(world: &mut World, args: &str) -> Vec<String> {
-    let (name, value) = args
-        .split_once(char::is_whitespace)
-        .map_or((args, ""), |(n, v)| (n, v.trim()));
+    let (name, value) = benilla_ui::script::set_args(args);
     if name.is_empty() || value.is_empty() {
         return vec!["usage: set <cvar> <value>".to_string()];
     }
-    set_cvar(world, name, value)
+    set_cvar(world, &name, &value)
 }
 
 /// `cvar_reset` and `cvar_default` (`0x63d590`, `0x63d640`): one body, since a row has no reset
 /// value apart from its default.
 fn cvar_default(world: &mut World, args: &str) -> Vec<String> {
-    let name = args.split_whitespace().next().unwrap_or("");
+    let name = benilla_ui::script::cvar_name_arg(args);
     if name.is_empty() {
         return vec!["usage: cvar_default <cvar>".to_string()];
     }
     let default = world
         .resource::<Cvars>()
-        .default_of(name)
+        .default_of(&name)
         .map(str::to_string);
     let Some(default) = default else {
-        return vec![format!("console: no CVar named '{name}'")];
+        return vec![benilla_ui::script::no_such_cvar(&name)];
     };
-    set_cvar(world, name, &default)
+    set_cvar(world, &name, &default)
 }
 
 /// `cvarlist [match]` (`0x63d6f0`), one line per row: value, default when moved, staged value,

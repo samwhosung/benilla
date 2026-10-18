@@ -1,7 +1,7 @@
 //! The engine verbs stock `ChatFrame.lua`'s slash handlers call that are not sends, channels or
 //! window state: `DoEmote` (`0x49fd30`), `RandomRoll` (`0x48c7b0`), `AssistByName` (`0x489c40`),
-//! `UninviteByName` (`0x48a610`), `ConsoleExec`, `LoggingChat` and `LoggingCombat`. Each is a
-//! queue or a flag the app drains.
+//! `UninviteByName` (`0x48a610`), `LoggingChat` and `LoggingCombat`. Each is a queue or a flag the
+//! app drains.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -48,7 +48,8 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().uninvite_requests)
     }
 
-    /// `ConsoleExec` lines that write no CVar: the app's console commands (`reloadui`, …).
+    /// `ConsoleExec` lines its own CVar commands did not run ([`super::console_exec`]): the app's
+    /// console commands (`reloadui`, …), a bare CVar name, an unknown word.
     pub fn take_console_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().console_lines)
     }
@@ -63,46 +64,6 @@ impl super::UiScript {
     pub fn take_logging_changes(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().logging_changed)
     }
-}
-
-/// `0x850d18`, verbatim.
-const USAGE_CONSOLE_EXEC: &str = "Usage: ConsoleExec(\"console_command\")";
-
-/// `ConsoleExec` (`0x515f10`) is in the registrar both states call (`0x51bb20`, from the glue
-/// registrar `0x46abb0` and the in-game `0x51bb60`), so it installs apart from this file's in-game
-/// verbs.
-pub(super) fn install_console_exec(lua: &Lua) -> mlua::Result<()> {
-    // `ConsoleExec("name value")`: a registered CVar with a value is written at once, as `SetCVar`
-    // writes it; anything else, a bare CVar name included (the reference answers it with
-    // `CVar "%s" is "%s"`, `0x63dde0`), goes to the app's command registry.
-    lua.globals().set(
-        "ConsoleExec",
-        lua.create_function(|lua, line: Value| {
-            // `lua_isstring(1)` (`0x515f18`): a string or a number runs, an empty one too; anything
-            // else raises the usage line (`0x850d18`) and runs nothing.
-            let line = super::binding_abi::string_arg(lua, line, USAGE_CONSOLE_EXEC)?;
-            let line = line.trim().to_string();
-            let (name, value) = line
-                .split_once(char::is_whitespace)
-                .map_or((line.as_str(), ""), |(n, v)| (n, v.trim()));
-            // `reloadUI` is `ReloadUiCommand` (`0x4035f0`), which asks `CGGameUI::Reload`'s gate,
-            // tag 10 (`0x4035fa` → `0x491380`), inside the call: refused, it does nothing.
-            if name.eq_ignore_ascii_case("reloadui")
-                && !super::protected::gate(lua, super::protected::Tag::RELOAD)
-            {
-                return Ok(());
-            }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let is_cvar = model.cvars.contains_key(&name.to_ascii_lowercase());
-            if is_cvar && !value.is_empty() {
-                super::cvars::write_cvar(&mut model, name, value.to_string());
-            } else {
-                model.console_lines.push(line.clone());
-            }
-            Ok(())
-        })?,
-    )?;
-    Ok(())
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -263,69 +224,6 @@ mod tests {
             vec![SelectionRequest::AssistByName("Alice".into())]
         );
         assert_eq!(s.take_uninvite_requests(), vec!["Carol".to_string()]);
-    }
-
-    #[test]
-    fn console_exec_writes_a_registered_cvar_and_queues_anything_else() {
-        let mut s = UiScript::new().unwrap();
-        s.register_cvars([("uiScale", "1")]);
-        s.run("ConsoleExec('uiscale 0.8') ConsoleExec('reloadui') ConsoleExec('uiScale')")
-            .unwrap();
-        assert_eq!(
-            s.eval::<String>("return GetCVar('uiScale')").unwrap(),
-            "0.8",
-            "the CVar store is the same one SetCVar writes, matched case-insensitively"
-        );
-        // A bare CVar name, whose value the reference prints, goes to the command lane.
-        assert_eq!(
-            s.take_console_lines(),
-            vec!["reloadui".to_string(), "uiScale".to_string()]
-        );
-        assert_eq!(
-            s.take_cvar_changes(),
-            vec![("uiScale".to_string(), "0.8".to_string())],
-            "a bare name writes nothing"
-        );
-    }
-
-    /// `lua_isstring(1)` (`0x515f18`) passes a string or a number, an empty string included,
-    /// and `luaL_error` (`0x515f27`) raises the usage line for anything else, running nothing.
-    #[test]
-    fn console_exec_takes_a_string_or_a_number_and_raises_its_usage_otherwise() {
-        let mut s = UiScript::new().unwrap();
-        for call in [
-            "ConsoleExec()",
-            "ConsoleExec(nil)",
-            "ConsoleExec({})",
-            "ConsoleExec(true)",
-        ] {
-            let err = s.run(call).unwrap_err().to_string();
-            assert!(
-                err.contains("Usage: ConsoleExec(\"console_command\")"),
-                "{call}: {err}"
-            );
-        }
-        assert!(s.take_console_lines().is_empty(), "nothing ran");
-        s.run("ConsoleExec(5) ConsoleExec('')").unwrap();
-        assert_eq!(
-            s.take_console_lines(),
-            vec!["5".to_string(), String::new()],
-            "a number is its text, and an empty line still runs"
-        );
-    }
-
-    /// `reloadUI` is `ReloadUiCommand` (`0x4035f0`), which asks the gate's tag 10 (`0x4035fa`): a
-    /// macro's line outside an input event is ignored, a key's body or the client's own passes.
-    #[test]
-    fn console_exec_reload_ui_asks_the_gate() {
-        let mut s = UiScript::new().unwrap();
-        s.run(r#"RunScript("ConsoleExec('reloadUI')")"#).unwrap();
-        assert!(s.take_console_lines().is_empty());
-        s.run_binding(r#"RunScript("ConsoleExec('ReloadUI')")"#)
-            .unwrap();
-        assert_eq!(s.take_console_lines(), vec!["ReloadUI".to_string()]);
-        s.run("ConsoleExec('reloadui')").unwrap();
-        assert_eq!(s.take_console_lines(), vec!["reloadui".to_string()]);
     }
 
     #[test]

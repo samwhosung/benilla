@@ -43,6 +43,7 @@ mod chat_types;
 mod chat_window;
 mod clip;
 mod colorselect;
+mod console_exec;
 mod container;
 mod craft;
 mod cursor;
@@ -222,6 +223,7 @@ pub use chat_misc::EmoteRequest;
 pub use chat_send::{ChatGroup, ChatSend, SEND_CHAT_TOKENS};
 pub use chat_types::ChatTypeColor;
 pub use chat_window::{message_group_index, ChatWindowLook, MESSAGE_GROUPS};
+pub use console_exec::{console_word, cvar_name_arg, no_such_cvar, set_args};
 pub use container::{
     BagAutoStore, ContainerMove, ContainerSlot, ContainerState, ContainerUse, EnchantView,
     PendingWrap, PetitionSlotView, RandomPropertyView, UiCursorMode, UseArm, UseFork,
@@ -601,7 +603,7 @@ fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime` and `ConsoleExec`. `ReadFile`,
     // `DeleteFile` and `AppendToFile` are not built.
     clock::install(&lua)?;
-    chat_misc::install_console_exec(&lua)?;
+    console_exec::install(&lua)?;
 
     // `0x706350`: `CreateFrame`, `CreateFont`, `GetNumFrames`, `EnumerateFrames` (table
     // `0x872e74`), then the widget method tables `0x7a2e70`..`0x78dc60`.
