@@ -41,6 +41,10 @@ fn leave_class(model: &Model, h: FrameHandle) -> LeaveClass {
 /// a motion leave and 1 for a removal, only clears the drag arm (`0x76b725`); `OnLeave` runs
 /// through the plain runner (`0x76b753` → `0x702690`), which sets no arg global.
 pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
+    // An enabled Button's leave refreshes its label (`0x779502`).
+    if script.is_some() {
+        super::button::refresh_label(&mut model(lua), h);
+    }
     // A hyperlink button's leave is its text frame's `OnHyperlinkLeave` (`0x7a34e0`), in place of
     // the Button's.
     if super::hyperlink::hover(lua, h, false) {

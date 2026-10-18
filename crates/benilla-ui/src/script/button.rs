@@ -1,6 +1,6 @@
 //! The `Button` and `CheckButton` methods (`CSimpleButton` `0x6eeab0`, `CSimpleCheckbox`
 //! `0x6eeb30`). The shown state texture latches at each state edge (`SetState` `0x779790`), not at
-//! paint. `<PushedTextOffset>` is not built: a pushed label does not shift.
+//! paint, and so does the pushed label's text offset (`0x779810`).
 //! Lookup runs CheckButton's table, then Button's, then the frame table, the client's class chain,
 //! so `SetChecked` is nil on a plain Button and `GetText` on a plain Frame.
 
@@ -123,6 +123,15 @@ fn adopt_label(model: &mut Model, owner: FrameHandle, rh: RegionHandle) {
     };
     super::region::anchor_unanchored_at(model, rh, point);
     apply_normal_font(model, owner);
+    refresh_label(model, owner);
+}
+
+/// The label refresh (`0x779810`) at the points where the reference runs it outside a state change
+/// ([`ButtonState::refresh_label`]); a no-op on any frame but a Button.
+pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
+    if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        bs.refresh_label();
+    }
 }
 
 /// Link the label to the normal font object and local justify, the reference's `0x779810` →
@@ -883,17 +892,66 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?,
     )?;
 
-    // LockHighlight (`0x782840`) and UnlockHighlight: the highlight shows regardless of hover.
+    // LockHighlight (`0x782840`) and UnlockHighlight: the highlight shows regardless of hover,
+    // then the label refresh (`0x495a98`).
     m.set(
         "LockHighlight",
         lua.create_function(|lua, this: Table| {
-            with_button(lua, &this, |bs| bs.locked_highlight = true)
+            with_button(lua, &this, |bs| {
+                bs.locked_highlight = true;
+                bs.refresh_label();
+            })
         })?,
     )?;
     m.set(
         "UnlockHighlight",
         lua.create_function(|lua, this: Table| {
-            with_button(lua, &this, |bs| bs.locked_highlight = false)
+            with_button(lua, &this, |bs| {
+                bs.locked_highlight = false;
+                bs.refresh_label();
+            })
+        })?,
+    )?;
+
+    // SetPushedTextOffset(x, y) (`0x782030`): two numbers (`lua_isnumber`, `0x7820c2`/`0x7820d3`),
+    // else `Usage: <name>:SetPushedTextOffset(x, y)` (`0x87a308`); each stored in layout units
+    // as an anchor offset is (`0x7820eb`-`0x78212b`). The label moves only at its next refresh.
+    m.set(
+        "SetPushedTextOffset",
+        lua.create_function(|lua, (this, x, y): (Table, Value, Value)| {
+            let num = |v: Value| lua.coerce_number(v).ok().flatten();
+            let (Some(x), Some(y)) = (num(x), num(y)) else {
+                let h = frame_handle_of(lua, &this)?;
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let who = model
+                    .arena
+                    .frame(h)
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {who}:SetPushedTextOffset(x, y)"
+                )));
+            };
+            let units = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .layout_units();
+            with_button(lua, &this, |bs| {
+                bs.pushed_text_offset = [units.store(x as f32), units.store(y as f32)];
+            })
+        })?,
+    )?;
+    // GetPushedTextOffset() (`0x782180`) → x, y, read back through the layout scale
+    // (`0x782237`-`0x78227a`): 1.28 each way on a fresh button at 4:3.
+    m.set(
+        "GetPushedTextOffset",
+        lua.create_function(|lua, this: Table| {
+            let [x, y] = with_button(lua, &this, |bs| bs.pushed_text_offset)?;
+            let units = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .layout_units();
+            Ok((units.load(x), units.load(y)))
         })?,
     )?;
 

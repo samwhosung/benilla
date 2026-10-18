@@ -207,6 +207,7 @@ impl UiScript {
                     let mut state_color: Option<[f32; 4]> = None;
                     let mut state_justify: Option<super::JustifyH> = None;
                     let mut button_font: Option<&crate::widget::ButtonFont> = None;
+                    let mut label_offset = [0.0f32; 2];
                     if let Some(crate::widget::KindState::Button(bs)) =
                         owner_frame.map(|f| &f.kind_state)
                     {
@@ -249,6 +250,7 @@ impl UiScript {
                             button_font = bs.font.as_ref();
                             state_color = color;
                             state_justify = justify;
+                            label_offset = bs.label_offset();
                         }
                     }
                     // A title region never draws: `CreateTitleRegion 0x773910` builds a plain
@@ -353,6 +355,21 @@ impl UiScript {
                             (!is_text)
                                 .then(|| model.region_kept.get(&rh).copied())
                                 .flatten()
+                        });
+                    }
+                    // A pushed label's text moves by its offset, `x · scale + left`,
+                    // `y · scale + bottom` (`0x772100`); its rect, anchors and edges stay.
+                    if label_offset != [0.0, 0.0] {
+                        let k =
+                            model.layout_unit() * owner_frame.map_or(1.0, |f| f.effective_scale);
+                        let (dx, dy) = (label_offset[0] * k, label_offset[1] * k);
+                        rect = rect.map(|r| {
+                            crate::layout::Rect::new(
+                                r.bottom + dy,
+                                r.left + dx,
+                                r.top + dy,
+                                r.right + dx,
+                            )
                         });
                     }
                     // Generated art fills only an empty slot (`ColorPickerFrame.xml` sets none).

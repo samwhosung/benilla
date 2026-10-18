@@ -104,16 +104,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "Button CheckButton LootButton",
         "the same family",
     ),
-    (
-        "GetPushedTextOffset",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
-    (
-        "SetPushedTextOffset",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
     // ── EditBox mode read-backs ──
     (
         "IsAutoFocus",

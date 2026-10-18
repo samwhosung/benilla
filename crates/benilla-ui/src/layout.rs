@@ -177,6 +177,13 @@ impl LayoutUnits {
         let q = (f64::from(v) / (f64::from(self.g3) * 1024.0)) as f32;
         (f64::from(self.g44) * f64::from(q)) as f32
     }
+
+    /// A stored length as a getter pushes it, the inverse of [`Self::store`]
+    /// (`GetPushedTextOffset` `0x782237`..`0x782251`): `f32(g3 · 1024 · v) / g44` as an f64.
+    pub fn load(self, v: f32) -> f64 {
+        let q = (f64::from(self.g3) * 1024.0 * f64::from(v)) as f32;
+        f64::from(q) / f64::from(self.g44)
+    }
 }
 
 /// A region's anchors, one slot per point: the client's `anchorPoints[9]` (`G+0x4`, a frame's
@@ -1231,6 +1238,8 @@ mod tests {
         let u = LayoutUnits::from_aspect(4.0 / 3.0);
         assert_eq!(u, LayoutUnits { g3: 1.0, g44: 0.8 });
         assert_eq!(u.store(1280.0), (1.25_f64 * f64::from(0.8_f32)) as f32);
+        // `GetPushedTextOffset` of the ctor's 0.001 (`0x3a83126f`).
+        assert!((u.load(f32::from_bits(0x3a83_126f)) - 1.28).abs() < 1e-6);
     }
 
     fn bits(r: Rect) -> [u32; 4] {

@@ -914,6 +914,13 @@ pub struct ButtonState {
     pub disabled_color: Option<[f32; 4]>,
     /// `LockHighlight()`: highlighted regardless of hover, both the texture and the label font.
     pub locked_highlight: bool,
+    /// `<PushedTextOffset>`/`SetPushedTextOffset` (`+0x4b0`/`+0x4b4`), x and y in layout units;
+    /// the ctor's (0.001, -0.001) (`0x778740`, `0x77874a`), about 1.28 UI units right and down at
+    /// 4:3. Only [`Self::refresh_label`] puts it on the label.
+    pub pushed_text_offset: [f32; 2],
+    /// The label's text offset (`CSimpleFontString::SetTextOffset` `0x772100`, `+0x110`/`+0x114`)
+    /// in layout units: it moves the drawn text, never the label's rect.
+    label_offset: [f32; 2],
     /// The shown state texture (`+0x4c4`), written only by `set_state` and `set_state_slot`.
     shown: Option<RegionHandle>,
     /// The state (`+0x328`), a latch moved only by edges: the enter and leave notifies
@@ -947,6 +954,8 @@ impl Default for ButtonState {
             highlight_color: None,
             disabled_color: None,
             locked_highlight: false,
+            pushed_text_offset: [f32::from_bits(0x3a83_126f), f32::from_bits(0xba83_126f)],
+            label_offset: [0.0, 0.0],
             shown: None,
             state: ButtonVisualState::Normal,
         }
@@ -979,7 +988,27 @@ impl ButtonState {
             self.shown = Some(slot);
             w.show(Some(slot));
         }
+        // The label refresh closes every real change (`0x7797fc`).
+        self.refresh_label();
         w
+    }
+
+    /// The label refresh's offset half (`0x779810`): PUSHED puts the pushed text offset on the
+    /// label (`0x779829`-`0x779837`), any other state zero (`0x77984f`). It runs on a state change,
+    /// an enabled enter or leave (`0x7794ab`, `0x779502`), `Lock`/`UnlockHighlight` (`0x495a98`)
+    /// and a label install (`0x778daa`), so a `SetPushedTextOffset` on a held button shows at the
+    /// next of these.
+    pub fn refresh_label(&mut self) {
+        self.label_offset = if self.state == ButtonVisualState::Pushed {
+            self.pushed_text_offset
+        } else {
+            [0.0, 0.0]
+        };
+    }
+
+    /// The offset the label's text draws at, in layout units ([`Self::refresh_label`]).
+    pub fn label_offset(&self) -> [f32; 2] {
+        self.label_offset
     }
 
     /// `SetButtonState(state, locked)` (`0x779790`), the one writer: the lock is stored before the

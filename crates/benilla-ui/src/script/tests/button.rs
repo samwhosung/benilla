@@ -1666,3 +1666,142 @@ fn state_font_setters_raise_on_an_unknown_name() {
         report.warnings
     );
 }
+
+/// `GetPushedTextOffset` (`0x782180`) reads the ctor's (0.001, -0.001) layout units back through
+/// the aspect (`0x778740`); `SetPushedTextOffset` (`0x782030`) stores through it and raises its
+/// usage (`0x87a308`); `<PushedTextOffset>` (`0x778aec`) zeroes, then reads its own and its
+/// `<AbsDimension>`'s axes.
+#[test]
+fn pushed_text_offset_reads_back_and_loads() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        local function near(a, b) return math.abs(a - b) < 1e-5 end
+        local b = CreateFrame("Button", "Pusher")
+        local x, y = b:GetPushedTextOffset()
+        assert(near(x, 1.28) and near(y, -1.28), x .. " " .. y)
+        b:SetPushedTextOffset(2, "-3")
+        x, y = b:GetPushedTextOffset()
+        assert(near(x, 2) and near(y, -3), x .. " " .. y)
+        local ok, err = pcall(b.SetPushedTextOffset, b, 1)
+        assert(not ok and string.find(err, "Usage: Pusher:SetPushedTextOffset(x, y)", 1, true), err)
+        local u = CreateFrame("Button")
+        ok, err = pcall(u.SetPushedTextOffset, u, "a", 1)
+        assert(not ok and string.find(err, "Usage: <unnamed>:SetPushedTextOffset(x, y)", 1, true),
+            err)
+    "#,
+    )
+    .unwrap();
+    s.set_screen_size(1280.0, 720.0);
+    // 0.001 · 768 · √(a² + 1) at 16:9.
+    s.run(
+        r#"
+        local x, y = CreateFrame("Button"):GetPushedTextOffset()
+        assert(math.abs(x - 1.5665) < 1e-4 and math.abs(y + 1.5665) < 1e-4, x .. " " .. y)
+    "#,
+    )
+    .unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <Button name="XmlZero">
+                <PushedTextOffset><AbsDimension x="0" y="0"/></PushedTextOffset>
+            </Button>
+            <Button name="XmlAttr"><PushedTextOffset x="3"/></Button>
+            <Button name="XmlBoth">
+                <PushedTextOffset x="5" y="7"><AbsDimension y="-2"/></PushedTextOffset>
+            </Button>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    s.run(
+        r#"
+        local function at(b, ex, ey)
+            local x, y = b:GetPushedTextOffset()
+            assert(math.abs(x - ex) < 1e-5 and math.abs(y - ey) < 1e-5,
+                b:GetName() .. " " .. x .. " " .. y)
+        end
+        at(XmlZero, 0, 0)
+        at(XmlAttr, 3, 0)
+        at(XmlBoth, 5, -2)
+    "#,
+    )
+    .unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The pushed text offset moves the drawn label at the label refresh (`0x779810` →
+/// `0x772100`): on entering PUSHED and back at leaving it, at an enabled enter or leave and at
+/// `Lock`/`UnlockHighlight`; never the label's rect.
+#[test]
+fn a_pushed_button_shifts_its_label_text() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        b = CreateFrame("Button", "Shifty")
+        b:SetPoint("BOTTOMLEFT", 0, 0); b:SetWidth(100); b:SetHeight(100)
+        b:SetFont("Fonts\\FRIZQT__.TTF", 12)
+        b:SetText("Go")
+        b:RegisterForClicks("LeftButtonUp")
+    "#,
+    )
+    .unwrap();
+    let text_rect = |s: &mut UiScript| {
+        s.resolve();
+        s.extract()
+            .into_iter()
+            .find_map(|q| match q.content {
+                QuadContent::Text { text: Some(t), .. } if t == "Go" => q.rect,
+                _ => None,
+            })
+            .expect("label quad")
+    };
+    let rest = text_rect(&mut s);
+    let left = s.eval::<f32>("return b:GetFontString():GetLeft()").unwrap();
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    let shifted = |r: crate::layout::Rect, dx: f32, dy: f32| {
+        near(r.left, rest.left + dx)
+            && near(r.right, rest.right + dx)
+            && near(r.bottom, rest.bottom + dy)
+            && near(r.top, rest.top + dy)
+    };
+
+    s.mouse_button(50.0, 50.0, "LeftButton", true);
+    let held = text_rect(&mut s);
+    assert!(shifted(held, 1.28, -1.28), "{held:?} vs {rest:?}");
+    assert_eq!(
+        s.eval::<f32>("return b:GetFontString():GetLeft()").unwrap(),
+        left
+    );
+    // While held: a new offset waits for the next refresh, here an unlock.
+    s.run("b:SetPushedTextOffset(4, -4)").unwrap();
+    assert!(shifted(text_rect(&mut s), 1.28, -1.28));
+    s.run("b:UnlockHighlight()").unwrap();
+    assert!(shifted(text_rect(&mut s), 4.0, -4.0));
+    s.mouse_button(50.0, 50.0, "LeftButton", false);
+    assert!(shifted(text_rect(&mut s), 0.0, 0.0));
+
+    s.run("b:SetButtonState(\"PUSHED\")").unwrap();
+    assert!(shifted(text_rect(&mut s), 4.0, -4.0));
+    // An enabled enter and leave refresh too.
+    s.run("b:SetPushedTextOffset(2, -2)").unwrap();
+    assert!(shifted(text_rect(&mut s), 4.0, -4.0));
+    s.mouse_move(50.0, 50.0);
+    assert!(shifted(text_rect(&mut s), 2.0, -2.0));
+    s.run("b:SetPushedTextOffset(3, -3)").unwrap();
+    s.mouse_move(500.0, 500.0);
+    assert!(shifted(text_rect(&mut s), 3.0, -3.0));
+    s.run("b:SetButtonState(\"NORMAL\")").unwrap();
+    assert!(shifted(text_rect(&mut s), 0.0, 0.0));
+
+    // Disabled: the press does nothing.
+    s.run("b:Disable()").unwrap();
+    s.mouse_button(50.0, 50.0, "LeftButton", true);
+    assert!(shifted(text_rect(&mut s), 0.0, 0.0));
+    s.mouse_button(50.0, 50.0, "LeftButton", false);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

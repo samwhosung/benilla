@@ -226,6 +226,20 @@ impl Loader<'_> {
                 self.call(wrapper, "SetText", text, dbg);
             }
         }
+        // `<PushedTextOffset>` (`0x778aec`): the dimension read (`0x6f1eb0`) zeroes both axes, takes
+        // the element's own non-empty `x`/`y`, then its `<AbsDimension>`'s, and stores them as
+        // `SetPushedTextOffset` does (`0x778b24`).
+        for el in children_named(el, "PushedTextOffset") {
+            let mut xy = [0.0f32; 2];
+            for src in std::iter::once(el).chain(children_named(el, "AbsDimension").take(1)) {
+                for (i, k) in ["x", "y"].into_iter().enumerate() {
+                    if let Some(v) = src.attr(k).filter(|v| !v.is_empty()) {
+                        xy[i] = framexml::atof(v);
+                    }
+                }
+            }
+            self.call(wrapper, "SetPushedTextOffset", (xy[0], xy[1]), dbg);
+        }
         // The per-state fonts, two spellings each; every occurrence applies, in document order.
         for (children, method, which) in [
             (
