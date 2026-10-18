@@ -600,15 +600,9 @@ fn set_slot_texture(
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let rh = *model.id_to_region.get(&id).expect("slot region id");
-    if resolvable {
-        // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
-        let set = if path.is_empty() {
-            crate::script::texel::TexSet::None
-        } else {
-            crate::script::texel::TexSet::File(path)
-        };
-        model.set_texel(rh, set);
-    }
+    // `""` clears the texture, which `QuestLogFrame.lua:165` relies on; a file that loads clears
+    // the desaturation, and one that fails keeps the image and the grey (`0x778f3a` → `0x770200`).
+    crate::script::load_texture_name(&mut model, rh, &path, false);
     let data = model.region_data.entry(rh).or_default();
     // The highlight applies its blend on every path call, to the old region as to a new one
     // (`0x779082`, `0x7790e6`), the old one even when its texture did not load. A checked

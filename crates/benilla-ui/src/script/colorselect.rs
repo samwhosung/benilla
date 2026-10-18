@@ -11,7 +11,7 @@ use mlua::{Lua, Table, Value};
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
 use super::region::{
-    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
+    install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::layout::Rect;
@@ -152,8 +152,8 @@ pub(super) fn install_loaded(
     install_slot_model(model, h, slot, Some(rh))
 }
 
-/// A marker's path leg (`0x78b7b0`): a marker that exists has its file swapped and nothing else;
-/// with none, a texture is built, given the file and installed.
+/// A marker's path leg (`0x78b7b0`, [`load_path_leg`]): a marker that exists has its file swapped
+/// and nothing else; with none, a texture that loads is installed.
 fn set_marker_path(lua: &Lua, this: &Table, slot: Slot, path: &str) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -166,14 +166,8 @@ fn set_marker_path(lua: &Lua, this: &Table, slot: Slot, path: &str) -> mlua::Res
         KindState::ColorSelect(s) => slot.get(s),
         _ => return Err(mlua::Error::runtime("not a ColorSelect")),
     };
-    match existing {
-        Some(rh) => set_texture_path(&mut model, rh, path),
-        None => {
-            let rh = new_texture_region(&mut model, h, slot.layer())
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            set_texture_path(&mut model, rh, path);
-            install_slot_model(&mut model, h, slot, Some(rh))?;
-        }
+    if let Some(rh) = load_path_leg(&mut model, h, existing, slot.layer(), path)? {
+        install_slot_model(&mut model, h, slot, Some(rh))?;
     }
     Ok(())
 }

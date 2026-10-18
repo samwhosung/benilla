@@ -506,6 +506,77 @@ fn a_path_that_does_not_load_makes_no_slot_region_and_keeps_the_old_texture() {
     .unwrap();
 }
 
+/// The bar, thumb and marker path legs (`0x783140`, `0x7897c0`, `0x78b7b0`) load into a texture
+/// they hold, which keeps its image when the load fails (`0x770200` → `0x7702ac`); with none, a
+/// texture whose load fails is deleted and nothing is installed (`0x7831d9`, `0x789849`, `0x78b837`),
+/// so a later good path builds one on the layer that call names.
+#[test]
+fn a_widget_path_that_does_not_load_installs_nothing_and_keeps_the_old_texture() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|p| p != "missing"));
+    s.run(
+        r#"
+        sb = CreateFrame("StatusBar")
+        sl = CreateFrame("Slider")
+        cs = CreateFrame("ColorSelect")
+        sb:SetStatusBarTexture("missing")
+        sl:SetThumbTexture("missing")
+        cs:SetColorWheelThumbTexture("missing")
+        assert(sb:GetStatusBarTexture() == nil, "no bar for a failed load")
+        assert(sl:GetThumbTexture() == nil, "no thumb")
+        assert(cs:GetColorWheelThumbTexture() == nil, "no marker")
+
+        sb:SetStatusBarTexture("present", "BORDER")
+        assert(sb:GetStatusBarTexture():GetDrawLayer() == "BORDER", "built on the good call's layer")
+        sl:SetThumbTexture("present")
+        cs:SetColorWheelThumbTexture("present")
+        for _, t in ipairs({ sb:GetStatusBarTexture(), sl:GetThumbTexture(),
+                             cs:GetColorWheelThumbTexture() }) do
+            t:SetDesaturated(1)
+        end
+        sb:SetStatusBarTexture("missing")
+        sl:SetThumbTexture("missing")
+        cs:SetColorWheelThumbTexture("missing")
+        for _, t in ipairs({ sb:GetStatusBarTexture(), sl:GetThumbTexture(),
+                             cs:GetColorWheelThumbTexture() }) do
+            assert(t:GetTexture() == "present", "the old texture stands")
+            assert(t:IsDesaturated() == 1, "and keeps its grey")
+        end
+        sb:SetStatusBarTexture("other")
+        sl:SetThumbTexture("other")
+        cs:SetColorWheelThumbTexture("other")
+        for _, t in ipairs({ sb:GetStatusBarTexture(), sl:GetThumbTexture(),
+                             cs:GetColorWheelThumbTexture() }) do
+            assert(t:GetTexture() == "other" and t:IsDesaturated() == nil, "a new file clears it")
+        end
+    "#,
+    )
+    .unwrap();
+}
+
+/// A Button state texture's path leg loads through `0x770200` with shader index 0 (`0x778f3a`): a
+/// new file that loads clears the desaturation, one that fails keeps it.
+#[test]
+fn a_button_path_that_loads_clears_the_desaturation() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|p| p != "missing"));
+    s.run(
+        r#"
+        b = CreateFrame("Button")
+        b:SetNormalTexture("present")
+        n = b:GetNormalTexture()
+        n:SetDesaturated(1)
+        b:SetNormalTexture("missing")
+        assert(n:GetTexture() == "present" and n:IsDesaturated() == 1, "a failed load keeps both")
+        b:SetNormalTexture("present")
+        assert(n:IsDesaturated() == 1, "the same file returns first")
+        b:SetNormalTexture("other")
+        assert(n:GetTexture() == "other" and n:IsDesaturated() == nil, "a new file clears it")
+    "#,
+    )
+    .unwrap();
+}
+
 /// The Button setters' raises (`0x87a210`/`0x87a1e0`, the highlight's `0x87a2cc`/`0x87a28c`, the
 /// checked pair's `0x87b224`/`0x87b1e8` and `0x87c0e8`/`0x87c0a0`) name the receiver and the
 /// method; a call with no argument raises Usage and clears nothing (`0x781b4f`).

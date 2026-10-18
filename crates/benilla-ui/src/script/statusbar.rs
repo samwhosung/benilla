@@ -8,7 +8,7 @@ use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
 use super::region::{
-    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
+    install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::order::DrawLayer;
@@ -110,9 +110,9 @@ pub(super) fn install_loaded(
     install_bar_model(model, h, Some(rh), layer.unwrap_or(DrawLayer::Artwork))
 }
 
-/// `SetStatusBarTexture`'s path leg (`0x783140`): a bar that exists has its file swapped and
-/// nothing else, its layer included; with none, a texture is built, given the file and installed
-/// on `layer` (`0x7831cb`).
+/// `SetStatusBarTexture`'s path leg (`0x783140`, [`load_path_leg`]): a bar that exists has its file
+/// swapped and nothing else, its layer included; with none, a texture that loads is installed on
+/// `layer` (`0x7831cb`).
 fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -125,16 +125,10 @@ fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::
         KindState::StatusBar(sb) => sb.bar,
         _ => return Err(mlua::Error::runtime("not a StatusBar")),
     };
-    match existing {
-        Some(rh) => set_texture_path(&mut model, rh, path),
-        None => {
-            let rh = new_texture_region(&mut model, h, layer)
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            set_texture_path(&mut model, rh, path);
-            // `SetAllPoints` onto the bar (`0x7831bf`).
-            super::region::implicit_creation_anchor(&mut model, rh);
-            install_bar_model(&mut model, h, Some(rh), layer)?;
-        }
+    if let Some(rh) = load_path_leg(&mut model, h, existing, layer, path)? {
+        // `SetAllPoints` onto the bar (`0x7831bf`).
+        super::region::implicit_creation_anchor(&mut model, rh);
+        install_bar_model(&mut model, h, Some(rh), layer)?;
     }
     Ok(())
 }

@@ -192,7 +192,7 @@ pub(super) fn slot_arg(
 
 /// A fresh anchorless Texture region of `owner` on `layer`, as the client builds the texture a
 /// path leg loads (`0x76fc40`) before it installs it as an object.
-pub(super) fn new_texture_region(
+fn new_texture_region(
     model: &mut Model,
     owner: crate::widget::FrameHandle,
     layer: crate::order::DrawLayer,
@@ -205,16 +205,37 @@ pub(super) fn new_texture_region(
     Some(rh)
 }
 
-/// `CSimpleTexture::SetTexture(path)` (`0x770200`) on a region: the file replaces a solid fill, and
-/// `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
-pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) {
-    let set = if path.is_empty() {
-        super::texel::TexSet::None
-    } else {
-        super::texel::TexSet::File(path.to_string())
-    };
-    model.set_texel(rh, set);
-    model.note_art(rh);
+/// A widget's texture path leg (`SetStatusBarTexture` `0x783140`, `SetThumbTexture` `0x7897c0`, a
+/// ColorSelect marker `0x78b7b0`) over its current texture `existing`. That texture loads the path
+/// ([`paint::load_texture_name`]) and keeps its image when the load fails (`0x783165`). With none,
+/// a texture is built on `layer` (`0x76fc40`) and loaded, and one whose load fails is deleted with
+/// nothing installed (`0x7831b4` → `0x7831d9`, `0x789834` → `0x789849`, `0x78b824` → `0x78b837`).
+/// Answers the texture built, for the caller to install. `""` loads, as an empty image
+/// (`QuestLogFrame.lua:165` relies on it).
+pub(super) fn load_path_leg(
+    model: &mut Model,
+    owner: crate::widget::FrameHandle,
+    existing: Option<RegionHandle>,
+    layer: crate::order::DrawLayer,
+    path: &str,
+) -> mlua::Result<Option<RegionHandle>> {
+    if let Some(rh) = existing {
+        paint::load_texture_name(model, rh, path, false);
+        return Ok(None);
+    }
+    // Probed before the build, the verdict the load reaches, so a failure builds nothing.
+    let fails = !path.is_empty()
+        && model
+            .texture_probe
+            .as_ref()
+            .is_some_and(|probe| !probe(path));
+    if fails {
+        return Ok(None);
+    }
+    let rh = new_texture_region(model, owner, layer)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+    paint::load_texture_name(model, rh, path, false);
+    Ok(Some(rh))
 }
 
 /// The loader's install of the texture a `<BarTexture>`, `<ThumbTexture>`, Button state-texture or
@@ -445,7 +466,7 @@ mod layout;
 mod paint;
 mod text;
 
-pub(crate) use paint::{load_texture_file, orientation, FileLoad};
+pub(crate) use paint::{load_texture_file, load_texture_name, orientation, FileLoad};
 pub(crate) use text::store_text_of;
 
 fn install_region_methods(lua: &Lua) -> mlua::Result<()> {

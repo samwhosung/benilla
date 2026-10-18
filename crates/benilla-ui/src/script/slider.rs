@@ -11,7 +11,7 @@ use mlua::{Lua, Table, Value};
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
 use super::region::{
-    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
+    install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::layout::Rect;
@@ -87,9 +87,9 @@ pub(super) fn install_loaded(
     install_thumb_model(model, h, Some(rh), layer.unwrap_or(DrawLayer::Overlay))
 }
 
-/// `SetThumbTexture`'s path leg (`0x7897c0`): a thumb that exists has its file swapped and nothing
-/// else; with none, a texture is built, given the file and installed on OVERLAY (`0x790431`'s
-/// layer).
+/// `SetThumbTexture`'s path leg (`0x7897c0`, [`load_path_leg`]): a thumb that exists has its file
+/// swapped and nothing else; with none, a texture that loads is installed on OVERLAY
+/// (`0x790431`'s layer).
 fn set_thumb_path(lua: &Lua, this: &Table, path: &str) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -102,14 +102,8 @@ fn set_thumb_path(lua: &Lua, this: &Table, path: &str) -> mlua::Result<()> {
         KindState::Slider(s) => s.thumb,
         _ => return Err(mlua::Error::runtime("not a Slider")),
     };
-    match existing {
-        Some(rh) => set_texture_path(&mut model, rh, path),
-        None => {
-            let rh = new_texture_region(&mut model, h, DrawLayer::Overlay)
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            set_texture_path(&mut model, rh, path);
-            install_thumb_model(&mut model, h, Some(rh), DrawLayer::Overlay)?;
-        }
+    if let Some(rh) = load_path_leg(&mut model, h, existing, DrawLayer::Overlay, path)? {
+        install_thumb_model(&mut model, h, Some(rh), DrawLayer::Overlay)?;
     }
     Ok(())
 }
