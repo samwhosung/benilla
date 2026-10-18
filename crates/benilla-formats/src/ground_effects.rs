@@ -306,11 +306,12 @@ fn doodad_schema() -> Schema {
     s
 }
 
-/// A DBC doodad name, a bare `ElwGra01.mdl`, to its model `World\NoDXT\Detail\ElwGra01.m2`.
+/// A DBC doodad name as the path its model is created from: `0x6b2460` copies the folder
+/// (`0x86b5d4`) and appends the raw name (`0x6b2473`-`0x6b2499`), then creates it through
+/// `0x707350` with flags 0 (`0x6b24ad`), whose cache rule maps the extension or stands the error
+/// cube ([`crate::models::model_path`], read by the mesh load).
 fn resolve_model(dbc_name: &str) -> String {
-    let file = dbc_name.rsplit(['\\', '/']).next().unwrap_or(dbc_name);
-    let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
-    format!("{DETAIL_DIR}{stem}.m2")
+    format!("{DETAIL_DIR}{dbc_name}")
 }
 
 /// Load both ground-effect DBCs off the patch chain. The reference matches `doodadId` against
@@ -368,16 +369,18 @@ pub fn load_ground_effect_catalog(
 mod tests {
     use super::*;
 
+    /// The folder and the raw name, decided by the cache's rule on the whole path.
     #[test]
-    fn resolve_model_forces_detail_m2_path() {
+    fn a_doodad_name_is_the_detail_folder_and_the_raw_name() {
+        let file = |name: &str| crate::models::model_path(&resolve_model(name));
         assert_eq!(
             resolve_model("ElwGra01.mdl"),
-            "World\\NoDXT\\Detail\\ElwGra01.m2"
+            "World\\NoDXT\\Detail\\ElwGra01.mdl"
         );
-        assert_eq!(
-            resolve_model("ElwFlo01.MDX"),
-            "World\\NoDXT\\Detail\\ElwFlo01.m2"
-        );
+        assert_eq!(file("ElwFlo01.MDX"), "world\\nodxt\\detail\\elwflo01.m2");
+        assert_eq!(file("Sub\\Tuft.mdx"), "world\\nodxt\\detail\\sub\\tuft.m2");
+        assert_eq!(file("ElwGra01"), "spells\\errorcube.m2");
+        assert_eq!(file("ElwGra01.blp"), "spells\\errorcube.m2");
     }
 
     #[test]
