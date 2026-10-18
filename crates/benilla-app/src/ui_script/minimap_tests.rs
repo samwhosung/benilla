@@ -216,9 +216,10 @@ fn hovering_the_indicator_shows_and_live_updates_the_game_time_tooltip() {
     );
 }
 
-/// A real click reaches `Minimap_OnClick` via `OnMouseUp` and parks centre-relative UI units.
+/// A real click reaches `Minimap_OnClick` via `OnMouseUp`, whose `PingLocation` pings the world
+/// point its offsets name as fractions of the 140-unit widget times the zoom diameter.
 #[test]
-fn a_click_on_the_minimap_parks_a_centre_relative_ping_request() {
+fn a_click_on_the_minimap_pings_the_world_point_under_it() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -244,26 +245,37 @@ fn a_click_on_the_minimap_parks_a_centre_relative_ping_request() {
         .unwrap();
     assert!(cx > 0.0 && cy > 0.0, "the widget resolved: ({cx}, {cy})");
 
-    assert_eq!(s.take_minimap_ping_request(), None);
+    s.set_minimap_player(Some((1000.0, 2000.0)));
+    assert!(s.take_minimap_pings_sent().is_empty());
 
     // 20 right and 12 up, inside the 70-unit disc; stock `Minimap_OnClick` first adds
-    // `CURSOR_OFFSET_X/Y`, -7 and -9 (`Minimap.lua:3-4`, `:133-134`).
+    // `CURSOR_OFFSET_X/Y`, -7 and -9 (`Minimap.lua:3-4`, `:133-134`), so 13 right and 3 up reach
+    // `PingLocation`: world X grows by 3/140 of the diameter, world Y falls by 13/140 of it.
     s.mouse_button(cx + 20.0, cy + 12.0, "LeftButton", true);
     s.mouse_button(cx + 20.0, cy + 12.0, "LeftButton", false);
-    let (dx, dy) = s
-        .take_minimap_ping_request()
-        .expect("OnMouseUp → Minimap_OnClick → PingLocation");
-    assert!((dx - 13.0).abs() < 0.01, "x right of centre, less 7: {dx}");
-    assert!((dy - 3.0).abs() < 0.01, "y UP from centre, less 9: {dy}");
-    assert_eq!(s.take_minimap_ping_request(), None);
+    let sent = s.take_minimap_pings_sent();
+    assert_eq!(sent.len(), 1, "OnMouseUp → Minimap_OnClick → PingLocation");
+    let d = 2.0 * benilla_ui::widget::minimap_radius_yd(3, 3, false);
+    let (x, y) = sent[0];
+    assert!(
+        (x - (1000.0 + 3.0 / 140.0 * d)).abs() < 0.01,
+        "north by the up offset: {x}"
+    );
+    assert!(
+        (y - (2000.0 - 13.0 / 140.0 * d)).abs() < 0.01,
+        "east by the right one: {y}"
+    );
 
     s.mouse_button(10.0, 10.0, "LeftButton", true);
     s.mouse_button(10.0, 10.0, "LeftButton", false);
-    assert_eq!(s.take_minimap_ping_request(), None, "off-widget is no ping");
+    assert!(
+        s.take_minimap_pings_sent().is_empty(),
+        "off-widget is no ping"
+    );
 }
 
 /// The reference answers from statics nothing clears (`0x4eefd0`), and stock `Minimap_OnUpdate`
-/// uses the pair with no nil test; here it is the app's last publish, `(0, 0)` before any.
+/// uses the pair with no nil test: two numbers always, recomputed from the stored point.
 #[test]
 fn get_ping_position_answers_two_numbers_always() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -288,7 +300,10 @@ fn get_ping_position_answers_two_numbers_always() {
         0.0,
         "before any ping: a number, not nil"
     );
-    s.set_minimap_ping((0.25, -0.125));
+    // A member's ping a quarter of the diameter west and an eighth south of the player.
+    s.set_minimap_player(Some((0.0, 0.0)));
+    let d = 2.0 * benilla_ui::widget::minimap_radius_yd(3, 3, false);
+    s.set_minimap_ping_point((-0.125 * d, -0.25 * d));
     let x = s
         .eval::<f32>("local x = Minimap:GetPingPosition(); return x")
         .unwrap();
@@ -306,14 +321,7 @@ fn get_ping_position_answers_two_numbers_always() {
         !s.eval::<bool>("return MiniMapPing:IsVisible()").unwrap(),
         "hidden until a ping"
     );
-    s.fire_event(
-        "MINIMAP_PING",
-        vec![
-            benilla_ui::script::ScriptValue::Str("player".into()),
-            benilla_ui::script::ScriptValue::Number(0.25),
-            benilla_ui::script::ScriptValue::Number(-0.125),
-        ],
-    );
+    s.apply_minimap_ping((-0.125 * d, -0.25 * d), "player");
     assert!(s.eval::<bool>("return MiniMapPing:IsVisible()").unwrap());
     s.tick(1.0);
     assert!(
@@ -447,15 +455,12 @@ fn a_shown_ping_pane_asks_for_a_tile_and_draws_its_cell() {
         s.visible_model_panes().is_empty(),
         "hidden until a ping: nothing to paint"
     );
-    let ping_at = |s: &mut UiScript, nx: f64, ny: f64| {
-        s.fire_event(
-            "MINIMAP_PING",
-            vec![
-                benilla_ui::script::ScriptValue::Str("player".into()),
-                benilla_ui::script::ScriptValue::Number(nx),
-                benilla_ui::script::ScriptValue::Number(ny),
-            ],
-        );
+    // A ping whose `GetPingPosition` is `(nx, ny)`, the player at the origin: `nx = −dy/D` and
+    // `ny = dx/D`.
+    let ping_at = |s: &mut UiScript, nx: f32, ny: f32| {
+        let d = 2.0 * benilla_ui::widget::minimap_radius_yd(3, 3, false);
+        s.set_minimap_player(Some((0.0, 0.0)));
+        s.apply_minimap_ping((ny * d, -nx * d), "player");
     };
     ping_at(&mut s, 0.25, -0.125);
     let panes = s.visible_model_panes();
@@ -596,7 +601,6 @@ fn a_shown_ping_pane_asks_for_a_tile_and_draws_its_cell() {
     {
         let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
         // `Minimap_OnUpdate` re-seats the frame from `GetPingPosition()` (`Minimap.lua:74`).
-        script.set_minimap_ping((-0.125, 0.25));
         ping_at(&mut script, -0.125, 0.25);
     }
     next_frame(&mut app);

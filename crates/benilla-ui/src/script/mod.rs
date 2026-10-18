@@ -472,6 +472,15 @@ pub(crate) const REGION_MAP_METHODS: [&str; 19] = [
 const REG_WRAPPERS: &str = "__benilla_wrappers";
 const REG_SCRIPTS: &str = "__benilla_scripts";
 
+/// `MINIMAP_PING`'s arguments, `%s%f%f` (`0x4ee48d`): the unit token and the two fractions.
+pub(crate) fn ping_args(token: &str, a: f64, b: f64) -> Vec<ScriptValue> {
+    vec![
+        ScriptValue::Str(token.to_string()),
+        ScriptValue::Number(a),
+        ScriptValue::Number(b),
+    ]
+}
+
 /// The layout handle of the screen root (the client's `CSimpleTop`, not the `UIParent` frame),
 /// which a top-level `SetPoint` without `relativeTo` anchors to; frame ids, from 1, are the rest.
 pub const SCREEN: crate::layout::Handle = 0;
@@ -891,16 +900,30 @@ impl UiScript {
         }
     }
 
-    /// Publish `Minimap:GetPingPosition()`'s offsets from the widget centre, as fractions of its
-    /// side (x right, y up); the app recomputes them from the ping's world point each frame.
-    pub fn set_minimap_ping(&mut self, ping: (f32, f32)) {
-        self.model_mut().minimap_ping = ping;
+    /// Push the active player's WoW world `(x, y)`, `None` with no player object, before the
+    /// script tick: the ping methods read it at the call (`0x4eecdf`, `0x4ef021`).
+    pub fn set_minimap_player(&mut self, pos: Option<(f32, f32)>) {
+        self.model_mut().minimap.player = pos;
     }
 
-    /// Drain a `Minimap:PingLocation(x, y)`: centre-relative offsets in the screen root's units,
-    /// x right, y up.
-    pub fn take_minimap_ping_request(&mut self) -> Option<(f32, f32)> {
-        self.model_mut().minimap_ping_request.take()
+    /// Seat the stored ping a new VM inherits, the reference's statics living across the reload
+    /// (`0xbc787c`, `0xbc7880`); no event.
+    pub fn set_minimap_ping_point(&mut self, world: (f32, f32)) {
+        self.model_mut().minimap.ping = world;
+    }
+
+    /// A group member's ping (`0x5e41bd` → `0x4ee330`): stored at once and `MINIMAP_PING` signalled
+    /// with the pinger's unit token, all before this returns. Nothing without a player object.
+    pub fn apply_minimap_ping(&mut self, world: (f32, f32), token: &str) {
+        let fractions = self.model_mut().minimap.apply_ping(world);
+        if let Some((a, b)) = fractions {
+            self.fire_event("MINIMAP_PING", ping_args(token, a, b));
+        }
+    }
+
+    /// Drain the world points our own `Minimap:PingLocation` pinged since the last call.
+    pub fn take_minimap_pings_sent(&mut self) -> Vec<(f32, f32)> {
+        std::mem::take(&mut self.model_mut().minimap_pings_sent)
     }
 
     /// `Minimap:SetMaskTexture`'s value, `None` until one is set, while the app keeps

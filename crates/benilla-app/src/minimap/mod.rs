@@ -5,8 +5,8 @@
 //! - Tiles: one 256² BLP per ADT tile (533.33 yd), `map<X>_<Y>.blp` resolved through
 //!   `md5translate.trs` ([`benilla_formats::MinimapTranslate`]), indexed in ADT order.
 //! - Zoom to radius (`0x6da9b0`): two zoom indices, picked by WMO containment, each persisted
-//!   (`minimapZoom`, `minimapInsideZoom`); outdoors a chunk-count half-extent, indoors
-//!   [`INTERIOR_ZOOM_RADIUS`] yards.
+//!   (`minimapZoom`, `minimapInsideZoom`); outdoors a chunk-count half-extent, indoors a yard
+//!   table ([`benilla_ui::widget::minimap_radius_yd`]).
 //! - North up: screen up is world +X, screen left world +Y.
 
 pub(crate) mod blips;
@@ -41,31 +41,16 @@ use benilla_world::wmo_portal::{
 };
 use benilla_world::world_map::CurrentMap;
 
-/// Yards per ADT tile / per MCNK chunk (16 chunks per tile edge).
+/// Yards per ADT tile.
 const TILE_YARDS: f32 = 533.333_3;
-const CHUNK_YARDS: f32 = TILE_YARDS / 16.0;
 
-/// The outdoor zoom table (`0x8116d0`): view diameter in chunks per zoom index; half-extent =
-/// `chunks · 0.5 · 33.333` yd (`0x6da9b0`).
-const ZOOM_CHUNKS: [f32; 6] = [14.0, 12.0, 10.0, 8.0, 6.0, 4.0];
-
-/// The indoor view radius in yards per indoor zoom index: table `0x8116e8`, indexed by `0x86f69c`
-/// (`minimapInsideZoom`). The on-screen radius is exactly this (the composite at `1.5·c`,
-/// `0x4ec090`, blits its middle two-thirds, `0x4ec440`), and the same `c` sizes the selection box
-/// (`0x6d96b6`).
-///
-/// Not a constant: the `10.0f` at `0x4ed9eb` is only the field's static initializer, and
-/// `0x6d98f5` writes `radiusTable[indoorZoom]` into it whenever the zoom or indoor state changes.
-const INTERIOR_ZOOM_RADIUS: [f32; 6] = [150.0, 120.0, 90.0, 60.0, 40.0, 25.0];
-
-/// How far the map reaches, in yards; both branches of [`emit_minimap`] and the ping read it here.
+/// How far the map reaches, in yards (`0x6da9b0`), for both branches of [`emit_minimap`]. Indoors
+/// the on-screen radius is exactly the table's (the composite at `1.5·c`, `0x4ec090`, blits its
+/// middle two-thirds, `0x4ec440`), and the same `c` sizes the selection box (`0x6d96b6`); the
+/// `10.0f` at `0x4ed9eb` is only the field's static initializer, which `0x6d98f5` rewrites from
+/// the table whenever the zoom or indoor state changes.
 fn view_radius_yd(zoom: u8, inside_zoom: u8, inside: bool) -> f32 {
-    let clamp = |z: u8| usize::from(z.min(5));
-    if inside {
-        INTERIOR_ZOOM_RADIUS[clamp(inside_zoom)]
-    } else {
-        ZOOM_CHUNKS[clamp(zoom)] * 0.5 * CHUNK_YARDS
-    }
+    benilla_ui::widget::minimap_radius_yd(zoom, inside_zoom, inside)
 }
 
 /// The outer-edge bleed: a tile on its group grid's boundary grows 1 yd on that side, so groups
@@ -374,14 +359,9 @@ fn emit_minimap(
         locks,
         poi_marker,
         pois,
-        mut ping,
-        script,
     ) = blip_inputs;
     // Hover resets every frame; the blip pass re-establishes it while the map draws.
     *blip_hover = blips::MinimapBlipHover::None;
-    // Drain the `Minimap:PingLocation` click before any early return: it is spent in the frame it
-    // was made, and a click on a frame the map does not draw is not a ping.
-    let click = script.and_then(|mut s| s.take_minimap_ping_request());
     let (Some(slot), Some(assets), Some(map), Some(catalog)) =
         (widget.0.as_ref(), assets, map, catalog)
     else {
@@ -633,9 +613,7 @@ fn emit_minimap(
                 tracking.stealthed,
             );
         }
-        let win = window.iter().next();
-        let cursor = win.and_then(|w| w.cursor_position());
-        let seam = win.map_or(1.0, |w| crate::ui_script::seam_scale(w.height()));
+        let cursor = window.iter().next().and_then(|w| w.cursor_position());
         // The pan origin snapped to a half-logical-pixel grid: every blip offset and rim bearing
         // derives from `wx`/`wy`, so the layer steps together instead of rewriting the batch mesh
         // every frame while walking. Blip world positions stay exact.
@@ -651,7 +629,6 @@ fn emit_minimap(
             wy: (wy / q).round() * q,
             wz: wow[2],
             cursor,
-            seam,
         }
     });
     let mut hover = blips::MinimapBlipHover::None;
@@ -769,12 +746,6 @@ fn emit_minimap(
                 });
             }
         }
-    }
-
-    // Seat the click against this frame's geometry; the marker is the stock `MiniMapPing`
-    // `<Model>`, drawn over the widget by `crate::ui_models`.
-    if let Some(ctx) = &blip_ctx {
-        ping::seat_click(ctx, &mut ping, click);
     }
 }
 
@@ -923,13 +894,18 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_mask
                         .after(crate::ui_script::UiInput)
                         .before(UiQuadAppend),
-                    // Before the script tick, after the containment verdict it reads. Gated on the
-                    // in-game UI: a member's ping in the login burst would otherwise spend its
-                    // `fresh` latch on the glue VM, which has no `MiniMapPing` frame.
+                    // Before the script tick, after the indoor push the radius reads. Gated on the
+                    // in-game UI: a member's ping in the login burst has no player to land on
+                    // (`0x4ee341`), so it is dropped, not signalled to the glue VM.
                     ping::drive_minimap_ping
                         .after(feed_minimap_inside)
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
+                    ping::drop_inbound_pings
+                        .in_set(crate::ui_script::UiFeed)
+                        .run_if(not(crate::ui_script::ingame_ui_up)),
+                    // After the tick whose `PingLocation` calls it sends.
+                    ping::send_own_pings.after(crate::ui_script::UiInput),
                     // Before the script tick, so GameTimeFrame reads this frame's minute.
                     feed_game_time.in_set(crate::ui_script::UiFeed),
                     // In the feed, off the hover the last walk left; after the world drive only so

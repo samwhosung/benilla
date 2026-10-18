@@ -142,30 +142,63 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "PingLocation",
-        // Centre-relative offsets in the minimap's own units, x right and y up, which the
-        // reference reads against the widget's own size (`0x4eeca0`); parked in screen units, its
-        // effective scale applied, for the app to resolve in the frame it draws the map. One
-        // pending click, not one per widget.
-        lua.create_function(|lua, (this, x, y): (Value, f32, f32)| {
-            let h = this_minimap(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let s = super::object::eff_scale(&model, h);
-            model.minimap_ping_request = Some((x * s, y * s));
+        // `0x4eeca0`: nothing without the player object (`0x4eecdf`). Arguments 2 and 3 count only
+        // when both pass `lua_isnumber` (`0x4eed0b`, `0x4eed1f`), and only then is `this` looked
+        // up (`0x4eed25`); otherwise both offsets stay 0 and the ping lands on the player. The
+        // first is negated (`0x4eedeb`) and divided by the frame's given height (slot 0x20,
+        // `0x4eee31`), the second by its width (slot 0x1c, `0x4eee21`): fractions of its own size,
+        // whatever its scale. Each times the zoom diameter (`0x4eecf8`) offsets the player's point,
+        // world X by the second and world Y by the first (`0x4eee48`), with no disc test. The
+        // party send (`0x4eef72`) goes to the host; the ping then applies at once (`0x4eefb5`).
+        lua.create_function(|lua, args: mlua::MultiValue| {
+            let player = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .minimap
+                .player;
+            let Some(player) = player else {
+                return Ok(());
+            };
+            let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Nil);
+            let (x, y) = (lua.coerce_number(arg(1))?, lua.coerce_number(arg(2))?);
+            let (mut first, mut second) = (0.0_f64, 0.0_f64);
+            if let (Some(x), Some(y)) = (x, y) {
+                let h = this_minimap(lua, &arg(0))?;
+                let (w, ht) = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    model
+                        .layout_inputs
+                        .get(&h)
+                        .map_or((0.0, 0.0), |i| (i.width, i.height))
+                };
+                first = -x / f64::from(ht);
+                second = y / f64::from(w);
+            }
+            super::tick::verb(lua, |model| {
+                let d = 2.0 * f64::from(model.minimap.radius_yd());
+                let world = (
+                    (f64::from(player.0) + second * d) as f32,
+                    (f64::from(player.1) + first * d) as f32,
+                );
+                model.minimap_pings_sent.push(world);
+                if let Some((a, b)) = model.minimap.apply_ping(world) {
+                    model.raise("MINIMAP_PING", super::ping_args("player", a, b));
+                }
+            });
             Ok(())
         })?,
     )?;
     m.set(
         "GetPingPosition",
-        // Fractions of the widget side from its centre (`MINIMAP_PING`'s arg2/arg3 space), which
-        // the app recomputes from the world point each frame. Always two numbers (`0x4eefd0`): the
-        // stock `Minimap_OnUpdate` multiplies them for 5 s, so a nil would error every frame. No
-        // `this` lookup.
+        // Two numbers recomputed from the stored point at every call, `(0, 0)` with no player
+        // (`0x4eefd0`); the stock `Minimap_OnUpdate` multiplies them for 5 s, so a nil would error
+        // every frame. No `this` lookup.
         lua.create_function(|lua, _: mlua::MultiValue| {
-            let (x, y) = lua
+            Ok(lua
                 .app_data_ref::<Model>()
                 .expect("model app_data")
-                .minimap_ping;
-            Ok((x, y))
+                .minimap
+                .ping_position())
         })?,
     )?;
     lua.set_named_registry_value(REG_MINIMAP_METHODS, m)?;

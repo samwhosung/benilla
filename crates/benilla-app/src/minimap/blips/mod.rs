@@ -169,8 +169,6 @@ pub(super) type BlipInputs<'w, 's> = (
     Option<Res<'w, crate::go_templates::Locks>>,
     Res<'w, crate::poi_marker::PoiMarker>,
     Option<Res<'w, crate::area_poi::AreaPoiRes>>,
-    ResMut<'w, super::MinimapPing>,
-    Option<NonSendMut<'w, UiScript>>,
 );
 
 /// Every streamed object the classifier considers; our own avatar is the arrow, never a dot.
@@ -200,9 +198,6 @@ pub(super) struct BlipCtx {
     pub(super) wz: f32,
     /// The cursor in the quads' y-down logical px.
     pub(super) cursor: Option<Vec2>,
-    /// Window px per root unit: everything else here is window px, while Lua
-    /// ([`Minimap:PingLocation`](super::ping)) hands root units.
-    pub(super) seam: f32,
 }
 
 impl BlipCtx {

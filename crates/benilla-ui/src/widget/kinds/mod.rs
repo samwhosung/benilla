@@ -745,6 +745,12 @@ pub struct MinimapStatics {
     pub inside: bool,
     /// `Minimap:SetMaskTexture`'s mask, write-only from Lua; `None` is [`MINIMAP_DEFAULT_MASK`].
     pub mask_texture: Option<String>,
+    /// The one ping, a WoW world `(x, y)` (`0xbc787c`, `0xbc7880`): zero from the static
+    /// initializer (`0x4ea1f0`), never cleared.
+    pub ping: (f32, f32),
+    /// The active player's WoW world `(x, y)`, pushed by the app every frame; `None` with no player
+    /// object, when the ping methods do nothing (`0x4eecdf`, `0x4eeff6`).
+    pub player: Option<(f32, f32)>,
 }
 
 /// Both zoom CVars register with `"3"` (`0x48fc5a`/`0x48fc76`) and the reset copies the CVar in;
@@ -758,6 +764,8 @@ impl Default for MinimapStatics {
             inside_zoom: MINIMAP_DEFAULT_ZOOM,
             inside: false,
             mask_texture: None,
+            ping: (0.0, 0.0),
+            player: None,
         }
     }
 }
@@ -770,6 +778,38 @@ impl MinimapStatics {
         } else {
             self.zoom
         }
+    }
+
+    /// The view radius in yards at the live zoom (`0x6da9b0`).
+    pub fn radius_yd(&self) -> f32 {
+        minimap_radius_yd(self.zoom, self.inside_zoom, self.inside)
+    }
+
+    /// The ping's offset from the player over the zoom diameter `D`, `(−dy/D, dx/D)` with `dx`,
+    /// `dy` the point less the player's position; `None` with no player.
+    fn ping_fraction(&self) -> Option<(f64, f64)> {
+        let player = self.player?;
+        let k = 1.0 / (2.0 * f64::from(self.radius_yd()));
+        let dx = f64::from(self.ping.0) - f64::from(player.0);
+        let dy = f64::from(self.ping.1) - f64::from(player.1);
+        Some((-dy * k, dx * k))
+    }
+
+    /// `GetPingPosition` (`0x4eefd0`), anew from the stored point every call: `(0, 0)` with no
+    /// player (`0x4eeff6`), the second value rounded to a float (`0x4ef05b`), the first not.
+    pub fn ping_position(&self) -> (f64, f64) {
+        self.ping_fraction()
+            .map_or((0.0, 0.0), |(a, b)| (a, f64::from(b as f32)))
+    }
+
+    /// `MinimapApplyPing` (`0x4ee330`): store the point (`0x4ee366`, `0x4ee373`) and give
+    /// `MINIMAP_PING`'s two numbers, the first rounded to a float before it is negated
+    /// (`0x4ee473`), the second a double (`0x4ee476`); `None`, nothing stored, with no player.
+    pub fn apply_ping(&mut self, world: (f32, f32)) -> Option<(f64, f64)> {
+        self.player?;
+        self.ping = world;
+        self.ping_fraction()
+            .map(|(a, b)| (-f64::from((-a) as f32), b))
     }
 
     /// `SetZoomIndex` (`0x6da8e0`) on the `__ftol` of a level: the cell the indoor byte picks takes
@@ -788,6 +828,24 @@ impl MinimapStatics {
         }
         *cell = index;
         Some(cvar)
+    }
+}
+
+/// The outdoor zoom table (`0x8116d0`): the view diameter in map chunks per zoom index.
+pub const MINIMAP_ZOOM_CHUNKS: [f32; 6] = [14.0, 12.0, 10.0, 8.0, 6.0, 4.0];
+
+/// The indoor view radius in yards per indoor zoom index, table `0x8116e8`.
+pub const MINIMAP_INDOOR_RADII: [f32; 6] = [150.0, 120.0, 90.0, 60.0, 40.0, 25.0];
+
+/// The minimap's radius in yards (`0x6da9b0`): with the indoor byte set the indoor table at the
+/// indoor index (`0x6da9bf`), else the outdoor chunk count times 0.5 and 33.333332 (`0x6da9e9`,
+/// `0x6da9ef`). The ping, the blips and the dots all use it; an index past 5 reads the last entry.
+pub fn minimap_radius_yd(zoom: u8, inside_zoom: u8, inside: bool) -> f32 {
+    let at = |z: u8| usize::from(z.min(MINIMAP_ZOOM_LEVELS - 1));
+    if inside {
+        MINIMAP_INDOOR_RADII[at(inside_zoom)]
+    } else {
+        MINIMAP_ZOOM_CHUNKS[at(zoom)] * 0.5 * 33.333_332
     }
 }
 

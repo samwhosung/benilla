@@ -305,19 +305,120 @@ fn frame_alpha_reads_the_shown_frames_alpha() {
     );
 }
 
-/// `Minimap_OnClick` divides the cursor by the minimap's effective scale and hands
-/// `PingLocation` offsets in the minimap's own units; the reference reads them against the
-/// widget's own size (`0x4eeca0`), so they reach the host scaled back to screen units.
+/// `PingLocation` (`0x4eeca0`) turns its two offsets into fractions of the frame's own given size,
+/// the first over the height and negated, the second over the width, and offsets the player's
+/// world point by them times the zoom diameter, world X by the second and Y by the first, with no
+/// disc test and whatever the frame's scale. The ping applies inside the call (`0x4ee330`):
+/// `MINIMAP_PING` fires before it returns.
 #[test]
-fn ping_location_reaches_the_host_in_screen_units() {
-    let mut s = UiScript::new().unwrap();
+fn ping_location_pings_the_world_point_its_fractions_name_inside_the_call() {
+    let mut s = script();
     s.run(
-        r#"m = CreateFrame("Minimap", "HalfMinimap")
-           m:SetScale(0.5)
-           m:PingLocation(10, -20)"#,
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+           m:SetWidth(140) m:SetHeight(100)
+           seen = {}
+           local f = CreateFrame("Frame")
+           f:RegisterEvent("MINIMAP_PING")
+           f:SetScript("OnEvent", function()
+               local gx, gy = m:GetPingPosition()
+               table.insert(seen, {arg1, arg2, arg3, gx, gy})
+           end)"#,
     )
     .unwrap();
-    assert_eq!(s.take_minimap_ping_request(), Some((5.0, -10.0)));
+
+    // No player object: nothing happens (`0x4eecdf`), and the getter answers zeros (`0x4eeff6`).
+    s.run("m:PingLocation(10, 20)").unwrap();
+    assert!(s.take_minimap_pings_sent().is_empty());
+    assert_eq!(s.eval::<usize>("return table.getn(seen)").unwrap(), 0);
+    assert_eq!(
+        s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap(),
+        (0.0, 0.0)
+    );
+
+    s.set_minimap_player(Some((100.0, 200.0)));
+    let d = 2.0 * f64::from(crate::widget::minimap_radius_yd(3, 3, false));
+    let k = 1.0 / d;
+    // Before any ping the stored point is world (0, 0), which the getter does not detect.
+    let (gx, gy) = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
+    assert!(
+        (gx - 200.0 * k).abs() < 1e-6 && (gy + 100.0 * k).abs() < 1e-6,
+        "{gx} {gy}"
+    );
+
+    s.run("m:PingLocation(10, 20) after = table.getn(seen)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<usize>("return after").unwrap(),
+        1,
+        "fired inside the call"
+    );
+    let sent = s.take_minimap_pings_sent();
+    let want = (100.0 + (20.0 / 140.0) * d, 200.0 - (10.0 / 100.0) * d);
+    assert_eq!(sent.len(), 1);
+    assert!(
+        (f64::from(sent[0].0) - want.0).abs() < 1e-3
+            && (f64::from(sent[0].1) - want.1).abs() < 1e-3,
+        "the axes swap: x over the height, y over the width: {sent:?} vs {want:?}"
+    );
+    let ev = s
+        .eval::<(String, f64, f64, f64, f64)>(
+            "local e = seen[1] return e[1], e[2], e[3], e[4], e[5]",
+        )
+        .unwrap();
+    assert_eq!(ev.0, "player");
+    assert!(
+        (ev.1 - 0.1).abs() < 1e-6 && (ev.2 - 20.0 / 140.0).abs() < 1e-6,
+        "{ev:?}"
+    );
+    assert!(
+        (ev.3 - 0.1).abs() < 1e-6 && (ev.4 - 20.0 / 140.0).abs() < 1e-6,
+        "{ev:?}"
+    );
+
+    // The scale does not enter: the fractions are of the frame's own size.
+    s.run("m:SetScale(0.5) m:PingLocation(10, 20)").unwrap();
+    let scaled = s.take_minimap_pings_sent();
+    assert_eq!(scaled, sent, "same fractions at scale 0.5");
+
+    // Past the rim still pings: no disc test.
+    s.run("m:PingLocation(0, 130)").unwrap();
+    assert_eq!(s.take_minimap_pings_sent().len(), 1, "outside the disc");
+
+    // Without two numbers, the player's own point, and no `this` is needed.
+    for chunk in [
+        "m:PingLocation()",
+        "m:PingLocation(5)",
+        "m.PingLocation()",
+        "m:PingLocation(nil, 3)",
+    ] {
+        s.run(chunk).unwrap();
+        assert_eq!(s.take_minimap_pings_sent(), vec![(100.0, 200.0)], "{chunk}");
+    }
+    // With two numbers, the member prologue runs.
+    let err = crate::script::lua_message(&s.run("m.PingLocation(nil, 1, 2)").unwrap_err());
+    assert!(
+        err.ends_with("Attempt to find 'this' in non-table object (used '.' instead of ':' ?)"),
+        "{err}"
+    );
+
+    // The getter recomputes from the stored point at every call, as the player moves.
+    s.run("m:PingLocation(0, 70)").unwrap();
+    s.take_minimap_pings_sent();
+    let before = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
+    s.set_minimap_player(Some((110.0, 200.0)));
+    let after = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
+    assert!(
+        (after.1 - (before.1 - 10.0 * k)).abs() < 1e-6,
+        "{before:?} → {after:?}"
+    );
+
+    // A member's ping applies the same way, with its token.
+    s.apply_minimap_ping((100.0, 200.0), "party2");
+    assert_eq!(
+        s.eval::<String>("return seen[table.getn(seen)][1]")
+            .unwrap(),
+        "party2"
+    );
 }
 
 /// The zoom cells, the indoor byte and the mask are statics (`0x86f698`, `0x86f69c`, `0xceaa60`,
