@@ -1351,7 +1351,8 @@ pub struct StatusBarState {
     has_value: bool,
     /// VERTICAL fills bottom-up; HORIZONTAL, the default, left to right (enum `0x811b00`).
     pub vertical: bool,
-    /// The fill texture (`<BarTexture>`), cropped to [`Self::fraction`] along the orientation axis.
+    /// The fill texture (`<BarTexture>`), cropped to [`Self::drawn_fraction`] along the
+    /// orientation axis.
     pub bar: Option<RegionHandle>,
 }
 
@@ -1407,6 +1408,17 @@ impl StatusBarState {
             ((self.value - self.min) / (self.max - self.min)).clamp(0.0, 1.0)
         } else {
             0.0
+        }
+    }
+
+    /// The fraction the bar texture is cut to. The update `0x7833c0` sets the texture's
+    /// coordinates only with a range and a value (`0x7833e6`, `0x7833ea`) and otherwise returns,
+    /// leaving the texture whole across the bar: `1.0` until both are set.
+    pub fn drawn_fraction(&self) -> f32 {
+        if self.range_valid && self.has_value {
+            self.fraction()
+        } else {
+            1.0
         }
     }
 }

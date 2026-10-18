@@ -211,6 +211,55 @@ fn statusbar_bar_region_crops_its_texture_rather_than_stretching_it() {
     assert_eq!(uv(&s), [0.0, 1.0, 0.0, 1.0], "full");
 }
 
+/// `0x7833c0` sets the bar texture's coordinates only with a range and a value (`0x7833e6`,
+/// `0x7833ea`); before both it returns, so the whole texture draws across the bar.
+#[test]
+fn statusbar_without_a_range_and_a_value_draws_its_whole_texture() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        local b = CreateFrame("StatusBar", "SbWhole")
+        b:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0)
+        b:SetWidth(200); b:SetHeight(20)
+        b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    "#,
+    )
+    .unwrap();
+    let fill = |s: &UiScript| -> ([f32; 4], f32) {
+        s.extract()
+            .iter()
+            .find_map(|q| match &q.content {
+                QuadContent::Texture {
+                    path: Some(_),
+                    tex_coords,
+                    ..
+                } => Some((
+                    tex_coords.map_or([0.0, 1.0, 0.0, 1.0], |tc| tc.edges()),
+                    q.rect.expect("bar rect resolved").width(),
+                )),
+                _ => None,
+            })
+            .expect("the bar quad")
+    };
+    s.resolve();
+    assert_eq!(
+        fill(&s),
+        ([0.0, 1.0, 0.0, 1.0], 200.0),
+        "no range, no value"
+    );
+    s.run("SbWhole:SetValue(25)").unwrap();
+    assert_eq!(
+        fill(&s),
+        ([0.0, 1.0, 0.0, 1.0], 200.0),
+        "a value before a range"
+    );
+    s.run("SbWhole:SetMinMaxValues(0, 100)").unwrap();
+    assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "a range, no value");
+    s.run("SbWhole:SetValue(25)").unwrap();
+    assert_eq!(fill(&s), ([0.0, 0.25, 0.0, 1.0], 50.0), "both: the fill");
+}
+
 #[test]
 fn statusbar_get_texture_returns_the_bar_region() {
     let s = script();

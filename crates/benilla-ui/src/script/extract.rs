@@ -470,10 +470,10 @@ fn texture_color(fill: Option<[f32; 4]>, vertex: Option<[f32; 4]>) -> Option<[f3
     }
 }
 
-/// A StatusBar's fill rect: the frame rect scaled by the value fraction, rightward from the left
+/// A StatusBar's fill rect: the frame rect scaled by the drawn fraction, rightward from the left
 /// edge or upward from the bottom (1.12 has no reverse fill).
 fn bar_fill_rect(r: Rect, sb: &crate::widget::StatusBarState) -> Rect {
-    let f = sb.fraction();
+    let f = sb.drawn_fraction();
     if sb.vertical {
         Rect::new(r.bottom, r.left, r.bottom + r.height() * f, r.right)
     } else {
@@ -489,7 +489,7 @@ fn bar_fill_rect(r: Rect, sb: &crate::widget::StatusBarState) -> Rect {
 fn bar_fill_uv(base: Option<TexCoords>, sb: &crate::widget::StatusBarState) -> TexCoords {
     // An affine base contributes its bounding edges (no live StatusBar uses one).
     let [l, r, t, b] = base.map(|tc| tc.edges()).unwrap_or([0.0, 1.0, 0.0, 1.0]);
-    let f = sb.fraction();
+    let f = sb.drawn_fraction();
     TexCoords::Rect(if sb.vertical {
         [l, r, b - (b - t) * f, b]
     } else {
