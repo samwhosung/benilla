@@ -228,7 +228,9 @@ fn resolve_service(
     TrainerService {
         spell_id: wire.spell,
         name: display.map(|d| d.name.clone()),
-        subtext: display.and_then(|d| d.rank.clone()),
+        // `0x4d8b50` answers the record's NameSubtext, "" for a rankless spell (`0x4d8b84`), and
+        // NULL without a Spell record (`0x4d8b58`), which `0x6f3890` pushes as nil.
+        subtext: display.map(|d| d.rank.clone().unwrap_or_default()),
         // Over the wire spell, like the name and subtext ([`service_icon`]).
         texture: service_icon(wire.spell, trainer_type, spells, icons, items, ask),
         description: service_description(wire, trainer_type, spells, items, ask, text),

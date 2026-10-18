@@ -109,7 +109,8 @@ pub struct TrainerService {
     pub spell_id: u32,
     /// The wire spell's name; `None` (before `Spell.dbc` loads) answers nil, shown as `UNKNOWN`.
     pub name: Option<String>,
-    /// The wire spell's rank text, such as "Rank 2".
+    /// The wire spell's NameSubtext, such as "Rank 2", "" for a rankless spell; `None` is no Spell
+    /// record and answers nil (`0x4d8b58`).
     pub subtext: Option<String>,
     pub texture: Option<String>,
     /// The expanded text; `None` answers nil (`0x4d9d90`).
@@ -502,10 +503,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let s = &t.services[si];
                     Ok(MultiValue::from_vec(vec![
                         opt_str(lua, s.name.as_ref())?,
-                        // The subText is the DBC's NameSubtext string, the empty string for a
-                        // spell without a rank (`0x4d8b50` -> `0x4d8e13`), never nil: a client's
-                        // FrameXML may `format` it before its nil guard.
-                        Value::String(lua.create_string(s.subtext.as_deref().unwrap_or(""))?),
+                        opt_str(lua, s.subtext.as_ref())?,
                         Value::String(lua.create_string(s.category.era_str())?),
                         Value::Integer(1),
                     ]))

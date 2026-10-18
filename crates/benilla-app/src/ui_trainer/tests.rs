@@ -465,7 +465,11 @@ fn display_name_is_the_wire_spell_not_the_taught_one() {
         &BTreeSet::new(),
     );
     assert_eq!(svc.name.as_deref(), Some("Apprentice Blacksmith"));
-    assert_eq!(svc.subtext.as_deref(), None);
+    assert_eq!(
+        svc.subtext.as_deref(),
+        Some(""),
+        "a rankless spell's NameSubtext is \"\" (0x4d8b84)"
+    );
     assert_ne!(
         spells.get(2020).map(|d| d.name.as_str()),
         spells.get(2018).map(|d| d.name.as_str()),
