@@ -240,60 +240,41 @@ impl Loader<'_> {
             }
             self.call(wrapper, "SetPushedTextOffset", (xy[0], xy[1]), dbg);
         }
-        // The per-state fonts, two spellings each; every occurrence applies, in document order.
-        for (children, method, which) in [
-            (
-                ["NormalFont", "NormalText"],
-                "SetTextFontObject",
-                LabelFont::Normal,
-            ),
-            (
-                ["HighlightFont", "HighlightText"],
-                "SetHighlightFontObject",
-                LabelFont::Highlight,
-            ),
-            (
-                ["DisabledFont", "DisabledText"],
-                "SetDisabledFontObject",
-                LabelFont::Disabled,
-            ),
-        ] {
-            for f in children_named_any(el, &children) {
-                // `<Font>`-typed elements (`0x778bf4` → `0x783c30`): `inherits=` and `font=` land
-                // in one slot and `font=` wins (`0x783d22`). `style=` is not 1.12 and is not read.
-                // A name no font holds is a load warning (`0x87a51c`, `0x783d38`), where the Lua
-                // setter raises.
-                for attr in ["inherits", "font"] {
-                    if let Some(name) = f.attr(attr) {
-                        // Once per name, as a FontString's miss (`apply_fontstring_font`).
-                        if let Err(e) = wrapper.call_method::<()>(method, name.to_string()) {
-                            self.warn_once(
-                                &format!("fontobj:{name}"),
-                                format!("{dbg}: <{} {attr}=\"{name}\">: {e}", f.tag),
-                            );
-                        }
-                    }
+        // The three embedded fonts and their colours, in document order (`0x7788c0`): each font
+        // element, two spellings each, loads into its font as a `<Font>` does (`0x778baf`,
+        // `0x778bf4` → `0x783c30`); each colour element (`0x6f23d0`) is that font's text colour.
+        // Deviation: `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends
+        // both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither
+        // could reach its state.
+        for child in &el.children {
+            let tag = child.tag.as_str();
+            let font = [
+                ("NormalFont", LabelFont::Normal),
+                ("NormalText", LabelFont::Normal),
+                ("HighlightFont", LabelFont::Highlight),
+                ("HighlightText", LabelFont::Highlight),
+                ("DisabledFont", LabelFont::Disabled),
+                ("DisabledText", LabelFont::Disabled),
+            ]
+            .into_iter()
+            .find(|(t, _)| tag.eq_ignore_ascii_case(t));
+            if let Some((_, which)) = font {
+                match crate::script::state_font_lua(self.lua, wrapper, which) {
+                    Ok(id) => self.load_font_node(child, id, "<unnamed>"),
+                    Err(e) => self.report.fault(format!("{dbg}: <{tag}>: {e}")),
                 }
-                // A `justifyH` here is a local write on that state's font, never the label
-                // (`0x783c30`); the button reads it to anchor a label it makes later (`0x778d20`).
-                if let Some(j) = f.attr("justifyH") {
-                    match crate::justify::parse_h(j) {
-                        crate::justify::Set::To(jh) => {
-                            if let Err(e) = crate::script::set_label_font_justify_h_lua(
-                                self.lua, wrapper, which, jh,
-                            ) {
-                                self.report
-                                    .fault(format!("{dbg}: <{}> justifyH: {e}", f.tag));
-                            }
-                        }
-                        // Reported, not modelled: the reference clears the axis on a cross-axis
-                        // token and raises on a non-token.
-                        _ => self.report.warnings.push(format!(
-                            "{dbg}: <{}> justifyH=\"{j}\" is not a horizontal token — ignored",
-                            f.tag
-                        )),
-                    }
-                }
+                continue;
+            }
+            let color = [
+                ("NormalColor", "SetTextColor"),
+                ("HighlightColor", "SetHighlightTextColor"),
+                ("DisabledColor", "SetDisabledTextColor"),
+            ]
+            .into_iter()
+            .find(|(t, _)| tag.eq_ignore_ascii_case(t));
+            if let Some((_, method)) = color {
+                let c = color_of(child);
+                self.call(wrapper, method, (c[0], c[1], c[2], c[3]), dbg);
             }
         }
     }

@@ -6,13 +6,13 @@
 
 use mlua::{Lua, MultiValue, ObjectLike, Table, Value};
 
+use super::font::FontId;
 use super::object::frame_handle_of;
 use super::region::region_wrapper;
-use super::{event, JustifyH, Model, RegionData};
-use crate::justify::Justify;
+use super::{event, Model, RegionData};
 use crate::order::DrawLayer;
 use crate::widget::{
-    ButtonFont, ButtonState, ButtonVisualState, FrameHandle, FrameKind, KindState, RegionHandle,
+    ButtonFonts, ButtonState, ButtonVisualState, FrameHandle, FrameKind, KindState, RegionHandle,
     RegionKind,
 };
 
@@ -92,80 +92,7 @@ impl Slot {
     }
 }
 
-/// The normal font's justify (`[button+0x390]`): its own `<NormalFont justifyH=>`, else its font
-/// object's, else CENTER. The label adopter anchors by it.
-fn normal_font_justify(model: &Model, bs: &ButtonState) -> Justify {
-    let mut word = Justify::default();
-    let inherited = || {
-        bs.normal_font
-            .as_deref()
-            .and_then(|n| model.font_object(n))
-            .and_then(|fo| fo.justify)
-            .map(|j| j.paint_h())
-    };
-    if let Some(j) = bs.normal_justify_h.or_else(inherited) {
-        word.set_h(j);
-    }
-    word
-}
-
-/// `SetFontString`'s tail (`0x778d20`), which `SetText` also creates its label through
-/// (`0x778dc0`): an unanchored label anchors LEFT, RIGHT or CENTER by the normal font's justify,
-/// never its own (`+0x120`, CENTER on a fresh string), then takes the per-state font (`0x779810`).
-fn adopt_label(model: &mut Model, owner: FrameHandle, rh: RegionHandle) {
-    let point = {
-        let Some(frame) = model.arena.frame(owner) else {
-            return;
-        };
-        let KindState::Button(bs) = &frame.kind_state else {
-            return;
-        };
-        super::region::justify_anchor_point(normal_font_justify(model, bs).0)
-    };
-    super::region::anchor_unanchored_at(model, rh, point);
-    apply_normal_font(model, owner);
-    refresh_label(model, owner);
-}
-
-/// The label refresh (`0x779810`) at the points where the reference runs it outside a state change
-/// ([`ButtonState::refresh_label`]); a no-op on any frame but a Button.
-pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
-    if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
-        bs.refresh_label();
-    }
-}
-
-/// Link the label to the normal font object and local justify, the reference's `0x779810` →
-/// `0x770c60`, so its `GetFont` answers what it paints; the stock `DropDownList1` reads it
-/// (`UIDropDownMenu.xml:11`). Deviation: a hovered or disabled label still reports the normal
-/// font, since the state fonts are overlaid at paint and a link made here would outlive the state.
-/// `font::repaint` keeps what the label set itself (its inherit mask, `CSimpleFontString+0xd4`),
-/// and the local justify obeys the same mask.
-fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
-    let (rh, name, local_justify) = {
-        let Some(frame) = model.arena.frame(owner) else {
-            return;
-        };
-        let KindState::Button(bs) = &frame.kind_state else {
-            return;
-        };
-        let Some(rh) = bs.text else {
-            return;
-        };
-        (rh, bs.normal_font.clone(), bs.normal_justify_h)
-    };
-    let to = name.as_deref().and_then(|n| model.fonts.id(n));
-    super::font::link_region(model, rh, to);
-    let d = model.region_data.entry(rh).or_default();
-    if let Some(j) = local_justify {
-        if d.font_mask.has(super::FontMask::JUSTIFY) {
-            d.justify.set_h(j);
-        }
-    }
-    model.touch_measure(rh);
-}
-
-/// Which of the button's three embedded font instances a `<…Font>` element writes.
+/// Which of the button's three embedded fonts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LabelFont {
     Normal,
@@ -173,37 +100,175 @@ pub(crate) enum LabelFont {
     Disabled,
 }
 
-/// The loader's `<NormalFont justifyH=>` and kin: `LoadXML` (`0x7788c0`) runs the `<Font>` loader
-/// (`0x783c30`) on the embedded font, so the justify is its own, not inherited; no Lua verb
-/// writes it. An adopted label keeps its anchor and takes the new normal justify.
-pub(crate) fn set_label_font_justify_h_lua(
-    lua: &Lua,
-    wrapper: &Table,
-    which: LabelFont,
-    j: JustifyH,
-) -> mlua::Result<()> {
-    let owner = frame_handle_of(lua, wrapper)?;
-    with_button(lua, wrapper, |bs| match which {
-        LabelFont::Normal => bs.normal_justify_h = Some(j),
-        LabelFont::Highlight => bs.highlight_justify_h = Some(j),
-        LabelFont::Disabled => bs.disabled_justify_h = Some(j),
-    })?;
-    if which == LabelFont::Normal {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        apply_normal_font(&mut model, owner);
+impl LabelFont {
+    fn of(self, f: ButtonFonts) -> FontId {
+        match self {
+            LabelFont::Normal => f.normal,
+            LabelFont::Highlight => f.highlight,
+            LabelFont::Disabled => f.disabled,
+        }
     }
+}
+
+/// Button `h`'s three embedded fonts (normal `+0x33c`, highlight `+0x3b8`, disabled `+0x434`),
+/// made empty on first use, which is the constructor's state; `None` for any frame but a Button.
+pub(super) fn fonts(model: &mut Model, h: FrameHandle) -> Option<ButtonFonts> {
+    match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::Button(bs)) if bs.fonts.is_some() => return bs.fonts,
+        Some(KindState::Button(_)) => {}
+        _ => return None,
+    }
+    let made = ButtonFonts {
+        normal: model.fonts.anonymous(),
+        highlight: model.fonts.anonymous(),
+        disabled: model.fonts.anonymous(),
+    };
+    if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        bs.fonts = Some(made);
+    }
+    Some(made)
+}
+
+/// [`fonts`] for a Lua receiver.
+fn fonts_of(lua: &Lua, this: &Table) -> mlua::Result<(FrameHandle, ButtonFonts)> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let f = fonts(&mut model, h).ok_or_else(|| mlua::Error::runtime("not a Button"))?;
+    Ok((h, f))
+}
+
+/// The loader's handle on one embedded font, which `<NormalFont>` and kin load into (`0x778baf`,
+/// `0x778bf4` → `0x783c30`).
+pub(crate) fn state_font_lua(lua: &Lua, wrapper: &Table, which: LabelFont) -> mlua::Result<FontId> {
+    Ok(which.of(fonts_of(lua, wrapper)?.1))
+}
+
+/// `SetFontString`'s tail (`0x778d20`), which `SetText` also creates its label through
+/// (`0x778dc0`): an unanchored label anchors LEFT, RIGHT or CENTER by the normal font's justify
+/// word (`[button+0x390]`, the constructor's CENTER until the font holds one), never its own
+/// (`+0x120`), then the label refresh links it to the state's font (`0x778daa`).
+fn adopt_label(model: &mut Model, owner: FrameHandle, rh: RegionHandle) {
+    let Some(f) = fonts(model, owner) else {
+        return;
+    };
+    let word = model.fonts.get(f.normal).block.justify.unwrap_or_default();
+    super::region::anchor_unanchored_at(model, rh, super::region::justify_anchor_point(word.0));
+    refresh_label(model, owner);
+}
+
+/// The label refresh (`0x779810`) at the points where the reference runs it outside a state change
+/// ([`ButtonState::refresh_label`]), its offset and its font; a no-op on any frame but a Button.
+pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
+    if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        bs.refresh_label();
+    }
+    relink_label(model, h);
+}
+
+/// The label refresh's font half (`0x779810` → `0x770c60` on the label's `+0xcc`, `0x779878`): the
+/// disabled font in state 0 (`0x77985c`), else the highlight font while the HIGHLIGHT layer is on
+/// (`+0x1a8`, `0x77983c`), else the normal one. The link applies every group the font holds
+/// through the label's mask, so a state font that holds no colour leaves the colour the last one
+/// gave, and a label's own setter outlasts every state. Here the layer is on while the cursor is
+/// over the button or `LockHighlight` holds, as the highlight texture draws. Relinking the font it
+/// already follows does nothing (`0x770c6a`), so the edges that move nothing cost one compare.
+fn relink_label(model: &mut Model, h: FrameHandle) {
+    let (rh, state, locked) = match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::Button(bs)) => match bs.text {
+            Some(rh) => (rh, bs.button_state(), bs.locked_highlight),
+            None => return,
+        },
+        _ => return,
+    };
+    let Some(f) = fonts(model, h) else {
+        return;
+    };
+    let to = if state == ButtonVisualState::Disabled {
+        f.disabled
+    } else if locked || model.mouseover == Some(h) {
+        f.highlight
+    } else {
+        f.normal
+    };
+    super::font::link_region(model, rh, Some(to));
+}
+
+/// `Set{Text,Highlight,Disabled}FontObject(font | "font" | nil)` (`0x780400`, `0x780700`,
+/// `0x780580`): the shared `0x79ef10` on that embedded font, whose texts name the button
+/// (`0x87c5fc` and kin, `<unnamed>` for none), so a miss raises and no dead name is stored. nil
+/// unlinks the font and keeps what it took.
+fn link_state_font(
+    lua: &Lua,
+    this: &Table,
+    which: LabelFont,
+    args: &MultiValue,
+) -> mlua::Result<()> {
+    let who = super::font::c_name(lua, this);
+    let to = super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
+    let (_, f) = fonts_of(lua, this)?;
+    let id = which.of(f);
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if to.is_some_and(|to| super::font::would_loop(&model, id, to)) {
+        return Err(mlua::Error::runtime(format!(
+            "{who}:SetFontObject(): Can't create a font object loop"
+        )));
+    }
+    super::font::link_font(&mut model, id, to);
     Ok(())
 }
 
-/// A state font setter's argument (`0x780400`, `0x780700`, `0x780580`, all into `0x79ef10`): a
-/// font object, nil, or a name looked up at once (`0x783870`, `0x79efe1`), a miss raising
-/// `<button>:SetFontObject(): Couldn't find font named <name>` (`0x87c5fc`, the button's name or
-/// `<unnamed>`, `0x84c7f0`), so no dead name is stored.
-fn state_font_arg(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<Option<String>> {
-    let who = super::font::c_name(lua, this);
-    let id = super::font::font_arg(lua, &who, super::font::Verb::SetFontObject, args.front())?;
+/// `Get{Text,Highlight,Disabled}FontObject()` (`0x7804c0`, `0x7807c0`, `0x780640` → `0x79f090`):
+/// the font that embedded font follows, or nil.
+fn state_font_object(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<Value> {
+    let (_, f) = fonts_of(lua, this)?;
+    let parent = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .fonts
+        .get(which.of(f))
+        .parent;
+    match parent {
+        Some(p) => Ok(Value::Table(super::font::wrapper(lua, p)?)),
+        None => Ok(Value::Nil),
+    }
+}
+
+/// `Set{Text,Highlight,Disabled}TextColor(r, g, b [, a])` (`0x778e20`, `0x778ec0`, `0x778e70`):
+/// the embedded font's colour, its own bit cleared and the change pushed to the label.
+fn set_state_color(
+    lua: &Lua,
+    this: &Table,
+    which: LabelFont,
+    (r, g, b, a): (Value, Value, Value, Value),
+) -> mlua::Result<()> {
+    let a = super::object::alpha_f32(lua, &a);
+    // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
+    let (r, g, b) = (
+        super::object::tonumber_f32(lua, &r),
+        super::object::tonumber_f32(lua, &g),
+        super::object::tonumber_f32(lua, &b),
+    );
+    let (_, f) = fonts_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    super::font::set(&mut model, which.of(f), super::FontMask::COLOR, |fo| {
+        fo.color = Some([r, g, b, a]);
+    });
+    Ok(())
+}
+
+/// `Get{Text,Highlight,Disabled}TextColor()` (`0x781100`, `0x781800`, `0x781480`): four numbers,
+/// the embedded font's colour (`+0x58`), its own or what its font pushed, else the constructor's
+/// white.
+fn state_color(lua: &Lua, this: &Table, which: LabelFont) -> mlua::Result<(f32, f32, f32, f32)> {
+    let (_, f) = fonts_of(lua, this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    Ok(id.and_then(|id| model.fonts.get(id).name.clone()))
+    let c = model
+        .fonts
+        .get(which.of(f))
+        .block
+        .color
+        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    Ok((c[0], c[1], c[2], c[3]))
 }
 
 /// Run `f` over a frame's Button state under one short write borrow. It moves no state, only an
@@ -233,8 +298,11 @@ fn with_button_shown(
     f: impl FnOnce(&mut ButtonState) -> crate::widget::ShownWrites,
 ) -> mlua::Result<()> {
     let writes = with_button(lua, this, f)?;
+    let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     super::region::apply_shown_writes(&mut model, writes);
+    // A state change ends in the label refresh (`0x7797fc`).
+    relink_label(&mut model, h);
     Ok(())
 }
 
@@ -261,6 +329,7 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
         frame.disabled_layers |= bit;
     }
     super::region::apply_shown_writes(&mut model, writes);
+    relink_label(&mut model, h);
     Ok(())
 }
 
@@ -277,6 +346,7 @@ pub(super) fn edge(
         _ => return,
     };
     super::region::apply_shown_writes(model, writes);
+    relink_label(model, h);
 }
 
 /// Whether a hover edge on `h` reaches the base notify, the HIGHLIGHT layer and the Lua
@@ -714,39 +784,59 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // The per-state label fonts, and `<NormalFont>` and kin through the loader. Each takes a font
-    // object, its name or nil, stored by name: extract re-resolves the current state's font every
-    // frame, so a state change or a later edit to the object reaches the label.
-    m.set(
-        "SetTextFontObject",
-        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
-            let name = state_font_arg(lua, &this, &args)?;
-            let owner = frame_handle_of(lua, &this)?;
-            with_button(lua, &this, |bs| bs.normal_font = name)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            apply_normal_font(&mut model, owner);
-            Ok(())
-        })?,
-    )?;
-    m.set(
-        "SetHighlightFontObject",
-        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
-            let name = state_font_arg(lua, &this, &args)?;
-            with_button(lua, &this, |bs| bs.highlight_font = name)
-        })?,
-    )?;
-    m.set(
-        "SetDisabledFontObject",
-        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
-            let name = state_font_arg(lua, &this, &args)?;
-            with_button(lua, &this, |bs| bs.disabled_font = name)
-        })?,
-    )?;
+    // The three embedded fonts, one verb family each: the font object, the text colour.
+    for (which, set_obj, get_obj, set_color, get_color) in [
+        (
+            LabelFont::Normal,
+            "SetTextFontObject",
+            "GetTextFontObject",
+            "SetTextColor",
+            "GetTextColor",
+        ),
+        (
+            LabelFont::Highlight,
+            "SetHighlightFontObject",
+            "GetHighlightFontObject",
+            "SetHighlightTextColor",
+            "GetHighlightTextColor",
+        ),
+        (
+            LabelFont::Disabled,
+            "SetDisabledFontObject",
+            "GetDisabledFontObject",
+            "SetDisabledTextColor",
+            "GetDisabledTextColor",
+        ),
+    ] {
+        m.set(
+            set_obj,
+            lua.create_function(move |lua, (this, args): (Table, MultiValue)| {
+                link_state_font(lua, &this, which, &args)
+            })?,
+        )?;
+        m.set(
+            get_obj,
+            lua.create_function(move |lua, this: Table| state_font_object(lua, &this, which))?,
+        )?;
+        m.set(
+            set_color,
+            lua.create_function(
+                move |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                    set_state_color(lua, &this, which, (r, g, b, a))
+                },
+            )?,
+        )?;
+        m.set(
+            get_color,
+            lua.create_function(move |lua, this: Table| state_color(lua, &this, which))?,
+        )?;
+    }
 
-    // SetFont(file, height [, flags]) (`0x780880`) sets all three embedded fonts and returns
-    // nothing, discarding the shared `0x79f210`'s load result. It never touches the label
-    // (`+0x338`), so creates none: extract applies the stored font to whatever label exists. The
-    // arguments pass the shared gate, which names the button in its usage line.
+    // SetFont(file, height [, flags]) (`0x780880`) sets the normal, disabled and highlight fonts in
+    // that order (`0x780927`, `0x78094e`, `0x78096e`), each through the shared `0x79f210`, and
+    // returns nothing. The label takes it by the push, as it follows one of the three; with no
+    // label there is nothing to push to. The arguments pass the shared gate, which names the
+    // button in its usage line.
     m.set(
         "SetFont",
         lua.create_function(
@@ -761,132 +851,51 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !super::font_block::instance_loads(lua, &path, height) {
                     return Ok(());
                 }
-                let flags = flags.as_str().to_string();
-                with_button(lua, &this, |bs| {
-                    bs.font = Some(ButtonFont {
-                        path,
-                        height,
-                        flags,
-                        monochrome,
-                    })
-                })
+                let (_, f) = fonts_of(lua, &this)?;
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                for id in [f.normal, f.disabled, f.highlight] {
+                    super::font::set(&mut model, id, super::FontMask::FONT, |fo| {
+                        fo.font = Some(path.clone());
+                        fo.height = Some(height);
+                        fo.outline = flags;
+                        fo.monochrome = monochrome;
+                    });
+                }
+                Ok(())
             },
         )?,
     )?;
-    // GetFont() (`0x7809a0` → `0x79f3b0`) → file, height, flags off the normal font, else the
-    // object it inherits (`<NormalFont>`, `SetTextFontObject`); always three values.
+    // GetFont() (`0x7809a0` → `0x79f3b0`) → file, height, flags off the normal font alone
+    // (`0x780a41`): its own, or what it follows pushed; nil, 0, "" when it holds none.
     m.set(
         "GetFont",
         lua.create_function(|lua, this: Table| {
-            let (own, inherits) =
-                with_button(lua, &this, |bs| (bs.font.clone(), bs.normal_font.clone()))?;
-            let (path, height, flags) = match own {
-                Some(f) => (Some(f.path), Some(f.height), f.flags),
-                None => {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let fo = inherits.and_then(|n| model.font_object(&n));
-                    (
-                        fo.and_then(|f| f.font.clone()),
-                        fo.and_then(|f| f.height),
-                        fo.map(|f| f.outline)
-                            .unwrap_or_default()
-                            .as_str()
-                            .to_string(),
-                    )
-                }
+            let (_, f) = fonts_of(lua, &this)?;
+            let block = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.fonts.get(f.normal).block.clone()
             };
-            let path = match path {
+            let path = match block.font {
                 Some(p) => Value::String(lua.create_string(&p)?),
                 None => Value::Nil,
             };
-            Ok((path, height, flags))
+            Ok((path, block.height.unwrap_or(0.0), block.outline.as_str()))
         })?,
-    )?;
-
-    // The per-state label colours: a set one paints over the state font's colour at extract.
-    m.set(
-        "SetTextColor",
-        lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
-                with_button(lua, &this, |bs| bs.normal_color = Some([r, g, b, a]))
-            },
-        )?,
-    )?;
-    // GetTextColor() (`0x781100`) → r, g, b, a, four values, off the normal font: its own colour,
-    // else the inherited object's (`<NormalFont>`, `SetTextFontObject`), else white.
-    m.set(
-        "GetTextColor",
-        lua.create_function(|lua, this: Table| {
-            let (own, inherits) =
-                with_button(lua, &this, |bs| (bs.normal_color, bs.normal_font.clone()))?;
-            let c = own.unwrap_or_else(|| {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                inherits
-                    .and_then(|n| model.font_object(&n))
-                    .and_then(|f| f.color)
-                    .unwrap_or([1.0, 1.0, 1.0, 1.0])
-            });
-            Ok((c[0], c[1], c[2], c[3]))
-        })?,
-    )?;
-    m.set(
-        "SetHighlightTextColor",
-        lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
-                with_button(lua, &this, |bs| bs.highlight_color = Some([r, g, b, a]))
-            },
-        )?,
-    )?;
-    m.set(
-        "SetDisabledTextColor",
-        lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = super::object::alpha_f32(lua, &a);
-                // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
-                let (r, g, b) = (
-                    super::object::tonumber_f32(lua, &r),
-                    super::object::tonumber_f32(lua, &g),
-                    super::object::tonumber_f32(lua, &b),
-                );
-                with_button(lua, &this, |bs| bs.disabled_color = Some([r, g, b, a]))
-            },
-        )?,
     )?;
 
     // LockHighlight (`0x782840`) and UnlockHighlight: the highlight shows regardless of hover,
     // then the label refresh (`0x495a98`).
-    m.set(
-        "LockHighlight",
-        lua.create_function(|lua, this: Table| {
-            with_button(lua, &this, |bs| {
-                bs.locked_highlight = true;
-                bs.refresh_label();
-            })
-        })?,
-    )?;
-    m.set(
-        "UnlockHighlight",
-        lua.create_function(|lua, this: Table| {
-            with_button(lua, &this, |bs| {
-                bs.locked_highlight = false;
-                bs.refresh_label();
-            })
-        })?,
-    )?;
+    for (name, on) in [("LockHighlight", true), ("UnlockHighlight", false)] {
+        m.set(
+            name,
+            lua.create_function(move |lua, this: Table| {
+                let h = frame_handle_of(lua, &this)?;
+                with_button(lua, &this, |bs| bs.locked_highlight = on)?;
+                refresh_label(&mut lua.app_data_mut::<Model>().expect("model app_data"), h);
+                Ok(())
+            })?,
+        )?;
+    }
 
     // SetPushedTextOffset(x, y) (`0x782030`): two numbers (`lua_isnumber`, `0x7820c2`/`0x7820d3`),
     // else `Usage: <name>:SetPushedTextOffset(x, y)` (`0x87a308`); each stored in layout units

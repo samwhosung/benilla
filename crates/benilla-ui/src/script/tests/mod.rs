@@ -8,6 +8,7 @@ mod anchor_slots;
 mod anchors;
 mod backdrop;
 mod button;
+mod button_fonts;
 mod capture;
 mod channel;
 mod chat_bubble;

@@ -77,33 +77,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
     ("SetBlipTexture", "Minimap", "the same"),
     ("SetIconTexture", "Minimap", "the same"),
     ("SetPlayerModel", "Minimap", "the same"),
-    // ── The Button font-object and text-colour family ──
-    // `button.rs` keeps this font state but publishes none of it; nothing calls these.
-    (
-        "GetDisabledFontObject",
-        "Button CheckButton LootButton",
-        "the button font-state family; no caller anywhere measured",
-    ),
-    (
-        "GetDisabledTextColor",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
-    (
-        "GetHighlightFontObject",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
-    (
-        "GetHighlightTextColor",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
-    (
-        "GetTextFontObject",
-        "Button CheckButton LootButton",
-        "the same family",
-    ),
     // ── EditBox mode read-backs ──
     (
         "IsAutoFocus",

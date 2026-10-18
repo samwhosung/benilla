@@ -85,6 +85,11 @@ impl Fonts {
         id
     }
 
+    /// A new unnamed font, a widget's own.
+    pub(crate) fn anonymous(&mut self) -> FontId {
+        self.push_node(None)
+    }
+
     fn push_node(&mut self, name: Option<String>) -> FontId {
         let id = FontId(u32::try_from(self.nodes.len()).expect("fewer than 2^32 fonts"));
         self.nodes.push(FontNode {
@@ -234,12 +239,6 @@ pub(super) fn font_arg(
 }
 
 // ── The live link ────────────────────────────────────────────────────────────────────────────
-
-/// Copy every group a font object holds onto one region through its mask, as a link does
-/// (`0x770c60` marks all five changed, `0x770d0c`): [`apply`] with every group.
-pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
-    apply(d, fo, FontMask::ALL);
-}
 
 /// `ApplyFontBlock 0x770800`: write each of `groups` that the font holds (its set bits, `0x770826`)
 /// and the region's mask passes (`word & mask`, `0x770824`). An empty `CreateFont` font holds

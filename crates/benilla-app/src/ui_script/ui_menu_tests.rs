@@ -107,8 +107,11 @@ fn a_menu_rows_label_reports_the_normal_fonts_justify_and_object() {
         "LEFT"
     );
     assert!(
-        s.eval::<bool>("return ChatMenuButton1:GetFontString():GetFontObject() == GameFontNormal")
-            .unwrap(),
-        "the label inherits the button's normal font object"
+        s.eval::<bool>(
+            "return ChatMenuButton1:GetFontString():GetFontObject():GetFontObject() \
+             == GameFontNormal"
+        )
+        .unwrap(),
+        "the label follows the button's normal font, which follows GameFontNormal"
     );
 }

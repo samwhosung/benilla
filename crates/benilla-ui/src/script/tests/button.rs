@@ -744,15 +744,19 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
         "unlocked: back to the difficulty colour"
     );
 
+    // nil only unlinks (`0x770cb8`): the highlight font keeps the white it took.
     s.run(r#"b:SetHighlightFontObject(nil); b:SetText("Rough Copper Vest")"#)
         .unwrap();
     s.resolve();
     s.mouse_move(150.0, 110.0);
     assert_eq!(
         label_color(&mut s),
-        Some([1.0, 0.5, 0.25, 1.0]),
-        "no <HighlightFont> → hover changes nothing"
+        Some([1.0, 1.0, 1.0, 1.0]),
+        "an unlinked highlight font still holds its colour"
     );
+    assert!(s
+        .eval::<bool>("return b:GetHighlightFontObject() == nil")
+        .unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -1010,8 +1014,13 @@ fn a_lazily_made_label_is_anchored_by_the_normal_fonts_justify() {
             .unwrap(),
         "LEFT"
     );
+    // The label follows the button's own normal font (`0x779878`), which follows `ProbeFont`.
     assert!(s
-        .eval::<bool>("return left:GetFontString():GetFontObject() == ProbeFont")
+        .eval::<bool>(
+            "local f = left:GetFontString():GetFontObject() \
+             return f ~= ProbeFont and f:GetFontObject() == ProbeFont \
+             and left:GetTextFontObject() == ProbeFont"
+        )
         .unwrap());
 
     s.run(
@@ -1620,6 +1629,7 @@ fn state_font_setters_raise_on_an_unknown_name() {
     s.register_font_object(
         "KnownFont",
         FontObject {
+            font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
         },
@@ -1661,7 +1671,7 @@ fn state_font_setters_raise_on_an_unknown_name() {
         report
             .warnings
             .iter()
-            .any(|w| w.contains("Couldn't find font named NoSuchFont")),
+            .any(|w| w.contains("Couldn't find inherited font: NoSuchFont")),
         "{:?}",
         report.warnings
     );

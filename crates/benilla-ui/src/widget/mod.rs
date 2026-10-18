@@ -127,10 +127,11 @@ impl<T> Arena<T> {
 // ── Widget kinds ─────────────────────────────────────────────────────────────────────────────
 
 mod kinds;
+pub(crate) use kinds::ButtonFonts;
 pub use kinds::{
     model_key, pane_clock_step_ms, slider_fraction, slider_grab, slider_set_value, ArmedSequence,
-    ButtonFont, ButtonState, ButtonVisualState, CharacterPane, ColorSelectState, CopyCamera,
-    EditAction, EditBoxState, EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate,
+    ButtonState, ButtonVisualState, CharacterPane, ColorSelectState, CopyCamera, EditAction,
+    EditBoxState, EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate,
     MessageFrameState, MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight,
     ModelPlayHead, ModelState, PaneArm, PaneCopy, RegionKind, ScrollFrameState,
     ScrollingMessageState, SequenceFacts, ShownWrites, SliderState, StatusBarState, TooltipAnchor,

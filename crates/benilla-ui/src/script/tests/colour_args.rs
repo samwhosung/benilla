@@ -51,21 +51,17 @@ fn text_and_shadow_colour_setters_coerce_numeric_strings() {
 
 #[test]
 fn button_highlight_and_disabled_colours_coerce_numeric_strings() {
-    let s = script();
-    s.run(r#"B = CreateFrame("Button", "B")"#).unwrap();
-    s.run(&format!(
-        "B:SetHighlightTextColor({CHANNELS}) B:SetDisabledTextColor({CHANNELS})"
-    ))
-    .unwrap();
-    let t: mlua::Table = s.lua().globals().get("B").unwrap();
-    let h = crate::script::object::frame_handle_of(s.lua(), &t).unwrap();
-    let model = s.model_ref();
-    let Some(crate::widget::KindState::Button(bs)) = model.arena.frame(h).map(|f| &f.kind_state)
-    else {
-        panic!("not a button");
-    };
-    assert_eq!(bs.highlight_color, Some([1.0, 0.5, 0.0, 1.0]));
-    assert_eq!(bs.disabled_color, Some([1.0, 0.5, 0.0, 1.0]));
+    let setup = r#"B = CreateFrame("Button", "B")"#;
+    check(
+        setup,
+        "B:SetHighlightTextColor(ARGS)",
+        "B:GetHighlightTextColor()",
+    );
+    check(
+        setup,
+        "B:SetDisabledTextColor(ARGS)",
+        "B:GetDisabledTextColor()",
+    );
 }
 
 #[test]

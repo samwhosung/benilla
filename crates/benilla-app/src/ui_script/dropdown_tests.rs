@@ -123,11 +123,15 @@ fn a_button_label_reports_the_font_object_its_button_set() {
         label_face.is_some_and(|f| f.ends_with(".TTF")),
         "the row label must report a real font face through its button's font object"
     );
+    // The label follows its button's own normal font (`0x779878`), a Font object the corpus can
+    // index at once, which follows `GameFontHighlightSmall` (`UIDropDownMenuTemplates.xml:153`).
     assert!(
         s.eval::<bool>(
-            "return DropDownList1Button1NormalText:GetFontObject() == GameFontHighlightSmall"
+            "local f = DropDownList1Button1NormalText:GetFontObject() \
+             return f:GetObjectType() == 'Font' and f:GetFontObject() == GameFontHighlightSmall \
+             and DropDownList1Button1:GetTextFontObject() == GameFontHighlightSmall"
         )
         .unwrap(),
-        "the label must hand back the font OBJECT, which is what the corpus indexes immediately"
+        "the label must hand back a font OBJECT, which is what the corpus indexes immediately"
     );
 }

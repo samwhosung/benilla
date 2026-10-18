@@ -275,7 +275,7 @@ pub use tabard::{
 pub use video_pairs::VIDEO_PAIR_CVARS;
 pub use worldmap_arrow::ARROW_MODEL;
 
-pub(crate) use button::{set_label_font_justify_h_lua, LabelFont};
+pub(crate) use button::{state_font_lua, LabelFont};
 pub use inspect::{InspectView, UnitReach};
 pub use item_stats::{item_usable, ItemSetView, ItemTemplateView, PlayerReqState};
 pub use item_text::ItemTextState;

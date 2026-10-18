@@ -41,15 +41,14 @@ pub(super) fn usage_name(this: &Table) -> String {
 
 /// Whether FontString `rh` has a font, the reference's non-null `CSimpleFontString+0xe0`. A
 /// string starts with none (`0x770d30`) and gets one only from its own `SetFont` or XML `font=`,
-/// or from the font object it follows (`inherits=`, `font=`, `SetFontObject`, a Button's normal
-/// font); `SetFont` with a height of 0 frees it (`0x7715b3`). Without one, Lua's `SetText` raises
+/// or from the font it follows (`inherits=`, `font=`, `SetFontObject`, a Button's state font);
+/// `SetFont` with a height of 0 frees it (`0x7715b3`). Without one, Lua's `SetText` raises
 /// (`0x79d7e5`), the measures answer 0 (`0x772bd0`, `0x7728b6`, `0x7729d4`) and nothing is built
 /// or drawn (`0x7724f8`, `0x772e5b`).
 ///
-/// [`RegionData::font_path`](super::RegionData::font_path) is `None` exactly then, but for two
-/// labels extract paints: a Button's label follows the button's embedded normal font, which
-/// `Button:SetFont` fills (`0x780880`), and an EditBox's text string runs off the box's own font
-/// instance, whose font-less state is not modelled here.
+/// [`RegionData::font_path`](super::RegionData::font_path) is `None` exactly then, but for an
+/// EditBox's text string, which runs off the box's own font instance, whose font-less state is
+/// not modelled here.
 pub(super) fn has_font(model: &Model, rh: RegionHandle) -> bool {
     use crate::widget::KindState;
     let Some(d) = model.region_data.get(&rh) else {
@@ -65,18 +64,7 @@ pub(super) fn has_font(model: &Model, rh: RegionHandle) -> bool {
     else {
         return false;
     };
-    match &owner.kind_state {
-        KindState::Button(bs) if bs.text == Some(rh) && d.font_mask.has(super::FontMask::FONT) => {
-            bs.font.is_some()
-                || bs
-                    .normal_font
-                    .as_deref()
-                    .and_then(|n| model.font_object(n))
-                    .is_some_and(|fo| fo.font.is_some())
-        }
-        KindState::EditBox(eb) => eb.text_region == Some(rh),
-        _ => false,
-    }
+    matches!(&owner.kind_state, KindState::EditBox(eb) if eb.text_region == Some(rh))
 }
 
 /// `SetFont`'s three arguments as the shared implementation reads them.
