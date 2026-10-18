@@ -1567,3 +1567,47 @@ fn click_maps_its_argument_to_the_name_onclick_sees() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A checked texture made from a path is ADD (`0x7852f8`, `0x785408`); one reloaded keeps its
+/// blend (`0x785295`); one from XML keeps its own `alphaMode`, BLEND by default.
+#[test]
+fn a_checked_texture_made_from_a_path_is_additive() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|p| p != "missing"));
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <CheckButton name="XmlCheck">
+                <CheckedTexture file="Interface\Check"/>
+                <DisabledCheckedTexture file="Interface\DisabledCheck"/>
+            </CheckButton>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    s.run(
+        r#"
+        assert(XmlCheck:GetCheckedTexture():GetBlendMode() == "BLEND", "xml checked")
+        assert(XmlCheck:GetDisabledCheckedTexture():GetBlendMode() == "BLEND", "xml disabled")
+        local cb = CreateFrame("CheckButton", "PathCheck")
+        cb:SetCheckedTexture("missing")
+        assert(cb:GetCheckedTexture() == nil, "an unloadable path makes nothing")
+        cb:SetCheckedTexture("Interface\\Check")
+        assert(cb:GetCheckedTexture():GetBlendMode() == "ADD", "path checked")
+        cb:SetDisabledCheckedTexture("Interface\\DisabledCheck")
+        assert(cb:GetDisabledCheckedTexture():GetBlendMode() == "ADD", "path disabled")
+        cb:GetCheckedTexture():SetBlendMode("BLEND")
+        cb:SetCheckedTexture("Interface\\Check2")
+        assert(cb:GetCheckedTexture():GetBlendMode() == "BLEND", "a reload keeps its blend")
+        cb:SetNormalTexture("Interface\\Up")
+        assert(cb:GetNormalTexture():GetBlendMode() == "BLEND", "a state texture")
+        -- Deviation: 1.12.1 would repaint the checked texture with B (`0x785388`).
+        local d = CreateFrame("CheckButton", "OwnSlot")
+        d:SetCheckedTexture("A"); d:SetDisabledCheckedTexture("B")
+        assert(d:GetCheckedTexture():GetTexture() == "A", "the checked texture keeps A")
+        assert(d:GetDisabledCheckedTexture():GetTexture() == "B", "B is the disabled-checked")
+    "#,
+    )
+    .unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

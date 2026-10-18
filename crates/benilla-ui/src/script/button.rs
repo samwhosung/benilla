@@ -477,6 +477,10 @@ fn set_slot_texture(
     // (`0x7702ac`). The slot's region made for this call is then destroyed without a blend or a
     // slot (`0x7790ce`, `0x7790fa`; `0x778f88`, `0x778fb7`), while an existing one (`0x77907c`) goes
     // on to the highlight's blend.
+    // Deviation: the disabled-checked leg (`0x785380`) tests and reloads the checked slot
+    // (`[+0x4e0]`, `0x785388`/`0x7853a5`), a copy of the checked leg's (`0x785270`), so in 1.12.1
+    // a check box with a checked texture repaints that one and never gets its disabled-checked
+    // texture from a path. benilla tests and reloads the slot the method names.
     let existing = with_button(lua, this, |bs| slot.get(bs))?.is_some();
     let resolvable = path.is_empty()
         || lua
@@ -502,9 +506,13 @@ fn set_slot_texture(
     }
     let data = model.region_data.entry(rh).or_default();
     // The highlight applies its blend on every path call, to the old region as to a new one
-    // (`0x779082`, `0x7790e6`), the old one even when its texture did not load.
+    // (`0x779082`, `0x7790e6`), the old one even when its texture did not load. A checked
+    // texture made here is ADD (`0x7852f8`, `0x785408`), a reloaded one keeps its blend
+    // (`0x785295`); the state textures keep the constructor's BLEND (`0x778f10`).
     if let Some(blend) = blend {
         data.blend = blend;
+    } else if !existing && matches!(slot, Slot::Checked | Slot::DisabledChecked) {
+        data.blend = crate::script::BlendMode::Add;
     }
     model.note_art(rh);
     Ok(())
