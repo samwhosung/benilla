@@ -956,13 +956,13 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_inside.in_set(crate::ui_script::UiFeed),
                     // Before the script tick, so an addon's OnUpdate reads this frame's heading.
                     feed_minimap_player_facing.in_set(crate::ui_script::UiFeed),
-                    // After this frame's movement and stream, the art the tick set and
-                    // every drain that moves a group, death or marker record, before the paint
-                    // that draws the arrows, as the reference aims them inside its draw.
+                    // After this frame's movement (the plate driver's set is past it), the art
+                    // the tick set and every drain that moves a group, death or marker record,
+                    // before the paint that draws the arrows, as the reference aims them inside
+                    // its draw. Unordered against the terrain stream and the snap-hold release,
+                    // which touch nothing it reads, so the paint never waits on streaming.
                     feed_minimap_arrows
                         .after(crate::vplates::VPlateSet)
-                        .after(benilla_world::schedule::WorldStage::Stream)
-                        .after(crate::player::release_post_snap_hold)
                         .after(crate::ui_chat::ChatDrain)
                         .after(crate::ui_party::drain_party)
                         .after(crate::death::drain_death)
@@ -989,8 +989,7 @@ impl Plugin for MinimapPlugin {
                     // drains, so a ping from a slash handler goes against this frame's roster.
                     ping::send_own_pings
                         .after(crate::ui_chat::ChatDrain)
-                        .after(crate::ui_party::drain_party)
-                        .after(benilla_world::schedule::WorldStage::Stream),
+                        .after(crate::ui_party::drain_party),
                     // Before the script tick, so GameTimeFrame reads this frame's minute.
                     feed_game_time.in_set(crate::ui_script::UiFeed),
                     // In the feed, off the hover the last walk left; after the world drive only so
