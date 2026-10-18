@@ -84,7 +84,14 @@ impl LayoutUnits {
     /// (`0x7a1a54`..`0x7a1a78`).
     #[inline]
     pub fn edge(self, e: f32, s: f32) -> f64 {
-        let p = (f64::from(e) / f64::from(s) * self.scale()) as f32;
+        self.edge_wide(f64::from(e), s)
+    }
+
+    /// [`Self::edge`] of a length the caller computed at 53 bits, as the layout cache's writer
+    /// takes a difference of two edges (`0x49102d`..`0x49103c`).
+    #[inline]
+    pub fn edge_wide(self, e: f64, s: f32) -> f64 {
+        let p = (e / f64::from(s) * self.scale()) as f32;
         f64::from(p) / f64::from(self.k1)
     }
 

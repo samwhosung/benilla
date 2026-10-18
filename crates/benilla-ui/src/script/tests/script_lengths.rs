@@ -171,3 +171,52 @@ fn the_font_lengths_answer_through_the_getter_steps() {
         );
     }
 }
+
+/// The layout cache's writer takes the getter steps on the layout rect (`0x490fb3`..`0x491130`)
+/// before it rounds, so a half the store moved under or over rounds as the reference rounds it.
+/// At 4:3 the left edge reads 20.4999992 and the width 12.4999998, which round down; the top,
+/// `RN24(K2 + S(−30.5)) − K2`, reads −30.50003 and the height 11.500015, which round away.
+#[test]
+fn the_layout_cache_rounds_the_getter_steps() {
+    let mut s = vm();
+    s.run(
+        r#"local f = CreateFrame("Frame", "Saved", UIParent)
+           f:SetMovable(true) f:SetResizable(true)
+           f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20.5, -30.5)
+           f:SetWidth(12.5) f:SetHeight(11.5)
+           f:SetUserPlaced(true)"#,
+    )
+    .unwrap();
+    s.resolve();
+    let row = s
+        .user_placed_layouts()
+        .into_iter()
+        .find(|r| r.name == "Saved")
+        .expect("a row");
+    assert_eq!(
+        (row.x, row.y, row.width, row.height),
+        (Some(20), Some(-31), Some(12), Some(12))
+    );
+}
+
+/// `PingLocation` stores both offsets by `S` (`0x4eede6`, `0x4eee11`) before it divides them by
+/// the frame's stored height and width (slots 0x20 and 0x1c) and stores each fraction times the
+/// diameter as a float (`0x4eee2e`, `0x4eee3d`).
+#[test]
+fn ping_location_divides_the_stored_offsets() {
+    let mut s = vm();
+    s.run(r#"m = CreateFrame("Minimap", "Pinged") m:SetWidth(140) m:SetHeight(100)"#)
+        .unwrap();
+    s.set_minimap_player(Some((100.0, 200.0)));
+    let u = crate::layout::LayoutUnits::from_aspect(1024.0 / 768.0);
+    let d = 2.0 * f64::from(crate::widget::minimap_radius_yd(3, 3, false));
+    let st = |v: f32| f64::from(u.store(v));
+    for (x, y) in [(10.0f32, 20.0f32), (37.3, -51.7), (-3.1, 66.6), (12.9, 5.5)] {
+        s.run(&format!("m:PingLocation({x}, {y})")).unwrap();
+        let sent = s.take_minimap_pings_sent();
+        let second = f64::from((st(y) / st(140.0) * d) as f32);
+        let first = f64::from((-st(x) / st(100.0) * d) as f32);
+        let want = ((100.0 + second) as f32, (200.0 + first) as f32);
+        assert_eq!(sent, vec![want], "{x} {y}");
+    }
+}

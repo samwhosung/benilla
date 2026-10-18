@@ -98,7 +98,7 @@ impl super::UiScript {
                 settle_frame(self.lua(), h);
             }
             let model = self.model_ref();
-            let Some(r) = model.frame_rect(h) else {
+            let Some(&r) = model.frame_rects.get(&h) else {
                 continue;
             };
             let Some((movable, resizable, level)) = model
@@ -108,21 +108,26 @@ impl super::UiScript {
             else {
                 continue; // the resolve's script destroyed it
             };
-            let root = model.screen;
-            let scale = f64::from(eff_scale(&model, h));
-            let own = |v: f32| f64::from(v) / scale;
+            // Each leg is the getter steps on the layout rect over the frame's layout scale
+            // (`0x490fb3`..`0x490fbf`): the left edge alone, the top less the root's top, and the
+            // two spans, each difference at 53 bits.
+            let units = model.layout_units();
+            let root_top = f64::from(model.layout_space().extent().1);
+            let scale = eff_scale(&model, h);
+            let own = |v: f64| units.edge_wide(v, scale);
+            let wide = f64::from;
             let (x, y) = if movable {
                 (
-                    Some(round_offset(own(r.left - root.left))),
-                    Some(round_offset(own(r.top - root.top))),
+                    Some(round_offset(own(wide(r.left)))),
+                    Some(round_offset(own(wide(r.top) - root_top))),
                 )
             } else {
                 (None, None)
             };
             let (width, height) = if resizable {
                 (
-                    Some(round_extent(own(r.right - r.left))),
-                    Some(round_extent(own(r.top - r.bottom))),
+                    Some(round_extent(own(wide(r.right) - wide(r.left)))),
+                    Some(round_extent(own(wide(r.top) - wide(r.bottom)))),
                 )
             } else {
                 (None, None)

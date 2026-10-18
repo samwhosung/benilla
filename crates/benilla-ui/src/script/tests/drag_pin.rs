@@ -295,17 +295,18 @@ fn the_layout_cache_round_trips_the_pin() {
     assert!(fresh.errors().is_empty(), "{:?}", fresh.errors());
 }
 
-/// A drag that leaves the frame off the unit grid saves whole units: `X:`/`Y:` round half away
-/// from zero (`0x490fc4`–`0x490fdf`), and the apply seats the rounded spot.
+/// A drag that leaves the frame off the unit grid saves whole units: `X:`/`Y:` round to the
+/// nearest, a half away from zero (`0x490fc4`–`0x490fdf`), and the apply seats the rounded spot.
+/// The spot is off the half, where the getter steps on the rect decide which way it goes.
 #[test]
 fn a_sub_unit_drag_saves_and_restores_rounded() {
     let mut s = centred_box();
     s.run("Box:StartMoving()").unwrap();
-    s.mouse_move(430.25, 279.5);
+    s.mouse_move(430.25, 279.25);
     s.run("Box:StopMovingOrSizing()").unwrap();
     crate::assert_near!(
         anchor(&s),
-        pinned_at(330.25, -270.5),
+        pinned_at(330.25, -270.75),
         "the live pin is exact"
     );
     s.resolve();
@@ -313,7 +314,7 @@ fn a_sub_unit_drag_saves_and_restores_rounded() {
     assert_eq!(
         (saved[0].x, saved[0].y),
         (Some(330), Some(-271)),
-        "330.25 rounds down, -270.5 away from zero"
+        "330.25 rounds down, -270.75 away from zero"
     );
 
     let mut fresh = centred_box();

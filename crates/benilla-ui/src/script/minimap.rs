@@ -446,21 +446,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (mut first, mut second) = (0.0_f64, 0.0_f64);
             if let (Some(x), Some(y)) = (x, y) {
                 let h = this_minimap(lua, &arg(0))?;
-                let (w, ht) = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model
-                        .layout_inputs
-                        .get(&h)
-                        .map_or((0.0, 0.0), |i| (i.width, i.height))
-                };
-                first = -x / f64::from(ht);
-                second = y / f64::from(w);
+                // Both arguments are stored by `S` (`0x4eede6`, `0x4eee11`) and divided by the
+                // frame's stored height and width, the layout slots 0x20 and 0x1c.
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let u = model.layout_units();
+                let (w, ht) = model
+                    .layout_inputs
+                    .get(&h)
+                    .map_or((0.0, 0.0), |i| (i.width, i.height));
+                let stored = |v: f32| f64::from(u.store(v));
+                first = -stored(x as f32) / stored(ht);
+                second = stored(y as f32) / stored(w);
             }
             super::tick::verb(lua, |model| {
                 let d = 2.0 * f64::from(model.minimap.radius_yd());
+                // Each fraction times the diameter is stored as a float (`0x4eee2e`, `0x4eee3d`).
+                let (second, first) = (
+                    f64::from((second * d) as f32),
+                    f64::from((first * d) as f32),
+                );
                 let world = (
-                    (f64::from(player.0) + second * d) as f32,
-                    (f64::from(player.1) + first * d) as f32,
+                    (f64::from(player.0) + second) as f32,
+                    (f64::from(player.1) + first) as f32,
                 );
                 model.minimap_pings_sent.push(world);
                 if let Some((a, b)) = model.minimap.apply_ping(world) {
