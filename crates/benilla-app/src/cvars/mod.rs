@@ -1894,13 +1894,13 @@ mod tests {
                 "cameraTerrainTiltTimeMax 0",
                 "Value out of range (0.001000 - 300.000000)",
                 "cameraTerrainTiltTimeMax",
-                "10",
+                "10.0",
             ),
             (
                 "cameraTargetSmoothSpeed 0",
                 "Value out of range (0.100000 - 360.000000)",
                 "cameraTargetSmoothSpeed",
-                "90",
+                "90.0",
             ),
             (
                 "cameraBobbingSmoothSpeed 0",
@@ -1912,7 +1912,7 @@ mod tests {
                 "cameraYawMoveSpeed 400",
                 "Value out of range (0.100000 - 360.000000)",
                 "cameraYawMoveSpeed",
-                "180",
+                "180.0",
             ),
             (
                 "cameraSmoothStyle 4",

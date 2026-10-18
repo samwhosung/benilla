@@ -1893,7 +1893,13 @@ fn defaults_resets_the_controls_page_to_registered_defaults() {
         changes.contains(&("autoLootDefault".to_string(), "0".to_string())),
         "{changes:?}"
     );
-    assert_eq!(changes.len(), 2, "only the moved values queue: {changes:?}");
+    // The Mouse Look Speed row's pitch twin is written as the stock save writes it,
+    // `sliderValue/2` as a number (`UIOptionsFrame.lua:355-356`): "90" over the registered "90.0".
+    assert!(
+        changes.contains(&("cameraPitchMoveSpeed".to_string(), "90".to_string())),
+        "{changes:?}"
+    );
+    assert_eq!(changes.len(), 3, "only the moved values queue: {changes:?}");
     assert!(
         !s.eval::<bool>(
             "return BenillaOptionsFrameContainerBodyControlsRowStickyTargetCheck:GetChecked()"
@@ -3739,7 +3745,7 @@ fn the_max_camera_distance_slider_stores_a_factor_and_reads_out_yards() {
     assert_eq!(
         s.eval::<String>("return GetCVar(\"cameraDistanceMaxFactor\")")
             .unwrap(),
-        "1"
+        "1.0"
     );
     assert_eq!(
         s.eval::<String>(

@@ -11,18 +11,6 @@ use super::table::{all_rows, Reference};
 /// `same` rows whose shipped default is not yet the registered string, each with the issue that
 /// fixes it. The test fails on any other, and on a listed row that has come right.
 const KNOWN: &[(&str, &str)] = &[
-    ("MasterVolume", "#1278"),
-    ("SoundVolume", "#1278"),
-    ("cameraYawMoveSpeed", "#1278"),
-    ("cameraPitchMoveSpeed", "#1278"),
-    ("cameraDistanceMaxFactor", "#1278"),
-    ("cameraYawSmoothSpeed", "#1278"),
-    ("cameraPivotDYMin", "#1278"),
-    ("cameraTargetSmoothSpeed", "#1278"),
-    ("cameraTerrainTiltTimeMin", "#1278"),
-    ("cameraTerrainTiltTimeMax", "#1278"),
-    ("cameraBobbingLRAmplitude", "#1278"),
-    ("cameraBobbingUDAmplitude", "#1278"),
     ("WorldDetail", "#1279"),
     ("Sound_EnableSoundWhenGameIsInBG", "#545"),
     ("gamma", "#1281"),
