@@ -270,3 +270,144 @@ fn an_xml_texture_whose_file_fails_to_load_fills_green() {
     );
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
+
+const TEST_FONT: &str = r#"<Font name="LevelTestFont" font="Fonts\FRIZQT__.TTF" virtual="true">
+    <FontHeight><AbsValue val="12"/></FontHeight>
+</Font>"#;
+
+/// `0x770f40`: a `font=` file needs the node's own `<FontHeight>`, and a refused one returns before
+/// `spacing`, the justifies and the colour (`0x771191`); an empty `font=` is absent (`0x7710f7`).
+#[test]
+fn a_fontstring_font_file_needs_its_own_nodes_height_and_a_refusal_stops_the_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <FontString name="HeightTemplate" font="Fonts\ARIALN.TTF" virtual="true">
+                <FontHeight><AbsValue val="20"/></FontHeight>
+            </FontString>
+            <Frame name="Host">
+                <Layers><Layer>
+                    <FontString name="Control" inherits="LevelTestFont"/>
+                    <FontString name="Refused" inherits="LevelTestFont" font="Fonts\MORPHEUS.TTF"
+                                justifyH="LEFT" justifyV="TOP" spacing="3">
+                        <Color r="1" g="0" b="0"/>
+                    </FontString>
+                    <FontString name="LeansOnTemplate" inherits="HeightTemplate"
+                                font="Fonts\MORPHEUS.TTF"/>
+                    <FontString name="OwnWins" inherits="HeightTemplate" font="Fonts\MORPHEUS.TTF">
+                        <FontHeight><AbsValue val="16"/></FontHeight>
+                    </FontString>
+                    <FontString name="EmptyFont" inherits="LevelTestFont" font="">
+                        <FontHeight><AbsValue val="30"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    let paint = |name: &str| {
+        s.eval::<String>(&format!(
+            "local r, g, b = {name}:GetTextColor() \
+             return table.concat({{{name}:GetJustifyH(), {name}:GetJustifyV(), \
+             {name}:GetSpacing(), r, g, b}}, ' ')"
+        ))
+        .unwrap()
+    };
+    assert_eq!(paint("Refused"), paint("Control"), "nothing after the font");
+    let font = |name: &str| {
+        s.eval::<(String, f32)>(&format!(
+            "local f, h = {name}:GetFont() return f, h"
+        ))
+        .unwrap()
+    };
+    assert_eq!(font("LeansOnTemplate"), ("Fonts\\ARIALN.TTF".into(), 20.0));
+    assert_eq!(font("OwnWins"), ("Fonts\\MORPHEUS.TTF".into(), 16.0));
+    assert_eq!(font("EmptyFont"), font("Control"));
+    for name in ["Refused", "LeansOnTemplate"] {
+        let line = format!("FontString {name}: Missing font height in FontString element");
+        assert!(has_line(&report, &line), "{line}: {:?}", report.warnings);
+    }
+    assert_eq!(
+        report.warnings.len(),
+        2,
+        "no other line: {:?}",
+        report.warnings
+    );
+}
+
+/// `0x7713ca`-`0x771454`: a FontString's own `<Shadow>` takes its first `<Color>` over opaque black
+/// and its first `<Offset>` over (0.001, -0.001).
+#[test]
+fn a_fontstrings_own_shadow_element_is_read() {
+    let s = ui();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Frame name="Host">
+                <Layers><Layer>
+                    <FontString name="Shadowed" inherits="LevelTestFont">
+                        <Shadow>
+                            <Offset><AbsDimension x="2" y="-3"/></Offset>
+                            <Color r="1" g="0" b="0" a="0.5"/>
+                        </Shadow>
+                    </FontString>
+                    <FontString name="BareShadow" inherits="LevelTestFont"><Shadow/></FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    let shadow = |name: &str| {
+        s.eval::<Vec<f32>>(&format!(
+            "local x, y = {name}:GetShadowOffset() \
+             local r, g, b, a = {name}:GetShadowColor() return {{x, y, r, g, b, a}}"
+        ))
+        .unwrap()
+    };
+    assert_eq!(shadow("Shadowed"), vec![2.0, -3.0, 1.0, 0.0, 0.0, 0.5]);
+    assert_eq!(shadow("BareShadow"), vec![0.001, -0.001, 0.0, 0.0, 0.0, 1.0]);
+}
+
+/// `0x771006`-`0x771032`, `0x778c07`-`0x778c31`: an empty `text=` is skipped, so a template's text
+/// stands, and a global holding `""` shows its key.
+#[test]
+fn an_empty_text_is_skipped_and_an_empty_global_shows_its_key() {
+    let s = ui();
+    s.eval::<()>("LEVEL_TEST_EMPTY = \"\"").unwrap();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <FontString name="TextTemplate" inherits="LevelTestFont" text="A" virtual="true"/>
+            <Button name="ButtonTemplateA" text="A" virtual="true">
+                <ButtonText name="$parentText" inherits="TextTemplate"/>
+            </Button>
+            <Frame name="Host">
+                <Layers><Layer>
+                    <FontString name="KeyShown" inherits="LevelTestFont" text="LEVEL_TEST_EMPTY"/>
+                    <FontString name="Kept" inherits="TextTemplate" text=""/>
+                </Layer></Layers>
+            </Frame>
+            <Button name="KeyButton" text="LEVEL_TEST_EMPTY">
+                <ButtonText name="$parentText" inherits="LevelTestFont"/>
+            </Button>
+            <Button name="KeptButton" inherits="ButtonTemplateA" text=""/>
+            <Button name="LabelKept">
+                <ButtonText name="$parentText" inherits="TextTemplate" text=""/>
+            </Button>
+        </Ui>"#
+        ),
+    );
+    let text = |expr: &str| {
+        s.eval::<Option<String>>(&format!("return {expr}"))
+            .unwrap()
+    };
+    assert_eq!(text("KeyShown:GetText()").as_deref(), Some("LEVEL_TEST_EMPTY"));
+    assert_eq!(text("Kept:GetText()").as_deref(), Some("A"));
+    assert_eq!(text("KeyButton:GetText()").as_deref(), Some("LEVEL_TEST_EMPTY"));
+    assert_eq!(text("KeptButton:GetText()").as_deref(), Some("A"));
+    assert_eq!(text("LabelKept:GetText()").as_deref(), Some("A"));
+}

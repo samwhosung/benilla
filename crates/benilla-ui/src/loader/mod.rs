@@ -362,12 +362,13 @@ impl Loader<'_> {
     }
 
     /// Resolve `text=` as a global-string key (`FrameScript_GetText 0x703bf0`), so
-    /// `GlobalStrings.lua` must run before any XML. A miss comes back empty (`0x882748`) and all
-    /// three `text=` readers then show the raw value (`0x778c07`, `0x771006`, `0x7292a6`). The
-    /// warning on a key-shaped miss is benilla's own.
+    /// `GlobalStrings.lua` must run before any XML. A miss comes back empty (`0x882748`), and all
+    /// three `text=` readers show the raw value for an empty answer (`0x771032`, `0x778c31`,
+    /// `0x7292a6`), so a global holding `""` shows its key. The warning on a key-shaped miss is
+    /// benilla's own.
     pub(super) fn resolve_text(&mut self, raw: &str, dbg: &str) -> String {
         if let Ok(s) = self.lua().globals().get::<String>(raw) {
-            return s;
+            return if s.is_empty() { raw.to_string() } else { s };
         }
         if is_global_string_key(raw) {
             self.warn_once(
@@ -768,7 +769,7 @@ impl Loader<'_> {
         self.apply_statusbar(el, levels, wrapper, self_name, dbg_name);
         self.apply_slider(el, wrapper, self_name, dbg_name);
         self.apply_colorselect(el, wrapper, self_name, dbg_name);
-        self.apply_button(el, wrapper, self_name, dbg_name);
+        self.apply_button(el, levels, wrapper, self_name, dbg_name);
         self.apply_editbox(el, wrapper, dbg_name);
         self.apply_messageframe(el, wrapper, dbg_name);
         self.apply_simplehtml(el, wrapper, dbg_name);
@@ -943,6 +944,21 @@ pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
 pub(super) fn abs_value(el: &Element) -> Option<f32> {
     let src = children_named(el, "AbsValue").next().unwrap_or(el);
     src.attr("val").and_then(|v| v.trim().parse::<f32>().ok())
+}
+
+/// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
+/// (`0xff000000`) and its first `<Offset>` over (0.001, -0.001) (`0x3a83126f`, `0xba83126f`).
+pub(super) fn shadow_of(sh: &Element) -> crate::script::FontShadow {
+    let (x, y) = children_named(sh, "Offset")
+        .next()
+        .map_or((None, None), abs_dim);
+    let color = children_named(sh, "Color")
+        .next()
+        .map_or([0.0, 0.0, 0.0, 1.0], color_of);
+    crate::script::FontShadow {
+        offset: [x.unwrap_or(0.001), y.unwrap_or(-0.001)],
+        color,
+    }
 }
 
 /// A [`FontObject`] from a flattened `<Font>`. The merge appends inherited nodes first, so the last

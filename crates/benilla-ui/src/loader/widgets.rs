@@ -110,6 +110,7 @@ impl Loader<'_> {
     pub(super) fn apply_button(
         &mut self,
         el: &Element,
+        levels: &[Element],
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
@@ -156,11 +157,15 @@ impl Loader<'_> {
                 FontAttrs::Own
             };
             // `SetText` creates the label even with no text, so its layout lands on a real region;
-            // `text=` is a global-string key (`0x703bf0`).
-            let label = match bt.attr("text") {
-                Some(raw) => self.resolve_text(raw, dbg),
-                None => String::new(),
-            };
+            // `text=` is each level's, a global-string key (`0x703bf0`), an empty one skipped
+            // (`0x77101b`).
+            let levels = self.levels(bt);
+            let mut label = String::new();
+            for level in &levels {
+                if let Some(raw) = level.attr("text").filter(|t| !t.is_empty()) {
+                    label = self.resolve_text(raw, dbg);
+                }
+            }
             // A named label is created as a named region, not aliased after `SetText`, so its
             // `GetName()` answers.
             let bt_name = bt.name().map(|raw| framexml::resolve_name(raw, self_name));
@@ -181,15 +186,12 @@ impl Loader<'_> {
                 // `0x778b96`); the button's own adopter anchor never fires on them (`0x778d5f`).
                 // On `<NormalText>` the justify is the Normal font's, so the implicit anchor reads
                 // the ctor's CENTER (`0x212`); the justify still reaches the paint (`0x784111`).
+                // Both load as any FontString does (`0x6f2780` → `0x770f40`, `0x778b8f`), each
+                // level in turn; `<NormalText>` skips its font attributes (`0x778b7b`).
                 self.call_region(&region, "ClearAllPoints", (), dbg);
-                let levels = self.levels(bt);
-                self.apply_region_layout(bt, &levels, &region, self_name, dbg, font_attrs);
-                // `<ButtonText>` reads its own `inherits=` and `font=` as any FontString does
-                // (`0x6f2780` → `0x770f40`); `<NormalText>` skips them (`0x778b7b`).
-                if font_attrs == FontAttrs::Own {
-                    self.apply_fontstring_font(bt, &region, dbg);
+                for level in &levels {
+                    self.load_fontstring_level(level, &region, self_name, font_attrs, false, dbg);
                 }
-                self.apply_wrap_attrs(bt, &region, dbg);
                 if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region) {
                     self.report.fault(format!("{dbg}: implicit anchor: {e}"));
                 }
@@ -216,10 +218,13 @@ impl Loader<'_> {
                 self.call(wrapper, "SetChecked", checked, dbg);
             }
         }
-        if let Some(text) = el.attr("text") {
-            // A global-string key (`0x703bf0`): `text="DELETE"` reads "Delete".
-            let text = self.resolve_text(text, dbg);
-            self.call(wrapper, "SetText", text, dbg);
+        // Each level's `text=`, a global-string key (`0x703bf0`, `text="DELETE"` reads "Delete"),
+        // an empty one skipped (`0x778c1a`).
+        for level in levels {
+            if let Some(text) = level.attr("text").filter(|t| !t.is_empty()) {
+                let text = self.resolve_text(text, dbg);
+                self.call(wrapper, "SetText", text, dbg);
+            }
         }
         // The per-state fonts, two spellings each; every occurrence applies, in document order.
         for (children, method, which) in [

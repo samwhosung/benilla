@@ -7,8 +7,8 @@ use super::{abs_value, children_named, color_of, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
-/// skips them (`0x7710e1`-`0x771467`) for the button's Normal font to take (`0x783c30`). Here it
-/// gates justify and spacing, the font attributes the button's label pass applies.
+/// skips them (`0x7710db` → `0x771468`) for the button's Normal font to take (`0x783c30`): an
+/// `inherits` font object, `font=`, `spacing`, the justifies, `<Color>` and `<Shadow>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FontAttrs {
     /// Every other region, a Button's `<ButtonText>` included.
@@ -59,11 +59,11 @@ impl Loader<'_> {
     }
 
     /// One `<Layer>` region on `wrapper`, created on `level` and loaded: its name (`$parent`
-    /// expanded, published as a global, read from `raw` alone, `0x6f2751`), `hidden`, `alpha`,
-    /// layout, font and visual, then the implicit creation anchor, run after the region's LoadXML
-    /// as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone. `None`
-    /// when the creation raised. `inherits=` may name a region template, in the frames' one
-    /// registry (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
+    /// expanded, published as a global, read from `raw` alone, `0x6f2751`), then its `LoadXML`
+    /// level by level ([`Loader::levels`]; `inherits=` may name a region template, in the frames'
+    /// one registry, `0x6ee500`), then the implicit creation anchor, run after the region's
+    /// LoadXML as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone.
+    /// `None` when the creation raised.
     fn build_region(
         &mut self,
         raw: &Element,
@@ -74,8 +74,7 @@ impl Loader<'_> {
         dbg: &str,
     ) -> Option<Table> {
         let levels = self.levels(raw);
-        let region = &self.expand_region(raw);
-        let rname: Option<String> = region
+        let rname: Option<String> = raw
             .name()
             .map(|raw| framexml::resolve_name(raw, parent_name));
         let method = if is_texture {
@@ -91,33 +90,13 @@ impl Loader<'_> {
                     return None;
                 }
             };
-        if is_texture {
-            for node in &levels {
+        for node in &levels {
+            if is_texture {
                 self.load_texture_level(node, &region_wrapper, parent_name, dbg);
+            } else {
+                let attrs = FontAttrs::Own;
+                self.load_fontstring_level(node, &region_wrapper, parent_name, attrs, true, dbg);
             }
-        } else {
-            if region.attr_bool("hidden") {
-                if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
-                    self.report.fault(format!("{dbg}: region Hide: {e}"));
-                }
-            }
-            if let Some(a) = region
-                .attr("alpha")
-                .and_then(|v| v.trim().parse::<f32>().ok())
-            {
-                self.call_region(&region_wrapper, "SetAlpha", a, dbg);
-            }
-            self.apply_region_layout(
-                region,
-                &levels,
-                &region_wrapper,
-                parent_name,
-                dbg,
-                FontAttrs::Own,
-            );
-            // Before the visual pass, so an explicit `<Color>` beats the font object's.
-            self.apply_fontstring_font(region, &region_wrapper, dbg);
-            self.apply_region_visual(region, &region_wrapper, dbg);
         }
         if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
             self.report.fault(format!("{dbg}: implicit anchor: {e}"));
@@ -144,7 +123,6 @@ impl Loader<'_> {
                 continue;
             }
             let levels = self.levels(region);
-            let region = &self.expand_region(region);
             let rname: Option<String> = region
                 .name()
                 .map(|raw| framexml::resolve_name(raw, parent_name));
@@ -178,16 +156,10 @@ impl Loader<'_> {
                     }
                 },
             };
-            self.apply_region_layout(
-                region,
-                &levels,
-                &region_wrapper,
-                parent_name,
-                dbg,
-                FontAttrs::Own,
-            );
-            self.apply_fontstring_font(region, &region_wrapper, dbg);
-            self.apply_region_visual(region, &region_wrapper, dbg);
+            for node in &levels {
+                let attrs = FontAttrs::Own;
+                self.load_fontstring_level(node, &region_wrapper, parent_name, attrs, true, dbg);
+            }
             // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
             if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
                 self.report.fault(format!("{dbg}: implicit anchor: {e}"));
@@ -201,7 +173,7 @@ impl Loader<'_> {
                     self.report
                         .fault(format!("{dbg}: adopt special FontString: {e}"));
                 }
-                if let Some(bytes) = region.attr("bytes") {
+                if let Some(bytes) = levels.iter().rev().find_map(|l| l.attr("bytes")) {
                     if let Err(e) = crate::script::apply_xml_bytes(self.lua(), wrapper, bytes) {
                         self.report.fault(format!("{dbg}: FontString bytes: {e}"));
                     }
@@ -239,62 +211,133 @@ impl Loader<'_> {
         }
     }
 
-    /// A region's geometry, each level's own ([`Loader::apply_geometry`]), whose `$parent` is the
-    /// owner's name, or a nameless owner's nearest named ancestor's; then a FontString's justify
-    /// and spacing when [`FontAttrs::Own`].
-    pub(super) fn apply_region_layout(
+    /// One level of a `<FontString>`'s `LoadXML` (`0x770f40`), after its `inherits` level: an
+    /// `inherits` font object, the geometry, `hidden`, `text`, the wrap attributes, then, when the
+    /// string owns its font attributes ([`FontAttrs`], `0x7710db`), `font=`, `spacing`,
+    /// `justifyV`, `justifyH` and the `<Color>` and `<Shadow>` children, in that order. A `font=`
+    /// file needs this node's own first `<FontHeight>` above 0 (`0x77112f`-`0x771154`); without
+    /// one the level reports `0x878e10` and returns (`0x771191`), so nothing after the font is
+    /// read on it, whatever height a template gave. `with_text` is false for a Button's label,
+    /// whose text the button sets.
+    pub(super) fn load_fontstring_level(
         &mut self,
-        region: &Element,
-        levels: &[Element],
+        node: &Element,
         wrapper: &Table,
         parent_name: &str,
+        attrs: FontAttrs,
+        with_text: bool,
         dbg: &str,
-        font_attrs: FontAttrs,
     ) {
-        for level in levels {
-            self.apply_geometry(level, wrapper, true, parent_name, dbg);
+        let own = attrs == FontAttrs::Own;
+        // `inherits=` names a font object first (`0x770f69`), linked only when the string owns
+        // its font attributes (`0x770f72`), else a template, loaded as a level of its own. Any
+        // other name passes through and is reported: `SetFontObject("")` would clear the font
+        // object where a bad name warns.
+        if let Some(name) = node.attr("inherits").filter(|n| !n.is_empty()) {
+            let template = self.model().framexml_templates.borrow().contains(name);
+            if own && (self.is_font_object(name) || !template) {
+                self.set_font_object(wrapper, "inherits", name, dbg);
+            }
         }
-        if font_attrs == FontAttrs::Own {
-            if let Some(j) = region.attr("justifyH") {
-                self.call_region(wrapper, "SetJustifyH", j.to_string(), dbg);
+        self.apply_geometry(node, wrapper, true, parent_name, dbg);
+        match node.attr_bool_opt("hidden") {
+            Some(true) => self.call_region(wrapper, "Hide", (), dbg),
+            Some(false) => self.call_region(wrapper, "Show", (), dbg),
+            None => {}
+        }
+        if let Some(a) = node
+            .attr("alpha")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            self.call_region(wrapper, "SetAlpha", a, dbg);
+        }
+        // An empty `text` is skipped (`0x77101b`), so a template's text stands. The string's own
+        // `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on a string with no font
+        // (`0x79d7e5`); `LoadXML` sets the text before the font.
+        if let Some(raw) = node.attr("text").filter(|t| with_text && !t.is_empty()) {
+            let text = self.resolve_text(raw, dbg);
+            if let Err(e) = crate::script::region::store_text_of(self.lua, wrapper, Some(text)) {
+                self.report.fault(format!("{dbg}: region SetText: {e}"));
             }
-            if let Some(j) = region.attr("justifyV") {
-                self.call_region(wrapper, "SetJustifyV", j.to_string(), dbg);
+        }
+        self.apply_wrap_attrs(node, wrapper, dbg);
+        if !own {
+            return;
+        }
+        // `font=`, empty as absent (`0x7710f7`): a font object's name links it (`0x771114`), any
+        // other value is a file its own `<FontHeight>` and `outline=` qualify (`0x77110b`), so
+        // `ZoneText.xml`'s `AutoFollowStatusText` draws at GameFontNormal's 12, not its own 20.
+        match node.attr("font").filter(|f| !f.is_empty()) {
+            Some(name) if self.is_font_object(name) => {
+                self.set_font_object(wrapper, "font", name, dbg);
             }
-            // `spacing=` (`0x771257`) goes through the setter and clears inherit bit `0x10`
-            // (`0x771298`), so it outlasts the font object's.
-            if let Some(sp) = region.attr("spacing").filter(|v| !v.is_empty()) {
-                self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
+            Some(path) => {
+                let height = children_named(node, "FontHeight")
+                    .next()
+                    .and_then(abs_value)
+                    .filter(|h| *h > 0.0);
+                let Some(height) = height else {
+                    let name = self.object_name(wrapper);
+                    self.report_missing_font_height("FontString", &name, &node.tag);
+                    return;
+                };
+                // The flags word, set whole on this leg (`0x771194`-`0x771214`): `outline=` is
+                // NORMAL or THICK, and any non-empty `monochrome=` adds the flag, even "false".
+                let flags = (
+                    node.attr("outline")
+                        .map(crate::script::Outline::parse)
+                        .unwrap_or_default(),
+                    node.attr("monochrome").is_some_and(|v| !v.is_empty()),
+                );
+                if let Err(e) = crate::script::apply_font_parts(
+                    self.lua,
+                    wrapper,
+                    Some(path.to_string()),
+                    Some(height),
+                    Some(flags),
+                ) {
+                    self.report.fault(format!("{dbg}: region font attrs: {e}"));
+                }
+            }
+            None => {}
+        }
+        // `spacing=` (`0x771257`) goes through the setter and clears inherit bit `0x10`
+        // (`0x771298`), so it outlasts the font object's.
+        if let Some(sp) = node.attr("spacing").filter(|v| !v.is_empty()) {
+            self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
+        }
+        if let Some(j) = node.attr("justifyV").filter(|v| !v.is_empty()) {
+            self.call_region(wrapper, "SetJustifyV", j.to_string(), dbg);
+        }
+        if let Some(j) = node.attr("justifyH").filter(|v| !v.is_empty()) {
+            self.call_region(wrapper, "SetJustifyH", j.to_string(), dbg);
+        }
+        // Each `<Color>` is the text colour (`0x77f750`) and each `<Shadow>` the shadow
+        // (`0x7722a0`), both local to the string, so they outlast the font object's.
+        for child in &node.children {
+            if child.tag.eq_ignore_ascii_case("Color") {
+                let c = color_of(child);
+                self.call_region(wrapper, "SetVertexColor", (c[0], c[1], c[2], c[3]), dbg);
+            } else if child.tag.eq_ignore_ascii_case("Shadow") {
+                let sh = super::shadow_of(child);
+                let c = sh.color;
+                self.call_region(wrapper, "SetShadowColor", (c[0], c[1], c[2], c[3]), dbg);
+                self.call_region(
+                    wrapper,
+                    "SetShadowOffset",
+                    (sh.offset[0], sh.offset[1]),
+                    dbg,
+                );
             }
         }
     }
 
-    /// A FontString's text, wrap attributes and `<Color>`.
-    pub(super) fn apply_region_visual(
-        &mut self,
-        region: &Element,
-        region_wrapper: &Table,
-        dbg: &str,
-    ) {
-        let color = children_named(region, "Color").next().map(color_of);
-        if let Some(text) = region.attr("text") {
-            // A global-string key, not a literal (`0x703bf0`).
-            let text = self.resolve_text(text, dbg);
-            // The string's own `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on
-            // a string with no font (`0x79d7e5`); `LoadXML` sets the text before the font.
-            if let Err(e) =
-                crate::script::region::store_text_of(self.lua, region_wrapper, Some(text))
-            {
-                self.report.fault(format!("{dbg}: region SetText: {e}"));
-            }
-        }
-        self.apply_wrap_attrs(region, region_wrapper, dbg);
-        if let Some(c) = color {
-            self.call_region(
-                region_wrapper,
-                "SetVertexColor",
-                (c[0], c[1], c[2], c[3]),
-                dbg,
+    /// `SetFontObject` for an XML `<attr>=` naming `name`, a failure reported once.
+    fn set_font_object(&mut self, wrapper: &Table, attr: &str, name: &str, dbg: &str) {
+        if let Err(e) = wrapper.call_method::<()>("SetFontObject", name.to_string()) {
+            self.warn_once(
+                &format!("fontobj:{name}"),
+                format!("{dbg}: <FontString {attr}=\"{name}\">: {e}"),
             );
         }
     }
@@ -431,79 +474,6 @@ impl Loader<'_> {
         let model = self.model();
         let fonts = model.framexml_fonts.borrow();
         fonts.contains_key(name) || fonts.keys().any(|k| k.eq_ignore_ascii_case(name))
-    }
-
-    /// A `<FontString>`'s font: `inherits=` through [`Self::font_object_through_templates`], then
-    /// `font=`, a font object's name first and a file only on a miss (`0x770f40`, `0x771104`).
-    pub(super) fn apply_fontstring_font(&mut self, region: &Element, wrapper: &Table, dbg: &str) {
-        if let Some(name) = region.attr("inherits") {
-            // The expanded element keeps the instance's `inherits=`, a template's name, so the
-            // chain is walked to its font object. An unresolved name passes through unchanged:
-            // `SetFontObject("")` would clear the font object where a bad name warns.
-            let resolved = self
-                .font_object_through_templates(name)
-                .unwrap_or_else(|| name.to_string());
-            if let Err(e) = wrapper.call_method::<()>("SetFontObject", resolved) {
-                self.warn_once(
-                    &format!("fontobj:{name}"),
-                    format!("{dbg}: <FontString inherits=\"{name}\">: {e}"),
-                );
-            }
-        }
-        // `font=` gates `<FontHeight>` and `outline=` (`0x7710e1`-`0x771254`): a font object's
-        // name links it and skips them (`0x771114`, `0x771119`), any other value is a file they
-        // qualify (`0x77110b`), and with no `font=` they are never read (`0x7710fa`), so
-        // `ZoneText.xml`'s `AutoFollowStatusText` draws at GameFontNormal's 12, not its own 20.
-        match region.attr("font") {
-            Some(name) if self.is_font_object(name) => {
-                if let Err(e) = wrapper.call_method::<()>("SetFontObject", name.to_string()) {
-                    self.warn_once(
-                        &format!("fontobj:{name}"),
-                        format!("{dbg}: <FontString font=\"{name}\">: {e}"),
-                    );
-                }
-            }
-            Some(path) => {
-                // A file needs a first `<FontHeight>` above 0 (`0x77112f`-`0x771154`); else the
-                // load reports `0x878e10` (`0x77117d`) and returns (`0x771191`), before `outline=`
-                // and with the string's font unset.
-                let height = children_named(region, "FontHeight")
-                    .next()
-                    .and_then(abs_value)
-                    .filter(|h| *h > 0.0);
-                let Some(height) = height else {
-                    let name = wrapper
-                        .call_method::<Option<String>>("GetName", ())
-                        .ok()
-                        .flatten();
-                    self.report_missing_font_height(
-                        "FontString",
-                        name.as_deref().unwrap_or("<unnamed>"),
-                        &region.tag,
-                    );
-                    return;
-                };
-                // The flags word, set whole on this leg (`0x771194`-`0x771214`): `outline=` is
-                // NORMAL or THICK, and any non-empty `monochrome=` adds the flag, even "false".
-                let flags = (
-                    region
-                        .attr("outline")
-                        .map(crate::script::Outline::parse)
-                        .unwrap_or_default(),
-                    region.attr("monochrome").is_some_and(|v| !v.is_empty()),
-                );
-                if let Err(e) = crate::script::apply_font_parts(
-                    self.lua,
-                    wrapper,
-                    Some(path.to_string()),
-                    Some(height),
-                    Some(flags),
-                ) {
-                    self.report.fault(format!("{dbg}: region font attrs: {e}"));
-                }
-            }
-            None => {}
-        }
     }
 }
 
