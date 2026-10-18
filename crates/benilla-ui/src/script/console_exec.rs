@@ -36,17 +36,85 @@ pub fn console_word(line: &str) -> (&str, &str) {
     (&line[..end], line[end..].trim_start_matches(' '))
 }
 
-/// `set`'s two arguments: the name, then the rest of the line as its value.
-pub fn set_args(rest: &str) -> (String, String) {
-    let (name, value) = rest
-        .split_once(char::is_whitespace)
-        .map_or((rest, ""), |(n, v)| (n, v.trim()));
-    (name.to_string(), value.to_string())
+/// The delimiters the console's commands tokenize with (`0x80e1d4`).
+const CONSOLE_DELIMS: &[u8] = b" ,;\t\"\r\n";
+
+/// The name buffer of `set`, `cvar_reset` and `cvar_default` (`0x63d510`, `0x63d59d`, `0x63d64d`).
+const NAME_BYTES: usize = 0x40;
+
+/// `set`'s value buffer (`0x63d529`).
+const VALUE_BYTES: usize = 0x100;
+
+/// Storm's `SStrTokenize` (`0x64ae50`): the next token of `s` into a buffer of `size` bytes, and
+/// `s` advanced past it. With `"` among the delimiters (`0x64ae8d`):
+///
+/// - leading delimiters are skipped, but a `"` among them opens a quoted span and is consumed
+///   (`0x64aebf`);
+/// - outside a span a delimiter ends the token and is consumed (`0x64af37`, `0x64af66`), and a `"`
+///   after the token's first byte ends it and is left (`0x64af09`-`0x64af12`);
+/// - inside a span delimiters are kept, and a `"` closes the span, is consumed and ends the token
+///   (`0x64af14`-`0x64af2a`);
+/// - at `size - 1` bytes storing stops, and the rest of the token is skipped to its end
+///   (`0x64af4e`).
+///
+/// Empty input is the empty token.
+fn s_str_tokenize(s: &mut &[u8], size: usize, delims: &[u8]) -> Vec<u8> {
+    let quotes = delims.contains(&b'"');
+    let mut i = 0;
+    let mut in_quote = false;
+    while let Some(&c) = s.get(i) {
+        if !delims.contains(&c) {
+            break;
+        }
+        i += 1;
+        if quotes && c == b'"' {
+            in_quote = true;
+            break;
+        }
+    }
+    let mut token = Vec::new();
+    while let Some(&c) = s.get(i) {
+        if quotes && c == b'"' {
+            if !token.is_empty() && !in_quote {
+                break;
+            }
+            i += 1;
+            in_quote = !in_quote;
+            if !in_quote {
+                break;
+            }
+            continue;
+        }
+        if !in_quote && delims.contains(&c) {
+            i += 1;
+            break;
+        }
+        if token.len() + 1 < size {
+            token.push(c);
+        }
+        i += 1;
+    }
+    *s = &s[i..];
+    token
 }
 
-/// `cvar_reset`'s and `cvar_default`'s one argument, the CVar's name.
+/// The next console token of `rest`, in a buffer of `size` bytes.
+fn console_token(rest: &mut &[u8], size: usize) -> String {
+    String::from_utf8_lossy(&s_str_tokenize(rest, size, CONSOLE_DELIMS)).into_owned()
+}
+
+/// `set`'s two arguments (`0x63d51d`, `0x63d539`): the name's token, then the value's, so a value
+/// is one word or one quoted span, and none is the empty string.
+pub fn set_args(rest: &str) -> (String, String) {
+    let mut rest = rest.as_bytes();
+    let name = console_token(&mut rest, NAME_BYTES);
+    (name, console_token(&mut rest, VALUE_BYTES))
+}
+
+/// `cvar_reset`'s and `cvar_default`'s one argument, the CVar's name's token (`0x63d5aa`,
+/// `0x63d65a`).
 pub fn cvar_name_arg(rest: &str) -> String {
-    rest.split_whitespace().next().unwrap_or("").to_string()
+    console_token(&mut rest.as_bytes(), NAME_BYTES)
 }
 
 /// The line `set` and the reset pair print for a name no row has. Deviation: the reference's `set`
@@ -127,8 +195,74 @@ fn run_cvar_command(model: &mut Model, word: &str, rest: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::console_word;
+    use super::{console_word, s_str_tokenize, set_args, CONSOLE_DELIMS};
     use crate::script::UiScript;
+
+    /// `0x64ae50` with the console's delimiters (`0x80e1d4`), token by token.
+    #[test]
+    fn the_tokenizer_reads_words_quoted_spans_and_cuts() {
+        let tokens = |line: &str, size: usize| {
+            let mut s = line.as_bytes();
+            let mut out = Vec::new();
+            for _ in 0..4 {
+                out.push(String::from_utf8(s_str_tokenize(&mut s, size, CONSOLE_DELIMS)).unwrap());
+            }
+            out
+        };
+        assert_eq!(tokens("a b", 16), ["a", "b", "", ""]);
+        assert_eq!(tokens(" ,;a,,b", 16), ["a", "b", "", ""]);
+        assert_eq!(tokens("\"a b\" c", 16), ["a b", "c", "", ""]);
+        assert_eq!(
+            tokens("\"a,;b\"c", 16),
+            ["a,;b", "c", "", ""],
+            "a closing quote ends it"
+        );
+        assert_eq!(
+            tokens("ab\"c d\"", 16),
+            ["ab", "c d", "", ""],
+            "a quote after text is left"
+        );
+        assert_eq!(tokens("\"open span", 16), ["open span", "", "", ""]);
+        assert_eq!(
+            tokens("abcdef gh", 4),
+            ["abc", "gh", "", ""],
+            "cut, then skipped to the end"
+        );
+        assert_eq!(tokens("", 16), ["", "", "", ""]);
+    }
+
+    /// `set` tokenizes its name into 0x40 bytes and its value into 0x100 (`0x63d500`), so the
+    /// value is one word or one quoted span, and a missing one is the empty string.
+    #[test]
+    fn set_takes_one_token_for_its_value() {
+        let s = UiScript::new().unwrap();
+        s.register_cvars([("myKnob", "z")]);
+        let set = |s: &UiScript, line: &str| {
+            s.eval::<String>(&format!("ConsoleExec({line:?}) return GetCVar('myKnob')"))
+                .unwrap()
+        };
+        assert_eq!(set(&s, "set myKnob a b"), "a");
+        assert_eq!(set(&s, "set myKnob \"a b\""), "a b");
+        assert_eq!(set(&s, "set myKnob 1,2"), "1");
+        assert_eq!(set(&s, "set myKnob ab\"c\""), "ab");
+        assert_eq!(set(&s, "set myKnob ,;  v"), "v");
+        assert_eq!(
+            set(&s, "set myKnob"),
+            "",
+            "no value stores the empty string"
+        );
+        assert_eq!(
+            set(&s, &format!("set myKnob {}", "x".repeat(300))),
+            "x".repeat(255)
+        );
+        // A CVar's own command takes the rest as it is.
+        assert_eq!(set(&s, "myKnob a b, c "), "a b, c ");
+        let long = format!("{}myKnob", "n".repeat(64));
+        assert_eq!(
+            set_args(&format!("{long} v")),
+            ("n".repeat(63), "v".to_string())
+        );
+    }
 
     /// `0x63ce2b` skips spaces only; `0x63f880` ends the word at a space or after `0x3f` bytes.
     #[test]

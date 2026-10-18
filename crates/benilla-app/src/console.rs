@@ -184,13 +184,10 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
     lines
 }
 
-/// `set <name> <value>` (`0x63d500`), as [`benilla_ui::script::set_args`] reads it; an unknown
-/// name is refused ([`benilla_ui::script::no_such_cvar`]).
+/// `set <name> <value>` (`0x63d500`), as [`benilla_ui::script::set_args`] tokenizes it: no value
+/// stores the empty string, and an unknown name is refused ([`benilla_ui::script::no_such_cvar`]).
 fn set(world: &mut World, args: &str) -> Vec<String> {
     let (name, value) = benilla_ui::script::set_args(args);
-    if name.is_empty() || value.is_empty() {
-        return vec!["usage: set <cvar> <value>".to_string()];
-    }
     set_cvar(world, &name, &value)
 }
 
@@ -347,6 +344,20 @@ mod tests {
             run(&mut app, "  "),
             vec!["console: no command given (`help` lists the commands)".to_string()]
         );
+    }
+
+    /// The host's `set` tokenizes as the VM's does (`0x63d500`): one token of value, none the
+    /// empty string.
+    #[test]
+    fn set_stores_one_token_and_none_as_empty() {
+        let mut app = console_app();
+        assert!(run(&mut app, "set realmName \"Two Words\" more").is_empty());
+        assert_eq!(
+            app.world().resource::<Cvars>().get("realmName"),
+            Some("Two Words")
+        );
+        assert!(run(&mut app, "set realmName").is_empty());
+        assert_eq!(app.world().resource::<Cvars>().get("realmName"), Some(""));
     }
 
     /// A write to a latched row says it is staged, prints as staged, and the list shows it.
