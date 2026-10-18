@@ -1278,22 +1278,28 @@ pub(super) fn sync_glue_scene(
         aim(&mut cams, GLUE_SLOT, &rig);
     } else if let Some(w) = w.filter(|_| scene.spawned) {
         let window_px = UVec2::new(w.physical_width(), w.physical_height()).max(UVec2::ONE);
-        let view = pane.map_or(window_px, |v| v.size);
+        // The projection spans the pane's raw rectangle, unclamped and unrounded, which the
+        // clamped viewport then squashes (`modelview#viewport-and-clamp`).
+        let rect = preview
+            .pane
+            .map(|[l, r, t, b]| window_px.as_vec2() * Vec2::new(r - l, b - t))
+            .filter(|size| size.min_element() > 0.0)
+            .unwrap_or(window_px.as_vec2());
         aim(
             &mut cams,
             GLUE_SLOT,
-            &ortho_scene_rig(window_px, view, preview.root),
+            &ortho_scene_rig(window_px, rect, preview.root),
         );
     }
 }
 
 /// The orthographic leg of a scene pane with no camera, as a camera in the scene's own model
-/// space over a `view`-pixel viewport of a `window`-pixel screen. The paint projects the pane's
+/// space over a `rect`-pixel pane of a `window`-pixel screen. The paint projects the pane's
 /// rectangle with model (0, 0) at its bottom-left, +X right, +Y up and +Z toward the viewer, depth
-/// ±500 layout units (`0x7ad7f0`, `0x5c3d90`), through the root `T(layoutScale · position) ·
+/// ±500 layout units about a view at z 0 (`0x7ad7f0`, `0x5c3d90`), through the root `T(layoutScale · position) ·
 /// R(facing, +Z) · S(G48 · 5/3 · modelScale · layoutScale)` (`0x76d1a0`): one model unit is
 /// `5/3 · modelScale · layoutScale` screen heights, one layout unit `√(a²+1)` of them.
-fn ortho_scene_rig(window: UVec2, view: UVec2, root: SceneRoot) -> (Transform, Projection) {
+fn ortho_scene_rig(window: UVec2, rect: Vec2, root: SceneRoot) -> (Transform, Projection) {
     use benilla_assets::coords::wow_to_bevy;
     let h = window.y as f32;
     let diag = (window.x as f32 / h).hypot(1.0);
@@ -1303,8 +1309,8 @@ fn ortho_scene_rig(window: UVec2, view: UVec2, root: SceneRoot) -> (Transform, P
     let depth = 500.0 * px_per_layout;
     let (sin, cos) = (-root.facing).sin_cos();
     let unturn = |v: Vec2| Vec2::new(cos * v.x - sin * v.y, sin * v.x + cos * v.y);
-    let centre = unturn((view.as_vec2() * 0.5 - pos.truncate()) / px_per_unit);
-    let eye = [centre.x, centre.y, (depth - pos.z) / px_per_unit];
+    let centre = unturn((rect * 0.5 - pos.truncate()) / px_per_unit);
+    let eye = [centre.x, centre.y, -pos.z / px_per_unit];
     let up = unturn(Vec2::Y);
     (
         Transform::from_translation(wow_to_bevy(eye)).looking_to(
@@ -1312,11 +1318,11 @@ fn ortho_scene_rig(window: UVec2, view: UVec2, root: SceneRoot) -> (Transform, P
             wow_to_bevy([up.x, up.y, 0.0]),
         ),
         Projection::Orthographic(OrthographicProjection {
-            near: 0.0,
-            far: 2.0 * depth / px_per_unit,
+            near: -depth / px_per_unit,
+            far: depth / px_per_unit,
             scaling_mode: bevy::camera::ScalingMode::Fixed {
-                width: view.x as f32 / px_per_unit,
-                height: view.y as f32 / px_per_unit,
+                width: rect.x / px_per_unit,
+                height: rect.y / px_per_unit,
             },
             ..OrthographicProjection::default_3d()
         }),
@@ -2390,56 +2396,66 @@ mod tests {
     }
 
     /// Clip-space XY of a Bevy-space point through an orthographic rig.
-    fn ortho_ndc(rig: &(Transform, Projection), view: UVec2, p: Vec3) -> Vec2 {
+    fn ortho_ndc(rig: &(Transform, Projection), rect: Vec2, p: Vec3) -> Vec2 {
         use bevy::camera::CameraProjection;
         let Projection::Orthographic(mut ortho) = rig.1.clone() else {
             panic!("the orthographic leg");
         };
-        ortho.update(view.x as f32, view.y as f32);
+        ortho.update(rect.x, rect.y);
         let clip = ortho.get_clip_from_view() * rig.0.to_matrix().inverse() * p.extend(1.0);
         clip.truncate().truncate() / clip.w
     }
 
     /// A scene file with no camera takes the orthographic leg (`0x76ceeb` → `0x76ce80(NULL)`):
     /// model (0, 0) at the pane's bottom-left, +X right, +Y up, one model unit `5/3 · modelScale
-    /// · layoutScale` screen heights (`0x76d1a0`, `0x7ad7f0`).
+    /// · layoutScale` screen heights, a position in layout units of `√(a²+1)` screen heights, and
+    /// the view at layout z 0 with depth ±500 layout units (`0x76d1a0`, `0x7ad7f0`).
     #[test]
     fn a_scene_with_no_camera_draws_on_the_orthographic_leg() {
         use benilla_assets::coords::wow_to_bevy;
-        let window = UVec2::new(1024, 768);
-        let rig = ortho_scene_rig(window, window, SceneRoot::default());
         let near = |got: Vec2, want: Vec2| (got - want).abs().max_element() < 1e-4;
-        let at =
-            |rig: &(Transform, Projection), p: [f32; 3]| ortho_ndc(rig, window, wow_to_bevy(p));
+        let window = UVec2::new(1024, 768);
+        let full = window.as_vec2();
+        let at = |rig: &(Transform, Projection), p: [f32; 3]| ortho_ndc(rig, full, wow_to_bevy(p));
+        let rig = ortho_scene_rig(window, full, SceneRoot::default());
         assert!(near(at(&rig, [0.0; 3]), Vec2::new(-1.0, -1.0)));
         // 768 px is 0.6 model units at scale 1; 1024 px is 0.8.
         assert!(near(at(&rig, [0.8, 0.6, 0.0]), Vec2::new(1.0, 1.0)));
-        assert!(near(at(&rig, [0.4, 0.3, 0.0]), Vec2::ZERO));
-        // Depth ±500 layout units, one model unit each at 4:3 and scale 1.
-        let Projection::Orthographic(o) = &rig.1 else {
-            unreachable!()
-        };
-        assert!((o.far - 1000.0).abs() < 1e-2, "{}", o.far);
-
-        // Model scale 2 halves the span; a quarter turn puts +X up; a position moves the root.
+        // A quarter turn puts +X up.
         let turned = SceneRoot {
             model_scale: 2.0,
             facing: std::f32::consts::FRAC_PI_2,
             ..default()
         };
-        let rig = ortho_scene_rig(window, window, turned);
-        assert!(near(at(&rig, [0.0, 0.0, 0.0]), Vec2::new(-1.0, -1.0)));
+        let rig = ortho_scene_rig(window, full, turned);
         assert!(near(at(&rig, [0.3, 0.0, 0.0]), Vec2::new(-1.0, 1.0)));
-        let moved = SceneRoot {
-            position: Vec3::new(0.3, 0.0, 0.0),
-            ..default()
+
+        // 16:9, a 600×400 pane, layout scale 0.8, model scale 1.5: a model unit is
+        // 5/3 · 1.5 · 0.8 · 1080 = 2160 px, a layout unit 1080 · √((16/9)² + 1) px.
+        let window = UVec2::new(1920, 1080);
+        let rect = Vec2::new(600.0, 400.0);
+        let root = SceneRoot {
+            model_scale: 1.5,
+            layout_scale: 0.8,
+            position: Vec3::new(0.05, 0.02, 0.1),
+            facing: 0.0,
         };
-        let rig = ortho_scene_rig(window, window, moved);
-        // 0.3 layout units at 4:3 is 0.3 · 5/3 = 0.5 model units: half the screen's height.
-        assert!(near(
-            at(&rig, [0.0; 3]),
-            Vec2::new(-1.0 + 2.0 * 384.0 / 1024.0, -1.0)
-        ));
+        let (px_per_unit, px_per_layout) = (2160.0, 1080.0 * (16.0f32 / 9.0).hypot(1.0));
+        let pos = root.position * root.layout_scale * px_per_layout / px_per_unit;
+        let rig = ortho_scene_rig(window, rect, root);
+        let at = |p: Vec3| ortho_ndc(&rig, rect, wow_to_bevy(p.to_array()));
+        assert!(near(at(-pos), Vec2::new(-1.0, -1.0)), "{}", at(-pos));
+        let corner = (rect / px_per_unit).extend(0.0) - pos;
+        assert!(near(at(corner), Vec2::new(1.0, 1.0)), "{}", at(corner));
+        // Layout z 0 is the view plane, and depth runs ±500 layout units about it.
+        let plane = Vec3::new(0.0, 0.0, -pos.z);
+        let view = rig.0.to_matrix().inverse() * wow_to_bevy(plane.to_array()).extend(1.0);
+        assert!(view.z.abs() < 1e-4, "{view}");
+        let Projection::Orthographic(o) = &rig.1 else {
+            unreachable!()
+        };
+        let depth = 500.0 * px_per_layout / px_per_unit;
+        assert!((o.near + depth).abs() < 1e-2 && (o.far - depth).abs() < 1e-2);
     }
 
     /// `petDisplayId == 0` is the client's whole gate: the server zeroes the triple for all but a
