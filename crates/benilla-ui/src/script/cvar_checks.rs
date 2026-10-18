@@ -278,12 +278,17 @@ pub fn check_horizon_farclip(value: &str, _applied: &str, rows: CvarRows<'_>) ->
 }
 
 /// The two depth-bias callbacks, `footstepBias`'s (`0x689450`) and `shadowBias`'s (`0x6d8530`):
-/// `sscanf(value, "%f")` (`0x73fb5d`) into the argument's own slot, refused below 0 (`test ah,1`)
-/// or above 1, a NaN too (`test ah,0x41; jp`), with `refused`; taken with `taken` and the value
-/// through the CRT's `%f` (`0x73fec4`). With no number the slot keeps the string pointer's bits,
-/// which a heap address reads as a tiny positive float, so such text is taken here as 0.
+/// `sscanf(value, "%f")` (`0x73fb5d`) into the argument's own slot, then [`depth_bias_of`]. With
+/// no number the slot keeps the string pointer's bits, which a heap address reads as a tiny
+/// positive float, so such text is taken here as 0.
 fn depth_bias(value: &str, refused: &str, taken: &str) -> CvarVerdict {
-    let v = scanf_f(value).unwrap_or(0.0);
+    depth_bias_of(scanf_f(value).unwrap_or(0.0), refused, taken)
+}
+
+/// The depth-bias test on the scanned float: refused below 0 or unordered, a NaN, at the first
+/// compare (`fcomp 0.0; test ah,1; jne`, C0 set), and above 1 at the second (`test ah,0x41; jp`),
+/// with `refused`; taken with `taken` and the value through the CRT's `%f` (`0x73fec4`).
+fn depth_bias_of(v: f32, refused: &str, taken: &str) -> CvarVerdict {
     if (0.0..=1.0).contains(&v) {
         CvarVerdict::accept_saying(format!("{taken} {:.6}", f64::from(v)))
     } else {
@@ -812,6 +817,19 @@ mod tests {
             CvarVerdict::accept_saying("Shadow bias set to 1.000000")
         );
         assert!(check_footstep_bias("0", "", &no_rows).accept);
+        // No number: the slot's pointer bits read as a tiny float, taken as 0.
+        for text in ["abc", "", "nan"] {
+            assert_eq!(
+                check_shadow_bias(text, "", &no_rows),
+                CvarVerdict::accept_saying("Shadow bias set to 0.000000"),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            depth_bias_of(f32::NAN, "refused", "taken"),
+            CvarVerdict::refuse("refused"),
+            "a NaN is unordered at the first compare"
+        );
         for bad in ["-0.1", "1.5", "+2"] {
             assert_eq!(
                 check_footstep_bias(bad, "", &no_rows),

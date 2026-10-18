@@ -328,30 +328,23 @@ pub(crate) fn spell_effect_scale(level: i32) -> f32 {
     }
 }
 
-/// `/console detailDoodadAlpha [0..255]`, the reference's console command (`0x6739a0`, registered
-/// by `0x63f9e0` as a command, not a CVar, so it never persists): the ground-clutter cutout that
-/// `texel.a x distance_ramp` is tested against, so at the default 128 grass ends ~61 yd out of
-/// the 70 yd horizon. Out of range is rejected (`0x6739b9`) with a readout. A bare command also
-/// prints the readout, where the reference reads an uninitialised stack slot.
+/// `/console detailDoodadAlpha <n>`, the reference's console command (`0x6739a0`, registered by
+/// `0x63f9e0` as a command, not a CVar, so it never persists): the ground-clutter cutout that
+/// `texel.a x distance_ramp` is tested against (`[0xc7b2fc]`, 128 at `0x66f861`), so at the
+/// default grass ends ~61 yd out of the 70 yd horizon. `sscanf(args, "%d")` (`0x835154`), then an
+/// unsigned compare with 255 (`0x6739b9`): in range it is set without a word, above it (a
+/// negative too) only "Alpha ref range 0 - 255." (`0x867f6c`) is printed. With no number the
+/// slot keeps what `push ecx` left in it, the parse buffer's address `0xc4ee08`, which is above
+/// 255.
 fn detail_doodad_alpha(world: &mut World, args: &str) -> Vec<String> {
-    let Some(mut clutter) = world.get_resource_mut::<benilla_world::clutter::ClutterConfig>()
-    else {
-        return vec!["detailDoodadAlpha: this run has no ground clutter".to_string()];
-    };
-    match args
-        .split_whitespace()
-        .next()
-        .and_then(|v| v.parse::<u8>().ok())
-    {
-        Some(v) => {
-            clutter.alpha_ref = f32::from(v) / 255.0;
-            vec![format!("detailDoodadAlpha set to {v}")]
-        }
-        None => vec![format!(
-            "detailDoodadAlpha is {} (usage: /console detailDoodadAlpha 0-255)",
-            (clutter.alpha_ref * 255.0).round() as u32
-        )],
+    let alpha = benilla_ui::script::scanf_d(args).map_or(0x00c4_ee08, |v| v as u32);
+    if alpha > 0xff {
+        return vec!["Alpha ref range 0 - 255.".to_string()];
     }
+    if let Some(mut clutter) = world.get_resource_mut::<benilla_world::clutter::ClutterConfig>() {
+        clutter.alpha_ref = alpha as f32 / 255.0;
+    }
+    Vec::new()
 }
 
 impl Plugin for VideoPlugin {
@@ -678,6 +671,36 @@ pub(crate) fn apply_window_mode(
 mod tests {
     use super::*;
 
+    /// `0x6739a0`: `sscanf %d` and an unsigned compare with 255. In range it sets the cutout and
+    /// says nothing; above it, a negative and text with no number print only the range line.
+    #[test]
+    fn detail_doodad_alpha_reads_like_the_references_command() {
+        let mut world = World::new();
+        world.insert_resource(benilla_world::clutter::ClutterConfig::default());
+        let at = |w: &World| {
+            (w.resource::<benilla_world::clutter::ClutterConfig>()
+                .alpha_ref
+                * 255.0)
+                .round() as u32
+        };
+        for (args, said, now) in [
+            ("12abc", None, 12),
+            (" +12", None, 12),
+            ("200", None, 200),
+            ("300", Some("Alpha ref range 0 - 255."), 200),
+            ("-1", Some("Alpha ref range 0 - 255."), 200),
+            ("", Some("Alpha ref range 0 - 255."), 200),
+            ("abc", Some("Alpha ref range 0 - 255."), 200),
+        ] {
+            let lines = detail_doodad_alpha(&mut world, args);
+            assert_eq!(
+                lines,
+                said.map(String::from).into_iter().collect::<Vec<_>>(),
+                "{args:?}"
+            );
+            assert_eq!(at(&world), now, "{args:?}");
+        }
+    }
     /// Synced is `Fifo`, not `AutoVsync` (`FifoRelaxed`, which tears on a late frame).
     #[test]
     fn the_default_is_synced_like_the_window_literal() {

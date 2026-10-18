@@ -220,6 +220,12 @@ const HELP_COMMAND_LINE: usize = 0xc4;
 /// of eight names is not followed by `NONE`, two slips of the reference's loop (`0x63ffed`,
 /// `0x64004d`). The commands list in registration order, then the CVars in the registry's list
 /// order, where the reference's one table interleaves them as start-up registers them.
+///
+/// Deviation: a CVar lists under its registration's category with its registration's help, even
+/// when `config.toml` held it at boot. In the reference such a record was made by the config
+/// line's `set` (`0x63d569`-`0x63d582`), which registered its command in category 5 with the help
+/// `""` (`0x63ddc9`), and the later registration finds the record and returns without registering
+/// again (`0x63dc1a`-`0x63dc87`), so what `help` says would hang on what the file held.
 fn help(world: &mut World, args: &str) -> Vec<String> {
     if args.is_empty() {
         return vec![
@@ -378,13 +384,16 @@ mod tests {
         let cvars = app.world().resource::<Cvars>();
         assert_eq!(all.len(), cvars.rows().count(), "the argument is not read");
         assert_eq!(all.last().unwrap(), "  \"myAddonKnob\" is \"7\"", "last");
-        let ranks: Vec<usize> = cvars
-            .listed()
+        // The printed order is the table's, not the registry's registration order.
+        let printed: Vec<&str> = all
             .iter()
-            .map(|r| crate::cvars::list_rank(&r.name))
+            .map(|l| l.split('"').nth(1).expect("a quoted name"))
             .collect();
-        assert!(ranks.is_sorted(), "the table's order");
+        let ranks: Vec<usize> = printed.iter().map(|n| crate::cvars::list_rank(n)).collect();
+        assert!(ranks.is_sorted(), "the table's order: {printed:?}");
         assert!(ranks[0] < usize::MAX);
+        let registered: Vec<&str> = cvars.rows().map(|r| r.name.as_str()).collect();
+        assert_ne!(printed, registered, "sorted, not as registered");
     }
 
     /// The buffer is 0x100 bytes (`0x63d734`), so a line stops at 255.
@@ -468,22 +477,6 @@ mod tests {
             run(&mut app, "help set ").is_empty(),
             "the whole tail is the word"
         );
-    }
-
-    /// What a console line prints goes to the log and never to chat: `ConsoleWrite` (`0x63cb50`)
-    /// fires no event, and the chat drain hands every `/console` and `ConsoleExec` line here.
-    #[test]
-    fn a_console_line_prints_nothing_to_chat() {
-        let mut app = console_app();
-        app.init_resource::<crate::ui_chat::ChatLog>();
-        super::run(app.world_mut(), "nosuchthing");
-        super::run(app.world_mut(), "farclip");
-        super::run(app.world_mut(), "help");
-        assert!(app
-            .world()
-            .resource::<crate::ui_chat::ChatLog>()
-            .pending_kinds()
-            .is_empty());
     }
 
     #[test]

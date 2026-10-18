@@ -68,8 +68,9 @@ impl NoticeState {
 }
 
 /// The first `%d` of the CRT's `sscanf` (`0x73fb5d`): leading whitespace skipped, an optional sign
-/// and the leading digits; 0 when there are none, and for a number past `i64`.
-fn scanf_d(s: &str) -> i64 {
+/// and the leading digits; `None` when no digit follows, which leaves the out-slot untouched; 0
+/// for a number past `i64`.
+pub fn scanf_d(s: &str) -> Option<i64> {
     let s = s.trim_start();
     let (sign, digits) = match s.as_bytes().first() {
         Some(b'-') => (-1, &s[1..]),
@@ -79,7 +80,7 @@ fn scanf_d(s: &str) -> i64 {
     let end = digits
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(digits.len());
-    sign * digits[..end].parse::<i64>().unwrap_or(0)
+    (end > 0).then(|| sign * digits[..end].parse::<i64>().unwrap_or(0))
 }
 
 /// `DefaultServerLogin`'s two strings. Never logged: the `Debug` form names the account only.
@@ -1005,7 +1006,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let width = model
                 .cvars
                 .get("gxresolution")
-                .map_or(0, |c| scanf_d(&c.value));
+                .map_or(0, |c| scanf_d(&c.value).unwrap_or(0));
             Ok(width as f64)
         })?,
     )?;
