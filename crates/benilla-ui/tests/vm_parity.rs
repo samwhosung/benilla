@@ -203,6 +203,7 @@ const CASES: &[(&str, &str)] = &[
     ("random", "math.randomseed(42) local a = math.random(100) math.randomseed(42) return S(a == math.random(100), math.random() < 1, math.random(5, 5))"),
     // ── What the current VM's 5.1 accepts, which 5.0 does not ──
     ("hex_literals", "return S(0x10, 0xff + 1, 0XA)"),
+    // The client's lexer has no long-bracket levels: `[=` is the token `[` (`0x6ff793`).
     ("long_brackets", "return S([=[a]]b]=], [==[x]=]y]==], [[plain]])"),
     ("string_dump", "return S(type(string.dump), E(function() return type(string.dump(function() end)) end))"),
     // A numeric `for`'s variable is its counter, one for the loop: the client's `fornum`
@@ -250,7 +251,8 @@ const CASES: &[(&str, &str)] = &[
     // ── Syntax errors and the lexer's edges, through `loadstring` ──
     // Input past the chunk's end is the client's bare `<eof> expected` (`0x6fca1a`). A control
     // byte is the lexer's `invalid control char` (`0x6ffabb`). `\n` alone ends a line
-    // (`0x6ffb94`): a `\r` is a blank, and a byte in a string (`0x700326`).
+    // (`0x6ffb94`): a `\r` is a blank, and a byte in a string (`0x700326`). `[=` is the token
+    // `[` (`0x6ff793`) and `--[==[` a line comment (`0x6ff6c9`).
     ("syntax_errors", r#"local o = {}
         for _, src in ipairs({"x = 1 +", "local function", "x = #t", "x = a % b",
             "return function(...) return ... end", "for x do end", "x = 1..2", "x = \"a\nb\"",
@@ -262,9 +264,10 @@ const CASES: &[(&str, &str)] = &[
           table.insert(o, (f and "ok" or e))
         end
         return table.concat(o, " | ")"#),
-    ("long_strings", r#"return S([[a [[b]] c]], [==[a ]] [[ ]=] b]==], [[
-first newline skipped]], [=[
-also]=], [[a
+    // `read_long_string` (`0x700010`) reads `=` as text.
+    ("long_strings", r#"return S([[a [[b]] c]], [[a [[ ]] ]=] b]], [[
+first newline skipped]], [[=[
+also]=]], [[a
 b]])"#),
     // ── Table layout, which `pairs` order shows ──
     // The orders of `pairs_constructors`, `pairs_mixed`, `fix-front_setlist_order` and

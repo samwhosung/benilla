@@ -676,7 +676,7 @@ mod tests {
     }
 
     /// The 5.0 grammar the stock files use still parses, including the three constructs 5.1
-    /// dropped: the iterator-less generic-for, nested long strings (`LUA_COMPAT_LSTR`) and the
+    /// dropped: the iterator-less generic-for, nested long strings (`read_long_string`, `0x700010`) and the
     /// constructor's extra semicolon.
     #[test]
     fn the_5_0_grammar_the_reference_writes_still_parses() {
@@ -690,7 +690,7 @@ mod tests {
             for k, v in { 3, 4 } do sum = sum + v end
             -- a table constructor with 5.0's compat semicolon
             local t = { a = 1; b = 2; }
-            -- nesting long strings (LUA_COMPAT_LSTR = 2)
+            -- nesting long strings, 5.0's
             local s2 = [[outer [[inner]] outer]]
             -- 5.0's own spellings for what `#`/`%` would say
             BENILLA_GRAMMAR_OK = count(1, 2, 3) + sum + t.a + t.b

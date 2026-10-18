@@ -918,6 +918,11 @@ fn page_texts_on_screen(s: &UiScript) -> Vec<String> {
 }
 
 /// A Rust string as a Lua long-bracket literal, so quotes and backslashes need no second escape.
+/// The client's `[[` has no `=` levels, so the text must hold no bracket pair of its own.
 fn lua_str(s: &str) -> String {
-    format!("[==[{s}]==]")
+    assert!(
+        !s.contains("[[") && !s.contains("]]") && !s.starts_with('\n'),
+        "{s:?}"
+    );
+    format!("[[{s}]]")
 }

@@ -1,7 +1,6 @@
-//! The lexer: Lua 5.1's `llex.c` as benilla's script host has always run it, built with
-//! `LUA_COMPAT_LSTR` 2 (`GRAMMAR.md`): long brackets have levels (`[=[ ]=]`) and a level-0 one
-//! nests `[[` as 5.0's did. As the client's lexer does, `\n` alone ends a line and a numeral is
-//! read decimal only. Source is bytes.
+//! The lexer: Lua 5.1's `llex.c` with the client's 5.0 long brackets (`GRAMMAR.md`): `[[` opens
+//! a long string that nests `[[`, with no `=` levels (`luaX_lex` `0x6ff610`). As the client's
+//! lexer does, `\n` alone ends a line and a numeral is read decimal only. Source is bytes.
 
 use crate::chunkid;
 
@@ -294,12 +293,13 @@ impl<'a> Lexer<'a> {
                         return Ok(Self::tok(Tok::Char(b'-')));
                     }
                     self.pos += 1;
-                    // A long comment opens at `[`, `=`s and `[`; `skip_sep` consumes what it
-                    // reads either way, and anything else is a short comment from there.
+                    // A long comment opens at `--[[` alone; anything else, `--[=[` too, is a
+                    // line comment from the byte after the last one read (`0x6ff68b`-`0x6ff6c9`).
                     if self.ch() == b'[' as i32 {
-                        let sep = self.skip_sep();
-                        if sep >= 0 {
-                            self.long_string(false, sep as usize)?;
+                        self.pos += 1;
+                        if self.ch() == b'[' as i32 {
+                            self.buff.clear();
+                            self.long_string(false)?;
                             continue;
                         }
                     }
@@ -308,17 +308,17 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 0x5B /* [ */ => {
-                    let sep = self.skip_sep();
-                    if sep >= 0 {
-                        let bytes = self.long_string(true, sep as usize)?;
-                        let mut t = Self::tok(Tok::String);
-                        t.bytes = bytes;
-                        return Ok(t);
-                    }
-                    if sep == -1 {
+                    // The byte after a `[` is tested once (`0x6ff793`): a second `[` opens a long
+                    // string, anything else, `=` too, leaves `[` a token.
+                    self.pos += 1;
+                    if self.ch() != b'[' as i32 {
                         return Ok(Self::tok(Tok::Char(b'[')));
                     }
-                    return Err(self.lex_error("invalid long string delimiter", false));
+                    self.buff.clear();
+                    let bytes = self.long_string(true)?;
+                    let mut t = Self::tok(Tok::String);
+                    t.bytes = bytes;
+                    return Ok(t);
                 }
                 0x3D /* = */ => return Ok(self.two(Tok::Eq, b'=')),
                 0x3C /* < */ => return Ok(self.two(Tok::Le, b'<')),
@@ -387,47 +387,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// 5.1's `skip_sep`, at a `[` or `]`: the `=`s between it and a second one of the same
-    /// bracket, or `-count - 1` when no second bracket follows. The buffer keeps what it read.
-    fn skip_sep(&mut self) -> i32 {
-        let s = self.ch();
-        self.buff.clear();
-        self.buff.push(s as u8);
-        self.pos += 1;
-        let mut count = 0;
-        while self.ch() == b'=' as i32 {
-            self.buff.push(b'=');
-            self.pos += 1;
-            count += 1;
-        }
-        if self.ch() == s {
-            count
-        } else {
-            -count - 1
-        }
-    }
-
-    /// 5.1's `read_long_string` with `LUA_COMPAT_LSTR` 2, at the second `[` of a level-`sep`
-    /// opener. A level-0 string nests `[[` as 5.0's did; a higher level ends at its first
-    /// matching closer. The buffer keeps the brackets, which an error quotes.
-    fn sep_closes(&mut self, sep: usize) -> bool {
-        // At `]` or `[`: `skip_sep` from here appends to the buffer instead of resetting it.
-        let s = self.ch();
-        self.buff.push(s as u8);
-        self.pos += 1;
-        let mut count = 0;
-        while self.ch() == b'=' as i32 {
-            self.buff.push(b'=');
-            self.pos += 1;
-            count += 1;
-        }
-        self.ch() == s && count == sep
-    }
-
-    fn long_string(&mut self, keep: bool, sep: usize) -> Result<Vec<u8>, SyntaxError> {
-        let mut cont = 0i32;
-        // The second `[`.
-        self.buff.push(b'[');
+    /// 5.0's `read_long_string` (`0x700010`), at the second `[`: a `[[` inside nests one deeper
+    /// and a `]]` closes one, with no `=` levels. The buffer keeps the brackets, which an error
+    /// quotes.
+    fn long_string(&mut self, keep: bool) -> Result<Vec<u8>, SyntaxError> {
+        let mut cont = 0u32;
+        self.buff.extend_from_slice(b"[[");
         self.pos += 1;
         if self.at_newline() {
             self.newline()?;
@@ -442,21 +407,27 @@ impl<'a> Lexer<'a> {
                     };
                     return Err(self.lex_error(msg, true));
                 }
+                // `[` then `[` (`0x700109`): one level deeper.
                 0x5B => {
-                    if self.sep_closes(sep) {
+                    self.buff.push(b'[');
+                    self.pos += 1;
+                    if self.ch() == b'[' as i32 {
                         self.buff.push(b'[');
                         self.pos += 1;
                         cont += 1;
                     }
                 }
+                // `]` then `]` (`0x700173`): the end at level 0 (`0x70017e`), else one level out.
                 0x5D => {
-                    if self.sep_closes(sep) {
+                    self.buff.push(b']');
+                    self.pos += 1;
+                    if self.ch() == b']' as i32 {
                         self.buff.push(b']');
                         self.pos += 1;
-                        cont -= 1;
-                        if !(sep == 0 && cont >= 0) {
+                        if cont == 0 {
                             break;
                         }
+                        cont -= 1;
                     }
                 }
                 // Only `\n` (`0x700234`); a `\r` is kept as a byte.
@@ -475,13 +446,12 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        // `luaZ_buffer + (2 + sep)`, `bufflen - 2 * (2 + sep)`: the text between the brackets.
+        // `luaZ_buffer + 2`, the length less 4 (`0x70020a`): the text between the brackets.
         // A comment's buffer was reset at each newline and holds no string.
         if !keep {
             return Ok(Vec::new());
         }
-        let n = 2 + sep;
-        Ok(self.buff[n..self.buff.len() - n].to_vec())
+        Ok(self.buff[2..self.buff.len() - 2].to_vec())
     }
 
     /// `read_string` (`0x7002a0`): a `\n` ends it unfinished (`0x700326`), a `\r` is a byte,

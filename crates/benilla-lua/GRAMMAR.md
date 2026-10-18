@@ -23,7 +23,7 @@ Five restore what 5.1 changed or removed:
 | where in 5.1 | change | why |
 |---|---|---|
 | `lvm.c` | 5.0's `OP_TFORPREP` table-to-`next` substitution, at the top of `OP_TFORLOOP` | `for k, v in someTable do` raised "attempt to call a table value" |
-| `luaconf.h` | `LUA_COMPAT_LSTR` `1` to `2` | 5.1 kept 5.0's `[[...]]` nesting machinery and put an advisory error in front of it; two corpus addons died on "nesting of `[[...]]` is deprecated" |
+| `llex.c` | 5.0's long brackets: `[[` nests `[[`, and there are no `=` levels | two corpus addons nest `[[...]]`, which stock 5.1 refuses as "nesting of `[[...]]` is deprecated"; the client's lexer tests the byte after `[` once (`0x6ff793`) and its `read_long_string` (`0x700010`) reads `=` as text, so `[=[` is `[` then `=`, and `--[==[` a line comment (`0x6ff6c9`) |
 | `luaconf.h` | `LUA_QL(x)` back to 5.0's `` `x' `` from 5.1's `'x'` | every Lua error message quotes a program element, and `WoW.exe`'s own `.rdata` carries all five formats in the 5.0 spelling |
 | `lparser.c` | 5.0's compat-semicolon skip at the top of `constructor()`'s field loop | one extra `;` after a field separator inside a table constructor (`Back_Title = AL["Factions"];;`, which AtlasLoot writes) is accepted by the client |
 | `lparser.c` | `recfield`'s `cc->nh++` inside its `TK_NAME` arm, 5.0's placement | a `[expr] = value` constructor field credits neither `OP_NEWTABLE` size hint in 5.0, so the table is born on the dummy node |

@@ -212,17 +212,15 @@ mod tests {
             err("do\nx = 1"),
             "t:2: `end' expected (to close `do' at line 1) near `<eof>'"
         );
-        assert_eq!(
-            err("x = [=x"),
-            "t:1: invalid long string delimiter near `[='"
-        );
+        // `[` then `=` is the token `[` (`0x6ff793`).
+        assert_eq!(err("x = [=x"), "t:1: unexpected symbol near `['");
         // The numeral stops at the `x`, which then opens a statement.
         assert_eq!(err("x = 3x"), "t:1: `=' expected near `<eof>'");
         assert_eq!(err("x = 3e"), "t:1: malformed number near `3e'");
     }
 
-    /// 5.1's lexer with level-0 nesting and the client's line ends and numerals: `\n` alone ends a
-    /// line, `[=[` has levels, and `0x10` is 0 then the name `x10`.
+    /// The client's long brackets, line ends and numerals: `[[` nests and has no `=` levels,
+    /// `\n` alone ends a line, and `0x10` is 0 then the name `x10`.
     #[test]
     fn the_lexer_is_the_script_hosts() {
         // The string constant a chunk returns.
@@ -236,7 +234,17 @@ mod tests {
         };
         assert_eq!(one(b"return [[a\r\nb]]"), b"a\r\nb", "a \\r is a byte");
         assert_eq!(one(b"return [[a [[b]] c]]"), b"a [[b]] c");
-        assert_eq!(one(b"return [=[a]]b]=]"), b"a]]b");
+        assert_eq!(one(b"return [[=[a]=]]"), b"=[a]=");
+        // No levels (`0x6ff793`, `read_long_string` `0x700010`): `[=[` is `[` then `=`, and
+        // `--[==[` a line comment, so the line after it is code (`0x6ff6c9`).
+        assert_eq!(err("x = [=[a]=]"), "t:1: unexpected symbol near `['");
+        assert_eq!(err("x = [==[a]==]"), "t:1: unexpected symbol near `['");
+        assert_eq!(
+            err("--[==[\nx = 1\n]==]"),
+            "t:3: unexpected symbol near `]'"
+        );
+        assert!(check(b"--[==[ x = 1 ]==]", b"=t").is_ok());
+        assert!(check(b"--[[ a [[ b ]] c ]] x = 1", b"=t").is_ok());
         assert!(check(b"x = 'a\rb'", b"=t").is_ok());
         assert_eq!(err("x = 0x10"), "t:1: `=' expected near `<eof>'");
         assert!(check(b"a=1b=2", b"=t").is_ok());
