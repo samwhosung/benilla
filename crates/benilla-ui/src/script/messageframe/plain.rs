@@ -81,21 +81,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| with_mf(lua, &this, MessageFrameState::clear))?,
     )?;
 
-    // SetInsertMode (`0x794ed0`) compares against "BOTTOM" (`0x871404`), so anything else is
-    // TOP; the ctor default is BOTTOM.
+    // SetInsertMode (`0x794ed0`): a `lua_isstring` value (`0x794f5c`), a number as its text,
+    // compared whole and without case, untrimmed (`SStrCmpI`), with "TOP" (`0x8713e0`) then
+    // "BOTTOM" (`0x871404`). Anything else raises `Usage: %s:SetInsertMode("TOP" or "BOTTOM")`
+    // (`0x87ba50`) naming the frame, the mode left alone. The ctor default is BOTTOM.
     m.set(
         "SetInsertMode",
         lua.create_function(|lua, (this, mode): (Table, Value)| {
-            let mode = match &mode {
-                Value::String(s) => {
-                    if s.to_str()?.trim().eq_ignore_ascii_case("BOTTOM") {
-                        InsertMode::Bottom
-                    } else {
-                        InsertMode::Top
-                    }
+            with_mf(lua, &this, |_| ())?;
+            let mode = match crate::script::binding_abi::optional_string(lua, &mode) {
+                Some(m) if m.eq_ignore_ascii_case("TOP") => InsertMode::Top,
+                Some(m) if m.eq_ignore_ascii_case("BOTTOM") => InsertMode::Bottom,
+                _ => {
+                    return Err(crate::script::binding_abi::usage(
+                        lua,
+                        &this,
+                        r#"SetInsertMode("TOP" or "BOTTOM")"#,
+                    ))
                 }
-                // A non-string fails the compare too.
-                _ => InsertMode::Top,
             };
             with_mf(lua, &this, |mf| mf.insert_mode = mode)
         })?,

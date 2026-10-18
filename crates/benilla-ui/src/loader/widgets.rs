@@ -374,9 +374,16 @@ impl Loader<'_> {
                 }
             }
         }
+        // A non-empty `insertMode` is BOTTOM when it equals "BOTTOM" whole and without case, and
+        // TOP otherwise, never a raise (`0x785a46`-`0x785a68`).
         if plain {
-            if let Some(mode) = el.attr("insertMode") {
-                self.call(wrapper, "SetInsertMode", mode.trim().to_string(), dbg);
+            if let Some(mode) = el.attr("insertMode").filter(|m| !m.is_empty()) {
+                let mode = if mode.eq_ignore_ascii_case("BOTTOM") {
+                    "BOTTOM"
+                } else {
+                    "TOP"
+                };
+                self.call(wrapper, "SetInsertMode", mode, dbg);
             }
         }
         if let Some(s) = el

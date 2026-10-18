@@ -212,3 +212,60 @@ fn set_hyperlink_format_takes_a_number_and_names_the_frame() {
     s.run(r#"assert(LinkHTML:GetHyperlinkFormat() == "5")"#)
         .unwrap();
 }
+
+/// `SetInsertMode` (`0x794ed0`) takes a `lua_isstring` value compared whole, without case and
+/// untrimmed, with "TOP" then "BOTTOM" (`0x794f7e`, `0x794fa0`); anything else raises
+/// `Usage: %s:SetInsertMode("TOP" or "BOTTOM")` (`0x87ba50`) and leaves the mode.
+#[test]
+fn set_insert_mode_raises_on_anything_but_top_or_bottom() {
+    let s = script();
+    s.run(r#"InsertMF = CreateFrame("MessageFrame", "InsertMF")"#)
+        .unwrap();
+    for call in [
+        r#"InsertMF:SetInsertMode(" TOP")"#,
+        r#"InsertMF:SetInsertMode("BOTOM")"#,
+        "InsertMF:SetInsertMode(1)",
+        "InsertMF:SetInsertMode()",
+    ] {
+        let e = err(&s, call);
+        assert!(
+            e.contains(r#"Usage: InsertMF:SetInsertMode("TOP" or "BOTTOM")"#),
+            "`{call}` -> {e}"
+        );
+    }
+    s.run(
+        r#"
+        assert(InsertMF:GetInsertMode() == "BOTTOM", "a raise keeps the mode")
+        InsertMF:SetInsertMode("top"); assert(InsertMF:GetInsertMode() == "TOP")
+        InsertMF:SetInsertMode("bottom"); assert(InsertMF:GetInsertMode() == "BOTTOM")
+    "#,
+    )
+    .unwrap();
+    let e = err(&s, r#"CreateFrame("MessageFrame"):SetInsertMode("x")"#);
+    assert!(e.contains("Usage: <unnamed>:SetInsertMode("), "{e}");
+}
+
+/// The XML `insertMode` never raises: a non-empty value is BOTTOM when it equals "BOTTOM" without
+/// case, TOP otherwise (`0x785a46`-`0x785a68`).
+#[test]
+fn xml_insert_mode_is_bottom_or_top_without_a_raise() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <MessageFrame name="XmlMF1" insertMode="bottom"/>
+            <MessageFrame name="XmlMF2" insertMode="SIDEWAYS"/>
+            <MessageFrame name="XmlMF3" insertMode=" BOTTOM"/>
+        </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    s.run(
+        r#"
+        assert(XmlMF1:GetInsertMode() == "BOTTOM")
+        assert(XmlMF2:GetInsertMode() == "TOP")
+        assert(XmlMF3:GetInsertMode() == "TOP")
+    "#,
+    )
+    .unwrap();
+}
