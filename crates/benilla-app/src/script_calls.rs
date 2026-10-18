@@ -745,6 +745,56 @@ mod tests {
         }
     }
 
+    /// `SetLootMethod`'s master name runs the resolver in mode 2 (`0x4e9418`, filter `0x493eca`):
+    /// a held groupmate resolves through the candidate feed while `CanAssist` and alive, and a
+    /// dead one is no candidate, so the name finds nobody and the binding sends nothing.
+    #[test]
+    fn set_loot_method_resolves_a_held_groupmate_only_while_alive() {
+        use benilla_ui::script::{PartyMemberInfo, PartyRequest, PartyState};
+        for (health, resolved) in [(100, true), (0, false)] {
+            let mut f = frame(false);
+            // OLD is a friendly player-controlled unit, our groupmate "Olly" in `party1`.
+            with_factions(&mut f, FRIEND, &[(FLAGS, 0x8), (HEALTH, health)]);
+            let world = f.app.world_mut();
+            let mut names = world.resource_mut::<crate::names::NameCache>();
+            names.insert_player(OLD, "Olly".into(), None);
+            names.insert_player(ME, "Me".into(), None);
+            world
+                .run_system_once(crate::ui_unit::feed_name_candidates)
+                .expect("the candidate feed runs as a one-shot system");
+            let mut script = f.app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_party(PartyState {
+                members: vec![PartyMemberInfo {
+                    name: "Olly".into(),
+                    guid: OLD,
+                }],
+                leader_index: 0,
+                leader_guid: ME,
+                own_guid: ME,
+                ..Default::default()
+            });
+            script.set_unit(
+                "party1",
+                Some(benilla_ui::script::UnitState {
+                    exists: true,
+                    has_object: true,
+                    guid: OLD,
+                    ..Default::default()
+                }),
+            );
+            script
+                .run(r#"SetLootMethod("master", "Ol")"#)
+                .expect("the script runs");
+            let sent = script.take_party_requests();
+            let expected = resolved.then_some(PartyRequest::LootMethod {
+                method: 2,
+                master: OLD,
+                threshold: 2,
+            });
+            assert_eq!(sent, expected.into_iter().collect::<Vec<_>>(), "{health}");
+        }
+    }
+
     /// The candidate feed marks a `UNIT_FLAG_NOT_SELECTABLE` unit as the commit's `IsSelectable`
     /// does (`0x4935ee`): the nearer namesake is the ranked pick and it is refused, so the chunk
     /// keeps the old target's view and the commit keeps its selection, not the farther namesake.

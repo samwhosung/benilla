@@ -11,6 +11,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, number_arg};
+use super::by_name::{self, Filter, Kinds, Match, RosterEntry, Search};
 use super::Model;
 use crate::strings::{fill, global, Arg};
 
@@ -258,98 +259,46 @@ impl super::UiScript {
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
 
-/// `CGGameUI::ClosestObjectMatch` (`0x493aa0`) as `SetLootMethod` calls it (mode 2, `0x4e9418`),
-/// over the group: the best guid for `name`, or `None`.
-///
-/// The reference runs three passes, each offering a name to the matcher `0x493c60`. First the four
-/// party slots in order (`0x493b22`), then the raid roster in order (`0x493ba7`), each only when
-/// the member has no object held (`0x468460` NULL), at the placeholder distance `0x4f1502f9`
-/// (`0x493b74`, `0x493c0c`); then every held living player by real distance (`0x468380` with
-/// `0x493d30`, mode 2's filter `0x493eca`). The matcher takes a name equal without case at once
-/// when its distance is below the best so far (`0x493c7f`..`0x493c93`); otherwise the length of
-/// the case-folded prefix it shares with `name` (`0x493cc0`..`0x493cee`) must reach the best
-/// length, which starts at 1, and a longer prefix wins outright while an equal one needs a
-/// smaller distance (`0x493cf8`..`0x493d09`). So `"Bo"` finds "Bob", the first of several equal
-/// prefixes in roster order keeps the place, and a name sharing no first letter finds nobody.
-///
-/// Not modelled: held players outside the group, which the reference's third pass also offers,
-/// at real distances; and the real distances among held group members, which keep roster order.
+/// `SetLootMethod`'s master name through the shared resolver ([`by_name::resolve`]), as
+/// `0x4e9418` calls `0x493aa0`: players only, mode 2 (`CanAssist` and alive), whole name or longest
+/// prefix. The roster is the party slots (`0x493b22`) then the raid (`0x493ba7`); our own row is
+/// held, as the active player object always is, and is offered by the object pass at distance 0.
 fn closest_group_member(model: &Model, name: &str) -> Option<u64> {
-    struct Best<'a> {
-        search: &'a [u8],
-        guid: Option<u64>,
-        len: usize,
-        distance: f32,
-    }
-    impl Best<'_> {
-        /// `0x493c60`; `true` once an exact name ends the search.
-        fn offer(&mut self, candidate: &str, guid: u64, distance: f32) -> bool {
-            let cand = candidate.as_bytes();
-            if cand.eq_ignore_ascii_case(self.search) && distance < self.distance {
-                self.guid = Some(guid);
-                return true;
-            }
-            let len = cand
-                .iter()
-                .zip(self.search)
-                .take_while(|(c, s)| c.eq_ignore_ascii_case(s))
-                .count();
-            if len > self.len || (len == self.len && distance < self.distance) {
-                self.guid = Some(guid);
-                self.len = len;
-                self.distance = distance;
-            }
-            false
-        }
-    }
-    /// The placeholder distance the roster passes hand the matcher (`0x4f1502f9`).
-    const ROSTER_DISTANCE: f32 = f32::from_bits(0x4f15_02f9);
     let party = &model.party;
     let held = |token: String| model.unit(&token).is_some_and(|u| u.has_object);
-    let mut best = Best {
-        search: name.as_bytes(),
-        guid: None,
-        len: 1,
-        distance: f32::MAX,
-    };
-    let mut near: Vec<(&str, u64)> = Vec::new();
-    let roster = party
+    let members = party
         .members
         .iter()
         .take(4)
         .enumerate()
-        .map(|(i, m)| (m.name.as_str(), m.guid, held(format!("party{}", i + 1))))
-        .chain(party.raid.iter().enumerate().map(|(i, m)| {
-            let me = party.own_guid != 0 && m.guid == party.own_guid;
-            (
-                m.name.as_str(),
-                m.guid,
-                me || held(format!("raid{}", i + 1)),
-            )
-        }));
-    for (candidate, guid, is_held) in roster {
-        if guid == 0 || candidate.is_empty() {
-            continue;
-        }
-        if is_held {
-            near.push((candidate, guid));
-        } else if best.offer(candidate, guid, ROSTER_DISTANCE) {
-            return best.guid;
-        }
-    }
-    // The player's own object is the nearest (`0x493d30` measures from it).
-    let own = model.unit("player").and_then(|u| u.name.as_deref());
-    if let Some(own) = own.filter(|n| !n.is_empty() && party.own_guid != 0) {
-        if best.offer(own, party.own_guid, 0.0) {
-            return best.guid;
-        }
-    }
-    for (i, (candidate, guid)) in near.into_iter().enumerate() {
-        if best.offer(candidate, guid, 1.0 + i as f32) {
-            break;
-        }
-    }
-    best.guid
+        .map(|(i, m)| RosterEntry {
+            name: &m.name,
+            guid: m.guid,
+            held: held(format!("party{}", i + 1)),
+        });
+    let raid = party.raid.iter().enumerate().map(|(i, m)| RosterEntry {
+        name: &m.name,
+        guid: m.guid,
+        held: (party.own_guid != 0 && m.guid == party.own_guid) || held(format!("raid{}", i + 1)),
+    });
+    let search = Search {
+        query: name,
+        kinds: Kinds::PlayerOnly,
+        filter: Filter::AssistableAlive,
+        exact: Match::PrefixOk,
+    };
+    by_name::resolve(search, members, raid, model.held_candidates()).map(|pick| pick.guid)
+}
+
+/// Whether `guid` is ourselves or on the party slots (`0x4e7f70`), or on the raid roster
+/// (`0x4baee0`); a zero guid is neither.
+fn is_group_member(lua: &Lua, guid: u64) -> bool {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let party = &model.party;
+    guid != 0
+        && (guid == party.own_guid
+            || party.members.iter().take(4).any(|m| m.guid == guid)
+            || party.raid.iter().any(|m| m.guid == guid))
 }
 
 /// The checks both loot setters open with: not in a group (the first party guid and the raid
@@ -677,7 +626,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     closest_group_member(&model, &name)
                 };
-                let Some(guid) = found else {
+                // The pick must be ourselves (`0x4e7f70`, which also tests the four party slots)
+                // or in the raid (`0x4baee0`); a stranger the resolver preferred is refused with
+                // the typed name, and no next-best member is tried.
+                let Some(guid) = found.filter(|g| is_group_member(lua, *g)) else {
                     chat_error(lua, "ERR_TARGET_NOT_IN_GROUP_S", &[Arg::S(&name)]);
                     return Ok(());
                 };
@@ -1605,6 +1557,125 @@ mod tests {
             vec![loot_request(2, 0x1, 2)],
             "the longer prefix wins"
         );
+    }
+
+    /// A held player the app's candidate feed pushes: `name` at `dist2`, `assistable_alive` as the
+    /// mode-2 filter reads it.
+    fn held_player(
+        guid: u64,
+        name: &str,
+        dist2: f32,
+        assistable_alive: bool,
+    ) -> crate::script::NameCandidate {
+        crate::script::NameCandidate {
+            name: name.into(),
+            dist2,
+            state: crate::script::UnitState {
+                exists: true,
+                has_object: true,
+                guid,
+                name: Some(name.into()),
+                is_player: true,
+                ..Default::default()
+            },
+            selectable: true,
+            assistable_alive,
+        }
+    }
+
+    /// The party token `token` has an object, so the roster passes leave it to the object pass.
+    fn hold(s: &mut UiScript, token: &str, guid: u64, name: &str) {
+        s.set_unit(
+            token,
+            Some(crate::script::UnitState {
+                exists: true,
+                has_object: true,
+                guid,
+                name: Some(name.into()),
+                ..Default::default()
+            }),
+        );
+    }
+
+    /// `0x493aa0` runs the object pass after the roster passes (`0x493c2c`), so an assistable
+    /// player in range outranks a groupmate with no object at an equal prefix (the roster's
+    /// placeholder distance is the larger, `0x4f1502f9`); the pick is then no groupmate and the
+    /// binding prints game error 0x49 with the typed name (`0x4e9440`, `esi` the argument).
+    #[test]
+    fn a_held_stranger_outranks_an_unheld_groupmate_and_is_refused() {
+        let mut s = loot_vm(led_party());
+        s.set_name_candidate(0xB0B1, Some(held_player(0xB0B1, "Bobby", 25.0, true)));
+        s.run(r#"SetLootMethod("master", "Bo")"#).unwrap();
+        assert!(s.take_party_requests().is_empty(), "Bobby is no groupmate");
+        assert_eq!(
+            s.take_shown_chat_lines(),
+            vec![(
+                "ERR_TARGET_NOT_IN_GROUP_S",
+                "Bo is not in your group.".to_string()
+            )]
+        );
+        // A longer prefix still wins at any distance: the unheld Bob answers "Bob".
+        s.run(r#"SetLootMethod("master", "Bob")"#).unwrap();
+        assert_eq!(s.take_party_requests(), vec![loot_request(2, 0xB0B, 2)]);
+        // Only the matcher's best is tried: the stranger is not skipped for the next-best member.
+        let mut s = loot_vm(led_party());
+        s.set_name_candidate(0xA1, Some(held_player(0xA1, "Alicia", 4.0, true)));
+        s.run(r#"SetLootMethod("master", "Ali")"#).unwrap();
+        assert!(s.take_party_requests().is_empty());
+        assert_eq!(s.take_shown_chat_lines().len(), 1);
+    }
+
+    /// Mode 2's filter (`0x493eca`) is `CanAssist` and health above 0: a held groupmate who fails it
+    /// is not offered by the roster passes (they skip held members, `0x493b4d`) nor by the object
+    /// pass, so nobody resolves; and a creature is outside typemask 0x10.
+    #[test]
+    fn a_held_groupmate_who_is_dead_or_unassistable_is_not_resolved() {
+        let mut s = loot_vm(led_party());
+        hold(&mut s, "party2", 0xB0B, "Bob");
+        s.set_name_candidate(0xB0B, Some(held_player(0xB0B, "Bob", 9.0, false)));
+        s.run(r#"SetLootMethod("master", "Bob")"#).unwrap();
+        assert!(s.take_party_requests().is_empty());
+        assert_eq!(s.take_shown_chat_lines().len(), 1);
+        // Alive again, the same candidate resolves.
+        s.set_name_candidate(0xB0B, Some(held_player(0xB0B, "Bob", 9.0, true)));
+        s.run(r#"SetLootMethod("master", "Bob")"#).unwrap();
+        assert_eq!(s.take_party_requests(), vec![loot_request(2, 0xB0B, 2)]);
+        // A held creature is outside the typemask, so its longer prefix does not displace the
+        // unheld groupmate Bob's.
+        let mut s = loot_vm(led_party());
+        let mut cat = held_player(0xF130_0001, "Bobcat", 1.0, true);
+        cat.state.is_player = false;
+        s.set_name_candidate(0xF130_0001, Some(cat));
+        s.run(r#"SetLootMethod("master", "Bobc")"#).unwrap();
+        assert_eq!(s.take_party_requests(), vec![loot_request(2, 0xB0B, 2)]);
+    }
+
+    /// Of two held groupmates with an equal prefix the nearer wins (`0x493cfc`, strictly below the
+    /// best); the roster order decides nothing once both are held.
+    #[test]
+    fn of_two_held_groupmates_the_nearer_wins() {
+        let party = PartyState {
+            members: vec![
+                PartyMemberInfo {
+                    name: "Bob".into(),
+                    guid: 0xB1,
+                },
+                PartyMemberInfo {
+                    name: "Bobby".into(),
+                    guid: 0xB2,
+                },
+            ],
+            ..led_party()
+        };
+        for (bob, bobby, guid) in [(400.0, 16.0, 0xB2), (16.0, 400.0, 0xB1)] {
+            let mut s = loot_vm(party.clone());
+            hold(&mut s, "party1", 0xB1, "Bob");
+            hold(&mut s, "party2", 0xB2, "Bobby");
+            s.set_name_candidate(0xB1, Some(held_player(0xB1, "Bob", bob, true)));
+            s.set_name_candidate(0xB2, Some(held_player(0xB2, "Bobby", bobby, true)));
+            s.run(r#"SetLootMethod("master", "Bo")"#).unwrap();
+            assert_eq!(s.take_party_requests(), vec![loot_request(2, guid, 2)]);
+        }
     }
 
     #[test]
