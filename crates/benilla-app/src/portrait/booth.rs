@@ -1192,6 +1192,7 @@ mod tests {
                 anim_id: 0,
                 seq_index: 0,
                 node: bevy::animation::graph::AnimationNodeIndex::new(1),
+                blend_node: None,
                 looping: true,
                 duration: 0.5,
                 move_speed: 0.0,

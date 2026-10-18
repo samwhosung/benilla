@@ -16,6 +16,7 @@ fn clip(anim_id: u16, move_speed: f32) -> AnimClip {
         anim_id,
         seq_index: 0,
         node: AnimationNodeIndex::new(0),
+        blend_node: None,
         looping: true,
         duration: 1.0,
         move_speed,

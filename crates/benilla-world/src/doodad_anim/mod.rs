@@ -487,6 +487,7 @@ mod tests {
             anim_id,
             seq_index: 0,
             node: AnimationNodeIndex::new(1),
+            blend_node: None,
             looping: true,
             duration: 2.0,
             move_speed: 0.0,
@@ -554,6 +555,7 @@ mod tests {
         AnimClip {
             seq_index,
             node: AnimationNodeIndex::new(node),
+            blend_node: None,
             ..clip(anim_id)
         }
     }

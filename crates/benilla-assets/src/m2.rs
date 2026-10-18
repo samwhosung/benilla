@@ -510,6 +510,10 @@ impl AssetLoader for M2ModelLoader {
                     let clip = ctx.add_labeled_asset(format!("clip{i}"), clip);
                     let node = graph.add_clip(clip.clone(), 1.0, root);
                     pose.set_node(node, pose_idx, 0);
+                    // The key bone's blend slot keeps the outgoing sequence on its own clock
+                    // (`0x7125ea`), and it can be the sequence the primary re-arms.
+                    let blend_node = graph.add_clip(clip.clone(), 1.0, root);
+                    pose.set_node(blend_node, pose_idx, 0);
                     // The sheath family (89/90) gets per-arm masked nodes.
                     let arm_nodes =
                         (matches!(anim.anim_id, 89 | 90) && arm_roots.is_some()).then(|| {
@@ -532,6 +536,7 @@ impl AssetLoader for M2ModelLoader {
                         anim_id: anim.anim_id,
                         seq_index: anim.seq_index,
                         node,
+                        blend_node: Some(blend_node),
                         looping: anim.looping,
                         duration: anim.duration,
                         move_speed: anim.move_speed,

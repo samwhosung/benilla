@@ -2624,6 +2624,7 @@ mod tests {
                 anim_id: 0,
                 seq_index: 0,
                 node: node(STAND_NODE),
+                blend_node: None,
                 looping: true,
                 duration: 2.0,
                 move_speed: 0.0,

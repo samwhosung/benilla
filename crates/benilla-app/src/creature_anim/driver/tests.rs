@@ -29,6 +29,7 @@ fn clip(anim_id: u16, node: u32, looping: bool) -> AnimClip {
         anim_id,
         seq_index: 0,
         node: AnimationNodeIndex::new(node as usize),
+        blend_node: None,
         looping,
         duration: 1.0,
         move_speed: 0.0,
@@ -284,6 +285,7 @@ fn spawn_fidgeter(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
         .add(graph);
     let seq = |id: u16, node, duration: f32, frequency: u16| AnimClip {
         node,
+        blend_node: None,
         duration,
         blend_time: 0.0,
         frequency,
@@ -3113,6 +3115,7 @@ fn spawn_vendor(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
         .add(graph);
     let seq = |id: u16, node, duration: f32, blend_time: f32| AnimClip {
         node,
+        blend_node: None,
         duration,
         blend_time,
         replay: (0, 0),

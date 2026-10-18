@@ -121,7 +121,7 @@ pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<
     player
         .playing_animations()
         .filter_map(|(node, active)| {
-            let clip = anims.clips.iter().find(|c| c.node == *node)?;
+            let clip = anims.clip_at(*node)?;
             Some((clip.seq_index, active.seek_time(), active.weight()))
         })
         .max_by(|a, b| a.2.total_cmp(&b.2))

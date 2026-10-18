@@ -871,6 +871,7 @@ mod tests {
                     anim_id: id,
                     seq_index: 0,
                     node,
+                    blend_node: None,
                     // The crate's clips are bit-0-clear bands: the kernel loops them.
                     looping: true,
                     duration: dur,

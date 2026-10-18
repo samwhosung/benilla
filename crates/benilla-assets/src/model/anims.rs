@@ -32,6 +32,9 @@ pub struct AnimClip {
     /// The file slot the per-sequence bakes key on, not the index in [`ModelAnimations::clips`].
     pub seq_index: usize,
     pub node: AnimationNodeIndex,
+    /// A second full-body node on the same clip, so a key bone's blend slot can run this sequence
+    /// on a clock of its own while the primary re-arms it (`+0xc4`, copied whole at `0x7125ea`).
+    pub blend_node: Option<AnimationNodeIndex>,
     pub looping: bool,
     /// Length in seconds; a unit streamed in dead seeks its one-shot to the end pose.
     pub duration: f32,
@@ -146,6 +149,13 @@ impl ModelAnimations {
             .or_else(|| self.clips.first())
     }
 
+    /// The clip a graph node plays as its full-body pose, on either of its two tracks.
+    pub fn clip_at(&self, node: AnimationNodeIndex) -> Option<&AnimClip> {
+        self.clips
+            .iter()
+            .find(|c| c.node == node || c.blend_node == Some(node))
+    }
+
     /// Pick a variation of `anim_id` for a `rand()` roll, the reference's weighted walk
     /// (`0x7121a0`, variation −1). Exhaustion keeps the head: only the win path (`0x7124e9`)
     /// overwrites the slot set at `0x71247a`. Variations are the sequences sharing `anim_id` in
@@ -223,6 +233,7 @@ mod tests {
             anim_id,
             seq_index: 0,
             node: AnimationNodeIndex::new(0),
+            blend_node: None,
             looping: true,
             duration: 1.0,
             move_speed: 0.0,

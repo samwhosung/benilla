@@ -413,6 +413,7 @@ mod tests {
             anim_id: 11,
             seq_index: 38,
             node: AnimationNodeIndex::new(7),
+            blend_node: None,
             looping: true,
             duration: 0.5,
             move_speed: 0.0,

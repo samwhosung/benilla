@@ -235,6 +235,7 @@ mod tests {
             anim_id,
             seq_index: 0,
             node: AnimationNodeIndex::new(node as usize),
+            blend_node: None,
             looping,
             duration,
             move_speed: 0.0,

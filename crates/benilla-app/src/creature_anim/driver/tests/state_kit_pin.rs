@@ -39,6 +39,7 @@ fn spawn_orc(app: &mut App) -> (Entity, [AnimationNodeIndex; 3]) {
         .add(graph);
     let seq = |id: u16, node, looping| AnimClip {
         node,
+        blend_node: None,
         duration: SPAN,
         blend_time: 0.0,
         replay: (0, 0),
@@ -392,6 +393,7 @@ fn spawn_runner(app: &mut App) -> (Entity, [AnimationNodeIndex; 6]) {
         .add(graph);
     let seq = |id: u16, node, looping| AnimClip {
         node,
+        blend_node: None,
         duration: SPAN,
         blend_time: 0.0,
         replay: (0, 0),

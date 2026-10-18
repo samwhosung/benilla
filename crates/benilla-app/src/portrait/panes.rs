@@ -178,7 +178,8 @@ struct StandIn {
 pub(super) struct Turn {
     /// The serial of the engine arm last played.
     played: Option<u64>,
-    /// The node the primary runs; the spawn's idle Stand until the first arm (`0x70ebd0`).
+    /// The node the primary runs, either of its clip's two tracks; the spawn's idle Stand until
+    /// the first arm (`0x70ebd0`).
     pub(super) playing: Option<AnimationNodeIndex>,
     pub(super) fade: Option<Fade>,
     /// When the primary's window closes, `start + span·R` (`0x712692`); `None` once reported.
@@ -187,7 +188,8 @@ pub(super) struct Turn {
     completed: bool,
 }
 
-/// The secondary blend slot (`[blk+0xc4]`, `0x7125d6`): the pose an arm replaced, faded out by λ.
+/// The secondary blend slot (`[blk+0xc4]`, `0x7125d6`): the pose an arm replaced, on its own clock
+/// and a track the primary is not using, faded out by λ.
 #[derive(Clone, Copy)]
 pub(super) struct Fade {
     pub(super) node: AnimationNodeIndex,
@@ -200,6 +202,13 @@ pub(super) struct Fade {
 /// The fade still to run, 1 to 0: `(blendEnd − now) · blendRate`, recomputed every frame.
 fn fade_frac(fade: &Fade, now: f64) -> f32 {
     ((fade.until - now) / f64::from(fade.span)) as f32
+}
+
+/// Empty the secondary slot, stopping its track.
+fn clear_fade(player: &mut AnimationPlayer, turn: &mut Turn) {
+    if let Some(old) = turn.fade.take() {
+        player.stop(old.node);
+    }
 }
 
 /// One engine arm, `0x7121a0(bone −1, id, variation −1, offset, 1.0, blend, 1)`. The id resolves
@@ -222,100 +231,81 @@ fn play_arm(
         return false;
     };
     let replays = rng.replay_count(clip.replay);
-    let (node, looping, blend_time) = (clip.node, clip.looping, clip.blend_time.max(0.0));
-    let same = outgoing == Some(node);
-    // The shortcut (`0x712553`): a blended arm of the sequence that already ran to its end
-    // restarts it with no blend slot.
-    let shortcut = blend && same && turn.completed;
-    if !blend || shortcut {
+    let blend_time = clip.blend_time.max(0.0);
+    // The primary's record (`[blk+0xa4]`), on either of its clip's tracks.
+    let same = outgoing.is_some_and(|n| n == clip.node || Some(n) == clip.blend_node);
+    if !blend {
         // No blend: the secondary slot is cleared (`0x712635`, `[blk+0xd0] = −1`).
-        if let Some(old) = turn.fade.take() {
-            if old.node != node {
-                player.stop(old.node);
-            }
-        }
-    }
-    // The half-blend refusal (`0x7125c9`/`0x7125d4`): a running blend with λ > 0.5 keeps its
-    // secondary and window, and the outgoing primary is dropped.
-    let refused = blend
-        && !shortcut
-        && turn
-            .fade
-            .is_some_and(|f| crate::creature_anim::select::blend_lambda(fade_frac(&f, now)) > 0.5);
-    if refused {
-        if let Some(out) = outgoing.filter(|o| *o != node) {
-            player.stop(out);
-        }
-    } else if blend && !shortcut {
-        // One secondary slot: a fade in flight is displaced, unless it is the node replaying.
-        if let Some(old) = turn.fade.take() {
-            if old.node != node && Some(old.node) != outgoing {
-                player.stop(old.node);
-            }
-        }
-    }
-    let fade = if refused {
-        turn.fade
-    } else if blend && !shortcut && !same && blend_time > 0.0 {
-        outgoing.map(|node| Fade {
+        clear_fade(player, turn);
+    } else if same && turn.completed {
+        // The shortcut (`0x712553` → `0x71262d`): the sequence that ran to its end is written
+        // again as the primary alone; the secondary and its window stay as they are.
+    } else if turn
+        .fade
+        .is_none_or(|f| crate::creature_anim::select::blend_lambda(fade_frac(&f, now)) <= 0.5)
+    {
+        // The copy (`0x7125d6`): the outgoing primary becomes the secondary, its clock kept, over
+        // the incoming clip's blendTime (`0x7125f2`). A zero blendTime ends it on the next pass.
+        clear_fade(player, turn);
+        turn.fade = outgoing.filter(|_| blend_time > 0.0).map(|node| Fade {
             node,
             until: now + f64::from(blend_time),
             span: blend_time,
-        })
-    } else {
-        None
-    };
-    // A blended re-arm of the running sequence, latch clear, fades from that sequence on its own
-    // clock (`0x71255f` → `0x7125d6`). The player holds one track per clip, so the track runs on
-    // through the window instead: no restart, no jump.
-    let continues = blend && same && !shortcut && !refused;
-    {
-        // Set explicitly: `play` is idempotent on a live node, which would keep its old clock and
-        // weight.
-        let active = player.play(node);
-        active.set_repeat(if looping {
-            RepeatAnimation::Forever
-        } else {
-            RepeatAnimation::Never
         });
-        active.set_speed(1.0);
-        if !continues {
-            active.seek_to(offset);
-        }
-        // λ = 1 on a blended arm's first frame, so the pose does not move on the frame it lands.
-        active.set_weight(if fade.is_some() { 0.0 } else { 1.0 });
     }
-    if fade.is_none() {
-        if let Some(out) = outgoing.filter(|o| *o != node) {
-            player.stop(out);
+    // Else the half-blend refusal (`0x7125c9`/`0x7125d4`): λ > 0.5 keeps the secondary and its
+    // window, and the primary alone is written.
+    // The primary runs on the clip's track the secondary is not on, so a re-arm of the sequence
+    // the secondary holds leaves that clock alone.
+    let node = match (turn.fade, clip.blend_node) {
+        (Some(f), Some(twin)) if f.node == clip.node => twin,
+        (Some(f), None) if f.node == clip.node => {
+            // A model built with one track per clip: the arm takes it, and the secondary ends.
+            turn.fade = None;
+            clip.node
         }
+        _ => clip.node,
+    };
+    // The primary write replaces the outgoing primary (`0x712692`), unless the copy kept it.
+    if let Some(out) = outgoing.filter(|&o| o != node && turn.fade.is_none_or(|f| f.node != o)) {
+        player.stop(out);
     }
+    let active = player.start(node);
+    active.set_repeat(if clip.looping {
+        RepeatAnimation::Forever
+    } else {
+        RepeatAnimation::Never
+    });
+    active.set_speed(1.0);
+    active.seek_to(offset);
+    // λ = 1 on a blended arm's first frame, so the pose does not move on the frame it lands.
+    active.set_weight(if turn.fade.is_some() { 0.0 } else { 1.0 });
     turn.playing = Some(node);
-    turn.fade = fade;
     turn.completed = false;
     turn.ends = Some(now - f64::from(offset) + f64::from(clip.duration) * f64::from(replays));
     true
 }
 
-/// Advance the fade: λ, smoothstep of the window still to run (`0x714880`), weights the outgoing
-/// pose and the incoming takes `1 − λ`.
+/// Advance the fade: λ, smoothstep of the window still to run (`0x714880`), weights the secondary
+/// and the primary takes `1 − λ`. At the window's end (`0x7147b1`) the secondary alone stops.
 fn advance_fade(player: &mut AnimationPlayer, turn: &mut Turn, now: f64) {
     let Some(fade) = turn.fade else {
         return;
     };
     let frac = fade_frac(&fade, now);
-    if frac <= 0.0 {
+    let lambda = if frac <= 0.0 {
         turn.fade = None;
         player.stop(fade.node);
-        if let Some(cur) = turn.playing {
-            player.play(cur).set_weight(1.0);
-        }
+        0.0
     } else {
         let lambda = crate::creature_anim::select::blend_lambda(frac);
-        player.play(fade.node).set_weight(lambda);
-        if let Some(cur) = turn.playing {
-            player.play(cur).set_weight(1.0 - lambda);
+        if let Some(out) = player.animation_mut(fade.node) {
+            out.set_weight(lambda);
         }
+        lambda
+    };
+    if let Some(cur) = turn.playing.and_then(|n| player.animation_mut(n)) {
+        cur.set_weight(1.0 - lambda);
     }
 }
 

@@ -11,6 +11,8 @@ fn turning_model() -> benilla_assets::ModelAnimations {
         anim_id,
         seq_index: 0,
         node: AnimationNodeIndex::new(node),
+        // The blend slot's own track of each, nodes 5 to 8.
+        blend_node: Some(AnimationNodeIndex::new(node + 4)),
         looping: true,
         duration: 0.5,
         move_speed: 0.0,
@@ -316,11 +318,12 @@ fn an_arm_reports_its_natural_end_once() {
 }
 
 /// `0x7121a0` resolves an id the model lacks through its fallback (`0x711bf0`, default Stand),
-/// so a pet with no shuffles plays Stand for one; the paint's Stand return then re-arms the
-/// running sequence with the latch clear, which blends (`0x71255f`) rather than snapping the idle
-/// back to its first frame.
+/// so a pet with no shuffles plays Stand for one. That re-arm of the running Stand, latch clear,
+/// copies it to the secondary on its own clock (`0x71255f` → `0x7125d6`) and restarts the primary
+/// on the clip's other track; the paint's Stand return, inside that blend's first half, is refused
+/// (`0x7125d4`) and restarts the primary alone while the idle fades on.
 #[test]
-fn a_display_with_no_shuffle_turns_on_stand_and_returns_without_a_snap() {
+fn a_display_with_no_shuffle_turns_on_stand_and_fades_from_the_idles_own_clock() {
     let mut anims = turning_model();
     anims.clips.retain(|c| c.anim_id == ANIM_STAND);
     // The model's own baked resolution: both shuffles fall back to Stand.
@@ -340,17 +343,131 @@ fn a_display_with_no_shuffle_turns_on_stand_and_returns_without_a_snap() {
     c.step(arm(ANIM_STAND, 1, true), 0.6); // the idle's fade done
     c.player.play(node(2)).seek_to(0.3);
     c.step(arm(ANIM_SHUFFLE_LEFT, 2, true), 1.0);
-    assert_eq!(c.turn.playing, Some(node(2)), "the substitute plays");
+    assert_eq!(
+        c.turn.playing,
+        Some(node(6)),
+        "the substitute restarts on Stand's second track"
+    );
     assert!(c.turn.ends.is_some(), "an arm that played owes its end");
-    // The paint's return, 100 ms on.
+    assert_eq!(c.turn.fade.map(|f| (f.node, f.until)), Some((node(2), 1.5)));
+    // The paint's return, 110 ms on.
     c.step(arm(ANIM_STAND, 3, true), 1.11);
-    assert!(c.turn.fade.is_none(), "nothing else to fade from");
-    assert_eq!(weight(&c.player, 2), Some(1.0));
+    assert_eq!(c.turn.playing, Some(node(6)));
+    assert_eq!(
+        c.turn.fade.map(|f| (f.node, f.until)),
+        Some((node(2), 1.5)),
+        "the refused arm keeps the window"
+    );
     assert_eq!(
         c.player.animation(node(2)).map(|a| a.seek_time()),
         Some(0.3),
-        "the idle runs on, no snap to frame 0"
+        "the idle fades out on its own clock, no snap to frame 0"
     );
+    assert_eq!(
+        c.player.animation(node(6)).map(|a| a.seek_time()),
+        Some(0.0)
+    );
+    let (out, inc) = (weight(&c.player, 2).unwrap(), weight(&c.player, 6).unwrap());
+    assert!((out + inc - 1.0).abs() < 1e-5 && out > 0.5, "{out} / {inc}");
+}
+
+/// A held arrow, frame by frame: the shuffle runs to its end, the callback arms Stand (`0x5062e4`),
+/// which copies the shuffle to the secondary (`0x7125d6`), and the next `SetRotation` re-arms the
+/// shuffle inside Stand's first half, refused (`0x7125d4`). The secondary keeps the old shuffle on
+/// its clock while the new one runs from 0 on the clip's other track.
+fn held_turn() -> Copy {
+    let mut c = Copy::standing();
+    let first = arm(ANIM_SHUFFLE_RIGHT, 2, true);
+    c.step(first, 1.0);
+    c.step(first, 1.3); // the shuffle's own fade done
+    c.player.play(node(4)).seek_to(0.45);
+    assert_eq!(c.step(first, 1.5), Some(2), "its window closes");
+    c.step(arm(ANIM_STAND, 3, true), 1.517);
+    c.step(arm(ANIM_SHUFFLE_RIGHT, 4, true), 1.533);
+    c
+}
+
+#[test]
+fn a_held_turns_rearm_inside_stands_blend_keeps_the_old_shuffle_on_its_own_clock() {
+    let c = held_turn();
+    let fade = c.turn.fade.expect("Stand's fade still runs");
+    assert_eq!(fade.node, node(4), "fading the old shuffle");
+    assert!(
+        (fade.until - 2.017).abs() < 1e-9,
+        "on Stand's window, untouched"
+    );
+    assert_eq!(
+        c.player.animation(node(4)).map(|a| a.seek_time()),
+        Some(0.45),
+        "the old shuffle is not seeked back"
+    );
+    assert_eq!(c.turn.playing, Some(node(8)), "the new one is on the twin");
+    assert_eq!(
+        c.player.animation(node(8)).map(|a| a.seek_time()),
+        Some(0.0)
+    );
+    let (out, inc) = (weight(&c.player, 4).unwrap(), weight(&c.player, 8).unwrap());
+    assert!(
+        out > 0.99 && (out + inc - 1.0).abs() < 1e-5,
+        "{out} / {inc}"
+    );
+    assert_eq!(
+        weight(&c.player, 2),
+        None,
+        "the overwritten Stand is dropped"
+    );
+}
+
+/// At the window's end (`0x7147b1`) the secondary slot alone is emptied; the primary runs on.
+#[test]
+fn the_fade_window_ends_the_secondary_alone() {
+    let mut c = held_turn();
+    c.player.play(node(8)).seek_to(0.3);
+    c.step(arm(ANIM_SHUFFLE_RIGHT, 4, true), 2.02);
+    assert!(c.turn.fade.is_none());
+    assert_eq!(weight(&c.player, 4), None, "the old shuffle is stopped");
+    let primary = c
+        .player
+        .animation(node(8))
+        .expect("the primary still plays");
+    assert_eq!(
+        (primary.seek_time(), primary.weight(), primary.repeat_mode()),
+        (0.3, 1.0, RepeatAnimation::Forever),
+        "on its clock, whole, still looping"
+    );
+}
+
+/// The shortcut (`0x712553` → `0x71262d`) writes the primary alone: a fade in flight keeps its
+/// slot, clock and window.
+#[test]
+fn a_latched_same_sequence_rearm_leaves_a_live_fade_alone() {
+    let mut c = Copy::standing();
+    // 400 ms in, the shuffle's window closes before its own 0.25 s fade from Stand does.
+    let late = PaneArm {
+        offset_ms: 400,
+        ..arm(ANIM_SHUFFLE_LEFT, 2, true)
+    };
+    c.step(late, 1.0);
+    c.player.play(node(2)).seek_to(0.2);
+    assert_eq!(c.step(late, 1.1), Some(2));
+    c.step(arm(ANIM_SHUFFLE_LEFT, 3, true), 1.15);
+    assert_eq!(
+        c.turn.fade.map(|f| (f.node, f.until)),
+        Some((node(2), 1.25)),
+        "the secondary slot is left as it is"
+    );
+    assert_eq!(
+        c.player.animation(node(2)).map(|a| a.seek_time()),
+        Some(0.2)
+    );
+    assert_eq!(c.turn.playing, Some(node(3)));
+    assert_eq!(
+        c.player.animation(node(3)).map(|a| a.seek_time()),
+        Some(0.0),
+        "restarted"
+    );
+    let (out, inc) = (weight(&c.player, 2).unwrap(), weight(&c.player, 3).unwrap());
+    assert!(out > 0.0 && (out + inc - 1.0).abs() < 1e-5, "{out} / {inc}");
 }
 
 // ── The composite ─────────────────────────────────────────────────────────────────────────

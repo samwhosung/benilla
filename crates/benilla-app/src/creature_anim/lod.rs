@@ -201,6 +201,7 @@ mod tests {
                 anim_id: 0,
                 seq_index: 0,
                 node,
+                blend_node: None,
                 looping: true,
                 duration: DUR,
                 move_speed: 0.0,
