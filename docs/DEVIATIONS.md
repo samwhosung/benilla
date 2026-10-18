@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 121
+- [benilla-ui](#benilla-ui): 122
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -156,7 +156,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### minimap
 
-- Dots re-project every frame, where the reference draws coordinates about 1 s stale, because that staleness is a throttle quirk. ([`src/minimap/blips/mod.rs:25`](../crates/benilla-app/src/minimap/blips/mod.rs#L25))
+- Dots re-project every frame, where the reference draws coordinates about 1 s stale, because that staleness is a throttle quirk. ([`src/minimap/blips/mod.rs:27`](../crates/benilla-app/src/minimap/blips/mod.rs#L27))
 
 #### name_persist
 
@@ -643,9 +643,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loader
 
-- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:426`](../crates/benilla-ui/src/loader/mod.rs#L426))
-- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:452`](../crates/benilla-ui/src/loader/mod.rs#L452))
-- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:728`](../crates/benilla-ui/src/loader/mod.rs#L728))
+- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:431`](../crates/benilla-ui/src/loader/mod.rs#L431))
+- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:457`](../crates/benilla-ui/src/loader/mod.rs#L457))
+- A link that would close a loop is refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and the next push down such a loop would never end. ([`src/loader/mod.rs:733`](../crates/benilla-ui/src/loader/mod.rs#L733))
 - `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so neither could reach its state. ([`src/loader/widgets.rs:250`](../crates/benilla-ui/src/loader/widgets.rs#L250))
 
 #### markup
@@ -699,7 +699,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - 1.12 has no such CVar; it exists because our Graphics page needs somewhere to keep the stop, and takes the API's name. ([`src/script/cvars.rs:988`](../crates/benilla-ui/src/script/cvars.rs#L988))
 - The getter reads `CVAR_WORLD_DETAIL`, where the reference's reads only `smallCull` (`0x488d77`), because benilla's stop follows the knob that draws: a console `frillDensity` write moves the ground clutter and `WorldDetail` with it, and no renderer reads `smallCull` (its callback's `[0x868620]` has no reader). ([`src/script/cvars.rs:1016`](../crates/benilla-ui/src/script/cvars.rs#L1016))
 - The promotion's IME legs (`0x77d417`–`0x77d431`) and the IME writer's `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: benilla has no IME composition. ([`src/script/editbox/flush.rs:28`](../crates/benilla-ui/src/script/editbox/flush.rs#L28))
-- The nameplate glow is shown but never drawn, because its additive rim reads as hard edge lines in our linear-blending pipeline; the lit plate brightens its bar instead. ([`src/script/extract.rs:230`](../crates/benilla-ui/src/script/extract.rs#L230))
+- The nameplate glow is shown but never drawn, because its additive rim reads as hard edge lines in our linear-blending pipeline; the lit plate brightens its bar instead. ([`src/script/extract.rs:231`](../crates/benilla-ui/src/script/extract.rs#L231))
 - A host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut host could end in a whitelisted suffix the real one does not; this takes the safe side. ([`src/script/glue_core.rs:367`](../crates/benilla-ui/src/script/glue_core.rs#L367))
 - Benilla keeps that decode and then encodes it again, every byte outside the URL characters `URL_SAFE` as `%XY` (a decoded `%` too), because the opener on some platforms is a shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte reaches it. ([`src/script/glue_core.rs:411`](../crates/benilla-ui/src/script/glue_core.rs#L411))
 - Past `NAME_TRIES` names the answer is nil, where the reference keeps trying, forever when the generator has learned nothing. ([`src/script/glue_create.rs:968`](../crates/benilla-ui/src/script/glue_create.rs#L968))
@@ -713,7 +713,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:297`](../crates/benilla-ui/src/script/keybind.rs#L297))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:286`](../crates/benilla-ui/src/script/macros.rs#L286))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:801`](../crates/benilla-ui/src/script/mod.rs#L801))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:814`](../crates/benilla-ui/src/script/mod.rs#L814))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:316`](../crates/benilla-ui/src/script/modelframe.rs#L316))
 - Benilla plays no pre-rendered movie (#968), so `StartMovie` answers nil, the reference's "could not start" (`0x78d861`), which the stock `MovieFrame_PlayMovie` answers by hiding the frame and so by returning to the login screen. ([`src/script/movieframe.rs:4`](../crates/benilla-ui/src/script/movieframe.rs#L4))
 - The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:431`](../crates/benilla-ui/src/script/nameplate.rs#L431))
@@ -771,8 +771,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1127`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1127))
 - The reference has one field, the font's, but our font is read off the first `<FontString>` region (`message_frame_font`), which a `CreateFrame` frame lacks; so that FontString's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:33`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L33))
 - Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:532`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L532))
-- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:862`](../crates/benilla-ui/src/widget/kinds/mod.rs#L862))
-- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1220`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1220))
+- An index past 5 reads the last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client fault a hand-edited CVar reaches. ([`src/widget/kinds/mod.rs:894`](../crates/benilla-ui/src/widget/kinds/mod.rs#L894))
+- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:996`](../crates/benilla-ui/src/widget/kinds/mod.rs#L996))
+- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1354`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1354))
 - Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:180`](../crates/benilla-ui/src/widget/propagation.rs#L180))
 - The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:284`](../crates/benilla-ui/src/widget/propagation.rs#L284))
 ### benilla-world
