@@ -247,9 +247,15 @@ impl Loader<'_> {
             for f in children_named_any(el, &children) {
                 // `<Font>`-typed elements (`0x778bf4` → `0x783c30`): `inherits=` and `font=` land
                 // in one slot and `font=` wins (`0x783d22`). `style=` is not 1.12 and is not read.
+                // A name no font holds is a load warning (`0x87a51c`, `0x783d38`), where the Lua
+                // setter raises.
                 for attr in ["inherits", "font"] {
                     if let Some(name) = f.attr(attr) {
-                        self.call(wrapper, method, name.to_string(), dbg);
+                        if let Err(e) = wrapper.call_method::<()>(method, name.to_string()) {
+                            self.report
+                                .warnings
+                                .push(format!("{dbg}: <{} {attr}=\"{name}\">: {e}", f.tag));
+                        }
                     }
                 }
                 // A `justifyH` here is a local write on that state's font, never the label

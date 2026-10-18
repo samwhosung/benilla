@@ -1611,3 +1611,58 @@ fn a_checked_texture_made_from_a_path_is_additive() {
     .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A state font setter looks a name up at once and raises on a miss (`0x79efe1`, `0x87c5fc`);
+/// the loader's `<NormalFont inherits=>` warns instead (`0x87a51c`).
+#[test]
+fn state_font_setters_raise_on_an_unknown_name() {
+    let s = script();
+    s.register_font_object(
+        "KnownFont",
+        FontObject {
+            height: Some(12.0),
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local b = CreateFrame("Button", "FontMiss")
+        for _, verb in ipairs({"SetTextFontObject", "SetHighlightFontObject",
+                               "SetDisabledFontObject"}) do
+            local ok, err = pcall(b[verb], b, "NoSuchFont")
+            assert(not ok, verb)
+            assert(string.find(err, "FontMiss:SetFontObject(): Couldn't find font named NoSuchFont",
+                1, true), err)
+            b[verb](b, "knownfont")
+            b[verb](b, nil)
+        end
+        local u = CreateFrame("Button")
+        local _, err = pcall(u.SetTextFontObject, u, "NoSuchFont")
+        assert(string.find(err, "<unnamed>:SetFontObject(): Couldn't find font named NoSuchFont",
+            1, true), err)
+        b:SetTextFontObject("KnownFont")
+        pcall(b.SetTextFontObject, b, "NoSuchFont")
+        local _, height = b:GetFont()
+        assert(height == 12, "a miss keeps the old")
+    "#,
+    )
+    .unwrap();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <Button name="XmlFontMiss">
+                <NormalFont inherits="NoSuchFont"/>
+            </Button>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("Couldn't find font named NoSuchFont")),
+        "{:?}",
+        report.warnings
+    );
+}
