@@ -350,18 +350,22 @@ pub(crate) struct PlayerLookup<'w, 's> {
     /// would put it in an undeclared order against every system that moves a unit.
     units: Query<'w, 's, (Entity, &'static Guid, &'static GlobalTransform)>,
     self_q: Query<'w, 's, &'static GlobalTransform, With<SelfPlayer>>,
-    /// The roster passes' members, and the object manager's answer for each.
-    group: Res<'w, crate::ui_party::GroupState>,
-    index: Res<'w, GuidIndex>,
 }
 
 impl PlayerLookup<'_, '_> {
     /// `0x493aa0` with typemask `0x10`, filter mode 0 and no exact-only flag, as `/assist <name>`
     /// calls it: the party slots and the raid members with no object held, then any player in the
     /// object list, whole name or longest prefix. Selects nothing, so the pick is only a guid.
-    pub(crate) fn find(&self, names: &NameCache, name: &str) -> Option<u64> {
+    /// `group` and `index` are the roster and the object manager's guids, which the chat drain
+    /// holds itself.
+    pub(crate) fn find(
+        &self,
+        names: &NameCache,
+        group: &crate::ui_party::GroupState,
+        index: &GuidIndex,
+        name: &str,
+    ) -> Option<u64> {
         let origin = self.self_q.single().ok().map(|tf| tf.translation());
-        let index = &self.index;
         fn entry<'a>(
             m: &'a benilla_protocol::messages::GroupMemberEntry,
             index: &GuidIndex,
@@ -372,11 +376,10 @@ impl PlayerLookup<'_, '_> {
                 held: index.0.contains_key(&m.guid),
             }
         }
-        let in_raid = self.group.group_type == crate::ui_party::GROUPTYPE_RAID;
+        let in_raid = group.group_type == crate::ui_party::GROUPTYPE_RAID;
         let roster = Roster {
-            party: self.group.party_slots().map(|m| entry(m, index)).collect(),
-            raid: self
-                .group
+            party: group.party_slots().map(|m| entry(m, index)).collect(),
+            raid: group
                 .members
                 .iter()
                 .filter(|_| in_raid)
@@ -871,9 +874,14 @@ mod tests {
             .insert_player(ME, "Me".into(), None);
         let find = |world: &mut World, query: &'static str| {
             world
-                .run_system_once(move |lookup: PlayerLookup, names: Res<NameCache>| {
-                    lookup.find(&names, query)
-                })
+                .run_system_once(
+                    move |lookup: PlayerLookup,
+                          names: Res<NameCache>,
+                          group: Res<crate::ui_party::GroupState>,
+                          index: Res<GuidIndex>| {
+                        lookup.find(&names, &group, &index, query)
+                    },
+                )
                 .expect("the lookup runs as a one-shot system")
         };
         assert_eq!(find(&mut world, "Bo"), Some(BOB));

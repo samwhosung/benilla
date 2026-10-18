@@ -775,7 +775,7 @@ pub(super) fn drain_chat_input(
                 let target = emote_target(
                     arg.as_deref(),
                     &selection,
-                    |name| chat_out.players.find(&names, name),
+                    |name| chat_out.players.find(&names, &group, guids, name),
                     self_guid.0,
                 );
                 match commands
