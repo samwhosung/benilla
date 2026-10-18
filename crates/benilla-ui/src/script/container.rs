@@ -374,16 +374,16 @@ impl super::UiScript {
         self.model_ref().ui_cursor
     }
 
-    /// Drain the pending cursor write: `Some(mode)` a set, `Some(None)` a reset, `None` no call,
-    /// which must leave the cursor as it was, so an armed spell keeps its cast cursor over a
-    /// spellbook button.
-    #[allow(clippy::option_option)]
     /// The path [`UiCursorMode::Custom`] shows: the name `SetCursor` loaded it by, as the script
     /// gave it (`0xbe2c70`).
     pub fn custom_cursor_name(&self) -> String {
         self.model_ref().custom_cursor_name.clone()
     }
 
+    /// Drain the pending cursor write: `Some(mode)` a set, `Some(None)` a reset, `None` no call,
+    /// which must leave the cursor as it was, so an armed spell keeps its cast cursor over a
+    /// spellbook button.
+    #[allow(clippy::option_option)]
     pub fn take_cursor_write(&mut self) -> Option<Option<UiCursorMode>> {
         let mut model = self.model_mut();
         std::mem::take(&mut model.ui_cursor_dirty).then_some(model.ui_cursor)
