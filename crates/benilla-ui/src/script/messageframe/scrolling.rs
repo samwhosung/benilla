@@ -846,7 +846,7 @@ mod tests {
     }
 
     /// The Lua `AtTop` reads the flag the last relayout cached against the frame's rect; a resize
-    /// relayouts in the frame's update.
+    /// relayouts when the resolve applies the new rect (`0x7882f0`).
     #[test]
     fn at_top_reads_the_layout_through_lua() {
         let mut s = UiScript::new().unwrap();
@@ -867,7 +867,6 @@ mod tests {
         // Shrunk to two rows, the oldest message no longer shows.
         s.run("CF:SetHeight(30)").unwrap();
         s.resolve();
-        s.tick(0.0);
         assert!(
             s.eval::<bool>("return CF:AtTop() == nil").unwrap(),
             "a shorter frame places fewer messages, so the oldest drops off"

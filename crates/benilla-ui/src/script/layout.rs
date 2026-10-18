@@ -878,6 +878,7 @@ impl UiScript {
         // A solve may have resized a frame: its backdrop re-runs its texcoords (`0x76b580`).
         if model.layout_solves != solves {
             super::backdrop::after_resolve(model);
+            super::messageframe::after_resolve(model);
         }
         if !model.layout_verify_recheck {
             return;

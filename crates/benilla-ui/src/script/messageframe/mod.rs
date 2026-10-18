@@ -51,6 +51,33 @@ pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     }
 }
 
+/// After a resolve: a visible scrolling frame laid out against another size or font relayouts at
+/// its anchor now, as the rect application does (`0x7882f0` → `0x788310` → `0x788427`), so a read
+/// before its next update sees the new layout. Its update keeps the same test as a fallback.
+pub(super) fn after_resolve(model: &mut Model) {
+    let frames: Vec<FrameHandle> = model
+        .resolved
+        .keys()
+        .copied()
+        .filter(|&fh| {
+            model.arena.frame(fh).is_some_and(|f| {
+                f.effective_visible && matches!(f.kind_state, KindState::ScrollingMessage(_))
+            })
+        })
+        .collect();
+    for fh in frames {
+        let layout_key = UiScript::message_layout_key(model, fh);
+        let viewport = UiScript::message_viewport(model, fh);
+        if let Some(KindState::ScrollingMessage(smf)) =
+            model.arena.frame_mut(fh).map(|f| &mut f.kind_state)
+        {
+            if smf.laid.replace(layout_key) != Some(layout_key) {
+                smf.relayout(viewport);
+            }
+        }
+    }
+}
+
 /// A scrolling frame's show (`0x788440`) runs the OnShow script and then relayouts at the anchor
 /// (`0x788451`), inside the show, with the frame already marked visible.
 pub(super) fn on_visibility(lua: &mlua::Lua, h: FrameHandle, visible: bool) {
