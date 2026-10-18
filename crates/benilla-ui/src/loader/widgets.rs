@@ -41,30 +41,19 @@ impl Loader<'_> {
         }
     }
 
-    /// `<StatusBar>` (`0x782ef0`): a reversed `minValue`/`maxValue` pair is swapped, as
-    /// `SetMinMaxValues` also does; `drawLayer` is the bar texture's layer, ARTWORK by default.
+    /// `<StatusBar>` (`0x782ef0`): the `<BarTexture>`, built on `drawLayer` (ARTWORK by default),
+    /// and `<BarColor>`, then for each level ([`Loader::levels`]) its range, its value and its
+    /// orientation.
     pub(super) fn apply_statusbar(
         &mut self,
         el: &Element,
+        levels: &[Element],
         wrapper: &Table,
         self_name: &str,
         dbg: &str,
     ) {
         if !el.tag.eq_ignore_ascii_case("StatusBar") {
             return;
-        }
-        let parse = |attr: &str| el.attr(attr).and_then(|v| v.trim().parse::<f32>().ok());
-        let (min, max) = (parse("minValue"), parse("maxValue"));
-        if min.is_some() || max.is_some() {
-            self.call(
-                wrapper,
-                "SetMinMaxValues",
-                (min.unwrap_or(0.0), max.unwrap_or(0.0)),
-                dbg,
-            );
-        }
-        if let Some(o) = el.attr("orientation") {
-            self.call(wrapper, "SetOrientation", o.to_string(), dbg);
         }
         let layer = el.attr("drawLayer");
         for bar in children_named(el, "BarTexture") {
@@ -79,8 +68,39 @@ impl Loader<'_> {
             let c = color_of(bc);
             self.call(wrapper, "SetStatusBarColor", (c[0], c[1], c[2], c[3]), dbg);
         }
-        if let Some(v) = parse("defaultValue") {
-            self.call(wrapper, "SetValue", v, dbg);
+        for level in levels {
+            // Each value with `atof`, present and non-empty: the range needs both bounds on the
+            // node, and `defaultValue` is read only after it (`0x782fb0`-`0x783021`); a reversed
+            // pair is swapped, as `SetMinMaxValues` also does.
+            let value = |attr: &str| {
+                level
+                    .attr(attr)
+                    .filter(|v| !v.is_empty())
+                    .map(framexml::atof)
+            };
+            if let (Some(min), Some(max)) = (value("minValue"), value("maxValue")) {
+                self.call(wrapper, "SetMinMaxValues", (min, max), dbg);
+                if let Some(v) = value("defaultValue") {
+                    self.call(wrapper, "SetValue", v, dbg);
+                }
+            }
+            // `orientation` through the token parse `0x6f1a20`: empty is skipped, a miss logged
+            // (`0x87a3c4`) and never raised (`0x783064`), where the Lua setter raises.
+            if let Some(token) = level.attr("orientation").filter(|v| !v.is_empty()) {
+                match crate::script::region::orientation(token) {
+                    Some(vertical) => {
+                        let o = if vertical { "VERTICAL" } else { "HORIZONTAL" };
+                        self.call(wrapper, "SetOrientation", o, dbg);
+                    }
+                    None => {
+                        let name = self.object_name(wrapper);
+                        self.status_warning(format!(
+                            "Frame {name}: Unknown orientation {token} in element {}",
+                            level.tag
+                        ));
+                    }
+                }
+            }
         }
     }
 

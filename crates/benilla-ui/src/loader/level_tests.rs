@@ -125,3 +125,47 @@ fn a_frame_level_of_zero_or_less_is_logged_and_kept_per_level() {
         );
     }
 }
+
+/// `0x782ef0`: per level, the range needs both bounds (read with `atof`) and `defaultValue` follows
+/// it; `orientation` is skipped when empty and logged, never raised, when unknown.
+#[test]
+fn a_status_bar_reads_its_range_and_orientation_per_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <StatusBar name="Fresh"/>
+            <StatusBar name="MaxOnly" maxValue="100" defaultValue="50"/>
+            <StatusBar name="Both" minValue="0" maxValue="100x" defaultValue="40"/>
+            <StatusBar name="RangeTemplate" minValue="0" maxValue="10" defaultValue="3" virtual="true"/>
+            <StatusBar name="OverRange" inherits="RangeTemplate" maxValue="100"/>
+            <StatusBar name="Diagonal" orientation="DIAGONAL"/>
+            <StatusBar name="Blank" orientation=""/>
+            <StatusBar name="Upright" orientation="vertical"/>
+        </Ui>"#,
+    );
+    let state = |name: &str| {
+        s.eval::<(f32, f32, f32)>(&format!(
+            "local lo, hi = {name}:GetMinMaxValues() return lo, hi, {name}:GetValue()"
+        ))
+        .unwrap()
+    };
+    assert_eq!(state("MaxOnly"), state("Fresh"), "one bound sets nothing");
+    assert_eq!(state("Both"), (0.0, 100.0, 40.0));
+    assert_eq!(
+        state("OverRange"),
+        (0.0, 10.0, 3.0),
+        "the template's pair stands"
+    );
+    let orientation = |name: &str| {
+        s.eval::<String>(&format!("return {name}:GetOrientation()"))
+            .unwrap()
+    };
+    assert_eq!(orientation("Diagonal"), "HORIZONTAL");
+    assert_eq!(orientation("Blank"), "HORIZONTAL");
+    assert_eq!(orientation("Upright"), "VERTICAL");
+    assert!(has_line(
+        &report,
+        "Frame Diagonal: Unknown orientation DIAGONAL in element StatusBar"
+    ));
+}

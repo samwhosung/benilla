@@ -765,7 +765,7 @@ impl Loader<'_> {
         self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,
         //      so a Frame wearing a <Button> template skips the Button steps.
-        self.apply_statusbar(el, wrapper, self_name, dbg_name);
+        self.apply_statusbar(el, levels, wrapper, self_name, dbg_name);
         self.apply_slider(el, wrapper, self_name, dbg_name);
         self.apply_colorselect(el, wrapper, self_name, dbg_name);
         self.apply_button(el, wrapper, self_name, dbg_name);
