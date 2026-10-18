@@ -2203,7 +2203,11 @@ mod tests {
         ] {
             assert_eq!(insets(f), [0.0; 4], "{f}");
         }
-        assert_eq!(insets("WorldStateScoreFrame"), [13.0, 115.0, 10.0, 13.0]);
+        // Each inset through the setter and getter steps at 4:3: `G(S(13))` is 13.000001.
+        assert_eq!(
+            insets("WorldStateScoreFrame"),
+            [13.000_001, 115.0, 10.0, 13.000_001]
+        );
     }
 
     fn seat_a_player(s: &mut UiScript) {
