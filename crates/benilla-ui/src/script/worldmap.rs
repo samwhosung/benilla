@@ -140,6 +140,16 @@ pub struct WorldMapSheetRow {
     pub scale: f32,
 }
 
+/// The `(x, y)` of `ProcessMapClick` (`0x4a7f30`) and `UpdateMapHighlight` (`0x4a7fa0`): both
+/// `lua_isnumber`-gated (`0x4a7f3e`, `0x4a7f4e`; `0x4a7fb0`, `0x4a7fc4`) and read as floats
+/// (`0x6f3620`), else the binding's own usage text (`0x845438`, `0x845458`), no receiver named.
+fn map_point(lua: &Lua, x: Value, y: Value, usage: &str) -> mlua::Result<(f32, f32)> {
+    match (lua.coerce_number(x)?, lua.coerce_number(y)?) {
+        (Some(x), Some(y)) => Ok((x as f32, y as f32)),
+        _ => Err(mlua::Error::runtime(usage)),
+    }
+}
+
 /// The `0x4a6ec0` cell law: clamp the UV, un-lerp through the loc rect to world coordinates,
 /// scale by `0x806544` (1/(64·533.33)), range-check, and index `col - row·128`, `row` being
 /// truncated from the negated axis and so `<= 0`.
@@ -879,7 +889,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // rect (`0x4a6ec0`), which it drills into.
     g.set(
         "ProcessMapClick",
-        lua.create_function(|lua, (x, y): (f32, f32)| {
+        lua.create_function(|lua, (x, y): (Value, Value)| {
+            let (x, y) = map_point(lua, x, y, "Usage: ProcessMapClick(x, y)")?;
             let target = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let wm = &model.worldmap;
@@ -910,7 +921,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // scrollChildX, scrollChildY (`0x4a7fa0`): eight values always, a nil fileName hiding the quad.
     g.set(
         "UpdateMapHighlight",
-        lua.create_function(|lua, (x, y): (f32, f32)| {
+        lua.create_function(|lua, (x, y): (Value, Value)| {
+            let (x, y) = map_point(lua, x, y, "Usage: UpdateMapHighlight(x, y)")?;
             let hit = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 hover(&model.worldmap, x, y)

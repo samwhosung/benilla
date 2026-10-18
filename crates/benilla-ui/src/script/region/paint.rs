@@ -213,11 +213,20 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // SetAlphaGradient(start, length) (`0x79cc80`), a FontString's write-on reveal: answers 1
     // (`0x79cd58`) or nil (`0x79cd6d`) for whether `start` is still inside the text in chars, and
-    // stock `QuestFrame.lua:558` advances until it is not.
+    // stock `QuestFrame.lua:558` advances until it is not. Both arguments are `lua_isnumber`-gated
+    // (`0x79cd0c`, `0x79cd1c`), else `Usage: %s:SetAlphaGradient(start, length)` (`0x87c5a0`,
+    // `0x79cd9b`).
     m.set(
         "SetAlphaGradient",
-        lua.create_function(|lua, (this, start, length): (Table, f32, f32)| {
+        lua.create_function(|lua, (this, start, length): (Table, Value, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            // Both are `_ftol`ed to the dwords the region stores (`0x79cd31`, `0x79cd44`).
+            let line = "SetAlphaGradient(start, length)";
+            let int = |v| -> mlua::Result<f32> {
+                let n = crate::script::binding_abi::method_number(lua, &this, v, line)?;
+                Ok(crate::script::binding_abi::ftol(n) as f32)
+            };
+            let (start, length) = (int(start)?, int(length)?);
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let data = model.region_data.entry(rh).or_default();
             data.alpha_gradient = Some((start, length));

@@ -61,6 +61,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         }
     })?;
     // GetID/SetID (`0x775280`/`0x775340`): a plain numeric label at `+0xb0` (XML `id=`), default 0.
+    // SetID tests `lua_isnumber` (`0x7753cc`), `_ftol`s the number, and a miss raises
+    // `Usage: %s:SetID(ID)` (`0x87976c`, `0x77540b`).
     m.set(
         "GetID",
         lua.create_function(|lua, this: Table| {
@@ -71,8 +73,14 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "SetID",
-        lua.create_function(|lua, (this, id): (Table, i64)| {
+        lua.create_function(|lua, (this, id): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            let id = i64::from(binding_abi::ftol(binding_abi::method_number(
+                lua,
+                &this,
+                id,
+                "SetID(ID)",
+            )?));
             let mut model = lua.app_data_mut::<Model>().expect("model");
             if let Some(f) = model.arena.frame_mut(h) {
                 f.wow_id = id;
@@ -353,8 +361,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "SetFrameLevel",
-        lua.create_function(|lua, (this, level): (Table, i64)| {
+        lua.create_function(|lua, (this, level): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `lua_isnumber` (`0x7745ec`), else `Usage: %s:SetFrameLevel(level)` (`0x879608`,
+            // `0x774669`); the number is `_ftol`ed (`0x774601`).
+            let level = i64::from(binding_abi::ftol(binding_abi::method_number(
+                lua,
+                &this,
+                level,
+                "SetFrameLevel(level)",
+            )?));
             let lvl = level.clamp(0, i64::from(u16::MAX)) as u16;
             // A script level change moves no children: `0x774560` calls `set_frame_level 0x76a4f0`
             // with `propagate = 0`, which stock `BonusActionButtonTemplate` relies on.
@@ -675,11 +691,19 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `SetHitRectInsets` stores `S` of each (`0x775e38`..`0x775ee2`, through `0x76b1b0`) and
     // `GetHitRectInsets` answers `G` of each, in the same order (`0x775caa`..`0x775d35`, through
     // `0x76b1e0`); benilla keeps the script numbers and takes both steps at the read.
+    // All four arguments are `lua_isnumber`-gated (`0x775de2`..`0x775e1f`), else
+    // `Usage: %s:SetHitRectInsets(left, right, top, bottom)` (`0x879780`, `0x775f0f`).
     m.set(
         "SetHitRectInsets",
         lua.create_function(
-            |lua, (this, left, right, top, bottom): (Table, f32, f32, f32, f32)| {
+            |lua, (this, left, right, top, bottom): (Table, Value, Value, Value, Value)| {
                 let h = frame_handle_of(lua, &this)?;
+                let line = "SetHitRectInsets(left, right, top, bottom)";
+                let mut insets = [0.0f32; 4];
+                for (slot, v) in insets.iter_mut().zip([left, right, top, bottom]) {
+                    *slot = binding_abi::method_number(lua, &this, v, line)? as f32;
+                }
+                let [left, right, top, bottom] = insets;
                 lua.app_data_mut::<Model>()
                     .expect("model")
                     .arena

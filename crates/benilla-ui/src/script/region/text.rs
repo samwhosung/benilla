@@ -229,11 +229,15 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // the size magnified from the raster, uncapped. It writes the text height a font load writes
     // (`+0xe4`, `0x77163b`), so `GetFont` answers it and the next font push replaces it; a height
     // within 2^-22 of the current one changes nothing (`0x77161c`), the bit included. No inherit
-    // bit is cleared.
+    // bit is cleared. A `lua_isnumber` miss raises `Usage: %s:SetTextHeight(pixelHeight)`
+    // (`0x87c728`, `0x79e4f9`).
     m.set(
         "SetTextHeight",
-        lua.create_function(|lua, (this, height): (Table, f32)| {
+        lua.create_function(|lua, (this, height): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let height =
+                binding_abi::method_number(lua, &this, height, "SetTextHeight(pixelHeight)")?
+                    as f32;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let model_units = model.layout_units();
             let d = model.region_data.entry(rh).or_default();

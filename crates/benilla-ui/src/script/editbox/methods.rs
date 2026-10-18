@@ -191,16 +191,23 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             })
         })?,
     )?;
+    // SetHistoryLines (`0x799450`), SetBlinkSpeed (`0x798250`) and SetTextInsets (`0x798a60`) gate
+    // their numbers with `lua_isnumber` after the receiver checks, else raise their usage line
+    // (`0x87bf50`, `0x87be90`, `0x87bef0`; `0x799521`, `0x7982ff`, `0x798c11`).
     m.set(
         "SetHistoryLines",
-        lua.create_function(|lua, (this, n): (Table, i64)| {
-            with_editbox(lua, &this, |eb| {
+        lua.create_function(|lua, (this, n): (Table, Value)| {
+            let h = frame_handle_of(lua, &this)?;
+            let n = binding_abi::method_number(lua, &this, n, "SetHistoryLines(numLines)")?;
+            let n = i64::from(binding_abi::ftol(n));
+            with_eb(lua, h, |eb| {
                 eb.history_max = n.max(0) as usize;
                 let over = eb.history.len().saturating_sub(eb.history_max);
                 if over > 0 {
                     eb.history.drain(..over);
                 }
             })
+            .ok_or_else(|| mlua::Error::runtime("not an EditBox"))
         })?,
     )?;
     m.set(
@@ -212,8 +219,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetBlinkSpeed/GetBlinkSpeed: the caret half-period (XML `blinkSpeed`, 0.5 s by default).
     m.set(
         "SetBlinkSpeed",
-        lua.create_function(|lua, (this, s): (Table, f32)| {
-            with_editbox(lua, &this, |eb| eb.blink_period = s)
+        lua.create_function(|lua, (this, s): (Table, Value)| {
+            let h = frame_handle_of(lua, &this)?;
+            let s = binding_abi::method_number(lua, &this, s, "SetBlinkSpeed(speed)")? as f32;
+            with_eb(lua, h, |eb| eb.blink_period = s)
+                .ok_or_else(|| mlua::Error::runtime("not an EditBox"))
         })?,
     )?;
     m.set(
@@ -223,23 +233,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetTextInsets",
         lua.create_function(
-            |lua,
-             (this, l, r, t, b): (
-                Table,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-            )| {
+            |lua, (this, l, r, t, b): (Table, Value, Value, Value, Value)| {
                 let h = frame_handle_of(lua, &this)?;
-                set_text_insets(
-                    lua,
-                    h,
-                    l.unwrap_or(0.0),
-                    r.unwrap_or(0.0),
-                    t.unwrap_or(0.0),
-                    b.unwrap_or(0.0),
-                );
+                let line = "SetTextInsets(l, r, t, b)";
+                let mut v = [0.0f32; 4];
+                for (slot, arg) in v.iter_mut().zip([l, r, t, b]) {
+                    *slot = binding_abi::method_number(lua, &this, arg, line)? as f32;
+                }
+                set_text_insets(lua, h, v[0], v[1], v[2], v[3]);
                 Ok(())
             },
         )?,
