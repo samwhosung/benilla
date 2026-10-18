@@ -158,3 +158,27 @@ fn xml_history_lines_zero_loads_where_the_lua_setter_refuses() {
     )
     .unwrap();
 }
+
+/// A line spends its time to exactly 0 (`0x786323`) and then its fade (`0x78633c`); the setters
+/// skip a line whose time is 0 (`0x785c3d`), so a line already fading is not retimed.
+#[test]
+fn a_line_already_fading_is_untouched_by_set_time_visible() {
+    let mut s = script();
+    s.run("CreateFrame('MessageFrame', 'MFf') MFf:AddMessage('x', 1, 1, 1)")
+        .unwrap();
+    let alive = |s: &UiScript| {
+        let m = s.model_ref();
+        let h = m.arena.lookup("MFf").expect("named frame");
+        m.arena
+            .frame(h)
+            .and_then(|f| f.kind_state.message_lines())
+            .map_or(0, |l| l.len())
+    };
+    s.run("MFf:SetTimeVisible(0.5)").unwrap();
+    s.tick(0.6); // the time runs out: stored as exactly 0
+    s.tick(1.0); // 3 s of fade, 2 left
+    assert_eq!(alive(&s), 1);
+    s.run("MFf:SetTimeVisible(100)").unwrap();
+    s.tick(2.5); // the fade runs out
+    assert_eq!(alive(&s), 0, "the fading line kept its own clock");
+}

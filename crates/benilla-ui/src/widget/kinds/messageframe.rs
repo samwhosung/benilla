@@ -786,33 +786,44 @@ impl MessageFrameState {
         self.lines.clear();
     }
 
-    /// Advance the fade by `dt` (OnUpdate, `0x786200`) in the scrolling class's two phases, with no
-    /// scroll gate, freeing a finished line (`0x786570`). The reference also gates on
-    /// `numLinesDisplayed > 0`, which this does not check. The arithmetic is `f32`: whether
-    /// `0x786200` keeps the unrounded x87 value like the scrolling tick is untraced.
+    /// Advance the fade by `dt` (OnUpdate, `0x786200`), per line as `0x7862e0` does, with no scroll
+    /// gate. A line whose time is not 0 spends it (`0x786300`); once it is no longer above 0 the
+    /// time is stored as exactly 0 (`0x786323`), or, with no fade left, the line is freed
+    /// (`0x786351`, `0x786570`). A line at time 0 spends its fade (`0x78633c`), freed when that is
+    /// no longer above 0 and otherwise re-aimed through the quantized fraction of the frame's
+    /// duration (`0x78635b`-`0x786379`); a line with no fade left stays (`0x78633a`). The reference
+    /// also gates on `numLinesDisplayed > 0`, which this does not check. The arithmetic is `f32`:
+    /// whether `0x786200` keeps the unrounded x87 value like the scrolling tick is untraced.
     pub fn tick(&mut self, dt: f32) {
         if !self.fading_enabled {
             return;
         }
-        for line in &mut self.lines {
-            if line.time_left > 0.0 {
+        let duration = self.fade_duration;
+        self.lines.retain_mut(|line| {
+            if line.time_left != 0.0 {
                 line.time_left -= dt;
-                continue;
+                // Greater, or unordered (`test ah,5; jp`), goes on.
+                if line.time_left > 0.0 || line.time_left.is_nan() {
+                    return true;
+                }
+                if line.fade_left == 0.0 {
+                    return false;
+                }
+                line.time_left = 0.0;
+                return true;
             }
-            if self.fade_duration <= 0.0 {
-                line.alpha = 0.0;
-                continue;
+            if line.fade_left == 0.0 {
+                return true;
             }
-            line.fade_left -= dt;
-            if line.fade_left <= 0.0 {
-                line.fade_left = 0.0;
-                line.alpha = 0.0;
+            let fade = line.fade_left - dt;
+            if fade > 0.0 || fade.is_nan() {
+                line.fade_left = fade;
+                line.alpha = f32::from(quantize_fade(fade / duration)) / 255.0;
+                true
             } else {
-                line.alpha = f32::from(quantize_fade(line.fade_left / self.fade_duration)) / 255.0;
+                false
             }
-        }
-        // A line past phase 1 at alpha 0 is finished, and freed.
-        self.lines.retain(|l| l.time_left > 0.0 || l.alpha > 0.0);
+        });
     }
 
     /// Evict the oldest lines until the rest fit `viewport_rows`, each costing its wrapped rows.
