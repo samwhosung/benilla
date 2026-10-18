@@ -62,9 +62,6 @@ pub struct M2Model {
     /// The unit-frame portrait camera, `cameraLookup[0]` (`0x713540`), rendered as authored:
     /// `lookAt` and the record's perspective, with no framing on top (`0x7ac640`).
     pub portrait_camera: Option<PortraitCamera>,
-    /// The camera table's first record, the glue scenes' `Model:SetCamera(0)`; their
-    /// `cameraLookup[0]` is the `0xffff` none sentinel.
-    pub camera0: Option<PortraitCamera>,
     /// The whole camera table by raw index, for `SetCamera(n)`; an index past its end leaves the
     /// pane on the orthographic leg.
     pub cameras: Vec<PaneCamera>,
@@ -641,7 +638,6 @@ impl AssetLoader for M2ModelLoader {
             far: c.far_clip,
         };
         let portrait_camera = parse_m2_portrait_camera(&bytes).map(to_bevy);
-        let camera0 = benilla_formats::parse_m2_camera(&bytes, 0).map(to_bevy);
         let cameras: Vec<PaneCamera> = benilla_formats::parse_m2_pane_cameras(&bytes)
             .into_iter()
             .map(|c| PaneCamera {
@@ -680,7 +676,6 @@ impl AssetLoader for M2ModelLoader {
             attachments,
             markers,
             portrait_camera,
-            camera0,
             cameras,
             string_anchors,
             cch_marker,

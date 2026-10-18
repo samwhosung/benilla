@@ -4,6 +4,8 @@
 //! poses, seats and yaws them, and the bake lands in [`super::PortraitImages`] under
 //! [`GLUE_SLOT`].
 
+use std::sync::Arc;
+
 use benilla_assets::M2Model;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{OrthographicProjection, PerspectiveProjection};
@@ -226,6 +228,10 @@ pub(crate) struct GluePreview {
     /// The pane's root inputs, which place the scene on the orthographic leg a file with no
     /// camera takes ([`ortho_scene_rig`]).
     pub(crate) root: SceneRoot,
+    /// The pane's camera, a raw index into the scene file's camera table
+    /// ([`benilla_ui::script::GlueScenePane::camera`]); `None` takes the orthographic leg. The
+    /// default is the `Model` ctor's pending camera 0 (`+0x320`).
+    pub(crate) camera: Option<u32>,
 }
 
 /// A scene pane's root inputs (`0x76d1a0`): `SetModelScale`, the frame's effective scale,
@@ -262,6 +268,7 @@ impl Default for GluePreview {
             hidden: false,
             live: Vec::new(),
             root: SceneRoot::default(),
+            camera: Some(0),
         }
     }
 }
@@ -278,16 +285,17 @@ impl GluePreview {
 }
 
 /// The glue background scene, the reference's fullscreen `ModelFFX`: `SetBackgroundModel` loads
-/// `UI_<Race>.mdx`, plays sequence 0 and shows camera 0. Its root never yaws; the character
-/// stands on its attachment 0, and its camera drives the booth camera while it shows.
+/// `UI_<Race>.mdx`, plays sequence 0 and shows the camera the pane chose, camera 0 in stock
+/// GlueXML. Its root never yaws; the character stands on its attachment 0, and its camera drives
+/// the booth camera while it shows.
 #[derive(Resource)]
 pub(crate) struct CreateScene {
     root: Entity,
     file: Option<GlueSceneFile>,
     handle: Option<Handle<M2Model>>,
     spawned: bool,
-    /// The authored camera 0, captured at spawn.
-    cam: Option<benilla_assets::PortraitCamera>,
+    /// The file's camera table by raw index, each record at rest, captured at spawn.
+    cams: Arc<[benilla_assets::PortraitCamera]>,
     /// The character's stage spot, scene attachment 0 in Bevy model space (`ZERO` with no scene);
     /// the body seats on attachment 0 at select too (`0x473039`).
     char_spot: Vec3,
@@ -342,7 +350,7 @@ struct ParkedScene {
     root: Entity,
     file: GlueSceneFile,
     handle: Handle<M2Model>,
-    cam: Option<benilla_assets::PortraitCamera>,
+    cams: Arc<[benilla_assets::PortraitCamera]>,
     char_spot: Vec3,
     char_facing: Quat,
     char_scale: f32,
@@ -361,7 +369,7 @@ impl CreateScene {
             file: None,
             handle: None,
             spawned: false,
-            cam: None,
+            cams: Arc::new([]),
             char_spot: Vec3::ZERO,
             char_facing: Quat::IDENTITY,
             char_scale: 1.0,
@@ -409,7 +417,7 @@ impl CreateScene {
                     root: self.root,
                     file,
                     handle,
-                    cam: self.cam,
+                    cams: self.cams.clone(),
                     char_spot: self.char_spot,
                     char_facing: self.char_facing,
                     char_scale: self.char_scale,
@@ -432,7 +440,7 @@ impl CreateScene {
             self.root = commands.spawn(stage_root(layer)).id();
         }
         self.spawned = false;
-        self.cam = None;
+        self.cams = Arc::new([]);
         self.char_spot = Vec3::ZERO;
         let Some(p) = returning else {
             // A new instance's clock starts from 0, as the widget scene's constructor zeroes it
@@ -445,7 +453,7 @@ impl CreateScene {
         self.root = p.root;
         self.file = Some(p.file);
         self.handle = Some(p.handle);
-        self.cam = p.cam;
+        self.cams = p.cams;
         self.char_spot = p.char_spot;
         self.char_facing = p.char_facing;
         self.char_scale = p.char_scale;
@@ -474,7 +482,7 @@ impl CreateScene {
         self.file = None;
         self.handle = None;
         self.spawned = false;
-        self.cam = None;
+        self.cams = Arc::new([]);
         self.char_spot = Vec3::ZERO;
         self.char_facing = Quat::IDENTITY;
         self.char_scale = 1.0;
@@ -857,8 +865,8 @@ fn glue_ffx(
 }
 
 /// Drive the background scene ([`CreateScene`]): load and spawn the pane's file, size the target
-/// to the window, seat the character, and hold the booth camera on the scene's camera 0, or with
-/// none on the orthographic leg.
+/// to the window, seat the character, and hold the booth camera on the pane's camera of the
+/// scene's table, or with none on the orthographic leg.
 #[allow(clippy::type_complexity)]
 pub(super) fn sync_glue_scene(
     mut commands: Commands,
@@ -1216,7 +1224,7 @@ pub(super) fn sync_glue_scene(
         }
         scene_rig.finish(&mut commands);
         scene.spawned = true;
-        scene.cam = model.camera0;
+        scene.cams = model.cameras.iter().map(|c| c.still).collect();
         scene.char_spot = stage;
         scene.char_facing = stage_facing;
         scene.char_scale = stage_scale;
@@ -1234,10 +1242,10 @@ pub(super) fn sync_glue_scene(
         scene.pet_baked = None;
         scene.rev += 1; // the character re-lights onto the scene rig (sync_glue_booth's key)
         info!(
-            "create scene: {name} up — {} submeshes, camera {} stage {:?} facing {:.2}° \
+            "create scene: {name} up — {} submeshes, {} camera(s) stage {:?} facing {:.2}° \
              scale {:.3}",
             model.submeshes.len(),
-            scene.cam.is_some(),
+            scene.cams.len(),
             scene.char_spot,
             scene.char_facing.to_euler(EulerRot::YXZ).0.to_degrees(),
             scene.char_scale,
@@ -1252,14 +1260,14 @@ pub(super) fn sync_glue_scene(
             preview.yaw,
         );
     }
-    // The installed camera owns the booth camera while the scene shows, every frame: the file's
-    // camera 0, or with none the orthographic leg (`0x76ceeb` installs no camera, `0x76ce80(NULL)`),
-    // never the last scene's aim.
+    // The installed camera owns the booth camera while the scene shows, every frame: the pane's
+    // camera of the file's table, or with none the orthographic leg (`0x76ceeb` installs no
+    // camera, `0x76ce80(NULL)`), never the last scene's aim.
     let w = window.single().ok();
     let pane = w
         .zip(preview.pane)
         .and_then(|(w, pane)| stock_pane_view(w.physical_width(), w.physical_height(), pane));
-    if let Some(cam) = scene.cam {
+    if let Some(cam) = installed_camera(&scene.cams, preview.camera) {
         let aspect = w.map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
         let fwd = (cam.target - cam.eye).normalize_or_zero();
         let up = Quat::from_axis_angle(fwd, cam.roll) * Vec3::Y;
@@ -1291,6 +1299,15 @@ pub(super) fn sync_glue_scene(
             &ortho_scene_rig(window_px, rect, preview.root),
         );
     }
+}
+
+/// Raw camera `chosen` of a scene file's table (`0x713590`); none, or an index past its end, is the
+/// NULL camera (`0x76cf08`), whose leg is orthographic.
+fn installed_camera(
+    cams: &[benilla_assets::PortraitCamera],
+    chosen: Option<u32>,
+) -> Option<benilla_assets::PortraitCamera> {
+    cams.get(usize::try_from(chosen?).ok()?).copied()
 }
 
 /// The orthographic leg of a scene pane with no camera, as a camera in the scene's own model
@@ -2406,6 +2423,27 @@ mod tests {
         clip.truncate().truncate() / clip.w
     }
 
+    /// The booth aims by the pane's raw camera index into the file's table (`0x713590`), not by
+    /// camera 0; none, or an index past the table, is the NULL camera's orthographic leg.
+    #[test]
+    fn the_scene_aims_by_the_panes_camera_index() {
+        let cam = |x: f32| benilla_assets::PortraitCamera {
+            eye: Vec3::new(x, 0.0, 0.0),
+            target: Vec3::ZERO,
+            roll: 0.0,
+            fov: 0.8,
+            near: 0.1,
+            far: 100.0,
+        };
+        let cams = [cam(1.0), cam(2.0)];
+        let eye = |chosen| installed_camera(&cams, chosen).map(|c| c.eye.x);
+        assert_eq!(eye(Some(1)), Some(2.0));
+        assert_eq!(eye(Some(0)), Some(1.0));
+        assert_eq!(eye(Some(2)), None);
+        assert_eq!(eye(None), None);
+        assert_eq!(GluePreview::default().camera, Some(0));
+    }
+
     /// A scene file with no camera takes the orthographic leg (`0x76ceeb` → `0x76ce80(NULL)`):
     /// model (0, 0) at the pane's bottom-left, +X right, +Y up, one model unit `5/3 · modelScale
     /// · layoutScale` screen heights, a position in layout units of `√(a²+1)` screen heights, and
@@ -3440,7 +3478,7 @@ mod tests {
             root: parked_root,
             file: GlueSceneFile::new("UI_MainMenu.mdx"),
             handle: Handle::default(),
-            cam: None,
+            cams: Arc::new([]),
             char_spot: Vec3::ZERO,
             char_facing: Quat::IDENTITY,
             char_scale: 1.0,

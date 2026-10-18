@@ -3082,7 +3082,7 @@ fn stock_scene(name: &str) -> crate::portrait::GlueSceneFile {
 #[test]
 fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
     let _ = benilla_formats::wow_data_or_skip!();
-    let (app, _rx, _abandon) = stock_app();
+    let (mut app, _rx, _abandon) = stock_app();
     let p = preview(&app);
     assert_eq!(p.scene, Some(stock_scene("MainMenu")));
     assert!(p.look.is_none());
@@ -3091,6 +3091,13 @@ fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
     for (got, want) in fog.rgb.iter().zip([0.25, 0.06, 0.015]) {
         assert!((got - want).abs() < 1.0 / 255.0, "{:?}", fog.rgb);
     }
+    // The booth aims by the camera the pane chose, not the file's camera 0.
+    assert_eq!(p.camera, Some(0));
+    vm(&app).run("AccountLogin:SetCamera(1)").unwrap();
+    app.update();
+    let chosen = vm(&app).glue_scene().expect("the login pane").camera;
+    assert_ne!(chosen, Some(0));
+    assert_eq!(preview(&app).camera, chosen);
 }
 
 /// The selected character stands in the select scene: the roster load's selection, then a
