@@ -454,6 +454,17 @@ impl crate::script::UiScript {
     }
 }
 
+/// What an XML `file=` load came to ([`load_texture_file`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileLoad {
+    /// The host's texture probe found the file.
+    Loaded,
+    /// The probe did not: `0x770200` returned 0 and the texture kept what it had (`0x7702ac`).
+    Failed,
+    /// No probe is installed (a test harness): the path is stored, with no verdict.
+    Unprobed,
+}
+
 /// The XML `<Texture file=>` load of a region (`0x76fe20` → `0x770200`): the path form of
 /// [`set_texture`] with the wrap flag the element's `<TexCoords>` decide.
 pub(crate) fn load_texture_file(
@@ -461,9 +472,14 @@ pub(crate) fn load_texture_file(
     this: &Table,
     file: &str,
     wrap: bool,
-) -> mlua::Result<()> {
+) -> mlua::Result<FileLoad> {
+    let probed = lua
+        .app_data_ref::<Model>()
+        .expect("model")
+        .texture_probe
+        .is_some();
     let path = Value::String(lua.create_string(file)?);
-    set_texture(
+    let answer = set_texture(
         lua,
         this.clone(),
         path,
@@ -471,8 +487,12 @@ pub(crate) fn load_texture_file(
         Value::Nil,
         Value::Nil,
         wrap,
-    )
-    .map(drop)
+    )?;
+    Ok(match (probed, answer) {
+        (false, _) => FileLoad::Unprobed,
+        (true, Value::Nil) => FileLoad::Failed,
+        (true, _) => FileLoad::Loaded,
+    })
 }
 
 /// `Texture:SetTexture` (`0x79bb40`) and the XML `<Texture file=>` load (`0x76fe20`), the two

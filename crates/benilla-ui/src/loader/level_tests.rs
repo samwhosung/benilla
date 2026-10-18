@@ -205,7 +205,68 @@ fn every_tex_coords_applies_in_order_over_the_default_edges() {
     // UL, LL, UR, LR: (l, t), (l, b), (r, t), (r, b).
     let rect = |l: f32, r: f32, t: f32, b: f32| vec![l, t, l, b, r, t, r, b];
     assert_eq!(coords("Partial"), rect(0.5, 1.0, 0.0, 1.0));
-    assert_eq!(coords("Twice"), rect(0.5, 1.0, 0.0, 1.0), "the second, whole");
+    assert_eq!(
+        coords("Twice"),
+        rect(0.5, 1.0, 0.0, 1.0),
+        "the second, whole"
+    );
     assert_eq!(coords("Trailing"), rect(0.25, 0.75, 0.0, 1.0));
-    assert_eq!(coords("Cropped"), rect(0.025, 0.535, 0.0, 0.75), "the instance's crop");
+    assert_eq!(
+        coords("Cropped"),
+        rect(0.025, 0.535, 0.0, 0.75),
+        "the instance's crop"
+    );
+}
+
+/// `0x770102`-`0x770171`: a level's `file=` that fails to load logs `0x878d24` and fills the
+/// texture opaque green, even over a template level whose file loaded; with no probe installed the
+/// path is stored as before.
+#[test]
+fn an_xml_texture_whose_file_fails_to_load_fills_green() {
+    let xml = r#"<Ui>
+        <Texture name="GoodTemplate" file="Interface\Good" virtual="true"/>
+        <Frame name="Host">
+            <Size><AbsDimension x="64" y="64"/></Size>
+            <Anchors><Anchor point="CENTER"/></Anchors>
+            <Layers><Layer>
+                <Texture name="Bad" file="Interface\Nope" setAllPoints="true"/>
+                <Texture name="OverGood" inherits="GoodTemplate" file="Interface\NopeToo"/>
+                <Texture file="Interface\Nope"/>
+                <Texture name="Fine" file="Interface\Good"/>
+            </Layer></Layers>
+        </Frame>
+    </Ui>"#;
+    let mut s = ui();
+    s.set_texture_probe(Box::new(|path: &str| !path.contains("Nope")));
+    let report = load_str(&s, xml);
+    let texture = |s: &UiScript, name: &str| {
+        s.eval::<Option<String>>(&format!("return {name}:GetTexture()"))
+            .unwrap()
+    };
+    assert_eq!(texture(&s, "Bad").as_deref(), Some("Solid Texture"));
+    assert_eq!(texture(&s, "OverGood").as_deref(), Some("Solid Texture"));
+    assert_eq!(texture(&s, "Fine").as_deref(), Some("Interface\\Good"));
+    for line in [
+        r"Texture Bad: Unable to load texture file Interface\Nope",
+        r"Texture OverGood: Unable to load texture file Interface\NopeToo",
+        r"Texture <unnamed>: Unable to load texture file Interface\Nope",
+    ] {
+        assert!(has_line(&report, line), "{line}: {:?}", report.warnings);
+    }
+    s.resolve();
+    let green = s.extract().iter().any(|q| {
+        matches!(
+            &q.content,
+            crate::script::QuadContent::Texture { color: Some(c), .. } if *c == [0.0, 1.0, 0.0, 1.0]
+        )
+    });
+    assert!(green, "the failed texture draws opaque green");
+
+    let unprobed = ui();
+    let report = load_str(&unprobed, xml);
+    assert_eq!(
+        texture(&unprobed, "Bad").as_deref(),
+        Some("Interface\\Nope")
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }

@@ -2075,6 +2075,40 @@ mod tests {
     /// Seats a player before a probe loads the manifest, as the live client always has one by
     /// then: the stock macro window formats `UnitName("player")` into a tab label in its `OnLoad`,
     /// and without a player that raises like a load failure.
+    /// The reference fills an XML texture whose file does not load opaque green and logs it
+    /// (`0x770136`-`0x770171`). No stock texture the core or the glue load draws fails on an
+    /// install, so a line here is benilla's resolver missing a file the reference opens, which
+    /// would paint part of the stock interface green.
+    #[test]
+    fn every_texture_the_stock_interface_loads_opens() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let probe = |s: &mut UiScript| {
+            let chain = std::sync::Mutex::new(benilla_formats::open_chain(&data).expect("chain"));
+            let loose = benilla_assets::LooseFiles::install();
+            s.set_texture_probe(Box::new(move |path| {
+                benilla_assets::sprite_found(&chain, &loose, path)
+            }));
+        };
+        let failed = |s: &mut UiScript| -> Vec<String> {
+            s.finish_ui_load_log();
+            let mut lines: Vec<String> = s.diagnostics().into_iter().map(|d| d.message).collect();
+            lines.extend(s.take_load_log_writes().iter().map(|w| format!("{w:?}")));
+            lines.retain(|l| l.contains("Unable to load texture file"));
+            lines
+        };
+        let mut core = UiScript::new().expect("VM");
+        core.set_screen_size(1024.0, 768.0);
+        probe(&mut core);
+        super::super::manifest::load_default_ui(&core);
+        assert_eq!(failed(&mut core), Vec::<String>::new(), "the core");
+
+        let mut glue = UiScript::new_glue().expect("VM");
+        glue.set_screen_size(1024.0, 768.0);
+        probe(&mut glue);
+        super::super::glue::load_glue(&mut glue);
+        assert_eq!(failed(&mut glue), Vec::<String>::new(), "the glue");
+    }
+
     fn seat_a_player(s: &mut UiScript) {
         s.set_unit(
             "player",

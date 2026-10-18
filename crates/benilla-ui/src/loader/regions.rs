@@ -342,9 +342,19 @@ impl Loader<'_> {
                 self.apply_gradient(child, wrapper, dbg);
             }
         }
+        // A file that fails to load is logged (`0x878d24`) and the texture filled opaque green
+        // (`0xff00ff00` through `0x770360`, `0x77016a`), the reference's tell for a bad path.
         if let Some(file) = node.attr("file").filter(|f| !f.is_empty()) {
-            if let Err(e) = crate::script::load_texture_file(self.lua, wrapper, file, wrap) {
-                self.report.fault(format!("{dbg}: region SetTexture: {e}"));
+            match crate::script::load_texture_file(self.lua, wrapper, file, wrap) {
+                Ok(crate::script::FileLoad::Failed) => {
+                    let name = self.object_name(wrapper);
+                    self.status_warning(format!(
+                        "Texture {name}: Unable to load texture file {file}"
+                    ));
+                    self.call_region(wrapper, "SetTexture", (0.0, 1.0, 0.0, 1.0), dbg);
+                }
+                Ok(_) => {}
+                Err(e) => self.report.fault(format!("{dbg}: region SetTexture: {e}")),
             }
         }
         if let Some(mode) = node.attr("alphaMode") {
