@@ -49,6 +49,7 @@ pub struct AuctionItemRow {
     pub name: Option<String>,
     pub texture: Option<String>,
     pub count: u32,
+    /// `None` while the item template query is in flight.
     pub quality: Option<u32>,
     /// `RequiredLevel`, printed red above the player's level.
     pub level: u32,
@@ -348,14 +349,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, &kind, index)
             };
-            // A row whose item template has not landed (`quality` is `None` until it does) takes
-            // the miss exit too: the client sends an item the item cache lacks (`0x55ba30`
-            // returned 0) to `je 0x4cefa0` -> `0x4cf1ec`, never answering a nil quality, which the
-            // stock Lua indexes `ITEM_QUALITY_COLORS` with unguarded.
+            // A miss (unknown type, out of range, or an item template not cached: `quality` is
+            // `None` until it lands) answers twelve values, `count = 1` and `quality = -1`, through
+            // the one exit `0x4cf1ec`; the item-cache lookup `0x55ba30` returning 0 reaches it at
+            // `0x4cefa0`.
             let Some(r) = row.filter(|r| r.quality.is_some()) else {
-                // A miss (unknown type, out of range, item not cached) still answers twelve
-                // values, with `count = 1` and `quality = -1` (one shared exit, `0x4cf1ec`), read
-                // unguarded.
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,         // name
                     Value::Nil,         // texture
