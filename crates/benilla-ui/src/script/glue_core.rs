@@ -357,11 +357,12 @@ const LAUNCH_HOSTS: [&str; 10] = [
 ];
 
 /// The gate in front of the browser: `0x5abd00` tests `0x5abc10` and `0x429ff0` takes the URL.
-/// The URL begins `http://` (`0x85d6bc`, compared case-folded), every byte after it is a letter,
-/// a digit, `.`, `-` or `/` (so no query, port, escape or `_`), and its host, the text up to the
-/// first `/`, is one of [`LAUNCH_HOSTS`], compared case-folded. `0x429ff0` refuses a URL of 0x400
-/// bytes or more (`0x42a01c`). The reference works on a C string, so the verb cuts its argument
-/// at a NUL before asking; a URL with a NUL in it is refused here.
+/// The URL begins `http://` (`0x85d6bc`, compared case-folded), every byte after it is `/`, `.`,
+/// `-` (`0x5abc54`-`0x5abc5e`) or passes `isalpha` (`0x73fb91`, mask `0x103`), so no digit, query,
+/// port, escape or `_`, and its host, the text up to the first `/`, is one of [`LAUNCH_HOSTS`],
+/// compared case-folded. `0x429ff0` refuses a URL of 0x400 bytes or more (`0x42a01c`). The
+/// reference works on a C string, so the verb cuts its argument at a NUL before asking; a URL with
+/// a NUL in it is refused here.
 ///
 /// Deviation: a host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte
 /// buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut
@@ -381,7 +382,7 @@ pub fn launch_url_allowed(url: &str) -> bool {
     };
     if !rest
         .iter()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'/'))
+        .all(|b| b.is_ascii_alphabetic() || matches!(b, b'.' | b'-' | b'/'))
     {
         return false;
     }
@@ -1332,6 +1333,8 @@ mod tests {
             "http://battle.net/",
             "http://www.blizzard.com/?q=1",
             "http://www.blizzard.com:80/",
+            "http://www.blizzard.com/patch1121",
+            "http://us1.blizzard.com/",
             "http://www.blizzard.com/a_b",
             "http://www.blizzard.com/a b",
             "http://www.blizzard.com\n/",
