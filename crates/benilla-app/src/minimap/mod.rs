@@ -172,8 +172,8 @@ pub(crate) struct MinimapZoom {
     pub(crate) inside: u8,
 }
 
-/// The zoom CVars' change callback: each lands on its own field, clamped at 5 like the reference's
-/// `set_zoom` (`0x6daa10`).
+/// The app's mirror of the two zoom CVars, each on its own field and clamped into the six-entry
+/// zoom tables (`0x8116d0`, `0x8116e8`), which the reference's raw copy (`0x6d9013`) indexes.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut zoom: ResMut<MinimapZoom>) {
     match ev.key().as_str() {
         "minimapzoom" => zoom.outdoor = zoom_index(ev.num()),

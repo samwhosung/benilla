@@ -5,7 +5,7 @@
 
 use mlua::{Lua, Table, Value};
 
-use super::binding_abi::lua_number_text;
+use super::binding_abi::{lua_number_text, number_arg};
 use super::object::{decode_id, frame_handle_of};
 use super::Model;
 use crate::widget::{FrameHandle, FrameKind, KindState, MINIMAP_ZOOM_LEVELS};
@@ -95,19 +95,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetZoom",
-        lua.create_function(|lua, (_this, zoom): (Value, f64)| {
-            // Truncated and clamped to 0..=5 (`0x6daa10`), into the current mode's index; no
-            // `this` lookup (`0x4eec60`).
-            let clamped = (zoom.max(0.0) as u8).min(MINIMAP_ZOOM_LEVELS - 1);
+        lua.create_function(|lua, (_this, zoom): (Value, Value)| {
+            // No `this` lookup; argument 2 passes `lua_isnumber` (`0x4eec68`) or raises (`0x4eec8d`).
+            let level = number_arg(lua, zoom, "Usage: SetZoom(level)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.minimap.set_active_zoom(clamped);
-            // The reference also sets the mode's CVar, which is what survives a restart.
-            let cvar = if model.minimap.inside {
-                "minimapInsideZoom"
-            } else {
-                "minimapZoom"
-            };
-            super::cvars::set_from_engine(&mut model, cvar, clamped.to_string());
+            if let Some(cvar) = model.minimap.set_zoom_index(level) {
+                // The mode's CVar takes the new level, which is what survives a restart.
+                let text = model.minimap.active_zoom().to_string();
+                super::cvars::set_from_engine(&mut model, cvar, text);
+            }
             Ok(())
         })?,
     )?;

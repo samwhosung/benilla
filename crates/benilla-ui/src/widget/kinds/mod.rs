@@ -772,13 +772,22 @@ impl MinimapStatics {
         }
     }
 
-    /// Writes the index the inside flag selects.
-    pub fn set_active_zoom(&mut self, zoom: u8) {
-        if self.inside {
-            self.inside_zoom = zoom;
+    /// `SetZoomIndex` (`0x6da8e0`) on the `__ftol` of a level: the cell the indoor byte picks takes
+    /// it capped by an unsigned compare against 5 (`0x6da8fd`, `0x6da902`), so a negative level is
+    /// 5. Only a change writes, and names the CVar the reference then sets with `%d`
+    /// (`minimapInsideZoom` or `minimapZoom`, `0x6da909`).
+    pub fn set_zoom_index(&mut self, level: i32) -> Option<&'static str> {
+        let index = (level as u32).min(u32::from(MINIMAP_ZOOM_LEVELS - 1)) as u8;
+        let (cell, cvar) = if self.inside {
+            (&mut self.inside_zoom, "minimapInsideZoom")
         } else {
-            self.zoom = zoom;
+            (&mut self.zoom, "minimapZoom")
+        };
+        if *cell == index {
+            return None;
         }
+        *cell = index;
+        Some(cvar)
     }
 }
 

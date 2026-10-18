@@ -4,7 +4,7 @@ use super::common::script;
 use crate::script::*;
 use crate::widget::{MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS};
 
-/// The zoom rides extraction as [`QuadContent::Minimap`]; `SetZoom` clamps to 0..=5.
+/// The zoom rides extraction as [`QuadContent::Minimap`]; `SetZoom` caps at 5.
 #[test]
 fn minimap_zoom_api_and_extract() {
     let mut s = script();
@@ -32,9 +32,9 @@ fn minimap_zoom_api_and_extract() {
     assert_eq!(
         s.eval::<u8>("return m:GetZoom()").unwrap(),
         MINIMAP_ZOOM_LEVELS - 1,
-        "SetZoom clamps at levels-1 like the client's 0x6daa10"
+        "SetZoom caps at levels-1 (`0x6da8fd`)"
     );
-    s.run("m:SetZoom(-2)").unwrap();
+    s.run("m:SetZoom(0)").unwrap();
     assert_eq!(s.eval::<u8>("return m:GetZoom()").unwrap(), 0);
 
     s.resolve();
@@ -380,4 +380,57 @@ fn the_minimap_state_is_one_set_of_statics_and_its_getters_take_no_receiver() {
         let err = crate::script::lua_message(&s.run(chunk).expect_err(chunk));
         assert!(err.ends_with(want), "{chunk}: {err}");
     }
+}
+
+/// `SetZoom` (`0x4eec60`): `lua_isnumber(2)` or `Usage: SetZoom(level)` (`0x84c96c`), then `__ftol`
+/// (`0x40a2b0`) and `SetZoomIndex` (`0x6da8e0`), whose unsigned compare against 5 (`0x6da8fd`,
+/// `0x6da902`) makes a negative level the top one; the CVar is written only on a change.
+#[test]
+fn set_zoom_truncates_caps_unsigned_and_writes_its_cvar_only_on_a_change() {
+    let mut s = script();
+    s.register_cvars([("minimapZoom", "3"), ("minimapInsideZoom", "3")]);
+    s.run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
+        .unwrap();
+    for (level, want) in [
+        ("-1", 5),
+        ("0", 0),
+        ("-4", 5),
+        ("-0.9", 0),
+        ("4.9", 4),
+        ("'2'", 2),
+        ("2^32 + 1", 1),
+        ("0/0", 0),
+        ("1/0", 0),
+        ("-2^31", 5),
+    ] {
+        s.run(&format!("m:SetZoom({level})")).unwrap();
+        assert_eq!(
+            s.eval::<u8>("return m:GetZoom()").unwrap(),
+            want,
+            "SetZoom({level})"
+        );
+    }
+    for chunk in [
+        "m:SetZoom()",
+        "m:SetZoom(nil)",
+        "m:SetZoom({})",
+        "m:SetZoom('x')",
+    ] {
+        assert_eq!(
+            crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
+            "[string \"(chunk)\"]:1: Usage: SetZoom(level)",
+            "{chunk}"
+        );
+    }
+
+    // -1 is 5, and the CVar reads it.
+    s.take_cvar_changes();
+    s.run("m:SetZoom(-1)").unwrap();
+    assert_eq!(s.cvar("minimapZoom").as_deref(), Some("5"));
+    // An unchanged index writes nothing, whatever the CVar holds by then.
+    s.run(r#"SetCVar("minimapZoom", "1")"#).unwrap();
+    s.take_cvar_changes();
+    s.run("m:SetZoom(5)").unwrap();
+    assert!(s.take_cvar_changes().is_empty(), "no change, no write");
+    assert_eq!(s.cvar("minimapZoom").as_deref(), Some("1"));
 }
