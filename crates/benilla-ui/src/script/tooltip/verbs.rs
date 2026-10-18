@@ -149,7 +149,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 None => (String::new(), [1.0, 1.0, 1.0, 1.0]),
             };
             write_cell(&mut model, lh, &(current + &extra), color);
-            super::owe_relayout(&mut model, h);
+            // `0x5305b0` sizes the tooltip again (`0x530615`).
+            super::size_tooltip(&mut model, h);
             Ok(())
         })?,
     )?;
@@ -205,20 +206,29 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             super::add_font_strings(lua, &this, lh, rh)
         })?,
     )?;
-    // SetMinimumWidth(w): a floor on the auto-sized width (`SetTooltipMoney` passes the money
-    // row's, GameTooltip.lua:91).
+    // SetMinimumWidth(width) (`0x530e50`): the sizer's floor (`SetTooltipMoney` passes the money
+    // row's, GameTooltip.lua:91), stored as given (`0x530f05`) and read at the next sizing. A
+    // width `lua_isnumber` refuses raises the usage error (`0x530edc`, `0x8550a0`).
     m.set(
         "SetMinimumWidth",
-        lua.create_function(|lua, (this, w): (Table, f32)| {
-            with_tip(lua, &this, |t| t.min_width = w.max(0.0))
+        lua.create_function(|lua, (this, w): (Table, Value)| {
+            let Some(w) = lua.coerce_number(w).ok().flatten() else {
+                return Err(mlua::Error::RuntimeError(
+                    "Usage: SetMinimumWidth(width)".into(),
+                ));
+            };
+            with_tip(lua, &this, |t| t.min_width = w as f32)
         })?,
     )?;
-    // SetPadding(w): extra auto-size width that survives a content clear (ItemRefTooltip's 16
-    // keeps its close button off the text, ItemRef.xml:40).
+    // SetPadding(width) (`0x530f10`): extra plate width that survives a clear (ItemRefTooltip's 16
+    // keeps its close button off the text, ItemRef.xml:40), read by `lua_tonumber` with no type
+    // test, so a non-number is 0 (`0x530fa0`), stored as given (`0x530630`) and read at the next
+    // sizing.
     m.set(
         "SetPadding",
-        lua.create_function(|lua, (this, w): (Table, f32)| {
-            with_tip(lua, &this, |t| t.padding = w.max(0.0))
+        lua.create_function(|lua, (this, w): (Table, Value)| {
+            let w = lua.coerce_number(w).ok().flatten().unwrap_or(0.0);
+            with_tip(lua, &this, |t| t.padding = w as f32)
         })?,
     )?;
     // FadeOut() (`0x531f00`): the fade request ([`super::fade_out`]).

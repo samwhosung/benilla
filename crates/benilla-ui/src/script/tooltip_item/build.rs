@@ -313,6 +313,10 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
             if let Err(e) = rebuilt {
                 errors.push(e);
             }
+            // The callback sizes the plate after its builder's show (`0x52e5ae`), so lines an
+            // `OnShow` added count.
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            crate::script::tooltip::size_tooltip(&mut model, h);
         }
     }
     errors

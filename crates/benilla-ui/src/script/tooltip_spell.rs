@@ -247,8 +247,11 @@ fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> ml
         wait.fallback_name,
         wait.opts,
         wait.remaining,
-    )
-    .map(|_| ())
+    )?;
+    // As the reference's spell callback sizes after its builder's show (`0x52f869`).
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    super::tooltip::size_tooltip(&mut model, h);
+    Ok(())
 }
 
 /// The view store and its asks for the unit a render is built against: the pet's when the

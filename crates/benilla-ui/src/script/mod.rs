@@ -1126,6 +1126,7 @@ impl UiScript {
     /// measure can fail the ellipsis fit and truncate text that fits.
     pub fn invalidate_text_measures(&mut self) {
         let mut model = self.model_mut();
+        model.tooltip_measures.clear();
         for d in model.region_data.values_mut() {
             d.measured = None;
         }

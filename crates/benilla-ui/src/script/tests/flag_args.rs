@@ -405,25 +405,26 @@ fn macro_flags_read_get_bool_or_default_with_default_zero() {
     }
 }
 
-/// The GameTooltip wrap flag (`0x531811`, `0x531dd3`, `0x531b60`), default 0: a wrapped line pins
-/// its left cell to the wrap width. A double line wraps only with an empty right side, as the line
-/// core clears the flag otherwise (`0x530284`).
+/// The GameTooltip wrap flag (`0x531811`, `0x531dd3`, `0x531b60`), default 0, stored per line
+/// (`0x53036f`). A double line wraps only with an empty right side, as the line core clears the
+/// flag otherwise (`0x530284`).
 #[test]
 fn tooltip_wrap_flags_read_get_bool_or_default_with_default_zero() {
     let s = script();
-    s.run(r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")"#)
-        .unwrap();
-    let pinned = |line: u32| {
-        let t: mlua::Table = s
-            .lua()
-            .globals()
-            .get(format!("TTTextLeft{line}"))
-            .expect("left line");
-        let rh = crate::script::region::region_handle_of(s.lua(), &t).unwrap();
-        s.model_ref()
-            .region_data
-            .get(&rh)
-            .is_some_and(|d| d.size.is_some())
+    // Owned, so `SetText`'s show keeps the line: an ownerless one hides, and the hide's clear
+    // zeroes the flags (`0x530a60`).
+    s.run(
+        r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")"#,
+    )
+    .unwrap();
+    let pinned = |line: usize| {
+        let model = s.model_ref();
+        let h = model.arena.lookup("TT").expect("the tooltip");
+        match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(crate::widget::KindState::Tooltip(t)) => t.wrapped[line - 1],
+            _ => panic!("not a tooltip"),
+        }
     };
     for (arg, want) in cases(false) {
         s.run("TT:ClearLines()").unwrap();

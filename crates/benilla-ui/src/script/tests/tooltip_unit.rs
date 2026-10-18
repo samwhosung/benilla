@@ -653,7 +653,7 @@ fn world_hover_drive_and_health_watcher() {
     "#,
     )
     .unwrap();
-    // The auto-size needs the line measures before the plate has a rect.
+    // With no font engine the sizer waits on the line measures before the plate has a rect.
     let answers: Vec<(u32, f32, f32, u64)> = s
         .fontstrings_needing_measure()
         .iter()

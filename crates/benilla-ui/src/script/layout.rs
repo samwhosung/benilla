@@ -738,7 +738,7 @@ pub(super) fn layout_verify_enabled() -> bool {
 struct PreambleProf {
     on: bool,
     last: Option<std::time::Instant>,
-    /// The GameTooltip auto-size pre-pass (`layout_tooltips`).
+    /// The GameTooltip cursor pre-pass (`anchor_cursor_tooltips`).
     tooltip: u128,
     /// `OnSizeChanged`'s "before" snapshot.
     watched: u128,
@@ -839,6 +839,8 @@ impl UiScript {
     /// [`UiScript::resolve`]'s body on a bare `Model`, so a Lua binding can force a fresh resolve,
     /// as a scroll frame's range recompute must reflect a same-tick `SetHeight`.
     pub(super) fn resolve_layout(model: &mut Model) {
+        // A tooltip sized before its lines were measured, in a VM with no font engine.
+        super::tooltip::size_owed(model);
         let solves = model.layout_solves;
         Self::resolve_layout_inner(model);
         // A solve may have resized a frame: its backdrop re-runs its texcoords (`0x76b580`).
@@ -943,8 +945,8 @@ impl UiScript {
     fn resolve_layout_inner(model: &mut Model) {
         // Text that emptied or filled since the last resolve: named now where its node's hash
         // moved, ahead of the epoch's read, as if named at the write.
-        if !model.text_flips.is_empty() {
-            for rh in std::mem::take(&mut model.text_flips) {
+        if !model.content_writes.is_empty() {
+            for rh in std::mem::take(&mut model.content_writes) {
                 model.touch_layout_content(rh);
             }
         }
@@ -960,8 +962,8 @@ impl UiScript {
         // Every call past tier 1 counts, verify's re-walks included: the walk is the cost.
         model.layout_gate_walks = model.layout_gate_walks.wrapping_add(1);
         let mut pre = PreambleProf::new(layout_prof_enabled());
-        // The GameTooltip pre-pass writes tooltip sizes and offsets from cached measures.
-        super::tooltip::layout_tooltips(model);
+        // The GameTooltip pre-pass places each cursor-anchored plate.
+        super::tooltip::anchor_cursor_tooltips(model);
         pre.tooltip = pre.lap();
         // The invalidations since the last resolve, the pre-pass's included, each answered by this
         // one, as the reference drains its whole queue (`0x768ed0`).
@@ -2083,9 +2085,21 @@ pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option
         super::measure::store_measured(model, rh, id, zero);
         return None;
     }
+    let wrap_width = model.region_data.get(&rh)?.wrap_width();
+    measure_request_at(model, rh, wrap_width, key, scale)
+}
+
+/// The [`MeasureRequest`] for `rh`'s text laid out in `wrap_width` (`None`, unwrapped) under
+/// `key`, whatever measure it holds; `None` for no text.
+pub(super) fn measure_request_at(
+    model: &mut Model,
+    rh: RegionHandle,
+    wrap_width: Option<f32>,
+    key: u64,
+    scale: f32,
+) -> Option<MeasureRequest> {
     let d = model.region_data.get(&rh)?;
     let text = d.text.clone().filter(|t| !t.is_empty())?;
-    let wrap_width = d.size.map(|s| s.0).filter(|w| *w > 0.0);
     let font = d.font_path.clone();
     let height = d.font_height;
     let text_height = d.text_height;

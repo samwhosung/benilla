@@ -130,6 +130,10 @@ pub(crate) struct Model {
     pub(crate) addons_chain_reader: Option<super::addon::SharedChainReader>,
     /// The host's font engine, so a metric answers inside the asking call, not a frame later.
     pub(crate) measurer: Option<super::measure::SharedMeasurer>,
+    /// The tooltip sizer's measures by key ([`super::tooltip`]): the clear's width reset and the
+    /// sizer's probes key a wrapped line three ways a frame, so the hover loops' per-frame rebuild
+    /// asks the font engine nothing after the first. Emptied with the engine's metrics.
+    pub(crate) tooltip_measures: HashMap<(u64, bool), super::MeasuredText>,
     /// Whether a texture path resolves (patch chain or loose addon file), so the path form of
     /// `SetTexture` returns the reference's 1 or nil inline (`0x79bb40`). `None` answers nil.
     pub(crate) texture_probe: Option<TextureProbe>,
@@ -341,9 +345,10 @@ pub(crate) struct Model {
 
     /// Frames the last resolve resized, `(id, width, height)`, owed `OnSizeChanged` outside it.
     pub(crate) pending_size_changed: Vec<(u32, f32, f32)>,
-    /// Regions whose text emptied or filled since the last resolve, which names each one whose
-    /// node hash moved ([`Model::touch_layout_text`]).
-    pub(crate) text_flips: Vec<RegionHandle>,
+    /// Regions whose text emptied or filled ([`Model::touch_layout_text`]), or whose tooltip line
+    /// width the clear or the sizer wrote ([`Model::note_line_width`]), since the last resolve,
+    /// which names each one whose node hash moved.
+    pub(crate) content_writes: Vec<RegionHandle>,
 
     /// Script errors caught from `pcall`'d handlers, drained by the host each frame.
     pub(crate) errors: Vec<String>,
@@ -1361,6 +1366,7 @@ impl Model {
             addons_root: None,
             addons_chain_reader: None,
             measurer: None,
+            tooltip_measures: HashMap::new(),
             texture_probe: None,
             world_loc_projector: None,
             texture_size_probe: None,
@@ -1425,7 +1431,7 @@ impl Model {
             mouse_capture: None,
             last_click: HashMap::new(),
             pending_size_changed: Vec::new(),
-            text_flips: Vec::new(),
+            content_writes: Vec::new(),
             layout_force: Vec::new(),
             layout_pending: Vec::new(),
             layout_unsettled: HashSet::new(),
@@ -1954,8 +1960,15 @@ impl Model {
             .get(&rh)
             .is_some_and(|d| d.text.as_deref().is_some_and(|t| !t.is_empty()));
         if shown != was_shown {
-            self.text_flips.push(rh);
+            self.content_writes.push(rh);
         }
+    }
+
+    /// A tooltip line's width written by the clear (`0x5301f0`) or the sizer (`0x5308ef`), each a
+    /// `SetWidth` that invalidates (`0x7683d0`): noted as a text flip is, as the hover loops reset
+    /// and restore it every frame, so the next resolve names it only if it moved the node's hash.
+    pub(crate) fn note_line_width(&mut self, rh: RegionHandle) {
+        self.content_writes.push(rh);
     }
 
     /// Text that emptied or filled on anchored region `rh`, which moves the measure its resolve
@@ -2606,37 +2619,6 @@ impl Model {
     /// A measure-key write that names no region, such as a font object: the next sweep walks all.
     pub(crate) fn touch_measure_all(&mut self) {
         self.measure_dirty = None;
-    }
-
-    /// Names a frame without bumping the epoch, for the resolve's own tooltip pre-pass: a bump
-    /// inside a resolve would hold the gate open for good, yet an unnamed write could go stale.
-    pub(crate) fn note_layout_frame_write(&mut self, h: FrameHandle) {
-        if self.layout_touched.is_some() {
-            match self.frame_to_id.get(&h) {
-                Some(&id) => {
-                    self.layout_touched
-                        .as_mut()
-                        .expect("checked above")
-                        .push(id);
-                }
-                _ => self.give_up_naming(),
-            }
-        }
-    }
-
-    /// `note_layout_frame_write` for a region.
-    pub(crate) fn note_layout_region_write(&mut self, rh: RegionHandle) {
-        if self.layout_touched.is_some() {
-            match self.region_to_id.get(&rh) {
-                Some(&id) => {
-                    self.layout_touched
-                        .as_mut()
-                        .expect("checked above")
-                        .push(id);
-                }
-                _ => self.give_up_naming(),
-            }
-        }
     }
 
     /// Names layout id `id` as what this write moved, while naming is still on, whether or not

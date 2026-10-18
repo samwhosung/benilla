@@ -136,8 +136,8 @@ pub use kinds::{
     ScrollingMessageState, SequenceFacts, ShownWrites, SliderState, StatusBarState, TooltipAnchor,
     TooltipState, Viewport, ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND,
     MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL,
-    MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP,
-    TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD, TOOLTIP_WRAP_WIDTH, TURN_HOLD_MS,
+    MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_COLUMN_GAP,
+    TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PLATE_PAD, TOOLTIP_WRAP_WIDTH, TURN_HOLD_MS,
 };
 
 // ── Frame and Region nodes ───────────────────────────────────────────────────────────────────
@@ -334,7 +334,8 @@ pub struct WidgetArena {
     /// The live frames whose kind has a [`KindUpdate`], kept the same way: the update walk reaches
     /// each one shown, with an `OnUpdate` or without.
     walked_kinds: Vec<FrameHandle>,
-    /// The live GameTooltips, kept the same way, for the layout pre-pass and unit push.
+    /// The live GameTooltips, kept the same way, for the layout's cursor pre-pass, the headless
+    /// sizing and the unit push.
     tooltip_kinds: Vec<FrameHandle>,
     /// The live Minimaps, kept the same way, for the containment, zoom and arrow-facing feeds.
     minimap_kinds: Vec<FrameHandle>,

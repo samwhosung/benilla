@@ -100,9 +100,12 @@ impl super::UiScript {
     /// it whenever the window size or `uiScale` changes: glyph advances snap to whole physical
     /// pixels.
     pub fn set_text_measurer(&mut self, measurer: Box<dyn TextMeasure>) {
-        self.model_mut().measurer = Some(SharedMeasurer(std::rc::Rc::new(
-            std::cell::RefCell::new(measurer),
-        )));
+        let mut model = self.model_mut();
+        model.measurer = Some(SharedMeasurer(std::rc::Rc::new(std::cell::RefCell::new(
+            measurer,
+        ))));
+        // A new engine answers under a new raster: no measure of the old one stands.
+        model.tooltip_measures.clear();
     }
 
     /// Whether a [`TextMeasure`] is installed; the host then skips its batch measure pass.

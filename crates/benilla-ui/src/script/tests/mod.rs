@@ -80,6 +80,7 @@ mod texture_art;
 mod tooltip;
 mod tooltip_item;
 mod tooltip_setter_flags;
+mod tooltip_size;
 mod tooltip_spell;
 mod tooltip_unit;
 mod toplevel;

@@ -7,13 +7,24 @@
 
 use std::time::Instant;
 
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{MeasureRequest, TextMeasure, UiScript};
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
 
 /// A deterministic font engine: 6 units a character, so only a real text change moves the layout.
+/// The laid-out width and height of `r`.
+fn six_wide(r: &MeasureRequest) -> (f32, f32) {
+    #[allow(clippy::cast_precision_loss)]
+    let w = r.text.chars().count() as f32 * 6.0;
+    match r.wrap_width {
+        Some(ww) if w > ww => (ww, 12.0 * (w / ww).ceil()),
+        _ => (w, 12.0),
+    }
+}
+
+/// [`six_wide`] answering the host's measure round trip.
 fn answer_measures(s: &mut UiScript) -> usize {
     let reqs = s.fontstrings_needing_measure();
     let n = reqs.len();
@@ -21,12 +32,8 @@ fn answer_measures(s: &mut UiScript) -> usize {
         let answers: Vec<(u32, f32, f32, u64)> = reqs
             .iter()
             .map(|r| {
-                #[allow(clippy::cast_precision_loss)]
-                let w = r.text.chars().count() as f32 * 6.0;
-                match r.wrap_width {
-                    Some(ww) if w > ww => (r.id, ww, 12.0 * (w / ww).ceil(), r.key),
-                    _ => (r.id, w, 12.0, r.key),
-                }
+                let (w, h) = six_wide(r);
+                (r.id, w, h, r.key)
             })
             .collect();
         s.set_measured_text_unwrapped(&answers);
@@ -34,9 +41,35 @@ fn answer_measures(s: &mut UiScript) -> usize {
     n
 }
 
+/// [`six_wide`] installed in the VM, as the app installs its font engine
+/// (`extract::seat_text_measurer`), so a tooltip is sized in the call that shows it (`0x530640`)
+/// rather than over the round trip's frames.
+struct SixWide;
+
+impl TextMeasure for SixWide {
+    fn measure(&mut self, r: &MeasureRequest) -> (f32, f32, f32) {
+        let (w, h) = six_wide(r);
+        #[allow(clippy::cast_precision_loss)]
+        let natural = r.text.chars().count() as f32 * 6.0;
+        (w, h, natural)
+    }
+}
+
 /// The full shipped UI, loaded and settled.
 fn settled_default_ui() -> UiScript {
+    settled_ui(false)
+}
+
+/// [`settled_default_ui`] with [`SixWide`] installed.
+fn settled_default_ui_measured() -> UiScript {
+    settled_ui(true)
+}
+
+fn settled_ui(measurer: bool) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    if measurer {
+        s.set_text_measurer(Box::new(SixWide));
+    }
     s.set_screen_size(1600.0, 900.0);
     // The UI loads on world entry, so a player always exists by then.
     s.set_unit(
@@ -237,12 +270,12 @@ fn hidden_frames_cost() {
     );
 }
 
-/// Measuring before resolving makes a tooltip content change cost one layout solve; measured
-/// after, the answers would force a second whole-UI solve.
+/// A tooltip content change costs one layout solve: the sizer measures in the show through the
+/// engine the VM holds, as the app's does, so no answer lands after the resolve to force a second.
 #[test]
 fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
     benilla_formats::wow_data_or_skip!();
-    let mut s = settled_default_ui();
+    let mut s = settled_default_ui_measured();
     install_changing_tooltip(&s, "GateOwner", "gate_change");
 
     for _ in 0..4 {
@@ -258,8 +291,8 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
     let solves = s.layout_solves() - before;
     assert_eq!(
         solves, 10,
-        "10 content changes must cost 10 solves — one each. Two per change means the measure \
-         round-trip is running AFTER the resolve again (extract::tick_script's order)."
+        "10 content changes must cost 10 solves — one each. Two per change means a measure \
+         landed after the resolve (extract::tick_script's order)."
     );
     // Nor may they derive the graph: a content change writes measure answers and re-anchors
     // pooled line regions, nothing structural.
@@ -468,7 +501,7 @@ fn a_tooltip_content_change_solves_a_tooltip_sized_scope() {
 #[test]
 fn a_scoped_resolve_reproduces_the_whole_graph_solve() {
     benilla_formats::wow_data_or_skip!();
-    let mut s = settled_default_ui();
+    let mut s = settled_default_ui_measured();
     install_changing_tooltip(&s, "ScopeOwner", "scope_change");
 
     for step in 0..12 {

@@ -12,19 +12,27 @@ pub(crate) fn load_ui(s: &UiScript, entry: &str) -> usize {
     load_entry(s, entry, false, false)
 }
 
-/// Declares `TestTooltipTemplate`, the stock template's 30 `TextLeft`/`TextRight` pairs, for a test
-/// with no install. A tooltip made without the template holds no line, as on 1.12.1; a test makes
-/// one with `CreateFrame("GameTooltip", name, parent, "TestTooltipTemplate")`.
+/// Declares `TestTooltipTemplate`, the stock template's 30 `TextLeft`/`TextRight` pairs with their
+/// anchors (`GameTooltipTemplate.xml`), for a test with no install. A tooltip made without the
+/// template holds no line, as on 1.12.1; a test makes one with
+/// `CreateFrame("GameTooltip", name, parent, "TestTooltipTemplate")`.
 pub(crate) fn load_tooltip_template(s: &UiScript) {
     let mut xml = String::from(
         r#"<Ui><GameTooltip name="TestTooltipTemplate" virtual="true"><Layers><Layer level="ARTWORK">"#,
     );
     for i in 1..=30 {
-        for side in ["Left", "Right"] {
-            xml.push_str(&format!(
-                r#"<FontString name="$parentText{side}{i}" hidden="true"/>"#
-            ));
-        }
+        let left_anchor = if i == 1 {
+            r#"<Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-10"/></Offset></Anchor>"#
+                .to_string()
+        } else {
+            format!(
+                r#"<Anchor point="TOPLEFT" relativeTo="$parentTextLeft{}" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor>"#,
+                i - 1
+            )
+        };
+        xml.push_str(&format!(
+            r#"<FontString name="$parentTextLeft{i}" hidden="true"><Anchors>{left_anchor}</Anchors></FontString><FontString name="$parentTextRight{i}" hidden="true"><Anchors><Anchor point="RIGHT" relativeTo="$parentTextLeft{i}" relativePoint="LEFT"><Offset><AbsDimension x="40" y="0"/></Offset></Anchor></Anchors></FontString>"#
+        ));
     }
     xml.push_str("</Layer></Layers></GameTooltip></Ui>");
     let doc = benilla_ui::framexml::parse(&xml).expect("tooltip template parses");

@@ -545,13 +545,22 @@ impl RegionData {
 
     /// [`Self::measure_key`] with `text` in place of the region's own.
     pub(crate) fn measure_key_of(&self, text: &str, scale: f32) -> u64 {
+        self.measure_key_at(text, self.wrap_width(), scale)
+    }
+
+    /// The width the text wraps in: the authored width when positive, else none.
+    pub(crate) fn wrap_width(&self) -> Option<f32> {
+        self.size.map(|s| s.0).filter(|w| *w > 0.0)
+    }
+
+    /// [`Self::measure_key_of`] with `wrap_width` in place of the region's own.
+    pub(crate) fn measure_key_at(&self, text: &str, wrap_width: Option<f32>, scale: f32) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         self.font_path.hash(&mut hasher);
         self.font_height.map(f32::to_bits).hash(&mut hasher);
         self.text_height.map(f32::to_bits).hash(&mut hasher);
-        let wrap_width = self.size.map(|s| s.0).filter(|w| *w > 0.0);
         wrap_width.map(f32::to_bits).hash(&mut hasher);
         // The outline changes the measure: a THICK one steps each glyph 1 px further
         // (`GlyphStepBase 0x5ca2b0`); so does the shadow's x offset, which seeds the line.

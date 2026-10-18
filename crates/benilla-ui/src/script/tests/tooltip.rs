@@ -1,4 +1,4 @@
-//! The GameTooltip widget's engine mechanics: the line stack and its auto-size, `SetOwner`'s
+//! The GameTooltip widget's engine mechanics: the line stack and its sizing, `SetOwner`'s
 //! anchor modes, the implicit and gated shows, and the fade.
 
 use super::common::script;
@@ -18,6 +18,11 @@ fn measure_all(s: &mut UiScript, sizes: &[(&str, f32, f32)]) {
         .collect();
     s.set_measured_text_unwrapped(&answers);
     s.resolve();
+}
+
+/// Whether `got` is `want` to a ten-thousandth: the plate pads are 10.24, which f32 rounds.
+fn near(got: f64, want: f64) -> bool {
+    (got - want).abs() < 1e-4
 }
 
 #[test]
@@ -50,15 +55,10 @@ fn line_stack_autosize_and_right_flush() {
             ("5 - 9 Damage", 70.0, 12.0),
         ],
     );
-    // maxw = max(80, 50+40+30, 70) = 120 ⇒ width 140; totalh = 14+2+12+2+12 = 42 ⇒ height 62.
-    // ANCHOR_RIGHT: tooltip BOTTOMLEFT at owner TOPRIGHT (140, 500).
-    s.run(
-        r#"
-        assert(TT:GetWidth() == 140, "auto width, got " .. TT:GetWidth())
-        assert(TT:GetHeight() == 62, "auto height, got " .. TT:GetHeight())
-    "#,
-    )
-    .unwrap();
+    // widest = max(80, 50 + 38.4 + 30, 70) = 118.4 ⇒ width 138.88; height 14+2+12+2+12 = 42 ⇒
+    // 62.48. ANCHOR_RIGHT: tooltip BOTTOMLEFT at owner TOPRIGHT (140, 500).
+    let (w, h): (f64, f64) = s.eval("return TT:GetWidth(), TT:GetHeight()").unwrap();
+    assert!(near(w, 138.88) && near(h, 62.48), "auto size, got {w}x{h}");
     let quads = s.extract();
     let rect_of = |needle: &str| {
         quads
@@ -70,19 +70,22 @@ fn line_stack_autosize_and_right_flush() {
             .unwrap_or_else(|| panic!("no quad for {needle}"))
     };
     let l1 = rect_of("Tough Jerky");
-    // Frame: left 140, bottom 500 ⇒ text inset TOPLEFT (150, 552).
-    assert_eq!((l1.left, l1.top), (150.0, 552.0));
+    // Frame: left 140, top 562.48 ⇒ the template's TOPLEFT (10, −10) at (150, 552.48).
+    assert!(
+        l1.left == 150.0 && near(f64::from(l1.top), 552.48),
+        "{l1:?}"
+    );
     let r2 = rect_of("Sword");
-    // Right-flushed: right edge at frame.right − pad = 280 − 10 = 270.
-    assert_eq!(r2.right, 270.0);
-    // Seated on line 2's band (left2 top = 552 − 14 − 2 = 536).
+    // The right text's RIGHT at its left text's LEFT + the widest line: 150 + 118.4.
+    assert!(near(f64::from(r2.right), 268.4), "{r2:?}");
+    // Seated on line 2's band (left2 top = 552.48 − 14 − 2).
     let l2 = rect_of("One-Hand");
-    assert_eq!(l2.top, 536.0);
+    assert!(near(f64::from(l2.top), 536.48), "{l2:?}");
 }
 
-/// The layout re-points each shown right cell by its RIGHT slot alone, `SetPoint(RIGHT, leftCell,
+/// The sizer re-points each shown right cell by its RIGHT slot alone, `SetPoint(RIGHT, leftCell,
 /// LEFT, width, 0)` (`0x53094f`): a point an addon added beside it keeps its offset, and after a
-/// `ClearAllPoints` the RIGHT point comes back.
+/// `ClearAllPoints` the next sizing sets RIGHT again.
 #[test]
 fn the_right_column_write_sets_the_right_slot_only() {
     let mut s = script();
@@ -108,7 +111,7 @@ fn the_right_column_write_sets_the_right_slot_only() {
             ("Sword", 30.0, 12.0),
         ],
     );
-    // maxw = max(80, 50 + 40 + 30) = 120.
+    // widest = max(80, 50 + 38.4 + 30) = 118.4.
     let right_anchor = r#"
         local p, rel, rp, x, y = TTRTextRight2:GetPoint(N)
         return p, rel == TTRTextLeft2, rp, x, y
@@ -130,12 +133,12 @@ fn the_right_column_write_sets_the_right_slot_only() {
     let (p, rel, rp, x, y): (String, bool, String, f64, f64) =
         s.eval(&right_anchor.replace('N', "2")).unwrap();
     assert_eq!(
-        (p.as_str(), rel, rp.as_str(), x, y),
-        ("RIGHT", true, "LEFT", 120.0, 0.0)
+        (p.as_str(), rel, rp.as_str(), x as f32, y),
+        ("RIGHT", true, "LEFT", 118.4, 0.0)
     );
 
-    s.run("TTRTextRight2:ClearAllPoints()").unwrap();
-    s.resolve();
+    // The next sizing, the show's, sets RIGHT again.
+    s.run("TTRTextRight2:ClearAllPoints() TTR:Show()").unwrap();
     s.resolve();
     assert_eq!(
         s.eval::<i64>("return TTRTextRight2:GetNumPoints()")
@@ -146,14 +149,14 @@ fn the_right_column_write_sets_the_right_slot_only() {
     let (p, rel, rp, x, y): (String, bool, String, f64, f64) =
         s.eval(&right_anchor.replace('N', "1")).unwrap();
     assert_eq!(
-        (p.as_str(), rel, rp.as_str(), x, y),
-        ("RIGHT", true, "LEFT", 120.0, 0.0)
+        (p.as_str(), rel, rp.as_str(), x as f32, y),
+        ("RIGHT", true, "LEFT", 118.4, 0.0)
     );
 }
 
 /// An empty left cell is a one-unit row plus its 2 px gap in the anchor chain, as the reference's
-/// size getters floor a FontString at one FrameXML unit. The plate's height is not asserted: the
-/// client sums shown left cells only, so this row's share of it is the open tooltip-height issue's to settle.
+/// size getters floor a FontString at one FrameXML unit; the sizer counts it in neither size
+/// (`0x530983`).
 #[test]
 fn empty_line_is_a_one_unit_row_and_the_chain_stays_contiguous() {
     let mut s = script();
@@ -183,10 +186,12 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_contiguous() {
             ("PvP", 24.0, 12.0),
         ],
     );
-    // maxw 90 (the name; the double line is 0 + 40 + 6) ⇒ width 110.
+    // widest 90 (the name; the double line's hidden left counts no gap: 6) ⇒ width 110.48, and
+    // height 14+2+12+2+12 ⇒ 62.48.
+    let (w, h): (f64, f64) = s.eval("return TTE:GetWidth(), TTE:GetHeight()").unwrap();
+    assert!(near(w, 110.48) && near(h, 62.48), "auto size, got {w}x{h}");
     s.run(
         r#"
-        assert(TTE:GetWidth() == 110, "auto width, got " .. tostring(TTE:GetWidth()))
         -- The chain stays contiguous through the blank row: Level 20 sits gap+1+gap under the name.
         assert(TTETextLeft3:GetTop() == TTETextLeft1:GetBottom() - 5,
                "chain contiguous through the empty row, got " .. tostring(TTETextLeft3:GetTop())
@@ -238,16 +243,18 @@ fn double_line_wraps_only_with_an_empty_right_text() {
         tt:AddDoubleLine("plain", "R", 1, 1, 1, 1, 1, 1, true)
         tt:AddDoubleLine("unflagged", "", 1, 1, 1, 1, 1, 1)
         tt:AddDoubleLine("", "right only", 1, 1, 1, 1, 1, 1, true)
-        W1, W2, W3, W4 = TTWTextLeft1:GetWidth(), TTWTextLeft2:GetWidth(), TTWTextLeft3:GetWidth(), TTWTextLeft4:GetWidth()
     "#,
     )
     .unwrap();
-    let (w1, w2, w3, w4): (f64, f64, f64, f64) = s.eval("return W1, W2, W3, W4").unwrap();
-    let pin = crate::widget::TOOLTIP_WRAP_WIDTH as f64;
-    assert!(
-        w1 == pin && w2 < pin && w3 < pin && w4 < pin,
-        "{w1} {w2} {w3} {w4}"
-    );
+    let wrapped = {
+        let model = s.model_ref();
+        let h = model.arena.lookup("TTW").expect("the tooltip");
+        match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(crate::widget::KindState::Tooltip(t)) => t.wrapped[..4].to_vec(),
+            _ => panic!("not a tooltip"),
+        }
+    };
+    assert_eq!(wrapped, [true, false, false, false]);
     assert!(s.take_errors().is_empty());
 }
 
@@ -304,7 +311,8 @@ fn the_clear_blanks_the_left_text_and_keeps_the_right() {
 }
 
 /// The post-load pass (`0x529650`) fixes the line limit when the tooltip is made, finding the
-/// pairs by global name (`0x76c760`); only `AddFontStrings` (`0x529940`) raises it, by one.
+/// pairs by global name (`0x76c760`); only `AddFontStrings` (`0x529940`) raises it, by one, and it
+/// leaves the pair's points and shown bit as the caller made them.
 #[test]
 fn the_line_limit_is_fixed_at_creation_and_only_add_font_strings_raises_it() {
     let mut s = script();
@@ -316,14 +324,14 @@ fn the_line_limit_is_fixed_at_creation_and_only_add_font_strings_raises_it() {
         c:AddLine("x")
         assert(c:NumLines() == 0, "made after the tooltip: " .. c:NumLines())
 
-        -- (a) handed over, the pair is the one line, seated once.
+        -- (a) handed over, the pair is the one line, as the caller made it.
         local a = CreateFrame("GameTooltip", "TTA")
         local al, ar = a:CreateFontString("TTATextLeft1"), a:CreateFontString("TTATextRight1")
         a:AddFontStrings(al, ar)
+        assert(ar:IsShown(), "the pair keeps its shown bit")
         a:AddLine("one"); a:AddLine("two")
         assert(a:NumLines() == 1, "one pair, one line: " .. a:NumLines())
-        local _, arel = al:GetPoint(1)
-        assert(al:GetNumPoints() == 1 and arel == a, "seated once, on the plate")
+        assert(al:GetNumPoints() == 0, "no point set on the pair")
 
         -- (b) a 31st pair on a templated tooltip raises the limit to 31.
         local b = CreateFrame("GameTooltip", "TTB", nil, "TestTooltipTemplate")
@@ -332,8 +340,7 @@ fn the_line_limit_is_fixed_at_creation_and_only_add_font_strings_raises_it() {
         for i = 1, 40 do b:AddLine("line " .. i) end
         assert(b:NumLines() == 31, "30 declared and 1 handed over: " .. b:NumLines())
         assert(bl:GetText() == "line 31")
-        local _, brel = bl:GetPoint(1)
-        assert(bl:GetNumPoints() == 1 and brel == TTBTextLeft30, "seated once, after line 30")
+        assert(bl:GetNumPoints() == 0, "no point set on the 31st pair")
     "#,
     )
     .unwrap();
@@ -458,7 +465,8 @@ fn settext_shows_and_both_addline_shapes() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Until its lines are measured, a tooltip keeps its declared size rather than a gaps-only one.
+/// With no font engine, a tooltip keeps its declared size until its lines are measured, and is
+/// sized when the measures land: benilla's headless fallback, as the reference measures inline.
 #[test]
 fn unmeasured_lines_hold_declared_size() {
     let mut s = script();
@@ -497,8 +505,8 @@ fn unmeasured_lines_hold_declared_size() {
             ("(3.7 damage per second)", 110.0, 12.0),
         ],
     );
-    s.run(r#"assert(TT6:GetWidth() == 140, "auto width after measures, got " .. TT6:GetWidth())"#)
-        .unwrap();
+    let w: f64 = s.eval("return TT6:GetWidth()").unwrap();
+    assert!(near(w, 138.88), "auto width after measures, got {w}");
 }
 
 #[test]
@@ -518,9 +526,9 @@ fn minimum_width_floors_autosize() {
     .unwrap();
     s.resolve();
     measure_all(&mut s, &[("tiny", 20.0, 12.0)]);
-    // floor 90 beats content 20 ⇒ width 110.
-    s.run(r#"assert(TT4:GetWidth() == 110, "floored width, got " .. TT4:GetWidth())"#)
-        .unwrap();
+    // floor 90 beats content 20 ⇒ width 110.48.
+    let w: f64 = s.eval("return TT4:GetWidth()").unwrap();
+    assert!(near(w, 110.48), "floored width, got {w}");
 }
 
 /// Fresh content mid-fade cancels the ramp at full alpha.
@@ -616,27 +624,26 @@ fn owner_anchored_tooltip_clamps_to_screen() {
             ("Alliance Territory", 120.0, 12.0),
         ],
     );
-    // Auto-size: maxw 120 ⇒ width 140; totalh 14+2+12 ⇒ height 48. Unclamped, the plate's
-    // BOTTOMRIGHT at the owner's TOPLEFT (610, 600) puts its top at 648.
-    s.run(
-        r#"
-        assert(TTC:GetTop() == 600, "top clamped to the screen top, got " .. TTC:GetTop())
-        assert(TTC:GetBottom() == 552, "size preserved, got " .. TTC:GetBottom())
-        assert(TTC:GetRight() == 610, "X untouched (inside), got " .. TTC:GetRight())
-        TTC:SetClampedToScreen(false)
-    "#,
-    )
-    .unwrap();
+    // The sizer: widest 120 ⇒ width 140.48; 14+2+12 ⇒ height 48.48. Unclamped, the plate's
+    // BOTTOMRIGHT at the owner's TOPLEFT (610, 600) puts its top at 648.48.
+    let (top, bottom, right): (f64, f64, f64) = s
+        .eval("return TTC:GetTop(), TTC:GetBottom(), TTC:GetRight()")
+        .unwrap();
+    assert_eq!(top, 600.0, "top clamped to the screen top");
+    assert!(near(bottom, 551.52), "size preserved, got {bottom}");
+    assert_eq!(right, 610.0, "X untouched (inside)");
+    s.run("TTC:SetClampedToScreen(false)").unwrap();
     s.resolve();
     // Unclamped, the plate goes back above the window.
-    s.run(
-        r#"
-        assert(not TTC:IsClampedToScreen(), "flag readable")
-        assert(TTC:GetBottom() == 600, "unclamped: bottom back at the owner's top")
-        assert(TTC:GetTop() == 648, "unclamped: off the window again")
-    "#,
-    )
-    .unwrap();
+    let (clamped, top, bottom): (bool, f64, f64) = s
+        .eval("return TTC:IsClampedToScreen() == 1, TTC:GetTop(), TTC:GetBottom()")
+        .unwrap();
+    assert!(!clamped, "flag readable");
+    assert_eq!(bottom, 600.0, "unclamped: bottom back at the owner's top");
+    assert!(
+        near(top, 648.48),
+        "unclamped: off the window again, got {top}"
+    );
     assert!(s.take_errors().is_empty());
 }
 
@@ -969,9 +976,9 @@ fn anchor_cursor_follows_the_cursor_every_frame() {
         Host = CreateFrame("Frame", "Host")
         Tip:SetOwner(Host, "ANCHOR_CURSOR")
         Tip:AddLine("Copper Ore")
-        -- An explicit size, because this VM has no text measurer: the auto-size pre-pass leaves a
-        -- plate with no measured extents at its declared size, and the placement is what is under
-        -- test, not the width.
+        -- An explicit size, because this VM has no text measurer: the sizer leaves a plate with
+        -- unmeasured lines at its declared size, and the placement is what is under test, not
+        -- the width.
         Tip:SetWidth(120) Tip:SetHeight(40)
         Tip:Show()
         "#,
@@ -1312,11 +1319,12 @@ fn the_fade_end_restores_full_alpha_before_its_hide() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The tooltip is invalidated by its relayout (`0x530640`, ending in `0x7680e0(1)` at `0x530a52`),
-/// which only Show and the line writers run (`0x530aad`, `0x52ad59`, ..): a cleared plate keeps its
-/// rect through an unrelated resolve, and the next line's relayout resolves it without points.
+/// The tooltip is invalidated by its sizer (`0x530640`, ending in `0x7680e0(1)` at `0x530a52`),
+/// which the show runs and a line writer does not (`0x530aad`; `0x531630`): a cleared plate keeps
+/// its rect through an unrelated resolve and an `AddLine`, and the next show resolves it without
+/// points, as `ANCHOR_NONE` sets none (`0x52fe90` with 0, `0x530a49`).
 #[test]
-fn only_the_relayout_invalidates_the_tooltip() {
+fn only_the_sizer_invalidates_the_tooltip() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -1324,7 +1332,8 @@ fn only_the_relayout_invalidates_the_tooltip() {
         local owner = CreateFrame("Button", "Slot")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
         local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
-        tt:SetOwner(owner, "ANCHOR_RIGHT")
+        tt:SetOwner(owner, "ANCHOR_NONE")
+        tt:SetPoint("TOPLEFT", 140, -100)
         tt:AddLine("Tough Jerky", 1, 1, 1)
         tt:Show()
     "#,
@@ -1342,13 +1351,16 @@ fn only_the_relayout_invalidates_the_tooltip() {
     .unwrap();
     s.resolve();
     s.resolve();
-    assert_eq!(left(&mut s), Some(140.0), "nothing ran the relayout");
+    assert_eq!(left(&mut s), Some(140.0), "nothing ran the sizer");
     s.run(r#"TT:AddLine("Soulbound")"#).unwrap();
+    s.resolve();
+    assert_eq!(left(&mut s), Some(140.0), "AddLine sizes nothing");
+    s.run("TT:Show()").unwrap();
     s.resolve();
     assert_eq!(
         left(&mut s),
         None,
-        "the relayout invalidated a plate with no points"
+        "the sizer invalidated a plate with no points"
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

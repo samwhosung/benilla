@@ -101,12 +101,17 @@ fn bag_item_money_law_and_fallback() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A wrap line's first measure asks with the wrap column, so one pass answers the wrapped size,
-/// and the size holds while the hover clears and rebuilds the content every frame.
+/// A wrapped description is sized in the builder's show (`0x52e15c` → `0x530640`): split at 230.4
+/// into its widest piece, and the size holds while the hover clears and rebuilds the content every
+/// frame, measuring nothing past the first.
 #[test]
-fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
+fn a_wrapped_description_sizes_in_the_show_and_survives_the_reenter_loop() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    s.set_text_measurer(Box::new(crate::script::tests::tooltip_size::Mono(
+        calls.clone(),
+    )));
     s.set_item_template(
         7,
         ItemTemplateView {
@@ -128,38 +133,19 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     "#,
     )
     .unwrap();
+    // The stand-in engine's 5 per byte: the quoted description, 405 wide, splits at 230.4 into
+    // rows of 230 and 170; name 14 + gap 2 + charges 12 + gap 2 + two rows of 12 + 2·10.24.
+    let size =
+        |s: &UiScript| -> (f64, f64) { s.eval("return TT:GetWidth(), TT:GetHeight()").unwrap() };
+    let want = (
+        f64::from(2.0 * 10.24f32 + 0.0 + 230.0),
+        f64::from(2.0 * 10.24f32 + 54.0),
+    );
+    let near = |(w, h): (f64, f64)| (w - want.0).abs() < 1e-4 && (h - want.1).abs() < 1e-4;
+    assert!(near(size(&s)), "sized in the show: {:?}", size(&s));
+    s.tick(0.016);
     s.resolve();
-    // One measure pass: the wrap-flagged description asks with the wrap column, others without.
-    let answer = |s: &mut UiScript| {
-        let reqs = s.fontstrings_needing_measure();
-        let answers: Vec<(u32, f32, f32, u64)> = reqs
-            .iter()
-            .map(|r| {
-                if r.text.starts_with('"') {
-                    assert_eq!(
-                        r.wrap_width,
-                        Some(crate::widget::TOOLTIP_WRAP_WIDTH),
-                        "a wrap line's FIRST ask carries the wrap column"
-                    );
-                    (r.id, 250.0, 36.0, r.key) // wrapped: 3 rows tall, inside the column
-                } else {
-                    (r.id, 60.0, 14.0, r.key)
-                }
-            })
-            .collect();
-        s.set_measured_text_unwrapped(&answers);
-        s.resolve();
-    };
-    answer(&mut s);
-    // name 14 + gap 2 + the charges line 14 + gap 2 + description 36 + 2·pad 20 = 88.
-    s.run(
-        r#"
-        assert(TT:GetWidth() == 270, "wrap column + padding, got " .. TT:GetWidth())
-        assert(TT:GetHeight() == 88, "wrap rows counted, got " .. TT:GetHeight())
-    "#,
-    )
-    .unwrap();
-    // Clear, rebuild and measure once per frame for three frames: the size holds.
+    let measured = calls.get();
     for _ in 0..3 {
         s.run(
             r#"
@@ -168,16 +154,11 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
         "#,
         )
         .unwrap();
+        s.tick(0.016);
         s.resolve();
-        answer(&mut s);
-        s.run(
-            r#"
-            assert(TT:GetWidth() == 270 and TT:GetHeight() == 88,
-                   "re-enter holds the wrapped size, got " .. TT:GetWidth() .. "x" .. TT:GetHeight())
-        "#,
-        )
-        .unwrap();
+        assert!(near(size(&s)), "re-enter holds the size: {:?}", size(&s));
     }
+    assert_eq!(calls.get(), measured, "the re-enter loop re-measured");
     assert!(s.take_errors().is_empty());
 }
 
