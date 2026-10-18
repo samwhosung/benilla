@@ -70,8 +70,9 @@ const TEXT_H: f32 = 0.01;
 const MARGIN: f32 = 0.01;
 /// The text wrap hard cap, gx (`[0x80679c]` = 0.2).
 const WRAP_W: f32 = 0.2;
-/// The border unit (edge size, insets, tail side): 16/1024 of the screen width.
-const BORDER_FRAC: f32 = 16.0 / 1024.0;
+/// The border unit (edge size, insets, tail side): 16 script units (`[0x8066d8]`), which the
+/// bubble stores by `S` for its insets, edge size and tile size (`0x4b09d2`-`0x4b0a2f`).
+const BORDER_UNITS: f32 = 16.0;
 
 /// The CVar gating this kind's bubble (`0x608b0d`); `None` for a kind that does not bubble.
 fn bubble_cvar(kind: ChatEventKind, cfg: &BubbleConfig) -> Option<bool> {
@@ -152,10 +153,12 @@ fn sanitize(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The border unit in logical px: 16/1024 of the screen width, in the damped size basis.
+/// The border unit in logical px: `S(16)` in gx for the viewport's aspect, in the damped size
+/// basis. At 4:3 that is a 64th of the width; wider, `S` divides by `1024·A` and so stays 16 of the
+/// 768 units the height spans.
 fn border_px(viewport: Vec2, basis: f32) -> f32 {
-    let width_gx = viewport.x / viewport.length();
-    gx_px(width_gx * BORDER_FRAC, basis).max(1.0)
+    let units = benilla_ui::screencoord::LayoutUnits::from_aspect(viewport.x / viewport.y);
+    gx_px(units.store(BORDER_UNITS), basis).max(1.0)
 }
 
 /// This frame's bubble-spawn requests, pushed as the chat line routes.
@@ -981,16 +984,20 @@ mod tests {
         assert_eq!(b.stack, [2, 3, 1], "1's new line came after 3's");
     }
 
-    /// 16 px at 1024-wide 4:3 (width/64), damped past the plate knee.
+    /// `S(16)` (`0x4b09d2`): 16 px at 1024×768, a 64th of the width; at 16:9 under the plate
+    /// knee, 1024×576, 12 px, the 16 of 768 units the height spans, where a 64th of the width
+    /// would be 16; damped past the knee.
     #[test]
-    fn border_unit_is_a_64th_of_the_width() {
+    fn border_unit_is_sixteen_script_units() {
         let vp = Vec2::new(1024.0, 768.0);
         assert_eq!(border_px(vp, plate_basis(vp)), 16.0);
+        let vp = Vec2::new(1024.0, 576.0);
+        assert_eq!(border_px(vp, plate_basis(vp)), 12.0);
         let wide = Vec2::new(2560.0, 1440.0);
         let b = border_px(wide, plate_basis(wide));
         assert!(
-            b > 16.0 && b < 40.0,
-            "damped growth between the native pin and the faithful 40 px, got {b}"
+            b > 16.0 && b < 30.0,
+            "damped growth between the native pin and the faithful 30 px, got {b}"
         );
     }
 }
