@@ -1,6 +1,7 @@
 //! The resize-bounds quad, as the reference stores it (`CLayoutFrame 0x767680`).
 
 use crate::script::UiScript;
+use crate::test_support::law43;
 
 /// A resizable 200×100 frame planted at its BOTTOMLEFT.
 fn sizer() -> UiScript {
@@ -36,19 +37,19 @@ fn a_virgin_frames_bounds_read_back_as_zero_not_nil() {
     }
     s.run("Sizer:SetMinResize(120, 60) Sizer:SetMaxResize(400, 300)")
         .unwrap();
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Sizer:GetMinResize()").unwrap(),
-        (120.0, 60.0)
+        (law43(120.0), law43(60.0))
     );
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
-        (400.0, 300.0)
+        (law43(400.0), law43(300.0))
     );
     // The reference writes all four fields, so the untouched pair round-trips.
     s.run("Sizer:SetMinResize(10, 10)").unwrap();
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
-        (400.0, 300.0)
+        (law43(400.0), law43(300.0))
     );
 }
 
@@ -56,16 +57,16 @@ fn a_virgin_frames_bounds_read_back_as_zero_not_nil() {
 fn the_setters_gate_is_lua_isnumber_and_the_usage_text_is_the_references() {
     let s = sizer();
     s.run("Sizer:SetMinResize(\"120\", \"60\")").unwrap();
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Sizer:GetMinResize()").unwrap(),
-        (120.0, 60.0),
+        (law43(120.0), law43(60.0)),
         "a numeric string is coerced, as 5.0's lua_isnumber does"
     );
     // Arguments past the third are ignored.
     s.run("Sizer:SetMaxResize(400, 300, 999, \"x\")").unwrap();
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
-        (400.0, 300.0)
+        (law43(400.0), law43(300.0))
     );
     for bad in [
         "Sizer:SetMinResize()",
@@ -243,15 +244,15 @@ fn the_xml_element_writes_both_pairs() {
         "#,
     );
     load(&s, &doc);
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Chatty:GetMinResize()")
             .unwrap(),
-        (296.0, 75.0)
+        (law43(296.0), law43(75.0))
     );
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Chatty:GetMaxResize()")
             .unwrap(),
-        (608.0, 400.0)
+        (law43(608.0), law43(400.0))
     );
     // An authored `<Size>` outside the bounds survives load unclamped.
     assert_eq!(s.eval::<f32>("return Chatty:GetWidth()").unwrap(), 400.0);
@@ -264,9 +265,9 @@ fn the_xml_element_writes_both_pairs() {
         "#,
     );
     load(&s, &partial);
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<(f64, f64)>("return Half:GetMinResize()").unwrap(),
-        (10.0, 20.0)
+        (law43(10.0), law43(20.0))
     );
     assert_eq!(
         s.eval::<(f64, f64)>("return Half:GetMaxResize()").unwrap(),

@@ -663,16 +663,17 @@ fn a_button_reports_its_own_label_width() {
         .expect("the label asks to be measured");
     s.set_measured_text_unwrapped(&[(req.id, 61.0, 12.0, req.key)]);
 
-    benilla_ui::assert_near!(
+    // Through the getter steps, `G(S(v))` at 4:3.
+    assert_eq!(
         s.eval::<f64>("return ProbeWidthButton:GetTextWidth()")
             .expect("Button:GetTextWidth"),
-        61.0,
+        benilla_ui::test_support::law43(61.0),
         "the Button reports its LABEL's natural extent"
     );
-    benilla_ui::assert_near!(
+    assert_eq!(
         s.eval::<f64>("return ProbeWidthButton:GetTextHeight()")
             .expect("Button:GetTextHeight"),
-        12.0
+        benilla_ui::test_support::law43(12.0)
     );
     // A Button with no label answers 0; the reference reads a FontString pointer that a bare
     // `CreateFrame("Button")` leaves null, and what it does then is untraced.

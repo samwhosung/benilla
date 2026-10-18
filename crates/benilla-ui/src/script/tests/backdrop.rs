@@ -55,6 +55,7 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
 #[test]
 fn get_backdrop_reconstructs_from_the_struct() {
     let s = script();
+    crate::test_support::install_law43(&s);
     s.run(
         r#"
         local f = CreateFrame("Frame", "GB")
@@ -63,7 +64,7 @@ fn get_backdrop_reconstructs_from_the_struct() {
         -- `select` is 5.1's base library and is not a 1.12 global (`lua50::install`).
         local function count(...) return arg.n end
         -- Lengths come back through the getter steps, `G(S(v))`, a hair off the number given.
-        local function near(a, b) return math.abs(a - b) < 1e-3 end
+        local function near(a, b) return a == law(b) end
 
         -- TRAP 2: no backdrop => ZERO values, not nil. The count is the only way to see it.
         assert(count(f:GetBackdrop()) == 0, "unset backdrop must return no values at all")
@@ -129,6 +130,7 @@ fn get_backdrop_reconstructs_from_the_struct() {
 fn get_backdrop_round_trips_through_set_backdrop() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
+    crate::test_support::install_law43(&s);
     s.run(
         r#"
         local f = CreateFrame("Frame", "BC2Plate")
@@ -144,7 +146,7 @@ fn get_backdrop_round_trips_through_set_backdrop() {
         backdrop["edgeSize"] = 32
         f:SetBackdrop(backdrop)
         local b = f:GetBackdrop()
-        local function near(a, v) return math.abs(a - v) < 1e-3 end
+        local function near(a, v) return a == law(v) end
         assert(b.bgFile == "bg" and b.edgeFile == "edge", "files survive the round trip")
         assert(b.tile == 1 and near(b.tileSize, 32) and near(b.edgeSize, 32), "tiling survives")
         assert(near(b.insets.left, 11) and near(b.insets.bottom, 11), "insets survive")
@@ -817,9 +819,10 @@ fn a_resize_repaints_a_piece_over_its_own_vertex_colour() {
 #[test]
 fn the_bg_bottomright_anchor_answers_the_top_inset() {
     let s = script();
+    crate::test_support::install_law43(&s);
     s.run(
         r#"
-        local function near(a, b) return math.abs(a - b) < 1e-3 end -- G(S(v)) of each inset
+        local function near(a, b) return a == law(b) end -- G(S(v)) of each inset
         local f = CreateFrame("Frame")
         f:SetBackdrop({ bgFile = "bg", insets = { left = 3, right = 4, top = 7, bottom = 9 } })
         local bg = f:GetRegions()

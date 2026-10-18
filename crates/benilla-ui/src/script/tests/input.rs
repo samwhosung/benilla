@@ -217,6 +217,7 @@ fn mouse_wheel_passes_delta_to_the_captured_frame() {
 fn hit_rect_insets_shrink_the_mouse_rect_only() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
+    crate::test_support::install_law43(&s);
     // A 100×100 frame at the origin; the top inset is the micro buttons' 18
     // (`MainMenuBarMicroButtons.xml:9`), with 5 off each other side.
     s.run(
@@ -227,7 +228,7 @@ fn hit_rect_insets_shrink_the_mouse_rect_only() {
         a:SetScript("OnEnter", function() entered = true end)
         a:SetHitRectInsets(5, 5, 18, 5)
         local l, r, t, b = a:GetHitRectInsets()
-        local near = function(x, v) return math.abs(x - v) < 1e-3 end
+        local near = function(x, v) return x == law(v) end
         assert(near(l, 5) and near(r, 5) and near(t, 18) and near(b, 5))
     "#,
     )

@@ -65,14 +65,15 @@ fn combat_text_damage_scrolls_and_expires() {
             ScriptValue::Str("17".into()),
         ],
     );
+    benilla_ui::test_support::install_law43(&s);
     let ok: bool = s
         .eval(
             r#"
             local t = CombatText1
             local _, h = t:GetFont()
             local y0 = COMBAT_TEXT_TO_ANIMATE[1].yPos
-            -- The height reads back through the getter steps, a hair off 25.
-            return t:IsShown() ~= nil and t:GetText() == "-17" and math.abs(h - 25) < 1e-3
+            -- The height reads back through the getter steps, `G(S(25))` at 4:3.
+            return t:IsShown() ~= nil and t:GetText() == "-17" and h == law(25)
                 and y0 ~= nil
         "#,
         )

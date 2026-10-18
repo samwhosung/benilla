@@ -1940,7 +1940,8 @@ mod loader_tests {
         let (l, r, t, b) = s
             .eval::<(f64, f64, f64, f64)>("return Micro:GetHitRectInsets()")
             .unwrap();
-        crate::assert_near!((l, r, t, b), (0.0, 0.0, 18.0, 0.0));
+        let law = crate::test_support::law43;
+        assert_eq!((l, r, t, b), (law(0.0), law(0.0), law(18.0), law(0.0)));
         crate::assert_near!(s.eval::<f64>("return Micro:GetHeight()").unwrap(), 58.0);
         // A button is mouse-enabled by construction, so the hit test is live.
         assert!(

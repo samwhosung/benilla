@@ -1557,16 +1557,21 @@ fn each_child_element_applies_in_turn_and_the_instances_wins() {
     s.resolve();
     let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
     // The lengths read back through the getter steps, `G(S(v))`, a hair off the numbers given.
-    crate::assert_near!(
+    let law = |v: &[f32]| -> Vec<f32> {
+        v.iter()
+            .map(|&x| crate::test_support::law43(x) as f32)
+            .collect()
+    };
+    assert_eq!(
         got("EachFrame:GetHitRectInsets()"),
-        vec![1.0, 0.0, 2.0, 3.0]
+        law(&[1.0, 0.0, 2.0, 3.0])
     );
-    crate::assert_near!(got("EachFrame:GetMinResize()"), vec![7.0, 8.0]);
-    crate::assert_near!(
+    assert_eq!(got("EachFrame:GetMinResize()"), law(&[7.0, 8.0]));
+    assert_eq!(
         got("EachTwice:GetHitRectInsets()"),
-        vec![13.0, 115.0, 10.0, 13.0]
+        law(&[13.0, 115.0, 10.0, 13.0])
     );
-    crate::assert_near!(got("EachBox:GetTextInsets()"), vec![4.0, 5.0, 6.0, 7.0]);
+    assert_eq!(got("EachBox:GetTextInsets()"), law(&[4.0, 5.0, 6.0, 7.0]));
     assert_eq!(&got("EachModel:GetFogColor()")[..3], [0.0, 0.0, 1.0]);
 }
 

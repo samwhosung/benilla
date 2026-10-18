@@ -971,7 +971,8 @@ fn text_insets_shrink_the_text_region_rect() {
     let (l, r_, t, b) = s
         .eval::<(f32, f32, f32, f32)>("return E:GetTextInsets()")
         .unwrap();
-    crate::assert_near!((l, r_, t, b), (15.0, 13.0, 2.0, 3.0));
+    let law = |v: f32| crate::test_support::law43(v) as f32;
+    assert_eq!((l, r_, t, b), (law(15.0), law(13.0), law(2.0), law(3.0)));
 }
 
 // SetTextColor tints the box's text region, as `ChatEdit_UpdateHeader` colours the typed text.

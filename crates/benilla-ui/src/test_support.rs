@@ -8,6 +8,22 @@ use crate::layout::Rect;
 /// sub-ulp drift (at most about 2e-4 on a 768-unit screen), far below a unit.
 pub const TOL: f64 = 1e-3;
 
+/// `G(S(v))` under the 4:3 cells the default test screen sets: what a getter answers, bit for bit,
+/// for a script number its setter stored.
+pub fn law43(v: f32) -> f64 {
+    crate::layout::LayoutUnits::from_aspect(4.0 / 3.0).round_trip(v)
+}
+
+/// Install [`law43`] as the Lua global `law`, for a script assert to compare a getter's answer
+/// bit for bit.
+pub fn install_law43(s: &crate::script::UiScript) {
+    let f = s
+        .lua()
+        .create_function(|_, v: f32| Ok(law43(v)))
+        .expect("law");
+    s.lua().globals().set("law", f).expect("law");
+}
+
 /// A value compared within a tolerance where it is a float, exactly where it is not.
 pub trait Near {
     fn near(&self, other: &Self, tol: f64) -> bool;

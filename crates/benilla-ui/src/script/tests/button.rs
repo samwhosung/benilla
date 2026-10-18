@@ -796,14 +796,14 @@ fn a_button_reports_its_labels_extent() {
         .expect("the label asks the host for its extent");
     s.set_measured_text_unwrapped(&[(req.id, 47.0, 14.0, req.key)]);
 
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<f64>("return WidthBtn:GetTextWidth()").unwrap(),
-        47.0,
+        crate::test_support::law43(47.0),
         "the Button forwards to its own label"
     );
-    crate::assert_near!(
+    assert_eq!(
         s.eval::<f64>("return WidthBtn:GetTextHeight()").unwrap(),
-        14.0
+        crate::test_support::law43(14.0)
     );
 
     // A label-less Button answers 0; the reference reads the label pointer (`+0x338`), null here,

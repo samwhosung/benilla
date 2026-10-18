@@ -93,29 +93,36 @@ fn an_alt_press_in_layout_mode_moves_the_toplevel_window() {
 fn a_control_press_sizes_from_the_grid_cell_and_the_middle_moves() {
     let mut s = window();
     s.run("SetLayoutMode(1)").unwrap();
+    // Each rect is the law's at 4:3, the pins and sizes moved by the cursor's layout deltas: 100
+    // reads 99.99999850988391, 110 reads 109.9999983608723, and so on.
+    let (b100, h110) = (99.999_998_509_883_91, 109.999_998_360_872_3);
     // Top-right cell: right of 250, above 175.
     modifier_drag(&mut s, (290.0, 195.0), (20.0, 10.0), (true, false));
-    crate::assert_near!(
+    assert_eq!(
         rect(&mut s, "Win"),
-        (100.0, 100.0, 220.0, 110.0),
+        (b100, b100, 219.999_996_721_744_6, h110),
         "TOPRIGHT"
     );
     // Now 220×110 from (100, 100): the left column is x < 155, the middle row 127.5..182.5.
     modifier_drag(&mut s, (154.0, 150.0), (-10.0, 0.0), (true, false));
-    crate::assert_near!(rect(&mut s, "Win"), (90.0, 100.0, 230.0, 110.0), "LEFT");
+    assert_eq!(
+        rect(&mut s, "Win"),
+        (90.000_008_195_638_53, b100, 229.999_996_572_732_98, h110),
+        "LEFT"
+    );
     // Now 230×110 from (90, 100): x 147.5 is a quarter in by script numbers, but in layout units
     // the press is 5.6e-9 short of the cut, so it still sizes from the left.
     modifier_drag(&mut s, (147.5, 150.0), (-10.0, 0.0), (true, false));
-    crate::assert_near!(
+    assert_eq!(
         rect(&mut s, "Win"),
-        (80.0, 100.0, 240.0, 110.0),
+        (80.000_008_344_650_14, b100, 239.999_996_423_721_37, h110),
         "LEFT at 147.5"
     );
     // Now 240×110 from (80, 100): x 150 is the middle column.
     modifier_drag(&mut s, (150.0, 150.0), (10.0, 10.0), (true, false));
-    crate::assert_near!(
+    assert_eq!(
         rect(&mut s, "Win"),
-        (90.0, 110.0, 240.0, 110.0),
+        (90.000_008_195_638_53, h110, 239.999_996_423_721_37, h110),
         "the middle cell moves"
     );
     assert_eq!(log_of(&s), "");
