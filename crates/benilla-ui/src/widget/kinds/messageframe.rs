@@ -20,6 +20,10 @@ pub struct MessageLine {
     /// `trunc(remaining / fadeDuration * 255)` (`0x788547`, `0x786364`). At 0 a scrolling line
     /// keeps its ring slot and rows; a MessageFrame frees it (`0x786570`).
     pub alpha: f32,
+    /// The record's shown flag (`+0x8`): set by the store and a re-arm (`0x788204`, `0x788b0d`),
+    /// cleared when the fade hides the line (`0x788525`); the fade skips a line without it
+    /// (`0x7884bb`), and the time setters rewrite only lines with it.
+    pub shown: bool,
     /// The rows the line wraps into at the frame's width and font, host-measured; 1 until then.
     pub rows: u16,
     /// Hash of the text, font, height and wrap width `rows` was measured at; 0 is unmeasured.
@@ -360,6 +364,7 @@ impl ScrollingMessageState {
             time_left: self.time_visible,
             fade_left: self.fade_duration,
             alpha: f32::from(color.a) / 255.0,
+            shown: true,
             rows: 1,
             rows_key: 0,
         });
@@ -414,6 +419,7 @@ impl ScrollingMessageState {
             line.time_left = time_visible;
             line.fade_left = fade_duration;
             line.alpha = 1.0;
+            line.shown = true;
         }
     }
 
@@ -534,6 +540,26 @@ impl ScrollingMessageState {
             .wrapping_rem(count)
     }
 
+    /// `SetTimeVisible(s)`'s store (`0x788090`): each line shown with its shown flag takes `s` as
+    /// its visible time (`0x7880b4`), then the frame (`0x7880cc`).
+    pub fn set_time_visible(&mut self, s: f32) {
+        let range = self.shown_range();
+        for line in self.lines.range_mut(range).filter(|l| l.shown) {
+            line.time_left = s;
+        }
+        self.time_visible = s;
+    }
+
+    /// `SetFadeDuration(s)`'s store (`0x7880f0`): the same over the fade time (`0x788114`,
+    /// `0x78812c`).
+    pub fn set_fade_duration(&mut self, s: f32) {
+        let range = self.shown_range();
+        for line in self.lines.range_mut(range).filter(|l| l.shown) {
+            line.fade_left = s;
+        }
+        self.fade_duration = s;
+    }
+
     /// `PageUp` (`0x7885b0`): `ScrollUp` once per line shown, the cached count read once up front
     /// (`0x7885b4`); a step that cannot move ends the page there (`0x7885ca`), else one `ScrollDown`
     /// follows (`0x7885d4`). With no line shown the page is that step back alone.
@@ -572,6 +598,9 @@ impl ScrollingMessageState {
         let dt = f64::from(dt);
         let range = self.shown_range();
         for line in self.lines.range_mut(range) {
+            if !line.shown {
+                continue;
+            }
             if line.time_left > 0.0 {
                 line.time_left = ((f64::from(line.time_left) - dt).max(0.0)) as f32;
                 continue;
@@ -580,6 +609,7 @@ impl ScrollingMessageState {
                 // No ramp: the line vanishes when phase 1 ends, marking the links (`0x788538`).
                 self.links_dirty |= line.alpha > 0.0;
                 line.alpha = 0.0;
+                line.shown = false;
                 continue;
             }
             let remaining = f64::from(line.fade_left) - dt;
@@ -589,6 +619,7 @@ impl ScrollingMessageState {
                 self.links_dirty |= line.alpha > 0.0;
                 line.fade_left = 0.0;
                 line.alpha = 0.0;
+                line.shown = false;
             } else {
                 // Over the live fadeDuration (a mid-fade change rescales the ramp), from the
                 // unrounded `remaining`, not the stored f32.
@@ -674,6 +705,7 @@ impl MessageFrameState {
             fade_left: self.fade_duration,
             // Quantized like the colour: all four channels pack into one ARGB dword.
             alpha: f32::from(quantize_u8(a)) / 255.0,
+            shown: true,
             rows: 1,
             rows_key: 0,
         });

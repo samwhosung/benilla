@@ -259,11 +259,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })
         })?,
     )?;
-    // XML's `displayDuration` is the Lua `TimeVisible` (`0x788090`).
+    // XML's `displayDuration` is the Lua `TimeVisible`. SetTimeVisible (`0x793b00`) and
+    // SetFadeDuration (`0x793cb0`) take a `lua_isnumber` argument, else raise their usage line
+    // (`0x87b918`, `0x87b93c`), and store it as f32 with no clamp (`0x793ba6`, `0x793d56`).
     m.set(
         "SetTimeVisible",
-        lua.create_function(|lua, (this, s): (Table, f32)| {
-            with_smf(lua, &this, |smf| smf.time_visible = s.max(0.0))
+        lua.create_function(|lua, (this, s): (Table, Value)| {
+            let s = is_number(lua, &s).ok_or_else(|| {
+                crate::script::binding_abi::usage(lua, &this, "SetTimeVisible(seconds)")
+            })?;
+            with_smf(lua, &this, |smf| smf.set_time_visible(s as f32))
         })?,
     )?;
     m.set(
@@ -272,8 +277,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetFadeDuration",
-        lua.create_function(|lua, (this, s): (Table, f32)| {
-            with_smf(lua, &this, |smf| smf.fade_duration = s.max(0.0))
+        lua.create_function(|lua, (this, s): (Table, Value)| {
+            let s = is_number(lua, &s).ok_or_else(|| {
+                crate::script::binding_abi::usage(lua, &this, "SetFadeDuration(seconds)")
+            })?;
+            with_smf(lua, &this, |smf| smf.set_fade_duration(s as f32))
         })?,
     )?;
     m.set(
@@ -1032,6 +1040,63 @@ mod tests {
         s.run("CF:Show() CF:Clear()").unwrap();
         assert!(s.eval::<bool>("return CF:AtTop() == nil").unwrap());
         assert_eq!(s.eval::<i64>("return CF:AtBottom()").unwrap(), 1);
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The lines' `(time_left, fade_left)`, oldest first.
+    fn timers(s: &UiScript) -> Vec<(f32, f32)> {
+        let model = s.model_ref();
+        let fh = model.arena.lookup("CF").expect("CF");
+        match model.arena.frame(fh).map(|f| &f.kind_state) {
+            Some(crate::widget::KindState::ScrollingMessage(smf)) => smf
+                .lines
+                .iter()
+                .map(|l| (l.time_left, l.fade_left))
+                .collect(),
+            _ => unreachable!("a scrolling frame"),
+        }
+    }
+
+    /// `SetTimeVisible` and `SetFadeDuration` raise their usage line for a non-number (`0x87b918`,
+    /// `0x87b93c`), store the f32 unclamped, and rewrite the timer of each line shown that still
+    /// has its shown flag (`0x788090`, `0x7880f0`).
+    #[test]
+    fn the_time_setters_gate_their_number_and_rewrite_the_lines_shown() {
+        let mut s = three_rows(5);
+        for (call, line) in [
+            ("CF:SetTimeVisible()", "Usage: CF:SetTimeVisible(seconds)"),
+            (
+                "CF:SetFadeDuration('x')",
+                "Usage: CF:SetFadeDuration(seconds)",
+            ),
+            (
+                "CreateFrame('ScrollingMessageFrame'):SetTimeVisible(nil)",
+                "Usage: <unnamed>:SetTimeVisible(seconds)",
+            ),
+        ] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains(line), "{call}: {err}");
+        }
+        s.run("CF:SetTimeVisible(7) CF:SetFadeDuration('2')")
+            .unwrap();
+        assert_eq!(
+            timers(&s),
+            [(10.0, 3.0), (10.0, 3.0), (7.0, 2.0), (7.0, 2.0), (7.0, 2.0)],
+            "the three lines shown, not the two above them"
+        );
+        s.run("CF:SetTimeVisible(-2) CF:SetFadeDuration(0.1)")
+            .unwrap();
+        assert_eq!(s.eval::<f64>("return CF:GetTimeVisible()").unwrap(), -2.0);
+        assert_eq!(
+            s.eval::<f64>("return CF:GetFadeDuration()").unwrap(),
+            f64::from(0.1f32)
+        );
+        // Faded out, a line loses its shown flag (`0x788525`) and keeps its timers.
+        s.run("CF:SetTimeVisible(0) CF:SetFadeDuration(0)").unwrap();
+        s.tick(0.1);
+        assert_eq!(alphas(&s)[2..], [0.0, 0.0, 0.0]);
+        s.run("CF:SetTimeVisible(5)").unwrap();
+        assert_eq!(timers(&s)[4], (0.0, 0.0), "a hidden line is not rewritten");
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
