@@ -202,10 +202,25 @@ impl Templates {
     /// losing the boundaries that per-level state (a texture's wrap flag, `0x76fec6`) follows. A
     /// cycle stops at the repeated name.
     pub fn inherited_levels(&self, element: &Element) -> Vec<std::rc::Rc<Element>> {
+        self.inherited_levels_until(element, |_| false)
+    }
+
+    /// [`Self::inherited_levels`], the walk stopping at the first `inherits` that `is_font` claims:
+    /// a FontString looks the name up as a font first and loads no template once one answers
+    /// (`0x770f69` → `0x770fb7`), so a template of the same name, and what it inherits, is never a
+    /// level.
+    pub fn inherited_levels_until(
+        &self,
+        element: &Element,
+        is_font: impl Fn(&str) -> bool,
+    ) -> Vec<std::rc::Rc<Element>> {
         let mut out: Vec<std::rc::Rc<Element>> = Vec::new();
         let mut active: Vec<String> = Vec::new();
         let mut name = element.attr("inherits").map(str::to_string);
         while let Some(n) = name.filter(|n| !n.is_empty()) {
+            if is_font(&n) {
+                break;
+            }
             let key = n.to_ascii_lowercase();
             if active.contains(&key) {
                 break;
@@ -457,25 +472,25 @@ pub fn expand(
     templates: &dyn Inheritable,
     warnings: &mut Vec<String>,
 ) -> Element {
-    expand_known(element, templates, &HashSet::new(), warnings)
+    expand_known(element, templates, &|_| false, warnings)
 }
 
-/// [`expand`], skipping without a warning an `inherits` that names a font object: a
+/// [`expand`], skipping without a warning an `inherits` that `is_font` claims: a
 /// `<FontString inherits="GameFontNormalSmall">` takes a font, applied later, not a template.
 pub fn expand_known(
     element: &Element,
     templates: &dyn Inheritable,
-    fonts: &HashSet<&str>,
+    is_font: &dyn Fn(&str) -> bool,
     warnings: &mut Vec<String>,
 ) -> Element {
     let mut active = HashSet::new();
-    expand_inner(element, templates, fonts, warnings, &mut active)
+    expand_inner(element, templates, is_font, warnings, &mut active)
 }
 
 fn expand_inner(
     element: &Element,
     templates: &dyn Inheritable,
-    fonts: &HashSet<&str>,
+    is_font: &dyn Fn(&str) -> bool,
     warnings: &mut Vec<String>,
     active: &mut HashSet<String>,
 ) -> Element {
@@ -497,7 +512,7 @@ fn expand_inner(
         }
         let Some(template) = templates.find(name) else {
             // A font object is not an unknown template; it is applied after this.
-            if !fonts.contains(name) {
+            if !is_font(name) {
                 warnings.push(format!(
                     "unknown template '{name}' referenced by inherits; skipping"
                 ));
@@ -505,7 +520,7 @@ fn expand_inner(
             active.remove(name);
             continue;
         };
-        let expanded_template = expand_inner(template, templates, fonts, warnings, active);
+        let expanded_template = expand_inner(template, templates, is_font, warnings, active);
         active.remove(name);
         base = Some(match base {
             None => expanded_template,

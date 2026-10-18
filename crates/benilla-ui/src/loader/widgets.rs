@@ -158,7 +158,7 @@ impl Loader<'_> {
             // `SetText` creates the label even with no text, so its layout lands on a real region;
             // `text=` is each level's, a global-string key (`0x703bf0`), an empty one skipped
             // (`0x77101b`).
-            let label_levels = self.levels(bt);
+            let label_levels = self.fontstring_levels(bt);
             let mut label = String::new();
             for level in &label_levels {
                 if let Some(raw) = level.attr("text").filter(|t| !t.is_empty()) {

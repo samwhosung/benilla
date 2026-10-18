@@ -642,3 +642,120 @@ fn an_xml_font_file_that_fails_to_load_keeps_the_followed_font() {
     assert!(font(&s, "LoadKept").starts_with(r"Fonts\HELD.TTF 10 "));
     assert!(font(&s, "LoadHeldAgain").starts_with(r"Fonts\HELD.TTF 10 "));
 }
+
+/// `0x770f69`-`0x770f88`: a FontString's `inherits=` is looked up as a font first, and a hit jumps
+/// past the template lookup, so a template of the same name is never a level, on a Button's
+/// `<NormalText>` (which links nothing) too.
+#[test]
+fn a_fontstring_inheriting_a_font_loads_no_template_of_that_name() {
+    let s = ui();
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Font name="LevelBoth" font="Fonts\ARIALN.TTF" virtual="true">
+                <FontHeight><AbsValue val="14"/></FontHeight>
+            </Font>
+            <FontString name="LevelBoth" text="T" justifyH="LEFT" virtual="true">
+                <Anchors><Anchor point="BOTTOMRIGHT"/></Anchors>
+            </FontString>
+            <Frame name="BothHost">
+                <Size><AbsDimension x="64" y="64"/></Size>
+                <Layers><Layer>
+                    <FontString name="BothKid" inherits="LevelBoth"/>
+                    <FontString name="BothControl" inherits="LevelTestFont"/>
+                </Layer></Layers>
+            </Frame>
+            <Button name="BothButton">
+                <NormalText inherits="LevelBoth"/>
+            </Button>
+        </Ui>"#
+        ),
+    );
+    let got = |expr: &str| {
+        s.eval::<String>(&format!("return tostring({expr})"))
+            .unwrap()
+    };
+    assert_eq!(got("BothKid:GetText()"), "nil", "no template text");
+    assert_eq!(got("BothKid:GetFontObject() == LevelBoth"), "true");
+    assert_eq!(
+        got("BothKid:GetJustifyH()"),
+        "CENTER",
+        "no template justify"
+    );
+    assert_eq!(
+        got("BothKid:GetNumPoints() .. (BothKid:GetPoint(1))"),
+        got("BothControl:GetNumPoints() .. (BothControl:GetPoint(1))"),
+        "only the implicit anchor"
+    );
+    assert_ne!(
+        got("BothButton:GetText()"),
+        "T",
+        "<NormalText> loads no template either"
+    );
+}
+
+/// `0x783870` is the one font table, which `CreateFont` fills (`0x706077`): a FontString's
+/// `font=` and `inherits=` find a font a script made.
+#[test]
+fn a_fontstring_finds_a_font_made_by_create_font() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Script>CreateFont("LevelLuaFont"):SetFont("Fonts\\ARIALN.TTF", 15)</Script>
+            <Frame name="LuaFontHost">
+                <Layers><Layer>
+                    <FontString name="LuaFontKid" font="LevelLuaFont"/>
+                    <FontString name="LuaInheritKid" inherits="levelluafont"/>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    for name in ["LuaFontKid", "LuaInheritKid"] {
+        let (linked, path, height) = s
+            .eval::<(bool, String, f32)>(&format!(
+                "local f, h = {name}:GetFont() return {name}:GetFontObject() == LevelLuaFont, f, h"
+            ))
+            .unwrap();
+        assert!(linked, "{name} follows the font");
+        assert_eq!(
+            (path.as_str(), height),
+            (r"Fonts\ARIALN.TTF", 15.0),
+            "{name}"
+        );
+    }
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+/// `0x770f8a`-`0x770fb1`: an `inherits=` that names neither a font nor a template is logged
+/// (`0x8786a8`) whoever owns the string's font, and links nothing. A `<NormalText>` also loads into
+/// the button's Normal font (`0x783c30`), which logs its own miss (`0x87a51c`).
+#[test]
+fn a_fontstring_inheriting_nothing_is_logged() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="NothingHost">
+                <Layers><Layer>
+                    <FontString name="NothingKid" inherits="LevelNothing"/>
+                </Layer></Layers>
+            </Frame>
+            <Button name="NothingButton">
+                <NormalText inherits="LevelNothingToo"/>
+            </Button>
+        </Ui>"#,
+    );
+    for line in [
+        "Couldn't find inherited node: LevelNothing",
+        "Couldn't find inherited node: LevelNothingToo",
+        "Couldn't find inherited font: LevelNothingToo",
+    ] {
+        assert!(has_line(&report, line), "{line}: {:?}", report.warnings);
+    }
+    assert_eq!(report.warnings.len(), 3, "{:?}", report.warnings);
+    assert!(s
+        .eval::<bool>("return NothingKid:GetFontObject() == nil")
+        .unwrap());
+}

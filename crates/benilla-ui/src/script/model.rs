@@ -165,9 +165,6 @@ pub(crate) struct Model {
     pub(crate) framexml_debug: std::cell::Cell<i32>,
     /// The loads' records for `Logs\FrameXML.log` and the drains the host has yet to write.
     pub(crate) load_log: crate::status::LoadLog,
-    /// The FrameXML font registry, a namespace apart from templates (a font inherits only a font).
-    pub(crate) framexml_fonts:
-        std::cell::RefCell<std::collections::HashMap<String, crate::framexml::Element>>,
     pub(crate) arena: WidgetArena,
     /// Per-frame anchors, size and scale; every live frame has one from creation on.
     pub(crate) layout_inputs: HashMap<FrameHandle, LayoutInput>,
@@ -1378,7 +1375,6 @@ impl Model {
             exec_context: Default::default(),
             framexml_debug: Default::default(),
             load_log: Default::default(),
-            framexml_fonts: Default::default(),
             arena: WidgetArena::new(),
             layout_inputs: HashMap::new(),
             solver: LayoutSolver::new(),

@@ -60,8 +60,9 @@ impl Loader<'_> {
 
     /// One `<Layer>` region on `wrapper`, created on `level` and loaded: its name (`$parent`
     /// expanded, published as a global, read from `raw` alone, `0x6f2751`), then its `LoadXML`
-    /// level by level ([`Loader::levels`]; `inherits=` may name a region template, in the frames'
-    /// one registry, `0x6ee500`), then the implicit creation anchor, run after the region's
+    /// level by level ([`Loader::levels`], a FontString's up to a font, [`Loader::fontstring_levels`];
+    /// `inherits=` may name a region template, in the frames' one registry, `0x6ee500`), then the
+    /// implicit creation anchor, run after the region's
     /// LoadXML as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone.
     /// `None` when the creation raised.
     fn build_region(
@@ -73,7 +74,11 @@ impl Loader<'_> {
         is_texture: bool,
         dbg: &str,
     ) -> Option<Table> {
-        let levels = self.levels(raw);
+        let levels = if is_texture {
+            self.levels(raw)
+        } else {
+            self.fontstring_levels(raw)
+        };
         let rname: Option<String> = raw
             .name()
             .map(|raw| framexml::resolve_name(raw, parent_name));
@@ -122,7 +127,7 @@ impl Loader<'_> {
             if !region.tag.eq_ignore_ascii_case("FontString") {
                 continue;
             }
-            let levels = self.levels(region);
+            let levels = self.fontstring_levels(region);
             let rname: Option<String> = region
                 .name()
                 .map(|raw| framexml::resolve_name(raw, parent_name));
@@ -230,13 +235,16 @@ impl Loader<'_> {
     ) {
         let own = attrs == FontAttrs::Own;
         // `inherits=` names a font object first (`0x770f69`), linked only when the string owns
-        // its font attributes (`0x770f72`), else a template, loaded as a level of its own. Any
-        // other name passes through and is reported: `SetFontObject("")` would clear the font
-        // object where a bad name warns.
+        // its font attributes (`0x770f72`), else a template, already loaded as a level of its own
+        // ([`Loader::fontstring_levels`]). A name that is neither is logged (`0x8786a8`,
+        // `0x770fa3`), whoever owns the font.
         if let Some(name) = node.attr("inherits").filter(|n| !n.is_empty()) {
-            let template = self.model().framexml_templates.borrow().contains(name);
-            if own && (self.is_font_object(name) || !template) {
-                self.set_font_object(wrapper, "inherits", name, dbg);
+            if self.is_font_object(name) {
+                if own {
+                    self.set_font_object(wrapper, "inherits", name, dbg);
+                }
+            } else if !self.model().framexml_templates.borrow().contains(name) {
+                self.status_warning(format!("Couldn't find inherited node: {name}"));
             }
         }
         self.apply_geometry(node, wrapper, true, parent_name, dbg);
@@ -452,14 +460,12 @@ impl Loader<'_> {
     pub(super) fn font_object_through_templates(&self, inherits: &str) -> Option<String> {
         const MAX_HOPS: usize = 8;
         let model = self.model();
-        let fonts = model.framexml_fonts.borrow();
         let templates = model.framexml_templates.borrow();
         // One name, not a comma list: 1.12's lookup has no splitter.
         for entry in [inherits] {
             let mut name = entry.to_string();
             for _ in 0..MAX_HOPS {
-                if fonts.contains_key(&name) || fonts.keys().any(|k| k.eq_ignore_ascii_case(&name))
-                {
+                if model.fonts.id(&name).is_some() {
                     return Some(name);
                 }
                 let Some(next) = templates
@@ -475,12 +481,11 @@ impl Loader<'_> {
         None
     }
 
-    /// Whether `name` is a registered font object: the reference's flat, case-insensitive lookup
-    /// (`0x783870`, `SStrCmpI`), with no template walk.
+    /// Whether `name` is a named font object, declared by `<Font>` or made by `CreateFont`: the
+    /// reference's one font table (`0x783870`, which `CreateFont` fills too, `0x706077`), looked
+    /// up flat and ignoring case, with no template walk.
     pub(super) fn is_font_object(&self, name: &str) -> bool {
-        let model = self.model();
-        let fonts = model.framexml_fonts.borrow();
-        fonts.contains_key(name) || fonts.keys().any(|k| k.eq_ignore_ascii_case(name))
+        self.model().fonts.id(name).is_some()
     }
 }
 

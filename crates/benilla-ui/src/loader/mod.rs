@@ -557,13 +557,9 @@ impl Loader<'_> {
         let model = self.model();
         let templates = model.framexml_templates.borrow();
         // A font object in an inherit chain is skipped, not warned as an unknown template.
-        let fonts = model.framexml_fonts.borrow();
-        let font_names: std::collections::HashSet<&str> =
-            fonts.keys().map(|k| k.as_str()).collect();
+        let is_font = |name: &str| model.fonts.id(name).is_some();
         let mut warns = Vec::new();
-        let out = framexml::expand_known(el, &*templates, &font_names, &mut warns);
-        drop(font_names);
-        drop(fonts);
+        let out = framexml::expand_known(el, &*templates, &is_font, &mut warns);
         drop(templates);
         drop(model);
         self.report.warnings.extend(warns);
@@ -577,6 +573,20 @@ impl Loader<'_> {
             .framexml_templates
             .borrow()
             .inherited_levels(raw);
+        Levels {
+            inherited,
+            own: raw,
+        }
+    }
+
+    /// The nodes a FontString's `LoadXML` reads: [`Self::levels`], up to the first `inherits` that
+    /// names a font, which the string links instead of loading a template (`0x770f69`).
+    pub(super) fn fontstring_levels<'a>(&self, raw: &'a Element) -> Levels<'a> {
+        let model = self.model();
+        let inherited = model
+            .framexml_templates
+            .borrow()
+            .inherited_levels_until(raw, |name| model.fonts.id(name).is_some());
         Levels {
             inherited,
             own: raw,
@@ -604,14 +614,7 @@ impl Loader<'_> {
         let Some(name) = el.name().map(str::to_string) else {
             return;
         };
-        let id = {
-            let mut model = self.model();
-            model
-                .framexml_fonts
-                .borrow_mut()
-                .insert(name.clone(), el.clone());
-            model.fonts.named(&name)
-        };
+        let id = self.model().fonts.named(&name);
         self.load_font_node(el, id, &name);
         // In 1.12 a named `<Font>` is also a Lua global, the object `SetFontObject` takes.
         if let Err(e) = crate::script::font::publish(self.lua(), id, &name) {
