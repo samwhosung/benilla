@@ -908,7 +908,6 @@ mod tests {
         ))
         .unwrap();
         s.resolve();
-        s.tick(0.0); // the resize relayout
         s
     }
 
@@ -962,7 +961,8 @@ mod tests {
             ("2", 2.0),
             ("5", 0.0),
             ("-1", 4.0),
-            ("99", 4.0),
+            // The remainder -4, which the floor makes slot 0 (`0x788723`-`0x788729`).
+            ("98", 4.0),
             ("'3'", 3.0),
         ] {
             assert_eq!(s.arity(&format!("CF:SetScrollFromBottom({n})")).unwrap(), 0);
@@ -1300,6 +1300,29 @@ mod tests {
         s.resolve();
         s.tick(0.0);
         assert_eq!(alphas(&s), [half; 6]);
+    }
+
+    /// The resolve's resize test is `0x788310`'s: a size moved by under the `1e-5` epsilon
+    /// (`0x80c5c8`) relayouts nothing, one past it relayouts; a hidden frame's rect waits for its
+    /// show, whose relayout and then the resolve's lay it out.
+    #[test]
+    fn a_resize_relayouts_past_the_epsilon_and_a_hidden_one_at_its_show() {
+        let (half, full) = (0.5, 1.0);
+        let four = [half, full, full, full, full, half];
+        let mut s = faded_chat(false);
+        s.run("CF:SetHeight(44.005)").unwrap();
+        s.resolve();
+        assert_eq!(alphas(&s), [half; 6], "under the epsilon");
+        s.run("CF:SetHeight(44.05)").unwrap();
+        s.resolve();
+        assert_eq!(alphas(&s), four, "past it, at the anchor");
+        let mut s = faded_chat(false);
+        s.run("CF:Hide() CF:SetHeight(86)").unwrap();
+        s.resolve();
+        assert_eq!(alphas(&s), [half; 6], "hidden: deferred");
+        s.run("CF:Show()").unwrap();
+        s.resolve();
+        assert_eq!(alphas(&s), [full, full, full, full, full, half]);
     }
 
     /// A scrolling frame `CF` of the given height holding `messages`, bottom left at (32, 90),

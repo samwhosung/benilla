@@ -34,15 +34,15 @@ pub(super) use scrolling::REG_SCROLLINGMESSAGEFRAME_METHODS;
 pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     let rows = UiScript::message_viewport_rows(model, h);
     let viewport = UiScript::message_viewport(model, h);
-    let layout_key = UiScript::message_layout_key(model, h);
+    let font_key = UiScript::message_font_key(model, h);
     match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         Some(KindState::Message(mf)) => {
             mf.trim_to_viewport(rows);
             mf.tick(elapsed);
         }
         Some(KindState::ScrollingMessage(smf)) => {
-            // A resize or a font change relayouts at the anchor (`0x788427`, `0x788086`).
-            if smf.laid.replace(layout_key) != Some(layout_key) {
+            // A font change relayouts at the anchor (`0x788086`); the resize is the resolve's.
+            if smf.laid_font.replace(font_key) != Some(font_key) {
                 smf.relayout(viewport);
             }
             smf.tick(elapsed)
@@ -51,27 +51,42 @@ pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     }
 }
 
-/// After a resolve: a visible scrolling frame laid out against another size or font relayouts at
-/// its anchor now, as the rect application does (`0x7882f0` → `0x788310` → `0x788427`), so a read
-/// before its next update sees the new layout. Its update keeps the same test as a fallback.
+/// `0x788310`'s size test (`0x788384`-`0x7883bd`): either dimension moved by the f32 `1e-5`
+/// (`0x80c5c8`) or more, the rects in layout units as the reference's are, a NaN counting as
+/// moved.
+fn size_moved(old: Rect, new: Rect, eps: f64) -> bool {
+    let dw =
+        (f64::from(new.right) - f64::from(new.left)) - (f64::from(old.right) - f64::from(old.left));
+    let dh =
+        (f64::from(new.top) - f64::from(new.bottom)) - (f64::from(old.top) - f64::from(old.bottom));
+    let moved = |d: f64| d.is_nan() || d.abs() >= eps;
+    moved(dh) || moved(dw)
+}
+
+/// After a resolve: a scrolling frame whose rect changed size relayouts at its anchor now, as its
+/// rect application does (`0x7882f0` → `0x788310` → `0x788427`), so a read before its next update
+/// sees the new layout. A hidden frame's layout is deferred until its show, here as in the
+/// reference, so its rect, and this, wait for the show.
 pub(super) fn after_resolve(model: &mut Model) {
-    let frames: Vec<FrameHandle> = model
-        .resolved
-        .keys()
-        .copied()
-        .filter(|&fh| {
-            model.arena.frame(fh).is_some_and(|f| {
-                f.effective_visible && matches!(f.kind_state, KindState::ScrollingMessage(_))
-            })
+    let eps = f64::from(f32::from_bits(0x3727_c5ac));
+    let frames: Vec<(FrameHandle, Rect)> = model
+        .frame_rects
+        .iter()
+        .filter(|(fh, _)| {
+            matches!(
+                model.arena.frame(**fh).map(|f| &f.kind_state),
+                Some(KindState::ScrollingMessage(_))
+            )
         })
+        .map(|(&fh, &r)| (fh, r))
         .collect();
-    for fh in frames {
-        let layout_key = UiScript::message_layout_key(model, fh);
+    for (fh, rect) in frames {
         let viewport = UiScript::message_viewport(model, fh);
         if let Some(KindState::ScrollingMessage(smf)) =
             model.arena.frame_mut(fh).map(|f| &mut f.kind_state)
         {
-            if smf.laid.replace(layout_key) != Some(layout_key) {
+            if smf.laid_rect.is_none_or(|was| size_moved(was, rect, eps)) {
+                smf.laid_rect = Some(rect);
                 smf.relayout(viewport);
             }
         }
@@ -92,11 +107,13 @@ pub(super) fn on_visibility(lua: &mlua::Lua, h: FrameHandle, visible: bool) {
         return;
     }
     let viewport = UiScript::message_viewport(&model, h);
-    let layout_key = UiScript::message_layout_key(&model, h);
+    let font_key = UiScript::message_font_key(&model, h);
+    let rect = model.frame_rects.get(&h).copied();
     if let Some(KindState::ScrollingMessage(smf)) =
         model.arena.frame_mut(h).map(|f| &mut f.kind_state)
     {
-        smf.laid = Some(layout_key);
+        smf.laid_font = Some(font_key);
+        smf.laid_rect = rect.or(smf.laid_rect);
         smf.relayout(viewport);
     }
     drop(model);
@@ -439,15 +456,11 @@ impl UiScript {
         font.viewport(height, scale, visible)
     }
 
-    /// What the scrolling frame `fh`'s relayout lays out against: its size and its font.
-    pub(super) fn message_layout_key(model: &Model, fh: FrameHandle) -> u64 {
+    /// The font the scrolling frame `fh`'s relayout lays out with, as a key.
+    pub(super) fn message_font_key(model: &Model, fh: FrameHandle) -> u64 {
         use std::hash::{Hash, Hasher};
         let font = Self::message_frame_font(model, fh);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        if let Some(r) = model.frame_rect(fh) {
-            (r.right - r.left).to_bits().hash(&mut hasher);
-            (r.top - r.bottom).to_bits().hash(&mut hasher);
-        }
         font.path.hash(&mut hasher);
         font.height.map(f32::to_bits).hash(&mut hasher);
         font.spacing.to_bits().hash(&mut hasher);

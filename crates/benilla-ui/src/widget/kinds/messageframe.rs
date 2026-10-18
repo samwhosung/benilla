@@ -74,9 +74,12 @@ pub struct ScrollingMessageState {
     /// relayout (`0x788a8e`), a line fading out (`0x788538`) and a fade re-arm (`0x788bf1`), and
     /// spent by the per-frame rebuild (`0x788595` → `0x788c00`).
     pub links_dirty: bool,
-    /// A key of what the last relayout laid out against: the frame's size and font. A change is
-    /// a resize (`0x788427`) or a font change (`0x788086`), each relayouting at the anchor.
-    pub laid: Option<u64>,
+    /// The font the last relayout laid out with, as a key: a change is a font change
+    /// (`0x788086`), which relayouts at the anchor.
+    pub laid_font: Option<u64>,
+    /// The layout-unit rect the frame's size was last tested against (`0x788321`-`0x788339`): a
+    /// resize past the epsilon relayouts at the anchor (`0x788427`).
+    pub laid_rect: Option<crate::layout::Rect>,
     /// Relayouts that moved the anchor since the binding last fired `OnMessageScrollChanged` for
     /// them (`0x78877a`, `0x788a89`-`0x788aad`).
     pub scroll_changes: u32,
@@ -99,7 +102,8 @@ impl Default for ScrollingMessageState {
             at_top: false,
             at_bottom: true,
             links_dirty: false,
-            laid: None,
+            laid_font: None,
+            laid_rect: None,
             scroll_changes: 0,
         }
     }
