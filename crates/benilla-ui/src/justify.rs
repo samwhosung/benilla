@@ -172,15 +172,16 @@ pub fn name_v(j: JustifyV) -> &'static str {
     name_of(bits_v(j), V_MASK)
 }
 
-/// The `Usage:` string `SetJustifyH` raises on a miss (`.rdata 0x87c77c`), the `%s` spelled as
-/// the widget type.
-pub fn usage_h(widget: &str) -> mlua::Error {
-    mlua::Error::runtime(format!("Usage: <{widget}>:SetJustifyH(\"justify\")"))
+/// The `Usage:` line `SetJustifyH` raises for a non-string or a token that does not parse
+/// (`0x87c77c`), `name` being the object's own name or `<unnamed>`: the helper `0x79fc20` takes it
+/// in `ecx` from each of the six bindings' `[vt+0x4]` call (FontString `0x79e7bb` inlines it).
+pub fn usage_h(name: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("Usage: {name}:SetJustifyH(\"justify\")"))
 }
 
-/// The `Usage:` string `SetJustifyV` raises on a miss (`.rdata 0x87c7a0`).
-pub fn usage_v(widget: &str) -> mlua::Error {
-    mlua::Error::runtime(format!("Usage: <{widget}>:SetJustifyV(\"justify\")"))
+/// [`usage_h`]'s vertical twin (`0x87c7a0`, helper `0x79fce0`).
+pub fn usage_v(name: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("Usage: {name}:SetJustifyV(\"justify\")"))
 }
 
 #[cfg(test)]

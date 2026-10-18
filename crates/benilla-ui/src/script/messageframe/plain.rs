@@ -38,7 +38,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
     // The justify quartet, on both classes ([`super::install_justify`]).
-    super::install_justify(lua, &m, "MessageFrame")?;
+    super::install_justify(lua, &m)?;
 
     // AddMessage(text [, r, g, b [, a]]) (`0x795590`). An unusable text is a silent no-op
     // ([`super::message_text`]). r, g and b count only as a trio, else white, and a bad colour

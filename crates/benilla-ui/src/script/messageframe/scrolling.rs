@@ -68,7 +68,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
     // The justify quartet, on both classes ([`super::install_justify`]).
-    super::install_justify(lua, &m, "ScrollingMessageFrame")?;
+    super::install_justify(lua, &m)?;
 
     // AddMessage(text [, r, g, b [, id]]) (`0x792900`): white without rgb; the state quantizes
     // the colour and makes the line opaque. The rgb test is three `lua_isnumber` checks; the id

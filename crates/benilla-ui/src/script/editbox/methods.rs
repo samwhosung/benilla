@@ -3,6 +3,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use crate::script::binding_abi;
 use crate::script::object::frame_handle_of;
 use crate::widget::EditBoxState;
 
@@ -347,10 +348,13 @@ fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
     ] {
         m.set(
             name,
-            lua.create_function(move |lua, (this, token): (Table, String)| {
-                let bits = EditBoxState::justify_bit(&token).ok_or_else(|| {
-                    mlua::Error::runtime(format!("Usage: <EditBox>:{name}(\"justify\")"))
-                })?;
+            lua.create_function(move |lua, (this, token): (Table, Value)| {
+                frame_handle_of(lua, &this)?;
+                let bits = binding_abi::optional_string(lua, &token)
+                    .and_then(|t| EditBoxState::justify_bit(&t))
+                    .ok_or_else(|| {
+                        binding_abi::usage(lua, &this, &format!("{name}(\"justify\")"))
+                    })?;
                 with_editbox(lua, &this, |eb| eb.set_justify_axis(mask, bits))
             })?,
         )?;

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use mlua::{FromLua, Lua, MultiValue, Table, Value};
 
+use super::binding_abi;
 use super::object::frame_handle_of;
 use super::{FontObject, FontShadow, Model, Outline, RegionData};
 use crate::justify::{self, Justify};
@@ -684,9 +685,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetJustifyH",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let s =
-                String::from_lua(arg(&rest, 0), lua).map_err(|_| justify::usage_h("SimpleHTML"))?;
-            let bits = justify::parse_bits(&s).ok_or_else(|| justify::usage_h("SimpleHTML"))?;
+            frame_handle_of(lua, &this)?;
+            let bits = binding_abi::optional_string(lua, &arg(&rest, 0))
+                .and_then(|s| justify::parse_bits(&s))
+                .ok_or_else(|| justify::usage_h(&binding_abi::name_of(lua, &this)))?;
             edit_font(lua, &this, elem, |ef| {
                 ef.justify.0 = justify::set_axis(ef.justify.0, justify::H_MASK, bits);
                 ef.mask.clear(super::FontMask::JUSTIFY);
@@ -704,9 +706,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetJustifyV",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let s =
-                String::from_lua(arg(&rest, 0), lua).map_err(|_| justify::usage_v("SimpleHTML"))?;
-            let bits = justify::parse_bits(&s).ok_or_else(|| justify::usage_v("SimpleHTML"))?;
+            frame_handle_of(lua, &this)?;
+            let bits = binding_abi::optional_string(lua, &arg(&rest, 0))
+                .and_then(|s| justify::parse_bits(&s))
+                .ok_or_else(|| justify::usage_v(&binding_abi::name_of(lua, &this)))?;
             edit_font(lua, &this, elem, |ef| {
                 ef.justify.0 = justify::set_axis(ef.justify.0, justify::V_MASK, bits);
                 ef.mask.clear(super::FontMask::JUSTIFY);

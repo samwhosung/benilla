@@ -107,11 +107,7 @@ pub(super) fn shown_text<'a>(
 /// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry,
 /// under [`crate::justify`]'s rules: an unknown token raises the usage line, and a token of the
 /// other axis clears this one, so `GetJustifyH()` then answers `"UNKNOWN"`.
-pub(super) fn install_justify(
-    lua: &mlua::Lua,
-    m: &mlua::Table,
-    widget: &'static str,
-) -> mlua::Result<()> {
+pub(super) fn install_justify(lua: &mlua::Lua, m: &mlua::Table) -> mlua::Result<()> {
     use crate::justify::{self, Justify};
 
     fn slot(ks: &mut KindState) -> Option<&mut Option<Justify>> {
@@ -136,17 +132,17 @@ pub(super) fn install_justify(
         m.set(
             name,
             lua.create_function(move |lua, (this, token): (mlua::Table, mlua::Value)| {
-                let parsed = token
-                    .as_string()
-                    .and_then(|t| t.to_str().ok().and_then(|t| justify::parse_bits(&t)))
+                let h = frame_handle_of(lua, &this)?;
+                let parsed = crate::script::binding_abi::optional_string(lua, &token)
+                    .and_then(|t| justify::parse_bits(&t))
                     .ok_or_else(|| {
+                        let name = crate::script::binding_abi::name_of(lua, &this);
                         if horizontal {
-                            justify::usage_h(widget)
+                            justify::usage_h(&name)
                         } else {
-                            justify::usage_v(widget)
+                            justify::usage_v(&name)
                         }
                     })?;
-                let h = frame_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let frame = model
                     .arena

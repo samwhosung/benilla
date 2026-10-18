@@ -28,3 +28,88 @@ fn a_usage_line_names_the_object_not_its_lua_get_name() {
     let e = err(&s, "UsageModel:SetModel()");
     assert!(e.contains(r#"Usage: UsageModel:SetModel("file")"#), "{e}");
 }
+
+/// The six `SetJustifyH`/`SetJustifyV` bindings raise `Usage: %s:SetJustifyH("justify")`
+/// (`0x87c77c`, `0x87c7a0`) for a non-string or a token that does not parse, naming the object:
+/// FontString `0x79e7bb`, Font `0x7a0bf9`, ScrollingMessageFrame `0x79268f`, MessageFrame
+/// `0x794c5f`, SimpleHTML `0x7967e7`, EditBox `0x797a1f`.
+#[test]
+fn set_justify_usage_lines_name_the_object() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "JustOwner")
+        JustFS = f:CreateFontString("JustFS")
+        JustAnon = f:CreateFontString()
+        JustFont = CreateFont("JustFont")
+        JustSMF = CreateFrame("ScrollingMessageFrame", "JustSMF")
+        JustMF = CreateFrame("MessageFrame", "JustMF")
+        JustHTML = CreateFrame("SimpleHTML", "JustHTML")
+        JustBox = CreateFrame("EditBox", "JustBox")
+        JustAnonBox = CreateFrame("EditBox")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "JustFS:SetJustifyH('X')",
+            r#"Usage: JustFS:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustFS:SetJustifyH(nil)",
+            r#"Usage: JustFS:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustFS:SetJustifyV({})",
+            r#"Usage: JustFS:SetJustifyV("justify")"#,
+        ),
+        (
+            "JustAnon:SetJustifyH('X')",
+            r#"Usage: <unnamed>:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustFont:SetJustifyH('X')",
+            r#"Usage: JustFont:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustFont:SetJustifyV(nil)",
+            r#"Usage: JustFont:SetJustifyV("justify")"#,
+        ),
+        (
+            "JustSMF:SetJustifyH('X')",
+            r#"Usage: JustSMF:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustMF:SetJustifyV('X')",
+            r#"Usage: JustMF:SetJustifyV("justify")"#,
+        ),
+        (
+            "JustHTML:SetJustifyH('X')",
+            r#"Usage: JustHTML:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustBox:SetJustifyH('X')",
+            r#"Usage: JustBox:SetJustifyH("justify")"#,
+        ),
+        (
+            "JustBox:SetJustifyV(nil)",
+            r#"Usage: JustBox:SetJustifyV("justify")"#,
+        ),
+        (
+            "JustAnonBox:SetJustifyH('X')",
+            r#"Usage: <unnamed>:SetJustifyH("justify")"#,
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    // A token still parses on every class.
+    s.run(
+        r#"
+        JustFS:SetJustifyH("LEFT"); assert(JustFS:GetJustifyH() == "LEFT")
+        JustFont:SetJustifyV("TOP"); assert(JustFont:GetJustifyV() == "TOP")
+        JustBox:SetJustifyH("right"); assert(JustBox:GetJustifyH() == "RIGHT")
+    "#,
+    )
+    .unwrap();
+}

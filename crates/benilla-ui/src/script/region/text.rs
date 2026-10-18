@@ -4,6 +4,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::justify;
+use crate::script::binding_abi;
 use crate::script::Model;
 
 use super::region_handle_of;
@@ -122,11 +123,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `crate::justify`'s, shared with the `<Font>` object.
     m.set(
         "SetJustifyH",
-        lua.create_function(|lua, (this, j): (Table, String)| {
+        lua.create_function(|lua, (this, j): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
-            let parsed = justify::parse_h(&j);
+            let parsed = binding_abi::optional_string(lua, &j)
+                .map_or(justify::Set::NoMatch, |j| justify::parse_h(&j));
             if parsed == justify::Set::NoMatch {
-                return Err(justify::usage_h("FontString"));
+                return Err(justify::usage_h(&binding_abi::name_of(lua, &this)));
             }
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
@@ -149,11 +151,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetJustifyV (XML `justifyV`), as SetJustifyH.
     m.set(
         "SetJustifyV",
-        lua.create_function(|lua, (this, j): (Table, String)| {
+        lua.create_function(|lua, (this, j): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
-            let parsed = justify::parse_v(&j);
+            let parsed = binding_abi::optional_string(lua, &j)
+                .map_or(justify::Set::NoMatch, |j| justify::parse_v(&j));
             if parsed == justify::Set::NoMatch {
-                return Err(justify::usage_v("FontString"));
+                return Err(justify::usage_v(&binding_abi::name_of(lua, &this)));
             }
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();

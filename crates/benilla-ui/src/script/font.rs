@@ -727,11 +727,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // cleared axis; a fresh object reads CENTER/MIDDLE, the constructor default `0x212`.
     m.set(
         "SetJustifyH",
-        lua.create_function(|lua, (this, j): (Table, String)| {
-            let jh = match justify::parse_h(&j) {
-                justify::Set::To(jh) => jh,
-                justify::Set::Clears => return Ok(()),
-                justify::Set::NoMatch => return Err(justify::usage_h("Font")),
+        lua.create_function(|lua, (this, j): (Table, Value)| {
+            id_of(lua, &this)?;
+            let parsed = binding_abi::optional_string(lua, &j).map(|j| justify::parse_h(&j));
+            let jh = match parsed {
+                Some(justify::Set::To(jh)) => jh,
+                Some(justify::Set::Clears) => return Ok(()),
+                _ => return Err(justify::usage_h(&binding_abi::name_of(lua, &this))),
             };
             edit(lua, &this, FontMask::JUSTIFY, |fo| {
                 fo.justify.get_or_insert_with(Default::default).set_h(jh)
@@ -746,11 +748,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetJustifyV",
-        lua.create_function(|lua, (this, j): (Table, String)| {
-            let jv = match justify::parse_v(&j) {
-                justify::Set::To(jv) => jv,
-                justify::Set::Clears => return Ok(()),
-                justify::Set::NoMatch => return Err(justify::usage_v("Font")),
+        lua.create_function(|lua, (this, j): (Table, Value)| {
+            id_of(lua, &this)?;
+            let parsed = binding_abi::optional_string(lua, &j).map(|j| justify::parse_v(&j));
+            let jv = match parsed {
+                Some(justify::Set::To(jv)) => jv,
+                Some(justify::Set::Clears) => return Ok(()),
+                _ => return Err(justify::usage_v(&binding_abi::name_of(lua, &this))),
             };
             edit(lua, &this, FontMask::JUSTIFY, |fo| {
                 fo.justify.get_or_insert_with(Default::default).set_v(jv)
