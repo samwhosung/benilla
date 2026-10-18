@@ -47,7 +47,8 @@ fn set_font_reads_flags_only_from_a_string_or_a_number() {
     for &(obj, kind) in KINDS {
         for (arg, want) in [
             ("\"OUTLINE\"", "OUTLINE"),
-            ("\"THICKOUTLINE\"", "THICKOUTLINE"),
+            ("\"THICKOUTLINE\"", "OUTLINE, THICKOUTLINE"),
+            ("\"THICK\"", ""),
             ("false", ""),
             ("nil", ""),
             ("7", ""),
@@ -220,4 +221,62 @@ fn a_fontstrings_refused_load_changes_nothing_and_a_zero_height_frees_its_font()
             .unwrap(),
         (None, 0.0, String::new())
     );
+}
+
+/// `0x6f1a90` ORs in every name of `0x811b10` found as a case-insensitive substring, so `THICK`
+/// alone sets nothing, and `GetFont` (`0x6f1ad0`) joins every set bit's name in table order with
+/// `", "`. SimpleHTML's element fonts hold no MONOCHROME yet, so it sits out the monochrome rows.
+#[test]
+fn get_font_joins_every_set_flag_in_table_order() {
+    let s = receivers();
+    for &(obj, kind) in KINDS.iter().filter(|(_, kind)| *kind != "SimpleHTML") {
+        for (arg, want) in [
+            ("MONOCHROME", "MONOCHROME"),
+            ("OUTLINE,MONOCHROME", "OUTLINE, MONOCHROME"),
+            (
+                "monochrome thickoutline",
+                "OUTLINE, THICKOUTLINE, MONOCHROME",
+            ),
+            ("THICK", ""),
+        ] {
+            s.run(&format!(
+                "{obj}:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 13, \"{arg}\")"
+            ))
+            .unwrap();
+            assert_eq!(flags_of(&s, obj), want, "{kind}: {arg}");
+        }
+    }
+}
+
+/// The XML legs set the word whole (`0x771194`-`0x771204`, `0x783db1`-`0x783e14`): `THICK` is
+/// 5, both outline bits, and a non-empty `monochrome=` adds 2.
+#[test]
+fn an_xml_thick_monochrome_font_reads_back_every_flag() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <Font name="XmlFlagsFont" font="Fonts\FRIZQT__.TTF" outline="THICK" monochrome="1"
+                  virtual="true">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </Font>
+            <Frame name="XmlFlagsHost">
+                <Layers><Layer>
+                    <FontString name="XmlFlagsString" font="Fonts\FRIZQT__.TTF" outline="THICK"
+                                monochrome="1">
+                        <FontHeight><AbsValue val="12"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    for obj in ["XmlFlagsFont", "XmlFlagsString"] {
+        assert_eq!(
+            flags_of(&s, obj),
+            "OUTLINE, THICKOUTLINE, MONOCHROME",
+            "{obj}"
+        );
+    }
 }

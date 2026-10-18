@@ -608,7 +608,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(p) => Value::String(lua.create_string(&p)?),
                 None => Value::Nil,
             };
-            Ok((path, fo.height.unwrap_or(0.0), fo.outline.as_str()))
+            Ok((
+                path,
+                fo.height.unwrap_or(0.0),
+                fo.outline.flags_text(fo.monochrome),
+            ))
         })?,
     )?;
 

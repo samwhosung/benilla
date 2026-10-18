@@ -203,7 +203,7 @@ pub(super) fn emit(
             host.rect.height(),
             style.font_height,
             spec.height,
-            style.outline.as_str(),
+            style.outline.flags_text(style.monochrome),
             spec.path.unwrap_or("<none — the fallback face>"),
             ebox_geom.unwrap_or_default(),
             &draw_text[..draw_text.len().min(60)]

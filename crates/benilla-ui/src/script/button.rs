@@ -891,7 +891,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(p) => Value::String(lua.create_string(&p)?),
                 None => Value::Nil,
             };
-            Ok((path, block.height.unwrap_or(0.0), block.outline.as_str()))
+            Ok((
+                path,
+                block.height.unwrap_or(0.0),
+                block.outline.flags_text(block.monochrome),
+            ))
         })?,
     )?;
 

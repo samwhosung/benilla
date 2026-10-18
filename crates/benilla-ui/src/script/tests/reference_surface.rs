@@ -491,7 +491,7 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     assert_eq!(
         s.eval::<String>("local _, _, flags = SFBare:GetFont() return flags")
             .unwrap(),
-        "THICKOUTLINE"
+        "OUTLINE, THICKOUTLINE"
     );
     // Both arguments are required (`lua_isstring` + `lua_isnumber`, else the usage error).
     assert!(s.run(r#"SFBare:SetFont("Fonts\\SKURRI.TTF")"#).is_err());

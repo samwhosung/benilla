@@ -316,7 +316,7 @@ pub(super) fn install(
                 None => Value::Nil,
             };
             let height = d.and_then(|d| d.font_height).unwrap_or(0.0);
-            let flags = d.map(|d| d.outline).unwrap_or_default().as_str();
+            let flags = d.map_or("", |d| d.outline.flags_text(d.monochrome));
             Ok((path, height, flags))
         })?,
     )?;

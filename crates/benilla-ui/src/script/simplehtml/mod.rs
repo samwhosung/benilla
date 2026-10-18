@@ -575,7 +575,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(path) => Value::String(lua.create_string(&path)?),
                 None => Value::Nil,
             };
-            Ok((path, p.font_height, p.outline.as_str()))
+            Ok((path, p.font_height, p.outline.flags_text(false)))
         })?,
     )?;
 

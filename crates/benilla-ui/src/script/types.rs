@@ -264,12 +264,13 @@ impl Outline {
         }
     }
 
-    /// Parse a Lua `SetFont` flags string, shared by every `SetFont` (`0x79f210`) and matched by
-    /// substring against `{0x1 OUTLINE, 0x4 THICKOUTLINE, 0x2 MONOCHROME}` (`0x811b10`): THICK
-    /// first, since `THICKOUTLINE` contains `OUTLINE`. MONOCHROME is [`monochrome_flag`]'s.
+    /// Parse a Lua `SetFont` flags string, shared by every `SetFont` (`0x79f210`): `0x6f1a90` ORs in
+    /// each name of `{0x1 OUTLINE, 0x4 THICKOUTLINE, 0x2 MONOCHROME}` (`0x811b10`) found as a
+    /// case-insensitive substring (`0x64b540`), so `THICKOUTLINE` sets 0x1 and 0x4 and `THICK`
+    /// alone sets nothing. MONOCHROME is [`monochrome_flag`]'s.
     pub fn flags(s: &str) -> Outline {
         let s = s.to_ascii_uppercase();
-        if s.contains("THICK") {
+        if s.contains("THICKOUTLINE") {
             Outline::Thick
         } else if s.contains("OUTLINE") {
             Outline::Normal
@@ -278,12 +279,17 @@ impl Outline {
         }
     }
 
-    /// The flags token `GetFont` answers.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Outline::None => "",
-            Outline::Normal => "OUTLINE",
-            Outline::Thick => "THICKOUTLINE",
+    /// The flags text `GetFont` answers (`0x6f1ad0`): the name of every set bit in `0x811b10`'s
+    /// order, joined by `", "` (`0x84480c`). A thick outline holds both outline bits, as both
+    /// readers set it (`0x6f1a90`, the XML `THICK`'s 5 at `0x7711e3`).
+    pub fn flags_text(self, monochrome: bool) -> &'static str {
+        match (self, monochrome) {
+            (Outline::None, false) => "",
+            (Outline::Normal, false) => "OUTLINE",
+            (Outline::Thick, false) => "OUTLINE, THICKOUTLINE",
+            (Outline::None, true) => "MONOCHROME",
+            (Outline::Normal, true) => "OUTLINE, MONOCHROME",
+            (Outline::Thick, true) => "OUTLINE, THICKOUTLINE, MONOCHROME",
         }
     }
 }
