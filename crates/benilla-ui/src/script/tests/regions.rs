@@ -1556,7 +1556,11 @@ fn tex_coord_modifies_rect_is_one_slash_nil_and_scales_the_rect() {
             .unwrap(),
         "cleared back to nil"
     );
-    assert_eq!(region_tex_rect(&s, "TcmArt"), before, "unflagged: the whole rect");
+    assert_eq!(
+        region_tex_rect(&s, "TcmArt"),
+        before,
+        "unflagged: the whole rect"
+    );
 }
 
 /// The draw order of the texture quads `label` names.
