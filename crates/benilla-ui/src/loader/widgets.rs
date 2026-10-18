@@ -318,6 +318,13 @@ impl Loader<'_> {
             let (l, r, t, b) = (get("left"), get("right"), get("top"), get("bottom"));
             self.call(wrapper, "SetTextInsets", (l, r, t, b), dbg);
         }
+        // Each `<HighlightColor>` in turn, the last winning (`0x77a277`): the `<Color>` reader
+        // (`0x6f23d0`, `0x77a292`), then the selection's setter (`0x77a2a2`).
+        for hc in children_named(el, "HighlightColor") {
+            if let Err(e) = crate::script::set_selection_color(self.lua, wrapper, color_of(hc)) {
+                self.report.fault(format!("{dbg}: <HighlightColor>: {e}"));
+            }
+        }
         for (attr, method) in [
             ("autoFocus", "SetAutoFocus"),
             ("numeric", "SetNumeric"),

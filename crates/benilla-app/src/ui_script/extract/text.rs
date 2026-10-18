@@ -147,7 +147,7 @@ pub(super) fn emit(
         // A multiline box draws wrapped (its region is TOP/LEFT already); the caret and the
         // selection seat by `(row, x)` at the wrap's row pitch.
         for &(row, sx0, sx1) in &ui.selection {
-            let hc = ui.highlight_color;
+            let hc = ui.highlight_color.to_f32();
             #[allow(clippy::cast_precision_loss)]
             let ry = top + row as f32 * cell_h;
             // The engine's selection x-span is in UI units.

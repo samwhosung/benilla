@@ -136,8 +136,10 @@ pub struct EditBoxState {
     /// focus change raises, turns it on in the focused box (`0x77de35`), off in others
     /// (`0x77de51`).
     pub caret_shown: bool,
-    /// The selection tint (`SetHighlightColor`), RGBA 0..1; the ctor default is `0xFF606060`.
-    pub highlight_color: [f32; 4],
+    /// The selection tint, packed: the solid fill of the selection regions, set from XML
+    /// `<HighlightColor>` through `SetSelectionColor` (`0x77e330`), which no Lua method reaches;
+    /// the ctor's is `0xFF606060` (`0x779c7a`).
+    pub highlight_color: crate::color::Rgba8,
     /// The bits of `Set/GetJustifyH` and `Set/GetJustifyV` (`0x797990`-`0x797bd0`), kept on the
     /// box and not drawn. For V that is the reference: `SetMultiLine` (`0x77a4a0`) makes the
     /// text's V bits local, so a `SetJustifyV` is masked out (`0x77086e`) and only the getter sees
@@ -216,7 +218,7 @@ impl Default for EditBoxState {
             // Filled by `WidgetArena::create`'s ctor pass, which `Default` cannot reach.
             selection_regions: [None; 3],
             caret_region: None,
-            highlight_color: [96.0 / 255.0, 96.0 / 255.0, 96.0 / 255.0, 1.0],
+            highlight_color: crate::color::Rgba8::rgba(0x60, 0x60, 0x60, 0xff),
             // The ctor's `0x211` less the unread bit 0x200: LEFT | MIDDLE, since the ctor
             // overrides the font default's CENTER (`0x779be4`).
             justify: 0x01 | 0x10,

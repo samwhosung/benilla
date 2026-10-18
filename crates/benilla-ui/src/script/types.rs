@@ -713,8 +713,8 @@ pub struct EditBoxTextUi {
     pub caret_on: bool,
     /// Per-row `(row, x0, x1)` px spans from each row's origin; single-line has at most one.
     pub selection: Vec<(usize, f32, f32)>,
-    /// `SetHighlightColor`; the constructor's default is opaque `0x606060` grey.
-    pub highlight_color: [f32; 4],
+    /// The selection tint ([`crate::widget::EditBoxState::highlight_color`]).
+    pub highlight_color: crate::color::Rgba8,
 }
 
 /// One FontString the layout needs host-measured this frame (text, no explicit height), answered

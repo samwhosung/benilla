@@ -481,6 +481,18 @@ pub(crate) fn apply_xml_bytes(lua: &Lua, frame: &Table, bytes: &str) -> mlua::Re
     Ok(())
 }
 
+/// `CSimpleEditBox::SetSelectionColor` (`0x77e330`), the XML `<HighlightColor>`'s setter
+/// (`0x77a2a2`): the selection's tint.
+pub(crate) fn set_selection_color(
+    lua: &Lua,
+    frame: &Table,
+    color: crate::color::Rgba8,
+) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, frame)?;
+    with_eb(lua, h, |eb| eb.highlight_color = color);
+    Ok(())
+}
+
 /// Get or create the box's text FontString; an XML-declared one is wired by [`adopt_text_region`].
 pub(super) fn ensure_text_region(lua: &Lua, h: FrameHandle) -> Option<RegionHandle> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");

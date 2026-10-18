@@ -1076,3 +1076,49 @@ fn a_bare_shadow_is_a_thousandth_of_a_layout_unit() {
         }
     }
 }
+
+/// An EditBox's `<HighlightColor>` (`0x77a277`) is read as a `<Color>` (`0x6f23d0`: clamped and
+/// packed) and tints the selection (`0x77e330`), the last one winning, a template's first; with
+/// none the selection keeps the constructor's `0xFF606060` (`0x779c7a`).
+#[test]
+fn an_editbox_tints_its_selection_with_its_highlight_color() {
+    let mut s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <EditBox name="TintTemplate" virtual="true">
+                <Size><AbsDimension x="100" y="20"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <HighlightColor r="0" g="1" b="0"/>
+            </EditBox>
+            <EditBox name="TintRed" inherits="TintTemplate">
+                <HighlightColor r="1" g="0" b="0" a="0.5"/>
+            </EditBox>
+            <EditBox name="TintClamped" inherits="TintTemplate">
+                <HighlightColor r="2" g="-1" b="0.5"/>
+            </EditBox>
+            <EditBox name="TintInherited" inherits="TintTemplate"/>
+            <EditBox name="TintNone">
+                <Size><AbsDimension x="100" y="20"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+            </EditBox>
+        </Ui>"#,
+    );
+    let mut tint = |name: &str| {
+        s.run(&format!("{name}:SetFocus()")).unwrap();
+        s.resolve();
+        if let Some(req) = s.editbox_advances_request() {
+            let cum: Vec<f32> = (0..=req.text.len()).map(|i| i as f32 * 7.0).collect();
+            s.set_editbox_advances(req.id, req.key, cum, vec![0], 0.0);
+        }
+        let c = s
+            .focused_editbox_text_ui()
+            .expect("focused")
+            .highlight_color;
+        (c.r, c.g, c.b, c.a)
+    };
+    assert_eq!(tint("TintRed"), (255, 0, 0, 128));
+    assert_eq!(tint("TintClamped"), (255, 0, 128, 255));
+    assert_eq!(tint("TintInherited"), (0, 255, 0, 255));
+    assert_eq!(tint("TintNone"), (0x60, 0x60, 0x60, 0xff));
+}

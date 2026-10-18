@@ -51,7 +51,9 @@ mod death;
 pub mod diagnostics;
 mod editbox;
 pub mod instance;
-pub(crate) use editbox::{adopt_text_region, apply_xml_bytes, editbox_text_region_wrapper};
+pub(crate) use editbox::{
+    adopt_text_region, apply_xml_bytes, editbox_text_region_wrapper, set_selection_color,
+};
 pub(crate) use tooltip::post_load as tooltip_post_load;
 pub(crate) mod addon;
 mod addon_enable;
