@@ -64,17 +64,22 @@ pub(super) fn drive_minimap_ping(
         script.set_minimap_ping_point(ping.world);
         *seated = true;
     }
-    // The token: ourselves, or the sender's party slot; a sender in no slot leaves `player`
-    // (`0x4ee330`).
+    // The token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`, `0x4ee412`),
+    // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither leaves
+    // `player`.
     let self_guid = self_q.iter().next().map(|g| g.0);
     for (world, sender) in std::mem::take(&mut ping.inbound) {
         let token = if Some(sender) == self_guid {
             "player".to_string()
+        } else if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
+            format!("party{}", i + 1)
+        } else if let Some(i) = crate::ui_party::raid_row_guids(&group, self_guid)
+            .iter()
+            .position(|&g| g == sender)
+        {
+            format!("raid{}", i + 1)
         } else {
-            group
-                .party_slots()
-                .position(|m| m.guid == sender)
-                .map_or_else(|| "player".to_string(), |i| format!("party{}", i + 1))
+            "player".to_string()
         };
         script.apply_minimap_ping(world, &token);
     }
@@ -171,6 +176,49 @@ mod tests {
         let (x, y) = s.eval::<(f64, f64)>("return m:GetPingPosition()").unwrap();
         let d = 2.0 * f64::from(benilla_ui::widget::minimap_radius_yd(3, 3, false));
         assert!((x - 50.0 / d).abs() < 1e-6 && y.abs() < 1e-9, "{x} {y}");
+    }
+
+    /// The token is the party scan's `party%d` first, then the raid scan's `raid%d` (`0x4ee412`,
+    /// `0x4ee41b`), each 1-based; ourselves, and a sender in neither, leave `player`.
+    #[test]
+    fn a_pingers_token_is_its_party_slot_else_its_raid_row() {
+        use benilla_protocol::messages::GroupMemberEntry;
+        let (mut app, _rx) = ping_app(true);
+        const ME: u64 = 0x10;
+        app.world_mut().spawn((Guid(ME), SelfPlayer));
+        let member = |guid: u64, flags: u8| GroupMemberEntry {
+            name: format!("m{guid:x}"),
+            guid,
+            status: 1,
+            flags,
+        };
+        {
+            let mut group = app
+                .world_mut()
+                .resource_mut::<crate::ui_party::GroupState>();
+            group.group_type = crate::ui_party::GROUPTYPE_RAID;
+            group.own_flags = 0;
+            // Subgroup 0 (ours) holds 0xA1; 0xB1 and 0xB2 are in subgroup 1.
+            group.members = vec![member(0xB1, 1), member(0xA1, 0), member(0xB2, 1)];
+        }
+        for (sender, want) in [
+            (0xA1, "party1"),
+            (0xB2, "raid4"),
+            (0xB1, "raid2"),
+            (ME, "player"),
+            (0xDEAD, "player"),
+        ] {
+            app.world_mut()
+                .resource_mut::<MinimapPing>()
+                .seat((100.0, 150.0), sender);
+            app.update();
+            let s = script(&mut app);
+            assert_eq!(
+                s.eval::<String>("return seen[table.getn(seen)]").unwrap(),
+                want,
+                "{sender:#x}"
+            );
+        }
     }
 
     /// Our own ping goes on the wire when grouped and only then, and becomes the process's copy,
