@@ -66,7 +66,7 @@ pub(super) fn has_font(model: &Model, rh: RegionHandle) -> bool {
         return false;
     };
     match &owner.kind_state {
-        KindState::Button(bs) if bs.text == Some(rh) && !d.font_explicit.face => {
+        KindState::Button(bs) if bs.text == Some(rh) && d.font_mask.has(super::FontMask::FONT) => {
             bs.font.is_some()
                 || bs
                     .normal_font
@@ -304,9 +304,7 @@ pub(super) fn install(
                     d.monochrome = false;
                 }
                 d.font_height = Some(height);
-                d.font_explicit.face = true;
-                d.font_explicit.outline = true;
-                d.font_explicit.height = true;
+                d.font_mask.clear(super::FontMask::FONT);
                 let after = (d.font_path.clone(), d.font_height, d.outline, d.monochrome);
                 model.touch_measure(rh);
                 // A FontString's load of another face, height or flags clears its valid bit and
@@ -371,7 +369,7 @@ pub(super) fn install(
                 let d = model.region_data.entry(rh).or_default();
                 d.set_vertex_color(Some([r, g, b, a]));
                 // Clears the colour inherit bit (`0x79dbd0`): it survives a font-object repaint.
-                d.font_explicit.color = true;
+                d.font_mask.clear(super::FontMask::COLOR);
                 Ok(())
             },
         )?,
@@ -414,7 +412,7 @@ pub(super) fn install(
                     offset,
                     color: [r, g, b, a],
                 });
-                d.font_explicit.shadow = true;
+                d.font_mask.clear(super::FontMask::SHADOW);
                 Ok(())
             },
         )?,
@@ -444,7 +442,7 @@ pub(super) fn install(
                 offset: [x, y],
                 color,
             });
-            d.font_explicit.shadow = true;
+            d.font_mask.clear(super::FontMask::SHADOW);
             // The offset seeds `GetStringWidth`'s line, so it is in the measure key.
             model.touch_measure(rh);
             Ok(())
@@ -479,7 +477,7 @@ pub(super) fn install(
                 let changed = d.spacing.to_bits() != spacing.to_bits();
                 d.spacing = spacing;
                 // Clears inherit bit `0x10` (`0x79e37b`, `0x79fbb1`).
-                d.font_explicit.spacing = true;
+                d.font_mask.clear(super::FontMask::SPACING);
                 model.touch_measure(rh);
                 // A FontString's new spacing clears its valid bit and invalidates (`0x771666`);
                 // the same one returns first (`0x77161c`).

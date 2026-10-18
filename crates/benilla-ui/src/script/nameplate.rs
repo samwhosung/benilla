@@ -633,7 +633,6 @@ impl Plate {
             g.level_off_y,
         )]);
         level_data.font_height = Some(g.level_height);
-        level_data.font_explicit.height = true;
         model.touch_measure(level);
 
         let skull_data = model.region_data.entry(skull).or_default();
@@ -862,8 +861,9 @@ fn font_string(
         .create_region(frame, RegionKind::FontString, DrawLayer::Overlay, 0)
         .expect("live plate");
     let data = model.region_data.entry(rh).or_default();
+    // The engine's own load (`0x7714f0`) clears no inherit bit, so a later `SetFontObject`
+    // repaints the plate's text as any FontString's.
     data.font_path = font;
-    data.font_explicit.face = true;
     data.justify.set_v(justify_v);
     rh
 }

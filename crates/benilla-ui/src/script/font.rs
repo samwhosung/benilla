@@ -11,8 +11,8 @@
 //! `OnFontChanged` (`0x77e4b0` on a font, `0x773530` then `0x770800` on a FontString); here each
 //! setter writes the [`FontObject`] and calls [`propagate`]. A local setter clears its property's
 //! bit in the dependent's inherit mask (`+0x2c`, FontString `+0xd4`) and nothing restores it, so a
-//! colour set on a FontString survives a later `SetFontObject`: [`RegionData::font_explicit`] is
-//! that mask. `+0x38` is not it; its high bits mark a held value, which the inheriting merge also
+//! colour set on a FontString survives a later `SetFontObject`: [`RegionData::font_mask`] is
+//! that mask, one bit per group ([`FontMask`]). `+0x38` is not it; its high bits mark a held value, which the inheriting merge also
 //! sets (`0x7709d3`).
 //!
 //! Not built: a `<Font inherits=…>` parent is copied at load (`Loader::do_font`), so mutating
@@ -26,7 +26,7 @@ use super::binding_abi;
 use super::object::publish_global;
 use crate::justify;
 
-use super::{FontObject, FontShadow, Model, RegionData};
+use super::{FontMask, FontObject, FontShadow, Model, RegionData};
 
 /// The shared metatable of every font-object handle.
 const REG_FONT_META: &str = "__benilla_font_meta";
@@ -102,52 +102,48 @@ fn resolve_required(verb: &str, v: &Value) -> mlua::Result<String> {
 
 // ── The live link: a font object to the regions that inherit it ──────────────────────────────
 
-/// Copy a font object's paint onto one region, skipping each property the region set itself
-/// ([`RegionData::font_explicit`]) and each the font does not hold: the reference gates every merge
-/// on the source's held-value bits (`+0x38`, the merge `0x770910`), so an empty `CreateFont` font
-/// changes nothing.
-///
-/// The outline is always copied, as [`Outline`](super::Outline) has no unset state; only an empty
-/// `CreateFont` font on an outlined FontString differs from the reference, clearing the outline.
+/// Copy every group a font object holds onto one region through its mask, as a link does
+/// (`0x770c60` marks all five changed, `0x770d0c`): [`apply`] with every group.
 pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
-    let ex = d.font_explicit;
-    if !ex.face {
+    apply(d, fo, FontMask::ALL);
+}
+
+/// `ApplyFontBlock 0x770800`: write each of `groups` that the font holds (its set bits, `0x770826`)
+/// and the region's mask passes (`word & mask`, `0x770824`). An empty `CreateFont` font holds
+/// nothing, so it changes nothing.
+pub(crate) fn apply(d: &mut RegionData, fo: &FontObject, groups: FontMask) {
+    let g = groups & d.font_mask;
+    // Face, height and flags load together (`0x7714f0`, `0x770848`), the height into `+0xe4`.
+    if g.has(FontMask::FONT) {
         if let Some(f) = &fo.font {
             d.font_path = Some(f.clone());
+            if let Some(h) = fo.height {
+                d.font_height = Some(h);
+            }
+            d.outline = fo.outline;
+            d.monochrome = fo.monochrome;
         }
     }
-    if !ex.height {
-        if let Some(h) = fo.height {
-            d.font_height = Some(h);
+    // `(~mask & word) | (font & mask)` (`0x770868`, `0x770876`).
+    if g.has(FontMask::JUSTIFY) {
+        if let Some(j) = fo.justify {
+            let m = d.justify_mask.0;
+            d.justify.0 = (d.justify.0 & !m) | (j.0 & m);
         }
     }
-    if !ex.outline {
-        d.outline = fo.outline;
-        d.monochrome = fo.monochrome;
-    }
-    if !ex.shadow {
-        if let Some(s) = fo.shadow {
-            d.font_shadow = Some(s);
-        }
-    }
-    if !ex.color {
+    if g.has(FontMask::COLOR) {
         if let Some(c) = fo.color {
             d.set_vertex_color(Some(c));
         }
     }
-    if !ex.justify_h {
-        if let Some(j) = fo.justify_h {
-            d.justify.set_h(j);
-        }
-    }
-    if !ex.justify_v {
-        if let Some(j) = fo.justify_v {
-            d.justify.set_v(j);
+    if g.has(FontMask::SHADOW) {
+        if let Some(s) = fo.shadow {
+            d.font_shadow = Some(s);
         }
     }
     // Copied as given: a FontString's reader clamps it, as its setter `0x772240` does at the merge
     // (`0x7708fd`).
-    if !ex.spacing {
+    if g.has(FontMask::SPACING) {
         if let Some(sp) = fo.spacing {
             d.spacing = sp;
         }
@@ -402,15 +398,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 justify::Set::Clears => return Ok(()),
                 justify::Set::NoMatch => return Err(justify::usage_h("Font")),
             };
-            edit(lua, &this, |fo| fo.justify_h = Some(jh))
+            edit(lua, &this, |fo| {
+                fo.justify.get_or_insert_with(Default::default).set_h(jh)
+            })
         })?,
     )?;
     m.set(
         "GetJustifyH",
         lua.create_function(|lua, this: Table| {
-            Ok(justify::name_h(
-                read(lua, &this)?.justify_h.unwrap_or_default(),
-            ))
+            Ok(read(lua, &this)?.justify.unwrap_or_default().name_h())
         })?,
     )?;
     m.set(
@@ -421,15 +417,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 justify::Set::Clears => return Ok(()),
                 justify::Set::NoMatch => return Err(justify::usage_v("Font")),
             };
-            edit(lua, &this, |fo| fo.justify_v = Some(jv))
+            edit(lua, &this, |fo| {
+                fo.justify.get_or_insert_with(Default::default).set_v(jv)
+            })
         })?,
     )?;
     m.set(
         "GetJustifyV",
         lua.create_function(|lua, this: Table| {
-            Ok(justify::name_v(
-                read(lua, &this)?.justify_v.unwrap_or_default(),
-            ))
+            Ok(read(lua, &this)?.justify.unwrap_or_default().name_v())
         })?,
     )?;
 

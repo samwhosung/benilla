@@ -277,50 +277,24 @@ impl UiScript {
                     let alpha = owner_frame.map(|f| f.effective_alpha).unwrap_or(1.0)
                         * data.alpha.unwrap_or(1.0);
                     if let Some(fo) = state_font {
-                        // The font object's paint, behind the severance mask (`font_explicit`) on
-                        // every axis as in `font::repaint`: an axis the label set itself stays.
-                        if !data.font_explicit.face {
-                            data.font_path = fo.font.clone().or(data.font_path);
-                        }
-                        if !data.font_explicit.height {
-                            data.font_height = fo.height.or(data.font_height);
-                        }
-                        if !data.font_explicit.shadow {
-                            data.font_shadow = fo.shadow.or(data.font_shadow);
-                        }
-                        if !data.font_explicit.outline {
-                            data.outline = fo.outline;
-                            data.monochrome = fo.monochrome;
-                        }
-                        // The mask, not `vertex_color.is_none()`: a label linked to its font object
-                        // already carries the normal object's colour.
-                        if !data.font_explicit.color {
-                            data.vertex_color = fo.color.or(data.vertex_color);
-                        }
-                        // The instance's own `justifyH`, else the object's; a hover or disable
+                        // The font object's paint, behind the label's inherit mask as in
+                        // `font::apply`: a group the label set itself stays.
+                        super::font::repaint(&mut data, fo);
+                        // The instance's own `justifyH` over the object's; a hover or disable
                         // swaps it here, as the client re-links the label (`0x779810`).
-                        if !data.font_explicit.justify_h {
-                            if let Some(j) = state_justify.or(fo.justify_h) {
+                        if data.font_mask.has(super::FontMask::JUSTIFY) {
+                            if let Some(j) = state_justify {
                                 data.justify.set_h(j);
-                            }
-                        }
-                        if !data.font_explicit.justify_v {
-                            if let Some(j) = fo.justify_v {
-                                data.justify.set_v(j);
                             }
                         }
                     }
                     // `Button:SetFont` sits between: a local set on the embedded font outranks its
                     // object (clearing the `inheritMask` bit, `CSimpleFontString+0xD4`, for good)
-                    // but loses to the label's own, so `font_explicit` gates it too.
+                    // but loses to the label's own, so the label's mask gates it too.
                     if let Some(bf) = button_font {
-                        if !data.font_explicit.face {
+                        if data.font_mask.has(super::FontMask::FONT) {
                             data.font_path = Some(bf.path.clone());
-                        }
-                        if !data.font_explicit.height {
                             data.font_height = Some(bf.height);
-                        }
-                        if !data.font_explicit.outline {
                             data.outline = super::Outline::flags(&bf.flags);
                             data.monochrome = bf.monochrome;
                         }
@@ -379,6 +353,7 @@ impl UiScript {
                         art
                     } else if is_text {
                         let spacing = data.line_gap();
+                        let text_height = data.text_height();
                         QuadContent::Text {
                             text: data.text,
                             color: data.vertex_color,
@@ -388,7 +363,7 @@ impl UiScript {
                             justify_v: data.justify.paint_v(),
                             font: data.font_path,
                             font_height: data.font_height,
-                            text_height: data.text_height,
+                            text_height,
                             shadow: data.font_shadow,
                             outline: data.outline,
                             monochrome: data.monochrome,

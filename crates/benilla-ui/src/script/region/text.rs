@@ -138,8 +138,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 justify::Set::NoMatch => unreachable!("returned above"),
             }
             // Every successful parse overrides the font object, the erasing one too: `0x79e6b0`
-            // sets the per-axis mask (`+0x124`) at `0x79e780`, before the branch.
-            d.font_explicit.justify_h = true;
+            // clears the axis of the per-bit mask (`+0x124`, `0x79e779`) and the group bit
+            // (`0x79e7a5`), so the font no longer reaches the other axis either.
+            d.justify_mask.0 &= !crate::justify::H_MASK;
+            d.font_mask.clear(super::super::FontMask::JUSTIFY);
             Ok(())
         })?,
     )?;
@@ -161,7 +163,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 justify::Set::Clears => d.justify.clear_v(),
                 justify::Set::NoMatch => unreachable!("returned above"),
             }
-            d.font_explicit.justify_v = true;
+            d.justify_mask.0 &= !crate::justify::V_MASK;
+            d.font_mask.clear(super::super::FontMask::JUSTIFY);
             Ok(())
         })?,
     )?;
@@ -214,14 +217,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetTextHeight: the scaled-string mode (`0x771600` alone clears the one-to-one bit `0x200`),
-    // the size magnified from the raster, uncapped. The font is untouched, so GetFont keeps the
-    // face's own height.
+    // the size magnified from the raster, uncapped. It writes the text height a font load writes
+    // (`+0xe4`, `0x77163b`), so `GetFont` answers it and the next font push replaces it; a height
+    // within 2^-22 of the current one changes nothing (`0x77161c`), the bit included. No inherit
+    // bit is cleared.
     m.set(
         "SetTextHeight",
         lua.create_function(|lua, (this, height): (Table, f32)| {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            model.region_data.entry(rh).or_default().text_height = Some(height);
+            let d = model.region_data.entry(rh).or_default();
+            if (height - d.font_height.unwrap_or(0.0)).abs() < f32::from_bits(0x3480_0000) {
+                return Ok(());
+            }
+            d.font_height = Some(height);
+            d.text_scaled = true;
             model.touch_measure(rh);
             Ok(())
         })?,

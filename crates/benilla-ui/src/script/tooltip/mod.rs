@@ -133,10 +133,9 @@ pub(super) fn write_cell(
     let d = model.region_data.entry(rh).or_default();
     let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
     d.text = Some(text);
+    // The region colour (`0x77f750`, `0x5302d0`), which clears no inherit bit: a later change to
+    // the line's font object's colour repaints it until the next write.
     d.set_vertex_color(Some(color));
-    // The line's own colour, as if set by `SetTextColor`: a later
-    // `GameTooltipText:SetTextColor` must not repaint it.
-    d.font_explicit.color = true;
     model.set_region_hidden(rh, false);
     model.touch_measure(rh);
     model.touch_layout_text(rh, was_shown);

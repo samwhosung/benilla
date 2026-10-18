@@ -58,7 +58,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let kept = d.vertex_color.map_or(1.0, |c| c[3]);
                 d.set_vertex_color(Some([r, g, b, a.unwrap_or(kept)]));
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
-                d.font_explicit.color = true;
+                d.font_mask.clear(super::super::FontMask::COLOR);
                 Ok(())
             },
         )?,

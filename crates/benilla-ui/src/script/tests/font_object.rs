@@ -149,7 +149,7 @@ fn an_inheriting_font_still_flattens_to_the_same_values() {
     assert_eq!(derived.height, Some(18.0));
     assert_eq!(derived.color, Some([1.0, 1.0, 1.0, 1.0]));
     assert_eq!(derived.outline, Outline::Normal);
-    assert_eq!(derived.justify_h, Some(JustifyH::Center));
+    assert_eq!(derived.justify.map(|j| j.name_h()), Some("CENTER"));
     assert!(derived.shadow.is_some(), "the shadow inherits too");
     assert_eq!(
         s.eval::<(String, f32, String)>("return DerivedFont:GetFont()")
@@ -231,8 +231,7 @@ fn set_font_object_takes_the_object_or_the_name() {
             color: Some([0.25, 0.5, 0.75, 1.0]),
             outline: Outline::Thick,
             monochrome: false,
-            justify_h: None,
-            justify_v: None,
+            justify: None,
             shadow: None,
             spacing: None,
         },
@@ -293,8 +292,7 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
             monochrome: false,
-            justify_h: None,
-            justify_v: None,
+            justify: None,
             shadow: None,
             spacing: None,
         },
@@ -330,8 +328,7 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
             monochrome: false,
-            justify_h: None,
-            justify_v: None,
+            justify: None,
             shadow: None,
             spacing: None,
         },
@@ -518,8 +515,11 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
             monochrome: false,
-            justify_h: Some(JustifyH::Right),
-            justify_v: None,
+            justify: Some({
+                let mut j = crate::justify::Justify::default();
+                j.set_h(JustifyH::Right);
+                j
+            }),
             shadow: None,
             spacing: None,
         },

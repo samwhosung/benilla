@@ -26,6 +26,7 @@ mod engine_updates;
 mod european_text;
 mod events;
 mod flag_args;
+mod font_links;
 mod font_object;
 mod frame_api;
 mod generic_for;

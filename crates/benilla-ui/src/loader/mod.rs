@@ -1039,19 +1039,24 @@ pub(super) fn font_object_leg(
     if let Some(sp) = el.attr("spacing").filter(|v| !v.is_empty()) {
         font.spacing = Some(crate::framexml::atof(sp));
     }
+    // Each axis writes its bits of the one justify word (`0x783f90`, `0x783fd8`).
     if let Some(j) = el.attr("justifyV").filter(|v| !v.is_empty()) {
-        font.justify_v = Some(match j.to_ascii_uppercase().as_str() {
-            "TOP" => JustifyV::Top,
-            "BOTTOM" => JustifyV::Bottom,
-            _ => JustifyV::Middle,
-        });
+        font.justify.get_or_insert_with(Default::default).set_v(
+            match j.to_ascii_uppercase().as_str() {
+                "TOP" => JustifyV::Top,
+                "BOTTOM" => JustifyV::Bottom,
+                _ => JustifyV::Middle,
+            },
+        );
     }
     if let Some(j) = el.attr("justifyH").filter(|v| !v.is_empty()) {
-        font.justify_h = Some(match j.to_ascii_uppercase().as_str() {
-            "LEFT" => JustifyH::Left,
-            "RIGHT" => JustifyH::Right,
-            _ => JustifyH::Center,
-        });
+        font.justify.get_or_insert_with(Default::default).set_h(
+            match j.to_ascii_uppercase().as_str() {
+                "LEFT" => JustifyH::Left,
+                "RIGHT" => JustifyH::Right,
+                _ => JustifyH::Center,
+            },
+        );
     }
     for child in &el.children {
         if child.tag.eq_ignore_ascii_case("Color") {

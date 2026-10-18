@@ -316,8 +316,9 @@ pub struct FontObject {
     pub outline: Outline,
     /// `monochrome=` (font flag bit 1).
     pub monochrome: bool,
-    pub justify_h: Option<JustifyH>,
-    pub justify_v: Option<JustifyV>,
+    /// The justify word (`+0x54`), both axes one group: a font that sets either axis holds the
+    /// whole word, the other axis at the constructor's (`0x212`, `0x783a87`).
+    pub justify: Option<crate::justify::Justify>,
     /// The gap between lines (`spacing=`, `SetSpacing`), stored as given (`+0x50`).
     pub spacing: Option<f32>,
 }
@@ -442,16 +443,22 @@ pub(crate) struct RegionData {
     /// live link: its paint is copied below, and
     /// [`script::font::propagate`](super::font::propagate) repaints on a change.
     pub(crate) font_object: Option<String>,
-    /// What this region set for itself, which its font object no longer overwrites.
-    pub(crate) font_explicit: FontExplicit,
+    /// The groups this region still takes from its font object, `+0xd4`; each local setter clears
+    /// its own.
+    pub(crate) font_mask: FontMask,
+    /// The justify bits the justify group writes, `+0x124` ([`JustifyMask`]).
+    pub(crate) justify_mask: JustifyMask,
     /// Resolved font face path (`SetFont`/`SetFontObject`); `None` is no font, the reference's
     /// null `+0xe0` (`font_block::has_font`).
     pub(crate) font_path: Option<String>,
-    /// Resolved font height in logical px; `None` is the renderer's default.
+    /// The text height in logical px (`+0xe4`), which a font load (`0x7714f0`, `0x771589`) and
+    /// `SetTextHeight` (`0x77163b`) both write and `GetFont` reads (`0x7727bc`); `None` is the
+    /// renderer's default.
     pub(crate) font_height: Option<f32>,
-    /// A `SetTextHeight` override: a FontString is one-to-one by default (bit `0x200`, capped at
-    /// 32 px), and only `SetTextHeight 0x771600` clears that, drawing the size uncapped.
-    pub(crate) text_height: Option<f32>,
+    /// `SetTextHeight` cleared the one-to-one bit (`0x200` of `+0x120`, `0x771627`): the text then
+    /// draws at [`Self::font_height`] uncapped, magnified from the raster. Nothing sets it back,
+    /// so a later font load keeps the string scaled.
+    pub(crate) text_scaled: bool,
     /// Resolved glyph outline (`SetFont` flags or the font object).
     pub(crate) outline: Outline,
     /// Resolved monochrome flag, from the same flags word as [`Self::outline`].
@@ -467,29 +474,68 @@ pub(crate) struct RegionData {
     pub(crate) measured: Option<MeasuredText>,
 }
 
-/// The font properties a region set for itself, which changes to its font object no longer
-/// reach: the reference's inherit mask (`FONTINSTANCE+0x2c`, a FontString's `+0xd4`; justify
-/// per axis at `+0x124`), whose bit each local setter clears. Nothing restores one, a later
-/// `SetFontObject` included, so a row that calls `SetTextColor(1, 0, 0)` stays red.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FontExplicit {
-    /// `SetFont`'s path argument, or XML `font=`.
-    pub(crate) face: bool,
-    /// `SetFont`'s height argument, or XML `<FontHeight>`.
-    pub(crate) height: bool,
-    /// `SetFont`'s flags argument, or XML `outline=` and `monochrome=`: the outline and the
-    /// monochrome flag together.
-    pub(crate) outline: bool,
-    /// `SetTextColor`/`SetVertexColor`, or a `<FontString><Color>`.
-    pub(crate) color: bool,
-    /// `SetShadowColor`/`SetShadowOffset`, or XML `<Shadow>` on the FontString itself.
-    pub(crate) shadow: bool,
-    /// `SetJustifyH`, or XML `justifyH=`.
-    pub(crate) justify_h: bool,
-    /// `SetJustifyV`, or XML `justifyV=`.
-    pub(crate) justify_v: bool,
-    /// `SetSpacing`, or XML `spacing=` (inherit bit `0x10`).
-    pub(crate) spacing: bool,
+/// The font groups a follower still takes from the font it follows: the inherit mask (a Font's
+/// `+0x2c`, a FontString's `+0xd4`), `0x1f` from each constructor (`0x783a98`, `0x770d49`). A push
+/// or a link writes a group only through its bit (`0x770800`, `0x770910`); each local setter
+/// clears its own bit and nothing sets one back, so a row that calls `SetTextColor(1, 0, 0)` stays
+/// red through any later `SetFontObject`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FontMask(u8);
+
+impl FontMask {
+    /// The face, height and flags, one group (`0x770848` loads all three).
+    pub(crate) const FONT: FontMask = FontMask(0x1);
+    /// The justify word, both axes together (`0x770859`).
+    pub(crate) const JUSTIFY: FontMask = FontMask(0x2);
+    /// The text colour, alpha included (`0x7708a2`).
+    pub(crate) const COLOR: FontMask = FontMask(0x4);
+    /// The shadow colour and offset together (`0x7708a9`).
+    pub(crate) const SHADOW: FontMask = FontMask(0x8);
+    /// The line spacing (`0x7708fd`).
+    pub(crate) const SPACING: FontMask = FontMask(0x10);
+    pub(crate) const ALL: FontMask = FontMask(0x1f);
+
+    /// Whether every bit of `g` is set.
+    pub(crate) fn has(self, g: FontMask) -> bool {
+        self.0 & g.0 == g.0
+    }
+
+    pub(crate) fn clear(&mut self, g: FontMask) {
+        self.0 &= !g.0;
+    }
+}
+
+impl Default for FontMask {
+    fn default() -> Self {
+        FontMask::ALL
+    }
+}
+
+impl std::ops::BitAnd for FontMask {
+    type Output = FontMask;
+    fn bitand(self, o: FontMask) -> FontMask {
+        FontMask(self.0 & o.0)
+    }
+}
+
+impl std::ops::BitOr for FontMask {
+    type Output = FontMask;
+    fn bitor(self, o: FontMask) -> FontMask {
+        FontMask(self.0 | o.0)
+    }
+}
+
+/// A FontString's per-bit justify mask (`+0x124`, `0x3f` from the constructor, `0x770ddd`): the
+/// justify group writes `(word & !mask) | (font & mask)` (`0x770859`-`0x770876`). `SetJustifyH`
+/// clears its three bits (`0x79e779`) and `SetJustifyV` its three (`0x79e96c`), each with the
+/// group bit; the koKR chat bubble clears the horizontal three alone (`0x4b1707`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct JustifyMask(pub(crate) u32);
+
+impl Default for JustifyMask {
+    fn default() -> Self {
+        JustifyMask(0x3f)
+    }
 }
 
 /// A cached host measurement of a FontString's laid-out text.
@@ -529,6 +575,12 @@ impl RegionData {
         self.spacing.max(0.0)
     }
 
+    /// The size a `SetTextHeight` string draws at, uncapped ([`Self::text_scaled`]); `None` for a
+    /// one-to-one string.
+    pub(crate) fn text_height(&self) -> Option<f32> {
+        self.text_scaled.then(|| self.font_height.unwrap_or(0.0))
+    }
+
     /// The shadow's x offset in UI units, 0 for none ([`MeasureRequest::shadow_x`]).
     pub(crate) fn shadow_x(&self) -> f32 {
         self.font_shadow.map_or(0.0, |s| s.offset[0])
@@ -560,7 +612,7 @@ impl RegionData {
         text.hash(&mut hasher);
         self.font_path.hash(&mut hasher);
         self.font_height.map(f32::to_bits).hash(&mut hasher);
-        self.text_height.map(f32::to_bits).hash(&mut hasher);
+        self.text_scaled.hash(&mut hasher);
         wrap_width.map(f32::to_bits).hash(&mut hasher);
         // The outline changes the measure: a THICK one steps each glyph 1 px further
         // (`GlyphStepBase 0x5ca2b0`); so does the shadow's x offset, which seeds the line.

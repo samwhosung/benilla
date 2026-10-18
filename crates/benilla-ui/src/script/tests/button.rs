@@ -1111,7 +1111,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
     assert_eq!(
         color,
         Some([1.0, 0.82, 0.0, 1.0]),
-        "an axis the label never set still inherits — severance is per-axis"
+        "a group the label never set still inherits: the mask is per group"
     );
 }
 

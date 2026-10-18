@@ -80,8 +80,7 @@ fn set_font_object_repoints_fontstring() {
             color: Some([0.0, 0.0, 0.0, 1.0]),
             outline: Outline::None,
             monochrome: false,
-            justify_h: None,
-            justify_v: None,
+            justify: None,
             shadow: None,
             spacing: None,
         },
@@ -94,8 +93,7 @@ fn set_font_object_repoints_fontstring() {
             color: Some([1.0, 1.0, 1.0, 1.0]),
             outline: Outline::None,
             monochrome: false,
-            justify_h: None,
-            justify_v: None,
+            justify: None,
             shadow: None,
             spacing: None,
         },
@@ -195,15 +193,22 @@ fn justify_v_defaults_middle_and_overrides() {
             color: None,
             outline: Outline::None,
             monochrome: false,
-            justify_h: None,
-            justify_v: Some(JustifyV::Top),
+            justify: Some({
+                let mut j = crate::justify::Justify::default();
+                j.set_v(JustifyV::Top);
+                j
+            }),
             shadow: None,
             spacing: None,
         },
     );
     s.run("fs:SetFontObject('TopFont')").unwrap();
     s.resolve();
-    assert_eq!(justify_v(&s), JustifyV::Bottom, "severance is permanent");
+    assert_eq!(
+        justify_v(&s),
+        JustifyV::Bottom,
+        "a cleared inherit bit is never set back"
+    );
 
     // A string that never set the axis takes the object's justification.
     s.run(

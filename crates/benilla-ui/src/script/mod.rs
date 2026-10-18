@@ -329,7 +329,7 @@ pub use trainer::{
     TrainerAbilityReq, TrainerGroup, TrainerService, TrainerServiceCategory, TrainerSkillReq,
     TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
-pub(crate) use types::{monochrome_flag, FontExplicit, MeasuredText, RegionData};
+pub(crate) use types::{monochrome_flag, FontMask, MeasuredText, RegionData};
 pub use types::{
     BlendMode, EditAction, EditBoxAdvanceRequest, EditBoxTextUi, EditOutcome, EditUnit,
     ExtractedQuad, FontObject, FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest,

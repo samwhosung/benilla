@@ -294,10 +294,12 @@ fn unit_combat_drives_the_player_hit_indicator() {
         )
         .unwrap();
     assert!(ok, "physical wound paints the amount ({:?})", s.errors());
+    // `NumberFontNormalHuge` is already 30 (`Fonts.xml:174`), so `SetTextHeight(30)` changes
+    // nothing (`0x77161c`) and the string stays one-to-one, drawn at its font's 30.
     assert_eq!(
         extracted_text_height(&mut s, "17"),
-        Some(30.0),
-        "base height 30 (the SetTextHeight regime)"
+        None,
+        "base height 30 is the font's own, one-to-one"
     );
 
     s.fire_event("UNIT_COMBAT", ev("player", "WOUND", "CRITICAL", 64, 4));

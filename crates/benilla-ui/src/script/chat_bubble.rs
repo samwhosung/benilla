@@ -308,9 +308,9 @@ fn create(
         .expect("live bubble");
     // The `NAMEPLATE_FONT` global's font with no flags (`0x4b0b2b`-`0x4b0b42`): no outline, no
     // shadow.
+    // The engine's own load (`0x7714f0`) clears no inherit bit.
     let data = model.region_data.entry(text).or_default();
     data.font_path = font;
-    data.font_explicit.face = true;
     model.touch_layout_frame(frame);
     model.touch_layout_region(tail);
     model.touch_layout_region(text);
@@ -408,7 +408,7 @@ fn set_line(
     if model.locale == KO_KR {
         let data = model.region_data.entry(text).or_default();
         data.justify.set_h(super::types::JustifyH::Left);
-        data.font_explicit.justify_h = true;
+        data.justify_mask.0 &= !crate::justify::H_MASK;
     }
     fit_width(model, i, g);
     if !was_shown {

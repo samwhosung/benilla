@@ -225,7 +225,7 @@ pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option
             id: model.region_to_id.get(&rh).copied().unwrap_or(0),
             font: d.font_path.clone(),
             height: d.font_height,
-            text_height: d.text_height,
+            text_height: d.text_height(),
             wrap_width: None,
             outline: d.outline,
             // One line has no gap: `0x5c2070` charges `(N−1)·gap`.

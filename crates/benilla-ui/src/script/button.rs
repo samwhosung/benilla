@@ -100,7 +100,8 @@ fn normal_font_justify(model: &Model, bs: &ButtonState) -> Justify {
         bs.normal_font
             .as_deref()
             .and_then(|n| model.font_object(n))
-            .and_then(|fo| fo.justify_h)
+            .and_then(|fo| fo.justify)
+            .map(|j| j.paint_h())
     };
     if let Some(j) = bs.normal_justify_h.or_else(inherited) {
         word.set_h(j);
@@ -138,7 +139,7 @@ pub(super) fn refresh_label(model: &mut Model, h: FrameHandle) {
 /// `0x770c60`, so its `GetFont` answers what it paints; the stock `DropDownList1` reads it
 /// (`UIDropDownMenu.xml:11`). Deviation: a hovered or disabled label still reports the normal
 /// font, since the state fonts are overlaid at paint and a link made here would outlive the state.
-/// `font::repaint` keeps what the label set itself (its severance mask, `CSimpleFontString+0xd4`),
+/// `font::repaint` keeps what the label set itself (its inherit mask, `CSimpleFontString+0xd4`),
 /// and the local justify obeys the same mask.
 fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
     let (rh, name, local_justify) = {
@@ -165,7 +166,7 @@ fn apply_normal_font(model: &mut Model, owner: FrameHandle) {
         }
     }
     if let Some(j) = local_justify {
-        if !d.font_explicit.justify_h {
+        if d.font_mask.has(super::FontMask::JUSTIFY) {
             d.justify.set_h(j);
         }
     }

@@ -2102,7 +2102,7 @@ pub(super) fn measure_request_at(
     let text = d.text.clone().filter(|t| !t.is_empty())?;
     let font = d.font_path.clone();
     let height = d.font_height;
-    let text_height = d.text_height;
+    let text_height = d.text_height();
     let outline = d.outline;
     let spacing = d.line_gap();
     let shadow_x = d.shadow_x();
