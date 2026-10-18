@@ -338,6 +338,16 @@ impl Loader<'_> {
         crate::script::event::invoke_with_globals(self.lua, wrapper.clone(), func, Vec::new())
     }
 
+    /// An object's name as the reference's load lines print it: `GetName`, else `<unnamed>`
+    /// (`0x84c7f0`).
+    pub(super) fn object_name(&self, wrapper: &Table) -> String {
+        wrapper
+            .call_method::<Option<String>>("GetName", ())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "<unnamed>".to_string())
+    }
+
     /// A severity-1 line into the document's record (the `[status+0xc]` call every `LoadXML` logs
     /// through), retained as a warning too.
     pub(super) fn status_warning(&mut self, line: String) {
@@ -731,7 +741,7 @@ impl Loader<'_> {
         //      hook, its own OnShow and OnHide fire nothing.
         crate::script::visibility::set_load_window(self.lua(), wrapper, true);
         // 2 · LoadXML attributes (`0x769820`).
-        self.apply_attrs(el, wrapper, dbg_name);
+        self.apply_attrs(el, levels, wrapper, dbg_name);
         // 3 · <Size> and 4 · <Anchors>, each level's own (the CLayoutFrame geometry base,
         //     `0x767800`).
         for level in levels {

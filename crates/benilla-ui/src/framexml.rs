@@ -584,6 +584,27 @@ pub fn resolve_name(raw: &str, parent_name: &str) -> String {
     }
 }
 
+/// The client's integer parse `0x64ac60`, which the frame loader reads `frameLevel=` with
+/// (`0x7699c5`): an optional `-`, then the leading digits, wrapping in 32 bits; no whitespace skip
+/// and no `+`, so `" 5"` and `"+5"` are 0 and `"5a"` is 5.
+pub(crate) fn atoi(s: &str) -> i32 {
+    let (negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i32, |n, b| {
+            n.wrapping_mul(10).wrapping_add(i32::from(b - b'0'))
+        });
+    if negative {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
 /// C's `atof` (`0x64aaa0`), which the reference reads numeric attributes with (SimpleHTML's
 /// `width=` and `height=`, `spacing=`): the longest numeric prefix after leading whitespace, 0 when
 /// there is none, so `"12px"` is 12.
@@ -970,7 +991,19 @@ print(x)</Script>
 
 #[cfg(test)]
 mod atof_tests {
-    use super::atof;
+    use super::{atof, atoi};
+
+    #[test]
+    fn atoi_takes_a_minus_and_the_leading_digits() {
+        assert_eq!(atoi("5"), 5);
+        assert_eq!(atoi("5a"), 5);
+        assert_eq!(atoi("-3"), -3);
+        assert_eq!(atoi("+5"), 0);
+        assert_eq!(atoi(" 5"), 0);
+        assert_eq!(atoi(""), 0);
+        assert_eq!(atoi("-"), 0);
+        assert_eq!(atoi("4294967297"), 1);
+    }
 
     #[test]
     fn atof_takes_the_numeric_prefix() {

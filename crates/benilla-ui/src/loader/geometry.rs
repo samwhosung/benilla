@@ -6,8 +6,14 @@ use super::{abs_dim, children_named, Loader};
 
 impl Loader<'_> {
     /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
-    /// own (`0x76cac0`).
-    pub(super) fn apply_attrs(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
+    /// own (`0x76cac0`): from the merged `el`, and `frameLevel` from each of `levels`.
+    pub(super) fn apply_attrs(
+        &mut self,
+        el: &Element,
+        levels: &[Element],
+        wrapper: &Table,
+        dbg: &str,
+    ) {
         if el.attr_bool("hidden") {
             self.call(wrapper, "Hide", (), dbg);
         }
@@ -23,9 +29,19 @@ impl Loader<'_> {
                     .push(format!("{dbg}: Unknown frame strata: {strata}"));
             }
         }
-        if let Some(level) = el.attr("frameLevel") {
-            if let Ok(n) = level.parse::<i64>() {
+        // `frameLevel=` per level, read with `atoi` (`0x7699c5`): above 0 it is set (`0x76a4f0`,
+        // the setter `SetFrameLevel` calls), else logged (`0x878628`) and the level kept, so an
+        // instance's `"0"` leaves its template's level.
+        for level in levels {
+            let Some(value) = level.attr("frameLevel").filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let n = framexml::atoi(value);
+            if n > 0 {
                 self.call(wrapper, "SetFrameLevel", n, dbg);
+            } else {
+                let name = self.object_name(wrapper);
+                self.status_warning(format!("Frame {name}: Unknown frame level: {value}"));
             }
         }
         if let Some(alpha) = el.attr("alpha") {

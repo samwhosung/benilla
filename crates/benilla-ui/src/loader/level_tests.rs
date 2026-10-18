@@ -79,3 +79,49 @@ fn set_all_points_yields_to_its_own_nodes_anchors_only() {
     // The instance's all-points clears the template's CENTER.
     assert_eq!(points("InstanceAll"), 2);
 }
+
+/// `0x7699ad`: `frameLevel` is read with `atoi` per level and set only above 0; otherwise the line
+/// `0x878628` is logged and the level stays.
+#[test]
+fn a_frame_level_of_zero_or_less_is_logged_and_kept_per_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="Host" frameLevel="3"/>
+            <Frame name="Plain" parent="Host"/>
+            <Frame name="Zero" parent="Host" frameLevel="0"/>
+            <Frame name="Negative" parent="Host" frameLevel="-3"/>
+            <Frame name="Trailing" parent="Host" frameLevel="5a"/>
+            <Frame name="Plus" parent="Host" frameLevel="+5"/>
+            <Frame name="LevelSeven" frameLevel="7" virtual="true"/>
+            <Frame name="OverSeven" parent="Host" inherits="LevelSeven" frameLevel="0"/>
+        </Ui>"#,
+    );
+    let level = |name: &str| {
+        s.eval::<i64>(&format!("return {name}:GetFrameLevel()"))
+            .unwrap()
+    };
+    let plain = level("Plain");
+    assert_eq!(plain, 4, "a child sits one above its parent");
+    assert_eq!(level("Zero"), plain);
+    assert_eq!(level("Negative"), plain);
+    assert_eq!(level("Plus"), plain);
+    assert_eq!(level("Trailing"), 5);
+    assert_eq!(level("OverSeven"), 7, "the template's level stands");
+    for (name, value) in [
+        ("Zero", "0"),
+        ("Negative", "-3"),
+        ("Plus", "+5"),
+        ("OverSeven", "0"),
+    ] {
+        assert!(
+            has_line(
+                &report,
+                &format!("Frame {name}: Unknown frame level: {value}")
+            ),
+            "{name}: {:?}",
+            report.warnings
+        );
+    }
+}
