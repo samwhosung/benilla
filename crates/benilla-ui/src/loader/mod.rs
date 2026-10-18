@@ -625,10 +625,11 @@ impl Loader<'_> {
     /// links it to that font (`0x783ce6`; a miss is logged, `0x87a51c`), a `font=` naming a font
     /// links it there instead (`0x783d22`), and any other `font=` is a file that needs the node's
     /// own first `<FontHeight>` above 0 and sets the flags word whole from `outline=` and
-    /// `monochrome=` (`0x783db1`-`0x783ea3`); without the height the load stops (`0x783dae`). Then
-    /// `spacing=` with `atof` (`0x783ee0`), `justifyV`, `justifyH` and each `<Color>` and `<Shadow>`
-    /// child, the last of each winning. Each attribute is a setter's write, clearing its inherit bit
-    /// (`0x783ea9`-`0x784100`) and pushing to what already follows the font.
+    /// `monochrome=` (`0x783db1`-`0x783ea3`) when it loads; without the height the load stops
+    /// (`0x783dae`). Then `spacing=` with `atof` (`0x783ee0`), `justifyV`, `justifyH` and each
+    /// `<Color>` and `<Shadow>` child, the last of each winning. Each attribute is a setter's write,
+    /// clearing its inherit bit (`0x783ea9`-`0x784100`) and pushing to what already follows the
+    /// font.
     pub(super) fn load_font_node(
         &mut self,
         el: &Element,
@@ -660,12 +661,33 @@ impl Loader<'_> {
                 let outline = el.attr("outline").map(Outline::parse).unwrap_or_default();
                 // Any non-empty `monochrome=` sets the flag (`0x783e01`-`0x783e14`), even "false".
                 let monochrome = el.attr("monochrome").is_some_and(|v| !v.is_empty());
-                font::set(&mut self.model(), id, FontMask::FONT, |fo| {
-                    fo.font = Some(path.to_string());
-                    fo.height = Some(height);
-                    fo.outline = outline;
-                    fo.monochrome = monochrome;
-                });
+                // The font the node already holds (the path ignoring case, the height within 2⁻²²,
+                // the same flags) is kept as spelled and still clears the bit (`0x783e17`-`0x783e5d`
+                // → `0x783ea9`); any other loads first (`0x783e7c`). A file that fails is logged
+                // (`0x87a4c8`) and the node goes on to `spacing`, keeping what it follows.
+                let mut model = self.model();
+                let fo = &model.fonts.get(id).block;
+                let held = fo
+                    .font
+                    .as_deref()
+                    .is_some_and(|p| p.eq_ignore_ascii_case(path))
+                    && fo
+                        .height
+                        .is_some_and(|h| (h - height).abs() < crate::script::SAME_FONT_HEIGHT)
+                    && (fo.outline, fo.monochrome) == (outline, monochrome);
+                if held || crate::script::face_loads(&model, path) {
+                    font::set(&mut model, id, FontMask::FONT, |fo| {
+                        if !held {
+                            fo.font = Some(path.to_string());
+                            fo.height = Some(height);
+                            fo.outline = outline;
+                            fo.monochrome = monochrome;
+                        }
+                    });
+                } else {
+                    drop(model);
+                    self.status_warning(format!("Font {name}: Unable to load font file {path}"));
+                }
             }
             None => {}
         }

@@ -2109,6 +2109,40 @@ mod tests {
         assert_eq!(failed(&mut glue), Vec::<String>::new(), "the glue");
     }
 
+    /// An XML font file that does not load is logged and leaves the font as it was (`0x771226`,
+    /// `0x783eaf`). No stock font the core or the glue declares fails on an install, so a line
+    /// here is benilla's font probe missing a face the reference opens, which would strip a stock
+    /// font.
+    #[test]
+    fn every_font_file_the_stock_interface_loads_opens() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let probe = |s: &mut UiScript| {
+            let chain = std::sync::Mutex::new(benilla_formats::open_chain(&data).expect("chain"));
+            let loose = benilla_assets::LooseFiles::install();
+            s.set_font_probe(Box::new(move |path| {
+                super::super::lifecycle::font_found(&chain, &loose, path)
+            }));
+        };
+        let failed = |s: &mut UiScript| -> Vec<String> {
+            s.finish_ui_load_log();
+            let mut lines: Vec<String> = s.diagnostics().into_iter().map(|d| d.message).collect();
+            lines.extend(s.take_load_log_writes().iter().map(|w| format!("{w:?}")));
+            lines.retain(|l| l.contains("Unable to load font file"));
+            lines
+        };
+        let mut core = UiScript::new().expect("VM");
+        core.set_screen_size(1024.0, 768.0);
+        probe(&mut core);
+        super::super::manifest::load_default_ui(&core);
+        assert_eq!(failed(&mut core), Vec::<String>::new(), "the core");
+
+        let mut glue = UiScript::new_glue().expect("VM");
+        glue.set_screen_size(1024.0, 768.0);
+        probe(&mut glue);
+        super::super::glue::load_glue(&mut glue);
+        assert_eq!(failed(&mut glue), Vec::<String>::new(), "the glue");
+    }
+
     fn seat_a_player(s: &mut UiScript) {
         s.set_unit(
             "player",

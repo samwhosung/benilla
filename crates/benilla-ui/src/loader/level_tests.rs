@@ -572,3 +572,73 @@ fn a_font_element_reads_its_flags_only_beside_its_own_font_file() {
         "Couldn't find inherited font: LevelNoSuchFont"
     ));
 }
+
+const NOPE: &str = r"Fonts\NOPE.TTF";
+
+/// `0x770f40`, `0x783c30`: a `font=` file that fails to load writes nothing, is logged
+/// (`0x878dc8`, `0x87a4c8`) and the node goes on to `spacing`, so a FontString or a Font keeps the
+/// font it follows, and keeps following it. The font already held skips the load, keeps its
+/// spelling and clears the bit (`0x771541`, `0x783e5d` → `0x783ea9`).
+#[test]
+fn an_xml_font_file_that_fails_to_load_keeps_the_followed_font() {
+    let mut s = ui();
+    load_str(
+        &s,
+        r#"<Ui><Font name="LoadHeld" font="Fonts\HELD.TTF" virtual="true">
+            <FontHeight><AbsValue val="10"/></FontHeight>
+        </Font></Ui>"#,
+    );
+    s.set_font_probe(Box::new(|path: &str| {
+        !path.contains("NOPE") && !path.contains("HELD")
+    }));
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="LoadParent" font="Fonts\FRIZQT__.TTF" outline="NORMAL" virtual="true">
+                <FontHeight><AbsValue val="12"/></FontHeight>
+            </Font>
+            <Font name="LoadChild" inherits="LoadParent" font="Fonts\NOPE.TTF" spacing="2"
+                  virtual="true">
+                <FontHeight><AbsValue val="20"/></FontHeight>
+            </Font>
+            <Font name="LoadHeldAgain" inherits="LoadHeld" font="fonts\held.ttf" virtual="true">
+                <FontHeight><AbsValue val="10"/></FontHeight>
+            </Font>
+            <Frame name="LoadHost">
+                <Layers><Layer>
+                    <FontString name="LoadMissed" inherits="LoadParent" font="Fonts\NOPE.TTF"
+                                spacing="3">
+                        <FontHeight><AbsValue val="20"/></FontHeight>
+                    </FontString>
+                    <FontString name="LoadKept" inherits="LoadHeld" font="FONTS\HELD.TTF">
+                        <FontHeight><AbsValue val="10"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    let font = |s: &UiScript, name: &str| {
+        s.eval::<String>(&format!(
+            "local f, h, flags = {name}:GetFont() \
+             return table.concat({{f, h, flags, {name}:GetSpacing()}}, ' ')"
+        ))
+        .unwrap()
+    };
+    assert_eq!(font(&s, "LoadChild"), r"Fonts\FRIZQT__.TTF 12 OUTLINE 2");
+    assert_eq!(font(&s, "LoadMissed"), r"Fonts\FRIZQT__.TTF 12 OUTLINE 3");
+    for line in [
+        format!("Font LoadChild: Unable to load font file {NOPE}"),
+        format!("FontString LoadMissed: Unable to load font file {NOPE}"),
+    ] {
+        assert!(has_line(&report, &line), "{line}: {:?}", report.warnings);
+    }
+    assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+    // Their font bit is still set, so the parent's next font reaches them; the held font's
+    // string and font cleared theirs.
+    s.run(r#"LoadParent:SetFont("Fonts\\ARIALN.TTF", 9) LoadHeld:SetFont("Fonts\\ARIALN.TTF", 9)"#)
+        .unwrap();
+    assert_eq!(font(&s, "LoadChild"), r"Fonts\ARIALN.TTF 9  2");
+    assert_eq!(font(&s, "LoadMissed"), r"Fonts\ARIALN.TTF 9  3");
+    assert!(font(&s, "LoadKept").starts_with(r"Fonts\HELD.TTF 10 "));
+    assert!(font(&s, "LoadHeldAgain").starts_with(r"Fonts\HELD.TTF 10 "));
+}

@@ -283,6 +283,7 @@ pub use video_pairs::VIDEO_PAIR_CVARS;
 pub use worldmap_arrow::ARROW_MODEL;
 
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
+pub(crate) use font_block::{face_loads, SAME_FONT_HEIGHT};
 pub use inspect::{InspectView, UnitReach};
 pub use item_stats::{item_usable, ItemSetView, ItemTemplateView, PlayerReqState};
 pub use item_text::ItemTextState;
@@ -310,8 +311,8 @@ pub use quest::{
 };
 pub use quest_log::{QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS};
 pub(crate) use region::{
-    apply_font_parts, apply_texture_name, apply_wrap_attrs, implicit_creation_anchor_lua,
-    install_loaded_texture, load_blend_mode, load_texture_file, load_texture_name,
+    apply_texture_name, apply_wrap_attrs, implicit_creation_anchor_lua, install_loaded_texture,
+    load_blend_mode, load_texture_file, load_texture_name, load_xml_font_file,
     texture_name_verdict, FileLoad,
 };
 pub use reputation::{FactionEntry, ReputationSend, ReputationState};

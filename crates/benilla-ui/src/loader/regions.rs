@@ -217,8 +217,8 @@ impl Loader<'_> {
     /// `justifyV`, `justifyH` and the `<Color>` and `<Shadow>` children, in that order. A `font=`
     /// file needs this node's own first `<FontHeight>` above 0 (`0x77112f`-`0x771154`); without
     /// one the level reports `0x878e10` and returns (`0x771191`), so nothing after the font is
-    /// read on it, whatever height a template gave. `with_text` is false for a Button's label,
-    /// whose text the button sets.
+    /// read on it, whatever height a template gave. A file that does not load only skips the
+    /// font. `with_text` is false for a Button's label, whose text the button sets.
     pub(super) fn load_fontstring_level(
         &mut self,
         node: &Element,
@@ -289,14 +289,17 @@ impl Loader<'_> {
                         .unwrap_or_default(),
                     node.attr("monochrome").is_some_and(|v| !v.is_empty()),
                 );
-                if let Err(e) = crate::script::apply_font_parts(
-                    self.lua,
-                    wrapper,
-                    Some(path.to_string()),
-                    Some(height),
-                    Some(flags),
-                ) {
-                    self.report.fault(format!("{dbg}: region font attrs: {e}"));
+                // A file that fails to load is logged (`0x878dc8`, `0x771226`-`0x771251`) and the
+                // level goes on to `spacing`, the string keeping the font it had.
+                match crate::script::load_xml_font_file(self.lua, wrapper, path, height, flags) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let name = self.object_name(wrapper);
+                        self.status_warning(format!(
+                            "FontString {name}: Unable to load font file {path}"
+                        ));
+                    }
+                    Err(e) => self.report.fault(format!("{dbg}: region font attrs: {e}")),
                 }
             }
             None => {}

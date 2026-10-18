@@ -213,11 +213,20 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
         if let Some(&cached) = seen.borrow().get(path) {
             return cached;
         }
-        let found = font_loose.find(path, LooseOpen::BareNameFirst).is_some()
-            || font_chain.lock_recover().contains(path);
+        let found = font_found(&font_chain, &font_loose, path);
         seen.borrow_mut().insert(path.to_string(), found);
         found
     }));
+}
+
+/// Whether a font face's open of `path` finds a file: the loose files by bare name first, then the
+/// chain, as `ui_text::engine`'s face loader reads them.
+pub(super) fn font_found(
+    chain: &std::sync::Mutex<benilla_formats::Chain>,
+    loose: &benilla_assets::LooseFiles,
+    path: &str,
+) -> bool {
+    loose.find(path, LooseOpen::BareNameFirst).is_some() || chain.lock_recover().contains(path)
 }
 
 /// Whether this run wants the player UI: always outside a capture, and in one only when opted in

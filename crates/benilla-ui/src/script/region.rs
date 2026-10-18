@@ -285,41 +285,42 @@ pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
     model.note_art(rh);
 }
 
-/// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, and the flags word of
-/// `outline=` and `monochrome=`), any of which may be absent. Not the `SetFont` binding: the
-/// reference applies XML fonts in `LoadXML`, and its `SetFont` requires a path and a height
-/// (`0x87c69c`). Each part is an explicit set, so it survives a change to the inherited font
-/// object; an empty `font=` keeps the inherited face.
-pub(crate) fn apply_font_parts(
+/// A FontString's XML font file (`font=`, its `<FontHeight>` and the flags word of `outline=` and
+/// `monochrome=`) through the string's own `SetFont` (`0x771214` → `0x7714f0`), not the Lua
+/// binding. The font it already holds, the path matched ignoring case, the height within 2⁻²² and
+/// the same flags, is a success that writes nothing (`0x771502`-`0x771541`); any other goes to the font
+/// load (`0x44d040`), whose failure writes nothing (`0x771575`), answered `false`. A success is an
+/// explicit set that clears the font bit (`0x77121d`), so it outlasts the followed font object's.
+pub(crate) fn load_xml_font_file(
     lua: &Lua,
     this: &Table,
-    path: Option<String>,
-    height: Option<f32>,
-    flags: Option<(super::Outline, bool)>,
-) -> mlua::Result<()> {
+    path: &str,
+    height: f32,
+    (outline, monochrome): (super::Outline, bool),
+) -> mlua::Result<bool> {
     let rh = region_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model");
+    let held = model.region_data.get(&rh).is_some_and(|d| {
+        d.font_path
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(path))
+            && d.font_height
+                .is_some_and(|h| (h - height).abs() < super::SAME_FONT_HEIGHT)
+            && (d.outline, d.monochrome) == (outline, monochrome)
+    });
+    if !held && !super::face_loads(&model, path) {
+        return Ok(false);
+    }
     let d = model.region_data.entry(rh).or_default();
-    let mut any = false;
-    if let Some(p) = path.filter(|p| !p.is_empty()) {
-        d.font_path = Some(p);
-        any = true;
-    }
-    if let Some(h) = height {
-        d.font_height = Some(h);
-        any = true;
-    }
-    if let Some((outline, monochrome)) = flags {
+    if !held {
+        d.font_path = Some(path.to_string());
+        d.font_height = Some(height);
         d.outline = outline;
         d.monochrome = monochrome;
-        any = true;
     }
-    // A loaded file clears the font bit (`0x77121d`), the face, height and flags being one group.
-    if any {
-        d.font_mask.clear(super::FontMask::FONT);
-    }
+    d.font_mask.clear(super::FontMask::FONT);
     model.touch_measure(rh);
-    Ok(())
+    Ok(true)
 }
 
 /// A FontString's XML `nonspacewrap` and `maxLines` (`0x77103f`-`0x7710cd`), each written only when

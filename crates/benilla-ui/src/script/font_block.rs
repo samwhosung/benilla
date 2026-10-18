@@ -149,10 +149,14 @@ impl Load {
 
 /// Whether the font load (`0x44d040`, the factory `0x5c1ae0`) finds `path`: never for an empty one
 /// (`0x44d059`), else the host's probe, as only the store knows the files; with no probe, any
-/// non-empty path loads.
-pub(super) fn face_loads(model: &Model, path: &str) -> bool {
+/// non-empty path loads. The XML font legs ask it too (`0x771214`, `0x783e7c`).
+pub(crate) fn face_loads(model: &Model, path: &str) -> bool {
     !path.is_empty() && model.font_probe.as_ref().is_none_or(|probe| probe(path))
 }
+
+/// The tolerance both XML font legs read a held height as unchanged within, 2⁻²² (`0x8029d4`, at
+/// the FontString's `0x77152a` and the Font's `0x783e4d`).
+pub(crate) const SAME_FONT_HEIGHT: f32 = 1.0 / 4_194_304.0;
 
 /// The shared path's verdict (`0x79f210`): no load for a height of 0 or less
 /// (`0x79f2f1`-`0x79f2ff`), else [`face_loads`]. A failure writes nothing (`0x79f30f` →
