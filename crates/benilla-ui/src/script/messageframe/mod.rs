@@ -678,7 +678,7 @@ impl UiScript {
                 (fr.bottom + used, fr.bottom + used + band_h)
             };
             used += advance(line.rows);
-            if line.alpha <= 0.0 {
+            if !line.shown || line.alpha <= 0.0 {
                 continue; // faded: holds its rows, draws nothing
             }
             out.push(ExtractedQuad {

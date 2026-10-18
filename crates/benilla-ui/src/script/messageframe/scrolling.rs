@@ -407,9 +407,9 @@ mod tests {
             ..Default::default()
         };
         s.add("x".into(), 1.0, 1.0, 1.0);
-        s.tick(0.6); // spends timeVisible, still full this tick
-        assert_eq!(s.lines[0].alpha, 1.0);
-        s.tick(0.1); // past phase 1 with no ramp: straight to 0
+        // The tick that spends timeVisible, with no fade time, hides it (`0x7884f9`).
+        s.tick(0.6);
+        assert!(!s.lines[0].shown);
         assert_eq!(s.lines[0].alpha, 0.0);
     }
 
@@ -1112,12 +1112,19 @@ mod tests {
             s.eval::<f64>("return CF:GetFadeDuration()").unwrap(),
             f64::from(0.1f32)
         );
-        // Faded out, a line loses its shown flag (`0x788525`) and keeps its timers.
+        // At time 0 with no fade a line never hides (`0x78850e`), and is rewritten.
         s.run("CF:SetTimeVisible(0) CF:SetFadeDuration(0)").unwrap();
+        s.tick(0.1);
+        assert_eq!(alphas(&s)[2..], [1.0, 1.0, 1.0]);
+        s.run("CF:SetTimeVisible(5)").unwrap();
+        assert_eq!(timers(&s)[4], (5.0, 0.0));
+        // Hidden at the end of its visible time (`0x788525`), a line keeps its timers.
+        s.run("CF:SetTimeVisible(0.05)").unwrap();
         s.tick(0.1);
         assert_eq!(alphas(&s)[2..], [0.0, 0.0, 0.0]);
         s.run("CF:SetTimeVisible(5)").unwrap();
-        assert_eq!(timers(&s)[4], (0.0, 0.0), "a hidden line is not rewritten");
+        let (time, _) = timers(&s)[4];
+        assert!(time < 0.0, "a hidden line is not rewritten: {time}");
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
@@ -1157,6 +1164,71 @@ mod tests {
             "a hidden relayout still fires; the show's does not move"
         );
         assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The fade keys on each line's own countdowns (`0x7884c1`-`0x788558`): a line whose visible
+    /// time runs out with no fade time hides that same tick; one at time 0 with no fade time
+    /// never hides; a negative visible time is nonzero, so it counts down and hides or starts the
+    /// fade; a fade that lands exactly on 0 stays shown at alpha 0.
+    #[test]
+    fn the_fade_keys_on_each_lines_own_countdowns() {
+        let fresh = |time: f32, fade: f32| {
+            let mut s = ScrollingMessageState::default();
+            s.add("x".into(), 1.0, 1.0, 1.0);
+            s.lines[0].time_left = time;
+            s.lines[0].fade_left = fade;
+            s.links_dirty = false;
+            s
+        };
+        let mut s = fresh(0.5, 0.0);
+        s.tick(0.6);
+        assert!(
+            !s.lines[0].shown && s.links_dirty,
+            "hidden the tick the time ran out"
+        );
+        let mut s = fresh(0.0, 0.0);
+        for _ in 0..5 {
+            s.tick(1.0);
+        }
+        assert!(s.lines[0].shown && s.lines[0].alpha == 1.0, "never hides");
+        let mut s = fresh(-1.0, 2.0);
+        s.tick(0.25);
+        assert_eq!(
+            (s.lines[0].time_left, s.lines[0].alpha),
+            (0.0, 1.0),
+            "a negative time is below 0 at once: the fade starts next tick"
+        );
+        s.tick(1.0);
+        assert_eq!(s.lines[0].fade_left, 1.0);
+        let mut s = fresh(-1.0, 0.0);
+        s.tick(0.25);
+        assert!(!s.lines[0].shown);
+        let mut s = fresh(0.0, 1.0);
+        s.tick(1.0);
+        assert!(
+            s.lines[0].shown && s.lines[0].alpha == 0.0,
+            "exactly 0 stays shown"
+        );
+        s.tick(1.0);
+        assert!(s.lines[0].shown, "and then never moves");
+    }
+
+    /// The alpha byte is the low byte of `ftol(left / fadeDuration · 255)` with no clamp
+    /// (`0x788553`, `0x788558`): a line whose fade time outlasts the frame's wraps.
+    #[test]
+    fn the_fade_alpha_byte_wraps_unclamped() {
+        let mut s = ScrollingMessageState {
+            time_visible: 0.0,
+            fade_duration: 1.0,
+            ..Default::default()
+        };
+        s.add("x".into(), 1.0, 1.0, 1.0);
+        s.lines[0].fade_left = 3.0;
+        s.tick(0.1);
+        let left = f64::from(3.0f32) - f64::from(0.1f32);
+        let byte = (left * 255.0) as i64 as u8;
+        assert_ne!(byte, 255, "wrapped, not clamped");
+        assert_eq!(s.lines[0].alpha, f32::from(byte) / 255.0);
     }
 
     /// `CF` holds `l0`..`l5`, three rows high, scrolled up one line (shown `l4 l3 l2`, walked
@@ -1411,13 +1483,13 @@ mod tests {
              f:SetPoint('BOTTOMLEFT', 0, 0)\n\
              f:SetWidth(430)\n\
              f:SetHeight(120)\n\
-             f:SetTimeVisible(0)\n\
+             f:SetTimeVisible(0.05)\n\
              f:SetFadeDuration(0)",
         )
         .unwrap();
         s.run("CF:AddMessage('doomed', 1, 1, 1)").unwrap();
-        // Two ticks retire 'doomed' (phase 1, then the snap with no ramp); then fresh lines land.
-        s.tick(0.1);
+        // The tick that spends its visible time hides 'doomed', which has no fade time; then
+        // fresh lines land.
         s.tick(0.1);
         s.run("CF:SetTimeVisible(120)").unwrap();
         s.run("CF:AddMessage('a', 1, 1, 1)").unwrap();

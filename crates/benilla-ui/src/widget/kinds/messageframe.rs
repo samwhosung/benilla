@@ -599,54 +599,63 @@ impl ScrollingMessageState {
     /// Advance the fade by `dt` (OnUpdate, `0x788460`): only with fading on, at the bottom and
     /// lines shown, as cached (`0x788480`, `0x78848c`, `0x78849b`), and over the lines shown alone,
     /// so a line out of view keeps its fade where it stopped. The scroll entries, not this, bring
-    /// faded lines back. Both countdowns store `f32` while the ramp reads the unrounded x87 value
-    /// (`fst` without pop, `0x7884d7`, `0x788544`), and phase 1's overshoot is dropped, so the fade
-    /// starts whole on the next tick.
+    /// faded lines back. Each line keys on its own countdowns, each tested `!= 0` (`test ah,0x44`):
+    /// a nonzero visible time counts down and is stored (`0x7884d7`); once below 0 the line hides if
+    /// its fade time is 0 (`0x7884f9`) and otherwise starts the fade next tick at time 0
+    /// (`0x7884fb`). At time 0 a fade time of 0 leaves the line as it is (`0x78850e`); any other
+    /// counts down, hiding below 0 (`0x788521`, so exactly 0 stays shown at alpha 0), else stored
+    /// with the alpha byte `ftol(left / fadeDuration · 255)`, unclamped (`0x788544`-`0x788558`), from
+    /// the unrounded x87 value.
     pub fn tick(&mut self, dt: f32) {
         if !self.fading_enabled || !self.at_bottom || self.lines_shown == 0 {
             return;
         }
         let dt = f64::from(dt);
+        let duration = f64::from(self.fade_duration);
         let range = self.shown_range();
+        let mut hid = false;
         for line in self.lines.range_mut(range) {
             if !line.shown {
                 continue;
             }
-            if line.time_left > 0.0 {
-                line.time_left = ((f64::from(line.time_left) - dt).max(0.0)) as f32;
+            // The hide (`0x788525`): the flag cleared, the node hidden and the links marked
+            // (`0x788538`). The record's alpha byte is left; here it reads 0, which nothing can
+            // see while the flag is clear.
+            let mut hide = |line: &mut MessageLine| {
+                line.shown = false;
+                line.alpha = 0.0;
+                hid = true;
+            };
+            if line.time_left != 0.0 {
+                let left = f64::from(line.time_left) - dt;
+                line.time_left = left as f32;
+                if left < 0.0 {
+                    if line.fade_left == 0.0 {
+                        hide(line);
+                    } else {
+                        line.time_left = 0.0;
+                    }
+                }
                 continue;
             }
-            if self.fade_duration <= 0.0 {
-                // No ramp: the line vanishes when phase 1 ends, marking the links (`0x788538`).
-                self.links_dirty |= line.alpha > 0.0;
-                line.alpha = 0.0;
-                line.shown = false;
+            if line.fade_left == 0.0 {
                 continue;
             }
-            let remaining = f64::from(line.fade_left) - dt;
-            line.fade_left = remaining as f32;
-            if remaining <= 0.0 {
-                // The hide marks the links (`0x788538`), once: a hidden line is skipped after.
-                self.links_dirty |= line.alpha > 0.0;
-                line.fade_left = 0.0;
-                line.alpha = 0.0;
-                line.shown = false;
-            } else {
-                // Over the live fadeDuration (a mid-fade change rescales the ramp), from the
-                // unrounded `remaining`, not the stored f32.
-                let byte = quantize_fade_wide(remaining / f64::from(self.fade_duration));
-                line.alpha = f32::from(byte) / 255.0;
+            let left = f64::from(line.fade_left) - dt;
+            if left < 0.0 {
+                hide(line);
+                continue;
             }
+            line.fade_left = left as f32;
+            let byte = crate::script::binding_abi::ftol(left / duration * 255.0) as u8;
+            line.alpha = f32::from(byte) / 255.0;
         }
+        self.links_dirty |= hid;
     }
 }
+
 /// The fade's alpha byte, truncated with no `+0.5` (`0x788547`).
 fn quantize_fade(x: f32) -> u8 {
-    (x.clamp(0.0, 1.0) * 255.0).trunc() as u8
-}
-
-/// [`quantize_fade`] of the unrounded ratio (see [`ScrollingMessageState::tick`]).
-fn quantize_fade_wide(x: f64) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0).trunc() as u8
 }
 
