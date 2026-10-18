@@ -545,8 +545,8 @@ pub(crate) struct Model {
     /// Saved CVar values, set before any registration so a CVar starts at its saved value: the
     /// reference's table outlives `ReloadUI`, while ours is per VM.
     pub(crate) cvars_saved_base: HashMap<String, String>,
-    /// `(registered name, new value)` per Lua `SetCVar`, the app's sync and save cue.
-    pub(crate) cvar_changes: Vec<(String, String)>,
+    /// The mirror's writes in order, the app's sync and save cue.
+    pub(crate) cvar_changes: Vec<super::cvars::CvarWrite>,
     /// `(name, default)` per addon `RegisterCVar` that created a slot.
     pub(crate) cvar_registrations: Vec<(String, String)>,
     /// How many CVars Lua's `RegisterCVar` has created this process (`[0xb4e3c8]`), which nothing

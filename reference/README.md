@@ -32,4 +32,4 @@ script.
 | `messages.tsv` | `scripts/gen-message-catalog.py`, which writes `messages/catalog.rs`; the gates check it regenerates byte for byte |
 | `chat_types.tsv` | `script/chat_types.rs` (its `DEFAULTS` test) |
 | `chat_groups.tsv` | `script/chat_window.rs` (its `MESSAGE_GROUPS` test) |
-| `cvars.tsv` | `cvars/reference_table.rs` (the CVar table's reference column) |
+| `cvars.tsv` | `cvars/listing.rs` (the registry's list order, compiled in), `cvars/reference_table.rs` (the CVar table's reference column) |

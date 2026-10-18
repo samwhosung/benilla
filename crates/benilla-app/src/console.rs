@@ -68,7 +68,10 @@ impl ConsoleCommandApp for App {
 /// inside the call (`benilla_ui::script`'s `console_exec`): listed by `help`, never run here.
 const CVAR_COMMANDS: [(&str, &str); 3] = [
     ("cvar_default", "Reset a CVar to its default."),
-    ("cvar_reset", "Reset a CVar to its default."),
+    (
+        "cvar_reset",
+        "Set the value of a CVar to it's startup value",
+    ),
     ("set", "Set the value of a CVar."),
 ];
 
@@ -78,11 +81,7 @@ pub(crate) struct ConsolePlugin;
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConsoleCommands>()
-            .console_command(
-                "cvarlist",
-                "List the CVars, optionally matching a string.",
-                cvarlist,
-            )
+            .console_command("cvarlist", "List cvars", cvarlist)
             .console_command("help", "List the console commands, or describe one.", help);
     }
 }
@@ -129,42 +128,39 @@ fn print_cvar(world: &World, name: &str) -> String {
     }
 }
 
-/// `cvarlist [match]` (`0x63d6f0`), one line per row: value, default when moved, staged value,
-/// and whether the session or an addon owns it. The reference's line format is untraced; this
-/// one is benilla's.
-fn cvarlist(world: &mut World, args: &str) -> Vec<String> {
-    let wanted = args.split_whitespace().next().map(str::to_ascii_lowercase);
-    let cvars = world.resource::<Cvars>();
-    let mut rows: Vec<_> = cvars
-        .rows()
-        .filter(|r| {
-            wanted
-                .as_deref()
-                .is_none_or(|w| r.name.to_ascii_lowercase().contains(w))
-        })
-        .collect();
-    rows.sort_by_key(|r| r.name.to_ascii_lowercase());
-    let mut out: Vec<String> = rows
-        .iter()
+/// `cvarlist` (`0x63d6f0`), which reads no argument: one line per row in list order
+/// ([`Cvars::listed`]), `  "%s" is "%s"` (`0x8652a8`) of the name and the applied value, then
+/// ` (default "%s")` (`0x865298`) and ` (reset "%s")` (`0x865288`), each when the slot holds text
+/// that differs from the value case-sensitively (`SStrCmp`, `0x63d753`, `0x63d7a2`). The line is
+/// built in 0x100 bytes, so it stops at 255.
+fn cvarlist(world: &mut World, _args: &str) -> Vec<String> {
+    world
+        .resource::<Cvars>()
+        .listed()
+        .into_iter()
         .map(|r| {
-            let mut line = format!("{} = \"{}\"", r.name, r.value);
-            if r.value != r.default {
+            let mut line = format!("  \"{}\" is \"{}\"", r.name, r.value);
+            if r.default != r.value {
                 line.push_str(&format!(" (default \"{}\")", r.default));
             }
-            if let Some(staged) = &r.pending {
-                line.push_str(&format!(" [staged \"{staged}\"]"));
+            if let Some(reset) = r.reset.as_ref().filter(|reset| **reset != r.value) {
+                line.push_str(&format!(" (reset \"{reset}\")"));
             }
-            if cvars.is_session_owned(&r.name) {
-                line.push_str(" [session]");
-            }
-            if r.addon {
-                line.push_str(" [addon]");
-            }
+            cut_to_bytes(&mut line, 0xff);
             line
         })
-        .collect();
-    out.push(format!("{} CVar(s)", rows.len()));
-    out
+        .collect()
+}
+
+/// Cut `line` to at most `max` bytes, on a character boundary.
+fn cut_to_bytes(line: &mut String, max: usize) {
+    if line.len() > max {
+        let mut end = max;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+    }
 }
 
 /// `help [command]`: the registry's listing.
@@ -232,7 +228,7 @@ mod tests {
         );
     }
 
-    /// A latched row prints its stage, and the list shows it.
+    /// A latched row prints its stage.
     #[test]
     fn a_latched_cvar_reports_its_stage() {
         let mut app = console_app();
@@ -241,50 +237,82 @@ mod tests {
             run(&mut app, "gxvsync"),
             vec!["CVar \"gxVSync\" is \"1\" (\"0\" staged until the next RestartGx)".to_string()]
         );
-        let list = run(&mut app, "cvarlist gxv");
-        assert_eq!(
-            list,
-            vec![
-                "gxVSync = \"1\" [staged \"0\"]".to_string(),
-                "1 CVar(s)".to_string()
-            ]
-        );
     }
 
+    /// `0x63d6f0`: every row whatever the argument, `  "%s" is "%s"`, then the default and the
+    /// reset text where each differs from the value case-sensitively, in the table's order.
     #[test]
-    fn cvarlist_says_where_each_row_stands() {
+    fn cvarlist_prints_the_references_lines_in_list_order() {
         let mut app = console_app();
-        {
-            let mut cvars = app.world_mut().resource_mut::<Cvars>();
-            cvars.set("farclip", "500");
-            cvars.own_for_session("uiScale", Some("1.2"));
-            cvars.learn_addon_row("myAddonKnob", "7");
-        }
-        let list = run(&mut app, "cvarlist");
-        assert!(
-            list.contains(&"farclip = \"500\" (default \"350\")".to_string()),
-            "{list:?}"
-        );
-        assert!(
-            list.contains(&"uiScale = \"1.2\" (default \"0.9\") [session]".to_string()),
-            "{list:?}"
-        );
-        assert!(
-            list.contains(&"myAddonKnob = \"7\" [addon]".to_string()),
-            "{list:?}"
-        );
-        assert!(list.last().unwrap().ends_with(" CVar(s)"));
-        // A substring, case-insensitively: `horizonfarclip` is the reference's too.
-        let some = run(&mut app, "cvarlist FARCLIP");
+        app.world_mut()
+            .insert_resource(Cvars::with_value("farclip", "400"));
+        let line = |app: &mut App, name: &str| {
+            run(app, "cvarlist")
+                .into_iter()
+                .find(|l| l.starts_with(&format!("  \"{name}\" ")))
+                .unwrap()
+        };
         assert_eq!(
-            some,
-            vec![
-                "farclip = \"500\" (default \"350\")".to_string(),
-                "horizonfarclip = \"2112\"".to_string(),
-                "2 CVar(s)".to_string()
-            ],
-            "matched case-insensitively"
+            line(&mut app, "farclip"),
+            "  \"farclip\" is \"400\" (default \"350\")",
+            "the reset text is the value"
         );
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .set("farclip", "500");
+        assert_eq!(
+            line(&mut app, "farclip"),
+            "  \"farclip\" is \"500\" (default \"350\") (reset \"400\")"
+        );
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .set("farclip", "350");
+        assert_eq!(
+            line(&mut app, "farclip"),
+            "  \"farclip\" is \"350\" (reset \"400\")"
+        );
+        assert_eq!(
+            line(&mut app, "MusicVolume"),
+            "  \"MusicVolume\" is \"0.4\""
+        );
+        // `SStrCmp`, not the save's case-blind compare.
+        app.world_mut()
+            .insert_resource(Cvars::with_value("ErrorFilter", "ALL"));
+        assert_eq!(
+            line(&mut app, "ErrorFilter"),
+            "  \"ErrorFilter\" is \"ALL\" (default \"all\")"
+        );
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .learn_addon_row("myAddonKnob", "7");
+        let all = run(&mut app, "cvarlist FARCLIP");
+        let cvars = app.world().resource::<Cvars>();
+        assert_eq!(all.len(), cvars.rows().count(), "the argument is not read");
+        assert_eq!(all.last().unwrap(), "  \"myAddonKnob\" is \"7\"", "last");
+        let ranks: Vec<usize> = cvars
+            .listed()
+            .iter()
+            .map(|r| crate::cvars::list_rank(&r.name))
+            .collect();
+        assert!(ranks.is_sorted(), "the table's order");
+        assert!(ranks[0] < usize::MAX);
+    }
+
+    /// The buffer is 0x100 bytes (`0x63d734`), so a line stops at 255.
+    #[test]
+    fn a_cvarlist_line_stops_at_255_bytes() {
+        let mut app = console_app();
+        let long = "x".repeat(300);
+        app.world_mut()
+            .resource_mut::<Cvars>()
+            .set("realmName", &long);
+        let line = run(&mut app, "cvarlist")
+            .into_iter()
+            .find(|l| l.starts_with("  \"realmName\" "))
+            .unwrap();
+        let mut want = format!("  \"realmName\" is \"{long}\"");
+        want.truncate(255);
+        assert_eq!(line, want);
     }
 
     #[test]
@@ -306,11 +334,11 @@ mod tests {
         );
         assert_eq!(
             run(&mut app, "help CVAR_RESET"),
-            vec!["cvar_reset — Reset a CVar to its default.".to_string()]
+            vec!["cvar_reset — Set the value of a CVar to it's startup value".to_string()]
         );
         assert_eq!(
             run(&mut app, "help cvarlist"),
-            vec!["cvarlist — List the CVars, optionally matching a string.".to_string()]
+            vec!["cvarlist — List cvars".to_string()]
         );
     }
 

@@ -117,7 +117,7 @@ pub fn cvar_name_arg(rest: &str) -> String {
     console_token(&mut rest.as_bytes(), NAME_BYTES)
 }
 
-/// The line `set` and the reset pair print for a name no row has. Deviation: the reference's `set`
+/// The line `set` prints for a name no row has. Deviation: the reference's `set`
 /// registers an unknown name as a new category-5 record (`0x63d569`-`0x63d582`); benilla refuses
 /// it, because nothing would read the row and `config.toml` keeps an unknown key anyway.
 pub fn no_such_cvar(name: &str) -> String {
@@ -164,20 +164,19 @@ fn run_cvar_command(model: &mut Model, word: &str, rest: &str) -> bool {
                 super::cvars::write_cvar(model, &name, value);
             }
         }
-        "cvar_reset" | "cvar_default" => {
+        command @ ("cvar_reset" | "cvar_default") => {
+            let to_default = command == "cvar_default";
             let name = cvar_name_arg(rest);
             if name.is_empty() {
-                model
-                    .cvar_console
-                    .push("usage: cvar_default <cvar>".to_string());
+                restore_every_cvar(model, to_default);
                 return true;
             }
-            match model.cvars.get(&name.to_ascii_lowercase()) {
-                Some(slot) => {
-                    let default = slot.default.clone();
-                    super::cvars::write_cvar(model, &name, default);
-                }
-                None => model.cvar_console.push(no_such_cvar(&name)),
+            let key = name.to_ascii_lowercase();
+            if model.cvars.contains_key(&key) {
+                super::cvars::restore_cvar(model, &key, to_default);
+            } else {
+                // `0x86525c` in class 3 (`0x63d5c8`, `0x63d678`); its newline ends the line.
+                model.cvar_console.push(format!("No such cvar \"{name}\""));
             }
         }
         // A CVar's own command (`0x63dde0`): the rest past its spaces, untrimmed, is the value;
@@ -187,10 +186,37 @@ fn run_cvar_command(model: &mut Model, word: &str, rest: &str) -> bool {
             if value.is_empty() || !model.cvars.contains_key(key) {
                 return false;
             }
-            super::cvars::write_cvar(model, word, value.to_string());
+            super::cvars::console_set(model, key, value.to_string());
         }
     }
     true
+}
+
+/// `cvar_reset` or `cvar_default` with no name (`0x63d5ee`, `0x63d69e`): `Resetting all cvars`
+/// (`0x865244`) or `Restoring all cvars` (`0x865270`), then `CVar::Reset` or `CVar::Default` on
+/// every record in list order.
+///
+/// Deviation: a row the session owns (an env lever) is passed, because the env chose its value for
+/// this run and the file never holds it, so a reset would undo the lever and save nothing.
+fn restore_every_cvar(model: &mut Model, to_default: bool) {
+    model.cvar_console.push(
+        if to_default {
+            "Restoring all cvars"
+        } else {
+            "Resetting all cvars"
+        }
+        .to_string(),
+    );
+    let mut keys: Vec<(usize, String)> = model
+        .cvars
+        .iter()
+        .filter(|(_, slot)| !slot.session)
+        .map(|(key, slot)| (slot.seq, key.clone()))
+        .collect();
+    keys.sort_unstable();
+    for (_, key) in keys {
+        super::cvars::restore_cvar(model, &key, to_default);
+    }
 }
 
 #[cfg(test)]
@@ -334,10 +360,170 @@ mod tests {
             .unwrap();
         assert_eq!(
             s.take_cvar_console_lines(),
+            ["console: no CVar named 'nosuch'", "No such cvar \"nosuch\""]
+        );
+    }
+
+    fn seeded(name: &str, value: &str, default: &str) -> crate::script::SeededCvar {
+        crate::script::SeededCvar {
+            name: name.into(),
+            value: value.into(),
+            default: default.into(),
+            latched: false,
+            check: None,
+            reset: None,
+            session: false,
+        }
+    }
+
+    fn get(s: &UiScript, name: &str) -> String {
+        s.eval::<String>(&format!("return GetCVar({name:?})"))
+            .unwrap()
+    }
+
+    /// `cvar_reset` restores the reset text, the value the row started the session at
+    /// (`0x63dff0`), and `cvar_default` the default (`0x63e010`).
+    #[test]
+    fn cvar_reset_restores_the_session_start_value_and_cvar_default_the_default() {
+        let mut s = UiScript::new().unwrap();
+        let mut farclip = seeded("farclip", "400", "350");
+        farclip.reset = Some("400".into());
+        s.seed_cvars([farclip]);
+        s.run("SetCVar('farclip', '500') ConsoleExec('cvar_reset farclip')")
+            .unwrap();
+        assert_eq!(get(&s, "farclip"), "400");
+        s.run("ConsoleExec('cvar_default FARCLIP')").unwrap();
+        assert_eq!(get(&s, "farclip"), "350");
+        s.run("ConsoleExec('cvar_reset farclip')").unwrap();
+        assert_eq!(get(&s, "farclip"), "400");
+        assert_eq!(
+            s.take_cvar_writes(),
+            [("500", false), ("400", true), ("350", true), ("400", true)].map(
+                |(value, restore)| {
+                    let (name, value) = ("farclip".to_string(), value.to_string());
+                    if restore {
+                        crate::script::CvarWrite::Restore { name, value }
+                    } else {
+                        crate::script::CvarWrite::Set { name, value }
+                    }
+                }
+            )
+        );
+        s.run("ConsoleExec('cvar_reset nosuch') ConsoleExec('cvar_default nosuch')")
+            .unwrap();
+        assert_eq!(
+            s.take_cvar_console_lines(),
+            ["No such cvar \"nosuch\"", "No such cvar \"nosuch\""]
+        );
+    }
+
+    /// The CVar's own command fills an empty reset slot (`0x63de1c` passes `setReset`), so the
+    /// first value typed is what `cvar_reset` restores; `set` and `SetCVar` pass no `setReset`
+    /// (`0x63d54a`, `0x488ca8`).
+    #[test]
+    fn the_first_value_a_cvar_command_stores_is_its_reset_text() {
+        let mut s = UiScript::new().unwrap();
+        s.seed_cvars([seeded("farclip", "350", "350")]);
+        s.run("SetCVar('farclip', '450') ConsoleExec('set farclip 460')")
+            .unwrap();
+        s.run("ConsoleExec('cvar_reset farclip')").unwrap();
+        assert_eq!(get(&s, "farclip"), "350", "neither filled the slot");
+        s.run("ConsoleExec('farclip 500') ConsoleExec('farclip 600') ConsoleExec('cvar_reset farclip')")
+            .unwrap();
+        assert_eq!(get(&s, "farclip"), "500");
+        let fills: Vec<_> = s
+            .take_cvar_writes()
+            .into_iter()
+            .filter(|w| matches!(w, crate::script::CvarWrite::FillReset { .. }))
+            .collect();
+        assert_eq!(
+            fills,
+            [crate::script::CvarWrite::FillReset {
+                name: "farclip".into(),
+                value: "500".into()
+            }],
+            "the host learns the fill once"
+        );
+        // A value equal to the current one still fills (`0x63e138` runs moved or not).
+        s.seed_cvars([seeded("farclip", "450", "350")]);
+        s.run("ConsoleExec('farclip 450') ConsoleExec('farclip 300') ConsoleExec('cvar_reset farclip')")
+            .unwrap();
+        assert_eq!(get(&s, "farclip"), "450");
+    }
+
+    /// The pair calls `InternalSet` directly: no callback runs, so nothing refuses and nothing
+    /// prints; a read-only row stores nothing (`0x63e0ba`); a latched row takes the value at once
+    /// and keeps its stage.
+    #[test]
+    fn a_reset_runs_no_callback_and_honours_the_flags() {
+        let mut s = UiScript::new().unwrap();
+        let mut shadow = seeded("shadowLevel", "0", "1");
+        shadow.check = Some(crate::script::check_shadow_level);
+        shadow.reset = Some("7".into());
+        let mut vsync = seeded("gxVSync", "1", "1");
+        vsync.latched = true;
+        vsync.reset = Some("1".into());
+        s.seed_cvars([shadow, vsync, seeded("realmList", "a", "b")]);
+        s.set_cvar_read_only("realmList", true);
+        s.run("ConsoleExec('cvar_reset shadowLevel')").unwrap();
+        assert_eq!(get(&s, "shadowLevel"), "7", "the callback would refuse 7");
+        assert!(s.take_cvar_console_lines().is_empty());
+        s.run("ConsoleExec('cvar_default realmList')").unwrap();
+        assert_eq!(get(&s, "realmList"), "a");
+        s.run("SetCVar('gxVSync', '0') ConsoleExec('cvar_default gxVSync')")
+            .unwrap();
+        assert_eq!(get(&s, "gxVSync"), "1", "staged, not applied");
+        s.take_cvar_writes();
+        s.seed_cvars([{
+            let mut v = seeded("gxVSync", "0", "1");
+            v.latched = true;
+            v
+        }]);
+        s.run("SetCVar('gxVSync', '1') ConsoleExec('cvar_default gxVSync')")
+            .unwrap();
+        assert_eq!(
+            s.take_cvar_writes(),
             [
-                "console: no CVar named 'nosuch'",
-                "console: no CVar named 'nosuch'"
-            ]
+                crate::script::CvarWrite::Set {
+                    name: "gxVSync".into(),
+                    value: "1".into()
+                },
+                crate::script::CvarWrite::Restore {
+                    name: "gxVSync".into(),
+                    value: "1".into()
+                },
+            ],
+            "the stage is queued, then the value applied at once"
+        );
+        assert_eq!(get(&s, "gxVSync"), "1");
+    }
+
+    /// With no name the pair says so and restores every row in list order (`0x63d5ee`,
+    /// `0x63d69e`), passing the rows the session owns.
+    #[test]
+    fn a_reset_with_no_name_restores_every_row_but_the_sessions() {
+        let mut s = UiScript::new().unwrap();
+        let mut ui_scale = seeded("uiScale", "1.2", "0.9");
+        ui_scale.session = true;
+        s.seed_cvars([
+            seeded("farclip", "400", "350"),
+            ui_scale,
+            seeded("MusicVolume", "0.2", "0.4"),
+        ]);
+        s.run("ConsoleExec('cvar_reset')").unwrap();
+        assert_eq!(get(&s, "farclip"), "350");
+        assert_eq!(get(&s, "MusicVolume"), "0.4");
+        assert_eq!(get(&s, "uiScale"), "1.2", "the env's value stands");
+        assert_eq!(
+            s.take_cvar_changes(),
+            [("farclip", "350"), ("MusicVolume", "0.4")]
+                .map(|(n, v)| (n.to_string(), v.to_string())),
+            "in list order"
+        );
+        s.run("ConsoleExec('cvar_default')").unwrap();
+        assert_eq!(
+            s.take_cvar_console_lines(),
+            ["Resetting all cvars", "Restoring all cvars"]
         );
     }
 

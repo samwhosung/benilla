@@ -28,14 +28,17 @@ use std::time::Instant;
 use bevy::prelude::*;
 
 use crate::ui_script::VmMemo;
-use benilla_ui::script::{CvarCheck, SeededCvar, UiScript};
+use benilla_ui::script::{CvarCheck, CvarWrite, SeededCvar, UiScript};
 
 #[cfg(test)]
 mod deviations_doc;
 mod inert;
+mod listing;
 #[cfg(test)]
 mod reference_table;
 mod table;
+#[cfg(test)]
+pub(crate) use listing::list_rank;
 #[cfg(test)]
 use table::Reference;
 pub(crate) use table::{all_rows, registered_pairs, REGISTERED};
@@ -106,11 +109,13 @@ pub(crate) struct Row {
     pub(crate) pending: Option<String>,
     /// The reference's flag bit1.
     pub(crate) latched: bool,
-    /// Declared by an addon's `RegisterCVar`: persisted like any row and re-seeded into every later
-    /// VM, so the addon's re-declaration is a no-op.
-    pub(crate) addon: bool,
     /// The change callback's refusal ([`table::Registered::check`]).
     check: Option<CvarCheck>,
+    /// The reset text (`rec+0x34`) `cvar_reset` restores (`0x63dff0`): the value `config.toml`
+    /// held at start-up, as `Config.wtf`'s `set` makes the record with it (`0x63d582`) and the
+    /// registration keeps it (`0x63dc6c`); else the first value the CVar's own console command
+    /// stored (`0x63de23`); else none, and the default stands in.
+    pub(crate) reset: Option<String>,
 }
 
 /// What a write did.
@@ -199,8 +204,8 @@ impl Cvars {
                 value: default.to_string(),
                 pending: None,
                 latched: r.latched,
-                addon: false,
                 check: r.check,
+                reset: None,
             });
         }
         cvars
@@ -254,8 +259,17 @@ impl Cvars {
     }
 
     /// Every row, in registration order.
+    #[cfg(test)]
     pub(crate) fn rows(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
+    }
+
+    /// Every row in the registry's list order ([`listing`]), which `cvarlist` prints and a reset
+    /// of every row walks.
+    pub(crate) fn listed(&self) -> Vec<&Row> {
+        let mut rows: Vec<&Row> = self.rows.iter().collect();
+        rows.sort_by_key(|r| listing::list_rank(&r.name));
+        rows
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&str> {
@@ -291,6 +305,7 @@ impl Cvars {
         self.row(name).map(|r| r.default.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn is_session_owned(&self, name: &str) -> bool {
         self.session_owned.contains(&name.to_ascii_lowercase())
     }
@@ -387,6 +402,44 @@ impl Cvars {
         self.write(name, value, true)
     }
 
+    /// The reset text the VM's mirror filled ([`benilla_ui::script::CvarWrite::FillReset`]),
+    /// taken only into an empty slot, as the mirror's was.
+    fn fill_reset(&mut self, name: &str, value: &str) {
+        match self.slot(name) {
+            Some(i) => {
+                self.rows[i].reset.get_or_insert_with(|| value.to_string());
+            }
+            None => warn!("cvar {name}: not registered — reset text ignored"),
+        }
+    }
+
+    /// A `cvar_reset` or `cvar_default` the VM's mirror already made
+    /// ([`benilla_ui::script::CvarWrite::Restore`]): `InternalSet` called directly, so a latched
+    /// row takes the value at once and keeps its stage, and the config is dirty.
+    ///
+    /// Deviation: the observers fire, where the reference runs no callback here
+    /// (`0x63dff0`, `0x63e010`), because a knob moves only through its [`CvarChanged`] observer,
+    /// which also stands in for the reference's direct reads of the record; without it knob and
+    /// value would disagree until the next write.
+    fn restore_from_vm(&mut self, name: &str, value: &str) -> SetOutcome {
+        let Some(i) = self.slot(name) else {
+            warn!("cvar {name}: not registered — restore ignored");
+            return SetOutcome::Unknown;
+        };
+        let row = &mut self.rows[i];
+        if same_text(&row.value, value) {
+            return SetOutcome::Unchanged;
+        }
+        let old = std::mem::replace(&mut row.value, value.to_string());
+        self.events.push(CvarChanged {
+            name: row.name.clone(),
+            old,
+            new: value.to_string(),
+        });
+        self.touch();
+        SetOutcome::Changed
+    }
+
     /// Follow a value the engine already applied, for a second spelling of one knob
     /// (`WorldDetail`/`frillDensity`): the row moves, persists and reaches the mirror, but no
     /// observer fires, since a full write would queue an event that lands a flush late and wins
@@ -478,11 +531,12 @@ impl Cvars {
         self.insert_row(Row {
             name: name.to_string(),
             default: default.to_string(),
-            value: saved.unwrap_or_else(|| default.to_string()),
+            value: saved.clone().unwrap_or_else(|| default.to_string()),
             pending: None,
             latched: false,
-            addon: true,
             check: None,
+            // The saved value is the reset text of the record its line made.
+            reset: saved,
         });
     }
 
@@ -501,6 +555,7 @@ impl Cvars {
                 continue;
             }
             let row = &mut self.rows[i];
+            row.reset = Some(value.clone());
             // The saved text stands as it is, a number or not: `set` made the record from it
             // (`0x63d582`) and `Register` keeps it (`0x63dc6c`). The callback runs on the saved
             // value and its answer is not tested: the file is read before these rows are
@@ -553,23 +608,33 @@ impl Cvars {
         for (name, default) in script.take_cvar_registrations() {
             self.learn_addon_row(&name, &default);
         }
-        for (name, value) in script.take_cvar_changes() {
-            self.set_from_vm(&name, &value);
+        for write in script.take_cvar_writes() {
+            match write {
+                CvarWrite::Set { name, value } => {
+                    self.set_from_vm(&name, &value);
+                }
+                CvarWrite::FillReset { name, value } => self.fill_reset(&name, &value),
+                CvarWrite::Restore { name, value } => {
+                    self.restore_from_vm(&name, &value);
+                }
+            }
         }
         self.lua_created = self.lua_created.max(script.cvar_lua_created());
         self.console.extend(script.take_cvar_console_lines());
     }
 
-    /// The whole table as a VM's mirror is seeded from it.
+    /// The whole table as a VM's mirror is seeded from it, in list order.
     pub(crate) fn vm_seed(&self) -> Vec<SeededCvar> {
-        self.rows
-            .iter()
+        self.listed()
+            .into_iter()
             .map(|r| SeededCvar {
                 name: r.name.clone(),
                 value: r.value.clone(),
                 default: r.default.clone(),
                 latched: r.latched,
                 check: r.check,
+                reset: r.reset.clone(),
+                session: self.session_owned.contains(&r.name.to_ascii_lowercase()),
             })
             .collect()
     }
@@ -2347,6 +2412,65 @@ mod tests {
 
     fn res<T: Resource>(app: &App) -> &T {
         app.world().resource::<T>()
+    }
+
+    /// `cvar_reset` restores the value `config.toml` held at start-up (`0x63dff0`, the reset text
+    /// `Config.wtf`'s `set` gave the record) and `cvar_default` the default (`0x63e010`); each moves
+    /// the knob and dirties the file.
+    #[test]
+    fn the_reset_pair_restores_the_start_value_and_moves_the_knob() {
+        let mut app = cvar_app();
+        app.world_mut()
+            .insert_resource(Cvars::with_value("farclip", "400"));
+        apply(&mut app, "farclip", "500");
+        app.world_mut().resource_mut::<Cvars>().dirty = false;
+        assert!(console_exec(&mut app, "cvar_reset farclip").is_empty());
+        assert_eq!(res::<Cvars>(&app).get("farclip"), Some("400"));
+        assert_eq!(res::<ViewDistance>(&app).farclip, 400.0);
+        assert!(res::<Cvars>(&app).dirty);
+        console_exec(&mut app, "cvar_default farclip");
+        assert_eq!(res::<Cvars>(&app).get("farclip"), Some("350"));
+        assert_eq!(res::<ViewDistance>(&app).farclip, 350.0);
+        assert_eq!(
+            console_exec(&mut app, "cvar_reset nosuch"),
+            ["No such cvar \"nosuch\""]
+        );
+    }
+
+    /// The first value the CVar's own command stores becomes its reset text (`0x63de1c`), and the
+    /// registry keeps it past the VM that typed it.
+    #[test]
+    fn a_typed_value_is_the_reset_text_across_vms() {
+        let mut app = cvar_app();
+        console_exec(&mut app, "farclip 500");
+        console_exec(&mut app, "farclip 600");
+        assert_eq!(
+            res::<Cvars>(&app).row("farclip").unwrap().reset.as_deref(),
+            Some("500")
+        );
+        console_exec(&mut app, "cvar_reset farclip");
+        assert_eq!(res::<Cvars>(&app).get("farclip"), Some("500"));
+        assert_eq!(res::<ViewDistance>(&app).farclip, 500.0);
+    }
+
+    /// A reset of every row passes the rows the session owns, which the env set and the file never
+    /// holds.
+    #[test]
+    fn a_reset_of_every_row_passes_the_sessions() {
+        let mut app = cvar_app();
+        {
+            let mut cvars = app.world_mut().resource_mut::<Cvars>();
+            cvars.own_for_session("uiScale", Some("1.2"));
+            cvars.set("farclip", "500");
+            cvars.take_events();
+        }
+        assert_eq!(
+            console_exec(&mut app, "cvar_default"),
+            ["Restoring all cvars"]
+        );
+        let cvars = res::<Cvars>(&app);
+        assert_eq!(cvars.get("farclip"), Some("350"));
+        assert_eq!(cvars.get("uiScale"), Some("1.2"));
     }
 
     #[test]

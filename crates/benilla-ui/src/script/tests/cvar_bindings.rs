@@ -222,6 +222,8 @@ fn the_read_only_flag_survives_a_host_reseed() {
         default: String::new(),
         latched: false,
         check: None,
+        reset: None,
+        session: false,
     }]);
     assert!(raised(&s, "SetCVar(\"realmName\", \"x\")").contains("is read-only"));
 }
@@ -365,6 +367,8 @@ fn a_seeded_check_refuses_before_the_store() {
         default: "1".into(),
         latched: false,
         check: Some(crate::script::check_shadow_level),
+        reset: None,
+        session: false,
     }]);
     s.run("SetCVar('shadowLevel', 2)").unwrap();
     assert_eq!(get(&s, "shadowLevel"), "1");

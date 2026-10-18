@@ -30,6 +30,14 @@ pub(crate) struct CvarSlot {
     pub pending: Option<String>,
     /// The change callback that may refuse a write ([`super::cvar_checks`]); host-seeded only.
     pub check: Option<CvarCheck>,
+    /// The record's reset text (`rec+0x34`), which `cvar_reset` restores (`0x63dff0`): the saved
+    /// value the row started at, else the first value its own console command stored, else none.
+    pub reset: Option<String>,
+    /// The session, not the player, owns the row (an env lever): a reset of every row passes it.
+    pub session: bool,
+    /// The row's place in the mirror's list, its insertion order, which a walk of every row
+    /// follows.
+    pub seq: usize,
 }
 
 /// One row of the host's registry as the VM's mirror is seeded from it; `value` is the applied
@@ -41,6 +49,23 @@ pub struct SeededCvar {
     pub default: String,
     pub latched: bool,
     pub check: Option<CvarCheck>,
+    /// The reset text ([`CvarSlot::reset`]).
+    pub reset: Option<String>,
+    /// Owned by the session ([`CvarSlot::session`]).
+    pub session: bool,
+}
+
+/// One write the mirror made, queued for the host's registry in the order it was made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CvarWrite {
+    /// `CVar::Set` (`0x63df50`) past its callback: a latched row's stage, else its new value.
+    Set { name: String, value: String },
+    /// The record's empty reset slot filled (`0x63e158`) by the CVar's own console command
+    /// (`0x63de23` passes `setReset`), whether or not the value moved.
+    FillReset { name: String, value: String },
+    /// `CVar::Reset` (`0x63dff0`) or `CVar::Default` (`0x63e010`): `InternalSet` called directly,
+    /// so no callback ran and a latched row took the value at once, its stage kept.
+    Restore { name: String, value: String },
 }
 
 /// One multisample format the device supports, the reference's triple (`[0xb4b444]`, count
@@ -124,20 +149,22 @@ impl super::UiScript {
             match model.cvars.get_mut(&key) {
                 Some(slot) => slot.default = default.to_string(),
                 None => {
-                    let value = model
-                        .cvars_saved_base
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_else(|| default.to_string());
+                    // A saved value is also the reset text, as the config line's `set` made the
+                    // record with it (`0x63d582`).
+                    let saved = model.cvars_saved_base.get(&key).cloned();
+                    let seq = model.cvars.len();
                     model.cvars.insert(
                         key,
                         CvarSlot {
                             name: name.to_string(),
-                            value,
+                            value: saved.clone().unwrap_or_else(|| default.to_string()),
                             default: default.to_string(),
                             latched: false,
                             pending: None,
                             check: None,
+                            reset: saved,
+                            session: false,
+                            seq,
                         },
                     );
                 }
@@ -152,6 +179,7 @@ impl super::UiScript {
         let mut model = self.model_mut();
         for row in rows {
             let key = row.name.to_ascii_lowercase();
+            let seq = model.cvars.get(&key).map_or(model.cvars.len(), |s| s.seq);
             model.cvars.insert(
                 key,
                 CvarSlot {
@@ -161,6 +189,9 @@ impl super::UiScript {
                     latched: row.latched,
                     pending: None,
                     check: row.check,
+                    reset: row.reset,
+                    session: row.session,
+                    seq,
                 },
             );
         }
@@ -222,10 +253,24 @@ impl super::UiScript {
             || !model.cvar_console.is_empty()
     }
 
-    /// Drain the `(name, new_value)` changes queued since the last call, under the registered
-    /// spelling: the host's cue to sync its resources and mark the config dirty.
-    pub fn take_cvar_changes(&mut self) -> Vec<(String, String)> {
+    /// Drain the writes queued since the last call, in order, under the registered spelling: the
+    /// host's cue to sync its resources and mark the config dirty.
+    pub fn take_cvar_writes(&mut self) -> Vec<CvarWrite> {
         std::mem::take(&mut self.model_mut().cvar_changes)
+    }
+
+    /// [`Self::take_cvar_writes`] as `(name, value)` per value written, a stage or a restore; a
+    /// reset slot's fill is dropped.
+    pub fn take_cvar_changes(&mut self) -> Vec<(String, String)> {
+        self.take_cvar_writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                CvarWrite::Set { name, value } | CvarWrite::Restore { name, value } => {
+                    Some((name, value))
+                }
+                CvarWrite::FillReset { .. } => None,
+            })
+            .collect()
     }
 
     /// Drain the `(name, default)` rows an addon's `RegisterCVar` created since the last call; the
@@ -324,6 +369,14 @@ pub(super) fn set_from_engine(model: &mut Model, name: &str, value: String) {
 /// row (`0x63e0ba`-`0x63e0c2`), nothing for text equal to the value case-blind (`SStrCmpI`,
 /// `0x63e0ec`), and any other text stored as it is, a number or not.
 fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
+    store_with(model, key, value, false)
+}
+
+/// [`store`], and with `fill_reset` the CVar's own console command (`0x63dde0`), which passes
+/// `setReset` (`0x63de1c`): past the callback, an unlatched row that is not read-only takes the
+/// text as its reset text if it has none (`0x63e13f`-`0x63e158`), moved or not. A latched row
+/// returns at its stage first (`0x63dfc1`).
+fn store_with(model: &mut Model, key: &str, value: String, fill_reset: bool) -> Option<String> {
     let slot = model.cvars.get_mut(key)?;
     if let Some(check) = slot.check {
         let verdict = check(&value, &slot.value);
@@ -342,14 +395,68 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
         }
         slot.pending = staged;
     } else {
-        if model.cvars_read_only.contains(key) || slot.value.eq_ignore_ascii_case(&value) {
+        if model.cvars_read_only.contains(key) {
+            return None;
+        }
+        let fill = (fill_reset && slot.reset.is_none()).then(|| {
+            slot.reset = Some(value.clone());
+            CvarWrite::FillReset {
+                name: slot.name.clone(),
+                value: value.clone(),
+            }
+        });
+        if slot.value.eq_ignore_ascii_case(&value) {
+            model.cvar_changes.extend(fill);
             return None;
         }
         slot.value = value.clone();
+        let registered = slot.name.clone();
+        model.cvar_changes.push(CvarWrite::Set {
+            name: registered.clone(),
+            value,
+        });
+        model.cvar_changes.extend(fill);
+        return Some(registered);
     }
     let registered = slot.name.clone();
-    model.cvar_changes.push((registered.clone(), value));
+    model.cvar_changes.push(CvarWrite::Set {
+        name: registered.clone(),
+        value,
+    });
     Some(registered)
+}
+
+/// The CVar's own console command with a value (`0x63dde0`): `CVar::Set(rest, 1, 1, 0, 1)`
+/// (`0x63de18`-`0x63de23`), a write that also fills an empty reset slot.
+pub(super) fn console_set(model: &mut Model, key: &str, value: String) {
+    store_with(model, key, value, true);
+}
+
+/// `CVar::Reset` (`0x63dff0`, the reset text, else the default) or, with `to_default`,
+/// `CVar::Default` (`0x63e010`, the default, else the reset text), each `InternalSet(text, 1, 0,
+/// 0, 1)` called directly: no callback runs and none can refuse, a latched row takes the value at
+/// once and keeps its stage, and a read-only row (`0x63e0ba`) or text equal to the value
+/// case-blind (`0x63e0ec`) stores nothing. A row always has a default here, so `to_default` never
+/// falls back.
+pub(super) fn restore_cvar(model: &mut Model, key: &str, to_default: bool) {
+    if model.cvars_read_only.contains(key) {
+        return;
+    }
+    let Some(slot) = model.cvars.get_mut(key) else {
+        return;
+    };
+    let text = match (&slot.reset, to_default) {
+        (Some(reset), false) => reset.clone(),
+        _ => slot.default.clone(),
+    };
+    if slot.value.eq_ignore_ascii_case(&text) {
+        return;
+    }
+    slot.value = text.clone();
+    model.cvar_changes.push(CvarWrite::Restore {
+        name: slot.name.clone(),
+        value: text,
+    });
 }
 
 /// A by-name write from a binding that raises nothing (`ConsoleExec`, `SetGamma`,
@@ -463,15 +570,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             // The host gives the row a place in its registry, which outlives this VM.
             model.cvar_registrations.push((name.clone(), value.clone()));
+            let seq = model.cvars.len();
             model.cvars.insert(
                 key,
                 CvarSlot {
                     name,
-                    value: saved.unwrap_or_else(|| value.clone()),
+                    value: saved.clone().unwrap_or_else(|| value.clone()),
                     default: value,
                     latched: false,
                     pending: None,
                     check: None,
+                    // The saved value is the reset text of the record its config line made.
+                    reset: saved,
+                    session: false,
+                    seq,
                 },
             );
             Ok(())
@@ -1010,6 +1122,8 @@ mod tests {
                 default: "1".into(),
                 latched: true,
                 check: None,
+                reset: None,
+                session: false,
             },
             SeededCvar {
                 name: "MusicVolume".into(),
@@ -1017,6 +1131,8 @@ mod tests {
                 default: "0.4".into(),
                 latched: false,
                 check: None,
+                reset: None,
+                session: false,
             },
         ]);
         s.run(r#"SetCVar("gxVSync", 0)"#).unwrap();
