@@ -328,7 +328,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // Every refusal ([`merchant_grab`]) is silent and clears the cursor.
     g.set(
         "PickupMerchantItem",
-        lua.create_function(|lua, index: Option<f64>| {
+        lua.create_function(|lua, index: Value| {
+            // `lua_isnumber` (`0x4fb7c4`) gates the row; a miss is `merchant_grab`'s refusal.
+            let index = crate::script::binding_abi::is_number(lua, index);
             // The sell fork comes first, before the argument is read. Its clear is the sale's, not
             // `ClearCursor`: `CURSOR_UPDATE` fires and the source slot stays greyed until the
             // server's inventory update (`0x494b60`). Every other leg reads the row, then clears.

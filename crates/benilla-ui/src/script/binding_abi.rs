@@ -50,6 +50,12 @@ pub(crate) fn float_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resul
         .ok_or_else(|| mlua::Error::RuntimeError(usage.into()))
 }
 
+/// Shape D's gate: `is-number` (`0x6f34d0`) then `tonumber` (`0x6f3620`), a miss the caller's own
+/// fallback. A numeric string passes; nil, a missing argument and any other type miss.
+pub(crate) fn is_number(lua: &Lua, v: Value) -> Option<f64> {
+    lua.coerce_number(v).ok().flatten()
+}
+
 /// An index argument read as the reference reads one: a number or numeric string (`0x6f34d0`)
 /// truncated by `_ftol` ([`ftol`]) and then decremented and compared unsigned, so a zero or
 /// negative index is a huge one and falls out of range where a Rust integer parameter would raise

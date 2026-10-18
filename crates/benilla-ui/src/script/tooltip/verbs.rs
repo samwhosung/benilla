@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Table, Value, Variadic};
 
-use crate::script::binding_abi::{optional_string, string_arg};
+use crate::script::binding_abi::{self, optional_string, string_arg};
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
@@ -27,7 +27,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetOwner",
         lua.create_function(
-            |lua, (this, owner, anchor, x, y): (Table, Value, Value, Option<f32>, Option<f32>)| {
+            |lua, (this, owner, anchor, x, y): (Table, Value, Value, Value, Value)| {
                 let h = frame_handle_of(lua, &this)?;
                 set_shown(lua, h, false);
                 // The owner is read after the hide (`0x531189`), so a bad one raises on a
@@ -64,14 +64,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                         TooltipAnchor::Left
                     }
                 };
-                set_owner_core(
-                    lua,
-                    h,
-                    Some(owner_h),
-                    anchor,
-                    x.unwrap_or(0.0),
-                    y.unwrap_or(0.0),
-                );
+                // Each offset has its own `lua_isnumber` gate (`0x53134f`, `0x531388`), a miss
+                // keeping 0.
+                let offset = |v| binding_abi::is_number(lua, v).map_or(0.0, |n| n as f32);
+                set_owner_core(lua, h, Some(owner_h), anchor, offset(x), offset(y));
                 Ok(())
             },
         )?,

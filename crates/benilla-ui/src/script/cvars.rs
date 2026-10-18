@@ -675,7 +675,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.globals().set(
         "SetMultisampleFormat",
-        lua.create_function(|lua, id: Option<f64>| {
+        lua.create_function(|lua, id: Value| {
+            // `lua_isnumber` (`0x48c659`): a non-number is a missing id, which the deviation below
+            // ignores.
+            let id = crate::script::binding_abi::is_number(lua, id);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // 1-based from `UIDropDownMenu_GetSelectedID`. Deviation: an id out of range is
             // ignored, because the reference reads one entry past the last (`0x48c67c`) and a

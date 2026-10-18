@@ -118,16 +118,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // HighlightText([start [, end]]): the defaults (0, -1) select all.
+    // HighlightText([start [, end]]): the defaults (0, -1) select all. Each argument has its own
+    // `lua_isnumber` gate (`0x798907`, `0x79892e`) and is `_ftol`ed; a miss keeps the default.
     m.set(
         "HighlightText",
-        lua.create_function(
-            |lua, (this, start, end): (Table, Option<i64>, Option<i64>)| {
-                let h = frame_handle_of(lua, &this)?;
-                highlight_text(lua, h, start.unwrap_or(0), end.unwrap_or(-1));
-                Ok(())
-            },
-        )?,
+        lua.create_function(|lua, (this, start, end): (Table, Value, Value)| {
+            let h = frame_handle_of(lua, &this)?;
+            let arg = |v, default| {
+                binding_abi::is_number(lua, v).map_or(default, |n| i64::from(binding_abi::ftol(n)))
+            };
+            highlight_text(lua, h, arg(start, 0), arg(end, -1));
+            Ok(())
+        })?,
     )?;
 
     m.set(

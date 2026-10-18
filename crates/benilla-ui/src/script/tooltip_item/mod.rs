@@ -609,8 +609,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // pushed at `0x52e4a3`). repairCost is the item's cost (`0x534975`), shown in repair mode.
     m.set(
         "SetBagItem",
-        lua.create_function(|lua, (this, bag, slot): (Table, i64, u32)| {
+        lua.create_function(|lua, (this, bag, slot): (Table, Value, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // Both are `lua_isnumber`-gated (`0x5346ff`, `0x53470f`); a miss returns no value at
+            // all (`0x53476e`), the tooltip untouched.
+            let (Some(bag), Some(slot)) = (
+                crate::script::binding_abi::is_number(lua, bag),
+                crate::script::binding_abi::is_number(lua, slot),
+            ) else {
+                return Ok(MultiValue::new());
+            };
+            let bag = i64::from(crate::script::binding_abi::ftol(bag));
+            let slot = crate::script::binding_abi::ftol(slot) as u32;
             let (item_id, count, link, quality, inst, repair_cost) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let cost = model.repair_costs.bags.get(&(bag, slot)).copied();

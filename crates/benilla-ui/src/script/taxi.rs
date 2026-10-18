@@ -174,7 +174,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetNumRoutes",
-        lua.create_function(|lua, i: i64| {
+        // A bare `lua_tonumber` (`0x4dcede`) with no gate: a non-number reads 0, which `0x4dc170`
+        // (index - 1 as unsigned) answers 0 for, as for any out-of-range node.
+        lua.create_function(|lua, i: Value| {
+            let i = i64::from(binding_abi::ftol(binding_abi::coerced_number(lua, Some(i))));
             let model = lua.app_data_ref::<Model>().expect("model");
             Ok(node(&model, i).map_or(0, |n| n.routes.len()) as i64)
         })?,

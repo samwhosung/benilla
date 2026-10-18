@@ -392,7 +392,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "ActionHasRange",
-        lua.create_function(|lua, action: u32| Ok(state_flag(lua, action, |s| s.has_range)))?,
+        // `0x4e75d0`: `lua_isnumber` (`0x4e75d6`) else nil (`0x4e7613`), raising nothing.
+        lua.create_function(|lua, action: Value| {
+            Ok(match crate::script::binding_abi::is_number(lua, action) {
+                Some(n) => state_flag(lua, crate::script::binding_abi::ftol(n) as u32, |s| {
+                    s.has_range
+                }),
+                None => Value::Nil,
+            })
+        })?,
     )?;
     g.set(
         "IsCurrentAction",
