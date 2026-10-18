@@ -324,28 +324,26 @@ fn the_mouse_wheel_flag_round_trips_and_only_the_world_frame_is_born_enabled() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The reference takes a closed-vocabulary value with stray whitespace: the zBar addon ships
-/// `frameStrata="BACKGROUND "` (`zBar.xml:146`). Frame kind, strata and draw layer all trim.
+/// A closed-vocabulary value with stray whitespace misses, as the reference's lookups compare the
+/// whole string (`0x6f17ee`, `0x6f18ce`, `0x6ee32c`): zBar's `frameStrata="BACKGROUND "`
+/// (`zBar.xml:146`) is logged and skipped there. A padded layer leaves `CreateTexture`'s default
+/// (`0x773b01`), a padded strata raises, and a padded kind is no frame type.
 #[test]
-fn an_enum_attribute_tolerates_the_whitespace_a_real_addon_ships() {
+fn an_enum_value_with_stray_whitespace_misses() {
     let s = script();
-    s.run(
-        r#"
-        Padded = CreateFrame(" Frame ", "PaddedKind")
-        Padded:SetFrameStrata("BACKGROUND ")
-        Trailing = Padded:CreateTexture("PaddedTex", " OVERLAY")
-    "#,
-    )
-    .unwrap();
-    assert!(s.errors().is_empty(), "{:?}", s.errors());
+    s.run(r#"Padded = CreateFrame("Frame", "PaddedKind") Tex = Padded:CreateTexture("PaddedTex", " OVERLAY")"#)
+        .unwrap();
     assert_eq!(
-        s.eval::<String>("return Padded:GetFrameStrata()").unwrap(),
-        "BACKGROUND",
-        "the frame took the strata, and reports it in the canonical spelling"
+        s.eval::<String>("return Tex:GetDrawLayer()").unwrap(),
+        "ARTWORK"
     );
-    // The padded kind resolved: an unknown kind would have raised from `CreateFrame`.
-    assert!(s.eval::<bool>("return PaddedKind ~= nil").unwrap());
-    assert!(s.eval::<bool>("return PaddedTex ~= nil").unwrap());
+    let e = s
+        .run(r#"Padded:SetFrameStrata("BACKGROUND ")"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("Unknown frame strata: BACKGROUND "), "{e}");
+    let e = s.run(r#"CreateFrame(" Frame ")"#).unwrap_err().to_string();
+    assert!(e.contains("Unknown frame type ' Frame '"), "{e}");
 }
 
 // ── OnDoubleClick ──
