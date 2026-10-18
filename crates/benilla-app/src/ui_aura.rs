@@ -103,6 +103,7 @@ impl Plugin for UiAuraPlugin {
         app.init_resource::<AuraDurations>()
             .init_resource::<PlayerAuraCache>()
             .init_resource::<AuraFeedMemory>()
+            .init_resource::<benilla_world::frame_pace::FrameStep>()
             // Feed before the VM dispatch, drain after it.
             // After this frame's world publish, so the gain names the unit in the same frame.
             .add_systems(
@@ -428,6 +429,8 @@ fn feed_auras(
     durations: Res<AuraDurations>,
     mut cache: ResMut<PlayerAuraCache>,
     time: Res<Time<Real>>,
+    // The stamp clock at the instant `GetTime` stands at, so an expiry maps onto the VM's clock.
+    step: Res<benilla_world::frame_pace::FrameStep>,
     mut mem: ResMut<AuraFeedMemory>,
 ) {
     let Some(mut script) = script else {
@@ -465,7 +468,7 @@ fn feed_auras(
             let (duration, expiration_time) = join_duration(
                 durations.by_slot.get(&c.slot),
                 c.appeared_at,
-                bevy_now,
+                step.elapsed_secs_f64(),
                 script_now,
             );
             AuraState {
@@ -618,16 +621,17 @@ const DURATION_SLACK: f64 = 1.0;
 /// Joins a slot's stamp to the aura in that slot as `(duration, expirationTime)` on the script
 /// clock, `(0, 0)` for none; only this rejects a stamp. A stamp older than the aura by more than
 /// [`DURATION_SLACK`] is dropped as an earlier occupant's, where the reference's reader
-/// (`0x4e4450`) has no freshness test.
+/// (`0x4e4450`) has no freshness test. `stamp_now` is the stamps' clock at the instant
+/// `script_now` stands at (`FrameStep::elapsed`), so the expiry holds still frame to frame.
 fn join_duration(
     stamp: Option<&DurationStamp>,
     appeared_at: f64,
-    bevy_now: f64,
+    stamp_now: f64,
     script_now: f64,
 ) -> (f64, f64) {
     stamp
         .filter(|d| d.received_at >= appeared_at - DURATION_SLACK)
-        .map(|d| (d.total, script_now + (d.expires_at - bevy_now)))
+        .map(|d| (d.total, script_now + (d.expires_at - stamp_now)))
         .unwrap_or((0.0, 0.0))
 }
 

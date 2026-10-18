@@ -526,6 +526,7 @@ mod caret_tests {
         app.init_resource::<Time>();
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
+        app.init_resource::<benilla_world::frame_pace::FrameStep>();
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {

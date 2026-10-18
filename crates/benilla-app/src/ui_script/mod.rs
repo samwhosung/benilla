@@ -192,7 +192,9 @@ pub(crate) struct UiInput;
 /// `Cooldown.lua:3` gates on `start > 0`, so a reset would hide every running cooldown's sweep.
 #[derive(Resource)]
 pub(crate) struct UiClock {
-    /// `Time<Real>::last_update()` at the tick that produced [`Self::ui_now`].
+    /// [`FrameStep::at`] at the tick that produced [`Self::ui_now`].
+    ///
+    /// [`FrameStep::at`]: benilla_world::frame_pace::FrameStep::at
     pub(crate) anchor: std::time::Instant,
     /// The VM clock after that tick, in seconds since this process started.
     pub(crate) ui_now: f64,
@@ -329,6 +331,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<PlayerUiPressConsumed>()
             .init_resource::<CursorPayloadHeld>()
             .init_resource::<UiClock>()
+            .init_resource::<benilla_world::frame_pace::FrameStep>()
             .init_resource::<AddOnIdentity>()
             // After `AssetSet::Open`: the VM's first load is the chain's `GlobalStrings.lua`.
             .add_systems(
@@ -495,17 +498,17 @@ pub(crate) use lifecycle::{
     finish_ui_load, is_emote_token_line, seat_from_roster, shutdown_ui_state,
 };
 
-/// `GetFramerate()`'s host half: FPS on `Time<Real>`, smoothed by a one-second pole; how the
-/// reference averages it is untraced.
+/// `GetFramerate()`'s host half: FPS on the frame step the UI ticks on, smoothed by a one-second
+/// pole; how the reference averages it is untraced.
 fn feed_framerate(
     script: Option<NonSendMut<UiScript>>,
-    time: Res<Time<bevy::time::Real>>,
+    step: Res<benilla_world::frame_pace::FrameStep>,
     mut smoothed: Local<f64>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    let dt = time.delta_secs_f64();
+    let dt = step.delta.as_secs_f64();
     if dt <= 0.0 {
         return; // the first frame, or a paused one
     }
@@ -814,6 +817,9 @@ mod dropdown_tests;
 
 #[cfg(test)]
 mod ui_scale_tests;
+
+#[cfg(test)]
+mod frame_step_tests;
 
 #[cfg(test)]
 mod action_bar_tests;

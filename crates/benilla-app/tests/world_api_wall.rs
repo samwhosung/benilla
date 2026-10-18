@@ -110,6 +110,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("ffx_glow::FfxSwitches", "record"),
     ("ffx_glow::GlueFfx", "record"),
     ("final_pass::FinalPassTarget", "record"),
+    ("frame_pace::FrameStep", "record"),
     ("instance_tint::InstanceTintMirrors", "record"),
     ("instance_tint::InstanceTints", "record"),
     ("interact::PickMesh", "record"),

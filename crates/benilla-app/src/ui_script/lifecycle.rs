@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use benilla_assets::{LockRecover, LooseOpen};
 use benilla_ui::script::{GlueNotice, UiScript};
+use benilla_world::frame_pace::FrameStep;
 
 use super::manifest::silenced_ui_load;
 use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboardCapture};
@@ -151,21 +152,20 @@ fn new_vm<E: std::fmt::Display>(
 }
 
 /// Start the new VM's `GetTime()` where the process already is and re-anchor [`UiClock`] to it,
-/// both off the `Time<Real>` it anchors on. The reference's `GetTime` is `GetTickCount` × 0.001
+/// both off the [`FrameStep`] the VM ticks on. The reference's `GetTime` is `GetTickCount` × 0.001
 /// (`0x515ea0`, via `0x42c010` → `0x42b790`), an OS clock that never restarts; ours lives in the
 /// VM, rebuilt at every login and `ReloadUI`, and a clock back at zero puts every converted
 /// cooldown start in the past, which stock `CooldownFrame_SetTimer` hides (`Cooldown.lua:3`).
 fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
-    let (anchor, elapsed) = world
-        .get_resource::<Time<bevy::time::Real>>()
-        .map_or_else(Default::default, |t| {
-            (t.last_update(), t.elapsed_secs_f64())
-        });
-    script.set_now(elapsed);
+    let step = world
+        .get_resource::<FrameStep>()
+        .copied()
+        .unwrap_or_default();
+    script.set_now(step.elapsed_secs_f64());
     if let Some(mut clock) = world.get_resource_mut::<UiClock>() {
         *clock = UiClock {
-            anchor: anchor.unwrap_or_else(std::time::Instant::now),
-            ui_now: elapsed,
+            anchor: step.at,
+            ui_now: step.elapsed_secs_f64(),
         };
     }
 }
@@ -1431,13 +1431,13 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<UiClock>();
-        // The process has been up 90 s, on `Time<Real>` and on the dying VM alike.
+        // The process has been up 90 s, on the frame step's clock and on the dying VM alike.
         let startup = Instant::now() - Duration::from_secs(90);
-        let mut time = Time::<bevy::time::Real>::new(startup);
-        // `Time<Real>` measures `elapsed` from its first update, not from `startup`.
-        time.update_with_instant(startup);
-        time.update_with_instant(startup + Duration::from_secs(90));
-        world.insert_resource(time);
+        world.insert_resource(FrameStep {
+            delta: Duration::from_millis(16),
+            at: startup + Duration::from_secs(90),
+            elapsed: Duration::from_secs(90),
+        });
         let mut dying = UiScript::new().unwrap();
         dying.set_now(90.0);
         world.insert_non_send_resource(dying);

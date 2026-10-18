@@ -50,6 +50,7 @@ fn app(w: u32, h: u32, ui_scale: f32) -> App {
     app.init_resource::<Time>();
     app.init_resource::<Time<Real>>();
     app.init_resource::<super::UiClock>();
+    app.init_resource::<benilla_world::frame_pace::FrameStep>();
     app.insert_resource(super::UiScaleCvar(ui_scale));
     app.world_mut().spawn((
         Window {

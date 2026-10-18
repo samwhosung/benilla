@@ -434,9 +434,10 @@ pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, sea
 pub(super) fn tick_script(
     script: Option<NonSendMut<UiScript>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    // Real time: the reference's `GetTime` is the OS tick count, and virtual time clamps each
-    // delta to 250 ms, so a stall would leave every GetTime-anchored timer running long.
-    time: Res<Time<Real>>,
+    // The paced frame step, unclamped, as 1.12.1 hands `OnUpdate` its frame time (`0x76b2c0`):
+    // not `Time<Real>`, which pipelined rendering mis-splits, nor `Time<Virtual>`, which clamps a
+    // stall to 250 ms and which the capture harness pauses.
+    step: Res<benilla_world::frame_pace::FrameStep>,
     mut ui_clock: ResMut<super::UiClock>,
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
     // The booth seam's DPI, and the pane map cleared when the VM or the window is gone.
@@ -539,12 +540,12 @@ pub(super) fn tick_script(
         } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
             super::glue::on_glue_screen_resized(&script);
         }
-        script.tick(time.delta_secs());
+        script.tick(step.delta.as_secs_f32());
     }
-    // The VM's clock anchored at `Time<Real>`'s last update, whose deltas it accumulates; every
-    // `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
+    // The VM's clock anchored at the instant the paced clock stands at, which moves by the same
+    // steps; every `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
     *ui_clock = super::UiClock {
-        anchor: time.last_update().unwrap_or_else(std::time::Instant::now),
+        anchor: step.at,
         ui_now: script.now(),
     };
     let us_tick = lap();
@@ -1716,6 +1717,7 @@ mod clip_plumb_tests {
         app.init_resource::<Time>();
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
+        app.init_resource::<benilla_world::frame_pace::FrameStep>();
         // The uiScale dial at 1.0, the identity.
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
@@ -1802,6 +1804,7 @@ mod clip_plumb_tests {
         app.init_resource::<Time>();
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
+        app.init_resource::<benilla_world::frame_pace::FrameStep>();
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {
@@ -2033,6 +2036,7 @@ mod extract_gate_tests {
         app.init_resource::<Time>();
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
+        app.init_resource::<benilla_world::frame_pace::FrameStep>();
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {
