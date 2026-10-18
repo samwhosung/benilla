@@ -125,8 +125,10 @@ pub struct Anchor {
     pub point: Point,
     pub relative_to: Handle,
     pub relative_point: Point,
-    pub x_off: f32,
-    pub y_off: f32,
+    /// The offsets: script numbers `SetPoint` stores by `S` (`0x7a28a3`..`0x7a28e3`), or layout
+    /// lengths the engine wrote itself, as the drag pin does (`0x768430`).
+    pub x_off: Len,
+    pub y_off: Len,
 }
 
 impl Anchor {
@@ -141,8 +143,25 @@ impl Anchor {
             point,
             relative_to,
             relative_point,
-            x_off,
-            y_off,
+            x_off: Len::Script(x_off),
+            y_off: Len::Script(y_off),
+        }
+    }
+
+    /// An anchor whose offsets the engine wrote in layout units.
+    pub fn new_layout(
+        point: Point,
+        relative_to: Handle,
+        relative_point: Point,
+        x_off: f32,
+        y_off: f32,
+    ) -> Anchor {
+        Anchor {
+            point,
+            relative_to,
+            relative_point,
+            x_off: Len::Layout(x_off),
+            y_off: Len::Layout(y_off),
         }
     }
 
@@ -151,8 +170,8 @@ impl Anchor {
         self.point == other.point
             && self.relative_to == other.relative_to
             && self.relative_point == other.relative_point
-            && self.x_off.to_bits() == other.x_off.to_bits()
-            && self.y_off.to_bits() == other.y_off.to_bits()
+            && self.x_off.bits() == other.x_off.bits()
+            && self.y_off.bits() == other.y_off.bits()
     }
 }
 
@@ -186,8 +205,8 @@ impl Anchors {
     /// call then stores nothing; else `a` replaces it. Returns whether it stored. A NaN offset
     /// never matches, as the client's unordered compare.
     pub fn set(&mut self, a: Anchor, units: LayoutUnits) -> bool {
-        let near = |p: f32, q: f32| {
-            (f64::from(units.store(p)) - f64::from(units.store(q))).abs() < SIZE_EPS
+        let near = |p: Len, q: Len| {
+            (f64::from(p.layout(units)) - f64::from(q.layout(units))).abs() < SIZE_EPS
         };
         let unchanged = self.get(a.point).is_some_and(|h| {
             h.relative_to == a.relative_to
@@ -243,7 +262,7 @@ impl Anchors {
     /// The offsets of the anchor held for `point`; the point is not writable here, so an anchor
     /// never leaves its slot.
     #[inline]
-    pub fn offset_mut(&mut self, point: Point) -> Option<(&mut f32, &mut f32)> {
+    pub fn offset_mut(&mut self, point: Point) -> Option<(&mut Len, &mut Len)> {
         self.0[point.id() as usize]
             .as_mut()
             .map(|a| (&mut a.x_off, &mut a.y_off))
@@ -276,8 +295,8 @@ impl Anchors {
     pub fn stored(&self, units: LayoutUnits) -> Anchors {
         let mut out = *self;
         for a in out.0.iter_mut().flatten() {
-            a.x_off = units.store(a.x_off);
-            a.y_off = units.store(a.y_off);
+            a.x_off = Len::Layout(a.x_off.layout(units));
+            a.y_off = Len::Layout(a.y_off.layout(units));
         }
         out
     }
@@ -325,9 +344,11 @@ impl<'a> IntoIterator for &'a Anchors {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutInput {
     pub anchors: Anchors,
-    /// `0.0` is the no-size sentinel (`0x7ffd74`): the axis derives from the anchors.
-    pub width: f32,
-    pub height: f32,
+    /// `0.0` is the no-size sentinel (`0x7ffd74`): the axis derives from the anchors. A script
+    /// number `SetWidth`/`SetHeight` stores by `S`, or a layout length the engine wrote, as the
+    /// drag pin does (`0x768430`).
+    pub width: Len,
+    pub height: Len,
     /// The effective scale, parent times own (`0x76ac90`), applied only to the anchor offsets and
     /// the size span.
     pub scale: f32,
@@ -343,8 +364,8 @@ impl Default for LayoutInput {
     fn default() -> LayoutInput {
         LayoutInput {
             anchors: Anchors::new(),
-            width: 0.0,
-            height: 0.0,
+            width: Len::Script(0.0),
+            height: Len::Script(0.0),
             scale: 1.0,
             clamp: false,
             extent_x: 0.8,
@@ -362,8 +383,8 @@ impl LayoutInput {
         let (extent_x, extent_y) = space.extent();
         LayoutInput {
             anchors: self.anchors.stored(units),
-            width: units.store(self.width),
-            height: units.store(self.height),
+            width: Len::Layout(self.width.layout(units)),
+            height: Len::Layout(self.height.layout(units)),
             scale: self.scale,
             clamp: self.clamp,
             extent_x,
@@ -379,8 +400,8 @@ impl LayoutInput {
     ) -> LayoutInput {
         LayoutInput {
             anchors: anchors.into_iter().collect(),
-            width,
-            height,
+            width: Len::Script(width),
+            height: Len::Script(height),
             ..LayoutInput::default()
         }
     }
@@ -791,7 +812,7 @@ pub fn resolve_rect(
 
 /// A frame's size slots, its stored fields as floats (`0x768420`, `0x768410`).
 fn stored_size(frame: &LayoutInput) -> (f64, f64) {
-    (f64::from(frame.width), f64::from(frame.height))
+    (f64::from(frame.width.raw()), f64::from(frame.height.raw()))
 }
 
 /// [`resolve_rect`] with the anchors its scans read, a bit per point id ([`Anchors::read_targets`]).
@@ -814,8 +835,8 @@ fn build_edge_input(
     let mut slots: [Option<AnchorRel>; 9] = [None; 9];
     for a in &frame.anchors {
         slots[a.point.id() as usize] = Some(AnchorRel {
-            x_off: a.x_off,
-            y_off: a.y_off,
+            x_off: a.x_off.raw(),
+            y_off: a.y_off.raw(),
             rel_point: a.relative_point.id() as u32,
             rel_rect: target_rect(a.relative_to).map(Rect::to_array),
             // An ordinary frame's normalize predicate returns 0 (`0x46ff60`).
@@ -1285,7 +1306,7 @@ mod tests {
         for (x, y) in [(10.001, 20.0), (10.0, 19.999), (f32::NAN, 20.0)] {
             let mut b = a;
             assert!(b.set(with(x, y), eps), "({x}, {y})");
-            assert!(b.get(Point::Center).unwrap().x_off.to_bits() == x.to_bits());
+            assert!(b.get(Point::Center).unwrap().x_off.raw().to_bits() == x.to_bits());
         }
         let mut b = a;
         assert!(b.set(
@@ -1499,8 +1520,8 @@ mod tests {
                 10.0,
                 -5.0,
             )]),
-            width: 200.0,
-            height: 50.0,
+            width: Len::Script(200.0),
+            height: Len::Script(50.0),
             scale: 2.0,
             ..LayoutInput::default()
         };

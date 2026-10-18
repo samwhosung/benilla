@@ -191,12 +191,12 @@ impl super::UiScript {
             input.anchors = pin;
         }
         if seat_size && w != 0 {
-            changed |= input.width.to_bits() != (w as f32).to_bits();
-            input.width = w as f32;
+            changed |= input.width.bits() != crate::layout::Len::Script(w as f32).bits();
+            input.width = crate::layout::Len::Script(w as f32);
         }
         if seat_size && ht != 0 {
-            changed |= input.height.to_bits() != (ht as f32).to_bits();
-            input.height = ht as f32;
+            changed |= input.height.bits() != crate::layout::Len::Script(ht as f32).bits();
+            input.height = crate::layout::Len::Script(ht as f32);
         }
         if seat_size {
             model.note_authored_size(h);
@@ -261,10 +261,10 @@ impl super::UiScript {
                 input.anchors = anchors;
             }
             if seat_size {
-                changed |= input.width.to_bits() != l.width.to_bits()
-                    || input.height.to_bits() != l.height.to_bits();
-                input.width = l.width;
-                input.height = l.height;
+                changed |= input.width.bits() != crate::layout::Len::Script(l.width).bits()
+                    || input.height.bits() != crate::layout::Len::Script(l.height).bits();
+                input.width = crate::layout::Len::Script(l.width);
+                input.height = crate::layout::Len::Script(l.height);
             }
             if let Some(f) = model.arena.frame_mut(h) {
                 f.user_placed = true;

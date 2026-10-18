@@ -125,9 +125,9 @@ pub(crate) fn seat_engine_children(model: &mut Model, minimap: FrameHandle) {
     let side = disc * unit;
     for h in arrows {
         let input = model.layout_inputs.entry(h).or_default();
-        let changed = input.width.to_bits() != side.to_bits();
-        input.width = side;
-        input.height = side;
+        let changed = input.width.bits() != crate::layout::Len::Script(side).bits();
+        input.width = crate::layout::Len::Script(side);
+        input.height = crate::layout::Len::Script(side);
         model.invalidate_frame(h, changed);
     }
     if let Some(h) = player {
@@ -453,10 +453,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let (w, ht) = model
                     .layout_inputs
                     .get(&h)
-                    .map_or((0.0, 0.0), |i| (i.width, i.height));
+                    .map_or((0.0, 0.0), |i| (i.width.layout(u), i.height.layout(u)));
                 let stored = |v: f32| f64::from(u.store(v));
-                first = -stored(x as f32) / stored(ht);
-                second = stored(y as f32) / stored(w);
+                first = -stored(x as f32) / f64::from(ht);
+                second = stored(y as f32) / f64::from(w);
             }
             super::tick::verb(lua, |model| {
                 let d = 2.0 * f64::from(model.minimap.radius_yd());

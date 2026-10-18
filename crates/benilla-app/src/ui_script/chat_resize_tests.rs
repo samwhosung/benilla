@@ -569,7 +569,8 @@ fn an_undocked_tab_drags_again_and_a_plain_click_drops_the_window() {
     let first = centre(&mut s, "ChatFrame2");
     drag_named_tab(&mut s, "ChatFrame2", 0.0, 120.0);
     let second = centre(&mut s, "ChatFrame2");
-    assert_eq!(
+    // The drag moves by the cursor's travel in layout units (`0x7655c4`), read back by `G`.
+    benilla_ui::assert_near!(
         second.1,
         first.1 + 120.0,
         "the second drag of the undocked tab moved the window"
@@ -670,7 +671,9 @@ fn a_tab_dropped_off_screen_puts_the_window_back_whole() {
         (1, "TOPLEFT", "UIParent", "TOPLEFT"),
         "the validate's anchor is the only one"
     );
-    assert_eq!((width(&mut s), height(&mut s)), (w, h), "at its own size");
+    // The drag's pin sizes from the rect (`0x7684f1`, `0x768518`), its edges' difference in layout
+    // units, which can read an ulp off the script size.
+    benilla_ui::assert_near!((width(&mut s), height(&mut s)), (w, h), "at its own size");
     let want_top: f64 = s
         .eval("return MainMenuBar:GetHeight() + ChatFrame1Tab:GetHeight()")
         .unwrap();

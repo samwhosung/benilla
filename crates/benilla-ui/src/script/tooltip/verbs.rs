@@ -232,13 +232,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     // SetPadding(width) (`0x530f10`): extra plate width that survives a clear (ItemRefTooltip's 16
     // keeps its close button off the text, ItemRef.xml:40), read by `lua_tonumber` with no type
-    // test, so a non-number is 0 (`0x530fa0`), stored as given (`0x530630`) and read at the next
-    // sizing.
+    // test, so a non-number is 0 (`0x530fa0`), stored in layout units (`0x530fba`, `0x530630`)
+    // and read at the next sizing.
     m.set(
         "SetPadding",
         lua.create_function(|lua, (this, w): (Table, Value)| {
             let w = lua.coerce_number(w).ok().flatten().unwrap_or(0.0);
-            with_tip(lua, &this, |t| t.padding = w as f32)
+            let h = frame_handle_of(lua, &this)?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let stored = model.layout_units().store(w as f32);
+            super::tip_mut(&mut model, h).map(|t| t.padding = stored)
         })?,
     )?;
     // FadeOut() (`0x531f00`): the fade request ([`super::fade_out`]).

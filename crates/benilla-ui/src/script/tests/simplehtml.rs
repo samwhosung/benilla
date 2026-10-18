@@ -54,7 +54,7 @@ fn blocks(s: &UiScript, name: &str) -> Vec<Blk> {
                         .position(|id| *id == Some(a.relative_to))
                         .map_or(Rel::Other, Rel::Block)
                 };
-                (a.point, a.relative_point, a.x_off, a.y_off, rel)
+                (a.point, a.relative_point, a.x_off.raw(), a.y_off.raw(), rel)
             });
             Blk {
                 text: d.text.clone(),

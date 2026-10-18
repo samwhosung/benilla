@@ -86,8 +86,8 @@ impl InputFingerprint {
             self.feed(u64::from(a.point.id()));
             self.feed(u64::from(a.relative_to));
             self.feed(u64::from(a.relative_point.id()));
-            self.f32(a.x_off);
-            self.f32(a.y_off);
+            self.feed(a.x_off.bits());
+            self.feed(a.y_off.bits());
             n += 1;
         }
         self.feed(n);
@@ -96,8 +96,8 @@ impl InputFingerprint {
     #[inline]
     fn input(&mut self, i: &LayoutInput) {
         self.anchors(&i.anchors);
-        self.f32(i.width);
-        self.f32(i.height);
+        self.feed(i.width.bits());
+        self.feed(i.height.bits());
         self.f32(i.scale);
         self.feed(u64::from(i.clamp));
         self.f32(i.extent_x);
@@ -218,7 +218,11 @@ pub(super) const FONTSTRING_MIN_SPAN: f32 = 1.0;
 /// A font string's size slot (`0x772930`, height `0x772a60`) in layout units: its stored size, or
 /// when that is 0 its text's extent (`0x772890`), raised to `S(1)`, at 53 bits, when not above it or
 /// a NaN (`0x772971`, `0x77297a`), so a single anchor always fixes the opposite edge.
-fn fontstring_slot(units: layout::LayoutUnits, authored: f32, measure: Option<f32>) -> f64 {
+pub(in crate::script) fn fontstring_slot(
+    units: layout::LayoutUnits,
+    authored: f32,
+    measure: Option<f32>,
+) -> f64 {
     let stored = units.store(authored);
     let candidate = if stored == 0.0 {
         measure.map_or(0.0, |m| f64::from(units.store(m)))

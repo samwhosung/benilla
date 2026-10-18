@@ -951,10 +951,10 @@ impl UiScript {
             })
             .collect();
         for h in arrows {
-            let size = model
-                .layout_inputs
-                .get(&h)
-                .map_or((0.0, 0.0), |i| (i.width, i.height));
+            let size = model.layout_inputs.get(&h).map_or((0.0, 0.0), |i| {
+                let u = model.layout_units();
+                (i.width.script(u), i.height.script(u))
+            });
             let loaded = match model.arena.frame(h).map(|f| &f.kind_state) {
                 Some(KindState::Model(m)) => m
                     .path

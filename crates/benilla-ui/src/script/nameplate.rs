@@ -585,8 +585,8 @@ impl Plate {
 
         // The plate's size; its position is per-frame, in `drive`.
         let input = model.layout_inputs.entry(frame).or_default();
-        input.width = g.width;
-        input.height = g.height;
+        input.width = crate::layout::Len::Script(g.width);
+        input.height = crate::layout::Len::Script(g.height);
 
         for rh in [border, glow] {
             model.region_data.entry(rh).or_default().anchors = Anchors::from([
@@ -603,8 +603,8 @@ impl Plate {
             g.bar_off_x,
             g.bar_off_y,
         )]);
-        bar_input.width = g.bar_width;
-        bar_input.height = g.bar_height;
+        bar_input.width = crate::layout::Len::Script(g.bar_width);
+        bar_input.height = crate::layout::Len::Script(g.bar_height);
 
         // The name's (`0x7cb456`) and level's (`0x7cb7f5`) anchors, which `_Nameplates` checks.
         let name_data = model.region_data.entry(name).or_default();

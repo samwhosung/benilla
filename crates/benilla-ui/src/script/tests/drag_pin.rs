@@ -104,7 +104,9 @@ fn a_bare_start_and_stop_pins_a_stretched_frame_at_its_rect() {
         "#,
     )
     .unwrap();
-    assert_eq!(anchor(&s), pinned_at(100.0, -400.0));
+    // The pin's top is `S(200) − K2·RN24(600/768)` in layout units, which `GetPoint` answers as
+    // `G` of it: -399.99995589 at 4:3, -399.99997 as a float.
+    assert_eq!(anchor(&s), pinned_at(100.0, -399.99997));
     crate::assert_near!(
         s.eval::<(f64, f64)>("return Box:GetWidth(), Box:GetHeight()")
             .unwrap(),
@@ -480,6 +482,47 @@ fn the_save_reads_the_flags_after_the_rect() {
         (saved[0].x, saved[0].y, saved[0].width, saved[0].height),
         (Some(40), Some(-60), Some(70), Some(30)),
         "resized by its own OnSizeChanged inside the save, so W and H are written"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The pin and the pump write layout units themselves (`0x768430`, `0x7655b0`): the cursor's layout
+/// delta goes into the pinned offset and size, so `GetPoint` and `GetWidth` answer `G` of what the
+/// drag stored, not the script numbers the cursor travelled. The answers are the law's at 4:3,
+/// derived from the cells `0x41ad10` writes.
+#[test]
+fn a_drag_answers_the_layout_offsets_and_size_it_stored() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        Box = CreateFrame("Frame", "Box")
+        Box:SetPoint("BOTTOMLEFT", 100, 100); Box:SetWidth(200); Box:SetHeight(100)
+        Box:SetMovable(true); Box:SetResizable(true)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(400.0, 300.0);
+    s.run("Box:StartMoving()").unwrap();
+    s.mouse_move(437.25, 289.5);
+    s.run("Box:StopMovingOrSizing()").unwrap();
+    let point = "local _, _, _, x, y = Box:GetPoint(1) return x, y";
+    let moved = (137.249_982_696_026_82, -410.499_948_106_706_94);
+    assert_eq!(s.eval::<(f64, f64)>(point).unwrap(), moved);
+
+    s.run("Box:StartSizing(\"BOTTOMRIGHT\")").unwrap();
+    s.mouse_move(450.75, 282.25);
+    s.run("Box:StopMovingOrSizing()").unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64)>("return Box:GetWidth(), Box:GetHeight()")
+            .unwrap(),
+        (213.500_019_706_785_4, 107.249_983_143_061_66)
+    );
+    assert_eq!(
+        s.eval::<(f64, f64)>(point).unwrap(),
+        moved,
+        "a far grip keeps the pin"
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

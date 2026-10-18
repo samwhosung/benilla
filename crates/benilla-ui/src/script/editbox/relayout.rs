@@ -141,8 +141,8 @@ pub(super) fn relayout(lua: &Lua, h: FrameHandle) -> bool {
     // `fld top; fadd bottom; fadd st, st(1)`.
     let height = (top + bottom) + text_h;
     let input = model.layout_inputs.entry(h).or_default();
-    let moved = input.height.to_bits() != height.to_bits();
-    input.height = height;
+    let moved = input.height.bits() != crate::layout::Len::Script(height).bits();
+    input.height = crate::layout::Len::Script(height);
     // `SetHeight`, which invalidates (`0x7683f0`).
     model.invalidate_frame(h, moved);
     true

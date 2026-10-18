@@ -222,7 +222,7 @@ pub(crate) fn get_point_values(
         Value::String(lua.create_string(super::point_name(a.point))?),
         rel(a.relative_to)?,
         Value::String(lua.create_string(super::point_name(a.relative_point))?),
-        Value::Number(units.load(units.store(a.x_off))),
-        Value::Number(units.load(units.store(a.y_off))),
+        Value::Number(a.x_off.get(units)),
+        Value::Number(a.y_off.get(units)),
     ]))
 }

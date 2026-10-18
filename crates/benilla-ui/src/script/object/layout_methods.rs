@@ -128,8 +128,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let input = model.layout_inputs.entry(h).or_default();
-            let changed = input.width.to_bits() != w.to_bits();
-            input.width = w;
+            let changed = input.width.bits() != crate::layout::Len::Script(w).bits();
+            input.width = crate::layout::Len::Script(w);
             // A size write moves no edge and no roster membership. It invalidates whether or not
             // the width moved (`0x7683d0`).
             model.invalidate_frame(h, changed);
@@ -146,8 +146,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let input = model.layout_inputs.entry(h).or_default();
-            let changed = input.height.to_bits() != ht.to_bits();
-            input.height = ht;
+            let changed = input.height.bits() != crate::layout::Len::Script(ht).bits();
+            input.height = crate::layout::Len::Script(ht);
             model.invalidate_frame(h, changed);
             model.note_authored_size(h);
             Ok(())
@@ -293,8 +293,14 @@ fn size_read(lua: &Lua, h: FrameHandle, width: bool) -> f64 {
         let set = model
             .layout_inputs
             .get(&h)
-            .map_or(0.0, |i| if width { i.width } else { i.height });
-        (units, units.store(set))
+            .map_or(crate::layout::Len::Script(0.0), |i| {
+                if width {
+                    i.width
+                } else {
+                    i.height
+                }
+            });
+        (units, set.layout(units))
     };
     if stored != 0.0 {
         return units.load(stored);

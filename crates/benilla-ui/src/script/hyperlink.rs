@@ -287,12 +287,12 @@ fn place(model: &mut Model, h: FrameHandle, rect: Rect, link: &str, text: &str) 
     let pin = Anchors::from([Anchor::new(Point::TopLeft, SCREEN, Point::TopLeft, x, y)]);
     let input = model.layout_inputs.entry(h).or_default();
     let changed = !input.anchors.bits_eq(&pin)
-        || input.width.to_bits() != w.to_bits()
-        || input.height.to_bits() != ht.to_bits();
+        || input.width.bits() != crate::layout::Len::Script(w).bits()
+        || input.height.bits() != crate::layout::Len::Script(ht).bits();
     if changed {
         input.anchors = pin;
-        input.width = w;
-        input.height = ht;
+        input.width = crate::layout::Len::Script(w);
+        input.height = crate::layout::Len::Script(ht);
         model.note_authored_size(h);
     }
     // The points are cleared (`0x7a3415`), one set with the invalidate flag (`0x7a3441`), and the

@@ -431,3 +431,19 @@ fn a_steady_hover_measures_nothing_after_its_first_frame() {
     assert_eq!(calls.get(), after_first, "a steady hover re-measured");
     assert_eq!(s.layout_solves(), solves, "a steady hover re-solved");
 }
+
+/// The sizer works in layout units (`0x5309d8`-`0x530a39`): `2·S(10.24) + S(padding) +
+/// S(minimum)`, stored once by the plate's layout size slot, so `GetWidth` answers `G` of that
+/// sum, not of the script sum stored afresh. At 4:3 with padding 16 and a minimum of 177 the two
+/// differ: 213.48001161992534 against 213.4799925464393.
+#[test]
+fn the_plate_width_is_a_layout_sum() {
+    let (s, _) = tooltip();
+    s.run(r#"TS:AddLine("abcd") TS:SetMinimumWidth(177) TS:SetPadding(16) TS:Show()"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<f64>("return TS:GetWidth()").unwrap(),
+        213.480_011_619_925_34
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

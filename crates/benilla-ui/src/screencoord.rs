@@ -150,6 +150,30 @@ impl Len {
         units.load(self.layout(units))
     }
 
+    /// The number held, in whichever unit it is: for a value already brought into layout units,
+    /// as the resolver's stored input is ([`crate::layout::LayoutInput::stored`]).
+    #[inline]
+    pub fn raw(self) -> f32 {
+        match self {
+            Len::Script(v) | Len::Layout(v) => v,
+        }
+    }
+
+    /// Whether it is exactly zero in either unit, the size sentinel (`0x7ffd74`).
+    #[inline]
+    pub fn is_zero(self) -> bool {
+        self.raw() == 0.0
+    }
+
+    /// Bit-exact identity, its unit included, as the layout gate's fingerprint compares.
+    #[inline]
+    pub fn bits(self) -> u64 {
+        match self {
+            Len::Script(v) => u64::from(v.to_bits()),
+            Len::Layout(l) => (1 << 32) | u64::from(l.to_bits()),
+        }
+    }
+
     /// The length in script units for a consumer that lays out or draws in them: a script number
     /// as given, a layout length through `G`.
     #[inline]
@@ -229,6 +253,23 @@ impl LayoutSpace {
             return 0.0;
         }
         (f64::from(l) / f64::from(extent) * f64::from(root)) as f32
+    }
+
+    /// A point in the root's units as the client's cursor holds it in layout units: its fraction of
+    /// the root, stored as a float (`[root+0x1118]`), times the extent, stored again (`0x41ad80`).
+    #[inline]
+    pub fn cursor_layout(&self, x: f32, y: f32) -> (f32, f32) {
+        let to = |v: f32, root: f32, extent: f32| {
+            if root == 0.0 {
+                return 0.0;
+            }
+            let f = (f64::from(v) / f64::from(root)) as f32;
+            (f64::from(extent) * f64::from(f)) as f32
+        };
+        (
+            to(x, self.root_w, self.extent_x),
+            to(y, self.root_h, self.extent_y),
+        )
     }
 
     /// A layout rect in the root's units: the root maps onto the root, each axis by its fraction.

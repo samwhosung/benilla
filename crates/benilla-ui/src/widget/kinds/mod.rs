@@ -325,8 +325,8 @@ pub struct TooltipState {
     /// (`[arg+0x18]`, not the compact `[arg+0x14]`), surviving the stock caller's `SetOwner` in
     /// between (`MerchantFrame.xml:67-72`); the reference's route to `0x52b650` is untraced.
     pub equipped_header_armed: bool,
-    /// `SetPadding` (`+0x3bc`): extra plate width past the content (`0x5309f4`), which the clear
-    /// keeps (`ItemRef.xml:40` sets 16 for the close button).
+    /// `SetPadding` (`+0x3bc`), in layout units (`0x530fba`): extra plate width past the content
+    /// (`0x5309f4`), which the clear keeps (`ItemRef.xml:40` sets 16 for the close button).
     pub padding: f32,
     /// Benilla-only: a sizing ran in a VM with no font engine before its lines were measured, so
     /// the next resolve runs it again ([`crate::script::tooltip`]'s headless fallback).

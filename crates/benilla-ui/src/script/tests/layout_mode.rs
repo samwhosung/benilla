@@ -87,8 +87,8 @@ fn an_alt_press_in_layout_mode_moves_the_toplevel_window() {
 }
 
 /// Control sizes from the cell of a 3×3 grid the press falls in, the rect cut at a quarter and
-/// three quarters per axis (`0x765384`–`0x765464`); the middle cell moves. A cut belongs to the
-/// cell past it: x at exactly a quarter is the middle column.
+/// three quarters per axis (`0x765384`–`0x765464`), in layout units; the middle cell moves. A
+/// script-exact quarter is no layout cut: 147.5 here lands a hair short of it, in the left column.
 #[test]
 fn a_control_press_sizes_from_the_grid_cell_and_the_middle_moves() {
     let mut s = window();
@@ -103,11 +103,19 @@ fn a_control_press_sizes_from_the_grid_cell_and_the_middle_moves() {
     // Now 220×110 from (100, 100): the left column is x < 155, the middle row 127.5..182.5.
     modifier_drag(&mut s, (154.0, 150.0), (-10.0, 0.0), (true, false));
     crate::assert_near!(rect(&mut s, "Win"), (90.0, 100.0, 230.0, 110.0), "LEFT");
-    // Now 230×110 from (90, 100): x 147.5 is exactly a quarter in.
-    modifier_drag(&mut s, (147.5, 150.0), (10.0, 10.0), (true, false));
+    // Now 230×110 from (90, 100): x 147.5 is a quarter in by script numbers, but in layout units
+    // the press is 5.6e-9 short of the cut, so it still sizes from the left.
+    modifier_drag(&mut s, (147.5, 150.0), (-10.0, 0.0), (true, false));
     crate::assert_near!(
         rect(&mut s, "Win"),
-        (100.0, 110.0, 230.0, 110.0),
+        (80.0, 100.0, 240.0, 110.0),
+        "LEFT at 147.5"
+    );
+    // Now 240×110 from (80, 100): x 150 is the middle column.
+    modifier_drag(&mut s, (150.0, 150.0), (10.0, 10.0), (true, false));
+    crate::assert_near!(
+        rect(&mut s, "Win"),
+        (90.0, 110.0, 240.0, 110.0),
         "the middle cell moves"
     );
     assert_eq!(log_of(&s), "");

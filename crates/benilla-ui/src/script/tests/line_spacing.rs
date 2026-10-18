@@ -309,7 +309,7 @@ fn simplehtml_keeps_a_negative_spacing_but_steps_its_blocks_by_zero() {
         .get(crate::layout::Point::TopLeft)
         .expect("the TOPLEFT anchor")
         .y_off;
-    assert_eq!(y, 0.0, "the step is the clamped spacing");
+    assert_eq!(y.raw(), 0.0, "the step is the clamped spacing");
 }
 
 /// How many messages a plain frame keeps after a tick: its capacity.

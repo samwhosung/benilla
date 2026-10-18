@@ -121,7 +121,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
     let width = model
         .layout_inputs
         .get(&fh)
-        .map_or(0.0, |input| input.width);
+        .map_or(0.0, |input| input.width.script(model.layout_units()));
 
     // `prevBlock` (`+0x348`), the last text block, and `nextYOffset` (`+0x34c`), never positive.
     let mut prev_block: Option<u32> = None;
