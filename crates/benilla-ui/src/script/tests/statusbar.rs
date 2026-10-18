@@ -252,16 +252,33 @@ fn statusbar_fill_replaces_a_set_tex_coord_at_its_next_marked_update() {
             .expect("the bar quad")
     };
     s.tick(0.0);
-    assert_eq!(fill(&s), ([0.0, 0.4, 0.0, 1.0], 80.0), "the base is not kept");
-    s.run("SbOwn:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1)").unwrap();
+    assert_eq!(
+        fill(&s),
+        ([0.0, 0.4, 0.0, 1.0], 80.0),
+        "the base is not kept"
+    );
+    s.run("SbOwn:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1)")
+        .unwrap();
     s.tick(0.0);
-    assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "unmarked: the addon's holds");
+    assert_eq!(
+        fill(&s),
+        ([0.0, 1.0, 0.0, 1.0], 200.0),
+        "unmarked: the addon's holds"
+    );
     s.run("SbOwn:SetValue(40)").unwrap();
     s.tick(0.0);
-    assert_eq!(fill(&s), ([0.0, 1.0, 0.0, 1.0], 200.0), "an equal value stores nothing");
+    assert_eq!(
+        fill(&s),
+        ([0.0, 1.0, 0.0, 1.0], 200.0),
+        "an equal value stores nothing"
+    );
     s.run("SbOwn:SetValue(60)").unwrap();
     s.tick(0.0);
-    assert_eq!(fill(&s), ([0.0, 0.6, 0.0, 1.0], 120.0), "a stored value marks it");
+    assert_eq!(
+        fill(&s),
+        ([0.0, 0.6, 0.0, 1.0], 120.0),
+        "a stored value marks it"
+    );
     s.run("SbOwn:Hide(); SbOwn:SetValue(10); SbOwn:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1)")
         .unwrap();
     s.tick(0.0);
@@ -344,6 +361,37 @@ fn statusbar_get_texture_returns_the_bar_region() {
         b:SetStatusBarColor(1, 0, 0)
         local r, g, bb, a = b:GetStatusBarColor()
         assert(r == ONE and g == 0 and bb == 0 and a == ONE)
+    "#,
+    )
+    .unwrap();
+}
+
+/// NaN through the setters as the x87 compares take it: `SetMinMaxValues` keeps a NaN low bound,
+/// as `min > max` is false (`0x783276`, `test ah,0x41`); `SetValue`'s clamps keep a NaN, which is
+/// then never equal to the held value (`0x783342`), so each NaN is stored and fires.
+#[test]
+fn statusbar_nan_keeps_its_low_bound_and_always_stores() {
+    let s = script();
+    s.run(
+        r#"
+        local b = CreateFrame("StatusBar", "SbNan")
+        Fires = 0
+        b:SetScript("OnValueChanged", function() Fires = Fires + 1 end)
+        local nan = 0 / 0
+        b:SetMinMaxValues(0, 10); b:SetValue(5)
+        assert(Fires == 1, "the first value: " .. Fires)
+        b:SetValue(nan)
+        local v = b:GetValue()
+        assert(v ~= v and Fires == 2, "a NaN is stored and fires")
+        b:SetValue(nan)
+        assert(Fires == 3, "a NaN is never the held value")
+        b:SetMinMaxValues(nan, 10)
+        local mn, mx = b:GetMinMaxValues()
+        assert(mn ~= mn and mx == 10, "NaN is not above 10: the low bound is kept")
+        assert(Fires == 4, "the range re-sets the held NaN, which fires")
+        b:SetMinMaxValues(3, nan)
+        mn, mx = b:GetMinMaxValues()
+        assert(mn == 3 and mx ~= mx, "3 is not above NaN either")
     "#,
     )
     .unwrap();

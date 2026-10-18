@@ -317,6 +317,10 @@ fn an_engine_health_write_fires_onvaluechanged_with_the_plate_as_parent() {
     // Health and maximum both moved: one watcher each, the range fire twice, the value once.
     drive(&mut s, &[plate("Wolf", 20.0, 50.0)]);
     assert_eq!(s.eval::<i64>("return Fired").unwrap(), 5);
+    // The maximum alone moved: its watcher (field `0x58`) runs once, the range re-firing the held
+    // value, and the equal value stores nothing.
+    drive(&mut s, &[plate("Wolf", 20.0, 60.0)]);
+    assert_eq!(s.eval::<i64>("return Fired").unwrap(), 6);
 }
 
 /// The driver writes a plate's static properties once, at creation, so an addon's takeover (pfUI
