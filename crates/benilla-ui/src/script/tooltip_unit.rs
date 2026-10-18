@@ -176,46 +176,23 @@ fn set_subject(lua: &Lua, h: FrameHandle, guid: Option<u64>) {
     }
 }
 
-/// Seed the `<name>StatusBar` child from a unit snapshot, as the builder (`0x52a0eb` min/max,
-/// `0x52a12e` value) and the health watcher (`0x529560`) do, firing `OnValueChanged` on a change;
-/// FrameXML's `HealthBar_OnValueChanged` colours the fill. Neither shows it. Returns the bar.
+/// Drive the `<name>StatusBar` child from a unit snapshot, as the builder (`0x52a0eb` range,
+/// `0x52a12e` value) and the health watcher (`0x529560`) do: the raw maximum and health through
+/// [`super::statusbar::set_health`], firing each `OnValueChanged` it makes; FrameXML's
+/// `HealthBar_OnValueChanged` colours the fill. Neither shows it. Returns the bar.
 fn seed_bar(lua: &Lua, h: FrameHandle, u: &UnitState) -> Option<FrameHandle> {
-    let bar = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        super::tooltip::status_bar(&model, h)?
-    };
-    let changed = {
+    let (bar, fires) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let Some(KindState::StatusBar(sb)) = model.arena.frame_mut(bar).map(|f| &mut f.kind_state)
-        else {
-            return None;
-        };
-        sb.min = 0.0;
-        sb.max = u.max_health.max(1) as f32;
-        let v = u.health.min(u.max_health.max(1)) as f32;
-        let changed = (sb.value - v).abs() > f32::EPSILON;
-        sb.value = v;
-        changed
-    };
-    if changed {
-        let (id, value) = {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let v = match model.arena.frame(bar).map(|f| &f.kind_state) {
-                Some(KindState::StatusBar(sb)) => sb.value,
-                _ => 0.0,
-            };
-            (model.frame_id(bar), v)
-        };
-        if let Err(e) = super::event::fire_widget_handler(
-            lua,
-            id,
-            "OnValueChanged",
-            vec![mlua::Value::Number(f64::from(value))],
-        ) {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .record_lua_error(&e);
+        let bar = super::tooltip::status_bar(&model, h)?;
+        if let Some(KindState::Tooltip(t)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            t.unit_health = u.health;
         }
+        let fires =
+            super::statusbar::set_health(&mut model, bar, u.max_health as f32, u.health as f32);
+        (bar, fires)
+    };
+    for value in fires.into_iter().flatten() {
+        super::statusbar::fire_engine_value_changed(lua, bar, value);
     }
     Some(bar)
 }
@@ -223,7 +200,8 @@ fn seed_bar(lua: &Lua, h: FrameHandle, u: &UnitState) -> Option<FrameHandle> {
 /// A `set_unit` push of the unit a tooltip shows updates its health bar without rebuilding the
 /// lines, as the reference's HEALTH field watcher does: it is keyed on the unit's guid (`0x52a0a8`
 /// registers `0x529560` on `+0x368`/`+0x36c`), so a token that stops naming the unit, as
-/// `"mouseover"` does when the hover ends, leaves a fading plate's bar standing.
+/// `"mouseover"` does when the hover ends, leaves a fading plate's bar standing. It runs only
+/// when the health differs from the bytes it last saw (`0x4655bb`), not for a maximum alone.
 pub(super) fn on_unit_push(lua: &Lua, token: &str) {
     let (unit, hits): (UnitState, Vec<FrameHandle>) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -240,7 +218,8 @@ pub(super) fn on_unit_push(lua: &Lua, token: &str) {
                 model.frame_to_id.contains_key(&h)
                     && matches!(
                         model.arena.frame(h).map(|f| &f.kind_state),
-                        Some(KindState::Tooltip(t)) if t.unit_guid == Some(unit.guid)
+                        Some(KindState::Tooltip(t))
+                            if t.unit_guid == Some(unit.guid) && t.unit_health != unit.health
                     )
             })
             .collect();

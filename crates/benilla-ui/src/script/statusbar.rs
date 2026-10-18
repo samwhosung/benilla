@@ -35,16 +35,6 @@ fn with_bar<T>(
     }
 }
 
-/// Store the value clamped to the range, `Some` when it changed (the caller fires
-/// `OnValueChanged`); a degenerate range pins to `min`.
-fn store_value(sb: &mut StatusBarState, v: f32) -> Option<f32> {
-    let clamped = v.clamp(sb.min, sb.max.max(sb.min));
-    (clamped != sb.value).then(|| {
-        sb.value = clamped;
-        clamped
-    })
-}
-
 /// Install `incoming` as the bar texture, or clear it, through `0x7831f0`: the same texture is a
 /// no-op, the displaced one is deleted, the incoming one is linked in on `layer` shown (`0x78321b`)
 /// and its texcoord-modifies-rect flag is set (`0x783220`).
@@ -144,18 +134,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let line = "SetMinMaxValues(min, max)";
             let min = binding_abi::method_number(lua, &this, min, line)? as f32;
             let max = binding_abi::method_number(lua, &this, max, line)? as f32;
-            // A reversed pair is swapped, as `LoadXML` does; the held value re-clamps, and a move
-            // fires `OnValueChanged`.
-            let changed = with_bar(lua, &this, |sb| {
-                (sb.min, sb.max) = if min <= max { (min, max) } else { (max, min) };
-                store_value(sb, sb.value)
-            })?;
+            // Straight to `0x783270` (`0x78f584`).
+            let changed = with_bar(lua, &this, |sb| sb.set_min_max(min, max))?;
             fire_value_changed(lua, &this, changed)
         })?,
     )?;
     m.set(
         "GetMinMaxValues",
-        lua.create_function(|lua, this: Table| with_bar(lua, &this, |sb| (sb.min, sb.max)))?,
+        lua.create_function(|lua, this: Table| with_bar(lua, &this, |sb| sb.min_max()))?,
     )?;
     m.set(
         "SetValue",
@@ -163,13 +149,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `lua_isnumber` (`0x78f720`) else `Usage: %s:SetValue(value)` (`0x87b184`).
             with_bar(lua, &this, |_| ())?;
             let v = binding_abi::method_number(lua, &this, v, "SetValue(value)")? as f32;
-            let changed = with_bar(lua, &this, |sb| store_value(sb, v))?;
+            let changed = with_bar(lua, &this, |sb| sb.set_value(v))?;
             fire_value_changed(lua, &this, changed)
         })?,
     )?;
     m.set(
         "GetValue",
-        lua.create_function(|lua, this: Table| with_bar(lua, &this, |sb| sb.value))?,
+        lua.create_function(|lua, this: Table| with_bar(lua, &this, |sb| sb.value()))?,
     )?;
     m.set(
         "SetOrientation",
@@ -276,28 +262,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// Fire `OnValueChanged` (the StatusBar's script slot, `+0x32c`) for a changed value, outside any
 /// model borrow.
 fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Result<()> {
-    let Some(value) = changed else { return Ok(()) };
-    let id = {
-        let h = frame_handle_of(lua, this)?;
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        model.frame_id(h)
-    };
-    if let Err(e) = event::fire_widget_handler(
-        lua,
-        id,
-        "OnValueChanged",
-        vec![Value::Number(f64::from(value))],
-    ) {
-        lua.app_data_mut::<Model>()
-            .expect("model app_data")
-            .record_lua_error(&e);
+    if let Some(value) = changed {
+        fire_engine_value_changed(lua, frame_handle_of(lua, this)?, value);
     }
     Ok(())
 }
 
-/// `OnValueChanged` for a bar the engine moved, the nameplate health bars: the reference re-sets
-/// them from a GUID-watch callback (`0x7cc570`, registered at `0x467e70`) on every server update,
-/// and that `SetValue` fires the script as any other does.
+/// The engine's write of a health bar: the tooltip's builder (`0x52a0eb`, `0x52a12e`) and health
+/// watcher (`0x52959b`, `0x5295b1`) and the nameplate's (`0x7cc5a8`, `0x7cc5be`) each call
+/// `SetMinMaxValues(0, max)` then `SetValue(health)` on every run, so a bar with a value fires
+/// `OnValueChanged` for the range as well as for a moved value. Answers those fires in order,
+/// none for a frame that is not a StatusBar.
+pub(super) fn set_health(
+    model: &mut Model,
+    bar: crate::widget::FrameHandle,
+    max: f32,
+    health: f32,
+) -> [Option<f32>; 2] {
+    match model.arena.frame_mut(bar).map(|f| &mut f.kind_state) {
+        Some(KindState::StatusBar(sb)) => [sb.set_min_max(0.0, max), sb.set_value(health)],
+        _ => [None, None],
+    }
+}
+
+/// `OnValueChanged` (`+0x32c`, with `"%f"`, `0x783371`) for a bar the engine moved, outside any
+/// model borrow.
 pub(super) fn fire_engine_value_changed(lua: &Lua, bar: crate::widget::FrameHandle, value: f32) {
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");

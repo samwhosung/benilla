@@ -634,6 +634,8 @@ fn world_hover_drive_and_health_watcher() {
         end)
         local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
         bar:SetPoint("TOPLEFT", tt, "BOTTOMLEFT", 2, -1); bar:SetWidth(100); bar:SetHeight(8)
+        BarFires = {}
+        bar:SetScript("OnValueChanged", function() table.insert(BarFires, arg1) end)
     "#,
     )
     .unwrap();
@@ -650,6 +652,7 @@ fn world_hover_drive_and_health_watcher() {
         assert(GameTooltipTextLeft1:GetText() == "Timber Wolf")
         local _, mx = GameTooltipStatusBar:GetMinMaxValues()
         assert(mx == 50 and GameTooltipStatusBar:GetValue() == 30, "bar seeded from the snapshot")
+        assert(table.getn(BarFires) == 1 and BarFires[1] == 30, "a fresh bar: the value fires")
     "#,
     )
     .unwrap();
@@ -673,6 +676,18 @@ fn world_hover_drive_and_health_watcher() {
     s.set_unit("mouseover", Some(hurt));
     s.run(
         r#"assert(GameTooltipStatusBar:GetValue() == 12, "the health watcher tracked the push")"#,
+    )
+    .unwrap();
+    // The watcher (`0x529560`) sets the range, re-firing the held 30, then the moved value; an
+    // unchanged push runs no watcher, and a maximum alone is not the watched field.
+    let mut same = wolf();
+    same.health = 12;
+    s.set_unit("mouseover", Some(same.clone()));
+    same.max_health = 60;
+    s.set_unit("mouseover", Some(same));
+    s.run(
+        r#"assert(table.getn(BarFires) == 3 and BarFires[2] == 30 and BarFires[3] == 12,
+                  "fired " .. table.getn(BarFires))"#,
     )
     .unwrap();
     // Hover lost: the fade arms and `"mouseover"` names nobody (`0x492890` zeroes the pair), yet

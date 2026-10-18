@@ -539,13 +539,11 @@ impl Plate {
         let fill_data = model.region_data.entry(fill).or_default();
         // The fill keeps `CSimpleTexture`'s default BLEND (`0x76fc40`), written out as a fact.
         fill_data.blend = BlendMode::Blend;
+        // The bar's ctor (`0x7cc340` → `0x782d80`) sets no range and no value.
         if let Some(KindState::StatusBar(sb)) =
             model.arena.frame_mut(bar).map(|f| &mut f.kind_state)
         {
             sb.bar = Some(fill);
-            sb.min = 0.0;
-            sb.max = 1.0;
-            sb.value = 0.0;
         }
 
         for rh in [glow, skull, raid] {
@@ -706,18 +704,20 @@ impl Plate {
         }
 
         // Raw health on the bar; the fill's reaction colour brightens while lit (`LIT_BOOST`).
-        if last
-            .as_ref()
-            .is_none_or(|l| l.health != state.health || l.max_health != state.max_health)
-        {
-            if let Some(KindState::StatusBar(sb)) =
-                model.arena.frame_mut(bar).map(|f| &mut f.kind_state)
-            {
-                sb.min = 0.0;
-                sb.max = state.max_health;
-                sb.value = state.health.clamp(0.0, state.max_health);
+        // The assignment drives it once (`0x7cc42c`); after that one watcher per field, HEALTH and
+        // MAXHEALTH (`0x7cc53b`, `0x7cc562`), runs for each that changed (`0x4655bb`).
+        let runs = match &last {
+            None => 1,
+            Some(l) => {
+                usize::from(l.health != state.health)
+                    + usize::from(l.max_health != state.max_health)
             }
-            effects.values.push((bar, state.health));
+        };
+        for _ in 0..runs {
+            let fires = super::statusbar::set_health(model, bar, state.max_health, state.health);
+            effects
+                .values
+                .extend(fires.into_iter().flatten().map(|v| (bar, v)));
         }
         if last
             .as_ref()

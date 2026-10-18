@@ -21,8 +21,10 @@ fn statusbar_methods_exist_only_on_statusbars() {
     assert!(ok);
 }
 
+/// `0x783270` keeps the low bound only when it is not above the high one, else takes the high one:
+/// a reversed pair collapses onto `max`, never swaps. `SetValue` (`0x7832d0`) clamps.
 #[test]
-fn statusbar_value_clamps_and_minmax_swaps() {
+fn statusbar_value_clamps_and_a_reversed_pair_collapses_onto_max() {
     let s = script();
     s.run(
         r#"
@@ -32,18 +34,23 @@ fn statusbar_value_clamps_and_minmax_swaps() {
         assert(b:GetValue() == 100, "clamped to max")
         b:SetValue(-5)
         assert(b:GetValue() == 0, "clamped to min")
-        -- A reversed pair is swapped (LoadXML `0x782ef0`'s behavior, one rule for both paths).
         b:SetMinMaxValues(80, 20)
         local mn, mx = b:GetMinMaxValues()
-        assert(mn == 20 and mx == 80, "reversed pair swapped")
+        assert(mn == 20 and mx == 20, "the low bound is the max: " .. mn .. ", " .. mx)
         assert(b:GetValue() == 20, "held value re-clamped into the new range")
+        b:SetMinMaxValues(100, 0)
+        mn, mx = b:GetMinMaxValues()
+        assert(mn == 0 and mx == 0 and b:GetValue() == 0, "(100, 0) is (0, 0)")
     "#,
     )
     .unwrap();
 }
 
+/// `0x7832d0` fires on a stored value only, an equal one returning (`0x783342`); `0x783270` clears
+/// the has-value bit and re-sets the held value (`0x7832af`, `0x7832bc`), so once the bar has a
+/// value every `SetMinMaxValues` fires, moved or not.
 #[test]
-fn statusbar_setvalue_fires_onvaluechanged() {
+fn statusbar_set_min_max_refires_onvaluechanged_for_the_held_value() {
     let s = script();
     s.run(
         r#"
@@ -55,10 +62,32 @@ fn statusbar_setvalue_fires_onvaluechanged() {
             assert(self == b and arg1 == value, "handler-firing conventions carry the value")
         end)
         b:SetValue(4)
-        b:SetValue(4)          -- no change, no fire
-        b:SetMinMaxValues(0, 3) -- re-clamp 4 -> 3: a value change, fires
-        assert(table.getn(seen) == 2 and seen[1] == 4 and seen[2] == 3,
-               "fired once per actual change: " .. table.getn(seen))
+        b:SetValue(4)            -- equal: no fire
+        b:SetMinMaxValues(0, 10) -- unchanged range, held 4: fires
+        b:SetMinMaxValues(0, 3)  -- re-clamp 4 -> 3: fires
+        assert(table.getn(seen) == 3 and seen[1] == 4 and seen[2] == 4 and seen[3] == 3,
+               "fired " .. table.getn(seen))
+    "#,
+    )
+    .unwrap();
+}
+
+/// `SetValue` returns at once without a range (`0x7832dc`), storing nothing; a range set on a bar
+/// with no value fires nothing (`0x7832a5`), and the first stored value always fires.
+#[test]
+fn statusbar_value_before_a_range_is_dropped() {
+    let s = script();
+    s.run(
+        r#"
+        local b = CreateFrame("StatusBar", "SbFresh")
+        seen = 0
+        b:SetScript("OnValueChanged", function() seen = seen + 1 end)
+        b:SetValue(5)
+        assert(b:GetValue() == 0 and seen == 0, "no range: not stored, not fired")
+        b:SetMinMaxValues(0, 10)
+        assert(b:GetValue() == 0 and seen == 0, "a range alone fires nothing")
+        b:SetValue(0)
+        assert(seen == 1, "the first value fires though it equals the field")
     "#,
     )
     .unwrap();
