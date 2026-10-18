@@ -346,3 +346,97 @@ fn create_frame_raises_in_the_reference_order() {
     )
     .unwrap();
 }
+
+/// The StatusBar and Slider value setters gate on `lua_isnumber`, a numeric string passing, and
+/// raise `Usage: %s:SetMinMaxValues(min, max)` (`0x87b160`), `Usage: %s:SetValue(value)`
+/// (`0x87b184`) and the Slider's `Usage: %s:SetValueStep(value)` (`0x87b39c`), naming the frame.
+#[test]
+fn bar_and_slider_value_setters_raise_their_usage_lines() {
+    let s = script();
+    s.run(
+        r#"
+        UseSB = CreateFrame("StatusBar", "UseSB")
+        UseSL = CreateFrame("Slider", "UseSL")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "UseSB:SetMinMaxValues(0)",
+            "Usage: UseSB:SetMinMaxValues(min, max)",
+        ),
+        (
+            "UseSB:SetMinMaxValues('x', 1)",
+            "Usage: UseSB:SetMinMaxValues(min, max)",
+        ),
+        ("UseSB:SetValue(nil)", "Usage: UseSB:SetValue(value)"),
+        (
+            "UseSL:SetMinMaxValues({}, 1)",
+            "Usage: UseSL:SetMinMaxValues(min, max)",
+        ),
+        ("UseSL:SetValue()", "Usage: UseSL:SetValue(value)"),
+        (
+            "UseSL:SetValueStep(true)",
+            "Usage: UseSL:SetValueStep(value)",
+        ),
+        (
+            r#"CreateFrame("StatusBar"):SetValue()"#,
+            "Usage: <unnamed>:SetValue(value)",
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        UseSB:SetMinMaxValues("0", "10"); UseSB:SetValue("4")
+        assert(UseSB:GetValue() == 4)
+        UseSL:SetMinMaxValues(0, 10); UseSL:SetValueStep("2")
+        assert(UseSL:GetValueStep() == 2)
+    "#,
+    )
+    .unwrap();
+}
+
+/// `SetOrientation` on both (`0x78f290`, `0x790580`): a non-string raises
+/// `Usage: %s:SetOrientation("orientation")` (`0x87b108`), a token the parse `0x6f1a20` misses
+/// `%s:SetOrientation(): Unknown orientation: %s` (`0x87b130`).
+#[test]
+fn set_orientation_raises_the_reference_lines() {
+    let s = script();
+    s.run(
+        r#"
+        OriSB = CreateFrame("StatusBar", "OriSB")
+        OriSL = CreateFrame("Slider", "OriSL")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "OriSB:SetOrientation('DIAGONAL')",
+            "OriSB:SetOrientation(): Unknown orientation: DIAGONAL",
+        ),
+        (
+            "OriSB:SetOrientation(nil)",
+            r#"Usage: OriSB:SetOrientation("orientation")"#,
+        ),
+        (
+            "OriSL:SetOrientation(5)",
+            "OriSL:SetOrientation(): Unknown orientation: 5",
+        ),
+        (
+            "OriSL:SetOrientation({})",
+            r#"Usage: OriSL:SetOrientation("orientation")"#,
+        ),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        OriSB:SetOrientation("vertical"); assert(OriSB:GetOrientation() == "VERTICAL")
+        OriSL:SetOrientation("horizontal"); assert(OriSL:GetOrientation() == "HORIZONTAL")
+    "#,
+    )
+    .unwrap();
+}

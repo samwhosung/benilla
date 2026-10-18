@@ -196,6 +196,28 @@ pub(crate) fn usage(lua: &Lua, this: &Table, line: &str) -> mlua::Error {
     mlua::Error::runtime(format!("Usage: {}:{line}", name_of(lua, this)))
 }
 
+/// A method's number argument: `is-number` (`0x6f34d0`) then `tonumber` (`0x6f3620`), so a
+/// numeric string passes, else the method's [`usage`] line naming `this`.
+pub(crate) fn method_number(lua: &Lua, this: &Table, v: Value, line: &str) -> mlua::Result<f64> {
+    lua.coerce_number(v)?.ok_or_else(|| usage(lua, this, line))
+}
+
+/// `SetOrientation`'s argument on the StatusBar and the Slider (`0x78f320`, `0x790610`): a
+/// `lua_isstring` value through the token parse `0x6f1a20`, `true` for VERTICAL. A non-string
+/// raises `Usage: %s:SetOrientation("orientation")` (`0x87b108`), a miss
+/// `%s:SetOrientation(): Unknown orientation: %s` (`0x87b130`), both naming `this`.
+pub(crate) fn orientation_arg(lua: &Lua, this: &Table, v: &Value) -> mlua::Result<bool> {
+    let Some(token) = optional_string(lua, v) else {
+        return Err(usage(lua, this, r#"SetOrientation("orientation")"#));
+    };
+    super::region::orientation(&token).ok_or_else(|| {
+        mlua::Error::runtime(format!(
+            "{}:SetOrientation(): Unknown orientation: {token}",
+            name_of(lua, this)
+        ))
+    })
+}
+
 /// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits
 /// up to the first other byte, with no whitespace skip; none is 0. The accumulator is a 32-bit
 /// register that wraps (`0x64ac98`-`0x64aca5`) and `neg` wraps too, so `"4294967297"` is 1.

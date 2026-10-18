@@ -8,6 +8,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi;
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
 use super::region::{install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg};
@@ -111,7 +112,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "SetMinMaxValues",
-        lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
+        lua.create_function(|lua, (this, min, max): (Table, Value, Value)| {
+            // Both `lua_isnumber` (`0x790832`, `0x790843`) else
+            // `Usage: %s:SetMinMaxValues(min, max)` (`0x87b160`).
+            with_slider(lua, &this, |_| ())?;
+            let line = "SetMinMaxValues(min, max)";
+            let min = binding_abi::method_number(lua, &this, min, line)? as f32;
+            let max = binding_abi::method_number(lua, &this, max, line)? as f32;
             // A reversed pair is kept, not swapped (`0x789580`). A held value re-clamps and fires
             // on a move; a fresh slider with no value yet fires nothing (bit 2).
             let changed = with_slider(lua, &this, |s| s.set_min_max(min, max))?;
@@ -124,7 +131,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetValue",
-        lua.create_function(|lua, (this, v): (Table, f32)| {
+        lua.create_function(|lua, (this, v): (Table, Value)| {
+            // `lua_isnumber` (`0x790a10`) else `Usage: %s:SetValue(value)` (`0x87b184`).
+            with_slider(lua, &this, |_| ())?;
+            let v = binding_abi::method_number(lua, &this, v, "SetValue(value)")? as f32;
             let changed = with_slider(lua, &this, |s| s.store_value(v))?;
             fire_value_changed(lua, &this, changed)
         })?,
@@ -135,9 +145,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetValueStep",
-        // Stores the step, then re-pushes the range as `SetMinMaxValues` does, so a held value
-        // moved onto the new step fires `OnValueChanged`.
-        lua.create_function(|lua, (this, step): (Table, f32)| {
+        // `lua_isnumber` (`0x790bc0`) else `Usage: %s:SetValueStep(value)` (`0x87b39c`). Stores
+        // the step, then re-pushes the range as `SetMinMaxValues` does, so a held value moved onto
+        // the new step fires `OnValueChanged`.
+        lua.create_function(|lua, (this, step): (Table, Value)| {
+            with_slider(lua, &this, |_| ())?;
+            let step = binding_abi::method_number(lua, &this, step, "SetValueStep(value)")? as f32;
             let changed = with_slider(lua, &this, |s| s.set_value_step(step))?;
             fire_value_changed(lua, &this, changed)
         })?,
@@ -148,16 +161,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetOrientation",
-        lua.create_function(|lua, (this, o): (Table, String)| {
-            let vertical = match o.to_ascii_uppercase().as_str() {
-                "HORIZONTAL" => false,
-                "VERTICAL" => true,
-                _ => {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetOrientation: unknown orientation '{o}'"
-                    )))
-                }
-            };
+        lua.create_function(|lua, (this, o): (Table, Value)| {
+            with_slider(lua, &this, |_| ())?;
+            let vertical = binding_abi::orientation_arg(lua, &this, &o)?;
             with_slider(lua, &this, |s| s.vertical = vertical)
         })?,
     )?;

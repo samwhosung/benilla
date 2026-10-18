@@ -6,6 +6,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi;
 use super::object::{draw_layer_from_str, frame_handle_of};
 use super::region::{install_into_slot, load_path_leg, region_wrapper, slot_arg, SlotArg};
 use super::{event, Model};
@@ -136,7 +137,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "SetMinMaxValues",
-        lua.create_function(|lua, (this, min, max): (Table, f32, f32)| {
+        lua.create_function(|lua, (this, min, max): (Table, Value, Value)| {
+            // Both `lua_isnumber` (`0x78f542`, `0x78f553`) else
+            // `Usage: %s:SetMinMaxValues(min, max)` (`0x87b160`).
+            with_bar(lua, &this, |_| ())?;
+            let line = "SetMinMaxValues(min, max)";
+            let min = binding_abi::method_number(lua, &this, min, line)? as f32;
+            let max = binding_abi::method_number(lua, &this, max, line)? as f32;
             // A reversed pair is swapped, as `LoadXML` does; the held value re-clamps, and a move
             // fires `OnValueChanged`.
             let changed = with_bar(lua, &this, |sb| {
@@ -152,7 +159,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetValue",
-        lua.create_function(|lua, (this, v): (Table, f32)| {
+        lua.create_function(|lua, (this, v): (Table, Value)| {
+            // `lua_isnumber` (`0x78f720`) else `Usage: %s:SetValue(value)` (`0x87b184`).
+            with_bar(lua, &this, |_| ())?;
+            let v = binding_abi::method_number(lua, &this, v, "SetValue(value)")? as f32;
             let changed = with_bar(lua, &this, |sb| store_value(sb, v))?;
             fire_value_changed(lua, &this, changed)
         })?,
@@ -163,16 +173,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "SetOrientation",
-        lua.create_function(|lua, (this, o): (Table, String)| {
-            let vertical = match o.to_ascii_uppercase().as_str() {
-                "HORIZONTAL" => false,
-                "VERTICAL" => true,
-                _ => {
-                    return Err(mlua::Error::runtime(format!(
-                        "SetOrientation: unknown orientation '{o}'"
-                    )))
-                }
-            };
+        lua.create_function(|lua, (this, o): (Table, Value)| {
+            with_bar(lua, &this, |_| ())?;
+            let vertical = binding_abi::orientation_arg(lua, &this, &o)?;
             with_bar(lua, &this, |sb| sb.vertical = vertical)
         })?,
     )?;
