@@ -164,7 +164,7 @@ impl UiScript {
                         let tsize = model
                             .region_data
                             .get(&rh)
-                            .and_then(|d| d.size)
+                            .and_then(|d| d.size_script(model.layout_units()))
                             .map(|(w, h)| (w * scale, h * scale));
                         if cs.wheel_thumb == Some(rh) {
                             rect = cs

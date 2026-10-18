@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Len, Point};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, FrameKind, RegionHandle, RegionKind};
 
@@ -352,7 +352,7 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
 
     // A border-unit square, its TOPRIGHT on the frame's BOTTOM lifted a quarter unit.
     let tail_data = model.region_data.entry(tail).or_default();
-    tail_data.size = Some((g.border, g.border));
+    tail_data.size = Some((Len::Script(g.border), Len::Script(g.border)));
     tail_data.anchors = Anchors::from([Anchor::new(
         Point::TopRight,
         frame_id,
@@ -440,7 +440,7 @@ fn fit_width(model: &mut Model, i: usize, g: BubbleGeometry) {
         natural.max(floor)
     };
     if let Some(d) = model.region_data.get_mut(&text) {
-        d.size = Some((width, 0.0));
+        d.size = Some((Len::Script(width), Len::Script(0.0)));
     }
     model.touch_measure(text);
     // `SetWidth`, which invalidates (`0x7683d0`).
@@ -485,7 +485,7 @@ fn drive(
     let width = model
         .region_data
         .get(&text)
-        .and_then(|d| d.size)
+        .and_then(|d| d.size_script(model.layout_units()))
         .map_or(0.0, |s| s.0)
         + 2.0 * g.margin;
     let snap = |v: f32| {

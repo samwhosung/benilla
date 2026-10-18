@@ -2566,7 +2566,7 @@ impl Model {
             return;
         };
         if self.region_data.get(&rh).is_some_and(|d| {
-            !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0)
+            !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w.is_zero() || h.is_zero())
         }) {
             self.layout_unsettled.insert(id);
         }

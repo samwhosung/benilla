@@ -28,7 +28,7 @@ use super::font::FontId;
 use super::object::frame_handle_of;
 use super::{Model, RegionData};
 use crate::justify::{self, Justify};
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Len, Point};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, FrameKind, RegionHandle, RegionKind};
 
@@ -165,7 +165,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                         // No height: the rect takes the wrapped text's height from the measure
                         // round trip, as the client's font engine gives it (`0x7729b0`,
                         // `0x5c2070`).
-                        size: Some((width, 0.0)),
+                        size: Some((Len::Script(width), Len::Script(0.0))),
                         text: Some(text),
                         ..RegionData::default()
                     },
@@ -219,7 +219,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     rh,
                     RegionData {
                         anchors,
-                        size: Some((*w, *h)),
+                        size: Some((Len::Script(*w), Len::Script(*h))),
                         ..RegionData::default()
                     },
                 );

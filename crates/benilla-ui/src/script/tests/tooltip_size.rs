@@ -464,3 +464,22 @@ fn the_plate_pad_is_added_unrounded() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A wrapped line takes the widest line's width into its layout size slot as it is (`0x5308ef`),
+/// so its `GetWidth` answers `G` of that sum: a double line of nine and nine bytes at 4:3 sums to
+/// a layout width `G` reads as 128.39999961256981, where a script number stored back would read
+/// 128.3999900758268.
+#[test]
+fn a_wrapped_line_takes_the_layout_width() {
+    let (s, _) = tooltip();
+    s.run(
+        r#"TS:AddDoubleLine("aaaaaaaaa", "bbbbbbbbb") TS:AddLine("c", 1, 1, 1, 1)
+        TS:Show()"#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<f64>("return TSTextLeft2:GetWidth()").unwrap(),
+        128.399_999_612_569_81
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

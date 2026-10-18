@@ -170,7 +170,7 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
     // A line with no authored size already reads width 0.
     for &rh in &lefts {
         if model.region_data.get(&rh).is_some_and(|d| d.size.is_some()) {
-            size::set_line_width(model, rh, 0.0);
+            size::set_line_width(model, rh, crate::layout::Len::Layout(0.0));
         }
     }
     for (rh, left) in lefts

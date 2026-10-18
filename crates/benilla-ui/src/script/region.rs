@@ -10,7 +10,7 @@ use super::{
     Model, REG_FONTSTRING_META, REG_FONTSTRING_METHODS, REG_REGION_META, REG_REGION_METHODS,
     REG_TEXTURE_META, REG_TEXTURE_METHODS, REG_TITLE_META, REG_TITLE_METHODS, REG_WRAPPERS, SCREEN,
 };
-use crate::layout::{Anchor, Anchors};
+use crate::layout::{Anchor, Anchors, Len};
 use crate::widget::{RegionHandle, RegionKind};
 
 /// Resolve `self` (a region wrapper) to its live [`RegionHandle`].
@@ -926,12 +926,10 @@ pub(super) fn region_ladder_context(lua: &Lua, rh: RegionHandle) -> (String, Str
 }
 
 /// Bit-exact size equality, the layout gate's own test, so a setter's no-op check agrees with it.
-pub(super) fn size_bits_eq(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> bool {
+pub(super) fn size_bits_eq(a: Option<(Len, Len)>, b: Option<(Len, Len)>) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some((aw, ah)), Some((bw, bh))) => {
-            aw.to_bits() == bw.to_bits() && ah.to_bits() == bh.to_bits()
-        }
+        (Some((aw, ah)), Some((bw, bh))) => aw.bits() == bw.bits() && ah.bits() == bh.bits(),
         _ => false,
     }
 }
@@ -968,22 +966,61 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
 /// `0x770790`). A FontString answers its authored size unless 0 (`0x77294a`), else its measure,
 /// either floored at one unit (`0x772930`, `0x772a60`); the width is unwrapped, as
 /// `GetStringWidth` gives it (`0x772890`, `0x79e510`), the height wrapped (`0x7729b0`). A title
-/// region answers its field (`0x768420`, `0x768410`).
-pub(super) fn measured_wh(lua: &Lua, this: &Table) -> mlua::Result<(f32, f32)> {
-    let rh = region_handle_of(lua, this)?;
-    // Measures this tick when a host font engine is installed; a no-op for a Texture or a
-    // current measure.
-    super::measure::ensure_measured(lua, rh);
-    let model = lua.app_data_ref::<Model>().expect("model");
-    Ok(virtual_span(&model, rh))
+/// region answers its field (`0x768420`, `0x768410`). In layout units, as the slots return it in
+/// `st0`, so a size the engine stored in layout units reads back as it is. A FontString's measure
+/// still owed answers 0.
+pub(super) fn virtual_slot(model: &Model, rh: RegionHandle) -> (f64, f64) {
+    let units = model.layout_units();
+    let Some(d) = model.region_data.get(&rh) else {
+        return (0.0, 0.0);
+    };
+    let zero = Len::Script(0.0);
+    let (aw, ah) = d.size.unwrap_or((zero, zero));
+    match model.arena.region(rh).map(|r| r.kind) {
+        Some(RegionKind::FontString) => {
+            let scale = model
+                .arena
+                .region(rh)
+                .and_then(|r| model.arena.frame(r.owner))
+                .map_or(1.0, |f| f.effective_scale);
+            let m = d.measured.filter(|m| m.key == d.measure_key(scale, units));
+            let known = |from_measure: fn(&crate::script::types::MeasuredText) -> f32| {
+                if d.text.as_deref().is_none_or(str::is_empty) {
+                    Some(0.0)
+                } else {
+                    m.as_ref().map(from_measure)
+                }
+            };
+            let slot = |a: Len, from_measure| {
+                if !a.is_zero() {
+                    super::layout::fontstring_slot(units, a, None)
+                } else {
+                    known(from_measure)
+                        .map_or(0.0, |v| super::layout::fontstring_slot(units, a, Some(v)))
+                }
+            };
+            (slot(aw, |m| m.natural_w), slot(ah, |m| m.h))
+        }
+        Some(RegionKind::Texture) => {
+            let (sw, sh) = (aw.layout(units), ah.layout(units));
+            let texel = (sw == 0.0 || sh == 0.0)
+                .then(|| super::layout::content_span(d, model.texture_size_probe.as_ref()))
+                .flatten();
+            (
+                super::layout::texture_slot(units, sw, texel.map(|t| t.0)),
+                super::layout::texture_slot(units, sh, texel.map(|t| t.1)),
+            )
+        }
+        _ => (f64::from(aw.layout(units)), f64::from(ah.layout(units))),
+    }
 }
 
-/// [`measured_wh`]'s body on a borrowed model, for the engine's own callers.
+/// [`virtual_slot`] in script units, for the engine's own callers that lay out or draw in them.
 pub(super) fn virtual_span(model: &Model, rh: RegionHandle) -> (f32, f32) {
     let Some(d) = model.region_data.get(&rh) else {
         return (0.0, 0.0);
     };
-    let (aw, ah) = d.size.unwrap_or((0.0, 0.0));
+    let (aw, ah) = d.size_script(model.layout_units()).unwrap_or((0.0, 0.0));
     match model.arena.region(rh).map(|r| r.kind) {
         Some(RegionKind::FontString) => {
             // The measure key carries the owner's effective scale, as the request loop stamps it.
@@ -995,7 +1032,9 @@ pub(super) fn virtual_span(model: &Model, rh: RegionHandle) -> (f32, f32) {
                 .and_then(|r| model.arena.frame(r.owner))
                 .map(|f| f.effective_scale)
                 .unwrap_or(1.0);
-            let m = d.measured.filter(|m| m.key == d.measure_key(scale));
+            let m = d
+                .measured
+                .filter(|m| m.key == d.measure_key(scale, model.layout_units()));
             // The floor applies to a known extent. Empty text is a known zero and floors; a pending
             // measure, possible only in a VM with no measurer installed, answers 0, where the
             // reference measures inline and always knows.

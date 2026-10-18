@@ -12,7 +12,7 @@ use std::collections::{HashSet, VecDeque};
 
 use mlua::Lua;
 
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Len, Point};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, FrameKind, KindState, RegionHandle, RegionKind};
 
@@ -646,12 +646,12 @@ impl Plate {
             -g.level_off_x,
             g.level_off_y,
         )]);
-        skull_data.size = Some((g.skull_size, g.skull_size));
+        skull_data.size = Some((Len::Script(g.skull_size), Len::Script(g.skull_size)));
 
         let raid_data = model.region_data.entry(raid).or_default();
         raid_data.anchors =
             Anchors::from([Anchor::new(Point::Right, plate_id, Point::Left, 0.0, 0.0)]);
-        raid_data.size = Some((g.raid_size, g.raid_size));
+        raid_data.size = Some((Len::Script(g.raid_size), Len::Script(g.raid_size)));
 
         // Once per geometry change: each node it wrote is invalidated, as the plate setup's
         // `SetPoint`/`SetAllPoints` with the invalidate flag do (`0x7cb456`..`0x7cb806`).

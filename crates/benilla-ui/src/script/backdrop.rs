@@ -422,13 +422,16 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
 
 /// A piece's anchors on frame `owner` and its explicit size, `None` where the anchors span both
 /// axes.
-fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Anchors, Option<(f32, f32)>) {
+fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Anchors, Option<(Len, Len)>) {
     let anchors = anchors
         .into_iter()
         .flatten()
         .map(|(p, x, y)| Anchor::new(p, owner, p, x, y))
         .collect();
-    (anchors, (size != (0.0, 0.0)).then_some(size))
+    (
+        anchors,
+        (size != (0.0, 0.0)).then_some((Len::Script(size.0), Len::Script(size.1))),
+    )
 }
 
 /// Re-size an installed backdrop in place, its nine regions kept: the edge size, the tile period

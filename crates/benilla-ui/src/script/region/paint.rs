@@ -448,7 +448,7 @@ impl crate::script::UiScript {
             .region_data
             .iter()
             .filter(|(_, d)| {
-                !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0)
+                !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w.is_zero() || h.is_zero())
             })
             .filter_map(|(rh, _)| model.region_to_id.get(rh).copied())
             .collect();

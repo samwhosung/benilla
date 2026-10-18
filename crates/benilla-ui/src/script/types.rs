@@ -450,7 +450,7 @@ pub(crate) struct RegionData {
     pub(crate) blend: BlendMode,
     /// `SetWidth`/`SetHeight`, XML `<Size>`; `None` derives it. It fills only an axis the anchors
     /// leave free, so under an implicit `SetAllPoints` the stack-split plate's 256×32 is unread.
-    pub(crate) size: Option<(f32, f32)>,
+    pub(crate) size: Option<(crate::layout::Len, crate::layout::Len)>,
     /// `SetPoint`, XML `<Anchors>`, relative to the owner frame unless naming a frame or sibling
     /// region. An edge they leave unset comes from the region's own size, measured text or texel
     /// extent, never the owner's rect; one still unset leaves the region unresolved (`0x767a20`).
@@ -652,20 +652,31 @@ impl RegionData {
     /// The measure-cache key of the text, font, wrap width, outline, line gap, shadow and owner
     /// scale. A Lua metric read treats a measure under another key as absent; the layout keeps the
     /// old box until the new one lands, except for empty text, which is never measured.
-    pub(crate) fn measure_key(&self, scale: f32) -> u64 {
+    pub(crate) fn measure_key(&self, scale: f32, units: crate::layout::LayoutUnits) -> u64 {
         // By reference: `String` hashes as `str` does, and this runs for every FontString every
         // frame, so a clone would allocate for nothing.
-        self.measure_key_of(self.text.as_deref().unwrap_or(""), scale)
+        self.measure_key_of(self.text.as_deref().unwrap_or(""), scale, units)
     }
 
     /// [`Self::measure_key`] with `text` in place of the region's own.
-    pub(crate) fn measure_key_of(&self, text: &str, scale: f32) -> u64 {
-        self.measure_key_at(text, self.wrap_width(), scale)
+    pub(crate) fn measure_key_of(
+        &self,
+        text: &str,
+        scale: f32,
+        units: crate::layout::LayoutUnits,
+    ) -> u64 {
+        self.measure_key_at(text, self.wrap_width(units), scale)
     }
 
-    /// The width the text wraps in: the authored width when positive, else none.
-    pub(crate) fn wrap_width(&self) -> Option<f32> {
-        self.size.map(|s| s.0).filter(|w| *w > 0.0)
+    /// The width the text wraps in, in script units for the font engine: the authored width when
+    /// positive, else none.
+    pub(crate) fn wrap_width(&self, units: crate::layout::LayoutUnits) -> Option<f32> {
+        self.size.map(|s| s.0.script(units)).filter(|w| *w > 0.0)
+    }
+
+    /// The authored size in script units, for a consumer that lays out or draws in them.
+    pub(crate) fn size_script(&self, units: crate::layout::LayoutUnits) -> Option<(f32, f32)> {
+        self.size.map(|(w, h)| (w.script(units), h.script(units)))
     }
 
     /// [`Self::measure_key_of`] with `wrap_width` in place of the region's own.

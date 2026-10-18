@@ -2,7 +2,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::layout::{Anchor, Anchors, Point};
+use crate::layout::{Anchor, Anchors, Len, Point};
 use crate::script::object::anchor_args::{
     get_point_index, get_point_values, parse_set_all_points, resolve_rel_target,
 };
@@ -11,8 +11,7 @@ use crate::script::region_map::{set_shared, Side};
 use crate::script::{Model, SCREEN};
 
 use super::{
-    measured_wh, region_handle_of, region_ladder_context, region_owner_id, region_set_point,
-    size_bits_eq,
+    region_handle_of, region_ladder_context, region_owner_id, region_set_point, size_bits_eq,
 };
 
 /// `ClearAllPoints` on a region (`0x767ed0` → `0x767620`): the region leaves the cached graph with
@@ -37,7 +36,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
-            let new = Some((w, d.size.map_or(0.0, |s| s.1)));
+            let new = Some((Len::Script(w), d.size.map_or(Len::Script(0.0), |s| s.1)));
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             // No edge or roster change; the width, as wrap width, keys a FontString's measure. It
@@ -59,7 +58,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let d = model.region_data.entry(rh).or_default();
-            let new = Some((d.size.map_or(0.0, |s| s.0), h));
+            let new = Some((d.size.map_or(Len::Script(0.0), |s| s.0), Len::Script(h)));
             let changed = !size_bits_eq(d.size, new);
             d.size = new;
             // No edge or roster change; the width, as wrap width, keys a FontString's measure. It
@@ -75,9 +74,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // No `SetSize`: not a 1.12 verb.
 
     // The frame's `GetWidth`/`GetHeight` (`0x7a1e00`, `0x7a2030`): the region's own size slot
-    // ([`measured_wh`]) as stored, when non-zero, with no resolve; else, resolving a pending region,
-    // its rect's span, not divided by the owner's effective scale, or 0 with no rect; each through
-    // the getter steps.
+    // ([`super::virtual_slot`]) as stored, when non-zero, with no resolve; else, resolving a
+    // pending region, its rect's span, not divided by the owner's effective scale, or 0 with no
+    // rect; each through the getter steps.
     set_shared(lua, m, Side::Region, "GetWidth", |lua, this: Table| {
         region_size_read(lua, &this, true)
     })?;
@@ -256,18 +255,21 @@ fn owner_scale(model: &Model, rh: crate::widget::RegionHandle) -> f32 {
 /// and `fst` stores it as a float before the getter steps (`0x7a1e99`), so a texture's art extent
 /// and a font string's floor read back as `G(S(v))` of their size in script units.
 fn region_size_read(lua: &Lua, this: &Table, width: bool) -> mlua::Result<f64> {
-    let (w, h) = measured_wh(lua, this)?;
-    let set = if width { w } else { h };
     let rh = region_handle_of(lua, this)?;
-    let (units, text) = {
+    // Measures this tick when a host font engine is installed; a no-op for a Texture or a
+    // current measure.
+    crate::script::measure::ensure_measured(lua, rh);
+    let (units, text, slot) = {
         let model = lua.app_data_ref::<Model>().expect("model");
         let text = model
             .arena
             .region(rh)
             .is_some_and(|r| matches!(r.kind, crate::widget::RegionKind::FontString));
-        (model.layout_units(), text)
+        let slot = crate::script::region::virtual_slot(&model, rh);
+        (model.layout_units(), text, slot)
     };
-    let stored = units.store(set);
+    // The slot's answer stored as a float (`0x7a1e96`), then the getter steps.
+    let stored = (if width { slot.0 } else { slot.1 }) as f32;
     // A FontString's size is floored at one unit (`0x772930`, `0x772a60`), never 0, so it never
     // reads its rect; its 0 is a host measure still in flight, which answers 0.
     if stored != 0.0 || text {

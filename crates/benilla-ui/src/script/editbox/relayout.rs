@@ -5,7 +5,7 @@
 use crate::script::TextMeasure as _;
 use mlua::Lua;
 
-use crate::layout::{Anchor, Anchors, Point, Rect};
+use crate::layout::{Anchor, Anchors, Len, Point, Rect};
 use crate::script::{MeasureRequest, Model};
 use crate::widget::{EditBoxState, FrameHandle, KindState, RegionHandle};
 
@@ -36,7 +36,7 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
     let data = model.region_data.entry(rh).or_default();
     let same_anchors = data.anchors.bits_eq(&anchors);
     // `None` keeps the size: a box with no rect yet.
-    let size = size.map_or(data.size, Some);
+    let size = size.map_or(data.size, |(w, h)| Some((Len::Script(w), Len::Script(h))));
     let size_moved = !crate::script::region::size_bits_eq(data.size, size);
     if !same_anchors {
         data.anchors = anchors;
@@ -191,7 +191,7 @@ fn text_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option<f32> {
         if d.text.as_deref().is_none_or(str::is_empty) {
             0.0
         } else {
-            let key = d.measure_key(owner_scale(&model, h));
+            let key = d.measure_key(owner_scale(&model, h), model.layout_units());
             d.measured.filter(|m| m.key == key)?.h
         }
     };
@@ -213,7 +213,7 @@ pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option
     let scale = owner_scale(&model, h);
     let req = {
         let d = model.region_data.get(&rh)?;
-        let key = d.measure_key_of(ONE_LINE, scale);
+        let key = d.measure_key_of(ONE_LINE, scale, model.layout_units());
         if let Some(KindState::EditBox(eb)) = model.arena.frame(h).map(|f| &f.kind_state) {
             if let Some((k, lh)) = eb.line_height {
                 if k == key {

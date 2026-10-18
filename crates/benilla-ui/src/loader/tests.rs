@@ -2443,7 +2443,7 @@ mod loader_tests {
                     .collect::<Vec<_>>(),
                 blocks
                     .iter()
-                    .map(|rh| model.region_data[rh].size)
+                    .map(|rh| model.region_data[rh].size.map(|(w, h)| (w.raw(), h.raw())))
                     .collect::<Vec<_>>(),
             )
         };

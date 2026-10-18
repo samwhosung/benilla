@@ -114,7 +114,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         Ok(units.load(
             units.store(
                 d.measured
-                    .filter(|m| m.key == d.measure_key(scale))
+                    .filter(|m| m.key == d.measure_key(scale, units))
                     .map(|m| m.natural_w)
                     .unwrap_or(0.0),
             ),

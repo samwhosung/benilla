@@ -9,7 +9,7 @@
 //! own, as the reference always measures inline.
 
 use super::{apply_anchor, tip_mut};
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Len, Point};
 use crate::script::layout::fontstring_slot;
 use crate::script::{MeasuredText, Model};
 use crate::widget::{
@@ -119,7 +119,8 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
         if widest.partial_cmp(&piece) != Some(std::cmp::Ordering::Greater) {
             widest = piece;
         }
-        set_line_width(model, left, units.load(widest) as f32);
+        // The width goes into the line's layout size slot as it is (`0x5308ef`, `+0x14`).
+        set_line_width(model, left, Len::Layout(widest));
     }
 
     // Each shown right text at the widest line's width from its left text's LEFT, a layout
@@ -186,9 +187,9 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
 
 /// A line's `SetWidth`, its height kept, through [`Model::note_line_width`]; an unmoved width
 /// invalidates only a line whose rect a resolve would not give back.
-pub(super) fn set_line_width(model: &mut Model, rh: RegionHandle, w: f32) {
+pub(super) fn set_line_width(model: &mut Model, rh: RegionHandle, w: Len) {
     let d = model.region_data.entry(rh).or_default();
-    let new = Some((w, d.size.map_or(0.0, |s| s.1)));
+    let new = Some((w, d.size.map_or(Len::Script(0.0), |s| s.1)));
     if crate::script::region::size_bits_eq(d.size, new) {
         model.invalidate_region(rh, false);
         return;
@@ -333,7 +334,7 @@ fn memo_insert(model: &mut Model, key: (u64, bool), m: MeasuredText) {
 /// `rh`'s measure at its own width, stored as its own, as a font string's getters measure in
 /// place (`0x772890`, `0x7729b0`).
 fn current(model: &mut Model, rh: RegionHandle) -> Option<MeasuredText> {
-    let wrap = model.region_data.get(&rh)?.wrap_width();
+    let wrap = model.region_data.get(&rh)?.wrap_width(model.layout_units());
     let m = probe(model, rh, wrap)?;
     let stale = model
         .region_data
@@ -351,13 +352,17 @@ fn current(model: &mut Model, rh: RegionHandle) -> Option<MeasuredText> {
 }
 
 /// The authored size of `rh` and whether its text is empty.
-fn authored(model: &Model, rh: RegionHandle) -> ((f32, f32), bool) {
-    model.region_data.get(&rh).map_or(((0.0, 0.0), true), |d| {
-        (
-            d.size.unwrap_or((0.0, 0.0)),
-            d.text.as_deref().is_none_or(str::is_empty),
-        )
-    })
+fn authored(model: &Model, rh: RegionHandle) -> ((Len, Len), bool) {
+    let zero = Len::Script(0.0);
+    model
+        .region_data
+        .get(&rh)
+        .map_or(((zero, zero), true), |d| {
+            (
+                d.size.unwrap_or((zero, zero)),
+                d.text.as_deref().is_none_or(str::is_empty),
+            )
+        })
 }
 
 /// A font string's width slot (`0x772930`) in layout units: its authored width when non-zero,
@@ -366,7 +371,7 @@ fn authored(model: &Model, rh: RegionHandle) -> ((f32, f32), bool) {
 fn get_width(model: &mut Model, rh: RegionHandle, pending: &mut bool) -> f64 {
     let units = model.layout_units();
     let ((w, _), empty) = authored(model, rh);
-    if w != 0.0 || empty {
+    if !w.is_zero() || empty {
         return fontstring_slot(units, w, None);
     }
     match current(model, rh) {
@@ -383,7 +388,7 @@ fn get_width(model: &mut Model, rh: RegionHandle, pending: &mut bool) -> f64 {
 fn get_height(model: &mut Model, rh: RegionHandle, pending: &mut bool) -> f64 {
     let units = model.layout_units();
     let ((_, h), empty) = authored(model, rh);
-    if h != 0.0 || empty {
+    if !h.is_zero() || empty {
         return fontstring_slot(units, h, None);
     }
     match current(model, rh) {
@@ -399,6 +404,6 @@ fn get_height(model: &mut Model, rh: RegionHandle, pending: &mut bool) -> f64 {
 /// text or font. `None` while owed.
 fn cached_width(model: &mut Model, rh: RegionHandle) -> Option<f32> {
     let units = model.layout_units();
-    let wrap = model.region_data.get(&rh).and_then(|d| d.wrap_width());
+    let wrap = model.region_data.get(&rh).and_then(|d| d.wrap_width(units));
     probe(model, rh, wrap).map(|m| units.store(m.natural_w))
 }

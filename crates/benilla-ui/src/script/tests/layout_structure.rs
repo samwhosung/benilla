@@ -460,7 +460,10 @@ fn an_owner_minted_after_its_region_joined_takes_the_owner_edge() {
             )
             .expect("region");
         let d = m.region_data.entry(rh).or_default();
-        d.size = Some((8.0, 8.0));
+        d.size = Some((
+            crate::layout::Len::Script(8.0),
+            crate::layout::Len::Script(8.0),
+        ));
         d.anchors = crate::layout::Anchors::from([crate::layout::Anchor::new(
             crate::layout::Point::TopLeft,
             root_id,
