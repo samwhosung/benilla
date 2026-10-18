@@ -25,7 +25,9 @@ use bevy::prelude::*;
 use benilla_ui::script::{GlueScenePane, UiScript, VmKind};
 
 use super::glue_mgr::SharedGlueMgr;
-use crate::portrait::{CreateLook, GlueLook, GluePreview, GlueScene, SceneFog, SelectLook};
+use crate::portrait::{
+    CreateLook, GlueLook, GluePreview, GlueSceneFile, SceneFog, SceneRoot, SelectLook,
+};
 
 /// The create scene's character and facing, as the create verbs left them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -36,24 +38,23 @@ struct CreateStage {
 
 /// What the booth stands while the stock glue screens are up: `pane` is the shown `ModelFFX`'s
 /// scene, `standing` the select character on its attachment 0, `facing` the select facing cell in
-/// radians, `create` the create scene's. A file that names none of the shipped scenes stands
-/// nothing.
+/// radians, `create` the create scene's. The scene is the pane's file, whatever it names: slot 37
+/// (`0x76cce0`) loads any non-empty name, and an empty one leaves the pane no model.
 fn stock_preview(
     pane: Option<&GlueScenePane>,
     standing: Option<&benilla_protocol::Character>,
     facing: f32,
     create: CreateStage,
-) -> (Option<GlueScene>, Option<GlueLook>, f32, Option<SceneFog>) {
-    let Some(pane) = pane else {
+) -> (
+    Option<GlueSceneFile>,
+    Option<GlueLook>,
+    f32,
+    Option<SceneFog>,
+) {
+    let Some(pane) = pane.filter(|p| !p.path.is_empty()) else {
         return (None, None, 0.0, None);
     };
-    let scene = GlueScene::from_model_path(&pane.path);
-    if scene.is_none() {
-        warn_once!(
-            "glue scene: {} is none of the shipped glue scenes; the glue booth stands nothing",
-            pane.path
-        );
-    }
+    let scene = Some(GlueSceneFile::new(&pane.path));
     // The character and the facing are the select frame's scene's (`[0xb42174]`) or the
     // customize frame's (`[0xb420f0]`), each its own.
     let (look, yaw) = if pane.select {
@@ -180,6 +181,15 @@ pub(crate) fn feed_stock_glue_preview(
     if preview.pane != rect {
         preview.pane = rect;
     }
+    let root = pane.as_ref().map_or(SceneRoot::default(), |p| SceneRoot {
+        model_scale: p.model_scale,
+        layout_scale: p.layout_scale,
+        position: Vec3::from_array(p.position),
+        facing: p.facing,
+    });
+    if preview.root != root {
+        preview.root = root;
+    }
     if preview.scene != scene {
         preview.scene = scene;
     }
@@ -230,7 +240,7 @@ mod tests {
             1.0,
             CreateStage::default(),
         );
-        assert_eq!(scene, Some(GlueScene::MainMenu));
+        assert_eq!(scene, Some(file("UI_MainMenu")));
         assert!(
             look.is_none() && yaw == 0.0,
             "only the select frame's scene holds a character"
@@ -288,7 +298,7 @@ mod tests {
                 facing: -0.25,
             },
         );
-        assert_eq!(scene, Some(GlueScene::Orc));
+        assert_eq!(scene, Some(file("UI_Orc")));
         assert!(
             look == Some(GlueLook::Create(CreateLook {
                 race: 2,
@@ -306,22 +316,67 @@ mod tests {
         assert!(look.is_none());
     }
 
+    /// The stock folder's scene file `UI_<name>`.
+    fn file(name: &str) -> GlueSceneFile {
+        GlueSceneFile::new(&format!("Interface\\Glues\\Models\\{name}\\{name}.mdx"))
+    }
+
+    /// No shown pane, or one whose `SetModel` name was empty, stands nothing; any other file
+    /// stands as itself (`0x76cce0`), a scene 1.12.1 never shipped included.
     #[test]
-    fn no_shown_pane_and_an_unknown_file_stand_nothing() {
+    fn a_pane_stands_whatever_file_it_holds() {
+        let none = CreateStage::default();
+        assert_eq!(stock_preview(None, None, 0.0, none).0, None);
         assert_eq!(
-            stock_preview(None, None, 0.0, CreateStage::default()).0,
+            stock_preview(Some(&pane("", true, None)), None, 0.0, none).0,
             None
         );
-        assert_eq!(
-            stock_preview(
-                Some(&pane("Interface\\Glues\\Models\\Odd.mdx", true, None)),
-                None,
-                0.0,
-                CreateStage::default()
-            )
-            .0,
-            None
+        let gnome = "Interface\\Glues\\Models\\UI_Gnome\\UI_Gnome.mdx";
+        let (scene, ..) = stock_preview(Some(&pane(gnome, true, None)), None, 0.0, none);
+        assert_eq!(scene.as_ref().map(GlueSceneFile::path), Some(gnome));
+        let custom = "Interface\\Glues\\Models\\Custom\\UI_Orc.mdx";
+        let (scene, ..) = stock_preview(Some(&pane(custom, true, None)), None, 0.0, none);
+        assert_eq!(scene, Some(GlueSceneFile::new(custom)));
+        assert_ne!(
+            scene,
+            Some(file("UI_Orc")),
+            "its own file, not the stock UI_Orc"
         );
+    }
+
+    /// Through the verbs: `SetCharSelectBackground` stands its file unfogged whatever the script
+    /// sets after (`0x472150` replaces the fog callback), and `SetCharCustomizeBackground` keeps
+    /// the pane's fog (`0x4707b0`), none after `ClearFog`.
+    #[test]
+    fn the_background_verbs_stand_any_file_under_their_screens_fog() {
+        let s = UiScript::new_glue().unwrap();
+        s.run(
+            "CreateFrame('ModelFFX', 'Select') SetCharSelectModelFrame('Select') \
+             SetCharSelectBackground('Interface\\\\Glues\\\\Models\\\\UI_Goblin\\\\UI_Goblin.mdx') \
+             Select:SetFogColor(1, 0, 0) Select:SetFogFar(100)",
+        )
+        .unwrap();
+        let none = CreateStage::default();
+        let (scene, _, _, fog) = stock_preview(s.glue_scene().as_ref(), None, 0.0, none);
+        assert_eq!(scene, Some(file("UI_Goblin")));
+        assert_eq!(fog, None, "the select scene never fogs");
+
+        s.run(
+            "Select:Hide() CreateFrame('ModelFFX', 'Create') SetCharCustomizeFrame('Create') \
+             SetCharCustomizeBackground('Custom\\\\Stage.mdx') \
+             Create:SetFogColor(1, 0, 0) Create:SetFogFar(100)",
+        )
+        .unwrap();
+        let (scene, _, _, fog) = stock_preview(s.glue_scene().as_ref(), None, 0.0, none);
+        assert_eq!(scene, Some(GlueSceneFile::new("Custom\\Stage.mdx")));
+        assert_eq!(
+            fog.map(|f| f.far),
+            Some(100.0),
+            "the create scene keeps its fog"
+        );
+        s.run("Create:ClearFog()").unwrap();
+        let (.., fog) = stock_preview(s.glue_scene().as_ref(), None, 0.0, none);
+        assert_eq!(fog, None);
     }
 
     /// `SetGlueScreen("credits")` hides `AccountLogin` and shows no model (`GlueParent.lua:34-45`):
@@ -346,19 +401,19 @@ mod tests {
             s.resolve();
             app.update();
             let p = app.world().resource::<GluePreview>();
-            (p.scene, p.hidden, p.stage, p.shown)
+            (p.scene.clone(), p.hidden, p.stage, p.shown)
         };
         let (scene, hidden, stage, shown) = run(&mut app, "");
-        assert_eq!((scene, hidden), (Some(GlueScene::MainMenu), false));
+        assert_eq!((scene, hidden), (Some(file("UI_MainMenu")), false));
 
         assert_eq!(
             run(&mut app, "Login:Hide()"),
-            (Some(GlueScene::MainMenu), true, stage, shown),
+            (Some(file("UI_MainMenu")), true, stage, shown),
             "hidden, the scene stays up: no teardown, no new instance"
         );
         assert_eq!(
             run(&mut app, "Login:Show()"),
-            (Some(GlueScene::MainMenu), false, stage, shown + 1),
+            (Some(file("UI_MainMenu")), false, stage, shown + 1),
             "shown again, the same instance resumes, and its OnShow pins the glow"
         );
 
@@ -368,7 +423,7 @@ mod tests {
             "Login:Hide() Login:SetModel('Interface/Glues/Models/UI_Orc/UI_Orc.mdx')",
         );
         let (scene, hidden, again, _) = run(&mut app, "Login:Show()");
-        assert_eq!((scene, hidden), (Some(GlueScene::Orc), false));
+        assert_eq!((scene, hidden), (Some(file("UI_Orc")), false));
         assert_ne!(again, stage);
     }
 
@@ -395,13 +450,13 @@ mod tests {
             s.resolve();
             app.update();
             let p = app.world().resource::<GluePreview>();
-            (p.scene, p.stage, p.live.clone())
+            (p.scene.clone(), p.stage, p.live.clone())
         };
         let (scene, login, live) = run(&mut app, "");
-        assert_eq!((scene, live), (Some(GlueScene::MainMenu), vec![login]));
+        assert_eq!((scene, live), (Some(file("UI_MainMenu")), vec![login]));
 
         let (scene, select, live) = run(&mut app, "Login:Hide() Select:Show()");
-        assert_eq!(scene, Some(GlueScene::Orc));
+        assert_eq!(scene, Some(file("UI_Orc")));
         assert_ne!(select, login);
         assert_eq!(
             live,
@@ -412,7 +467,7 @@ mod tests {
         let (scene, back, live) = run(&mut app, "Select:Hide() Login:Show()");
         assert_eq!(
             (scene, back),
-            (Some(GlueScene::MainMenu), login),
+            (Some(file("UI_MainMenu")), login),
             "the same instance, the same stage"
         );
         assert_eq!(live, vec![login, select]);

@@ -102,6 +102,12 @@ pub struct GlueScenePane {
     /// The pane is the create screen's customize frame (`[0xb420f0]`), whose scene the preview
     /// character stands in.
     pub create: bool,
+    /// The root inputs the paint places the scene by (`0x76d1a0`): `SetModelScale`, the frame's
+    /// effective scale, `SetPosition` in layout units and `SetFacing` in radians.
+    pub model_scale: f32,
+    pub layout_scale: f32,
+    pub position: [f32; 3],
+    pub facing: f32,
 }
 
 /// A record of the array: the character and whether `+0x110`, the built composite, is set.
@@ -391,6 +397,10 @@ fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueSceneP
         fog: m.scene_fog(),
         select: model_frame_handle(model) == Some(h),
         create: super::glue_create::create_frame_handle(model) == Some(h),
+        model_scale: m.scale,
+        layout_scale: f.effective_scale,
+        position: m.position.into(),
+        facing: m.facing,
     })
 }
 

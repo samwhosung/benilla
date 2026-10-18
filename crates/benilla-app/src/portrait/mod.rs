@@ -57,8 +57,9 @@ mod glue_booth;
 /// A model file's own authored lights, folded as the reference's gather does (`0x718960`).
 pub(crate) use glue_booth::{scene_rig, SceneRig};
 pub(crate) use glue_booth::{
-    CreateLook, GhostKit, GlueLook, GluePetBake, GluePreview, GluePreviewBake, GlueScene, PetLook,
-    PreviewBillboard, PreviewEffects, PreviewPart, PreviewRider, SceneFog, SelectLook, GLUE_SLOT,
+    CreateLook, GhostKit, GlueLook, GluePetBake, GluePreview, GluePreviewBake, GlueSceneFile,
+    PetLook, PreviewBillboard, PreviewEffects, PreviewPart, PreviewRider, SceneFog, SceneRoot,
+    SelectLook, GLUE_SLOT,
 };
 mod light;
 pub(crate) use light::{material_variant, VariantLane};
