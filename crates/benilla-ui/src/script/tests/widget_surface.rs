@@ -76,13 +76,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
     ("GetCurrentScroll", "ScrollingMessageFrame", "the same"),
     ("GetNumLinesDisplayed", "ScrollingMessageFrame", "the same"),
     ("SetScrollFromBottom", "ScrollingMessageFrame", "the same"),
-    // ── The colour picker's HSV pair ──
-    (
-        "GetColorHSV",
-        "ColorSelect",
-        "the RGB pair is published; nothing measured asks for HSV",
-    ),
-    ("SetColorHSV", "ColorSelect", "the same"),
 ];
 
 /// Methods answered here that 1.12 does not register on that class, each with why it stays.

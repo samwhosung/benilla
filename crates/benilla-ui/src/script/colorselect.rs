@@ -248,6 +248,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetColorRGB",
         lua.create_function(|lua, this: Table| with_colorselect(lua, &this, |s| s.rgb_f64()))?,
     )?;
+    m.set(
+        "SetColorHSV",
+        // A bare `lua_tonumber` on h, s, v (`0x78e9b2`-`0x78e9d0`), each stored as f32 with no
+        // clamp, then the same redraw and `OnColorSelect` tail as SetColorRGB (`0x78e9f1`).
+        lua.create_function(|lua, (this, h, s, v): (Table, Value, Value, Value)| {
+            let [h, s, v] = [h, s, v].map(|x| crate::script::object::tonumber_f64(lua, &x) as f32);
+            let (qr, qg, qb) = with_colorselect(lua, &this, |c| {
+                c.set_hsv(h, s, v);
+                c.rgb_f64()
+            })?;
+            fire_color_select(lua, &this, qr, qg, qb)
+        })?,
+    )?;
+    m.set(
+        "GetColorHSV",
+        // The three stored floats widened (`0x78ea9c`-`0x78eacd`): hue in degrees, unclamped.
+        lua.create_function(|lua, this: Table| {
+            with_colorselect(lua, &this, |c| {
+                let [h, s, v] = c.hsv.map(f64::from);
+                (h, s, v)
+            })
+        })?,
+    )?;
 
     // The four texture accessors (`0x78de90`, `0x78e160`, `0x78e450`, `0x78e720`; getters
     // `0x78dd80`, `0x78e070`), through which the XML loader installs a ColorSelect's elements.
@@ -577,6 +600,53 @@ mod tests {
             .eval("local r, g, b = cs:GetColorRGB() return fired[1], r .. \",\" .. g .. \",\" .. b")
             .unwrap();
         assert_eq!(from_handler, from_getter);
+    }
+
+    /// `SetColorHSV` stores three raw f32s (`0x78e9b7`-`0x78e9d5`), coercing a non-number to 0
+    /// with no clamp and no gate, and fires on every call; `GetColorHSV` answers them widened.
+    #[test]
+    fn the_hsv_pair_stores_raw_floats_and_fires_every_time() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            r#"
+            fired = {}
+            cs = CreateFrame("ColorSelect", "TestColorSelectHsv")
+            cs:SetScript("OnColorSelect", function()
+                table.insert(fired, arg1 .. "," .. arg2 .. "," .. arg3)
+            end)
+        "#,
+        )
+        .unwrap();
+        assert_eq!(s.arity("cs:GetColorHSV()").unwrap(), 3);
+        assert_eq!(s.arity("cs:SetColorHSV(1, 1, 1)").unwrap(), 0);
+        s.run("fired = {}").unwrap();
+
+        s.run("cs:SetColorHSV(0.1, 0.5, 0.25)").unwrap();
+        let hsv: (f64, f64, f64) = s.eval("return cs:GetColorHSV()").unwrap();
+        assert_eq!(hsv, (f64::from(0.1f32), 0.5, 0.25), "stored as f32");
+        assert_ne!(hsv.0, 0.1);
+
+        s.run("cs:SetColorHSV(400, 2, -1)").unwrap();
+        let hsv: (f64, f64, f64) = s.eval("return cs:GetColorHSV()").unwrap();
+        assert_eq!(hsv, (400.0, 2.0, -1.0), "no clamp");
+
+        s.run(r#"cs:SetColorHSV("x")"#).unwrap();
+        let hsv: (f64, f64, f64) = s.eval("return cs:GetColorHSV()").unwrap();
+        assert_eq!(hsv, (0.0, 0.0, 0.0), "a non-number reads 0");
+
+        s.run("fired = {} cs:SetColorHSV(120, 1, 1) cs:SetColorHSV(120, 1, 1)")
+            .unwrap();
+        assert_eq!(s.eval::<usize>("return table.getn(fired)").unwrap(), 2);
+        let (from_handler, from_getter): (String, String) = s
+            .eval("local r, g, b = cs:GetColorRGB() return fired[2], r .. \",\" .. g .. \",\" .. b")
+            .unwrap();
+        assert_eq!(from_handler, from_getter);
+        assert_eq!(from_handler, "0,1,0");
+
+        // An RGB grey stores hue -1 (`0x7bbccd`), readable through the HSV getter.
+        s.run("cs:SetColorRGB(0.5, 0.5, 0.5)").unwrap();
+        assert_eq!(s.eval::<f64>("return (cs:GetColorHSV())").unwrap(), -1.0);
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
     #[test]
