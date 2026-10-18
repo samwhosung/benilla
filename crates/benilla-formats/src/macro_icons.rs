@@ -19,7 +19,7 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// after the prefix without a last-dot `.blp` or `.tga`, skipping directories, then `qsort`s with
 /// `SStrCmpI` (`0x4f0128`, comparator `0x4f05e0`) and drops adjacent duplicates
 /// (`0x4f0140`-`0x4f01a4`): the order is alphabetical, and a stock 5875 install yields 517 icons.
-pub fn load_macro_icons(chain: &mut Chain) -> Result<Vec<String>> {
+pub fn load_macro_icons(chain: &Chain) -> Result<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
     for entry in chain.list()? {
         let path = entry.name.replace('/', "\\");

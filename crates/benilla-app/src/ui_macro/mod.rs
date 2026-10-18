@@ -42,9 +42,6 @@ impl Plugin for UiMacroPlugin {
             .add_systems(
                 Update,
                 (
-                    // Once per VM, in `Update`: it needs both the patch chain and the VM, and each
-                    // login builds a fresh VM.
-                    load_icon_catalog.in_set(crate::ui_script::UiFeed),
                     // Before the action feeds read it (they run in `UnitFeed`), so a macro edited
                     // this frame reports its new spell's cooldown the same frame.
                     rebind_macro_spells
@@ -62,31 +59,39 @@ impl Plugin for UiMacroPlugin {
     }
 }
 
-/// Build the icon chooser's list once per VM: the `Spell_` and `Ability_` files under
-/// `Interface\Icons\` ([`benilla_formats::load_macro_icons`]). A failed load leaves it empty, and
+/// Give the world-entry VM what lists the icon chooser, over the patch chain
+/// ([`benilla_formats::load_macro_icons`]). The VM runs it on first use: only the in-game state
+/// registers the macro verbs (`RegisterMacroFunctions` `0x4f1b90`, from `0x490297`), so the glue
+/// and boot VMs get none. A failed listing builds an empty list, and
 /// `MacroPopupOkayButton_Update` then keeps OKAY disabled.
-fn load_icon_catalog(
-    script: Option<NonSendMut<UiScript>>,
-    assets: Option<Res<WorldAssets>>,
-    mut seeded: Local<crate::ui_script::VmMemo<bool>>,
-) {
-    let (Some(mut script), Some(assets)) = (script, assets) else {
+pub(crate) fn install_icon_source(world: &World, script: &mut UiScript) {
+    let Some(assets) = world.get_resource::<WorldAssets>() else {
         return;
     };
-    if !seeded.claim(&script) {
-        return;
-    }
-    let loaded = {
-        let mut chain = assets.chain.lock_recover();
-        benilla_formats::load_macro_icons(&mut chain)
-    };
-    match loaded {
-        Ok(icons) => {
-            info!("ui_macro: {} macro icons in the chooser", icons.len());
-            script.set_macro_icons(icons);
+    script.set_macro_icon_source(icon_source(assets.chain.clone()));
+}
+
+/// The icon chooser's lister over `chain`.
+fn icon_source(
+    chain: std::sync::Arc<std::sync::Mutex<benilla_formats::Chain>>,
+) -> Box<dyn Fn() -> Vec<String>> {
+    Box::new(move || {
+        let start = std::time::Instant::now();
+        match benilla_formats::load_macro_icons(&chain.lock_recover()) {
+            Ok(icons) => {
+                info!(
+                    "ui_macro: {} macro icons in the chooser, listed in {:.0} ms",
+                    icons.len(),
+                    start.elapsed().as_secs_f32() * 1000.0
+                );
+                icons
+            }
+            Err(e) => {
+                error!("ui_macro: no Interface\\Icons\\ listing — the chooser is empty: {e:#}");
+                Vec::new()
+            }
         }
-        Err(e) => error!("ui_macro: no Interface\\Icons\\ listing — the chooser is empty: {e:#}"),
-    }
+    })
 }
 
 /// `(realm, character)` off the roster's login pick, keying the per-character files.

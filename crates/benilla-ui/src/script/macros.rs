@@ -1,7 +1,7 @@
 //! Player macros. 1.12 keeps them client-side with no opcode (`macros-cache.txt`), and
 //! `CreateMacro` must return the new index at once, so the table lives here: the app seeds it
-//! ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`] says, and pushes the
-//! icon list ([`UiScript::set_macro_icons`]).
+//! ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`] says, and installs
+//! what lists the icon chooser ([`UiScript::set_macro_icon_source`]), run on first use.
 //!
 //! Indices 1..=18 are the account macros and 19..=36 the character macros, each list dense from
 //! its base (`MacroFrame.macroBase`). A macro's bound spell (`0x4e5a50`'s macro arm returns
@@ -163,6 +163,14 @@ impl super::UiScript {
         self.model_mut().macro_icons = icons;
     }
 
+    /// Install what builds the icon list. `GetNumMacroIcons`, `CreateMacro` and `EditMacro` run it
+    /// while the list is empty, tested on the count `[0xbdcc1c]` (`0x4f19f6`, `0x4f162d`,
+    /// `0x4f1961`), so a VM lists nothing until a script asks; the list lives as long as the VM,
+    /// as `CGGameUI::Shutdown` frees it (`0x4effb0`, at `0x490c5f`) on logout and `ReloadUI`.
+    pub fn set_macro_icon_source(&mut self, source: Box<dyn Fn() -> Vec<String>>) {
+        self.model_mut().macro_icon_source = Some(source.into());
+    }
+
     /// Bumped by every seed and every change, so a per-frame reader such as the action bar compares
     /// a `u64` instead of diffing the table. Not [`Self::take_macros_dirty`]: that drain has one
     /// owner, the save, and a second reader would steal its edge.
@@ -171,9 +179,8 @@ impl super::UiScript {
     }
 }
 
-/// `CreateMacro(name, iconIndex, body, local, perCharacter)` (usage string `0x84cb74`): the new
-/// 1-based index, or the error the client raises for the two failures (`0x84cbb4`, `0x84cbdc`), an
-/// empty name and a full tab.
+/// `CreateMacro`'s worker (`0x4f1010`): the new 1-based index, or the full-tab error
+/// (`0x84cbdc`). The verb has refused an empty name already.
 fn create_macro(
     model: &mut Model,
     name: &str,
@@ -182,12 +189,6 @@ fn create_macro(
     local_only: bool,
     per_character: bool,
 ) -> mlua::Result<usize> {
-    // Tested on the first byte (`*name == 0`): a blank name is a name.
-    if name.is_empty() {
-        return Err(mlua::Error::RuntimeError(
-            "CreateMacro() failed, no name specified".into(),
-        ));
-    }
     let name = clamp_chars(name, MAX_MACRO_NAME);
     let list = model.macros.list_mut(per_character);
     if list.len() >= MAX_MACROS {
@@ -275,6 +276,26 @@ fn pickup_macro(lua: &Lua, index: usize) -> bool {
     set_cursor(lua, true, |_| Some(CursorPayload::Macro(payload)))
 }
 
+/// Build the icon list if it is empty, as the three verbs do before they read it (`0x4f0090`
+/// behind a zero count). The source runs with no borrow of the model held. Deviation: a listing
+/// that finds no icon stays empty, to be listed again on the next ask, where the reference's
+/// dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults.
+fn ensure_macro_icons(lua: &Lua) {
+    let source = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        if !model.macro_icons.is_empty() {
+            return;
+        }
+        model.macro_icon_source.clone()
+    };
+    if let Some(source) = source {
+        let icons = source();
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .macro_icons = icons;
+    }
+}
+
 fn opt_string(v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::String(s)) => Some(s.to_string_lossy()),
@@ -337,9 +358,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `GetNumMacroIcons()` (`0x4f19f0`): the list's size, built first while it is empty.
     g.set(
         "GetNumMacroIcons",
         lua.create_function(|lua, ()| {
+            ensure_macro_icons(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model.macro_icons.len() as i64)
         })?,
@@ -366,9 +389,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CreateMacro(name, iconIndex, body, local, perCharacter) (`0x4f15b0`): the name is a string
     // or number and the icon a number or numeric string, else the usage text (`0x84cb74`) raises.
     // `iconIndex` is an index into the chooser list. An empty name raises (`0x84cbb4`, tested on
-    // the first byte, so a blank one is a name), and so does a full tab (`0x84cbdc`); a made macro
-    // answers exactly its new 1-based index (`0x4f16ce`). The gate `0x494a50(7)` ahead of the body
-    // passes every context (`0x494b54` maps tag 7 to the arm that returns 1).
+    // the first byte, so a blank one is a name) before the list is built (`0x4f1613`, `0x4f1637`),
+    // and a full tab raises after (`0x84cbdc`); a made macro answers exactly its new 1-based index
+    // (`0x4f16ce`). The gate `0x494a50(7)` ahead of the body passes every context (`0x494b54` maps
+    // tag 7 to the arm that returns 1).
     g.set(
         "CreateMacro",
         lua.create_function(|lua, args: MultiValue| {
@@ -386,6 +410,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let icon = lua
                 .coerce_number(a.get(1).cloned().unwrap_or(Value::Nil))?
                 .ok_or_else(usage)?;
+            if name.is_empty() {
+                return Err(mlua::Error::RuntimeError(
+                    "CreateMacro() failed, no name specified".into(),
+                ));
+            }
+            ensure_macro_icons(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // `trunc(n) - 1` against the chooser list, unsigned (`0x4f1632`, `0x4f163c`).
             let texture = usize::try_from(super::binding_abi::ftol(icon).wrapping_sub(1))
@@ -408,6 +438,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(index) = a.first().and_then(|v| v.as_integer()).map(|i| i as usize) else {
                 return Ok(Value::Nil);
             };
+            // The list is built only for an index that names a macro and a numeric icon
+            // (`0x4f1913`, `0x4f1945`, `0x4f196b`).
+            let names_macro = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .macros
+                .get(index)
+                .is_some();
+            if names_macro
+                && lua
+                    .coerce_number(a.get(2).cloned().unwrap_or(Value::Nil))?
+                    .is_some()
+            {
+                ensure_macro_icons(lua);
+            }
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // A nil icon leaves the icon alone: `MacroFrame_SaveMacro` passes nil on every save.
             let texture = match a.get(2) {
@@ -707,6 +752,105 @@ mod tests {
                 "GetMacroIconInfo({off})"
             );
         }
+    }
+
+    /// A VM whose icon list is built by a source that counts its runs and answers `icons`.
+    fn lazily_listed(
+        icons: &'static [&'static str],
+    ) -> (UiScript, std::rc::Rc<std::cell::Cell<u32>>) {
+        let mut s = UiScript::new().unwrap();
+        let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = runs.clone();
+        s.set_macro_icon_source(Box::new(move || {
+            counter.set(counter.get() + 1);
+            icons.iter().map(|i| i.to_string()).collect()
+        }));
+        (s, runs)
+    }
+
+    const TWO_ICONS: &[&str] = &[
+        "Interface\\Icons\\Ability_Ambush",
+        "Interface\\Icons\\Ability_BackStab",
+    ];
+
+    /// `GetNumMacroIcons` builds on first use (`0x4f19f6`-`0x4f1a02`) and `GetMacroIconInfo`
+    /// never does (`0x4f1a30`), so a VM lists nothing until a script asks for the count.
+    #[test]
+    fn the_icon_list_is_built_on_the_first_count_and_kept() {
+        let (s, runs) = lazily_listed(TWO_ICONS);
+        assert_eq!(runs.get(), 0, "installing the source lists nothing");
+        assert_eq!(
+            s.eval::<String>("return GetMacroIconInfo(1)").unwrap(),
+            "",
+            "before a build the list is empty"
+        );
+        assert_eq!(runs.get(), 0, "GetMacroIconInfo never builds");
+        assert_eq!(s.eval::<i64>("return GetNumMacroIcons()").unwrap(), 2);
+        assert_eq!(runs.get(), 1);
+        assert_eq!(s.eval::<i64>("return GetNumMacroIcons()").unwrap(), 2);
+        assert_eq!(runs.get(), 1, "a built list is kept");
+        assert_eq!(
+            s.eval::<String>("return GetMacroIconInfo(2)").unwrap(),
+            "Interface\\Icons\\Ability_BackStab"
+        );
+    }
+
+    /// The build is gated on the count, not on a built flag (`0x4f19fb`), so a list that comes
+    /// back empty is listed again on the next ask.
+    #[test]
+    fn an_empty_icon_list_is_listed_again() {
+        let (s, runs) = lazily_listed(&[]);
+        for _ in 0..2 {
+            assert_eq!(s.eval::<i64>("return GetNumMacroIcons()").unwrap(), 0);
+        }
+        assert_eq!(runs.get(), 2);
+    }
+
+    /// `CreateMacro` builds after its usage check and its empty-name raise (`0x4f1613`,
+    /// `0x4f1637`), then reads its icon from the built list.
+    #[test]
+    fn create_macro_builds_the_list_only_past_its_checks() {
+        let (s, runs) = lazily_listed(TWO_ICONS);
+        assert!(s.run("CreateMacro('a', 'x')").is_err());
+        assert!(s.run("CreateMacro('', 1)").is_err());
+        assert_eq!(runs.get(), 0, "a refused call lists nothing");
+        s.run("CreateMacro('a', 2, '/say hi')").unwrap();
+        assert_eq!(runs.get(), 1);
+        assert_eq!(
+            s.eval::<String>("local _, t = GetMacroInfo(1) return t")
+                .unwrap(),
+            "Interface\\Icons\\Ability_BackStab"
+        );
+    }
+
+    /// `EditMacro` builds only for an index that names a macro (`0x4f1913`) and a numeric icon
+    /// (`0x4f1945`), then reads the icon from the built list (`0x4f196b`).
+    #[test]
+    fn edit_macro_builds_the_list_only_for_a_macro_and_a_numeric_icon() {
+        let (mut s, runs) = lazily_listed(TWO_ICONS);
+        s.set_macros(MacroState {
+            account: vec![MacroView {
+                name: "m".into(),
+                ..Default::default()
+            }],
+            character: Vec::new(),
+        });
+        for call in [
+            "EditMacro(2, nil, 1)",
+            "EditMacro(1, 'n')",
+            "EditMacro(1, nil, 'x')",
+            "EditMacro(1, nil, nil, '/say x')",
+        ] {
+            s.run(call).unwrap();
+            assert_eq!(runs.get(), 0, "{call} lists nothing");
+        }
+        s.run("EditMacro(1, nil, 1)").unwrap();
+        assert_eq!(runs.get(), 1);
+        assert_eq!(
+            s.eval::<String>("local _, t = GetMacroInfo(1) return t")
+                .unwrap(),
+            "Interface\\Icons\\Ability_Ambush"
+        );
     }
 
     /// The macro setter (`0x494f80`) signals only through its inner clear (`0x494fad`): that

@@ -299,7 +299,8 @@ pub use merchant::{ItemStatsHead, MerchantItem, MerchantState, RepairCosts};
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;
 pub(crate) use model::Model;
 pub use model::{
-    FontProbe, TextureProbe, TextureSizeFn, TextureSizeProbe, WorldLocFn, WorldLocProjector,
+    FontProbe, MacroIconSource, TextureProbe, TextureSizeFn, TextureSizeProbe, WorldLocFn,
+    WorldLocProjector,
 };
 pub use party::{PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, SavedInstanceInfo};
 pub use pet::{PetActionView, PetStats};

@@ -256,7 +256,8 @@ pub(crate) fn arm_entry_ui_load(world: &mut World) {
 /// `GlobalStrings.lua` and `Fonts.xml` as its first rows, and `ChatFrame.lua` the emote tokens.
 fn mint_entry_vm(world: &mut World) {
     crate::cvars::fold_dying_vm_cvars(world);
-    if let Some(script) = new_vm(world, UiScript::new) {
+    if let Some(mut script) = new_vm(world, UiScript::new) {
+        crate::ui_macro::install_icon_source(world, &mut script);
         world.insert_non_send_resource(script);
     }
 }

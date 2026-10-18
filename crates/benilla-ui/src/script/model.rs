@@ -30,6 +30,9 @@ pub type TextureSizeFn = dyn Fn(&str) -> Option<(u32, u32)>;
 /// The host's answer to whether a font path loads.
 pub type FontProbe = std::rc::Rc<dyn Fn(&str) -> bool>;
 
+/// The host's lister of the macro icon chooser's paths, `0x4f0090`'s three sources.
+pub type MacroIconSource = std::rc::Rc<dyn Fn() -> Vec<String>>;
+
 /// Minted id to handle, indexed directly: ids are dense and every scripted call looks one up.
 #[derive(Debug, Clone)]
 pub(crate) struct IdMap<T>(Vec<Option<T>>);
@@ -611,6 +614,8 @@ pub(crate) struct Model {
     /// The macro icon chooser's paths, behind `GetMacroIconInfo`: `0x4f0090`'s listing of
     /// `Interface\Icons\`, not `SpellIcon.dbc`.
     pub(crate) macro_icons: Vec<String>,
+    /// What builds `macro_icons` while it is empty; `None` builds nothing.
+    pub(crate) macro_icon_source: Option<MacroIconSource>,
     /// `ToggleSpellAutocast` ids for `CMSG_PET_SPELL_AUTOCAST` (`0x2F3`), which names a spell.
     pub(crate) pet_spell_autocasts: Vec<u32>,
     /// An auto-repeat or cast that `SpellStopCasting()` can stop, not a channel (`0x6e6e80`). Its
@@ -1550,6 +1555,7 @@ impl Model {
             macros_generation: 0,
             macro_bindings: HashMap::new(),
             macro_icons: Vec::new(),
+            macro_icon_source: None,
             pet_spell_autocasts: Vec::new(),
             casting: false,
             spell_targeting: false,

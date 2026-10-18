@@ -252,8 +252,8 @@ fn every_macro_chooser_icon_resolves_in_the_client_archives() {
     const CHOOSER_ICONS_5875: usize = 517;
 
     let data = benilla_formats::wow_data_or_skip!();
-    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-    let icons = benilla_formats::load_macro_icons(&mut chain).expect("load chooser catalog");
+    let chain = benilla_formats::open_chain(&data).expect("open chain");
+    let icons = benilla_formats::load_macro_icons(&chain).expect("load chooser catalog");
     assert_eq!(
         icons.len(),
         CHOOSER_ICONS_5875,
@@ -282,4 +282,23 @@ fn every_macro_chooser_icon_resolves_in_the_client_archives() {
         icons, sorted,
         "the chooser list must be case-insensitively sorted"
     );
+}
+
+/// The world-entry VM's lister runs on the first `GetNumMacroIcons` (`0x4f19f0`), never at the
+/// VM's creation, and `GetMacroIconInfo` before it answers "" (`0x4f1ac5`).
+#[test]
+fn the_entry_vms_icon_chooser_is_listed_on_first_use() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let chain = benilla_formats::open_chain(&data).expect("open chain");
+    let mut s = UiScript::new().expect("VM");
+    s.set_macro_icon_source(super::icon_source(std::sync::Arc::new(
+        std::sync::Mutex::new(chain),
+    )));
+    assert_eq!(s.eval::<String>("return GetMacroIconInfo(1)").unwrap(), "");
+    let count = s.eval::<i64>("return GetNumMacroIcons()").unwrap();
+    assert!(count > 0, "the stock chain lists its icons");
+    assert!(s
+        .eval::<String>("return GetMacroIconInfo(1)")
+        .unwrap()
+        .starts_with("Interface\\Icons\\"));
 }
