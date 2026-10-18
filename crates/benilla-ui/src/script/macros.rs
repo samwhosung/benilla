@@ -157,7 +157,8 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().macros_dirty)
     }
 
-    /// Push the icon chooser's texture paths in grid order, built by the app from `SpellIcon.dbc`.
+    /// Push the icon chooser's texture paths in grid order: the files under `Interface\Icons\`
+    /// that `0x4f0090` lists (`benilla_formats::load_macro_icons`), not `SpellIcon.dbc`.
     pub fn set_macro_icons(&mut self, icons: Vec<String>) {
         self.model_mut().macro_icons = icons;
     }
@@ -344,20 +345,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `GetMacroIconInfo(index)` (`0x4f1a30`): `trunc(n) - 1` compared unsigned with the count
+    // (`0x4f1a76`), so 0, a negative and an index past the list push "" (`0x4f1ac5`, `0x882748`),
+    // never nil. It never builds the list.
     g.set(
         "GetMacroIconInfo",
         lua.create_function(|lua, Idx(index): Idx| {
             let path = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                index
-                    .checked_sub(1)
-                    .and_then(|i| model.macro_icons.get(i))
+                model
+                    .macro_icons
+                    .get((index as u32).wrapping_sub(1) as usize)
                     .cloned()
+                    .unwrap_or_default()
             };
-            match path {
-                Some(p) => Ok(Value::String(lua.create_string(&p)?)),
-                None => Ok(Value::Nil),
-            }
+            Ok(Value::String(lua.create_string(&path)?))
         })?,
     )?;
 
@@ -680,16 +682,31 @@ mod tests {
         assert_eq!(s.cursor_payload(), ambush);
     }
 
+    /// Off the list `0x4f1a30` pushes "" (`0x4f1ac5`), for 0 and a negative too, as the unsigned
+    /// compare reads them as huge.
     #[test]
-    fn the_icon_chooser_list_is_one_based_with_a_nil_tail() {
+    fn the_icon_chooser_list_is_one_based_with_an_empty_string_tail() {
         let s = seeded();
         assert_eq!(s.eval::<i64>("return GetNumMacroIcons()").unwrap(), 3);
         assert_eq!(
             s.eval::<String>("return GetMacroIconInfo(2)").unwrap(),
             "Interface\\Icons\\Ability_BackStab"
         );
-        assert!(s.eval::<bool>("return GetMacroIconInfo(4) == nil").unwrap());
-        assert!(s.eval::<bool>("return GetMacroIconInfo(0) == nil").unwrap());
+        assert_eq!(
+            s.eval::<String>("return GetMacroIconInfo(2.9)").unwrap(),
+            "Interface\\Icons\\Ability_BackStab",
+            "the index truncates"
+        );
+        for off in ["4", "0", "-1", "'5'"] {
+            assert_eq!(
+                s.eval::<String>(&format!(
+                    "return type(GetMacroIconInfo({off})) .. '|' .. GetMacroIconInfo({off})"
+                ))
+                .unwrap(),
+                "string|",
+                "GetMacroIconInfo({off})"
+            );
+        }
     }
 
     /// The macro setter (`0x494f80`) signals only through its inner clear (`0x494fad`): that

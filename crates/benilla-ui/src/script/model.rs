@@ -608,7 +608,8 @@ pub(crate) struct Model {
     pub(crate) macros_generation: u64,
     /// Each macro's cached cast by 1-based index, from the app; an absent macro reads unbound.
     pub(crate) macro_bindings: HashMap<u32, macros::MacroBinding>,
-    /// The macro icon paths from `SpellIcon.dbc`, behind `GetMacroIconInfo`.
+    /// The macro icon chooser's paths, behind `GetMacroIconInfo`: `0x4f0090`'s listing of
+    /// `Interface\Icons\`, not `SpellIcon.dbc`.
     pub(crate) macro_icons: Vec<String>,
     /// `ToggleSpellAutocast` ids for `CMSG_PET_SPELL_AUTOCAST` (`0x2F3`), which names a spell.
     pub(crate) pet_spell_autocasts: Vec<u32>,
