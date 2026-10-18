@@ -265,10 +265,12 @@ impl Loader<'_> {
                 // setter raises.
                 for attr in ["inherits", "font"] {
                     if let Some(name) = f.attr(attr) {
+                        // Once per name, as a FontString's miss (`apply_fontstring_font`).
                         if let Err(e) = wrapper.call_method::<()>(method, name.to_string()) {
-                            self.report
-                                .warnings
-                                .push(format!("{dbg}: <{} {attr}=\"{name}\">: {e}", f.tag));
+                            self.warn_once(
+                                &format!("fontobj:{name}"),
+                                format!("{dbg}: <{} {attr}=\"{name}\">: {e}", f.tag),
+                            );
                         }
                     }
                 }
