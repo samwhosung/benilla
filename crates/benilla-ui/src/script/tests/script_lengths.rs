@@ -87,3 +87,35 @@ fn the_backdrop_lengths_answer_through_the_getter_steps() {
         .fold(f32::INFINITY, f32::min);
     crate::assert_near!(corner, 39.162796);
 }
+
+/// `GetTextWidth`/`GetTextHeight` answer `G` of the label's size slot (`0x782345`, `0x782445`):
+/// its `GetWidth`/`GetHeight`, an authored size included, at full precision. `SetPushedTextOffset`
+/// stores `S` (`0x7820fd`, `0x782126`) and `GetPushedTextOffset` answers `G` (`0x782249`,
+/// `0x78226d`); a script number is stored again by new cells, as their rebuild would store it.
+#[test]
+fn the_button_lengths_answer_through_the_getter_steps() {
+    let mut s = vm();
+    s.run(
+        r#"B = CreateFrame("Button", "Btn") B:SetText("x")
+           local t = B:GetFontString() t:SetWidth(100) t:SetHeight(50)
+           B:SetPushedTextOffset(100, 50)"#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64)>("return B:GetTextWidth(), B:GetTextHeight()")
+            .unwrap(),
+        (G_100, G_50)
+    );
+    assert_eq!(
+        s.eval::<(f64, f64)>("return B:GetPushedTextOffset()")
+            .unwrap(),
+        (G_100, G_50)
+    );
+    s.set_window_size(1920.0, 1080.0);
+    assert_eq!(
+        s.eval::<(f64, f64)>("return B:GetPushedTextOffset()")
+            .unwrap(),
+        (100.00000136774479, 50.00000068387239),
+        "G(S(v)) under the new cells, not G of the old store"
+    );
+}

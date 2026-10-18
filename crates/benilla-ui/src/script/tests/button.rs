@@ -801,7 +801,7 @@ fn a_button_reports_its_labels_extent() {
         47.0,
         "the Button forwards to its own label"
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<f64>("return WidthBtn:GetTextHeight()").unwrap(),
         14.0
     );

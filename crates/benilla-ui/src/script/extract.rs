@@ -205,7 +205,7 @@ impl UiScript {
                             continue;
                         }
                         if bs.text == Some(rh) {
-                            label_offset = bs.label_offset();
+                            label_offset = bs.label_offset(model.layout_units());
                         }
                     }
                     // A title region never draws: `CreateTitleRegion 0x773910` builds a plain

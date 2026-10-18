@@ -4,6 +4,7 @@
 //! Lookup runs CheckButton's table, then Button's, then the frame table, the client's class chain,
 //! so `SetChecked` is nil on a plain Button and `GetText` on a plain Frame.
 
+use crate::layout::Len;
 use mlua::{Lua, MultiValue, ObjectLike, Table, Value};
 
 use super::font::FontId;
@@ -775,21 +776,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTextWidth/GetTextHeight (`0x782290`/`0x782390`) forward to the label's extents (vtable
-    // `0x1c`/`0x20`). The width is the natural, unwrapped one: the laid-out width would feed a
-    // size-to-text caller (`MoneyFrame.lua:202`) its own output. 0 before measurement and with no
-    // label, where the reference dereferences `+0x338` and what it does on null is untraced.
-    for (name, region_getter) in [
-        ("GetTextWidth", "GetStringWidth"),
-        // 1.12 has no `GetStringHeight`; `0x782390` reads the label's height.
-        ("GetTextHeight", "GetHeight"),
-    ] {
+    // GetTextWidth/GetTextHeight (`0x782290`/`0x782390`) read the label's size slot (`+0x338`,
+    // layout vtable `0x1c`/`0x20`, `0x772930`/`0x772a60`), store it as a float and answer `G` of it
+    // (`0x782348`..`0x782366`): the label's `GetWidth`/`GetHeight` exactly, whose width is the
+    // authored one or the unwrapped text's, floored at one unit, so a size-to-text caller
+    // (`MoneyFrame.lua:202`) never reads its own output. 0 with no label (`0x78244d`).
+    for (name, region_getter) in [("GetTextWidth", "GetWidth"), ("GetTextHeight", "GetHeight")] {
         m.set(
             name,
             lua.create_function(move |lua, this: Table| {
                 let label = get_slot_texture(lua, &this, Slot::Text)?;
                 match label {
-                    Value::Table(t) => t.call_method::<f32>(region_getter, ()),
+                    Value::Table(t) => t.call_method::<f64>(region_getter, ()),
                     _ => Ok(0.0),
                 }
             })?,
@@ -928,12 +926,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     "SetPushedTextOffset(x, y)",
                 ));
             };
-            let units = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .layout_units();
             with_button(lua, &this, |bs| {
-                bs.pushed_text_offset = [units.store(x as f32), units.store(y as f32)];
+                bs.pushed_text_offset = [Len::Script(x as f32), Len::Script(y as f32)];
             })
         })?,
     )?;
@@ -947,7 +941,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .app_data_ref::<Model>()
                 .expect("model app_data")
                 .layout_units();
-            Ok((units.load(x), units.load(y)))
+            Ok((x.get(units), y.get(units)))
         })?,
     )?;
 
