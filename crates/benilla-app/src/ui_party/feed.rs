@@ -871,40 +871,14 @@ pub(crate) fn drain_party(
                         .send(ClientCommand::GroupSetLeader { guid: m.guid });
                 }
             }
+            // The binding resolved the method, the master and the threshold (`0x4e92a0`).
             PartyRequest::LootMethod {
                 method,
-                master_name,
-                threshold: asked,
+                master,
+                threshold,
             } => {
-                let Some(method_id) = loot_method_id(&method) else {
-                    continue;
-                };
-                let master = if method_id == 2 {
-                    master_name
-                        .as_deref()
-                        .and_then(|n| {
-                            group
-                                .members
-                                .iter()
-                                .find(|m| m.name.eq_ignore_ascii_case(n))
-                                .map(|m| m.guid)
-                        })
-                        .or(self_guid)
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                // An absent threshold keeps the group's current one (at least 2), where the
-                // reference's binding defaults it to 2 (`0x4e946d`), so a method change resets it.
-                let threshold = asked.unwrap_or_else(|| {
-                    group
-                        .loot
-                        .map(|l| u32::from(l.threshold))
-                        .filter(|t| *t >= 2)
-                        .unwrap_or(2)
-                });
                 let _ = commands.0.send(ClientCommand::LootMethod {
-                    method: method_id,
+                    method,
                     master,
                     threshold,
                 });
@@ -1081,34 +1055,14 @@ fn apply_test_intent(
         }
         PartyRequest::LootMethod {
             method,
-            master_name,
+            master,
             threshold,
         } => {
-            if let Some(method_id) = loot_method_id(method) {
-                let master = if method_id == 2 {
-                    master_name
-                        .as_deref()
-                        .and_then(|n| {
-                            group
-                                .members
-                                .iter()
-                                .find(|m| m.name.eq_ignore_ascii_case(n))
-                                .map(|m| m.guid)
-                        })
-                        .or(self_guid)
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                // The live drain's rule: an absent threshold keeps the current one.
-                let threshold = threshold
-                    .map_or_else(|| group.loot.map_or(2, |l| l.threshold.max(2)), |t| t as u8);
-                group.loot = Some(GroupLootInfo {
-                    method: method_id as u8,
-                    master,
-                    threshold,
-                });
-            }
+            group.loot = Some(GroupLootInfo {
+                method: *method as u8,
+                master: *master,
+                threshold: *threshold as u8,
+            });
             true
         }
         PartyRequest::LootThreshold(threshold) => {
@@ -1242,18 +1196,6 @@ fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32,
     } else if let Some(m) = group.members.iter_mut().find(|m| m.guid == guid) {
         put(&mut m.flags);
     }
-}
-
-/// `SetLootMethod`'s string → the wire's `LootMethod` id.
-fn loot_method_id(method: &str) -> Option<u32> {
-    Some(match method {
-        "freeforall" => 0,
-        "roundrobin" => 1,
-        "master" => 2,
-        "group" => 3,
-        "needbeforegreed" => 4,
-        _ => return None,
-    })
 }
 
 /// The `/partytest` roster: four unstreamed synthetic members with mixed statuses and records,
@@ -2074,9 +2016,9 @@ mod tests {
         test_apply_local(
             &mut group,
             &PartyRequest::LootMethod {
-                method: "needbeforegreed".into(),
-                master_name: None,
-                threshold: None,
+                method: 4,
+                master: 0,
+                threshold: 2,
             },
             me,
             None,
