@@ -482,6 +482,21 @@ pub(crate) fn apply_xml_bytes(lua: &Lua, frame: &Table, bytes: &str) -> mlua::Re
     Ok(())
 }
 
+/// The history ring's size (`0x77cd90`), which the XML `historyLines` reaches with 0 or more
+/// (`0x77a175`-`0x77a18d`) and `SetHistoryLines` only above 0 (`0x7994f7`); lines past the new size
+/// are dropped, the oldest first.
+pub(crate) fn set_history_lines(lua: &Lua, frame: &Table, n: i32) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, frame)?;
+    with_eb(lua, h, |eb| {
+        eb.history_max = n.max(0) as usize;
+        let over = eb.history.len().saturating_sub(eb.history_max);
+        if over > 0 {
+            eb.history.drain(..over);
+        }
+    })
+    .ok_or_else(|| mlua::Error::runtime("not an EditBox"))
+}
+
 /// `CSimpleEditBox::SetSelectionColor` (`0x77e330`), the XML `<HighlightColor>`'s setter
 /// (`0x77a2a2`): the selection's tint.
 pub(crate) fn set_selection_color(

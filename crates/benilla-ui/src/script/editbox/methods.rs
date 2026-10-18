@@ -200,20 +200,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetHistoryLines",
         lua.create_function(|lua, (this, n): (Table, Value)| {
-            let h = frame_handle_of(lua, &this)?;
+            frame_handle_of(lua, &this)?;
             let n = binding_abi::method_number(lua, &this, n, "SetHistoryLines(numLines)")?;
             let n = binding_abi::ftol(n);
             if n <= 0 {
                 return Err(binding_abi::usage(lua, &this, "SetHistoryLines(numLines)"));
             }
-            with_eb(lua, h, |eb| {
-                eb.history_max = n as usize;
-                let over = eb.history.len().saturating_sub(eb.history_max);
-                if over > 0 {
-                    eb.history.drain(..over);
-                }
-            })
-            .ok_or_else(|| mlua::Error::runtime("not an EditBox"))
+            super::set_history_lines(lua, &this, n)
         })?,
     )?;
     m.set(

@@ -52,7 +52,8 @@ pub mod diagnostics;
 mod editbox;
 pub mod instance;
 pub(crate) use editbox::{
-    adopt_text_region, apply_xml_bytes, editbox_text_region_wrapper, set_selection_color,
+    adopt_text_region, apply_xml_bytes, editbox_text_region_wrapper, set_history_lines,
+    set_selection_color,
 };
 pub(crate) use messageframe::set_xml_insets as set_message_xml_insets;
 pub(crate) use tooltip::post_load as tooltip_post_load;

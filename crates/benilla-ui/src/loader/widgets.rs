@@ -372,7 +372,10 @@ impl Loader<'_> {
             self.call(wrapper, "SetMaxLetters", s_str_to_int(v), dbg);
         }
         if let Some(v) = el.attr("historyLines").filter(|v| !v.is_empty()) {
-            self.call(wrapper, "SetHistoryLines", s_str_to_int(v).max(0), dbg);
+            // The loader's own setter (`0x77cd90`), not the Lua binding's, which refuses 0.
+            if let Err(e) = crate::script::set_history_lines(self.lua, wrapper, s_str_to_int(v)) {
+                self.report.fault(format!("{dbg}: SetHistoryLines: {e}"));
+            }
         }
         if let Some(v) = el.attr("blinkSpeed").filter(|v| !v.is_empty()) {
             let s = super::xml_float(v);

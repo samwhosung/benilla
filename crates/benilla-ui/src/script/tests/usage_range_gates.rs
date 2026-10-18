@@ -138,3 +138,23 @@ fn message_frame_time_setters_retime_the_lines_already_shown() {
         .map_or(0, |l| l.len());
     assert_eq!(lines, 0, "the line took the new times and finished");
 }
+
+/// The XML `historyLines` reaches the ring's setter (`0x77a175`-`0x77a18d`, `0x77cd90`) with 0 or
+/// more, where the Lua binding refuses a count not above 0: stock `MailFrame.xml` and
+/// `TradeFrame.xml` declare `historyLines="0"`.
+#[test]
+fn xml_history_lines_zero_loads_where_the_lua_setter_refuses() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui><EditBox name="XmlHist0" historyLines="0"/><EditBox name="XmlHist4" historyLines="4"/></Ui>"#,
+    )
+    .expect("parses");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    s.run(
+        r#"
+        assert(XmlHist0:GetHistoryLines() == 0 and XmlHist4:GetHistoryLines() == 4)
+    "#,
+    )
+    .unwrap();
+}
