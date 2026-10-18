@@ -22,10 +22,18 @@ pub const DEFAULT_EDGE_SIZE: Len = Len::Layout(0.025);
 /// `BackgroundInsets`: the background's inset from the frame rect; the border is never inset.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Insets {
-    pub left: f32,
-    pub right: f32,
-    pub top: f32,
-    pub bottom: f32,
+    pub left: Len,
+    pub right: Len,
+    pub top: Len,
+    pub bottom: Len,
+}
+
+impl Insets {
+    /// `[left, right, top, bottom]` in script units, for the geometry benilla lays out in them.
+    #[cfg(test)]
+    pub(crate) fn script(&self, units: crate::layout::LayoutUnits) -> [f32; 4] {
+        [self.left, self.right, self.top, self.bottom].map(|l| l.script(units))
+    }
 }
 
 /// A frame's installed backdrop (the 0x68-byte struct at `frame+0x1ac`): exactly the keys the
@@ -39,9 +47,9 @@ pub struct Backdrop {
     pub edge_file: Option<String>,
     /// Tile the background, else stretch it (`+0x40`).
     pub(crate) tile: bool,
-    /// `tileSize`, a script number (`+0x4c`, `S` at `0x777934`); 0 tiles at `edge_size`
+    /// `tileSize` (`+0x4c`, `S` at `0x777934`, a `<RelValue>` as parsed); 0 tiles at `edge_size`
     /// (`0x77f0c0`).
-    pub tile_size: f32,
+    pub tile_size: Len,
     /// `edgeSize` (`+0x48`, `S` at `0x77798d`, else the constructor's layout default): the border
     /// piece size and the edge tiling period.
     pub edge_size: Len,
@@ -60,7 +68,7 @@ impl Default for Backdrop {
             bg_file: None,
             edge_file: None,
             tile: false,
-            tile_size: 0.0,
+            tile_size: Len::Script(0.0),
             edge_size: DEFAULT_EDGE_SIZE,
             insets: Insets::default(),
             bg_color: crate::color::Rgba8::WHITE,
@@ -128,7 +136,7 @@ const EDGES: [Edge; 8] = [
 /// A piece's anchors on its frame, `(point, relativePoint, x, y)` in the frame's units, and its
 /// `(width, height)`, 0 for an axis the anchors span (`0x77e8d0`'s `SetPoint 0x767c70` and
 /// layout-vtable `+0x14`/`+0x18` calls).
-type PieceLayout = ([Option<(Point, f32, f32)>; 4], (f32, f32));
+type PieceLayout = ([Option<(Point, Len, Len)>; 4], (f32, f32));
 
 /// The background's four anchors. Its BOTTOMRIGHT takes the TOP inset for its y, a bug in the
 /// reference (`0x77e9ae` loads `+0x50`, top, not `+0x54`), kept: the resolver reads the bottom
@@ -161,7 +169,8 @@ fn edge_layout(edge: Edge, e: f32) -> PieceLayout {
         Edge::BottomLeft => ((BottomLeft, 0.0, 0.0), None, (e, e)),
         Edge::BottomRight => ((BottomRight, 0.0, 0.0), None, (e, e)),
     };
-    ([Some(a), b, None, None], size)
+    let len = |(p, x, y): (Point, f32, f32)| (p, Len::Script(x), Len::Script(y));
+    ([Some(len(a)), b.map(len), None, None], size)
 }
 
 /// A corner's texcoords, set once at creation (`0x77e8d0`): its slice, upright.
@@ -177,14 +186,10 @@ fn corner_uvs(edge: Edge) -> Uvs {
 /// `0x77f195`), so a scaled frame repeats its art more or less often than at scale 1. The
 /// background divides the frame's own rect (`0x77f18f`, `0x77f1af`), not its inset quad, so the
 /// tiles squeeze by the inset width over the frame width. All four arrays run `[TL, TR, BR, BL]`.
-fn run_uvs(bd: &Backdrop, edge: f32, rect: Rect) -> (Option<Uvs>, [Uvs; 4]) {
+fn run_uvs(bd: &Backdrop, edge: f32, tile: f32, rect: Rect) -> (Option<Uvs>, [Uvs; 4]) {
     let (l, r, b, t) = (rect.left, rect.right, rect.bottom, rect.top);
     let bg = (bd.has_bg() && bd.tile).then(|| {
-        let period = if bd.tile_size != 0.0 {
-            bd.tile_size
-        } else {
-            edge
-        };
+        let period = if tile != 0.0 { tile } else { edge };
         let (wt, ht) = ((r - l) / period, (t - b) / period);
         [[0.0, 0.0], [wt, 0.0], [wt, ht], [0.0, ht]]
     });
@@ -242,17 +247,17 @@ pub(crate) fn pieces(
     let edge = bd.edge_size.script(units);
     let e = edge * scale;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
-    let (bg_uvs, edge_uvs) = run_uvs(bd, edge, frame);
+    let (bg_uvs, edge_uvs) = run_uvs(bd, edge, bd.tile_size.script(units), frame);
 
     if bd.has_bg() {
         // TOPLEFT, TOPRIGHT and BOTTOMLEFT place it; the BOTTOMRIGHT anchor is never read.
-        let i = bd.insets;
+        let [il, ir, it, ib] = bd.insets.script(units);
         out.push(BackdropPiece {
             corners: aa_corners(
-                l + i.left * scale,
-                r - i.right * scale,
-                b + i.bottom * scale,
-                t - i.top * scale,
+                l + il * scale,
+                r - ir * scale,
+                b + ib * scale,
+                t - it * scale,
             ),
             // Untiled, no `SetTexCoord` runs and the background stretches over `[0,1]`.
             uvs: bg_uvs.unwrap_or([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
@@ -294,6 +299,8 @@ pub(crate) struct Installed {
     pub(crate) spec: Backdrop,
     /// The spec's edge size in script units under the cells it was laid out for.
     edge: f32,
+    /// The spec's tile size the same way.
+    tile: f32,
     pieces: [Option<RegionHandle>; 9],
     /// The frame rect the texcoords last ran for; `ApplyRect 0x76b580` re-runs them only when the
     /// size moves past [`layout::size_changed`].
@@ -409,6 +416,7 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
     model.backdrops.insert(
         fh,
         Installed {
+            tile: spec.tile_size.script(model.layout_units()),
             spec,
             edge: edge_size,
             pieces,
@@ -426,7 +434,11 @@ fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Anchors, Option<
     let anchors = anchors
         .into_iter()
         .flatten()
-        .map(|(p, x, y)| Anchor::new(p, owner, p, x, y))
+        .map(|(p, x, y)| {
+            let mut a = Anchor::new(p, owner, p, 0.0, 0.0);
+            (a.x_off, a.y_off) = (x, y);
+            a
+        })
         .collect();
     (
         anchors,
@@ -442,7 +454,7 @@ pub(crate) fn set_metrics(
     model: &mut Model,
     fh: FrameHandle,
     edge_size: Len,
-    tile_size: f32,
+    tile_size: Len,
     insets: Insets,
 ) {
     let Some(inst) = model.backdrops.get_mut(&fh) else {
@@ -467,7 +479,10 @@ pub(crate) fn cells_changed(model: &mut Model) {
     let moved: Vec<FrameHandle> = model
         .backdrops
         .iter()
-        .filter(|(_, i)| i.spec.edge_size.script(units).to_bits() != i.edge.to_bits())
+        .filter(|(_, i)| {
+            i.spec.edge_size.script(units).to_bits() != i.edge.to_bits()
+                || i.spec.tile_size.script(units).to_bits() != i.tile.to_bits()
+        })
         .map(|(&fh, _)| fh)
         .collect();
     for fh in moved {
@@ -483,6 +498,7 @@ fn relayout(model: &mut Model, fh: FrameHandle) {
     };
     let edge_size = inst.spec.edge_size.script(units);
     inst.edge = edge_size;
+    inst.tile = inst.spec.tile_size.script(units);
     inst.ran_for = None;
     let (spec, pieces) = (inst.spec.clone(), inst.pieces);
     let owner = model.frame_id(fh);
@@ -518,7 +534,7 @@ fn run_texcoords(model: &mut Model, fh: FrameHandle, rect: Rect) {
 /// corners' left as created, then both colours re-applied (`0x77f410`, `0x77f440`).
 fn rerun(inst: &mut Installed, region_data: &mut HashMap<RegionHandle, RegionData>, rect: Rect) {
     inst.ran_for = Some(rect);
-    let (bg, edges) = run_uvs(&inst.spec, inst.edge, rect);
+    let (bg, edges) = run_uvs(&inst.spec, inst.edge, inst.tile, rect);
     if let (Some(rh), Some(uvs)) = (inst.bg(), bg) {
         if let Some(d) = region_data.get_mut(&rh) {
             d.tex_coords = Some(TexCoords::Corners(uvs));
@@ -615,13 +631,13 @@ mod tests {
             bg_file: Some("Interface\\Tooltips\\UI-Tooltip-Background".into()),
             edge_file: Some("Interface\\Tooltips\\UI-Tooltip-Border".into()),
             tile: true,
-            tile_size: edge_size,
+            tile_size: crate::layout::Len::Script(edge_size),
             edge_size: Len::Script(edge_size),
             insets: Insets {
-                left: inset,
-                right: inset,
-                top: inset,
-                bottom: inset,
+                left: crate::layout::Len::Script(inset),
+                right: crate::layout::Len::Script(inset),
+                top: crate::layout::Len::Script(inset),
+                bottom: crate::layout::Len::Script(inset),
             },
             ..Default::default()
         }
@@ -685,10 +701,10 @@ mod tests {
         let frame = Rect::new(0.0, 0.0, 100.0, 200.0);
         let bd = Backdrop {
             insets: Insets {
-                left: 3.0,
-                right: 4.0,
-                top: 7.0,
-                bottom: 9.0,
+                left: crate::layout::Len::Script(3.0),
+                right: crate::layout::Len::Script(4.0),
+                top: crate::layout::Len::Script(7.0),
+                bottom: crate::layout::Len::Script(9.0),
             },
             ..tooltip_backdrop(16.0, 0.0)
         };
@@ -700,7 +716,7 @@ mod tests {
         let (anchors, _) = bg_layout(&bd);
         assert_eq!(
             anchors[3],
-            Some((Point::BottomRight, -4.0, 7.0)),
+            Some((Point::BottomRight, Len::Script(-4.0), Len::Script(7.0))),
             "the quirk is kept"
         );
     }

@@ -85,7 +85,7 @@ fn set_font_object_repoints_fontstring() {
         "Big",
         FontObject {
             font: Some("Fonts\\MORPHEUS.TTF".into()),
-            height: Some(18.0),
+            height: Some(crate::layout::Len::Script(18.0)),
             color: Some(crate::color::Rgba8::from_f32([0.0, 0.0, 0.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
@@ -98,7 +98,7 @@ fn set_font_object_repoints_fontstring() {
         "Small",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(10.0),
+            height: Some(crate::layout::Len::Script(10.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
@@ -198,7 +198,7 @@ fn justify_v_defaults_middle_and_overrides() {
         "TopFont",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             color: None,
             outline: Outline::None,
             monochrome: false,

@@ -490,7 +490,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Value::Nil // erases the key from a reused table
                 },
             )?;
-            t.set("tileSize", u.round_trip(bd.tile_size))?;
+            t.set("tileSize", bd.tile_size.get(u))?;
             t.set("edgeSize", bd.edge_size.get(u))?;
             let insets = match t.get::<Value>("insets") {
                 Ok(Value::Table(existing)) => existing,
@@ -500,10 +500,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     fresh
                 }
             };
-            insets.set("left", u.round_trip(bd.insets.left))?;
-            insets.set("right", u.round_trip(bd.insets.right))?;
-            insets.set("top", u.round_trip(bd.insets.top))?;
-            insets.set("bottom", u.round_trip(bd.insets.bottom))?;
+            insets.set("left", bd.insets.left.get(u))?;
+            insets.set("right", bd.insets.right.get(u))?;
+            insets.set("top", bd.insets.top.get(u))?;
+            insets.set("bottom", bd.insets.bottom.get(u))?;
             Ok(mlua::MultiValue::from_vec(vec![Value::Table(t)]))
         })?,
     )?;
@@ -683,7 +683,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 lua.app_data_mut::<Model>()
                     .expect("model")
                     .arena
-                    .set_hit_rect_insets(h, [left, right, top, bottom]);
+                    .set_hit_rect_insets(h, [left, right, top, bottom].map(Len::Script));
                 Ok(())
             },
         )?,
@@ -695,12 +695,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model");
             let i = model.arena.hit_rect_insets(h);
             let u = model.layout_units();
-            Ok((
-                u.round_trip(i[0]),
-                u.round_trip(i[1]),
-                u.round_trip(i[2]),
-                u.round_trip(i[3]),
-            ))
+            Ok((i[0].get(u), i[1].get(u), i[2].get(u), i[3].get(u)))
         })?,
     )?;
     Ok(())
@@ -720,9 +715,9 @@ fn backdrop_from_table(t: &Table) -> mlua::Result<Backdrop> {
     // and `tile = 0` are off and `tile = "yes"` is on.
     bd.tile = bool_or_default(Some(&t.get::<Value>("tile").unwrap_or(Value::Nil)), false);
     if let Ok(Value::Number(n)) = t.get::<Value>("tileSize") {
-        bd.tile_size = n as f32;
+        bd.tile_size = Len::Script(n as f32);
     } else if let Ok(Value::Integer(n)) = t.get::<Value>("tileSize") {
-        bd.tile_size = n as f32;
+        bd.tile_size = Len::Script(n as f32);
     }
     if let Ok(Value::Number(n)) = t.get::<Value>("edgeSize") {
         bd.edge_size = Len::Script(n as f32);
@@ -730,12 +725,12 @@ fn backdrop_from_table(t: &Table) -> mlua::Result<Backdrop> {
         bd.edge_size = Len::Script(n as f32);
     }
     if let Ok(Value::Table(ins)) = t.get::<Value>("insets") {
-        let num = |k: &str| -> f32 {
-            match ins.get::<Value>(k) {
+        let num = |k: &str| -> Len {
+            Len::Script(match ins.get::<Value>(k) {
                 Ok(Value::Number(n)) => n as f32,
                 Ok(Value::Integer(n)) => n as f32,
                 _ => 0.0,
-            }
+            })
         };
         bd.insets = Insets {
             left: num("left"),

@@ -22,6 +22,7 @@ use mlua::{Lua, MultiValue, Table, Value};
 use super::binding_abi;
 use super::object::publish_global;
 use crate::justify;
+use crate::layout::Len;
 use crate::widget::{FrameHandle, RegionHandle};
 
 use super::{FontMask, FontObject, FontShadow, Model, RegionData};
@@ -288,8 +289,12 @@ pub(crate) fn held(fo: &FontObject) -> FontMask {
 /// The groups of `groups` in which `a` and `b` differ: a font by name ignoring case, height and
 /// spacing by 2^-22 (`0x770973`, `0x77097c`, `0x770a84`), the rest exactly.
 fn differs(a: &FontObject, b: &FontObject, groups: FontMask) -> FontMask {
-    let close = |x: Option<f32>, y: Option<f32>| match (x, y) {
-        (Some(x), Some(y)) => (x - y).abs() < f32::from_bits(0x3480_0000),
+    // Two heights in one unit within 2⁻²²; a script number and a layout length differ.
+    let close = |x: Option<Len>, y: Option<Len>| match (x, y) {
+        (Some(Len::Script(x)), Some(Len::Script(y)))
+        | (Some(Len::Layout(x)), Some(Len::Layout(y))) => {
+            (x - y).abs() < f32::from_bits(0x3480_0000)
+        }
         (None, None) => true,
         _ => false,
     };
@@ -309,7 +314,10 @@ fn differs(a: &FontObject, b: &FontObject, groups: FontMask) -> FontMask {
         (FontMask::JUSTIFY, a.justify == b.justify),
         (FontMask::COLOR, a.color == b.color),
         (FontMask::SHADOW, a.shadow == b.shadow),
-        (FontMask::SPACING, close(a.spacing, b.spacing)),
+        (
+            FontMask::SPACING,
+            close(a.spacing.map(Len::Script), b.spacing.map(Len::Script)),
+        ),
     ] {
         if groups.has(g) && !eq {
             m.set(g);
@@ -674,7 +682,7 @@ pub(super) fn install_shared(lua: &Lua, m: &Table, resolve: ResolveFont) -> mlua
                 fo.font = Some(path);
                 fo.outline = flags;
                 fo.monochrome = monochrome;
-                fo.height = Some(height);
+                fo.height = Some(Len::Script(height));
             });
             Ok(Value::Number(1.0))
         })?,
@@ -693,7 +701,7 @@ pub(super) fn install_shared(lua: &Lua, m: &Table, resolve: ResolveFont) -> mlua
             let u = lua.app_data_ref::<Model>().expect("model").layout_units();
             Ok((
                 path,
-                u.round_trip(fo.height.unwrap_or(0.0)),
+                fo.height.map_or(0.0, |h| h.get(u)),
                 fo.outline.flags_text(fo.monochrome),
             ))
         })?,

@@ -61,7 +61,7 @@ fn blocks(s: &UiScript, name: &str) -> Vec<Blk> {
                 texture: d.tex.path().clone(),
                 justify_h: d.justify.name_h(),
                 font: d.font_path.clone(),
-                font_height: d.font_height,
+                font_height: d.font_height.map(crate::layout::Len::raw),
                 size: d.size.map(|(w, h)| (w.raw(), h.raw())),
                 anchor,
             }

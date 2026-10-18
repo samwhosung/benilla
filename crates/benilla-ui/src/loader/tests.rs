@@ -1624,7 +1624,7 @@ mod loader_tests {
 
         let base = s.font_object("Base").expect("Base registered");
         assert_eq!(base.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
-        assert_eq!(base.height, Some(12.0));
+        assert_eq!(base.height, Some(crate::layout::Len::Script(12.0)));
         assert_eq!(
             base.color,
             Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0]))
@@ -1634,7 +1634,7 @@ mod loader_tests {
         // no `font=` beside it, so it is never read (`0x783cf1`).
         let leaf = s.font_object("Leaf").expect("Leaf registered");
         assert_eq!(leaf.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
-        assert_eq!(leaf.height, Some(12.0));
+        assert_eq!(leaf.height, Some(crate::layout::Len::Script(12.0)));
         assert_eq!(
             leaf.color,
             Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0]))

@@ -381,8 +381,10 @@ impl Loader<'_> {
         // Each `<TextInsets>` in the child loop (`0x77a2a9`), the last winning, through the inset
         // read (`0x77a2d5`), set when it succeeds (`0x77a2da`).
         for ins in children_named(el, "TextInsets") {
-            if let Some([l, r, t, b]) = self.inset(ins) {
+            if let Some(v) = self.inset(ins) {
+                let [l, r, t, b] = self.script_of(v);
                 self.call(wrapper, "SetTextInsets", (l, r, t, b), dbg);
+                crate::script::xml_layout::text_insets(self.lua, wrapper, v);
             }
         }
         // Each `<HighlightColor>` in turn, the last winning (`0x77a277`): the `<Color>` reader

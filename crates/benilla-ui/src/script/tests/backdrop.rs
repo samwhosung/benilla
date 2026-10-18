@@ -583,15 +583,15 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                             bg_file: t.get("bgFile").ok(),
                             edge_file: t.get("edgeFile").ok(),
                             tile: t.get::<Option<f32>>("tile").ok().flatten().is_some(),
-                            tile_size: t.get("tileSize").unwrap(),
+                            tile_size: crate::layout::Len::Script(t.get("tileSize").unwrap()),
                             edge_size: crate::layout::Len::Script(t.get("edgeSize").unwrap()),
                             insets: {
                                 let ins: mlua::Table = t.get("insets").unwrap();
                                 Insets {
-                                    left: ins.get("left").unwrap(),
-                                    right: ins.get("right").unwrap(),
-                                    top: ins.get("top").unwrap(),
-                                    bottom: ins.get("bottom").unwrap(),
+                                    left: crate::layout::Len::Script(ins.get("left").unwrap()),
+                                    right: crate::layout::Len::Script(ins.get("right").unwrap()),
+                                    top: crate::layout::Len::Script(ins.get("top").unwrap()),
+                                    bottom: crate::layout::Len::Script(ins.get("bottom").unwrap()),
                                 }
                             },
                             ..Default::default()

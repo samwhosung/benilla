@@ -201,7 +201,7 @@ impl Loader<'_> {
                 let height = children_named(node, "FontHeight")
                     .next()
                     .map(|h| self.value(h))
-                    .filter(|h| *h > 0.0);
+                    .filter(|h| h.raw() > 0.0);
                 let Some(height) = height else {
                     let name = self.object_name(wrapper);
                     self.report_missing_font_height("FontString", &name, &node.tag);

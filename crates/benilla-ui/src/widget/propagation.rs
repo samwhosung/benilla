@@ -543,15 +543,17 @@ impl WidgetArena {
     }
 
     /// `SetHitRectInsets`, `[left, right, top, bottom]`.
-    pub fn set_hit_rect_insets(&mut self, h: FrameHandle, insets: [f32; 4]) {
+    pub fn set_hit_rect_insets(&mut self, h: FrameHandle, insets: [crate::layout::Len; 4]) {
         if let Some(f) = self.frame_mut(h) {
             f.hit_rect_insets = insets;
         }
     }
 
     /// `GetHitRectInsets`, `[left, right, top, bottom]`.
-    pub fn hit_rect_insets(&self, h: FrameHandle) -> [f32; 4] {
-        self.frame(h).map(|f| f.hit_rect_insets).unwrap_or([0.0; 4])
+    pub fn hit_rect_insets(&self, h: FrameHandle) -> [crate::layout::Len; 4] {
+        self.frame(h)
+            .map(|f| f.hit_rect_insets)
+            .unwrap_or([crate::layout::Len::Script(0.0); 4])
     }
 
     // ── Small helpers ────────────────────────────────────────────────────────────────────────────

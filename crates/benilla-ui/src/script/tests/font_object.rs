@@ -147,7 +147,7 @@ fn an_inheriting_font_holds_its_parents_groups_under_its_own() {
     );
     let derived = s.font_object("DerivedFont").expect("registered");
     assert_eq!(derived.font.as_deref(), Some("Fonts\\FRIZQT__.TTF"));
-    assert_eq!(derived.height, Some(18.0));
+    assert_eq!(derived.height, Some(crate::layout::Len::Script(18.0)));
     assert_eq!(
         derived.color,
         Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0]))
@@ -231,7 +231,7 @@ fn set_font_object_takes_the_object_or_the_name() {
         "GameFontHighlightSmall",
         FontObject {
             font: Some("Fonts\\ARIALN.TTF".into()),
-            height: Some(11.0),
+            height: Some(crate::layout::Len::Script(11.0)),
             color: Some(crate::color::Rgba8::from_f32([0.25, 0.5, 0.75, 1.0])),
             outline: Outline::Thick,
             monochrome: false,
@@ -292,7 +292,7 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
         "GameFontHighlightSmall",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(10.0),
+            height: Some(crate::layout::Len::Script(10.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
@@ -328,7 +328,7 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         "ThemeFont",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
@@ -406,7 +406,7 @@ fn propagation_is_scoped_to_the_object_that_changed() {
             name,
             FontObject {
                 font: Some(face.into()),
-                height: Some(12.0),
+                height: Some(crate::layout::Len::Script(12.0)),
                 color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
                 ..FontObject::default()
             },
@@ -516,7 +516,7 @@ fn fonz_appraiser_copies_a_shipped_object_then_overrides_the_face() {
         "GameFontHighlightSmall",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(10.0),
+            height: Some(crate::layout::Len::Script(10.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             outline: Outline::None,
             monochrome: false,
@@ -583,7 +583,7 @@ fn button_state_fonts_take_the_object_and_follow_its_mutation() {
         "GameFontNormal",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             ..FontObject::default()
         },
@@ -625,7 +625,7 @@ fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
         "DressedFont",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(14.0),
+            height: Some(crate::layout::Len::Script(14.0)),
             color: Some(crate::color::Rgba8::from_f32([0.2, 0.4, 0.6, 1.0])),
             ..FontObject::default()
         },

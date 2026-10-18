@@ -108,21 +108,101 @@ pub(crate) fn pushed_text_offset(lua: &Lua, wrapper: &Table, v: [Len; 2]) {
     }
 }
 
-/// A `<Backdrop>`'s `<EdgeSize>` (`0x77e7ae`), after its `SetBackdrop`.
-pub(crate) fn edge_size(lua: &Lua, wrapper: &Table, v: Len) {
-    if !is_layout(v) {
+/// A `<Backdrop>`'s `<EdgeSize>`, `<TileSize>` and `<BackgroundInsets>` (`0x77e779`-`0x77e7ef`),
+/// after its `SetBackdrop`.
+pub(crate) fn backdrop(
+    lua: &Lua,
+    wrapper: &Table,
+    edge: Option<Len>,
+    tile: Option<Len>,
+    insets: Option<[Len; 4]>,
+) {
+    let layout = edge.is_some_and(is_layout)
+        || tile.is_some_and(is_layout)
+        || insets.is_some_and(|i| i.iter().any(|&l| is_layout(l)));
+    if !layout {
         return;
     }
     let Ok(h) = frame_handle_of(lua, wrapper) else {
         return;
     };
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    let Some(spec) = model
-        .backdrops
-        .get(&h)
-        .map(|i| (i.spec.tile_size, i.spec.insets))
-    else {
+    let Some(spec) = model.backdrops.get(&h).map(|i| i.spec.clone()) else {
         return;
     };
-    super::backdrop::set_metrics(&mut model, h, v, spec.0, spec.1);
+    let pick = |v: Option<Len>, held: Len| v.filter(|&l| is_layout(l)).unwrap_or(held);
+    let mut i = spec.insets;
+    if let Some([l, r, t, b]) = insets {
+        (i.left, i.right, i.top, i.bottom) = (
+            pick(Some(l), i.left),
+            pick(Some(r), i.right),
+            pick(Some(t), i.top),
+            pick(Some(b), i.bottom),
+        );
+    }
+    super::backdrop::set_metrics(
+        &mut model,
+        h,
+        pick(edge, spec.edge_size),
+        pick(tile, spec.tile_size),
+        i,
+    );
+}
+
+/// A `<HitRectInsets>` (`0x769cb5`), after its `SetHitRectInsets`.
+pub(crate) fn hit_rect_insets(lua: &Lua, wrapper: &Table, v: [Len; 4]) {
+    if !v.iter().any(|&l| is_layout(l)) {
+        return;
+    }
+    let Ok(h) = frame_handle_of(lua, wrapper) else {
+        return;
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    if let Some(f) = model.arena.frame_mut(h) {
+        for (cell, l) in f.hit_rect_insets.iter_mut().zip(v) {
+            if is_layout(l) {
+                *cell = l;
+            }
+        }
+    }
+}
+
+/// A `<ResizeBounds>`'s `<minResize>` or `<maxResize>` (`0x769baa`), after its setter.
+pub(crate) fn resize_bound(lua: &Lua, wrapper: &Table, upper: bool, v: [Len; 2]) {
+    if !v.iter().any(|&l| is_layout(l)) {
+        return;
+    }
+    let Ok(h) = frame_handle_of(lua, wrapper) else {
+        return;
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    if let Some(f) = model.arena.frame_mut(h) {
+        let (w, ht) = if upper {
+            &mut f.max_resize
+        } else {
+            &mut f.min_resize
+        };
+        put((w, ht), v);
+    }
+}
+
+/// An EditBox's `<TextInsets>` (`0x77a2d5`), after its `SetTextInsets`.
+pub(crate) fn text_insets(lua: &Lua, wrapper: &Table, v: [Len; 4]) {
+    if !v.iter().any(|&l| is_layout(l)) {
+        return;
+    }
+    let Ok(h) = frame_handle_of(lua, wrapper) else {
+        return;
+    };
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model");
+        if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            for (cell, l) in eb.text_insets.iter_mut().zip(v) {
+                if is_layout(l) {
+                    *cell = l;
+                }
+            }
+        }
+    }
+    super::editbox::reseat_text_region(lua, h);
 }

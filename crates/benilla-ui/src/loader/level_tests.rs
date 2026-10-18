@@ -1954,3 +1954,79 @@ fn an_aspect_change_keeps_a_dragged_frames_rel_size() {
     assert_eq!((want.2, want.3), (units.load(0.1), units.load(0.05)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// Every `<Rel…>` reader stores as parsed, with no setter steps on the path (`XmlReadDimension`
+/// `0x6f2037`-`0x6f2060`, `XmlReadValue`, `XmlReadInset` `0x6f2305`-`0x6f2388`), so each kind's
+/// getter answers `G` of the parsed number itself. At 16:9, 1, 2, 8, 16 and 0.25 are lengths a
+/// round trip through script units misses by an ulp.
+#[test]
+fn every_rel_reader_keeps_its_layout_length() {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 576.0);
+    load_str(
+        &s,
+        r#"<Ui>
+            <Font name="RelFont" font="Fonts\FRIZQT__.TTF">
+                <FontHeight><RelValue val="0.25"/></FontHeight>
+            </Font>
+            <Frame name="RelKinds" resizable="true">
+                <HitRectInsets><RelInset left="1" right="2" top="8" bottom="16"/></HitRectInsets>
+                <ResizeBounds>
+                    <minResize><RelDimension x="1" y="2"/></minResize>
+                    <maxResize><RelDimension x="8" y="16"/></maxResize>
+                </ResizeBounds>
+                <Backdrop bgFile="bg" tile="true">
+                    <TileSize><RelValue val="2"/></TileSize>
+                    <BackgroundInsets><RelInset left="1" right="2" top="8" bottom="16"/></BackgroundInsets>
+                </Backdrop>
+                <Layers><Layer>
+                    <FontString name="RelKindsText" font="Fonts\FRIZQT__.TTF">
+                        <FontHeight><RelValue val="0.25"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+            <EditBox name="RelBox">
+                <TextInsets><RelInset left="1" right="2" top="8" bottom="16"/></TextInsets>
+            </EditBox>
+        </Ui>"#,
+    );
+    let (g1, g2, g8, g16) = (
+        1_566.511_817_075_623_4,
+        3_133.023_634_151_247,
+        12_532.094_536_604_987,
+        25_064.189_073_209_975,
+    );
+    let quad = |code: &str| s.eval::<(f64, f64, f64, f64)>(code).unwrap();
+    let pair = |code: &str| s.eval::<(f64, f64)>(code).unwrap();
+    assert_eq!(
+        quad("return RelKinds:GetHitRectInsets()"),
+        (g1, g2, g8, g16)
+    );
+    assert_eq!(pair("return RelKinds:GetMinResize()"), (g1, g2));
+    assert_eq!(pair("return RelKinds:GetMaxResize()"), (g8, g16));
+    assert_eq!(quad("return RelBox:GetTextInsets()"), (g1, g2, g8, g16));
+    assert_eq!(
+        quad(
+            "local b = RelKinds:GetBackdrop() local i = b.insets \
+             return i.left, i.right, i.top, i.bottom"
+        ),
+        (g1, g2, g8, g16)
+    );
+    assert_eq!(
+        s.eval::<f64>("return RelKinds:GetBackdrop().tileSize")
+            .unwrap(),
+        g2
+    );
+    let g_quarter = 391.627_954_268_905_85;
+    assert_eq!(
+        s.eval::<f64>("local _, h = RelKindsText:GetFont() return h")
+            .unwrap(),
+        g_quarter
+    );
+    assert_eq!(
+        s.eval::<f64>("local _, h = RelFont:GetFont() return h")
+            .unwrap(),
+        g_quarter
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

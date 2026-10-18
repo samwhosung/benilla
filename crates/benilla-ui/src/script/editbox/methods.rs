@@ -257,12 +257,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .app_data_ref::<crate::script::model::Model>()
                 .expect("model")
                 .layout_units();
-            Ok((
-                u.round_trip(ins[0]),
-                u.round_trip(ins[1]),
-                u.round_trip(ins[2]),
-                u.round_trip(ins[3]),
-            ))
+            Ok((ins[0].get(u), ins[1].get(u), ins[2].get(u), ins[3].get(u)))
         })?,
     )?;
     // GetNumLetters (`0x7992c0`): the class array's letters (`0x77bc80`), classes 2, 3 and 6 only,

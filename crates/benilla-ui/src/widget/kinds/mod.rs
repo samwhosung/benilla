@@ -196,7 +196,7 @@ impl KindState {
     }
 
     /// The message kinds' text insets ([`ScrollingMessageState::insets`]).
-    pub fn message_insets(&self) -> Option<[f32; 4]> {
+    pub fn message_insets(&self) -> Option<[crate::layout::Len; 4]> {
         match self {
             KindState::ScrollingMessage(smf) => Some(smf.insets),
             KindState::Message(mf) => Some(mf.insets),
@@ -205,7 +205,7 @@ impl KindState {
     }
 
     /// [`Self::message_insets`], mutably, for the XML `<TextInsets>`.
-    pub fn message_insets_mut(&mut self) -> Option<&mut [f32; 4]> {
+    pub fn message_insets_mut(&mut self) -> Option<&mut [crate::layout::Len; 4]> {
         match self {
             KindState::ScrollingMessage(smf) => Some(&mut smf.insets),
             KindState::Message(mf) => Some(&mut mf.insets),

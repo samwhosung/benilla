@@ -1,6 +1,7 @@
 use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
+use crate::layout::Len;
 use crate::script::binding_abi::{s_str_to_float, s_str_to_int};
 use crate::script::object;
 
@@ -111,8 +112,10 @@ impl Loader<'_> {
         // `<HitRectInsets>`: the mouse rect, inset from the frame's, when the inset read succeeds
         // (`0x769cb5`); a side it omits is 0.
         for ins in children_named(el, "HitRectInsets") {
-            if let Some([l, r, t, b]) = self.inset(ins) {
+            if let Some(v) = self.inset(ins) {
+                let [l, r, t, b] = self.script_of(v);
                 self.call(wrapper, "SetHitRectInsets", (l, r, t, b), dbg);
+                crate::script::xml_layout::hit_rect_insets(self.lua, wrapper, v);
             }
         }
         // `<ResizeBounds>` (`0x769baa`): its first `<minResize>` and `<maxResize>`, both pairs
@@ -120,11 +123,12 @@ impl Loader<'_> {
         // A `<Size>` outside them is not clamped.
         for rb in children_named(el, "ResizeBounds") {
             for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
-                let units = self.model().layout_units();
-                let [x, y] = children_named(rb, tag)
+                let v = children_named(rb, tag)
                     .next()
-                    .map_or([0.0; 2], |d| self.dimension(d).script(units));
+                    .map_or([Len::Script(0.0); 2], |d| self.dimension(d).v);
+                let [x, y] = self.script_of(v);
                 self.call(wrapper, verb, (x, y), dbg);
+                crate::script::xml_layout::resize_bound(self.lua, wrapper, tag == "maxResize", v);
             }
         }
         // `movable`/`resizable`: flag bits 0x100/0x200, via the setter Lua uses (`0x76a3c0`).

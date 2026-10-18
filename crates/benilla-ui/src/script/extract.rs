@@ -279,7 +279,8 @@ impl UiScript {
                         art
                     } else if is_text {
                         let spacing = data.line_gap();
-                        let text_height = data.text_height();
+                        let text_height = data.text_height(model.layout_units());
+                        let font_height = data.font_height_script(model.layout_units());
                         let text_color = data.vertex_color_or_white();
                         QuadContent::Text {
                             text: data.text,
@@ -291,7 +292,7 @@ impl UiScript {
                             justify_h: data.justify.paint_h(),
                             justify_v: data.justify.paint_v(),
                             font: data.font_path,
-                            font_height: data.font_height,
+                            font_height,
                             text_height,
                             shadow: data.font_shadow.map(|s| s.drawn(model.layout_units())),
                             outline: data.outline,

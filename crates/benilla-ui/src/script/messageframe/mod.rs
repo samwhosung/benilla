@@ -410,16 +410,21 @@ pub(crate) fn inner_rect(r: Rect, insets: [f32; 4], scale: f32) -> Rect {
 pub(crate) fn message_rect(model: &Model, fh: FrameHandle) -> Option<Rect> {
     let r = model.frame_rect(fh)?;
     let frame = model.arena.frame(fh)?;
-    let insets = frame.kind_state.message_insets().unwrap_or_default();
+    let u = model.layout_units();
+    let insets = frame
+        .kind_state
+        .message_insets()
+        .map_or([0.0; 4], |i| i.map(|l| l.script(u)));
     Some(inner_rect(r, insets, frame.effective_scale))
 }
 
 /// XML `<TextInsets>` on a MessageFrame or a ScrollingMessageFrame (`0x785b65`, `0x787d6e`): the
-/// four insets, in FrameXML units; the next layout lays the lines out in the new box.
+/// four insets as the inset read answers them, script numbers or a `<RelInset>`'s layout units;
+/// the next layout lays the lines out in the new box.
 pub(crate) fn set_xml_insets(
     lua: &mlua::Lua,
     frame: &mlua::Table,
-    insets: [f32; 4],
+    insets: [crate::layout::Len; 4],
 ) -> mlua::Result<()> {
     let h = frame_handle_of(lua, frame)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -439,7 +444,7 @@ impl UiScript {
             .and_then(|rh| model.region_data.get(&rh))
             .map(|d| MessageFont {
                 path: d.font_path.clone(),
-                height: d.font_height,
+                height: d.font_height_script(model.layout_units()),
                 shadow: d.font_shadow,
                 outline: d.outline,
                 monochrome: d.monochrome,
@@ -667,7 +672,11 @@ impl UiScript {
             return;
         };
         // The lines' box, the frame's rect less its insets ([`inner_rect`]).
-        let insets = frame.kind_state.message_insets().unwrap_or_default();
+        let u = model.layout_units();
+        let insets = frame
+            .kind_state
+            .message_insets()
+            .map_or([0.0; 4], |i| i.map(|l| l.script(u)));
         let fr = inner_rect(fr, insets, paint.scale);
         // (lines, index of the message on the anchored row, which edge it hangs off).
         let (lines, top_index, from_top): (&std::collections::VecDeque<MessageLine>, usize, bool) =

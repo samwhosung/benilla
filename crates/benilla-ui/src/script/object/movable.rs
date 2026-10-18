@@ -105,9 +105,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 if let Some(f) = model.arena.frame_mut(h) {
                     if upper {
-                        f.max_resize = (w, hgt);
+                        f.max_resize = (Len::Script(w), Len::Script(hgt));
                     } else {
-                        f.min_resize = (w, hgt);
+                        f.min_resize = (Len::Script(w), Len::Script(hgt));
                     }
                 }
                 Ok(())
@@ -118,15 +118,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             lua.create_function(move |lua, this: Table| {
                 let h = frame_handle_of(lua, &this)?;
                 let model = lua.app_data_ref::<Model>().expect("model");
-                let (w, hgt) = model.arena.frame(h).map_or((0.0, 0.0), |f| {
-                    if upper {
-                        f.max_resize
-                    } else {
-                        f.min_resize
-                    }
-                });
                 let units = model.layout_units();
-                Ok((units.round_trip(w), units.round_trip(hgt)))
+                Ok(model.arena.frame(h).map_or((0.0, 0.0), |f| {
+                    let (w, hgt) = if upper { f.max_resize } else { f.min_resize };
+                    (w.get(units), hgt.get(units))
+                }))
             })?,
         )?;
     }
@@ -483,7 +479,7 @@ fn drag_step(model: &mut Model, mv: FrameMove, dx: f32, dy: f32) {
     });
     // `G+0x60`/`+0x68` bound the width and `G+0x5c`/`+0x64` the height, as `S` stored them.
     let (min, max) = model.arena.frame(h).map_or(((0.0, 0.0), (0.0, 0.0)), |f| {
-        let st = |(a, b): (f32, f32)| (units.store(a), units.store(b));
+        let st = |(a, b): (Len, Len)| (a.layout(units), b.layout(units));
         (st(f.min_resize), st(f.max_resize))
     });
     let (mut dx, mut dy) = (dx, dy);

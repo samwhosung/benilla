@@ -2126,8 +2126,8 @@ pub(super) fn measure_request_at(
     let d = model.region_data.get(&rh)?;
     let text = d.text.clone().filter(|t| !t.is_empty())?;
     let font = d.font_path.clone();
-    let height = d.font_height;
-    let text_height = d.text_height();
+    let height = d.font_height_script(model.layout_units());
+    let text_height = d.text_height(model.layout_units());
     let outline = d.outline;
     let spacing = d.line_gap();
     let shadow_x = d.shadow_x(model.layout_units());

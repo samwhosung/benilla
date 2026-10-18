@@ -15,7 +15,8 @@ use super::FrameHandle;
 /// frame's own units; an over-shrunk rect collapses to empty rather than inverting.
 pub(super) fn hit_rect(model: &Model, fh: FrameHandle, r: Rect) -> Rect {
     let s = super::object::eff_scale(model, fh);
-    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i * s);
+    let u = model.layout_units();
+    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i.script(u) * s);
     Rect {
         left: r.left + left,
         right: (r.right - right).max(r.left + left),

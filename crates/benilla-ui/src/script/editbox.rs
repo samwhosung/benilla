@@ -421,14 +421,15 @@ fn write_region_text(model: &mut Model, rh: RegionHandle, text: String) {
 /// `SetTextInsets(l, r, t, b)` (`0x77a6e0`): store the insets and re-seat the text region by
 /// them (`0x77a707` → `0x77b8c0`).
 fn set_text_insets(lua: &Lua, h: FrameHandle, l: f32, r: f32, t: f32, b: f32) {
-    if with_eb(lua, h, |eb| eb.text_insets = [l, r, t, b]).is_none() {
+    let insets = [l, r, t, b].map(crate::layout::Len::Script);
+    if with_eb(lua, h, |eb| eb.text_insets = insets).is_none() {
         return;
     }
     reseat_text_region(lua, h);
 }
 
 /// Run `0x77b8c0` on the box's text region, creating the region's data if nothing has yet.
-fn reseat_text_region(lua: &Lua, h: FrameHandle) {
+pub(super) fn reseat_text_region(lua: &Lua, h: FrameHandle) {
     if ensure_text_region(lua, h).is_none() {
         return;
     }

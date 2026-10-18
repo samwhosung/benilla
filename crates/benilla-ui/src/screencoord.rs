@@ -125,6 +125,24 @@ pub enum Len {
     Layout(f32),
 }
 
+impl std::ops::Neg for Len {
+    type Output = Len;
+    /// The same length the other way, in its own unit.
+    fn neg(self) -> Len {
+        match self {
+            Len::Script(v) => Len::Script(-v),
+            Len::Layout(l) => Len::Layout(-l),
+        }
+    }
+}
+
+impl Default for Len {
+    /// A script 0, the cleared cell.
+    fn default() -> Len {
+        Len::Script(0.0)
+    }
+}
+
 impl std::hash::Hash for Len {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {

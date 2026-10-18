@@ -19,9 +19,13 @@ impl Loader<'_> {
             }
         };
         self.call(wrapper, "SetBackdrop", table, dbg);
-        if let Some(v) = parts.edge_size {
-            crate::script::xml_layout::edge_size(self.lua(), wrapper, v);
-        }
+        crate::script::xml_layout::backdrop(
+            self.lua(),
+            wrapper,
+            parts.edge_size,
+            parts.tile_size,
+            parts.insets,
+        );
         if let Some(c) = parts.color {
             self.call(wrapper, "SetBackdropColor", c.fractions(), dbg);
         }
@@ -40,7 +44,7 @@ impl Loader<'_> {
             let is = |t: &str| child.tag.eq_ignore_ascii_case(t);
             if is("TileSize") {
                 if let Some(v) = self.value_read(child) {
-                    out.tile_size = Some(v.script(self.model().layout_units()));
+                    out.tile_size = Some(v);
                 }
             } else if is("EdgeSize") {
                 if let Some(v) = self.value_read(child) {
@@ -83,9 +87,10 @@ impl Loader<'_> {
             t.set("edgeSize", v.script(self.model().layout_units()))?;
         }
         if let Some(v) = parts.tile_size {
-            t.set("tileSize", v)?;
+            t.set("tileSize", v.script(self.model().layout_units()))?;
         }
-        if let Some([l, r, top, b]) = parts.insets {
+        if let Some(i) = parts.insets {
+            let [l, r, top, b] = self.script_of(i);
             let it = self.lua().create_table()?;
             for (k, v) in [("left", l), ("right", r), ("top", top), ("bottom", b)] {
                 it.set(k, v)?;
@@ -99,9 +104,9 @@ impl Loader<'_> {
 /// What a `<Backdrop>`'s children set, the last of each kind.
 #[derive(Default)]
 struct BackdropChildren {
-    tile_size: Option<f32>,
+    tile_size: Option<crate::layout::Len>,
     edge_size: Option<crate::layout::Len>,
-    insets: Option<[f32; 4]>,
+    insets: Option<[crate::layout::Len; 4]>,
     color: Option<crate::color::Rgba8>,
     border_color: Option<crate::color::Rgba8>,
 }

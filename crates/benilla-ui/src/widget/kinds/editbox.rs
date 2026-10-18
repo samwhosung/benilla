@@ -96,7 +96,7 @@ pub struct EditBoxState {
     pub history_draft: Option<String>,
     /// `SetTextInsets(l, r, t, b)` (`+0x3ec`, `+0x3f4`, `+0x3f0`, `+0x3e8`), which seat the text
     /// region and pad a multi-line box's height.
-    pub text_insets: [f32; 4],
+    pub text_insets: [crate::layout::Len; 4],
     /// One line's measured height in the text region's font (`0x7727b0(fs, 1)`), the height of an
     /// empty multi-line box's text, with the measure key it was taken under.
     pub line_height: Option<(u64, f32)>,
@@ -200,7 +200,7 @@ impl Default for EditBoxState {
             history_max: 0,
             history_pos: None,
             history_draft: None,
-            text_insets: [0.0; 4],
+            text_insets: [crate::layout::Len::Script(0.0); 4],
             line_height: None,
             notified_rect: None,
             advances: Vec::new(),

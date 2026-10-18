@@ -656,7 +656,7 @@ impl Loader<'_> {
                 let height = children_named(el, "FontHeight")
                     .next()
                     .map(|h| self.value(h))
-                    .filter(|h| *h > 0.0);
+                    .filter(|h| h.raw() > 0.0);
                 let Some(height) = height else {
                     self.report_missing_font_height("Font", name, &el.tag);
                     return;
@@ -669,14 +669,15 @@ impl Loader<'_> {
                 // → `0x783ea9`); any other loads first (`0x783e7c`). A file that fails is logged
                 // (`0x87a4c8`) and the node goes on to `spacing`, keeping what it follows.
                 let mut model = self.model();
+                let u = model.layout_units();
                 let fo = &model.fonts.get(id).block;
                 let held = fo
                     .font
                     .as_deref()
                     .is_some_and(|p| p.eq_ignore_ascii_case(path))
-                    && fo
-                        .height
-                        .is_some_and(|h| (h - height).abs() < crate::script::SAME_FONT_HEIGHT)
+                    && fo.height.is_some_and(|h| {
+                        (h.script(u) - height.script(u)).abs() < crate::script::SAME_FONT_HEIGHT
+                    })
                     && (fo.outline, fo.monochrome) == (outline, monochrome);
                 if held || crate::script::face_loads(&model, path) {
                     font::set(&mut model, id, FontMask::FONT, |fo| {
@@ -1127,12 +1128,11 @@ impl Loader<'_> {
 
     /// `XmlReadValue` (`0x6f1d60`): the `val` of a `<FontHeight>`, `<EdgeSize>` or `<TileSize>`
     /// (`0x8714a4`).
-    /// In script units, for a cell benilla keeps as a script number.
-    pub(super) fn value(&mut self, el: &Element) -> f32 {
+    /// Whatever the read answers, its unit kept, for a caller that ignores the answer.
+    pub(super) fn value(&mut self, el: &Element) -> Len {
         let missing = r#"No "val" attribute in element: "#;
-        let units = self.model().layout_units();
         self.xml_length(el, ["val"], "val", ("AbsValue", "RelValue"), missing)
-            .script(units)[0]
+            .v[0]
     }
 
     /// [`Self::value`] with its answer and its unit, for a caller that checks it (`0x77e779`,
@@ -1145,12 +1145,17 @@ impl Loader<'_> {
 
     /// `XmlReadInset` (`0x6f20a0`): `left`, `right`, `top` and `bottom` of an insets element,
     /// gated on `bottom` alone (`0x6f21bc`, `0x871530`).
-    pub(super) fn inset(&mut self, el: &Element) -> Option<[f32; 4]> {
+    pub(super) fn inset(&mut self, el: &Element) -> Option<[Len; 4]> {
         let missing = r#"No "right", "left", "top", or "bottom" attributes in element: "#;
         let keys = ["left", "right", "top", "bottom"];
-        let units = self.model().layout_units();
         let r = self.xml_length(el, keys, "bottom", ("AbsInset", "RelInset"), missing);
-        r.ok.then_some(r.script(units))
+        r.ok.then_some(r.v)
+    }
+
+    /// Script numbers for a verb, a layout length through `G`.
+    pub(super) fn script_of<const N: usize>(&self, v: [Len; N]) -> [f32; N] {
+        let units = self.model().layout_units();
+        v.map(|l| l.script(units))
     }
 
     /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black

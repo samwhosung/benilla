@@ -866,7 +866,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 for id in [f.normal, f.disabled, f.highlight] {
                     super::font::set(&mut model, id, super::FontMask::FONT, |fo| {
                         fo.font = Some(path.clone());
-                        fo.height = Some(height);
+                        fo.height = Some(Len::Script(height));
                         fo.outline = flags;
                         fo.monochrome = monochrome;
                     });
@@ -881,9 +881,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetFont",
         lua.create_function(|lua, this: Table| {
             let (_, f) = fonts_of(lua, &this)?;
-            let block = {
+            let (block, u) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.fonts.get(f.normal).block.clone()
+                (
+                    model.fonts.get(f.normal).block.clone(),
+                    model.layout_units(),
+                )
             };
             let path = match block.font {
                 Some(p) => Value::String(lua.create_string(&p)?),
@@ -891,7 +894,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             Ok((
                 path,
-                block.height.unwrap_or(0.0),
+                block.height.map_or(0.0, |h| h.script(u)),
                 block.outline.flags_text(block.monochrome),
             ))
         })?,

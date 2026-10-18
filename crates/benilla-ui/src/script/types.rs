@@ -347,8 +347,8 @@ pub struct TextShadow {
 pub struct FontObject {
     /// The TTF path (`font=`).
     pub font: Option<String>,
-    /// Logical px (`<FontHeight>`).
-    pub height: Option<f32>,
+    /// `<FontHeight>` or `SetFont`'s height, a script number or a `<RelValue>`'s layout length.
+    pub height: Option<crate::layout::Len>,
     pub shadow: Option<FontShadow>,
     /// The packed text colour (`+0x58`), alpha in its top byte; unset reads white (`0x783a8e`).
     pub color: Option<crate::color::Rgba8>,
@@ -494,7 +494,7 @@ pub(crate) struct RegionData {
     /// The text height in logical px (`+0xe4`), which a font load (`0x7714f0`, `0x771589`) and
     /// `SetTextHeight` (`0x77163b`) both write and `GetFont` reads (`0x7727bc`); `None` is the
     /// renderer's default.
-    pub(crate) font_height: Option<f32>,
+    pub(crate) font_height: Option<crate::layout::Len>,
     /// `SetTextHeight` cleared the one-to-one bit (`0x200` of `+0x120`, `0x771627`): the text then
     /// draws at [`Self::font_height`] uncapped, magnified from the raster. Nothing sets it back,
     /// so a later font load keeps the string scaled.
@@ -639,8 +639,14 @@ impl RegionData {
 
     /// The size a `SetTextHeight` string draws at, uncapped ([`Self::text_scaled`]); `None` for a
     /// one-to-one string.
-    pub(crate) fn text_height(&self) -> Option<f32> {
-        self.text_scaled.then(|| self.font_height.unwrap_or(0.0))
+    pub(crate) fn text_height(&self, units: crate::layout::LayoutUnits) -> Option<f32> {
+        self.text_scaled
+            .then(|| self.font_height_script(units).unwrap_or(0.0))
+    }
+
+    /// The font height in script units, for the font engine and the layout benilla does in them.
+    pub(crate) fn font_height_script(&self, units: crate::layout::LayoutUnits) -> Option<f32> {
+        self.font_height.map(|h| h.script(units))
     }
 
     /// The shadow's x offset in script units under `units`, 0 for none
@@ -685,7 +691,9 @@ impl RegionData {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         self.font_path.hash(&mut hasher);
-        self.font_height.map(f32::to_bits).hash(&mut hasher);
+        self.font_height
+            .map(crate::layout::Len::bits)
+            .hash(&mut hasher);
         self.text_scaled.hash(&mut hasher);
         wrap_width.map(f32::to_bits).hash(&mut hasher);
         // The outline changes the measure: a THICK one steps each glyph 1 px further

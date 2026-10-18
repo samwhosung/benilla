@@ -599,7 +599,7 @@ fn button_label_repaints_by_state_font_object() {
         FontObject {
             color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );
@@ -608,7 +608,7 @@ fn button_label_repaints_by_state_font_object() {
         FontObject {
             color: Some(crate::color::Rgba8::from_f32([0.5, 0.5, 0.5, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );
@@ -676,7 +676,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
         FontObject {
             color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );
@@ -685,7 +685,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
         FontObject {
             color: Some(crate::color::Rgba8::from_f32([1.0, 1.0, 1.0, 1.0])),
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );
@@ -1057,7 +1057,7 @@ fn a_button_labels_own_setfont_survives_the_state_font_repoint() {
         "TemplateFont",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
             outline: Outline::None,
             ..Default::default()
@@ -1373,7 +1373,7 @@ fn button_get_text_color_answers_four_values_through_the_state_font() {
         "BtnGold",
         FontObject {
             color: Some(crate::color::Rgba8::from_f32([1.0, 0.82, 0.0, 1.0])),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );
@@ -1527,7 +1527,7 @@ fn button_set_font_writes_the_monochrome_bit_over_its_font_object() {
         "MonoFont",
         FontObject {
             font: Some("Fonts\\ARIALN.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             monochrome: true,
             ..Default::default()
         },
@@ -1651,7 +1651,7 @@ fn state_font_setters_raise_on_an_unknown_name() {
         "KnownFont",
         FontObject {
             font: Some("Fonts\\FRIZQT__.TTF".into()),
-            height: Some(12.0),
+            height: Some(crate::layout::Len::Script(12.0)),
             ..Default::default()
         },
     );

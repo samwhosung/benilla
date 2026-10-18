@@ -295,17 +295,18 @@ pub(crate) fn load_xml_font_file(
     lua: &Lua,
     this: &Table,
     path: &str,
-    height: f32,
+    height: Len,
     (outline, monochrome): (super::Outline, bool),
 ) -> mlua::Result<bool> {
     let rh = region_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model");
+    let u = model.layout_units();
     let held = model.region_data.get(&rh).is_some_and(|d| {
         d.font_path
             .as_deref()
             .is_some_and(|p| p.eq_ignore_ascii_case(path))
             && d.font_height
-                .is_some_and(|h| (h - height).abs() < super::SAME_FONT_HEIGHT)
+                .is_some_and(|h| (h.script(u) - height.script(u)).abs() < super::SAME_FONT_HEIGHT)
             && (d.outline, d.monochrome) == (outline, monochrome)
     });
     if !held && !super::face_loads(&model, path) {

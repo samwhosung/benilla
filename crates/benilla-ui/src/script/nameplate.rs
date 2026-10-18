@@ -615,7 +615,7 @@ impl Plate {
             0.0,
             0.0,
         )]);
-        name_data.font_height = Some(g.name_height);
+        name_data.font_height = Some(Len::Script(g.name_height));
 
         for rh in [name, level] {
             model.region_data.entry(rh).or_default().font_shadow = Some(FontShadow {
@@ -635,7 +635,7 @@ impl Plate {
             -g.level_off_x,
             g.level_off_y,
         )]);
-        level_data.font_height = Some(g.level_height);
+        level_data.font_height = Some(Len::Script(g.level_height));
         model.touch_measure(level);
 
         let skull_data = model.region_data.entry(skull).or_default();

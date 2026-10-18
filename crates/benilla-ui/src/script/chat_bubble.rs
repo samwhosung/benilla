@@ -290,8 +290,8 @@ fn create(
             bg_file: Some(BG_TEXTURE.to_string()),
             edge_file: Some(EDGE_TEXTURE.to_string()),
             tile: true,
-            tile_size: g.border,
-            edge_size: crate::layout::Len::Script(g.border),
+            tile_size: Len::Script(g.border),
+            edge_size: Len::Script(g.border),
             insets: uniform(g.border),
             ..Backdrop::default()
         }),
@@ -328,10 +328,10 @@ fn create(
 
 fn uniform(v: f32) -> Insets {
     Insets {
-        left: v,
-        right: v,
-        top: v,
-        bottom: v,
+        left: Len::Script(v),
+        right: Len::Script(v),
+        top: Len::Script(v),
+        bottom: Len::Script(v),
     }
 }
 
@@ -343,8 +343,8 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
     backdrop::set_metrics(
         model,
         frame,
-        crate::layout::Len::Script(g.border),
-        g.border,
+        Len::Script(g.border),
+        Len::Script(g.border),
         uniform(g.border),
     );
     let frame_id = model.frame_id(frame);
@@ -361,7 +361,7 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
         g.border / 4.0,
     )]);
 
-    model.region_data.entry(text).or_default().font_height = Some(g.text_height);
+    model.region_data.entry(text).or_default().font_height = Some(Len::Script(g.text_height));
     model.touch_measure(text);
 
     // The frame hugs the text: TOPLEFT and BOTTOMRIGHT on the text's, out by the margin.

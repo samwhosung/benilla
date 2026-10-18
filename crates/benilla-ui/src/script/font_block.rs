@@ -19,6 +19,7 @@ use mlua::{Lua, Table, Value};
 use super::binding_abi;
 use super::font::FontId;
 use super::{FontShadow, Model, Outline};
+use crate::layout::Len;
 use crate::widget::{FrameHandle, KindState, RegionHandle};
 
 /// The own font of an EditBox, a MessageFrame or a ScrollingMessageFrame (`+0x300`, `+0x320`,
@@ -330,7 +331,7 @@ pub(super) fn install(
                     d.outline = Outline::None;
                     d.monochrome = false;
                 }
-                d.font_height = Some(height);
+                d.font_height = Some(Len::Script(height));
                 d.font_mask.clear(super::FontMask::FONT);
                 let after = (d.font_path.clone(), d.font_height, d.outline, d.monochrome);
                 model.touch_measure(rh);
@@ -372,8 +373,9 @@ pub(super) fn install(
             };
             // `G` of the stored height (`0x79d4a2`..`0x79d4b7`), which `SetFont` stored by `S`
             // (`0x79d5d3`; the shared `0x79f276`).
-            let height = d.and_then(|d| d.font_height).unwrap_or(0.0);
-            let height = model.layout_units().round_trip(height);
+            let height = d
+                .and_then(|d| d.font_height)
+                .map_or(0.0, |h| h.get(model.layout_units()));
             let flags = d.map_or("", |d| d.outline.flags_text(d.monochrome));
             Ok((path, height, flags))
         })?,

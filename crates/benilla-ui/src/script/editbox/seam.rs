@@ -160,7 +160,7 @@ fn stale_advances(
     };
     let d = model.region_data.get(&rh);
     let font = d.and_then(|d| d.font_path.clone());
-    let height = d.and_then(|d| d.font_height);
+    let height = d.and_then(|d| d.font_height_script(model.layout_units()));
     let outline = d.map(|d| d.outline).unwrap_or_default();
     // A multi-line box steps its rows by the font height plus the gap (`0x77d133`-`0x77d161`).
     let spacing = d.map_or(0.0, super::super::RegionData::line_gap);

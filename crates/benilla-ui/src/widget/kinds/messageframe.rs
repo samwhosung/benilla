@@ -72,7 +72,7 @@ pub struct ScrollingMessageState {
     pub at_bottom: bool,
     /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
     /// (`+0x37c`-`+0x388`); only XML `<TextInsets>` sets them (`0x787fb0`).
-    pub insets: [f32; 4],
+    pub insets: [crate::layout::Len; 4],
     /// The detached FontString that holds the lines' font (the frame's own `+0x338`), the font
     /// verbs' receiver; never in `GetRegions`, as the reference's font is no region.
     pub font_region: Option<crate::widget::RegionHandle>,
@@ -107,7 +107,7 @@ impl Default for ScrollingMessageState {
             lines_shown: 0,
             at_top: false,
             at_bottom: true,
-            insets: [0.0; 4],
+            insets: [crate::layout::Len::Script(0.0); 4],
             font_region: None,
             links_dirty: false,
             laid_font: None,
@@ -721,7 +721,7 @@ pub struct MessageFrameState {
     /// The text insets `(left, right, top, bottom)` the lines' box keeps from the frame's rect
     /// (`+0x330`-`+0x33c`, zeroed by the ctor at `0x785675`); only XML `<TextInsets>` sets them
     /// (`0x785b80`).
-    pub insets: [f32; 4],
+    pub insets: [crate::layout::Len; 4],
     /// The lines' font holder (`+0x320`), as [`ScrollingMessageState::font_region`].
     pub font_region: Option<crate::widget::RegionHandle>,
 }
@@ -737,7 +737,7 @@ impl Default for MessageFrameState {
             fade_duration: 3.0,
             fading_enabled: true,
             lines_gen: 0,
-            insets: [0.0; 4],
+            insets: [crate::layout::Len::Script(0.0); 4],
             font_region: None,
         }
     }

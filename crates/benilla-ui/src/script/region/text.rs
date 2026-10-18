@@ -235,11 +235,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, height): (Table, f32)| {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            let model_units = model.layout_units();
             let d = model.region_data.entry(rh).or_default();
-            if (height - d.font_height.unwrap_or(0.0)).abs() < f32::from_bits(0x3480_0000) {
+            let held = d.font_height.map_or(0.0, |h| h.script(model_units));
+            if (height - held).abs() < f32::from_bits(0x3480_0000) {
                 return Ok(());
             }
-            d.font_height = Some(height);
+            d.font_height = Some(crate::layout::Len::Script(height));
             d.text_scaled = true;
             model.touch_measure(rh);
             Ok(())

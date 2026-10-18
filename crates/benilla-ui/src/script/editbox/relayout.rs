@@ -29,6 +29,7 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
     let (Some(rh), insets, multi_line) = (eb.text_region, eb.text_insets, eb.multi_line) else {
         return;
     };
+    let insets = insets.map(|l| l.script(model.layout_units()));
     let owner = model.frame_id(h);
     let [l, _, t, _] = insets;
     let anchors = Anchors::from([Anchor::new(Point::TopLeft, owner, Point::TopLeft, l, -t)]);
@@ -134,8 +135,9 @@ pub(super) fn relayout(lua: &Lua, h: FrameHandle) -> bool {
         return false;
     };
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let units = model.layout_units();
     let [_, _, top, bottom] = match model.arena.frame(h).map(|f| &f.kind_state) {
-        Some(KindState::EditBox(eb)) => eb.text_insets,
+        Some(KindState::EditBox(eb)) => eb.text_insets.map(|l| l.script(units)),
         _ => return true,
     };
     // `fld top; fadd bottom; fadd st, st(1)`.
@@ -165,7 +167,8 @@ fn single_line(lua: &Lua, h: FrameHandle) -> bool {
         return true;
     };
     // The advance table is in root units: the box's own times its effective scale.
-    let width = inset_text_size(&model, h, eb.text_insets, false).map(|(w, _)| w * k);
+    let insets = eb.text_insets.map(|l| l.script(model.layout_units()));
+    let width = inset_text_size(&model, h, insets, false).map(|(w, _)| w * k);
     let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
         return true;
     };
@@ -224,8 +227,8 @@ pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option
         MeasureRequest {
             id: model.region_to_id.get(&rh).copied().unwrap_or(0),
             font: d.font_path.clone(),
-            height: d.font_height,
-            text_height: d.text_height(),
+            height: d.font_height_script(model.layout_units()),
+            text_height: d.text_height(model.layout_units()),
             wrap_width: None,
             outline: d.outline,
             // One line has no gap: `0x5c2070` charges `(N−1)·gap`.
