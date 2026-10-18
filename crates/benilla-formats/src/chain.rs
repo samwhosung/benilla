@@ -166,17 +166,6 @@ impl Chain {
     /// (most of `texture.MPQ`) is readable by name but not listed. Unions every archive's
     /// `(listfile)`, as each names only its own files; sizes come from the winning archive.
     pub fn list(&self) -> Result<Vec<ChainEntry>> {
-        self.list_where(|_| true)
-    }
-
-    /// [`Chain::list`] of the names that begin with `prefix` (any case, `/` and `\` alike), tested
-    /// before a name is resolved or sized, so listing one folder costs the listfiles' text and a
-    /// lookup per name in it, not one per name in the chain.
-    pub fn list_prefix(&self, prefix: &str) -> Result<Vec<ChainEntry>> {
-        self.list_where(|name| has_path_prefix(name, prefix))
-    }
-
-    fn list_where(&self, keep: impl Fn(&str) -> bool) -> Result<Vec<ChainEntry>> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for archive in &self.archives {
@@ -186,10 +175,7 @@ impl Chain {
             for raw in String::from_utf8_lossy(&listfile).split([';', '\r', '\n']) {
                 let name = raw.trim();
                 // Dedupe the way MPQ hashing compares names: any case, `/` and `\` alike.
-                if name.is_empty()
-                    || !keep(name)
-                    || !seen.insert(name.replace('/', "\\").to_ascii_lowercase())
-                {
+                if name.is_empty() || !seen.insert(name.replace('/', "\\").to_ascii_lowercase()) {
                     continue;
                 }
                 if let Some(a) = self.resolve(name) {
@@ -206,62 +192,80 @@ impl Chain {
         }
         Ok(out)
     }
+
+    /// `EnumerateArchiveFiles` (`0x401470`): every `(listfile)` line that begins with `prefix`,
+    /// without ASCII case and with `\` only as `\` (`SStrCmpI` at `0x4014fe`), as written and
+    /// unresolved. The archives are the mount's slots below the base ones, the patches and
+    /// `speech2.MPQ` in their opening order (`0x4014a0`-`0x4014bf`, up to `[0x882740]`), then
+    /// `interface.MPQ`, base slot 6 (`0x4014c1`-`0x4014e1`); a slot with no archive is passed over.
+    pub fn enumerate_archive_files(&self, prefix: &str) -> Vec<String> {
+        let named = |a: &&Archive, name: &str| {
+            a.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        };
+        let base = |a: &&Archive| VANILLA_BASE_ORDER.iter().any(|b| named(a, b));
+        let interface = self.archives.iter().find(|a| named(a, "interface.MPQ"));
+        let mut out = Vec::new();
+        for archive in self.archives.iter().filter(|a| !base(a)).chain(interface) {
+            if let Ok(listfile) = archive.read_file("(listfile)") {
+                listfile_lines(&listfile, prefix, &mut out);
+            }
+        }
+        out
+    }
 }
 
-/// Whether `name` begins with `prefix`, without ASCII case and with `/` read as `\`.
-fn has_path_prefix(name: &str, prefix: &str) -> bool {
-    let fold = |b: &u8| match b {
-        b'/' => b'\\',
-        b => b.to_ascii_lowercase(),
-    };
-    name.len() >= prefix.len()
-        && name.as_bytes()[..prefix.len()]
+/// The longest line `0x648fb0` keeps: its buffer takes bytes while below `[ebp-5]` of `[ebp-0x108]`
+/// (`0x64902a`-`0x649031`), and drops the rest of a longer one.
+const LISTFILE_LINE_MAX: usize = 0x103;
+
+/// `EnumerateArchiveListfile` (`0x648fb0`) over one listfile, with `0x4014f0`'s prefix test: a line
+/// ends at a CR or LF (`0x649022`, `0x649026`); an empty one, and one whose text from its last dot
+/// is `.md5` without case (`0x865bd8`, `0x64905f`), is passed over. A last line with no CR or LF
+/// after it is never passed, as the walk ends at the buffer's end without a flush (`0x64907f`).
+fn listfile_lines(listfile: &[u8], prefix: &str, out: &mut Vec<String>) {
+    let mut line: Vec<u8> = Vec::with_capacity(LISTFILE_LINE_MAX);
+    for &b in listfile {
+        if b != b'\r' && b != b'\n' {
+            if line.len() < LISTFILE_LINE_MAX {
+                line.push(b);
+            }
+            continue;
+        }
+        let md5 = line
             .iter()
-            .map(fold)
-            .eq(prefix.as_bytes().iter().map(fold))
+            .rposition(|&c| c == b'.')
+            .is_some_and(|dot| line[dot..].eq_ignore_ascii_case(b".md5"));
+        let under = line.len() >= prefix.len()
+            && line[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes());
+        if !line.is_empty() && !md5 && under {
+            out.push(String::from_utf8_lossy(&line).into_owned());
+        }
+        line.clear();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Lines end at CR or LF; the prefix compares without case and reads `/` as itself; `.md5`
+    /// lines, empty lines and an unterminated last line are passed over; a long line is cut.
     #[test]
-    fn a_path_prefix_matches_any_case_and_either_slash() {
-        assert!(has_path_prefix(
-            "Interface\\Icons\\Spell_Fire.blp",
-            "Interface\\Icons\\"
-        ));
-        assert!(has_path_prefix("interface/ICONS/x", "Interface\\Icons\\"));
-        assert!(has_path_prefix("Interface\\Icons\\", "Interface\\Icons\\"));
-        assert!(!has_path_prefix("Interface\\Icon", "Interface\\Icons\\"));
-        assert!(!has_path_prefix(
-            "Interface\\IconsX\\a",
-            "Interface\\Icons\\"
-        ));
-        assert!(!has_path_prefix("Textures\\Icons\\a", "Interface\\Icons\\"));
-    }
-
-    /// The narrowed listing is the whole listing filtered: the same names, sizes and order.
-    #[test]
-    fn a_prefix_listing_is_the_full_listing_filtered() {
-        let data = crate::wow_data_or_skip!();
-        let chain = Chain::open(&data).expect("open chain");
-        let prefix = "Interface\\Icons\\";
-        let full: Vec<(String, u64)> = chain
-            .list()
-            .unwrap()
-            .into_iter()
-            .filter(|e| has_path_prefix(&e.name, prefix))
-            .map(|e| (e.name, e.size))
-            .collect();
-        let narrowed: Vec<(String, u64)> = chain
-            .list_prefix(prefix)
-            .unwrap()
-            .into_iter()
-            .map(|e| (e.name, e.size))
-            .collect();
-        assert!(!full.is_empty());
-        assert_eq!(narrowed, full);
+    fn a_listfile_walk_passes_the_lines_under_the_prefix() {
+        let long = format!("Interface\\Icons\\{}", "x".repeat(400));
+        let text = format!(
+            "Interface\\Icons\\Spell_A.blp\r\ninterface\\ICONS\\b.blp\n\nInterface/Icons/c.blp\n\
+             Interface\\Icons\\d.blp.MD5\rTextures\\e.blp\n{long}\nInterface\\Icons\\last.blp"
+        );
+        let mut out = Vec::new();
+        listfile_lines(text.as_bytes(), "Interface\\Icons\\", &mut out);
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert_eq!(out[0], "Interface\\Icons\\Spell_A.blp");
+        assert_eq!(out[1], "interface\\ICONS\\b.blp");
+        assert_eq!(out[2].len(), LISTFILE_LINE_MAX);
     }
 
     fn owned(names: &[&str]) -> Vec<String> {

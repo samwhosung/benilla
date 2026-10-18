@@ -17,35 +17,34 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// `GetMacroIconInfo` returns. `data` is the install's `Data` folder, whose parent is the install
 /// folder; `None` lists the archives alone.
 ///
-/// The reference reads three sources in turn. First the `(listfile)` of every open `patch*.MPQ` and
-/// `interface.MPQ` (name table index 6, `0x82e12c`, read via `0x648fb0`), keeping a name under the
-/// prefix that begins `Spell_` or `Ability_` and ends `.blp` or `.tga` (`0x4f0220`). Then the two
-/// loose scans of `loose_names`. Each entry is the name without its last-dot extension; then a
-/// `qsort` with `SStrCmpI` (`0x4f0128`, comparator `0x4f05e0`) and the drop of adjacent duplicates
-/// (`0x4f0140`-`0x4f01a4`): the order is alphabetical, and a stock 5875 install yields 517 icons.
+/// The reference reads three sources in turn. First the archives' listed names under the prefix
+/// ([`Chain::enumerate_archive_files`], `0x401470(6, prefix, 0x4f0220)` at `0x4f00b8`), the
+/// callback skipping the prefix's 16 characters unchecked and keeping a name that begins `Spell_`
+/// or `Ability_` and ends `.blp` or `.tga` (`0x4f0220`); it has no folder test, so a name below a
+/// subfolder is kept with its `\`. Then the two loose scans of `loose_names`. Each entry is the
+/// name without its last-dot extension; then a `qsort` with `SStrCmpI` (`0x4f0128`, comparator
+/// `0x4f05e0`) and the drop of adjacent duplicates (`0x4f0140`-`0x4f01a4`): the order is
+/// alphabetical, and a stock 5875 install yields 517 icons.
 pub fn load_macro_icons(chain: &Chain, data: Option<&Path>) -> Result<Vec<String>> {
-    let mut names: Vec<String> = Vec::new();
-    for entry in chain.list_prefix(ICON_DIR)? {
-        let path = entry.name.replace('/', "\\");
-        // Case-insensitive (`SStrCmpI`), as listfiles are not consistently cased.
-        if path.len() <= ICON_DIR.len()
-            || !path.as_bytes()[..ICON_DIR.len()].eq_ignore_ascii_case(ICON_DIR.as_bytes())
-        {
-            continue;
-        }
-        let file = &path[ICON_DIR.len()..];
-        // The reference skips directories (`flags & 0x10`): here, a name in a subdirectory.
-        if file.contains('\\') {
-            continue;
-        }
-        if let Some(stem) = icon_stem(file).filter(|_| spell_or_ability(file)) {
-            names.push(stem.to_string());
-        }
-    }
+    let mut names = archive_names(chain.enumerate_archive_files(ICON_DIR));
     if let Some(data) = data {
         loose_names(data, &mut names);
     }
     Ok(chooser_list(names))
+}
+
+/// `0x4f0220` over the listed names, each beginning with the prefix: the part after it, cut at its
+/// last dot, when it passes the name and extension rules.
+fn archive_names(listed: Vec<String>) -> Vec<String> {
+    listed
+        .iter()
+        .filter_map(|name| {
+            let file = &name[ICON_DIR.len()..];
+            icon_stem(file)
+                .filter(|_| spell_or_ability(file))
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 /// The two loose scans, through `0x42ad10`, which lists a folder with `FindFirstFileW` relative to
@@ -175,6 +174,25 @@ mod tests {
         let mut out = Vec::new();
         loose_icons(dir, rule, &mut out);
         out
+    }
+
+    /// `0x4f0220` keeps a `Spell_`/`Ability_` name with a `.blp` or `.tga` last extension, a
+    /// name below a subfolder with it, as it tests no folder.
+    #[test]
+    fn the_archive_callback_keeps_names_by_their_text_alone() {
+        let listed = [
+            "Interface\\Icons\\Spell_Fire_A.blp",
+            "INTERFACE\\icons\\ability_b.TGA",
+            "Interface\\Icons\\Spell_Sub\\C.blp",
+            "Interface\\Icons\\Ability_D.tga.blp",
+            "Interface\\Icons\\Other.blp",
+            "Interface\\Icons\\Spell_E",
+            "Interface\\Icons\\",
+        ];
+        assert_eq!(
+            archive_names(listed.iter().map(|n| n.to_string()).collect()),
+            ["Spell_Fire_A", "ability_b", "Spell_Sub\\C", "Ability_D.tga"]
+        );
     }
 
     /// `0x4f0350` keeps `Ability_`/`Spell_` names, any case, with a `.bz` cut before the
