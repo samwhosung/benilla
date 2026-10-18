@@ -458,7 +458,7 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
             }
             let scale = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                fullscreen_scale(model.screen.width() / model.screen.height())
+                fullscreen_scale(model.screen_aspect())
             };
             frame.call_method::<()>("SetScale", scale)
         })?,

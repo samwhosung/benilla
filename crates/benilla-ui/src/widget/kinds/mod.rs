@@ -736,7 +736,7 @@ pub struct MinimapState {
     /// The minimap's level plus 3 (`+0x334`, `0x4ede48`, again at `0x4ee1a3`), the rim arrows'
     /// level base.
     pub level_base: i32,
-    /// The ctor's `G48 · 5/3` (`0x4edc42`, `0x4edc47`), 1.0 at 4:3, every blip size's factor.
+    /// The ctor's `G48 · 5/3` (`0x4edc42`, `0x4edc47`), about 1 at 4:3, every blip size's factor.
     pub base: f32,
 }
 

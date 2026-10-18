@@ -73,7 +73,7 @@ impl UiScript {
                 return false;
             }
             model.ui_scale_request = Some(ui_scale);
-            let aspect = model.screen.width() / model.screen.height();
+            let aspect = model.screen_aspect();
             model
                 .arena
                 .lookup("UIParent")
@@ -116,7 +116,7 @@ impl UiScript {
             let Some(ui_scale) = model.ui_scale_request else {
                 return false;
             };
-            let aspect = model.screen.width() / model.screen.height();
+            let aspect = model.screen_aspect();
             let v = capped_ui_scale(ui_scale, aspect);
             let v = if v >= UI_SCALE_FLOOR {
                 v
