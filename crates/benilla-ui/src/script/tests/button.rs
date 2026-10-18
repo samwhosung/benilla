@@ -538,7 +538,10 @@ fn highlight_is_additive_and_state_textures_fill_then_anchor() {
     // The 1.12 client's `SetHighlightTexture` defaults the texture to ADD.
     assert!(matches!(
         &find("Interface\\Hi.blp").content,
-        QuadContent::Texture { additive: true, .. }
+        QuadContent::Texture {
+            blend: BlendMode::Add,
+            ..
+        }
     ));
     // The reference's string setter anchors a texture it builds with `SetAllPoints`, so the later
     // 64px size is unread and the ring fills the 36px button.
@@ -578,7 +581,7 @@ fn highlight_is_additive_and_state_textures_fill_then_anchor() {
     assert!(matches!(
         &hi.content,
         QuadContent::Texture {
-            additive: false,
+            blend: BlendMode::Blend,
             ..
         }
     ));

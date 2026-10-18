@@ -335,9 +335,13 @@ impl UiScript {
                                 .gradient
                                 .filter(|_| has_texture)
                                 .map(|g| g.vertex_colors()),
-                            // The renderer acts on ADD only: the other four `alphaMode` values
-                            // answer `GetBlendMode` but draw as straight alpha.
-                            additive: data.blend == crate::script::BlendMode::Add,
+                            blend: drawn_blend(
+                                data.blend,
+                                owner_frame.map_or(1.0, |f| f.effective_alpha),
+                                data.alpha.unwrap_or(1.0),
+                                data.vertex_color,
+                                data.gradient.map(|g| g.vertex_colors()),
+                            ),
                             tex_coords: data.tex_coords,
                             wrap,
                             circular: data.circular,
@@ -405,6 +409,40 @@ impl UiScript {
         // Each layer batch's End sorts its quads by texture (`0x7731a0`).
         layer_batch::sort_batches(&mut out, &batch_quads);
         out
+    }
+}
+
+/// The blend a texture's record draws with (`0x76fb00`): a record with a colour array and a mode
+/// below `BLEND` draws as `BLEND` (`0x76fb85`-`0x76fba2`). The array is there exactly when it holds
+/// an entry (`0x773035`), and the frame-alpha fold (`0x77fac0`) leaves one exactly when the frame's
+/// alpha byte is below `0xfe` (`0x77fb6a` builds a white one) or an entry is not opaque white
+/// (`0x77faf5`-`0x77fb23`). The entries are the vertex colour, whose alpha byte the region's
+/// `SetAlpha` writes (`0x79b580`), or a gradient's four; a solid fill is the texel (`0x770360`).
+fn drawn_blend(
+    mode: crate::script::BlendMode,
+    frame_alpha: f32,
+    region_alpha: f32,
+    vertex: Option<[f32; 4]>,
+    gradient: Option<[[f32; 4]; 4]>,
+) -> crate::script::BlendMode {
+    use crate::script::BlendMode;
+    if !matches!(mode, BlendMode::Disable | BlendMode::AlphaKey) {
+        return mode;
+    }
+    // A channel's byte as the colour setters pack it (`×255 + 0.5`, truncated, `0x40a2b0`).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let opaque_white =
+        |c: [f32; 4]| c[..3].iter().all(|&v| byte(v) == 0xff) && byte(c[3] * region_alpha) >= 0xfe;
+    let all_white = match (gradient, vertex) {
+        (Some(g), _) => g.into_iter().all(opaque_white),
+        (None, Some(c)) => opaque_white(c),
+        (None, None) => opaque_white([1.0; 4]),
+    };
+    if byte(frame_alpha) < 0xfe || !all_white {
+        BlendMode::Blend
+    } else {
+        mode
     }
 }
 

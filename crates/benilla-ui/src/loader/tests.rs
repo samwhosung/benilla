@@ -2634,19 +2634,23 @@ mod layer_blend_tests {
         let mut s = s;
         s.set_screen_size(800.0, 600.0);
         s.resolve();
-        let additive = s
+        let blend = s
             .extract()
             .iter()
             .find_map(|q| match &q.content {
                 QuadContent::Texture {
                     path: Some(p),
-                    additive,
+                    blend,
                     ..
-                } if p == "Interface\\Glow" => Some(*additive),
+                } if p == "Interface\\Glow" => Some(*blend),
                 _ => None,
             })
             .expect("the layer texture extracted");
-        assert!(additive, "alphaMode=ADD must ride into the quad blend flag");
+        assert_eq!(
+            blend,
+            crate::script::BlendMode::Add,
+            "alphaMode=ADD must ride into the quad blend"
+        );
     }
 
     /// `alphaMode=` (`0x770176`) skips an empty value and ignores an unknown one with no log

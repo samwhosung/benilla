@@ -586,17 +586,25 @@ fn despawn_rigs(commands: &mut Commands, rigs: &Query<(Entity, Option<&ChildOf>)
     }
 }
 
-/// One invisible HUD quad per warm frame, so its batch-mesh pipeline (POSITION + UV_0 + COLOR)
-/// compiles under the cover. The minimap composite's `Rectangle` layout is a rig in [`menagerie`].
+/// Invisible HUD quads per warm frame, so the batch-mesh pipelines (POSITION + UV_0 + COLOR)
+/// compile under the cover: the premultiplied one every mode but `MOD` draws through, and
+/// `MOD`'s multiply ([`crate::ui_pass::UiQuadKey`]), whose zero-alpha texel discards. The minimap
+/// composite's `Rectangle` layout is a rig in [`menagerie`].
 fn warm_ui_quad_lane(warm: Res<WarmPass>, mut quads: ResMut<crate::ui_pass::UiQuads>) {
     if warm.spawned_at.is_none() || warm.done {
         return;
     }
-    quads.overlays.push(crate::ui_pass::UiQuad {
-        rect: Rect::new(0.0, 0.0, 1.0, 1.0),
-        color: [0.0, 0.0, 0.0, 0.0],
-        ..default()
-    });
+    for blend in [
+        benilla_ui::script::BlendMode::Blend,
+        benilla_ui::script::BlendMode::Mod,
+    ] {
+        quads.overlays.push(crate::ui_pass::UiQuad {
+            rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+            color: [0.0, 0.0, 0.0, 0.0],
+            blend,
+            ..default()
+        });
+    }
 }
 
 /// Push one degenerate draw per reachable [`EffectPipelineKey`] through the production stream,

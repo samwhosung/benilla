@@ -110,8 +110,9 @@ pub enum QuadContent {
         /// A gradient's four vertex colours, `[TL, TR, BR, BL]` ([`Gradient::vertex_colors`]),
         /// each multiplying the texel and `color`; `None` for a one-colour quad.
         gradient: Option<[[f32; 4]; 4]>,
-        /// The `ADD` blend instead of straight alpha.
-        additive: bool,
+        /// The blend the record draws with: the region's `SetBlendMode` mode, except that
+        /// `DISABLE` and `ALPHAKEY` draw as `BLEND` under a vertex colour (`0x76fb93`).
+        blend: BlendMode,
         /// `None` is the full texture.
         tex_coords: Option<TexCoords>,
         /// The wrap flag the file loaded with (`0x770200`, bits 3 and 4 of the texture's flags):
@@ -201,21 +202,21 @@ pub enum JustifyV {
 }
 
 /// A Texture's blend mode, the client's `alphaMode` enum (`0x811aa8`), set by XML `alphaMode=`
-/// or `SetBlendMode`; BLEND is the constructor's (`0x76fc64 mov [esi+0xd0],2`). The renderer
-/// acts only on ADD: the others draw as straight alpha, their reference blending not built.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// or `SetBlendMode`; BLEND is the constructor's (`0x76fc64 mov [esi+0xd0],2`). The discriminant
+/// is the EGxBlend the submit sets (`0x76fba2`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum BlendMode {
-    /// `DISABLE` (0): `GL_ONE, GL_ZERO`, alpha reference 0.
-    Disable,
-    /// `ALPHAKEY` (1): `GL_ONE, GL_ZERO`, alpha reference 224/255.
-    AlphaKey,
-    /// `BLEND` (2): `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`.
+    /// `DISABLE` (0): blending off, alpha reference 0 (no test).
+    Disable = 0,
+    /// `ALPHAKEY` (1): blending off, alpha reference 224/255.
+    AlphaKey = 1,
+    /// `BLEND` (2): `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`, alpha reference 1/255.
     #[default]
-    Blend,
-    /// `ADD` (3): `GL_SRC_ALPHA, GL_ONE`.
-    Add,
-    /// `MOD` (4): `GL_DST_COLOR, GL_ZERO`.
-    Mod,
+    Blend = 2,
+    /// `ADD` (3): `GL_SRC_ALPHA, GL_ONE`, alpha reference 1/255.
+    Add = 3,
+    /// `MOD` (4): `GL_DST_COLOR, GL_ZERO`, alpha reference 1/255.
+    Mod = 4,
 }
 
 impl BlendMode {

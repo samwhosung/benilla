@@ -1,8 +1,13 @@
 // The player-UI quad material. The reference draws the UI fixed-function into an 8-bit
 // backbuffer, so the fragment tints and premultiplies on gamma bytes and outputs raw gamma for the
-// `(One, OneMinusSrcAlpha)` blend; `ui_gamma.wgsl` decodes once. One pipeline, a flag per mode:
-//   BLEND (EGxBlend 2, `SrcAlpha/OneMinusSrcAlpha`): out = (rgb·a, a) ⇒ dst·(1−a) + rgb·a
-//   ADD   (EGxBlend 3, `SrcAlpha/One`):              out = (rgb·a, 0) ⇒ dst      + rgb·a
+// `(One, OneMinusSrcAlpha)` blend; `ui_gamma.wgsl` decodes once. One pipeline for four modes, a
+// uniform per mode, and a second pipeline for MOD:
+//   DISABLE  (EGxBlend 0, no blend):                    out = (rgb, 1)     ⇒ rgb
+//   ALPHAKEY (EGxBlend 1, no blend, test a ≥ 224/255):  out = (rgb, 1)     ⇒ rgb, or discard
+//   BLEND    (EGxBlend 2, `SrcAlpha/OneMinusSrcAlpha`): out = (rgb·a, a)   ⇒ dst·(1−a) + rgb·a
+//   ADD      (EGxBlend 3, `SrcAlpha/One`):              out = (rgb·a, 0)   ⇒ dst      + rgb·a
+//   MOD      (EGxBlend 4, `DestColor/Zero`, its own pipeline): out = rgb ⇒ dst·rgb
+// Modes 2 to 4 test the alpha at 1/255 (`0x85ad20`), which only MOD can see.
 // `linear_to_srgb` restores the authored byte of every sampled texel except a SKIP_DECODE upload
 // (`gamma_texel`), which already holds it.
 // Deviation: bilinear filtering runs on the decoded texel, not on the gamma byte the reference
@@ -57,7 +62,8 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     return out;
 }
 
-@group(2) @binding(0) var<uniform> additive: u32;
+// The EGxBlend, 0 to 4 (`UiQuad::blend`).
+@group(2) @binding(0) var<uniform> blend_mode: u32;
 @group(2) @binding(1) var quad_texture: texture_2d<f32>;
 @group(2) @binding(2) var quad_sampler: sampler;
 // Mask to the inscribed circle: the unit portrait's round stencil, which the reference stamps into
@@ -93,6 +99,11 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 // Do not normalise: they sum just above 1.0 and white relies on the output clamp.
 const LUMA: vec3<f32> = vec3<f32>(0.299, 0.587, 0.114);
 
+// The alpha references `0x85ad20` gives ALPHAKEY (224) and MOD (1), half a byte below so a texel
+// stored at the byte passes `GEQUAL`.
+const ALPHAKEY_REF: f32 = 223.5 / 255.0;
+const MOD_REF: f32 = 0.5 / 255.0;
+
 // Linear to sRGB (IEC 61966-2-1), the exact inverse of the sampler's decode in f32.
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let higher = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
@@ -126,19 +137,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if desaturate != 0u {
         rgb = vec3<f32>(dot(texel, LUMA));
     }
-    // `k`, the UI's coverage (frame alpha and masks), stays apart from `t.a`: it scales a
-    // premultiplied source's colour and alpha alike, while `t.a` weights only a straight source.
-    var k = c.a;
+    // `m`, the masks' coverage, and `k`, the UI's (frame alpha and masks), stay apart from `t.a`:
+    // `k` scales a premultiplied source's colour and alpha alike, while `t.a` weights only a
+    // straight source.
+    var m = 1.0;
     if circular != 0u {
         // A soft edge 2% of the width, like the reference's stencil at portrait size.
-        k *= 1.0 - smoothstep(0.48, 0.5, distance(in.uv, vec2<f32>(0.5)));
+        m *= 1.0 - smoothstep(0.48, 0.5, distance(in.uv, vec2<f32>(0.5)));
     }
     if mask_rect.z > mask_rect.x {
         let muv = (in.position.xy - mask_rect.xy) / (mask_rect.zw - mask_rect.xy);
         let inside = f32(all(muv >= vec2<f32>(0.0)) && all(muv <= vec2<f32>(1.0)));
-        let m = textureSampleLevel(mask_texture, mask_sampler, clamp(muv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
-        k *= m * inside;
+        let cover = textureSampleLevel(mask_texture, mask_sampler, clamp(muv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
+        m *= cover * inside;
     }
+    let k = c.a * m;
     // Alpha test: returns the linear texel, not `rgb`, because it draws only into the minimap's
     // linear 256² composite, whose blit encodes.
     if alpha_ref > 0.0 {
@@ -147,11 +160,33 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         return vec4<f32>(srgb_to_linear(t.rgb) * c.rgb, 1.0);
     }
+    // The fragment's alpha the test reads: texel times vertex colour (the combine preset).
+    let tested = t.a * c.a;
+    switch blend_mode {
+        // DISABLE and ALPHAKEY write the texel over the target; the masks still cut it.
+        case 0u: {
+            return vec4<f32>(rgb * m, m);
+        }
+        case 1u: {
+            if tested < ALPHAKEY_REF {
+                discard;
+            }
+            return vec4<f32>(rgb * m, m);
+        }
+        // MOD multiplies the target by the texel; a masked-out fragment multiplies by 1.
+        case 4u: {
+            if tested < MOD_REF {
+                discard;
+            }
+            return vec4<f32>(mix(vec3<f32>(1.0), rgb, m), 1.0);
+        }
+        default: {}
+    }
     let a = t.a * k;
     // Premultiply in gamma, not by the hardware `SrcAlpha`. A booth bake takes `k` alone: `t.a`
     // again would zero its additive light over empty space.
     let weight = select(a, k, premultiplied != 0u);
-    if additive != 0u {
+    if blend_mode == 3u {
         return vec4<f32>(rgb * weight, 0.0);
     }
     return vec4<f32>(rgb * weight, a);

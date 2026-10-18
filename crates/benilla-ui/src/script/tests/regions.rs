@@ -1305,6 +1305,83 @@ fn an_unresolvable_set_texture_keeps_the_art_the_region_had() {
     assert!(s.eval::<bool>("return t:GetTexture() == nil").unwrap());
 }
 
+/// The blend each texture record draws with (`0x76fb00`): its own mode, except that `DISABLE` and
+/// `ALPHAKEY` under a colour array draw as `BLEND` (`0x76fb93`). The array survives the frame-alpha
+/// fold (`0x77fac0`) when the frame's alpha byte is below `0xfe` or an entry is not opaque white;
+/// a solid fill is the texel and no entry (`0x770360`).
+#[test]
+fn disable_and_alphakey_draw_as_blend_under_a_vertex_colour() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        DrawHost = CreateFrame("Frame", "DrawHost")
+        DrawHost:SetPoint("CENTER", 0, 0)
+        DrawHost:SetWidth(10) DrawHost:SetHeight(10)
+        DrawTex = DrawHost:CreateTexture("DrawTex", "ARTWORK")
+        DrawTex:SetAllPoints(DrawHost)
+        "#,
+    )
+    .unwrap();
+    let drawn = |s: &mut UiScript, setup: &str| {
+        s.run(&format!(
+            "DrawHost:SetAlpha(1) DrawTex:SetAlpha(1) DrawTex:SetVertexColor(1, 1, 1, 1) \
+             DrawTex:SetTexture('Interface\\\\Art') {setup}"
+        ))
+        .unwrap();
+        s.resolve();
+        s.extract()
+            .into_iter()
+            .find_map(|q| match q.content {
+                QuadContent::Texture { blend, .. } => Some(blend),
+                _ => None,
+            })
+            .expect("the texture draws")
+    };
+    for (setup, want) in [
+        ("DrawTex:SetBlendMode('DISABLE')", BlendMode::Disable),
+        ("DrawTex:SetBlendMode('ALPHAKEY')", BlendMode::AlphaKey),
+        (
+            "DrawTex:SetBlendMode('DISABLE') DrawTex:SetVertexColor(1, 1, 1)",
+            BlendMode::Disable,
+        ),
+        (
+            "DrawTex:SetBlendMode('DISABLE') DrawTex:SetTexture(1, 0, 0, 0.5)",
+            BlendMode::Disable,
+        ),
+        (
+            "DrawTex:SetBlendMode('DISABLE') DrawTex:SetVertexColor(1, 0, 0)",
+            BlendMode::Blend,
+        ),
+        (
+            "DrawTex:SetBlendMode('ALPHAKEY') DrawTex:SetVertexColor(1, 1, 1, 0.5)",
+            BlendMode::Blend,
+        ),
+        (
+            "DrawTex:SetBlendMode('DISABLE') DrawTex:SetAlpha(0.5)",
+            BlendMode::Blend,
+        ),
+        (
+            "DrawTex:SetBlendMode('ALPHAKEY') DrawHost:SetAlpha(0.5)",
+            BlendMode::Blend,
+        ),
+        (
+            "DrawTex:SetBlendMode('DISABLE') DrawTex:SetGradient('VERTICAL', 1, 1, 1, 0, 0, 0)",
+            BlendMode::Blend,
+        ),
+        (
+            "DrawTex:SetBlendMode('MOD') DrawTex:SetVertexColor(1, 0, 0)",
+            BlendMode::Mod,
+        ),
+        (
+            "DrawTex:SetBlendMode('ADD') DrawHost:SetAlpha(0.5)",
+            BlendMode::Add,
+        ),
+    ] {
+        assert_eq!(drawn(&mut s, setup), want, "{setup}");
+    }
+}
+
 /// `Texture:GetBlendMode` (`0x79a890`, table `0x87c128`) answers one string, the mode
 /// `SetBlendMode` (`0x79a950`) set, `"BLEND"` by default (the ctor's `[+0xd0] = 2`, `0x76fc64`).
 #[test]

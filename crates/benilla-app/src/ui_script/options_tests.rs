@@ -235,11 +235,15 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
                 QuadContent::Texture {
                     path: Some(p),
                     color,
-                    additive,
+                    blend,
                     ..
-                } if p.contains("UI-QuestLogTitleHighlight") => {
-                    q.rect.map(|r| (r, color.unwrap_or([1.0; 4]), *additive))
-                }
+                } if p.contains("UI-QuestLogTitleHighlight") => q.rect.map(|r| {
+                    (
+                        r,
+                        color.unwrap_or([1.0; 4]),
+                        *blend == benilla_ui::script::BlendMode::Add,
+                    )
+                }),
                 _ => None,
             })
             .collect()
