@@ -447,3 +447,20 @@ fn the_plate_width_is_a_layout_sum() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The plate pad goes into the sum at 53 bits, as `0x41ae60` leaves it in `st0` and the sizer
+/// doubles it there (`0x5309ed`, `0x5309f2`): at 16:9 with a line narrower than its minimum of 8
+/// the plate
+/// reads 28.48000045956225, where the pad stored first would read 28.479998271170587.
+#[test]
+fn the_plate_pad_is_added_unrounded() {
+    let (mut s, _) = tooltip();
+    s.set_screen_size(1024.0, 576.0);
+    s.run(r#"TS:AddLine("a") TS:SetMinimumWidth(8) TS:Show()"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<f64>("return TS:GetWidth()").unwrap(),
+        28.480_000_459_562_25
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

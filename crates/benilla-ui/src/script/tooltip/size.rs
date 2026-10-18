@@ -68,6 +68,9 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
         if right_shown {
             w = (get_width(model, right, &mut pending) + f64::from(w)) as f32;
         }
+        // The reference adds a third width, a texture `AddTexture` (`0x5303d0`) pinned to this
+        // line (`0x530723`-`0x530755`, `+0x34c` keyed by `+0x358`); nothing calls it, so its count
+        // (`+0x364`) stays the 0 the constructor and the clear write (`0x529313`, `0x5301cf`).
         // `fcomp; test ah,5; jp` (`0x53075b`): only a larger number replaces, never a NaN.
         if widest < w {
             widest = w;
@@ -88,11 +91,12 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
             pending = true;
             continue;
         };
-        let wrap_cap = units.store(TOOLTIP_WRAP_WIDTH);
-        let cap = if wrap_cap > natural {
+        // The compare takes the cap at 53 bits, as `0x41ae60` leaves it in `st0` (`0x5307cb`);
+        // only the cap taken is stored (`0x5307ef`).
+        let cap = if units.store_wide(TOOLTIP_WRAP_WIDTH) > f64::from(natural) {
             natural
         } else {
-            wrap_cap
+            units.store(TOOLTIP_WRAP_WIDTH)
         };
         // The font engine lays out in script units: the cap goes to it through the getter steps.
         let cap_script = units.load(cap) as f32;
@@ -145,7 +149,8 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
             continue;
         }
         if height != 0.0 {
-            height += units.store(TOOLTIP_LINE_GAP);
+            // The gap at 53 bits added to the stored sum (`0x5309aa`, `0x5309af`).
+            height = (units.store_wide(TOOLTIP_LINE_GAP) + f64::from(height)) as f32;
         }
         height = (get_height(model, left, &mut pending) + f64::from(height)) as f32;
     }
@@ -154,10 +159,10 @@ pub(in crate::script) fn size_tooltip(model: &mut Model, h: FrameHandle) {
         t.relayout_owed = pending;
     }
     if !pending {
-        // `2·S(pad) + padding + widest` by `2·S(pad) + height` (`0x5309f4`, `0x530a0c`), through
-        // the plate's layout size slots (`0x530a2e`, `0x530a39`), so `GetWidth` answers them
-        // through the getter steps.
-        let pad = f64::from(units.store(TOOLTIP_PLATE_PAD));
+        // `2·S(pad) + padding + widest` by `2·S(pad) + height` (`0x5309f4`, `0x530a0c`), the pad
+        // at 53 bits and doubled in `st0` (`0x5309ed`, `0x5309f2`), through the plate's layout
+        // size slots (`0x530a2e`, `0x530a39`), so `GetWidth` answers them through the getters.
+        let pad = units.store_wide(TOOLTIP_PLATE_PAD);
         let w =
             crate::layout::Len::Layout((2.0 * pad + f64::from(padding) + f64::from(widest)) as f32);
         let ht = crate::layout::Len::Layout((2.0 * pad + f64::from(height)) as f32);
