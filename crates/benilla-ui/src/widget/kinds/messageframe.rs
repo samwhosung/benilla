@@ -14,8 +14,9 @@ pub struct MessageLine {
     pub time_left: f32,
     /// Seconds of fade left, from the `fadeDuration` snapshot; counts once `time_left` is spent.
     pub fade_left: f32,
-    /// The display alpha: `AddMessage`'s (opaque on a ScrollingMessageFrame, `0x792add`; the alpha
-    /// argument on a MessageFrame, `0x795752`) until the fade overwrites it with the byte ramp
+    /// The display alpha: `AddMessage`'s (on a ScrollingMessageFrame opaque with a colour,
+    /// `0x792add`, else the frame font's alpha, `0x792b39`; the alpha argument on a MessageFrame,
+    /// `0x795752`) until the fade overwrites it with the byte ramp
     /// `trunc(remaining / fadeDuration * 255)` (`0x788547`, `0x786364`). At 0 a scrolling line
     /// keeps its ring slot and rows; a MessageFrame frees it (`0x786570`).
     pub alpha: f32,
@@ -184,6 +185,21 @@ impl ScrollingMessageState {
         id: u32,
         viewport: impl Into<Viewport>,
     ) {
+        // The binding packs the given colour with the alpha byte 0xff (`0x792add`).
+        let color = crate::color::Rgba8::rgba(quantize_u8(r), quantize_u8(g), quantize_u8(b), 255);
+        self.add_packed(text, color, id, viewport);
+    }
+
+    /// [`Self::add_with_id`] with the record's colour dword as given, its alpha byte the line's
+    /// starting alpha: `AddMessage` without a colour copies the frame font's whole dword
+    /// (`0x792b39`-`0x792b45`) and the store keeps it (`0x7881f9`-`0x7881fe`).
+    pub fn add_packed(
+        &mut self,
+        text: String,
+        color: crate::color::Rgba8,
+        id: u32,
+        viewport: impl Into<Viewport>,
+    ) {
         let viewport = viewport.into();
         self.lines_gen = self.lines_gen.wrapping_add(1);
         let scrolled_up = self.scroll_offset > 0;
@@ -194,10 +210,10 @@ impl ScrollingMessageState {
         let line = MessageLine {
             text,
             id,
-            color: [quantize_u8(r), quantize_u8(g), quantize_u8(b)],
+            color: [color.r, color.g, color.b],
             time_left: self.time_visible,
             fade_left: self.fade_duration,
-            alpha: 1.0,
+            alpha: f32::from(color.a) / 255.0,
             rows: 1,
             rows_key: 0,
         };

@@ -298,29 +298,16 @@ pub(super) fn ensure_font_region(
 
 impl UiScript {
     pub(super) fn message_frame_font(model: &Model, fh: FrameHandle) -> MessageFont {
-        model
-            .arena
-            .frame(fh)
-            .and_then(|frame| {
-                frame
-                    .regions
-                    .iter()
-                    .find(|&&rh| {
-                        matches!(
-                            model.arena.region(rh).map(|r| r.kind),
-                            Some(crate::widget::RegionKind::FontString)
-                        )
-                    })
-                    .and_then(|rh| model.region_data.get(rh))
-                    .map(|d| MessageFont {
-                        path: d.font_path.clone(),
-                        height: d.font_height,
-                        shadow: d.font_shadow,
-                        outline: d.outline,
-                        monochrome: d.monochrome,
-                        justify_h: d.justify.paint_h(),
-                        spacing: d.spacing,
-                    })
+        Self::message_font_region(model, fh)
+            .and_then(|rh| model.region_data.get(&rh))
+            .map(|d| MessageFont {
+                path: d.font_path.clone(),
+                height: d.font_height,
+                shadow: d.font_shadow,
+                outline: d.outline,
+                monochrome: d.monochrome,
+                justify_h: d.justify.paint_h(),
+                spacing: d.spacing,
             })
             .unwrap_or(MessageFont {
                 path: None,
@@ -331,6 +318,30 @@ impl UiScript {
                 justify_h: JustifyH::Left,
                 spacing: 0.0,
             })
+    }
+
+    /// The frame font's packed text colour (`[font+0x58]`, which `SetTextColor` writes), opaque
+    /// white (the ctor's `-1`, `0x783a8e`) when the frame has no font region.
+    pub(super) fn message_frame_color(model: &Model, fh: FrameHandle) -> crate::color::Rgba8 {
+        Self::message_font_region(model, fh)
+            .and_then(|rh| model.region_data.get(&rh))
+            .map_or(crate::color::Rgba8::WHITE, |d| d.vertex_color_or_white())
+    }
+
+    /// The FontString region a message frame's font lives on, if it has one.
+    fn message_font_region(model: &Model, fh: FrameHandle) -> Option<crate::widget::RegionHandle> {
+        model.arena.frame(fh).and_then(|frame| {
+            frame
+                .regions
+                .iter()
+                .find(|&&rh| {
+                    matches!(
+                        model.arena.region(rh).map(|r| r.kind),
+                        Some(crate::widget::RegionKind::FontString)
+                    )
+                })
+                .copied()
+        })
     }
 
     /// How many rows the plain frame `fh`'s resolved rect holds at its font's pitch, its capacity

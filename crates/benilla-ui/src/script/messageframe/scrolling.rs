@@ -70,8 +70,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The justify quartet, on both classes ([`super::install_justify`]).
     super::install_justify(lua, &m)?;
 
-    // AddMessage(text [, r, g, b [, id]]) (`0x792900`): white without rgb; the state quantizes
-    // the colour and makes the line opaque. The rgb test is three `lua_isnumber` checks; the id
+    // AddMessage(text [, r, g, b [, id]]) (`0x792900`): the state quantizes the colour and makes
+    // the line opaque; without rgb the line takes the frame font's packed colour, alpha included
+    // (`0x792b39`-`0x792b45`). The rgb test is three `lua_isnumber` checks; the id
     // is stack index 6 when they pass (`0x792b13`) and index 3, `r`'s, when they fail
     // (`0x792b48`), which makes `AddMessage(text, id)` work and gives
     // `AddMessage(text, nil, nil, nil, nil, 5)` id 0. A missing id is 0, which `UpdateColorByID`
@@ -89,13 +90,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // `lua_isnumber`-gated `_ftol` (`0x792b1b`, `0x792b4f`); 0 when the gate fails.
                 let id = is_number(lua, if has_rgb { &id } else { &r })
                     .map_or(0, |n| crate::script::binding_abi::ftol(n) as u32);
-                let (r, g, b) = if has_rgb {
-                    (channel(lua, &r), channel(lua, &g), channel(lua, &b))
-                } else {
-                    (1.0, 1.0, 1.0)
+                if has_rgb {
+                    let (r, g, b) = (channel(lua, &r), channel(lua, &g), channel(lua, &b));
+                    return with_viewport(lua, &this, |smf, rows| {
+                        smf.add_with_id(text, r, g, b, id, rows);
+                    });
+                }
+                let color = {
+                    let h = frame_handle_of(lua, &this)?;
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    UiScript::message_frame_color(&model, h)
                 };
                 with_viewport(lua, &this, |smf, rows| {
-                    smf.add_with_id(text, r, g, b, id, rows);
+                    smf.add_packed(text, color, id, rows);
                 })
             },
         )?,
@@ -1174,6 +1181,54 @@ mod tests {
         );
     }
 
+    /// Without rgb a line takes the frame font's packed colour, its alpha byte the line's starting
+    /// alpha (`0x792b39`-`0x792b45`); with rgb it is opaque. A re-arm makes it opaque (`0x788b09`).
+    #[test]
+    fn an_uncoloured_message_takes_the_frame_fonts_colour() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            "BenillaMF = CreateFrame('ScrollingMessageFrame') \
+             BenillaMF:AddMessage('plain') \
+             BenillaMF:SetTextColor(1, 0.82, 0) \
+             BenillaMF:AddMessage('gold', 7) \
+             BenillaMF:AddMessage('given', 0, 0, 1) \
+             BenillaMF:SetTextColor(1, 1, 1, 0.5) \
+             BenillaMF:AddMessage('half') \
+             BenillaFont = CreateFont('BenillaFont') \
+             BenillaFont:SetTextColor(0, 1, 0) \
+             BenillaMF2 = CreateFrame('ScrollingMessageFrame') \
+             BenillaMF2:SetFontObject(BenillaFont) \
+             BenillaMF2:AddMessage('inherited')",
+        )
+        .unwrap();
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+        let frame: mlua::Table = s.eval("return BenillaMF").unwrap();
+        let lines: Vec<([u8; 3], f32, u32)> = super::with_smf(s.lua(), &frame, |smf| {
+            smf.lines.iter().map(|l| (l.color, l.alpha, l.id)).collect()
+        })
+        .unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                ([255, 255, 255], 1.0, 0),
+                ([255, 209, 0], 1.0, 7),
+                ([0, 0, 255], 1.0, 0),
+                ([255, 255, 255], 128.0 / 255.0, 0),
+            ]
+        );
+        let other: mlua::Table = s.eval("return BenillaMF2").unwrap();
+        let inherited = super::with_smf(s.lua(), &other, |smf| smf.lines[0].color).unwrap();
+        assert_eq!(
+            inherited,
+            [0, 255, 0],
+            "a font object's colour reaches the line"
+        );
+        s.run("BenillaMF:ScrollUp() BenillaMF:ScrollDown()")
+            .unwrap();
+        let alpha: f32 = super::with_smf(s.lua(), &frame, |smf| smf.lines[3].alpha).unwrap();
+        assert_eq!(alpha, 1.0, "a scroll re-arms the line opaque");
+    }
+
     #[test]
     fn update_color_by_id_recolours_only_that_ids_lines() {
         let mut smf = ScrollingMessageState::default();
@@ -1234,7 +1289,7 @@ mod tests {
         s.run("CF:SetMaxLines(128)").unwrap();
         assert_eq!(s.eval::<i64>("return CF:GetMaxLines()").unwrap(), 128);
         s.run("CF:AddMessage('one', 1, 1, 1)").unwrap();
-        s.run("CF:AddMessage('two')").unwrap(); // rgb-less form defaults white
+        s.run("CF:AddMessage('two')").unwrap(); // rgb-less: the font's colour, here white
         assert_eq!(s.eval::<i64>("return CF:GetNumMessages()").unwrap(), 2);
         assert!(s.eval::<bool>("return CF:AtBottom()").unwrap());
         s.run("CF:ScrollUp()").unwrap();
