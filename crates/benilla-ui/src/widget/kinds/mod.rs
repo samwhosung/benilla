@@ -722,14 +722,30 @@ impl ModelState {
     }
 }
 
-/// A Minimap frame's own state: its engine children. Everything else the minimap shows is one
-/// process-wide set of statics ([`MinimapStatics`]), as the reference keeps it.
+/// A Minimap frame's own state: its engine children and the sizes its ctor froze. Everything else
+/// the minimap shows is one process-wide set of statics ([`MinimapStatics`]), as the reference
+/// keeps it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MinimapState {
+    /// The party and pet arrows (`[Minimap+0x320]`), engine children 1 to 5.
+    pub group_arrows: Vec<FrameHandle>,
+    /// The landmark and static-blip rim arrows (`[Minimap+0x314]`), engine children 6 to 8.
+    pub rim_arrows: Vec<FrameHandle>,
     /// The player-arrow `Model` (`[Minimap+0x338]`), reached by `SetPlayerFacing` (`0x4eb8e0`).
-    /// Set by `WidgetArena::create` on insert, as the ctor builds its children.
     pub player_arrow: Option<FrameHandle>,
+    /// The minimap's level plus 3 (`+0x334`, `0x4ede48`, again at `0x4ee1a3`), the rim arrows'
+    /// level base.
+    pub level_base: i32,
+    /// The ctor's `G48 · 5/3` (`0x4edc42`, `0x4edc47`), 1.0 at 4:3, every blip size's factor.
+    pub base: f32,
 }
+
+/// The disc's size in layout units over [`MinimapState::base`], `[0x807a44]` (`0x4edcaf`): the
+/// eight arrow frames' width and height.
+pub const MINIMAP_DISC: f32 = 0.11;
+
+/// The arrow frames' model scale, `[0x807a28]` (`0x4edeb2`).
+pub const MINIMAP_ARROW_SCALE: f32 = 0.6;
 
 /// The minimap's statics, one set for every Minimap frame: the zoom cells, outdoor `0x86f698`
 /// (CVar `minimapZoom`) and indoor `0x86f69c` (CVar `minimapInsideZoom`, radii
@@ -894,6 +910,12 @@ pub const MINIMAP_DEFAULT_MASK: &str = "Textures\\MinimapMask";
 /// unloadable file (`0x4ee286`): five rim and party arrows, three POI arrows, the player arrow;
 /// addons (Questie, pfQuest) read `({Minimap:GetChildren()})[9]` as the player arrow.
 pub const MINIMAP_ENGINE_CHILDREN: usize = 9;
+
+/// The `[Minimap+0x320]` group's size, the party and pet arrows.
+pub const MINIMAP_GROUP_ARROWS: usize = 5;
+
+/// The `[Minimap+0x314]` group's size, the landmark rim arrows.
+pub const MINIMAP_RIM_ARROWS: usize = 3;
 
 /// The default `minimapArrowModel` (`0x84c768`), applied to engine children 1 to 8 (`0x4ee170`).
 pub const MINIMAP_DEFAULT_ARROW_MODEL: &str = "Interface\\Minimap\\Rotating-MinimapArrow.mdx";

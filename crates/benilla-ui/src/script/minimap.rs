@@ -48,6 +48,78 @@ fn frame_name(lua: &Lua, h: FrameHandle) -> String {
         .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
+/// The `CMinimap` ctor's nine `Model` children (`0x4edbc0`), made with the minimap as parent, so
+/// at its stratum and its level plus one: five party and pet arrows (`0x4ede72`), three rim
+/// arrows (`0x4edf1f`) and the player arrow (`0x4edfae`). Each is anchored CENTER on the
+/// minimap's CENTER (`0x767c70(4, minimap, 4, x, y)`): the eight at offset 0 (`0x4ede8b`,
+/// `0x4edf38`), each the disc's size (`[0xbc7970]` through slots 5 and 6, `0x4ede9e`, `0x4edeaf`),
+/// model scale 0.6 (`0x4edeba`) and hidden (`0x4edece`, `0x4edf7b`); the five relevelled to the
+/// minimap's level plus 2 (`0x4edee0`); the player arrow at offset 0.001 each way (`0x4edfd1`),
+/// sized by its file, at model scale `G48 · 5/3` (`0x4edfec`) and left shown.
+pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
+    use crate::layout::{Anchor, Point};
+    let hide = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let Some((strata, level)) = model.arena.frame(minimap).map(|f| (f.strata, f.level)) else {
+            return;
+        };
+        let base = super::worldmap_arrow::g48(&model) * (5.0 / 3.0);
+        let unit = model.layout_unit();
+        let units = model.layout_units();
+        let minimap_id = model.frame_id(minimap);
+        let disc = crate::widget::MINIMAP_DISC * base * unit;
+        let mut children = Vec::with_capacity(crate::widget::MINIMAP_ENGINE_CHILDREN);
+        for i in 0..crate::widget::MINIMAP_ENGINE_CHILDREN {
+            let child = model.arena.create(FrameKind::Model, None, Some(minimap));
+            model.arena.set_frame_strata(child, strata);
+            let lift = if i < crate::widget::MINIMAP_GROUP_ARROWS {
+                2
+            } else {
+                1
+            };
+            model
+                .arena
+                .set_frame_level(child, level.saturating_add(lift), false);
+            let player = i + 1 == crate::widget::MINIMAP_ENGINE_CHILDREN;
+            let offset = if player { 0.001 * unit } else { 0.0 };
+            let input = model.layout_inputs.entry(child).or_default();
+            input.anchors.set(
+                Anchor::new(Point::Center, minimap_id, Point::Center, offset, offset),
+                units,
+            );
+            if !player {
+                input.width = disc;
+                input.height = disc;
+            }
+            model.invalidate_frame(child, true);
+            if let Some(KindState::Model(m)) =
+                model.arena.frame_mut(child).map(|f| &mut f.kind_state)
+            {
+                m.scale = if player {
+                    base
+                } else {
+                    crate::widget::MINIMAP_ARROW_SCALE
+                };
+            }
+            children.push(child);
+        }
+        let (arrows, player) = children.split_at(crate::widget::MINIMAP_ENGINE_CHILDREN - 1);
+        if let Some(KindState::Minimap(m)) =
+            model.arena.frame_mut(minimap).map(|f| &mut f.kind_state)
+        {
+            m.group_arrows = arrows[..crate::widget::MINIMAP_GROUP_ARROWS].to_vec();
+            m.rim_arrows = arrows[crate::widget::MINIMAP_GROUP_ARROWS..].to_vec();
+            m.player_arrow = player.first().copied();
+            m.level_base = i32::from(level) + 3;
+            m.base = base;
+        }
+        arrows.to_vec()
+    };
+    for child in hide {
+        super::visibility::set_shown(lua, child, false);
+    }
+}
+
 /// The model half of `CMinimap::LoadXML` (`0x4ee2b0`): `minimapArrowModel` to engine children 1
 /// to 8 (`0x4ee170`), `minimapPlayerModel` to child 9 alone (`0x4ee260`). Runs before the
 /// `<Frames>` descent, as the reference chains to `CSimpleFrame::LoadXML` (`0x76a2f0`) after.

@@ -81,7 +81,7 @@ impl Arrow {
 
 /// `G48` (`0x832a48`), the Y half-extent of the reference's layout space: `1/√(A² + 1)` for the
 /// screen's aspect `A`, 0.6 at 4:3.
-fn g48(model: &Model) -> f32 {
+pub(super) fn g48(model: &Model) -> f32 {
     let (w, h) = (model.screen.width(), model.screen.height());
     let a = if h > 0.0 { w / h } else { 4.0 / 3.0 };
     1.0 / (a * a + 1.0).sqrt()

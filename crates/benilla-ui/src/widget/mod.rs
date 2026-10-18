@@ -136,9 +136,10 @@ pub use kinds::{
     MinimapState, MinimapStatics, ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState,
     PaneArm, PaneCopy, RegionKind, ScrollFrameState, ScrollingMessageState, SequenceFacts,
     ShownWrites, SliderState, StatusBarState, TooltipAnchor, TooltipState, Viewport,
-    ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND, MINIMAP_DEFAULT_ARROW_MODEL,
-    MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM,
-    MINIMAP_ENGINE_CHILDREN, MINIMAP_INDOOR_RADII, MINIMAP_ZOOM_CHUNKS, MINIMAP_ZOOM_LEVELS,
+    ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND, MINIMAP_ARROW_SCALE,
+    MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL,
+    MINIMAP_DEFAULT_ZOOM, MINIMAP_DISC, MINIMAP_ENGINE_CHILDREN, MINIMAP_GROUP_ARROWS,
+    MINIMAP_INDOOR_RADII, MINIMAP_RIM_ARROWS, MINIMAP_ZOOM_CHUNKS, MINIMAP_ZOOM_LEVELS,
     TOOLTIP_COLUMN_GAP, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PLATE_PAD, TOOLTIP_WRAP_WIDTH,
     TURN_HOLD_MS,
 };
@@ -664,9 +665,6 @@ impl WidgetArena {
         }
         if matches!(kind, FrameKind::Minimap) {
             self.minimap_kinds.push(handle);
-            // The `CMinimap` ctor's last act, so a `CreateFrame("Minimap")` has its nine children
-            // before its `OnLoad` too.
-            self.build_minimap_engine_children(handle);
         }
         handle
     }
@@ -689,18 +687,6 @@ impl WidgetArena {
             s.text_region = text;
             s.selection_regions = selection;
             s.caret_region = caret;
-        }
-    }
-
-    /// Build a Minimap's nine engine `Model` children, the ninth its player arrow. They are born
-    /// anonymous and without a model file; `CMinimap::LoadXML` (`0x4ee2b0`) assigns the paths.
-    fn build_minimap_engine_children(&mut self, minimap: FrameHandle) {
-        let mut ninth = None;
-        for _ in 0..kinds::MINIMAP_ENGINE_CHILDREN {
-            ninth = Some(self.create(FrameKind::Model, None, Some(minimap)));
-        }
-        if let Some(KindState::Minimap(m)) = self.frame_mut(minimap).map(|f| &mut f.kind_state) {
-            m.player_arrow = ninth;
         }
     }
 

@@ -648,3 +648,59 @@ fn the_icon_and_blip_setters_replace_their_atlases_with_their_own_texts() {
     // Each slot is its own: the mask stands.
     assert_eq!(art(&s, MinimapArtSlot::Mask), None);
 }
+
+/// The ctor's nine children (`0x4edbc0`): all anchored CENTER on the minimap's CENTER, the eight
+/// arrow frames the disc's size, scaled 0.6 and hidden, the first five a level above the other
+/// four, and the player arrow left shown at 0.001 layout units off centre, scaled `G48 · 5/3`.
+#[test]
+fn the_engine_children_are_anchored_sized_and_hidden_as_the_ctor_leaves_them() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"p = CreateFrame("Frame", "Holder") p:SetFrameLevel(4)
+           m = CreateFrame("Minimap", "TestMinimap", p)
+           m:SetWidth(140) m:SetHeight(140) m:SetPoint("CENTER", 0, 0)
+           kids = {m:GetChildren()}"#,
+    )
+    .unwrap();
+    s.resolve();
+    let level = s.eval::<i64>("return m:GetFrameLevel()").unwrap();
+    for i in 1..=9 {
+        let get = |what: &str| format!("local c = kids[{i}] return {what}");
+        let (point, rel, rel_point, x, y) = s
+            .eval::<(String, String, String, f64, f64)>(&get(
+                "(function() local a, r, b, x, y = c:GetPoint(1) return a, r:GetName(), b, x, y end)()",
+            ))
+            .unwrap();
+        assert_eq!(
+            (point.as_str(), rel.as_str(), rel_point.as_str()),
+            ("CENTER", "TestMinimap", "CENTER"),
+            "child {i}"
+        );
+        let shown = s.eval::<bool>(&get("c:IsShown() == 1")).unwrap();
+        let child_level = s.eval::<i64>(&get("c:GetFrameLevel()")).unwrap();
+        let scale = s.eval::<f64>(&get("c:GetModelScale()")).unwrap();
+        if i < 9 {
+            // 0.11 layout units at 4:3, where a layout unit is 1280 FrameXML units.
+            let w = s.eval::<f64>(&get("c:GetWidth()")).unwrap();
+            let h = s.eval::<f64>(&get("c:GetHeight()")).unwrap();
+            assert!(
+                (w - 140.8).abs() < 1e-3 && (h - 140.8).abs() < 1e-3,
+                "child {i}: {w}x{h}"
+            );
+            assert!(!shown, "child {i} is hidden");
+            assert!((scale - 0.6).abs() < 1e-6, "child {i}: {scale}");
+            assert!((x, y) == (0.0, 0.0), "child {i}: {x},{y}");
+            let want = if i <= 5 { level + 2 } else { level + 1 };
+            assert_eq!(child_level, want, "child {i}");
+        } else {
+            assert!(shown, "the player arrow stays shown");
+            assert!(
+                (x - 1.28).abs() < 1e-3 && (y - 1.28).abs() < 1e-3,
+                "{x},{y}"
+            );
+            assert!((scale - 1.0).abs() < 1e-6, "G48 · 5/3 is 1 at 4:3: {scale}");
+            assert_eq!(child_level, level + 1);
+        }
+    }
+}

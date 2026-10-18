@@ -674,7 +674,7 @@ pub(super) fn create_frame(
     });
 
     // Create in the arena, mint the id, seed a default layout input. All under one write borrow.
-    let id = {
+    let (id, h) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let h = model.arena.create(frame_kind, name, parent_handle);
         if frame_kind == FrameKind::WorldFrame {
@@ -700,8 +700,13 @@ pub(super) fn create_frame(
         model.layout_load_begin(h);
         // No handler is bound yet, so the resolve this owes fires nothing.
         let _ = model.layout_load_end(h);
-        id
+        (id, h)
     };
+    // The `CMinimap` ctor's last act, so a `CreateFrame("Minimap")` has its nine children before
+    // its `OnLoad` too.
+    if frame_kind == FrameKind::Minimap {
+        super::minimap::build_engine_children(lua, h);
+    }
 
     // The wrapper exists, published under its name, before the template's `OnLoad` runs inside
     // this call, so the handler can reach the frame by name.
