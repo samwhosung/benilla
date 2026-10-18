@@ -236,7 +236,9 @@ impl Loader<'_> {
         for el in children_named(el, "PushedTextOffset") {
             let d = self.dimension(el);
             if d.ok {
-                self.call(wrapper, "SetPushedTextOffset", (d.v[0], d.v[1]), dbg);
+                let [x, y] = d.script(self.model().layout_units());
+                self.call(wrapper, "SetPushedTextOffset", (x, y), dbg);
+                crate::script::xml_layout::pushed_text_offset(self.lua, wrapper, d.v);
             }
         }
         // The three embedded fonts and their colours, in document order (`0x7788c0`): each font

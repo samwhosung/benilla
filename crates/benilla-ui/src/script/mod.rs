@@ -199,6 +199,7 @@ mod who_sort;
 mod worldmap;
 mod worldstate;
 mod worn_display;
+pub(crate) mod xml_layout;
 mod zone_text;
 
 pub use action::{ActionSlot, ActionState, ActionUse};

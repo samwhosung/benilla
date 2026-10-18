@@ -19,6 +19,9 @@ impl Loader<'_> {
             }
         };
         self.call(wrapper, "SetBackdrop", table, dbg);
+        if let Some(v) = parts.edge_size {
+            crate::script::xml_layout::edge_size(self.lua(), wrapper, v);
+        }
         if let Some(c) = parts.color {
             self.call(wrapper, "SetBackdropColor", c.fractions(), dbg);
         }
@@ -37,7 +40,7 @@ impl Loader<'_> {
             let is = |t: &str| child.tag.eq_ignore_ascii_case(t);
             if is("TileSize") {
                 if let Some(v) = self.value_read(child) {
-                    out.tile_size = Some(v);
+                    out.tile_size = Some(v.script(self.model().layout_units()));
                 }
             } else if is("EdgeSize") {
                 if let Some(v) = self.value_read(child) {
@@ -77,7 +80,7 @@ impl Loader<'_> {
             t.set("tile", true)?;
         }
         if let Some(v) = parts.edge_size {
-            t.set("edgeSize", v)?;
+            t.set("edgeSize", v.script(self.model().layout_units()))?;
         }
         if let Some(v) = parts.tile_size {
             t.set("tileSize", v)?;
@@ -97,7 +100,7 @@ impl Loader<'_> {
 #[derive(Default)]
 struct BackdropChildren {
     tile_size: Option<f32>,
-    edge_size: Option<f32>,
+    edge_size: Option<crate::layout::Len>,
     insets: Option<[f32; 4]>,
     color: Option<crate::color::Rgba8>,
     border_color: Option<crate::color::Rgba8>,

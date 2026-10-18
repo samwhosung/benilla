@@ -120,9 +120,10 @@ impl Loader<'_> {
         // A `<Size>` outside them is not clamped.
         for rb in children_named(el, "ResizeBounds") {
             for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
+                let units = self.model().layout_units();
                 let [x, y] = children_named(rb, tag)
                     .next()
-                    .map_or([0.0; 2], |d| self.dimension(d).v);
+                    .map_or([0.0; 2], |d| self.dimension(d).script(units));
                 self.call(wrapper, verb, (x, y), dbg);
             }
         }
@@ -189,8 +190,10 @@ impl Loader<'_> {
         if let Some(size) = children_named(node, "Size").next() {
             let d = self.dimension(size);
             if d.ok {
-                self.call_on(wrapper, region, "SetWidth", d.v[0], dbg);
-                self.call_on(wrapper, region, "SetHeight", d.v[1], dbg);
+                let [w, h] = d.script(self.model().layout_units());
+                self.call_on(wrapper, region, "SetWidth", w, dbg);
+                self.call_on(wrapper, region, "SetHeight", h, dbg);
+                crate::script::xml_layout::size(self.lua, wrapper, region, d.v);
             }
         }
         let set_all_points = node.attr_is_true("setAllPoints");

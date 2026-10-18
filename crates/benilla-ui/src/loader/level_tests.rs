@@ -1339,12 +1339,8 @@ fn the_xml_length_readers_read_the_first_child_only() {
         "an unknown first child: nothing set"
     );
     assert_eq!(size("LenOwn"), [10.0, 20.0]);
-    // 0.1 and 0.05 layout units at 4:3, where one is 1280 FrameXML units.
-    let rel = size("LenRel");
-    assert!(
-        (rel[0] - 128.0).abs() < 1e-3 && (rel[1] - 64.0).abs() < 1e-3,
-        "{rel:?}"
-    );
+    // 0.1 and 0.05 layout units at 4:3, where `G` reads them as 128 and 64.
+    assert_eq!(size("LenRel"), [128.0, 64.0]);
     assert_eq!(
         got("LenOffset:GetLeft(), LenOffset:GetBottom()"),
         [5.0, 0.0]
@@ -1862,4 +1858,43 @@ fn a_padded_frame_strata_attribute_misses() {
         "{:?}",
         report.warnings
     );
+/// A `<Rel…>` child's numbers are layout units, stored as parsed (`0x6f2037`-`0x6f2060`), so each
+/// getter answers `G` of them: at 16:9, 0.1 reads 156.651185208989, where the number scaled to
+/// FrameXML units and stored by `S` would read 156.6511677018557.
+#[test]
+fn a_rel_length_is_stored_in_layout_units() {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 576.0);
+    load_str(
+        &s,
+        r#"<Ui>
+            <Button name="RelBox">
+                <Size><RelDimension x="0.1" y="0.05"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT">
+                    <Offset><RelDimension x="0.03" y="-0.0123"/></Offset>
+                </Anchor></Anchors>
+                <PushedTextOffset><RelDimension x="0.03" y="-0.0123"/></PushedTextOffset>
+                <Layers><Layer>
+                    <FontString name="RelText" font="Fonts\FRIZQT__.TTF">
+                        <FontHeight val="12"/>
+                        <Shadow><Offset><RelDimension x="0.03" y="-0.0123"/></Offset></Shadow>
+                    </FontString>
+                </Layer></Layers>
+            </Button>
+        </Ui>"#,
+    );
+    s.resolve();
+    let pair = |code: &str| s.eval::<(f64, f64)>(code).unwrap();
+    let off = (46.995_352_061_270_04, -19.268_094_870_334_718);
+    assert_eq!(
+        pair("return RelBox:GetWidth(), RelBox:GetHeight()"),
+        (156.651_185_208_989, 78.325_592_604_494_5)
+    );
+    assert_eq!(
+        pair("local _, _, _, x, y = RelBox:GetPoint(1) return x, y"),
+        off
+    );
+    assert_eq!(pair("return RelBox:GetPushedTextOffset()"), off);
+    assert_eq!(pair("return RelText:GetShadowOffset()"), off);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

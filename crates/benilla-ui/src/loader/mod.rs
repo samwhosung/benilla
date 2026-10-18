@@ -14,6 +14,7 @@ use mlua::{Function, ObjectLike, Table, Value};
 
 use crate::framexml::{self, Element, ParsedDocument, ScriptRef, TopLevel};
 use crate::justify;
+use crate::layout::Len;
 use crate::script::{Outline, UiScript};
 use crate::status;
 
@@ -1007,13 +1008,15 @@ impl Loader<'_> {
         } = d;
         // The first `<Offset>`, read whatever it answers, after the target's miss and self tests
         // (`0x767946`-`0x7679ad`), so a skipped anchor reads none.
-        let [x, y] = offset.map_or([0.0; 2], |o| self.dimension(&o).v);
-        let args = (point, rel, rel_point, x, y);
+        let v = offset.map_or([Len::Script(0.0); 2], |o| self.dimension(&o).v);
+        let [x, y] = v.map(|l| l.script(self.model().layout_units()));
+        let args = (point.clone(), rel, rel_point, x, y);
         if region {
             self.call_region(&wrapper, "SetPoint", args, &dbg);
         } else {
             self.call(&wrapper, "SetPoint", args, &dbg);
         }
+        crate::script::xml_layout::offset(self.lua, &wrapper, region, &point, v);
     }
 
     /// Apply the anchors deferred since `mark`, in order; a target still missing now warns.
@@ -1047,20 +1050,28 @@ impl Loader<'_> {
 
 /// What one of the reference's XML length readers answers (`XmlReadDimension 0x6f1eb0`,
 /// `XmlReadValue 0x6f1d60`, `XmlReadInset 0x6f20a0`): the values, zeroed and then written where
-/// read, in FrameXML units, and whether the read succeeded. A failure keeps what was written
-/// before it, which a caller that ignores the answer reads (`0x7679ad`, `0x77142d`, `0x771146`).
+/// read, and whether the read succeeded. A failure keeps what was written before it, which a
+/// caller that ignores the answer reads (`0x7679ad`, `0x77142d`, `0x771146`).
 pub(super) struct XmlLength<const N: usize> {
-    pub(super) v: [f32; N],
+    pub(super) v: [Len; N],
     pub(super) ok: bool,
+}
+
+impl<const N: usize> XmlLength<N> {
+    /// The values as script numbers, for a cell benilla keeps as one: a layout length through `G`.
+    pub(super) fn script(&self, units: crate::layout::LayoutUnits) -> [f32; N] {
+        self.v.map(|l| l.script(units))
+    }
 }
 
 impl Loader<'_> {
     /// The readers' one node rule: the node's own non-empty `keys` through `SStrToFloat`, then its
     /// first child only. With none, the read succeeds when `gate` is present, else it logs
-    /// `missing` with the node's tag and fails (`0x6f1f44`-`0x6f1f55`). An `abs` child's own
-    /// non-empty `keys` overwrite; a `rel` child's are raw layout units, `layout_unit` FrameXML
-    /// units each (`0x6f2037`-`0x6f2060`, no conversion); any other child logs `0x871464` and
-    /// fails (`0x6f2070`).
+    /// `missing` with the node's tag and fails (`0x6f1f44`-`0x6f1f55`). The node's own and an
+    /// `abs` child's non-empty `keys` are script numbers the reader stores by `S` (`0x6f1ee3`-
+    /// `0x6f1f02`, `0x6f1f9f`-`0x6f1fc1`), the child's overwriting; a `rel` child's are layout
+    /// units, stored as parsed (`0x6f2037`-`0x6f2060`); any other child logs `0x871464` and fails
+    /// (`0x6f2070`).
     fn xml_length<const N: usize>(
         &mut self,
         el: &Element,
@@ -1069,15 +1080,15 @@ impl Loader<'_> {
         child: (&str, &str),
         missing: &str,
     ) -> XmlLength<N> {
-        let mut v = [0.0; N];
-        let read = |src: &Element, v: &mut [f32; N], unit: f32| {
+        let mut v = [Len::Script(0.0); N];
+        let read = |src: &Element, v: &mut [Len; N], unit: fn(f32) -> Len| {
             for (slot, key) in v.iter_mut().zip(keys) {
                 if let Some(x) = xml_float_attr(src, key) {
-                    *slot = x * unit;
+                    *slot = unit(x);
                 }
             }
         };
-        read(el, &mut v, 1.0);
+        read(el, &mut v, Len::Script);
         let ok = match el.children.first() {
             None if el.attr(gate).is_some() => true,
             None => {
@@ -1085,12 +1096,11 @@ impl Loader<'_> {
                 false
             }
             Some(c) if c.tag.eq_ignore_ascii_case(child.0) => {
-                read(c, &mut v, 1.0);
+                read(c, &mut v, Len::Script);
                 true
             }
             Some(c) if c.tag.eq_ignore_ascii_case(child.1) => {
-                let unit = self.model().layout_unit();
-                read(c, &mut v, unit);
+                read(c, &mut v, Len::Layout);
                 true
             }
             Some(c) => {
@@ -1117,14 +1127,17 @@ impl Loader<'_> {
 
     /// `XmlReadValue` (`0x6f1d60`): the `val` of a `<FontHeight>`, `<EdgeSize>` or `<TileSize>`
     /// (`0x8714a4`).
+    /// In script units, for a cell benilla keeps as a script number.
     pub(super) fn value(&mut self, el: &Element) -> f32 {
         let missing = r#"No "val" attribute in element: "#;
+        let units = self.model().layout_units();
         self.xml_length(el, ["val"], "val", ("AbsValue", "RelValue"), missing)
-            .v[0]
+            .script(units)[0]
     }
 
-    /// [`Self::value`] with its answer, for a caller that checks it (`0x77e779`, `0x77e7ae`).
-    pub(super) fn value_read(&mut self, el: &Element) -> Option<f32> {
+    /// [`Self::value`] with its answer and its unit, for a caller that checks it (`0x77e779`,
+    /// `0x77e7ae`).
+    pub(super) fn value_read(&mut self, el: &Element) -> Option<Len> {
         let missing = r#"No "val" attribute in element: "#;
         let r = self.xml_length(el, ["val"], "val", ("AbsValue", "RelValue"), missing);
         r.ok.then_some(r.v[0])
@@ -1135,8 +1148,9 @@ impl Loader<'_> {
     pub(super) fn inset(&mut self, el: &Element) -> Option<[f32; 4]> {
         let missing = r#"No "right", "left", "top", or "bottom" attributes in element: "#;
         let keys = ["left", "right", "top", "bottom"];
+        let units = self.model().layout_units();
         let r = self.xml_length(el, keys, "bottom", ("AbsInset", "RelInset"), missing);
-        r.ok.then_some(r.v)
+        r.ok.then_some(r.script(units))
     }
 
     /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
@@ -1146,7 +1160,7 @@ impl Loader<'_> {
     /// they stand for would ([`crate::layout::Len::Layout`]).
     pub(super) fn shadow_of(&mut self, sh: &Element) -> crate::script::FontShadow {
         let offset = match children_named(sh, "Offset").next() {
-            Some(o) => self.dimension(o).v.map(crate::layout::Len::Script),
+            Some(o) => self.dimension(o).v,
             None => crate::script::FontShadow::DEFAULT_OFFSET,
         };
         let color = children_named(sh, "Color")
