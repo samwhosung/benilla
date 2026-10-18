@@ -34,83 +34,82 @@ fn with_scroll<T>(
     }
 }
 
-/// The axis of an offset or a range. `0x786e30` computes both ranges in one pass over one subtree
-/// union: `[+0x31c] = max(0, maxRIGHT − minLEFT − width) / scale`, and `[+0x320]` the same with
-/// top, bottom and height.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-/// One range as the recompute `0x786e30` measures it: `max(0, content − frame)` from the resolved
-/// rects. The content is the scroll child's whole subtree, not its own rect
-/// (`0x786e30` calls the recursive `0x786f80`): stock `ItemTextPageScrollChild` is 10×10 around a
-/// 270×304 SimpleHTML (`ItemTextFrame.xml:198`). Each extent is divided by its frame's effective
-/// scale, since the offset is in local units; a range in screen px under-scrolls a scaled frame.
-fn scroll_range(model: &Model, h: FrameHandle, axis: Axis) -> f32 {
+/// Both ranges as the recompute `0x786e30` measures them in one pass, `[horizontal, vertical]`.
+/// The content box is the scroll child's whole subtree, not its own rect (`0x786e30` calls the
+/// recursive `0x786f80`): stock `ItemTextPageScrollChild` is 10×10 around a 270×304 SimpleHTML
+/// (`ItemTextFrame.xml:198`). Its left and bottom start at `f32::MAX` and its right and top at 0
+/// (`0x786e5d`, `0x786e64`). Each range is the box's extent less the frame's (`0x786e84`), raised to 0
+/// when not above it, NaN included (`0x786e8f`), times the reciprocal of the scroll frame's own
+/// effective scale (`+0x7c`): at full precision for the horizontal (`0x786e9f`-`0x786eaa`), rounded
+/// to f32 for the vertical (`0x786ea5`, `0x786ece`). The child's own scale is never read.
+fn scroll_ranges(model: &Model, h: FrameHandle) -> [f32; 2] {
     let child = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Scroll(s)) => s.child,
         _ => None,
     };
-    let Some(child) = child else { return 0.0 };
-    let scale_of = |f: FrameHandle| {
-        model
-            .arena
-            .frame(f)
-            .map(|x| x.effective_scale)
-            .filter(|s| s.abs() >= 1e-6)
-            .unwrap_or(1.0)
+    let (Some(child), Some(frame), Some(rect)) =
+        (child, model.arena.frame(h), model.resolved.get(&h))
+    else {
+        return [0.0, 0.0];
     };
-    let Some(viewport) = model.resolved.get(&h).map(|r| {
-        let extent = match axis {
-            Axis::Horizontal => r.width(),
-            Axis::Vertical => r.height(),
-        };
-        extent / scale_of(h)
-    }) else {
-        return 0.0;
+    let mut content = SpanBox {
+        left: f32::MAX,
+        bottom: f32::MAX,
+        right: 0.0,
+        top: 0.0,
     };
-    let Some((far, near)) = subtree_span(model, child, axis) else {
-        return 0.0;
-    };
-    ((far - near) / scale_of(child) - viewport).max(0.0)
+    join_subtree(model, child, &mut content);
+    let floor = |x: f64| if x > 0.0 { x } else { 0.0 };
+    let inv = 1.0 / f64::from(frame.effective_scale);
+    let x =
+        floor(f64::from(content.right) - f64::from(content.left) - f64::from(rect.width())) * inv;
+    let y = floor(f64::from(content.top) - f64::from(content.bottom) - f64::from(rect.height()))
+        * f64::from(inv as f32);
+    [x as f32, y as f32]
 }
 
-/// The span of `f`'s subtree along `axis` in screen px, as `(far, near)`: its own rect unioned with
-/// its shown regions and visible child frames, recursively (`0x786f80`). Hidden parts add no range:
-/// the client guards both lists on visibility.
-fn subtree_span(model: &Model, f: FrameHandle, axis: Axis) -> Option<(f32, f32)> {
-    let edges = |r: &crate::layout::Rect| match axis {
-        Axis::Horizontal => (r.right, r.left),
-        Axis::Vertical => (r.top, r.bottom),
+/// The content box `0x786f80` grows, in the layout's units.
+struct SpanBox {
+    left: f32,
+    bottom: f32,
+    right: f32,
+    top: f32,
+}
+
+impl SpanBox {
+    /// Grow to cover `r`; a NaN edge leaves the box's (the unordered compares keep it).
+    fn join(&mut self, r: &crate::layout::Rect) {
+        self.left = self.left.min(r.left);
+        self.bottom = self.bottom.min(r.bottom);
+        self.right = self.right.max(r.right);
+        self.top = self.top.max(r.top);
+    }
+}
+
+/// `0x786f80`: join `f`'s own resolved rect, shown or not (`0x786fb0`), each shown region's
+/// (`0x78703b`), and recursively each child frame whose own shown bit is set (`+0xd0`,
+/// `0x7870e0`), so a shown descendant of a hidden scroll child still counts. A part with no
+/// resolved rect adds nothing.
+fn join_subtree(model: &Model, f: FrameHandle, content: &mut SpanBox) {
+    let Some(frame) = model.arena.frame(f) else {
+        return;
     };
-    let frame = model.arena.frame(f)?;
-    let mut span: Option<(f32, f32)> = model.resolved.get(&f).map(edges);
-    let union = |s: &mut Option<(f32, f32)>, far: f32, near: f32| {
-        *s = Some(match *s {
-            Some((of, on)) => (of.max(far), on.min(near)),
-            None => (far, near),
-        });
-    };
+    if let Some(r) = model.resolved.get(&f) {
+        content.join(r);
+    }
     for &rh in &frame.regions {
         if model.region_data.get(&rh).is_some_and(|d| d.hidden) {
             continue;
         }
         if let Some(r) = model.region_resolved.get(&rh) {
-            let (far, near) = edges(r);
-            union(&mut span, far, near);
+            content.join(r);
         }
     }
     for &ch in &frame.children {
-        if !model.arena.frame(ch).is_some_and(|c| c.effective_visible) {
-            continue;
-        }
-        if let Some((far, near)) = subtree_span(model, ch, axis) {
-            union(&mut span, far, near);
+        if model.arena.frame(ch).is_some_and(|c| c.shown) {
+            join_subtree(model, ch, content);
         }
     }
-    span
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -173,15 +172,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SetVerticalScroll(px) (`0x786db0`): stores the offset unclamped (`[+0x328]`), re-anchors the
-    // child (`0x787100`) and fires `OnVerticalScroll(self, offset)`, all only on a change; the
-    // reference skips a change under 2⁻²² from the old offset, where this compares bits. The range
-    // is never read here: every clamp is FrameXML's, through the scroll bar's min and max.
+    // child (`0x787100`) and fires `OnVerticalScroll(self, offset)`, all only on a change: one
+    // under 2⁻²² in the reference's layout units (`0x786dc2`, [`Model::size_eps`] in ours) is
+    // dropped whole, and a NaN, unordered, always stores and fires (`0x786dcd`). The range is
+    // never read here: every clamp is FrameXML's, through the scroll bar's min and max.
     m.set(
         "SetVerticalScroll",
         lua.create_function(|lua, (this, px): (Table, f32)| {
+            let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
             let changed = with_scroll(lua, &this, |s| {
-                let changed = s.vertical.to_bits() != px.to_bits();
-                s.vertical = px;
+                let changed = moved(s.vertical, px, eps);
+                if changed {
+                    s.vertical = px;
+                }
                 changed
             })?;
             if !changed {
@@ -210,9 +213,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetHorizontalScroll",
         lua.create_function(|lua, (this, px): (Table, f32)| {
+            let eps = lua.app_data_ref::<Model>().expect("model").size_eps();
             let changed = with_scroll(lua, &this, |s| {
-                let changed = s.horizontal.to_bits() != px.to_bits();
-                s.horizontal = px;
+                let changed = moved(s.horizontal, px, eps);
+                if changed {
+                    s.horizontal = px;
+                }
                 changed
             })?;
             if !changed {
@@ -239,6 +245,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.set_named_registry_value(REG_SCROLLFRAME_METHODS, m)?;
     Ok(())
+}
+
+/// Whether `new` is a change from `old` by the reference's `fabs; fcomp [0x8029d4]; test ah,5`
+/// (`0x786dc2`, `0x786ede`): at least `eps` apart, or unordered, so a NaN is always a change.
+fn moved(old: f32, new: f32, eps: f64) -> bool {
+    let d = (f64::from(new) - f64::from(old)).abs();
+    d >= eps || d.is_nan()
 }
 
 /// Fire `On{Vertical,Horizontal}Scroll(self, offset)`, the reference's script slots `[+0x334]` and
@@ -284,18 +297,14 @@ pub(super) fn update(lua: &Lua, h: FrameHandle) {
             return;
         }
         let has_child = s.child.is_some();
-        let measured = (rect.is_some() && has_child).then(|| {
-            [
-                scroll_range(&model, h, Axis::Horizontal),
-                scroll_range(&model, h, Axis::Vertical),
-            ]
-        });
+        let measured = (rect.is_some() && has_child).then(|| scroll_ranges(&model, h));
         let Some(s) = scroll_state(&mut model, h) else {
             return;
         };
         let moved = measured.filter(|new| {
             let old = std::mem::replace(&mut s.range, *new);
-            (0..2).any(|i| (f64::from(new[i]) - f64::from(old[i])).abs() >= eps)
+            // Unless both moved under 2^-22 (`0x786ede`, `0x786ef2`): a NaN fires.
+            (0..2).any(|i| moved(old[i], new[i], eps))
         });
         if moved.is_none() {
             s.range_dirty = false;

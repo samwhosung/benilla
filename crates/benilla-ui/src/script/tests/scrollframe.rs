@@ -1116,3 +1116,115 @@ fn a_sub_threshold_jitter_does_not_mark_the_range() {
     assert_eq!(ranged(&s), (2, 499.0, 499.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+// ── The range in the scroll frame's scale, and the offset tolerance ─────────────────────────
+
+/// The vertical range of `SF` after a recompute.
+fn y_range(s: &mut UiScript) -> f32 {
+    s.resolve();
+    s.tick(0.016);
+    s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap()
+}
+
+/// `0x786e30` takes the content box less the frame's size and multiplies it by the reciprocal of
+/// the scroll frame's own scale (`+0x7c`, `0x786e9f`); the child's scale is never read. A
+/// half-scale 600-tall child is 300 tall on screen, 100 over a 200-tall unscaled frame.
+#[test]
+fn the_range_is_in_the_scroll_frames_scale_alone() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        local child = CreateFrame("Frame", "Child")
+        child:SetWidth(300); child:SetHeight(600)
+        child:SetScale(0.5)
+        frame:SetScrollChild(child)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(y_range(&mut s), 100.0, "(300 - 200) / 1");
+
+    // A parentless child keeps scale 1 under a double-scale frame: (600 - 400) / 2.
+    s.run("Child:SetScale(1) SF:SetScale(2) SF:UpdateScrollChildRect()")
+        .unwrap();
+    assert_eq!(y_range(&mut s), 100.0, "(600 - 400) / 2");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// `0x786f80` joins a child frame by its own shown bit (`+0xd0`, `0x7870e0`) and the scroll child
+/// itself with no shown test (`0x786fb0`), so once laid out, a hidden scroll child's shown tall
+/// descendant still makes a range (a hidden frame's layout is deferred, its rect kept).
+#[test]
+fn a_hidden_scroll_childs_shown_descendant_counts() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        local child = CreateFrame("Frame", "Child")
+        child:SetWidth(300); child:SetHeight(100)
+        local tall = CreateFrame("Frame", "Tall", child)
+        tall:SetPoint("TOPLEFT", child, "TOPLEFT", 0, 0)
+        tall:SetWidth(300); tall:SetHeight(600)
+        frame:SetScrollChild(child)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(y_range(&mut s), 400.0, "600 - 200");
+    s.run("Child:Hide() SF:UpdateScrollChildRect()").unwrap();
+    assert_eq!(y_range(&mut s), 400.0, "through the hidden child");
+    s.run("Tall:Hide() SF:UpdateScrollChildRect()").unwrap();
+    assert_eq!(y_range(&mut s), 0.0, "a hidden descendant adds nothing");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// `0x786db0`/`0x786d30` drop a change under 2^-22 in the layout's units (`0x786dc2`), storing and
+/// firing nothing, and store and fire a NaN every time (the unordered compare, `0x786dcd`).
+#[test]
+fn an_offset_change_under_the_tolerance_is_dropped_and_nan_always_fires() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        V, H = 0, 0
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        frame:SetScript("OnVerticalScroll", function() V = V + 1 end)
+        frame:SetScript("OnHorizontalScroll", function() H = H + 1 end)
+        local child = CreateFrame("Frame", "Child")
+        child:SetWidth(300); child:SetHeight(600)
+        frame:SetScrollChild(child)
+    "#,
+    )
+    .unwrap();
+    // 2^-22 times the layout unit of an 800x600 screen, 768 * 5/3.
+    let eps = crate::layout::SIZE_EPS * 1280.0;
+    for (set, get, count) in [
+        ("SetVerticalScroll", "GetVerticalScroll", "V"),
+        ("SetHorizontalScroll", "GetHorizontalScroll", "H"),
+    ] {
+        s.run(&format!("SF:{set}(10)")).unwrap();
+        s.run(&format!("SF:{set}({})", 10.0 + eps / 2.0)).unwrap();
+        assert_eq!(s.eval::<f64>(&format!("return {count}")).unwrap(), 1.0);
+        assert_eq!(
+            s.eval::<f64>(&format!("return SF:{get}()")).unwrap(),
+            10.0,
+            "{set}: the sub-tolerance change is not stored"
+        );
+        s.run(&format!("SF:{set}({})", 10.0 + eps * 2.0)).unwrap();
+        assert_eq!(s.eval::<f64>(&format!("return {count}")).unwrap(), 2.0);
+        s.run(&format!("SF:{set}(0/0) SF:{set}(0/0)")).unwrap();
+        assert_eq!(
+            s.eval::<f64>(&format!("return {count}")).unwrap(),
+            4.0,
+            "{set}: NaN fires each time"
+        );
+    }
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
