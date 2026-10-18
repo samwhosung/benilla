@@ -286,6 +286,135 @@ mod tests {
         );
     }
 
+    /// A minimal V1 archive holding stored files, its tables encrypted as the reader expects: the
+    /// MPQ string hash and table cipher, written out here since `benilla-mpq` keeps its own private.
+    fn fixture_mpq(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut table = [0u32; 0x500];
+        let mut seed: u32 = 0x0010_0001;
+        for i in 0..0x100 {
+            for j in 0..5 {
+                seed = (seed * 125 + 3) % 0x2A_AAAB;
+                let hi = (seed & 0xFFFF) << 16;
+                seed = (seed * 125 + 3) % 0x2A_AAAB;
+                table[i + j * 0x100] = hi | (seed & 0xFFFF);
+            }
+        }
+        let hash = |name: &str, kind: usize| {
+            let (mut s1, mut s2): (u32, u32) = (0x7FED_7FED, 0xEEEE_EEEE);
+            for b in name.bytes() {
+                let ch = b.to_ascii_uppercase() as u32;
+                s1 = table[kind + ch as usize] ^ s1.wrapping_add(s2);
+                s2 = ch
+                    .wrapping_add(s1)
+                    .wrapping_add(s2)
+                    .wrapping_add(s2 << 5)
+                    .wrapping_add(3);
+            }
+            s1
+        };
+        let encrypt = |data: &mut [u32], mut key: u32| {
+            let mut seed: u32 = 0xEEEE_EEEE;
+            for v in data.iter_mut() {
+                seed = seed.wrapping_add(table[0x400 + (key & 0xFF) as usize]);
+                let plain = *v;
+                *v = plain ^ key.wrapping_add(seed);
+                key = (!key << 0x15).wrapping_add(0x1111_1111) | (key >> 0x0B);
+                seed = plain
+                    .wrapping_add(seed)
+                    .wrapping_add(seed << 5)
+                    .wrapping_add(3);
+            }
+        };
+        const SLOTS: usize = 16;
+        let hash_pos = 32u32;
+        let block_pos = hash_pos + SLOTS as u32 * 16;
+        let mut data_pos = block_pos + files.len() as u32 * 16;
+        let mut hashes = vec![0xFFFF_FFFFu32; SLOTS * 4];
+        let mut blocks = Vec::new();
+        let mut body = Vec::new();
+        for (i, (name, bytes)) in files.iter().enumerate() {
+            let mut slot = hash(name, 0) as usize & (SLOTS - 1);
+            while hashes[slot * 4 + 3] != 0xFFFF_FFFF {
+                slot = (slot + 1) & (SLOTS - 1);
+            }
+            hashes[slot * 4..slot * 4 + 4].copy_from_slice(&[
+                hash(name, 0x100),
+                hash(name, 0x200),
+                0,
+                i as u32,
+            ]);
+            blocks.extend([
+                data_pos,
+                bytes.len() as u32,
+                bytes.len() as u32,
+                0x8000_0000,
+            ]);
+            body.extend_from_slice(bytes);
+            data_pos += bytes.len() as u32;
+        }
+        encrypt(&mut hashes, hash("(hash table)", 0x300));
+        encrypt(&mut blocks, hash("(block table)", 0x300));
+        let mut out = Vec::new();
+        for w in [
+            0x1A51_504D,
+            32,
+            data_pos,
+            0,
+            hash_pos,
+            block_pos,
+            SLOTS as u32,
+        ] {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+        // The 16-bit format version and block size shift (bytes 12..16) stay 0.
+        for w in hashes.into_iter().chain(blocks) {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// The walk reads the patches and `speech2.MPQ` in mount order, then `interface.MPQ`, and no
+    /// other base archive, each listfile's lines as written.
+    #[test]
+    fn the_archive_walk_reads_the_patches_then_interface_mpq() {
+        let dir = std::env::temp_dir().join(format!(
+            "benilla-chain-walk-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for archive in [
+            "interface.MPQ",
+            "model.MPQ",
+            "dbc.MPQ",
+            "patch.MPQ",
+            "patch-2.MPQ",
+            "speech2.MPQ",
+        ] {
+            let line = format!("X\\{archive}\r\nY\\{archive}\r\n");
+            std::fs::write(
+                dir.join(archive),
+                fixture_mpq(&[("(listfile)", line.as_bytes())]),
+            )
+            .unwrap();
+        }
+        let chain = Chain::open(&dir).expect("open the fixture chain");
+        let walked = chain.enumerate_archive_files("x\\");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            walked,
+            [
+                "X\\patch.MPQ",
+                "X\\patch-2.MPQ",
+                "X\\speech2.MPQ",
+                "X\\interface.MPQ"
+            ]
+        );
+    }
+
     fn owned(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| n.to_string()).collect()
     }
