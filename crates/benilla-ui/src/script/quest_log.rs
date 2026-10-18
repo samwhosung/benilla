@@ -1679,6 +1679,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     fn watch_id_at(model: &Model, index: u32) -> Option<u32> {
         model.quest_row(index as usize).map(|e| e.quest_id)
     }
+    // `AddQuestWatch` (`0x4e1930`) and `RemoveQuestWatch` (`0x4e1970`): a `lua_isnumber` argument
+    // (`0x4e1938`, `0x4e1978`) is a row, `_ftol`ed and looked up by `0x4df150`; a miss takes the
+    // selected quest's id (`0xbb7480`, `0x4e195c`, `0x4e199c`), which `SelectQuestLogEntry` only
+    // ever sets to a quest, never a header. Either way an id of 0 does nothing.
+    fn watch_target(lua: &Lua, model: &Model, arg: Value) -> Option<u32> {
+        match crate::script::binding_abi::is_number(lua, arg) {
+            Some(n) => watch_id_at(model, crate::script::binding_abi::ftol(n) as u32),
+            None => model
+                .quest_row(model.quest_log_selection as usize)
+                .filter(|r| !r.is_header)
+                .map(|r| r.quest_id),
+        }
+    }
     // The share button enables on `GetQuestLogPushable() and GetNumPartyMembers() > 0`
     // (`QuestLogFrame.lua:301`) and clicks `QuestLogPushQuest()` (`QuestLogFrame.xml:512`), both
     // about the selection. `GetQuestLogPushable` answers 1 or nil, never false (`0x4e12b0`).
@@ -1735,9 +1748,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "AddQuestWatch",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(id) = watch_id_at(&model, i) {
+            if let Some(id) = watch_target(lua, &model, i) {
                 if !model.quest_log_watched.contains(&id) && model.quest_log_watched.len() < 5 {
                     model.quest_log_watched.push(id);
                 }
@@ -1747,9 +1760,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "RemoveQuestWatch",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(id) = watch_id_at(&model, i) {
+            if let Some(id) = watch_target(lua, &model, i) {
                 model.quest_log_watched.retain(|w| *w != id);
             }
             Ok(())
@@ -2889,6 +2902,31 @@ mod tests {
         s.run("AddQuestWatch(2)").unwrap();
         seat(&mut s, &[]);
         assert_eq!(s.eval::<i64>("return GetNumQuestWatches()").unwrap(), 0);
+    }
+
+    /// `AddQuestWatch` and `RemoveQuestWatch` (`0x4e1930`, `0x4e1970`): an argument that fails
+    /// `lua_isnumber` (`0x4e1938`, `0x4e1978`) takes the selected quest's id (`0xbb7480`,
+    /// `0x4e195c`, `0x4e199c`) and raises nothing; a number is a row, and the selection stays out
+    /// of it.
+    #[test]
+    fn a_non_number_watches_the_selected_quest() {
+        for arg in ["", "nil", "'x'", "{}", "true"] {
+            let mut s = two_quests();
+            s.run("SelectQuestLogEntry(3)").unwrap(); // quest 7
+            s.run(&format!("AddQuestWatch({arg})")).unwrap();
+            assert_eq!(s.quest_log_watched(), vec![7], "AddQuestWatch({arg})");
+            s.run("SelectQuestLogEntry(2)").unwrap(); // quest 783
+            s.run(&format!("RemoveQuestWatch({arg})")).unwrap();
+            assert_eq!(s.quest_log_watched(), vec![7], "other quest, Remove({arg})");
+            s.run("SelectQuestLogEntry(3)").unwrap();
+            s.run(&format!("RemoveQuestWatch({arg})")).unwrap();
+            assert!(s.quest_log_watched().is_empty(), "RemoveQuestWatch({arg})");
+        }
+        // A number is a row whatever is selected; a numeric string counts as one.
+        let mut s = two_quests();
+        s.run("SelectQuestLogEntry(2)").unwrap();
+        s.run("AddQuestWatch('3')").unwrap();
+        assert_eq!(s.quest_log_watched(), vec![7]);
     }
 
     /// The prune (`0x4de7a7` to `0x4de80f`) counts folded quests; a collapse never prunes.
