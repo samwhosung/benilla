@@ -391,8 +391,19 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain(),
             )
-            // In the feed phase, so an `OnUpdate` reads this frame's `GetFramerate()`.
+            // `GetFramerate()`'s ring, a static of the client's that no reload or logout
+            // resets: the feed hands a new VM its rate before the tick, and each world frame's
+            // step joins the ring after its paint, standing for `CGWorldFrame::OnRender`
+            // (`0x482ea0`), so an `OnUpdate` reads the frames before its own.
+            .init_resource::<WorldFrameTimes>()
             .add_systems(Update, feed_framerate.in_set(UiFeed))
+            .add_systems(
+                Update,
+                record_world_frame_time
+                    .after(UiPaint)
+                    .after(WorldStage::Present)
+                    .run_if(in_state(crate::client_state::ClientState::InWorld)),
+            )
             // The input pass hit-tests the rects the tick just resolved, and runs in-world only or
             // on the stock glue screens.
             .init_resource::<UiPassState>()
@@ -503,29 +514,27 @@ pub(crate) use lifecycle::{
     finish_ui_load, is_emote_token_line, seat_from_roster, shutdown_ui_state,
 };
 
-/// `GetFramerate()`'s host half: FPS on the frame step the UI ticks on, smoothed by a one-second
-/// pole; how the reference averages it is untraced.
-fn feed_framerate(
+/// The 30 world-frame times `GetFramerate()` averages (`0xc631c8`).
+#[derive(Resource, Default)]
+struct WorldFrameTimes(benilla_ui::script::FrameTimeRing);
+
+/// `GetFramerate()`'s rate as the ring stands, for the tick about to run.
+fn feed_framerate(script: Option<NonSendMut<UiScript>>, times: Res<WorldFrameTimes>) {
+    if let Some(mut script) = script {
+        script.set_framerate(times.0.rate());
+    }
+}
+
+/// One world frame's step into the ring (`0x672700`), the elapsed every `OnUpdate` was handed.
+fn record_world_frame_time(
     script: Option<NonSendMut<UiScript>>,
     step: Res<benilla_world::frame_pace::FrameStep>,
-    mut smoothed: Local<f64>,
+    mut times: ResMut<WorldFrameTimes>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let dt = step.delta.as_secs_f64();
-    if dt <= 0.0 {
-        return; // the first frame, or a paused one
+    times.0.push(step.delta.as_secs_f32());
+    if let Some(mut script) = script {
+        script.set_framerate(times.0.rate());
     }
-    let instant = 1.0 / dt;
-    // One-pole IIR with a 1 s time constant, frame-rate independent.
-    let alpha = (dt / 1.0).min(1.0);
-    *smoothed = if *smoothed <= 0.0 {
-        instant
-    } else {
-        *smoothed + alpha * (instant - *smoothed)
-    };
-    script.set_framerate(*smoothed);
 }
 
 /// Synthetic player and target snapshots for a server-less UI capture, and its first events once.

@@ -58,6 +58,7 @@ mod addon_enable;
 pub mod addon_gate;
 mod char_name;
 mod client;
+pub use client::FrameTimeRing;
 mod clock;
 mod cvar_checks;
 mod cvars;

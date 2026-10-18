@@ -1270,7 +1270,7 @@ pub(crate) struct Model {
     /// `GetSummonConfirmSummoner()` calls that answered no name: each call's lookup passes the
     /// callback `0x48b710` (`0x48b6e1`), which the app makes.
     pub(crate) summon_summoner_lookups: u32,
-    /// `GetFramerate()`, pushed each tick.
+    /// `GetFramerate()`, pushed after each world frame; the empty ring's 1000 until then.
     pub(crate) framerate: f64,
     /// `(shift, ctrl, alt)` for `Is*KeyDown`, pushed before the frame's mouse events.
     pub(crate) modifiers: (bool, bool, bool),
@@ -1819,7 +1819,7 @@ impl Model {
             summon_confirm: super::summon::SummonConfirmUiState::default(),
             summon_confirms: 0,
             summon_summoner_lookups: 0,
-            framerate: 0.0,
+            framerate: 1000.0,
             modifiers: (false, false, false),
             money: 0,
             net_latency_ms: 0,
