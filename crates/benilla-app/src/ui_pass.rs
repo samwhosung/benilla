@@ -127,6 +127,9 @@ pub(crate) struct UiQuadMask {
     pub texture: Handle<Image>,
     /// The span it covers, in [`UiQuad::rect`]'s y-down logical px; it samples 0..1 across it.
     pub rect: Rect,
+    /// The mask's stage modulates colour too, so the quad's colour is times the mask texel's RGB
+    /// (combine preset 1 on stage 1); off, only its alpha is coverage.
+    pub modulate_rgb: bool,
 }
 
 impl Default for UiQuad {
@@ -231,6 +234,9 @@ pub(crate) struct UiQuadMaterial {
     #[texture(5)]
     #[sampler(6)]
     mask: Option<Handle<Image>>,
+    /// The mask texel's RGB multiplies the colour ([`UiQuadMask::modulate_rgb`]).
+    #[uniform(12)]
+    mask_rgb: u32,
     /// `(u_min, v_min, u_max, v_max)`; `min > max` on an axis disables that axis.
     #[uniform(11)]
     uv_clamp: Vec4,
@@ -282,6 +288,7 @@ impl UiQuadMaterial {
             // The alpha-test arm decodes explicitly, so the tile's SKIP_DECODE holds without this.
             gamma_texel: 0,
             mask_rect: Vec4::new(0.0, 0.0, -1.0, -1.0),
+            mask_rgb: 0,
             mask: None,
             uv_clamp: UV_CLAMP_OFF,
         }
@@ -732,6 +739,7 @@ type MatKey = (
     Option<AssetId<Image>>,
     [u32; 4],
     [u32; 4],
+    bool,
 );
 
 /// The [`UiQuadMaterial::uv_clamp`] that clamps neither axis: `min > max` turns an axis off.
@@ -1015,6 +1023,7 @@ fn rebuild_ui_mesh(
             ),
             None => (Vec4::new(0.0, 0.0, -1.0, -1.0), None),
         };
+        let mask_rgb = run.mask.as_ref().is_some_and(|m| m.modulate_rgb);
         if *UI_PROBE && run.mask.is_some() {
             info!(
                 "ui probe: masked run {i}: mask_rect={mask_rect:?} scale={scale} tex={:?}",
@@ -1034,6 +1043,7 @@ fn rebuild_ui_mesh(
             mask.as_ref().map(bevy::asset::Handle::id),
             mask_rect.to_array().map(f32::to_bits),
             uv_clamp.to_array().map(f32::to_bits),
+            mask_rgb,
         );
         // The per-slot skip gate: a rebuild covers the whole stream, but a slot whose run matches
         // its pooled mesh in full is not rewritten. A one-colour run stores white vertices and
@@ -1074,6 +1084,7 @@ fn rebuild_ui_mesh(
                     gamma_texel: u32::from(run.gamma_texel),
                     mask_rect,
                     mask: mask.clone(),
+                    mask_rgb: u32::from(mask_rgb),
                     uv_clamp,
                 })
             })
@@ -1461,6 +1472,49 @@ mod tests {
             flags,
             vec![0, 1],
             "one material greys and one does not — the uniform the shader branches on"
+        );
+    }
+
+    /// A minimap tile's mask modulates colour as well as alpha (stage 1 at combine preset 1,
+    /// `0x4eae83`), so the mask's RGB reaches the material as its own uniform: a tile and the
+    /// interior blit under one mask cannot share a run.
+    #[test]
+    fn a_colour_modulating_mask_splits_the_run_and_lands_on_the_material() {
+        let mut app = rebuild_app();
+        let texture: Handle<Image> =
+            bevy::asset::uuid_handle!("d0000000-0000-4000-8000-0000000000c1");
+        let mask = |modulate_rgb| UiQuadMask {
+            texture: texture.clone(),
+            rect: Rect::new(0.0, 0.0, 128.0, 64.0),
+            modulate_rgb,
+        };
+        let mut quads = app.world_mut().resource_mut::<UiQuads>();
+        quads.quads.push(UiQuad {
+            rect: Rect::new(0.0, 0.0, 64.0, 64.0),
+            z_key: 1,
+            mask: Some(mask(true)),
+            ..default()
+        });
+        quads.quads.push(UiQuad {
+            rect: Rect::new(64.0, 0.0, 128.0, 64.0),
+            z_key: 2,
+            mask: Some(mask(false)),
+            ..default()
+        });
+        quads.dirty = true;
+        app.update();
+        let mut flags: Vec<u32> = app
+            .world_mut()
+            .resource::<Assets<UiQuadMaterial>>()
+            .iter()
+            .filter(|(_, m)| m.mask.is_some())
+            .map(|(_, m)| m.mask_rgb)
+            .collect();
+        flags.sort_unstable();
+        assert_eq!(
+            flags,
+            vec![0, 1],
+            "one masked run modulates colour, one does not"
         );
     }
 

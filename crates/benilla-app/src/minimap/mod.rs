@@ -428,9 +428,18 @@ fn emit_minimap(
     // The drawn family's world-to-px scale, for the point blips drawn after the tiles.
     let mut blip_px_per_yd = 0.0_f32;
 
+    // The outdoor tile binds the mask to stage 1 with preset 1, modulate on colour and alpha
+    // (`0x4eae74`, `0x4eae83`), so the tile's colour is times the mask's RGB too. The interior
+    // blit binds it (`0x4ec668`) without setting the stage's preset, which it inherits, untraced,
+    // so it keeps the coverage alone.
     let mask = assets.tex(MinimapArtSlot::Mask).map(|m| UiQuadMask {
         texture: m.clone(),
         rect: slot.rect,
+        modulate_rgb: false,
+    });
+    let tile_mask = mask.clone().map(|m| UiQuadMask {
+        modulate_rgb: true,
+        ..m
     });
 
     let interior = minimap_interior(&player, &instances, &wmos, &world, &asset_server);
@@ -615,7 +624,7 @@ fn emit_minimap(
                     gamma_texel: true,
                     // No CPU clip: the mask shader zeroes everything outside `mask_rect`, and an
                     // unclipped panning tile is a pure translation that never rewrites its mesh.
-                    mask: mask.clone(),
+                    mask: tile_mask.clone(),
                     ..default()
                 });
             }

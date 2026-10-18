@@ -94,6 +94,9 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 // The UV window this quad may sample, `(u_min, v_min, u_max, v_max)`, inset half a texel so a
 // magnified atlas cell never filters in its neighbour; `min > max` leaves an axis unclamped.
 @group(2) @binding(11) var<uniform> uv_clamp: vec4<f32>;
+// The mask's stage modulates colour as well as alpha (combine preset 1, the outdoor minimap tile's
+// stage 1, `0x4eae83`): the colour is times the mask texel's bytes.
+@group(2) @binding(12) var<uniform> mask_rgb: u32;
 
 // BT.601 luma, `Desaturate.bls`'s `c[0]` as f32 words `0x3E991687`, `0x3F1645A2`, `0x3DE978D5`.
 // Do not normalise: they sum just above 1.0 and white relies on the output clamp.
@@ -148,8 +151,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if mask_rect.z > mask_rect.x {
         let muv = (in.position.xy - mask_rect.xy) / (mask_rect.zw - mask_rect.xy);
         let inside = f32(all(muv >= vec2<f32>(0.0)) && all(muv <= vec2<f32>(1.0)));
-        let cover = textureSampleLevel(mask_texture, mask_sampler, clamp(muv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).a;
-        m *= cover * inside;
+        let ms = textureSampleLevel(mask_texture, mask_sampler, clamp(muv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+        m *= ms.a * inside;
+        if mask_rgb != 0u {
+            rgb *= ms.rgb;
+        }
     }
     let k = c.a * m;
     // Alpha test: returns the linear texel, not `rgb`, because it draws only into the minimap's
