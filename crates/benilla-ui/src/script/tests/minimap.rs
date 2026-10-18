@@ -1025,3 +1025,29 @@ fn a_resize_to_a_new_aspect_reseats_what_the_ctor_took_from_the_cells() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The disc `[0xbc7970]` is the unstored `G48 · 5/3` times 0.11, stored once (`0x4edc42`–
+/// `0x4edcaf`), pinned bit for bit. At 16:10 it is one ulp under `0.11 · RN24(G48 · 5/3)`.
+#[test]
+fn the_disc_is_the_unrounded_base_times_its_factor_stored_once() {
+    let disc = |s: &UiScript| -> Vec<u32> {
+        let model = s.model_ref();
+        model
+            .arena
+            .minimap_kinds()
+            .iter()
+            .filter_map(|&h| match model.arena.frame(h).map(|f| &f.kind_state) {
+                Some(crate::widget::KindState::Minimap(m)) => Some(m.disc.to_bits()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut s = script();
+    s.set_window_size(1024.0, 768.0);
+    s.run(r#"CreateFrame("Minimap", "Disc")"#).unwrap();
+    assert_eq!(disc(&s), vec![0x3de1_47ad], "4:3");
+    s.set_window_size(1920.0, 1080.0);
+    assert_eq!(disc(&s), vec![0x3db8_13a5], "16:9");
+    s.set_window_size(1920.0, 1200.0);
+    assert_eq!(disc(&s), vec![0x3dc6_ff37], "16:10");
+}

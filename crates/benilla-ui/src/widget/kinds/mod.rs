@@ -738,10 +738,13 @@ pub struct MinimapState {
     pub level_base: i32,
     /// The ctor's `G48 · 5/3` (`0x4edc42`, `0x4edc47`), about 1 at 4:3, every blip size's factor.
     pub base: f32,
+    /// The disc, `[0xbc7970]` (`0x4edcaf`), in layout units: the arrow frames' size and the rim
+    /// arrows' orbit.
+    pub disc: f32,
 }
 
-/// The disc's size in layout units over [`MinimapState::base`], `[0x807a44]` (`0x4edcaf`): the
-/// eight arrow frames' width and height.
+/// `[0x807a44]`, the disc's factor on the unstored `G48 · 5/3` (`0x4edca9`); the disc itself is
+/// [`MinimapState::disc`].
 pub const MINIMAP_DISC: f32 = 0.11;
 
 /// The arrow frames' model scale, `[0x807a28]` (`0x4edeb2`).
