@@ -18,12 +18,12 @@ mod feed;
 pub(crate) mod net;
 mod pets;
 mod records;
-#[cfg(test)]
-pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};
 pub(crate) use feed::{
-    raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
+    drain_party, raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
     GROUP_MEMBER_SUBGROUP,
 };
+#[cfg(test)]
+pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};
 pub(crate) use records::record_notices;
 
 pub(crate) struct UiPartyPlugin;

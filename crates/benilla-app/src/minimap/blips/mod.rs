@@ -299,11 +299,11 @@ pub(super) fn rim_arrow_records(
 
 /// A party member's position: the streamed transform, else the `PARTY_MEMBER_STATS` position
 /// (whole yards on the wire).
-pub(crate) fn party_member_pos(
+pub(crate) fn party_member_pos<F: bevy::ecs::query::QueryFilter>(
     m: &benilla_protocol::messages::GroupMemberEntry,
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
-    unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
+    unit_pos: &Query<&GlobalTransform, F>,
 ) -> Option<(f32, f32)> {
     if let Some(tf) = guids.0.get(&m.guid).and_then(|e| unit_pos.get(*e).ok()) {
         let w = bevy_to_wow(tf.translation());
@@ -325,13 +325,13 @@ pub(crate) fn party_member_pos(
 /// at `Importance` -1 and exempt from the 694.444-yd cut, taking one of the three rim slots. So
 /// there is no pet arrow here, the corpse arrow takes the pet's frame, and four rim arrows can
 /// draw where the reference draws three.
-pub(super) fn group_arrow_records(
+pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     wx: f32,
     wy: f32,
     radius_yd: f32,
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
-    unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
+    unit_pos: &Query<&GlobalTransform, F>,
     corpse: Option<[f32; 3]>,
 ) -> [Option<(f32, u16)>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
     let out_of_range =

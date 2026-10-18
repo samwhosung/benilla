@@ -794,7 +794,7 @@ fn member_for_token<'a>(group: &'a GroupState, token: &str) -> Option<&'a GroupM
 }
 
 /// Drain the Lua party intents into their `CMSG_*` sends.
-pub(super) fn drain_party(
+pub(crate) fn drain_party(
     script: Option<NonSendMut<UiScript>>,
     mut group: ResMut<GroupState>,
     selection: Res<Selection>,

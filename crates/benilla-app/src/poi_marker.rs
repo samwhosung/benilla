@@ -77,7 +77,11 @@ impl PoiMarker {
 }
 
 /// Clears the marker on arrival or at its deadline, once a frame as the minimap driver does.
-fn expire_marker(mut marker: ResMut<PoiMarker>, player: Res<Player>, time: Res<Time<Real>>) {
+pub(crate) fn expire_marker(
+    mut marker: ResMut<PoiMarker>,
+    player: Res<Player>,
+    time: Res<Time<Real>>,
+) {
     let Some(poi) = &marker.poi else {
         return;
     };
@@ -95,7 +99,7 @@ fn expire_marker(mut marker: ResMut<PoiMarker>, player: Res<Player>, time: Res<T
 }
 
 /// World entry clears the slot (`zone_rebuild`): a worldport or a logout.
-fn clear_on_world_entry(
+pub(crate) fn clear_on_world_entry(
     mut marker: ResMut<PoiMarker>,
     mut worldports: MessageReader<WorldportMessage>,
     mut logged_out: MessageReader<LoggedOutMessage>,

@@ -848,7 +848,14 @@ fn feed_minimap_arrows(
     poi_marker: Res<crate::poi_marker::PoiMarker>,
     group: Res<crate::ui_party::GroupState>,
     guids: Res<crate::net::GuidIndex>,
-    unit_pos: Query<&GlobalTransform, With<crate::net::NetEntity>>,
+    // Never a world camera, so it shares nothing with the camera pose's write.
+    unit_pos: Query<
+        &GlobalTransform,
+        (
+            With<crate::net::NetEntity>,
+            Without<benilla_world::view::WorldCamera>,
+        ),
+    >,
     death_net: Res<crate::death::DeathNet>,
     inside: Res<MinimapInside>,
     mut listed: Local<crate::ui_script::VmMemo<Option<Vec<blips::ArrowKey>>>>,
@@ -953,9 +960,19 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_inside.in_set(crate::ui_script::UiFeed),
                     // Before the script tick, so an addon's OnUpdate reads this frame's heading.
                     feed_minimap_player_facing.in_set(crate::ui_script::UiFeed),
-                    // After the tick, before the paint that draws the arrows.
+                    // After this frame's movement and stream, the art the tick set and
+                    // every drain that moves a group, death or marker record, before the paint
+                    // that draws the arrows, as the reference aims them inside its draw.
                     feed_minimap_arrows
-                        .after(crate::ui_script::UiInput)
+                        .after(crate::vplates::VPlateSet)
+                        .after(benilla_world::schedule::WorldStage::Stream)
+                        .after(crate::player::release_post_snap_hold)
+                        .after(crate::ui_chat::ChatDrain)
+                        .after(crate::ui_party::drain_party)
+                        .after(crate::death::drain_death)
+                        .after(crate::poi_marker::expire_marker)
+                        .after(crate::poi_marker::clear_on_world_entry)
+                        .after(feed_minimap_art)
                         .before(crate::ui_script::UiPaint),
                     // After the tick that can set the art, before the emit that draws with it.
                     feed_minimap_art
@@ -969,10 +986,15 @@ impl Plugin for MinimapPlugin {
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
                     ping::drop_inbound_pings
+                        .after(ping::drive_minimap_ping)
                         .in_set(crate::ui_script::UiFeed)
                         .run_if(not(crate::ui_script::ingame_ui_up)),
-                    // After the tick whose `PingLocation` calls it sends.
-                    ping::send_own_pings.after(crate::ui_script::UiInput),
+                    // After the tick whose `PingLocation` calls it sends, and the chat and group
+                    // drains, so a ping from a slash handler goes against this frame's roster.
+                    ping::send_own_pings
+                        .after(crate::ui_chat::ChatDrain)
+                        .after(crate::ui_party::drain_party)
+                        .after(benilla_world::schedule::WorldStage::Stream),
                     // Before the script tick, so GameTimeFrame reads this frame's minute.
                     feed_game_time.in_set(crate::ui_script::UiFeed),
                     // In the feed, off the hover the last walk left; after the world drive only so
