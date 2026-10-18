@@ -564,13 +564,22 @@ fn the_row_menu_offers_the_rank_verbs_by_rank() {
     );
 }
 
-/// Three verbs go by name and the kick by row index (`UnitPopup.lua:624-631`).
+/// Three verbs go by name, resolved to a guid by the binding, and the kick by row index (`UnitPopup.lua:624-631`).
 #[test]
 fn the_menu_verbs_queue_the_right_requests() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     open_raid_tab(&mut s);
     push_raid(&mut s, twelve());
+    // The active player object, which the by-name resolver wants (`0x493ae0`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            has_object: true,
+            ..Default::default()
+        }),
+    );
     let click = |s: &UiScript, key: &str| {
         s.run(&format!(
             "for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
@@ -585,7 +594,7 @@ fn the_menu_verbs_queue_the_right_requests() {
     assert_eq!(
         s.take_party_requests(),
         vec![PartyRequest::AssistantLeader {
-            name: "Member2".into(),
+            guid: twelve()[2].guid,
             grant: true
         }]
     );

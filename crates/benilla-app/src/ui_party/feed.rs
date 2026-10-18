@@ -614,29 +614,6 @@ fn raid_name_of(
         .map(|m| m.name.clone())
 }
 
-/// A name to the guid `CMSG_GROUP_SET_LEADER` and `CMSG_GROUP_ASSISTANT_LEADER` want (UnitPopup
-/// addresses raid rows by name), matched case-insensitively like every roster name compare.
-fn raid_guid_for_name(
-    group: &GroupState,
-    self_guid: Option<u64>,
-    names: &NameCache,
-    name: &str,
-) -> Option<u64> {
-    if let Some(g) = self_guid {
-        if names
-            .resolve_unit(g, None, Ask::Read)
-            .is_some_and(|n| n.eq_ignore_ascii_case(name))
-        {
-            return Some(g);
-        }
-    }
-    group
-        .members
-        .iter()
-        .find(|m| m.name.eq_ignore_ascii_case(name))
-        .map(|m| m.guid)
-}
-
 /// `GetRaidRosterInfo`'s array (`0x4bb560`) in [`raid_row_guids`]' order: empty outside a raid,
 /// so `GetNumRaidMembers()` answers 0 in a party. The reference's array holds the local player
 /// and the wire's list does not, so our row comes from [`RaidSelf`].
@@ -956,17 +933,14 @@ pub(crate) fn drain_party(
                         .send(ClientCommand::GroupSwapSubGroup { name, other });
                 }
             }
-            PartyRequest::PromoteName(name) => {
-                if let Some(guid) = raid_guid_for_name(&group, self_guid, &names, &name) {
-                    let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
-                }
+            // The binding resolved the name (`0x48a86a`, `0x4bbd6b`, `0x4bbe3b`).
+            PartyRequest::PromoteGuid(guid) => {
+                let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
             }
-            PartyRequest::AssistantLeader { name, grant } => {
-                if let Some(guid) = raid_guid_for_name(&group, self_guid, &names, &name) {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::GroupAssistantLeader { guid, grant });
-                }
+            PartyRequest::AssistantLeader { guid, grant } => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::GroupAssistantLeader { guid, grant });
             }
             PartyRequest::UninviteRaid(index) => {
                 // Sent by name. The reference's `UninviteFromRaid` and `UninviteFromParty` share
@@ -1016,7 +990,7 @@ fn test_apply_local(
             | PartyRequest::SetSubgroup { .. }
             | PartyRequest::SwapSubgroup { .. }
             | PartyRequest::UninviteRaid(_)
-            | PartyRequest::PromoteName(_)
+            | PartyRequest::PromoteGuid(_)
             | PartyRequest::AssistantLeader { .. }
     ) {
         group.count_list();
@@ -1129,22 +1103,14 @@ fn apply_test_intent(
             }
             true
         }
-        PartyRequest::PromoteName(name) => {
-            if let Some(m) = group
-                .members
-                .iter()
-                .find(|m| m.name.eq_ignore_ascii_case(name))
-            {
-                group.leader = m.guid;
+        PartyRequest::PromoteGuid(guid) => {
+            if group.members.iter().any(|m| m.guid == *guid) {
+                group.leader = *guid;
             }
             true
         }
-        PartyRequest::AssistantLeader { name, grant } => {
-            if let Some(m) = group
-                .members
-                .iter_mut()
-                .find(|m| m.name.eq_ignore_ascii_case(name))
-            {
+        PartyRequest::AssistantLeader { guid, grant } => {
+            if let Some(m) = group.members.iter_mut().find(|m| m.guid == *guid) {
                 if *grant {
                     m.flags |= GROUP_MEMBER_ASSISTANT;
                 } else {
@@ -2173,13 +2139,6 @@ mod tests {
             Some("Alice")
         );
         assert_eq!(raid_name_of(&group, me, &names, 0xDEAD), None);
-
-        assert_eq!(
-            raid_guid_for_name(&group, me, &names, "alice"),
-            Some(0xA11CE)
-        );
-        assert_eq!(raid_guid_for_name(&group, me, &names, "KEL"), Some(0x5E1F));
-        assert_eq!(raid_guid_for_name(&group, me, &names, "Nobody"), None);
 
         // Outside a raid all are empty, so a raid verb in a party sends nothing.
         group.group_type = 0;

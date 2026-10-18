@@ -599,27 +599,9 @@ pub(super) fn drain_chat_input(
                 if let Some(name) =
                     name.or_else(|| target_player_name(&selection, &names, &commands))
                 {
-                    // `CMSG_GROUP_SET_LEADER` takes a guid, resolved against the roster. A miss
-                    // prints the server's error wording; the reference's `PromoteByName` miss is
-                    // untraced.
-                    match group
-                        .members
-                        .iter()
-                        .find(|m| m.name.eq_ignore_ascii_case(&name))
-                    {
-                        Some(m) => {
-                            let _ = commands
-                                .0
-                                .send(ClientCommand::GroupSetLeader { guid: m.guid });
-                        }
-                        None => {
-                            // `ERR_TARGET_NOT_IN_GROUP_S` (`GlobalStrings.lua:1861`).
-                            chat_log.push_event(super::event::ChatEvent::text_only(
-                                super::event::ChatEventKind::System,
-                                format!("{name} is not in your party."),
-                            ));
-                        }
-                    }
+                    // The binding's own resolve and queue (`PromoteByName 0x48a86a`); a miss is
+                    // silent there.
+                    script.promote_by_name(&name);
                 }
             }
             // The duel verbs join the intent queue `StartDuel` and `CancelDuel` feed: the stock
