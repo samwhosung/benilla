@@ -36,17 +36,17 @@ fn a_virgin_frames_bounds_read_back_as_zero_not_nil() {
     }
     s.run("Sizer:SetMinResize(120, 60) Sizer:SetMaxResize(400, 300)")
         .unwrap();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Sizer:GetMinResize()").unwrap(),
         (120.0, 60.0)
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
         (400.0, 300.0)
     );
     // The reference writes all four fields, so the untouched pair round-trips.
     s.run("Sizer:SetMinResize(10, 10)").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
         (400.0, 300.0)
     );
@@ -56,14 +56,14 @@ fn a_virgin_frames_bounds_read_back_as_zero_not_nil() {
 fn the_setters_gate_is_lua_isnumber_and_the_usage_text_is_the_references() {
     let s = sizer();
     s.run("Sizer:SetMinResize(\"120\", \"60\")").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Sizer:GetMinResize()").unwrap(),
         (120.0, 60.0),
         "a numeric string is coerced, as 5.0's lua_isnumber does"
     );
     // Arguments past the third are ignored.
     s.run("Sizer:SetMaxResize(400, 300, 999, \"x\")").unwrap();
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Sizer:GetMaxResize()").unwrap(),
         (400.0, 300.0)
     );
@@ -243,12 +243,12 @@ fn the_xml_element_writes_both_pairs() {
         "#,
     );
     load(&s, &doc);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Chatty:GetMinResize()")
             .unwrap(),
         (296.0, 75.0)
     );
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Chatty:GetMaxResize()")
             .unwrap(),
         (608.0, 400.0)
@@ -264,7 +264,7 @@ fn the_xml_element_writes_both_pairs() {
         "#,
     );
     load(&s, &partial);
-    assert_eq!(
+    crate::assert_near!(
         s.eval::<(f64, f64)>("return Half:GetMinResize()").unwrap(),
         (10.0, 20.0)
     );

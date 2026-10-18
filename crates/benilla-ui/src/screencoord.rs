@@ -72,6 +72,13 @@ impl LayoutUnits {
         f64::from(p) / f64::from(self.k1)
     }
 
+    /// `G(S(v))`: a script number a setter stored, as its getter answers it. benilla keeps the
+    /// script number and takes both steps at the read, so new cells read as a rebuild would.
+    #[inline]
+    pub fn round_trip(self, v: f32) -> f64 {
+        self.load(self.store(v))
+    }
+
     /// `E(e, s)`, a resolved edge as `GetLeft`, `GetRight`, `GetTop` and `GetBottom` push it:
     /// divided by the region's scale `[+0x7c]` at 53 bits, then the getter steps
     /// (`0x7a1a54`..`0x7a1a78`).

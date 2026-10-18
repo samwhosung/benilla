@@ -227,7 +227,8 @@ fn hit_rect_insets_shrink_the_mouse_rect_only() {
         a:SetScript("OnEnter", function() entered = true end)
         a:SetHitRectInsets(5, 5, 18, 5)
         local l, r, t, b = a:GetHitRectInsets()
-        assert(l == 5 and r == 5 and t == 18 and b == 5)
+        local near = function(x, v) return math.abs(x - v) < 1e-3 end
+        assert(near(l, 5) and near(r, 5) and near(t, 18) and near(b, 5))
     "#,
     )
     .unwrap();

@@ -67,8 +67,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     //
     // `SetMinResize 0x776020`, `GetMinResize 0x775f20`, `SetMaxResize 0x7762a0`,
     // `GetMaxResize 0x7761a0`. Both arguments must pass `lua_isnumber` (`0x6f34d0`), else `Usage:`
-    // (`0x8797b8`/`0x8797e4`); the pair is stored raw, with no layout touch and no `min > max`
-    // check. The getters always answer two numbers, 0 meaning unbounded.
+    // (`0x8797b8`/`0x8797e4`); the pair is stored as `S` stores it (min: width at `+0x84`, height
+    // at `+0x80`, `0x77610f`, `0x776138`; max at `+0x8c` and `+0x88`), with no layout touch and no
+    // `min > max` check. The getters always answer two numbers through `G` (`0x775fda`,
+    // `0x775ffe`; `0x77625a`, `0x77627e`), 0 meaning unbounded. benilla keeps the script number and
+    // takes both steps at the read.
     for (name, upper) in [("MinResize", false), ("MaxResize", true)] {
         m.set(
             format!("Set{name}"),
@@ -122,7 +125,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         f.min_resize
                     }
                 });
-                Ok((f64::from(w), f64::from(hgt)))
+                let units = model.layout_units();
+                Ok((units.round_trip(w), units.round_trip(hgt)))
             })?,
         )?;
     }

@@ -667,6 +667,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     // Hit-rect insets shrink only the mouse hit rect; geometry, drawing and anchors ignore them.
+    // `SetHitRectInsets` stores `S` of each (`0x775e38`..`0x775ee2`, through `0x76b1b0`) and
+    // `GetHitRectInsets` answers `G` of each, in the same order (`0x775caa`..`0x775d35`, through
+    // `0x76b1e0`); benilla keeps the script numbers and takes both steps at the read.
     m.set(
         "SetHitRectInsets",
         lua.create_function(
@@ -686,7 +689,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
             let i = model.arena.hit_rect_insets(h);
-            Ok((i[0], i[1], i[2], i[3]))
+            let u = model.layout_units();
+            Ok((
+                u.round_trip(i[0]),
+                u.round_trip(i[1]),
+                u.round_trip(i[2]),
+                u.round_trip(i[3]),
+            ))
         })?,
     )?;
     Ok(())

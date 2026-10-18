@@ -69,6 +69,7 @@ mod region_map;
 mod regions;
 mod resize_bounds;
 mod screen_units;
+mod script_lengths;
 mod scrollframe;
 mod set_font_args;
 mod setparent;
