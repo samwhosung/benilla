@@ -615,8 +615,12 @@ fn drive_session_start(
         .collect()
 }
 
-/// The session start after the addons' own `ADDON_LOADED`: `VARIABLES_LOADED`, `PLAYER_LOGIN` and
-/// `PLAYER_ENTERING_WORLD`, a target, then ten ticks of 0.1 s ([`drive_session_start`] says why).
+/// The session start after the addons' own `ADDON_LOADED`: the load's tail, `VARIABLES_LOADED` and
+/// the `PLAYER_LOGIN` arm (`finish_ui_load_with`'s order, with no saved file), then the live
+/// client's world-enter cascade ([`UiScript::fire_world_enter`]: `PLAYER_LOGIN`,
+/// `PLAYER_ENTERING_WORLD`, the minimap and quest-log steps and their events, in its sound
+/// bracket), a target, then ten ticks of 0.1 s ([`drive_session_start`] says why). `"player"`
+/// already names guid 1 ([`seat_a_session`]), as the live feed seats it before the cascade.
 ///
 /// The target comes after `PLAYER_ENTERING_WORLD`, with the argless `PLAYER_TARGET_CHANGED` that
 /// selecting one signals (`0x493540`): the interface is built (`0x48fbf0`) before the enter cascade
@@ -624,9 +628,9 @@ fn drive_session_start(
 /// earlier, `TargetFrame_OnLoad`'s `TargetFrame_Update()` (`TargetFrame.lua:20`) indexes
 /// `TargetofTargetFrame`, which `TargetFrame.xml` declares later, before its `RegisterEvent` calls.
 fn enter_world(script: &mut UiScript) {
-    for event in ["VARIABLES_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD"] {
-        script.fire_event(event, Vec::new());
-    }
+    script.fire_event("VARIABLES_LOADED", Vec::new());
+    script.arm_player_login();
+    script.fire_world_enter();
     script.set_unit(
         "target",
         Some(benilla_ui::script::UnitState {
@@ -3715,6 +3719,45 @@ mod dependency_tests {
         assert!(
             s.frame_visible("TargetFrame"),
             "the target frame registered its events at load, so world entry shows the target"
+        );
+    }
+
+    /// The harness enters the world through the client's cascade (`0x4908c0`), not a list of its
+    /// own: `PLAYER_LOGIN` once, then `PLAYER_ENTERING_WORLD`, then the quest log's rebuild and its
+    /// `QUEST_LOG_UPDATE` (`0x4909a1`), every handler inside the sound bracket (`0x4908d5`).
+    #[test]
+    fn the_world_entry_is_the_clients_cascade() {
+        let mut s = UiScript::new().unwrap();
+        seat_a_session(&mut s);
+        s.run(
+            r#"
+            Seen = {}
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({ "VARIABLES_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD",
+                                 "QUEST_LOG_UPDATE" }) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event)
+                if event == "PLAYER_ENTERING_WORLD" then PlaySound("igMainMenuOpen") end
+            end)
+            "#,
+        )
+        .unwrap();
+        s.take_sounds();
+        enter_world(&mut s);
+        assert!(s.errors().is_empty(), "{:#?}", s.errors());
+        let seen = s.eval::<String>("return table.concat(Seen, ' ')").unwrap();
+        assert!(
+            seen.starts_with(
+                "VARIABLES_LOADED PLAYER_LOGIN PLAYER_ENTERING_WORLD QUEST_LOG_UPDATE"
+            ),
+            "{seen}"
+        );
+        assert_eq!(seen.matches("PLAYER_LOGIN").count(), 1, "{seen}");
+        assert!(
+            s.take_sounds().is_empty(),
+            "the cascade's handlers are silent"
         );
     }
 
