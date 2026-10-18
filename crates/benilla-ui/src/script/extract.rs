@@ -293,7 +293,7 @@ impl UiScript {
                             font: data.font_path,
                             font_height: data.font_height,
                             text_height,
-                            shadow: data.font_shadow,
+                            shadow: data.font_shadow.map(|s| s.drawn(model.layout_units())),
                             outline: data.outline,
                             monochrome: data.monochrome,
                             spacing,

@@ -2121,7 +2121,7 @@ pub(super) fn measure_request_at(
     let text_height = d.text_height();
     let outline = d.outline;
     let spacing = d.line_gap();
-    let shadow_x = d.shadow_x();
+    let shadow_x = d.shadow_x(model.layout_units());
     let max_lines = d.max_lines;
     let non_space_wrap = model.non_space_wrap_of(rh);
     let id = model.region_id(rh);

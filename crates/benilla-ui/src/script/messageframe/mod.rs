@@ -560,10 +560,7 @@ impl UiScript {
                 font.height.map(f32::to_bits).hash(&mut h);
                 wrap_width.to_bits().hash(&mut h);
                 (font.outline as u8).hash(&mut h);
-                font.shadow
-                    .map_or(0.0, |s| s.offset[0])
-                    .to_bits()
-                    .hash(&mut h);
+                font.shadow.map(|s| s.offset[0]).hash(&mut h);
                 scale.to_bits().hash(&mut h);
                 european.hash(&mut h);
                 h.finish()
@@ -581,10 +578,7 @@ impl UiScript {
                 font.height.map(f32::to_bits).hash(&mut hasher);
                 wrap_width.to_bits().hash(&mut hasher);
                 (font.outline as u8).hash(&mut hasher);
-                font.shadow
-                    .map_or(0.0, |s| s.offset[0])
-                    .to_bits()
-                    .hash(&mut hasher);
+                font.shadow.map(|s| s.offset[0]).hash(&mut hasher);
                 scale.to_bits().hash(&mut hasher);
                 let key = hasher.finish();
                 if line.rows_key == key {
@@ -597,7 +591,9 @@ impl UiScript {
                     height: font.height,
                     wrap_width,
                     outline: font.outline,
-                    shadow_x: font.shadow.map_or(0.0, |s| s.offset[0]),
+                    shadow_x: font
+                        .shadow
+                        .map_or(0.0, |s| s.offset[0].script(model.layout_units())),
                     scale,
                     text: text.into_owned(),
                     key,
@@ -765,7 +761,7 @@ impl UiScript {
                     justify_v: JustifyV::Top,
                     font: font.path.clone(),
                     // The font's own shadow, ChatFontNormal's black at `(1,-1)`.
-                    shadow: font.shadow,
+                    shadow: font.shadow.map(|s| s.drawn(model.layout_units())),
                     font_height: font.height,
                     text_height: None, // message lines have no SetTextHeight
                     outline: font.outline,

@@ -133,3 +133,41 @@ fn the_edit_box_text_insets_answer_through_the_getter_steps() {
         (G_3, G_5, G_100, G_50)
     );
 }
+
+/// `SetFont`'s height (`0x79d5d3`; the shared `0x79f276`), `SetShadowOffset` (`0x79e150`,
+/// `0x79fa28`) and `SetSpacing` (`0x79e36b`, `0x79fb7e`) store `S`; `GetFont` (`0x79d4b7`,
+/// `0x79f3e3`), `GetShadowOffset` (`0x79e029`, `0x79faf5`) and `GetSpacing` (`0x79e28e`,
+/// `0x79fbfc`) answer `G`, on a FontString and on a font instance alike.
+#[test]
+fn the_font_lengths_answer_through_the_getter_steps() {
+    let s = vm();
+    s.run(
+        r#"local f = CreateFrame("Frame", "Host")
+           T = f:CreateFontString(nil, "ARTWORK")
+           E = CreateFrame("EditBox", "Box")
+           for _, o in ipairs({ T, E }) do
+               o:SetFont("Fonts\\FRIZQT__.TTF", 12)
+               o:SetShadowOffset(7, -3)
+               o:SetSpacing(11)
+           end"#,
+    )
+    .unwrap();
+    for who in ["T", "E"] {
+        let (h, x, y, sp): (f64, f64, f64, f64) = s
+            .eval(&format!(
+                "local _, h = {who}:GetFont() local x, y = {who}:GetShadowOffset() \
+                 return h, x, y, {who}:GetSpacing()"
+            ))
+            .unwrap();
+        assert_eq!(
+            (h, x, y, sp),
+            (
+                12.00000029802322,
+                6.999999776482586,
+                -3.000000074505805,
+                G_11
+            ),
+            "{who}"
+        );
+    }
+}

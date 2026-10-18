@@ -1141,18 +1141,13 @@ impl Loader<'_> {
 
     /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
     /// (`0xff000000`), and its first `<Offset>` read whatever it answers (`0x77142d`, `0x7840a8`),
-    /// else (0.001, -0.001) (`0x3a83126f`, `0xba83126f`). The default is stored raw, in layout
-    /// units, where an `<Offset>` is converted from FrameXML units (`0x6f1ee3`-`0x6f1efd`), so in
-    /// FrameXML units it is 0.001 times [`crate::script::Model::layout_unit`]. Deviation: it is
-    /// taken at load, so a later aspect change keeps it, where the reference reloads the UI on a
-    /// change above 0.001 (`0x491380`, called at `0x492f33` and `0x49303a`).
+    /// script numbers the reader stores by `S` (`0x6f1ee3`-`0x6f1efd`), else (0.001, -0.001)
+    /// layout units, stored raw (`0x3a83126f`, `0xba83126f`), which new cells read as the reload
+    /// they stand for would ([`crate::layout::Len::Layout`]).
     pub(super) fn shadow_of(&mut self, sh: &Element) -> crate::script::FontShadow {
         let offset = match children_named(sh, "Offset").next() {
-            Some(o) => self.dimension(o).v,
-            None => {
-                let raw = 0.001_f32 * self.model().layout_unit();
-                [raw, -raw]
-            }
+            Some(o) => self.dimension(o).v.map(crate::layout::Len::Script),
+            None => crate::script::FontShadow::DEFAULT_OFFSET,
         };
         let color = children_named(sh, "Color")
             .next()

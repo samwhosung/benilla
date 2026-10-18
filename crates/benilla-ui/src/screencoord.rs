@@ -118,6 +118,15 @@ pub enum Len {
     Layout(f32),
 }
 
+impl std::hash::Hash for Len {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Len::Script(v) => (0u8, v.to_bits()).hash(state),
+            Len::Layout(l) => (1u8, l.to_bits()).hash(state),
+        }
+    }
+}
+
 impl Len {
     /// The length in layout units, as the reference holds it.
     #[inline]

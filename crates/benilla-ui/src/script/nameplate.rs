@@ -619,7 +619,10 @@ impl Plate {
 
         for rh in [name, level] {
             model.region_data.entry(rh).or_default().font_shadow = Some(FontShadow {
-                offset: [g.shadow_offset, -g.shadow_offset],
+                offset: [
+                    crate::layout::Len::Script(g.shadow_offset),
+                    crate::layout::Len::Script(-g.shadow_offset),
+                ],
                 color: crate::color::Rgba8::BLACK,
             });
         }

@@ -14,7 +14,7 @@ use crate::layout::{Anchor, Anchors};
 use crate::widget::{RegionHandle, RegionKind};
 
 /// Resolve `self` (a region wrapper) to its live [`RegionHandle`].
-pub(super) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHandle> {
+pub(crate) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHandle> {
     let id = decode_id(this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     model

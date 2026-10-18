@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use benilla_ui::order::ZTarget;
-use benilla_ui::script::{EditBoxTextUi, FontShadow, JustifyH, JustifyV, Outline};
+use benilla_ui::script::{EditBoxTextUi, JustifyH, JustifyV, Outline, TextShadow};
 use benilla_ui::widget::FrameHandle;
 
 use crate::ui_pass::{UiQuad, UvRect};
@@ -23,7 +23,7 @@ pub(super) struct TextStyle {
     pub font: Option<String>,
     pub font_height: Option<f32>,
     pub text_height: Option<f32>,
-    pub shadow: Option<FontShadow>,
+    pub shadow: Option<TextShadow>,
     pub outline: Outline,
     pub monochrome: bool,
     /// The gap between lines, frame-local, scaled like the font height.

@@ -460,13 +460,14 @@ fn a_fontstrings_own_shadow_element_is_read() {
         shadow("Shadowed"),
         vec![2.0, -3.0, read(1.0), 0.0, 0.0, read(0.5)]
     );
-    // 0.001 layout units at the 4:3 screen: 0.001 · 768 · 5/3.
-    let bare = shadow("BareShadow");
-    assert!(
-        (bare[0] - 1.28).abs() < 1e-5 && (bare[1] + 1.28).abs() < 1e-5,
-        "{bare:?}"
+    // The default is (0.001, -0.001) layout units (`0x7713eb`), read back through `G`: 1.28 each
+    // way at 4:3. `ui()` is 800 by 600, a 4:3 root, whose cells are those of the aspect 4/3.
+    let u = crate::layout::LayoutUnits::from_aspect(4.0 / 3.0);
+    let g = |l: u32| u.load(f32::from_bits(l)) as f32;
+    assert_eq!(
+        shadow("BareShadow"),
+        vec![g(0x3a83_126f), g(0xba83_126f), 0.0, 0.0, 0.0, read(1.0)]
     );
-    assert_eq!(bare[2..], [0.0, 0.0, 0.0, read(1.0)]);
     assert_eq!(
         shadow("HalfOffset"),
         vec![2.0, 0.0, 0.0, 0.0, 0.0, read(1.0)],
@@ -559,7 +560,12 @@ fn a_font_element_reads_its_flags_only_beside_its_own_font_file() {
     );
     assert_eq!(
         font("LevelOwnFile"),
-        parent.replacen("Fonts\\FRIZQT__.TTF 12 OUTLINE", "Fonts\\ARIALN.TTF 14 ", 1),
+        // The heights read back through the getter steps: `G(S(12))` and `G(S(14))` at 4:3.
+        parent.replacen(
+            "Fonts\\FRIZQT__.TTF 12.000000298023 OUTLINE",
+            "Fonts\\ARIALN.TTF 13.999999552965 ",
+            1,
+        ),
         "its own file sets the whole flags word"
     );
     assert_eq!(
@@ -628,8 +634,15 @@ fn an_xml_font_file_that_fails_to_load_keeps_the_followed_font() {
         ))
         .unwrap()
     };
-    assert_eq!(font(&s, "LoadChild"), r"Fonts\FRIZQT__.TTF 12 OUTLINE 2");
-    assert_eq!(font(&s, "LoadMissed"), r"Fonts\FRIZQT__.TTF 12 OUTLINE 3");
+    // The height and spacing read back through the getter steps, `G(S(v))` at 4:3.
+    assert_eq!(
+        font(&s, "LoadChild"),
+        r"Fonts\FRIZQT__.TTF 12.000000298023 OUTLINE 2"
+    );
+    assert_eq!(
+        font(&s, "LoadMissed"),
+        r"Fonts\FRIZQT__.TTF 12.000000298023 OUTLINE 3.0000000745058"
+    );
     for line in [
         format!("Font LoadChild: Unable to load font file {NOPE}"),
         format!("FontString LoadMissed: Unable to load font file {NOPE}"),
@@ -641,10 +654,16 @@ fn an_xml_font_file_that_fails_to_load_keeps_the_followed_font() {
     // string and font cleared theirs.
     s.run(r#"LoadParent:SetFont("Fonts\\ARIALN.TTF", 9) LoadHeld:SetFont("Fonts\\ARIALN.TTF", 9)"#)
         .unwrap();
-    assert_eq!(font(&s, "LoadChild"), r"Fonts\ARIALN.TTF 9  2");
-    assert_eq!(font(&s, "LoadMissed"), r"Fonts\ARIALN.TTF 9  3");
-    assert!(font(&s, "LoadKept").starts_with(r"Fonts\HELD.TTF 10 "));
-    assert!(font(&s, "LoadHeldAgain").starts_with(r"Fonts\HELD.TTF 10 "));
+    assert_eq!(
+        font(&s, "LoadChild"),
+        r"Fonts\ARIALN.TTF 9.0000002235174  2"
+    );
+    assert_eq!(
+        font(&s, "LoadMissed"),
+        r"Fonts\ARIALN.TTF 9.0000002235174  3.0000000745058"
+    );
+    assert!(font(&s, "LoadKept").starts_with(r"Fonts\HELD.TTF 9.9999998509884 "));
+    assert!(font(&s, "LoadHeldAgain").starts_with(r"Fonts\HELD.TTF 9.9999998509884 "));
 }
 
 /// `0x770f69`-`0x770f88`: a FontString's `inherits=` is looked up as a font first, and a hit jumps
@@ -884,8 +903,50 @@ fn a_held_font_differing_only_in_height_or_flags_reloads() {
                 "local f, h, flags = {name}:GetFont() return table.concat({{f, h, flags}}, ' ')"
             ))
             .unwrap();
-        assert_eq!(font, r"Fonts\HELD.TTF 10 ", "{name} keeps the held font");
+        // `G(S(10))` at 4:3.
+        assert_eq!(
+            font, r"Fonts\HELD.TTF 9.9999998509884 ",
+            "{name} keeps the held font"
+        );
     }
+}
+
+/// A `<Shadow>` with no `<Offset>` keeps (0.001, -0.001) layout units (`0x7713eb`), so the shadow
+/// sits further out at a wider aspect, 1.5665 script units each way at 16:9, and draws there:
+/// the stock `ZoneTextFont` and `WorldMapTextFont` are such shadows (`Fonts.xml`).
+#[test]
+fn a_bare_shadow_is_a_layout_offset() {
+    let mut s = ui();
+    s.set_window_size(1920.0, 1080.0);
+    load_str(
+        &s,
+        &format!(
+            r#"<Ui>{TEST_FONT}
+            <Frame name="Host">
+                <Size><AbsDimension x="200" y="40"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <Layers><Layer>
+                    <FontString name="Bare" inherits="LevelTestFont" text="Zone"><Shadow/></FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#
+        ),
+    );
+    assert_eq!(
+        s.eval::<(f64, f64)>("return Bare:GetShadowOffset()")
+            .unwrap(),
+        (1.566511890386744, -1.566511890386744)
+    );
+    s.resolve();
+    let drawn = s.extract().into_iter().find_map(|q| match q.content {
+        crate::script::QuadContent::Text {
+            text: Some(t),
+            shadow,
+            ..
+        } if t == "Zone" => shadow,
+        _ => None,
+    });
+    assert_eq!(drawn.map(|d| d.offset), Some([1.5665119, -1.5665119]));
 }
 
 /// `0x770f69`: each level's `inherits` is asked as a font first, so a template chain stops at the

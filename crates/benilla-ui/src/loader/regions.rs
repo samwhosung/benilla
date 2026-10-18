@@ -256,12 +256,27 @@ impl Loader<'_> {
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
                 let sh = self.shadow_of(child);
                 self.call_region(wrapper, "SetShadowColor", sh.color.fractions(), dbg);
-                self.call_region(
-                    wrapper,
-                    "SetShadowOffset",
-                    (sh.offset[0], sh.offset[1]),
-                    dbg,
-                );
+                use crate::layout::Len;
+                let script = |l: Len| match l {
+                    Len::Script(v) => v,
+                    Len::Layout(_) => 0.0,
+                };
+                let (x, y) = (script(sh.offset[0]), script(sh.offset[1]));
+                self.call_region(wrapper, "SetShadowOffset", (x, y), dbg);
+                // The default offset is layout units, stored as it is (`0x7713eb`), which no
+                // script setter can give.
+                if sh.offset != [Len::Script(x), Len::Script(y)] {
+                    if let Ok(rh) = crate::script::region::region_handle_of(self.lua, wrapper) {
+                        let mut model = self.model();
+                        if let Some(s) = model
+                            .region_data
+                            .get_mut(&rh)
+                            .and_then(|d| d.font_shadow.as_mut())
+                        {
+                            s.offset = sh.offset;
+                        }
+                    }
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 use mlua::{Lua, Value};
 
+use crate::layout::Len;
 use crate::layout::{Anchors, Rect};
 use crate::order::ZTarget;
 
@@ -158,7 +159,7 @@ pub enum QuadContent {
         /// The `SetTextHeight` override, drawn uncapped; `None` keeps the 32 px raster cap.
         text_height: Option<f32>,
         /// 1.12's `MasterFont` sets `(1,-1)` black, so nearly every stock font has one.
-        shadow: Option<FontShadow>,
+        shadow: Option<TextShadow>,
         outline: Outline,
         /// The `monochrome` flag (font flag bit 1): the glyphs draw from a 1-bit raster.
         monochrome: bool,
@@ -309,9 +310,34 @@ pub(crate) fn monochrome_flag(s: &str) -> bool {
 /// black (`Fonts.xml:55`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontShadow {
-    /// Pixels, y up: `y="-1"` is 1 px down.
-    pub offset: [f32; 2],
+    /// The offset, y up: `y="-1"` is 1 unit down. `SetShadowOffset` and an `<Offset>` give script
+    /// numbers (`S` at `0x79e150`, `0x79fa28`, `0x6f1efd`); a `<Shadow>` with no `<Offset>` keeps
+    /// (0.001, -0.001) layout units (`0x7713eb`).
+    pub offset: [Len; 2],
     /// The packed colour; a `<Shadow>` with no `<Color>` is opaque black (`0x78405f`).
+    pub color: crate::color::Rgba8,
+}
+
+impl FontShadow {
+    /// The `<Shadow>` default offset, (0.001, -0.001) layout units (`0x7713eb`, `0x7713f2`).
+    pub const DEFAULT_OFFSET: [Len; 2] = [
+        Len::Layout(f32::from_bits(0x3a83_126f)),
+        Len::Layout(f32::from_bits(0xba83_126f)),
+    ];
+
+    /// The shadow as it draws, its offset in script units under `units`.
+    pub fn drawn(self, units: crate::layout::LayoutUnits) -> TextShadow {
+        TextShadow {
+            offset: self.offset.map(|l| l.script(units)),
+            color: self.color,
+        }
+    }
+}
+
+/// A text shadow as it draws: the offset in script units, y up, and the packed colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextShadow {
+    pub offset: [f32; 2],
     pub color: crate::color::Rgba8,
 }
 
@@ -617,9 +643,10 @@ impl RegionData {
         self.text_scaled.then(|| self.font_height.unwrap_or(0.0))
     }
 
-    /// The shadow's x offset in UI units, 0 for none ([`MeasureRequest::shadow_x`]).
-    pub(crate) fn shadow_x(&self) -> f32 {
-        self.font_shadow.map_or(0.0, |s| s.offset[0])
+    /// The shadow's x offset in script units under `units`, 0 for none
+    /// ([`MeasureRequest::shadow_x`]).
+    pub(crate) fn shadow_x(&self, units: crate::layout::LayoutUnits) -> f32 {
+        self.font_shadow.map_or(0.0, |s| s.offset[0].script(units))
     }
 
     /// The measure-cache key of the text, font, wrap width, outline, line gap, shadow and owner
@@ -654,7 +681,7 @@ impl RegionData {
         // (`GlyphStepBase 0x5ca2b0`); so does the shadow's x offset, which seeds the line.
         (self.outline as u8).hash(&mut hasher);
         self.line_gap().to_bits().hash(&mut hasher);
-        self.shadow_x().to_bits().hash(&mut hasher);
+        self.font_shadow.map(|s| s.offset[0]).hash(&mut hasher);
         // The flag moves the wrap and `maxLines` the cut text the height is measured from.
         self.non_space_wrap.hash(&mut hasher);
         self.max_lines.hash(&mut hasher);

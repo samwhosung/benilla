@@ -230,7 +230,7 @@ pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option
             outline: d.outline,
             // One line has no gap: `0x5c2070` charges `(N−1)·gap`.
             spacing: d.line_gap(),
-            shadow_x: d.shadow_x(),
+            shadow_x: d.shadow_x(model.layout_units()),
             // One unwrapped line: neither moves its height.
             non_space_wrap: false,
             max_lines: 0,
