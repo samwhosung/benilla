@@ -113,3 +113,30 @@ fn set_justify_usage_lines_name_the_object() {
     )
     .unwrap();
 }
+
+/// `SetMaxBytes` and `SetMaxLetters` raise on an argument count other than one (`lua_gettop`
+/// against 2, `0x798fbc`, `0x79919c`) with `Usage: %s:SetMaxBytes(max)` (`0x87bf14`) and
+/// `Usage: %s:SetMaxLetters(max)` (`0x87bf30`), naming the box (`0x798fc6`, `0x7991a6`).
+#[test]
+fn edit_box_max_setters_name_the_box() {
+    let s = script();
+    s.run(
+        r#"
+        MaxBox = CreateFrame("EditBox", "MaxBox")
+        MaxAnon = CreateFrame("EditBox")
+    "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        ("MaxBox:SetMaxLetters()", "Usage: MaxBox:SetMaxLetters(max)"),
+        ("MaxBox:SetMaxBytes(1, 2)", "Usage: MaxBox:SetMaxBytes(max)"),
+        (
+            "MaxAnon:SetMaxLetters()",
+            "Usage: <unnamed>:SetMaxLetters(max)",
+        ),
+        ("MaxAnon:SetMaxBytes()", "Usage: <unnamed>:SetMaxBytes(max)"),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+}

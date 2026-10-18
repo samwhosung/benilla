@@ -138,16 +138,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
-        // `SetMaxBytes` (`0x798f30`) has `SetMaxLetters`'s exact count gate (`0x798fbc`) and raw
-        // coercion, but it stores n - 1 for a positive n and -1, unlimited, otherwise
-        // (`0x799012`-`0x799022`; the ctor writes -1 at `0x7799df`).
+        // `SetMaxBytes` (`0x798f30`) has `SetMaxLetters`'s exact count gate (`0x798fbc`, raising
+        // `Usage: %s:SetMaxBytes(max)` with the box's name, `0x87bf14`) and raw coercion, but it
+        // stores n - 1 for a positive n and -1, unlimited, otherwise (`0x799012`-`0x799022`; the
+        // ctor writes -1 at `0x7799df`).
         "SetMaxBytes",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
             let args: Vec<Value> = args.into_iter().collect();
+            with_editbox(lua, &this, |_| ())?;
             if args.len() != 1 {
-                return Err(mlua::Error::runtime(
-                    "Usage: <unnamed>:SetMaxBytes(maxBytes)",
-                ));
+                return Err(binding_abi::usage(lua, &this, "SetMaxBytes(max)"));
             }
             let n = crate::script::binding_abi::coerced_number(lua, args.first().cloned());
             let n = n as i64;
@@ -165,15 +165,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         // `SetMaxLetters` (`0x799110`) checks the count exactly, `lua_gettop` (`0x6f3070`) against
-        // 2 at `0x79919c`, and not the type: no argument or two raise `Usage:`, nil or `{}` store
-        // 0, `"12"` stores 12. 0 is no limit: the insert skips its trim on zero (`0x77c085`).
+        // 2 at `0x79919c`, and not the type: no argument or two raise `Usage: %s:SetMaxLetters(max)`
+        // (`0x87bf30`) with the box's name, nil or `{}` store 0, `"12"` stores 12. 0 is no limit:
+        // the insert skips its trim on zero (`0x77c085`).
         "SetMaxLetters",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
             let args: Vec<Value> = args.into_iter().collect();
+            with_editbox(lua, &this, |_| ())?;
             if args.len() != 1 {
-                return Err(mlua::Error::runtime(
-                    "Usage: <unnamed>:SetMaxLetters(maxLetters)",
-                ));
+                return Err(binding_abi::usage(lua, &this, "SetMaxLetters(max)"));
             }
             let n = crate::script::binding_abi::coerced_number(lua, args.first().cloned());
             // Truncated toward zero like `__ftol`; the reference stores a negative as is, but its
