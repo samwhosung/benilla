@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 22
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 114
+- [benilla-ui](#benilla-ui): 115
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -728,6 +728,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:103`](../crates/benilla-ui/src/script/tabard.rs#L103))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:138`](../crates/benilla-ui/src/script/taxi.rs#L138))
 - A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:30`](../crates/benilla-ui/src/script/tick.rs#L30))
+- `0x530a52` lays it out at once; getters resolve first, so only OnSizeChanged fires later. ([`src/script/tooltip/size.rs:155`](../crates/benilla-ui/src/script/tooltip/size.rs#L155))
 - The reference's builder hides and clears on a missing record (`0x52b72e`..`0x52b73f`), where a source that knows the item's name shows that, because a blank plate under an on-screen name reads as broken; the template's arrival then builds it whole. ([`src/script/tooltip_item/build.rs:53`](../crates/benilla-ui/src/script/tooltip_item/build.rs#L53))
 - An object no longer held, or a source that keeps no guid (the player's own trade slot), rebuilds from the instance the build read, where the reference's lookup finds no object and builds from the record and the block alone; benilla's views carry no object to read once it is gone, and the kept instance is what the plate showed. ([`src/script/tooltip_item/build.rs:154`](../crates/benilla-ui/src/script/tooltip_item/build.rs#L154))
 - The reference's padding repeats a mana stat once per zero entry; not emulated, since only the internal test ring 6674 has one. ([`src/script/tooltip_item/render.rs:416`](../crates/benilla-ui/src/script/tooltip_item/render.rs#L416))
@@ -755,8 +756,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A code point past U+FFFF is no space, where the client tests its low 16 bits, so U+10020 counts as a space there. ([`src/widget/kinds/editbox.rs:1127`](../crates/benilla-ui/src/widget/kinds/editbox.rs#L1127))
 - The reference has one field, the font's, but our font is read off the first `<FontString>` region (`message_frame_font`), which a `CreateFrame` frame lacks; so that FontString's own `GetJustifyH` does not see this. ([`src/widget/kinds/messageframe.rs:33`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L33))
 - Kept apart from the font's, as `ScrollingMessageState::justify` is. ([`src/widget/kinds/messageframe.rs:532`](../crates/benilla-ui/src/widget/kinds/messageframe.rs#L532))
-- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:861`](../crates/benilla-ui/src/widget/kinds/mod.rs#L861))
-- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1205`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1205))
+- `None` until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0. ([`src/widget/kinds/mod.rs:868`](../crates/benilla-ui/src/widget/kinds/mod.rs#L868))
+- On the thumb it is the grabbed point, where `CSimpleSlider` (`0x789ba0`/`0x789ca0`) always centers it, because that feels less surprising and a stock-sized thumb hides the difference. ([`src/widget/kinds/mod.rs:1212`](../crates/benilla-ui/src/widget/kinds/mod.rs#L1212))
 - Levels pack contiguously, because the reference's resuming cursor (`0x764fd3`/`0x764fd8`) leaves a hole past a wide gap ({0, 4, 6} at bound 7 gives {0, 1, 3} at bound 4). ([`src/widget/propagation.rs:180`](../crates/benilla-ui/src/widget/propagation.rs#L180))
 - The frame is still in the old parent's child list during `OnHide`, unlike the reference (`0x76ab34` unlinks first), because a handler that itself reparents must not find the lists half-spliced. ([`src/widget/propagation.rs:280`](../crates/benilla-ui/src/widget/propagation.rs#L280))
 ### benilla-world
