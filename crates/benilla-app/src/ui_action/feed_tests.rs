@@ -392,6 +392,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         .init_resource::<crate::sound::MessageSounds>()
         .insert_resource(NetCommands(tx));
     let mut script = UiScript::new().unwrap();
+    script.set_macro_icons(vec!["Interface\\Icons\\Spell_Fire_FlameBolt".into()]);
     script.set_macros(MacroState {
         account: vec![MacroView {
             name: "Ambush".into(),
@@ -420,7 +421,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
 
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
-        .run(r#"EditMacro(1, nil, "Interface\\Icons\\Spell_Fire_FlameBolt")"#)
+        .run("EditMacro(1, nil, 1)")
         .unwrap();
     assert!(
         !app.world().resource::<PlayerActions>().dirty,
