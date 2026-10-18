@@ -421,11 +421,14 @@ fn the_restore_resolves_each_frame_at_once_even_hidden() {
         height: Some(80),
         ..FrameLayout::default()
     }]);
+    // The fired size is the layout rect's (`0x76b623`), in root units over one root unit's store.
+    let per = f64::from(s.model_ref().layout_units().store(1.0));
+    let (fires, last_w) = s.eval::<(i64, f64)>("return fires, last_w").unwrap();
     assert_eq!(
-        s.eval::<(i64, f64)>("return fires, last_w").unwrap(),
-        (1, 120.0),
+        fires, 1,
         "fired inside the restore, though the frame is hidden"
     );
+    crate::assert_near!(last_w / per, 120.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

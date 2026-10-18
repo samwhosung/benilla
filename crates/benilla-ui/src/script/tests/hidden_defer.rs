@@ -22,6 +22,17 @@ fn int(s: &UiScript, expr: &str) -> i64 {
     s.eval::<i64>(&format!("return {expr}")).unwrap()
 }
 
+/// `OnSizeChanged`'s size in layout units (`0x76b623`) over one root unit's store: in root units.
+fn root(s: &UiScript, layout: f64) -> f64 {
+    layout / f64::from(s.model_ref().layout_units().store(1.0))
+}
+
+/// Set `PER`, one root unit's store, so a handler can log its size in root units.
+fn set_per(s: &UiScript) {
+    let per = f64::from(s.model_ref().layout_units().store(1.0));
+    s.lua().globals().set("PER", per).unwrap();
+}
+
 fn num(s: &UiScript, expr: &str) -> f64 {
     s.eval::<f64>(&format!("return {expr}")).unwrap()
 }
@@ -65,7 +76,11 @@ fn a_size_change_while_hidden_fires_once_inside_show() {
         1,
         "the show resolves it, inside Show"
     );
-    assert_eq!(num(&s, "last_w"), 30.0, "once, with the last size");
+    crate::assert_near!(
+        root(&s, num(&s, "last_w")),
+        30.0,
+        "once, with the last size"
+    );
     assert_eq!(
         s.eval::<String>("return table.concat(log, ',')").unwrap(),
         "size,show",
@@ -409,11 +424,12 @@ fn a_getter_fires_the_size_change_it_resolves_inside_the_read() {
     "#,
     )
     .unwrap();
+    set_per(&s);
     s.resolve();
     s.run(
         r#"
         DeferGet:SetScript("OnSizeChanged", function()
-            table.insert(log, "size " .. arg1)
+            table.insert(log, "size " .. floor(arg1 / PER + 0.5))
         end)
         DeferGet:Hide(); DeferGet:SetWidth(20)
     "#,
@@ -456,11 +472,12 @@ fn a_getter_on_a_queued_visible_frame_fires_inside_the_read() {
     "#,
     )
     .unwrap();
+    set_per(&s);
     s.resolve();
     s.run(
         r#"
         QueuedGet:SetScript("OnSizeChanged", function()
-            table.insert(log, "size " .. arg1)
+            table.insert(log, "size " .. floor(arg1 / PER + 0.5))
         end)
         QueuedGet:SetWidth(25)
         table.insert(log, "read")
