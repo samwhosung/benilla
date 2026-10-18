@@ -245,13 +245,24 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         )?,
     )?;
     // GetTextInsets (`0x798c30` → `0x77a710`) copies the four out, then re-seats the text region
-    // (`0x77a73f` → `0x77b8c0`), so the getter puts a script-moved region back.
+    // (`0x77a73f` → `0x77b8c0`), so the getter puts a script-moved region back. Each is answered
+    // through `G` (`0x798cfc`..`0x798d68`), `SetTextInsets` having stored `S` of each
+    // (`0x798b5b`..`0x798bd9`); benilla keeps the script numbers and takes both steps here.
     m.set(
         "GetTextInsets",
         lua.create_function(|lua, this: Table| {
             let ins = with_editbox(lua, &this, |eb| eb.text_insets)?;
             reseat_text_region(lua, frame_handle_of(lua, &this)?);
-            Ok((ins[0], ins[1], ins[2], ins[3]))
+            let u = lua
+                .app_data_ref::<crate::script::model::Model>()
+                .expect("model")
+                .layout_units();
+            Ok((
+                u.round_trip(ins[0]),
+                u.round_trip(ins[1]),
+                u.round_trip(ins[2]),
+                u.round_trip(ins[3]),
+            ))
         })?,
     )?;
     // GetNumLetters (`0x7992c0`): the class array's letters (`0x77bc80`), classes 2, 3 and 6 only,

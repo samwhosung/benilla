@@ -119,3 +119,17 @@ fn the_button_lengths_answer_through_the_getter_steps() {
         "G(S(v)) under the new cells, not G of the old store"
     );
 }
+
+/// `SetTextInsets` stores `S` of each (`0x798b5b`..`0x798bd9`) and `GetTextInsets` answers `G`
+/// of each (`0x798cfc`..`0x798d68`).
+#[test]
+fn the_edit_box_text_insets_answer_through_the_getter_steps() {
+    let s = vm();
+    s.run(r#"E = CreateFrame("EditBox", "Insets") E:SetTextInsets(3, 5, 100, 50)"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64, f64, f64)>("return E:GetTextInsets()")
+            .unwrap(),
+        (G_3, G_5, G_100, G_50)
+    );
+}
