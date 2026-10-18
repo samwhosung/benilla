@@ -62,7 +62,9 @@ fn loose_names(data: &Path, out: &mut Vec<String>) {
 }
 
 /// Sort without case, then drop adjacent duplicates, the reference's two steps in its order, and
-/// put the prefix back on.
+/// put the prefix back on. Deviation: of names equal but for case, benilla keeps the first in
+/// source order, where the reference's survivor is whichever its CRT `qsort` (`0x73f727`, not
+/// stable) leaves last, as the dedup frees the earlier of each equal pair (`0x4f0163`-`0x4f0171`).
 fn chooser_list(mut names: Vec<String>) -> Vec<String> {
     names.sort_by_key(|n| n.to_ascii_lowercase());
     names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
