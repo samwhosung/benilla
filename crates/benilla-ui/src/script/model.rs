@@ -1904,8 +1904,17 @@ impl Model {
     /// `CSimpleFrame::SetScale` (`0x76ac10`): store `h`'s own scale, cascade the effective scale
     /// down its subtree, and re-lay out and re-measure on a change, since the owner's effective
     /// scale is in every descendant FontString's measure key. Lua `SetScale` and the UI scale
-    /// ([`super::ui_scale`]) both come here, as both reach `0x76ac10` in the reference.
-    pub(crate) fn set_frame_scale(&mut self, h: FrameHandle, scale: f32) {
+    /// ([`super::ui_scale`]) both come here, as both reach `0x76ac10` in the reference. Unless
+    /// `force` (the UI scale's sink `0x494577` passes it, Lua's `0x7751f9` does not), a change of
+    /// less than 2^-22 is dropped whole (`0x76ac1a`-`0x76ac35`).
+    pub(crate) fn set_frame_scale(&mut self, h: FrameHandle, scale: f32, force: bool) {
+        if !force
+            && self.arena.frame(h).is_some_and(|f| {
+                (f64::from(scale) - f64::from(f.scale)).abs() < crate::layout::SIZE_EPS
+            })
+        {
+            return;
+        }
         let changed = self.arena.frame(h).is_some_and(|f| f.scale != scale);
         self.arena.set_scale(h, scale);
         if changed {

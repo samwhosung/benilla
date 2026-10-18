@@ -478,7 +478,7 @@ fn an_owner_minted_after_its_region_joined_takes_the_owner_edge() {
             !m.frame_to_id.contains_key(&host),
             "the owner has no id yet"
         );
-        m.set_frame_scale(host, 2.0);
+        m.set_frame_scale(host, 2.0, false);
         m.frame_id(host);
     }
     resolve_matches_scratch(&mut s, "the owner's id minted");

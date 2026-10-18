@@ -52,3 +52,49 @@ fn draw_layer_verbs_default_to_artwork() {
     assert_eq!(drawn(&s, "Layered"), vec!["Art".to_string()]);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// `SetScale` (`0x775140`): a non-number raises the usage line (`0x775250`), a scale below 0 or
+/// NaN raises `Scale must be > 0` naming the frame or `<unnamed>` (`0x77520b`) and stores nothing,
+/// 0 is stored, and a change under 2^-22 is dropped (`0x76ac1a`).
+#[test]
+fn set_scale_gates_its_argument_as_the_client_does() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame", "Scaled")
+        f:SetPoint("CENTER", 0, 0); f:SetWidth(100); f:SetHeight(100)
+        f:CreateTexture(nil, "ARTWORK"):SetAllPoints(f)
+        u = CreateFrame("Frame")
+        f:SetScale(0.5)
+    "#,
+    )
+    .unwrap();
+    let err = |code: &str| s.run(code).unwrap_err().to_string();
+    let e = err("f:SetScale(-1)");
+    assert!(e.contains("Scaled:SetScale(): Scale must be > 0"), "{e}");
+    let e = err("f:SetScale(0/0)");
+    assert!(e.contains("Scaled:SetScale(): Scale must be > 0"), "{e}");
+    let e = err("u:SetScale(-0.5)");
+    assert!(e.contains("<unnamed>:SetScale(): Scale must be > 0"), "{e}");
+    let e = err("f:SetScale(\"x\")");
+    assert!(e.contains("Usage: Scaled:SetScale(scale)"), "{e}");
+    let e = err("f:SetScale()");
+    assert!(e.contains("Usage: Scaled:SetScale(scale)"), "{e}");
+    assert_eq!(s.eval::<f64>("return f:GetScale()").unwrap(), 0.5);
+
+    s.run("f:SetScale(\"2\")").unwrap();
+    assert_eq!(s.eval::<f64>("return f:GetScale()").unwrap(), 2.0);
+    s.run("f:SetScale(1)  f:SetScale(1 + 1e-7)").unwrap();
+    assert_eq!(s.eval::<f64>("return f:GetScale()").unwrap(), 1.0);
+    s.run("f:SetScale(1 + 4e-7)").unwrap();
+    assert_eq!(
+        s.eval::<f64>("return f:GetScale()").unwrap(),
+        f64::from((1.0f64 + 4e-7) as f32)
+    );
+
+    s.run("f:SetScale(0)").unwrap();
+    assert_eq!(s.eval::<f64>("return f:GetScale()").unwrap(), 0.0);
+    s.resolve();
+    let _ = s.extract();
+}

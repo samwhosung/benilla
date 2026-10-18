@@ -418,11 +418,26 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     m.set(
         "SetScale",
-        lua.create_function(|lua, (this, scale): (Table, f32)| {
+        lua.create_function(|lua, (this, scale): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            // `0x775140`: `lua_isnumber` else the usage line (`0x775250`); a scale below 0 or NaN
+            // (`fcomp 0.0; test ah,1`, `0x7751e9`, on the double) raises and stores nothing
+            // (`0x77520b`); 0 passes. The store is the f32 (`0x7751e6`).
+            let Some(scale) = lua.coerce_number(scale)? else {
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetScale(scale)",
+                    frame_name(lua, h)
+                )));
+            };
+            if scale < 0.0 || scale.is_nan() {
+                return Err(mlua::Error::runtime(format!(
+                    "{}:SetScale(): Scale must be > 0",
+                    frame_name(lua, h)
+                )));
+            }
             lua.app_data_mut::<Model>()
                 .expect("model")
-                .set_frame_scale(h, scale);
+                .set_frame_scale(h, scale as f32, false);
             Ok(())
         })?,
     )?;
@@ -815,6 +830,17 @@ fn regions_of(lua: &Lua, this: &Table) -> mlua::Result<Vec<u32>> {
         .filter(|r| model.arena.region(*r).is_some_and(|reg| !reg.detached))
         .collect();
     Ok(live.into_iter().map(|r| model.region_id(r)).collect())
+}
+
+/// Frame `h`'s name as the reference's usage lines print it (the frame's own name, vtable slot 1),
+/// or `<unnamed>` (`0x84c7f0`).
+fn frame_name(lua: &Lua, h: crate::widget::FrameHandle) -> String {
+    let model = lua.app_data_ref::<Model>().expect("model");
+    model
+        .arena
+        .frame(h)
+        .and_then(|f| f.name.clone())
+        .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
 /// One backdrop colour channel as `SetBackdropColor` (`0x777d30`) and `SetBackdropBorderColor`

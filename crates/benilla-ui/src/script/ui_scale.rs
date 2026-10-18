@@ -82,7 +82,7 @@ impl UiScript {
         let Some((ui_parent, v)) = applied else {
             return false;
         };
-        self.model_mut().set_frame_scale(ui_parent, v);
+        self.model_mut().set_frame_scale(ui_parent, v, true);
         true
     }
 
@@ -133,7 +133,7 @@ impl UiScript {
         let Some((ui_parent, v)) = applied else {
             return false;
         };
-        self.model_mut().set_frame_scale(ui_parent, v);
+        self.model_mut().set_frame_scale(ui_parent, v, true);
         true
     }
 }
