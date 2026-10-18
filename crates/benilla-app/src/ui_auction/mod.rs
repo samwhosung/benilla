@@ -1157,6 +1157,11 @@ mod tests {
             .unwrap();
         app.insert_non_send_resource(script);
         app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
+        // The row's item template is cached: an uncached row answers the miss shape, whose
+        // eleventh value is nil whatever the bidder.
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
         {
             let mut open = app.world_mut().resource_mut::<AuctionOpen>();
             open.open(0x1234, 1);
