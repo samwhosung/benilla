@@ -95,26 +95,21 @@ impl SmartBucket {
     }
 }
 
-/// `__ftol` (`0x40a2b0`) as `0x509dd0` takes it: truncate into a qword and keep its low dword;
-/// an infinity, NaN or a quotient past 2^63 stores the integer indefinite `0x8000_0000_0000_0000`,
-/// whose low dword is 0.
-fn ftol_low(q: f32) -> i32 {
-    const TWO_63: f32 = 9_223_372_036_854_775_808.0;
-    let t = q.trunc();
-    if (-TWO_63..TWO_63).contains(&t) {
-        t as i64 as i32
-    } else {
-        0
-    }
-}
-
-/// The search bound (`0x509dd0`): `(_ftol(viewport.x / width) + 1) * (_ftol(viewport.y / height)
-/// + 1)` in 32-bit registers (`inc`, `imul`, no overflow check), which `0x5097a0` compares
-/// unsigned (`jae` at `0x509839`). A zero-width rect or a 0x0 viewport makes a quotient infinite or
-/// NaN, which `_ftol` turns into 0, so that factor is 1.
+/// The search bound (`0x509dd0`): `(_ftol(viewport.x / width) + 1) * (_ftol(viewport.y / height) + 1)`
+/// in 32-bit registers (`inc`, `imul`, no overflow check), which `0x5097a0` compares unsigned
+/// (`jae` at `0x509839`). The divisor is the rect's two edges subtracted unrounded (`fsub`, then
+/// `fdivr` on the x87 stack at 53 bits), so the quotient is an `f64` of the `f32` inputs. A
+/// zero-width rect or a 0x0 viewport makes a quotient infinite or NaN, which `_ftol` turns into 0
+/// (the integer indefinite's low dword), so that factor is 1.
 fn search_bound(input: Rect, viewport: Vec2) -> u32 {
-    let across = ftol_low(viewport.x / input.width()).wrapping_add(1);
-    let down = ftol_low(viewport.y / input.height()).wrapping_add(1);
+    let across = benilla_ui::script::ftol(
+        f64::from(viewport.x) / (f64::from(input.max.x) - f64::from(input.min.x)),
+    )
+    .wrapping_add(1);
+    let down = benilla_ui::script::ftol(
+        f64::from(viewport.y) / (f64::from(input.max.y) - f64::from(input.min.y)),
+    )
+    .wrapping_add(1);
     across.wrapping_mul(down) as u32
 }
 
@@ -307,6 +302,14 @@ mod tests {
         let _ = b.resolve(flat, VP);
         let _ = b.resolve(flat, Vec2::ZERO);
         let _ = b.resolve(plate, Vec2::ZERO);
+    }
+
+    /// The quotient runs at 53 bits (`0x509df5`, `0x509e05`): 1024 / 6.4f32 is 159.99999762 there,
+    /// so the factor is 160, where an `f32` division rounds it to 160.0 and gives 161.
+    #[test]
+    fn the_bound_divides_at_double_precision() {
+        let rect = Rect::new(0.0, 0.0, 6.4, 1.0);
+        assert_eq!(search_bound(rect, Vec2::new(1024.0, 1.0)), 160 * 2);
     }
 
     #[test]

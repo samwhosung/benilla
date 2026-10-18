@@ -22,7 +22,7 @@ use crate::widget::{FrameHandle, RegionHandle};
 /// `_ftol` (`0x40a2b0`) as the bindings consume it: the x87 rounding control set to chop, a
 /// `fistp` to a qword, and its low dword. What the qword cannot hold (an infinity, NaN, ±2^63 and
 /// beyond) stores the integer-indefinite pattern `0x8000_0000_0000_0000`, whose low dword is 0.
-pub(crate) fn ftol(n: f64) -> i32 {
+pub fn ftol(n: f64) -> i32 {
     const TWO_63: f64 = 9_223_372_036_854_775_808.0;
     let t = n.trunc();
     if (-TWO_63..TWO_63).contains(&t) {
