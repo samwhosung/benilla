@@ -129,7 +129,12 @@ fn create(lua: &Lua, which: Arrow, parent: Value) -> mlua::Result<()> {
     }
     let wrapper = create_frame(
         lua,
-        ("Model".to_string(), None, Some(Value::Table(t)), None),
+        (
+            Some(Value::String(lua.create_string("Model")?)),
+            None,
+            Some(Value::Table(t)),
+            None,
+        ),
     )?;
     let id = decode_id(&wrapper)?;
     let scale = {

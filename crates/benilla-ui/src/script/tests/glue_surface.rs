@@ -409,7 +409,7 @@ fn the_glue_vm_makes_the_startup_frame_types_only() {
             .run(&format!(r#"CreateFrame("{t}")"#))
             .expect_err(t)
             .to_string();
-        assert!(e.contains(&format!("unknown frame type '{t}'")), "{t}: {e}");
+        assert!(e.contains(&format!("Unknown frame type '{t}'")), "{t}: {e}");
         world.run(&format!(r#"CreateFrame("{t}")"#)).unwrap();
     }
 }

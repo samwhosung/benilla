@@ -294,3 +294,55 @@ fn not_movable_errors_name_an_unnamed_frame_unnamed() {
         assert!(e.contains(line), "`{call}` -> {e}");
     }
 }
+
+/// `CreateFrame` (`0x7060b0`) gates in order: the type `lua_isstring` (`0x7060d5`) and the
+/// parent's tag none, nil or table (`0x7060e9`-`0x706112`), both raising the usage line
+/// (`0x872f60`); a table parent with no object in `[0]` (`0x87303c`) or one that is no frame
+/// (`0x873004`); a template miss (`0x7061ed`); then the unknown type (`0x7062a0`, `0x872fa8`).
+#[test]
+fn create_frame_raises_in_the_reference_order() {
+    const USAGE: &str = r#"Usage: CreateFrame("frameType" [, "name"] [, parent] [, "template"])"#;
+    let s = script();
+    s.run(r#"ParentHost = CreateFrame("Frame", "ParentHost")"#)
+        .unwrap();
+    for (call, line) in [
+        (r#"CreateFrame("Frame", "ByName", "ParentHost")"#, USAGE),
+        (r#"CreateFrame("Frame", nil, 5)"#, USAGE),
+        (r#"CreateFrame("Frame", nil, true)"#, USAGE),
+        ("CreateFrame(nil)", USAGE),
+        ("CreateFrame({})", USAGE),
+        ("CreateFrame()", USAGE),
+        (
+            r#"CreateFrame("Frame", "NoThis", {})"#,
+            "CreateFrame: Couldn't find 'this' in parent object",
+        ),
+        (
+            r#"CreateFrame("Frame", "OnTexture", ParentHost:CreateTexture())"#,
+            "CreateFrame: Wrong parent object type, expected frame",
+        ),
+        (
+            r#"CreateFrame("Frame", "OnFont", CreateFont("ParentFont"))"#,
+            "CreateFrame: Wrong parent object type, expected frame",
+        ),
+        (
+            r#"CreateFrame("Bogus", nil, nil, "NoSuchTemplate")"#,
+            r#"CreateFrame(): Couldn't find inherited node "NoSuchTemplate""#,
+        ),
+        (
+            r#"CreateFrame("Bogus")"#,
+            "CreateFrame: Unknown frame type 'Bogus'",
+        ),
+        ("CreateFrame(5)", "CreateFrame: Unknown frame type '5'"),
+    ] {
+        let e = err(&s, call);
+        assert!(e.contains(line), "`{call}` -> {e}");
+    }
+    s.run(
+        r#"
+        assert(ByName == nil and NoThis == nil and OnTexture == nil and OnFont == nil)
+        local child = CreateFrame("Frame", "UnderHost", ParentHost)
+        assert(child:GetParent() == ParentHost)
+    "#,
+    )
+    .unwrap();
+}

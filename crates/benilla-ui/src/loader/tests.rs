@@ -922,7 +922,7 @@ mod loader_tests {
         assert!(s.eval::<bool>("return Real ~= nil").unwrap());
         // The Lua door raises on the same lookup.
         let err = s.run(r#"CreateFrame("Bogus")"#).unwrap_err().to_string();
-        assert!(err.contains("unknown frame type 'Bogus'"), "{err}");
+        assert!(err.contains("Unknown frame type 'Bogus'"), "{err}");
     }
 
     /// A `.toc` line hands a listed `Bindings.xml` to `0x6ede10` (from `0x6edd51`), so each

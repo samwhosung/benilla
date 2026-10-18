@@ -38,7 +38,7 @@ fn a_second_world_frame_is_an_unknown_type() {
         .run(r#"CreateFrame("WorldFrame", "Another")"#)
         .unwrap_err()
         .to_string();
-    assert!(err.contains("unknown frame type 'WorldFrame'"), "{err}");
+    assert!(err.contains("Unknown frame type 'WorldFrame'"), "{err}");
     assert!(s.eval::<bool>("return Another == nil").unwrap());
 }
 

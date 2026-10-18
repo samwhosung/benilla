@@ -569,17 +569,24 @@ fn kind_method_registries(kind: Option<FrameKind>) -> &'static [&'static str] {
 /// `CreateFrame(kind, name?, parent?, inherits?)` (`0x7060b0`), the runtime frame factory.
 /// `inherits` names one template, applied after the frame is made
 /// ([`crate::loader::apply_template`]) so its `OnLoad` sees the frame's real name and its `$parent`
-/// resolves against the caller's name. An unknown template raises `Couldn't find inherited node`
-/// and creates nothing (`0x7061dd`); a known but unusable one (not virtual, or the wrong shape)
-/// only warns, since the lookup itself succeeded.
+/// resolves against the caller's name. The gates run in the reference's order, each a raise that
+/// creates nothing: the type and the parent's tag (the usage line), a table parent that is no
+/// frame, an unknown template (`Couldn't find inherited node`, `0x7061dd`), then an unknown type
+/// (`0x7062a0`). A known but unusable template (not virtual, or the wrong shape) only warns, since
+/// the lookup itself succeeded.
 pub(super) fn create_frame(
     lua: &Lua,
-    (kind, name, parent, inherits): (String, Option<Value>, Option<Value>, Option<Value>),
+    (kind, name, parent, inherits): (Option<Value>, Option<Value>, Option<Value>, Option<Value>),
 ) -> mlua::Result<Table> {
-    // An unknown type raises. The reference's message (`0x872fa8`) capitalises `Unknown`, and it
-    // tests the template first (`0x7061dd`), raising for the type only at `0x7062a0`.
-    let frame_kind = registered_frame_kind(lua, &kind)
-        .ok_or_else(|| mlua::Error::runtime(format!("CreateFrame: unknown frame type '{kind}'")))?;
+    const USAGE: &str = r#"Usage: CreateFrame("frameType" [, "name"] [, parent] [, "template"])"#;
+    // `lua_isstring(1)` (`0x7060d5`), then the parent's tag must be none, nil or a table
+    // (`0x7060e9`-`0x706112`): a parent given by name raises.
+    let Some(kind) = kind.as_ref().and_then(|v| optional_string(lua, v)) else {
+        return Err(mlua::Error::runtime(USAGE));
+    };
+    if !matches!(parent, None | Some(Value::Nil) | Some(Value::Table(_))) {
+        return Err(mlua::Error::runtime(USAGE));
+    }
     // `name` and `inherits` go through `lua_tostring` (`0x6f3690`) unguarded, so a number is a
     // string: `CreateFrame("Frame", 5)` names the frame "5". For `inherits` the conversion runs
     // before the string-type gate and retags the slot (`0x70613f`, `0x6f7cb1`), so a number there
@@ -587,18 +594,37 @@ pub(super) fn create_frame(
     let name: Option<String> = name.as_ref().and_then(|v| optional_string(lua, v));
     let template: Option<String> = inherits.as_ref().and_then(|v| optional_string(lua, v));
 
-    // A table is the parent and a name string is looked up; anything else is no parent. The
-    // reference raises `Usage: CreateFrame(...)` (`0x872f60`) for anything but a table or nil
-    // (`0x706112`).
-    let parent_handle: Option<FrameHandle> = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        match &parent {
-            Some(Value::Table(t)) => decode_id(t)
-                .ok()
-                .and_then(|id| model.id_to_frame.get(&id).copied()),
-            Some(Value::String(s)) => s.to_str().ok().and_then(|n| model.arena.lookup(n.as_ref())),
-            _ => None,
+    // A table parent is the object in its `[0]` (`0x706162`): none raises `Couldn't find 'this'
+    // in parent object` (`0x87303c`), and an object that is no frame (a region, a Font object)
+    // `Wrong parent object type, expected frame` (`0x7061ab`, `0x873004`).
+    let parent_handle: Option<FrameHandle> = match &parent {
+        Some(Value::Table(t)) => {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            match t.raw_get::<Value>(0)? {
+                Value::LightUserData(l) => Some(
+                    model
+                        .id_to_frame
+                        .get(&(l.0 as usize as u32))
+                        .copied()
+                        .ok_or_else(|| {
+                            mlua::Error::runtime(
+                                "CreateFrame: Wrong parent object type, expected frame",
+                            )
+                        })?,
+                ),
+                Value::Integer(_) if super::font::id_of_table(&model, t).is_some() => {
+                    return Err(mlua::Error::runtime(
+                        "CreateFrame: Wrong parent object type, expected frame",
+                    ))
+                }
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "CreateFrame: Couldn't find 'this' in parent object",
+                    ))
+                }
+            }
         }
+        _ => None,
     };
 
     // The reference silently ignores a fourth argument that is neither string nor number
@@ -610,7 +636,7 @@ pub(super) fn create_frame(
                 "CreateFrame: the 4th argument (inherits) must be a template-name string, got {}; \
                  ignored for '{}'",
                 v.type_name(),
-                name.as_deref().unwrap_or("<unnamed>")
+                name.as_deref().unwrap_or(super::binding_abi::UNNAMED)
             ));
         }
     }
@@ -633,6 +659,10 @@ pub(super) fn create_frame(
             )));
         }
     }
+
+    // The node build fails for a type no factory knows (`0x70628b` → `0x7062a0`, `0x872fa8`).
+    let frame_kind = registered_frame_kind(lua, &kind)
+        .ok_or_else(|| mlua::Error::runtime(format!("CreateFrame: Unknown frame type '{kind}'")))?;
 
     // A leading `$parent` in the name expands as in XML: `CreateFrame` sets `name=` on a synthetic
     // node (`0x70622d`) for the XML builder `0x6ee280`, so the name reaches `SetName` (`0x76c650`),
