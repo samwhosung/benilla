@@ -132,8 +132,8 @@ pub use kinds::{
     model_key, pane_clock_step_ms, slider_fraction, slider_grab, slider_set_value, ArmedSequence,
     ButtonState, ButtonVisualState, CharacterPane, ColorSelectState, CopyCamera, EditAction,
     EditBoxState, EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate,
-    MessageFrameState, MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight,
-    ModelPlayHead, ModelState, PaneArm, PaneCopy, RegionKind, ScrollFrameState,
+    MessageFrameState, MessageLine, MinimapState, MinimapStatics, ModelFileFacts, ModelFog,
+    ModelLight, ModelPlayHead, ModelState, PaneArm, PaneCopy, RegionKind, ScrollFrameState,
     ScrollingMessageState, SequenceFacts, ShownWrites, SliderState, StatusBarState, TooltipAnchor,
     TooltipState, Viewport, ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND,
     MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL,
@@ -325,8 +325,6 @@ pub struct WidgetArena {
     link_log: Option<Vec<FrameHandle>>,
     /// The draw list's fingerprint cache ([`crate::order::traversal`]).
     pub(crate) order_cache: crate::order::OrderCache,
-    /// Minimap frames ever created, so the state feed notices a new one without a walk.
-    minimap_created: u64,
     /// The live model panes, so the host's passes over them (the paint list, the implicit rects)
     /// skip the rest of the arena. Added at creation, as kinds never change; `destroy` removes its
     /// own.
@@ -383,7 +381,6 @@ impl WidgetArena {
             next_created: 0,
             renumbers: 0,
             link_log: None,
-            minimap_created: 0,
             order_cache: Default::default(),
             model_kinds: Vec::new(),
             walked_kinds: Vec::new(),
@@ -391,11 +388,6 @@ impl WidgetArena {
             minimap_kinds: Vec::new(),
             editbox_kinds: Vec::new(),
         }
-    }
-
-    /// Minimap frames ever created, a cheap signal that a new one exists.
-    pub fn minimap_created(&self) -> u64 {
-        self.minimap_created
     }
 
     /// The live model panes.
@@ -635,9 +627,6 @@ impl WidgetArena {
             next_decl: 0,
         };
 
-        if matches!(kind, FrameKind::Minimap) {
-            self.minimap_created += 1;
-        }
         let model_kind = kind.is_model();
         let visible = frame.effective_visible;
         let (strata, level) = (frame.strata, frame.level);

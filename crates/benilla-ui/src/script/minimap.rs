@@ -6,30 +6,44 @@
 use mlua::{Lua, Table, Value};
 
 use super::binding_abi::lua_number_text;
-use super::object::frame_handle_of;
+use super::object::{decode_id, frame_handle_of};
 use super::Model;
-use crate::widget::{KindState, MinimapState, MINIMAP_ZOOM_LEVELS};
+use crate::widget::{FrameHandle, FrameKind, KindState, MINIMAP_ZOOM_LEVELS};
 
 /// Registry key of the Minimap method table.
 pub(super) const REG_MINIMAP_METHODS: &str = "__benilla_minimap_methods";
 
-/// Run `f` over a frame's Minimap state; errors on any other receiver, since the method table is
-/// a plain Lua value a caller can misapply.
-fn with_minimap<T>(
-    lua: &Lua,
-    this: &Table,
-    f: impl FnOnce(&mut MinimapState) -> T,
-) -> mlua::Result<T> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let frame = model
-        .arena
-        .frame_mut(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    match &mut frame.kind_state {
-        KindState::Minimap(m) => Ok(f(m)),
-        _ => Err(mlua::Error::runtime("not a Minimap")),
+/// The member prologue the setters share: `this` must be a table (`0x847ef8`), carry a
+/// framescript object (`0x847ec0`) and be a Minimap, the `IsA` test against the Minimap class
+/// token `0xbc8290` (`0x4ee000`, else `0x847e98`).
+fn this_minimap(lua: &Lua, this: &Value) -> mlua::Result<FrameHandle> {
+    let Value::Table(t) = this else {
+        return Err(mlua::Error::runtime(
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ));
+    };
+    if decode_id(t).is_err() {
+        return Err(mlua::Error::runtime(
+            "Attempt to find 'this' in non-framescript object",
+        ));
     }
+    let wrong = || mlua::Error::runtime("Wrong object type for member function");
+    let h = frame_handle_of(lua, t).map_err(|_| wrong())?;
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    match model.arena.frame(h).map(|f| f.kind) {
+        Some(FrameKind::Minimap) => Ok(h),
+        _ => Err(wrong()),
+    }
+}
+
+/// The frame's name for a usage or load error's `%s`, `<unnamed>` without one.
+fn frame_name(lua: &Lua, h: FrameHandle) -> String {
+    lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .arena
+        .frame(h)
+        .and_then(|f| f.name.clone())
+        .unwrap_or_else(|| "<unnamed>".to_string())
 }
 
 /// The model half of `CMinimap::LoadXML` (`0x4ee2b0`): `minimapArrowModel` to engine children 1
@@ -70,29 +84,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "GetZoom",
-        // The indoor index while inside a WMO, else the outdoor one, as the reference routes.
-        lua.create_function(|lua, this: Table| with_minimap(lua, &this, |m| m.active_zoom()))?,
+        // The indoor index while inside a WMO, else the outdoor one (`0x6da980`); no `this`.
+        lua.create_function(|lua, _: mlua::MultiValue| {
+            Ok(lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .minimap
+                .active_zoom())
+        })?,
     )?;
     m.set(
         "SetZoom",
-        lua.create_function(|lua, (this, zoom): (Table, f64)| {
-            // Truncated and clamped to 0..=5 (`0x6daa10`), into the current mode's index.
+        lua.create_function(|lua, (_this, zoom): (Value, f64)| {
+            // Truncated and clamped to 0..=5 (`0x6daa10`), into the current mode's index; no
+            // `this` lookup (`0x4eec60`).
             let clamped = (zoom.max(0.0) as u8).min(MINIMAP_ZOOM_LEVELS - 1);
-            let inside = with_minimap(lua, &this, |m| {
-                m.set_active_zoom(clamped);
-                m.inside
-            })?;
-            // The reference also sets the mode's CVar, which is what survives a restart. The borrow
-            // above is released first: both reach the same `Model`.
-            super::cvars::set_from_engine(
-                &mut lua.app_data_mut::<Model>().expect("model app_data"),
-                if inside {
-                    "minimapInsideZoom"
-                } else {
-                    "minimapZoom"
-                },
-                clamped.to_string(),
-            );
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model.minimap.set_active_zoom(clamped);
+            // The reference also sets the mode's CVar, which is what survives a restart.
+            let cvar = if model.minimap.inside {
+                "minimapInsideZoom"
+            } else {
+                "minimapZoom"
+            };
+            super::cvars::set_from_engine(&mut model, cvar, clamped.to_string());
             Ok(())
         })?,
     )?;
@@ -103,30 +118,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // empty path restores the default circle rather than unmasking the map; what the
         // reference does with one is untraced.
         "SetMaskTexture",
-        lua.create_function(|lua, (this, path): (Table, Value)| {
+        lua.create_function(|lua, (this, path): (Value, Value)| {
+            let h = this_minimap(lua, &this)?;
             let path = match path {
                 Value::String(s) => s.to_string_lossy(),
                 Value::Integer(i) => lua_number_text(i as f64),
                 Value::Number(n) => lua_number_text(n),
                 _ => {
-                    with_minimap(lua, &this, |_| ())?;
-                    return Err(super::binding_abi::usage(
-                        lua,
-                        &this,
-                        "SetMaskTexture(\"file\")",
-                    ));
+                    return Err(mlua::Error::runtime(format!(
+                        "Usage: {}:SetMaskTexture(\"file\")",
+                        frame_name(lua, h)
+                    )));
                 }
             };
             let path = Some(path).filter(|p| !p.is_empty());
-            with_minimap(lua, &this, |m| m.mask_texture = path)
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .minimap
+                .mask_texture = path;
+            Ok(())
         })?,
     )?;
     m.set(
         "GetZoomLevels",
-        lua.create_function(|lua, this: Table| {
-            // The reference's constant, with the receiver still validated.
-            with_minimap(lua, &this, |_| MINIMAP_ZOOM_LEVELS)
-        })?,
+        // The reference's constant (`0x6da9a0`), with no `this` lookup (`0x4eebe0`).
+        lua.create_function(|_, _: mlua::MultiValue| Ok(MINIMAP_ZOOM_LEVELS))?,
     )?;
     m.set(
         "PingLocation",
@@ -134,9 +150,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // reference reads against the widget's own size (`0x4eeca0`); parked in screen units, its
         // effective scale applied, for the app to resolve in the frame it draws the map. One
         // pending click, not one per widget.
-        lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
-            with_minimap(lua, &this, |_| ())?;
-            let h = frame_handle_of(lua, &this)?;
+        lua.create_function(|lua, (this, x, y): (Value, f32, f32)| {
+            let h = this_minimap(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let s = super::object::eff_scale(&model, h);
             model.minimap_ping_request = Some((x * s, y * s));
@@ -147,9 +162,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetPingPosition",
         // Fractions of the widget side from its centre (`MINIMAP_PING`'s arg2/arg3 space), which
         // the app recomputes from the world point each frame. Always two numbers (`0x4eefd0`): the
-        // stock `Minimap_OnUpdate` multiplies them for 5 s, so a nil would error every frame.
-        lua.create_function(|lua, this: Table| {
-            with_minimap(lua, &this, |_| ())?;
+        // stock `Minimap_OnUpdate` multiplies them for 5 s, so a nil would error every frame. No
+        // `this` lookup.
+        lua.create_function(|lua, _: mlua::MultiValue| {
             let (x, y) = lua
                 .app_data_ref::<Model>()
                 .expect("model app_data")

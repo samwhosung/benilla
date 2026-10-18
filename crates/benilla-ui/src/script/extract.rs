@@ -90,9 +90,10 @@ impl UiScript {
                     let alpha = frame.map_or(1.0, |f| crate::color::alpha_f32(f.alpha));
                     let scale = frame.map(|f| f.effective_scale).unwrap_or(1.0);
                     let content = match frame.map(|f| &f.kind_state) {
-                        Some(crate::widget::KindState::Minimap(m)) => QuadContent::Minimap {
-                            zoom: m.zoom,
-                            inside_zoom: m.inside_zoom,
+                        // The zoom cells are the minimap's statics, one pair for every Minimap.
+                        Some(crate::widget::KindState::Minimap(_)) => QuadContent::Minimap {
+                            zoom: model.minimap.zoom,
+                            inside_zoom: model.minimap.inside_zoom,
                         },
                         // A `<Model>`/`<PlayerModel>` pane's content hole. Both kinds share
                         // `KindState::Model`, as the client's `CGCharacterModelBase` extends

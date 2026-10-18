@@ -778,11 +778,11 @@ fn emit_minimap(
     }
 }
 
-/// Push the player's WMO containment onto the Minimap widget (`0xceaa60`), so the zoom buttons
-/// drive the indoor index indoors and the outdoor one outside; the verdict is [`emit_minimap`]'s,
-/// as the reference keeps one flag. Pushed on the edge and whenever the VM's Minimap-creation
-/// count moves, so a widget built later is still told. The edge also fires `MINIMAP_UPDATE_ZOOM`,
-/// on which the stock `Minimap_OnEvent` re-syncs the +/- buttons to the other index's level.
+/// Push the player's WMO containment, the indoor byte `0xceaa60`, so the zoom buttons drive the
+/// indoor index indoors and the outdoor one outside; the verdict is [`emit_minimap`]'s, as the
+/// reference keeps one flag. Pushed on the edge, which a new VM's first frame is. The edge also
+/// fires `MINIMAP_UPDATE_ZOOM`, on which the stock `Minimap_OnEvent` re-syncs the +/- buttons to
+/// the other index's level.
 fn feed_minimap_inside(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     world: benilla_world::world_point::WorldPoint,
@@ -792,18 +792,12 @@ fn feed_minimap_inside(
     asset_server: Res<AssetServer>,
     mut inside_res: ResMut<MinimapInside>,
     mut was_inside: Local<crate::ui_script::VmMemo<Option<bool>>>,
-    mut pushed_at: Local<crate::ui_script::VmMemo<u64>>,
 ) {
     let inside = minimap_interior(&player, &instances, &wmos, &world, &asset_server).is_some();
     inside_res.0 = inside;
     let Some(mut script) = script else { return };
-    let edge = *was_inside.get(&script) != Some(inside);
-    let created = script.minimap_widgets_created();
-    if edge || *pushed_at.get(&script) != created {
+    if *was_inside.get(&script) != Some(inside) {
         script.set_minimap_inside(inside);
-        *pushed_at.get(&script) = created;
-    }
-    if edge {
         *was_inside.get(&script) = Some(inside);
         script.fire_event("MINIMAP_UPDATE_ZOOM", vec![]);
     }

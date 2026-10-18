@@ -722,41 +722,48 @@ impl ModelState {
     }
 }
 
-/// The Minimap widget's state. The client keeps two zoom indices, outdoor (`0x86f698`, CVar
-/// `minimapZoom`) and indoor (`0x86f69c`, CVar `minimapInsideZoom`, radii `{150,120,90,60,40,25}`
-/// yd); the WMO-interior flag `0xceaa60` picks which one `GetZoom`/`SetZoom` use.
-#[derive(Clone, Debug, PartialEq)]
+/// A Minimap frame's own state: its engine children. Everything else the minimap shows is one
+/// process-wide set of statics ([`MinimapStatics`]), as the reference keeps it.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MinimapState {
-    /// The outdoor zoom index, 0 widest to 5 tightest; `SetZoom` clamps at 5 (`0x6daa10`).
+    /// The player-arrow `Model` (`[Minimap+0x338]`), reached by `SetPlayerFacing` (`0x4eb8e0`).
+    /// Set by `WidgetArena::create` on insert, as the ctor builds its children.
+    pub player_arrow: Option<FrameHandle>,
+}
+
+/// The minimap's statics, one set for every Minimap frame: the zoom cells, outdoor `0x86f698`
+/// (CVar `minimapZoom`) and indoor `0x86f69c` (CVar `minimapInsideZoom`, radii
+/// `{150,120,90,60,40,25}` yd), the indoor byte `0xceaa60` that picks between them, and the mask
+/// `0xbc7968`. `GetZoomLevels`, `GetZoom`, `SetZoom` and `GetPingPosition` read and write them
+/// with no `this` lookup (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MinimapStatics {
+    /// The outdoor zoom index, 0 widest to 5 tightest.
     pub zoom: u8,
     pub inside_zoom: u8,
     /// Inside a WMO interior, which picks the index; pushed by the app, which owns that test.
     pub inside: bool,
     /// `Minimap:SetMaskTexture`'s mask, write-only from Lua; `None` is [`MINIMAP_DEFAULT_MASK`].
     pub mask_texture: Option<String>,
-    /// The player-arrow `Model` (`[Minimap+0x338]`), reached by `SetPlayerFacing` (`0x4eb8e0`).
-    pub player_arrow: Option<FrameHandle>,
 }
 
 /// Both zoom CVars register with `"3"` (`0x48fc5a`/`0x48fc76`) and the reset copies the CVar in;
 /// a higher index zooms in, 3 being a 60 yd indoor radius and a 133.3 yd outdoor half-extent.
 pub const MINIMAP_DEFAULT_ZOOM: u8 = 3;
 
-impl Default for MinimapState {
+impl Default for MinimapStatics {
     fn default() -> Self {
         Self {
             zoom: MINIMAP_DEFAULT_ZOOM,
             inside_zoom: MINIMAP_DEFAULT_ZOOM,
             inside: false,
             mask_texture: None,
-            // Set by `WidgetArena::create` on insert, as the ctor builds its children.
-            player_arrow: None,
         }
     }
 }
 
-impl MinimapState {
-    /// The index `GetZoom`/`SetZoom` act on now.
+impl MinimapStatics {
+    /// The index `GetZoom`/`SetZoom` act on now (`0x6da980`).
     pub fn active_zoom(&self) -> u8 {
         if self.inside {
             self.inside_zoom

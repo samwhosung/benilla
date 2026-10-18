@@ -1217,6 +1217,9 @@ pub(crate) struct Model {
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
 
+    /// The minimap's process-wide statics (zoom cells, indoor byte, mask), shared by every
+    /// Minimap frame of this VM.
+    pub(crate) minimap: crate::widget::MinimapStatics,
     /// A `Minimap:PingLocation(x, y)`, drained the same frame: centre-relative offsets in the screen
     /// root's units, `GetCursorPosition`'s space, not the window pixels of the app's minimap
     /// geometry.
@@ -1784,6 +1787,7 @@ impl Model {
             verb_events: None,
             item_locks: std::collections::HashSet::new(),
             cursor_pos: (0.0, 0.0),
+            minimap: crate::widget::MinimapStatics::default(),
             minimap_ping_request: None,
             minimap_ping: (0.0, 0.0),
             chat_sends: Vec::new(),

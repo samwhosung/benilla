@@ -861,22 +861,11 @@ impl UiScript {
         model.modifiers = (shift, ctrl, alt);
     }
 
-    /// Push the player's WMO-containment state (the client's `0xceaa60`) onto every Minimap: it
-    /// picks which persisted zoom index `GetZoom`/`SetZoom` act on. Call it before the script
-    /// tick, on each inside/outside edge and whenever [`Self::minimap_widgets_created`] moves.
+    /// Push the player's WMO-containment state, the indoor byte `0xceaa60` that picks which zoom
+    /// index `GetZoom`/`SetZoom` act on. Call it before the script tick, on each inside/outside
+    /// edge and for each new VM.
     pub fn set_minimap_inside(&mut self, inside: bool) {
-        self.for_each_minimap(|m| m.inside = inside);
-    }
-
-    fn for_each_minimap(&mut self, mut f: impl FnMut(&mut crate::widget::MinimapState)) {
-        let mut model = self.model_mut();
-        for h in model.arena.minimap_kinds().to_vec() {
-            if let Some(frame) = model.arena.frame_mut(h) {
-                if let KindState::Minimap(m) = &mut frame.kind_state {
-                    f(m);
-                }
-            }
-        }
+        self.model_mut().minimap.inside = inside;
     }
 
     /// Push the player's facing (radians) onto every Minimap's player-arrow `Model`, every frame,
@@ -914,34 +903,19 @@ impl UiScript {
         self.model_mut().minimap_ping_request.take()
     }
 
-    /// `Minimap:SetMaskTexture`'s value from the first Minimap (the app draws one map), `None`
-    /// until one is set, while the app keeps [`crate::widget::MINIMAP_DEFAULT_MASK`].
+    /// `Minimap:SetMaskTexture`'s value, `None` until one is set, while the app keeps
+    /// [`crate::widget::MINIMAP_DEFAULT_MASK`].
     pub fn minimap_mask_texture(&self) -> Option<String> {
-        let model = self.model_ref();
-        model.arena.minimap_kinds().iter().find_map(|&h| {
-            match model.arena.frame(h).map(|f| &f.kind_state) {
-                Some(KindState::Minimap(m)) => m.mask_texture.clone(),
-                _ => None,
-            }
-        })
+        self.model_ref().minimap.mask_texture.clone()
     }
 
-    /// Minimap widgets ever created in this VM: a move means a new one needs the containment state.
-    pub fn minimap_widgets_created(&self) -> u64 {
-        self.model_ref().arena.minimap_created()
-    }
-
-    /// Seed every Minimap's two zoom indices from the persisted CVars, as the client's reset path
-    /// does (`[0x86f698] ← [[0xb4b410]+0x28]`, `[0x86f69c] ← [[0xb4d90c]+0x28]`). Call it once,
-    /// when the UI and the widget exist: from then on `Minimap:SetZoom` keeps the CVar following
-    /// the widget, and a repeated seed would fight the +/- buttons.
+    /// Seed the two zoom cells from the persisted CVars, as the client's reset path does
+    /// (`[0x86f698] ← [[0xb4b410]+0x28]`, `[0x86f69c] ← [[0xb4d90c]+0x28]`).
     pub fn set_minimap_zoom(&mut self, zoom: u8, inside_zoom: u8) {
         let top = crate::widget::MINIMAP_ZOOM_LEVELS - 1;
-        let (zoom, inside_zoom) = (zoom.min(top), inside_zoom.min(top));
-        self.for_each_minimap(|m| {
-            m.zoom = zoom;
-            m.inside_zoom = inside_zoom;
-        });
+        let mut model = self.model_mut();
+        model.minimap.zoom = zoom.min(top);
+        model.minimap.inside_zoom = inside_zoom.min(top);
     }
 
     /// Load and run a text chunk; handler errors during events go to [`UiScript::errors`] instead.

@@ -319,3 +319,65 @@ fn ping_location_reaches_the_host_in_screen_units() {
     .unwrap();
     assert_eq!(s.take_minimap_ping_request(), Some((5.0, -10.0)));
 }
+
+/// The zoom cells, the indoor byte and the mask are statics (`0x86f698`, `0x86f69c`, `0xceaa60`,
+/// `0xbc7968`): every Minimap frame shows the one zoom and the one mask, and the zoom and ping
+/// getters take no `this` (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`).
+#[test]
+fn the_minimap_state_is_one_set_of_statics_and_its_getters_take_no_receiver() {
+    let mut s = script();
+    s.run(
+        r#"a = CreateFrame("Minimap", "MapA")
+           b = CreateFrame("Minimap", "MapB")
+           plain = CreateFrame("Frame", "PlainFrame")"#,
+    )
+    .unwrap();
+    s.run("a:SetZoom(1)").unwrap();
+    assert_eq!(s.eval::<u8>("return b:GetZoom()").unwrap(), 1, "one zoom");
+    for chunk in [
+        "return a.GetZoom()",
+        "return a.GetZoom(plain)",
+        "return a.GetZoom(5)",
+    ] {
+        assert_eq!(s.eval::<u8>(chunk).unwrap(), 1, "{chunk}");
+    }
+    assert_eq!(
+        s.eval::<u8>("return a.GetZoomLevels(plain)").unwrap(),
+        MINIMAP_ZOOM_LEVELS
+    );
+    s.run("a.SetZoom(plain, 4)").unwrap();
+    assert_eq!(s.eval::<u8>("return b:GetZoom()").unwrap(), 4);
+    assert_eq!(s.arity("a.GetPingPosition()").unwrap(), 2);
+    assert_eq!(s.arity("a.GetPingPosition(plain)").unwrap(), 2);
+
+    // The indoor byte is one flag for both frames.
+    s.set_minimap_inside(true);
+    s.run("b:SetZoom(2)").unwrap();
+    assert_eq!(s.eval::<u8>("return a:GetZoom()").unwrap(), 2);
+    s.set_minimap_inside(false);
+    assert_eq!(s.eval::<u8>("return a:GetZoom()").unwrap(), 4);
+
+    // One mask: the later frame's call wins.
+    s.run(r#"a:SetMaskTexture("Interface\\A") b:SetMaskTexture("Interface\\B")"#)
+        .unwrap();
+    assert_eq!(s.minimap_mask_texture().as_deref(), Some("Interface\\B"));
+
+    // The setters keep the member prologue, with the reference's three texts.
+    for (chunk, want) in [
+        (
+            r#"a.SetMaskTexture("x")"#,
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ),
+        (
+            r#"a.SetMaskTexture({}, "x")"#,
+            "Attempt to find 'this' in non-framescript object",
+        ),
+        (
+            r#"a.SetMaskTexture(plain, "x")"#,
+            "Wrong object type for member function",
+        ),
+    ] {
+        let err = crate::script::lua_message(&s.run(chunk).expect_err(chunk));
+        assert!(err.ends_with(want), "{chunk}: {err}");
+    }
+}
