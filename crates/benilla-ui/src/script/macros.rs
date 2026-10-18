@@ -369,12 +369,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetMacroIconInfo(index)` (`0x4f1a30`): `trunc(n) - 1` compared unsigned with the count
+    // `GetMacroIconInfo(index)` (`0x4f1a30`): an index that is no number raises the usage text
+    // (`0x4f1a41` `lua_isnumber`, `0x84cc78`); `trunc(n) - 1` is compared unsigned with the count
     // (`0x4f1a76`), so 0, a negative and an index past the list push "" (`0x4f1ac5`, `0x882748`),
     // never nil. It never builds the list.
     g.set(
         "GetMacroIconInfo",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, v: Value| {
+            let index = super::binding_abi::index_arg(lua, v, "Usage: GetMacroIconInfo(index)")?;
             let path = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model
@@ -731,6 +733,17 @@ mod tests {
             "Interface\\Icons\\Ability_BackStab",
             "the index truncates"
         );
+        for call in [
+            "GetMacroIconInfo()",
+            "GetMacroIconInfo('x')",
+            "GetMacroIconInfo({})",
+        ] {
+            let err = s.run(call).expect_err(call).to_string();
+            assert!(
+                err.contains("Usage: GetMacroIconInfo(index)"),
+                "{call}: {err}"
+            );
+        }
         for off in ["4", "0", "-1", "'5'"] {
             assert_eq!(
                 s.eval::<String>(&format!(
