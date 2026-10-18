@@ -228,11 +228,12 @@ fn a_minimap_is_born_with_nine_model_children_and_the_ninth_is_the_player_arrow(
         "Frame"
     );
 
-    // The model files come from `CMinimap::LoadXML` (`0x4ee2b0`), so a Lua-built one has none.
-    assert!(s
-        .eval::<Option<String>>("return ({m:GetChildren()})[9]:GetModel()")
-        .unwrap()
-        .is_none_or(|p| p.is_empty()));
+    // `CreateFrame`'s builder runs `CMinimap::LoadXML` (`0x4ee2b0`) too, so the stock models.
+    assert_eq!(
+        s.eval::<String>("return ({m:GetChildren()})[9]:GetModel()")
+            .unwrap(),
+        crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL
+    );
 }
 
 /// `SetMaskTexture` (`0x4ee4a0`), a 1.12 method with no getter, so the test reads the statics;
@@ -706,7 +707,8 @@ fn the_engine_children_are_anchored_sized_and_hidden_as_the_ctor_leaves_them() {
 }
 
 /// `SetArrowModel` (`0x4ee980`) puts its file on the eight arrow frames and re-arms their art, and
-/// answers no error for a file that does not load, which draws the error cube; `SetPlayerModel`
+/// answers no error for a file that does not load (the reference's error cube; benilla's pane
+/// draws nothing there, #330); `SetPlayerModel`
 /// (`0x4eeab0`) sets the player arrow alone and raises when it is left with no model, as `""`
 /// leaves it (`0x4ee286`).
 #[test]
@@ -720,7 +722,11 @@ fn the_model_setters_put_their_files_on_the_engine_children() {
         assert_eq!(c.path.as_deref(), Some("Nope\\Arrow.mdx"), "child {i}");
         assert_eq!(c.sequence, if i <= 5 { 165 } else { 166 }, "child {i}");
     }
-    assert_eq!(s.minimap_child("TestMinimap", 9).unwrap().path, None);
+    assert_eq!(
+        s.minimap_child("TestMinimap", 9).unwrap().path.as_deref(),
+        Some(crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL),
+        "the player arrow keeps its own file"
+    );
 
     s.run(r#"m:SetPlayerModel("Interface\\Minimap\\MinimapArrow.mdx")"#)
         .unwrap();

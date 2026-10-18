@@ -250,6 +250,11 @@ impl Loader<'_> {
         status::install_path(&format!("{}{path}", self.status_root))
     }
 
+    /// Mark the loader's `CreateFrame` call, the builder's creation half (`Model::xml_creating`).
+    fn set_xml_creating(&self, on: bool) {
+        self.model().xml_creating = on;
+    }
+
     /// `FrameXML_Debug` above 0, read where the reference reads it, at each close.
     fn debug(&self) -> bool {
         self.model().framexml_debug.get() > 0
@@ -824,21 +829,23 @@ impl Loader<'_> {
                 return None;
             }
         };
-        let wrapper: Table =
-            match create.call((el.tag.clone(), resolved_name.clone(), parent.cloned())) {
-                Ok(w) => w,
-                Err(e) => {
-                    self.report.fault(format!(
-                        "CreateFrame(<{}>{}): {e}",
-                        el.tag,
-                        resolved_name
-                            .as_deref()
-                            .map(|n| format!(" name=\"{n}\""))
-                            .unwrap_or_default()
-                    ));
-                    return None;
-                }
-            };
+        self.set_xml_creating(true);
+        let made = create.call::<Table>((el.tag.clone(), resolved_name.clone(), parent.cloned()));
+        self.set_xml_creating(false);
+        let wrapper: Table = match made {
+            Ok(w) => w,
+            Err(e) => {
+                self.report.fault(format!(
+                    "CreateFrame(<{}>{}): {e}",
+                    el.tag,
+                    resolved_name
+                        .as_deref()
+                        .map(|n| format!(" name=\"{n}\""))
+                        .unwrap_or_default()
+                ));
+                return None;
+            }
+        };
         self.report.frames += 1;
 
         let dbg_name = resolved_name

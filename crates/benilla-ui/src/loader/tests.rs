@@ -36,6 +36,50 @@ mod loader_tests {
         );
     }
 
+    /// `CreateFrame("Minimap")` runs the same post-load hook (`0x70628b` → `0x6ee280` → slot 0x24 at
+    /// `0x6ee4ea`, `0x4ee2b0`): after the template's `OnLoad`, the stock models and their sequences.
+    #[test]
+    fn a_created_minimap_takes_the_stock_models_after_its_onload() {
+        let s = UiScript::new().unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="MinimapTpl" virtual="true">
+                    <Scripts><OnLoad>seen = ({this:GetChildren()})[9]:GetModel() or "none"</OnLoad></Scripts>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        s.run(r#"m = CreateFrame("Minimap", "Made", nil, "MinimapTpl") bare = CreateFrame("Minimap")"#)
+            .unwrap();
+        assert_eq!(s.eval::<String>("return seen").unwrap(), "none");
+        for frame in ["m", "bare"] {
+            assert_eq!(
+                s.eval::<String>(&format!("return ({{{frame}:GetChildren()}})[9]:GetModel()"))
+                    .unwrap(),
+                crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL,
+                "{frame}"
+            );
+            for i in 1..=8 {
+                assert_eq!(
+                    s.eval::<String>(&format!(
+                        "return ({{{frame}:GetChildren()}})[{i}]:GetModel()"
+                    ))
+                    .unwrap(),
+                    crate::widget::MINIMAP_DEFAULT_ARROW_MODEL,
+                    "{frame} child {i}"
+                );
+            }
+        }
+        let made = s.minimap_child("Made", 1).unwrap();
+        assert_eq!(made.sequence, i32::from(crate::script::MINIMAP_GROUP_ARROW));
+        let made = s.minimap_child("Made", 6).unwrap();
+        assert_eq!(
+            made.sequence,
+            i32::from(crate::script::MINIMAP_LANDMARK_ARROW)
+        );
+    }
+
     /// `CMinimap::LoadXML 0x4ee2b0`: `minimapArrowModel` goes to engine children 1-8 (`0x4ee170`),
     /// `minimapPlayerModel` to child 9 alone (`[Minimap+0x338]`, `0x4ee260`); without the
     /// attributes the defaults are `0x84c768` and `0x8453c0`. `Minimap.xml:97` sets both.

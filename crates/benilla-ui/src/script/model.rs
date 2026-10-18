@@ -1151,6 +1151,9 @@ pub(crate) struct Model {
     pub(crate) tabard_intents: Vec<super::tabard::TabardIntent>,
     /// The `WorldFrame` type's one-shot record: true once the first is made.
     pub(crate) world_frame_made: bool,
+    /// Set while the XML loader's `CreateFrame` call builds a frame: the creation half only, so
+    /// `create_frame` leaves the builder's post-load hook (`0x6ee4ea`) to the loader's own steps.
+    pub(crate) xml_creating: bool,
     /// Per live-unit guid, reach for `CanInspect`/`CheckInteractDistance`; absent: nil.
     pub(crate) unit_reach: HashMap<u64, super::UnitReach>,
 
@@ -1841,6 +1844,7 @@ impl Model {
             tabard_host: Default::default(),
             tabard_intents: Vec::new(),
             world_frame_made: false,
+            xml_creating: false,
             unit_reach: HashMap::new(),
             chat_input: Vec::new(),
             skills: skills::SkillsState::default(),

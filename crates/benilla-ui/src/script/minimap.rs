@@ -125,7 +125,8 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
 /// (`0x4ee1a3`), and the file goes on the eight arrow frames, the five party and pet arrows
 /// playing `GroupArrow` (165, `0x4ee1de`) and the three rim arrows `Arrow` (166, `0x4ee22b`). The
 /// model is made with `CreateModelFromPath` (`0x707350`), which puts the error cube in for a file
-/// that does not load, so this answers 1 for any name.
+/// that does not load, so this answers 1 for any name; benilla's pane has no cube yet and draws
+/// nothing for such a file (#330).
 fn load_arrow_model(model: &mut Model, minimap: FrameHandle, path: &str) -> bool {
     let level = model.arena.frame(minimap).map_or(0, |f| i32::from(f.level));
     let (group, rim) = match model.arena.frame_mut(minimap).map(|f| &mut f.kind_state) {
