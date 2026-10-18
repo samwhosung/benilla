@@ -60,11 +60,11 @@ impl Loader<'_> {
 
     /// One `<Layer>` region on `wrapper`, created on `level` and loaded: its name (`$parent`
     /// expanded, published as a global, read from `raw` alone, `0x6f2751`), then its `LoadXML`
-    /// level by level ([`Loader::levels`], a FontString's up to a font, [`Loader::fontstring_levels`];
-    /// `inherits=` may name a region template, in the frames' one registry, `0x6ee500`), then the
-    /// implicit creation anchor, run after the region's
-    /// LoadXML as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone.
-    /// `None` when the creation raised.
+    /// level by level ([`Loader::levels`], a FontString's up to a font,
+    /// [`Loader::fontstring_levels`]; `inherits=` may name a region template, in the frames' one
+    /// registry, `0x6ee500`), then the implicit creation anchor, run after the region's `LoadXML`
+    /// as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone. `None`
+    /// when the creation raised.
     fn build_region(
         &mut self,
         raw: &Element,
@@ -313,8 +313,9 @@ impl Loader<'_> {
             self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
         }
         // A justify token is matched first (`0x6f1990`) and one that matches nothing is skipped
-        // (`0x7712c3`, `0x771327`); a match is the setter's write, which zeroes the axis for the
-        // other axis's token (`0x7712e1`-`0x7712e7`).
+        // (`0x7712c3`, `0x771327`). A match writes its axis's bits of the justify word inline, none
+        // for the other axis's token, which zeroes the axis (V `0x7712e1`-`0x7712e7`, H
+        // `0x771345`-`0x77134b`), and clears the bits the Lua setter clears, so the setter stands in.
         for (attr, setter) in [("justifyV", "SetJustifyV"), ("justifyH", "SetJustifyH")] {
             if let Some(j) = node
                 .attr(attr)

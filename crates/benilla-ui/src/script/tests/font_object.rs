@@ -1200,15 +1200,24 @@ fn a_fonts_unset_shadow_is_transparent() {
         "F = CreateFont('UnsetShadowF')
          host = CreateFrame('Frame') fs = host:CreateFontString() plain = host:CreateFontString()
          eb = CreateFrame('EditBox') mf = CreateFrame('MessageFrame')
-         smf = CreateFrame('ScrollingMessageFrame')",
+         smf = CreateFrame('ScrollingMessageFrame') html = CreateFrame('SimpleHTML')",
     )
     .unwrap();
     let alpha = |obj: &str| {
         s.eval::<Vec<f32>>(&format!("return {{ {obj}:GetShadowColor() }}"))
             .unwrap()
     };
-    for obj in ["F", "eb", "mf", "smf"] {
+    for obj in ["F", "eb", "mf", "smf", "html"] {
         assert_eq!(alpha(obj), vec![0.0, 0.0, 0.0, 0.0], "{obj}");
+    }
+    // SimpleHTML's four element fonts come from the same constructor (`0x789e7c`), and
+    // `SetShadowOffset` keeps their colour.
+    s.run("html:SetShadowOffset('H1', 1, -1)").unwrap();
+    for elem in ["P", "H1", "H2", "H3"] {
+        let c = s
+            .eval::<Vec<f32>>(&format!("return {{ html:GetShadowColor('{elem}') }}"))
+            .unwrap();
+        assert_eq!(c, vec![0.0, 0.0, 0.0, 0.0], "SimpleHTML {elem}");
     }
     assert_eq!(
         alpha("plain")[3],

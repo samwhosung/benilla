@@ -823,3 +823,130 @@ fn an_xml_justify_token_is_matched_and_a_miss_skipped() {
     assert_eq!(justify("JustString"), "RIGHT MIDDLE", "still following");
     assert_eq!(justify("JustCross"), "UNKNOWN UNKNOWN");
 }
+
+/// `0x771502`-`0x771541`, `0x783e17`-`0x783e5d`: the held-font shortcut needs the path, the height
+/// and the flags all equal; only the flags or only the height differing goes to the load, which a
+/// refused file fails (logged, the font kept).
+#[test]
+fn a_held_font_differing_only_in_height_or_flags_reloads() {
+    let mut s = ui();
+    load_str(
+        &s,
+        r#"<Ui><Font name="ReloadHeld" font="Fonts\HELD.TTF" virtual="true">
+            <FontHeight><AbsValue val="10"/></FontHeight>
+        </Font></Ui>"#,
+    );
+    s.set_font_probe(Box::new(|path: &str| !path.contains("HELD")));
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Font name="ReloadFlags" inherits="ReloadHeld" font="Fonts\HELD.TTF" outline="NORMAL"
+                  virtual="true">
+                <FontHeight><AbsValue val="10"/></FontHeight>
+            </Font>
+            <Font name="ReloadHeight" inherits="ReloadHeld" font="Fonts\HELD.TTF" virtual="true">
+                <FontHeight><AbsValue val="11"/></FontHeight>
+            </Font>
+            <Frame name="ReloadHost">
+                <Layers><Layer>
+                    <FontString name="ReloadFlagsString" inherits="ReloadHeld"
+                                font="Fonts\HELD.TTF" monochrome="1">
+                        <FontHeight><AbsValue val="10"/></FontHeight>
+                    </FontString>
+                    <FontString name="ReloadHeightString" inherits="ReloadHeld"
+                                font="Fonts\HELD.TTF">
+                        <FontHeight><AbsValue val="11"/></FontHeight>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    for line in [
+        r"Font ReloadFlags: Unable to load font file Fonts\HELD.TTF",
+        r"Font ReloadHeight: Unable to load font file Fonts\HELD.TTF",
+        r"FontString ReloadFlagsString: Unable to load font file Fonts\HELD.TTF",
+        r"FontString ReloadHeightString: Unable to load font file Fonts\HELD.TTF",
+    ] {
+        assert!(has_line(&report, line), "{line}: {:?}", report.warnings);
+    }
+    for name in [
+        "ReloadFlags",
+        "ReloadHeight",
+        "ReloadFlagsString",
+        "ReloadHeightString",
+    ] {
+        let font = s
+            .eval::<String>(&format!(
+                "local f, h, flags = {name}:GetFont() return table.concat({{f, h, flags}}, ' ')"
+            ))
+            .unwrap();
+        assert_eq!(font, r"Fonts\HELD.TTF 10 ", "{name} keeps the held font");
+    }
+}
+
+/// `0x770f69`: each level's `inherits` is asked as a font first, so a template chain stops at the
+/// font it reaches, and a template of that font's name is never loaded, even down the chain.
+#[test]
+fn a_template_chain_stops_at_a_font_that_shares_a_templates_name() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Font name="ChainFont" font="Fonts\ARIALN.TTF" virtual="true">
+                <FontHeight><AbsValue val="14"/></FontHeight>
+            </Font>
+            <FontString name="ChainFont" text="FROM_TEMPLATE" justifyV="TOP" virtual="true"/>
+            <FontString name="ChainMid" inherits="ChainFont" justifyH="RIGHT" virtual="true"/>
+            <Frame name="ChainHost">
+                <Layers><Layer>
+                    <FontString name="ChainKid" inherits="ChainMid"/>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    let got = |expr: &str| {
+        s.eval::<String>(&format!("return tostring({expr})"))
+            .unwrap()
+    };
+    assert_eq!(
+        got("ChainKid:GetText()"),
+        "nil",
+        "the same-named template is no level"
+    );
+    assert_eq!(got("ChainKid:GetJustifyV()"), "MIDDLE");
+    assert_eq!(
+        got("ChainKid:GetJustifyH()"),
+        "RIGHT",
+        "the middle template is"
+    );
+    assert_eq!(got("ChainKid:GetFontObject() == ChainFont"), "true");
+}
+
+/// `0x78a152`-`0x78a18f`: SimpleHTML's `font=` looks in the one font table, which `CreateFont`
+/// fills (`0x706077`), and links all four element fonts.
+#[test]
+fn a_simplehtml_font_finds_a_font_made_by_create_font() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Script>CreateFont("LevelHtmlFont"):SetFont("Fonts\\ARIALN.TTF", 15)</Script>
+            <SimpleHTML name="LevelHtml" font="LevelHtmlFont">
+                <Size><AbsDimension x="100" y="100"/></Size>
+            </SimpleHTML>
+        </Ui>"#,
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    for elem in ["P", "H1", "H2", "H3"] {
+        let (path, height) = s
+            .eval::<(String, f32)>(&format!(
+                "local f, h = LevelHtml:GetFont('{elem}') return f, h"
+            ))
+            .unwrap();
+        assert_eq!(
+            (path.as_str(), height),
+            (r"Fonts\ARIALN.TTF", 15.0),
+            "{elem}"
+        );
+    }
+}
