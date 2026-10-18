@@ -198,6 +198,13 @@ impl Chain {
     /// unresolved. The archives are the mount's slots below the base ones, the patches and
     /// `speech2.MPQ` in their opening order (`0x4014a0`-`0x4014bf`, up to `[0x882740]`), then
     /// `interface.MPQ`, base slot 6 (`0x4014c1`-`0x4014e1`); a slot with no archive is passed over.
+    ///
+    /// Not walked, as benilla mounts neither: the `speech2` child record each patch gets beside a
+    /// real `speech2.MPQ` (`0x648e80` at `0x403886`), which the reference's slots also hold and
+    /// which names its parent's `speech2\`-prefixed files, and an SZip archive, `0x648fb0`'s
+    /// type-1 arm (`0x668b30`; `0x648e38` types any name not ending `.mpq`). A child's type word is
+    /// never written (`0x648e85`-`0x648ea0`, `SMemAlloc` without the zero flag), so which arm
+    /// reads it is not fixed by the bytes.
     pub fn enumerate_archive_files(&self, prefix: &str) -> Vec<String> {
         let named = |a: &&Archive, name: &str| {
             a.path()
