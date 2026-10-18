@@ -304,22 +304,17 @@ pub(super) fn on_glue_screen_resized(script: &UiScript) {
     }
 }
 
-/// `GlueParent_OnLoad`'s sizing (`GlueParent.lua:74-84`), existence-guarded, over the frame's
-/// declared `setAllPoints` (`GlueParent.xml:4`), which a screen at 16:9 or narrower keeps: past
-/// 16:9 it is a centred 16:9 rect the root's height tall.
+/// `GlueParent_OnLoad` (`GlueParent.lua:74-84`) re-run on `GlueParent` from its declared
+/// `setAllPoints` (`GlueParent.xml:4`): past 16:9 it boxes the frame to a centred 16:9 rect the
+/// root's height tall, and its event registrations are a set, so a second run adds none.
 const GLUE_PARENT_RESEAT: &str = r#"
-if GlueParent then
+if GlueParent and GlueParent_OnLoad then
+    local outer = this
+    this = GlueParent
     GlueParent:ClearAllPoints()
     GlueParent:SetAllPoints()
-    local width = GetScreenWidth()
-    local height = GetScreenHeight()
-    if ( width / height > 16 / 9) then
-        local maxWidth = height * 16 / 9
-        local barWidth = ( width - maxWidth ) / 2
-        GlueParent:ClearAllPoints()
-        GlueParent:SetPoint("TOPLEFT", barWidth, 0)
-        GlueParent:SetPoint("BOTTOMRIGHT", -barWidth, 0)
-    end
+    GlueParent_OnLoad()
+    this = outer
 end
 "#;
 
