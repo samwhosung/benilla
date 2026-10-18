@@ -302,8 +302,9 @@ pub use quest::{
 };
 pub use quest_log::{QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS};
 pub(crate) use region::{
-    apply_font_parts, apply_wrap_attrs, implicit_creation_anchor_lua, install_loaded_texture,
-    load_blend_mode, load_texture_file, load_texture_name, FileLoad,
+    apply_font_parts, apply_texture_name, apply_wrap_attrs, implicit_creation_anchor_lua,
+    install_loaded_texture, load_blend_mode, load_texture_file, load_texture_name,
+    texture_name_verdict, FileLoad,
 };
 pub use reputation::{FactionEntry, ReputationSend, ReputationState};
 pub use session::SessionRequest;

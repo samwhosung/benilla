@@ -209,9 +209,9 @@ fn new_texture_region(
 /// ColorSelect marker `0x78b7b0`) over its current texture `existing`. That texture loads the path
 /// ([`paint::load_texture_name`]) and keeps its image when the load fails (`0x783165`). With none,
 /// a texture is built on `layer` (`0x76fc40`) and loaded, and one whose load fails is deleted with
-/// nothing installed (`0x7831b4` → `0x7831d9`, `0x789834` → `0x789849`, `0x78b824` → `0x78b837`).
-/// Answers the texture built, for the caller to install. `""` loads, as an empty image
-/// (`QuestLogFrame.lua:165` relies on it).
+/// nothing installed (`0x7831b4` → `0x7831d9`, `0x789834` → `0x789849`, `0x78b824` → `0x78b837`);
+/// here the verdict comes first, so a failure builds nothing. `""` loads, as no image. Answers the
+/// texture built, for the caller to install.
 pub(super) fn load_path_leg(
     model: &mut Model,
     owner: crate::widget::FrameHandle,
@@ -223,18 +223,13 @@ pub(super) fn load_path_leg(
         paint::load_texture_name(model, rh, path, false);
         return Ok(None);
     }
-    // Probed before the build, the verdict the load reaches, so a failure builds nothing.
-    let fails = !path.is_empty()
-        && model
-            .texture_probe
-            .as_ref()
-            .is_some_and(|probe| !probe(path));
-    if fails {
+    let verdict = paint::texture_name_verdict(model, path);
+    if verdict == paint::FileLoad::Failed {
         return Ok(None);
     }
     let rh = new_texture_region(model, owner, layer)
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    paint::load_texture_name(model, rh, path, false);
+    paint::apply_texture_name(model, rh, path, false, verdict);
     Ok(Some(rh))
 }
 
@@ -467,7 +462,8 @@ mod paint;
 mod text;
 
 pub(crate) use paint::{
-    load_blend_mode, load_texture_file, load_texture_name, orientation, FileLoad,
+    apply_texture_name, load_blend_mode, load_texture_file, load_texture_name, orientation,
+    texture_name_verdict, FileLoad,
 };
 pub(crate) use text::store_text_of;
 

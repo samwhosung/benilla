@@ -160,22 +160,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         return vec4<f32>(srgb_to_linear(t.rgb) * c.rgb, 1.0);
     }
-    // The fragment's alpha the test reads: texel times vertex colour (the combine preset).
-    let tested = t.a * c.a;
     switch blend_mode {
         // DISABLE and ALPHAKEY write the texel over the target; the masks still cut it.
         case 0u: {
             return vec4<f32>(rgb * m, m);
         }
+        // An ALPHAKEY quad that reaches here has no colour array (the extract promotes one that
+        // does), so the diffuse it tests against is white: the texel alone.
         case 1u: {
-            if tested < ALPHAKEY_REF {
+            if t.a < ALPHAKEY_REF {
                 discard;
             }
             return vec4<f32>(rgb * m, m);
         }
         // MOD multiplies the target by the texel; a masked-out fragment multiplies by 1.
         case 4u: {
-            if tested < MOD_REF {
+            // The test reads texel times vertex colour, the combine preset's alpha.
+            if t.a * c.a < MOD_REF {
                 discard;
             }
             return vec4<f32>(mix(vec3<f32>(1.0), rgb, m), 1.0);

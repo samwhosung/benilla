@@ -587,22 +587,27 @@ fn set_slot_texture(
     // a check box with a checked texture repaints that one and never gets its disabled-checked
     // texture from a path. benilla tests and reloads the slot the method names.
     let existing = with_button(lua, this, |bs| slot.get(bs))?.is_some();
-    let resolvable = path.is_empty()
-        || lua
-            .app_data_ref::<Model>()
-            .expect("model app_data")
-            .texture_probe
-            .as_ref()
-            .is_none_or(|probe| probe(&path));
-    if !existing && !resolvable {
-        return Ok(());
-    }
+    // A slot built for this call is judged before it is built, the probe asked once.
+    let verdict = if existing {
+        None
+    } else {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        match crate::script::texture_name_verdict(&model, &path) {
+            crate::script::FileLoad::Failed => return Ok(()),
+            v => Some(v),
+        }
+    };
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let rh = *model.id_to_region.get(&id).expect("slot region id");
     // `""` clears the texture, which `QuestLogFrame.lua:165` relies on; a file that loads clears
     // the desaturation, and one that fails keeps the image and the grey (`0x778f3a` → `0x770200`).
-    crate::script::load_texture_name(&mut model, rh, &path, false);
+    match verdict {
+        Some(v) => crate::script::apply_texture_name(&mut model, rh, &path, false, v),
+        None => {
+            crate::script::load_texture_name(&mut model, rh, &path, false);
+        }
+    }
     let data = model.region_data.entry(rh).or_default();
     // The highlight applies its blend on every path call, to the old region as to a new one
     // (`0x779082`, `0x7790e6`), the old one even when its texture did not load. A checked

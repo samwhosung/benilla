@@ -497,47 +497,74 @@ pub(crate) enum FileLoad {
 
 /// `CSimpleTexture::SetTexture(name)` (`0x770200`) on region `rh`, the one load behind
 /// `SetTexture`'s path form, the XML `file=` and every widget's path leg. The file the texture
-/// already shows answers 1 untouched (`0x770225`). An empty name, which is how a null one arrives
-/// here, drops the image and answers 1 (`0x770235` → `0x7702cb`). A name the install lacks answers
-/// 0 and keeps the image and the shader slot (`0x7702ac`). A file that loads writes shader 0 to the
-/// slot (`0x7702c0`), so it clears any desaturation, and then the image. Each of these paths
-/// passes shader index 0 (`0x79bd89`, `0x783165`, `0x7897e5`, `0x78b7d5`, `0x778f3a`).
+/// already shows answers 1 untouched (`0x770225`); anything else is judged by
+/// [`texture_name_verdict`] and applied by [`apply_texture_name`].
 pub(crate) fn load_texture_name(
     model: &mut Model,
     rh: crate::widget::RegionHandle,
     name: &str,
     wrap: bool,
 ) -> FileLoad {
+    let held = model
+        .region_data
+        .get(&rh)
+        .is_some_and(|d| !name.is_empty() && model.texels.holds_file(&d.tex, name));
+    if held {
+        return FileLoad::Loaded;
+    }
+    let verdict = texture_name_verdict(model, name);
+    apply_texture_name(model, rh, name, wrap, verdict);
+    verdict
+}
+
+/// What `0x770200` comes to for a name the texture does not already show: an empty name, which is
+/// how a null one arrives, loads as no image (`0x770235` → `0x7702cb`, answering 1); any other is
+/// the host probe's to judge, and a miss answers 0 (`0x7702ac`). The probe is asked once here, so a
+/// path leg that builds its texture only for a load that succeeds asks before it builds.
+pub(crate) fn texture_name_verdict(model: &Model, name: &str) -> FileLoad {
+    if name.is_empty() {
+        return FileLoad::Loaded;
+    }
+    match &model.texture_probe {
+        None => FileLoad::Unprobed,
+        Some(probe) if probe(name) => FileLoad::Loaded,
+        Some(_) => FileLoad::Failed,
+    }
+}
+
+/// `0x770200` past its probe on region `rh`. A failed load keeps the image and the shader slot
+/// (`0x7702ac`); an empty name drops the image and leaves the slot (`0x7702cb`); a file writes
+/// shader 0 to the slot (`0x7702c0`), clearing any desaturation, and then the image. Every caller
+/// passes shader index 0 (`0x79bd89`, `0x783165`, `0x7897e5`, `0x78b7d5`, `0x778f3a`).
+pub(crate) fn apply_texture_name(
+    model: &mut Model,
+    rh: crate::widget::RegionHandle,
+    name: &str,
+    wrap: bool,
+    verdict: FileLoad,
+) {
+    if verdict == FileLoad::Failed {
+        return;
+    }
     let Model {
         region_data,
         texels,
-        texture_probe,
         ..
     } = &mut *model;
     let data = region_data.entry(rh).or_default();
-    let (set, verdict) = if name.is_empty() {
-        (TexSet::None, FileLoad::Loaded)
+    let set = if name.is_empty() {
+        TexSet::None
     } else {
-        if texels.holds_file(&data.tex, name) {
-            return FileLoad::Loaded;
-        }
-        let verdict = match texture_probe {
-            None => FileLoad::Unprobed,
-            Some(probe) if probe(name) => FileLoad::Loaded,
-            Some(_) => return FileLoad::Failed,
-        };
         data.desaturated = false;
-        let set = if wrap {
+        if wrap {
             TexSet::WrapFile(name.to_string())
         } else {
             TexSet::File(name.to_string())
-        };
-        (set, verdict)
+        }
     };
     // The probe has answered already, so the file is no miss.
     texels.set(&mut data.tex, set, |_| false);
     model.note_art(rh);
-    verdict
 }
 
 /// The XML `<Texture file=>` load of a region (`0x76fe20` → `0x770200`), with the wrap flag the

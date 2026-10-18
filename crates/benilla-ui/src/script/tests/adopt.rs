@@ -554,6 +554,33 @@ fn a_widget_path_that_does_not_load_installs_nothing_and_keeps_the_old_texture()
     .unwrap();
 }
 
+/// A path leg that builds its texture asks the probe once, as `0x770200` loads once.
+#[test]
+fn a_path_leg_that_builds_a_texture_probes_once() {
+    let mut s = script();
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = calls.clone();
+    s.set_texture_probe(Box::new(move |_| {
+        seen.set(seen.get() + 1);
+        true
+    }));
+    for (make, call) in [
+        ("StatusBar", "f:SetStatusBarTexture('present')"),
+        ("Slider", "f:SetThumbTexture('present')"),
+        ("ColorSelect", "f:SetColorWheelThumbTexture('present')"),
+        ("Button", "f:SetNormalTexture('present')"),
+        (
+            "Button",
+            "f:SetNormalTexture('present') f:SetNormalTexture('other')",
+        ),
+    ] {
+        calls.set(0);
+        s.run(&format!("f = CreateFrame('{make}') {call}")).unwrap();
+        let loads = call.matches("Texture(").count();
+        assert_eq!(calls.get(), loads, "{call}: one probe per load");
+    }
+}
+
 /// A Button state texture's path leg loads through `0x770200` with shader index 0 (`0x778f3a`): a
 /// new file that loads clears the desaturation, one that fails keeps it.
 #[test]

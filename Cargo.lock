@@ -522,6 +522,7 @@ dependencies = [
  "kira",
  "libc",
  "mint",
+ "naga",
  "num-bigint",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",

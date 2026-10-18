@@ -124,3 +124,11 @@ windows-sys = { version = "0.59", features = [
 benilla-srp = { path = "../benilla-srp" }
 num-bigint = "0.4.6"
 sha1.workspace = true
+
+# The shader translation test writes the backend this platform renders with, through the naga
+# bevy already builds (`shaders.rs`).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+naga = { version = "27.0.3", features = ["msl-out"] }
+
+[target.'cfg(not(target_os = "macos"))'.dev-dependencies]
+naga = { version = "27.0.3", features = ["spv-out"] }
