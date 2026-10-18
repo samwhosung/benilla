@@ -358,23 +358,17 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, args): (Table, mlua::Variadic<Value>)| {
             let rest: Vec<f32> = args.iter().map(|v| tonumber_f32(lua, v)).collect();
             let rh = region_handle_of(lua, &this)?;
-            let coords =
-                match rest.len() {
-                    4 => TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]]),
-                    // The arguments come UL, LL, UR, LR; `TexCoords::Corners` stores TL, TR, BR, BL.
-                    8 => TexCoords::Corners([
-                        [rest[0], rest[1]], // UL → TL
-                        [rest[4], rest[5]], // UR → TR
-                        [rest[6], rest[7]], // LR → BR
-                        [rest[2], rest[3]], // LL → BL
-                    ]),
-                    _ => return Err(usage(
-                        lua,
-                        &this,
-                        "SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, LLy, \
-                         URx, URy, LRx, LRy)",
-                    )),
-                };
+            // The eight come UL, LL, UR, LR; `TexCoords::Corners` stores TL, TR, BR, BL.
+            let coords = match rest.len() {
+                4 => TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]]),
+                8 => TexCoords::Corners([
+                    [rest[0], rest[1]], // UL → TL
+                    [rest[4], rest[5]], // UR → TR
+                    [rest[6], rest[7]], // LR → BR
+                    [rest[2], rest[3]], // LL → BL
+                ]),
+                _ => return Err(usage(lua, &this, TEX_COORD_USAGE)),
+            };
             lua.app_data_mut::<Model>()
                 .expect("model")
                 .region_data
@@ -421,6 +415,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     Ok(())
 }
+
+/// `SetTexCoord`'s usage line (`0x87c538`), after its `%s:`.
+const TEX_COORD_USAGE: &str = "SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, \
+                               LLy, URx, URy, LRx, LRy)";
 
 /// The XML `alphaMode=` of a texture (`0x770176`): read with the same enum lookup as
 /// `SetBlendMode` (`0x6f1920`), but an empty value skips and an unknown one is ignored, with no
@@ -510,37 +508,34 @@ pub(crate) fn load_texture_name(
     name: &str,
     wrap: bool,
 ) -> FileLoad {
-    let verdict = {
-        let Model {
-            region_data,
-            texels,
-            texture_probe,
-            ..
-        } = &mut *model;
-        let data = region_data.entry(rh).or_default();
-        if !name.is_empty() && texels.holds_file(&data.tex, name) {
+    let Model {
+        region_data,
+        texels,
+        texture_probe,
+        ..
+    } = &mut *model;
+    let data = region_data.entry(rh).or_default();
+    let (set, verdict) = if name.is_empty() {
+        (TexSet::None, FileLoad::Loaded)
+    } else {
+        if texels.holds_file(&data.tex, name) {
             return FileLoad::Loaded;
         }
-        if name.is_empty() {
-            FileLoad::Loaded
+        let verdict = match texture_probe {
+            None => FileLoad::Unprobed,
+            Some(probe) if probe(name) => FileLoad::Loaded,
+            Some(_) => return FileLoad::Failed,
+        };
+        data.desaturated = false;
+        let set = if wrap {
+            TexSet::WrapFile(name.to_string())
         } else {
-            let verdict = match texture_probe {
-                None => FileLoad::Unprobed,
-                Some(probe) if probe(name) => FileLoad::Loaded,
-                Some(_) => return FileLoad::Failed,
-            };
-            data.desaturated = false;
-            verdict
-        }
+            TexSet::File(name.to_string())
+        };
+        (set, verdict)
     };
-    let set = if name.is_empty() {
-        TexSet::None
-    } else if wrap {
-        TexSet::WrapFile(name.to_string())
-    } else {
-        TexSet::File(name.to_string())
-    };
-    model.set_texel(rh, set);
+    // The probe has answered already, so the file is no miss.
+    texels.set(&mut data.tex, set, |_| false);
     model.note_art(rh);
     verdict
 }
