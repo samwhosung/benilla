@@ -221,3 +221,39 @@ fn a_scaled_frames_edge_divides_out_its_scale() {
         99.99999850988391
     );
 }
+
+/// A live resize sets the cells as a rebuild would and lays out afresh under them, so every getter
+/// answers what a VM built at the new size answers, bit for bit; the reference reaches the new
+/// cells only through that rebuild (`0x41ad10` from `0x46a828` and `0x48fe2b`).
+#[test]
+fn a_resize_lays_out_as_a_build_at_the_new_size() {
+    let chain = r#"local a = CreateFrame("Frame", "A") a:SetScale(0.9) a:SetWidth(300) a:SetHeight(200)
+        a:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 2.5, 3.25)
+        local b = CreateFrame("Frame", "B", a)
+        b:SetPoint("TOPRIGHT", a, "BOTTOMRIGHT", -12.3, 4.7)
+        b:SetPoint("BOTTOMLEFT", a, "BOTTOMLEFT", 7, -40)
+        local c = CreateFrame("Frame", "C") c:SetWidth(2) c:SetHeight(2)
+        c:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 1, 1)"#;
+    let read = |s: &UiScript| {
+        s.eval::<(f64, f64, f64, f64, f64, f64, f64, f64)>(
+            "local x, y = B:GetCenter() \
+             return A:GetWidth(), A:GetLeft(), B:GetLeft(), B:GetBottom(), B:GetWidth(), x, y, \
+             C:GetRight()",
+        )
+        .unwrap()
+    };
+    // A small resize moves `C`, by the origin, by less than the drain's keep threshold (`0x768d20`,
+    // 1e-5 layout units), which a rebuild has no old rect to hold against.
+    for (w, h) in [(1920.0, 1080.0), (1025.0, 768.0)] {
+        let mut resized = game(1024.0, 768.0);
+        resized.run(chain).unwrap();
+        resized.resolve();
+        let before = read(&resized);
+        resized.set_window_size(w, h);
+        resized.resolve();
+        let built = game(w, h);
+        built.run(chain).unwrap();
+        assert_eq!(read(&resized), read(&built), "{w}x{h}");
+        assert_ne!(read(&resized), before, "the cells moved");
+    }
+}
