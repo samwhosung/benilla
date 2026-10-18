@@ -249,8 +249,15 @@ fn random(vm: &mut Vm, nargs: usize) -> R<usize> {
 /// `math_randomseed` (`0x7fb450`): `srand` of argument 1 through `__ftol`.
 fn randomseed(vm: &mut Vm, nargs: usize) -> R<usize> {
     let s = vm.check_int(nargs, 1)?;
-    vm.rand = CrtRand::seeded(s as u32);
+    vm.srand(s as u32);
     Ok(0)
+}
+
+impl Vm {
+    /// `srand` (`0x7400d8`) from the host: `math.random`'s state becomes `seed`.
+    pub fn srand(&mut self, seed: u32) {
+        self.rand = CrtRand::seeded(seed);
+    }
 }
 
 // ── bit ──────────────────────────────────────────────────────────────────────────────────────

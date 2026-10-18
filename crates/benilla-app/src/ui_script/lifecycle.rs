@@ -140,6 +140,11 @@ fn new_vm<E: std::fmt::Display>(
     // `[0x882730]`, `Wow.ini`'s `Region`, read once alike and handed to the name check.
     script.set_client_region(super::client_region());
     seed_vm_clock(world, &mut script);
+    // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
+    // capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce.
+    if crate::run_mode::scenario_active() {
+        script.lua().srand(1);
+    }
     install_addon_asset_resolvers(world, &mut script);
     info!("ui_script: new VM, session {}", script.session());
     Some(script)
@@ -1123,6 +1128,32 @@ mod tests {
             record.class,
             Some(("사제".to_string(), "PRIEST".to_string()))
         );
+    }
+
+    /// A capture's VM draws the CRT's default sequence, `srand(1)`'s 41, 18467, ..., so its
+    /// frames reproduce; a session's is seeded from the clock.
+    #[test]
+    fn a_capture_vm_draws_the_default_random_sequence() {
+        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let draws = |capture: bool| {
+            let _cap = if capture {
+                EnvGuard::set("WOW_CAPTURE", "some-scenario")
+            } else {
+                EnvGuard::unset("WOW_CAPTURE")
+            };
+            let mut world = World::new();
+            let script = new_vm(&mut world, UiScript::new).expect("a VM");
+            script
+                .eval::<Vec<i64>>(
+                    "local r = math.random return {r(32767), r(32767), r(32767), r(32767)}",
+                )
+                .unwrap()
+        };
+        assert_eq!(draws(true), [42, 18468, 6335, 26501]);
+        assert_ne!(draws(false), [42, 18468, 6335, 26501]);
     }
 
     /// Every VM, glue and in-game, answers `GetLocale` with the install's locale (`[0xc0e080]`).

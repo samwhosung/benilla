@@ -824,6 +824,11 @@ impl Lua {
         self.set_named_registry_value(name, Value::Nil)
     }
 
+    /// `srand` from the host ([`Vm::srand`]): `math.random`'s state becomes `seed`.
+    pub fn srand(&self, seed: u32) {
+        self.vm().srand(seed);
+    }
+
     // ── coercion ─────────────────────────────────────────────────────────────────────────────
 
     /// `lua_tonumber`: a number, or a string that reads as one.

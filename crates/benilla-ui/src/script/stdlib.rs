@@ -422,7 +422,8 @@ fn strftime(c: &crate::civil::Civil, fmt: &[u8]) -> Option<Vec<u8>> {
         alternate: false,
     };
     let mut i = 0;
-    // A format that ends in `%` reads past its terminator in the client; here it ends.
+    // Deviation: a format that ends in `%` reads past its terminator in the client (`0x4135c3`),
+    // into whatever memory follows the string; here the output ends there.
     while w.left > 0 && i < fmt.len() {
         if fmt[i] != b'%' {
             w.byte(fmt[i]);
