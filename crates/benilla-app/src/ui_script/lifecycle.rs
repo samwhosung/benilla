@@ -1421,6 +1421,27 @@ mod tests {
         );
     }
 
+    /// Only the in-game state registers the macro verbs (`RegisterMacroFunctions` `0x4f1b90`, from
+    /// `0x490297`), so the world-entry VM gets the icon chooser's source and the glue VM and a
+    /// reload's boot VM get none.
+    #[test]
+    fn only_the_entry_vm_gets_the_macro_icon_source() {
+        use crate::client_state::ClientState;
+        let has = |world: &World| {
+            world
+                .non_send_resource::<UiScript>()
+                .has_macro_icon_source()
+        };
+        let mut world = World::new();
+        world.insert_resource(State::new(ClientState::Login));
+        setup_script(&mut world);
+        assert!(!has(&world), "the glue VM");
+        install_boot_vm(&mut world);
+        assert!(!has(&world), "a boot VM");
+        mint_entry_vm(&mut world);
+        assert!(has(&world), "the world-entry VM");
+    }
+
     /// The reference re-makes its Lua state inside `UI_Init` (`0x48fe97`).
     #[test]
     fn the_world_entry_builds_its_own_vm_rather_than_adopting_the_glue_phases() {

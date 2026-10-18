@@ -4,8 +4,6 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-
 use crate::loose::child_dir_ignoring_case;
 use crate::Chain;
 
@@ -14,8 +12,8 @@ use crate::Chain;
 const ICON_DIR: &str = "Interface\\Icons\\";
 
 /// The chooser's list, sorted and deduplicated without case, each entry as the full path
-/// `GetMacroIconInfo` returns. `data` is the install's `Data` folder, whose parent is the install
-/// folder; `None` lists the archives alone.
+/// `GetMacroIconInfo` returns. `chain` is the mounted archives and `data` the install's `Data`
+/// folder, whose parent is the install folder; `None` leaves out that source.
 ///
 /// The reference reads three sources in turn. First the archives' listed names under the prefix
 /// ([`Chain::enumerate_archive_files`], `0x401470(6, prefix, 0x4f0220)` at `0x4f00b8`), the
@@ -25,12 +23,14 @@ const ICON_DIR: &str = "Interface\\Icons\\";
 /// name without its last-dot extension; then a `qsort` with `SStrCmpI` (`0x4f0128`, comparator
 /// `0x4f05e0`) and the drop of adjacent duplicates (`0x4f0140`-`0x4f01a4`): the order is
 /// alphabetical, and a stock 5875 install yields 517 icons.
-pub fn load_macro_icons(chain: &Chain, data: Option<&Path>) -> Result<Vec<String>> {
-    let mut names = archive_names(chain.enumerate_archive_files(ICON_DIR));
+pub fn load_macro_icons(chain: Option<&Chain>, data: Option<&Path>) -> Vec<String> {
+    let mut names = chain.map_or_else(Vec::new, |c| {
+        archive_names(c.enumerate_archive_files(ICON_DIR))
+    });
     if let Some(data) = data {
         loose_names(data, &mut names);
     }
-    Ok(chooser_list(names))
+    chooser_list(names)
 }
 
 /// `0x4f0220` over the listed names, each beginning with the prefix: the part after it, cut at its

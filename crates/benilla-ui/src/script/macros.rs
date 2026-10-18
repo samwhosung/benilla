@@ -171,6 +171,11 @@ impl super::UiScript {
         self.model_mut().macro_icon_source = Some(source.into());
     }
 
+    /// Whether this VM has a source to build the icon list from.
+    pub fn has_macro_icon_source(&self) -> bool {
+        self.model_ref().macro_icon_source.is_some()
+    }
+
     /// Bumped by every seed and every change, so a per-frame reader such as the action bar compares
     /// a `u64` instead of diffing the table. Not [`Self::take_macros_dirty`]: that drain has one
     /// owner, the save, and a second reader would steal its edge.
