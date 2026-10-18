@@ -3091,14 +3091,30 @@ fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
     for (got, want) in fog.rgb.iter().zip([0.25, 0.06, 0.015]) {
         assert!((got - want).abs() < 1.0 / 255.0, "{:?}", fog.rgb);
     }
-    // The booth aims by the camera the pane chose, not the file's camera 0.
-    let index = |p: &crate::portrait::GluePreview| p.camera.as_ref().map(|c| c.index);
-    assert_eq!(index(p), Some(0));
-    vm(&app).run("AccountLogin:SetCamera(1)").unwrap();
-    app.update();
-    let chosen = vm(&app).glue_scene().expect("the login pane").camera;
-    assert_ne!(chosen.as_ref().map(|c| c.index), Some(0));
-    assert_eq!(preview(&app).camera, chosen);
+    // The booth aims by the camera the pane chose, on the file it chose it on. This harness
+    // lands no model facts, so each `SetCamera` stays pending on the pane's file.
+    let on = |index| {
+        Some(benilla_ui::widget::InstalledCamera {
+            file: "Interface\\Glues\\Models\\UI_MainMenu\\UI_MainMenu.mdx".to_string(),
+            index,
+        })
+    };
+    assert_eq!(p.camera, on(0));
+    for index in [1, 0] {
+        vm(&app)
+            .run(&format!("AccountLogin:SetCamera({index})"))
+            .unwrap();
+        app.update();
+        assert_eq!(
+            vm(&app).glue_scene().expect("the login pane").camera,
+            on(index)
+        );
+        assert_eq!(
+            preview(&app).camera,
+            on(index),
+            "the feeder carries {index}"
+        );
+    }
 }
 
 /// The selected character stands in the select scene: the roster load's selection, then a

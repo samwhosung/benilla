@@ -847,6 +847,72 @@ fn a_built_block_follows_later_sets_on_its_element_font() {
     assert!(mono, "the block draws the element font's MONOCHROME");
 }
 
+/// `SetFontObject` on an element font after `SetText` re-links that font (`0x79ef10` →
+/// `0x770c60`), and the link pushes the new face to the blocks that follow it.
+#[test]
+fn a_later_element_set_font_object_reaches_the_built_blocks() {
+    let s = script();
+    page(&s);
+    s.run(
+        r#"
+        local f = CreateFont("LaterFace"); f:SetFont("Fonts\\SKURRI.TTF", 22)
+        Page:SetText("<HTML><BODY><P>a</P></BODY></HTML>")
+        Page:SetFontObject("P", LaterFace)
+    "#,
+    )
+    .unwrap();
+    let b = blocks(&s, "Page");
+    assert_eq!(
+        (b[0].font.as_deref(), b[0].font_height),
+        (Some("Fonts\\SKURRI.TTF"), Some(22.0))
+    );
+}
+
+/// The face test is made once, at the build (`0x78ae36`): an `H1` block built on `P`'s font stays
+/// on `P` when `H1` gains a face later, and follows `P`'s changes.
+#[test]
+fn an_h1_block_built_on_p_stays_on_p() {
+    let s = script();
+    page(&s);
+    s.run(
+        r#"
+        Page:SetText("<HTML><BODY><H1>t</H1></BODY></HTML>")
+        Page:SetFont("H1", "Fonts\\SKURRI.TTF", 24)
+    "#,
+    )
+    .unwrap();
+    let face = |s: &UiScript| {
+        let b = blocks(s, "Page");
+        (b[0].font.clone(), b[0].font_height)
+    };
+    assert_eq!(face(&s), (Some("Fonts\\MORPHEUS.TTF".into()), Some(15.0)));
+    s.run(r#"Page:SetFont("P", "Fonts\\FRIZQT__.TTF", 11)"#)
+        .unwrap();
+    assert_eq!(face(&s), (Some("Fonts\\FRIZQT__.TTF".into()), Some(11.0)));
+}
+
+/// Each frame makes its own four element fonts (`0x789e61`-`0x789ea3`).
+#[test]
+fn two_simplehtmls_have_their_own_element_fonts() {
+    let s = script();
+    s.run(
+        r#"
+        HtmlOne = CreateFrame("SimpleHTML"); HtmlTwo = CreateFrame("SimpleHTML")
+        HtmlOne:SetFont("P", "Fonts\\SKURRI.TTF", 20)
+        HtmlOne:SetTextColor("H2", 1, 0, 0)
+    "#,
+    )
+    .unwrap();
+    assert!(s
+        .eval::<bool>(
+            "local p = HtmlTwo:GetFont('P'); local _, g = HtmlTwo:GetTextColor('H2')
+             local _, g1 = HtmlOne:GetTextColor('H2')
+             return p == nil and g > 0.99 and g1 == 0
+                and HtmlOne:GetFont('P') == 'Fonts\\\\SKURRI.TTF'"
+        )
+        .unwrap());
+}
+
 /// An element font tells its frame of each change (`0x77e530`), and a new face or spacing raises
 /// the link-button rebuild flag (`0x78a380`, bits `0x11`); a colour does not.
 #[test]

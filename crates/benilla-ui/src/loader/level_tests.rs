@@ -1743,3 +1743,30 @@ fn a_fontstring_directly_under_a_plain_frame_builds_nothing() {
         )
         .unwrap());
 }
+
+/// `font=` links all four element fonts first (`0x78a17a`-`0x78a18f`); a child's `inherits` then
+/// re-links its own element (`0x783ce6`), so only that one leaves the frame's font.
+#[test]
+fn a_simplehtml_child_inherits_overrides_its_element_after_font() {
+    let s = ui();
+    load_str(
+        &s,
+        r#"<Ui>
+            <Font name="HtmlAllFont" font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></Font>
+            <Font name="HtmlOneFont" font="Fonts\SKURRI.TTF"><FontHeight val="20"/></Font>
+            <SimpleHTML name="HtmlOverride" font="HtmlAllFont">
+                <FontStringHeader1 inherits="HtmlOneFont"/>
+            </SimpleHTML>
+        </Ui>"#,
+    );
+    s.run(r"HtmlAllFont:SetFont('Fonts\\MORPHEUS.TTF', 9)")
+        .unwrap();
+    assert!(s
+        .eval::<bool>(
+            "return HtmlOverride:GetFontObject('H1') == HtmlOneFont
+                and HtmlOverride:GetFont('H1') == 'Fonts\\\\SKURRI.TTF'
+                and HtmlOverride:GetFontObject('P') == HtmlAllFont
+                and HtmlOverride:GetFont('H2') == 'Fonts\\\\MORPHEUS.TTF'"
+        )
+        .unwrap());
+}
