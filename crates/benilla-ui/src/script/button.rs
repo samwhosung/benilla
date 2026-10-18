@@ -273,7 +273,11 @@ pub(super) fn edge(
 /// Hyperlink and NamePlate overrides chain back (`0x7cb8a5`). The hover target still moves, so
 /// `GetMouseFocus()` answers a disabled button.
 pub(super) fn hover_notify_runs(model: &Model, h: Option<FrameHandle>) -> bool {
-    let Some(h) = h else { return true };
+    h.is_none_or(|h| is_enabled(model, h))
+}
+
+/// Whether `h` is a Button out of the DISABLED state (`+0x328`); any other frame answers true.
+pub(super) fn is_enabled(model: &Model, h: FrameHandle) -> bool {
     match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Button(bs)) => bs.enabled(),
         _ => true,
@@ -1009,10 +1013,12 @@ pub(super) fn wants_press_visual(model: &Model, h: FrameHandle, button: &str) ->
     }
 }
 
-/// The click shared by the input path and `Click()`: a disabled Button fires nothing, a CheckButton
-/// toggles before `OnClick` runs (`0x785550`), then `OnClick` gets the button name alone as `arg1`
-/// (`0x779540` fires it with the format `"%s"`); `down`, true only for a click a `…ButtonDown`
-/// registration fired, reaches the nameplate's select alone. `scripted` marks a Lua `Click()`
+/// The click shared by the input path and `Click()`: a CheckButton toggles first, enabled or not
+/// (`0x785550`), a disabled Button fires nothing more, then `OnClick` gets the button name alone
+/// as `arg1` (`0x779540` fires it with the format `"%s"`); `down`, true only for a click a
+/// `…ButtonDown` registration fired, reaches the nameplate's select alone. The mouse never gets
+/// here for a disabled button: its press slot returns first (`0x77922e`), its release is gated on
+/// PUSHED. `scripted` marks a Lua `Click()`
 /// (`0x7826c0` passes 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then does nothing at
 /// all, not even its `OnClick` (`0x4c182b`); every other kind ignores it.
 pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripted: bool) {
@@ -1058,18 +1064,16 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
         };
         let is_check = frame.kind == FrameKind::CheckButton;
         let (fire, writes) = match &mut frame.kind_state {
-            // A Button fires only while enabled;
+            // A CheckButton's click slot (`0x785550`) toggles (`0x785566`) before the base click
+            // (`0x779540`), which runs nothing for a disabled button (`0x779552`): the toggle has
+            // no state gate, so `Click()` flips a disabled box silently.
             KindState::Button(bs) => {
-                if bs.enabled() {
-                    let writes = if is_check {
-                        bs.refresh_checked(!bs.checked, false)
-                    } else {
-                        Default::default()
-                    };
-                    (true, writes)
+                let writes = if is_check {
+                    bs.refresh_checked(!bs.checked, false)
                 } else {
-                    (false, Default::default())
-                }
+                    Default::default()
+                };
+                (bs.enabled(), writes)
             }
             // any other kind with an `OnClick` just fires.
             _ => (true, Default::default()),

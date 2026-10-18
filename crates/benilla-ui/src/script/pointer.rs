@@ -455,13 +455,14 @@ impl UiScript {
                     Some(h) => model.mouse_down_on.insert(button.to_string(), Some(h)),
                     None => model.mouse_down_on.remove(button),
                 };
-                // The Button press slot `0x779210` runs both legs only with the cursor inside the
-                // button (`0x77925c`) and the mouse button registered for it (`0x77924b` tests
-                // `m | m << 8`): the Down click for `…ButtonDown`, then the press edge,
-                // `SetButtonState(PUSHED)` (`0x7792b1`), for either registration, applied below
-                // after the scripts as the slot orders them.
+                // The Button press slot `0x779210` runs both legs only on an enabled button
+                // (`0x77922e`) with the cursor inside it (`0x77925c`) and the mouse button
+                // registered for it (`0x77924b` tests `m | m << 8`): the Down click for
+                // `…ButtonDown`, then the press edge, `SetButtonState(PUSHED)` (`0x7792b1`), for
+                // either registration, applied below after the scripts as the slot orders them.
                 let inside = press_target.filter(|&h| {
-                    button::wants_press_visual(&model, h, button)
+                    button::is_enabled(&model, h)
+                        && button::wants_press_visual(&model, h, button)
                         && frame_contains(&model, h, x, y)
                 });
                 press_art = inside;
@@ -591,8 +592,8 @@ impl UiScript {
             self.fire_drag_stop(source);
         }
         if let Some(id) = click_id {
-            // Shared with `Click()`: gated on the Button being enabled; a CheckButton toggles
-            // before `OnClick` fires. The mouse raises the gate's click flag around the slot
+            // Shared with `Click()`: a CheckButton toggles, then `OnClick` fires on an enabled
+            // Button. The mouse raises the gate's click flag around the slot
             // (`0x779275`-`0x77928b`); `Click()` does not.
             let _click = protected::raise(&self.lua, protected::Event::Click);
             button::click_button(&self.lua, id, button, down, false);

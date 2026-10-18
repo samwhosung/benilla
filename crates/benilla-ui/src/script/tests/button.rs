@@ -361,17 +361,63 @@ fn disabled_button_swallows_clicks_checkbutton_toggles_before_onclick() {
     assert_eq!(s.eval::<i64>("return clicks").unwrap(), 2);
     assert!(!s.eval::<bool>("return Toggler:GetChecked()").unwrap());
 
-    s.run("Toggler:Disable()").unwrap();
+    // Disabled, the mouse reaches nothing (the press slot returns, `0x77922e`), but `Click()`
+    // toggles before the base click's state gate (`0x785550`) and fires no `OnClick`; the refresh
+    // shows the disabled-checked texture.
+    s.run(
+        r#"
+        Toggler:SetCheckedTexture("Interface\\C.blp")
+        Toggler:SetDisabledCheckedTexture("Interface\\DC.blp")
+        Toggler:Disable()
+    "#,
+    )
+    .unwrap();
     s.mouse_button(50.0, 50.0, "LeftButton", true);
     s.mouse_button(50.0, 50.0, "LeftButton", false);
+    assert!(!s.eval::<bool>("return Toggler:GetChecked()").unwrap());
     s.run("Toggler:Click()").unwrap();
     assert_eq!(s.eval::<i64>("return clicks").unwrap(), 2);
-    assert!(!s.eval::<bool>("return Toggler:GetChecked()").unwrap());
+    assert!(s.eval::<bool>("return Toggler:GetChecked() == 1").unwrap());
+    assert!(s
+        .eval::<bool>("return Toggler:GetDisabledCheckedTexture():IsShown() == 1")
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return not Toggler:GetCheckedTexture():IsShown()")
+        .unwrap());
 
-    s.run("Toggler:SetChecked(1)").unwrap();
-    assert!(s.eval::<bool>("return Toggler:GetChecked()").unwrap());
     s.run("Toggler:SetChecked(nil)").unwrap();
     assert!(!s.eval::<bool>("return Toggler:GetChecked()").unwrap());
+    s.run("Toggler:SetChecked(1)").unwrap();
+    assert!(s.eval::<bool>("return Toggler:GetChecked()").unwrap());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn disabled_checkbutton_registered_for_down_ignores_the_press() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        clicks = 0
+        local cb = CreateFrame("CheckButton", "DownToggler")
+        cb:SetPoint("BOTTOMLEFT", 0, 0); cb:SetWidth(100); cb:SetHeight(100)
+        cb:RegisterForClicks("LeftButtonDown")
+        cb:SetScript("OnClick", function() clicks = clicks + 1 end)
+        cb:Disable()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_button(50.0, 50.0, "LeftButton", true);
+    s.mouse_button(50.0, 50.0, "LeftButton", false);
+    assert_eq!(s.eval::<i64>("return clicks").unwrap(), 0);
+    assert!(!s.eval::<bool>("return DownToggler:GetChecked()").unwrap());
+    s.run("DownToggler:Enable()").unwrap();
+    s.mouse_button(50.0, 50.0, "LeftButton", true);
+    assert_eq!(s.eval::<i64>("return clicks").unwrap(), 1);
+    assert!(s
+        .eval::<bool>("return DownToggler:GetChecked() == 1")
+        .unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
