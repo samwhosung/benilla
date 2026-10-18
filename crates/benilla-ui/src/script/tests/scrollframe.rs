@@ -224,12 +224,43 @@ fn set_vertical_scroll_fires_on_vertical_scroll_only_on_a_change() {
     "#,
     )
     .unwrap();
+    let units = s.model_ref().layout_units();
+    let law = |v: f32| units.load(units.store(v));
     assert_eq!(
-        s.eval::<String>("return table.concat(Fires, \",\")")
-            .unwrap(),
-        "40,700,0"
+        s.eval::<Vec<f64>>("return Fires").unwrap(),
+        vec![law(40.0), law(700.0), 0.0]
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// `0x786ded`–`0x786e10` (and `0x786d6d` on the horizontal clone) fire `G` of the stored offset,
+/// not the number given: the handler sees what the getter answers, off the given value by the
+/// store's rounding.
+#[test]
+fn the_scroll_handlers_fire_the_stored_offset_through_the_getter_steps() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        frame:SetScript("OnVerticalScroll", function() V = arg1 end)
+        frame:SetScript("OnHorizontalScroll", function() H = arg1 end)
+        frame:SetVerticalScroll(40.1)
+        frame:SetHorizontalScroll(-17.3)
+    "#,
+    )
+    .unwrap();
+    let units = s.model_ref().layout_units();
+    let law = |v: f32| units.load(units.store(v));
+    let (v, h, gv, gh): (f64, f64, f64, f64) = s
+        .eval("return V, H, SF:GetVerticalScroll(), SF:GetHorizontalScroll()")
+        .unwrap();
+    assert_eq!((v, h), (law(40.1), law(-17.3)));
+    assert_eq!((v, h), (gv, gh), "the handler sees what the getter answers");
+    assert_ne!(v, f64::from(40.1f32), "not the value as given");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// The recompute measures `max(0, child − frame)`, and leaves the stored range alone when the

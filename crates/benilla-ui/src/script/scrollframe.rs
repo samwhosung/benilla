@@ -202,7 +202,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             // The re-anchor at the new offset (`0x786dd8` → `0x787100`).
             reanchor_child(lua, &this)?;
-            fire_scroll(lua, &this, "OnVerticalScroll", px)
+            fire_scroll(lua, &this, "OnVerticalScroll", units.load(units.store(px)))
         })?,
     )?;
     m.set(
@@ -252,7 +252,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             reanchor_child(lua, &this)?;
-            fire_scroll(lua, &this, "OnHorizontalScroll", px)
+            fire_scroll(
+                lua,
+                &this,
+                "OnHorizontalScroll",
+                units.load(units.store(px)),
+            )
         })?,
     )?;
     m.set(
@@ -296,16 +301,15 @@ fn moved(old: f32, new: f32, eps: f64) -> bool {
 }
 
 /// Fire `On{Vertical,Horizontal}Scroll(self, offset)`, the reference's script slots `[+0x334]` and
-/// `[+0x32c]`, outside any model borrow.
-fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Result<()> {
+/// `[+0x32c]`, outside any model borrow. The offset is the stored one through the getter steps,
+/// `G([+0x328])` pushed as a double under `"%f"` (`0x786ded`–`0x786e10`, `0x835160`).
+fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f64) -> mlua::Result<()> {
     let id = {
         let h = frame_handle_of(lua, this)?;
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         model.frame_id(h)
     };
-    if let Err(e) =
-        event::fire_widget_handler(lua, id, script, vec![Value::Number(f64::from(value))])
-    {
+    if let Err(e) = event::fire_widget_handler(lua, id, script, vec![Value::Number(value)]) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
             .record_lua_error(&e);
