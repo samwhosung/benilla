@@ -2,7 +2,7 @@ use mlua::Table;
 
 use crate::framexml::Element;
 
-use super::{abs_value, children_named, color_of, Loader};
+use super::{children_named, color_of, Loader};
 
 impl Loader<'_> {
     /// One `<Backdrop>` (LoadXML `0x77e6c0`): the table Lua `SetBackdrop` takes, then the two
@@ -33,7 +33,7 @@ impl Loader<'_> {
 
     /// The `SetBackdrop` table for a `<Backdrop>`. A key the element omits stays absent, so
     /// `SetBackdrop` keeps the ctor's default (tileSize 0, edgeSize 32, insets 0).
-    pub(super) fn build_backdrop_table(&self, bd: &Element) -> mlua::Result<Table> {
+    pub(super) fn build_backdrop_table(&mut self, bd: &Element) -> mlua::Result<Table> {
         let t = self.lua().create_table()?;
         if let Some(f) = bd.attr("bgFile") {
             t.set("bgFile", f)?;
@@ -44,19 +44,26 @@ impl Loader<'_> {
         if bd.attr_bool("tile") {
             t.set("tile", true)?;
         }
-        if let Some(v) = children_named(bd, "EdgeSize").next().and_then(abs_value) {
+        // Each length is set only when its reader succeeds (`0x77e779`, `0x77e7ae`, `0x77e7ef`).
+        if let Some(v) = children_named(bd, "EdgeSize")
+            .next()
+            .and_then(|e| self.value_read(e))
+        {
             t.set("edgeSize", v)?;
         }
-        if let Some(v) = children_named(bd, "TileSize").next().and_then(abs_value) {
+        if let Some(v) = children_named(bd, "TileSize")
+            .next()
+            .and_then(|e| self.value_read(e))
+        {
             t.set("tileSize", v)?;
         }
-        if let Some(ins) = children_named(bd, "BackgroundInsets").next() {
-            let src = children_named(ins, "AbsInset").next().unwrap_or(ins);
+        if let Some([l, r, top, b]) = children_named(bd, "BackgroundInsets")
+            .next()
+            .and_then(|e| self.inset(e))
+        {
             let it = self.lua().create_table()?;
-            for k in ["left", "right", "top", "bottom"] {
-                if let Some(v) = src.attr(k).filter(|v| !v.is_empty()).map(super::xml_float) {
-                    it.set(k, v)?;
-                }
+            for (k, v) in [("left", l), ("right", r), ("top", top), ("bottom", b)] {
+                it.set(k, v)?;
             }
             t.set("insets", it)?;
         }

@@ -5,7 +5,7 @@ use crate::script::binding_abi::s_str_to_int;
 use crate::script::LabelFont;
 
 use super::regions::FontAttrs;
-use super::{abs_dim, abs_value, children_named, children_named_any, color_of, Levels, Loader};
+use super::{children_named, children_named_any, color_of, Levels, Loader};
 
 impl Loader<'_> {
     /// `<ScrollFrame>`'s `<ScrollChild>` (`LoadXML 0x786bc0`): after the base load (`0x769820`) it
@@ -231,19 +231,13 @@ impl Loader<'_> {
                 self.call(wrapper, "SetText", text, dbg);
             }
         }
-        // `<PushedTextOffset>` (`0x778aec`): the dimension read (`0x6f1eb0`) zeroes both axes, takes
-        // the element's own non-empty `x`/`y`, then its `<AbsDimension>`'s, and stores them as
-        // `SetPushedTextOffset` does (`0x778b24`).
+        // `<PushedTextOffset>` (`0x778aec`): the dimension read (`0x6f1eb0`), stored as
+        // `SetPushedTextOffset` does (`0x778b24`) only when it succeeds (`0x778b0c`).
         for el in children_named(el, "PushedTextOffset") {
-            let mut xy = [0.0f32; 2];
-            for src in std::iter::once(el).chain(children_named(el, "AbsDimension").take(1)) {
-                for (i, k) in ["x", "y"].into_iter().enumerate() {
-                    if let Some(v) = src.attr(k).filter(|v| !v.is_empty()) {
-                        xy[i] = super::xml_float(v);
-                    }
-                }
+            let d = self.dimension(el);
+            if d.ok {
+                self.call(wrapper, "SetPushedTextOffset", (d.v[0], d.v[1]), dbg);
             }
-            self.call(wrapper, "SetPushedTextOffset", (xy[0], xy[1]), dbg);
         }
         // The three embedded fonts and their colours, in document order (`0x7788c0`): each font
         // element, two spellings each, loads into its font as a `<Font>` does (`0x778baf`,
@@ -304,15 +298,11 @@ impl Loader<'_> {
             let s = super::xml_float(v);
             self.call(wrapper, "SetBlinkSpeed", if s > 0.0 { s } else { 0.0 }, dbg);
         }
+        // `<TextInsets>` through the inset read (`0x77a2d5`), set when it succeeds (`0x77a2da`).
         if let Some(ins) = children_named(el, "TextInsets").next() {
-            let src = children_named(ins, "AbsInset").next().unwrap_or(ins);
-            let get = |k: &str| {
-                src.attr(k)
-                    .filter(|v| !v.is_empty())
-                    .map_or(0.0, super::xml_float)
-            };
-            let (l, r, t, b) = (get("left"), get("right"), get("top"), get("bottom"));
-            self.call(wrapper, "SetTextInsets", (l, r, t, b), dbg);
+            if let Some([l, r, t, b]) = self.inset(ins) {
+                self.call(wrapper, "SetTextInsets", (l, r, t, b), dbg);
+            }
         }
         // Each `<HighlightColor>` in turn, the last winning (`0x77a277`): the `<Color>` reader
         // (`0x6f23d0`, `0x77a292`), then the selection's setter (`0x77a2a2`).
@@ -567,7 +557,7 @@ impl Loader<'_> {
                 // before `outline=`, `<Color>`, `<Shadow>`, the justifies and `spacing=`.
                 let height = children_named(el, "FontHeight")
                     .last()
-                    .and_then(abs_value)
+                    .map(|h| self.value(h))
                     .filter(|h| *h > 0.0);
                 let Some(height) = height else {
                     self.report_missing_font_height("Font", "<unnamed>", &el.tag);
@@ -597,13 +587,9 @@ impl Loader<'_> {
                 let (r, g, b, a) = c.fractions();
                 self.call(wrapper, "SetShadowColor", (name, r, g, b, a), dbg);
             }
-            if let Some((x, y)) = children_named(sh, "Offset").next().map(abs_dim) {
-                self.call(
-                    wrapper,
-                    "SetShadowOffset",
-                    (name, x.unwrap_or(0.0), y.unwrap_or(0.0)),
-                    dbg,
-                );
+            if let Some(o) = children_named(sh, "Offset").next() {
+                let [x, y] = self.dimension(o).v;
+                self.call(wrapper, "SetShadowOffset", (name, x, y), dbg);
             }
         }
         if let Some(j) = el.attr("justifyH") {

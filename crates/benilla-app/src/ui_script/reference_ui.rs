@@ -2143,6 +2143,42 @@ mod tests {
         assert_eq!(failed(&mut glue), Vec::<String>::new(), "the glue");
     }
 
+    /// The anchor loop (`0x767800`) and the XML length readers (`0x6f1eb0`, `0x6f1d60`,
+    /// `0x6f20a0`) log a node they refuse. The stock interface and benilla's layer write none, so
+    /// a line here is a read stricter than the reference's, or a layer file the reference would
+    /// refuse.
+    #[test]
+    fn every_anchor_and_length_the_stock_interface_writes_reads() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let refused = |s: &mut UiScript| -> Vec<String> {
+            s.finish_ui_load_log();
+            let mut lines: Vec<String> = s.diagnostics().into_iter().map(|d| d.message).collect();
+            lines.extend(s.take_load_log_writes().iter().map(|w| format!("{w:?}")));
+            lines.retain(|l| {
+                [
+                    "Invalid anchor point in frame",
+                    "Frame anchored to itself",
+                    "Couldn't find relative frame",
+                    "attributes in element",
+                    "attribute in element",
+                    "Unknown child node in",
+                ]
+                .iter()
+                .any(|t| l.contains(t))
+            });
+            lines
+        };
+        let mut core = UiScript::new().expect("VM");
+        core.set_screen_size(1024.0, 768.0);
+        super::super::manifest::load_default_ui(&core);
+        assert_eq!(refused(&mut core), Vec::<String>::new(), "the core");
+
+        let mut glue = UiScript::new_glue().expect("VM");
+        glue.set_screen_size(1024.0, 768.0);
+        super::super::glue::load_glue(&mut glue);
+        assert_eq!(refused(&mut glue), Vec::<String>::new(), "the glue");
+    }
+
     fn seat_a_player(s: &mut UiScript) {
         s.set_unit(
             "player",

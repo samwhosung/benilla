@@ -1701,7 +1701,8 @@ fn state_font_setters_raise_on_an_unknown_name() {
 /// `GetPushedTextOffset` (`0x782180`) reads the ctor's (0.001, -0.001) layout units back through
 /// the aspect (`0x778740`); `SetPushedTextOffset` (`0x782030`) stores through it and raises its
 /// usage (`0x87a308`); `<PushedTextOffset>` (`0x778aec`) zeroes, then reads its own and its
-/// `<AbsDimension>`'s axes.
+/// `<AbsDimension>`'s axes, and sets nothing when the read fails (`0x778b0c`): with no child and
+/// no `y` (`0x6f1f44`).
 #[test]
 fn pushed_text_offset_reads_back_and_loads() {
     let mut s = script();
@@ -1756,7 +1757,7 @@ fn pushed_text_offset_reads_back_and_loads() {
                 b:GetName() .. " " .. x .. " " .. y)
         end
         at(XmlZero, 0, 0)
-        at(XmlAttr, 3, 0)
+        at(XmlAttr, 1.28, -1.28)
         at(XmlBoth, 5, -2)
     "#,
     )

@@ -662,9 +662,10 @@ impl Loader<'_> {
                 self.link_font_node(id, to, name);
             }
             Some(path) => {
+                // The first `<FontHeight>`, read whatever it answers (`0x783d65`), above 0.
                 let height = children_named(el, "FontHeight")
                     .next()
-                    .and_then(abs_value)
+                    .map(|h| self.value(h))
                     .filter(|h| *h > 0.0);
                 let Some(height) = height else {
                     self.report_missing_font_height("Font", name, &el.tag);
@@ -722,13 +723,18 @@ impl Loader<'_> {
                 word.0 = justify::set_axis(word.0, mask, bits);
             });
         }
+        drop(model);
         for child in &el.children {
             if child.tag.eq_ignore_ascii_case("Color") {
                 let c = color_of(child);
-                font::set(&mut model, id, FontMask::COLOR, |fo| fo.color = Some(c));
+                font::set(&mut self.model(), id, FontMask::COLOR, |fo| {
+                    fo.color = Some(c)
+                });
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
-                let sh = shadow_of(child, model.layout_unit());
-                font::set(&mut model, id, FontMask::SHADOW, |fo| fo.shadow = Some(sh));
+                let sh = self.shadow_of(child);
+                font::set(&mut self.model(), id, FontMask::SHADOW, |fo| {
+                    fo.shadow = Some(sh)
+                });
             }
         }
     }
@@ -1037,6 +1043,122 @@ impl Loader<'_> {
     }
 }
 
+/// What one of the reference's XML length readers answers (`XmlReadDimension 0x6f1eb0`,
+/// `XmlReadValue 0x6f1d60`, `XmlReadInset 0x6f20a0`): the values, zeroed and then written where
+/// read, in FrameXML units, and whether the read succeeded. A failure keeps what was written
+/// before it, which a caller that ignores the answer reads (`0x7679ad`, `0x77142d`, `0x771146`).
+pub(super) struct XmlLength<const N: usize> {
+    pub(super) v: [f32; N],
+    pub(super) ok: bool,
+}
+
+impl Loader<'_> {
+    /// The readers' one node rule: the node's own non-empty `keys` through `SStrToFloat`, then its
+    /// first child only. With none, the read succeeds when `gate` is present, else it logs
+    /// `missing` with the node's tag and fails (`0x6f1f44`-`0x6f1f55`). An `abs` child's own
+    /// non-empty `keys` overwrite; a `rel` child's are raw layout units, `layout_unit` FrameXML
+    /// units each (`0x6f2037`-`0x6f2060`, no conversion); any other child logs `0x871464` and
+    /// fails (`0x6f2070`).
+    fn xml_length<const N: usize>(
+        &mut self,
+        el: &Element,
+        keys: [&str; N],
+        gate: &str,
+        child: (&str, &str),
+        missing: &str,
+    ) -> XmlLength<N> {
+        let mut v = [0.0; N];
+        let read = |src: &Element, v: &mut [f32; N], unit: f32| {
+            for (slot, key) in v.iter_mut().zip(keys) {
+                if let Some(x) = xml_float_attr(src, key) {
+                    *slot = x * unit;
+                }
+            }
+        };
+        read(el, &mut v, 1.0);
+        let ok = match el.children.first() {
+            None if el.attr(gate).is_some() => true,
+            None => {
+                self.status_warning(format!("{missing}{}", el.tag));
+                false
+            }
+            Some(c) if c.tag.eq_ignore_ascii_case(child.0) => {
+                read(c, &mut v, 1.0);
+                true
+            }
+            Some(c) if c.tag.eq_ignore_ascii_case(child.1) => {
+                let unit = self.model().layout_unit();
+                read(c, &mut v, unit);
+                true
+            }
+            Some(c) => {
+                let line = format!("Unknown child node in {} element: {}", el.tag, c.tag);
+                self.status_warning(line);
+                false
+            }
+        };
+        XmlLength { v, ok }
+    }
+
+    /// `XmlReadDimension` (`0x6f1eb0`): `x` and `y` of a `<Size>`, an `<Offset>`, a
+    /// `<PushedTextOffset>` or a resize bound, gated on `y` (`0x8714e8`).
+    pub(super) fn dimension(&mut self, el: &Element) -> XmlLength<2> {
+        let missing = r#"No "x" or "y" attributes in element: "#;
+        self.xml_length(
+            el,
+            ["x", "y"],
+            "y",
+            ("AbsDimension", "RelDimension"),
+            missing,
+        )
+    }
+
+    /// `XmlReadValue` (`0x6f1d60`): the `val` of a `<FontHeight>`, `<EdgeSize>` or `<TileSize>`
+    /// (`0x8714a4`).
+    pub(super) fn value(&mut self, el: &Element) -> f32 {
+        let missing = r#"No "val" attribute in element: "#;
+        self.xml_length(el, ["val"], "val", ("AbsValue", "RelValue"), missing)
+            .v[0]
+    }
+
+    /// [`Self::value`] with its answer, for a caller that checks it (`0x77e779`, `0x77e7ae`).
+    pub(super) fn value_read(&mut self, el: &Element) -> Option<f32> {
+        let missing = r#"No "val" attribute in element: "#;
+        let r = self.xml_length(el, ["val"], "val", ("AbsValue", "RelValue"), missing);
+        r.ok.then_some(r.v[0])
+    }
+
+    /// `XmlReadInset` (`0x6f20a0`): `left`, `right`, `top` and `bottom` of an insets element,
+    /// gated on `bottom` alone (`0x6f21bc`, `0x871530`).
+    pub(super) fn inset(&mut self, el: &Element) -> Option<[f32; 4]> {
+        let missing = r#"No "right", "left", "top", or "bottom" attributes in element: "#;
+        let keys = ["left", "right", "top", "bottom"];
+        let r = self.xml_length(el, keys, "bottom", ("AbsInset", "RelInset"), missing);
+        r.ok.then_some(r.v)
+    }
+
+    /// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
+    /// (`0xff000000`), and its first `<Offset>` read whatever it answers (`0x77142d`, `0x7840a8`),
+    /// else (0.001, -0.001) (`0x3a83126f`, `0xba83126f`). The default is stored raw, in layout
+    /// units, where an `<Offset>` is converted from FrameXML units (`0x6f1ee3`-`0x6f1efd`), so in
+    /// FrameXML units it is 0.001 times [`crate::script::Model::layout_unit`]. Deviation: it is
+    /// taken at load, so a later aspect change keeps it, where the reference reloads the UI on
+    /// one (`0x492f13`).
+    pub(super) fn shadow_of(&mut self, sh: &Element) -> crate::script::FontShadow {
+        let offset = match children_named(sh, "Offset").next() {
+            Some(o) => self.dimension(o).v,
+            None => {
+                let raw = 0.001_f32 * self.model().layout_unit();
+                [raw, -raw]
+            }
+        };
+        let color = children_named(sh, "Color")
+            .next()
+            .map_or(crate::color::Rgba8::BLACK, color_of);
+        crate::script::FontShadow { offset, color }
+    }
+}
+
 /// Iterate an element's direct children whose tag matches `tag` (case-insensitively).
 pub(super) fn children_named<'a>(
     el: &'a Element,
@@ -1079,12 +1201,6 @@ fn xml_float_attr(el: &Element, key: &str) -> Option<f32> {
     el.attr(key).filter(|v| !v.is_empty()).map(xml_float)
 }
 
-/// An `x`/`y` pair from a `<Size>`/`<Offset>`: its `<AbsDimension>` child, else its own attributes.
-pub(super) fn abs_dim(el: &Element) -> (Option<f32>, Option<f32>) {
-    let src = children_named(el, "AbsDimension").next().unwrap_or(el);
-    (xml_float_attr(src, "x"), xml_float_attr(src, "y"))
-}
-
 /// A `<Color r= g= b= a=/>` element as `0x6f23d0` packs it: each attribute that is present and
 /// non-empty through `SStrToFloat` (`0x64aaa0`, so text with no number is 0), else 0 for r, g and b
 /// and 1 for a (`0x6f23e2`-`0x6f23f7`), then clamped and rounded as every colour setter does.
@@ -1107,33 +1223,6 @@ pub(super) fn tex_coords(tc: &Element) -> (f32, f32, f32, f32) {
         edge("top", 0.0),
         edge("bottom", 1.0),
     )
-}
-
-/// A `<FontHeight>`-style scalar: its `<AbsValue val=>` child, else its own `val=`.
-pub(super) fn abs_value(el: &Element) -> Option<f32> {
-    let src = children_named(el, "AbsValue").next().unwrap_or(el);
-    xml_float_attr(src, "val")
-}
-
-/// A `<Shadow>` element (`0x7713ca`, `0x784058`): its first `<Color>` over opaque black
-/// (`0xff000000`), and its first `<Offset>`, else (0.001, -0.001) (`0x3a83126f`, `0xba83126f`).
-/// The offset reader zeroes both coordinates first (`0x6f1ebe`, `0x6f1ece`), so a coordinate an
-/// `<Offset>` leaves out is 0. The default is stored raw, in layout units, where an `<Offset>` is
-/// converted from FrameXML units (`0x6f1ee3`-`0x6f1efd`), so in FrameXML units it is 0.001 times
-/// `unit`, [`crate::script::Model::layout_unit`]. Deviation: it is taken at load, so a later
-/// aspect change keeps it, where the reference reloads the UI on one (`0x492f13`).
-pub(super) fn shadow_of(sh: &Element, unit: f32) -> crate::script::FontShadow {
-    let raw = 0.001_f32 * unit;
-    let offset = children_named(sh, "Offset")
-        .next()
-        .map_or([raw, -raw], |o| {
-            let (x, y) = abs_dim(o);
-            [x.unwrap_or(0.0), y.unwrap_or(0.0)]
-        });
-    let color = children_named(sh, "Color")
-        .next()
-        .map_or(crate::color::Rgba8::BLACK, color_of);
-    crate::script::FontShadow { offset, color }
 }
 
 #[cfg(test)]

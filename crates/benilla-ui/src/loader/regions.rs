@@ -3,7 +3,7 @@ use mlua::{ObjectLike, Table};
 use crate::framexml::{self, Element};
 use crate::status;
 
-use super::{abs_value, children_named, color_of, Loader};
+use super::{children_named, color_of, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
@@ -275,9 +275,10 @@ impl Loader<'_> {
                 self.set_font_object(wrapper, "font", name, dbg);
             }
             Some(path) => {
+                // The first `<FontHeight>`, read whatever it answers (`0x771141`), above 0.
                 let height = children_named(node, "FontHeight")
                     .next()
-                    .and_then(abs_value)
+                    .map(|h| self.value(h))
                     .filter(|h| *h > 0.0);
                 let Some(height) = height else {
                     let name = self.object_name(wrapper);
@@ -331,7 +332,7 @@ impl Loader<'_> {
                 let c = color_of(child).fractions();
                 self.call_region(wrapper, "SetVertexColor", c, dbg);
             } else if child.tag.eq_ignore_ascii_case("Shadow") {
-                let sh = super::shadow_of(child, self.model().layout_unit());
+                let sh = self.shadow_of(child);
                 self.call_region(wrapper, "SetShadowColor", sh.color.fractions(), dbg);
                 self.call_region(
                     wrapper,

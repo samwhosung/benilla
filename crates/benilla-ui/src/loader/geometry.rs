@@ -4,7 +4,7 @@ use crate::framexml::{self, Element};
 use crate::script::binding_abi::{s_str_to_float, s_str_to_int};
 use crate::script::object;
 
-use super::{abs_dim, children_named, color_of, Levels, Loader};
+use super::{children_named, color_of, Levels, Loader};
 
 impl Loader<'_> {
     /// A frame element's LoadXML attributes and simple children (`0x769820`), and a model pane's
@@ -105,27 +105,21 @@ impl Loader<'_> {
         if el.attr_bool("enableMouse") {
             self.call(wrapper, "EnableMouse", true, dbg);
         }
-        // `<HitRectInsets>`: the mouse rect, inset from the frame's; a side it omits is 0.
+        // `<HitRectInsets>`: the mouse rect, inset from the frame's, when the inset read succeeds
+        // (`0x769cb5`); a side it omits is 0.
         if let Some(ins) = children_named(el, "HitRectInsets").next() {
-            let src = children_named(ins, "AbsInset").next().unwrap_or(ins);
-            let side = |k: &str| {
-                src.attr(k)
-                    .filter(|v| !v.is_empty())
-                    .map_or(0.0, |v| s_str_to_float(v) as f32)
-            };
-            self.call(
-                wrapper,
-                "SetHitRectInsets",
-                (side("left"), side("right"), side("top"), side("bottom")),
-                dbg,
-            );
+            if let Some([l, r, t, b]) = self.inset(ins) {
+                self.call(wrapper, "SetHitRectInsets", (l, r, t, b), dbg);
+            }
         }
         // `<ResizeBounds>` (`0x769baa`): both pairs are always written, an absent one as 0, so a
         // lone `<minResize>` resets the max to unbounded. A `<Size>` outside them is not clamped.
         if let Some(rb) = children_named(el, "ResizeBounds").next() {
             for (tag, verb) in [("minResize", "SetMinResize"), ("maxResize", "SetMaxResize")] {
-                let (x, y) = children_named(rb, tag).next().map_or((None, None), abs_dim);
-                self.call(wrapper, verb, (x.unwrap_or(0.0), y.unwrap_or(0.0)), dbg);
+                let [x, y] = children_named(rb, tag)
+                    .next()
+                    .map_or([0.0; 2], |d| self.dimension(d).v);
+                self.call(wrapper, verb, (x, y), dbg);
             }
         }
         // `movable`/`resizable`: flag bits 0x100/0x200, via the setter Lua uses (`0x76a3c0`).
@@ -186,13 +180,13 @@ impl Loader<'_> {
         parent_name: &str,
         dbg: &str,
     ) {
+        // A `<Size>` the dimension read accepts sets both axes, a missing one as 0
+        // (`0x767835`-`0x76784a`); one it refuses sets nothing.
         if let Some(size) = children_named(node, "Size").next() {
-            let (x, y) = abs_dim(size);
-            if let Some(w) = x {
-                self.call_on(wrapper, region, "SetWidth", w, dbg);
-            }
-            if let Some(h) = y {
-                self.call_on(wrapper, region, "SetHeight", h, dbg);
+            let d = self.dimension(size);
+            if d.ok {
+                self.call_on(wrapper, region, "SetWidth", d.v[0], dbg);
+                self.call_on(wrapper, region, "SetHeight", d.v[1], dbg);
             }
         }
         let set_all_points = node.attr_is_true("setAllPoints");
@@ -229,17 +223,11 @@ impl Loader<'_> {
             // An empty `relativeTo` is the layout parent, as an absent one (`0x76795c`).
             let rel_raw = anchor.attr("relativeTo").filter(|r| !r.is_empty());
             let rel_to = rel_raw.map(|r| framexml::resolve_name(r, parent_name));
-            let (x, y) = children_named(anchor, "Offset")
+            // The first `<Offset>`, read whatever it answers (`0x7679ad`).
+            let [x, y] = children_named(anchor, "Offset")
                 .next()
-                .map(abs_dim)
-                .unwrap_or((None, None));
-            let args = (
-                point.to_string(),
-                rel_to,
-                rel_point.to_string(),
-                x.unwrap_or(0.0),
-                y.unwrap_or(0.0),
-            );
+                .map_or([0.0; 2], |o| self.dimension(o).v);
+            let args = (point.to_string(), rel_to, rel_point.to_string(), x, y);
             let d = super::DeferredAnchor {
                 wrapper: wrapper.clone(),
                 region,

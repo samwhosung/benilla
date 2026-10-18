@@ -1215,3 +1215,102 @@ fn widget_numbers_read_as_the_references_prefix_parse() {
         [5.0, 2.0, 3.0]
     );
 }
+
+/// The XML length readers read the node's own attributes, then its first child only
+/// (`0x6f1eb0`, `0x6f1d60`, `0x6f20a0`): with no child the read needs its gate attribute (`y`,
+/// `val`, `bottom`), a `Rel` child is in layout units, and any other child is logged and fails.
+/// A `<Size>` they accept sets both axes, a missing one as 0; one they refuse sets nothing
+/// (`0x767835`-`0x76784a`). An `<Offset>` and a `<FontHeight>` keep what was read either way.
+#[test]
+fn the_xml_length_readers_read_the_first_child_only() {
+    let mut s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="LenTemplate" virtual="true">
+                <Size><AbsDimension x="100" y="100"/></Size>
+            </Frame>
+            <Frame name="LenHost">
+                <Size><AbsDimension x="400" y="300"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
+                <Frames>
+                    <Frame name="LenNoY" inherits="LenTemplate"><Size x="10"/></Frame>
+                    <Frame name="LenHalf" inherits="LenTemplate">
+                        <Size><AbsDimension x="50"/></Size>
+                    </Frame>
+                    <Frame name="LenBogus" inherits="LenTemplate"><Size><Bogus x="5" y="5"/></Size></Frame>
+                    <Frame name="LenOwn" inherits="LenTemplate"><Size x="10" y="20"/></Frame>
+                    <Frame name="LenRel"><Size><RelDimension x="0.1" y="0.05"/></Size></Frame>
+                    <Frame name="LenOffset">
+                        <Size><AbsDimension x="10" y="10"/></Size>
+                        <Anchors><Anchor point="BOTTOMLEFT"><Offset x="5"/></Anchor></Anchors>
+                    </Frame>
+                    <Frame name="LenInsetNoBottom">
+                        <HitRectInsets left="5" right="6"/>
+                    </Frame>
+                    <Frame name="LenInsetEmptyBottom">
+                        <HitRectInsets left="5" bottom=""/>
+                    </Frame>
+                </Frames>
+                <Layers><Layer>
+                    <FontString name="LenFontKept" font="Fonts\FRIZQT__.TTF">
+                        <FontHeight val="14"><Bogus/></FontHeight>
+                    </FontString>
+                    <FontString name="LenFontNone" font="Fonts\FRIZQT__.TTF">
+                        <FontHeight/>
+                    </FontString>
+                </Layer></Layers>
+            </Frame>
+        </Ui>"#,
+    );
+    s.resolve();
+    let got = |code: &str| s.eval::<Vec<f32>>(&format!("return {{{code}}}")).unwrap();
+    let size = |f: &str| got(&format!("{f}:GetWidth(), {f}:GetHeight()"));
+    assert_eq!(
+        size("LenNoY"),
+        [100.0, 100.0],
+        "no child, no y: nothing set"
+    );
+    assert_eq!(size("LenHalf"), [50.0, 0.0], "both axes, the missing one 0");
+    assert_eq!(
+        size("LenBogus"),
+        [100.0, 100.0],
+        "an unknown first child: nothing set"
+    );
+    assert_eq!(size("LenOwn"), [10.0, 20.0]);
+    // 0.1 and 0.05 layout units at 4:3, where one is 1280 FrameXML units.
+    let rel = size("LenRel");
+    assert!(
+        (rel[0] - 128.0).abs() < 1e-3 && (rel[1] - 64.0).abs() < 1e-3,
+        "{rel:?}"
+    );
+    assert_eq!(
+        got("LenOffset:GetLeft(), LenOffset:GetBottom()"),
+        [5.0, 0.0]
+    );
+    assert_eq!(got("LenInsetNoBottom:GetHitRectInsets()"), [0.0; 4]);
+    assert_eq!(
+        got("LenInsetEmptyBottom:GetHitRectInsets()"),
+        [5.0, 0.0, 0.0, 0.0]
+    );
+    let (_, kept): (String, f32) = s.eval("return LenFontKept:GetFont()").unwrap();
+    assert_eq!(
+        kept, 14.0,
+        "a FontHeight keeps its own val past a refused child"
+    );
+    for line in [
+        r#"No "x" or "y" attributes in element: Size"#,
+        "Unknown child node in Size element: Bogus",
+        r#"No "x" or "y" attributes in element: Offset"#,
+        r#"No "right", "left", "top", or "bottom" attributes in element: HitRectInsets"#,
+        "Unknown child node in FontHeight element: Bogus",
+        r#"No "val" attribute in element: FontHeight"#,
+        "FontString LenFontNone: Missing font height in FontString element",
+    ] {
+        assert!(
+            has_line(&report, line),
+            "{line}: {:?}",
+            report.status.lines()
+        );
+    }
+}
