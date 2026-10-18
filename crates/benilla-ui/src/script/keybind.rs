@@ -217,7 +217,12 @@ impl KeybindState {
     }
 
     /// The live keys bound to `command`, in bind order; names compare case-insensitively
-    /// (`0x64a4c0`).
+    /// (`0x64a4c0`). Every one, as `GetBindingKey` and `GetBinding` loop until no key is left
+    /// (`0x4b80d0`-`0x4b80f6`, `0x4b7fb5`-`0x4b7fd8`).
+    ///
+    /// Deviation: a key rebound to the command it already has keeps a duplicate index in 1.12.1
+    /// (`0x4b7786` lowers the other keys' indices before `0x4b77ac` returns on the same name), so
+    /// both getters there answer one key too few; that client fault is not reproduced.
     fn keys_of<'a>(&'a self, command: &'a str) -> impl Iterator<Item = &'a String> + 'a {
         self.live
             .iter()
@@ -485,7 +490,8 @@ pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<
 /// The binding globals. `GetBinding(i)` answers the row's name and then every key bound to it
 /// (`0x4b7f60`: `1 + matches` values), so a `HEADER_*` row answers its name alone, which the stock
 /// window reads as three names (`Blizzard_BindingUI.lua:84`, `:87`). Only `GetNumBindings` and
-/// `GetBinding` skip hidden rows.
+/// `GetBinding` skip hidden rows. Each verb gates its arguments as the reference does and raises
+/// its own `Usage:` line.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetNumBindings",
@@ -496,31 +502,40 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.globals().set(
         "GetBinding",
-        lua.create_function(|lua, i: usize| {
+        lua.create_function(|lua, i: Value| {
+            // `lua_isnumber` else the usage line (`0x4b7fe4`); the ordinal is `__ftol(i) - 1`
+            // (`0x4b7f92`), and a miss leaves the name `""` (`0x4b7f98`), whose keys follow it.
+            let i = super::binding_abi::number_arg(lua, i, "Usage: GetBinding(index)")?;
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             let kb = &model.keybinds;
-            let Some(row) = i.checked_sub(1).and_then(|i| kb.visible().nth(i)) else {
-                return Ok(MultiValue::new());
+            let row = usize::try_from(i.wrapping_sub(1))
+                .ok()
+                .and_then(|i| kb.visible().nth(i));
+            let name = match row {
+                Some(Row::Header(h)) => h.as_str(),
+                Some(Row::Command(c)) => kb.entries[*c].name.as_str(),
+                None => "",
             };
-            let mut out = Vec::new();
-            match row {
-                Row::Header(h) => out.push(Value::String(lua.create_string(h)?)),
-                Row::Command(c) => {
-                    let name = &kb.entries[*c].name;
-                    out.push(Value::String(lua.create_string(name)?));
-                    for k in kb.keys_of(name) {
-                        out.push(Value::String(lua.create_string(k)?));
-                    }
-                }
+            let mut out = vec![Value::String(lua.create_string(name)?)];
+            for k in kb.keys_of(name) {
+                out.push(Value::String(lua.create_string(k)?));
             }
             Ok(MultiValue::from_iter(out))
         })?,
     )?;
     // A stored binding signals `UPDATE_BINDINGS` before the verb returns 1 (`0x4b805b`); a refused
-    // key returns nil and signals nothing.
+    // key returns nil and signals nothing. The key is `lua_isstring`-gated (`0x4b8083`); the command
+    // is read only when `lua_isstring` (`0x4b8022`), so anything else, a boolean or a table
+    // included, unbinds.
     lua.globals().set(
         "SetBinding",
-        lua.create_function(|lua, (key, command): (String, Option<String>)| {
+        lua.create_function(|lua, (key, command): (Value, Value)| {
+            let key = super::binding_abi::string_arg(
+                lua,
+                key,
+                "Usage: SetBinding(\"KEY\"[, \"COMMAND\"])",
+            )?;
+            let command = super::binding_abi::optional_string(lua, &command);
             let ok = super::tick::verb(lua, |model| {
                 let ok = model.keybinds.set_binding(&key, command.as_deref());
                 if ok {
@@ -550,11 +565,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.globals().set(
         "GetBindingKey",
-        lua.create_function(|lua, command: String| {
+        lua.create_function(|lua, command: Value| {
+            let command =
+                super::binding_abi::string_arg(lua, command, "Usage: GetBindingKey(\"COMMAND\")")?;
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             let kb = &model.keybinds;
             let mut out = Vec::new();
-            for k in kb.keys_of(&command).take(2) {
+            for k in kb.keys_of(&command) {
                 out.push(Value::String(lua.create_string(k)?));
             }
             Ok(MultiValue::from_iter(out))
@@ -562,7 +579,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.globals().set(
         "GetBindingAction",
-        lua.create_function(|lua, key: String| {
+        lua.create_function(|lua, key: Value| {
+            let key = super::binding_abi::string_arg(lua, key, "Usage: GetBindingAction(\"KEY\")")?;
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             let key = key.to_ascii_uppercase();
             let name = model
@@ -596,9 +614,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // `SaveBindings` reads its set by `tonumber` alone (`0x4b8269`, a non-number is 0) and raises
+    // the usage for any but 1 and 2 (`0x4b8275`-`0x4b8285`).
     lua.globals().set(
         "SaveBindings",
-        lua.create_function(|lua, which: u32| {
+        lua.create_function(|lua, which: Value| {
+            let which =
+                super::binding_abi::ftol(super::binding_abi::coerced_number(lua, Some(which)));
+            let which = match which {
+                1 | 2 => which.unsigned_abs(),
+                _ => {
+                    return Err(mlua::Error::RuntimeError(
+                        "Usage: SaveBindings(1||2)".into(),
+                    ))
+                }
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.keybinds.save(which);
             Ok(())
@@ -672,7 +702,7 @@ mod tests {
         s.run(r#"SetBinding("F", "JUMP")"#).unwrap();
         assert_eq!(rows(&s)[2], row(&["JUMP", "SPACE", "NUMPAD0", "F"]));
         assert!(s
-            .eval::<bool>("return GetBinding(0) == nil and GetBinding(6) == nil")
+            .eval::<bool>(r#"return GetBinding(0) == "" and GetBinding(6) == """#)
             .unwrap());
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("NUMPAD0")"#)
@@ -684,6 +714,81 @@ mod tests {
             "",
             "an unbound key reads as the empty command, like the client"
         );
+    }
+
+    /// `GetBindingKey` answers every key of a command (`0x4b80d0`-`0x4b80f6`), and `GetBinding`
+    /// every key after the name, which is `""` for an ordinal that names no row (`0x4b7f98`).
+    #[test]
+    fn the_getters_answer_every_key_and_an_empty_name_past_the_list() {
+        let s = script();
+        s.run(r#"SetBinding("F", "JUMP") SetBinding("G", "JUMP")"#)
+            .unwrap();
+        let count = |code: &str| -> u32 {
+            s.eval(&format!(
+                "local function n(...) return arg.n end return n({code})"
+            ))
+            .unwrap()
+        };
+        assert_eq!(count(r#"GetBindingKey("JUMP")"#), 4);
+        assert_eq!(
+            s.eval::<Vec<String>>(r#"return { GetBindingKey("jump") }"#)
+                .unwrap(),
+            row(&["SPACE", "NUMPAD0", "F", "G"])
+        );
+        assert_eq!(count("GetBinding(3)"), 5);
+        // The ordinal is `__ftol(i) - 1`: 3.7 is row 3, and "3" coerces.
+        assert_eq!(count("GetBinding(3.7)"), 5);
+        assert_eq!(count(r#"GetBinding("3")"#), 5);
+        for miss in ["0", "-1", "99", "0.5"] {
+            assert_eq!(
+                s.eval::<Vec<String>>(&format!("return {{ GetBinding({miss}) }}"))
+                    .unwrap(),
+                row(&[""]),
+                "GetBinding({miss})"
+            );
+        }
+    }
+
+    /// Each binding verb's bad argument raises its own usage line (`0x4b7fe4`, `0x4b8083`,
+    /// `0x4b8101`, `0x4b8166`, `0x4b8284`); `SetBinding`'s command is read only when it is a string
+    /// or number (`0x4b8022`), so a boolean or a table unbinds.
+    #[test]
+    fn the_binding_verbs_gate_their_arguments_as_the_client_does() {
+        let s = script();
+        for (code, want) in [
+            (r#"GetBinding("x")"#, "Usage: GetBinding(index)"),
+            ("GetBinding()", "Usage: GetBinding(index)"),
+            ("SetBinding()", r#"Usage: SetBinding("KEY"[, "COMMAND"])"#),
+            ("SetBinding({})", r#"Usage: SetBinding("KEY"[, "COMMAND"])"#),
+            ("GetBindingKey()", r#"Usage: GetBindingKey("COMMAND")"#),
+            ("GetBindingAction(nil)", r#"Usage: GetBindingAction("KEY")"#),
+            ("SaveBindings(3)", "Usage: SaveBindings(1||2)"),
+            ("SaveBindings(0)", "Usage: SaveBindings(1||2)"),
+            (r#"SaveBindings("x")"#, "Usage: SaveBindings(1||2)"),
+            ("SaveBindings()", "Usage: SaveBindings(1||2)"),
+        ] {
+            let e = s.run(code).unwrap_err().to_string();
+            assert!(e.contains(want), "{code}: {e}");
+        }
+        assert_eq!(
+            s.eval::<i64>(r#"return SetBinding("SPACE", false)"#)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("SPACE")"#)
+                .unwrap(),
+            "",
+            "a boolean command unbinds"
+        );
+        s.run(r#"SetBinding("NUMPAD0", {})"#).unwrap();
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("NUMPAD0")"#)
+                .unwrap(),
+            ""
+        );
+        s.run(r#"SaveBindings("1")"#).unwrap();
+        assert_eq!(s.eval::<u32>("return GetCurrentBindingSet()").unwrap(), 1);
     }
 
     /// The core file is read as the reference reads it: a first row with no header files under
