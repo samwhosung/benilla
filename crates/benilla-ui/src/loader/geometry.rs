@@ -202,7 +202,9 @@ impl Loader<'_> {
         // Every child of the first `<Anchors>`, whatever its tag (`[node+4]`, then `[child+0x1c]`,
         // `0x7679e3`): its `point` through `0x6f1840`, a whole-string match ignoring case; a missing
         // or unknown one is logged (`0x878470`, `0x7679cf`) and the child skipped, a missing one
-        // printing the CRT's `(null)` for the null `%s` (`0x742ffc`).
+        // printing `(null)`: the status's `0x41a000` formats through `0x64a8b0` and `0x64a820`
+        // to the CRT, whose `__output` (`0x742ba5`) puts `(null)` (`0x871708`) for a null `%s`
+        // (`0x742ffc`).
         for anchor in &anchors.children {
             let point = anchor.attr("point");
             let Some(point) = point.filter(|p| object::point_from_str(p).is_some()) else {
