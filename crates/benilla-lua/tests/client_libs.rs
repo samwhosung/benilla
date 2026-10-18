@@ -333,6 +333,34 @@ fn the_math_library_answers_the_clients_specials() {
     );
 }
 
+/// 5.0's `getfenv` and `setfenv` (`0x702ac0`, `0x702be0`): an environment's raw `__fenv` field
+/// (`aux_getfenv`, `0x702ba0`) is what `getfenv` answers and makes `setfenv` refuse, a metafield
+/// is not read, and `setfenv` answers nothing.
+#[test]
+fn fenv_protection_is_the_clients() {
+    assert_eq!(
+        ok("local function f() return x end
+            local env = {x = 1, __fenv = 'locked'}
+            setfenv(f, env)
+            local ok, e = pcall(setfenv, f, {})
+            return getfenv(f), ok, e, f()"),
+        [
+            "locked",
+            "false",
+            "`setfenv' cannot change a protected environment",
+            "1"
+        ]
+    );
+    assert_eq!(
+        ok("local function f() end
+            local env = setmetatable({}, {__fenv = 1})
+            local function count(...) return arg.n end
+            local n = count(setfenv(f, env))
+            return getfenv(f) == env, n, pcall(setfenv, f, {})"),
+        ["true", "0", "true"]
+    );
+}
+
 /// `math_random` (`0x7fb310`) over MSVC's `rand` (`0x7400e5`): from `srand(1)` the CRT's own
 /// first draws 41, 18467, 6334, 26500, 19169, each `% 32767` times `1/32767` (`0x822d38`), an
 /// interval's low end added to the `int` floor. A new state is seeded from the clock (`0x5b800b`).

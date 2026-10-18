@@ -494,6 +494,9 @@ b]])"#),
         local d = {} table.setn(d, 2) d[1] = 9 d[2] = 8 d[3] = 7 sort(d)
         local e = {4, 3, 2, 1} e[3] = nil local oke = pcall(table.sort, e)
         return S(E(f, 3, 1, nil), ok, t[1], t[2], t[3], oka, a[1], a[2], a[3], a[4]) .. "|" .. S(b[1], b[2], b[3], b[4], b[5], okc, c[1], c[2], c[4], d[1], d[2], d[3], oke, e[1], e[2], e[4])"#),
+    // 5.0's `setfenv` (`0x702be0`) answers nothing, takes its level as optional as `getfenv` does
+    // (`0x702b22`), and refuses a native as "given function" (`0x702c72`); `getfenv` answers an
+    // environment's raw `__fenv` (`0x702ba0`).
     ("fix-libs fenv", r#"local function f() end
         local t = {}
         local o = {S(setfenv(f, t) == f, getfenv(f) == t)}
