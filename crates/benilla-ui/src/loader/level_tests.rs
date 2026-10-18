@@ -216,6 +216,37 @@ fn a_slider_reads_its_values_and_orientation_like_the_reference() {
     ));
 }
 
+/// `0x789580` runs once per level (`0x769820` re-enters `LoadXML` on the `inherits` node at
+/// `0x76985c`): an instance with one bound leaves the template's pair, and a pair of its own
+/// replaces it whole.
+#[test]
+fn a_slider_reads_its_range_per_level() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Slider name="SlRangeTemplate" minValue="0" maxValue="10" valueStep="2" defaultValue="4"
+                orientation="HORIZONTAL" virtual="true"/>
+            <Slider name="SlOneBound" inherits="SlRangeTemplate" maxValue="100"/>
+            <Slider name="SlOwnPair" inherits="SlRangeTemplate" minValue="5" maxValue="50"/>
+        </Ui>"#,
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let state = |name: &str| {
+        s.eval::<(f32, f32, f32, f32, String)>(&format!(
+            "local lo, hi = {name}:GetMinMaxValues() \
+             return lo, hi, {name}:GetValueStep(), {name}:GetValue(), {name}:GetOrientation()"
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        state("SlOneBound"),
+        (0.0, 10.0, 2.0, 4.0, "HORIZONTAL".into())
+    );
+    let (lo, hi, step, _, _) = state("SlOwnPair");
+    assert_eq!((lo, hi, step), (5.0, 50.0, 2.0));
+}
+
 /// `0x76fe20`: every `<TexCoords>` child applies in order, each over 0, 1, 0, 1 with its edges read
 /// by `atof`, and the instance's level comes after its template's, so the last one wins whole.
 #[test]
