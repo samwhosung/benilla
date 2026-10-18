@@ -6,7 +6,9 @@
 //! - In range (`d / viewRadius ≤ 0.8`): the `POIIcons.blp` cell of the `Icon` column, only for
 //!   rows with `Flags & 2` (the world-PvP towers in 1.12 data); other rows draw nothing.
 //! - Out of range within 694.444 yd: the first 3 by (`Importance` signed ascending, distance),
-//!   on the 0.8 rim, each rotated to point at its POI in its source's art ([`RimArrow`]).
+//!   each a rim arrow: one of the minimap's engine `Model` children, which the VM aims at its POI
+//!   and the model pane renderer draws in its source's art ([`RimArrow`]), at a level above the
+//!   minimap's own draw, so above every dot.
 //!
 //! Dots come from the ObjectIcons classifier `0x4eaa90`. A unit or player must first be alive, not
 //! our own charm or summon, and trackable ([`dots`]'s `unit_dot_eligible`). Then quest status 7
@@ -17,9 +19,7 @@
 //!
 //! Blip sizes are frozen once by the CGMinimapFrame ctor (`0x4edbc0`) against a 140.8-px basis.
 //!
-//! Not built: the landmark `WorldStateID` gate (`0x6d9b27`); the per-source rim-arrow z-order
-//! (bottom to top landmark, party, quest, gossip, corpse, from `+0x48` as a frame-level offset),
-//! which conflicts with `0x4ed7b7` drawing the dots last and is unsettled; and static blip slot 0,
+//! Not built: the landmark `WorldStateID` gate (`0x6d9b27`) and static blip slot 0,
 //! `SelectQuestLogEntry()`'s gold guide arrow at the quest's POI (`0x4def70`).
 //!
 //! Deviation: dots re-project every frame, where the reference draws coordinates about 1 s
@@ -40,7 +40,7 @@ use bevy::window::PrimaryWindow;
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::{AreaPoi, AreaPoiCatalog};
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{MinimapRimArrow, UiScript, MINIMAP_CORPSE_ARROW, MINIMAP_GROUP_ARROW};
 
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
@@ -59,79 +59,21 @@ const FLAG_IN_RANGE_ICON: u32 = 0x2;
 /// The basis every blip size is frozen against: the stock 140-unit widget at 140.8 px on the
 /// 1024×768 screen, computed once by the CGMinimapFrame ctor (`0x4edbc0`).
 pub(super) const BLIP_BASIS_PX: f32 = 140.8;
-/// The player arrow's art, on the minimap and the world map, whose stock `WorldMapFrame.lua`
-/// `SetModel`s a pane to the same M2.
-pub(crate) const PLAYER_ARROW_TEXTURE: &str = "Interface\\Minimap\\MinimapArrow";
-/// `MinimapArrow.m2` is one 0.0262 × 0.0263-unit quad at 1280 px per model unit.
-pub(crate) const PLAYER_ARROW_QUAD_PX: f32 = 33.6;
-/// The quad's authored centre, (+0.0004, +0.00135) model units off the origin; it turns with
-/// facing.
-pub(crate) const PLAYER_ARROW_OFFSET_PX: bevy::math::Vec2 = bevy::math::Vec2::new(0.51, -1.73);
-/// The rim arrow's quad: `Rotating-MinimapArrow.m2`'s 0.0500-unit full-texture quads at 768 px
-/// per model unit (modelScale 0.6 × 1280), so the sprite needs no uv crop.
+/// The rim arrow's quad for the hover test: `Rotating-MinimapArrow.m2`'s 0.0500-unit quads at
+/// 768 units per model unit (model scale 0.6 × 1280).
 const ARROW_QUAD_PX: f32 = 38.4;
 
-/// Which rim-arrow art a blip source draws. The minimap's one arrow model,
-/// `Rotating-MinimapArrow.m2`, picks among four arrow layers by sequence (`0x4ed349`): in each
-/// looping sequence exactly one layer's stepped alpha is 1.0, untinted, so one flat sprite per
-/// source is exact. `AnimationData.dbc` names them 165 `GroupArrow`, 166 `Arrow`, 167
-/// `CorpseArrow`, 168 `GuideArrow`.
-///
-/// The selector is `0xa7` when the output record's `+0x48 == 2`, else `0xa6 + 2·(v != -2)`, so
-/// everything but a DBC landmark and the corpse draws the guide arrow.
+/// Which source a landmark rim arrow comes from: an `AreaPOI.dbc` row (`+0x48 == -2`, sequence
+/// 166 `Arrow`) or the guard's directions, the gossip marker (static slot 1, sequence 168
+/// `GuideArrow`). The VM picks the sequence from the slot (`0x4ed353`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RimArrow {
-    /// An `AreaPOI.dbc` landmark: sequence `0xa6`, `+0x48 == -2`, the white one.
+    /// An `AreaPOI.dbc` landmark.
     Landmark,
-    /// A party or raid member, or your pet: sequence `0xa5`, armed once at `0x4ee1e3` and never
-    /// re-armed.
-    Group,
-    /// Your own corpse: sequence `0xa7`, `+0x48 == 2`.
-    Corpse,
-    /// The guard's directions ([`crate::poi_marker`]): sequence `0xa8`, the default arm, gold.
+    /// The guard's directions ([`crate::poi_marker`]).
     Guide,
 }
 
-impl RimArrow {
-    /// The `AnimationData.dbc` sequence the reference plays for this art; the test checks the
-    /// model against it.
-    #[cfg(test)]
-    pub(crate) const fn anim_id(self) -> u16 {
-        match self {
-            Self::Group => 0xa5,
-            Self::Landmark => 0xa6,
-            Self::Corpse => 0xa7,
-            Self::Guide => 0xa8,
-        }
-    }
-
-    /// The `.blp` that sequence lights.
-    pub(crate) const fn texture(self) -> &'static str {
-        match self {
-            Self::Landmark => "Interface\\Minimap\\Rotating-MinimapArrow",
-            Self::Group => "Interface\\Minimap\\Rotating-MinimapGroupArrow",
-            Self::Corpse => "Interface\\Minimap\\Rotating-MinimapCorpseArrow",
-            Self::Guide => "Interface\\Minimap\\Rotating-MinimapGuideArrow",
-        }
-    }
-
-    /// The four, in [`RimArrowArt`]'s slot order.
-    pub(crate) const ALL: [Self; 4] = [Self::Landmark, Self::Group, Self::Corpse, Self::Guide];
-}
-
-/// The four rim-arrow textures; a missing one draws no arrow for its source, never another's.
-#[derive(Default)]
-pub(crate) struct RimArrowArt([Option<Handle<Image>>; 4]);
-
-impl RimArrowArt {
-    pub(crate) fn set(&mut self, kind: RimArrow, tex: Option<Handle<Image>>) {
-        self.0[kind as usize] = tex;
-    }
-
-    pub(super) fn get(&self, kind: RimArrow) -> Option<&Handle<Image>> {
-        self.0[kind as usize].as_ref()
-    }
-}
 /// An in-range POI icon's quad, 16 px (`[0xbc7658]`, frozen by the ctor).
 const POI_ICON_PX: f32 = 16.0;
 
@@ -258,13 +200,13 @@ fn poi_icon_cell(icon: u32) -> Option<[f32; 4]> {
     Some([c / 8.0, (c + 1.0) / 8.0, r / 8.0, (r + 1.0) / 8.0])
 }
 
-/// Draw the in-range POI icons, then the rim arrows; the later-drawn hover hit wins.
+/// Draw the in-range POI icons, then hover-test the rim arrows, which the engine children draw;
+/// the later hit wins.
 pub(super) fn emit_landmarks(
     ctx: &BlipCtx,
     cat: Option<&AreaPoiCatalog>,
     marker: Option<&AreaPoi>,
     map_id: u32,
-    arrows: &RimArrowArt,
     poi_icons: Option<&Handle<Image>>,
     quads: &mut UiQuads,
     hover: &mut MinimapBlipHover,
@@ -301,41 +243,58 @@ pub(super) fn emit_landmarks(
             }
         }
     }
-    for (_d, poi, art) in &sel.arrows {
-        let Some(tex) = arrows.get(*art) else {
-            continue;
-        };
-        let rect = push_rim_arrow(ctx, poi.pos, tex, quads);
+    for (_d, poi, _art) in &sel.arrows {
         if let Some(c) = ctx.cursor {
-            if rect.contains(c) {
+            if rim_arrow_rect(ctx, poi.pos).contains(c) {
                 *hover = MinimapBlipHover::Landmark(poi.name.clone());
             }
         }
     }
 }
 
-/// One rim arrow on the 0.8 rim, pointing at its target, drawn in one pass as only one of the
-/// model's layers is ever opaque. Returns its rect for the hover test.
-fn push_rim_arrow(
-    ctx: &BlipCtx,
-    target: [f32; 3],
-    tex: &Handle<Image>,
-    quads: &mut UiQuads,
-) -> Rect {
+/// A rim arrow's square on the 0.8 rim toward its target, for the hover test.
+fn rim_arrow_rect(ctx: &BlipCtx, target: [f32; 3]) -> Rect {
     let dir = ctx.offset(target).normalize_or_zero();
     let pos = ctx.center + dir * (ctx.side * 0.5 * BLIP_EDGE_RATIO);
-    // Quad rotation is clockwise on a y-down screen and the art points up at zero.
-    let rotation = dir.x.atan2(-dir.y);
-    let rect = Rect::from_center_size(pos, Vec2::splat(ctx.side * (ARROW_QUAD_PX / BLIP_BASIS_PX)));
-    quads.overlays.push(UiQuad {
-        rect,
-        z_key: ctx.z,
-        texture: Some(tex.clone()),
-        color: [1.0, 1.0, 1.0, ctx.alpha],
-        rotation,
-        ..default()
-    });
-    rect
+    Rect::from_center_size(pos, Vec2::splat(ctx.side * (ARROW_QUAD_PX / BLIP_BASIS_PX)))
+}
+
+/// The bearing from the player to `(x, y)` in radians from north toward west, the reference's
+/// `atan2` of the offset (`0x6d9dd1`, `0x6daf7f`), which is also the arrow's facing.
+pub(super) fn bearing(wx: f32, wy: f32, x: f32, y: f32) -> f32 {
+    (y - wy).atan2(x - wx)
+}
+
+/// A kept landmark's identity, its name and position bits.
+pub(super) type ArrowKey = (String, [u32; 2]);
+
+/// The landmark selection as the render's arrow records (`0x6daa20`), with each record's identity
+/// for the rebuild test: the list is rebuilt when its count or any kept record changes
+/// (`0x6d9d82`–`0x6d9dfb`).
+pub(super) fn rim_arrow_records(
+    sel: &LandmarkSelection<'_>,
+    wx: f32,
+    wy: f32,
+) -> (Vec<MinimapRimArrow>, Vec<ArrowKey>) {
+    sel.arrows
+        .iter()
+        .map(|(_, poi, art)| {
+            let guide = *art == RimArrow::Guide;
+            (
+                MinimapRimArrow {
+                    bearing: bearing(wx, wy, poi.pos[0], poi.pos[1]),
+                    // The guard's directions are the gossip marker, static slot 1, which shows
+                    // indoors too (`+0x44`); a DBC row is −2.
+                    slot: if guide { 1 } else { -2 },
+                    indoors: guide,
+                },
+                (
+                    poi.name.clone(),
+                    [poi.pos[0].to_bits(), poi.pos[1].to_bits()],
+                ),
+            )
+        })
+        .unzip()
 }
 
 /// A party member's position: the streamed transform, else the `PARTY_MEMBER_STATS` position
@@ -357,37 +316,38 @@ pub(crate) fn party_member_pos(
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
 
-/// The party and corpse rim arrows, the out-of-range half of the party placement `0x6dad10`,
-/// drawn before the player arrow.
+/// The party arrow frames' records, the out-of-range half of the party placement `0x6dad10`: a
+/// member beyond 0.8 of the radius has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`), playing
+/// `GroupArrow`.
 ///
 /// This differs from the reference, not built yet: its slot 4 is the pet (`UNIT_FIELD_CHARM`,
 /// else `UNIT_FIELD_SUMMON`, at `0x6dad60`), and the corpse is static blip slot 2 on the POI path,
-/// at `Importance` -1 and exempt from the 694.444-yd cut, taking one of the three rim slots.
-/// So there is no pet blip here, and four rim arrows can draw where the reference draws three.
-pub(super) fn emit_party_arrows(
-    ctx: &BlipCtx,
+/// at `Importance` -1 and exempt from the 694.444-yd cut, taking one of the three rim slots. So
+/// there is no pet arrow here, the corpse arrow takes the pet's frame, and four rim arrows can
+/// draw where the reference draws three.
+pub(super) fn group_arrow_records(
+    wx: f32,
+    wy: f32,
+    radius_yd: f32,
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
     unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
     corpse: Option<[f32; 3]>,
-    arrows: &RimArrowArt,
-    quads: &mut UiQuads,
-) {
-    let members = group
-        .party_slots()
-        .filter_map(|m| party_member_pos(m, group, guids, unit_pos))
-        .map(|p| (p, RimArrow::Group));
-    let corpse = corpse.map(|c| ((c[0], c[1]), RimArrow::Corpse));
-    for ((x, y), art) in members.chain(corpse) {
-        let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
-        if d / ctx.radius_yd <= BLIP_EDGE_RATIO {
-            continue; // in range: the dot pass draws it
+) -> [Option<(f32, u16)>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
+    let out_of_range =
+        |x: f32, y: f32| ((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO;
+    let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
+    for (i, m) in group.party_slots().enumerate().take(4) {
+        if let Some((x, y)) = party_member_pos(m, group, guids, unit_pos) {
+            if out_of_range(x, y) {
+                records[i] = Some((bearing(wx, wy, x, y), MINIMAP_GROUP_ARROW));
+            }
         }
-        let Some(tex) = arrows.get(art) else {
-            continue;
-        };
-        push_rim_arrow(ctx, [x, y, 0.0], tex, quads);
     }
+    if let Some(c) = corpse.filter(|c| out_of_range(c[0], c[1])) {
+        records[4] = Some((bearing(wx, wy, c[0], c[1]), MINIMAP_CORPSE_ARROW));
+    }
+    records
 }
 
 /// Show the hovered blip's name; a unit's resolves through the name cache. This is the in-rect
@@ -445,7 +405,8 @@ mod tooltip_tests;
 mod tests {
     use super::*;
 
-    /// The call site gives only the sequence id; the model says what it draws.
+    /// The VM arms only a sequence id (`0x4ed353`, `0x4ee1de`); the model says what it draws: in
+    /// each looping sequence exactly one arrow layer's stepped alpha is 1.0, untinted.
     #[test]
     fn each_rim_arrow_sequence_lights_exactly_its_own_layer() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -454,21 +415,36 @@ mod tests {
             .read_file("Interface\\Minimap\\Rotating-MinimapArrow.m2")
             .expect("the one rim-arrow model");
 
-        for kind in RimArrow::ALL {
-            let shown = benilla_formats::m2_sequence_visible_textures(&bytes, kind.anim_id())
+        for (anim_id, texture) in [
+            (
+                benilla_ui::script::MINIMAP_GROUP_ARROW,
+                "Interface\\Minimap\\Rotating-MinimapGroupArrow",
+            ),
+            (
+                benilla_ui::script::MINIMAP_LANDMARK_ARROW,
+                "Interface\\Minimap\\Rotating-MinimapArrow",
+            ),
+            (
+                benilla_ui::script::MINIMAP_CORPSE_ARROW,
+                "Interface\\Minimap\\Rotating-MinimapCorpseArrow",
+            ),
+            (
+                benilla_ui::script::MINIMAP_GUIDE_ARROW,
+                "Interface\\Minimap\\Rotating-MinimapGuideArrow",
+            ),
+        ] {
+            let shown = benilla_formats::m2_sequence_visible_textures(&bytes, anim_id)
                 .unwrap_or_else(|| {
                     panic!(
-                        "{kind:?}: the model authors no sequence {:#x} — the id \
-                    is wrong, or this is not the model the reference animates",
-                        kind.anim_id()
+                        "the model authors no sequence {anim_id:#x}: the id is wrong, or this is \
+                         not the model the reference animates"
                     )
                 });
-            let want = format!("{}.BLP", kind.texture().to_uppercase());
+            let want = format!("{}.BLP", texture.to_uppercase());
             assert_eq!(
                 shown,
                 vec![want],
-                "{kind:?} (sequence {:#x}) must light its layer and ONLY its layer",
-                kind.anim_id()
+                "sequence {anim_id:#x} must light its layer and ONLY its layer"
             );
         }
     }

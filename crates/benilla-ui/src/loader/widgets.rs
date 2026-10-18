@@ -333,7 +333,8 @@ impl Loader<'_> {
     }
 
     /// `<Minimap>` (`0x4ee2b0`): the two model files for the ctor's nine `Model` children, each
-    /// the stock model when the attribute is absent, as the reference reads a default string.
+    /// the stock model when the attribute is absent, as the reference reads a default string, and
+    /// its log line for a model that does not load.
     pub(super) fn apply_minimap(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
         if !el.tag.eq_ignore_ascii_case("Minimap") {
             return;
@@ -346,11 +347,16 @@ impl Loader<'_> {
             .attr("minimapPlayerModel")
             .filter(|s| !s.is_empty())
             .unwrap_or(crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL);
-        if let Err(e) = crate::script::apply_minimap_model_attrs(self.lua, wrapper, arrow, player) {
-            self.warn_once(
+        match crate::script::apply_minimap_model_attrs(self.lua, wrapper, arrow, player) {
+            Ok(failed) => {
+                for line in failed {
+                    self.report.warnings.push(format!("{dbg}: {line}"));
+                }
+            }
+            Err(e) => self.warn_once(
                 "minimap:models",
                 format!("{dbg}: <Minimap> model attributes: {e}"),
-            );
+            ),
         }
     }
 

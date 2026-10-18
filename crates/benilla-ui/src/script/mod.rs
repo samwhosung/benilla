@@ -298,6 +298,10 @@ pub use mail::{
 pub use measure::TextMeasure;
 pub use merchant::{ItemStatsHead, MerchantItem, MerchantState, RepairCosts};
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;
+pub use minimap::{
+    MinimapRimArrow, CORPSE_ARROW as MINIMAP_CORPSE_ARROW, GROUP_ARROW as MINIMAP_GROUP_ARROW,
+    GUIDE_ARROW as MINIMAP_GUIDE_ARROW, LANDMARK_ARROW as MINIMAP_LANDMARK_ARROW,
+};
 pub(crate) use model::Model;
 pub use model::{
     FontProbe, MacroIconSource, TextureProbe, TextureSizeFn, TextureSizeProbe, WorldLocFn,
@@ -877,11 +881,14 @@ impl UiScript {
         self.model_mut().minimap.inside = inside;
     }
 
-    /// Push the player's facing (radians) onto every Minimap's player-arrow `Model`, every frame,
-    /// raw: `CMinimap::SetPlayerFacing` (`0x4eb8e0`, fed at `0x4eb0a4`–`0x4eb0b1`) copies it into
-    /// the field `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
+    /// The Minimap's per-frame update (`0x4eb040`) on every Minimap's player arrow: once its model
+    /// is loaded (`0x7103d0`), `0x4ee100` centres it on its own size, half its width and height
+    /// (slots 0x1c and 0x20) in layout units; then `CMinimap::SetPlayerFacing` (`0x4eb8e0`, fed at
+    /// `0x4eb0a4`–`0x4eb0b1`) copies the player's facing (radians) raw into the field
+    /// `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
     pub fn set_minimap_player_facing(&mut self, facing: f32) {
         let mut model = self.model_mut();
+        let unit = model.layout_unit();
         let arrows: Vec<crate::widget::FrameHandle> = model
             .arena
             .minimap_kinds()
@@ -892,12 +899,31 @@ impl UiScript {
             })
             .collect();
         for h in arrows {
-            if let Some(frame) = model.arena.frame_mut(h) {
-                if let KindState::Model(state) = &mut frame.kind_state {
-                    state.facing = facing;
+            let size = model
+                .layout_inputs
+                .get(&h)
+                .map_or((0.0, 0.0), |i| (i.width, i.height));
+            let loaded = match model.arena.frame(h).map(|f| &f.kind_state) {
+                Some(KindState::Model(m)) => m
+                    .path
+                    .as_deref()
+                    .is_some_and(|p| model.model_facts.contains_key(&crate::widget::model_key(p))),
+                _ => false,
+            };
+            if let Some(KindState::Model(state)) =
+                model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+            {
+                if loaded {
+                    state.position = (size.0 / unit * 0.5, size.1 / unit * 0.5, 0.0);
                 }
+                state.facing = facing;
             }
         }
+    }
+
+    /// The minimap's view radius in yards at the live zoom (`0x6da9b0`).
+    pub fn minimap_radius_yd(&self) -> f32 {
+        self.model_ref().minimap.radius_yd()
     }
 
     /// Push the active player's WoW world `(x, y)`, `None` with no player object, before the

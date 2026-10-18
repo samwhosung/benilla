@@ -1,7 +1,8 @@
-//! The `Minimap` methods: zoom, the mask, the ping and the model attributes. The reference has six
-//! levels (`0x6da9a0`), a live index per mode (`0x86f698` outdoor, `0x86f69c` indoor) and the
-//! `minimapZoom`/`minimapInsideZoom` CVars (default `"3"`) that re-seed it (`0x6d9008`); the app
-//! maps the index to a radius (`0x6da9b0`) and holds the ping as a world point.
+//! The `Minimap` methods and engine children: the zoom, the three textures, the two arrow models and
+//! the ping over the minimap's process-wide statics ([`crate::widget::MinimapStatics`]), and the
+//! nine `Model` children its ctor makes, which draw the arrows. The reference has six zoom levels
+//! (`0x6da9a0`), a live index per mode (`0x86f698` outdoor, `0x86f69c` indoor) and the
+//! `minimapZoom`/`minimapInsideZoom` CVars (default `"3"`) that re-seed them (`0x6d9008`).
 
 use mlua::{Lua, Table, Value};
 
@@ -120,37 +121,149 @@ pub(crate) fn build_engine_children(lua: &Lua, minimap: FrameHandle) {
     }
 }
 
-/// The model half of `CMinimap::LoadXML` (`0x4ee2b0`): `minimapArrowModel` to engine children 1
-/// to 8 (`0x4ee170`), `minimapPlayerModel` to child 9 alone (`0x4ee260`). Runs before the
-/// `<Frames>` descent, as the reference chains to `CSimpleFrame::LoadXML` (`0x76a2f0`) after.
+/// `LoadArrowModel` (`0x4ee170`): the minimap's level plus 3 becomes the rim arrows' level base
+/// (`0x4ee1a3`), and the file goes on the eight arrow frames, the five party and pet arrows
+/// playing `GroupArrow` (165, `0x4ee1de`) and the three rim arrows `Arrow` (166, `0x4ee22b`). The
+/// model is made with `CreateModelFromPath` (`0x707350`), which puts the error cube in for a file
+/// that does not load, so this answers 1 for any name.
+fn load_arrow_model(model: &mut Model, minimap: FrameHandle, path: &str) -> bool {
+    let level = model.arena.frame(minimap).map_or(0, |f| i32::from(f.level));
+    let (group, rim) = match model.arena.frame_mut(minimap).map(|f| &mut f.kind_state) {
+        Some(KindState::Minimap(m)) => {
+            m.level_base = level + 3;
+            (m.group_arrows.clone(), m.rim_arrows.clone())
+        }
+        _ => return true,
+    };
+    for (frames, sequence) in [(group, GROUP_ARROW), (rim, LANDMARK_ARROW)] {
+        for h in frames {
+            model.set_pane_model(h, path.to_string());
+            arm(model, h, sequence);
+        }
+    }
+    true
+}
+
+/// `LoadPlayerModel` (`0x4ee260`): `SetModel` on the player arrow (slot 0x94, `0x76cce0`), which
+/// clears it for an empty name; 0 when the arrow is left with no model (`0x4ee286`).
+fn load_player_model(model: &mut Model, minimap: FrameHandle, path: &str) -> bool {
+    let Some(h) = (match model.arena.frame(minimap).map(|f| &f.kind_state) {
+        Some(KindState::Minimap(m)) => m.player_arrow,
+        _ => None,
+    }) else {
+        return false;
+    };
+    if path.is_empty() {
+        if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            m.clear_file();
+        }
+        return false;
+    }
+    model.set_pane_model(h, path.to_string());
+    true
+}
+
+/// `SimpleModelPlaySequence` (`0x76cf50`): `id` from its start, against the facts the pane's file
+/// has, or replayed when they land.
+fn arm(model: &mut Model, h: FrameHandle, id: u16) {
+    let path = match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::Model(m)) => m.path.clone(),
+        _ => return,
+    };
+    let facts = path.and_then(|p| model.model_facts_for(&p));
+    if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        m.arm(i32::from(id), 0, facts.as_deref());
+    }
+}
+
+/// `AnimationData.dbc`'s arrow sequences, which light one quad of the arrow model each: 165
+/// `GroupArrow`, 166 `Arrow`, 167 `CorpseArrow`, 168 `GuideArrow`.
+pub const GROUP_ARROW: u16 = 0xa5;
+pub const LANDMARK_ARROW: u16 = 0xa6;
+pub const CORPSE_ARROW: u16 = 0xa7;
+pub const GUIDE_ARROW: u16 = 0xa8;
+
+/// The post-load half of `CMinimap::LoadXML` (`0x4ee2b0`), which runs `CSimpleFrame`'s post-load
+/// first (`0x4ee2c0`), so after the `<Frames>`, the `OnLoad` and the `OnShow`: `minimapArrowModel`
+/// to the eight arrow frames, `minimapPlayerModel` to the player arrow, each defaulting when absent.
+/// A model that does not load warns as the reference logs (`0x84c73c`, `0x84c6fc`).
 pub(crate) fn apply_model_attrs(
     lua: &Lua,
     this: &Table,
     arrow: &str,
     player: &str,
-) -> mlua::Result<()> {
+) -> mlua::Result<Vec<&'static str>> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let Some(children) = model.arena.frame(h).map(|f| f.children.clone()) else {
-        return Ok(());
-    };
-    for (i, child) in children
-        .into_iter()
-        .take(crate::widget::MINIMAP_ENGINE_CHILDREN)
-        .enumerate()
-    {
-        let path = if i + 1 == crate::widget::MINIMAP_ENGINE_CHILDREN {
-            player
-        } else {
-            arrow
-        };
-        if let Some(frame) = model.arena.frame_mut(child) {
-            if let KindState::Model(state) = &mut frame.kind_state {
-                state.path = Some(path.to_string());
-            }
+    let mut failed = Vec::new();
+    if !load_arrow_model(&mut model, h, arrow) {
+        failed.push("Invalid minimapArrowModel in Minimap.xml");
+    }
+    if !load_player_model(&mut model, h, player) {
+        failed.push("Invalid minimapPlayerModel in Minimap.xml");
+    }
+    Ok(failed)
+}
+
+/// The model setters' one body (`SetArrowModel` `0x4ee980`, `SetPlayerModel` `0x4eeab0`): the member
+/// prologue, `lua_isstring(2)` or `Usage: %s:<name>("file")`, the loader, and
+/// `%s:<name>(): Couldn't load the file %s` when it answers 0.
+fn set_model(
+    lua: &Lua,
+    this: &Value,
+    path: Value,
+    name: &str,
+    load: fn(&mut Model, FrameHandle, &str) -> bool,
+) -> mlua::Result<()> {
+    let h = this_minimap(lua, this)?;
+    let path = match path {
+        Value::String(s) => s.to_string_lossy(),
+        Value::Integer(i) => lua_number_text(i as f64),
+        Value::Number(n) => lua_number_text(n),
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "Usage: {}:{name}(\"file\")",
+                frame_name(lua, h)
+            )));
         }
+    };
+    let loaded = load(
+        &mut lua.app_data_mut::<Model>().expect("model app_data"),
+        h,
+        &path,
+    );
+    if !loaded {
+        return Err(mlua::Error::runtime(format!(
+            "{}:{name}(): Couldn't load the file {path}",
+            frame_name(lua, h)
+        )));
     }
     Ok(())
+}
+
+/// One rim arrow the landmark selection kept, an arrow record (`0x4c` bytes, `0x6daa20`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MinimapRimArrow {
+    /// The bearing to its target in radians, from north toward west (`+0x40`).
+    pub bearing: f32,
+    /// The static record it came from (`+0x48`): 0 the quest marker, 1 the gossip marker, 2 the
+    /// corpse, −2 an `AreaPOI.dbc` row.
+    pub slot: i32,
+    /// `+0x44`: set for the gossip marker and the corpse, the arrows that show indoors.
+    pub indoors: bool,
+}
+
+/// An arrow frame's model position and facing for `bearing`, as the render's rotate loops set them
+/// (`0x4ed452`, `0x4ed4f7`): `(C − A·sin b, C + A·cos b, 0)` with `C` half the disc and `A` 0.8 of
+/// the half disc (`[0x807a24]`, `[0xbc8274]`), in layout units from the frame's bottom-left.
+fn place_arrow(model: &mut Model, h: FrameHandle, base: f32, bearing: f32) {
+    let c = crate::widget::MINIMAP_DISC * base * 0.5;
+    let a = 0.8 * c;
+    let (sin, cos) = bearing.sin_cos();
+    if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        m.position = (c - a * sin, c + a * cos, 0.0);
+        m.facing = bearing;
+    }
 }
 
 /// The texture setters' one body (`SetMaskTexture` `0x4ee4a0`): the member prologue, then
@@ -254,6 +367,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
+        "SetArrowModel",
+        lua.create_function(|lua, (this, path): (Value, Value)| {
+            set_model(lua, &this, path, "SetArrowModel", load_arrow_model)
+        })?,
+    )?;
+    m.set(
+        "SetPlayerModel",
+        lua.create_function(|lua, (this, path): (Value, Value)| {
+            set_model(lua, &this, path, "SetPlayerModel", load_player_model)
+        })?,
+    )?;
+    m.set(
         "GetZoomLevels",
         // The reference's constant (`0x6da9a0`), with no `this` lookup (`0x4eebe0`).
         lua.create_function(|_, _: mlua::MultiValue| Ok(MINIMAP_ZOOM_LEVELS))?,
@@ -321,4 +446,90 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.set_named_registry_value(REG_MINIMAP_METHODS, m)?;
     Ok(())
+}
+
+impl super::UiScript {
+    /// The arrow half of the minimap render (`0x4ec950`), on every Minimap's children. When the
+    /// arrow list was rebuilt (`0x6daa20` answered 1, `0x4ed2e2`), each of the three rim frames
+    /// with a record shows, at the level base plus its record's slot (`0x4ed344`) and playing its
+    /// art (`0x4ed353`), and the rest hide; with the indoor byte set only a record with `+0x44`
+    /// shows (`0x4ed308`). Every frame each record's frame is aimed (`0x4ed404`). Each party frame
+    /// shows while its record has an arrow and hides otherwise (`0x4ed3c0`), and is aimed
+    /// (`0x4ed4ba`); `group` gives each its bearing and the sequence its record plays.
+    pub fn set_minimap_arrows(
+        &mut self,
+        rim: &[MinimapRimArrow],
+        rebuilt: bool,
+        indoors: bool,
+        group: &[Option<(f32, u16)>; crate::widget::MINIMAP_GROUP_ARROWS],
+    ) {
+        let mut shows: Vec<(FrameHandle, bool)> = Vec::new();
+        {
+            let mut model = self.model_mut();
+            let minimaps = model.arena.minimap_kinds().to_vec();
+            for mm in minimaps {
+                let Some(KindState::Minimap(state)) = model.arena.frame(mm).map(|f| &f.kind_state)
+                else {
+                    continue;
+                };
+                let state = state.clone();
+                if rebuilt {
+                    for (i, &h) in state.rim_arrows.iter().enumerate() {
+                        let rec = rim.get(i).filter(|r| !indoors || r.indoors);
+                        shows.push((h, rec.is_some()));
+                        let Some(rec) = rec else { continue };
+                        let level = (state.level_base + rec.slot).clamp(0, i32::from(u16::MAX));
+                        model.arena.set_frame_level(h, level as u16, false);
+                        let art = match rec.slot {
+                            2 => CORPSE_ARROW,
+                            -2 => LANDMARK_ARROW,
+                            _ => GUIDE_ARROW,
+                        };
+                        arm(&mut model, h, art);
+                    }
+                }
+                for (i, &h) in state.rim_arrows.iter().enumerate().take(rim.len()) {
+                    place_arrow(&mut model, h, state.base, rim[i].bearing);
+                }
+                for (i, &h) in state.group_arrows.iter().enumerate() {
+                    shows.push((h, group[i].is_some()));
+                    let Some((bearing, sequence)) = group[i] else {
+                        continue;
+                    };
+                    let playing = match model.arena.frame(h).map(|f| &f.kind_state) {
+                        Some(KindState::Model(m)) => m.sequence,
+                        _ => continue,
+                    };
+                    if playing != i32::from(sequence) {
+                        arm(&mut model, h, sequence);
+                    }
+                    place_arrow(&mut model, h, state.base, bearing);
+                }
+            }
+        }
+        for (h, shown) in shows {
+            let now = self.model_ref().arena.frame(h).is_some_and(|f| f.shown);
+            if now != shown {
+                super::visibility::set_shown(&self.lua, h, shown);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl super::UiScript {
+    /// Engine child `i` (1-based, `GetChildren` order) of the named Minimap: its model pane state.
+    pub(crate) fn minimap_child(
+        &self,
+        minimap: &str,
+        i: usize,
+    ) -> Option<crate::widget::ModelState> {
+        let model = self.model_ref();
+        let h = model.arena.lookup(minimap)?;
+        let child = *model.arena.frame(h)?.children.get(i.checked_sub(1)?)?;
+        match model.arena.frame(child).map(|f| &f.kind_state) {
+            Some(KindState::Model(m)) => Some(m.clone()),
+            _ => None,
+        }
+    }
 }

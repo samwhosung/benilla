@@ -608,3 +608,120 @@ fn a_shown_ping_pane_asks_for_a_tile_and_draws_its_cell() {
     assert_eq!(moved.len(), 1, "one quad after the pane moved");
     assert_ne!(moved[0].rect, q.rect, "the composite followed the pane");
 }
+
+/// The stock `Minimap.xml`'s arrows are its engine children drawn as model panes: the player
+/// arrow sized by its file and centred 0.001 layout units off the disc's centre (`0x4edfd1`), the
+/// rim arrows disc-sized frames the arrow push shows and aims. Each is a child, a level above the
+/// minimap, so its pane paints after the minimap's own draw, the tiles and dots included: the
+/// draw pass submits levels in ascending order (`0x7657d0`), and the minimap's render is a
+/// callback on its own level's first layer (`0x4ebe70`).
+#[test]
+fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
+    use benilla_ui::script::{MinimapRimArrow, QuadContent};
+    use benilla_ui::widget::{ModelFileFacts, SequenceFacts};
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.run("function GetMinimapZoneText() return '' end")
+        .unwrap();
+    s.run("function PlaySound() end").unwrap();
+    for file in [
+        "Interface\\FrameXML\\Fonts.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\BattlefieldFrame.xml",
+        "Interface\\FrameXML\\Minimap.xml",
+    ] {
+        load_xml(&s, file);
+    }
+    // `MinimapArrow.m2`'s box, as the app hands it over; the rim model's sequences.
+    s.set_model_facts(
+        r"Interface\Minimap\MinimapArrow.mdx",
+        ModelFileFacts {
+            sequences: vec![SequenceFacts {
+                anim_id: 0,
+                duration_ms: 3333,
+                looping: true,
+            }],
+            bbox: ([-0.0127, -0.0118, 0.0], [0.0135, 0.0145, 0.0]),
+            cameras: 0,
+        },
+    );
+    s.set_model_facts(
+        r"Interface\Minimap\Rotating-MinimapArrow.mdl",
+        ModelFileFacts {
+            sequences: (0xa5..=0xa8)
+                .map(|anim_id| SequenceFacts {
+                    anim_id,
+                    duration_ms: 1000,
+                    looping: true,
+                })
+                .collect(),
+            bbox: ([-0.025, -0.025, 0.0], [0.025, 0.025, 0.0]),
+            cameras: 0,
+        },
+    );
+    s.set_minimap_player_facing(0.5);
+    s.set_minimap_arrows(
+        &[MinimapRimArrow {
+            bearing: 0.0,
+            slot: -2,
+            indoors: false,
+        }],
+        true,
+        false,
+        &[None; 5],
+    );
+    s.resolve();
+    let quads = s.extract();
+    let minimap = quads
+        .iter()
+        .find(|q| matches!(q.content, QuadContent::Minimap { .. }))
+        .expect("the minimap's own draw");
+    let mm = minimap.rect.expect("resolved");
+    let centre = ((mm.left + mm.right) / 2.0, (mm.top + mm.bottom) / 2.0);
+    let panes: Vec<_> = quads
+        .iter()
+        .filter_map(|q| match &q.content {
+            QuadContent::ModelPane {
+                model: Some(m),
+                facing,
+                position,
+                ..
+            } => Some((q, m.clone(), *facing, *position)),
+            _ => None,
+        })
+        .filter(|(_, m, _, _)| m.contains("MinimapArrow"))
+        .collect();
+    assert_eq!(
+        panes.len(),
+        2,
+        "the player arrow and one rim arrow: {panes:?}"
+    );
+    for (q, m, facing, position) in &panes {
+        assert!(q.z > minimap.z, "{m} paints above the minimap's own draw");
+        let r = q.rect.expect("a resolved rect");
+        let c = ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
+        if m.ends_with("MinimapArrow.mdx") {
+            assert!(
+                (c.0 - (centre.0 + 1.28)).abs() < 0.01 && (c.1 - (centre.1 + 1.28)).abs() < 0.01,
+                "0.001 layout units up and right: {c:?} vs {centre:?}"
+            );
+            assert!((facing - 0.5).abs() < 1e-6);
+            // Centred on its own box, half the extent each way (`0x4ee100`).
+            assert!(
+                (position.0 - 0.0131).abs() < 1e-4 && (position.1 - 0.01315).abs() < 1e-4,
+                "{position:?}"
+            );
+        } else {
+            assert!((r.right - r.left - 140.8).abs() < 0.01, "disc-sized: {r:?}");
+            assert!((c.0 - centre.0).abs() < 0.01 && (c.1 - centre.1).abs() < 0.01);
+            // Due north: the top of the disc, 0.8 of the half disc out.
+            assert!((position.0 - 0.055).abs() < 1e-6 && (position.1 - 0.099).abs() < 1e-6);
+        }
+    }
+}

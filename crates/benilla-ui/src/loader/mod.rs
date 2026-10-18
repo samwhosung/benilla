@@ -913,7 +913,6 @@ impl Loader<'_> {
         self.apply_editbox(el, wrapper, dbg_name);
         self.apply_messageframe(el, wrapper, dbg_name);
         self.apply_simplehtml(el, wrapper, dbg_name);
-        self.apply_minimap(el, wrapper, dbg_name);
         // 6 · <Scripts> handlers (`0x769ef0`); OnLoad is captured to fire bottom-up below.
         let onload = self.apply_scripts(el, wrapper, dbg_name);
         // 6b · a ScrollFrame's <ScrollChild> (`0x786bc0`, after the base load `0x769820`): still
@@ -938,6 +937,9 @@ impl Loader<'_> {
         }
         // 9 · and its OnShow, if it is visible now (`0x76a3b3`).
         crate::script::visibility::post_load_show(self.lua(), wrapper);
+        // 10 · a Minimap's models, which its post-load override sets after chaining to this one
+        //      (`0x4ee2b0` calls `0x76a2f0` first).
+        self.apply_minimap(el, wrapper, dbg_name);
     }
 
     /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.

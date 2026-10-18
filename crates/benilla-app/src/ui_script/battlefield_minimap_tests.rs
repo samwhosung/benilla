@@ -688,6 +688,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
         })
         .expect("the battle map's arrow pane is in the render list");
     let QuadContent::ModelPane {
+        handle,
         facing,
         model_scale,
         ..
@@ -709,10 +710,11 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     s.set_world_map_feed(Some((1, 1)), None, 0.0, None, Vec::new(), Vec::new());
     update(&mut s, 0.1);
     s.resolve();
+    // The Minimap's own player arrow shares the file; this is the battle map's pane alone.
     assert!(
         !s.extract().into_iter().any(|q| matches!(
             &q.content,
-            QuadContent::ModelPane { model: Some(m), .. } if m == ARROW_MODEL
+            QuadContent::ModelPane { handle: h, .. } if *h == handle
         ) && q.rect.is_some()),
         "off-map hides the arrow"
     );

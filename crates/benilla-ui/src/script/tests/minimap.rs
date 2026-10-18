@@ -704,3 +704,138 @@ fn the_engine_children_are_anchored_sized_and_hidden_as_the_ctor_leaves_them() {
         }
     }
 }
+
+/// `SetArrowModel` (`0x4ee980`) puts its file on the eight arrow frames and re-arms their art, and
+/// answers no error for a file that does not load, which draws the error cube; `SetPlayerModel`
+/// (`0x4eeab0`) sets the player arrow alone and raises when it is left with no model, as `""`
+/// leaves it (`0x4ee286`).
+#[test]
+fn the_model_setters_put_their_files_on_the_engine_children() {
+    let s = script();
+    s.run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
+        .unwrap();
+    s.run(r#"m:SetArrowModel("Nope\\Arrow.mdx")"#).unwrap();
+    for i in 1..=8 {
+        let c = s.minimap_child("TestMinimap", i).unwrap();
+        assert_eq!(c.path.as_deref(), Some("Nope\\Arrow.mdx"), "child {i}");
+        assert_eq!(c.sequence, if i <= 5 { 165 } else { 166 }, "child {i}");
+    }
+    assert_eq!(s.minimap_child("TestMinimap", 9).unwrap().path, None);
+
+    s.run(r#"m:SetPlayerModel("Interface\\Minimap\\MinimapArrow.mdx")"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>("return ({m:GetChildren()})[9]:GetModel()")
+            .unwrap(),
+        "Interface\\Minimap\\MinimapArrow.mdx"
+    );
+    let err = s.run(r#"m:SetPlayerModel("")"#).unwrap_err();
+    assert_eq!(
+        crate::script::lua_message(&err),
+        "[string \"(chunk)\"]:1: TestMinimap:SetPlayerModel(): Couldn't load the file "
+    );
+    assert!(s
+        .eval::<Option<String>>("return ({m:GetChildren()})[9]:GetModel()")
+        .unwrap()
+        .is_none());
+    for (chunk, want) in [
+        (
+            "m:SetArrowModel()",
+            "Usage: TestMinimap:SetArrowModel(\"file\")",
+        ),
+        (
+            "m:SetPlayerModel({})",
+            "Usage: TestMinimap:SetPlayerModel(\"file\")",
+        ),
+        (
+            r#"m.SetArrowModel("x")"#,
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ),
+    ] {
+        let err = crate::script::lua_message(&s.run(chunk).expect_err(chunk));
+        assert!(err.ends_with(want), "{chunk}: {err}");
+    }
+}
+
+/// The render's arrow half (`0x4ec950`): a rebuilt list shows one rim frame per record at the
+/// level base plus its slot, playing its art, and hides the rest; every frame aims each record's
+/// frame at `(C − A·sin b, C + A·cos b)`, facing `b`. Indoors only a record with `+0x44` shows
+/// (`0x4ed308`). A party frame shows while it has a bearing (`0x4ed3c0`).
+#[test]
+fn the_arrow_push_shows_levels_arms_and_aims_the_children() {
+    use crate::script::MinimapRimArrow;
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(r#"m = CreateFrame("Minimap", "TestMinimap") m:SetArrowModel("A.mdx")"#)
+        .unwrap();
+    let level = s.eval::<i64>("return m:GetFrameLevel()").unwrap();
+    let shown = |s: &UiScript, i: usize| {
+        s.eval::<bool>(&format!("return ({{m:GetChildren()}})[{i}]:IsShown() == 1"))
+            .unwrap()
+    };
+    let rim = [
+        MinimapRimArrow {
+            bearing: std::f32::consts::FRAC_PI_2,
+            slot: -2,
+            indoors: false,
+        },
+        MinimapRimArrow {
+            bearing: 0.0,
+            slot: 1,
+            indoors: true,
+        },
+    ];
+    let mut group = [None; 5];
+    group[0] = Some((std::f32::consts::PI, 165));
+    group[4] = Some((0.0, 167));
+    s.set_minimap_arrows(&rim, true, false, &group);
+    assert!(shown(&s, 6) && shown(&s, 7) && !shown(&s, 8));
+    assert!(shown(&s, 1) && !shown(&s, 2) && shown(&s, 5));
+    let at = |s: &UiScript, i: usize| s.minimap_child("TestMinimap", i).unwrap();
+    // The level base is the minimap's level plus 3: a landmark at +1, the gossip marker at +4.
+    for (i, want) in [(6, level + 1), (7, level + 4)] {
+        let got = s
+            .eval::<i64>(&format!(
+                "return ({{m:GetChildren()}})[{i}]:GetFrameLevel()"
+            ))
+            .unwrap();
+        assert_eq!(got, want, "child {i}");
+    }
+    assert_eq!(at(&s, 6).sequence, 166, "a landmark plays Arrow");
+    assert_eq!(at(&s, 7).sequence, 168, "a static slot plays GuideArrow");
+    assert_eq!(at(&s, 5).sequence, 167, "the record's own art");
+    // West of north at a quarter turn: the left of the disc, half the disc in.
+    let (c, a) = (0.055_f32, 0.044_f32);
+    let p = at(&s, 6).position;
+    assert!(
+        (p.0 - (c - a)).abs() < 1e-6 && (p.1 - c).abs() < 1e-6,
+        "{p:?}"
+    );
+    assert!((at(&s, 6).facing - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    let p = at(&s, 1).position;
+    assert!(
+        (p.0 - c).abs() < 1e-6 && (p.1 - (c - a)).abs() < 1e-6,
+        "south: {p:?}"
+    );
+
+    // Not rebuilt: the frames keep their show state and art, and are re-aimed.
+    s.run("({m:GetChildren()})[6]:SetSequence(0)").unwrap();
+    let turned = [
+        MinimapRimArrow {
+            bearing: 0.0,
+            ..rim[0]
+        },
+        rim[1],
+    ];
+    s.set_minimap_arrows(&turned, false, false, &group);
+    assert_eq!(at(&s, 6).sequence, 0, "no re-arm without a rebuild");
+    assert!(shown(&s, 7) && !shown(&s, 8));
+    assert!(at(&s, 6).facing.abs() < 1e-6);
+
+    // Indoors a rebuild shows only the records flagged `+0x44`.
+    s.set_minimap_arrows(&rim, true, true, &group);
+    assert!(!shown(&s, 6) && shown(&s, 7));
+    // A party record with no arrow hides its frame.
+    s.set_minimap_arrows(&rim, false, true, &[None; 5]);
+    assert!(!shown(&s, 1) && !shown(&s, 5));
+}

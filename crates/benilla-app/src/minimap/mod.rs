@@ -199,11 +199,6 @@ struct MinimapAssets {
     /// landmark atlas `Interface\Minimap\POIIcons` (`0xbc827c`) and the dot atlas
     /// `Interface\Minimap\ObjectIcons` (`0xbc822c`). No VM owns them, so a new VM inherits them.
     art: [MinimapTex; 3],
-    arrow: Option<Handle<Image>>,
-    /// The four rim-arrow arts: the reference's one `minimapArrowModel`
-    /// (`Rotating-MinimapArrow.mdx`) shows exactly one of these layers per blip source's looping
-    /// sequence, so one flat sprite each draws the same ([`blips::RimArrow`]).
-    rim_arrows: blips::RimArrowArt,
     /// `SpellShapeshiftForm.dbc`, the tracking dots' creature-type override (a cat-form druid is a
     /// Beast).
     forms: Option<HashMap<u32, benilla_formats::ShapeshiftForm>>,
@@ -264,16 +259,8 @@ fn setup_minimap(
         Ok(translate) => {
             info!("minimap: md5translate.trs — {} tiles", translate.len());
             // The default mask and icons open from the archives alone, as `0x4ed810`'s
-            // `TextureCreate` calls pass file flag 0 (`0x4ed862`, `0x4ed88b`, `0x4ed8b4`). The
-            // arrows are model textures (`MinimapArrow.m2`, `Rotating-MinimapArrow.m2`), and
-            // `CGMinimapFrame::LoadArrowModel` creates the models with flags 4 (`0x4ee181`), which
-            // their textures' opens keep (`0x71da64`), so they open loose-flagged.
+            // `TextureCreate` calls pass file flag 0 (`0x4ed862`, `0x4ed88b`, `0x4ed8b4`).
             let archives = LooseOpen::Archives;
-            let arrow = assets.sprite_texture(blips::PLAYER_ARROW_TEXTURE, &mut images);
-            let mut rim_arrows = blips::RimArrowArt::default();
-            for kind in blips::RimArrow::ALL {
-                rim_arrows.set(kind, assets.sprite_texture(kind.texture(), &mut images));
-            }
             // The three defaults (`0x84c6e4`, `0x84c6c8`, `0x84c6a8`); one that does not load is
             // the green solid, as `TextureCreate` gives it.
             let mut art: [MinimapTex; 3] = Default::default();
@@ -313,8 +300,6 @@ fn setup_minimap(
             commands.insert_resource(MinimapAssets {
                 translate,
                 art,
-                arrow,
-                rim_arrows,
                 forms,
             });
         }
@@ -631,8 +616,9 @@ fn emit_minimap(
         }
     }
 
-    // ── The blip layer: landmarks under the player arrow, the dots above it (the reference's
-    // order).
+    // ── The blip layer: the landmark icons, then the dots, last in the render (`0x4ed7b7`). The
+    // arrows are the minimap's engine children, drawn at their own levels above all of it
+    // ([`feed_minimap_arrows`]).
     // Our own descriptor's tracking state (private fields, only on the self entity).
     let me = self_store.iter().next();
     // Our own guid: our own pet and minions never take a dot (`0x4eac0d`).
@@ -648,11 +634,7 @@ fn emit_minimap(
         static BLIP_PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *BLIP_PROBE.get_or_init(|| std::env::var_os("WOW_MM_BLIP_PROBE").is_some()) {
             eprintln!(
-                "BLIP-PROBE: arrow_art={} pois={} map={} wx={wx:.0} wy={wy:.0} px_per_yd={blip_px_per_yd:.3} track_c={:#x} track_r={:#x} track_s={}",
-                blips::RimArrow::ALL
-                    .iter()
-                    .filter(|k| assets.rim_arrows.get(**k).is_some())
-                    .count(),
+                "BLIP-PROBE: pois={} map={} wx={wx:.0} wy={wy:.0} px_per_yd={blip_px_per_yd:.3} track_c={:#x} track_r={:#x} track_s={}",
                 pois.as_ref().map(|c| c.0.len()).unwrap_or(0),
                 map.0,
                 tracking.creatures,
@@ -682,57 +664,19 @@ fn emit_minimap(
     if let Some(ctx) = &blip_ctx {
         // The guard-directions marker rides this pass as a landmark, as the reference appends its
         // static blip slot after the DBC scan, so it draws even without `AreaPOI.dbc`. The icons
-        // need only their atlas (`0x4ed21f`); each arrow, its own art.
+        // need only their atlas (`0x4ed21f`).
         blips::emit_landmarks(
             ctx,
             pois.as_ref().map(|p| &p.0),
             poi_marker.on_map(map.0),
             map.0,
-            &assets.rim_arrows,
             assets.tex(MinimapArtSlot::Icons),
             &mut quads,
             &mut hover,
         );
-        // The party and corpse rim arrows (the out-of-range half of `0x6dad10`), before the
-        // player arrow, in the reference's order.
-        let corpse = death_net
-            .corpse
-            .filter(|cp| cp.display_map == map.0 as i32)
-            .map(|cp| cp.position);
-        blips::emit_party_arrows(
-            ctx,
-            &group,
-            &guids,
-            &unit_pos,
-            corpse,
-            &assets.rim_arrows,
-            &mut quads,
-        );
     }
 
-    // The player arrow: centered, spun to the facing. WoW orientation 0 = north (screen up),
-    // growing counterclockwise (toward west = screen left); our quad rotation is clockwise on
-    // screen, so the arrow angle is the negated facing.
-    if let Some(arrow) = &assets.arrow {
-        // `blips::PLAYER_ARROW_QUAD_PX`: MinimapArrow.m2's single quad at 1280 px/unit on the
-        // 140.8 basis, its authored centre offset rotating with the facing.
-        let s = side * (blips::PLAYER_ARROW_QUAD_PX / blips::BLIP_BASIS_PX);
-        let rotation = -player.facing();
-        let (sin, cos) = rotation.sin_cos();
-        let off = blips::PLAYER_ARROW_OFFSET_PX * (side / blips::BLIP_BASIS_PX);
-        let off = Vec2::new(off.x * cos - off.y * sin, off.x * sin + off.y * cos);
-        let rect = Rect::from_center_size(center + off, Vec2::splat(s));
-        quads.overlays.push(UiQuad {
-            rect,
-            z_key: slot.z,
-            texture: Some(arrow.clone()),
-            color: [1.0, 1.0, 1.0, slot.alpha],
-            rotation,
-            ..default()
-        });
-    }
-
-    // The object dots draw last, above the player arrow (`0x4ed7b7`): tracking dots (cells 0/1),
+    // The object dots, last of the minimap's own draw (`0x4ed7b7`): tracking dots (cells 0/1),
     // then quest (3) and party (4) dots.
     if let Some(ctx) = &blip_ctx {
         if let Some(icons) = assets.tex(MinimapArtSlot::Blips) {
@@ -891,6 +835,58 @@ fn feed_minimap_art(
     }
 }
 
+/// Aim the minimap's arrow children, the arrow half of its render (`0x4ec950`), after the tick and
+/// before the paint that draws them: the landmark selection's three records (rebuilt when its
+/// identities change) and the party records, by bearing. With an empty mask name the render
+/// returns before any of it (`0x4ec968`), so the arrows keep what they had.
+fn feed_minimap_arrows(
+    script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
+    assets: Option<Res<MinimapAssets>>,
+    player: Res<Player>,
+    map: Option<Res<CurrentMap>>,
+    pois: Option<Res<crate::area_poi::AreaPoiRes>>,
+    poi_marker: Res<crate::poi_marker::PoiMarker>,
+    group: Res<crate::ui_party::GroupState>,
+    guids: Res<crate::net::GuidIndex>,
+    unit_pos: Query<&GlobalTransform, With<crate::net::NetEntity>>,
+    death_net: Res<crate::death::DeathNet>,
+    inside: Res<MinimapInside>,
+    mut listed: Local<crate::ui_script::VmMemo<Option<Vec<blips::ArrowKey>>>>,
+) {
+    let (Some(mut script), Some(assets), Some(map)) = (script, assets, map) else {
+        return;
+    };
+    if assets.tex(MinimapArtSlot::Mask).is_none() || !player.active {
+        return;
+    }
+    let wow = bevy_to_wow(player.pos);
+    let (wx, wy) = (wow[0], wow[1]);
+    let radius = script.minimap_radius_yd();
+    let sel = blips::select_landmarks(
+        pois.as_ref()
+            .into_iter()
+            .flat_map(|p| p.0.rows().map(|(_, poi)| poi)),
+        poi_marker.on_map(map.0),
+        map.0,
+        wx,
+        wy,
+        radius,
+    );
+    let (rim, keys) = blips::rim_arrow_records(&sel, wx, wy);
+    let last = listed.get(&script);
+    let rebuilt = last.as_ref() != Some(&keys);
+    if rebuilt {
+        *last = Some(keys);
+    }
+    // Same map only: a dungeon corpse's display coords are the entrance.
+    let corpse = death_net
+        .corpse
+        .filter(|cp| cp.display_map == map.0 as i32)
+        .map(|cp| cp.position);
+    let records = blips::group_arrow_records(wx, wy, radius, &group, &guids, &unit_pos, corpse);
+    script.set_minimap_arrows(&rim, rebuilt, inside.0, &records);
+}
+
 /// Push the player's facing onto the Minimap's player-arrow `Model` every frame, as the reference's
 /// per-frame `CMinimap::SetPlayerFacing` (`0x4eb8e0`) writes `[+0x39c]`, what `Model:GetFacing()`
 /// reads. `player.facing()` is an unbounded accumulator, so it is normalized to `[0, 2π)`, the
@@ -957,6 +953,10 @@ impl Plugin for MinimapPlugin {
                     feed_minimap_inside.in_set(crate::ui_script::UiFeed),
                     // Before the script tick, so an addon's OnUpdate reads this frame's heading.
                     feed_minimap_player_facing.in_set(crate::ui_script::UiFeed),
+                    // After the tick, before the paint that draws the arrows.
+                    feed_minimap_arrows
+                        .after(crate::ui_script::UiInput)
+                        .before(crate::ui_script::UiPaint),
                     // After the tick that can set the art, before the emit that draws with it.
                     feed_minimap_art
                         .after(crate::ui_script::UiInput)
