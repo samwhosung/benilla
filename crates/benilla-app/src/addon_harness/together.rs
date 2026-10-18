@@ -88,6 +88,8 @@ fn survey_together_once(root: &Path) -> Vec<(String, Vec<String>)> {
     let Ok(mut script) = UiScript::new() else {
         return Vec::new();
     };
+    // A fixed `rand` seed, so two survey runs of an addon that draws at load agree.
+    script.lua().srand(1);
     script.set_screen_size(1024.0, 768.0);
     script.register_addons(registry.clone(), Some(root.to_path_buf()), None, None);
     super::seat_a_session(&mut script);

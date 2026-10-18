@@ -67,6 +67,8 @@ pub fn probe(root: &Path, name: &str, steps: &[Step]) -> Option<ProbeOutcome> {
         }
     };
     script.set_instruction_budget(super::ADDON_INSTRUCTION_BUDGET);
+    // A fixed `rand` seed, so two probe runs of an addon that draws at load agree.
+    script.lua().srand(1);
     script.set_screen_size(1024.0, 768.0);
     // No saved-variable roots, so a probe never touches a player's saved variables; the AddOns
     // root is passed as the survey passes it, so `LoadAddOn` resolves.

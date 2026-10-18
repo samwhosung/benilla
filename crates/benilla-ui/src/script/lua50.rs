@@ -676,8 +676,8 @@ mod tests {
     }
 
     /// The 5.0 grammar the stock files use still parses, including the three constructs 5.1
-    /// dropped: the iterator-less generic-for, nested long strings (`read_long_string`, `0x700010`) and the
-    /// constructor's extra semicolon.
+    /// dropped: the iterator-less generic-for, nested long strings (`read_long_string`,
+    /// `0x700010`) and the constructor's extra semicolon.
     #[test]
     fn the_5_0_grammar_the_reference_writes_still_parses() {
         let s = UiScript::new().unwrap();

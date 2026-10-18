@@ -143,6 +143,8 @@ fn stock_vm(root: &Path, registry: &[benilla_ui::script::AddOnInfo]) -> Result<U
     // A time bound, so one non-terminating addon cannot stall the survey: about 50x the heaviest
     // corpus addon (Enchantrix, 4M instructions), so a runaway reports in about a second.
     script.set_instruction_budget(ADDON_INSTRUCTION_BUDGET);
+    // A fixed `rand` seed, so two survey runs of an addon that draws at load agree.
+    script.lua().srand(1);
     script.set_screen_size(1024.0, 768.0);
     // The saved-variable roots are `None`, so a survey never reads or writes a player's; the
     // AddOns root is passed, so `LoadAddOn("<folder addon>")` does not answer `MISSING`.

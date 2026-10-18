@@ -935,10 +935,9 @@ fn unescape(s: &str) -> String {
 ///   benilla-lua checks them in the client's order on every platform (`pow`, `atan2` and `mod`
 ///   the first, `ldexp` the second), so the error items of the first three agree everywhere;
 /// - a `double` past the integer range cast to `ptrdiff_t` or `unsigned long` is undefined: x86-64
-///   answers `INT64_MIN`, arm64 saturates;
-/// - `math.random` is the host `rand`.
+///   answers `INT64_MIN`, arm64 saturates.
 ///
-/// benilla-lua pins the reference platform's answers for the compiler and `rand` cases, and runs
+/// benilla-lua pins the reference platform's answers for the compiler cases, and runs
 /// the host libm, so it answers a whole case as the C build only on the reference platform.
 /// Elsewhere, and on a platform no answer was blessed on, a case's answer is split into items at
 /// its separator, and each item every recorded platform answers alike is checked: only the items

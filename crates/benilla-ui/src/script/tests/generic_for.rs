@@ -166,8 +166,8 @@ fn nested_and_repeated_loops_each_substitute_independently() {
     assert_eq!(twice, 4);
 }
 
-/// `[[ ... [[ ... ]] ... ]]` nests in Lua 5.0, as 1.12.1 ships it: 5.1's `read_long_string` with
-/// `LUA_COMPAT_LSTR` 2.
+/// `[[ ... [[ ... ]] ... ]]` nests in Lua 5.0, as 1.12.1 ships it: `read_long_string`
+/// (`0x700010`) counts `[[` and `]]`.
 #[test]
 fn a_nested_long_string_parses_as_lua_50_does() {
     let s = crate::script::UiScript::new().unwrap();
