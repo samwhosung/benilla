@@ -59,26 +59,23 @@ impl Default for FramePacer {
 }
 
 impl FramePacer {
-    /// The refresh period this stream looks like, or `None` when it does not look vsync'd: the
-    /// window's median when enough deltas sit on it, else half the median of adjacent pairs, since
-    /// a run of mis-split frames fails the first test while each pair still adds up to two
-    /// refreshes.
+    /// The refresh period this stream looks like, the window's median, or `None` when too few
+    /// deltas sit on it to look vsync'd.
     fn cadence(&self) -> Option<f64> {
         if self.hist.len() < WINDOW {
             return None;
         }
         let v: Vec<f64> = self.hist.iter().copied().collect();
-        on_cadence(&v).or_else(|| {
-            let pairs: Vec<f64> = v.windows(2).map(|w| w[0] + w[1]).collect();
-            on_cadence(&pairs).map(|p| p / 2.0)
-        })
+        on_cadence(&v)
     }
 
-    /// Snaps `raw` to the presentation cadence, carrying the remainder; a stream that is not vsync'd
-    /// passes through with any time still owed added, and a stall with the whole carry. One call is one presented frame,
-    /// so the multiple is 1 until `raw` plus the carry reaches 1.5 periods, then a floor: rounding
-    /// would pace the 26.4 ms long half of a mis-split pair (1.58 periods) as two frames. No time is
-    /// created or lost, and every branch drains the carry by [`BLEED`].
+    /// Snaps `raw` to the presentation cadence, carrying the remainder; a stream that is not
+    /// vsync'd passes through with any time still owed added, and a stall with the whole carry.
+    /// One call is one presented frame, so the multiple is 1 until `raw` plus the carry reaches 1.5
+    /// periods, then a floor: rounding would pace the 26.4 ms long half of a mis-split pair (1.58
+    /// periods) as two frames. A multiple past [`MAX_MULT`] is a stall, never split into four
+    /// periods and a carry that hitches the next frame too. No time is created or lost, and every
+    /// branch drains the carry by [`BLEED`].
     fn pace(&mut self, raw: f64) -> f64 {
         if self.hist.len() == WINDOW {
             self.hist.pop_front();
@@ -94,12 +91,12 @@ impl FramePacer {
             return self.settle(want, raw);
         }
         let mult = if want >= 1.5 * period {
-            (want / period).floor().min(MAX_MULT)
+            (want / period).floor()
         } else {
             1.0
         };
         let snapped = mult * period;
-        if (want - snapped).abs() > CARRY_MAX * period {
+        if mult > MAX_MULT || (want - snapped).abs() > CARRY_MAX * period {
             // A real stall, not a mis-split: report it as it happened, the carry settled with it.
             self.carry = 0.0;
             return want;
@@ -247,7 +244,11 @@ pub(crate) fn pace_frame_time(
         return;
     }
     let paced = step.delta.min(virt.max_delta());
-    let total = pacer.total.unwrap_or(virt.elapsed()) + paced;
+    // Adopting Bevy's clock, this frame's own delta comes off: `elapsed` already holds it.
+    let total = pacer
+        .total
+        .unwrap_or_else(|| virt.elapsed().saturating_sub(virt.delta()))
+        + paced;
     pacer.total = Some(total);
 
     let ctx = *virt.context();
@@ -395,6 +396,25 @@ mod tests {
         assert_eq!(p.pace(stall), stall, "a stall is reported as it happened");
     }
 
+    /// A frame past four periods is a stall and passes whole; split into four periods and a
+    /// carry, the next frame would hitch as well.
+    #[test]
+    fn a_frame_past_four_periods_passes_whole_and_leaves_the_next_even() {
+        let mut p = pacer();
+        let period = 1.0 / 60.0;
+        for _ in 0..WINDOW {
+            p.pace(period);
+        }
+        let hitch = 5.2 * period;
+        assert_eq!(p.pace(hitch), hitch, "the hitch passes as it happened");
+        assert_eq!(p.carry, 0.0);
+        let next = p.pace(period);
+        assert!(
+            (next - period).abs() < 1.0e-9,
+            "the next frame is one period, not {next}"
+        );
+    }
+
     const P: f64 = 1.0 / 60.0;
 
     /// A pacer that has seen a steady 60 Hz window.
@@ -487,18 +507,28 @@ mod tests {
 
     /// 22 s of `Time<Real>` deltas from a 60 Hz run on Metal, in milliseconds. Its median sits off
     /// the true refresh, which a carry that never drains turns into a lead parked near -14.6 ms,
-    /// from which a short-first split leaks raw.
+    /// from which a short-first split leaks raw. Drained, time stays exact and most uneven raw
+    /// deltas pace even; a clustered run of mis-splits still fails the cadence test and passes.
     #[test]
-    fn a_measured_stream_keeps_its_carry_drained_and_its_steps_even() {
+    fn a_measured_stream_keeps_its_carry_drained_and_its_time_exact() {
         let raws: Vec<f64> = include_str!("../tests/data/frame_pace_stream.txt")
             .lines()
             .map(|l| l.trim().parse::<f64>().unwrap() / 1000.0)
             .collect();
         assert_eq!(raws.len(), 1319);
         let steps = replay(&mut pacer(), &raws, 0.011);
-        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
-        }
+        let uneven = |v: &[f64]| {
+            v.iter()
+                .skip(WINDOW)
+                .filter(|d| (*d - P).abs() >= EVEN)
+                .count()
+        };
+        assert!(
+            uneven(&steps) * 3 < uneven(&raws),
+            "{} uneven steps of {} raw",
+            uneven(&steps),
+            uneven(&raws)
+        );
     }
 
     /// A 60 to 120 Hz switch (a variable-refresh display): the old period snaps the first fast
@@ -522,34 +552,6 @@ mod tests {
             );
         }
         assert!(p.carry.abs() < EVEN, "the lead drained: {}", p.carry);
-    }
-
-    /// Five mis-split pairs in a row put half the window off cadence; each pair still adds up to
-    /// two refreshes, so the run stays paced.
-    #[test]
-    fn a_burst_of_mis_splits_stays_paced() {
-        let mut raws = vec![P; 40];
-        for _ in 0..5 {
-            raws.extend([0.0264, 2.0 * P - 0.0264]);
-        }
-        raws.extend([P; 40]);
-        let steps = replay(&mut pacer(), &raws, CARRY_MAX * P);
-        for (i, d) in steps.iter().enumerate().skip(WINDOW) {
-            assert!((d - P).abs() < EVEN, "frame {i}: a step of {d} s");
-        }
-    }
-
-    /// Every frame mis-split at the measured 26.4 / 8.0 ms: the pairs' 34.4 ms is the cadence,
-    /// two steps of 17.2 ms.
-    #[test]
-    fn an_every_frame_alternation_is_paced_at_half_its_pairs() {
-        let raws: Vec<f64> = (0..400)
-            .map(|i| if i % 2 == 0 { 0.0264 } else { 0.0080 })
-            .collect();
-        let steps = replay(&mut pacer(), &raws, CARRY_MAX * 0.0172);
-        for (i, d) in steps.iter().enumerate().skip(2 * WINDOW) {
-            assert!((d - 0.0172).abs() < EVEN, "frame {i}: a step of {d} s");
-        }
     }
 
     #[test]
@@ -660,6 +662,34 @@ mod tests {
         } else {
             b - a
         }
+    }
+
+    /// Pausing the virtual clock hands it back to Bevy; the frame that resumes it adopts Bevy's
+    /// elapsed before that frame and adds the paced step once, with no jump forward.
+    #[test]
+    fn resuming_the_virtual_clock_adds_the_step_once() {
+        let t0 = Instant::now();
+        let mut world = clock_world(t0);
+        let mut t = t0;
+        frame(&mut world, t);
+        for _ in 0..WINDOW + 10 {
+            t += Duration::from_secs_f64(P);
+            frame(&mut world, t);
+        }
+        world.resource_mut::<Time<Virtual>>().pause();
+        t += Duration::from_secs_f64(P);
+        frame(&mut world, t);
+        let before = world.resource::<Time<Virtual>>().elapsed();
+        world.resource_mut::<Time<Virtual>>().unpause();
+        t += Duration::from_secs_f64(P);
+        let (step, virt) = frame(&mut world, t);
+        let after = world.resource::<Time<Virtual>>().elapsed();
+        assert_eq!(virt, step.delta, "the resumed frame takes the paced step");
+        assert_eq!(
+            after - before,
+            virt,
+            "the virtual clock moved by its own delta, not twice it"
+        );
     }
 
     #[test]
