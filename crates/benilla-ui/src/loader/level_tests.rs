@@ -1770,3 +1770,31 @@ fn a_simplehtml_child_inherits_overrides_its_element_after_font() {
         )
         .unwrap());
 }
+
+/// `frameStrata=` goes through the strata lookup `0x6f17d0` (`0x769971`), which compares the whole
+/// value: a padded one is logged (`0x7699a4`) and skipped.
+#[test]
+fn a_padded_frame_strata_attribute_misses() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="PaddedStrata" frameStrata=" HIGH"/>
+            <Frame name="CasedStrata" frameStrata="high"/>
+        </Ui>"#,
+    );
+    let strata = |name: &str| {
+        s.eval::<String>(&format!("return {name}:GetFrameStrata()"))
+            .unwrap()
+    };
+    assert_eq!(strata("PaddedStrata"), "MEDIUM");
+    assert_eq!(strata("CasedStrata"), "HIGH");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.ends_with("Unknown frame strata:  HIGH")),
+        "{:?}",
+        report.warnings
+    );
+}

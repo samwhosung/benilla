@@ -158,6 +158,41 @@ fn blizzard_is_no_frame_strata() {
     assert!(crate::script::object::strata_from_str("tooltip").is_some());
 }
 
+/// The strata, draw-layer and frame-type lookups compare the whole string with `SStrCmpI`
+/// (`0x6f17ee`, `0x6f18ce`, `0x6ee32c`): case is folded, padding is not trimmed.
+#[test]
+fn a_padded_strata_layer_or_type_name_misses() {
+    let s = script();
+    s.run(r#"f = CreateFrame("Frame", "PadProbe") t = f:CreateTexture("PadProbeT", "ARTWORK")"#)
+        .unwrap();
+    for (call, want) in [
+        (
+            r#"f:SetFrameStrata(" HIGH")"#,
+            "PadProbe:SetFrameStrata(): Unknown frame strata:  HIGH",
+        ),
+        (
+            r#"f:SetFrameStrata("HIGH ")"#,
+            "PadProbe:SetFrameStrata(): Unknown frame strata: HIGH ",
+        ),
+        (
+            r#"t:SetDrawLayer(" OVERLAY")"#,
+            r#"Usage: PadProbeT:SetDrawLayer("layer")"#,
+        ),
+        (r#"CreateFrame("Frame ")"#, "Unknown frame type 'Frame '"),
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(e.contains(want), "{call}: {e}");
+    }
+    s.run(r#"f:SetFrameStrata("high") t:SetDrawLayer("overlay")"#)
+        .unwrap();
+    assert_eq!(
+        s.eval::<(String, String)>("return f:GetFrameStrata(), t:GetDrawLayer()")
+            .unwrap(),
+        ("HIGH".to_string(), "OVERLAY".to_string()),
+        "case is folded"
+    );
+}
+
 /// `SetDrawLayer` (`0x79a780`) reads the layer name alone against the five-row table (`0x811a80`):
 /// a third argument orders nothing, and a name off the table raises the Usage line (`0x87c42c`).
 #[test]

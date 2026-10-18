@@ -203,11 +203,11 @@ pub(super) fn point_name(p: Point) -> &'static str {
     }
 }
 
-/// An enum token, trimmed and uppercased; trimmed here rather than at the attribute read, since a
-/// `text=` value's spaces count. The reference's strata lookup compares the whole token,
-/// case-insensitively (`0x6f17ee`), so a padded `"BACKGROUND "` misses there.
+/// An enum token, uppercased for a case-blind match of the whole string: the strata, draw-layer
+/// and frame-type lookups each compare with `SStrCmpI` to the end (`0x6f17ee`, `0x6f18ce`,
+/// `0x6ee32c`), so a padded `"HIGH "` misses.
 fn enum_token(s: &str) -> String {
-    s.trim().to_ascii_uppercase()
+    s.to_ascii_uppercase()
 }
 
 /// A strata name, from the reference's eight-row table (`0x8119f8`), `BACKGROUND`..`TOOLTIP`, walked
