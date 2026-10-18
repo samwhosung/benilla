@@ -184,43 +184,52 @@ pub(crate) fn show_chat_line_into(lua: &Lua, key: &'static str, text: String) {
         .push((key, text));
 }
 
-/// [`UiScript::fire_event`] for a caller holding `&Lua`, such as a Lua binding.
+/// [`UiScript::fire_event`] for a caller holding `&Lua`: `SignalEvent` (`0x703e50`, with args
+/// `0x703f50`). An event with no listener touches nothing; otherwise `event` is set once before
+/// the walk (`0x703ea4`) and the earlier value put back after it (`0x703f04`), so a handler's
+/// assignment to it reaches the next listener. The walk takes each listener's successor before
+/// its call (`0x703ee8`): one appended meanwhile is reached unless the running one was the tail.
 pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
     let model_mut = || lua.app_data_mut::<Model>().expect("model app_data set");
-    if !model_mut().vm.fires(event) {
+    let mut at = {
+        let model = model_mut();
+        model
+            .event_to_frames
+            .get(event)
+            .and_then(|l| l.first().copied())
+    };
+    if at.is_none() {
         return;
     }
-    {
-        let mut at = {
-            let model = model_mut();
-            model
-                .event_to_frames
-                .get(event)
-                .and_then(|l| l.first().copied())
-        };
-        while let Some(h) = at {
-            let mut model = model_mut();
-            // A saved next that the previous handler unregistered ends the walk.
-            let Some(pos) = model
-                .event_to_frames
-                .get(event)
-                .and_then(|l| l.iter().position(|&x| x == h))
-            else {
-                break;
-            };
-            let next = model
-                .event_to_frames
-                .get(event)
-                .and_then(|l| l.get(pos + 1).copied());
-            let id = model.frame_id(h);
-            drop(model);
-            if let Err(e) = event::fire_event_handler(lua, id, event, &args) {
-                model_mut().record_lua_error(&e);
-            }
-            at = next;
-        }
+    let globals = lua.globals();
+    let saved = globals.get::<mlua::Value>("event").ok();
+    if let Ok(name) = lua.create_string(event) {
+        let _ = globals.set("event", name);
     }
-    event::fire_all_event_listeners(lua, event, &args);
+    while let Some(h) = at {
+        let mut model = model_mut();
+        // A saved next that the previous handler unregistered ends the walk.
+        let Some(pos) = model
+            .event_to_frames
+            .get(event)
+            .and_then(|l| l.iter().position(|&x| x == h))
+        else {
+            break;
+        };
+        let next = model
+            .event_to_frames
+            .get(event)
+            .and_then(|l| l.get(pos + 1).copied());
+        let id = model.frame_id(h);
+        drop(model);
+        if let Err(e) = event::fire_event_handler(lua, id, &args) {
+            model_mut().record_lua_error(&e);
+        }
+        at = next;
+    }
+    if let Some(saved) = saved {
+        let _ = globals.set("event", saved);
+    }
 }
 
 impl super::UiScript {

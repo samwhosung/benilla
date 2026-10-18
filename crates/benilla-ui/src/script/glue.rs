@@ -69,28 +69,27 @@ pub(crate) fn in_game_events() -> &'static [&'static str] {
 }
 
 impl VmKind {
+    /// This VM's event table: every name `RegisterEvent` can match, in id order.
+    pub(crate) fn events(self) -> &'static [&'static str] {
+        match self {
+            VmKind::InGame => in_game_events(),
+            VmKind::Glue => glue_events(),
+        }
+    }
+
     /// The event table's own spelling of `name` for `RegisterEvent`/`UnregisterEvent` (`0x702140`,
-    /// `0x702280`), or `None` for a name the table lacks, which registers nothing.
+    /// `0x702280`), or `None` for a name the table lacks, which registers nothing. Events fire by
+    /// id (`0x703e50`), so a name off the table reaches no frame, `RegisterAllEvents` ones
+    /// included.
     ///
     /// The reference compares the name with every table entry's, ASCII case folded (`0x64a4c0` →
     /// `0x414310`), and a miss returns without an error. A name two slots share registers on both,
     /// which a name-keyed listener list is one entry for.
     pub(crate) fn event_key(self, name: &str) -> Option<&'static str> {
-        let table: &'static [&'static str] = match self {
-            VmKind::InGame => in_game_events(),
-            VmKind::Glue => glue_events(),
-        };
-        table.iter().copied().find(|e| e.eq_ignore_ascii_case(name))
-    }
-
-    /// Whether the host may fire `event` into this VM. The reference fires by id
-    /// (`0x703e50`), so the glue state can only ever see one of its 26; a host's in-game event sent
-    /// to the glue VM reaches no frame, `RegisterAllEvents` ones included.
-    pub(crate) fn fires(self, event: &str) -> bool {
-        match self {
-            VmKind::InGame => true,
-            VmKind::Glue => glue_events().contains(&event),
-        }
+        self.events()
+            .iter()
+            .copied()
+            .find(|e| e.eq_ignore_ascii_case(name))
     }
 }
 

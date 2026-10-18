@@ -333,7 +333,7 @@ impl Loader<'_> {
         wrapper: &mlua::Table,
         func: &mlua::Function,
     ) -> mlua::Result<()> {
-        crate::script::event::invoke_with_globals(self.lua, wrapper.clone(), func, None, Vec::new())
+        crate::script::event::invoke_with_globals(self.lua, wrapper.clone(), func, Vec::new())
     }
 
     pub(super) fn warn_once(&mut self, key: &str, msg: impl Into<String>) {

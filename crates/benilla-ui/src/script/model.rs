@@ -298,14 +298,10 @@ pub(crate) struct Model {
     /// The model instances `SetModel` has made in this state, the last one's number.
     pub(crate) model_instances: u64,
     /// Event name to its frames in registration order, never a set: `SignalEvent` (`0x703e50`)
-    /// dispatches in that order across frames. Re-registering keeps a frame's position.
+    /// dispatches in that order across frames. Re-registering keeps a frame's position, and
+    /// `RegisterAllEvents` (`0x7023e0`) appends a frame to every event's list like a named one.
     pub(crate) event_to_frames: HashMap<String, Vec<FrameHandle>>,
     pub(crate) frame_events: HashMap<FrameHandle, HashSet<String>>,
-    /// `RegisterAllEvents` frames in registration order, dispatched after an event's own list and
-    /// cleared only by `UnregisterAllEvents`. Deviation: a flag, not the reference's append to
-    /// every event's list (`0x7023e0`, which orders by registration time and lets `UnregisterEvent`
-    /// drop one event), because events register here by name and no list of every name exists.
-    pub(crate) all_event_frames: Vec<FrameHandle>,
 
     /// The focused edit box (`0xcf4dc8`), taking all keys while visible; `None` admits `autoFocus`.
     pub(crate) focused_editbox: Option<FrameHandle>,
@@ -1415,7 +1411,6 @@ impl Model {
             model_instances: 0,
             event_to_frames: HashMap::new(),
             frame_events: HashMap::new(),
-            all_event_frames: Vec::new(),
             focused_editbox: None,
             alt_down: false,
             key_consumers: HashMap::new(),

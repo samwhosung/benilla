@@ -1,7 +1,9 @@
 //! Handler firing: the FrameScript calling convention for events, ticks and show/hide. The
-//! reference sets `this` (`0x872e64`), `event` (`0x84b648`) and `arg1..argN` (`0x8722dc`) around
-//! the call, restoring each after, and `pcall`s with no arguments; so does [`invoke_with_globals`],
-//! which sets only the args it is given, so a script fired with none leaves `arg1..argN` as found.
+//! reference sets `this` (`0x872e64`) and `arg1..argN` (`0x8722dc`) around each handler's call
+//! (`0x704f10`), restoring each after, and `pcall`s with no arguments; so does
+//! [`invoke_with_globals`], which sets only the args it is given, so a script fired with none
+//! leaves `arg1..argN` as found. `event` (`0x84b648`) is the walk's: set once before the first
+//! listener and restored after the last (`0x703ea4`, `0x703f04`), by [`super::tick::fire_event_into`].
 //! Handler errors return to the caller, which records them in [`super::Model::errors`].
 
 use std::borrow::Cow;
@@ -16,59 +18,19 @@ pub(super) fn fire_global(lua: &Lua, event: &str, args: &[ScriptValue]) {
     super::tick::fire_event_into(lua, event, args.to_vec());
 }
 
-/// The `RegisterAllEvents()` half of a dispatch: the all-events frames, after the event's own
-/// listeners and skipping any already visited. The next frame is re-found by position each step
-/// (`0x703ee8`), so a handler that unregisters the walk's successor ends the dispatch there.
-pub(super) fn fire_all_event_listeners(lua: &Lua, event: &str, args: &[ScriptValue]) {
-    let model_mut = || lua.app_data_mut::<Model>().expect("model app_data set");
-    let mut at = model_mut().all_event_frames.first().copied();
-    while let Some(h) = at {
-        let mut model = model_mut();
-        let Some(pos) = model.all_event_frames.iter().position(|&x| x == h) else {
-            break;
-        };
-        let next = model.all_event_frames.get(pos + 1).copied();
-        let already = model
-            .event_to_frames
-            .get(event)
-            .is_some_and(|l| l.contains(&h));
-        let id = model.frame_id(h);
-        drop(model);
-        if !already {
-            if let Err(e) = fire_event_handler(lua, id, event, args) {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .record_lua_error(&e);
-            }
-        }
-        at = next;
-    }
-}
-
-/// Fire a frame's `OnEvent` (both conventions) with the given args.
-pub(super) fn fire_event_handler(
-    lua: &Lua,
-    id: u32,
-    event: &str,
-    args: &[ScriptValue],
-) -> mlua::Result<()> {
+/// Fire a frame's `OnEvent` with the given args; the walk has set `event`.
+pub(super) fn fire_event_handler(lua: &Lua, id: u32, args: &[ScriptValue]) -> mlua::Result<()> {
     let extra: Vec<Value> = args
         .iter()
         .cloned()
         .map(|a| a.into_lua(lua))
         .collect::<mlua::Result<_>>()?;
-    fire(lua, id, "OnEvent", Some(event), extra)
+    fire(lua, id, "OnEvent", extra)
 }
 
 /// Fire a frame's `OnUpdate` with `arg1 = elapsed`.
 pub(super) fn fire_update_handler(lua: &Lua, id: u32, elapsed: f32) -> mlua::Result<()> {
-    fire(
-        lua,
-        id,
-        "OnUpdate",
-        None,
-        vec![Value::Number(f64::from(elapsed))],
-    )
+    fire(lua, id, "OnUpdate", vec![Value::Number(f64::from(elapsed))])
 }
 
 /// Fire a handler that carries no `event` name (`OnEnter`, `OnClick`, `OnValueChanged`, ...), with
@@ -79,7 +41,7 @@ pub(super) fn fire_widget_handler(
     script: &str,
     extra: Vec<Value>,
 ) -> mlua::Result<()> {
-    fire(lua, id, script, None, extra)
+    fire(lua, id, script, extra)
 }
 
 /// Drain [`Model::pending_size_changed`], queued by the resolve pass, and fire `OnSizeChanged` for
@@ -103,7 +65,6 @@ pub(super) fn fire_size_changed(lua: &Lua, id: u32, w: f32, h: f32) {
         lua,
         id,
         "OnSizeChanged",
-        None,
         vec![Value::Number(f64::from(w)), Value::Number(f64::from(h))],
     ) {
         lua.app_data_mut::<Model>()
@@ -124,15 +85,8 @@ pub(super) fn has_widget_handler(lua: &Lua, id: u32, script: &str) -> bool {
     }
 }
 
-/// The one firing path: `event_name` is `OnEvent`'s, `extra` the `arg1..argN`. Holds no model
-/// borrow across the call.
-fn fire(
-    lua: &Lua,
-    id: u32,
-    script: &str,
-    event_name: Option<&str>,
-    extra: Vec<Value>,
-) -> mlua::Result<()> {
+/// The one firing path: `extra` is the `arg1..argN`. Holds no model borrow across the call.
+fn fire(lua: &Lua, id: u32, script: &str, extra: Vec<Value>) -> mlua::Result<()> {
     let scripts: Table = lua.named_registry_value(REG_SCRIPTS)?;
     let func: Function = match scripts.get::<Value>(id)? {
         Value::Table(per) => match per.get::<Value>(script)? {
@@ -147,7 +101,7 @@ fn fire(
     // when the guard drops, unwinds included.
     let _fire =
         super::handler_prof::armed().then(|| super::handler_prof::Fire::open(lua, id, script));
-    invoke_with_globals(lua, wrapper, &func, event_name, extra)
+    invoke_with_globals(lua, wrapper, &func, extra)
 }
 
 /// The `argN` global names, spelled out so the common arities allocate nothing.
@@ -164,21 +118,17 @@ fn arg_name(i: usize) -> Cow<'static, str> {
     }
 }
 
-/// The calling convention, shared by [`fire`] and the loader's `OnLoad`: sets `this`, `event` and
+/// The calling convention, shared by [`fire`] and the loader's `OnLoad`: sets `this` and
 /// `arg1..argN` and calls the handler with no arguments, as `0x705199` calls `lua_pcall` with
 /// zero; the globals are restored after the call, even on error, so nested fires are safe.
 pub(crate) fn invoke_with_globals(
     lua: &Lua,
     wrapper: Table,
     func: &Function,
-    event_name: Option<&str>,
     extra: Vec<Value>,
 ) -> mlua::Result<()> {
     let mut globals: Vec<(&str, Value)> = Vec::with_capacity(2 + extra.len());
     globals.push(("this", Value::Table(wrapper)));
-    if let Some(ev) = event_name {
-        globals.push(("event", Value::String(lua.create_string(ev)?)));
-    }
     let names: Vec<Cow<'static, str>> = (1..=extra.len()).map(arg_name).collect();
     for (name, v) in names.iter().zip(extra) {
         globals.push((name.as_ref(), v));
