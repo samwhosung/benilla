@@ -1054,7 +1054,8 @@ fn a_fontheight_with_no_font_attr_beside_it_is_never_read() {
     let s = open_bagnon_stacked(&root);
     assert_eq!(
         resolved_font(&s, "AutoFollowStatusText"),
-        ("Fonts\\FRIZQT__.TTF".into(), "12".into()),
+        // 12 through the getter steps, `G(S(12))` at 4:3.
+        ("Fonts\\FRIZQT__.TTF".into(), "12.000000298023".into()),
         "AutoFollowStatusText inherits GameFontNormal (12) and declares <FontHeight val=20> with \
          no font= — the 20 is dead XML in the reference, so 20 here means we are reading an \
          attribute the client never reaches"

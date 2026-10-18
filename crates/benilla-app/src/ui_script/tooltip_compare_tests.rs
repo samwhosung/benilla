@@ -463,7 +463,7 @@ fn shipped_merchant_row_raises_the_compare_plates() {
         .eval(
             "local _, sh = ShoppingTooltip1TextLeft1:GetFont() \
              local _, mh = GameTooltipTextLeft1:GetFont() \
-             return sh == 10 and mh > sh",
+             return math.abs(sh - 10) < 1e-3 and mh > sh",
         )
         .unwrap();
     assert!(

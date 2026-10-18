@@ -71,7 +71,9 @@ fn combat_text_damage_scrolls_and_expires() {
             local t = CombatText1
             local _, h = t:GetFont()
             local y0 = COMBAT_TEXT_TO_ANIMATE[1].yPos
-            return t:IsShown() ~= nil and t:GetText() == "-17" and h == 25 and y0 ~= nil
+            -- The height reads back through the getter steps, a hair off 25.
+            return t:IsShown() ~= nil and t:GetText() == "-17" and math.abs(h - 25) < 1e-3
+                and y0 ~= nil
         "#,
         )
         .unwrap();
