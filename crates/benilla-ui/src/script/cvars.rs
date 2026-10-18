@@ -377,14 +377,24 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
 /// text as its reset text if it has none (`0x63e13f`-`0x63e158`), moved or not. A latched row
 /// returns at its stage first (`0x63dfc1`).
 fn store_with(model: &mut Model, key: &str, value: String, fill_reset: bool) -> Option<String> {
-    let slot = model.cvars.get_mut(key)?;
-    if let Some(check) = slot.check {
-        let verdict = check(&value, &slot.value);
-        model.cvar_console.extend(verdict.line);
+    let verdict = {
+        let cvars = &model.cvars;
+        let slot = cvars.get(key)?;
+        slot.check.map(|check| {
+            check(&value, &slot.value, &|name| {
+                cvars
+                    .get(&name.to_ascii_lowercase())
+                    .map(|s| s.value.clone())
+            })
+        })
+    };
+    if let Some(verdict) = verdict {
+        model.cvar_console.extend(verdict.lines);
         if !verdict.accept {
             return None;
         }
     }
+    let slot = model.cvars.get_mut(key)?;
     if slot.latched {
         let staged = (!value.eq_ignore_ascii_case(&slot.value)).then_some(value.clone());
         if slot.pending == staged && staged.is_some() {

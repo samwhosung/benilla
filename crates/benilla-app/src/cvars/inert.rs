@@ -7,13 +7,13 @@
 //! A row is inert: no observer reads it, `GetCVar` answers what was written, and it persists like
 //! any row, as a `[cvars]` entry in `benilla-config/config.toml` only while off its default. The
 //! flag bit1 rows are latched, as in the reference (a write is kept until a restart that never
-//! comes for the sound block, and `RestartGx` commits the `gx*` pair). A row has the reference's
-//! range check where the callback is one of the camera block's (`0x50b380`, `0x50b3c0`, `0x50bfe0`,
-//! `0x50c000`, `0x50c040`), which refuses an out-of-range write. The other callbacks that refuse
-//! (`0x490720`, `0x688ab0`, `0x688b70`, `0x688bd0`, `0x688f00`, `0x688fb0`, `0x689000`, `0x689050`,
-//! `0x6891f0`, `0x689250`, `0x689450`, `0x6d8530`) are not run, so an out-of-range write is kept
-//! here where the reference leaves the old value. The trailing address is the register site in
-//! `reference/cvars.tsv`.
+//! comes for the sound block, and `RestartGx` commits the `gx*` pair). A row whose callback
+//! refuses a write carries it as its check: the camera block's (`0x50b380`, `0x50b3c0`,
+//! `0x50bfe0`, `0x50c000`, `0x50c040`), the error filter's (`0x4030f0`), the target range's
+//! (`0x490720`) and the world's (`0x688b70`, `0x688bd0`, `0x688f00`, `0x688fb0`, `0x689000`,
+//! `0x689050`, `0x689250`, `0x689450`, `0x6d8530`). The two LOD distances' (`0x688ab0`,
+//! `0x6891f0`) never refuse but print a line out of range, and run too. The trailing address is
+//! the register site in `reference/cvars.tsv`.
 
 use super::table::{same, Registered};
 
@@ -202,67 +202,69 @@ pub(super) const INERT: &[Registered] = &[
     same("SoundRolloffFactor", "4").latched(),        // 0x4572f6
     same("SoundSoftwareChannels", "12").latched(),    // 0x45729c
     // ── Everything else ──────────────────────────────────────────────────────────────────────
-    same("accountName", ""),                          // 0x402bd2
-    same("automoveturnspeednarrow", "800"),           // 0x6039ee
-    same("automoveturnspeedwide", "1200"),            // 0x6039d4
-    same("bspcache", "1"),                            // 0x688868
-    same("combatLogOn", "1"),                         // 0x48fca4
-    same("CombatModeMaxDistance", "30.0f"),           // 0x5e24a9
-    same("debugTaint", "0"),                          // 0x48fc18
-    same("disableOptionalSpeech", "0"),               // 0x40239d
-    same("DistCull", "500"),                          // 0x688570
-    same("EnableGroupSpeech", "1"),                   // 0x457859
-    same("ErrorFilter", "all"),                       // 0x402d2a
-    same("ErrorLevelMax", "3"),                       // 0x402d07
-    same("ErrorLevelMin", "1"),                       // 0x402ce4
-    same("Errors", "0"),                              // 0x402c9e
-    same("ffxRectangle", "1"),                        // 0x6cd007
-    same("footstepBias", "0.125"),                    // 0x6888b4
-    same("FootstepSounds", "1"),                      // 0x623133
-    same("fullAlpha", "0"),                           // 0x6884b2
-    same("gxAspect", "1").latched(),                  // 0x63a8af
-    same("gxMultisampleQuality", "0.0").latched(),    // 0x63a976
-    same("gxOverride", ""),                           // 0x63a9e7
-    same("horizonfarclip", "2112"),                   // 0x68881c
-    same("hwDetect", "1"),                            // 0x63a259
-    same("Joystick", "0"),                            // 0x5142bc
-    same("lodDist", "100.0"),                         // 0x688524
-    same("M2BatchDoodads", "1"),                      // 0x40292f
-    same("M2Faster", "1"),                            // 0x402952
-    same("M2FasterDebug", "0"),                       // 0x402975
-    same("M2UseClipPlanes", "1"),                     // 0x4028a3
-    same("M2UseThreads", "1"),                        // 0x4028c6
-    same("M2UseZFill", "1"),                          // 0x402880
-    same("mapObjLightLOD", "0"),                      // 0x6886ec
-    same("mapObjOverbright", "1"),                    // 0x6886c6
-    same("mapShadows", "1"),                          // 0x6884fe
-    same("MapWaterSounds", "1"),                      // 0x462ac9
-    same("MaxLights", "4"),                           // 0x688596
-    same("mouseInvertYaw", "0"),                      // 0x50b72d
-    same("movie", "1"),                               // 0x402bf5
-    same("ObjectSelectionCircle", "1"),               // 0x6146ec
-    same("occlusion", "1"),                           // 0x6888da
-    same("particleDensity", "1.0"),                   // 0x688738
-    same("PlayerAnim", "0"),                          // 0x60333b
-    same("PlayerFadeInRate", "4096"),                 // 0x481b72
-    same("PlayerFadeOutAlpha", "128"),                // 0x481bbf
-    same("PlayerFadeOutRate", "4096"),                // 0x481b91
-    same("shadowBias", "0.1"),                        // 0x6d817d
-    same("shadowLOD", "1"),                           // 0x6d8157
-    same("ShowErrors", "1"),                          // 0x402cc1
-    same("showfootprintparticles", "1"),              // 0x6039b5
-    same("showfootprints", "1"),                      // 0x688842
-    same("showsmartrects", "0"),                      // 0x509439
-    same("SkyCloudLOD", "0"),                         // 0x6d1d33
-    same("TargetAnim", "0"),                          // 0x60335e
-    same("targetNearestDistance", "41.000000"),       // 0x48fda4
-    same("targetNearestDistanceRadius", "10.000000"), // 0x48fd60
-    same("textureLodDist", "777.0"),                  // 0x6887f6
-    same("timingModeOverride", "0"),                  // 0x402eb4
-    same("triangleStrips", "1"),                      // 0x68888e
-    same("unitDrawDist", "300.0"),                    // 0x68875e
-    same("UnitNameRenderMode", "2"),                  // 0x48fdc3
-    same("violenceLevel", "2"),                       // 0x6c5ae1
-    same("waterLOD", "0"),                            // 0x688784
-    same("widescreen", "1"),                          // 0x63a74f
+    same("accountName", ""),                // 0x402bd2
+    same("automoveturnspeednarrow", "800"), // 0x6039ee
+    same("automoveturnspeedwide", "1200"),  // 0x6039d4
+    same("bspcache", "1"),                  // 0x688868
+    same("combatLogOn", "1"),               // 0x48fca4
+    same("CombatModeMaxDistance", "30.0f"), // 0x5e24a9
+    same("debugTaint", "0"),                // 0x48fc18
+    same("disableOptionalSpeech", "0"),     // 0x40239d
+    same("DistCull", "500").checked(benilla_ui::script::check_dist_cull), // 0x688570
+    same("EnableGroupSpeech", "1"),         // 0x457859
+    same("ErrorFilter", "all").checked(benilla_ui::script::check_error_filter), // 0x402d2a
+    same("ErrorLevelMax", "3"),             // 0x402d07
+    same("ErrorLevelMin", "1"),             // 0x402ce4
+    same("Errors", "0"),                    // 0x402c9e
+    same("ffxRectangle", "1"),              // 0x6cd007
+    same("footstepBias", "0.125").checked(benilla_ui::script::check_footstep_bias), // 0x6888b4
+    same("FootstepSounds", "1"),            // 0x623133
+    same("fullAlpha", "0"),                 // 0x6884b2
+    same("gxAspect", "1").latched(),        // 0x63a8af
+    same("gxMultisampleQuality", "0.0").latched(), // 0x63a976
+    same("gxOverride", ""),                 // 0x63a9e7
+    same("horizonfarclip", "2112").checked(benilla_ui::script::check_horizon_farclip), // 0x68881c
+    same("hwDetect", "1"),                  // 0x63a259
+    same("Joystick", "0"),                  // 0x5142bc
+    same("lodDist", "100.0").checked(benilla_ui::script::check_lod_dist), // 0x688524
+    same("M2BatchDoodads", "1"),            // 0x40292f
+    same("M2Faster", "1"),                  // 0x402952
+    same("M2FasterDebug", "0"),             // 0x402975
+    same("M2UseClipPlanes", "1"),           // 0x4028a3
+    same("M2UseThreads", "1"),              // 0x4028c6
+    same("M2UseZFill", "1"),                // 0x402880
+    same("mapObjLightLOD", "0").checked(benilla_ui::script::check_map_obj_light_lod), // 0x6886ec
+    same("mapObjOverbright", "1"),          // 0x6886c6
+    same("mapShadows", "1"),                // 0x6884fe
+    same("MapWaterSounds", "1"),            // 0x462ac9
+    same("MaxLights", "4").checked(benilla_ui::script::check_max_lights), // 0x688596
+    same("mouseInvertYaw", "0"),            // 0x50b72d
+    same("movie", "1"),                     // 0x402bf5
+    same("ObjectSelectionCircle", "1"),     // 0x6146ec
+    same("occlusion", "1"),                 // 0x6888da
+    same("particleDensity", "1.0").checked(benilla_ui::script::check_particle_density), // 0x688738
+    same("PlayerAnim", "0"),                // 0x60333b
+    same("PlayerFadeInRate", "4096"),       // 0x481b72
+    same("PlayerFadeOutAlpha", "128"),      // 0x481bbf
+    same("PlayerFadeOutRate", "4096"),      // 0x481b91
+    same("shadowBias", "0.1").checked(benilla_ui::script::check_shadow_bias), // 0x6d817d
+    same("shadowLOD", "1"),                 // 0x6d8157
+    same("ShowErrors", "1"),                // 0x402cc1
+    same("showfootprintparticles", "1"),    // 0x6039b5
+    same("showfootprints", "1"),            // 0x688842
+    same("showsmartrects", "0"),            // 0x509439
+    same("SkyCloudLOD", "0"),               // 0x6d1d33
+    same("TargetAnim", "0"),                // 0x60335e
+    same("targetNearestDistance", "41.000000")
+        .checked(benilla_ui::script::check_target_nearest_distance), // 0x48fda4
+    same("targetNearestDistanceRadius", "10.000000")
+        .checked(benilla_ui::script::check_target_nearest_distance), // 0x48fd60
+    same("textureLodDist", "777.0").checked(benilla_ui::script::check_texture_lod_dist), // 0x6887f6
+    same("timingModeOverride", "0"),        // 0x402eb4
+    same("triangleStrips", "1"),            // 0x68888e
+    same("unitDrawDist", "300.0").checked(benilla_ui::script::check_unit_draw_dist), // 0x68875e
+    same("UnitNameRenderMode", "2"),        // 0x48fdc3
+    same("violenceLevel", "2"),             // 0x6c5ae1
+    same("waterLOD", "0").checked(benilla_ui::script::check_water_lod), // 0x688784
+    same("widescreen", "1"),                // 0x63a74f
 ];

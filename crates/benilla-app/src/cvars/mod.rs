@@ -345,16 +345,18 @@ impl Cvars {
             warn!("cvar {name}: not registered — write ignored");
             return SetOutcome::Unknown;
         };
-        let row = &mut self.rows[i];
         // The change callback, before anything is stored (`0x63df7d`). A VM write was checked
         // by the VM's own mirror, which refused it there or printed its line already.
-        if let (Some(check), false) = (row.check, from_vm) {
-            let verdict = check(value, &row.value);
-            self.console.extend(verdict.line);
+        if let (Some(check), false) = (self.rows[i].check, from_vm) {
+            let verdict = check(value, &self.rows[i].value, &|n| {
+                self.get(n).map(str::to_string)
+            });
+            self.console.extend(verdict.lines);
             if !verdict.accept {
                 return SetOutcome::Vetoed;
             }
         }
+        let row = &mut self.rows[i];
         if row.latched {
             // The reference's `Set 0x63df50` on flag bit1 stores `latchedValue`, skips
             // `InternalSet` and marks the config dirty (`0x63dfc4`), since the save writes the
@@ -558,6 +560,11 @@ impl Cvars {
                 info!("config: {name} is owned by this session, not the file (file value kept)");
                 continue;
             }
+            let verdict = self.rows[i].check.map(|check| {
+                check(value, &self.rows[i].value, &|n| {
+                    self.get(n).map(str::to_string)
+                })
+            });
             let row = &mut self.rows[i];
             row.reset = Some(value.clone());
             // The saved text stands as it is, a number or not: `set` made the record from it
@@ -566,9 +573,8 @@ impl Cvars {
             // registered (`0x402375`), and `CVar::Register` on the record it made calls the
             // callback and ignores the result (`0x63dc58`), so the value stands. A refusing
             // callback applied nothing, so no observer fires for it.
-            let applies = row.check.is_none_or(|check| {
-                let verdict = check(value, &row.value);
-                self.console.extend(verdict.line);
+            let applies = verdict.is_none_or(|verdict| {
+                self.console.extend(verdict.lines);
                 verdict.accept
             });
             if row.value == *value {
@@ -2047,9 +2053,124 @@ mod tests {
     /// callback on the saved value without testing its answer (`0x63dc58`), so it stands.
     #[test]
     fn a_saved_value_a_callback_refuses_still_loads() {
-        let cvars = registry(&[("baseMip", "5"), ("shadowLevel", "3")]);
+        let cvars = registry(&[
+            ("baseMip", "5"),
+            ("shadowLevel", "3"),
+            ("MaxLights", "9"),
+            ("ErrorFilter", "bogus"),
+        ]);
         assert_eq!(cvars.get("baseMip"), Some("5"));
         assert_eq!(cvars.get("shadowLevel"), Some("3"));
+        assert_eq!(cvars.get("MaxLights"), Some("9"));
+        assert_eq!(cvars.get("ErrorFilter"), Some("bogus"));
+    }
+
+    /// The reference's other refusing callbacks (#1340), run on the console's write and on a Lua
+    /// `SetCVar` alike: refused, the value stands and the callback's line is logged; taken, it is
+    /// stored. The two LOD distances never refuse.
+    #[test]
+    fn the_world_callbacks_refuse_on_every_write() {
+        let mut app = cvar_app();
+        for (name, bad, said, good) in [
+            ("MaxLights", "9", "MaxLights must be in range 1 - 4.", "2"),
+            ("mapObjLightLOD", "3", "MapObjLightLOD must be 0-2", "2"),
+            ("waterLOD", "1", "waterLOD fixed to 0", "0"),
+            (
+                "DistCull",
+                "900",
+                "DistCull must be in range 1.0 - 888.888916.",
+                "800",
+            ),
+            (
+                "particleDensity",
+                "0.1",
+                "Value must be between 0.25 and 1.0.",
+                "0.5",
+            ),
+            (
+                "unitDrawDist",
+                "50",
+                "Value must be between 100 and 300.",
+                "200",
+            ),
+            (
+                "targetNearestDistance",
+                "60",
+                "TargetNearestDistance must be between 1 and 50.000000",
+                "20",
+            ),
+            (
+                "targetNearestDistanceRadius",
+                "0",
+                "TargetNearestDistance must be between 1 and 50.000000",
+                "5",
+            ),
+            (
+                "horizonfarclip",
+                "800",
+                "HorizonFarClip must be in range 878.000000 - 2112.000000.",
+                "900",
+            ),
+            (
+                "footstepBias",
+                "2",
+                "Footstep bias must be in the range (0, 1)",
+                "0.5",
+            ),
+            (
+                "shadowBias",
+                "-1",
+                "Shadow bias must be in the range (0, 1)",
+                "0.5",
+            ),
+        ] {
+            let before = res::<Cvars>(&app).get(name).unwrap().to_string();
+            assert_eq!(
+                console_exec(&mut app, &format!("{name} {bad}")),
+                [said],
+                "{name}"
+            );
+            assert_eq!(console_exec(&mut app, &format!("SET {name} {bad}")), [said]);
+            assert_eq!(
+                res::<Cvars>(&app).get(name),
+                Some(before.as_str()),
+                "{name}"
+            );
+            console_exec(&mut app, &format!("{name} {good}"));
+            assert_eq!(res::<Cvars>(&app).get(name), Some(good), "{name}");
+            // A Lua `SetCVar` meets the same callback in the VM's mirror.
+            let mut script = UiScript::new().unwrap();
+            res::<Cvars>(&app).seed_vm(&mut script);
+            let read = script
+                .eval::<String>(&format!(
+                    "SetCVar({name:?}, {bad:?}) return GetCVar({name:?})"
+                ))
+                .unwrap();
+            assert_eq!(read, good, "{name}");
+        }
+        assert_eq!(
+            console_exec(&mut app, "ErrorFilter nonsense"),
+            [
+                "Unknown filter nonsense",
+                "Filters: general world ui animation models objects all",
+                "         use \"except\" to invert mask",
+                "         i.e.: all except objects",
+            ]
+        );
+        assert_eq!(res::<Cvars>(&app).get("ErrorFilter"), Some("all"));
+        assert_eq!(
+            console_exec(&mut app, "lodDist 9999"),
+            ["Lod distance must be in range 50.0f - 250.0f."]
+        );
+        assert_eq!(res::<Cvars>(&app).get("lodDist"), Some("9999"));
+        console_exec(&mut app, "textureLodDist 1");
+        assert_eq!(res::<Cvars>(&app).get("textureLodDist"), Some("1"));
+        // The horizon's lower bound follows the far clip.
+        console_exec(&mut app, "farclip 400");
+        assert_eq!(
+            console_exec(&mut app, "horizonfarclip 910"),
+            ["HorizonFarClip must be in range 928.000000 - 2112.000000."]
+        );
     }
 
     /// The VM's mirror carries the same callbacks, so a Lua `SetCVar` is refused at once and

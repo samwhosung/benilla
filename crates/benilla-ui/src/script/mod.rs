@@ -240,7 +240,13 @@ pub use cvar_checks::{
     check_base_mip, check_camera_decay, check_camera_distance_max, check_camera_pitch,
     check_camera_rate, check_camera_smooth_style, check_camera_time, check_camera_view,
     check_camera_yaw, check_farclip, check_frill_density, check_refresh, check_shadow_level,
-    check_small_cull, check_tex_lod_bias, check_triple_buffer, CvarCheck, CvarVerdict,
+    check_small_cull, check_tex_lod_bias, check_triple_buffer, CvarCheck, CvarRows, CvarVerdict,
+};
+pub use cvar_checks::{
+    check_dist_cull, check_error_filter, check_footstep_bias, check_horizon_farclip,
+    check_lod_dist, check_map_obj_light_lod, check_max_lights, check_particle_density,
+    check_shadow_bias, check_target_nearest_distance, check_texture_lod_dist, check_unit_draw_dist,
+    check_water_lod,
 };
 pub use cvars::small_cull_text;
 pub use cvars::{
