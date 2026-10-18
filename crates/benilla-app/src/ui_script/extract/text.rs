@@ -37,6 +37,9 @@ pub(super) struct TextStyle {
     pub non_space_wrap: bool,
     /// `maxLines`: the ellipsis cuts the text to this many lines, 0 for the rect's height.
     pub max_lines: u32,
+    /// The text frame whose link buttons this text's spans take, a scrolling message line's or a
+    /// SimpleHTML block's.
+    pub link_owner: Option<FrameHandle>,
 }
 
 /// The extraction loop's context for one Text quad.
@@ -60,8 +63,8 @@ pub(super) struct TextHost<'a> {
     pub caret_pinned: bool,
 }
 
-/// Rasterize one Text quad into `out`, and a message-frame line's hyperlink spans into
-/// `link_spans`. Glyph quads take the region's `z` ([`layout_text_quads`]).
+/// Rasterize one Text quad into `out`, and the hyperlink spans of a text that has a link owner
+/// into `link_spans`. Glyph quads take the region's `z` ([`layout_text_quads`]).
 pub(super) fn emit(
     atlas: &mut UiFontAtlas,
     text: &str,
@@ -243,18 +246,15 @@ pub(super) fn emit(
         }
         out.extend(sq);
     }
-    let mut glyphs = if let ZTarget::Frame(fh) = host.target {
-        // A frame-targeted Text quad is a message line: collect its links for the click hit-test.
+    let mut glyphs = if let Some(fh) = style.link_owner {
+        // A text whose links take buttons: collect them for the click hit-test.
         let mut spans = Vec::new();
         let g = layout_text_quads_links(
             &mut atlas.lock(),
-            text,
-            host.rect,
+            draw_text,
+            draw_rect,
             base_color,
-            crate::ui_text::Justify {
-                h: style.justify_h,
-                v: style.justify_v,
-            },
+            draw_justify,
             host.z,
             spec,
             seat,

@@ -310,6 +310,13 @@ impl UiScript {
                             ),
                             non_space_wrap: model.non_space_wrap_of(rh),
                             max_lines: data.max_lines,
+                            // A block of the SimpleHTML's last `SetText` (`0x78b011`).
+                            link_owner: owner.filter(|o| {
+                                model
+                                    .simple_html
+                                    .get(o)
+                                    .is_some_and(|st| st.blocks.contains(&rh))
+                            }),
                         }
                     } else {
                         // The draw gate is the texture slot, never the colour (`0x7706e0`: empty

@@ -179,6 +179,10 @@ pub enum QuadContent {
         non_space_wrap: bool,
         /// `maxLines` ([`RegionData::max_lines`]).
         max_lines: u32,
+        /// The text frame whose link buttons this text's `|H` spans take: a ScrollingMessageFrame
+        /// line's (`0x788ce7`) or a SimpleHTML block's (`0x78b052`); `None` for other text, whose
+        /// links are only text.
+        link_owner: Option<crate::widget::FrameHandle>,
     },
 }
 

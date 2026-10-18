@@ -665,6 +665,8 @@ impl UiScript {
                     // A line is a FontString with the flag off and no `maxLines` (`0x7865f0`).
                     non_space_wrap: false,
                     max_lines: 0,
+                    // Only the scrolling class gives its lines link buttons (`0x788ce7`).
+                    link_owner: reverse.then_some(fh),
                 },
                 scale: paint.scale,
             });

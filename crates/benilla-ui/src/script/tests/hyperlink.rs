@@ -275,3 +275,108 @@ fn a_rebuild_under_a_held_press_drops_the_click() {
     assert_eq!(log_of(&s), "click:item:2589#|Hitem:2589|h[x]|h#LeftButton");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A SimpleHTML `SH` at (100, 100) 430×120 on 800×600 holding one `<A href>`, logging its link
+/// events, with its one span fed over [110..160]×[120..134].
+fn html() -> UiScript {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r##"
+        log = {}
+        SH = CreateFrame("SimpleHTML", "SH")
+        SH:SetPoint("BOTTOMLEFT", 100, 100); SH:SetWidth(430); SH:SetHeight(120)
+        SH:SetFont("Fonts\FRIZQT__.TTF", 12)
+        SH:SetText('<html><body><p><a href="u">t</a></p></body></html>')
+        SH:SetScript("OnHyperlinkClick", function()
+            table.insert(log, "click:"..arg1.."#"..arg2.."#"..arg3)
+        end)
+        SH:SetScript("OnHyperlinkEnter", function() table.insert(log, "enter:"..arg1) end)
+        SH:SetScript("OnHyperlinkLeave", function() table.insert(log, "leave:"..arg1) end)
+        "##,
+    )
+    .unwrap();
+    s.resolve();
+    set_html_link(&mut s);
+    s
+}
+
+fn set_html_link(s: &mut UiScript) {
+    let owner = s.model_ref().arena.lookup("SH").expect("SH");
+    s.set_link_spans(vec![(
+        owner,
+        Rect::new(120.0, 110.0, 134.0, 160.0),
+        "u".to_string(),
+        "|Hu|ht|h".to_string(),
+    )]);
+}
+
+/// A SimpleHTML's link takes a button from the pool (`0x78b052` → `0x7a3880`), whose click fires
+/// the frame's `OnHyperlinkClick(link, text, button)`, as the stock `ServerAlertText` relies on
+/// (GlueXML `AccountLogin.xml`).
+#[test]
+fn a_simple_html_link_fires_on_hyperlink_click() {
+    let mut s = html();
+    assert_eq!(s.eval::<i64>("return SH:GetNumChildren()").unwrap(), 1);
+    click(&mut s, (130.0, 127.0), "LeftButton");
+    assert_eq!(log_of(&s), "enter:u click:u#|Hu|ht|h#LeftButton");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// Only `SetText` raises a SimpleHTML's rebuild flag (`0x78a50d`): a resize re-seats the hovered
+/// button with no leave, where a new `SetText` rebuilds and leaves it.
+#[test]
+fn a_simple_html_rebuilds_its_links_on_set_text_alone() {
+    let mut s = html();
+    s.mouse_move(130.0, 127.0);
+    s.run("SH:SetWidth(400)").unwrap();
+    s.resolve();
+    set_html_link(&mut s);
+    s.mouse_move(131.0, 127.0);
+    assert_eq!(log_of(&s), "enter:u", "a resize rebuilds nothing");
+    s.run(r#"SH:SetText('<html><body><p><a href="u">t</a></p></body></html>')"#)
+        .unwrap();
+    set_html_link(&mut s);
+    s.mouse_move(130.0, 127.0);
+    assert_eq!(log_of(&s), "enter:u leave:u enter:u");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The text the extract hands the app names its link owner for a SimpleHTML block and a scrolling
+/// message line, and none for a plain FontString or a MessageFrame line, whose links stay text.
+#[test]
+fn only_simple_html_blocks_and_scrolling_lines_name_a_link_owner() {
+    let mut s = html();
+    s.run(
+        r#"
+        CF = CreateFrame("ScrollingMessageFrame", "CF")
+        CF:SetPoint("TOPLEFT", 0, 0); CF:SetWidth(200); CF:SetHeight(60)
+        CF:AddMessage("|Hitem:1|h[a]|h", 1, 1, 1)
+        EF = CreateFrame("MessageFrame", "EF")
+        EF:SetPoint("TOPRIGHT", 0, 0); EF:SetWidth(200); EF:SetHeight(60)
+        EF:AddMessage("|Hitem:2|h[b]|h", 1, 1, 1)
+        local p = CreateFrame("Frame", "P")
+        p:SetPoint("CENTER", 0, 0); p:SetWidth(200); p:SetHeight(60)
+        local fs = p:CreateFontString("PFS", "ARTWORK")
+        fs:SetFont("Fonts\FRIZQT__.TTF", 12)
+        fs:SetAllPoints(p); fs:SetText("|Hitem:3|h[c]|h")
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    let owner_of = |s: &UiScript, needle: &str| {
+        s.extract().into_iter().find_map(|q| match q.content {
+            crate::script::QuadContent::Text {
+                text: Some(t),
+                link_owner,
+                ..
+            } if t.contains(needle) => Some(link_owner),
+            _ => None,
+        })
+    };
+    let lookup = |s: &UiScript, name: &str| s.model_ref().arena.lookup(name);
+    assert_eq!(owner_of(&s, "|Hu|h"), Some(lookup(&s, "SH")));
+    assert_eq!(owner_of(&s, "item:1"), Some(lookup(&s, "CF")));
+    assert_eq!(owner_of(&s, "item:2"), Some(None));
+    assert_eq!(owner_of(&s, "item:3"), Some(None));
+}

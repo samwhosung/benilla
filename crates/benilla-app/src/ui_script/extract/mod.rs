@@ -715,7 +715,8 @@ pub(super) fn paint_script(
     let mut out = Vec::new();
     let mut assets = world_assets;
     let mut minimap_slot = None;
-    // Message lines' link spans for the click hit-test; region FontStrings' are not collected.
+    // The link spans of text with a link owner, scrolling message lines and SimpleHTML blocks,
+    // for the click hit-test; other text's are not collected.
     let mut link_spans: Vec<(
         benilla_ui::widget::FrameHandle,
         benilla_ui::layout::Rect,
@@ -1507,6 +1508,7 @@ fn convert_entry(
             edit_line,
             non_space_wrap,
             max_lines,
+            link_owner,
         } => {
             // No atlas (no client data, or an unreadable font) draws no text.
             let (Some(atlas), Some(text)) = (font_atlas.as_deref_mut(), text) else {
@@ -1531,6 +1533,7 @@ fn convert_entry(
                     edit_line,
                     non_space_wrap,
                     max_lines,
+                    link_owner,
                 },
                 text::TextHost {
                     z: eq.z,

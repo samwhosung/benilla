@@ -14,10 +14,12 @@
 //! hides, so a hovered one gets its leave with its old link and a held press loses its capture, and
 //! goes to the free list's tail. Then each span takes the free list's head (`0x7a3880`, a new
 //! button when it is empty), which is placed on its line and shown (`0x7a3350`); nothing is ever
-//! freed. A ScrollingMessageFrame rebuilds from its update (`0x788595`) whenever its flag is up
-//! ([`crate::widget::ScrollingMessageState::links_dirty`]), and a change of its on-screen width
-//! or height relayouts it (`0x7882f0` → `0x788310` → `0x788750`), a rescale included, since the
-//! rect it compares is in screen units (`0x788342` scales the insets by `+0x7c`). The buttons hang
+//! freed. A SimpleHTML rebuilds from its update (`0x78a30b`) when `SetText` raised its flag, and
+//! never on a resize. A ScrollingMessageFrame rebuilds from its update (`0x788595`) whenever its
+//! flag is up ([`crate::widget::ScrollingMessageState::links_dirty`]), and a change of its
+//! on-screen width or height relayouts it (`0x7882f0` → `0x788310` → `0x788750`), a rescale
+//! included, since the rect it compares is in screen units (`0x788342` scales the insets by
+//! `+0x7c`). The buttons hang
 //! off their line (`0x7a3441`), so a frame that only moves carries them along with no rebuild.
 //! The app lays the text out, so its spans arrive here as screen rects every frame, and a frame
 //! not rebuilt has its buttons re-seated in place.
@@ -103,10 +105,10 @@ pub(crate) struct LinkPool {
 }
 
 /// Replace the spans on screen, `(text frame, y-up rect, link, text)`, a text frame's in the
-/// order its rebuild places them. Only a ScrollingMessageFrame's take buttons; a MessageFrame's
-/// stay text. A text frame due a rebuild ([`due`]) gets one: every live button hides, in order,
-/// its leave reading the link it still carries, then each span takes a free button, is placed,
-/// and shows. Any other has its live buttons re-seated on their spans with no hide and no show,
+/// order its rebuild places them. Only a ScrollingMessageFrame's and a SimpleHTML's take buttons;
+/// a MessageFrame's stay text. A text frame due a rebuild ([`due`]) gets one: every live button
+/// hides, in order, its leave reading the link it still carries, then each span takes a free
+/// button, is placed, and shows. Any other has its live buttons re-seated on their spans with no hide and no show,
 /// as buttons anchored to their lines follow a moved frame.
 pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String)>) {
     let mut by_owner: Vec<(FrameHandle, Vec<Span>)> = Vec::new();
@@ -133,12 +135,13 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
             .map(|(owner, _)| *owner)
             .collect();
         emptied.sort_by_key(|h| h.fingerprint_bits());
-        // Only the SMF (`0x788ce7`) and SimpleHTML (`0x78b052`) take one; ours draws no links.
+        // Only the SMF (`0x788ce7`) and SimpleHTML (`0x78b052`) take one.
         by_owner.retain(|(owner, _)| {
-            model
-                .arena
-                .frame(*owner)
-                .is_some_and(|f| matches!(f.kind_state, KindState::ScrollingMessage(_)))
+            model.simple_html.contains_key(owner)
+                || model
+                    .arena
+                    .frame(*owner)
+                    .is_some_and(|f| matches!(f.kind_state, KindState::ScrollingMessage(_)))
         });
         by_owner.extend(emptied.into_iter().map(|owner| (owner, Vec::new())));
     }
@@ -156,23 +159,31 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
     }
 }
 
-/// Whether `owner`, a ScrollingMessageFrame, rebuilds this pass: when its flag is up, which this
-/// spends, or its on-screen size moved (`0x788394`, `0x7883b2`).
+/// Whether `owner` rebuilds this pass: when its flag is up, which this spends, or, for a
+/// ScrollingMessageFrame, its on-screen size moved (`0x788394`, `0x7883b2`); a SimpleHTML's resize
+/// rebuilds nothing.
 /// Deviation: a span count that no longer matches the live set always rebuilds, so a state this
-/// model does not flag (a ring wiped by `SetMaxLines`, a hidden frame) leaves no stale button.
+/// model does not flag (a ring wiped by `SetMaxLines`, a hidden frame, a frame not yet laid out,
+/// which the reference's rebuild skips at `0x78af7b`) leaves no stale button.
 fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;
     let size = model
         .frame_rect(owner)
         .map(|r| (r.right - r.left, r.top - r.bottom));
-    let flagged = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
-        Some(KindState::ScrollingMessage(smf)) => std::mem::take(&mut smf.links_dirty),
-        _ => false,
+    let (flagged, sized) = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
+        Some(KindState::ScrollingMessage(smf)) => (std::mem::take(&mut smf.links_dirty), true),
+        _ => (
+            model
+                .simple_html
+                .get_mut(&owner)
+                .is_some_and(|st| std::mem::take(&mut st.links_dirty)),
+            false,
+        ),
     };
     let pool = model.link_buttons.entry(owner).or_default();
     let resized = std::mem::replace(&mut pool.size, size).is_some_and(|was| Some(was) != size);
-    flagged || resized || pool.live.len() != list.len()
+    flagged || (sized && resized) || pool.live.len() != list.len()
 }
 
 /// Re-seat `owner`'s live buttons on `list`, one each, with no hide and no show. True when a

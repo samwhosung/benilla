@@ -78,6 +78,9 @@ pub(crate) struct SimpleHtmlState {
     pub(crate) hyperlink_format: String,
     /// The content list (`+0x340`): every region the last `SetText` built, freed by the next.
     pub(crate) blocks: Vec<RegionHandle>,
+    /// The link-button rebuild flag (`+0x370`, zeroed by the ctor at `0x789eb9`): set by `SetText`
+    /// alone (`0x78a50d`) and spent by the frame's update (`0x78a30b`-`0x78a310`).
+    pub(crate) links_dirty: bool,
 }
 
 impl Default for SimpleHtmlState {
@@ -86,6 +89,7 @@ impl Default for SimpleHtmlState {
             fonts: Default::default(),
             hyperlink_format: parse::DEFAULT_HYPERLINK_FORMAT.to_string(),
             blocks: Vec::new(),
+            links_dirty: false,
         }
     }
 }
@@ -186,6 +190,7 @@ pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
     }
 
     build(model, fh, &parsed.blocks);
+    model.simple_html.entry(fh).or_default().links_dirty = true;
     parsed.used_markup
 }
 
