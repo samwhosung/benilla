@@ -168,6 +168,17 @@ pub(crate) struct Model {
     pub(crate) arena: WidgetArena,
     /// Per-frame anchors, size and scale; every live frame has one from creation on.
     pub(crate) layout_inputs: HashMap<FrameHandle, LayoutInput>,
+    /// Per dragged frame, its anchors and size as they stood before its first drag pin
+    /// (`0x768430`): what a rebuild re-creates from its script where the layout cache seats
+    /// nothing ([`crate::script::UiScript::reseat_user_placed`]).
+    pub(crate) drag_authored: HashMap<
+        FrameHandle,
+        (
+            crate::layout::Anchors,
+            crate::layout::Len,
+            crate::layout::Len,
+        ),
+    >,
     /// Each resolvable frame's rect from the last resolve, in layout units: the resolver's own,
     /// which its keep test, its getters and its anchors read; everything else reads
     /// [`Self::frame_rect`].
@@ -1394,6 +1405,7 @@ impl Model {
             load_log: Default::default(),
             arena: WidgetArena::new(),
             layout_inputs: HashMap::new(),
+            drag_authored: HashMap::new(),
             solver: LayoutSolver::new(),
             layout_fingerprint: None,
             layout_epoch: 0,

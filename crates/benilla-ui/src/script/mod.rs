@@ -928,7 +928,7 @@ impl UiScript {
         // The implicit rects are in layout units, which follow the aspect.
         self.reapply_implicit_rects();
         if let Some(rows) = reseat {
-            self.reseat_user_placed(rows, before);
+            self.reseat_user_placed(rows);
         }
         true
     }

@@ -410,6 +410,9 @@ fn pin_top_left(
     )]);
     let (w, ht) = (Len::Layout(w), Len::Layout(ht));
     let input = model.layout_inputs.entry(h).or_default();
+    let authored = (input.anchors, input.width, input.height);
+    model.drag_authored.entry(h).or_insert(authored);
+    let input = model.layout_inputs.entry(h).or_default();
     let changed = !input.anchors.bits_eq(&pin)
         || input.width.bits() != w.bits()
         || input.height.bits() != ht.bits();

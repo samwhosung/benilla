@@ -1903,3 +1903,54 @@ fn a_rel_length_is_stored_in_layout_units() {
     assert_eq!(pair("return RelText:GetShadowOffset()"), off);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// New cells are a rebuild, which parses a `<Rel…>` size again in layout units: a dragged,
+/// user-placed frame that is not resizable has no size row, so after 4:3 turns 16:9 it keeps the
+/// size its XML gives, as a fresh 16:9 build seated from the same cache reads it, not the drag
+/// pin's size brought through script units.
+#[test]
+fn an_aspect_change_keeps_a_dragged_frames_rel_size() {
+    let xml = r#"<Ui>
+        <Frame name="RelMover" movable="true">
+            <Size><RelDimension x="0.1" y="0.05"/></Size>
+            <Anchors><Anchor point="BOTTOMLEFT"><Offset x="300" y="200"/></Anchor></Anchors>
+        </Frame>
+    </Ui>"#;
+    let build = |w: f32| {
+        let mut s = UiScript::new().unwrap();
+        s.set_window_size(w, 768.0);
+        load_str(&s, xml);
+        s.resolve();
+        s
+    };
+    let read = |s: &mut UiScript| {
+        s.resolve();
+        s.eval::<(f64, f64, f64, f64)>(
+            "local _, _, _, x, y = RelMover:GetPoint(1) \
+             return x, y, RelMover:GetWidth(), RelMover:GetHeight()",
+        )
+        .unwrap()
+    };
+    let mut s = build(1024.0);
+    s.mouse_move(400.0, 300.0);
+    s.run("RelMover:StartMoving()").unwrap();
+    s.mouse_move(437.25, 289.5);
+    s.run("RelMover:StopMovingOrSizing()").unwrap();
+    s.resolve();
+    let rows = s.user_placed_layouts();
+    assert_eq!(
+        (rows[0].width, rows[0].height),
+        (None, None),
+        "not resizable"
+    );
+    s.set_window_size(1366.0, 768.0);
+
+    let mut fresh = build(1366.0);
+    fresh.restore_user_placed_layouts(rows);
+    let want = read(&mut fresh);
+    assert_eq!(read(&mut s), want);
+    // 0.1 by 0.05 layout units, as `G` reads them under the 1366×768 cells.
+    let units = crate::layout::LayoutUnits::from_aspect(1366.0 / 768.0);
+    assert_eq!((want.2, want.3), (units.load(0.1), units.load(0.05)));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
