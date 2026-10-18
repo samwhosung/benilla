@@ -114,7 +114,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     "Usage: SetText(\"text\" [, color])".into(),
                 ));
             }
-            let text = text_of(args.first());
+            let text = text_of(lua, args.first());
             let [r, g, b, _] = parse_line_color(lua, args.get(1), args.get(2), args.get(3));
             // The alpha is its own `lua_isnumber` gate (`0x531ddc`'s neighbour at idx 6), so a
             // numeric string counts.
@@ -169,7 +169,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "AddLine",
         lua.create_function(|lua, (this, args): (Table, Variadic<Value>)| {
-            let text = text_of(args.first());
+            let text = text_of(lua, args.first());
             let (color, wrap) = parse_line_tail(lua, &args[1.min(args.len())..]);
             append_line(lua, &this, (text, color), None, wrap)
         })?,
@@ -182,12 +182,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             |lua, (this, tl, tr, cl): (Table, Value, Value, Variadic<Value>)| {
                 let left_color = parse_line_color(lua, cl.first(), cl.get(1), cl.get(2));
                 let right_color = parse_line_color(lua, cl.get(3), cl.get(4), cl.get(5));
-                let right = text_of(Some(&tr));
+                let right = text_of(lua, Some(&tr));
                 let wrap = wrap_arg(cl.get(6));
                 append_line(
                     lua,
                     &this,
-                    (text_of(Some(&tl)), left_color),
+                    (text_of(lua, Some(&tl)), left_color),
                     Some((right, right_color)),
                     wrap,
                 )

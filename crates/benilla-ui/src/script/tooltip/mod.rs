@@ -515,21 +515,12 @@ fn parse_line_tail(lua: &Lua, args: &[Value]) -> ([f32; 4], bool) {
     )
 }
 
-/// A text argument as a line's string: numbers stringify as Lua does, and nil is empty.
-fn text_of(v: Option<&Value>) -> String {
-    match v {
-        Some(Value::String(s)) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        Some(Value::Number(n)) => {
-            let n = *n;
-            if n == n.trunc() && n.abs() < 1e15 {
-                format!("{}", n as i64)
-            } else {
-                format!("{n}")
-            }
-        }
-        Some(Value::Integer(i)) => format!("{i}"),
-        _ => String::new(),
-    }
+/// A line's text argument as `SetText`, `AddLine` and `AddDoubleLine` read it: `lua_isstring` then
+/// `lua_tostring` (`0x531c25`, `0x5316dc`, `0x5318ef`, `0x53190f`), so a number is its `%.14g`
+/// text and the bytes of a string are kept, lossily; anything else is no text.
+fn text_of(lua: &mlua::Lua, v: Option<&Value>) -> String {
+    v.and_then(|v| crate::script::binding_abi::optional_string(lua, v))
+        .unwrap_or_default()
 }
 
 /// Appends one line, without showing the tooltip or touching a fade (`0x5303b0`): `AddLine`

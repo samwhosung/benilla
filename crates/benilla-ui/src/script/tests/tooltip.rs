@@ -1397,3 +1397,25 @@ fn append_text_formats_line_one_without_showing_it() {
     let e = s.run("AppTT:AppendText()").unwrap_err().to_string();
     assert!(e.contains(r#"Usage: AppendText("text")"#), "{e}");
 }
+
+/// `AddLine`, `AddDoubleLine` and `SetText` read their text with `lua_isstring` then
+/// `lua_tostring` (`0x5316dc`, `0x5318ef`, `0x531c25`), so a number prints as Lua's `%.14g`.
+#[test]
+fn line_text_numbers_print_as_lua_number_text() {
+    let s = script();
+    s.run(
+        r#"
+        local owner = CreateFrame("Button", "NumOwner")
+        NumTT = CreateFrame("GameTooltip", "NumTT", nil, "TestTooltipTemplate")
+        NumTT:SetOwner(owner, "ANCHOR_RIGHT")
+        NumTT:SetText(1e15)
+        NumTT:AddLine(1/3)
+        NumTT:AddDoubleLine(2/3, 1e20)
+        assert(NumTTTextLeft1:GetText() == "1e+015", NumTTTextLeft1:GetText())
+        assert(NumTTTextLeft2:GetText() == "0.33333333333333", NumTTTextLeft2:GetText())
+        assert(NumTTTextLeft3:GetText() == "0.66666666666667", NumTTTextLeft3:GetText())
+        assert(NumTTTextRight3:GetText() == "1e+020", NumTTTextRight3:GetText())
+    "#,
+    )
+    .unwrap();
+}
