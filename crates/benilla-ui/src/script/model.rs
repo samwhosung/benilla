@@ -570,10 +570,13 @@ pub(crate) struct Model {
     /// `RestartGx()` calls, the video window's apply button.
     pub(crate) restart_gx_asks: u32,
 
-    /// Globals `RegisterForSave` declared, in order: written at logout and re-run at load.
+    /// Globals `RegisterForSave` declared, in order: written at logout and read back at load.
     pub(crate) saved_names: Vec<String>,
     /// Saved-variables files that failed to load; the shutdown write leaves them untouched.
     pub(crate) held_saved_files: Vec<std::path::PathBuf>,
+    /// Addon saved-variables files that ran cleanly this session: the only ones the shutdown
+    /// renames for a scope that declares no names.
+    pub(crate) loaded_saved_files: Vec<std::path::PathBuf>,
 
     /// The key-binding table the Key Bindings window edits, with its account and character sets.
     pub(crate) keybinds: super::keybind::KeybindState,
@@ -1531,6 +1534,7 @@ impl Model {
             restart_gx_asks: 0,
             saved_names: Vec::new(),
             held_saved_files: Vec::new(),
+            loaded_saved_files: Vec::new(),
             keybinds: super::keybind::KeybindState::default(),
             actions: HashMap::new(),
             action_states: HashMap::new(),

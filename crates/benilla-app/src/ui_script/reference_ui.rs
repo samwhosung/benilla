@@ -373,8 +373,18 @@ mod tests {
         let failures = super::super::manifest::load_default_ui(&s);
         assert!(failures.is_empty(), "the default UI: {failures:#?}");
 
+        // The stock files and the layer run in context 0, which `RegisterForSave` requires
+        // (`0x4884e0`).
+        let names = s.saved_variable_names();
+        for name in ["NAMEPLATES_ON", "FRIENDNAMEPLATES_ON", "AUTO_QUEST_WATCH"] {
+            assert!(
+                names.iter().any(|n| n == name),
+                "{name} registered: {names:?}"
+            );
+        }
+
         let (mut checked, mut uncovered, mut wrong) = (0usize, Vec::new(), Vec::new());
-        for name in s.saved_variable_names() {
+        for name in names {
             let Some(want) = theirs.get(&name) else {
                 uncovered.push(name);
                 continue;

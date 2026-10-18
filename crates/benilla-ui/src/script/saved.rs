@@ -1,15 +1,15 @@
 //! Saved variables: the Lua settings that survive a restart. The reference saves FrameXML's
-//! `RegisterForSave` globals to one file read back by a line parser (`0x4913b0`, strings and
-//! numbers only), and an addon's `## SavedVariables` to its own file, executed as a chunk before
-//! `ADDON_LOADED` (`AddOn_Load` `0x51f240`). Deviation: the `RegisterForSave` file is executed as a
-//! chunk too, because the line parser cannot carry a table. The app owns the files (`ui_saved`).
+//! `RegisterForSave` globals to one flat file it reads back line by line, never as Lua
+//! (`0x4913b0`, strings and numbers only: [`parse_flat`]), and an addon's `## SavedVariables` to its
+//! own file, executed as a chunk before `ADDON_LOADED` (`AddOn_Load` `0x51f240`). The app owns the
+//! files (`ui_saved`).
 //!
-//! The grammar is the reference's: `NAME = value`, `nil` written out, bracketed keys, tab indent,
-//! trailing comma. Deviations, so a file diffs cleanly and reloads exactly: LF line ends with no
-//! leading blank line, the shortest round-tripping float where the reference's `%.16g` can lose a
-//! digit, entries sorted rather than in `pairs` order, `\r` escaped where the reference writes it
-//! raw and cannot read it back, and a cycle dropped where the reference writes a sentinel into the
-//! caller's table.
+//! The written grammar is the reference's: `NAME = value`, `nil` written out, bracketed keys, tab
+//! indent, trailing comma. Deviations, so a file diffs cleanly and reloads exactly: LF line ends
+//! with no leading blank line, the shortest round-tripping float where the reference's `%.16g` can
+//! lose a digit, entries sorted rather than in `pairs` order, `\r` escaped where the reference
+//! writes it raw and cannot read it back, and a cycle dropped where the reference writes a sentinel
+//! into the caller's table.
 
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -36,6 +36,14 @@ impl super::UiScript {
     /// Whether this session's load failed on `path`.
     pub fn saved_file_held(&self, path: &std::path::Path) -> bool {
         self.model_ref().held_saved_files.iter().any(|p| p == path)
+    }
+
+    /// Whether an addon's saved-variables file at `path` ran cleanly this session.
+    pub fn saved_file_loaded(&self, path: &std::path::Path) -> bool {
+        self.model_ref()
+            .loaded_saved_files
+            .iter()
+            .any(|p| p == path)
     }
 
     /// The registered names in registration order, the reference's own write order.
@@ -83,6 +91,177 @@ impl super::UiScript {
         }
         out
     }
+
+    /// Read the flat `RegisterForSave` file into the globals as `0x4913b0` does: [`parse_flat`]'s
+    /// strings through `0x704300` and its numbers through `0x704250`, and no Lua runs. Answers
+    /// [`FlatFile::lost`].
+    pub fn load_flat_saved_variables(&self, bytes: &[u8]) -> usize {
+        let lua = self.lua();
+        let globals = lua.globals();
+        let flat = parse_flat(bytes);
+        for (name, value) in flat.assignments {
+            let value = match value {
+                Some(FlatValue::Str(s)) => lua.create_string(&s).map(Value::String),
+                Some(FlatValue::Num(n)) => Ok(Value::Number(f64::from(n))),
+                None => Ok(Value::Nil),
+            };
+            if let (Ok(name), Ok(value)) = (lua.create_string(&name), value) {
+                let _ = globals.set(name, value);
+            }
+        }
+        flat.lost
+    }
+}
+
+/// A value the flat reader sets: a non-empty string, or a number already rounded to `f32`.
+#[derive(Debug, PartialEq)]
+pub(crate) enum FlatValue {
+    Str(Vec<u8>),
+    Num(f32),
+}
+
+/// What [`parse_flat`] reads: the assignments in file order (`None` sets nil), and how many lines
+/// set nothing though they were not blank, a comment or `NAME = nil`, or were cut at the limit.
+#[derive(Debug, Default)]
+pub(crate) struct FlatFile {
+    pub(crate) assignments: Vec<(Vec<u8>, Option<FlatValue>)>,
+    pub(crate) lost: usize,
+}
+
+/// The longest line the reader keeps: `0x64ae50` copies at most 1,023 bytes into its 1,024-byte
+/// buffer (`0x491407`, `0x64af4b`) and drops the rest up to the next separator.
+const FLAT_LINE_MAX: usize = 0x3ff;
+
+/// Parse the flat file as `0x4913b0` does. The text ends at its first NUL, and `0x64ae50` splits it
+/// at CR and LF, skipping empty lines. Per line: leading spaces skipped, not tabs (`0x49141c`); the
+/// name runs to a space or `=` (`0x491445`-`0x49144d`); spaces, then `=` or the line is ignored
+/// (`0x49146b`); spaces, then the value is the rest of the line (`0x491489`); an empty name or value
+/// is ignored (`0x4914ab`, `0x4914b9`). A value opening `"` is a string ([`flat_string`]), one
+/// opening with a digit, or `-` or `.` then a digit (`0x4914fa`-`0x491526`), a number
+/// ([`flat_number`]); anything else (`nil`, `true`, a table, a call) is ignored.
+pub(crate) fn parse_flat(bytes: &[u8]) -> FlatFile {
+    let bytes = bytes.split(|&b| b == 0).next().unwrap_or_default();
+    let mut out = FlatFile::default();
+    for raw in bytes.split(|&b| b == b'\r' || b == b'\n') {
+        if raw.is_empty() {
+            continue;
+        }
+        let cut = raw.len() > FLAT_LINE_MAX;
+        let line = &raw[..raw.len().min(FLAT_LINE_MAX)];
+        let set = flat_line(line);
+        let benign = || {
+            let rest = skip_spaces(line);
+            rest.iter().all(|&b| b == b' ' || b == b'\t')
+                || rest.starts_with(b"--")
+                || flat_split(line).is_some_and(|(_, v)| v == b"nil" || v.starts_with(b"nil "))
+        };
+        if cut || (set.is_none() && !benign()) {
+            out.lost += 1;
+        }
+        out.assignments.extend(set);
+    }
+    out
+}
+
+fn skip_spaces(s: &[u8]) -> &[u8] {
+    let start = s.iter().position(|&b| b != b' ').unwrap_or(s.len());
+    &s[start..]
+}
+
+/// `(name, value text)` of a `name = value` line, `None` where `0x4913b0` ignores the line.
+fn flat_split(line: &[u8]) -> Option<(&[u8], &[u8])> {
+    let rest = skip_spaces(line);
+    let end = rest
+        .iter()
+        .position(|&b| b == b' ' || b == b'=')
+        .unwrap_or(rest.len());
+    let (name, rest) = rest.split_at(end);
+    let value = skip_spaces(skip_spaces(rest).strip_prefix(b"=")?);
+    (!name.is_empty() && !value.is_empty()).then_some((name, value))
+}
+
+/// One line's assignment, `None` when the reader ignores the line.
+fn flat_line(line: &[u8]) -> Option<(Vec<u8>, Option<FlatValue>)> {
+    let (name, value) = flat_split(line)?;
+    let value = match value {
+        [b'"', ..] => flat_string(value).map(FlatValue::Str),
+        [d, ..] if d.is_ascii_digit() => Some(FlatValue::Num(flat_number(value))),
+        [b'-' | b'.', d, ..] if d.is_ascii_digit() => Some(FlatValue::Num(flat_number(value))),
+        _ => return None,
+    };
+    Some((name.to_vec(), value))
+}
+
+/// A quoted value cut at its last `"` above index 1 (`0x4914c3`-`0x4914e0`), so `""` and an
+/// unterminated `"abc` are empty, which `0x704300` sets as nil (`0x70430f`).
+/// Deviation: the writer's escapes are undone ([`unescape`]), where the reference sets the bytes
+/// between the quotes raw, so a string holding a quote or a backslash would grow every session.
+fn flat_string(value: &[u8]) -> Option<Vec<u8>> {
+    let close = (2..value.len())
+        .rev()
+        .find(|&i| value[i] == b'"')
+        .unwrap_or(1);
+    let raw = value.get(1..close).unwrap_or_default();
+    (!raw.is_empty()).then(|| unescape(raw))
+}
+
+/// Undo [`quote`]'s escapes (`\\`, `\"`, `\n`, `\r`, `\000`); any other backslash stays as it is.
+fn unescape(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let (byte, len) = match (raw[i], raw.get(i + 1)) {
+            (b'\\', Some(b'\\')) => (b'\\', 2),
+            (b'\\', Some(b'"')) => (b'"', 2),
+            (b'\\', Some(b'n')) => (b'\n', 2),
+            (b'\\', Some(b'r')) => (b'\r', 2),
+            (b'\\', Some(b'0')) if raw.get(i + 2..i + 4) == Some(b"00") => (0, 4),
+            (b, _) => (b, 1),
+        };
+        out.push(byte);
+        i += len;
+    }
+    out
+}
+
+/// `SStrToFloat` (`0x64aaa0`) rounded to `f32` (`fstp dword` at `0x491534`): an optional `-`,
+/// digits, an optional `.` and digits, then `e` or `E`, an optional `+` (`0x64ac0a`-`0x64ac1d`) and
+/// `SStrToInt`'s optional `-` and digits (`0x64ac60`); whatever follows is ignored, so `5abc` is 5
+/// and `0x10` is 0.
+fn flat_number(value: &[u8]) -> f32 {
+    fn digits(s: &[u8]) -> (&[u8], &[u8]) {
+        s.split_at(s.iter().take_while(|b| b.is_ascii_digit()).count())
+    }
+    fn sign(s: &[u8]) -> (bool, &[u8]) {
+        s.strip_prefix(b"-").map_or((false, s), |rest| (true, rest))
+    }
+    let (neg, rest) = sign(value);
+    let (int, rest) = digits(rest);
+    let (frac, rest) = rest.strip_prefix(b".").map_or((&b""[..], rest), digits);
+    let mut exp: i64 = 0;
+    if let Some(rest) = rest.strip_prefix(b"e").or_else(|| rest.strip_prefix(b"E")) {
+        let (eneg, rest) = sign(rest.strip_prefix(b"+").unwrap_or(rest));
+        for &d in digits(rest).0 {
+            exp = (exp * 10 + i64::from(d - b'0')).min(100_000);
+        }
+        if eneg {
+            exp = -exp;
+        }
+    }
+    let text = |d: &[u8]| {
+        if d.is_empty() {
+            "0".to_owned()
+        } else {
+            String::from_utf8_lossy(d).into_owned()
+        }
+    };
+    let text = format!(
+        "{}{}.{}e{exp}",
+        if neg { "-" } else { "" },
+        text(int),
+        text(frac)
+    );
+    text.parse::<f64>().unwrap_or(0.0) as f32
 }
 
 /// One Lua value as Lua expression text, or `None` when it has none. `depth` is the indent of a
@@ -183,12 +362,19 @@ fn table(t: &Table, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<V
     Some(out)
 }
 
-/// Register `RegisterForSave`, with no context gate: the reference refuses it outside Blizzard code
-/// (`0x4884e0`), which [`super::taint::current`] could answer.
+/// Register `RegisterForSave` (`0x4884e0`): context 0 only (`[0xceeac0]`, [`super::taint::current`]),
+/// then a string or number argument (`0x6f3510`), each refusal raising the reference's text.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "RegisterForSave",
-        lua.create_function(|lua, name: String| {
+        lua.create_function(|lua, name: Value| {
+            if super::taint::current(lua) != super::taint::Context::Client {
+                return Err(mlua::Error::RuntimeError(
+                    "RegisterForSave() is only available to Blizzard scripts".into(),
+                ));
+            }
+            let name =
+                super::binding_abi::string_arg(lua, name, r#"Usage: RegisterForSave("variable")"#)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if !model.saved_names.contains(&name) {
                 model.saved_names.push(name);
@@ -364,5 +550,160 @@ mod tests {
         assert!(fresh
             .eval::<bool>("return KEYS[string.char(200)] == 1 and KEYS[string.char(201)] == 2")
             .unwrap());
+    }
+
+    /// One flat file read into a fresh VM whose `N` and `S` default to `"default"`.
+    fn read_flat(file: &[u8]) -> UiScript {
+        let s = UiScript::new().unwrap();
+        s.run("N = 'default' S = 'default'").unwrap();
+        s.load_flat_saved_variables(file);
+        s
+    }
+
+    /// `type(N)` and `tostring(N)` for the global `name` after reading `file`.
+    fn flat_global(file: &[u8], name: &str) -> String {
+        read_flat(file)
+            .eval::<String>(&format!(
+                "local v = getglobal({name:?}) return type(v) .. ':' .. tostring(v)"
+            ))
+            .unwrap()
+    }
+
+    /// The number goes through `fstp dword` (`0x491534`): 0.1 comes back as the f32 nearest it.
+    #[test]
+    fn a_flat_number_is_rounded_to_single_precision() {
+        let s = read_flat(b"PARTYBACKGROUND_OPACITY = 0.1\n");
+        assert_eq!(
+            s.eval::<f64>("return PARTYBACKGROUND_OPACITY").unwrap(),
+            f64::from(0.1f32)
+        );
+    }
+
+    /// The flat file is never run (`0x4913b0` has no call into the compiler): a call is not made,
+    /// and a table, a boolean or `nil` leave the global as it was.
+    #[test]
+    fn a_flat_file_runs_no_lua_and_sets_only_strings_and_numbers() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            "MARKED = 0 function MARK() MARKED = MARKED + 1 return 1 end \
+             CALLED = 'default' T = 'default' B = 'default' NIL = 'default'",
+        )
+        .unwrap();
+        s.load_flat_saved_variables(b"CALLED = MARK()\nT = {1}\nB = true\nNIL = nil\n");
+        assert_eq!(s.eval::<i64>("return MARKED").unwrap(), 0, "MARK never ran");
+        for name in ["CALLED", "T", "B", "NIL"] {
+            assert_eq!(
+                s.eval::<String>(&format!("return {name}")).unwrap(),
+                "default",
+                "{name} keeps its default"
+            );
+        }
+    }
+
+    /// The line grammar of `0x4913b0`, case by case.
+    #[test]
+    fn the_flat_line_grammar_is_the_references() {
+        let long = format!("S = \"{}\"", "a".repeat(1100));
+        let cases: &[(&[u8], &str, &str)] = &[
+            // Strings: cut at the last quote above index 1, empty is nil (`0x70430f`).
+            (b"S = \"abc\"", "S", "string:abc"),
+            (b"S = \"\"", "S", "nil:nil"),
+            (b"S = \"abc", "S", "nil:nil"),
+            (b"S = \"", "S", "nil:nil"),
+            (b"S = \"a\"b\"", "S", "string:a\"b"),
+            (b"S = \"abc\" -- note", "S", "string:abc"),
+            // The writer's escapes come back as the bytes they stand for.
+            (b"S = \"a\\\"b\\\\c\\nd\\re\"", "S", "string:a\"b\\c\nd\re"),
+            (b"S = \"a\\tb\"", "S", "string:a\\tb"),
+            // Numbers: a digit, or `-`/`.` then a digit, through `SStrToFloat`.
+            (b"N = 7", "N", "number:7"),
+            (b"N = -7", "N", "number:-7"),
+            (b"N = .5", "N", "number:0.5"),
+            (b"N = -.5", "N", "string:default"),
+            (b"N = 5abc", "N", "number:5"),
+            (b"N = 1e3", "N", "number:1000"),
+            (b"N = 2E+2", "N", "number:200"),
+            (b"N = 5e-1", "N", "number:0.5"),
+            (b"N = 0x10", "N", "number:0"),
+            (b"N = 3 -- note", "N", "number:3"),
+            // The name and the `=`: leading spaces skipped, tabs kept, spaces optional.
+            (b"   N=8", "N", "number:8"),
+            (b"\tX = 1", "\tX", "number:1"),
+            (b"N x = 1", "N", "string:default"),
+            (b"N = = 3", "N", "string:default"),
+            (b"N 3", "N", "string:default"),
+            // A line past 1,023 bytes is cut, so its closing quote is lost.
+            (long.as_bytes(), "S", "nil:nil"),
+        ];
+        for (file, name, want) in cases {
+            assert_eq!(
+                flat_global(file, name),
+                *want,
+                "{:?}",
+                String::from_utf8_lossy(file)
+            );
+        }
+        // CR LF, LF and CR alone all end a line; a NUL ends the file.
+        for file in [
+            &b"N = 1\r\nS = \"x\"\r\n"[..],
+            b"N = 1\nS = \"x\"",
+            b"N = 1\rS = \"x\"\r",
+            b"\r\n\r\nN = 1\n\n\nS = \"x\"\n",
+        ] {
+            assert_eq!(flat_global(file, "N"), "number:1");
+            assert_eq!(flat_global(file, "S"), "string:x");
+        }
+        assert_eq!(flat_global(b"N = 1\0\nS = \"x\"\n", "S"), "string:default");
+    }
+
+    /// What the writer emits for a string reads back as the same bytes, a NUL included.
+    #[test]
+    fn a_written_string_reads_back_unchanged() {
+        let s = UiScript::new().unwrap();
+        s.run("V = 'say \"hi\"\\\\ now\\n' .. string.char(0, 200) RegisterForSave('V')")
+            .unwrap();
+        let fresh = UiScript::new().unwrap();
+        fresh.load_flat_saved_variables(&s.saved_variables_bytes());
+        assert!(fresh
+            .eval::<bool>("return V == 'say \"hi\"\\\\ now\\n' .. string.char(0, 200)")
+            .unwrap());
+    }
+
+    /// `parse_flat`'s lost count: a line that set nothing and was not blank, a comment or `nil`.
+    #[test]
+    fn the_lost_count_names_only_lines_with_a_value_dropped() {
+        let flat = super::parse_flat(
+            b"-- header\n   \n\t\nA = nil\nB = 1\nC = {\n\t[1] = 1,\n}\nD = true\n",
+        );
+        // `C = {`, `}` and `D = true`; `\t[1] = 1,` sets the global "\t[1]", as the reference does.
+        assert_eq!(flat.lost, 3);
+        assert_eq!(flat.assignments.len(), 2);
+    }
+
+    /// `RegisterForSave` (`0x4884e0`) raises outside context 0, and for an argument that is not a
+    /// string or number (`0x488525`).
+    #[test]
+    fn register_for_save_is_the_clients_alone_and_takes_a_name() {
+        let s = UiScript::new().unwrap();
+        s.run("RegisterForSave('MINE') RegisterForSave(5)").unwrap();
+        assert_eq!(s.saved_variable_names(), vec!["MINE", "5"]);
+        let err = s.run("RegisterForSave({})").unwrap_err().to_string();
+        assert!(
+            err.contains("Usage: RegisterForSave(\"variable\")"),
+            "{err}"
+        );
+        let err = s.run("RegisterForSave()").unwrap_err().to_string();
+        assert!(
+            err.contains("Usage: RegisterForSave(\"variable\")"),
+            "{err}"
+        );
+        // `RunScript` carries the macro context and hands its error to the handler.
+        s.run("RunScript(\"RegisterForSave('MACRO')\")").unwrap();
+        let errors = s.errors().join("\n");
+        assert!(
+            errors.contains("RegisterForSave() is only available to Blizzard scripts"),
+            "{errors}"
+        );
+        assert_eq!(s.saved_variable_names(), vec!["MINE", "5"]);
     }
 }

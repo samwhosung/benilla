@@ -135,7 +135,7 @@ pub(crate) fn bindings_character_path(realm: &str, character: &str) -> Option<Pa
 }
 
 /// `benilla-config/saved-variables.lua`: the flat channel our FrameXML saves through
-/// `RegisterForSave` (the `SavedVariables.lua` analog), written whole at logout, run at UI load.
+/// `RegisterForSave` (the `SavedVariables.lua` analog), written whole at logout, read at UI load.
 pub(crate) fn saved_variables_path() -> Option<PathBuf> {
     home().map(|h| h.join("saved-variables.lua"))
 }

@@ -891,7 +891,7 @@ mod tests {
         );
 
         let s = benilla_ui::script::UiScript::new().unwrap();
-        // The saved-variables chunk said off; the CVar was the store, so it wins.
+        // The saved-variables file said off; the CVar was the store, so it wins.
         s.run("FRIENDNAMEPLATES_ON = nil NAMEPLATES_ON = 1")
             .unwrap();
         seat_legacy_settings(&s, &legacy);

@@ -652,19 +652,36 @@ pub(super) fn save_enable_state(script: &UiScript, identity: Option<&(String, St
 
 /// Write every loaded addon's declared saved variables at shutdown (`0x490c83`, after the flat
 /// file, before `AddOns.txt`). No autosave and no dirty bit, as in the reference, whose write gate
-/// is the record's loaded byte: an addon that never loaded is not written. An addon declaring
-/// nothing is left alone, where the reference deletes its file.
+/// is the record's loaded byte: an addon that never loaded is not written. A scope declaring no
+/// names loses its file (`0x51f859`, `0x51f9ac`) when it ran cleanly this session.
+/// Deviation: that file is renamed to `<Name>.lua.bak`, where the reference deletes it, so an addon
+/// update that drops its toc line costs the player nothing they cannot get back.
 pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(String, String)>) {
     let account = crate::local_state::addon_saved_account_dir();
     let character = identity.and_then(|(r, c)| crate::local_state::addon_saved_character_dir(r, c));
     let mut written = 0;
     for (name, account_names, character_names) in script.addon_saved_variable_sets() {
         for (dir, names) in [(&account, &account_names), (&character, &character_names)] {
-            if names.is_empty() {
-                continue;
-            }
             let Some(dir) = dir else { continue };
             let path = dir.join(format!("{name}.lua"));
+            if names.is_empty() {
+                // Only a file this session read cleanly: never a held one, never one it did not read.
+                if script.saved_file_loaded(&path) {
+                    let bak = dir.join(format!("{name}.lua.bak"));
+                    match std::fs::rename(&path, &bak) {
+                        Ok(()) => {
+                            info!(
+                                "ui_script: {name} declares no saved variables for {} — moved to {}",
+                                path.display(),
+                                bak.display()
+                            );
+                            written += 1;
+                        }
+                        Err(e) => warn!("ui_script: cannot move {}: {e}", path.display()),
+                    }
+                }
+                continue;
+            }
             if script.saved_file_held(&path) {
                 // It failed to load this session, so its globals are the addon's defaults, and
                 // writing them would replace the player's file.
@@ -685,7 +702,8 @@ pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(Str
             }
         }
     }
-    // Any file written empties the loose-file index (`0x51fa2f` tests the count, `0x51fa31`).
+    // Any file written or removed empties the loose-file index (`0x51f85e` counts a delete,
+    // `0x51fa2f` tests the count, `0x51fa31`).
     if written > 0 {
         benilla_formats::install_index().clear();
     }
@@ -2932,6 +2950,136 @@ mod tests {
             "the value the PLAYER_LOGOUT handler set must reach the file — if the write ran \
              first this reads 'unset':\n{written}"
         );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// An addon whose file records `<watch>` at its own `ADDON_LOADED` into `<Name>Seen`.
+    fn write_watching_addon(home: &Path, name: &str, directives: &str, watch: &str) {
+        write_addon(
+            home,
+            name,
+            &format!("## Interface: 11200\n{directives}main.lua\n"),
+            &[(
+                "main.lua",
+                &format!(
+                    "local f = CreateFrame('Frame') f:RegisterEvent('ADDON_LOADED') \
+                     f:SetScript('OnEvent', function() \
+                       if arg1 == '{name}' then {name}Seen = {watch} end end)"
+                ),
+            )],
+        );
+    }
+
+    /// The saved files run whenever they exist (`0x51f4a2`, `0x51f4f0`): the toc's declarations
+    /// gate only the write.
+    #[test]
+    fn a_saved_file_runs_though_the_toc_declares_nothing_for_it() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("saved-undeclared");
+        write_watching_addon(&home, "Foo", "", "FooDB");
+        write_watching_addon(&home, "Bar", "## SavedVariables: BarDB\n", "BarChar");
+        std::fs::create_dir_all(home.join("saved/Realm-Char")).unwrap();
+        std::fs::write(home.join("saved/Foo.lua"), "FooDB = 7\n").unwrap();
+        std::fs::write(home.join("saved/Realm-Char/Bar.lua"), "BarChar = 9\n").unwrap();
+
+        let id = ("Realm".to_string(), "Char".to_string());
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let failures = load_third_party(&mut script, Some(&id), &[], true);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(script.eval::<i64>("return FooSeen").ok(), Some(7));
+        assert_eq!(script.eval::<i64>("return BarSeen").ok(), Some(9));
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A loaded addon's scope with no names loses its file at shutdown (`0x51f859`, `0x51f9ac`),
+    /// here to `.bak`; a never-loaded addon's files and a file that failed to load stay.
+    #[test]
+    fn a_scope_declaring_nothing_moves_its_file_aside_at_shutdown() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("saved-delete");
+        write_watching_addon(&home, "Foo", "", "1");
+        write_watching_addon(
+            &home,
+            "Per",
+            "## SavedVariablesPerCharacter: PerChar\n",
+            "1",
+        );
+        write_watching_addon(&home, "Lod", "## LoadOnDemand: 1\n", "1");
+        write_watching_addon(&home, "Held", "", "1");
+        let saved = home.join("saved");
+        std::fs::create_dir_all(&saved).unwrap();
+        for (file, body) in [
+            ("Foo.lua", "FooDB = 7\n"),
+            ("Foo.lua.bak", "an older copy\n"),
+            ("Per.lua", "PerDB = 1\n"),
+            ("Lod.lua", "LodDB = 1\n"),
+            ("Held.lua", "HeldDB = = 1\n"),
+        ] {
+            std::fs::write(saved.join(file), body).unwrap();
+        }
+
+        let id = ("Realm".to_string(), "Char".to_string());
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let _ = load_third_party(&mut script, Some(&id), &[], true);
+        script.run("PerChar = 5").unwrap();
+        crate::ui_script::shutdown_ui_state(&mut script, Some(&id));
+
+        let read = |f: &str| std::fs::read_to_string(saved.join(f)).ok();
+        assert_eq!(read("Foo.lua"), None, "a loaded addon declaring nothing");
+        assert_eq!(read("Foo.lua.bak").as_deref(), Some("FooDB = 7\n"));
+        assert_eq!(
+            read("Per.lua"),
+            None,
+            "per-character only: the account file goes"
+        );
+        assert_eq!(read("Per.lua.bak").as_deref(), Some("PerDB = 1\n"));
+        assert!(
+            read("Realm-Char/Per.lua").is_some_and(|t| t.ends_with("PerChar = 5\n")),
+            "and the character file is written"
+        );
+        assert_eq!(
+            read("Lod.lua").as_deref(),
+            Some("LodDB = 1\n"),
+            "never loaded"
+        );
+        assert_eq!(read("Lod.lua.bak"), None);
+        assert_eq!(read("Held.lua").as_deref(), Some("HeldDB = = 1\n"), "held");
+        assert_eq!(read("Held.lua.bak"), None);
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// `RegisterForSave` from an insecure addon's file raises under its context word (`0x4884e0`).
+    #[test]
+    fn an_addon_cannot_register_for_save() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("saved-register");
+        write_addon(
+            &home,
+            "Sneaky",
+            "## Interface: 11200\nmain.lua\n",
+            &[("main.lua", "RegisterForSave('SNEAKY')")],
+        );
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let failures = load_third_party(&mut script, None, &[], true);
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.contains("RegisterForSave() is only available to Blizzard scripts")),
+            "{failures:?}"
+        );
+        assert!(script.saved_variable_names().is_empty());
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 

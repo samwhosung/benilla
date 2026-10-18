@@ -517,8 +517,8 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         // The new Minimap's zoom indices from the persisted CVars, as the reference's minimap reset
         // copies each CVar into its live index; `Minimap:SetZoom` owns them from here.
         script.set_minimap_zoom(zoom.0, zoom.1);
-        // The saved-variables chunk runs after the files set their defaults and before
-        // `VARIABLES_LOADED`, the reference's order (`AddOn_Load` `0x51f240`); reversed, the
+        // The saved-variables file is read after the files set their defaults and before
+        // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the
         // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any chat
         // is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*`
         // events (`ChatFrame.lua:1261-1273`).
@@ -983,7 +983,7 @@ pub(crate) fn finish_ui_load(script: &mut UiScript) {
 }
 
 /// [`finish_ui_load`] with its two host seams. `host_settings` runs between the saved-variables
-/// chunk and `VARIABLES_LOADED`, carrying over a setting `config.toml` held before it moved into
+/// file and `VARIABLES_LOADED`, carrying over a setting `config.toml` held before it moved into
 /// the saved variables. `between` runs after `VARIABLES_LOADED` and before the `PLAYER_LOGIN` arm
 /// (so before the event too): the chat-cache restore's `UPDATE_CHAT_WINDOWS` +
 /// `UPDATE_CHAT_COLOR` burst, where the reference registers its reader (`0x4900d6` → `0x498a20`),

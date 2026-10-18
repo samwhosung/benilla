@@ -1,10 +1,10 @@
 //! The saved-variables host side: the file, the load seam and the write. The declaration set and
 //! the serializer are [`benilla_ui::script`]'s.
 //!
-//! The file runs after the in-game UI's own files and before `VARIABLES_LOADED`, the order of the
-//! reference's `AddOn_Load` (`0x51f240`), so a saved value overrides a file-scope default before
-//! any consumer reads it. It is written only at UI shutdown (`0x490bd0`, after `PLAYER_LOGOUT`):
-//! the reference has no autosave and no Lua call that forces a write.
+//! The file is read after the in-game UI's own files and every addon's `ADDON_LOADED`, and before
+//! `VARIABLES_LOADED` (`0x4900a3`, `0x4900b2`), so a saved value overrides a file-scope default
+//! before any consumer reads it. It is written only at UI shutdown (`0x490bd0`, after
+//! `PLAYER_LOGOUT`): the reference has no autosave and no Lua call that forces a write.
 //!
 //! Deviation: the write is atomic ([`crate::local_state::write_atomic_bytes`]), because the
 //! reference's `.bak` rotation (`MoveFileW` without `MOVEFILE_REPLACE_EXISTING`, its result
@@ -22,13 +22,13 @@ impl Plugin for UiSavedPlugin {
     }
 }
 
-/// Run the saved-variables file into the VM, then `host_settings`, then fire `VARIABLES_LOADED`.
-/// A malformed or unreadable file warns and is held ([`UiScript::hold_saved_file`]), so the
-/// shutdown write leaves it alone. Read as bytes: the writer keeps a Lua string's raw bytes.
+/// Read the saved-variables file into the globals ([`UiScript::load_flat_saved_variables`]), then
+/// `host_settings`, then fire `VARIABLES_LOADED`. An unreadable file warns and is held
+/// ([`UiScript::hold_saved_file`]), so the shutdown write leaves it alone.
 ///
 /// `host_settings` seats what the host carries into a `RegisterForSave` global (a plate setting
-/// left in `config.toml`): after the chunk, so it outranks the file, and before the event, where
-/// the consumers run (`UIParent_OnEvent` → `UpdateNameplates`).
+/// left in `config.toml`): after the file, so it outranks it, and before the event, where the
+/// consumers run (`UIParent_OnEvent` → `UpdateNameplates`).
 pub(crate) fn load_saved_variables(
     script: &mut UiScript,
     host_settings: impl FnOnce(&mut UiScript),
@@ -37,15 +37,10 @@ pub(crate) fn load_saved_variables(
     if let Some(path) = crate::local_state::saved_variables_path() {
         match std::fs::read(&path) {
             Ok(bytes) => {
-                if let Err(e) = script.run_chunk(&bytes) {
-                    warn!(
-                        "saved variables: {} did not load ({e}) — running on defaults, and \
-                         leaving the file as it is",
-                        path.display()
-                    );
-                    script.hold_saved_file(&path);
-                } else {
-                    info!("saved variables: loaded {}", path.display());
+                let lost = script.load_flat_saved_variables(&bytes);
+                info!("saved variables: loaded {}", path.display());
+                if lost > 0 && contains(&bytes, CHUNK_ERA_HEADER_LINE.as_bytes()) {
+                    keep_chunk_era_copy(script, &path, &bytes, lost);
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -58,6 +53,53 @@ pub(crate) fn load_saved_variables(
     host_settings(script);
     // Fired whether or not there was a file, as a step of the reference's load sequence.
     script.fire_event("VARIABLES_LOADED", vec![]);
+}
+
+/// The header line of a file an earlier benilla wrote and ran as a Lua chunk, which can hold
+/// lines the line reader drops (a table, a boolean).
+const CHUNK_ERA_HEADER_LINE: &str =
+    "-- Written at logout/exit from the live values; executed as a Lua chunk at UI load.";
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Copy a chunk-era file whose lines the reader dropped to `saved-variables.lua.bak` before the
+/// shutdown write replaces it, once: an existing copy is never overwritten. With no copy made the
+/// file is held, so the write leaves it as it is.
+fn keep_chunk_era_copy(script: &UiScript, path: &std::path::Path, bytes: &[u8], lost: usize) {
+    use std::io::Write as _;
+    let bak = path.with_extension("lua.bak");
+    let copy = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&bak)
+    {
+        Ok(mut f) => f
+            .write_all(bytes)
+            .and_then(|()| f.sync_all())
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&bak);
+            }),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return,
+        Err(e) => Err(e),
+    };
+    match copy {
+        Ok(()) => warn!(
+            "saved variables: {} has {lost} line(s) this build no longer reads; the file as it \
+             was is kept at {}",
+            path.display(),
+            bak.display()
+        ),
+        Err(e) => {
+            warn!(
+                "saved variables: cannot keep a copy at {}: {e} — leaving {} as it is",
+                bak.display(),
+                path.display()
+            );
+            script.hold_saved_file(path);
+        }
+    }
 }
 
 /// Write the flat file from the live globals, one step of [`crate::ui_script::shutdown_ui_state`].
@@ -97,10 +139,10 @@ pub(crate) fn save(script: &mut UiScript) {
 }
 
 /// Deviation: a header saying what the file is, because the folder is in plain view; the
-/// reference's file opens with a bare blank line.
+/// reference's file opens with a bare blank line. Its lines are comments to the reader.
 const HEADER: &str = "\
 -- benilla saved variables: the UI's own remembered settings.
--- Written at logout/exit from the live values; executed as a Lua chunk at UI load.
+-- Written at logout/exit from the live values; read back at UI load, line by line.
 ";
 
 #[cfg(test)]
@@ -149,19 +191,74 @@ mod tests {
             "VARIABLES_LOADED fires exactly once, after the chunk"
         );
 
-        // A malformed file is left alone and the session runs on defaults.
+        // A line the reader ignores leaves the default, and the shutdown writes the file anew.
         crate::local_state::write_atomic(&path, "KEPT = = 3\n").unwrap();
-        let mut broken = script("1");
-        load_saved_variables(&mut broken, |_| {});
-        assert_eq!(broken.eval::<i64>("return KEPT").unwrap(), 1);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "KEPT = = 3\n");
-        // The shutdown write leaves it alone too.
-        save(&mut broken);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "KEPT = = 3\n",
-            "a file that did not load is not replaced by the defaults the session ran on"
+        let mut odd = script("1");
+        load_saved_variables(&mut odd, |_| {});
+        assert_eq!(odd.eval::<i64>("return KEPT").unwrap(), 1);
+        save(&mut odd);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("KEPT = 1\n"), "{text}");
+        assert!(
+            !path.with_extension("lua.bak").exists(),
+            "no copy for a current file"
         );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The header line an earlier benilla wrote, when it ran the file as a chunk.
+    const CHUNK_ERA: &str = "-- benilla saved variables: the UI's own remembered settings.\n\
+        -- Written at logout/exit from the live values; executed as a Lua chunk at UI load.\n";
+
+    /// A chunk-era file of plain lines reads the same values and needs no copy; one with a line the
+    /// reader drops is copied once to `.bak`, and a second load keeps that first copy.
+    #[test]
+    fn a_chunk_era_file_with_dropped_lines_is_copied_once() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-svera-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let path = tmp.join("saved-variables.lua");
+        let bak = tmp.join("saved-variables.lua.bak");
+
+        let plain = format!("{CHUNK_ERA}KEPT = 7\nNONE = nil\nLABEL = \"a\\\"b\"\n");
+        crate::local_state::write_atomic(&path, &plain).unwrap();
+        let mut s = script("1");
+        load_saved_variables(&mut s, |_| {});
+        assert_eq!(s.eval::<i64>("return KEPT").unwrap(), 7);
+        assert_eq!(s.eval::<String>("return LABEL").unwrap(), "a\"b");
+        assert!(!bak.exists(), "every line read: no copy");
+
+        let tabled = format!("{CHUNK_ERA}KEPT = 7\nLIST = {{\n\t[1] = 1,\n}}\n");
+        crate::local_state::write_atomic(&path, &tabled).unwrap();
+        let mut s = script("1");
+        load_saved_variables(&mut s, |_| {});
+        assert_eq!(s.eval::<i64>("return KEPT").unwrap(), 7);
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            tabled,
+            "the file as it was"
+        );
+
+        let again = format!("{CHUNK_ERA}LIST = {{}}\n");
+        crate::local_state::write_atomic(&path, &again).unwrap();
+        let mut s = script("1");
+        load_saved_variables(&mut s, |_| {});
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            tabled,
+            "the first copy stays"
+        );
+
+        // A current file with a dropped line makes no copy.
+        std::fs::remove_file(&bak).unwrap();
+        crate::local_state::write_atomic(&path, &format!("{HEADER}LIST = {{}}\n")).unwrap();
+        let mut s = script("1");
+        load_saved_variables(&mut s, |_| {});
+        assert!(!bak.exists());
         std::fs::remove_dir_all(&tmp).ok();
     }
 

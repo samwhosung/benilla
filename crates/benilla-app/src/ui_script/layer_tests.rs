@@ -489,7 +489,7 @@ fn every_global_the_layer_defines_takes_the_benilla_prefix() {
 }
 
 /// A login as the reference runs one on `s`, over a saved-variables file in `home` holding
-/// `saved`: the chunk and `VARIABLES_LOADED` inside the UI load, then the world entry's clear
+/// `saved`: the file and `VARIABLES_LOADED` inside the UI load, then the world entry's clear
 /// (`0x401639`, after the load at `0x401602`), then `PLAYER_ENTERING_WORLD`; a `ReloadUI()`
 /// (`entry` false) skips the clear. The bits start as `before`. Returns the app holding the VM and
 /// the plate bits.
