@@ -206,7 +206,6 @@ pub(crate) fn on_cvar(
     particles: Option<ResMut<benilla_world::particles::ParticleTuning>>,
     mut spell_effect_level: ResMut<SpellEffectLevel>,
     mut ffx: ResMut<benilla_world::ffx_glow::FfxSwitches>,
-    mut console: Option<ResMut<crate::console::ConsoleEcho>>,
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
     use benilla_world::view::{FARCLIP_RANGE, MSAA_RANGE};
@@ -296,9 +295,7 @@ pub(crate) fn on_cvar(
         "spelleffectlevel" => {
             spell_effect_level.0 = benilla_ui::script::s_str_to_int(&ev.new);
             let level = spell_effect_level.0.clamp(0, 2);
-            if let Some(console) = console.as_mut() {
-                console.print(format!("Spell effect level set to {level}."));
-            }
+            cvars.print(format!("Spell effect level set to {level}."));
             if let Some(mut particles) = particles {
                 particles.set_density(spell_effect_scale(level));
             }

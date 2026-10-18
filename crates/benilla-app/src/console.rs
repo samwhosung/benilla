@@ -6,9 +6,9 @@
 //! split ([`benilla_ui::script::console_word`]).
 //!
 //! Each CVar is also a command under its own name (`0x63dde0`): a bare name prints
-//! `CVar "%s" is "%s"`, a name with a value sets it, looked up after the registered commands.
-//! The built-ins are `ConsoleVar.cpp`'s four (`set`, `cvar_reset`, `cvar_default`, `cvarlist`)
-//! plus the registry's `help`.
+//! `CVar "%s" is "%s"` here, looked up after the registered commands; with a value it was a write,
+//! which `ConsoleExec` ran. The built-ins here are `ConsoleVar.cpp`'s `cvarlist` and the registry's
+//! `help`, which also lists the commands `ConsoleExec` runs (`CVAR_COMMANDS`).
 //!
 //! The reference's drop-down console screen is not built: output is a system line in chat.
 
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 
-use crate::cvars::{Cvars, SetOutcome};
+use crate::cvars::Cvars;
 
 /// A command's body: the world and the trimmed argument tail in, the lines to print out.
 pub(crate) type ConsoleHandler = fn(&mut World, &str) -> Vec<String>;
@@ -64,34 +64,20 @@ impl ConsoleCommandApp for App {
     }
 }
 
-/// Lines a CVar's change callback prints to the console (`0x63cb50`), such as `spellEffectLevel`'s
-/// "Spell effect level set to %d.". A console command's own write collects them into its output;
-/// any other write (a Lua `SetCVar`, the boot load) sends them to the log, as the reference's go
-/// to a console screen nobody has open.
-#[derive(Resource, Default)]
-pub(crate) struct ConsoleEcho {
-    capture: Option<Vec<String>>,
-}
+/// `ConsoleVar.cpp`'s commands that write a CVar, which `ConsoleExec` runs on the VM's mirror
+/// inside the call (`benilla_ui::script`'s `console_exec`): listed by `help`, never run here.
+const CVAR_COMMANDS: [(&str, &str); 3] = [
+    ("cvar_default", "Reset a CVar to its default."),
+    ("cvar_reset", "Reset a CVar to its default."),
+    ("set", "Set the value of a CVar."),
+];
 
-impl ConsoleEcho {
-    pub(crate) fn print(&mut self, line: String) {
-        match &mut self.capture {
-            Some(lines) => lines.push(line),
-            None => info!("console: {line}"),
-        }
-    }
-}
-
-/// The built-ins: the reference's four `ConsoleVar.cpp` commands and `help`.
+/// The built-ins: `ConsoleVar.cpp`'s `cvarlist` and `help`.
 pub(crate) struct ConsolePlugin;
 
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConsoleCommands>()
-            .init_resource::<ConsoleEcho>()
-            .console_command("set", "Set the value of a CVar.", set)
-            .console_command("cvar_reset", "Reset a CVar to its default.", cvar_default)
-            .console_command("cvar_default", "Reset a CVar to its default.", cvar_default)
             .console_command(
                 "cvarlist",
                 "List the CVars, optionally matching a string.",
@@ -101,11 +87,9 @@ impl Plugin for ConsolePlugin {
     }
 }
 
-/// Runs one console line, the reference's `ConsoleCommandExecute`: a registered command, else a
-/// CVar's own command, else unknown, matched case-insensitively. Returns the lines to print.
-///
-/// A CVar write runs its observers before this returns, as the callback runs inside `CVar::Set`
-/// in the reference.
+/// Runs one console line `ConsoleExec` handed on, the reference's `ConsoleCommandExecute`: a
+/// registered command, else a CVar's name, else unknown, matched case-insensitively. Returns the
+/// lines to print.
 pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
     let (name, args) = benilla_ui::script::console_word(line);
     if name.is_empty() {
@@ -121,13 +105,8 @@ pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
         .get_resource::<Cvars>()
         .is_some_and(|c| c.row(name).is_some())
     {
-        // `0x63dde0`: the rest past its spaces, untrimmed, is the value.
-        let value = args.trim_start_matches(' ');
-        return if value.is_empty() {
-            vec![print_cvar(world, name)]
-        } else {
-            set_cvar(world, name, value)
-        };
+        // `0x63dde0` with no value: `ConsoleExec` ran every line that had one.
+        return vec![print_cvar(world, name)];
     }
     vec![format!(
         "console: '{name}' is not a command or a CVar (`help` lists the commands)"
@@ -148,64 +127,6 @@ fn print_cvar(world: &World, name: &str) -> String {
         ),
         None => format!("CVar \"{}\" is \"{}\"", row.name, row.value),
     }
-}
-
-/// A write through the registry with its observers run, and the outcome as a line.
-fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
-    let (outcome, events, checked) = {
-        let mut cvars = world.resource_mut::<Cvars>();
-        let outcome = cvars.set(name, value);
-        (outcome, cvars.take_events(), cvars.take_console_lines())
-    };
-    // The callbacks' own lines come first, as they print inside `CVar::Set`: a refusing check's
-    // before the observers'.
-    if let Some(mut echo) = world.get_resource_mut::<ConsoleEcho>() {
-        echo.capture = Some(Vec::new());
-    }
-    for event in events {
-        world.trigger(event);
-    }
-    let mut lines = checked;
-    lines.extend(
-        world
-            .get_resource_mut::<ConsoleEcho>()
-            .and_then(|mut echo| echo.capture.take())
-            .unwrap_or_default(),
-    );
-    lines.extend(match outcome {
-        SetOutcome::Unknown => vec![benilla_ui::script::no_such_cvar(name)],
-        SetOutcome::ReadOnly | SetOutcome::Unchanged | SetOutcome::Changed | SetOutcome::Vetoed => {
-            Vec::new()
-        }
-        SetOutcome::Staged => vec![format!(
-            "{name} staged as \"{value}\" — applies at the next RestartGx"
-        )],
-    });
-    lines
-}
-
-/// `set <name> <value>` (`0x63d500`), as [`benilla_ui::script::set_args`] tokenizes it: no value
-/// stores the empty string, and an unknown name is refused ([`benilla_ui::script::no_such_cvar`]).
-fn set(world: &mut World, args: &str) -> Vec<String> {
-    let (name, value) = benilla_ui::script::set_args(args);
-    set_cvar(world, &name, &value)
-}
-
-/// `cvar_reset` and `cvar_default` (`0x63d590`, `0x63d640`): one body, since a row has no reset
-/// value apart from its default.
-fn cvar_default(world: &mut World, args: &str) -> Vec<String> {
-    let name = benilla_ui::script::cvar_name_arg(args);
-    if name.is_empty() {
-        return vec!["usage: cvar_default <cvar>".to_string()];
-    }
-    let default = world
-        .resource::<Cvars>()
-        .default_of(&name)
-        .map(str::to_string);
-    let Some(default) = default else {
-        return vec![benilla_ui::script::no_such_cvar(&name)];
-    };
-    set_cvar(world, &name, &default)
 }
 
 /// `cvarlist [match]` (`0x63d6f0`), one line per row: value, default when moved, staged value,
@@ -249,17 +170,23 @@ fn cvarlist(world: &mut World, args: &str) -> Vec<String> {
 /// `help [command]`: the registry's listing.
 fn help(world: &mut World, args: &str) -> Vec<String> {
     let table = world.resource::<ConsoleCommands>();
+    let mut all: Vec<(&str, &str)> = table
+        .by_key
+        .values()
+        .map(|c| (c.name, c.help))
+        .chain(CVAR_COMMANDS)
+        .collect();
+    all.sort_by_key(|(name, _)| name.to_ascii_lowercase());
     let wanted = args.split_whitespace().next();
     match wanted {
-        Some(name) => match table.by_key.get(&name.to_ascii_lowercase()) {
-            Some(c) => vec![format!("{} — {}", c.name, c.help)],
+        Some(name) => match all.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            Some((n, help)) => vec![format!("{n} — {help}")],
             None => vec![format!("console: no command named '{name}'")],
         },
         None => {
-            let mut out: Vec<String> = table
-                .by_key
-                .values()
-                .map(|c| format!("{} — {}", c.name, c.help))
+            let mut out: Vec<String> = all
+                .iter()
+                .map(|(n, help)| format!("{n} — {help}"))
                 .collect();
             out.push(
                 "…and every CVar by name: `<cvar>` prints it, `<cvar> <value>` sets it".into(),
@@ -292,31 +219,6 @@ mod tests {
             run(&mut app, "MusicVolume"),
             vec!["CVar \"MusicVolume\" is \"0.4\"".to_string()]
         );
-        assert!(
-            run(&mut app, "musicvolume 0.7").is_empty(),
-            "a set is quiet"
-        );
-        assert_eq!(
-            app.world().resource::<Cvars>().get("MusicVolume"),
-            Some("0.7")
-        );
-        assert_eq!(
-            run(&mut app, "SET MusicVolume 0.2"),
-            Vec::<String>::new(),
-            "`set` is a registered command, matched case-insensitively"
-        );
-        assert_eq!(
-            app.world().resource::<Cvars>().get("MusicVolume"),
-            Some("0.2")
-        );
-        assert_eq!(
-            run(&mut app, "cvar_default musicVolume"),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            app.world().resource::<Cvars>().get("MusicVolume"),
-            Some("0.4")
-        );
         assert_eq!(
             run(&mut app, "nosuchthing 1"),
             vec![
@@ -325,49 +227,16 @@ mod tests {
             ]
         );
         assert_eq!(
-            run(&mut app, "set nosuchthing 1"),
-            vec!["console: no CVar named 'nosuchthing'".to_string()],
-            "the stated divergence: no record conjured at the console"
-        );
-        // `InternalSet` stores text as it is (`0x63e0b0`): no parse check, and the record's float
-        // reads 0.
-        assert!(run(&mut app, "MusicVolume wat").is_empty());
-        assert_eq!(
-            app.world().resource::<Cvars>().get("MusicVolume"),
-            Some("wat")
-        );
-        assert_eq!(
-            app.world().resource::<Cvars>().num("MusicVolume"),
-            Some(0.0)
-        );
-        assert_eq!(
             run(&mut app, "  "),
             vec!["console: no command given (`help` lists the commands)".to_string()]
         );
     }
 
-    /// The host's `set` tokenizes as the VM's does (`0x63d500`): one token of value, none the
-    /// empty string.
-    #[test]
-    fn set_stores_one_token_and_none_as_empty() {
-        let mut app = console_app();
-        assert!(run(&mut app, "set realmName \"Two Words\" more").is_empty());
-        assert_eq!(
-            app.world().resource::<Cvars>().get("realmName"),
-            Some("Two Words")
-        );
-        assert!(run(&mut app, "set realmName").is_empty());
-        assert_eq!(app.world().resource::<Cvars>().get("realmName"), Some(""));
-    }
-
-    /// A write to a latched row says it is staged, prints as staged, and the list shows it.
+    /// A latched row prints its stage, and the list shows it.
     #[test]
     fn a_latched_cvar_reports_its_stage() {
         let mut app = console_app();
-        assert_eq!(
-            run(&mut app, "gxVSync 0"),
-            vec!["gxVSync staged as \"0\" — applies at the next RestartGx".to_string()]
-        );
+        app.world_mut().resource_mut::<Cvars>().set("gxVSync", "0");
         assert_eq!(
             run(&mut app, "gxvsync"),
             vec!["CVar \"gxVSync\" is \"1\" (\"0\" staged until the next RestartGx)".to_string()]
@@ -431,7 +300,14 @@ mod tests {
         );
         let listing = run(&mut app, "help");
         assert!(listing.contains(&"shout — Shout the argument back.".to_string()));
-        assert!(listing.contains(&"set — Set the value of a CVar.".to_string()));
+        assert!(
+            listing.contains(&"set — Set the value of a CVar.".to_string()),
+            "the commands ConsoleExec runs are listed too"
+        );
+        assert_eq!(
+            run(&mut app, "help CVAR_RESET"),
+            vec!["cvar_reset — Reset a CVar to its default.".to_string()]
+        );
         assert_eq!(
             run(&mut app, "help cvarlist"),
             vec!["cvarlist — List the CVars, optionally matching a string.".to_string()]
@@ -445,6 +321,6 @@ mod tests {
             Vec::new()
         }
         let mut app = console_app();
-        app.console_command("set", "again", nothing);
+        app.console_command("cvarlist", "again", nothing);
     }
 }

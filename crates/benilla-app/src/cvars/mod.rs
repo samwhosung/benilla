@@ -94,8 +94,6 @@ fn same_text(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-impl CvarChanged {}
-
 /// One row of the live registry: the parts of the reference's `CVar` record benilla keeps.
 #[derive(Clone, Debug)]
 pub(crate) struct Row {
@@ -156,8 +154,8 @@ pub(crate) struct Cvars {
     /// A change since the last save; `last_change` drives the one-quiet-second debounce.
     dirty: bool,
     last_change: Option<Instant>,
-    /// Lines change callbacks printed (`0x63cb50`), for the console command that wrote, else the
-    /// log ([`Cvars::take_console_lines`]).
+    /// Lines change callbacks and observers printed to the console (`0x63cb50`), which go to the
+    /// log, as the reference's go to a console screen nobody has open.
     console: Vec<String>,
     /// The CVars Lua's `RegisterCVar` created this process, the reference's `[0xb4e3c8]`: kept
     /// here because it outlives every VM, and counted by the VM
@@ -288,6 +286,7 @@ impl Cvars {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn default_of(&self, name: &str) -> Option<&str> {
         self.row(name).map(|r| r.default.as_str())
     }
@@ -576,6 +575,7 @@ impl Cvars {
     }
 
     /// The change callbacks' lines since the last call.
+    #[cfg(test)]
     pub(crate) fn take_console_lines(&mut self) -> Vec<String> {
         std::mem::take(&mut self.console)
     }
@@ -584,8 +584,13 @@ impl Cvars {
         !self.console.is_empty()
     }
 
-    /// Send the change callbacks' lines no console command collected to the log, as
-    /// [`crate::console::ConsoleEcho`] does with an observer's.
+    /// A line an observer prints to the console, such as `spellEffectLevel`'s "Spell effect level
+    /// set to %d." (`0x689537`-`0x689554`); logged with the callbacks' at the next sync.
+    pub(crate) fn print(&mut self, line: String) {
+        self.console.push(line);
+    }
+
+    /// Send the console's lines to the log.
     fn log_console_lines(&mut self) {
         if self.console.is_empty() {
             return;
@@ -1791,22 +1796,21 @@ mod tests {
     }
 
     /// `/console spellEffectLevel 0` prints the handler's own line (`0x689537`-`0x689554`, format
-    /// `0x869f94`) with the level it clamped to; a Lua write logs it instead.
+    /// `0x869f94`) with the level it clamped to.
     #[test]
     fn the_spell_effect_level_handler_echoes_to_the_console() {
         let mut app = cvar_app();
-        app.init_resource::<crate::console::ConsoleEcho>();
         assert_eq!(
-            crate::console::execute(app.world_mut(), "spellEffectLevel 0"),
+            console_exec(&mut app, "spellEffectLevel 0"),
             ["Spell effect level set to 0."]
         );
         assert_eq!(
-            crate::console::execute(app.world_mut(), "spellEffectLevel 9"),
+            console_exec(&mut app, "spellEffectLevel 9"),
             ["Spell effect level set to 2."]
         );
         assert_eq!(res::<Cvars>(&app).get("spellEffectLevel"), Some("9"));
         assert_eq!(
-            crate::console::execute(app.world_mut(), "farclip 400"),
+            console_exec(&mut app, "farclip 400"),
             Vec::<String>::new(),
             "a callback that prints nothing adds nothing"
         );
@@ -1819,7 +1823,6 @@ mod tests {
     #[test]
     fn a_refusing_callback_keeps_the_value_on_every_write() {
         let mut app = cvar_app();
-        app.init_resource::<crate::console::ConsoleEcho>();
         for (line, said, name, kept) in [
             (
                 "SmallCull 5",
@@ -1866,24 +1869,20 @@ mod tests {
                 "75",
             ),
         ] {
-            assert_eq!(
-                crate::console::execute(app.world_mut(), line),
-                [said],
-                "{line}"
-            );
+            assert_eq!(console_exec(&mut app, line), [said], "{line}");
             assert_eq!(res::<Cvars>(&app).get(name), Some(kept), "{line}");
         }
         assert_eq!(
-            crate::console::execute(app.world_mut(), "baseMip 1"),
+            console_exec(&mut app, "baseMip 1"),
             ["BaseMip level changed to 1"]
         );
         assert_eq!(
-            crate::console::execute(app.world_mut(), "baseMip 1"),
+            console_exec(&mut app, "baseMip 1"),
             Vec::<String>::new(),
             "the level it already has is taken silently"
         );
         assert_eq!(
-            crate::console::execute(app.world_mut(), "shadowLevel 0"),
+            console_exec(&mut app, "shadowLevel 0"),
             ["Shadow mip level changed upon restart."]
         );
         assert_eq!(res::<Cvars>(&app).get("shadowLevel"), Some("0"));
@@ -1894,11 +1893,8 @@ mod tests {
             None
         );
         assert_eq!(
-            crate::console::execute(app.world_mut(), "gxRefresh 60"),
-            [
-                "set pending gxRestart",
-                "gxRefresh staged as \"60\" — applies at the next RestartGx"
-            ]
+            console_exec(&mut app, "gxRefresh 60"),
+            ["set pending gxRestart"]
         );
 
         let mut cvars = Cvars::default();
@@ -1915,7 +1911,6 @@ mod tests {
     #[test]
     fn the_camera_validators_refuse_out_of_range_rates_and_times() {
         let mut app = cvar_app();
-        app.init_resource::<crate::console::ConsoleEcho>();
         for (line, said, name, kept) in [
             (
                 "cameraTerrainTiltTimeMax 0",
@@ -1967,14 +1962,10 @@ mod tests {
                 "0.0",
             ),
         ] {
-            assert_eq!(
-                crate::console::execute(app.world_mut(), line),
-                [said],
-                "{line}"
-            );
+            assert_eq!(console_exec(&mut app, line), [said], "{line}");
             assert_eq!(res::<Cvars>(&app).get(name), Some(kept), "{line}");
         }
-        assert!(crate::console::execute(app.world_mut(), "cameraTerrainTiltTimeMax 20").is_empty());
+        assert!(console_exec(&mut app, "cameraTerrainTiltTimeMax 20").is_empty());
         assert_eq!(
             res::<Cvars>(&app).get("cameraTerrainTiltTimeMax"),
             Some("20")
@@ -2335,6 +2326,25 @@ mod tests {
         outcome
     }
 
+    /// `ConsoleExec(line)` as the typed `/console` runs it: on a VM seeded from the app's registry,
+    /// its writes drained back and their observers run; the console lines the callbacks and the
+    /// observers printed.
+    fn console_exec(app: &mut App, line: &str) -> Vec<String> {
+        let world = app.world_mut();
+        let mut script = UiScript::new().unwrap();
+        world.resource::<Cvars>().seed_vm(&mut script);
+        script.run(&format!("ConsoleExec({line:?})")).unwrap();
+        let events = {
+            let mut cvars = world.resource_mut::<Cvars>();
+            cvars.drain_vm(&mut script);
+            cvars.take_events()
+        };
+        for event in events {
+            world.trigger(event);
+        }
+        world.resource_mut::<Cvars>().take_console_lines()
+    }
+
     fn res<T: Resource>(app: &App) -> &T {
         app.world().resource::<T>()
     }
@@ -2618,12 +2628,11 @@ mod tests {
     }
 
     /// Flag bit2 (`CVar::SetReadOnly` `0x63e030`) stops every host write in `InternalSet`
-    /// (`0x63e0ba`), after the callback ran; the console's included. A VM write met the VM's own
+    /// (`0x63e0ba`), after the callback ran. A VM write (`SetCVar`, `ConsoleExec`) met the VM's own
     /// copy of the flag, so the registry takes it.
     #[test]
     fn a_read_only_row_takes_no_host_write() {
         let mut app = cvar_app();
-        app.add_plugins(crate::console::ConsolePlugin);
         app.world_mut()
             .resource_mut::<Cvars>()
             .set_read_only("realmList", true);
@@ -2632,9 +2641,6 @@ mod tests {
             apply(&mut app, "REALMLIST", "x.example.org"),
             SetOutcome::ReadOnly
         );
-        assert!(crate::console::execute(app.world_mut(), "realmList y.example.org").is_empty());
-        assert!(crate::console::execute(app.world_mut(), "set realmList z.example.org").is_empty());
-        assert!(crate::console::execute(app.world_mut(), "cvar_default realmList").is_empty());
         let cvars = res::<Cvars>(&app);
         assert_eq!(cvars.get("realmList"), Some(before.as_str()));
         assert!(!cvars.has_events() && !cvars.has_outbox() && !cvars.dirty);
