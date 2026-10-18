@@ -2114,7 +2114,10 @@ impl Vm {
 
     fn describe(&self, i: usize) -> FrameInfo {
         let f = &self.frames[i];
-        let (name, namewhat) = match self.name_of(i) {
+        let named = self
+            .name_of(i)
+            .or_else(|| self.global_name_of(Value::Func(f.func)));
+        let (name, namewhat) = match named {
             Some((kind, n)) => (Some(n), kind),
             None => (None, ""),
         };
@@ -2161,9 +2164,35 @@ impl Vm {
         }
     }
 
-    /// The name a native was called by, as 5.0's `getfuncname` finds it from the calling
-    /// instruction: `("global", "strfind")`, `("method", "SetText")`.
+    /// 5.0's `travglobals` (`0x6fbf90`), which `lua_getinfo`'s `n` falls back on when the calling
+    /// instruction names nothing (`0x6fbe11`): the globals' hash part walked from its last node
+    /// down (`0x6fbfc6`), answering the first whose value is raw-equal to `f` (`0x6fbfcf`) and whose
+    /// key is a string (`0x6fbfd8`), as `("global", key)` (`0x6fbe22`).
+    fn global_name_of(&self, f: Value) -> Option<(&'static str, Vec<u8>)> {
+        let globals = self.heap.table(self.globals);
+        globals
+            .node
+            .iter()
+            .rev()
+            .find_map(|n| match n.key.unpack() {
+                V::Str(k) if n.val.raw_eq(f) => {
+                    Some(("global", crate::lex::cstr(self.heap.str(k)).to_vec()))
+                }
+                _ => None,
+            })
+    }
+
+    /// The name a native was called by, as 5.0's `lua_getinfo` `n` finds it: from the calling
+    /// instruction (`getfuncname`), `("global", "strfind")`, `("method", "SetText")`, else by a
+    /// global holding it ([`Self::global_name_of`]).
     pub fn called_name(&self) -> Option<(&'static str, Vec<u8>)> {
+        let me = self.frames.last()?;
+        self.calling_instruction_name()
+            .or_else(|| self.global_name_of(Value::Func(me.func)))
+    }
+
+    /// `getfuncname` for the running native: what its caller's calling instruction named it.
+    fn calling_instruction_name(&self) -> Option<(&'static str, Vec<u8>)> {
         let n = self.frames.len();
         if n < 2 {
             return None;

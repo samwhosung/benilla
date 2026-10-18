@@ -278,11 +278,17 @@ fn a_generic_for_steps_from_its_first_variable() {
 }
 
 /// `getfuncname` names a function only an `OP_CALL` or `OP_TAILCALL` called (`0x6fc499`..
-/// `0x6fc4a1`): a library function failing as a generic `for`'s generator is `?`.
+/// `0x6fc4a1`): a library function failing as a generic `for`'s generator is named by no
+/// instruction, so `lua_getinfo` falls back on the global holding it (`travglobals`, `0x6fbe11`),
+/// and one no global holds is `?`.
 #[test]
 fn a_generator_is_not_named_by_its_loop() {
     assert_eq!(
         run("for k in next, 5 do end"),
+        "<raised> t:1: bad argument #1 to `next' (table expected, got number)"
+    );
+    assert_eq!(
+        run("local n = next next = nil for k in n, 5 do end"),
         "<raised> t:1: bad argument #1 to `?' (table expected, got number)"
     );
 }
@@ -464,8 +470,13 @@ fn an_upvalue_is_named_nothing() {
         run("local u return pcall(function() u() end)"),
         "false,t:1: attempt to call a nil value"
     );
+    // Unnamed by its instruction, the function is named by the global holding it (`0x6fbe11`).
     assert_eq!(
         run("local strlen = string.len return pcall(function() return strlen(nil) end)"),
+        "false,t:1: bad argument #1 to `strlen' (string expected, got nil)"
+    );
+    assert_eq!(
+        run("local len = string.len strlen = nil return pcall(function() return len(nil) end)"),
         "false,t:1: bad argument #1 to `?' (string expected, got nil)"
     );
     // A local or global keeps its name.

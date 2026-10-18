@@ -670,11 +670,12 @@ fn traceback_frame(d: &mlua::Debug) -> String {
         line.push_str(&n.to_string());
         line.push(':');
     }
-    // A tail call has nothing to name it from and takes the `" ?"` arm, known by its `what` or as
-    // the `(tail call)` pseudo-frame.
+    // A name wins over `what` (the switch on `namewhat`, `0x7038fa`); a tail call has none
+    // (`0x6fbd20`) and takes the `" ?"` arm, known by its `what` or as the `(tail call)`
+    // pseudo-frame.
     let tail_call = src.what == "t" || short == "(tail call)";
     match names.name.as_deref() {
-        Some(name) if !name.is_empty() && !tail_call => {
+        Some(name) if !name.is_empty() => {
             line.push_str(" in function `");
             line.push_str(name);
             line.push('\'');
