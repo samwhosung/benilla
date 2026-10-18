@@ -65,12 +65,21 @@ fn loose_names(data: &Path, out: &mut Vec<String>) {
 /// put the prefix back on. Deviation: of names equal but for case, benilla keeps the first in
 /// source order, where the reference's survivor is whichever its CRT `qsort` (`0x73f727`, not
 /// stable) leaves last, as the dedup frees the earlier of each equal pair (`0x4f0163`-`0x4f0171`).
+///
+/// An empty name, a file named only `.blp` or `.tga`, stays an empty entry: `GetMacroIconInfo`
+/// answers "" for it (`0x4f1a88`) rather than the bare prefix.
 fn chooser_list(mut names: Vec<String>) -> Vec<String> {
     names.sort_by_key(|n| n.to_ascii_lowercase());
     names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     names
         .into_iter()
-        .map(|n| format!("{ICON_DIR}{n}"))
+        .map(|n| {
+            if n.is_empty() {
+                n
+            } else {
+                format!("{ICON_DIR}{n}")
+            }
+        })
         .collect()
 }
 
@@ -190,6 +199,16 @@ mod tests {
         let mut out = Vec::new();
         loose_icons(dir, rule, &mut out);
         out
+    }
+
+    /// A loose `.blp` stores an empty name, which the list keeps as an empty entry, not the bare
+    /// prefix, since `GetMacroIconInfo` answers "" for it (`0x4f1a88`).
+    #[test]
+    fn an_empty_icon_name_is_an_empty_entry() {
+        assert_eq!(
+            chooser_list(vec!["Spell_A".into(), String::new()]),
+            ["", "Interface\\Icons\\Spell_A"]
+        );
     }
 
     /// `0x4f0220` keeps a `Spell_`/`Ability_` name with a `.blp` or `.tga` last extension, a
