@@ -536,6 +536,8 @@ pub(super) fn tick_script(
             if resized || rescaled {
                 super::manifest::on_screen_resized(&script);
             }
+        } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
+            super::glue::on_glue_screen_resized(&script);
         }
         script.tick(time.delta_secs());
     }

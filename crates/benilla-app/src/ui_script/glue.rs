@@ -264,8 +264,9 @@ pub(super) fn glue_built(world: &mut World) {
 /// positive size as stored does nothing (`0x46abeb`-`0x46abfe`); any other is stored, and the
 /// `gxResolution` aspect ([`gx_aspect`]), when it moved 0.01 or more from the stored one, is stored
 /// and asks for a rebuild (`0x46ac66`-`0x46ac76`). So a window resized with `gxResolution`
-/// unchanged rebuilds nothing, and a new `gxResolution` rebuilds once, at the resize its
-/// `RestartGx` applies. The callback is the glue top's, so only a standing glue hears it.
+/// unchanged rebuilds nothing, its `GlueParent` box following it ([`on_glue_screen_resized`]),
+/// and a new `gxResolution` rebuilds once, at the resize its `RestartGx` applies. The callback is
+/// the glue top's, so only a standing glue hears it.
 pub(crate) fn watch_glue_aspect(
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     cvars: Option<Res<crate::cvars::Cvars>>,
@@ -289,6 +290,38 @@ pub(crate) fn watch_glue_aspect(
     rebuild.aspect = aspect;
     rebuild.requested = true;
 }
+
+/// What a change of the glue's screen size re-runs, from `extract::tick_script`: the box of
+/// `GlueParent_OnLoad` ([`GLUE_PARENT_RESEAT`]), the one glue code that reads the screen's size.
+/// Deviation: the reference's size callback only re-scales `GlueParent` and re-lays it out
+/// (`0x46ac51`, `0x46ac56`), as its root keeps `gxResolution`'s aspect until a rebuild (`0x41ad10`
+/// at `0x46a828`) and its window keeps that shape while dragged (`0x5989d7`); here the root is the
+/// window's, which takes any shape, so the box follows it on every resize, where a rebuild would
+/// reset the screen (the create screen's character and name, the typed password, the selection).
+pub(super) fn on_glue_screen_resized(script: &UiScript) {
+    if let Err(e) = script.run(GLUE_PARENT_RESEAT) {
+        error!("ui_script: GlueParent re-seat: {e}");
+    }
+}
+
+/// `GlueParent_OnLoad`'s sizing (`GlueParent.lua:74-84`), existence-guarded, over the frame's
+/// declared `setAllPoints` (`GlueParent.xml:4`), which a screen at 16:9 or narrower keeps: past
+/// 16:9 it is a centred 16:9 rect the root's height tall.
+const GLUE_PARENT_RESEAT: &str = r#"
+if GlueParent then
+    GlueParent:ClearAllPoints()
+    GlueParent:SetAllPoints()
+    local width = GetScreenWidth()
+    local height = GetScreenHeight()
+    if ( width / height > 16 / 9) then
+        local maxWidth = height * 16 / 9
+        local barWidth = ( width - maxWidth ) / 2
+        GlueParent:ClearAllPoints()
+        GlueParent:SetPoint("TOPLEFT", barWidth, 0)
+        GlueParent:SetPoint("BOTTOMRIGHT", -barWidth, 0)
+    end
+end
+"#;
 
 /// The per-frame glue update's rebuild (`0x46b930`): in screen state 0 alone (`0x46b977`), a
 /// pending request suspends and rebuilds the glue (`0x46b993`, `0x46a7b0(1)` at `0x46b99d`) and
@@ -806,6 +839,64 @@ mod tests {
         assert!(
             near(got, (bar, 768.0 * wide - bar, 0.0, 768.0)),
             "21:9: {got:?}"
+        );
+    }
+
+    /// A glue built at 16:9 and resized, as `extract::tick_script` resizes it: past 16:9
+    /// `GlueParent` is a centred 16:9 rect with bars at the sides, back at 16:9 or narrower it
+    /// fills the root again, and the scenes on it (`setAllPoints`, CharacterCreate.xml:196,
+    /// CharacterSelect.xml:75) never draw wider than 16:9. The screen stands through it: no
+    /// rebuild, so the typed account name is kept.
+    #[test]
+    fn a_resized_glue_boxes_glue_parent_at_sixteen_by_nine() {
+        let _ = benilla_formats::wow_data_or_skip!();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(768.0 * 16.0 / 9.0, 768.0);
+        let _ = load_glue(&mut s);
+        set_glue_screen(&mut s, GlueScreen::Login);
+        s.run("AccountLoginAccountEdit:SetText('typed')").unwrap();
+        let session = s.session();
+        let mut resize = |aspect: f32| {
+            if s.set_screen_size(768.0 * aspect, 768.0) {
+                on_glue_screen_resized(&s);
+            }
+            s.resolve();
+            let rect = |f: &str| {
+                s.eval::<(f32, f32, f32, f32)>(&format!(
+                    "return {f}:GetLeft(), {f}:GetRight(), {f}:GetBottom(), {f}:GetTop()"
+                ))
+                .unwrap()
+            };
+            let scenes = [rect("CharacterCreate"), rect("CharacterSelect")];
+            (rect("GlueParent"), scenes)
+        };
+        let near = |a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)| {
+            [(a.0, b.0), (a.1, b.1), (a.2, b.2), (a.3, b.3)]
+                .iter()
+                .all(|(x, y)| (x - y).abs() < 0.01)
+        };
+        for aspect in [21.0 / 9.0, 2.0, 16.0 / 9.0 + 0.005, 16.0 / 10.0, 4.0 / 3.0] {
+            let (got, scenes) = resize(aspect);
+            let width = 768.0 * aspect;
+            let bar = ((width - 768.0 * 16.0 / 9.0) / 2.0).max(0.0);
+            assert!(
+                near(got, (bar, width - bar, 0.0, 768.0)),
+                "{aspect}: {got:?}"
+            );
+            for scene in scenes {
+                assert!(
+                    near(scene, got),
+                    "{aspect}: a scene off GlueParent: {scene:?}"
+                );
+                let shape = (scene.1 - scene.0) / (scene.3 - scene.2);
+                assert!(shape <= 16.0 / 9.0 + 1e-4, "{aspect}: a scene at {shape}");
+            }
+        }
+        assert_eq!(s.session(), session, "the glue stands");
+        assert_eq!(
+            s.eval::<String>("return AccountLoginAccountEdit:GetText()")
+                .unwrap(),
+            "typed"
         );
     }
 }
