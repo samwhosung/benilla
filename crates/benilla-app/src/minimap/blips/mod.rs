@@ -9,6 +9,8 @@
 //!   each a rim arrow: one of the minimap's engine `Model` children, which the VM aims at its POI
 //!   and the model pane renderer draws in its source's art ([`RimArrow`]), at a level above the
 //!   minimap's own draw, so above every dot.
+//! - After the DBC rows, the static records: the gossip marker (slot 1) and the corpse (slot 2,
+//!   icon 7, flags 2, rank −1, `0x6dacd0`), which alone skips the 694.444-yd cut (`0x6d9cc2`).
 //!
 //! Dots come from the ObjectIcons classifier `0x4eaa90`. A unit or player must first be alive, not
 //! our own charm or summon, and trackable ([`dots`]'s `unit_dot_eligible`). Then quest status 7
@@ -40,7 +42,7 @@ use bevy::window::PrimaryWindow;
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::{AreaPoi, AreaPoiCatalog};
-use benilla_ui::script::{MinimapRimArrow, UiScript, MINIMAP_CORPSE_ARROW, MINIMAP_GROUP_ARROW};
+use benilla_ui::script::{MinimapRimArrow, UiScript};
 
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
@@ -64,14 +66,45 @@ pub(super) const BLIP_BASIS_PX: f32 = 140.8;
 const ARROW_QUAD_PX: f32 = 38.4;
 
 /// Which source a landmark rim arrow comes from: an `AreaPOI.dbc` row (`+0x48 == -2`, sequence
-/// 166 `Arrow`) or the guard's directions, the gossip marker (static slot 1, sequence 168
-/// `GuideArrow`). The VM picks the sequence from the slot (`0x4ed353`).
+/// 166 `Arrow`), the guard's directions, the gossip marker (static slot 1, sequence 168
+/// `GuideArrow`), or the corpse (static slot 2, sequence 167 `CorpseArrow`). The VM picks the
+/// sequence from the slot (`0x4ed353`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RimArrow {
     /// An `AreaPOI.dbc` landmark.
     Landmark,
     /// The guard's directions ([`crate::poi_marker`]).
     Guide,
+    /// The player's corpse ([`corpse_landmark`]).
+    Corpse,
+}
+
+impl RimArrow {
+    /// The arrow record's static slot (`+0x48`, `0x6dab26`–`0x6dab41`), −2 for a DBC row.
+    fn slot(self) -> i32 {
+        match self {
+            RimArrow::Landmark => -2,
+            RimArrow::Guide => 1,
+            RimArrow::Corpse => 2,
+        }
+    }
+}
+
+/// The corpse's static blip (`0x6dacd0`): slot 2, icon 7, flags 2, rank −1, named by
+/// `CORPSE_RED`, present only while the corpse is on the map the player is on (`0x492010`).
+pub(crate) fn corpse_landmark(position: [f32; 3], map_id: u32, name: String) -> AreaPoi {
+    AreaPoi {
+        importance: -1_i32 as u32,
+        icon: 7,
+        faction_id: 0,
+        pos: position,
+        continent_id: map_id,
+        flags: 2,
+        area_id: 0,
+        name,
+        description: String::new(),
+        world_state_id: 0,
+    }
 }
 
 /// An in-range POI icon's quad, 16 px (`[0xbc7658]`, frozen by the ctor).
@@ -155,12 +188,13 @@ pub(super) struct LandmarkSelection<'a> {
     pub(super) arrows: Vec<(f32, &'a AreaPoi, RimArrow)>,
 }
 
-/// The landmark selection (module doc). `marker`, the guard-directions POI, is appended after
-/// the DBC scan as the reference appends its static blip slot: it skips the candidacy gate but
-/// not the 694.444-yd cut, which `0x6d9cc2` spares only the corpse slot `0xcea848`.
+/// The landmark selection (module doc). `marker`, the guard-directions POI, and `corpse` are
+/// appended after the DBC scan as the reference appends its static blip slots 1 and 2: both skip
+/// the candidacy gate, and only the corpse (`0xcea848`) skips the 694.444-yd cut (`0x6d9cc2`).
 pub(super) fn select_landmarks<'a>(
     pois: impl Iterator<Item = &'a AreaPoi>,
     marker: Option<&'a AreaPoi>,
+    corpse: Option<&'a AreaPoi>,
     map_id: u32,
     wx: f32,
     wy: f32,
@@ -171,14 +205,15 @@ pub(super) fn select_landmarks<'a>(
     let candidates = pois
         .filter(|p| p.continent_id == map_id && p.flags & FLAG_CANDIDATE != 0)
         .map(|p| (p, RimArrow::Landmark))
-        .chain(marker.map(|m| (m, RimArrow::Guide)));
+        .chain(marker.map(|m| (m, RimArrow::Guide)))
+        .chain(corpse.map(|c| (c, RimArrow::Corpse)));
     for (p, art) in candidates {
         let d = ((p.pos[0] - wx).powi(2) + (p.pos[1] - wy).powi(2)).sqrt();
         if d / radius_yd <= BLIP_EDGE_RATIO {
             if p.flags & FLAG_IN_RANGE_ICON != 0 {
                 icons.push(p);
             }
-        } else if d <= LANDMARK_RANK_YD {
+        } else if d <= LANDMARK_RANK_YD || art == RimArrow::Corpse {
             arrows.push((d, p, art));
         }
     }
@@ -206,6 +241,7 @@ pub(super) fn emit_landmarks(
     ctx: &BlipCtx,
     cat: Option<&AreaPoiCatalog>,
     marker: Option<&AreaPoi>,
+    corpse: Option<&AreaPoi>,
     map_id: u32,
     poi_icons: Option<&Handle<Image>>,
     quads: &mut UiQuads,
@@ -214,6 +250,7 @@ pub(super) fn emit_landmarks(
     let sel = select_landmarks(
         cat.into_iter().flat_map(|c| c.rows().map(|(_, p)| p)),
         marker,
+        corpse,
         map_id,
         ctx.wx,
         ctx.wy,
@@ -279,14 +316,13 @@ pub(super) fn rim_arrow_records(
     sel.arrows
         .iter()
         .map(|(_, poi, art)| {
-            let guide = *art == RimArrow::Guide;
             (
                 MinimapRimArrow {
                     bearing: bearing(wx, wy, poi.pos[0], poi.pos[1]),
-                    // The guard's directions are the gossip marker, static slot 1, which shows
-                    // indoors too (`+0x44`); a DBC row is −2.
-                    slot: if guide { 1 } else { -2 },
-                    indoors: guide,
+                    slot: art.slot(),
+                    // The gossip marker and the corpse show indoors too (`+0x44`, `0x6daaf4`,
+                    // `0x6daafb`).
+                    indoors: *art != RimArrow::Landmark,
                 },
                 (
                     poi.name.clone(),
@@ -316,15 +352,11 @@ pub(crate) fn party_member_pos<F: bevy::ecs::query::QueryFilter>(
         .map(|(x, y)| (f32::from(x), f32::from(y)))
 }
 
-/// The party arrow frames' records, the out-of-range half of the party placement `0x6dad10`: a
-/// member beyond 0.8 of the radius has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`), playing
-/// `GroupArrow`.
-///
-/// This differs from the reference, not built yet: its slot 4 is the pet (`UNIT_FIELD_CHARM`,
-/// else `UNIT_FIELD_SUMMON`, at `0x6dad60`), and the corpse is static blip slot 2 on the POI path,
-/// at `Importance` -1 and exempt from the 694.444-yd cut, taking one of the three rim slots. So
-/// there is no pet arrow here, the corpse arrow takes the pet's frame, and four rim arrows can
-/// draw where the reference draws three.
+/// The party and pet arrow frames' bearings, the out-of-range half of the party placement
+/// `0x6dad10`: slots 0 to 3 the party members, slot 4 the pet, our charm else our summon
+/// (`0x6dad60`–`0x6dad9c`), each fetched as a unit (`0x6dadc8`); a member that is not streamed
+/// falls back to its party-stats position, the pet to nothing (`0x6dae25`). Beyond 0.8 of the
+/// radius it has an arrow at its bearing (`0x6daf5c`–`0x6daf7f`).
 pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     wx: f32,
     wy: f32,
@@ -332,21 +364,24 @@ pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
     group: &crate::ui_party::GroupState,
     guids: &GuidIndex,
     unit_pos: &Query<&GlobalTransform, F>,
-    corpse: Option<[f32; 3]>,
-) -> [Option<(f32, u16)>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
-    let out_of_range =
-        |x: f32, y: f32| ((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO;
+    pet: Option<u64>,
+) -> [Option<f32>; benilla_ui::widget::MINIMAP_GROUP_ARROWS] {
+    let arrow = |(x, y): (f32, f32)| {
+        (((x - wx).powi(2) + (y - wy).powi(2)).sqrt() / radius_yd > BLIP_EDGE_RATIO)
+            .then(|| bearing(wx, wy, x, y))
+    };
     let mut records = [None; benilla_ui::widget::MINIMAP_GROUP_ARROWS];
     for (i, m) in group.party_slots().enumerate().take(4) {
-        if let Some((x, y)) = party_member_pos(m, group, guids, unit_pos) {
-            if out_of_range(x, y) {
-                records[i] = Some((bearing(wx, wy, x, y), MINIMAP_GROUP_ARROW));
-            }
-        }
+        records[i] = party_member_pos(m, group, guids, unit_pos).and_then(arrow);
     }
-    if let Some(c) = corpse.filter(|c| out_of_range(c[0], c[1])) {
-        records[4] = Some((bearing(wx, wy, c[0], c[1]), MINIMAP_CORPSE_ARROW));
-    }
+    records[4] = pet
+        .and_then(|g| guids.0.get(&g))
+        .and_then(|e| unit_pos.get(*e).ok())
+        .map(|tf| {
+            let w = bevy_to_wow(tf.translation());
+            (w[0], w[1])
+        })
+        .and_then(arrow);
     records
 }
 
@@ -473,7 +508,7 @@ mod tests {
             poi(3, 0x1d, 556.0, "Stormwind"),
             poi(3, 0x5, 601.0, "Goldshire"),
         ];
-        let sel = select_landmarks(rows.iter(), None, 0, 0.0, 0.0, 133.0);
+        let sel = select_landmarks(rows.iter(), None, None, 0, 0.0, 0.0, 133.0);
         assert!(sel.icons.is_empty(), "no Flags&2 row is in range");
         let names: Vec<&str> = sel.arrows.iter().map(|(_, p, _)| p.name.as_str()).collect();
         assert_eq!(names, ["Stormwind", "Goldshire"]);
@@ -489,7 +524,7 @@ mod tests {
             poi(3, 1, 400.0, "city-mid"),
             poi(0, 1, 695.0, "beyond-rank"),
         ];
-        let sel = select_landmarks(rows.iter(), None, 0, 0.0, 0.0, 100.0);
+        let sel = select_landmarks(rows.iter(), None, None, 0, 0.0, 0.0, 100.0);
         let names: Vec<&str> = sel.arrows.iter().map(|(_, p, _)| p.name.as_str()).collect();
         assert_eq!(names, ["minor-near", "minor-far", "city-near"]);
     }
@@ -503,7 +538,7 @@ mod tests {
             poi(3, 0x5, 400.0, "Northshire Abbey"),
         ];
         let marker = poi(0, 0x63, 500.0, "Stormwind Warrior Trainer");
-        let sel = select_landmarks(cities.iter(), Some(&marker), 0, 0.0, 0.0, 133.0);
+        let sel = select_landmarks(cities.iter(), Some(&marker), None, 0, 0.0, 0.0, 133.0);
         let names: Vec<&str> = sel.arrows.iter().map(|(_, p, _)| p.name.as_str()).collect();
         assert_eq!(
             names,
@@ -522,7 +557,7 @@ mod tests {
     #[test]
     fn the_guard_marker_draws_its_icon_in_range() {
         let marker = poi(0, 0x63, 50.0, "The Bank");
-        let sel = select_landmarks(std::iter::empty(), Some(&marker), 0, 0.0, 0.0, 133.0);
+        let sel = select_landmarks(std::iter::empty(), Some(&marker), None, 0, 0.0, 0.0, 133.0);
         assert!(sel.arrows.is_empty(), "in range — no rim arrow");
         assert_eq!(sel.icons.len(), 1);
         assert_eq!(
@@ -537,7 +572,7 @@ mod tests {
     fn the_guard_marker_skips_the_candidacy_filter() {
         let mut marker = poi(0, 0, 300.0, "The Inn"); // Flags bit 0 clear: a DBC row would drop
         marker.continent_id = 571; // and a continent that isn't the displayed one
-        let sel = select_landmarks(std::iter::empty(), Some(&marker), 0, 0.0, 0.0, 133.0);
+        let sel = select_landmarks(std::iter::empty(), Some(&marker), None, 0, 0.0, 0.0, 133.0);
         assert_eq!(sel.arrows.len(), 1, "appended unconditionally");
     }
 
@@ -547,7 +582,7 @@ mod tests {
         tower.icon = 9; // col 1, row 1
         let plain = poi(3, 0x5, 50.0, "Northshire Abbey");
         let rows = [tower, plain];
-        let sel = select_landmarks(rows.iter(), None, 0, 0.0, 0.0, 133.0);
+        let sel = select_landmarks(rows.iter(), None, None, 0, 0.0, 0.0, 133.0);
         assert_eq!(sel.arrows.len(), 0);
         assert_eq!(sel.icons.len(), 1, "only the Flags&2 tower draws in range");
         assert_eq!(
@@ -556,5 +591,71 @@ mod tests {
             "icon 9 = col 1 row 1 of the 8x8 atlas"
         );
         assert_eq!(poi_icon_cell(64), None, "the client gates Icon < 0x40");
+    }
+
+    /// The corpse (`0x6dacd0`, rank −1) ranks ahead of every row and the gossip marker, keeps its
+    /// rim slot past 694.444 yd where the marker is cut (`0x6d9cc2`), and so leaves two of the three
+    /// slots; its record is static slot 2, shown indoors. In range it is an icon (flags 2), cell 7.
+    #[test]
+    fn the_corpse_takes_a_rim_slot_first_and_alone_skips_the_rank_cut() {
+        let cities = [
+            poi(0, 0x5, 200.0, "Goldshire"),
+            poi(0, 0x5, 300.0, "Northshire Abbey"),
+            poi(0, 0x5, 400.0, "Stormwind"),
+        ];
+        let far = corpse_landmark([2000.0, 0.0, 0.0], 0, "Corpse".into());
+        let marker = poi(0, 0x63, 700.0, "The Bank");
+        let sel = select_landmarks(cities.iter(), Some(&marker), Some(&far), 0, 0.0, 0.0, 133.0);
+        let names: Vec<&str> = sel.arrows.iter().map(|(_, p, _)| p.name.as_str()).collect();
+        assert_eq!(names, ["Corpse", "Goldshire", "Northshire Abbey"]);
+        let (rim, _) = rim_arrow_records(&sel, 0.0, 0.0);
+        assert_eq!((rim[0].slot, rim[0].indoors), (2, true));
+        assert_eq!((rim[1].slot, rim[1].indoors), (-2, false));
+
+        let near = corpse_landmark([50.0, 0.0, 0.0], 0, "Corpse".into());
+        let sel = select_landmarks(std::iter::empty(), None, Some(&near), 0, 0.0, 0.0, 133.0);
+        assert!(sel.arrows.is_empty());
+        assert_eq!(sel.icons.len(), 1);
+        assert_eq!(
+            poi_icon_cell(sel.icons[0].icon),
+            Some([0.875, 1.0, 0.0, 0.125])
+        );
+    }
+
+    /// Slot 4 is the pet, our charm else our summon, found only as a streamed unit (`0x6dad60`,
+    /// `0x6dae25`); out of range it has an arrow at its bearing, and no corpse ever lands there.
+    #[test]
+    fn the_fifth_group_arrow_is_the_pet_and_only_a_streamed_one() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let far = world
+            .spawn(GlobalTransform::from_translation(
+                benilla_assets::coords::wow_to_bevy([500.0, 0.0, 0.0]),
+            ))
+            .id();
+        let mut guids = GuidIndex::default();
+        guids.0.insert(0xF140, far);
+        world.insert_resource(guids);
+        world.init_resource::<crate::ui_party::GroupState>();
+        let records = |world: &mut World, pet: Option<u64>| {
+            world
+                .run_system_once(
+                    move |q: Query<&GlobalTransform>,
+                          guids: Res<GuidIndex>,
+                          group: Res<crate::ui_party::GroupState>| {
+                        group_arrow_records(0.0, 0.0, 133.0, &group, &guids, &q, pet)
+                    },
+                )
+                .unwrap()
+        };
+        let got = records(&mut world, Some(0xF140));
+        assert!(got[..4].iter().all(Option::is_none));
+        assert!(got[4].is_some_and(|b| b.abs() < 1e-6), "due north: {got:?}");
+        assert_eq!(
+            records(&mut world, Some(0xF141))[4],
+            None,
+            "not streamed: no arrow"
+        );
+        assert_eq!(records(&mut world, None)[4], None);
     }
 }

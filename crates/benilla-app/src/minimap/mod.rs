@@ -74,10 +74,6 @@ fn texel_stretch(extent_yd: f32) -> f32 {
 /// reciprocal of 255: one ULP above 224/255, and fragments are compared against those exact bits.
 pub(crate) const INTERIOR_TILE_ALPHA_REF: f32 = f32::from_bits(0x3F60_E0E2);
 
-/// The corpse blip's edge as a fraction of the widget side (the POIIcons cell's 16 px on a 140 px
-/// minimap); an estimate, the reference's in-range corpse blip size being untraced.
-const CORPSE_BLIP_FRACTION: f32 = 0.11;
-
 /// The day-night tint the reference modulates outdoor tiles by (tile draw `0x4eccdd`–`0x4ecd69`),
 /// from `color_a`, the Direct band (`LightIntBand` 0), and `color_b`, the Ambient band (1):
 ///
@@ -360,7 +356,7 @@ fn emit_minimap(
     wmos: Res<Assets<WmoModel>>,
     world: benilla_world::world_point::WorldPoint,
     asset_server: Res<AssetServer>,
-    death_net: Res<crate::death::DeathNet>,
+    corpse: Res<MinimapCorpse>,
     blip_inputs: blips::BlipInputs,
     mut composite: ResMut<composite::MinimapComposite>,
     rig: Option<Res<composite::CompositeRig>>,
@@ -663,13 +659,14 @@ fn emit_minimap(
     });
     let mut hover = blips::MinimapBlipHover::None;
     if let Some(ctx) = &blip_ctx {
-        // The guard-directions marker rides this pass as a landmark, as the reference appends its
-        // static blip slot after the DBC scan, so it draws even without `AreaPOI.dbc`. The icons
-        // need only their atlas (`0x4ed21f`).
+        // The guard-directions marker and the corpse ride this pass as landmarks, as the reference
+        // appends its static blip slots after the DBC scan, so they draw even without
+        // `AreaPOI.dbc`. The icons need only their atlas (`0x4ed21f`).
         blips::emit_landmarks(
             ctx,
             pois.as_ref().map(|p| &p.0),
             poi_marker.on_map(map.0),
+            corpse.0.as_ref(),
             map.0,
             assets.tex(MinimapArtSlot::Icons),
             &mut quads,
@@ -714,30 +711,6 @@ fn emit_minimap(
         }
     }
     *blip_hover = hover;
-
-    // The corpse blip in range: the POIIcons skull, the reference's world-map corpse art (its
-    // in-range minimap art is untraced). Out of range it is the rim arrow above, the fifth slot
-    // of `0x6dad10`. Same map only: a dungeon corpse's display coords are the entrance.
-    if let (Some(poi), Some(cp)) = (assets.tex(MinimapArtSlot::Icons), death_net.corpse) {
-        if cp.display_map == map.0 as i32 && blip_px_per_yd > 0.0 {
-            let off = Vec2::new(
-                (wy - cp.position[1]) * blip_px_per_yd,
-                -(cp.position[0] - wx) * blip_px_per_yd,
-            );
-            if off.length() <= side * 0.5 * 0.8 {
-                let s = side * CORPSE_BLIP_FRACTION;
-                let rect = Rect::from_center_size(center + off, Vec2::splat(s));
-                quads.overlays.push(UiQuad {
-                    rect,
-                    z_key: slot.z,
-                    texture: Some(poi.clone()),
-                    uv: crate::ui_pass::UvRect::from_tex_coords([0.875, 1.0, 0.0, 0.125]),
-                    color: [1.0, 1.0, 1.0, slot.alpha],
-                    ..default()
-                });
-            }
-        }
-    }
 }
 
 /// Push the player's WMO containment, the indoor byte `0xceaa60`, so the zoom buttons drive the
@@ -836,6 +809,11 @@ fn feed_minimap_art(
     }
 }
 
+/// The corpse's static blip while the corpse is on the player's map, set by
+/// [`feed_minimap_arrows`] (which reads its `CORPSE_RED` name off the VM) for the landmark draw.
+#[derive(Resource, Default)]
+pub(crate) struct MinimapCorpse(pub(crate) Option<benilla_formats::AreaPoi>);
+
 /// Aim the minimap's arrow children, the arrow half of its render (`0x4ec950`), after the tick and
 /// before the paint that draws them: the landmark selection's three records (rebuilt when its
 /// identities change) and the party records, by bearing. With an empty mask name the render
@@ -858,12 +836,23 @@ fn feed_minimap_arrows(
         ),
     >,
     death_net: Res<crate::death::DeathNet>,
+    self_store: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    mut corpse: ResMut<MinimapCorpse>,
     inside: Res<MinimapInside>,
     mut listed: Local<crate::ui_script::VmMemo<Option<Vec<blips::ArrowKey>>>>,
 ) {
     let (Some(mut script), Some(assets), Some(map)) = (script, assets, map) else {
         return;
     };
+    // Same map only: a dungeon corpse's display coords are the entrance.
+    let dead = death_net
+        .corpse
+        .filter(|cp| cp.display_map == map.0 as i32)
+        .map(|cp| cp.position);
+    let named = corpse.0.as_ref().map(|c| (c.pos, c.continent_id));
+    if dead.map(|p| (p, map.0)) != named {
+        corpse.0 = dead.map(|p| blips::corpse_landmark(p, map.0, script.global_text("CORPSE_RED")));
+    }
     if assets.tex(MinimapArtSlot::Mask).is_none() || !player.active {
         return;
     }
@@ -875,6 +864,7 @@ fn feed_minimap_arrows(
             .into_iter()
             .flat_map(|p| p.0.rows().map(|(_, poi)| poi)),
         poi_marker.on_map(map.0),
+        corpse.0.as_ref(),
         map.0,
         wx,
         wy,
@@ -886,12 +876,8 @@ fn feed_minimap_arrows(
     if rebuilt {
         *last = Some(keys);
     }
-    // Same map only: a dungeon corpse's display coords are the entrance.
-    let corpse = death_net
-        .corpse
-        .filter(|cp| cp.display_map == map.0 as i32)
-        .map(|cp| cp.position);
-    let records = blips::group_arrow_records(wx, wy, radius, &group, &guids, &unit_pos, corpse);
+    let pet = self_store.iter().next().and_then(|s| s.0.unit_pet_guid());
+    let records = blips::group_arrow_records(wx, wy, radius, &group, &guids, &unit_pos, pet);
     script.set_minimap_arrows(&rim, rebuilt, inside.0, &records);
 }
 
@@ -940,6 +926,7 @@ impl Plugin for MinimapPlugin {
             .init_resource::<blips::MinimapBlipHover>()
             .init_resource::<MinimapInside>()
             .init_resource::<MinimapPing>()
+            .init_resource::<MinimapCorpse>()
             .init_resource::<composite::MinimapComposite>()
             .add_systems(Startup, setup_minimap.after(AssetSet::Open))
             .add_systems(Startup, composite::setup_composite)

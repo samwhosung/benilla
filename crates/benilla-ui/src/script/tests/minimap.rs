@@ -796,7 +796,8 @@ fn the_model_setters_put_their_files_on_the_engine_children() {
 /// The render's arrow half (`0x4ec950`): a rebuilt list shows one rim frame per record at the
 /// level base plus its slot, playing its art, and hides the rest; every frame aims each record's
 /// frame at `(C − A·sin b, C + A·cos b)`, facing `b`. Indoors only a record with `+0x44` shows
-/// (`0x4ed308`). A party frame shows while it has a bearing (`0x4ed3c0`).
+/// (`0x4ed308`). A party or pet frame shows while it has a bearing (`0x4ed3c0`) and keeps the
+/// `GroupArrow` the model load armed (`0x4ee1de`).
 #[test]
 fn the_arrow_push_shows_levels_arms_and_aims_the_children() {
     use crate::script::MinimapRimArrow;
@@ -822,8 +823,8 @@ fn the_arrow_push_shows_levels_arms_and_aims_the_children() {
         },
     ];
     let mut group = [None; 5];
-    group[0] = Some((std::f32::consts::PI, 165));
-    group[4] = Some((0.0, 167));
+    group[0] = Some(std::f32::consts::PI);
+    group[4] = Some(0.0);
     s.set_minimap_arrows(&rim, true, false, &group);
     assert!(shown(&s, 6) && shown(&s, 7) && !shown(&s, 8));
     assert!(shown(&s, 1) && !shown(&s, 2) && shown(&s, 5));
@@ -839,7 +840,7 @@ fn the_arrow_push_shows_levels_arms_and_aims_the_children() {
     }
     assert_eq!(at(&s, 6).sequence, 166, "a landmark plays Arrow");
     assert_eq!(at(&s, 7).sequence, 168, "a static slot plays GuideArrow");
-    assert_eq!(at(&s, 5).sequence, 167, "the record's own art");
+    assert_eq!(at(&s, 5).sequence, 165, "the pet keeps GroupArrow");
     // West of north at a quarter turn: the left of the disc, half the disc in.
     let (c, a) = (0.055_f32, 0.044_f32);
     let p = at(&s, 6).position;
@@ -871,7 +872,60 @@ fn the_arrow_push_shows_levels_arms_and_aims_the_children() {
     // Indoors a rebuild shows only the records flagged `+0x44`.
     s.set_minimap_arrows(&rim, true, true, &group);
     assert!(!shown(&s, 6) && shown(&s, 7));
+    // The corpse, static slot 2: the top rim level, `CorpseArrow`, shown indoors.
+    let corpse = [MinimapRimArrow {
+        bearing: 1.0,
+        slot: 2,
+        indoors: true,
+    }];
+    s.set_minimap_arrows(&corpse, true, true, &group);
+    assert!(shown(&s, 6) && !shown(&s, 7));
+    assert_eq!(
+        s.eval::<i64>("return ({m:GetChildren()})[6]:GetFrameLevel()")
+            .unwrap(),
+        level + 5
+    );
+    assert_eq!(at(&s, 6).sequence, 167);
     // A party record with no arrow hides its frame.
     s.set_minimap_arrows(&rim, false, true, &[None; 5]);
     assert!(!shown(&s, 1) && !shown(&s, 5));
+}
+
+/// The ctor's sizes ride `G48 · 5/3` (`0x4edc42`): at 16:9 the disc is still 140.8 FrameXML units
+/// (0.11 base layout units, `0x4ede9e`), the rim centre `C` is 0.055 base and the radius `A` 0.044
+/// base (`0x4ed452`), and the player arrow's model scale is the base itself (`0x4edfec`), so each
+/// fails at 16:9 without the base, where at 4:3 the base is 1.
+#[test]
+fn at_sixteen_by_nine_the_children_scale_by_the_ctors_base() {
+    use crate::script::MinimapRimArrow;
+    let mut s = script();
+    s.set_screen_size(1920.0, 1080.0);
+    s.run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
+        .unwrap();
+    let a = 1920.0_f32 / 1080.0;
+    let base = 5.0 / 3.0 / (a * a + 1.0).sqrt();
+    for i in 1..=8 {
+        let w = s
+            .eval::<f32>(&format!("return ({{m:GetChildren()}})[{i}]:GetWidth()"))
+            .unwrap();
+        assert!((w - 140.8).abs() < 1e-3, "child {i}: {w}");
+    }
+    let player = s.minimap_child("TestMinimap", 9).unwrap();
+    assert!((player.scale - base).abs() < 1e-6, "{}", player.scale);
+    s.set_minimap_arrows(
+        &[MinimapRimArrow {
+            bearing: 0.0,
+            slot: -2,
+            indoors: false,
+        }],
+        true,
+        false,
+        &[None; 5],
+    );
+    let p = s.minimap_child("TestMinimap", 6).unwrap().position;
+    let (c, r) = (0.055 * base, 0.044 * base);
+    assert!(
+        (p.0 - c).abs() < 1e-6 && (p.1 - (c + r)).abs() < 1e-6,
+        "{p:?}"
+    );
 }

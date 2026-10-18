@@ -454,15 +454,16 @@ impl super::UiScript {
     /// arrow list was rebuilt (`0x6daa20` answered 1, `0x4ed2e2`), each of the three rim frames
     /// with a record shows, at the level base plus its record's slot (`0x4ed344`) and playing its
     /// art (`0x4ed353`), and the rest hide; with the indoor byte set only a record with `+0x44`
-    /// shows (`0x4ed308`). Every frame each record's frame is aimed (`0x4ed404`). Each party frame
-    /// shows while its record has an arrow and hides otherwise (`0x4ed3c0`), and is aimed
-    /// (`0x4ed4ba`); `group` gives each its bearing and the sequence its record plays.
+    /// shows (`0x4ed308`). Every frame each record's frame is aimed (`0x4ed404`). Each party and
+    /// pet frame shows while its record has an arrow and hides otherwise (`0x4ed3c0`), and is
+    /// aimed (`0x4ed4ba`) at its bearing in `group`; its `GroupArrow` was armed once, by the model
+    /// load (`0x4ee1de`).
     pub fn set_minimap_arrows(
         &mut self,
         rim: &[MinimapRimArrow],
         rebuilt: bool,
         indoors: bool,
-        group: &[Option<(f32, u16)>; crate::widget::MINIMAP_GROUP_ARROWS],
+        group: &[Option<f32>; crate::widget::MINIMAP_GROUP_ARROWS],
     ) {
         let mut shows: Vec<(FrameHandle, bool)> = Vec::new();
         {
@@ -494,17 +495,9 @@ impl super::UiScript {
                 }
                 for (i, &h) in state.group_arrows.iter().enumerate() {
                     shows.push((h, group[i].is_some()));
-                    let Some((bearing, sequence)) = group[i] else {
-                        continue;
-                    };
-                    let playing = match model.arena.frame(h).map(|f| &f.kind_state) {
-                        Some(KindState::Model(m)) => m.sequence,
-                        _ => continue,
-                    };
-                    if playing != i32::from(sequence) {
-                        arm(&mut model, h, sequence);
+                    if let Some(bearing) = group[i] {
+                        place_arrow(&mut model, h, state.base, bearing);
                     }
-                    place_arrow(&mut model, h, state.base, bearing);
                 }
             }
         }
