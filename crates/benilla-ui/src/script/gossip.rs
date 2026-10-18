@@ -13,6 +13,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// One gossip option; its 1-based index is its place in [`GossipMenu::options`].
@@ -112,7 +113,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // them, are ignored: coded options are not built, so no code is ever sent.
     g.set(
         "SelectGossipOption",
-        lua.create_function(|lua, (i, _rest): (u32, mlua::MultiValue)| {
+        lua.create_function(|lua, (i, _rest): (Value, mlua::MultiValue)| {
+            // `is-number` else `Usage: SelectGossipOption(index)` (`0x84b984`, `0x4e2a86`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: SelectGossipOption(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.gossip_selects.push(i);
             Ok(())
@@ -183,14 +186,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "SelectGossipAvailableQuest",
-        lua.create_function(|lua, i: usize| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: SelectGossipAvailableQuest(index)` (`0x84b9a8`, `0x4e2ab1`).
+            let i = binding_abi::index_arg(lua, i, "Usage: SelectGossipAvailableQuest(index)")?;
             select_quest(lua, false, i);
             Ok(())
         })?,
     )?;
     g.set(
         "SelectGossipActiveQuest",
-        lua.create_function(|lua, i: usize| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: SelectGossipActiveQuest(index)` (`0x84b9d4`, `0x4e2af1`).
+            let i = binding_abi::index_arg(lua, i, "Usage: SelectGossipActiveQuest(index)")?;
             select_quest(lua, true, i);
             Ok(())
         })?,

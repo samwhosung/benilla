@@ -5,10 +5,9 @@
 //! wire's slot index. FrameXML's bonus bar shows actions `(6 + offset - 1) * 12 + i` for the
 //! app-pushed `GetBonusBarOffset`.
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::{bool_or_default, flag};
+use super::binding_abi::{self, bool_or_default, flag};
 use super::protected::{self, Tag};
 use super::Model;
 
@@ -285,7 +284,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // of it is untraced, and place-on-click is the reading that split implies.
     g.set(
         "UseAction",
-        lua.create_function(|lua, (action, rest): (u32, MultiValue)| {
+        lua.create_function(|lua, (action, rest): (Value, MultiValue)| {
+            // `is-number` else `Usage: UseAction(slot, [, checkCursor] [, onSelf])` (`0x84c028`,
+            // `0x4e7191`).
+            let action = binding_abi::index_arg32(
+                lua,
+                action,
+                "Usage: UseAction(slot, [, checkCursor] [, onSelf])",
+            )?;
             // Both flags go through `GetBoolOrDefault` (`0x4e717e`, `0x4e716f`), default 0.
             let check_cursor = bool_or_default(rest.front(), false);
             let on_self = bool_or_default(rest.get(1), false);

@@ -5,10 +5,9 @@
 //! bind-on-pickup confirm, fire inside the verb. The `rollID` is client-internal, as
 //! `CMSG_LOOT_ROLL` addresses `(lootedTarget, itemSlot)`, so the app allocates its own.
 
-use crate::script::binding_abi;
 use mlua::{Lua, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::{Model, ScriptValue};
 use crate::script::binding_abi::number_arg;
 

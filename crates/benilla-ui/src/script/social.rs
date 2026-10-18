@@ -6,7 +6,7 @@
 
 use mlua::{Lua, Value};
 
-use super::binding_abi::{bool_or_default, string_arg};
+use super::binding_abi::{self, bool_or_default, string_arg};
 use super::who_sort::WhoSortChain;
 use super::Model;
 
@@ -118,7 +118,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // FrameXML tests `if ( not name )`.
     g.set(
         "GetFriendInfo",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetFriendInfo(index)` (`0x85da28`, `0x5ad073`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetFriendInfo(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(friend) = friend_at(&model.social.friends, index) else {
                 return Ok((
@@ -157,7 +163,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // call, and queue it for the app.
     g.set(
         "SetSelectedFriend",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetSelectedFriend(index)` (`0x85da44`, `0x5ad221`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: SetSelectedFriend(index)",
+            )?);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let index = clamp_index(index, model.social.friends.len());
             model.social.selected_friend = index;
@@ -307,7 +319,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetIgnoreName",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetIgnoreName(index)` (`0x85dac8`, `0x5ad48a`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetIgnoreName(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let name = usize::try_from(index - 1)
                 .ok()
@@ -329,7 +347,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "SetSelectedIgnore",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetSelectedIgnore(index)` (`0x85dae4`, `0x5ad531`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: SetSelectedIgnore(index)",
+            )?);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let index = clamp_index(index, model.social.ignores.len());
             model.social.selected_ignore = index;
@@ -375,7 +399,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetWhoInfo",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetWhoInfo(index)` (`0x85db5c`, `0x5ad6f1`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetWhoInfo(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let row = usize::try_from(index - 1)
                 .ok()

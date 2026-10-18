@@ -3,8 +3,9 @@
 //! intents the app drains. Positions are normalized 0..1 from the map's bottom-left, which the Lua
 //! scales by the 316x352 map.
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Table, Value};
 
+use super::binding_abi;
 use super::region::region_handle_of;
 use super::Model;
 
@@ -103,7 +104,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // "NONE" out of range, a button the reference hides.
     g.set(
         "TaxiNodeGetType",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: TaxiNodeGetType(slot)` (`0x84b080`, `0x4dcd01`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: TaxiNodeGetType(slot)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model");
             Ok(node(&model, i).map_or("NONE", |n| n.node_type.era_str()))
         })?,
@@ -111,7 +118,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "TaxiNodePosition",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: TaxiNodeTaxiNodeLocation(slot)` (`0x84b020`, `0x4dcb97`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: TaxiNodeTaxiNodeLocation(slot)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model");
             let (x, y) = node(&model, i).map_or((0.0, 0.0), |n| n.pos);
             Ok((x, y))
@@ -120,7 +133,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "TaxiNodeName",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: TaxiNodeName(slot)` (`0x84afec`, `0x4dcb41`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: TaxiNodeName(slot)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model");
             Ok(node(&model, i).map_or(String::new(), |n| n.name.clone()))
         })?,
@@ -128,7 +147,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "TaxiNodeCost",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: TaxiNodeCost(slot)` (`0x84b048`, `0x4dcc35`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: TaxiNodeCost(slot)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model");
             Ok(node(&model, i).map_or(0, |n| n.cost) as i64)
         })?,
@@ -140,7 +165,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // and copying a stack-top leak would copy a bug.
     g.set(
         "TaxiNodeSetCurrent",
-        lua.create_function(|_, _: i64| Ok(()))?,
+        lua.create_function(|lua, slot: Value| {
+            // `is-number` else `Usage: TaxiNodeSetCurrent(slot)` (`0x84b0a0`, `0x4dcd51`).
+            binding_abi::number_arg(lua, slot, "Usage: TaxiNodeSetCurrent(slot)")?;
+            Ok(())
+        })?,
     )?;
 
     g.set(
@@ -173,7 +202,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "TakeTaxiNode",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: TakeTaxiNode(slot)` (`0x84b064`, `0x4dccb1`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: TakeTaxiNode(slot)",
+            )?);
             if let Ok(i) = usize::try_from(i) {
                 lua.app_data_mut::<Model>()
                     .expect("model")

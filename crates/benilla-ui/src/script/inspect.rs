@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use mlua::{Lua, Value};
 
+use super::binding_abi;
 use super::char_stats::InventorySlots;
 use super::Model;
 
@@ -144,20 +145,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CheckInteractDistance(unit, type) → 1/nil (`0x48ba00`): in range only when
     // `d² < table[type-1]`, strictly, unlike `CanInspect` (`test ah,0x5; jp`). A token with no unit
     // answers nil (`0x48babe`), as does a `type` outside 1..=4 once truncated toward zero, the
-    // compare being unsigned (`0x48bac5`); a missing or non-number `type` raises (`0x48bb48`).
-    // The reference also raises for a missing unit (`0x48ba18`) or an unknown token (`0x515c14`),
-    // where this answers nil.
+    // compare being unsigned (`0x48bac5`). `is-number-or-string` on the unit and `is-number` on
+    // `type` gate both, else `Usage: CheckInteractDistance("unit", distIndex)` (`0x842900`,
+    // `0x48bb42`). The reference also raises for an unknown token (`0x515c14`), where this answers
+    // nil.
     g.set(
         "CheckInteractDistance",
-        lua.create_function(|lua, (unit, kind): (Option<String>, Option<f64>)| {
-            let Some(kind) = kind else {
-                return Err(mlua::Error::RuntimeError(
-                    "Usage: CheckInteractDistance(\"unit\", distIndex)".into(),
-                ));
-            };
-            let thr = usize::try_from(kind.trunc() as i64)
-                .ok()
-                .and_then(|k| k.checked_sub(1))
+        lua.create_function(|lua, (unit, kind): (Value, Value)| {
+            const USAGE: &str = r#"Usage: CheckInteractDistance("unit", distIndex)"#;
+            let unit = Some(binding_abi::string_arg(lua, unit, USAGE)?);
+            let kind = binding_abi::index_arg(lua, kind, USAGE)?;
+            let thr = kind
+                .checked_sub(1)
                 .and_then(|i| INTERACT_DIST_SQ.get(i).copied());
             let ok = match (reach(lua, &unit), thr) {
                 (Some(r), Some(thr)) => r.dist_sq < thr,

@@ -3,9 +3,9 @@
 //! and an accept re-issues that action with a suppress flag, as 1.12 has no confirm packet. The
 //! app owns the pending records; this module holds only the intents.
 
-use crate::script::binding_abi;
 use mlua::{Lua, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// One answer to a pending-equip question.
@@ -53,7 +53,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `0x4898f0`, the `OnAccept` of `EQUIP_BIND` and `AUTOEQUIP_BIND` (`StaticPopup.lua:612-647`).
     g.set(
         "EquipPendingItem",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: EquipPendingItem(index)` (`0x842600`, `0x489901`).
+            let index = binding_abi::index_arg32(lua, index, "Usage: EquipPendingItem(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.pending_equip_answers.push(PendingEquipAnswer {
                 index,

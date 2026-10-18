@@ -32,12 +32,11 @@
 //! Not built: `GetAbandonQuestItems` answers nil; a GameObject objective's name, which wears the
 //! placeholder.
 
-use crate::script::binding_abi;
 use std::collections::{HashMap, HashSet};
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::{flag, number_arg};
+use super::binding_abi::{self, flag, number_arg};
 use super::quest::{QuestItemView, QuestRewardSpell};
 use super::Model;
 use crate::strings::{fill, global, Arg};
@@ -1177,7 +1176,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "SelectQuestLogEntry",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: SelectQuestLogEntry(index)` (`0x84b540`, `0x4dfb0e`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: SelectQuestLogEntry(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.quest_log_selection = i;
             Ok(())
@@ -1383,7 +1384,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // or an item not yet held answers nil.
     g.set(
         "GetQuestLogItemLink",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, index): (Value, Value)| {
+            // `is-number` on arg 2, `is-number-or-string` on arg 1 else
+            // `Usage: GetQuestLogItemLink("type", index)` (`0x84b6d0`, `0x4e1053`).
+            let kind =
+                binding_abi::string_arg(lua, kind, r#"Usage: GetQuestLogItemLink("type", index)"#)?;
+            let index =
+                binding_abi::index_arg(lua, index, r#"Usage: GetQuestLogItemLink("type", index)"#)?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 selected_quest_item(&model, &kind, index).and_then(|it| it.link)
@@ -1418,14 +1425,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // passes (`QuestLogFrame.lua:557`, `:561`).
     g.set(
         "CollapseQuestHeader",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: CollapseQuestHeader(index)` (`0x84b720`, `0x4e1741`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: CollapseQuestHeader(index)")?;
             super::tick::verb(lua, |model| set_collapsed(model, i, true));
             Ok(())
         })?,
     )?;
     g.set(
         "ExpandQuestHeader",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: ExpandQuestHeader(index)` (`0x84b744`, `0x4e1791`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: ExpandQuestHeader(index)")?;
             super::tick::verb(lua, |model| set_collapsed(model, i, false));
             Ok(())
         })?,

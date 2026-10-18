@@ -4,10 +4,9 @@
 //! which the app points at them. The getters test no open state: both offers stay as the last
 //! trade left them until the next open clears them ([`UiScript::open_trade_window`]).
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::cursor::{self, CursorPayload};
 use super::Model;
 
@@ -765,7 +764,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ClickTargetTradeButton(id) (`TradeFrame.xml:101`): the partner's column takes nothing.
     g.set(
         "ClickTargetTradeButton",
-        lua.create_function(|lua, _id: u32| {
+        lua.create_function(|lua, _id: Value| {
+            // `is-number` else `Usage: ClickTargetTradeButton(index)` (`0x847bcc`, `0x4c0091`).
+            let _id = binding_abi::index_arg32(lua, _id, "Usage: ClickTargetTradeButton(index)")?;
             // Coins on the cursor still go into our offer, the index unread (`0x4c00a3`).
             super::tick::verb(lua, cursor::money::add_trade_money);
             Ok(())

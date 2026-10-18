@@ -5,9 +5,9 @@
 //! ([`set_cursor`] from a Lua verb, one segment each, so the clear's `CURSOR_UPDATE` reads the
 //! emptied cursor before the set), and every verb that drops a payload clears through [`clear`].
 
-use mlua::Lua;
+use mlua::{Lua, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::tick::verb;
 use super::{Model, ScriptValue};
 
@@ -918,7 +918,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "SplitContainerItem",
-        lua.create_function(|lua, (bag, slot, count): (i64, u32, i64)| {
+        lua.create_function(|lua, (bag, slot, count): (Value, Value, Value)| {
+            // `is-number` on args 1, 2 and 3 else `Usage: SplitContainerItem(index, slot, amount)`
+            // (`0x84d910`, `0x4fa0bf`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: SplitContainerItem(index, slot, amount)",
+            )?);
+            let slot = binding_abi::index_arg32(
+                lua,
+                slot,
+                "Usage: SplitContainerItem(index, slot, amount)",
+            )?;
+            let count = i64::from(binding_abi::number_arg(
+                lua,
+                count,
+                "Usage: SplitContainerItem(index, slot, amount)",
+            )?);
             split_container_item(lua, bag, slot, count);
             Ok(())
         })?,

@@ -217,7 +217,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitBuff",
         lua.create_function(
-            |lua, (token, index, _raid_filter): (Option<String>, i64, Option<Value>)| {
+            |lua, (token, index, _raid_filter): (Value, Value, Option<Value>)| {
+                // `is-number-or-string` on arg 1, `is-number` on arg 2 else `Usage: UnitBuff("unit",
+                // index [,raidFilter])` (`0x8512b8`, `0x519847`).
+                const USAGE: &str = r#"Usage: UnitBuff("unit", index [,raidFilter])"#;
+                let token = Some(crate::script::binding_abi::string_arg(lua, token, USAGE)?);
+                let index = i64::from(crate::script::binding_abi::number_arg(lua, index, USAGE)?);
                 nth_aura(lua, &token, index, true)
             },
         )?,
@@ -225,7 +230,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitDebuff",
         lua.create_function(
-            |lua, (token, index, _raid_filter): (Option<String>, i64, Option<Value>)| {
+            |lua, (token, index, _raid_filter): (Value, Value, Option<Value>)| {
+                // `is-number-or-string` on arg 1, `is-number` on arg 2 else `Usage: UnitDebuff("unit",
+                // index [,raidFilter])` (`0x8512e8`, `0x519c79`).
+                const USAGE: &str = r#"Usage: UnitDebuff("unit", index [,raidFilter])"#;
+                let token = Some(crate::script::binding_abi::string_arg(lua, token, USAGE)?);
+                let index = i64::from(crate::script::binding_abi::number_arg(lua, index, USAGE)?);
                 nth_aura(lua, &token, index, false)
             },
         )?,

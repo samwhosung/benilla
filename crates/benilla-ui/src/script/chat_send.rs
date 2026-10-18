@@ -192,11 +192,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // never a row number or a language id; past the end it pushes nothing.
     lua.globals().set(
         "GetLanguageByIndex",
-        lua.create_function(|lua, index: Option<i64>| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetLanguageByIndex(index)` (`0x844b9c`, `0x49fbfc`).
+            let index = crate::script::binding_abi::index_arg(
+                lua,
+                index,
+                "Usage: GetLanguageByIndex(index)",
+            )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let name = index
-                .and_then(|i| usize::try_from(i).ok())
-                .and_then(|i| i.checked_sub(1))
+                .checked_sub(1)
                 .and_then(|i| model.known_languages.get(i));
             Ok(match name {
                 Some(n) => MultiValue::from_vec(vec![Value::String(lua.create_string(n)?)]),

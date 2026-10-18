@@ -7,10 +7,9 @@
 //! `numAvailable` -1; `isUsable` is 1 or nil, the [`super::item_stats::item_usable`] gate, and a
 //! template still in flight reads usable (`0x4fb298`).
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::{flag, number_arg};
+use super::binding_abi::{self, flag, number_arg};
 use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
@@ -306,9 +305,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "BuyMerchantItem",
-        lua.create_function(|lua, (index, quantity): (u32, Option<u32>)| {
+        lua.create_function(|lua, (index, quantity): (Value, Value)| {
+            // `is-number` else `Usage: BuyMerchantItem(index)` (`0x84dcd8`, `0x4fb861`).
+            let index = binding_abi::index_arg32(lua, index, "Usage: BuyMerchantItem(index)")?;
+            // The quantity is 1 unless `is-number` passes and `_ftol` gives 1 or more, and at most
+            // 255 (`0x4fb8bf`-`0x4fb8ff`); a non-number never raises.
+            let quantity = lua
+                .coerce_number(quantity)?
+                .map(binding_abi::ftol)
+                .map_or(1, |q| q.clamp(1, 0xff)) as u32;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.merchant_buys.push((index, quantity.unwrap_or(1)));
+            model.merchant_buys.push((index, quantity));
             Ok(())
         })?,
     )?;
@@ -411,7 +418,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "BuybackItem",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: BuybackItem(slot)` (`0x84dcf8`, `0x4fb968`).
+            let index = binding_abi::index_arg32(lua, index, "Usage: BuybackItem(slot)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.merchant_buybacks.push(index);
             Ok(())
@@ -506,7 +515,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // in-flight item lock and base-mode Point gates live app-side.
     g.set(
         "ShowMerchantSellCursor",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: ShowMerchantSellCursor(index)` (`0x84dd14`, `0x4fbadf`).
+            let index = binding_abi::index_arg(lua, index, "Usage: ShowMerchantSellCursor(index)")?;
             arm_vendor_cursor(lua, |m| {
                 m.items.get(index.wrapping_sub(1)).map(|it| it.price)
             });
@@ -515,7 +526,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "ShowBuybackSellCursor",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: ShowBuybackSellCursor(index)` (`0x84dd3c`, `0x4fbbe1`).
+            let index = binding_abi::index_arg(lua, index, "Usage: ShowBuybackSellCursor(index)")?;
             arm_vendor_cursor(lua, |m| {
                 m.buyback.get(index.wrapping_sub(1)).map(|it| it.price)
             });

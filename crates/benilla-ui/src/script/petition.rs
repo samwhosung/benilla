@@ -202,7 +202,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // argument raises, through mlua's coercion as through the reference's `Usage:`.
     g.set(
         "GetPetitionNameInfo",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetPetitionNameInfo(index)` (`0x84cf94`, `0x4f453a`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetPetitionNameInfo(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(name) = usize::try_from(index)
                 .ok()

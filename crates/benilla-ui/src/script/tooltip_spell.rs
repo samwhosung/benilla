@@ -15,7 +15,7 @@
 
 use mlua::{Lua, Table, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::object::{frame_handle_of, frame_wrapper};
 use super::tooltip::{append_line, clear, clear_silent, tip_mut};
 use super::{CraftTooltip, Model, TrainerTooltip};
@@ -658,7 +658,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // the builder's return value, 1 or nil, with a cooldown running (`0x532a89`).
     m.set(
         "SetShapeshift",
-        lua.create_function(|lua, (this, index): (Table, usize)| {
+        lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `is-number` else `Usage: SetShapeshift(slot)` (`0x85523c`, `0x532ad6`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SetShapeshift(slot)")?;
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -688,7 +690,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // 1 or nil, with a cooldown running (`0x5328ca`).
     m.set(
         "SetPetAction",
-        lua.create_function(|lua, (this, index): (Table, usize)| {
+        lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `is-number` else `Usage: SetPetAction(slot)` (`0x855220`, `0x5328f4`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SetPetAction(slot)")?;
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -723,7 +727,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // surplus argument is ignored, as in the reference.
     m.set(
         "SetPlayerBuff",
-        lua.create_function(|lua, (this, index): (Table, i64)| {
+        lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `is-number` else `Usage: SetPlayerBuff(buffIndex)` (`0x855258`, `0x532c2b`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: SetPlayerBuff(buffIndex)",
+            )?);
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -891,7 +901,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // `ActionButton_SetTooltip` arms `updateTooltip` from it.
     m.set(
         "SetAction",
-        lua.create_function(|lua, (this, slot): (Table, u32)| {
+        lua.create_function(|lua, (this, slot): (Table, Value)| {
+            // `is-number` else `Usage: SetAction(slot)` (`0x855200`, `0x5326c3`).
+            let slot = binding_abi::index_arg32(lua, slot, "Usage: SetAction(slot)")?;
             let now = crate::script::clock::now(lua);
             let (action, remaining_ms, owned) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");

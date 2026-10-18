@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// An item template's tooltip view: the `SMSG_ITEM_QUERY_SINGLE_RESPONSE` fields the tooltip reads,
@@ -424,7 +425,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `ITEM_QUALITY_COLORS[-1]` is white, the colour of an uncached loot row (`0x4c2435`).
     lua.globals().set(
         "GetItemQualityColor",
-        lua.create_function(|lua, quality: i64| {
+        lua.create_function(|lua, quality: Value| {
+            // `is-number` else `Usage: GetItemQualityColor(index)` (`0x842d00`, `0x48dfc5`).
+            let quality = i64::from(binding_abi::number_arg(
+                lua,
+                quality,
+                "Usage: GetItemQualityColor(index)",
+            )?);
             // A 32-bit int (`__ftol`), compared unsigned.
             let i = match quality as i32 as u32 {
                 q if q >= 7 => 1,

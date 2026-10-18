@@ -4,6 +4,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// One stance-bar button, resolved by the app.
@@ -133,7 +134,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "CastShapeshiftForm",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
+            // A bare `tonumber` compared with 0.0 (`0x4b4820`, `0x802970`): a zero, and so any
+            // non-number, raises `Usage: CastShapeshiftForm(index)` (`0x846a90`, `0x4b4832`);
+            // the slot is then `_ftol`'s (`0x4b4855`).
+            let n = lua.coerce_number(i)?.unwrap_or(0.0);
+            if n == 0.0 {
+                return Err(mlua::Error::runtime("Usage: CastShapeshiftForm(index)"));
+            }
+            let i = binding_abi::ftol(n) as u32;
             // The form's cast is `TryCastSpell` (`0x4b4992` → `0x6e5a90`), behind the gate's tag 2;
             // the cancels of an active form (`0x4b496b`, `0x4b497c`) run ahead of it, so the call
             // is queued whatever the gate said and carries the answer to the cast alone.

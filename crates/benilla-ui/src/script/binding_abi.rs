@@ -42,6 +42,14 @@ pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
     }
 }
 
+/// [`number_arg`] without the truncation, for a binding's non-index number that its own
+/// `Usage:` gates: `is-number` (`0x6f34d0`) then `tonumber` (`0x6f3620`), so a numeric string
+/// passes (`SetChatWindowColor`'s colour, `PlaceAuctionBid`'s bid).
+pub(crate) fn float_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<f64> {
+    lua.coerce_number(v)?
+        .ok_or_else(|| mlua::Error::RuntimeError(usage.into()))
+}
+
 /// An index argument read as the reference reads one: a number or numeric string (`0x6f34d0`)
 /// truncated by `_ftol` ([`ftol`]) and then decremented and compared unsigned, so a zero or
 /// negative index is a huge one and falls out of range where a Rust integer parameter would raise

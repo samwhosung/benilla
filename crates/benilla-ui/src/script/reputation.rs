@@ -353,7 +353,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetSelectedFaction(index): a visible index; a header or an out-of-range index clears it.
     g.set(
         "SetSelectedFaction",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetSelectedFaction(index)` (`0x84a3b0`, `0x4d6bc1`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SetSelectedFaction(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.reputation_selected = entry_at(&model, index).map(|e| e.rep_list_id);
             Ok(())
@@ -366,7 +368,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`ReputationFrame.xml:9-15`), and the pane repaints on `UPDATE_FACTION` alone.
     g.set(
         "CollapseFactionHeader",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: CollapseFactionHeader(index)` (`0x84a320`, `0x4d6a61`).
+            let index = binding_abi::index_arg(lua, index, "Usage: CollapseFactionHeader(index)")?;
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 set_collapsed(&mut model, index, true);
@@ -377,7 +381,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "ExpandFactionHeader",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: ExpandFactionHeader(index)` (`0x84a344`, `0x4d6ab1`).
+            let index = binding_abi::index_arg(lua, index, "Usage: ExpandFactionHeader(index)")?;
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 set_collapsed(&mut model, index, false);
@@ -391,7 +397,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // first, and nothing acks it.
     g.set(
         "FactionToggleAtWar",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: FactionToggleAtWar(index)` (`0x84a2b8`, `0x4d6961`).
+            let index = binding_abi::index_arg(lua, index, "Usage: FactionToggleAtWar(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(e) = entry_at_mut(&mut model, index) else {
                 return Ok(());
@@ -487,7 +495,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the descriptor update returns. The app sends none as `-1`, since slot 0 is a real faction.
     g.set(
         "SetWatchedFactionIndex",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetWatchedFactionIndex(index)` (`0x84a388`, `0x4d6b71`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SetWatchedFactionIndex(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let slot = entry_at(&model, index).map(|e| e.rep_list_id);
             model.reputation_sends.push(ReputationSend::Watch(slot));

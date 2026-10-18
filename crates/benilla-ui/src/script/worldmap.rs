@@ -17,6 +17,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// One zone of a continent; its 1-based position is the Lua zone index.
@@ -697,7 +698,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // what keeps `WorldMapZoneButton_OnClick` from calling `SetMapZoom(-1, id)`.
     g.set(
         "GetMapZones",
-        lua.create_function(|lua, c: i64| {
+        lua.create_function(|lua, c: Value| {
+            // `is-number` else `Usage: GetMapZones(continentIndex)` (`0x8453e4`, `0x4a7d28`).
+            let c = i64::from(binding_abi::number_arg(
+                lua,
+                c,
+                "Usage: GetMapZones(continentIndex)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let zones = usize::try_from(c)
                 .ok()
@@ -735,11 +742,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "SetMapZoom",
-        lua.create_function(|lua, (c, z): (i64, Option<i64>)| {
+        lua.create_function(|lua, (c, z): (Value, Value)| {
+            // `is-number` else `Usage: SetMapZoom(continentIndex [,zoneIndex])` (`0x845408`,
+            // `0x4a7dc1`).
+            let c = i64::from(binding_abi::number_arg(
+                lua,
+                c,
+                "Usage: SetMapZoom(continentIndex [,zoneIndex])",
+            )?);
+            // The zone is 0 unless `is-number` passes (`0x4a7df0`-`0x4a7e08`), never raising.
+            let z = lua
+                .coerce_number(z)?
+                .map_or(0, |n| i64::from(binding_abi::ftol(n)));
             select(
                 &mut lua.app_data_mut::<Model>().expect("model app_data"),
                 c,
-                z.unwrap_or(0),
+                z,
             );
             fire_world_map_update(lua);
             Ok(())
@@ -934,7 +952,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // marker's packet Icon; an empty description is nil, as `0x6f3890` pushes for a NULL string.
     g.set(
         "GetMapLandmarkInfo",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: GetMapLandmarkInfo(index)` (`0x8454a0`, `0x4a8757`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: GetMapLandmarkInfo(index)",
+            )?);
             let landmark = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 usize::try_from(i)
@@ -979,7 +1003,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // mapPointX, mapPointY; mapPointX and mapPointY are 0 on every 5875 row.
     g.set(
         "GetMapOverlayInfo",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: GetMapOverlayInfo(index)` (`0x84552c`, `0x4a8a1b`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: GetMapOverlayInfo(index)",
+            )?);
             let overlay = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 usize::try_from(i)

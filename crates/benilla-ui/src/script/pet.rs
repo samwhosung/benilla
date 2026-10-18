@@ -5,9 +5,9 @@
 //! (`PetActionBarFrame.lua:98-104`). Booleans are 1/nil and cooldowns go cold once elapsed, as in
 //! [`super::action`].
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::protected::{self, Tag};
 use super::Model;
 
@@ -447,7 +447,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`PetHandler.cpp:178`).
     g.set(
         "CastPetAction",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: CastPetAction(index)` (`0x8479d4`, `0x4be35b`).
+            let i = binding_abi::index_arg32(lua, i, "Usage: CastPetAction(index)")?;
             // `PressPetAction 0x4bd1d0` opens on the gate's tag 2 (`0x4bd1e5`), ahead of its bar
             // test and every effect; a refusal is silent.
             if !protected::gate(lua, Tag::CAST) {

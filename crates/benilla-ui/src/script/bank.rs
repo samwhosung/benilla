@@ -202,13 +202,18 @@ mod tests {
             .unwrap(),
             4500
         );
-        // Slot 65 is empty and 70 is past the band; neither falls through to the doll.
+        // Slot 65 is empty; 70 is past the band, so the slot reader raises (`0x4c8520`).
         assert!(s
             .eval::<bool>("return GetInventoryItemTexture(\"player\", 65) == nil")
             .unwrap());
-        assert!(s
-            .eval::<bool>("return GetInventoryItemTexture(\"player\", 70) == nil")
-            .unwrap());
+        let e = s
+            .run("GetInventoryItemTexture(\"player\", 70)")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("Invalid inventory slot in GetInventoryItemTexture"),
+            "{e}"
+        );
     }
 
     #[test]

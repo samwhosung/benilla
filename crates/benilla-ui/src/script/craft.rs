@@ -405,7 +405,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `BuildColoredListString` takes (`Blizzard_CraftUI.lua:361`); nothing when there are none.
     g.set(
         "GetCraftSpellFocus",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetCraftSpellFocus(index)` (`0x84d4dc`, `0x4f78db`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetCraftSpellFocus(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
             if let Some(r) = recipe(&model, index) {
@@ -429,7 +431,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // out-of-range select clears it, and the getter answers 0 past the recipe count.
     g.set(
         "SelectCraft",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SelectCraft(index)` (`0x84d3b4`, `0x4f7101`).
+            let index = binding_abi::index_arg32(lua, index, "Usage: SelectCraft(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let count = num_recipes(&model) as u32;
             model.craft_selection = if index >= 1 && index <= count {
@@ -453,7 +457,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // DoCraft(index): queue the row's spell id; out of range is ignored.
     g.set(
         "DoCraft",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: DoCraft(index)` (`0x84d5c4`, `0x4f7d21`).
+            let index = binding_abi::index_arg(lua, index, "Usage: DoCraft(index)")?;
             // The recipe's cast is `TryCastSpell` (`0x4f7d64` → `0x6e5a90`), behind the gate's
             // tag 2 (`0x6e4bc1`).
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);

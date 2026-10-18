@@ -12,7 +12,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::object::frame_handle_of;
 use super::tooltip::clear_silent;
 use super::{ItemTemplateView, Model};
@@ -487,8 +487,25 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetInventoryItem",
         lua.create_function(
-            |lua, (this, unit, slot, name_only): (Table, String, usize, Value)| {
+            |lua, (this, unit, slot, name_only): (Table, Value, Value, Value)| {
                 let h = frame_handle_of(lua, &this)?;
+                // `is-number-or-string` on the unit else `Usage: SetInventoryItem(unit, slot [,
+                // nameOnly])` (`0x8552dc`, `0x532fa9`); then `is-number` on the slot, `tonumber`
+                // less 1.0 truncated (`0x532fe2`) and the slot reader's whitelist, else `Invalid
+                // inventory slot in SetInventoryItem` (`0x8552b0`, `0x53344c`).
+                let unit = super::binding_abi::string_arg(
+                    lua,
+                    unit,
+                    "Usage: SetInventoryItem(unit, slot [, nameOnly])",
+                )?;
+                let slot0 = lua
+                    .coerce_number(slot)?
+                    .map(|n| super::binding_abi::ftol(n - 1.0))
+                    .filter(|&s| super::char_stats::inventory_slot_reader_accepts(s))
+                    .ok_or_else(|| {
+                        mlua::Error::runtime("Invalid inventory slot in SetInventoryItem")
+                    })?;
+                let slot = (slot0 + 1) as usize;
                 // `nameOnly` (usage string `0x8552dc`) is set only by a number above 0
                 // (`0x533027..0x53304c`); anything else builds the ordinary tooltip, without an
                 // error. Three of the binding's four builder legs pass it on, not `0x533106`.
@@ -740,7 +757,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (`0x52b7bf`) is the only enchant source.
     m.set(
         "SetLootRollItem",
-        lua.create_function(|lua, (this, roll_id): (Table, u32)| {
+        lua.create_function(|lua, (this, roll_id): (Table, Value)| {
+            // `is-number` else `Usage: SetLootRollItem(id)` (`0x855650`, `0x53657b`).
+            let roll_id = binding_abi::index_arg32(lua, roll_id, "Usage: SetLootRollItem(id)")?;
             let h = frame_handle_of(lua, &this)?;
             let entry = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -950,7 +969,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // when there is one. The answer is the builder's return value, 1 or nil (`0x5356bb`).
     m.set(
         "SetInboxItem",
-        lua.create_function(|lua, (this, index): (Table, usize)| {
+        lua.create_function(|lua, (this, index): (Table, Value)| {
+            // `is-number` else `Usage: SetInboxItem(index)` (`0x855584`, `0x53559e`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SetInboxItem(index)")?;
             let h = frame_handle_of(lua, &this)?;
             let (item_id, roll, name) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -990,7 +1011,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // builder's return value, 1 or nil; a miss answers nil.
     m.set(
         "SetAuctionItem",
-        lua.create_function(|lua, (this, kind, index): (Table, String, usize)| {
+        lua.create_function(|lua, (this, kind, index): (Table, Value, Value)| {
+            // `is-number` on arg 3, `is-number-or-string` on arg 2 else
+            // `Usage: SetAuctionItem("type", index)` (`0x8555a0`, `0x535ab6`).
+            let kind =
+                binding_abi::string_arg(lua, kind, r#"Usage: SetAuctionItem("type", index)"#)?;
+            let index =
+                binding_abi::index_arg(lua, index, r#"Usage: SetAuctionItem("type", index)"#)?;
             let h = frame_handle_of(lua, &this)?;
             let (item_id, roll, name) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");

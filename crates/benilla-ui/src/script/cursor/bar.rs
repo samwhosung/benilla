@@ -3,9 +3,10 @@
 //! optimistic mirror of the app's table; each change queues one `CMSG_SET_ACTION_BUTTON`, so a
 //! drag-swap is two sends.
 
-use mlua::Lua;
+use mlua::{Lua, Value};
 
 use crate::script::action::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPELL};
+use crate::script::binding_abi;
 use crate::script::tick::verb;
 use crate::script::{ActionSlot, Model};
 
@@ -266,14 +267,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "PickupAction",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: PickupAction(slot)` (`0x84c05c`, `0x4e71fe`).
+            let id = binding_abi::index_arg32(lua, id, "Usage: PickupAction(slot)")?;
             pickup_action(lua, id);
             Ok(())
         })?,
     )?;
     g.set(
         "PlaceAction",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: PlaceAction(slot)` (`0x84c078`, `0x4e726e`).
+            let id = binding_abi::index_arg32(lua, id, "Usage: PlaceAction(slot)")?;
             place_action(lua, id);
             Ok(())
         })?,

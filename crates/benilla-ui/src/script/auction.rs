@@ -5,10 +5,9 @@
 //! The wire carries no sort: each list keeps an 8-deep stack of `(key, reversed)`, where clicking
 //! the primary column toggles it and another column is promoted with the direction it remembers.
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::cursor;
 use super::Model;
 
@@ -568,7 +567,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // whose `0x807060` flag is 0 returns nothing, without an error (`0x4cfa00`, `0x4cfa0e`).
     g.set(
         "GetAuctionItemSubClasses",
-        lua.create_function(|lua, class_index: usize| {
+        lua.create_function(|lua, class_index: Value| {
+            // `is-number` else `Usage: GetAuctionItemSubClasses(index)` (`0x8494fc`, `0x4cf9d8`).
+            let class_index =
+                binding_abi::index_arg(lua, class_index, "Usage: GetAuctionItemSubClasses(index)")?;
             let names: Vec<String> = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 class_index
@@ -593,7 +595,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // exhaust edge at `0x4cfb61` lands past the test at `0x4cfb63`).
     g.set(
         "GetAuctionInvTypes",
-        lua.create_function(|lua, (class_index, sub_index): (usize, usize)| {
+        lua.create_function(|lua, (class_index, sub_index): (Value, Value)| {
+            // `is-number` on args 1 and 2 else
+            // `Usage: GetAuctionInvTypes(classIndex, subClassIndex)` (`0x849524`, `0x4cfb99`).
+            let class_index = binding_abi::index_arg(
+                lua,
+                class_index,
+                "Usage: GetAuctionInvTypes(classIndex, subClassIndex)",
+            )?;
+            let sub_index = binding_abi::index_arg(
+                lua,
+                sub_index,
+                "Usage: GetAuctionInvTypes(classIndex, subClassIndex)",
+            )?;
             let offers = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 class_index
@@ -706,7 +720,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // PlaceAuctionBid(type, index, bidAmount); a buyout is a bid of exactly the buyout price.
     g.set(
         "PlaceAuctionBid",
-        lua.create_function(|lua, (kind, index, amount): (String, u32, u32)| {
+        lua.create_function(|lua, (kind, index, amount): (Value, Value, Value)| {
+            // `is-number` on args 2 and 3, `is-number-or-string` on arg 1 else
+            // `Usage: PlaceAuctionBid("type", index, bid)` (`0x8494d0`, `0x4cf94d`).
+            let kind = binding_abi::string_arg(
+                lua,
+                kind,
+                r#"Usage: PlaceAuctionBid("type", index, bid)"#,
+            )?;
+            let index = binding_abi::index_arg32(
+                lua,
+                index,
+                r#"Usage: PlaceAuctionBid("type", index, bid)"#,
+            )?;
+            let amount = binding_abi::index_arg32(
+                lua,
+                amount,
+                r#"Usage: PlaceAuctionBid("type", index, bid)"#,
+            )?;
             let Some(list) = list_index(&kind) else {
                 return Ok(());
             };
@@ -803,7 +834,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CalculateAuctionDeposit(runTime) → copper, by the client's arithmetic (`deposit_for`).
     g.set(
         "CalculateAuctionDeposit",
-        lua.create_function(|lua, minutes: u32| {
+        lua.create_function(|lua, minutes: Value| {
+            // `is-number` else `Usage: CalculateAuctionDeposit(runTime)` (`0x8493b0`,
+            // `0x4ce1d9`); the run time is `_ftol`'s 32 bits (`0x4ce28d`).
+            let minutes =
+                binding_abi::index_arg32(lua, minutes, "Usage: CalculateAuctionDeposit(runTime)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let rate = model.auction.as_ref().map_or(0, |a| a.deposit_percent);
             let stack_value = sell_item_info(&model).map_or(0, |(_, _, _, _, _, v)| v);

@@ -293,7 +293,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // fold re-sorts and signals `TRADE_SKILL_UPDATE` in place (`0x4fd750`).
     g.set(
         "ExpandTradeSkillSubClass",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: ExpandTradeSkillSubClass(index)` (`0x84e914`, `0x500151`).
+            let id = binding_abi::index_arg(lua, id, "Usage: ExpandTradeSkillSubClass(index)")?;
             crate::script::tick::verb(lua, |model| {
                 set_collapsed(model, id, false);
                 raise_update(model);
@@ -303,7 +305,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "CollapseTradeSkillSubClass",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: CollapseTradeSkillSubClass(index)` (`0x84e8bc`, `0x5000d1`).
+            let id = binding_abi::index_arg(lua, id, "Usage: CollapseTradeSkillSubClass(index)")?;
             crate::script::tick::verb(lua, |model| {
                 set_collapsed(model, id, true);
                 raise_update(model);
@@ -410,7 +414,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // `BuildColoredListString` (Blizzard_TradeSkillUI.lua:274).
     g.set(
         "GetTradeSkillTools",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetTradeSkillTools(index)` (`0x84e668`, `0x4ff9ab`).
+            let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillTools(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
             if let Some(r) = recipe_at(&model, index) {
@@ -439,7 +445,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // SelectTradeSkill and GetTradeSkillSelectionIndex take and answer visible indices.
     g.set(
         "SelectTradeSkill",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SelectTradeSkill(index)` (`0x84e2c4`, `0x4fd9c1`).
+            let index = binding_abi::index_arg32(lua, index, "Usage: SelectTradeSkill(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             select(&mut model, index);
             Ok(())
@@ -458,7 +466,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // `UPDATE_TRADESKILL_RECAST` before the first cast (`0x500307` → `0x4fd770`).
     g.set(
         "DoTradeSkill",
-        lua.create_function(|lua, (index, count): (usize, Option<Value>)| {
+        lua.create_function(|lua, (index, count): (Value, Option<Value>)| {
+            // `is-number` else `Usage: DoTradeSkill(index [, repeat])` (`0x84e93c`, `0x500291`).
+            let index =
+                binding_abi::index_arg(lua, index, "Usage: DoTradeSkill(index [, repeat])")?;
             // A count that is no number reads as 1 (`0x5002c5`-`0x5002cc`).
             let count = count
                 .and_then(|v| lua.coerce_number(v).ok().flatten())

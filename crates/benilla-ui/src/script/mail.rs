@@ -2,10 +2,9 @@
 //! (`UiScript::set_mail`), and the Lua verbs queue intents the app drains and sends. Indices are
 //! 1-based, as `MailFrame.lua` uses them.
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::cursor;
 use super::Model;
 
@@ -555,7 +554,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "InboxItemCanDelete",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: InboxItemCanDelete(index)` (`0x846508`, `0x4afe11`).
+            let index = binding_abi::index_arg(lua, index, "Usage: InboxItemCanDelete(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(row_at(&model, index).is_some_and(|r| r.can_delete)))
         })?,

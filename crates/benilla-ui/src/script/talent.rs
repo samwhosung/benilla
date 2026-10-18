@@ -17,10 +17,9 @@
 //! rank. The spell builder writes the same lines around the full body (`0x52f735`); its next-rank
 //! pass, a second full body, never runs, as no 1.12 exceptional talent has a second rank.
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{self, flag};
 use super::tooltip_spell::{spell_view_of, TalentLines};
 use super::Model;
 
@@ -209,7 +208,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // Flat (tier, column, isLearnable) triplets, as `Blizzard_TalentUI.lua:385` walks them.
     g.set(
         "GetTalentPrereqs",
-        lua.create_function(|lua, (tab, i): (usize, usize)| {
+        lua.create_function(|lua, (tab, i): (Value, Value)| {
+            // `is-number` on args 1 and 2 else `Usage: GetTalentPrereqs(tabIndex, talentIndex)`
+            // (`0x84ce40`, `0x4f3686`).
+            let tab =
+                binding_abi::index_arg(lua, tab, "Usage: GetTalentPrereqs(tabIndex, talentIndex)")?;
+            let i =
+                binding_abi::index_arg(lua, i, "Usage: GetTalentPrereqs(tabIndex, talentIndex)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
             if let Some(t) = talent_at(&model, tab, i) {
@@ -227,7 +232,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (vmangos `Player::LearnTalent`).
     g.set(
         "LearnTalent",
-        lua.create_function(|lua, (tab, i): (u32, u32)| {
+        lua.create_function(|lua, (tab, i): (Value, Value)| {
+            // `is-number` on args 1 and 2 else `Usage: LearnTalent(tabIndex, talentIndex)`
+            // (`0x84ce70`, `0x4f380c`).
+            let tab =
+                binding_abi::index_arg32(lua, tab, "Usage: LearnTalent(tabIndex, talentIndex)")?;
+            let i = binding_abi::index_arg32(lua, i, "Usage: LearnTalent(tabIndex, talentIndex)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.talent_learns.push((tab, i));
             Ok(())
@@ -274,7 +284,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetTalent",
-        lua.create_function(|lua, (this, tab, i): (Table, usize, usize)| {
+        lua.create_function(|lua, (this, tab, i): (Table, Value, Value)| {
+            // `is-number` on args 2 and 3 else `Usage: SetTalent(tabIndex, talentIndex)`
+            // (`0x85555c`, `0x535394`).
+            let tab = binding_abi::index_arg(lua, tab, "Usage: SetTalent(tabIndex, talentIndex)")?;
+            let i = binding_abi::index_arg(lua, i, "Usage: SetTalent(tabIndex, talentIndex)")?;
             let (display, ranks, mut lines) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let Some(t) = talent_at(&model, tab, i) else {

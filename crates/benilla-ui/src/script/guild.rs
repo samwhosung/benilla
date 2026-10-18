@@ -345,7 +345,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`FriendsFrame.lua:344`, `:347`).
     g.set(
         "GetGuildRosterInfo",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetGuildRosterInfo(index)` (`0x849aec`, `0x4d122b`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetGuildRosterInfo(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(m) = member_at(&model.guild.roster, index) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 10]));
@@ -369,7 +375,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // online member, whom the wire sends no time for.
     g.set(
         "GetGuildRosterLastOnline",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GetGuildRosterLastOnline(index)` (`0x849b10`, `0x4d14b7`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GetGuildRosterLastOnline(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(m) = member_at(&model.guild.roster, index) else {
                 return Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil));
@@ -412,7 +424,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "SetGuildRosterSelection",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SetGuildRosterSelection(index)` (`0x849b98`, `0x4d1831`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: SetGuildRosterSelection(index)",
+            )?);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let len = model.guild.roster.len();
             let index = u32::try_from(index.clamp(0, len as i64)).unwrap_or(0);
@@ -593,7 +611,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GuildControlGetRankName(index) (`0x4d1e90`): 1-based, the dropdown's ID.
     g.set(
         "GuildControlGetRankName",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GuildControlGetRankName(index)` (`0x849c10`, `0x4d1ebe`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GuildControlGetRankName(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let name = usize::try_from(index)
                 .ok()
@@ -610,7 +634,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // 0-based `rankIndex` passed by mistake loads nothing.
     g.set(
         "GuildControlSetRank",
-        lua.create_function(|lua, index: i64| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: GuildControlSetRank(rank)` (`0x849c38`, `0x4d1fb1`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GuildControlSetRank(rank)",
+            )?);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let rank = u32::try_from(index).ok().filter(|i| *i >= 1).unwrap_or(0);
             let rights = live_rights(&model, rank);
@@ -644,7 +674,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GuildControlSetRankFlag(index, enabled) (`0x4d2070`): stage one checkbox, 1 to 13.
     g.set(
         "GuildControlSetRankFlag",
-        lua.create_function(|lua, (index, enabled): (i64, Option<Value>)| {
+        lua.create_function(|lua, (index, enabled): (Value, Option<Value>)| {
+            // `is-number` else `Usage: GuildControlSetRankFlag(index, enabled)` (`0x849c5c`,
+            // `0x4d2082`).
+            let index = i64::from(binding_abi::number_arg(
+                lua,
+                index,
+                "Usage: GuildControlSetRankFlag(index, enabled)",
+            )?);
             let Some(slot) = usize::try_from(index)
                 .ok()
                 .and_then(|i| i.checked_sub(1))

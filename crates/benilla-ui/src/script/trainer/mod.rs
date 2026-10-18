@@ -887,7 +887,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // spans the whole row array like the getters' gate (`0x4d89b0`); their own bound is untraced.
     g.set(
         "CollapseTrainerSkillLine",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: CollapseTrainerSkillLine(index)` (`0x84ad24`, `0x4da6d1`).
+            let id = binding_abi::index_arg(lua, id, "Usage: CollapseTrainerSkillLine(index)")?;
             super::tick::verb(lua, |model| {
                 set_collapsed(model, id, true);
                 raise_trainer_update(model);
@@ -897,7 +899,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "ExpandTrainerSkillLine",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: ExpandTrainerSkillLine(index)` (`0x84ad78`, `0x4da751`).
+            let id = binding_abi::index_arg(lua, id, "Usage: ExpandTrainerSkillLine(index)")?;
             super::tick::verb(lua, |model| {
                 set_collapsed(model, id, false);
                 raise_trainer_update(model);
@@ -912,7 +916,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // stock window's `> 1` test treats the same as 0.
     g.set(
         "SelectTrainerService",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: SelectTrainerService(index)` (`0x84a8a8`, `0x4d8e71`).
+            let index = binding_abi::index_arg(lua, index, "Usage: SelectTrainerService(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.trainer_selection = service(&model, index).map(|s| s.spell_id);
             Ok(())
@@ -933,7 +939,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // buys every visible service for any index at or below 0 (`0x4da244`, `0x4d8a70`).
     g.set(
         "BuyTrainerService",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: BuyTrainerService(index)` (`0x84aad0`, `0x4da221`).
+            let index = binding_abi::index_arg(lua, index, "Usage: BuyTrainerService(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let buyable = service(&model, index)
                 .filter(|s| s.category == TrainerServiceCategory::Available)

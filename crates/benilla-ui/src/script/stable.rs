@@ -15,6 +15,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// The current pet plus the `NUM_PET_STABLE_SLOTS` (2) stable slots (`PetStable.lua:1`).
@@ -281,7 +282,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4cb280`), a miss answering nil, nil, 0, nil, nil.
     g.set(
         "GetStablePetInfo",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: GetStablePetInfo(index)` (`0x848f18`, `0x4cb25b`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: GetStablePetInfo(index)",
+            )?);
             let pet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_index(i).and_then(|i| model.stable.state.as_ref()?.slots[i].clone())
@@ -318,7 +325,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // family with no diet.
     g.set(
         "GetStablePetFoodTypes",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: GetStablePetInfo(index)` (`0x848f18`, `0x4cbaa3`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: GetStablePetInfo(index)",
+            )?);
             let diet = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_index(i)
@@ -386,7 +399,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ClickStablePet(i) → one value ([`click_stable_pet`]).
     g.set(
         "ClickStablePet",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: ClickStablePet(index)` (`0x848f38`, `0x4cb43b`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: ClickStablePet(index)",
+            )?);
             Ok(super::tick::verb(lua, |model| click_stable_pet(model, i)))
         })?,
     )?;
@@ -397,7 +416,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // cursor left clear. The set fires nothing of its own.
     g.set(
         "PickupStablePet",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: PickupStablePet(index)` (`0x848f58`, `0x4cb7b1`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: PickupStablePet(index)",
+            )?);
             let occupied = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_index(i)
@@ -437,7 +462,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // unsigned bound rejects slot 0. The reference's other gate, no charmed unit, is not built.
     g.set(
         "UnstablePet",
-        lua.create_function(|lua, i: i64| {
+        lua.create_function(|lua, i: Value| {
+            // `is-number` else `Usage: UnstablePet(index)` (`0x848efc`, `0x4caf38`).
+            let i = i64::from(binding_abi::number_arg(
+                lua,
+                i,
+                "Usage: UnstablePet(index)",
+            )?);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let pet_number = model
                 .stable

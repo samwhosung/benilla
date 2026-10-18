@@ -7,9 +7,9 @@
 //! its base (`MacroFrame.macroBase`). A macro's bound spell (`0x4e5a50`'s macro arm returns
 //! `[rec+0x564]`) is the app's to derive: it needs the spell catalog and the player's book.
 
-use crate::script::binding_abi;
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::cursor::{set_cursor, CursorMacro, CursorPayload};
 use super::Model;
 
@@ -477,7 +477,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "DeleteMacro",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: DeleteMacro(index)` (`0x84cc28`, `0x4f1861`).
+            let index = binding_abi::index_arg(lua, index, "Usage: DeleteMacro(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             delete_macro(&mut model, index);
             Ok(())
@@ -486,7 +488,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "PickupMacro",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, index: Value| {
+            // `is-number` else `Usage: PickupMacro(index)` (`0x84cc98`, `0x4f1af1`).
+            let index = binding_abi::index_arg(lua, index, "Usage: PickupMacro(index)")?;
             pickup_macro(lua, index);
             Ok(())
         })?,

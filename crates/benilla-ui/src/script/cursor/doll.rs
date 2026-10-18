@@ -3,7 +3,7 @@
 
 use mlua::{Lua, Value};
 
-use crate::script::binding_abi::flag;
+use crate::script::binding_abi::{self, flag};
 use crate::script::container::ContainerMove;
 use crate::script::protected::{self, Tag};
 use crate::script::tick::verb;
@@ -266,7 +266,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "EquipCursorItem",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, id: Value| {
+            // `is-number` else `Usage: EquipCursorItem(slot)` (`0x8425b4`, `0x489678`).
+            let id = binding_abi::index_arg32(lua, id, "Usage: EquipCursorItem(slot)")?;
             equip_cursor_item(lua, id);
             Ok(())
         })?,

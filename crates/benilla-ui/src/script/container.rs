@@ -5,7 +5,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::{flag, number_arg};
+use super::binding_abi::{self, flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
 use super::protected::{self, Tag};
 use super::Model;
@@ -795,7 +795,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // up raise. The reference also needs the bank open for 5-10, which is not checked here.
     lua.globals().set(
         "SetBagPortaitTexture",
-        lua.create_function(|lua, (region, container): (Table, i64)| {
+        lua.create_function(|lua, (region, container): (Table, Value)| {
+            // `is-number` else `Usage: SetBagPortaitTexture(texture, slot)` (`0x84d9c4`,
+            // `0x4fa58e`).
+            let container = i64::from(binding_abi::number_arg(
+                lua,
+                container,
+                "Usage: SetBagPortaitTexture(texture, slot)",
+            )?);
             if container >= 11 {
                 return Err(mlua::Error::runtime("Invalid slot in SetBagPortaitTexture"));
             }
@@ -832,7 +839,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.globals().set(
         "GetContainerNumSlots",
-        lua.create_function(|lua, bag: i64| {
+        lua.create_function(|lua, bag: Value| {
+            // `is-number` else `Usage: GetContainerNumSlots(index)` (`0x84d83c`, `0x4f9577`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: GetContainerNumSlots(index)",
+            )?);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model.containers.get(&bag).map_or(0, |c| c.num_slots))
         })?,
@@ -840,7 +853,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.globals().set(
         "GetBagName",
-        lua.create_function(|lua, bag: i64| {
+        lua.create_function(|lua, bag: Value| {
+            // `is-number` else `Usage: GetBagName(index)` (`0x84da04`, `0x4fa69a`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: GetBagName(index)",
+            )?);
             let name = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.containers.get(&bag).and_then(|c| c.name.clone())
@@ -964,7 +983,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.globals().set(
         "UseContainerItem",
-        lua.create_function(|lua, (bag, slot, rest): (i64, u32, mlua::MultiValue)| {
+        lua.create_function(|lua, (bag, slot, rest): (Value, Value, mlua::MultiValue)| {
+            // `is-number` on args 1 and 2 else `Usage: UseContainerItem(index, slot[, onSelf])`
+            // (`0x84d940`, `0x4fa440`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: UseContainerItem(index, slot[, onSelf])",
+            )?);
+            let slot = binding_abi::index_arg32(
+                lua,
+                slot,
+                "Usage: UseContainerItem(index, slot[, onSelf])",
+            )?;
             // `onSelf` through the client's flag coercion (`0x4fa17d`, `0x6f1c10`, default 0).
             let on_self = super::binding_abi::bool_or_default(rest.front(), false);
             // Every right-click clears the cursor before it reads the slot (`0x4fa198`): a held
@@ -986,7 +1017,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // any path.
     lua.globals().set(
         "PickupContainerItem",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
+        lua.create_function(|lua, (bag, slot): (Value, Value)| {
+            // `is-number` on args 1 and 2 else `Usage: PickupContainerItem(index, slot)`
+            // (`0x84d8e8`, `0x4f9f56`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: PickupContainerItem(index, slot)",
+            )?);
+            let slot =
+                binding_abi::index_arg32(lua, slot, "Usage: PickupContainerItem(index, slot)")?;
             // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind
             // the gate's tag 2.
             let may_cast = protected::gate(lua, Tag::CAST);
@@ -1004,7 +1044,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the cursor alone.
     lua.globals().set(
         "ShowContainerSellCursor",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
+        lua.create_function(|lua, (bag, slot): (Value, Value)| {
+            // `is-number` on args 1 and 2 else `Usage: ShowContainerSellCursor(index, slot)`
+            // (`0x84d970`, `0x4fa4d9`).
+            let bag = i64::from(binding_abi::number_arg(
+                lua,
+                bag,
+                "Usage: ShowContainerSellCursor(index, slot)",
+            )?);
+            let slot =
+                binding_abi::index_arg32(lua, slot, "Usage: ShowContainerSellCursor(index, slot)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let occupied = model
                 .containers

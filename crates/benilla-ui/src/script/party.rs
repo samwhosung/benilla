@@ -10,7 +10,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::number_arg;
+use super::binding_abi::{self, number_arg};
 use super::Model;
 
 /// One party member; everything else about them is the unit snapshot under their `partyN` token.
@@ -370,13 +370,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPartyMember(id) → 1 for a filled 1-based slot, else nil.
+    // GetPartyMember(id) → 1 for a filled 1-based slot, else nil. A non-number, or an index
+    // whose `id - 1` is 4 or more unsigned, raises `Usage: GetPartyMember(1-4)` (`0x84c3c4`,
+    // `0x4e90b3`, `0x4e90e4`).
     g.set(
         "GetPartyMember",
-        lua.create_function(|lua, id: i64| {
+        lua.create_function(|lua, id: Value| {
+            const USAGE: &str = "Usage: GetPartyMember(1-4)";
+            let id = binding_abi::index_arg32(lua, id, USAGE)?;
+            if id.wrapping_sub(1) >= 4 {
+                return Err(mlua::Error::runtime(USAGE));
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let n = model.party.members.len() as i64;
-            Ok(if id >= 1 && id <= n {
+            let (id, n) = (i64::from(id), model.party.members.len() as i64);
+            Ok(if id <= n {
                 Value::Integer(1)
             } else {
                 Value::Nil
@@ -509,7 +516,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "SetLootThreshold",
-        lua.create_function(|lua, n: u32| {
+        lua.create_function(|lua, n: Value| {
+            // `is-number` else `Usage: SetLooThreshold(threshold)` (`0x84c464`, `0x4e9564`).
+            let n = binding_abi::index_arg32(lua, n, "Usage: SetLooThreshold(threshold)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.party_requests.push(PartyRequest::LootThreshold(n));
             Ok(())
@@ -520,7 +529,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // call it bare.
     g.set(
         "SetRaidTarget",
-        lua.create_function(|lua, (unit, index): (String, u8)| {
+        lua.create_function(|lua, (unit, index): (Value, Value)| {
+            // `is-number-or-string` on arg 1, `is-number` on arg 2 else `Usage: SetRaidTarget(unit,
+            // index)` (`0x847578`, `0x4bc066`); the index is `_ftol`'s low byte (`0x4bbf23`).
+            const USAGE: &str = "Usage: SetRaidTarget(unit, index)";
+            let unit = binding_abi::string_arg(lua, unit, USAGE)?;
+            let index = binding_abi::number_arg(lua, index, USAGE)? as u8;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model
                 .party_requests
@@ -853,7 +867,8 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetPartyMember(1)").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return GetPartyMember(2)").unwrap(), 1);
         assert!(s.eval::<bool>("return GetPartyMember(3) == nil").unwrap());
-        assert!(s.eval::<bool>("return GetPartyMember(0) == nil").unwrap());
+        let e = s.run("GetPartyMember(0)").unwrap_err().to_string();
+        assert!(e.contains("Usage: GetPartyMember(1-4)"), "{e}");
         assert_eq!(s.eval::<i64>("return GetPartyLeaderIndex()").unwrap(), 1);
         assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
         let (method, master) = s

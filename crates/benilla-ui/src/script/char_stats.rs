@@ -819,10 +819,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // The getters' shared opening: `is-number-or-string` on the unit (`0x6f3510`) else `usage`,
+    // then the slot reader `0x4c8520` else `invalid`; the 1-based slot back for the lookup.
+    fn inventory_item_args(
+        lua: &Lua,
+        (unit, slot): (Value, Value),
+        usage: &'static str,
+        invalid: &'static str,
+    ) -> mlua::Result<(Option<String>, i64)> {
+        let token = super::binding_abi::string_arg(lua, unit, usage)?;
+        let slot0 = super::inventory_verbs::inventory_slot_arg(lua, slot, invalid)?;
+        Ok((Some(token), i64::from(slot0) + 1))
+    }
+
     // GetInventoryItemTexture(unit, slot) → icon path, or nil until the item's template arrives.
     g.set(
         "GetInventoryItemTexture",
-        lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
+        lua.create_function(|lua, (unit, slot): (Value, Value)| {
+            // `Usage: GetInventoryItemTexture(unit, slot)` (`0x8488f8`) unless arg 1 is a number or
+            // string, `Invalid inventory slot in GetInventoryItemTexture` (`0x8488c4`) unless the
+            // shared reader passes arg 2 (`0x4c82f8`).
+            let (token, slot) = inventory_item_args(
+                lua,
+                (unit, slot),
+                "Usage: GetInventoryItemTexture(unit, slot)",
+                "Invalid inventory slot in GetInventoryItemTexture",
+            )?;
             match player_inv_slot(lua, &token, slot).and_then(|v| v.icon) {
                 Some(icon) => Ok(Value::String(lua.create_string(&icon)?)),
                 None => Ok(Value::Nil),
@@ -834,7 +856,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // arrives with the name and quality.
     g.set(
         "GetInventoryItemLink",
-        lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
+        lua.create_function(|lua, (unit, slot): (Value, Value)| {
+            // `Usage: GetInventoryItemLink(unit, slot)` (`0x848ad0`) unless arg 1 is a number or
+            // string, `Invalid inventory slot in GetInventoryItemLink` (`0x848aa0`) unless the
+            // shared reader passes arg 2 (`0x4c8c68`).
+            let (token, slot) = inventory_item_args(
+                lua,
+                (unit, slot),
+                "Usage: GetInventoryItemLink(unit, slot)",
+                "Invalid inventory slot in GetInventoryItemLink",
+            )?;
             match player_inv_slot(lua, &token, slot).and_then(|v| v.link) {
                 Some(link) => Ok(Value::String(lua.create_string(&link)?)),
                 None => Ok(Value::Nil),
@@ -876,7 +907,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetInventoryItemQuality(unit, slot) → 0..6, or nil for an empty slot (the wiki's shape).
     g.set(
         "GetInventoryItemQuality",
-        lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
+        lua.create_function(|lua, (unit, slot): (Value, Value)| {
+            // `Usage: GetInventoryItemQuality(unit, slot)` (`0x848a14`) unless arg 1 is a number or
+            // string, `Invalid inventory slot in GetInventoryItemQuality` (`0x8489e0`) unless the
+            // shared reader passes arg 2 (`0x4c8925`).
+            let (token, slot) = inventory_item_args(
+                lua,
+                (unit, slot),
+                "Usage: GetInventoryItemQuality(unit, slot)",
+                "Invalid inventory slot in GetInventoryItemQuality",
+            )?;
             match player_inv_slot(lua, &token, slot) {
                 Some(v) if v.item_id != 0 => Ok(Value::Integer(i64::from(v.quality))),
                 _ => Ok(Value::Nil),
@@ -887,7 +927,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetInventoryItemBroken(unit, slot) → 1 or nil, per `slot_is_broken`.
     g.set(
         "GetInventoryItemBroken",
-        lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
+        lua.create_function(|lua, (unit, slot): (Value, Value)| {
+            // `Usage: GetInventoryItemBroken(unit, slot)` (`0x848958`) unless arg 1 is a number or
+            // string, `Invalid inventory slot in GetInventoryItemBroken` (`0x848924`) unless the
+            // shared reader passes arg 2 (`0x4c85ca`).
+            let (token, slot) = inventory_item_args(
+                lua,
+                (unit, slot),
+                "Usage: GetInventoryItemBroken(unit, slot)",
+                "Invalid inventory slot in GetInventoryItemBroken",
+            )?;
             match player_inv_slot(lua, &token, slot) {
                 Some(v) if slot_is_broken(&v) => Ok(Value::Integer(1)),
                 _ => Ok(Value::Nil),
@@ -1737,13 +1786,17 @@ mod tests {
             1,
             "no item behind the token is the empty answer, and the empty answer is 1"
         );
-        // Out-of-range slots: the empty shape, no error.
-        assert!(s
-            .eval::<bool>(r#"return GetInventoryItemLink("player", 25) == nil"#)
-            .unwrap());
-        assert!(s
-            .eval::<bool>(r#"return GetInventoryItemLink("player", -1) == nil"#)
-            .unwrap());
+        // Slots outside the reader's whitelist raise (`0x4c8520`, `0x848aa0`).
+        for slot in [25, -1] {
+            let e = s
+                .run(&format!(r#"GetInventoryItemLink("player", {slot})"#))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("Invalid inventory slot in GetInventoryItemLink"),
+                "{e}"
+            );
+        }
     }
 
     #[test]
