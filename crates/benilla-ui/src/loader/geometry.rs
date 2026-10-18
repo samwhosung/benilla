@@ -2,7 +2,6 @@ use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
 
-use super::regions::FontAttrs;
 use super::{abs_dim, children_named, Loader};
 
 impl Loader<'_> {
@@ -150,68 +149,78 @@ impl Loader<'_> {
                 return;
             }
         };
-        self.apply_region_layout(tr, &region, self_name, dbg, FontAttrs::Own);
-    }
-
-    /// `<Size>` (`0x767800`). Every one applies in document order, and expansion puts an
-    /// instance's children after its template's, so the instance's own `<Size>` wins.
-    pub(super) fn apply_size(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
-        for size in children_named(el, "Size") {
-            let (x, y) = abs_dim(size);
-            if let Some(w) = x {
-                self.call(wrapper, "SetWidth", w, dbg);
-            }
-            if let Some(h) = y {
-                self.call(wrapper, "SetHeight", h, dbg);
-            }
+        for level in self.levels(tr) {
+            self.apply_geometry(&level, &region, true, self_name, dbg);
         }
     }
 
-    /// `<Anchors>` (`0x767800`), after the `setAllPoints` shorthand: `relativePoint` defaults to
-    /// `point`, and `relativeTo` expands `$parent` to the nearest named ancestor's name, else
-    /// `Top` (`0x76c5b0`).
-    pub(super) fn apply_anchors(
+    /// One node's geometry, the CLayoutFrame part of every frame and region `LoadXML` (`0x767800`),
+    /// run once per level ([`Loader::levels`]): the node's first `<Size>`, then its first
+    /// `<Anchors>`, whose points are added, or, with none, `setAllPoints="true"` (compared whole,
+    /// `0x767879`) as `SetAllPoints`, which clears the points first (`0x767db0`). `setAllPoints`
+    /// beside the node's own `<Anchors>` is logged (`0x8784ac`) and ignored, so a template's
+    /// all-points and an instance's anchor both stand (`ActionButtonTemplate.xml`'s
+    /// `$parentCooldown` over `CooldownFrameTemplate`). `relativePoint` defaults to `point`, and
+    /// `relativeTo` expands `$parent` to `parent_name`, the nearest named ancestor's, else `Top`
+    /// (`0x76c5b0`).
+    pub(super) fn apply_geometry(
         &mut self,
-        el: &Element,
+        node: &Element,
         wrapper: &Table,
+        region: bool,
         parent_name: &str,
         dbg: &str,
     ) {
-        if el.attr_is_true("setAllPoints") {
-            self.call(wrapper, "SetAllPoints", (), dbg);
-        }
-        for anchors in children_named(el, "Anchors") {
-            for anchor in children_named(anchors, "Anchor") {
-                let Some(point) = anchor.attr("point") else {
-                    self.report
-                        .warnings
-                        .push(format!("{dbg}: <Anchor> without a point; skipped"));
-                    continue;
-                };
-                let rel_point = anchor.attr("relativePoint").unwrap_or(point).to_string();
-                let rel_to: Option<String> = anchor
-                    .attr("relativeTo")
-                    .map(|r| framexml::resolve_name(r, parent_name));
-                let (x, y) = children_named(anchor, "Offset")
-                    .next()
-                    .map(abs_dim)
-                    .unwrap_or((None, None));
-                let args = (
-                    point.to_string(),
-                    rel_to,
-                    rel_point,
-                    x.unwrap_or(0.0),
-                    y.unwrap_or(0.0),
-                );
-                let d = super::DeferredAnchor {
-                    wrapper: wrapper.clone(),
-                    region: false,
-                    args,
-                    dbg: dbg.to_string(),
-                };
-                // Deferred while the enclosing subtree has not built its target yet.
-                self.apply_anchor(d, true);
+        if let Some(size) = children_named(node, "Size").next() {
+            let (x, y) = abs_dim(size);
+            if let Some(w) = x {
+                self.call_on(wrapper, region, "SetWidth", w, dbg);
             }
+            if let Some(h) = y {
+                self.call_on(wrapper, region, "SetHeight", h, dbg);
+            }
+        }
+        let set_all_points = node.attr_is_true("setAllPoints");
+        let Some(anchors) = children_named(node, "Anchors").next() else {
+            if set_all_points {
+                self.call_on(wrapper, region, "SetAllPoints", (), dbg);
+            }
+            return;
+        };
+        if set_all_points {
+            self.status_warning("SETALLPOINTS set to true in frame with anchors (ignored)".into());
+        }
+        for anchor in children_named(anchors, "Anchor") {
+            let Some(point) = anchor.attr("point") else {
+                let kind = if region { "region " } else { "" };
+                self.report
+                    .warnings
+                    .push(format!("{dbg}: {kind}<Anchor> without a point; skipped"));
+                continue;
+            };
+            let rel_point = anchor.attr("relativePoint").unwrap_or(point).to_string();
+            let rel_to: Option<String> = anchor
+                .attr("relativeTo")
+                .map(|r| framexml::resolve_name(r, parent_name));
+            let (x, y) = children_named(anchor, "Offset")
+                .next()
+                .map(abs_dim)
+                .unwrap_or((None, None));
+            let args = (
+                point.to_string(),
+                rel_to,
+                rel_point,
+                x.unwrap_or(0.0),
+                y.unwrap_or(0.0),
+            );
+            let d = super::DeferredAnchor {
+                wrapper: wrapper.clone(),
+                region,
+                args,
+                dbg: dbg.to_string(),
+            };
+            // Deferred while the enclosing subtree has not built its target yet.
+            self.apply_anchor(d, true);
         }
     }
 }

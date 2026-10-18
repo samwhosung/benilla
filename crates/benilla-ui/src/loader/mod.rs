@@ -199,13 +199,15 @@ pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &s
     loader.report.warnings.extend(notes);
 
     // The XML `inherits=` expansion; its warnings get the `CreateFrame` call as a prefix.
+    let node = framexml::inherits_node(kind, template);
     let first = loader.report.warnings.len();
-    let expanded = loader.expand(&framexml::inherits_node(kind, template));
+    let expanded = loader.expand(&node);
     for w in &mut loader.report.warnings[first..] {
         *w = format!("{dbg}: {w}");
     }
+    let levels = loader.levels(&node);
 
-    loader.decorate(&expanded, wrapper, &self_name, &parent_name, &dbg);
+    loader.decorate(&expanded, &levels, wrapper, &self_name, &parent_name, &dbg);
 
     loader.report
 }
@@ -336,6 +338,13 @@ impl Loader<'_> {
         crate::script::event::invoke_with_globals(self.lua, wrapper.clone(), func, Vec::new())
     }
 
+    /// A severity-1 line into the document's record (the `[status+0xc]` call every `LoadXML` logs
+    /// through), retained as a warning too.
+    pub(super) fn status_warning(&mut self, line: String) {
+        self.report.status.report(status::WARNING, line.clone());
+        self.report.warnings.push(line);
+    }
+
     pub(super) fn warn_once(&mut self, key: &str, msg: impl Into<String>) {
         if self.warned.insert(key.to_string()) {
             self.report.warnings.push(msg.into());
@@ -408,8 +417,7 @@ impl Loader<'_> {
                 TopLevel::Font(el) => self.do_font(el),
                 TopLevel::Template(el) => self.register_template(el),
                 TopLevel::Instance(el) => {
-                    let expanded = self.expand(el);
-                    self.materialize(&expanded, None, framexml::DEFAULT_PARENT_NAME);
+                    self.materialize(el, None, framexml::DEFAULT_PARENT_NAME);
                 }
             }
         }
@@ -516,19 +524,19 @@ impl Loader<'_> {
         out
     }
 
-    /// The `file=` loads of a texture region, in the order the reference runs them
-    /// (`0x76fe20`): each `inherits` level's own file with the wrap flag of that level's own
-    /// `<TexCoords>` (the flag is a local of the level's load, zeroed before its children,
-    /// `0x76fec6`), the template first. A level without a `file=` loads nothing.
-    pub(super) fn texture_file_loads(&self, raw: &Element) -> Vec<(String, bool)> {
+    /// The nodes `raw`'s `LoadXML` reads, in the order it reads them: the reference merges no
+    /// template into an instance, but re-enters `LoadXML` on each `inherits` node first
+    /// (`0x76985c` for a frame, `0x76fe5b` for a texture, `0x770f9e` for a FontString), then reads
+    /// the node's own attributes and its own first child of each kind (`0x6f2c50`). So an
+    /// attribute whose rule is local to a node (`setAllPoints` beside the node's own `<Anchors>`,
+    /// a `font=` with its own `<FontHeight>`) is read here, level by level, the template first and
+    /// `raw` last; [`Loader::expand`]'s merged element serves the rest.
+    pub(super) fn levels(&self, raw: &Element) -> Vec<Element> {
         let model = self.model();
         let templates = model.framexml_templates.borrow();
         framexml::inherit_chain(raw, &*templates)
             .into_iter()
-            .filter_map(|level| {
-                let file = level.attr("file").filter(|f| !f.is_empty())?;
-                Some((file.to_string(), tex_coords_wrap(level)))
-            })
+            .cloned()
             .collect()
     }
 
@@ -585,15 +593,17 @@ impl Loader<'_> {
         }
     }
 
-    /// Build one template-expanded frame element, its nested `<Frames>`, then its `OnLoad`
+    /// Build one frame element, template-expanded, its nested `<Frames>`, then its `OnLoad`
     /// (bottom-up, `0x76a060`). `parent` is the lexically enclosing frame, which `parent=`
     /// overrides; `None` when the frame type is unknown, which skips the subtree.
     pub(super) fn materialize(
         &mut self,
-        el: &Element,
+        raw: &Element,
         parent: Option<&Table>,
         parent_name: &str,
     ) -> Option<Table> {
+        let expanded = self.expand(raw);
+        let el = &expanded;
         // Only creation lives here: everything after `CreateFrame` is `decorate`, which
         // `apply_template` enters for a frame that already exists.
 
@@ -695,17 +705,21 @@ impl Loader<'_> {
         // `$parent` for its contents; a nameless frame passes its nearest named ancestor on.
         let self_name = resolved_name.as_deref().unwrap_or(parent_name).to_string();
 
-        self.decorate(el, &wrapper, &self_name, parent_name, &dbg_name);
+        let levels = self.levels(raw);
+        self.decorate(el, &levels, &wrapper, &self_name, parent_name, &dbg_name);
         Some(wrapper)
     }
 
     /// Everything a frame element does to an existing frame, from `LoadXML` attributes to its
     /// `OnLoad` (bottom-up, `0x76a060`) and the post-load OnShow; shared by [`Self::materialize`] and
-    /// [`apply_template`]. `$parent` is `self_name` in this frame's contents and `parent_name` in
+    /// [`apply_template`]. `el` is the template-expanded element and `levels` the nodes it merges
+    /// ([`Loader::levels`]). `$parent` is `self_name` in this frame's contents and `parent_name` in
     /// its own anchors (`0x76c5b0`).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn decorate(
         &mut self,
         el: &Element,
+        levels: &[Element],
         wrapper: &Table,
         self_name: &str,
         parent_name: &str,
@@ -718,9 +732,11 @@ impl Loader<'_> {
         crate::script::visibility::set_load_window(self.lua(), wrapper, true);
         // 2 · LoadXML attributes (`0x769820`).
         self.apply_attrs(el, wrapper, dbg_name);
-        // 3 · <Size> and 4 · <Anchors> (the CLayoutFrame geometry base, `0x767800`).
-        self.apply_size(el, wrapper, dbg_name);
-        self.apply_anchors(el, wrapper, parent_name, dbg_name);
+        // 3 · <Size> and 4 · <Anchors>, each level's own (the CLayoutFrame geometry base,
+        //     `0x767800`).
+        for level in levels {
+            self.apply_geometry(level, wrapper, false, parent_name, dbg_name);
+        }
         // 5 · <Layers> regions (`0x769d70`) and the <Backdrop> plate (`0x77e6c0`), whose nine
         //     pieces are regions too, in document order: both are arms of the one child loop
         //     (`0x769b1c`), so the order they link into `GetRegions` is the file's. A template's
@@ -759,8 +775,7 @@ impl Loader<'_> {
         crate::script::tooltip_post_load(self.lua(), wrapper);
         for frames_el in children_named(el, "Frames") {
             for child in &frames_el.children {
-                let expanded = self.expand(child);
-                self.materialize(&expanded, Some(wrapper), self_name);
+                self.materialize(child, Some(wrapper), self_name);
             }
         }
 
@@ -982,6 +997,8 @@ pub(super) fn font_object_from_element(el: &Element) -> FontObject {
     }
 }
 
+#[cfg(test)]
+mod level_tests;
 #[cfg(test)]
 mod template_name_tests;
 #[cfg(test)]

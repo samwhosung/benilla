@@ -151,6 +151,22 @@ impl Loader<'_> {
         }
     }
 
+    /// [`Self::call_region`] on a region wrapper, else [`Self::call`].
+    pub(super) fn call_on(
+        &mut self,
+        wrapper: &Table,
+        region: bool,
+        method: &str,
+        args: impl mlua::IntoLuaMulti,
+        dbg: &str,
+    ) {
+        if region {
+            self.call_region(wrapper, method, args, dbg);
+        } else {
+            self.call(wrapper, method, args, dbg);
+        }
+    }
+
     /// Call a region-wrapper method, recording (not propagating) any error.
     pub(super) fn call_region(
         &mut self,

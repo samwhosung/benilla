@@ -32,8 +32,7 @@ impl Loader<'_> {
                 ));
                 continue;
             };
-            let expanded = self.expand(child);
-            let Some(child_wrapper) = self.materialize(&expanded, Some(wrapper), self_name) else {
+            let Some(child_wrapper) = self.materialize(child, Some(wrapper), self_name) else {
                 continue; // materialize already reported why
             };
             if let Err(e) = wrapper.call_method::<()>("SetScrollChild", child_wrapper) {
@@ -163,7 +162,8 @@ impl Loader<'_> {
                 // On `<NormalText>` the justify is the Normal font's, so the implicit anchor reads
                 // the ctor's CENTER (`0x212`); the justify still reaches the paint (`0x784111`).
                 self.call_region(&region, "ClearAllPoints", (), dbg);
-                self.apply_region_layout(bt, &region, self_name, dbg, font_attrs);
+                let levels = self.levels(bt);
+                self.apply_region_layout(bt, &levels, &region, self_name, dbg, font_attrs);
                 // `<ButtonText>` reads its own `inherits=` and `font=` as any FontString does
                 // (`0x6f2780` → `0x770f40`); `<NormalText>` skips them (`0x778b7b`).
                 if font_attrs == FontAttrs::Own {

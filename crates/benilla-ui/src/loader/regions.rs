@@ -3,7 +3,7 @@ use mlua::{ObjectLike, Table};
 use crate::framexml::{self, Element};
 use crate::status;
 
-use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader};
+use super::{abs_value, children_named, color_of, tex_coords_of, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
@@ -29,10 +29,6 @@ impl Loader<'_> {
         for layer in children_named(layers, "Layer") {
             let level = layer.attr("level").unwrap_or("ARTWORK").to_string();
             for region in &layer.children {
-                // `inherits=` may name a region template, in the frames' one registry
-                // (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
-                let raw = region;
-                let region = &self.expand_region(raw);
                 let is_texture = region.tag.eq_ignore_ascii_case("Texture");
                 let is_fontstring = region.tag.eq_ignore_ascii_case("FontString");
                 if !is_texture && !is_fontstring {
@@ -42,15 +38,15 @@ impl Loader<'_> {
                     ));
                     continue;
                 }
-                self.build_region(raw, region, wrapper, parent_name, &level, is_texture, dbg);
+                self.build_region(region, wrapper, parent_name, &level, is_texture, dbg);
             }
         }
     }
 
     /// The texture a widget element's child (`<BarTexture>`, `<ThumbTexture>`, a ColorSelect
-    /// texture) names, built as the shared texture adder does (`0x6f26f0`): `inherits=` expanded,
-    /// then the same region a `<Layers>` texture is, named, published, laid out, filled and given
-    /// its implicit all-points. The widget then installs the object it returns.
+    /// texture) names, built as the shared texture adder does (`0x6f26f0`): the same region a
+    /// `<Layers>` texture is, named, published, loaded level by level and given its implicit
+    /// all-points. The widget then installs the object it returns.
     pub(super) fn build_texture_child(
         &mut self,
         raw: &Element,
@@ -59,24 +55,26 @@ impl Loader<'_> {
         level: &str,
         dbg: &str,
     ) -> Option<Table> {
-        let expanded = self.expand_region(raw);
-        self.build_region(raw, &expanded, wrapper, parent_name, level, true, dbg)
+        self.build_region(raw, wrapper, parent_name, level, true, dbg)
     }
 
     /// One `<Layer>` region on `wrapper`, created on `level` and loaded: its name (`$parent`
-    /// expanded, published as a global), `hidden`, `alpha`, layout, font and visual, then the
-    /// implicit creation anchor, run after the region's LoadXML as the reference does (`0x7701c0`,
-    /// `0x771480`); an anchored region is left alone. `None` when the creation raised.
+    /// expanded, published as a global, read from `raw` alone, `0x6f2751`), `hidden`, `alpha`,
+    /// layout, font and visual, then the implicit creation anchor, run after the region's LoadXML
+    /// as the reference does (`0x7701c0`, `0x771480`); an anchored region is left alone. `None`
+    /// when the creation raised. `inherits=` may name a region template, in the frames' one
+    /// registry (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
     fn build_region(
         &mut self,
         raw: &Element,
-        region: &Element,
         wrapper: &Table,
         parent_name: &str,
         level: &str,
         is_texture: bool,
         dbg: &str,
     ) -> Option<Table> {
+        let levels = self.levels(raw);
+        let region = &self.expand_region(raw);
         let rname: Option<String> = region
             .name()
             .map(|raw| framexml::resolve_name(raw, parent_name));
@@ -104,13 +102,28 @@ impl Loader<'_> {
         {
             self.call_region(&region_wrapper, "SetAlpha", a, dbg);
         }
-        self.apply_region_layout(region, &region_wrapper, parent_name, dbg, FontAttrs::Own);
+        self.apply_region_layout(
+            region,
+            &levels,
+            &region_wrapper,
+            parent_name,
+            dbg,
+            FontAttrs::Own,
+        );
         if !is_texture {
             // Before the visual pass, so an explicit `<Color>` beats the font object's.
             self.apply_fontstring_font(region, &region_wrapper, dbg);
         }
-        let loads = if is_texture {
-            self.texture_file_loads(raw)
+        // Each level loads its own file with the wrap flag of its own `<TexCoords>` (the flag is a
+        // local of the level's load, zeroed before its children, `0x76fec6`), the template first.
+        let loads: Vec<(String, bool)> = if is_texture {
+            levels
+                .iter()
+                .filter_map(|level| {
+                    let file = level.attr("file").filter(|f| !f.is_empty())?;
+                    Some((file.to_string(), super::tex_coords_wrap(level)))
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -139,6 +152,7 @@ impl Loader<'_> {
             if !region.tag.eq_ignore_ascii_case("FontString") {
                 continue;
             }
+            let levels = self.levels(region);
             let region = &self.expand_region(region);
             let rname: Option<String> = region
                 .name()
@@ -173,7 +187,14 @@ impl Loader<'_> {
                     }
                 },
             };
-            self.apply_region_layout(region, &region_wrapper, parent_name, dbg, FontAttrs::Own);
+            self.apply_region_layout(
+                region,
+                &levels,
+                &region_wrapper,
+                parent_name,
+                dbg,
+                FontAttrs::Own,
+            );
             self.apply_fontstring_font(region, &region_wrapper, dbg);
             self.apply_region_visual(region, &region_wrapper, false, &[], dbg);
             // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
@@ -227,26 +248,20 @@ impl Loader<'_> {
         }
     }
 
-    /// A region's geometry: `<Size>`, a FontString's justify when [`FontAttrs::Own`],
-    /// `setAllPoints` and `<Anchors>`, whose `$parent` is the owner's name, or a nameless owner's
-    /// nearest named ancestor's.
+    /// A region's geometry, each level's own ([`Loader::apply_geometry`]), whose `$parent` is the
+    /// owner's name, or a nameless owner's nearest named ancestor's; then a FontString's justify
+    /// and spacing when [`FontAttrs::Own`].
     pub(super) fn apply_region_layout(
         &mut self,
         region: &Element,
+        levels: &[Element],
         wrapper: &Table,
         parent_name: &str,
         dbg: &str,
         font_attrs: FontAttrs,
     ) {
-        // Every `<Size>` in document order, as in `apply_size`.
-        for size in children_named(region, "Size") {
-            let (x, y) = abs_dim(size);
-            if let Some(w) = x {
-                self.call_region(wrapper, "SetWidth", w, dbg);
-            }
-            if let Some(h) = y {
-                self.call_region(wrapper, "SetHeight", h, dbg);
-            }
+        for level in levels {
+            self.apply_geometry(level, wrapper, true, parent_name, dbg);
         }
         if font_attrs == FontAttrs::Own {
             if let Some(j) = region.attr("justifyH") {
@@ -259,42 +274,6 @@ impl Loader<'_> {
             // (`0x771298`), so it outlasts the font object's.
             if let Some(sp) = region.attr("spacing").filter(|v| !v.is_empty()) {
                 self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
-            }
-        }
-        if region.attr_is_true("setAllPoints") {
-            self.call_region(wrapper, "SetAllPoints", (), dbg);
-        }
-        for anchors in children_named(region, "Anchors") {
-            for anchor in children_named(anchors, "Anchor") {
-                let Some(point) = anchor.attr("point") else {
-                    self.report
-                        .warnings
-                        .push(format!("{dbg}: region <Anchor> without a point; skipped"));
-                    continue;
-                };
-                let rel_point = anchor.attr("relativePoint").unwrap_or(point).to_string();
-                let rel_to: Option<String> = anchor
-                    .attr("relativeTo")
-                    .map(|r| framexml::resolve_name(r, parent_name));
-                let (x, y) = children_named(anchor, "Offset")
-                    .next()
-                    .map(abs_dim)
-                    .unwrap_or((None, None));
-                let args = (
-                    point.to_string(),
-                    rel_to,
-                    rel_point,
-                    x.unwrap_or(0.0),
-                    y.unwrap_or(0.0),
-                );
-                let d = super::DeferredAnchor {
-                    wrapper: wrapper.clone(),
-                    region: true,
-                    args,
-                    dbg: dbg.to_string(),
-                };
-                // Deferred while the enclosing subtree has not built its target yet.
-                self.apply_anchor(d, true);
             }
         }
     }
