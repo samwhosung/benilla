@@ -947,3 +947,19 @@ fn lua_str(s: &str) -> String {
     );
     format!("[[{s}]]")
 }
+
+/// `SetText` hands `lua_tostring(2)` to the parse (`0x796b1e`), which converts a number in place
+/// with `%.14g` (`0x6f7ca6`, `0x871960`): no f32 rounding, MSVC's three-digit exponent.
+#[test]
+fn a_number_parses_as_lua_number_text() {
+    let s = script();
+    page(&s);
+    for (code, want) in [
+        ("1/3", "0.33333333333333"),
+        ("123456789", "123456789"),
+        ("1e20", "1e+020"),
+    ] {
+        s.run(&format!("Page:SetText({code})")).unwrap();
+        assert_eq!(texts(&s, "Page"), [want], "{code}");
+    }
+}

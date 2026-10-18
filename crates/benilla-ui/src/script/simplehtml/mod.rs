@@ -730,13 +730,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetText",
         lua.create_function(|lua, (this, text): (Table, Value)| {
-            let raw = match &text {
-                // Bytes, lossily; never a raise.
-                Value::String(s) => s.to_string_lossy(),
-                Value::Number(n) => (*n as f32).to_string(),
-                Value::Integer(i) => (*i as f32).to_string(),
-                _ => String::new(),
-            };
+            // `lua_tostring(2)` (`0x796b1e`): bytes, lossily, a number as Lua's `%.14g` text.
+            let raw = binding_abi::optional_string(lua, &text).unwrap_or_default();
             let h = html_handle(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             set_text(&mut model, h, &raw);
