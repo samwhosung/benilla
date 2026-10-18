@@ -1364,3 +1364,36 @@ fn only_the_sizer_invalidates_the_tooltip() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// `AppendText` (`0x531e30`, helper `0x5305b0`): `%s%s` of line 1's left text and the argument,
+/// an empty left text printing `(null)` (`0x5305dd`), the result cut at 255 bytes (`0x64a865`), set
+/// without the cell's shown bit (`0x53060e`); a non-string raises `Usage: AppendText("text")`
+/// (`0x8551a8`) and a number appends its `%.14g` text.
+#[test]
+fn append_text_formats_line_one_without_showing_it() {
+    let s = script();
+    s.run(
+        r#"
+        local owner = CreateFrame("Button", "AppOwner")
+        AppTT = CreateFrame("GameTooltip", "AppTT", nil, "TestTooltipTemplate")
+        AppTT:SetOwner(owner, "ANCHOR_RIGHT")
+        AppTT:AddDoubleLine("", "R")
+        AppTT:AppendText("x")
+        assert(AppTTTextLeft1:GetText() == "(null)x", AppTTTextLeft1:GetText())
+        assert(not AppTTTextLeft1:IsShown(), "the left cell stays hidden")
+
+        AppTT:ClearLines()
+        AppTT:AddLine("a")
+        AppTT:AppendText(5)
+        AppTT:AppendText(1/3)
+        assert(AppTTTextLeft1:GetText() == "a50.33333333333333", AppTTTextLeft1:GetText())
+        AppTT:AppendText(string.rep("b", 300))
+        assert(string.len(AppTTTextLeft1:GetText()) == 255)
+    "#,
+    )
+    .unwrap();
+    let e = s.run("AppTT:AppendText({})").unwrap_err().to_string();
+    assert!(e.contains(r#"Usage: AppendText("text")"#), "{e}");
+    let e = s.run("AppTT:AppendText()").unwrap_err().to_string();
+    assert!(e.contains(r#"Usage: AppendText("text")"#), "{e}");
+}

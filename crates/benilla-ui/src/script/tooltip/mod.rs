@@ -125,14 +125,24 @@ pub(super) fn write_cell(
     text: &str,
     color: crate::color::Rgba8,
 ) {
+    // The region colour (`0x77f750`, `0x5302d0`), which clears no inherit bit: a later change to
+    // the line's font object's colour repaints it until the next write.
+    model
+        .region_data
+        .entry(rh)
+        .or_default()
+        .set_vertex_color(Some(color));
+    model.set_region_hidden(rh, false);
+    set_cell_text(model, rh, text);
+}
+
+/// A line cell's `SetText(text, 1)` alone (`0x771d80`), touching neither its colour nor its shown
+/// bit, as `AppendText`'s helper writes line 1 (`0x53060e`).
+pub(super) fn set_cell_text(model: &mut Model, rh: crate::widget::RegionHandle, text: &str) {
     let text = model.localized_text(text.to_string());
     let d = model.region_data.entry(rh).or_default();
     let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
     d.text = Some(text);
-    // The region colour (`0x77f750`, `0x5302d0`), which clears no inherit bit: a later change to
-    // the line's font object's colour repaints it until the next write.
-    d.set_vertex_color(Some(color));
-    model.set_region_hidden(rh, false);
     model.touch_measure(rh);
     model.touch_layout_text(rh, was_shown);
 }

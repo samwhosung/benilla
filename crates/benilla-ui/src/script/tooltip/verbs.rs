@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Table, Value, Variadic};
 
-use crate::script::binding_abi::optional_string;
+use crate::script::binding_abi::{optional_string, string_arg};
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
@@ -10,7 +10,7 @@ use crate::widget::{KindState, TooltipAnchor};
 
 use super::{
     append_line, clear, color_num, parse_line_color, parse_line_tail, set_owner_core, set_shown,
-    text_of, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
+    text_of, with_tip, wrap_arg, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -126,30 +126,40 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // AppendText(text) (`0x531e30`): appends to line 1's left cell in place, keeping its colour,
-    // and does nothing with no lines, as the reference's body does (`0x5305b0`, line 1 at
-    // `0x5305cc`). The bag tooltips hang a keybinding on their SetText title with it
-    // (ContainerFrame.xml:198, MainMenuBarBagButtons.lua:91).
+    // AppendText(text) (`0x531e30`): a `lua_isstring` value (`0x531ebc`), a number as its
+    // `%.14g` text, else `Usage: AppendText("text")` (`0x8551a8`). Its helper (`0x5305b0`) does
+    // nothing with no lines (`0x5305c4`); otherwise it prints line 1's left text and the argument
+    // through `%s%s` (`0x82e424`) into 256 bytes, an empty or unset text printing as `(null)`
+    // (`0x5305d4`-`0x5305dd`, the CRT's NULL `%s`), and the result cut at 255 bytes (`0x64a865`).
+    // That goes to the cell's `SetText` alone (`0x53060e`), its colour and shown bit untouched,
+    // and the tooltip is sized again (`0x530615`). The bag tooltips hang a keybinding on their
+    // SetText title with it (ContainerFrame.xml:198, MainMenuBarBagButtons.lua:91).
     m.set(
         "AppendText",
         lua.create_function(|lua, (this, text): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
-            let extra = text_of(Some(&text));
+            let extra = string_arg(lua, text, r#"Usage: AppendText("text")"#)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let lh = match model.arena.frame(h).map(|f| &f.kind_state) {
                 Some(KindState::Tooltip(t)) if t.num_lines > 0 => t.left_lines[0],
                 Some(KindState::Tooltip(_)) => return Ok(()),
                 _ => return Err(mlua::Error::runtime("not a GameTooltip")),
             };
-            let (current, color) = match model.region_data.get(&lh) {
-                Some(d) => (
-                    d.text.clone().unwrap_or_default(),
-                    d.vertex_color_or_white(),
-                ),
-                None => (String::new(), crate::color::Rgba8::WHITE),
-            };
-            write_cell(&mut model, lh, &(current + &extra), color);
-            // `0x5305b0` sizes the tooltip again (`0x530615`).
+            let current = model
+                .region_data
+                .get(&lh)
+                .and_then(|d| d.text.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| "(null)".to_string());
+            let mut joined = current + &extra;
+            // A cut inside a UTF-8 sequence drops its partial bytes, which the reference's decoder
+            // reads as one malformed code point (`0x41aab0`) that neither draws nor measures.
+            let mut cut = joined.len().min(255);
+            while !joined.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            joined.truncate(cut);
+            super::set_cell_text(&mut model, lh, &joined);
             super::size_tooltip(&mut model, h);
             Ok(())
         })?,
