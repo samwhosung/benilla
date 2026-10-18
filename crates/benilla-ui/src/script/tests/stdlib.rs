@@ -641,3 +641,27 @@ fn setglobal_sets_the_top_value_as_the_clients() {
         .unwrap();
     assert_eq!(got, ["SgOne", "6", "6"]);
 }
+
+/// `debugprofilestop` (`0x702860`) reads its counter live at the call, so a span inside one frame
+/// measures; ours answers it in milliseconds (the `Deviation:` at `install_profile`).
+#[test]
+fn debugprofilestop_measures_within_a_frame_in_milliseconds() {
+    let s = script();
+    s.run("debugprofilestart()").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let ms = s.eval::<f64>("return debugprofilestop()").unwrap();
+    assert!(
+        (20.0..2000.0).contains(&ms),
+        "no tick between, 20 ms slept: {ms}"
+    );
+    let busy = s
+        .eval::<f64>(
+            "debugprofilestart() local x = 0 for i = 1, 100000 do x = x + i end \
+             return debugprofilestop()",
+        )
+        .unwrap();
+    assert!(
+        busy > 0.0,
+        "a span of work inside one call answers above 0: {busy}"
+    );
+}

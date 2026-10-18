@@ -69,27 +69,34 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `debugprofilestart`/`debugprofilestop` (`0x702840`/`0x702860`), the two real `debug*` verbs (RDTSC
-/// via `0x4293d0`): start latches, stop answers the milliseconds since. Ours read the `GetTime()`
-/// clock ([`super::clock::now`]), the monotonic session seconds the tick advances, as benilla has
-/// no cycle counter; read in Rust, so an addon that replaces the `GetTime` global cannot bend it.
+/// `debugprofilestart`/`debugprofilestop` (`0x702840`/`0x702860`), the two real `debug*` verbs:
+/// start latches the processor's time-stamp counter (`rdtsc`, `0x4293d0`), and stop answers the
+/// counter's delta over `trunc(1000 / scale) / 1000` (`0x7028a6`-`0x7028c4`), `scale` being the
+/// millisecond clock's (`0x8332c8`). That is milliseconds only once the clock has moved onto the
+/// counter; on a multi-core processor it never does (`0x42b8be`), the scale stays 1.0, and the
+/// answer is a raw cycle count. Deviation: ours answers milliseconds, since a cycle count of unknown
+/// rate is no use to an addon timing its code. Both read a live monotonic clock at the call, as the
+/// counter is read, not the per-frame `GetTime()` clock, so a span inside one frame measures.
 fn install_profile(lua: &Lua) -> mlua::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
-    let start = std::sync::Arc::new(AtomicU64::new(0f64.to_bits()));
+    // The latch as nanoseconds past this VM's origin; 0 until a start, as `[0xceeb58]` is.
+    let origin = std::time::Instant::now();
+    let start = std::sync::Arc::new(AtomicU64::new(0));
     let g = lua.globals();
     let latch = start.clone();
+    let since_origin = move || u64::try_from(origin.elapsed().as_nanos()).unwrap_or(u64::MAX);
     g.set(
         "debugprofilestart",
-        lua.create_function(move |lua, ()| {
-            latch.store(super::clock::now(lua).to_bits(), Ordering::Relaxed);
+        lua.create_function(move |_, ()| {
+            latch.store(since_origin(), Ordering::Relaxed);
             Ok(())
         })?,
     )?;
     g.set(
         "debugprofilestop",
-        lua.create_function(move |lua, ()| {
-            let since = f64::from_bits(start.load(Ordering::Relaxed));
-            Ok((super::clock::now(lua) - since) * 1000.0)
+        lua.create_function(move |_, ()| {
+            let delta = since_origin().saturating_sub(start.load(Ordering::Relaxed));
+            Ok(delta as f64 / 1e6)
         })?,
     )?;
     Ok(())
