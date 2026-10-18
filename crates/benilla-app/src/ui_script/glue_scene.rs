@@ -321,6 +321,11 @@ mod tests {
         GlueSceneFile::new(&format!("Interface\\Glues\\Models\\{name}\\{name}.mdx"))
     }
 
+    /// The same file spelled with `/`, another key of the cache (`0x706b35`-`0x706b8a`).
+    fn slashed(name: &str) -> GlueSceneFile {
+        GlueSceneFile::new(&format!("Interface/Glues/Models/{name}/{name}.mdx"))
+    }
+
     /// No shown pane, or one whose `SetModel` name was empty, stands nothing; any other file
     /// stands as itself (`0x76cce0`), a scene 1.12.1 never shipped included.
     #[test]
@@ -404,16 +409,16 @@ mod tests {
             (p.scene.clone(), p.hidden, p.stage, p.shown)
         };
         let (scene, hidden, stage, shown) = run(&mut app, "");
-        assert_eq!((scene, hidden), (Some(file("UI_MainMenu")), false));
+        assert_eq!((scene, hidden), (Some(slashed("UI_MainMenu")), false));
 
         assert_eq!(
             run(&mut app, "Login:Hide()"),
-            (Some(file("UI_MainMenu")), true, stage, shown),
+            (Some(slashed("UI_MainMenu")), true, stage, shown),
             "hidden, the scene stays up: no teardown, no new instance"
         );
         assert_eq!(
             run(&mut app, "Login:Show()"),
-            (Some(file("UI_MainMenu")), false, stage, shown + 1),
+            (Some(slashed("UI_MainMenu")), false, stage, shown + 1),
             "shown again, the same instance resumes, and its OnShow pins the glow"
         );
 
@@ -423,7 +428,7 @@ mod tests {
             "Login:Hide() Login:SetModel('Interface/Glues/Models/UI_Orc/UI_Orc.mdx')",
         );
         let (scene, hidden, again, _) = run(&mut app, "Login:Show()");
-        assert_eq!((scene, hidden), (Some(file("UI_Orc")), false));
+        assert_eq!((scene, hidden), (Some(slashed("UI_Orc")), false));
         assert_ne!(again, stage);
     }
 
@@ -453,10 +458,10 @@ mod tests {
             (p.scene.clone(), p.stage, p.live.clone())
         };
         let (scene, login, live) = run(&mut app, "");
-        assert_eq!((scene, live), (Some(file("UI_MainMenu")), vec![login]));
+        assert_eq!((scene, live), (Some(slashed("UI_MainMenu")), vec![login]));
 
         let (scene, select, live) = run(&mut app, "Login:Hide() Select:Show()");
-        assert_eq!(scene, Some(file("UI_Orc")));
+        assert_eq!(scene, Some(slashed("UI_Orc")));
         assert_ne!(select, login);
         assert_eq!(
             live,
@@ -467,7 +472,7 @@ mod tests {
         let (scene, back, live) = run(&mut app, "Select:Hide() Login:Show()");
         assert_eq!(
             (scene, back),
-            (Some(file("UI_MainMenu")), login),
+            (Some(slashed("UI_MainMenu")), login),
             "the same instance, the same stage"
         );
         assert_eq!(live, vec![login, select]);

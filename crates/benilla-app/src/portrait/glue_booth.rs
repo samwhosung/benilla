@@ -122,27 +122,34 @@ impl GlueLook {
 
 /// The glue background scene's file, the pane's own: the path its last `SetModel` gave it
 /// (`SetCharSelectBackground` and `SetCharCustomizeBackground` reach the same slot, `0x472128`,
-/// `0x4707c8`), whatever it names. The identity is the load URL, so two spellings of one file are
-/// one scene, as the model cache keys by the folded name (`0x706b35`-`0x706b8a`).
+/// `0x4707c8`), whatever it names. The identity is the model cache's key: the name with its
+/// extension at the last dot folded to `.m2` and its case folded (`tolower` `0x40f92b`, `SStrCmpI`,
+/// `0x706b35`-`0x706b8a`), its separators as written, so `/` and `\` spell two keys.
 #[derive(Clone, Debug)]
 pub(crate) struct GlueSceneFile {
     path: String,
     url: std::sync::Arc<str>,
+    key: std::sync::Arc<str>,
 }
 
 impl PartialEq for GlueSceneFile {
     fn eq(&self, other: &Self) -> bool {
-        self.url == other.url
+        self.key == other.key
     }
 }
 
 impl GlueSceneFile {
     /// The scene file `path` names: `0x76cce0` creates a model frame's model with flags 5
-    /// (`0x76ccf5`), whose bit 4 lets the `.m2` and its textures open loose.
+    /// (`0x76ccf5`), whose 4 bit lets the `.m2` and its textures open loose. A refused name keys
+    /// as the error cube it stands.
     pub(crate) fn new(path: &str) -> Self {
+        let key = benilla_formats::m2_file_name(path)
+            .or_else(|| benilla_formats::m2_file_name(benilla_assets::ERROR_CUBE))
+            .unwrap_or_default();
         Self {
             path: path.to_string(),
             url: benilla_assets::m2_url_on(benilla_assets::MPQ_LOOSE_SOURCE, path).into(),
+            key: key.into(),
         }
     }
 
@@ -2347,7 +2354,7 @@ mod tests {
     }
 
     /// A scene is the pane's own file, loaded loose-aware (`0x76ccf5`, flags 5): a path under any
-    /// folder keeps its own URL, and two spellings of one file are one scene.
+    /// folder keeps its own URL, and a case or extension spelling of one file is one scene.
     #[test]
     fn a_scene_is_the_panes_own_file() {
         let custom = GlueSceneFile::new("Interface\\Glues\\Models\\Custom\\UI_Orc.mdx");
@@ -2356,8 +2363,14 @@ mod tests {
             "mpq-loose://interface/glues/models/custom/ui_orc.m2"
         );
         assert_ne!(custom, stock_scene(2).0, "not the stock UI_Orc");
+        // Case and extension fold; the separators do not.
+        let night_elf = "Interface\\Glues\\Models\\UI_NightElf\\UI_NightElf.MDX";
         assert_eq!(
-            GlueSceneFile::new("Interface\\Glues\\Models\\UI_NightElf\\UI_NightElf.MDX"),
+            GlueSceneFile::new(night_elf),
+            GlueSceneFile::new("interface\\glues\\models\\ui_nightelf\\ui_nightelf.m2"),
+        );
+        assert_ne!(
+            GlueSceneFile::new(night_elf),
             GlueSceneFile::new("interface/glues/models/ui_nightelf/ui_nightelf.m2"),
         );
         assert_eq!(
