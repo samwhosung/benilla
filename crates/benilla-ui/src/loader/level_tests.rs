@@ -1426,3 +1426,42 @@ fn a_message_frame_lays_its_lines_out_inside_its_text_insets() {
     let line = r#"No "right", "left", "top", or "bottom" attributes in element: TextInsets"#;
     assert!(has_line(&report, line), "{:?}", report.status.lines());
 }
+
+/// An anchor's `<Offset>` is read only after its `relativeTo` resolves and is not the object
+/// itself (`0x767946`-`0x767992`), so a skipped anchor reads, and logs, nothing of it.
+#[test]
+fn a_skipped_anchor_reads_no_offset() {
+    let s = ui();
+    let report = load_str(
+        &s,
+        r#"<Ui>
+            <Frame name="SkipHost">
+                <Anchors>
+                    <Anchor point="TOP" relativeTo="NoSuchFrame"><Offset x="1"/></Anchor>
+                    <Anchor point="LEFT" relativeTo="SkipHost"><Offset x="2"/></Anchor>
+                </Anchors>
+            </Frame>
+        </Ui>"#,
+    );
+    let offset_lines = |r: &LoadReport| {
+        r.status
+            .lines()
+            .iter()
+            .filter(|l| l.contains(r#"No "x" or "y" attributes in element: Offset"#))
+            .count()
+    };
+    assert!(has_line(
+        &report,
+        "Couldn't find relative frame: NoSuchFrame"
+    ));
+    assert!(has_line(&report, "Frame anchored to itself: SkipHost"));
+    assert_eq!(offset_lines(&report), 0, "{:?}", report.status.lines());
+    // The same Offset on an anchor that applies is read, and logged.
+    let applied = load_str(
+        &s,
+        r#"<Ui><Frame name="SkipApplied">
+            <Anchors><Anchor point="TOP"><Offset x="1"/></Anchor></Anchors>
+        </Frame></Ui>"#,
+    );
+    assert_eq!(offset_lines(&applied), 1);
+}

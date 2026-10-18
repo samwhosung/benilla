@@ -336,7 +336,10 @@ pub(super) struct DeferredAnchor {
     pub(super) wrapper: Table,
     /// A region wrapper (`call_region`) rather than a frame's (`call`).
     pub(super) region: bool,
-    pub(super) args: (String, Option<String>, String, f32, f32),
+    /// `(point, relativeTo, relativePoint)`, `relativeTo` with `$parent` expanded.
+    pub(super) args: (String, Option<String>, String),
+    /// The anchor's first `<Offset>`, read only once the target passes (`0x767992`).
+    pub(super) offset: Option<Element>,
     /// `relativeTo` as spelled, before `$parent` expands: what the anchor lines print (`0x76796f`,
     /// `0x767984`).
     pub(super) rel_raw: String,
@@ -1007,10 +1010,14 @@ impl Loader<'_> {
         let DeferredAnchor {
             wrapper,
             region,
-            args: (point, _, rel_point, x, y),
+            args: (point, _, rel_point),
+            offset,
             dbg,
             ..
         } = d;
+        // The first `<Offset>`, read whatever it answers, after the target's miss and self tests
+        // (`0x767946`-`0x7679ad`), so a skipped anchor reads none.
+        let [x, y] = offset.map_or([0.0; 2], |o| self.dimension(&o).v);
         let args = (point, rel, rel_point, x, y);
         if region {
             self.call_region(&wrapper, "SetPoint", args, &dbg);

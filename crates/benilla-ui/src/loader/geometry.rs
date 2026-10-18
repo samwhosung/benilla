@@ -223,15 +223,12 @@ impl Loader<'_> {
             // An empty `relativeTo` is the layout parent, as an absent one (`0x76795c`).
             let rel_raw = anchor.attr("relativeTo").filter(|r| !r.is_empty());
             let rel_to = rel_raw.map(|r| framexml::resolve_name(r, parent_name));
-            // The first `<Offset>`, read whatever it answers (`0x7679ad`).
-            let [x, y] = children_named(anchor, "Offset")
-                .next()
-                .map_or([0.0; 2], |o| self.dimension(o).v);
-            let args = (point.to_string(), rel_to, rel_point.to_string(), x, y);
+            let args = (point.to_string(), rel_to, rel_point.to_string());
             let d = super::DeferredAnchor {
                 wrapper: wrapper.clone(),
                 region,
                 args,
+                offset: children_named(anchor, "Offset").next().cloned(),
                 rel_raw: rel_raw.unwrap_or_default().to_string(),
                 dbg: dbg.to_string(),
             };
