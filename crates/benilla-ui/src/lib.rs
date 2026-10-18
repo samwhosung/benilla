@@ -20,5 +20,7 @@ pub mod script;
 pub mod source;
 pub mod status;
 pub mod strings;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod toc;
 pub mod widget;

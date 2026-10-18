@@ -8,6 +8,10 @@ description = "Engine-free WoW UI engine core: TOC and FrameXML parsing, templat
 [lints]
 workspace = true
 
+[features]
+# `test_support`: the geometry comparisons other crates' tests check the UI with.
+test-support = []
+
 [dependencies]
 roxmltree = "0.20"
 # The script host's Lua: benilla's own interpreter, through a crate that answers to the name

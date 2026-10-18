@@ -122,6 +122,8 @@ windows-sys = { version = "0.59", features = [
 # The login cycle's fake realmd runs the server half of SRP6 (`net::io::cycle_tests`).
 [dev-dependencies]
 benilla-srp = { path = "../benilla-srp" }
+# The UI's geometry comparisons (`benilla_ui::assert_near!`).
+benilla-ui = { path = "../benilla-ui", features = ["test-support"] }
 num-bigint = "0.4.6"
 sha1.workspace = true
 
