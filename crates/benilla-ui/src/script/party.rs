@@ -258,6 +258,100 @@ impl super::UiScript {
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
 
+/// `CGGameUI::ClosestObjectMatch` (`0x493aa0`) as `SetLootMethod` calls it (mode 2, `0x4e9418`),
+/// over the group: the best guid for `name`, or `None`.
+///
+/// The reference runs three passes, each offering a name to the matcher `0x493c60`. First the four
+/// party slots in order (`0x493b22`), then the raid roster in order (`0x493ba7`), each only when
+/// the member has no object held (`0x468460` NULL), at the placeholder distance `0x4f1502f9`
+/// (`0x493b74`, `0x493c0c`); then every held living player by real distance (`0x468380` with
+/// `0x493d30`, mode 2's filter `0x493eca`). The matcher takes a name equal without case at once
+/// when its distance is below the best so far (`0x493c7f`..`0x493c93`); otherwise the length of
+/// the case-folded prefix it shares with `name` (`0x493cc0`..`0x493cee`) must reach the best
+/// length, which starts at 1, and a longer prefix wins outright while an equal one needs a
+/// smaller distance (`0x493cf8`..`0x493d09`). So `"Bo"` finds "Bob", the first of several equal
+/// prefixes in roster order keeps the place, and a name sharing no first letter finds nobody.
+///
+/// Not modelled: held players outside the group, which the reference's third pass also offers,
+/// at real distances; and the real distances among held group members, which keep roster order.
+fn closest_group_member(model: &Model, name: &str) -> Option<u64> {
+    struct Best<'a> {
+        search: &'a [u8],
+        guid: Option<u64>,
+        len: usize,
+        distance: f32,
+    }
+    impl Best<'_> {
+        /// `0x493c60`; `true` once an exact name ends the search.
+        fn offer(&mut self, candidate: &str, guid: u64, distance: f32) -> bool {
+            let cand = candidate.as_bytes();
+            if cand.eq_ignore_ascii_case(self.search) && distance < self.distance {
+                self.guid = Some(guid);
+                return true;
+            }
+            let len = cand
+                .iter()
+                .zip(self.search)
+                .take_while(|(c, s)| c.eq_ignore_ascii_case(s))
+                .count();
+            if len > self.len || (len == self.len && distance < self.distance) {
+                self.guid = Some(guid);
+                self.len = len;
+                self.distance = distance;
+            }
+            false
+        }
+    }
+    /// The placeholder distance the roster passes hand the matcher (`0x4f1502f9`).
+    const ROSTER_DISTANCE: f32 = f32::from_bits(0x4f15_02f9);
+    let party = &model.party;
+    let held = |token: String| model.unit(&token).is_some_and(|u| u.has_object);
+    let mut best = Best {
+        search: name.as_bytes(),
+        guid: None,
+        len: 1,
+        distance: f32::MAX,
+    };
+    let mut near: Vec<(&str, u64)> = Vec::new();
+    let roster = party
+        .members
+        .iter()
+        .take(4)
+        .enumerate()
+        .map(|(i, m)| (m.name.as_str(), m.guid, held(format!("party{}", i + 1))))
+        .chain(party.raid.iter().enumerate().map(|(i, m)| {
+            let me = party.own_guid != 0 && m.guid == party.own_guid;
+            (
+                m.name.as_str(),
+                m.guid,
+                me || held(format!("raid{}", i + 1)),
+            )
+        }));
+    for (candidate, guid, is_held) in roster {
+        if guid == 0 || candidate.is_empty() {
+            continue;
+        }
+        if is_held {
+            near.push((candidate, guid));
+        } else if best.offer(candidate, guid, ROSTER_DISTANCE) {
+            return best.guid;
+        }
+    }
+    // The player's own object is the nearest (`0x493d30` measures from it).
+    let own = model.unit("player").and_then(|u| u.name.as_deref());
+    if let Some(own) = own.filter(|n| !n.is_empty() && party.own_guid != 0) {
+        if best.offer(own, party.own_guid, 0.0) {
+            return best.guid;
+        }
+    }
+    for (i, (candidate, guid)) in near.into_iter().enumerate() {
+        if best.offer(candidate, guid, 1.0 + i as f32) {
+            break;
+        }
+    }
+    best.guid
+}
+
 /// A catalog row of kind 0, game error `key` shown through `0x496720` from inside a verb: the
 /// template from the VM's globals filled with `args`, a chat line when it is not empty.
 fn chat_error(lua: &Lua, key: &'static str, args: &[Arg<'_>]) {
@@ -571,28 +665,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let party = &model.party;
-                    let own = model
-                        .unit("player")
-                        .and_then(|u| u.name.as_deref())
-                        .filter(|n| n.eq_ignore_ascii_case(&name))
-                        .map(|_| party.own_guid);
-                    own.into_iter()
-                        .chain(
-                            party
-                                .members
-                                .iter()
-                                .filter(|m| m.name.eq_ignore_ascii_case(&name))
-                                .map(|m| m.guid),
-                        )
-                        .chain(
-                            party
-                                .raid
-                                .iter()
-                                .filter(|m| m.name.eq_ignore_ascii_case(&name))
-                                .map(|m| m.guid),
-                        )
-                        .find(|g| *g != 0)
+                    closest_group_member(&model, &name)
                 };
                 let Some(guid) = found else {
                     chat_error(lua, "ERR_TARGET_NOT_IN_GROUP_S", &[Arg::S(&name)]);
@@ -1418,6 +1491,74 @@ mod tests {
         let mut s = loot_vm(raid);
         s.run(r#"SetLootMethod("master", "carol")"#).unwrap();
         assert_eq!(s.take_party_requests(), vec![loot_request(2, 0xCA401, 2)]);
+    }
+
+    /// `0x493aa0` (mode 2) resolves the master's name over the group: an exact name, else the longest
+    /// case-folded prefix shared (at least one letter), the first of equal ones in roster order.
+    #[test]
+    fn the_master_name_resolves_by_closest_match() {
+        let party = |names: &[(&str, u64)]| PartyState {
+            members: names
+                .iter()
+                .map(|(n, g)| PartyMemberInfo {
+                    name: (*n).into(),
+                    guid: *g,
+                })
+                .collect(),
+            ..led_party()
+        };
+        let resolve = |names: &[(&str, u64)], call: &str| {
+            let mut s = loot_vm(party(names));
+            s.run(call).unwrap();
+            (s.take_party_requests(), s.take_shown_chat_lines())
+        };
+        let alice_bob = [("Alice", 0xA), ("Bob", 0xB)];
+        // Exact, in any case, and partial.
+        for (call, guid) in [
+            (r#"SetLootMethod("master", "Bob")"#, 0xB),
+            (r#"SetLootMethod("master", "bOB")"#, 0xB),
+            (r#"SetLootMethod("master", "Bo")"#, 0xB),
+            (r#"SetLootMethod("master", "B")"#, 0xB),
+            (r#"SetLootMethod("master", "al")"#, 0xA),
+            (r#"SetLootMethod("master", "Alicia")"#, 0xA),
+            (r#"SetLootMethod("master", "Bxx")"#, 0xB),
+        ] {
+            let (sent, chat) = resolve(&alice_bob, call);
+            assert_eq!(sent, vec![loot_request(2, guid, 2)], "{call}");
+            assert!(chat.is_empty(), "{call}: {chat:?}");
+        }
+        // No shared first letter finds nobody: game error 0x49 with the name, nothing sent.
+        for call in [
+            r#"SetLootMethod("master", "Zed")"#,
+            r#"SetLootMethod("master", "xob")"#,
+        ] {
+            let (sent, chat) = resolve(&alice_bob, call);
+            assert!(sent.is_empty(), "{call}");
+            assert_eq!(chat.len(), 1, "{call}");
+            assert_eq!(chat[0].0, "ERR_TARGET_NOT_IN_GROUP_S");
+        }
+        // A longer prefix beats a shorter one wherever it sits; equal ones keep roster order, and
+        // an exact name later in the roster does not displace an equal-length earlier prefix
+        // (its distance is not below the best, `0x493c93`).
+        let bobs = [("Bobby", 0x1), ("Bob", 0x2), ("Bo", 0x3)];
+        for (call, guid) in [
+            (r#"SetLootMethod("master", "Bo")"#, 0x1),
+            (r#"SetLootMethod("master", "Bob")"#, 0x1),
+            (r#"SetLootMethod("master", "Bobb")"#, 0x1),
+            (r#"SetLootMethod("master", "Bobx")"#, 0x1),
+        ] {
+            let (sent, _) = resolve(&bobs, call);
+            assert_eq!(sent, vec![loot_request(2, guid, 2)], "{call}");
+        }
+        let (sent, _) = resolve(
+            &[("Bo", 0x3), ("Bobby", 0x1)],
+            r#"SetLootMethod("master", "Bob")"#,
+        );
+        assert_eq!(
+            sent,
+            vec![loot_request(2, 0x1, 2)],
+            "the longer prefix wins"
+        );
     }
 
     #[test]
