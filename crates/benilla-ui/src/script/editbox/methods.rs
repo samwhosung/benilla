@@ -310,6 +310,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
+    // The read-backs test one bit of the flags word `+0x318` each (`0x797dc5` & 1, `0x797f35` & 2,
+    // `0x7980a5` & 4, `0x798215` & 8) and push 1 or nil; no argument is read.
+    for (name, get) in flag_getters() {
+        m.set(
+            name,
+            lua.create_function(move |lua, this: Table| {
+                with_editbox(lua, &this, |eb| binding_abi::flag(get(eb)))
+            })?,
+        )?;
+    }
+
     install_font_block(lua, &m)?;
 
     lua.set_named_registry_value(REG_EDITBOX_METHODS, m)?;
@@ -385,5 +396,18 @@ fn flag_setters() -> [FlagSetter; 4] {
         ("SetNumeric", |eb, on| eb.numeric = on),
         ("SetPassword", |eb, on| eb.password = on),
         ("SetMultiLine", |eb, on| eb.multi_line = on),
+    ]
+}
+
+/// An `Is<Flag>` method name and the field it reads.
+type FlagGetter = (&'static str, fn(&EditBoxState) -> bool);
+
+/// The four config-flag read-backs, the setters' partners.
+fn flag_getters() -> [FlagGetter; 4] {
+    [
+        ("IsAutoFocus", |eb| eb.auto_focus),
+        ("IsNumeric", |eb| eb.numeric),
+        ("IsPassword", |eb| eb.password),
+        ("IsMultiLine", |eb| eb.multi_line),
     ]
 }

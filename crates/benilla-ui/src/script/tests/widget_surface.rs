@@ -67,15 +67,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "MovieFrame",
         "the same — `MovieFrame.lua:35` passes `GetMovieSubtitles()`",
     ),
-    // ── EditBox mode read-backs ──
-    (
-        "IsAutoFocus",
-        "EditBox",
-        "the mode is set and not readable back; no caller anywhere measured",
-    ),
-    ("IsMultiLine", "EditBox", "the same"),
-    ("IsNumeric", "EditBox", "the same"),
-    ("IsPassword", "EditBox", "the same"),
     // ── ScrollingMessageFrame's line-position surface ──
     (
         "GetCurrentLine",

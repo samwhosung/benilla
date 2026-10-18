@@ -1782,3 +1782,45 @@ fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The four read-backs answer 1 or nil off the flags word, one value each: a new box is autoFocus
+/// (the ctor stores 1, `0x779a2e`) and nothing else; a bare setter enables, nil disables; XML sets
+/// them through the same setters.
+#[test]
+fn the_mode_read_backs_answer_one_or_nil() {
+    let s = script();
+    s.run(r#"E = CreateFrame("EditBox", "E")"#).unwrap();
+    let probe = |expr: &str| -> (usize, String) {
+        let n = s.arity(expr).unwrap();
+        let t: String = s.eval(&format!("return type(({expr}))")).unwrap();
+        (n, t)
+    };
+    assert_eq!(probe("E:IsAutoFocus()"), (1, "number".into()));
+    assert_eq!(s.eval::<i64>("return E:IsAutoFocus()").unwrap(), 1);
+    for m in ["IsMultiLine", "IsNumeric", "IsPassword"] {
+        assert_eq!(
+            probe(&format!("E:{m}()")),
+            (1, "nil".into()),
+            "{m} on a new box"
+        );
+    }
+
+    s.run("E:SetNumeric(); E:SetAutoFocus(nil); E:SetMultiLine(1); E:SetPassword(true)")
+        .unwrap();
+    assert_eq!(probe("E:IsNumeric()"), (1, "number".into()));
+    assert_eq!(probe("E:IsAutoFocus()"), (1, "nil".into()));
+    assert_eq!(probe("E:IsMultiLine()"), (1, "number".into()));
+    assert_eq!(probe("E:IsPassword()"), (1, "number".into()));
+    s.run("E:SetNumeric(nil)").unwrap();
+    assert_eq!(probe("E:IsNumeric()"), (1, "nil".into()));
+
+    let doc = crate::framexml::parse(
+        r#"<Ui><EditBox name="Pw" password="true" autoFocus="false"/></Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    assert_eq!(s.eval::<i64>("return Pw:IsPassword()").unwrap(), 1);
+    assert_eq!(probe("Pw:IsAutoFocus()"), (1, "nil".into()));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
