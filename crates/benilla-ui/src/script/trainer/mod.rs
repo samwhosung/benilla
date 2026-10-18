@@ -473,7 +473,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let s = &t.services[si];
                     Ok(MultiValue::from_vec(vec![
                         opt_str(lua, s.name.as_ref())?,
-                        opt_str(lua, s.subtext.as_ref())?,
+                        // The subText is the DBC's NameSubtext string, the empty string for a
+                        // spell without a rank (`0x4d8b50` -> `0x4d8e13`), never nil: a client's
+                        // FrameXML may `format` it before its nil guard.
+                        Value::String(lua.create_string(s.subtext.as_deref().unwrap_or(""))?),
                         Value::String(lua.create_string(s.category.era_str())?),
                         Value::Integer(1),
                     ]))
