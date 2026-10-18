@@ -168,9 +168,11 @@ pub(crate) struct Model {
     pub(crate) arena: WidgetArena,
     /// Per-frame anchors, size and scale; every live frame has one from creation on.
     pub(crate) layout_inputs: HashMap<FrameHandle, LayoutInput>,
-    /// Per dragged frame, its anchors and size as they stood before its first drag pin
-    /// (`0x768430`): what a rebuild re-creates from its script where the layout cache seats
-    /// nothing ([`crate::script::UiScript::reseat_user_placed`]).
+    /// Per dragged frame, its anchors and size as the scripts last set them: as they stood before
+    /// its first drag pin (`0x768430`), then each script `SetPoint`, `SetAllPoints`,
+    /// `ClearAllPoints`, `SetWidth` and `SetHeight` applied to it too, the engine's own writes
+    /// not. What a rebuild re-creates where the layout cache seats nothing
+    /// ([`crate::script::UiScript::reseat_user_placed`]).
     pub(crate) drag_authored: HashMap<
         FrameHandle,
         (

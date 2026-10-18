@@ -274,8 +274,8 @@ impl super::UiScript {
     }
 
     /// New cells under a live interface, as the reload that is 1.12.1's only cell change: each
-    /// frame with a row gets back what its script built before its first drag, as the rebuild
-    /// re-creates it, a `<Rel…>` length still in layout units; then the rows seat it under the new
+    /// frame with a row gets back what the scripts last set ([`crate::script::Model::drag_authored`]), as the
+    /// rebuild re-creates it, a `<Rel…>` length still in layout units; then the rows seat it under the new
     /// cells (`0x4905e0`), as the reload's build does. The rows were written under the old cells
     /// ([`Self::user_placed_layouts`]), rounded, so a seated frame lands on whole units.
     pub(super) fn reseat_user_placed(&mut self, rows: Vec<FrameLayout>) {

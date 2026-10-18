@@ -46,6 +46,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             .layout_inputs
             .get_mut(&h)
             .is_some_and(|input| input.anchors.clear());
+        if let Some(rec) = model.drag_authored.get_mut(&h) {
+            rec.0.clear();
+        }
         if cleared {
             model.touch_layout_frame(h);
         }
@@ -115,6 +118,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let pair = Anchors::from(pair);
             let changed = !input.anchors.bits_eq(&pair);
             input.anchors = pair;
+            if let Some(rec) = model.drag_authored.get_mut(&h) {
+                rec.0 = pair;
+            }
             model.invalidate_frame(h, changed);
             Ok(())
         },
@@ -130,6 +136,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.width.bits() != crate::layout::Len::Script(w).bits();
             input.width = crate::layout::Len::Script(w);
+            if let Some(rec) = model.drag_authored.get_mut(&h) {
+                rec.1 = crate::layout::Len::Script(w);
+            }
             // A size write moves no edge and no roster membership. It invalidates whether or not
             // the width moved (`0x7683d0`).
             model.invalidate_frame(h, changed);
@@ -148,6 +157,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.height.bits() != crate::layout::Len::Script(ht).bits();
             input.height = crate::layout::Len::Script(ht);
+            if let Some(rec) = model.drag_authored.get_mut(&h) {
+                rec.2 = crate::layout::Len::Script(ht);
+            }
             model.invalidate_frame(h, changed);
             model.note_authored_size(h);
             Ok(())
@@ -332,12 +344,14 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
 
     let units = model.layout_units();
+    let anchor = Anchor::new(point, rel_to_id, rel_point, x, y);
+    // A frame a drag pinned keeps what the scripts last set, which a rebuild would reproduce.
+    if let Some(rec) = model.drag_authored.get_mut(&h) {
+        rec.0.set(anchor, units);
+    }
     let input = model.layout_inputs.entry(h).or_default();
     // An unchanged anchor stores nothing and queues no resolve (`0x767cde` → `0x767d5e`).
-    if input
-        .anchors
-        .set(Anchor::new(point, rel_to_id, rel_point, x, y), units)
-    {
+    if input.anchors.set(anchor, units) {
         model.invalidate_frame(h, true);
     }
     Ok(())

@@ -574,3 +574,61 @@ fn an_aspect_change_reseats_a_dragged_frame_from_the_cache() {
     crate::assert_near!(want, (337.0, -478.0, 200.0, 100.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// What a rebuild reproduces is what the scripts last set: a script `SetWidth` on a dragged frame
+/// that is not resizable, and a script `ClearAllPoints`/`SetPoint` on a sized frame that is not
+/// movable, both come back after 4:3 turns 16:9 as a fresh 16:9 build with the same scripts,
+/// seated from the same cache, reads them, not as they stood before the drag.
+#[test]
+fn an_aspect_change_reseats_what_the_scripts_last_set() {
+    let setup = r#"
+        Mover = CreateFrame("Frame", "Mover")
+        Mover:SetPoint("BOTTOMLEFT", 300, 200); Mover:SetWidth(200); Mover:SetHeight(100)
+        Mover:SetMovable(true)
+        Sizer = CreateFrame("Frame", "Sizer")
+        Sizer:SetPoint("BOTTOMLEFT", 100, 400); Sizer:SetWidth(120); Sizer:SetHeight(80)
+        Sizer:SetResizable(true)
+    "#;
+    let after = r#"
+        Mover:SetWidth(250)
+        Sizer:ClearAllPoints(); Sizer:SetPoint("CENTER", 40, 30)
+    "#;
+    let build = |w: f32| {
+        let mut s = script();
+        s.set_window_size(w, 768.0);
+        s.run(setup).unwrap();
+        s.resolve();
+        s
+    };
+    let read = |s: &mut UiScript| {
+        s.resolve();
+        s.eval::<(f64, f64, f64, String, f64, f64, f64, f64)>(
+            "local _, _, _, mx, my = Mover:GetPoint(1) \
+             local sp, _, _, sx, sy = Sizer:GetPoint(1) \
+             return mx, my, Mover:GetWidth(), sp, sx, sy, Sizer:GetWidth(), Sizer:GetHeight()",
+        )
+        .unwrap()
+    };
+    let mut s = build(1024.0);
+    s.mouse_move(400.0, 300.0);
+    s.run("Mover:StartMoving()").unwrap();
+    s.mouse_move(437.25, 289.5);
+    s.run("Mover:StopMovingOrSizing()").unwrap();
+    s.mouse_move(220.0, 400.0);
+    s.run("Sizer:StartSizing(\"BOTTOMRIGHT\")").unwrap();
+    s.mouse_move(250.5, 380.25);
+    s.run("Sizer:StopMovingOrSizing()").unwrap();
+    s.run(after).unwrap();
+    s.resolve();
+    let rows = s.user_placed_layouts();
+    s.set_window_size(1366.0, 768.0);
+
+    let mut fresh = build(1366.0);
+    fresh.run(after).unwrap();
+    fresh.restore_user_placed_layouts(rows);
+    let want = read(&mut fresh);
+    assert_eq!(read(&mut s), want);
+    assert_eq!(want.3, "CENTER", "the script's anchor, not the size pin");
+    crate::assert_near!(want.2, 250.0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
