@@ -2629,10 +2629,11 @@ mod tests {
         }
     }
 
-    /// `CURRENT_SPELL_CAST_CHANGED` (`0x4b3250`, from the arm at `0x6e5333`) is signalled inside
-    /// the call that armed the cursor, and the next frame's push does not signal it again.
+    /// `CURRENT_SPELL_CAST_CHANGED` (`0x4b3250`) is signalled inside the call that armed the
+    /// cursor and inside the one that bound it, and the next frame's feed does not signal either
+    /// change again. How many times 1.12.1 signals it per cast is #1986.
     #[test]
-    fn the_arm_signals_current_spell_cast_changed_inside_the_call_once() {
+    fn current_spell_cast_changed_fires_inside_the_call_and_not_again_from_the_feed() {
         let mut f = frame(true);
         with_factions(&mut f, FOE, &[(FLAGS, 0x8)]);
         with_friendly_party1(&mut f, true);
@@ -2654,22 +2655,28 @@ mod tests {
                 f:SetScript("OnEvent", function() FIRED = (FIRED or 0) + 1 end)"#,
             )
             .unwrap();
+        let feed = |f: &mut Frame| {
+            f.app
+                .world_mut()
+                .run_system_once(crate::spell::targeting::feed_targeting_to_vm)
+                .unwrap();
+        };
         run_hosted(
             &mut f,
             r#"CastSpellByName("Mark of the Wild") SEEN = FIRED"#,
         );
-        assert_eq!(global(&mut f, "SEEN"), Some(1), "inside the call");
-        f.app
-            .world_mut()
-            .run_system_once(crate::spell::targeting::feed_targeting_to_vm)
-            .unwrap();
-        assert_eq!(global(&mut f, "FIRED"), Some(1), "once");
+        let armed = global(&mut f, "SEEN");
+        assert!(armed.is_some(), "inside the arming call");
+        feed(&mut f);
+        assert_eq!(global(&mut f, "FIRED"), armed, "not again from the feed");
         run_hosted(&mut f, r#"SpellTargetUnit("party1") SEEN = FIRED"#);
-        assert_eq!(
-            global(&mut f, "SEEN"),
-            Some(2),
-            "the bind ends it inside its call too"
+        let bound = global(&mut f, "SEEN");
+        assert!(
+            bound > armed,
+            "inside the binding call: {armed:?} then {bound:?}"
         );
+        feed(&mut f);
+        assert_eq!(global(&mut f, "FIRED"), bound, "not again from the feed");
     }
 
     /// A key's body runs inside `CBindings::ExecuteBinding` (`0x4b7990`) with its input event up
