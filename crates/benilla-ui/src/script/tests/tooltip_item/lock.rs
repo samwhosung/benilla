@@ -74,7 +74,7 @@ fn fixture_rows(
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: HashMap::from([(
                 1,
@@ -427,7 +427,7 @@ fn openable_waits_for_unlocked_on_a_lock_id_with_no_row() {
         s.set_container(
             0,
             Some(ContainerState {
-                name: Some("Backpack".into()),
+                name: None,
                 num_slots: 16,
                 slots: HashMap::from([(1, slot(flags))]),
             }),

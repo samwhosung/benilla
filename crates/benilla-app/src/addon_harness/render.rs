@@ -140,7 +140,7 @@ pub(super) fn measure_render(
     script.set_container(
         0,
         Some(benilla_ui::script::ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: std::collections::HashMap::new(),
         }),

@@ -222,7 +222,7 @@ fn set_action_answers_the_builders_flag_by_kind() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: std::collections::HashMap::from([(
                 1,
@@ -368,7 +368,7 @@ fn live_objects_and_blocks_reach_the_flag() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: std::collections::HashMap::from([
                 (1, held(8300, 0, None)),

@@ -36,7 +36,7 @@ fn bag_item_money_law_and_fallback() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -235,7 +235,7 @@ fn real_instance_hover_renders_live_durability() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -294,7 +294,7 @@ fn broken_instance_hover_renders_zero_durability() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -362,7 +362,7 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -457,7 +457,7 @@ fn enchant_line_colour_is_per_slot_and_sign() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -538,7 +538,7 @@ fn temporary_enchant_line_carries_its_countdown_and_charges() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -812,7 +812,7 @@ fn random_property_template_hover_shows_the_placeholder() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),

@@ -148,7 +148,7 @@ fn shapeshift_and_container_cooldowns_keep_their_anchors_too() {
         ..Default::default()
     };
     let bag = || ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots: std::collections::HashMap::from([(1, slot())]),
     };

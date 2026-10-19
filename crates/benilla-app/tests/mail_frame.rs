@@ -90,7 +90,7 @@ fn one_linen_backpack() -> benilla_ui::script::ContainerState {
         },
     );
     benilla_ui::script::ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots,
     }

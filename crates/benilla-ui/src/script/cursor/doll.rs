@@ -492,7 +492,7 @@ mod tests {
             },
         );
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }
@@ -704,7 +704,7 @@ mod tests {
         s.set_container(
             0,
             Some(ContainerState {
-                name: Some("Backpack".into()),
+                name: None,
                 num_slots: 16,
                 slots,
             }),

@@ -38,7 +38,7 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
     s.set_container(
         0,
         Some(benilla_ui::script::ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: [(
                 1,

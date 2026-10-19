@@ -44,7 +44,7 @@ fn put_blade(s: &mut UiScript, remaining_ms: Option<u32>) {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: HashMap::from([(
                 1,
@@ -137,7 +137,7 @@ fn the_cooldown_line_follows_the_set_block_and_precedes_the_description() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: HashMap::from([(
                 1,

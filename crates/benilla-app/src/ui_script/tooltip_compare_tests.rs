@@ -153,7 +153,7 @@ fn seed_items(s: &mut UiScript) {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -303,7 +303,7 @@ fn repair_mode_hover_shows_the_items_repair_cost() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),

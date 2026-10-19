@@ -1799,7 +1799,7 @@ mod bind_confirm_tests {
             },
         );
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }

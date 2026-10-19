@@ -996,7 +996,7 @@ pub(crate) fn two_item_bag() -> super::container::ContainerState {
         ..Default::default()
     };
     super::container::ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots: [
             (1, item(117, "Tough Jerky")),
@@ -1056,7 +1056,7 @@ mod tests {
             },
         );
         crate::script::container::ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }

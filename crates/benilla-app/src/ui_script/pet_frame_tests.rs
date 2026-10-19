@@ -371,7 +371,7 @@ fn every_leg_of_the_pet_frame_click_reaches_a_live_binding() {
     s.set_container(
         0,
         Some(benilla_ui::script::ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: std::collections::HashMap::from([(
                 1,

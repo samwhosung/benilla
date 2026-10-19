@@ -45,7 +45,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
         },
     );
     ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots,
     }

@@ -234,7 +234,7 @@ mod tests {
         script.set_container(
             0,
             Some(ContainerState {
-                name: Some("Backpack".into()),
+                name: None,
                 num_slots: 16,
                 slots: [(
                     1,

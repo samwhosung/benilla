@@ -738,7 +738,7 @@ fn backpack() -> ContainerState {
         },
     );
     ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots,
     }

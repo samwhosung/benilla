@@ -1841,7 +1841,7 @@ mod tests {
         world.non_send_resource_mut::<UiScript>().set_container(
             0,
             Some(benilla_ui::script::ContainerState {
-                name: Some("Backpack".into()),
+                name: None,
                 num_slots: 16,
                 slots,
             }),

@@ -1268,7 +1268,7 @@ fn seat_a_session(script: &mut UiScript) {
         script.set_container(
             0,
             Some(benilla_ui::script::ContainerState {
-                name: Some("Backpack".into()),
+                name: None,
                 num_slots: 16,
                 slots,
             }),
@@ -3779,10 +3779,10 @@ mod dependency_tests {
 
         // The backpack: 16 slots, two filled.
         assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
-        assert_eq!(
-            s.eval::<String>("return GetBagName(0)").unwrap(),
-            "Backpack"
-        );
+        // Named by the stock global, empty where no interface defines it (`0x703bf0`).
+        assert!(s
+            .eval::<bool>("return GetBagName(0) == (BACKPACK_TOOLTIP or '')")
+            .unwrap());
         assert_eq!(
             s.eval::<i64>("local _, c = GetContainerItemInfo(0, 5) return c")
                 .unwrap(),

@@ -97,7 +97,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 4,
             slots,
         }),
@@ -799,7 +799,7 @@ fn locked_is_drawn_for_a_locked_object_and_sets_the_builder_flag() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 24,
             slots: HashMap::from([(1, slot(0)), (2, slot(0x4))]),
         }),
@@ -941,7 +941,7 @@ fn item_bindings_push_has_cooldown_as_one_or_nil() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 24,
             slots: HashMap::from([
                 (1, slot(Some((1000, 30_000, true)), None)),

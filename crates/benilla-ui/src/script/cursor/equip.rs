@@ -184,7 +184,7 @@ mod tests {
 
     fn bag(slots: &[(u32, u64, u32)]) -> ContainerState {
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: slots
                 .iter()
@@ -289,7 +289,7 @@ mod tests {
     /// slot.
     fn boe_bag(bonding: u32, bound: bool) -> ContainerState {
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: [(
                 1,

@@ -102,7 +102,7 @@ fn held(item_id: u32, name: &str, guid: u64, creator: (u64, Option<&str>)) -> Co
 /// slot 2.
 fn backpack(creator: (u64, Option<&str>)) -> ContainerState {
     ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots: HashMap::from([
             (1, held(BAR, "Copper Bar", 0x4000_0000_0000_0001, creator)),
@@ -314,7 +314,7 @@ fn a_charters_petition_answer_adds_its_lines() {
         },
     );
     let charter = |petition: Option<PetitionSlotView>| ContainerState {
-        name: Some("Backpack".into()),
+        name: None,
         num_slots: 16,
         slots: HashMap::from([(
             1,

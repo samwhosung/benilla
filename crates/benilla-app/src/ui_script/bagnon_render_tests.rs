@@ -163,7 +163,7 @@ fn seat(root: &Path, seat: Seat) -> UiScript {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
@@ -845,7 +845,7 @@ fn open_bagnon_stacked(root: &Path) -> UiScript {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),

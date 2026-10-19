@@ -1241,7 +1241,7 @@ fn shipped_bag_frame_drives_end_to_end() {
     s.set_container(
         0,
         Some(ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }),
