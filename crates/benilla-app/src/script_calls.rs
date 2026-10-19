@@ -6,11 +6,13 @@
 //! `/target Bob` then `/cast Flash Heal` heals Bob, `/cast` then `/target` casts at the old target,
 //! and `SpellIsTargeting()` on the line after a cast reads the word it armed.
 //!
-//! The entries that run a script with an input event up, where a cast may pass the gate's tag 2
-//! (`0x494a92`), lend the host to the VM ([`benilla_ui::script::UiScript::hosted`]): the mouse and
-//! key feed and the bindings pass, so each call applies inside its verb. A call made elsewhere (an
-//! `OnUpdate`, a handler a feed's event runs) waits in the VM's queue for [`apply_script_calls`],
-//! which drains it through the same host once a frame.
+//! The entries that run a script with an input event up lend the host to the VM
+//! ([`benilla_ui::script::UiScript::hosted`]): the mouse and key feed and the bindings pass, so
+//! each call applies inside its verb. There an addon's or a macro's cast passes the gate's tag 2
+//! (`0x494a92`); the client's own code passes it outside any input event (`0x494a5a` →
+//! `0x494b11`). A call made elsewhere (an `OnUpdate`, a handler a feed's event runs) waits in the
+//! VM's queue for the next lend, which applies it before its own script runs and under the events
+//! it was made under; [`apply_script_calls`] lends the host once a frame after the world clicks.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -43,9 +45,9 @@ macro_rules! pet_in_order {
 }
 
 /// The systems that lend [`ScriptCallHost`] to the VM: after what moves the world ahead of the
-/// input pass, so the calls read it as [`apply_script_calls`] does. Their calls apply with the
-/// rest of their input event, before the frame's world clicks; the reference dispatches each
-/// input record whole in the order it arrived (`0x423920` → `0x4239a0`, `0x4245b0`).
+/// input pass, so the calls read it as [`apply_script_calls`] does. benilla runs the frame's UI
+/// records, then its bindings, then its world clicks, where the reference dispatches each input
+/// record whole in the order it arrived (`0x423920` → `0x4239a0`, `0x4245b0`) (#1988).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CallHosts;
 
@@ -170,7 +172,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // The word the call left, for the script's next line: `SpellIsTargeting` (`0x6e6cd0`)
         // reads it, and `SpellTargetUnit` binds to it.
         if appliers.p1().push_view(script) {
-            // Deviation: the arm signals at `0x6e5333`, before its bind or send; here it follows.
+            // 1.12.1 signals at the arm (`0x6e5333`), before its bind or send, and again at the
+            // attempt's end (`0x6e51e3`); here once per change of the awaited spell (#1986).
             let macro_lines = tail.take();
             tail = Some(Box::new(move |script: &mut UiScript| {
                 script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
@@ -2720,7 +2723,7 @@ mod tests {
     }
 
     /// FuBar_CorkFu casts from its plugin's click: a button's `OnClick` run by the mouse raises the
-    /// click event (`0x779890`), and the input pass lends the host around it, so the cast arms
+    /// click event (`0x779275`), and the input pass lends the host around it, so the cast arms
     /// and the next line binds it inside the handler.
     #[test]
     fn a_clicks_handler_casts_and_binds_inside_the_input_pass() {

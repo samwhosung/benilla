@@ -413,12 +413,13 @@ pub(crate) fn publish_picks_self(
 
 /// Push the targeting state into the VM each frame, before the input pass, so a word armed last
 /// frame stands for this frame's clicks: the ESC chain's word, the bag and doll pickup reroute's
-/// item half, and `CURRENT_SPELL_CAST_CHANGED` on each edge. That event hides the enchant confirm
-/// popups (`UIParent.lua:449`); its one emitter `0x4b3250` is called from the cast arm, abort and
-/// bind sites, `StopTargeting 0x6e4900` among them. It fires on the spell changing, so a cancel
-/// and re-arm in one frame still counts. A script call pushes the same view inside the call
-/// ([`ScriptCursor::push_view`]), and the VM holds the spell it was told, so one change signals
-/// once.
+/// item half, and `CURRENT_SPELL_CAST_CHANGED` when the awaited spell changes. That event hides the
+/// enchant confirm popups (`UIParent.lua:449`). Its one emitter `0x4b3250` fires at each arm
+/// (`0x6e5333`), the attempt's end (`0x6e51e3`), the send (`0x6e54f0`), the bind (`0x6e5b40`) and
+/// the cancel (`0x6e4940`); here it is signalled once per change of the spell, so a cancel and an
+/// arm of another spell in one frame still count (#1986). A script call pushes the same view inside
+/// the call ([`ScriptCursor::push_view`]), and the VM holds the spell it was told, so one change
+/// signals once.
 pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
     checks: BindChecks,
@@ -434,7 +435,7 @@ pub(crate) fn feed_targeting_to_vm(
 
 /// Push what the VM reads of the targeting word: `SpellIsTargeting`, the pickup reroute's item
 /// half, `SpellCanTargetUnit`'s units and the spell awaiting its target, answering whether that
-/// spell changed since the VM was last told, the edge `CURRENT_SPELL_CAST_CHANGED` is signalled on.
+/// spell changed since the VM was last told, which benilla signals `CURRENT_SPELL_CAST_CHANGED` on.
 fn push_targeting_view(
     script: &mut benilla_ui::script::UiScript,
     targeting: &SpellTargeting,

@@ -170,8 +170,9 @@ impl super::UiScript {
     }
 
     /// Tell the VM which spell awaits its target (`GetTargetingSpellId 0x6e48e0`): `true` when it
-    /// differs from the last one told, the change `CURRENT_SPELL_CAST_CHANGED` is signalled on, so
-    /// a change told inside a call is not signalled again by the next frame's push.
+    /// differs from the last one told. benilla signals `CURRENT_SPELL_CAST_CHANGED` once per such
+    /// change, so one told inside a call is not signalled again by the next frame's push, where
+    /// `0x4b3250` fires at each arm, the attempt's end, the send, the bind and the cancel (#1986).
     pub fn tell_targeting_spell(&mut self, spell: Option<u32>) -> bool {
         let mut model = self.model_mut();
         std::mem::replace(&mut model.targeting_spell, spell) != spell
