@@ -572,7 +572,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### lib_math
 
-- The client's one process-wide stream is shared with its engine draws; here each VM holds its own, seeded from the wall clock when it is built, so a fork or a clone draws its own sequence. ([`src/lib_math.rs:191`](../crates/benilla-lua/src/lib_math.rs#L191))
+- The client's one process-wide stream is shared with its engine draws; here each VM holds its own, seeded from the wall clock when it is built, so a fork or a clone draws its own sequence. ([`src/lib_math.rs:226`](../crates/benilla-lua/src/lib_math.rs#L226))
 
 #### lib_string
 
