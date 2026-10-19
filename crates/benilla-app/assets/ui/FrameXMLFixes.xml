@@ -47,5 +47,20 @@
             end
         end
         RegisterForSave("FRIENDNAMEPLATES_ON")
+
+        -- Deviation: a button whose key moved away keeps the old key's label while it holds an
+        -- action with no range (a stance, a self buff). The stock ActionButton_UpdateHotkeys
+        -- (ActionButton.lua:129-140) writes no text in that one unbound case; this clears it. The
+        -- stock function runs first, unchanged.
+        local refUpdateHotkeys = ActionButton_UpdateHotkeys
+        function ActionButton_UpdateHotkeys(actionButtonType)
+            refUpdateHotkeys(actionButtonType)
+            local action = (actionButtonType or "ACTIONBUTTON")..this:GetID()
+            local button = ActionButton_GetPagedID(this)
+            if ( GetBindingText(GetBindingKey(action), "KEY_", 1) == ""
+                    and HasAction(button) and not ActionHasRange(button) ) then
+                getglobal(this:GetName().."HotKey"):SetText("")
+            end
+        end
     ]]></Script>
 </Ui>

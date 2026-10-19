@@ -1299,6 +1299,56 @@ fn an_extra_bars_empty_well_keeps_its_bound_hotkey_label() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// A key moved off a button holding an action with no range leaves no label behind. Deviation:
+/// the stock `ActionButton_UpdateHotkeys` writes no text in that case (ActionButton.lua:129-140),
+/// so 1.12.1 keeps the old key's label; our layer's `FrameXMLFixes.xml` clears it.
+#[test]
+fn a_key_moved_off_a_no_range_action_takes_its_label_along() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    crate::ui_script::load_stock_bindings(&mut s);
+    load_action_bar(&s, &["FrameXMLFixes.xml"]);
+    show_bars(&s, &[1]);
+    // Two stances: actions with no range.
+    for slot in [61, 63] {
+        s.set_action(
+            slot,
+            Some(ActionSlot {
+                texture: Some("Interface\\Icons\\Ability_Warrior_OffensiveStance".into()),
+                kind: 0x00,
+                action: 2457,
+                count: 0,
+                consumable: false,
+                use_spell: None,
+            }),
+        );
+    }
+    let label = |s: &UiScript, button: &str| {
+        s.eval::<Option<String>>(&format!("return {button}HotKey:GetText()"))
+            .unwrap()
+            .unwrap_or_default()
+    };
+    s.run(r#"SetBinding("SHIFT-2", "MULTIACTIONBAR1BUTTON1")"#)
+        .unwrap();
+    s.fire_event("UPDATE_BINDINGS", vec![]);
+    let shown = label(&s, "MultiBarBottomLeftButton1");
+    assert!(!shown.is_empty(), "the bound stance shows its key");
+
+    // The key moves to button 3, then to button 6.
+    s.run(r#"SetBinding("SHIFT-2", "MULTIACTIONBAR1BUTTON3")"#)
+        .unwrap();
+    s.fire_event("UPDATE_BINDINGS", vec![]);
+    assert_eq!(label(&s, "MultiBarBottomLeftButton1"), "");
+    assert_eq!(label(&s, "MultiBarBottomLeftButton3"), shown);
+    s.run(r#"SetBinding("SHIFT-2", "MULTIACTIONBAR1BUTTON6")"#)
+        .unwrap();
+    s.fire_event("UPDATE_BINDINGS", vec![]);
+    assert_eq!(label(&s, "MultiBarBottomLeftButton3"), "");
+    assert_eq!(label(&s, "MultiBarBottomLeftButton6"), shown);
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// `ShapeshiftBar_Update`'s `SetTexCoord(0, n-2, 0, 1)` (BonusActionBarFrame.lua:173) runs the
 /// middle strip's u past 1, but its XML `<TexCoords>` stay in [0, 1] (BonusActionBarFrame.xml:235),
 /// so the file loaded with the wrap flag off (`0x77012d`) and `SetTexCoord` never sets it: the
