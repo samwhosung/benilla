@@ -33,13 +33,17 @@ pub type CallTail = Box<dyn FnOnce(&mut UiScript)>;
 #[derive(Default)]
 struct HostSlot(Cell<Option<NonNull<dyn CallHost + 'static>>>);
 
-/// The slot, made on first use. It is never replaced or removed after, and no one borrows it
-/// mutably, so a shared borrow of it may be held across Lua.
+/// Install the empty slot at the VM's birth: app data is never inserted while any is borrowed
+/// (`handler_prof::install`), and a lend may come while a verb holds the model.
+pub(super) fn install(lua: &Lua) {
+    lua.set_app_data(HostSlot::default());
+}
+
+/// The slot. It is never replaced or removed after its install, and no one borrows it mutably, so
+/// a shared borrow of it may be held across Lua.
 fn slot(lua: &Lua) -> mlua::AppDataRef<'_, HostSlot> {
-    if lua.app_data_ref::<HostSlot>().is_none() {
-        lua.set_app_data(HostSlot::default());
-    }
-    lua.app_data_ref::<HostSlot>().expect("host slot set")
+    lua.app_data_ref::<HostSlot>()
+        .expect("the host slot is installed at the VM's birth")
 }
 
 /// Lend `host` to the VM of `lua` while `f` runs, then take it back, `f` unwinding included. A
@@ -159,6 +163,13 @@ mod tests {
         assert!(!s.host_free());
         s.hosted(&mut host, |s| assert!(s.host_free()));
         assert!(!s.host_free());
+    }
+
+    /// The slot is there from the VM's birth, so no lend or verb inserts app data.
+    #[test]
+    fn the_slot_is_installed_at_the_vms_birth() {
+        let s = UiScript::new().unwrap();
+        assert!(s.lua().app_data_ref::<HostSlot>().is_some());
     }
 
     #[test]

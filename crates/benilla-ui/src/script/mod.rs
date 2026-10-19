@@ -617,8 +617,9 @@ fn open_state(vm: VmKind) -> mlua::Result<Lua> {
     model.vm = vm;
     lua.set_app_data(model);
     // Before anything can fire a handler and while no app-data borrow is held, as the
-    // profiler's slot requires.
+    // profiler's slot and the call host's require.
     handler_prof::install(&lua);
+    host::install(&lua);
 
     // `0x7039e0`: the base array `0x811e28`, the four libraries and the compat chunk `0x8722e8`.
     stdlib::sandbox(&lua)?;
