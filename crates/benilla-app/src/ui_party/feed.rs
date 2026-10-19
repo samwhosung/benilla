@@ -18,7 +18,7 @@ use crate::target::Selection;
 use crate::ui_script::gate;
 
 use super::pets::{self, Roster};
-use super::GroupState;
+use super::{GroupSignal, GroupState};
 use crate::query_cache::Ask;
 
 // ─── The VM feed and drain ───────────────────────────────────────────────────────────────────────
@@ -26,10 +26,8 @@ use crate::query_cache::Ask;
 /// What the feed last pushed: the values its event edges fire on.
 #[derive(Default)]
 pub(crate) struct FedParty {
-    /// The group lists the feed has answered with `PARTY_MEMBERS_CHANGED`.
-    lists_applied: u32,
-    leader: u64,
-    loot: Option<GroupLootInfo>,
+    /// How far into [`GroupState::signals`] the feed has fired.
+    signals: u64,
     invite: Option<String>,
     units: [Option<UnitState>; 4],
     /// Each party slot's (member guid, object streamed) pair, the `PARTY_MEMBER_ENABLE`/`DISABLE`
@@ -43,17 +41,11 @@ pub(crate) struct FedParty {
     raid_units: Vec<Option<UnitState>>,
     /// `partypet1..4` and `raidpet1..40` (see [`pets`]).
     pets: pets::FedPets,
-    /// The group lists' `RAID_ROSTER_UPDATE`s the feed has answered.
-    roster_updates: u32,
-    /// The raid roster's identity (guid, rank, subgroup, online): the edge that stands in for the
-    /// `RAID_ROSTER_UPDATE` sites no list carries.
-    raid_key: Vec<(u64, u32, u32, bool)>,
     saved: Vec<SavedInstanceInfo>,
     saved_answers: u32,
     ready_check: u32,
     ready_check_requests: u32,
     answers_forwarded: usize,
-    raid_targets: [u64; 8],
 }
 
 pub(crate) const PARTY_TOKENS: [&str; 4] = ["party1", "party2", "party3", "party4"];
@@ -67,27 +59,24 @@ fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedPar
     saved != fed.saved || answers != fed.saved_answers
 }
 
-/// The `PARTY_MEMBERS_CHANGED`s the lists applied since the feed's last look owe: one each, as the
-/// reference signals once per packet (`0x5e6c61`). A fresh VM saw none of them, so it gets one
-/// catch-up for a group whose list landed before it, never the history; a count that ran backwards
-/// is a new session's, all of whose lists are new.
-fn members_changed_owed(applied: u32, seen: u32, fresh_vm: bool) -> u32 {
-    match (fresh_vm, applied.checked_sub(seen)) {
-        (true, _) => u32::from(applied != 0),
-        (false, Some(owed)) => owed,
-        (false, None) => applied,
-    }
-}
-
-/// The `RAID_ROSTER_UPDATE`s the lists applied since the feed's last look owe: one each, as the
-/// reference signals once per list (`0x4babef`, `0x4ba57b`). A fresh VM is owed none, since the
-/// roster edge gives the raid it finds its one catch-up; a count that ran backwards is a new
-/// session's, all of whose lists are new.
-fn roster_updates_owed(applied: u32, seen: u32, fresh_vm: bool) -> u32 {
-    if fresh_vm {
-        return 0;
-    }
-    applied.checked_sub(seen).unwrap_or(applied)
+/// What a fresh VM is told in place of the signals it never heard: one of each event the state it
+/// finds still carries, in the order a list signals them. The reference has no such pass: its
+/// world entry (`0x4908c0`) signals the roster only through the raid leg's fill of a zero row
+/// (`0x4ba140`, signalling at `0x4ba1a2`), and stock `RaidFrame.lua:32` reads the raid on
+/// `PLAYER_LOGIN` instead. It is benilla's seam: the in-world VM is built once the loading cover
+/// is up (`ui_script::lifecycle`), so a list can land before any VM hears it; a reload's VM is
+/// told the same.
+fn catch_up(group: &GroupState) -> Vec<GroupSignal> {
+    [
+        (GroupSignal::MembersChanged, group.listed),
+        (GroupSignal::LeaderChanged, group.leader != 0),
+        (GroupSignal::LootMethodChanged, group.loot.is_some()),
+        (GroupSignal::RaidRosterUpdate, group.raid_held()),
+        (GroupSignal::RaidTargetUpdate, group.raid_targets != [0; 8]),
+    ]
+    .into_iter()
+    .filter_map(|(signal, owed)| owed.then_some(signal))
+    .collect()
 }
 
 /// The `raid1..raid40` unit tokens, one per `MAX_RAID_MEMBERS` (40, `RaidFrame.lua:2`).
@@ -287,11 +276,6 @@ pub(crate) fn feed_party(
     };
     let held_store = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
     let raid = raid_roster(&group, me.as_ref(), &held_store, &names, chr, &zone_name);
-    // The `RAID_ROSTER_UPDATE` key, taken before the roster moves into the snapshot.
-    let raid_key: Vec<(u64, u32, u32, bool)> = raid
-        .iter()
-        .map(|r| (r.guid, r.rank, r.subgroup, r.online))
-        .collect();
 
     let fresh = PartyState {
         members,
@@ -432,61 +416,33 @@ pub(crate) fn feed_party(
         pets::feed_token(&mut script, &gate, &mut fed.pets.raid[i], token, now);
     }
 
-    // ── PARTY_MEMBERS_CHANGED ───────────────────────────────────────────────
+    // ── The group events ────────────────────────────────────────────────────
     //
-    // Signalled after every `SMSG_GROUP_LIST`'s member loop (`0x5e6c61`), whatever the list changed:
-    // a status, the flags, the leader or nothing at all, and an empty list reaches it too
-    // (`0x5e6b3c`). Each list in this drain fires its own, after the snapshots above.
-    let owed = members_changed_owed(group.lists_applied, fed.lists_applied, vm_reset);
-    fed.lists_applied = group.lists_applied;
-    if owed != 0 {
-        gate.audit("feed_party", "a group list");
+    // `PARTY_MEMBERS_CHANGED`, `PARTY_LEADER_CHANGED`, `PARTY_LOOT_METHOD_CHANGED`,
+    // `RAID_ROSTER_UPDATE` and `RAID_TARGET_UPDATE`, each as its handler signalled it, in packet
+    // order and once ([`GroupState::signals`]), after the snapshots above, which their handlers
+    // read. Nothing gates one on a difference: a list that changes nothing still signals, and a
+    // stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world entry's fill of a
+    // zero row (`0x4ba1a2`), is not built: our row holds our guid ([`GroupState::own_raid_row`]).
+    // A fresh VM heard none of them and is told [`catch_up`] instead.
+    let owed = if vm_reset {
+        catch_up(&group)
+    } else {
+        group.signals.since(fed.signals).to_vec()
+    };
+    fed.signals = group.signals.end();
+    if !owed.is_empty() {
+        gate.audit("feed_party", "a group signal");
     }
-    for _ in 0..owed {
-        script.fire_event("PARTY_MEMBERS_CHANGED", vec![]);
-    }
-    if group.leader != fed.leader {
-        gate.audit("feed_party", "the leader edge");
-        script.fire_event("PARTY_LEADER_CHANGED", vec![]);
-        fed.leader = group.leader;
-    }
-    if group.loot != fed.loot {
-        gate.audit("feed_party", "the loot-method edge");
-        script.fire_event("PARTY_LOOT_METHOD_CHANGED", vec![]);
-        fed.loot = group.loot;
-    }
-    // ── RAID_ROSTER_UPDATE ──────────────────────────────────────────────────
-    //
-    // The reference signals it from four places, and `GroupState` counts the two that a list
-    // drives; each list in this drain fires its own. A raid list's roster rebuild signals with no
-    // member name pending, whatever the list changed (`0x4babef`; nothing gates the signal on a difference),
-    // and a list that is not a raid signals for the roster it drops (`0x4ba57b`). The other two
-    // have no list behind them: the last pending name's answer (`0x4bada6`) and world entry filling
-    // in our own row (`0x4ba1a2`). The roster's identity (members, order, rank, subgroup, online)
-    // stands in for them when no list signalled: it moves as our own row arrives, and a list held
-    // back by a pending name fires on it when it moves. Level and health are not in it, which
-    // `RaidGroupFrame_OnEvent` re-reads on `UNIT_LEVEL` and `UNIT_HEALTH`.
-    let owed = roster_updates_owed(group.roster_updates, fed.roster_updates, vm_reset);
-    fed.roster_updates = group.roster_updates;
-    let roster_moved = raid_key != fed.raid_key;
-    fed.raid_key = raid_key;
-    if owed != 0 {
-        gate.audit("feed_party", "a raid roster list");
-        for _ in 0..owed {
-            script.fire_event("RAID_ROSTER_UPDATE", vec![]);
-        }
-    } else if roster_moved {
-        gate.audit("feed_party", "the raid-roster edge");
-        script.fire_event("RAID_ROSTER_UPDATE", vec![]);
-    }
-
-    // ── RAID_TARGET_UPDATE ──────────────────────────────────────────────────────────────────
-    //
-    // Fired when the board moves, with no argument; `TargetFrame.lua:99` re-reads the icon on it.
-    if group.raid_targets != fed.raid_targets {
-        gate.audit("feed_party", "the raid-target board edge");
-        fed.raid_targets = group.raid_targets;
-        script.fire_event("RAID_TARGET_UPDATE", vec![]);
+    for signal in owed {
+        let signalled = match signal {
+            GroupSignal::MembersChanged => "PARTY_MEMBERS_CHANGED",
+            GroupSignal::LeaderChanged => "PARTY_LEADER_CHANGED",
+            GroupSignal::LootMethodChanged => "PARTY_LOOT_METHOD_CHANGED",
+            GroupSignal::RaidRosterUpdate => "RAID_ROSTER_UPDATE",
+            GroupSignal::RaidTargetUpdate => "RAID_TARGET_UPDATE",
+        };
+        script.fire_event(signalled, vec![]);
     }
 
     // ── READY_CHECK ─────────────────────────────────────────────────────────
@@ -635,9 +591,10 @@ fn raid_roster<'a>(
         return Vec::new();
     }
     // Rank 2 leader, 1 assistant, 0 member, as the reference's roster rebuild writes it
-    // (`0x4ba90c`, `0x4ba920`, `0x4ba929`) and the binding returns it unchanged.
+    // (`0x4ba90c`, `0x4ba920`, `0x4ba929`) against the leader of that rebuild, and the binding
+    // returns it unchanged.
     let rank_of = |guid: u64, flags: u8| {
-        if guid == group.leader {
+        if guid == group.raid_leader {
             2
         } else if flags & GROUP_MEMBER_ASSISTANT != 0 {
             1
@@ -818,6 +775,9 @@ pub(crate) fn drain_party(
     commands: Res<NetCommands>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
+    // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a change
+    // the feed's gate should open on.
+    group.bypass_change_detection().signals.age();
     let Some(mut script) = script else {
         return;
     };
@@ -1013,11 +973,12 @@ fn test_apply_local(
 ) -> bool {
     let was_held = group.raid_held();
     let handled = apply_test_intent(group, req, self_guid, target_guid);
-    // The server answers each of these with a fresh `SMSG_GROUP_LIST`, which the reference signals
-    // `PARTY_MEMBERS_CHANGED` for whether or not it changed anything (`0x5e6c61`). A raid's list
-    // rebuilds the roster as [`GroupState::apply_list`] does, our row after any members
-    // (`0x5e6e6f`-`0x5e6e9c`), and signals `RAID_ROSTER_UPDATE` (`0x4babef`); a list that is not a
-    // raid signals one for the roster it drops (`0x4ba57b`).
+    // The server answers each of these with a fresh `SMSG_GROUP_LIST`, signalled in the order a
+    // real one is ([`GroupState::apply_list_awaiting`]): `PARTY_MEMBERS_CHANGED` whether or not it
+    // changed anything (`0x5e6c66`), the leader store's signal for a list naming a leader and the
+    // loot store's for one listing members, the raid roster as a raid list writes it, our row
+    // after any members (`0x5e6e6f`-`0x5e6e9c`), with its `RAID_ROSTER_UPDATE` (`0x4babef`) or the
+    // one that ends a raid for the roster it drops (`0x4ba57b`), and a party's board.
     if matches!(
         req,
         PartyRequest::Leave
@@ -1034,10 +995,32 @@ fn test_apply_local(
     ) {
         let raid = group.group_type == GROUPTYPE_RAID;
         group.own_raid_row = (raid && !group.members.is_empty()).then(|| self_guid.unwrap_or(0));
-        group.count_list();
-        if raid || was_held {
-            group.count_roster_update();
+        group.raid_leader = if raid { group.leader } else { 0 };
+        group.listed = true;
+        group.signal(GroupSignal::MembersChanged);
+        if group.leader != 0 {
+            group.signal(GroupSignal::LeaderChanged);
         }
+        if !group.members.is_empty() {
+            group.signal(GroupSignal::LootMethodChanged);
+        }
+        if raid || was_held {
+            group.signal(GroupSignal::RaidRosterUpdate);
+        }
+        // A party's list clears the board and signals (`0x4ba5db`), and vmangos resends any icons
+        // right after it (`Group.cpp:1358`), so the board comes back with a second signal.
+        if group.group_type != GROUPTYPE_RAID {
+            group.signal(GroupSignal::RaidTargetUpdate);
+            if group.raid_targets != [0; 8] && group.in_group {
+                group.signal(GroupSignal::RaidTargetUpdate);
+            } else {
+                group.raid_targets = [0; 8];
+            }
+        }
+    }
+    if matches!(req, PartyRequest::SetRaidTarget { .. }) {
+        // The server's `MSG_RAID_TARGET_UPDATE` echo, one signal (`0x4ba348`).
+        group.signal(GroupSignal::RaidTargetUpdate);
     }
     handled
 }
@@ -1928,22 +1911,112 @@ mod tests {
         assert_eq!(changed(&mut solo), 0, "no list, no event");
     }
 
+    /// A fresh VM is told one of each event the state carries, in a list's order, and never the
+    /// history: a group left this session still owes its members change, and nothing else.
     #[test]
-    fn the_lists_owed_are_the_count_since_the_last_look() {
-        assert_eq!(members_changed_owed(3, 3, false), 0, "nothing landed");
-        assert_eq!(members_changed_owed(5, 3, false), 2, "one apiece");
+    fn a_fresh_vm_is_told_what_the_state_carries_in_a_lists_order() {
+        use GroupSignal::*;
+        let mut g = GroupState::default();
+        assert_eq!(catch_up(&g), [], "no list this session");
+        let loot = GroupLootInfo {
+            method: 2,
+            master: member(1),
+            threshold: 3,
+        };
+        let raid = vec![GroupMemberEntry {
+            name: "M1".into(),
+            guid: member(1),
+            status: ON,
+            flags: 1,
+        }];
+        g.apply_list(GROUPTYPE_RAID, 0, raid, ME, Some(loot), Some(ME));
+        g.apply_raid_target_update(7, member(1));
         assert_eq!(
-            members_changed_owed(2, 4, false),
-            2,
-            "the session ended and began again"
+            catch_up(&g),
+            [
+                MembersChanged,
+                LeaderChanged,
+                LootMethodChanged,
+                RaidRosterUpdate,
+                RaidTargetUpdate
+            ]
         );
-        assert_eq!(members_changed_owed(0, 4, false), 0);
+        g.apply_list(0, 0, Vec::new(), 0, None, Some(ME));
+        assert_eq!(catch_up(&g), [MembersChanged], "the group ended");
+    }
+
+    /// The feed and the drain in the schedule's order, with a system between them that logs a
+    /// signal, as the chat input's `/partytest` can: the drain's age keeps it, the next frame's
+    /// feed fires it once, and the ages after drop it.
+    #[test]
+    fn a_signal_logged_between_the_feed_and_the_drain_fires_on_the_next_frame_once() {
+        #[derive(Resource, Default)]
+        struct Mark(bool);
+        fn mark(mut on: ResMut<Mark>, mut group: ResMut<GroupState>) {
+            if std::mem::take(&mut on.0) {
+                group.apply_raid_target_update(7, member(1));
+            }
+        }
+        let mut app = app();
+        app.init_resource::<Selection>().init_resource::<Mark>();
+        app.add_systems(Update, (mark.after(feed_party), drain_party.after(mark)));
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script
+            .run(
+                r#"
+                MARKS = 0
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("RAID_TARGET_UPDATE")
+                f:SetScript("OnEvent", function() MARKS = MARKS + 1 end)
+                "#,
+            )
+            .unwrap();
+        let marks = |app: &mut App| {
+            frame(app);
+            let script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let n: f64 = script.eval("return MARKS").unwrap();
+            script.run("MARKS = 0").unwrap();
+            n as u32
+        };
+        marks(&mut app);
+
+        app.world_mut().resource_mut::<Mark>().0 = true;
+        assert_eq!(marks(&mut app), 0, "logged after this frame's feed");
+        assert_eq!(marks(&mut app), 1, "the next frame's feed");
+        marks(&mut app);
+        assert_eq!(marks(&mut app), 0, "once");
+        let log = &app.world().resource::<GroupState>().signals;
+        assert_eq!(log.since(0), [], "and the ages dropped it");
+    }
+
+    /// The sandbox's echo signals as a real list does: one naming the leader signals the leader
+    /// store whether or not it moved (`0x4e8250`), one with members the loot store (`0x4e87fa`),
+    /// and the all-zero echo of a leave neither.
+    #[test]
+    fn the_sandbox_echo_signals_both_stores_on_every_list() {
+        use GroupSignal::*;
+        let mut g = GroupState::default();
+        synthetic_roster(&mut g, None);
+        g.signals.take();
+        let same = PartyRequest::LootThreshold(3);
+        assert!(test_apply_local(&mut g, &same, Some(ME), None));
         assert_eq!(
-            members_changed_owed(7, 0, true),
-            1,
-            "a fresh VM: the group, once"
+            g.signals.take(),
+            [
+                MembersChanged,
+                LeaderChanged,
+                LootMethodChanged,
+                RaidTargetUpdate
+            ],
+            "a threshold it already had, under the leader it already had"
         );
-        assert_eq!(members_changed_owed(0, 0, true), 0);
+        assert!(test_apply_local(
+            &mut g,
+            &PartyRequest::Leave,
+            Some(ME),
+            None
+        ));
+        assert_eq!(g.signals.take(), [MembersChanged, RaidTargetUpdate]);
     }
 
     /// The sandbox stands in for the server, whose echo of each group intent is a list.
@@ -2147,6 +2220,7 @@ mod tests {
             own_flags: 0,
             own_raid_row: Some(0x5E1F),
             leader: 0x5E1F,
+            raid_leader: 0x5E1F,
             members: vec![
                 // Alice: subgroup 2 (stored), an assistant; the byte says offline.
                 member(

@@ -36,6 +36,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ReadyCheckRequest, on_ready_check_request)
         .net_handler(K::ReadyCheckAnswer, on_ready_check_answer)
         .net_handler(K::RaidInstanceInfo, on_raid_instance_info)
+        .net_handler(K::PlayerName, on_player_name)
         .net_handler(K::Disconnected, on_session_end);
 }
 
@@ -171,7 +172,7 @@ fn on_member_stats(
 
 fn on_raid_target(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     match ev {
-        SessionEvent::RaidTargetSet { icon, guid } => group.apply_raid_target(icon, guid),
+        SessionEvent::RaidTargetSet { icon, guid } => group.apply_raid_target_update(icon, guid),
         SessionEvent::RaidTargetList { entries } => group.apply_raid_target_list(&entries),
         _ => {}
     }
@@ -197,6 +198,14 @@ fn on_ready_check_answer(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>
 fn on_raid_instance_info(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     if let SessionEvent::RaidInstanceInfo { entries } = ev {
         group.apply_raid_instance_info(entries);
+    }
+}
+
+/// `SMSG_NAME_QUERY_RESPONSE`, found or refused: the roster's lookups that waited on it run
+/// ([`GroupState::apply_player_name`]).
+fn on_player_name(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
+    if let SessionEvent::PlayerName { guid, .. } = ev {
+        group.apply_player_name(guid);
     }
 }
 
@@ -249,9 +258,9 @@ fn leader_changed(
 /// `SMSG_GROUP_LIST`: apply the roster, seat new members' records and re-ask the questgiver sweep
 /// (shared-quest availability follows the roster). Every member is name-queried once: the
 /// answer's race, class and gender are the only source of them for a member we never see streamed.
-/// A raid's rebuild counts the rows whose name is still to come (`0x4ba9b6`-`0x4ba9d0`), ours
-/// among them once others are listed (`0x5e6e73`), and signals `RAID_ROSTER_UPDATE` only with none
-/// (`0x4babdf`-`0x4babef`).
+/// The party seats (`0x4e8477`) and a raid's rows (`0x4ba9c7`), ours among them once others are
+/// listed (`0x5e6e73`), each look their name up with a callback, which [`GroupState`] keeps for
+/// the answer ([`on_player_name`]).
 fn list(
     group: &mut GroupState,
     errors: &mut UiErrorKeys,
@@ -267,21 +276,13 @@ fn list(
     index: &GuidIndex,
     net_commands: &NetCommands,
 ) {
-    // Each member's seat looks its name up with the callback `0x4e8490` (`0x4e8477`): the packet
-    // asks a refused name again.
-    let mut names_pending = false;
-    for m in &members {
-        names_pending |= names
-            .resolve_player(m.guid, Ask::Event(net_commands))
-            .is_none();
-    }
-    if group_type == GROUPTYPE_RAID && !members.is_empty() {
-        if let Some(own) = self_guid.0 {
-            names_pending |= names
-                .resolve_player(own, Ask::Event(net_commands))
-                .is_none();
-        }
-    }
+    // The lookups with a callback, which ask a refused name again; a miss waits for the answer.
+    // A party list seats every member and a raid list rows every one, so each is asked.
+    let lookup = |guid: u64| {
+        names
+            .resolve_player(guid, Ask::Event(net_commands))
+            .map(str::to_string)
+    };
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
     // no record as new, the reference's `srcRec == 0`.
     let seats: Vec<(u64, bool)> = members
@@ -295,7 +296,7 @@ fn list(
         leader,
         loot,
         self_guid.0,
-        names_pending,
+        &lookup,
     );
     push_group_lines(errors, shown.lines);
     if shown.invite_accept {
@@ -418,6 +419,7 @@ fn command_result(
 
 #[cfg(test)]
 mod tests {
+    use super::super::GroupSignal;
     use super::*;
     use crate::net::ClientCommand;
     use benilla_protocol::guid;
@@ -572,7 +574,11 @@ mod tests {
                 &GuidIndex::default(),
                 &net,
             );
-            group.roster_updates
+            let signals = group.signals.since(0);
+            signals
+                .iter()
+                .filter(|s| **s == GroupSignal::RaidRosterUpdate)
+                .count()
         };
 
         assert_eq!(raid(&mut group, &names, 1), 0, "no name held");
@@ -887,6 +893,74 @@ mod tests {
         assert_eq!(named(Some("Unknown")).as_deref(), Some("Unknown"));
         assert_eq!(named(Some("")).as_deref(), Some("Unknown Being"));
         assert_eq!(named(None).as_deref(), Some(""), "no VM");
+    }
+
+    /// The handlers end to end: a raid list whose member's name the cache misses asks it and holds
+    /// `RAID_ROSTER_UPDATE` back (`0x4ba9c7`, `0x4babdf`); the answer's handler runs the lookup
+    /// that waited, the last pending, so the roster update and the members change signal
+    /// (`0x4bad90`-`0x4badb0`).
+    #[test]
+    fn a_raid_list_waits_on_a_name_the_answer_brings() {
+        use bevy::ecs::system::RunSystemOnce;
+        const ME: u64 = 0x10;
+        let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<GroupState>()
+            .init_resource::<UiErrorKeys>()
+            .init_resource::<MessageSounds>()
+            .init_resource::<QuestGiver>()
+            .insert_resource(SelfGuid(Some(ME)))
+            .init_resource::<NameCache>()
+            .init_resource::<GuidIndex>();
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(ME, "Me".into(), None);
+        let mut far = member(0x22, "Brisca");
+        far.flags = 1;
+        app.world_mut()
+            .run_system_once_with(
+                on_list,
+                SessionEvent::GroupList {
+                    group_type: GROUPTYPE_RAID,
+                    own_flags: 0,
+                    members: vec![far],
+                    leader: ME,
+                    loot: None,
+                },
+            )
+            .expect("the group-list handler");
+        let signals = |app: &mut App| app.world_mut().resource_mut::<GroupState>().signals.take();
+        assert_eq!(
+            signals(&mut app),
+            [GroupSignal::MembersChanged, GroupSignal::LeaderChanged],
+            "a name pending: the list's own, and no roster yet"
+        );
+        let queried: Vec<u64> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::NameQuery { guid } => Some(guid),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(queried, vec![0x22], "and asked, once");
+
+        app.world_mut()
+            .run_system_once_with(
+                on_player_name,
+                SessionEvent::PlayerName {
+                    guid: 0x22,
+                    name: "Brisca".into(),
+                    race: 1,
+                    class: 1,
+                    gender: 0,
+                },
+            )
+            .expect("the name handler");
+        assert_eq!(
+            signals(&mut app),
+            [GroupSignal::RaidRosterUpdate, GroupSignal::MembersChanged]
+        );
     }
 
     #[test]

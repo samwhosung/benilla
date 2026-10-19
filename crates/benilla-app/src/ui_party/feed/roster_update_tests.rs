@@ -1,6 +1,7 @@
 //! `RAID_ROSTER_UPDATE` as the reference signals it: once per group list that rebuilds the raid
-//! roster with no member name pending (`0x4babef`) and once per list that drops the roster held
-//! (`0x4ba57b`), with the roster edge standing in for the two signals no list carries.
+//! roster with no member name pending (`0x4babef`), once per list that drops the roster held
+//! (`0x4ba57b`), and once when the last pending name answers (`0x4bada6`), which signals
+//! `PARTY_MEMBERS_CHANGED` after it (`0x4badb0`).
 
 use super::super::pets::tests::{app, app_with, flag, frame, member, ME};
 use super::*;
@@ -34,21 +35,35 @@ fn fired(app: &mut App) -> u32 {
 }
 
 /// `SMSG_GROUP_LIST` as the server sends it: members `1..` with their status byte, led by us, of
-/// the given group type. `names_pending` is what the name cache told the handler.
-fn send(app: &mut App, group_type: u8, statuses: &[u8], names_pending: bool) {
-    let list: Vec<GroupMemberEntry> = statuses
+/// the given group type. `missing` are the guids whose name the cache told the handler is to come.
+fn send(app: &mut App, group_type: u8, statuses: &[u8], missing: &[u64]) {
+    let rows: Vec<(u8, u8)> = statuses.iter().map(|&status| (status, 0)).collect();
+    send_rows(app, group_type, &rows, missing);
+}
+
+/// [`send`] with each member's (status, subgroup); ours is subgroup 0.
+fn send_rows(app: &mut App, group_type: u8, rows: &[(u8, u8)], missing: &[u64]) {
+    let list: Vec<GroupMemberEntry> = rows
         .iter()
         .enumerate()
-        .map(|(i, &status)| GroupMemberEntry {
+        .map(|(i, &(status, subgroup))| GroupMemberEntry {
             name: format!("M{}", i + 1),
             guid: member(i as u64 + 1),
             status,
-            flags: 0,
+            flags: subgroup,
         })
         .collect();
     let mut group = app.world_mut().resource_mut::<GroupState>();
     let seats: Vec<(u64, bool)> = list.iter().map(|m| (m.guid, m.listed_online())).collect();
-    group.apply_list_awaiting(group_type, 0, list, ME, None, Some(ME), names_pending);
+    // A list with members carries the loot tail (`Group.cpp:155-180`).
+    let loot = (!list.is_empty()).then_some(GroupLootInfo {
+        method: 3,
+        master: 0,
+        threshold: 2,
+    });
+    group.apply_list_awaiting(group_type, 0, list, ME, loot, Some(ME), &|guid| {
+        (!missing.contains(&guid)).then(String::new)
+    });
     // The handler's record leg (`net::seat_new_records`): a member new to the roster is seated at
     // 1/1 with the row's online bit.
     for (guid, online) in seats {
@@ -73,11 +88,11 @@ fn status(app: &mut App, i: u64, status: u8) {
 }
 
 fn raid(app: &mut App, statuses: &[u8]) {
-    send(app, GROUPTYPE_RAID, statuses, false);
+    send(app, GROUPTYPE_RAID, statuses, &[]);
 }
 
 fn party(app: &mut App, statuses: &[u8]) {
-    send(app, 0, statuses, false);
+    send(app, 0, statuses, &[]);
 }
 
 /// The all-zero list: "not in a group".
@@ -177,24 +192,211 @@ fn a_party_list_fires_no_raid_roster_update() {
     );
 }
 
-/// With a member name pending the writer signals nothing (`0x4babdf`); the name answer does later
-/// (`0x4bada6`), which is not built, so the roster edge signals a list that moves the roster's
-/// identity, as it always has.
+/// `SMSG_NAME_QUERY_RESPONSE` for member `i`, a warrior: the cache files it, then the lookups the
+/// roster left waiting run (`net::on_player_name`).
+fn answer(app: &mut App, i: u64) {
+    app.world_mut().resource_mut::<NameCache>().insert_player(
+        member(i),
+        format!("M{i}"),
+        Some((1, 1, 0)),
+    );
+    app.world_mut()
+        .resource_mut::<GroupState>()
+        .apply_player_name(member(i));
+}
+
+/// A frame that counts `PARTY_MEMBERS_CHANGED` and `RAID_ROSTER_UPDATE` in the order the VM is
+/// told of them; [`told`] takes them.
+fn watch_both(app: &mut App) {
+    let script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script
+        .run(
+            r#"
+            TOLD = ""
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("RAID_ROSTER_UPDATE")
+            f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+            f:SetScript("OnEvent", function()
+                TOLD = TOLD .. (event == "RAID_ROSTER_UPDATE" and "R" or "P")
+            end)
+            "#,
+        )
+        .unwrap();
+}
+
+/// Run a frame and take what it told, `R` a roster update and `P` a members change, in order.
+fn told(app: &mut App) -> String {
+    frame(app);
+    let script = app.world_mut().non_send_resource_mut::<UiScript>();
+    let told: String = script.eval("return TOLD").unwrap();
+    script.run("TOLD = \"\"").unwrap();
+    told
+}
+
+/// A raid member in another subgroup whose name is still to come when the roster lands: the writer
+/// counts it and signals nothing (`0x4babdf`), the row reads no class, and the answer counts the
+/// last pending name down, signalling `RAID_ROSTER_UPDATE` and then `PARTY_MEMBERS_CHANGED`
+/// (`0x4bad90`-`0x4badb0`), after which the row has its class. Holding no seat of ours, the
+/// member's lookup is the roster's alone.
 #[test]
-fn a_raid_list_with_a_name_pending_fires_only_on_the_roster_edge() {
+fn a_raid_member_whose_name_arrives_after_the_roster_fires_on_the_answer() {
+    let mut app = app();
+    crate::ui_unit::TestNames::english().insert(&mut app);
+    watch_both(&mut app);
+    // Past the VM's first look, which answers what it finds rather than the signals.
+    told(&mut app);
+    let class = |app: &mut App| {
+        flag(
+            app,
+            "(function() local _, _, _, _, class = GetRaidRosterInfo(2) \
+             if class then return 1 end return 0 end)()",
+        )
+    };
+
+    send_rows(&mut app, GROUPTYPE_RAID, &[(ON, 0), (ON, 1)], &[member(2)]);
+    assert_eq!(
+        told(&mut app),
+        "P",
+        "the list's members change, no roster yet"
+    );
+    assert_eq!(class(&mut app), Some(0.0), "no class before the answer");
+    answer(&mut app, 1);
+    assert_eq!(
+        told(&mut app),
+        "",
+        "another member's answer waits on nothing"
+    );
+    answer(&mut app, 2);
+    assert_eq!(told(&mut app), "RP", "the answer's two signals, in order");
+    assert_eq!(class(&mut app), Some(1.0));
+    answer(&mut app, 2);
+    assert_eq!(told(&mut app), "", "nothing left waiting");
+
+    // A list that lands while a name is pending cancels the old rows' lookups and counts afresh.
+    let rows = [(ON, 0), (ON, 1), (ON, 1)];
+    send_rows(&mut app, GROUPTYPE_RAID, &rows, &[member(3)]);
+    assert_eq!(told(&mut app), "P");
+    send_rows(&mut app, GROUPTYPE_RAID, &rows, &[]);
+    assert_eq!(told(&mut app), "PR", "every name held: the list signals");
+    answer(&mut app, 3);
+    assert_eq!(told(&mut app), "", "its lookup was cancelled");
+}
+
+/// `RAID_ROSTER_UPDATE` has four sites (`0x4ba1a2`, `0x4ba57b`, `0x4babef`, `0x4bada6`), none in the
+/// stats handler: a stats packet that takes a member offline moves the row `GetRaidRosterInfo`
+/// reads and signals nothing.
+#[test]
+fn a_stats_packet_moving_a_rows_online_bit_fires_no_raid_roster_update() {
     let mut app = app();
     watch(&mut app);
     raid(&mut app, &[ON, ON]);
-    fired(&mut app);
+    assert_eq!(fired(&mut app), 1, "the list");
+    let online = |app: &mut App| {
+        flag(
+            app,
+            "(function() local _, _, _, _, _, _, _, online = GetRaidRosterInfo(1) \
+             if online then return 1 end return 0 end)()",
+        )
+    };
+    assert_eq!(online(&mut app), Some(1.0));
+    status(&mut app, 1, member_status::OFFLINE);
+    assert_eq!(fired(&mut app), 0, "no list, no answer");
+    assert_eq!(online(&mut app), Some(0.0), "though the row reads it");
+}
 
-    send(&mut app, GROUPTYPE_RAID, &[DEAD, ON], true);
-    assert_eq!(fired(&mut app), 0, "a status alone, a name pending");
-    send(&mut app, GROUPTYPE_RAID, &[DEAD, ON], true);
-    assert_eq!(fired(&mut app), 0, "an identical list, a name pending");
-    send(&mut app, GROUPTYPE_RAID, &[DEAD, ON, ON], true);
-    assert_eq!(fired(&mut app), 1, "a member joined: the roster moved");
-    send(&mut app, GROUPTYPE_RAID, &[DEAD, ON, ON], false);
-    assert_eq!(fired(&mut app), 1, "the names held: the list fires");
+/// A kick ends the party at once (`0x5e6850`): `PARTY_MEMBERS_CHANGED` with the slots already
+/// empty and no leader, and no `PARTY_LEADER_CHANGED`, as the leader store finds the 0 the
+/// emptier wrote (`0x4e85a9`, `0x4e8267`); the all-zero list after it signals its members change
+/// and leads nobody new.
+#[test]
+fn a_kick_empties_the_party_at_once_and_names_no_new_leader() {
+    let mut app = app();
+    let script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script
+        .run(
+            r#"
+            TOLD = ""
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+            f:RegisterEvent("PARTY_LEADER_CHANGED")
+            f:SetScript("OnEvent", function()
+                local mark = event == "PARTY_LEADER_CHANGED" and "L" or "P"
+                TOLD = TOLD .. mark .. GetNumPartyMembers()
+            end)
+            "#,
+        )
+        .unwrap();
+    told(&mut app);
+    party(&mut app, &[ON, ON]);
+    assert_eq!(told(&mut app), "P2L2", "the list seats two, led by us");
+
+    app.world_mut()
+        .resource_mut::<GroupState>()
+        .apply_uninvited();
+    assert_eq!(told(&mut app), "P0", "the slots empty with the signal");
+    assert_eq!(flag(&mut app, "UnitExists('party1')"), None);
+    assert_eq!(flag(&mut app, "IsPartyLeader()"), None);
+    all_zero(&mut app);
+    assert_eq!(told(&mut app), "P0", "the list's own, and no leader");
+}
+
+/// `RAID_TARGET_UPDATE` follows its signals one for one: each raid-target packet, a mark that
+/// moves nothing included (`0x4ba348`), and each party list, which clears the board (`0x4ba5db`).
+#[test]
+fn raid_target_update_fires_per_packet_and_per_party_list() {
+    let mut app = app();
+    let script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script
+        .run(
+            r#"
+            MARKS = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("RAID_TARGET_UPDATE")
+            f:SetScript("OnEvent", function() MARKS = MARKS + 1 end)
+            "#,
+        )
+        .unwrap();
+    let marks = |app: &mut App| {
+        frame(app);
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let n: f64 = script.eval("return MARKS").unwrap();
+        script.run("MARKS = 0").unwrap();
+        n as u32
+    };
+    marks(&mut app);
+    party(&mut app, &[ON]);
+    assert_eq!(marks(&mut app), 1, "the party's list");
+    let mark = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_raid_target_update(7, member(1));
+    };
+    mark(&mut app);
+    mark(&mut app);
+    assert_eq!(
+        marks(&mut app),
+        2,
+        "one per packet, the second moving nothing"
+    );
+    party(&mut app, &[ON]);
+    assert_eq!(marks(&mut app), 1, "the list clears the mark");
+    assert_eq!(flag(&mut app, "GetRaidTargetIndex('party1')"), None);
+}
+
+/// A party member whose name is still to come: each list that seats them waits on it, and the
+/// answer signals `PARTY_MEMBERS_CHANGED` once for each (`0x4e8467`-`0x4e8495`).
+#[test]
+fn a_party_member_whose_name_arrives_after_the_roster_fires_once_per_list() {
+    let mut app = app();
+    watch_both(&mut app);
+    told(&mut app);
+    send(&mut app, 0, &[ON], &[member(1)]);
+    send(&mut app, 0, &[ON], &[member(1)]);
+    assert_eq!(told(&mut app), "PP", "the two lists");
+    answer(&mut app, 1);
+    assert_eq!(told(&mut app), "PP", "one per seat that waited");
+    answer(&mut app, 1);
+    assert_eq!(told(&mut app), "");
 }
 
 /// A list that is not a raid, with a raid held, drops it and signals once (`0x4ba57b`): the raid
@@ -368,9 +570,9 @@ fn a_worldport_in_a_raid_fires_no_raid_roster_update() {
     assert_eq!(rows(&mut app), 3.0);
 }
 
-/// A VM minted after the lists landed was told of none: the raid it finds gets its one catch-up
-/// from the roster edge, never the history, and a player who holds no raid gets nothing, however
-/// many lists ended raids before.
+/// A VM minted after the lists landed was told of none: the raid it finds gets its one catch-up,
+/// never the history, and a player who holds no raid gets nothing, however many lists ended raids
+/// before.
 #[test]
 fn a_fresh_vm_finds_a_raid_once_and_a_party_not_at_all() {
     let mut app = app();
@@ -392,20 +594,73 @@ fn a_fresh_vm_finds_a_raid_once_and_a_party_not_at_all() {
     assert_eq!(fired(&mut solo), 0);
 }
 
+/// One drain's packets signal in wire order, each inside its own handler: a raid list, the leader
+/// change vmangos sends as `SMSG_GROUP_SET_LEADER` and then a list naming the new leader
+/// (`Group::ChangeLeader`), and a mark. The VM hears the first list's members change, leader,
+/// loot and roster, then the second's, then the mark (`0x5e6c66`, `0x4e82c2`, `0x4e87fa`,
+/// `0x4babef`, `0x4ba348`), never the events gathered by kind.
 #[test]
-fn the_roster_updates_owed_are_the_count_since_the_last_look() {
-    assert_eq!(roster_updates_owed(3, 3, false), 0, "nothing landed");
-    assert_eq!(roster_updates_owed(5, 3, false), 2, "one apiece");
-    assert_eq!(
-        roster_updates_owed(2, 4, false),
-        2,
-        "the session ended and began again"
+fn one_drains_packets_signal_in_wire_order() {
+    use benilla_protocol::SessionEvent;
+    let mut app = app();
+    app.init_resource::<crate::ui_action::UiErrorKeys>()
+        .init_resource::<crate::sound::MessageSounds>()
+        .init_resource::<crate::ui_quest::QuestGiver>()
+        .insert_resource(crate::net::SelfGuid(Some(ME)));
+    super::super::net::register(&mut app);
+    for (guid, name) in [(ME, "Me"), (member(1), "M1")] {
+        app.world_mut().resource_mut::<NameCache>().insert_player(
+            guid,
+            name.into(),
+            Some((1, 1, 0)),
+        );
+    }
+    let script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script
+        .run(
+            r#"
+            TOLD = ""
+            local marks = { PARTY_MEMBERS_CHANGED = "P", PARTY_LEADER_CHANGED = "L",
+                            PARTY_LOOT_METHOD_CHANGED = "O", RAID_ROSTER_UPDATE = "R",
+                            RAID_TARGET_UPDATE = "T" }
+            local f = CreateFrame("Frame")
+            for e in pairs(marks) do f:RegisterEvent(e) end
+            f:SetScript("OnEvent", function() TOLD = TOLD .. marks[event] end)
+            "#,
+        )
+        .unwrap();
+    // Past the VM's first look, which answers what it finds rather than the signals.
+    told(&mut app);
+    let list = |leader| SessionEvent::GroupList {
+        group_type: GROUPTYPE_RAID,
+        own_flags: 0,
+        members: vec![GroupMemberEntry {
+            name: "M1".into(),
+            guid: member(1),
+            status: ON,
+            flags: 1,
+        }],
+        leader,
+        loot: Some(GroupLootInfo {
+            method: 3,
+            master: 0,
+            threshold: 2,
+        }),
+    };
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![
+            list(ME),
+            SessionEvent::GroupLeaderChanged { name: "M1".into() },
+            list(member(1)),
+            SessionEvent::RaidTargetSet {
+                icon: 7,
+                guid: member(1),
+            },
+        ],
     );
-    assert_eq!(
-        roster_updates_owed(7, 0, true),
-        0,
-        "a fresh VM's catch-up is the roster edge's"
-    );
+    assert_eq!(told(&mut app), "PLORPLORT");
+    assert_eq!(told(&mut app), "", "each once");
 }
 
 /// The sandbox stands in for the server, whose echo of each group intent is a list: a raid's list
