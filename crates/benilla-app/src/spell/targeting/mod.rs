@@ -1322,6 +1322,7 @@ mod tests {
                         Party => group.members = vec![member(0)],
                         Raid => {
                             group.group_type = crate::ui_party::GROUPTYPE_RAID;
+                            group.own_raid_row = Some(ME);
                             group.members = vec![member(1)];
                         }
                     }

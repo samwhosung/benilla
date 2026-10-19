@@ -688,15 +688,15 @@ fn feed_world_map(
     };
     let party_uv: Vec<Option<(f32, f32)>> = group.party_slots().map(member_uv).collect();
 
-    // The `raid1..40` blips in the raid roster's order, ourselves first so `raidN` matches; the
-    // stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
-    let raid_uv: Vec<Option<(f32, f32)>> = if group.group_type == crate::ui_party::GROUPTYPE_RAID {
-        std::iter::once(uv)
-            .chain(group.members.iter().map(member_uv))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then our
+    // own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
+    let raid_uv: Vec<Option<(f32, f32)>> = group
+        .raid_rows()
+        .map(|guid| match group.members.iter().find(|m| m.guid == guid) {
+            Some(m) => member_uv(m),
+            None => uv,
+        })
+        .collect();
 
     script.set_world_map_feed(
         player_sel.zone,

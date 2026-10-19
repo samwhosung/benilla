@@ -73,10 +73,7 @@ pub(super) fn drive_minimap_ping(
             "player".to_string()
         } else if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
             format!("party{}", i + 1)
-        } else if let Some(i) = crate::ui_party::raid_row_guids(&group, self_guid)
-            .iter()
-            .position(|&g| g == sender)
-        {
+        } else if let Some(i) = group.raid_rows().position(|g| g == sender) {
             format!("raid{}", i + 1)
         } else {
             "player".to_string()
@@ -198,13 +195,15 @@ mod tests {
                 .resource_mut::<crate::ui_party::GroupState>();
             group.group_type = crate::ui_party::GROUPTYPE_RAID;
             group.own_flags = 0;
-            // Subgroup 0 (ours) holds 0xA1; 0xB1 and 0xB2 are in subgroup 1.
+            group.own_raid_row = Some(ME);
+            // Subgroup 0 (ours) holds 0xA1; 0xB1 and 0xB2 are in subgroup 1. The rows are the
+            // wire's order, then us.
             group.members = vec![member(0xB1, 1), member(0xA1, 0), member(0xB2, 1)];
         }
         for (sender, want) in [
             (0xA1, "party1"),
-            (0xB2, "raid4"),
-            (0xB1, "raid2"),
+            (0xB2, "raid3"),
+            (0xB1, "raid1"),
             (ME, "player"),
             (0xDEAD, "player"),
         ] {

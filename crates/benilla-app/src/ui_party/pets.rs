@@ -937,19 +937,19 @@ pub(in crate::ui_party) mod tests {
         let creature_type =
             |app: &mut App, token: &str| text(app, &format!("UnitCreatureType('{token}')"));
         assert_eq!(
-            creature_type(&mut app, "raid1").as_deref(),
+            creature_type(&mut app, "raid2").as_deref(),
             Some("야수"),
-            "our own row"
+            "our own row, after the member's"
         );
         assert_eq!(
-            creature_type(&mut app, "raid2").as_deref(),
+            creature_type(&mut app, "raid1").as_deref(),
             Some("야수"),
             "a held member's row"
         );
         set_fields(&mut app, me, &[(BYTES_1, 0)]);
         frame(&mut app);
         assert_eq!(
-            creature_type(&mut app, "raid1").as_deref(),
+            creature_type(&mut app, "raid2").as_deref(),
             Some("인간형"),
             "out of form: our race's type"
         );

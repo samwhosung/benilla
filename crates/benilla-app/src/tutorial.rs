@@ -506,21 +506,19 @@ impl InputHooks<'_> {
 }
 
 /// The window edges the reference's handlers fire from: the trainer list (Trainers acknowledged,
-/// `0x4d74ae`), the vendor list (Vendors, `0x4fad32`), the taxi map (Travel, `0x4dbaa2`), and the
-/// group turning raid (Raid Groups, `0x4ba60d`, taken as the raid-type edge).
+/// `0x4d74ae`), the vendor list (Vendors, `0x4fad32`) and the taxi map (Travel, `0x4dbaa2`). Raid
+/// Groups fires from the group list itself (`ui_party::net`).
 #[derive(Default)]
 struct WindowWatch {
     trainer: Option<u64>,
     vendor: Option<u64>,
     taxi: bool,
-    raid: Option<bool>,
 }
 
 fn watch_windows(
     trainer: Res<crate::ui_trainer::TrainerOpen>,
     merchant: Res<crate::ui_merchant::MerchantOpen>,
     taxi: Res<crate::ui_taxi::TaxiState>,
-    group: Res<crate::ui_party::GroupState>,
     mut watch: Local<WindowWatch>,
     mut asks: MessageWriter<TutorialEvent>,
 ) {
@@ -537,11 +535,6 @@ fn watch_windows(
         asks.write(TutorialEvent::trigger(id::TRAVEL));
     }
     watch.taxi = taxi_open;
-    let raid = group.in_group && group.group_type == crate::ui_party::GROUPTYPE_RAID;
-    if raid && watch.raid == Some(false) {
-        asks.write(TutorialEvent::trigger(id::RAID_GROUPS));
-    }
-    watch.raid = Some(raid);
 }
 
 fn on_world_leave(mut tutorials: ResMut<Tutorials>, mut cascade: ResMut<WorldEnterCascade>) {
@@ -846,7 +839,6 @@ mod tests {
             .init_resource::<crate::ui_trainer::TrainerOpen>()
             .init_resource::<crate::ui_merchant::MerchantOpen>()
             .init_resource::<crate::ui_taxi::TaxiState>()
-            .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<Player>()
             .add_message::<EnteredWorldMessage>();
         let (tx, _rx) = crossbeam_channel::unbounded();

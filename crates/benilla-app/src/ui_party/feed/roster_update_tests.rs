@@ -93,6 +93,16 @@ fn rows(app: &mut App) -> f64 {
     script.eval("return GetNumRaidMembers()").unwrap()
 }
 
+/// `GetRaidRosterInfo`'s second return for row `row`.
+fn rank(app: &mut App, row: u32) -> f64 {
+    let script = app.world_mut().non_send_resource::<UiScript>();
+    script
+        .eval(&format!(
+            "local _, rank = GetRaidRosterInfo({row}) return rank"
+        ))
+        .unwrap()
+}
+
 /// `GetRaidRosterInfo`'s ninth return for row `row`.
 fn dead(app: &mut App, row: u32) -> Option<f64> {
     flag(
@@ -230,24 +240,132 @@ fn each_raid_list_of_one_drain_fires_its_own_raid_roster_update() {
     assert_eq!(fired(&mut app), 3);
 }
 
-/// World entry fills in our own row (`0x4ba1a2`), with no list behind it: the roster edge fires as
-/// our row arrives, once.
+/// Our own row comes with the list that names a member (`0x5e6e73`), last, so our object's arrival
+/// moves no row and signals nothing: the world entry's fill (`0x4ba140`) finds no zero row, as
+/// vmangos sends our create ahead of any list (`Map.cpp:432`, `Group.cpp:1454`).
 #[test]
-fn our_own_row_arriving_fires_raid_roster_update_once() {
+fn our_own_row_comes_with_the_list_and_our_arrival_fires_nothing() {
     let mut app = app();
     watch(&mut app);
     raid(&mut app, &[ON, ON]);
-    assert_eq!(fired(&mut app), 1, "the list, before we are in the world");
-    assert_eq!(rows(&mut app), 2.0);
+    assert_eq!(fired(&mut app), 1, "the list");
+    assert_eq!(rows(&mut app), 3.0, "the two, then us");
 
     app.world_mut().spawn((
         Guid(ME),
         ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[])),
         SelfPlayer,
     ));
-    assert_eq!(fired(&mut app), 1, "our row filled in");
-    assert_eq!(rows(&mut app), 3.0, "us, then the two");
-    assert_eq!(fired(&mut app), 0);
+    assert_eq!(fired(&mut app), 0, "our object moves no row");
+    assert_eq!(rows(&mut app), 3.0);
+}
+
+/// A raid with us in a later group (`own_flags` subgroup 3, stored 2): the rows are the wire's
+/// members as listed, then us (`0x5e6e73`), so `raid1` is the first listed, our row is the last
+/// with our own subgroup and rank, and the party slots are our subgroup's members alone.
+#[test]
+fn in_a_later_group_we_are_the_last_raid_row() {
+    let mut app = app();
+    app.world_mut()
+        .resource_mut::<NameCache>()
+        .insert_player(ME, "Me".into(), None);
+    let listed = |i: u64, subgroup: u8| GroupMemberEntry {
+        name: format!("M{i}"),
+        guid: member(i),
+        status: ON,
+        flags: subgroup,
+    };
+    app.world_mut().resource_mut::<GroupState>().apply_list(
+        GROUPTYPE_RAID,
+        2,
+        vec![listed(1, 0), listed(2, 2), listed(3, 1)],
+        member(1),
+        None,
+        Some(ME),
+    );
+    frame(&mut app);
+    let script = app.world_mut().non_send_resource::<UiScript>();
+    let row = |i: u32| -> (String, f64, f64) {
+        script
+            .eval(&format!(
+                "local name, rank, subgroup = GetRaidRosterInfo({i}) return name, rank, subgroup"
+            ))
+            .unwrap()
+    };
+    assert_eq!(
+        script.eval::<f64>("return GetNumRaidMembers()").unwrap(),
+        4.0
+    );
+    assert_eq!(
+        row(1),
+        ("M1".into(), 2.0, 1.0),
+        "the first listed, our leader"
+    );
+    assert_eq!(row(3), ("M3".into(), 0.0, 2.0));
+    assert_eq!(row(4), ("Me".into(), 0.0, 3.0), "us, last, in group 3");
+    for (token, want) in [("raid1", "M1"), ("raid2", "M2"), ("raid4", "Me")] {
+        assert_eq!(
+            script
+                .eval::<String>(&format!("return UnitName({token:?})"))
+                .unwrap(),
+            want,
+            "{token}"
+        );
+    }
+    assert_eq!(
+        script
+            .eval::<String>(r#"return UnitName("party1")"#)
+            .unwrap(),
+        "M2",
+        "our subgroup's one member"
+    );
+    assert!(script
+        .eval::<bool>(r#"return UnitName("party2") == nil"#)
+        .unwrap());
+}
+
+/// A raid list that names nobody seats no row, ours included (`0x5e6e71`): the writer still
+/// signals (`0x4babef`), the roster reads empty, and the party list after it finds no roster to
+/// drop (`0x4ba556`).
+#[test]
+fn a_raid_of_one_reads_no_rows_and_drops_none() {
+    let mut app = app();
+    watch(&mut app);
+    // Past the VM's first look, which answers what it finds rather than the lists.
+    fired(&mut app);
+    raid(&mut app, &[]);
+    assert_eq!(fired(&mut app), 1, "the writer ran");
+    assert_eq!(rows(&mut app), 0.0, "not even our own row");
+    party(&mut app, &[]);
+    assert_eq!(fired(&mut app), 0, "no roster held, none dropped");
+}
+
+/// A worldport takes our object and gives it back; the roster's rows hold guids, ours the list's,
+/// so neither edge moves a row and neither signals (vmangos sends no list on it).
+#[test]
+fn a_worldport_in_a_raid_fires_no_raid_roster_update() {
+    let mut app = app();
+    watch(&mut app);
+    let avatar = |app: &mut App| {
+        app.world_mut()
+            .spawn((
+                Guid(ME),
+                ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[])),
+                SelfPlayer,
+            ))
+            .id()
+    };
+    let me = avatar(&mut app);
+    raid(&mut app, &[ON, ON]);
+    assert_eq!(fired(&mut app), 1, "the list");
+    assert_eq!(rows(&mut app), 3.0);
+
+    app.world_mut().despawn(me);
+    assert_eq!(fired(&mut app), 0, "our object leaves");
+    assert_eq!(rows(&mut app), 3.0, "our row stays");
+    avatar(&mut app);
+    assert_eq!(fired(&mut app), 0, "and comes back");
+    assert_eq!(rows(&mut app), 3.0);
 }
 
 /// A VM minted after the lists landed was told of none: the raid it finds gets its one catch-up
@@ -291,8 +409,8 @@ fn the_roster_updates_owed_are_the_count_since_the_last_look() {
 }
 
 /// The sandbox stands in for the server, whose echo of each group intent is a list: a raid's list
-/// signals `RAID_ROSTER_UPDATE` though the intent moves nobody (a loot threshold), the one that
-/// ends the raid signals once, and a party's list signals none.
+/// rows the members then us and signals `RAID_ROSTER_UPDATE` though the intent moves nobody (a
+/// loot threshold), the one that ends the raid signals once, and a party's list signals none.
 #[test]
 fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
     let mut app = app();
@@ -308,13 +426,19 @@ fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
     assert_eq!(fired(&mut app), 0, "a party intent");
     intent(&mut app, PartyRequest::ConvertToRaid);
     assert_eq!(fired(&mut app), 1, "the party became a raid");
+    assert_eq!(rows(&mut app), 5.0, "its four, then us");
     intent(&mut app, PartyRequest::LootThreshold(4));
     assert_eq!(fired(&mut app), 1, "a raid intent that moves no member");
-    intent(&mut app, PartyRequest::PromoteUnit("party1".into()));
+    intent(&mut app, PartyRequest::PromoteUnit("party2".into()));
     assert_eq!(
         fired(&mut app),
         1,
         "once, though the leader's rank moved too"
+    );
+    assert_eq!(
+        (rank(&mut app, 1), rank(&mut app, 2)),
+        (0.0, 2.0),
+        "row 2 leads"
     );
     intent(
         &mut app,

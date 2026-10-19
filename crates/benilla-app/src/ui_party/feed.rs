@@ -271,7 +271,6 @@ pub(crate) fn feed_party(
     // The raid roster, the one list `GetNumRaidMembers`, `GetRaidRosterInfo` and `UnitInRaid` read.
     let me = self_pair.map(|(_, g, store)| RaidSelf {
         guid: g.0,
-        flags: group.own_flags,
         level: store.0.unit_level().unwrap_or(0),
         area: here.area(),
         dead: store.0.unit_is_dead(),
@@ -366,16 +365,29 @@ pub(crate) fn feed_party(
     //
     // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order. Our own row comes off
     // our descriptor: the wire list never contains us.
-    let raid_guids = raid_row_guids(&group, self_guid);
+    let raid_guids = raid_row_guids(&group);
     fed.raid_units.resize(RAID_TOKENS.len(), None);
     for (i, token) in RAID_TOKENS.iter().enumerate() {
         let snap = raid_guids.get(i).and_then(|guid| {
-            if Some(*guid) == self_guid {
-                let (_, _, store) = self_pair?;
+            if Some(*guid) == group.own_raid_row {
                 let name = names
                     .resolve_unit(*guid, None, Ask::Read)
                     .map(str::to_string);
-                let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
+                let mut s = match self_pair.filter(|(_, g, _)| g.0 == *guid) {
+                    Some((_, _, store)) => {
+                        crate::ui_unit::snapshot(store, *guid, name, 0, chr, types)
+                    }
+                    // No object of ours, as across a worldport: the row's guid still names us,
+                    // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row the
+                    // list wrote online (`0x5e6e94`).
+                    None => UnitState {
+                        exists: true,
+                        guid: *guid,
+                        name,
+                        is_connected: true,
+                        ..Default::default()
+                    },
+                };
                 s.is_player = true;
                 s.raid_target = group.raid_target_index(*guid);
                 s.faction_group = own_group.clone();
@@ -547,11 +559,10 @@ pub(crate) fn feed_party(
     }
 }
 
-/// Our own raid row, which `GroupState` lacks: `SMSG_GROUP_LIST` never lists the recipient.
+/// What our own raid row reads off our object: `SMSG_GROUP_LIST` never lists the recipient, and
+/// the row itself is [`GroupState::own_raid_row`].
 pub(super) struct RaidSelf {
     pub(super) guid: u64,
-    /// Our subgroup bits and assistant flag, `SMSG_GROUP_LIST`'s second byte.
-    pub(super) flags: u8,
     pub(super) level: u32,
     /// The area under us, walked to a zone by the caller (the reference reads `0xb4e314`).
     pub(super) area: Option<u32>,
@@ -563,37 +574,21 @@ pub(super) struct RaidSelf {
     pub(super) class: Option<u8>,
 }
 
-/// The raid rows as guids, in the order [`raid_roster`] builds them, which the RaidFrame's drag,
-/// kick and menu verbs address by index: the two must agree. Us first, then the wire's members;
-/// the reference appends the local player after them (`0x5e6e73`). Empty outside a raid.
-pub(crate) fn raid_row_guids(group: &GroupState, self_guid: Option<u64>) -> Vec<u64> {
-    raid_rows(group, self_guid).collect()
-}
-
-/// [`raid_row_guids`] as an iterator, so a per-token lookup allocates nothing.
-fn raid_rows(group: &GroupState, self_guid: Option<u64>) -> impl Iterator<Item = u64> + '_ {
-    let in_raid = group.group_type == GROUPTYPE_RAID;
-    self_guid.filter(|_| in_raid).into_iter().chain(
-        group
-            .members
-            .iter()
-            .filter(move |_| in_raid)
-            .map(|m| m.guid),
-    )
+/// The raid rows as guids ([`GroupState::raid_rows`]), the order [`raid_roster`] builds, which
+/// the RaidFrame's drag, kick and menu verbs address by index: the wire's members, then us
+/// (`0x5e6e73`). Empty while no roster is held.
+pub(crate) fn raid_row_guids(group: &GroupState) -> Vec<u64> {
+    group.raid_rows().collect()
 }
 
 /// The guid at a 1-based raid row, [`raid_row_guids`]`[index - 1]` without the allocation.
-pub(crate) fn raid_row_guid(
-    group: &GroupState,
-    self_guid: Option<u64>,
-    index: usize,
-) -> Option<u64> {
-    raid_rows(group, self_guid).nth(index.checked_sub(1)?)
+pub(crate) fn raid_row_guid(group: &GroupState, index: usize) -> Option<u64> {
+    group.raid_rows().nth(index.checked_sub(1)?)
 }
 
 /// A 1-based raid row index to its guid; row 0, a row past the end or no raid gives `None`.
-fn raid_guid_at(group: &GroupState, self_guid: Option<u64>, index: u32) -> Option<u64> {
-    raid_row_guid(group, self_guid, usize::try_from(index).ok()?)
+fn raid_guid_at(group: &GroupState, index: u32) -> Option<u64> {
+    raid_row_guid(group, usize::try_from(index).ok()?)
 }
 
 /// A guid to its name for the by-name opcodes: ours from the name cache, others' from the roster.
@@ -615,9 +610,11 @@ fn raid_name_of(
         .map(|m| m.name.clone())
 }
 
-/// `GetRaidRosterInfo`'s array (`0x4bb560`) in [`raid_row_guids`]' order: empty outside a raid,
-/// so `GetNumRaidMembers()` answers 0 in a party. The reference's array holds the local player
-/// and the wire's list does not, so our row comes from [`RaidSelf`].
+/// `GetRaidRosterInfo`'s array (`0x4bb560`) in [`raid_row_guids`]' order: empty while no roster
+/// is held, so `GetNumRaidMembers()` answers 0 in a party and in a raid the list named nobody
+/// else in. The reference's array holds the local player and the wire's list does not, so our
+/// row comes from [`RaidSelf`]; with no object of ours, as across a worldport, the row stays,
+/// online as the list wrote it (`0x5e6e94`), its level, zone and class not derived.
 ///
 /// A row whose unit the object manager holds (`0x4bb64b`, `held`) reads it: online (`0x4bb777`),
 /// its descriptor's level (`0x4bb65d`), the zone under us (`0x4bb739`, `[0xb4e314]`) and dead for
@@ -634,7 +631,7 @@ fn raid_roster<'a>(
     unit_names: crate::ui_unit::UnitNames<'_>,
     zone_name: &dyn Fn(u32) -> Option<String>,
 ) -> Vec<RaidMemberInfo> {
-    if group.group_type != GROUPTYPE_RAID {
+    if !group.raid_held() {
         return Vec::new();
     }
     // Rank 2 leader, 1 assistant, 0 member, as the reference's roster rebuild writes it
@@ -674,22 +671,6 @@ fn raid_roster<'a>(
     };
     let our_zone = || me.and_then(|me| me.area).and_then(zone_name);
     let mut roster = Vec::with_capacity(group.members.len() + 1);
-    if let Some(me) = me {
-        roster.push(row(
-            me.guid,
-            // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
-            names
-                .resolve_unit(me.guid, None, Ask::Read)
-                .unwrap_or_default()
-                .to_string(),
-            me.flags,
-            me.level,
-            our_zone(),
-            true,
-            me.dead,
-            me.class,
-        ));
-    }
     for m in &group.members {
         let class = names.player_traits(m.guid).map(|(_, class, _)| class);
         let (level, zone, online, ninth) = match held(m.guid) {
@@ -728,6 +709,23 @@ fn raid_roster<'a>(
             online,
             ninth,
             class,
+        ));
+    }
+    if let Some(guid) = group.own_raid_row {
+        let me = me.filter(|me| me.guid == guid);
+        roster.push(row(
+            guid,
+            // An unresolved name gets the binding's miss tuple, not a half-filled row (`0x4bb5f8`).
+            names
+                .resolve_unit(guid, None, Ask::Read)
+                .unwrap_or_default()
+                .to_string(),
+            group.own_flags,
+            me.map_or(0, |me| me.level),
+            me.and(our_zone()),
+            true,
+            me.is_some_and(|me| me.dead),
+            me.and_then(|me| me.class),
         ));
     }
     roster
@@ -949,7 +947,7 @@ pub(crate) fn drain_party(
                 let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
                     continue;
                 };
-                let Some(name) = raid_guid_at(&group, self_guid, index)
+                let Some(name) = raid_guid_at(&group, index)
                     .and_then(|g| raid_name_of(&group, self_guid, &names, g))
                 else {
                     continue;
@@ -959,8 +957,8 @@ pub(crate) fn drain_party(
                     .send(ClientCommand::GroupChangeSubGroup { name, group: sub });
             }
             PartyRequest::SwapSubgroup { index, other } => {
-                let pair = raid_guid_at(&group, self_guid, index)
-                    .zip(raid_guid_at(&group, self_guid, other))
+                let pair = raid_guid_at(&group, index)
+                    .zip(raid_guid_at(&group, other))
                     .and_then(|(a, b)| {
                         Some((
                             raid_name_of(&group, self_guid, &names, a)?,
@@ -986,7 +984,7 @@ pub(crate) fn drain_party(
                 // Sent by name. The reference's `UninviteFromRaid` and `UninviteFromParty` share
                 // the sender `0x5e9510`, which kicks by name when the target's object is present
                 // and by `CMSG_GROUP_UNINVITE_GUID` (`0x5e953e`) only when it is absent.
-                if let Some(name) = raid_guid_at(&group, self_guid, index)
+                if let Some(name) = raid_guid_at(&group, index)
                     .and_then(|g| raid_name_of(&group, self_guid, &names, g))
                 {
                     let _ = commands.0.send(ClientCommand::GroupUninvite { name });
@@ -1013,12 +1011,13 @@ fn test_apply_local(
     self_guid: Option<u64>,
     target_guid: Option<u64>,
 ) -> bool {
-    let was_raid = group.group_type == GROUPTYPE_RAID;
+    let was_held = group.raid_held();
     let handled = apply_test_intent(group, req, self_guid, target_guid);
     // The server answers each of these with a fresh `SMSG_GROUP_LIST`, which the reference signals
     // `PARTY_MEMBERS_CHANGED` for whether or not it changed anything (`0x5e6c61`). A raid's list
-    // also signals `RAID_ROSTER_UPDATE` (`0x4babef`), and the one that ends a raid for the roster
-    // it drops (`0x4ba57b`).
+    // rebuilds the roster as [`GroupState::apply_list`] does, our row after any members
+    // (`0x5e6e6f`-`0x5e6e9c`), and signals `RAID_ROSTER_UPDATE` (`0x4babef`); a list that is not a
+    // raid signals one for the roster it drops (`0x4ba57b`).
     if matches!(
         req,
         PartyRequest::Leave
@@ -1033,8 +1032,10 @@ fn test_apply_local(
             | PartyRequest::PromoteGuid(_)
             | PartyRequest::AssistantLeader { .. }
     ) {
+        let raid = group.group_type == GROUPTYPE_RAID;
+        group.own_raid_row = (raid && !group.members.is_empty()).then(|| self_guid.unwrap_or(0));
         group.count_list();
-        if was_raid || group.group_type == GROUPTYPE_RAID {
+        if raid || was_held {
             group.count_roster_update();
         }
     }
@@ -1135,9 +1136,7 @@ fn apply_test_intent(
         }
         PartyRequest::UninviteRaid(index) => {
             // Never our own row; the server ignores that too.
-            if let Some(guid) =
-                raid_guid_at(group, self_guid, *index).filter(|g| Some(*g) != self_guid)
-            {
+            if let Some(guid) = raid_guid_at(group, *index).filter(|g| Some(*g) != self_guid) {
                 group.members.retain(|m| m.guid != guid);
                 group.stats.remove(&guid);
             }
@@ -1179,7 +1178,7 @@ fn apply_test_intent(
 /// The sandbox's subgroup read: raid row `index`'s 0-based subgroup, ours from `own_flags` and
 /// everyone else's from their roster entry, as the wire splits them.
 fn test_subgroup_of(group: &GroupState, self_guid: Option<u64>, index: u32) -> Option<u8> {
-    let guid = raid_guid_at(group, self_guid, index)?;
+    let guid = raid_guid_at(group, index)?;
     if Some(guid) == self_guid {
         return Some(group.own_flags & GROUP_MEMBER_SUBGROUP);
     }
@@ -1192,7 +1191,7 @@ fn test_subgroup_of(group: &GroupState, self_guid: Option<u64>, index: u32) -> O
 
 /// The sandbox's subgroup write: bits 0-2 only, so the assistant bit in that byte survives.
 fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32, sub: u8) {
-    let Some(guid) = raid_guid_at(group, self_guid, index) else {
+    let Some(guid) = raid_guid_at(group, index) else {
         return;
     };
     let put =
@@ -2146,6 +2145,7 @@ mod tests {
         let mut group = GroupState {
             group_type: GROUPTYPE_RAID,
             own_flags: 0,
+            own_raid_row: Some(0x5E1F),
             leader: 0x5E1F,
             members: vec![
                 // Alice: subgroup 2 (stored), an assistant; the byte says offline.
@@ -2192,7 +2192,6 @@ mod tests {
         };
         let me = RaidSelf {
             guid: 0x5E1F,
-            flags: 0,
             level: 60,
             // We stand in Stormwind, the member records in Ironforge.
             area: Some(1519),
@@ -2205,49 +2204,63 @@ mod tests {
         let roster = raid_roster(&group, Some(&me), &held, &names, korean.names(), &zone);
         assert_eq!(roster.len(), 4, "the player is spliced back in");
 
-        // Row 1, us: leader (rank 2), subgroup stored 0, class off the descriptor.
-        assert_eq!(roster[0].name, "Me");
-        assert_eq!(roster[0].rank, 2);
+        // Row 1: an assistant, whose record is online and dead, the pair the reference's
+        // no-object arm tests (`0x4bb70a`-`0x4bb717`), with its level and zone (`0x4bb66e`,
+        // `0x4bb740`).
+        assert_eq!(roster[0].name, "Alice");
+        assert_eq!((roster[0].rank, roster[0].subgroup), (1, 2));
+        assert_eq!(roster[0].class_file.as_deref(), Some("WARRIOR"));
+        assert!(roster[0].online && roster[0].ninth, "online AND dead");
+        assert_eq!(roster[0].level, 58);
+        assert_eq!(roster[0].zone.as_deref(), Some("Ironforge"));
+
+        // Row 2: the record is offline, so level 0 (`0x4bb680`), the binding's offline zone, and
+        // return 9 nil though dead; an unresolved class is nil.
+        assert!(!roster[1].online, "offline");
+        assert_eq!(roster[1].level, 0, "an offline record's level is not read");
+        assert!(!roster[1].ninth, "0x4 without 0x1 is not the arm");
+        assert_eq!(roster[1].class, None);
+
+        // Row 3: held, so online whatever the record (`0x4bb777`), the descriptor's level
+        // (`0x4bb65d`), the zone under us (`0x4bb739`) and dead at 0 health (`0x4bb796`).
+        assert!(roster[2].online);
+        assert_eq!(roster[2].level, 33);
+        assert_eq!(roster[2].zone.as_deref(), Some("Stormwind City"));
+        assert!(roster[2].ninth);
+
+        // Row 4, us, after the members (`0x5e6e73`): leader (rank 2), subgroup stored 0, class off
+        // the descriptor.
+        assert_eq!(roster[3].name, "Me");
+        assert_eq!(roster[3].rank, 2);
         assert_eq!(
-            roster[0].subgroup, 0,
+            roster[3].subgroup, 0,
             "stored 0-based; the BINDING adds one"
         );
-        assert_eq!(roster[0].level, 60);
-        assert_eq!(roster[0].class_file.as_deref(), Some("DRUID"));
+        assert_eq!(roster[3].level, 60);
+        assert_eq!(roster[3].class_file.as_deref(), Some("DRUID"));
         assert_eq!(
-            roster[0].class.as_deref(),
+            roster[3].class.as_deref(),
             Some("드루이드"),
             "the display name is the table's, the token is not localized"
         );
-        assert_eq!(roster[0].zone.as_deref(), Some("Stormwind City"));
-        assert!(roster[0].online && !roster[0].ninth);
-
-        // Row 2: an assistant, whose record is online and dead, the pair the reference's
-        // no-object arm tests (`0x4bb70a`-`0x4bb717`), with its level and zone (`0x4bb66e`,
-        // `0x4bb740`).
-        assert_eq!((roster[1].rank, roster[1].subgroup), (1, 2));
-        assert_eq!(roster[1].class_file.as_deref(), Some("WARRIOR"));
-        assert!(roster[1].online && roster[1].ninth, "online AND dead");
-        assert_eq!(roster[1].level, 58);
-        assert_eq!(roster[1].zone.as_deref(), Some("Ironforge"));
-
-        // Row 3: the record is offline, so level 0 (`0x4bb680`), the binding's offline zone, and
-        // return 9 nil though dead; an unresolved class is nil.
-        assert!(!roster[2].online, "offline");
-        assert_eq!(roster[2].level, 0, "an offline record's level is not read");
-        assert!(!roster[2].ninth, "0x4 without 0x1 is not the arm");
-        assert_eq!(roster[2].class, None);
-
-        // Row 4: held, so online whatever the record (`0x4bb777`), the descriptor's level
-        // (`0x4bb65d`), the zone under us (`0x4bb739`) and dead at 0 health (`0x4bb796`).
-        assert!(roster[3].online);
-        assert_eq!(roster[3].level, 33);
         assert_eq!(roster[3].zone.as_deref(), Some("Stormwind City"));
-        assert!(roster[3].ninth);
+        assert!(roster[3].online && !roster[3].ninth);
 
-        // A party is not a raid: the list is empty, so `GetNumRaidMembers()` answers 0, while
-        // `IsRaidLeader()` still answers 1.
-        group.group_type = 0;
+        // With no object of ours, as across a worldport, our row stays where it was, online as the
+        // list wrote it: the roster's guids do not move.
+        let away = raid_roster(&group, None, &held, &names, korean.names(), &zone);
+        assert_eq!(
+            away.iter().map(|r| (r.guid, r.online)).collect::<Vec<_>>(),
+            roster
+                .iter()
+                .map(|r| (r.guid, r.online))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!((away[3].name.as_str(), away[3].level), ("Me", 0));
+
+        // No roster held, as after a party list (`0x4ba550`): empty, so `GetNumRaidMembers()`
+        // answers 0, while `IsRaidLeader()` still answers 1.
+        group.own_raid_row = None;
         assert!(raid_roster(&group, Some(&me), &held, &names, korean.names(), &zone).is_empty());
     }
 
@@ -2255,6 +2268,7 @@ mod tests {
     fn a_raid_row_index_names_the_same_player_the_roster_array_does() {
         let mut group = GroupState {
             group_type: GROUPTYPE_RAID,
+            own_raid_row: Some(0x5E1F),
             ..Default::default()
         };
         let wire = |name: &str, guid: u64| GroupMemberEntry {
@@ -2266,12 +2280,16 @@ mod tests {
         group.members = vec![wire("Alice", 0xA11CE), wire("Bob", 0xB0B)];
         let me = Some(0x5E1Fu64);
 
-        assert_eq!(raid_row_guids(&group, me), vec![0x5E1F, 0xA11CE, 0xB0B]);
-        assert_eq!(raid_guid_at(&group, me, 1), Some(0x5E1F), "row 1 is us");
-        assert_eq!(raid_guid_at(&group, me, 3), Some(0xB0B));
+        assert_eq!(raid_row_guids(&group), vec![0xA11CE, 0xB0B, 0x5E1F]);
+        assert_eq!(
+            raid_guid_at(&group, 1),
+            Some(0xA11CE),
+            "row 1 is the first listed"
+        );
+        assert_eq!(raid_guid_at(&group, 3), Some(0x5E1F), "the last row is us");
         for miss in [0, 4, 500] {
             assert_eq!(
-                raid_guid_at(&group, me, miss),
+                raid_guid_at(&group, miss),
                 None,
                 "index {miss} names nobody"
             );
@@ -2289,10 +2307,10 @@ mod tests {
         );
         assert_eq!(raid_name_of(&group, me, &names, 0xDEAD), None);
 
-        // Outside a raid all are empty, so a raid verb in a party sends nothing.
-        group.group_type = 0;
-        assert!(raid_row_guids(&group, me).is_empty());
-        assert_eq!(raid_guid_at(&group, me, 1), None);
+        // With no roster held all are empty, so a raid verb in a party sends nothing.
+        group.own_raid_row = None;
+        assert!(raid_row_guids(&group).is_empty());
+        assert_eq!(raid_guid_at(&group, 1), None);
     }
 
     #[test]
@@ -2305,42 +2323,47 @@ mod tests {
         assert!(group.test, "the synthetic raid arms the sandbox");
         assert_eq!(group.group_type, GROUPTYPE_RAID);
 
-        // Row 2 is the first wire member, and `synthetic_raid` gives it the assistant bit.
-        assert_eq!(test_subgroup_of(&group, me, 2), Some(0));
+        // Row 1 is the first wire member, and `synthetic_raid` gives it the assistant bit; we are
+        // the last row.
+        let us = group.members.len() as u32 + 1;
+        assert_eq!(test_subgroup_of(&group, me, 1), Some(0));
         assert!(group.members[0].flags & GROUP_MEMBER_ASSISTANT != 0);
 
         // Move it to subgroup 8 in Lua, 7 on the wire.
         assert!(test_apply_local(
             &mut group,
-            &PartyRequest::SetSubgroup { index: 2, group: 8 },
+            &PartyRequest::SetSubgroup { index: 1, group: 8 },
             me,
             None
         ));
-        assert_eq!(test_subgroup_of(&group, me, 2), Some(7));
+        assert_eq!(test_subgroup_of(&group, me, 1), Some(7));
         assert!(
             group.members[0].flags & GROUP_MEMBER_ASSISTANT != 0,
             "the assistant bit rides the same byte and must survive the move"
         );
 
-        // Swap it with row 1, us, whose subgroup lives in `own_flags`.
-        let mine = test_subgroup_of(&group, me, 1).unwrap();
+        // Swap it with our row, whose subgroup lives in `own_flags`.
+        let mine = test_subgroup_of(&group, me, us).unwrap();
         assert!(test_apply_local(
             &mut group,
-            &PartyRequest::SwapSubgroup { index: 1, other: 2 },
+            &PartyRequest::SwapSubgroup {
+                index: us,
+                other: 1
+            },
             me,
             None
         ));
-        assert_eq!(test_subgroup_of(&group, me, 1), Some(7));
-        assert_eq!(test_subgroup_of(&group, me, 2), Some(mine));
+        assert_eq!(test_subgroup_of(&group, me, us), Some(7));
+        assert_eq!(test_subgroup_of(&group, me, 1), Some(mine));
 
         assert!(test_apply_local(
             &mut group,
-            &PartyRequest::SetSubgroup { index: 2, group: 9 },
+            &PartyRequest::SetSubgroup { index: 1, group: 9 },
             me,
             None
         ));
         assert_eq!(
-            test_subgroup_of(&group, me, 2),
+            test_subgroup_of(&group, me, 1),
             Some(mine),
             "9 is not a subgroup"
         );
@@ -2361,14 +2384,14 @@ mod tests {
         let n = group.members.len();
         assert!(test_apply_local(
             &mut group,
-            &PartyRequest::UninviteRaid(1),
+            &PartyRequest::UninviteRaid(us),
             me,
             None
         ));
         assert_eq!(
             group.members.len(),
             n,
-            "row 1 is us; the server would refuse too"
+            "the last row is us; the server would refuse too"
         );
         assert!(test_apply_local(
             &mut group,

@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use benilla_protocol::messages::{ObjectType, OwnerFallback};
 
 use super::cast_target::TargetRelations;
-use crate::net::{ObjectStore, SelfGuid};
+use crate::net::ObjectStore;
 use crate::ui_party::{raid_row_guids, GroupState};
 
 /// `UNIT_FIELD_FLAGS & 0x8`, `UNIT_FLAG_PLAYER_CONTROLLED` (vmangos `UnitDefines.h:548`), which
@@ -52,11 +52,10 @@ impl GroupRoster {
 /// ([`raid_row_guids`]).
 pub(crate) fn publish_group_roster(
     group: Option<Res<GroupState>>,
-    self_guid: Res<SelfGuid>,
     mut roster: ResMut<GroupRoster>,
 ) {
     let Some(group) = group else { return };
-    if !group.is_changed() && !self_guid.is_changed() {
+    if !group.is_changed() {
         return;
     }
     let party = if group.slots_emptied {
@@ -66,7 +65,7 @@ pub(crate) fn publish_group_roster(
     };
     let now = GroupRoster {
         party,
-        raid: raid_row_guids(&group, self_guid.0),
+        raid: raid_row_guids(&group),
     };
     if *roster != now {
         *roster = now;
@@ -709,7 +708,7 @@ mod tests {
     }
 
     /// The published tables: the party slots are our own subgroup, at most four, and the raid
-    /// roster every row, us first, none outside a raid. A leave or a kick empties the slots and
+    /// roster every row, us last, none outside a raid. A leave or a kick empties the slots and
     /// keeps the roster.
     #[test]
     fn the_roster_publishes_the_slots_and_rows_the_reference_holds() {
@@ -722,7 +721,6 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<GroupRoster>();
         world.init_resource::<GroupState>();
-        world.insert_resource(SelfGuid(Some(ME)));
         assert_eq!(publish(&mut world), GroupRoster::default(), "no group");
 
         // A party: everyone in our subgroup, and no raid roster.
@@ -736,17 +734,18 @@ mod tests {
             }
         );
 
-        // A raid: the party slots are our subgroup's, the roster all rows with us first.
+        // A raid: the party slots are our subgroup's, the roster all rows with us last.
         {
             let mut group = world.resource_mut::<GroupState>();
             group.group_type = crate::ui_party::GROUPTYPE_RAID;
+            group.own_raid_row = Some(ME);
             group.members = vec![entry(MEMBER, 0), entry(RAIDER, 1), entry(STRANGER, 0)];
         }
         assert_eq!(
             publish(&mut world),
             GroupRoster {
                 party: vec![MEMBER, STRANGER],
-                raid: vec![ME, MEMBER, RAIDER, STRANGER],
+                raid: vec![MEMBER, RAIDER, STRANGER, ME],
             }
         );
 
@@ -756,7 +755,7 @@ mod tests {
             publish(&mut world),
             GroupRoster {
                 party: Vec::new(),
-                raid: vec![ME, MEMBER, RAIDER, STRANGER],
+                raid: vec![MEMBER, RAIDER, STRANGER, ME],
             }
         );
     }

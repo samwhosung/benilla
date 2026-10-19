@@ -65,6 +65,16 @@ pub struct GroupState {
     pub own_flags: u8,
     /// The other members in wire order; the list never contains the recipient.
     pub members: Vec<GroupMemberEntry>,
+    /// Our own raid row's guid while the raid roster holds rows: a raid list that names a member
+    /// appends us after them, at row `count` (`0x5e6e6f`-`0x5e6e9c`), and one that names nobody
+    /// leaves the roster empty (`0x5e6e71`, the writer's count at `0x4ba8a4`), as does any list
+    /// that is not a raid (`0x4ba550`). The guid is the session's own, known from the login on,
+    /// and a worldport keeps it. The reference writes the active player's (`0x5e6e73`), 0 while
+    /// none is set, as in a worldport's new object manager (`0x401bc0` into `0x464ff0`) until our
+    /// create, and the world entry fills that zero row (`0x4ba140`). vmangos sends our create
+    /// ahead of any list at login (`Map.cpp:432`, `Group.cpp:1454`), so only a list that lands
+    /// mid-worldport takes that path, which is not built.
+    pub own_raid_row: Option<u64>,
     /// How many `SMSG_GROUP_LIST`s landed, the all-zero and an unchanged one included. The
     /// reference signals `PARTY_MEMBERS_CHANGED` after each (`0x5e6c61`), with no compare against
     /// the roster it holds, and an empty list reaches it too (`0x5e6b3c`).
@@ -159,7 +169,7 @@ impl GroupState {
                 .map(|m| (m.guid, m.name.clone()))
                 .collect()
         };
-        let raid_held = self.group_type == GROUPTYPE_RAID;
+        let raid_held = self.raid_held();
         // "Held a group" (`0x5e6aa9`): an occupied slot (`0x5e6afb`) or a raid roster (`0x5e6b29`).
         let held = !held_slots.is_empty() || raid_held;
 
@@ -251,6 +261,7 @@ impl GroupState {
         self.in_group = true;
         self.group_type = group_type;
         self.own_flags = own_flags;
+        self.own_raid_row = (raid && !members.is_empty()).then(|| self_guid.unwrap_or(0));
         self.members = members;
         self.slots_emptied = false;
         self.leader = leader;
@@ -280,6 +291,24 @@ impl GroupState {
             .iter()
             .filter(move |m| m.flags & 0x7f == own)
             .take(4)
+    }
+
+    /// Whether the raid roster holds rows (`[0xb713e0]` above 0), what every raid reader and the
+    /// next list's raid legs test (`0x4ba556`, `0x4ba61a`, `0x5e6e65`).
+    pub fn raid_held(&self) -> bool {
+        self.own_raid_row.is_some()
+    }
+
+    /// The raid roster's rows in order, the one `GetRaidRosterInfo` and `raidN` read: the wire's
+    /// members as listed (`0x5e6b8e`-`0x5e6ba3`, kept row for row by `0x4ba8c6`-`0x4ba8d9`), then
+    /// us; empty while no roster is held.
+    pub fn raid_rows(&self) -> impl Iterator<Item = u64> + '_ {
+        let held = self.own_raid_row.is_some();
+        self.members
+            .iter()
+            .filter(move |_| held)
+            .map(|m| m.guid)
+            .chain(self.own_raid_row)
     }
 
     /// `SMSG_GROUP_INVITE`: the popup plus a chat line, as the reference's `0x5e6730` does.
@@ -438,6 +467,7 @@ impl GroupState {
             group_type,
             own_flags,
             members,
+            own_raid_row,
             slots_emptied,
             leader,
             loot,
@@ -460,6 +490,7 @@ impl GroupState {
         *group_type = 0;
         *own_flags = 0;
         members.clear();
+        *own_raid_row = None;
         *slots_emptied = false;
         *leader = 0;
         *loot = None;
@@ -909,6 +940,45 @@ mod tests {
             lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false),
             "nobody in our subgroup, no chime"
         );
+    }
+
+    /// A raid list that names nobody seats no row, ours included (`0x5e6e6f`-`0x5e6e71`), so it
+    /// leaves no roster held: the next such list prints the joined line again (`0x4ba838`, on the
+    /// old count of 0), and the party list after it says nothing of a raid and drops nothing
+    /// (`0x4ba556`). A raid list that names a member seats them, then us (`0x5e6e73`).
+    #[test]
+    fn a_raid_of_one_holds_no_roster() {
+        let mut g = GroupState::default();
+        let alone = |g: &mut GroupState| g.apply_list(1, 0, Vec::new(), ME, None, Some(ME));
+        assert_eq!(
+            alone(&mut g).lines,
+            vec![UiError::key("ERR_RAID_YOU_JOINED")]
+        );
+        assert!(!g.raid_held());
+        assert_eq!(g.raid_rows().count(), 0, "not even our own row");
+        assert_eq!(
+            alone(&mut g).lines,
+            vec![UiError::key("ERR_RAID_YOU_JOINED")],
+            "no roster held, so joined again"
+        );
+        let updates = g.roster_updates;
+        assert_eq!(
+            g.apply_list(0, 0, Vec::new(), ME, None, Some(ME)).lines,
+            Vec::new(),
+            "no raid to leave"
+        );
+        assert_eq!(g.roster_updates, updates, "and none to drop");
+
+        g.apply_list(1, 0, vec![sub("Alice", 1, 2)], ME, None, Some(ME));
+        assert!(g.raid_held());
+        assert_eq!(g.raid_rows().collect::<Vec<_>>(), vec![1, ME]);
+        assert_eq!(
+            g.apply_list(0, 0, vec![sub("Alice", 1, 2)], ME, None, Some(ME))
+                .lines,
+            vec![UiError::key("ERR_RAID_YOU_LEFT")],
+            "a roster held is dropped"
+        );
+        assert_eq!(g.raid_rows().count(), 0);
     }
 
     #[test]

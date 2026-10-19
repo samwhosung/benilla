@@ -21,7 +21,6 @@ use crate::ui_party::{raid_row_guids, GroupState};
 fn fill_group<'a>(
     g: &mut UnitGuids,
     group: Option<&GroupState>,
-    me: u64,
     held: impl Fn(u64) -> Option<&'a ObjectStore>,
 ) {
     g.party = [0; 4];
@@ -36,7 +35,7 @@ fn fill_group<'a>(
         g.party[i] = m.guid;
         g.party_pets[i] = group.party_pet_guid(m.guid, live(m.guid)).unwrap_or(0);
     }
-    g.raid = raid_row_guids(group, Some(me));
+    g.raid = raid_row_guids(group);
     g.raid_pets.extend(
         g.raid
             .iter()
@@ -128,7 +127,7 @@ impl UnitAuras {
         let mut g = std::mem::take(&mut self.guids);
         let mut walk = std::mem::take(&mut self.walk);
         (g.player, g.pet, g.target, g.mouseover, g.npc) = (me, pet, target, mouseover, npc);
-        fill_group(&mut g, group, me, &held);
+        fill_group(&mut g, group, &held);
         g.held.clear();
         walk.clear();
         walk.extend([me, pet, target, mouseover, npc].map(|g| (g, false)));
@@ -601,14 +600,14 @@ mod tests {
 
     // == The raid tokens ==
 
-    /// In our subgroup, so `party1` and `raid2`.
+    /// In our subgroup, so `party1` and `raid1`.
     const MATE: u64 = 0x2001;
-    /// Subgroup 2, `raid5` only.
+    /// Subgroup 2, `raid4` only.
     const FAR: u64 = 0x2004;
     const FAR_PET: u64 = 0xF140_0000_0000_0099;
 
-    /// A raid of five: us (row 1, subgroup 1), `MATE` (subgroup 1), two in subgroup 2 and `FAR`
-    /// in subgroup 3, in wire order, none streamed and none with a record.
+    /// A raid of five: `MATE` (subgroup 1), two in subgroup 2 and `FAR` in subgroup 3 in wire
+    /// order, then us (row 5, subgroup 1); none streamed and none with a record.
     fn raid_app() -> App {
         let mut app = party_app();
         relist_raid(&mut app, member_status::ONLINE);
@@ -664,9 +663,9 @@ mod tests {
             ],
         );
         app.update();
-        assert_eq!(listed(&mut app, "raid5", true), [589]);
+        assert_eq!(listed(&mut app, "raid4", true), [589]);
         assert!(
-            listed(&mut app, "raid5", false).is_empty(),
+            listed(&mut app, "raid4", false).is_empty(),
             "no factions, so `CanAssist` fails and the gate drops the buffs"
         );
         for token in ["party1", "party2", "raid6"] {
@@ -691,17 +690,17 @@ mod tests {
             },
         );
         app.update();
-        assert_eq!(listed(&mut app, "raid5", true), [589, 11976]);
+        assert_eq!(listed(&mut app, "raid4", true), [589, 11976]);
         let count = app
             .world_mut()
             .non_send_resource::<UiScript>()
-            .eval::<i64>(r#"local _, count = UnitDebuff("raid5", 1) return count"#)
+            .eval::<i64>(r#"local _, count = UnitDebuff("raid4", 1) return count"#)
             .unwrap();
         assert_eq!(count, 1);
-        assert_eq!(listed(&mut app, "raidpet5", false), [1126]);
-        assert_eq!(listed(&mut app, "raidpet5", true), [770]);
+        assert_eq!(listed(&mut app, "raidpet4", false), [1126]);
+        assert_eq!(listed(&mut app, "raidpet4", true), [770]);
         assert!(
-            listed(&mut app, "raidpet4", true).is_empty(),
+            listed(&mut app, "raidpet3", true).is_empty(),
             "a petless member's raidpet token names nobody"
         );
     }
@@ -716,12 +715,12 @@ mod tests {
         stats_of(&mut app, FAR, true, online(vec![(32, 770)]));
         app.update();
         assert!(seen(&mut app).is_empty());
-        assert_eq!(listed(&mut app, "raid5", true), [770]);
+        assert_eq!(listed(&mut app, "raid4", true), [770]);
 
         stats_of(&mut app, MATE, false, online(vec![(33, 11976)]));
         app.update();
         assert!(seen(&mut app).is_empty());
-        assert_eq!(listed(&mut app, "raid2", true), [589, 11976]);
+        assert_eq!(listed(&mut app, "raid1", true), [589, 11976]);
         assert_eq!(listed(&mut app, "party1", true), [589, 11976]);
     }
 
@@ -733,17 +732,17 @@ mod tests {
         let mut app = raid_app();
         stats_of(&mut app, MATE, true, online(vec![(32, 589)]));
         app.update();
-        assert_eq!(listed(&mut app, "raid2", true), [589]);
+        assert_eq!(listed(&mut app, "raid1", true), [589]);
         assert_eq!(listed(&mut app, "party1", true), [589]);
 
         relist_raid(&mut app, member_status::OFFLINE);
         app.update();
-        assert!(listed(&mut app, "raid2", true).is_empty());
+        assert!(listed(&mut app, "raid1", true).is_empty());
         assert!(listed(&mut app, "party1", true).is_empty());
 
         relist_raid(&mut app, member_status::ONLINE);
         app.update();
-        assert_eq!(listed(&mut app, "raid2", true), [589]);
+        assert_eq!(listed(&mut app, "raid1", true), [589]);
         assert_eq!(listed(&mut app, "party1", true), [589]);
     }
 
@@ -776,12 +775,12 @@ mod tests {
             },
         );
         app.update();
-        for token in ["raid5", "raidpet5", "raid6", "raid40", "raidpet40"] {
+        for token in ["raid4", "raidpet4", "raid6", "raid40", "raidpet40"] {
             assert!(listed(&mut app, token, true).is_empty(), "{token}");
         }
     }
 
-    /// Row 1 is us: the player's own list, as `"player"` answers it.
+    /// The last row, 5, is us: the player's own list, as `"player"` answers it.
     #[test]
     fn our_raid_row_mirrors_the_player_list() {
         let mut app = raid_app();
@@ -793,7 +792,7 @@ mod tests {
             ]));
         app.update();
         assert_eq!(listed(&mut app, "player", true), [589]);
-        assert_eq!(listed(&mut app, "raid1", true), [589]);
+        assert_eq!(listed(&mut app, "raid5", true), [589]);
     }
 
     /// A frame where nothing moved builds no list: the feed compares the inputs, not the lists.
@@ -974,13 +973,13 @@ mod tests {
     fn a_raid_members_target_reads_whatever_the_guid_holds() {
         let mut app = raid_app();
         stats_of(&mut app, FAR, true, online(vec![(32, 589)]));
-        // `raid3` is 0x2002, in view and targeting `FAR`, which is not.
+        // `raid2` is 0x2002, in view and targeting `FAR`, which is not.
         stream(&mut app, 0x2002, &unit_fields(0x19, FAR, 770));
         app.update();
-        assert_eq!(listed(&mut app, "raid3", true), [770]);
-        assert_eq!(listed(&mut app, "raid3target", true), [589]);
-        assert_eq!(listed(&mut app, "raid5", true), [589]);
-        assert!(listed(&mut app, "raid5target", true).is_empty());
-        assert!(listed(&mut app, "raid3targettarget", true).is_empty());
+        assert_eq!(listed(&mut app, "raid2", true), [770]);
+        assert_eq!(listed(&mut app, "raid2target", true), [589]);
+        assert_eq!(listed(&mut app, "raid4", true), [589]);
+        assert!(listed(&mut app, "raid4target", true).is_empty());
+        assert!(listed(&mut app, "raid2targettarget", true).is_empty());
     }
 }

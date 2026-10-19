@@ -775,7 +775,7 @@ impl UnitTokens<'_, '_> {
     /// The guid on 0-based raid row `row`, the one `raidN` and `GetRaidRosterInfo` share.
     fn raid_member(&self, row: u32) -> Option<u64> {
         let index = usize::try_from(row).ok()?.checked_add(1)?;
-        crate::ui_party::raid_row_guid(&self.group, self.me().map(|(_, g)| g), index)
+        crate::ui_party::raid_row_guid(&self.group, index)
     }
 
     /// A group member's pet, held: `CHARM`, else `SUMMON`, off the member's descriptor while it is
@@ -1954,7 +1954,7 @@ mod tests {
             assert_eq!(resolve(&mut app, "partypet1"), None, "an offline record");
         }
 
-        /// A raid of five: us (row 1), then the wire's members, the last in another subgroup.
+        /// A raid of five: the wire's members, the last in another subgroup, then us (row 5).
         fn raid() -> App {
             let (mut app, _) = app();
             let list = vec![
@@ -1978,7 +1978,7 @@ mod tests {
         #[test]
         fn raidpet_names_the_pet_of_the_row_raid_names() {
             let mut app = raid();
-            // Row 3 is `member(2)`, held with a pet; row 1 is us.
+            // Row 2 is `member(2)`, held with a pet; row 5 is us.
             let held_pet = stream(&mut app, pet(2), &[]);
             stream(&mut app, member(2), &guid_field(SUMMON, pet(2)));
             let mine = stream(&mut app, MY_PET, &[]);
@@ -1987,23 +1987,23 @@ mod tests {
                 .entity_mut(me)
                 .insert(store(&guid_field(SUMMON, MY_PET)));
 
-            assert_eq!(resolve(&mut app, "raidpet3"), Some((held_pet, pet(2))));
+            assert_eq!(resolve(&mut app, "raidpet2"), Some((held_pet, pet(2))));
             assert_eq!(
-                resolve(&mut app, "raidpet1"),
+                resolve(&mut app, "raidpet5"),
                 Some((mine, MY_PET)),
                 "our own row"
             );
             assert_eq!(
-                guid_of(&mut app, "raid3"),
+                guid_of(&mut app, "raid2"),
                 Some(member(2)),
                 "raidN is unchanged"
             );
-            assert_eq!(guid_of(&mut app, "raid1"), Some(ME));
-            assert_eq!(resolve(&mut app, "raidpet2"), None, "row 2 has no pet");
+            assert_eq!(guid_of(&mut app, "raid5"), Some(ME));
+            assert_eq!(resolve(&mut app, "raidpet1"), None, "row 1 has no pet");
             for token in ["raidpet0", "raidpet6", "raidpet", "raidpetX", "raidpet+3"] {
                 assert_eq!(resolve(&mut app, token), None, "{token}");
             }
-            assert_eq!(guid_of(&mut app, "RaidPet3"), Some(pet(2)), "case folds");
+            assert_eq!(guid_of(&mut app, "RaidPet2"), Some(pet(2)), "case folds");
         }
 
         /// `raidpetN`'s record leg has no online test (`0x4919ae`), where `partypetN`'s has one.
@@ -2019,8 +2019,8 @@ mod tests {
                 .resource_mut::<GroupState>()
                 .apply_stats(member(1), true, record);
             let held = stream(&mut app, pet(1), &[]);
-            // Row 2 and party slot 1 are the same member.
-            assert_eq!(resolve(&mut app, "raidpet2"), Some((held, pet(1))));
+            // Row 1 and party slot 1 are the same member.
+            assert_eq!(resolve(&mut app, "raidpet1"), Some((held, pet(1))));
             assert_eq!(resolve(&mut app, "partypet1"), None);
         }
 
@@ -2091,7 +2091,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
 
         const ME: u64 = 0x10;
-        /// party1 and raid2, party2 and raid3, party3 and raid4.
+        /// party1 and raid1, party2 and raid2, party3 and raid3; we are raid4.
         const A: u64 = 0x1001;
         const B: u64 = 0x1002;
         const C: u64 = 0x1003;
@@ -2214,12 +2214,12 @@ mod tests {
                 ("target", MOB),
                 ("targettarget", B),
                 ("targettargettarget", A),
+                ("raid4target", MOB),
                 ("raid1target", MOB),
-                ("raid2target", MOB),
-                ("raid3target", A),
-                ("raid2targettarget", B),
-                ("raidpet1target", MOB),
-                ("raidpet2target", B),
+                ("raid2target", A),
+                ("raid1targettarget", B),
+                ("raidpet4target", MOB),
+                ("raidpet1target", B),
                 ("mouseover", LONELY),
             ] {
                 assert_eq!(guid_of(&mut app, token), Some(want), "{token}");
@@ -2245,7 +2245,7 @@ mod tests {
                 "mouseovertargettarget",
                 // `C` targets a guid nobody holds.
                 "party3target",
-                "raid4target",
+                "raid3target",
                 // Nor does a further hop go past the break.
                 "party3targettarget",
                 // A base no one holds: party4 is nobody, raid5 is past the roster, a missing or
@@ -2255,7 +2255,7 @@ mod tests {
                 "raid0target",
                 "partytarget",
                 "partypet2target",
-                "raidpet3target",
+                "raidpet2target",
             ] {
                 assert_eq!(resolve(&mut app, token), None, "{token}");
             }
@@ -2321,7 +2321,11 @@ mod tests {
             }
             assert_eq!(guid_of(&mut app, "PlayerTarget"), Some(MOB));
             assert_eq!(guid_of(&mut app, "TargetTargetTarget"), Some(A));
-            assert_eq!(guid_of(&mut app, "RaidPet1Target"), Some(MOB));
+            assert_eq!(
+                guid_of(&mut app, "RaidPet4Target"),
+                Some(MOB),
+                "our own row's pet"
+            );
             for hops in [3, 30, 3000] {
                 let token = format!("party1{}", "target".repeat(hops));
                 assert_eq!(guid_of(&mut app, &token), Some(A), "{hops} hops round A");

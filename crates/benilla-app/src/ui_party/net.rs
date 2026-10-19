@@ -101,6 +101,7 @@ fn on_list(
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
+    tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     if let SessionEvent::GroupList {
         group_type,
@@ -110,6 +111,15 @@ fn on_list(
         loot,
     } = ev
     {
+        // The raid roster writer opens on Raid Groups for a rebuild with rows (`0x4ba604`,
+        // `0x4ba60d`), every one; the tutorial's own bit makes it fire once.
+        if group_type == GROUPTYPE_RAID && !members.is_empty() {
+            if let Some(mut tutorials) = tutorials {
+                tutorials.write(crate::tutorial::TutorialEvent::trigger(
+                    crate::tutorial::id::RAID_GROUPS,
+                ));
+            }
+        }
         list(
             &mut group,
             &mut errors,
@@ -788,6 +798,52 @@ mod tests {
         assert_eq!((rec.pet_guid, rec.pet_auras_negative.clone()), (None, None));
         assert_eq!(rec.pet_name, None, "and its name with it (`0x5f0a0f`)");
         assert_eq!(rec.auras, Some(vec![(0, 1126)]));
+    }
+
+    /// Raid Groups opens on every raid roster rebuild with rows (`0x4ba604`, `0x4ba60d`): a raid
+    /// list that names a member asks for it, each time, and a raid of one or a party asks nothing.
+    #[test]
+    fn a_raid_list_with_rows_triggers_the_raid_groups_tutorial() {
+        use crate::tutorial::{id, TutorialEvent};
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<GroupState>()
+            .init_resource::<UiErrorKeys>()
+            .init_resource::<MessageSounds>()
+            .init_resource::<QuestGiver>()
+            .insert_resource(SelfGuid(Some(0x10)))
+            .init_resource::<NameCache>()
+            .init_resource::<GuidIndex>()
+            .add_message::<TutorialEvent>();
+        let mut triggered = |group_type: u8, members: Vec<GroupMemberEntry>| {
+            app.world_mut()
+                .run_system_once_with(
+                    on_list,
+                    SessionEvent::GroupList {
+                        group_type,
+                        own_flags: 0,
+                        members,
+                        leader: 0x10,
+                        loot: None,
+                    },
+                )
+                .expect("the group-list handler");
+            app.world_mut()
+                .resource_mut::<Messages<TutorialEvent>>()
+                .drain()
+                .filter(|e| *e == TutorialEvent::trigger(id::RAID_GROUPS))
+                .count()
+        };
+        assert_eq!(triggered(GROUPTYPE_RAID, Vec::new()), 0, "a raid of one");
+        assert_eq!(triggered(0, vec![member(0x22, "Brisca")]), 0, "a party");
+        assert_eq!(triggered(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]), 1);
+        assert_eq!(
+            triggered(GROUPTYPE_RAID, vec![member(0x22, "Brisca")]),
+            1,
+            "every rebuild with rows"
+        );
     }
 
     /// The snapshot reads the VM's `UNKNOWNOBJECT` as it stands at the snapshot (`0x609324`), so a

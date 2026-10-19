@@ -14,7 +14,7 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_items::KEYRING_CONTAINER;
-use crate::ui_party::{GroupState, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP};
+use crate::ui_party::{GroupState, GROUP_MEMBER_SUBGROUP};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 
 mod net;
@@ -308,12 +308,13 @@ impl LootState {
         })
     }
 
-    /// The candidate slots as `0x61c550` lays them out: wire order in a party (`0x61c5b9`); in a
-    /// raid, each guid in the first free slot of its subgroup's block of five
+    /// The candidate slots as `0x61c550` lays them out, split on the raid roster's count
+    /// (`0x61c577`), not the group type: wire order with no roster held (`0x61c5b9`), a raid of one
+    /// included; with one, each guid in the first free slot of its subgroup's block of five
     /// (`0x61c5c9`-`0x61c637`), holes kept for `GroupLootDropDown_Initialize`'s "Group N" submenus
     /// (`LootFrame.lua:197-213`). The feed and the drain share it, so an index means one candidate.
     fn placed_candidates(&self, group: &GroupState) -> Vec<Option<u64>> {
-        if group.group_type != GROUPTYPE_RAID {
+        if !group.raid_held() {
             return self.master_candidates.iter().copied().map(Some).collect();
         }
         let mut slots: Vec<Option<u64>> = vec![None; MASTER_LOOT_CANDIDATE_SLOTS];
@@ -1812,8 +1813,9 @@ mod tests {
             flags: subgroup,
         };
         let mut raid = GroupState {
-            group_type: GROUPTYPE_RAID,
+            group_type: crate::ui_party::GROUPTYPE_RAID,
             own_flags: 0, // we are in subgroup 0
+            own_raid_row: Some(0xA),
             ..GroupState::default()
         };
         raid.members = vec![
@@ -1858,6 +1860,18 @@ mod tests {
         assert_eq!(loot.master_candidate(1, &party), Some(0xC));
         assert_eq!(loot.master_candidate(4, &party), Some(0xB));
         assert_eq!(loot.master_candidate(5, &party), None);
+
+        // A raid of one holds no roster (`0x5e6e71`), so the count reads 0 and the list is flat,
+        // whatever subgroup we sit in.
+        let alone = GroupState {
+            group_type: crate::ui_party::GROUPTYPE_RAID,
+            own_flags: 2,
+            ..GroupState::default()
+        };
+        let mut solo = LootState::default();
+        solo.set_master_candidates(vec![0xA]);
+        solo.open(0x42, loot_type::CORPSE, 0, vec![master_item(0, 117, 1)]);
+        assert_eq!(solo.master_candidate(1, &alone), Some(0xA), "a raid of one");
     }
 
     #[test]

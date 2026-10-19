@@ -1073,13 +1073,15 @@ mod tests {
         }
     }
 
+    /// Ten rows as the list writes them: the nine others as listed, the first of them leading,
+    /// then us (`0x5e6e73`).
     fn ten_player_raid() -> PartyState {
         let mut raid: Vec<crate::script::RaidMemberInfo> = (0u64..10)
             .map(|i| raider(&format!("Raider{i}"), 0x100 + i))
             .collect();
         raid[0].rank = 2; // the leader
-        raid[0].name = "Me".into();
         raid[3].subgroup = 1; // stored 0-based, exposed 2
+        raid[9].name = "Me".into();
         PartyState {
             raid,
             ..Default::default()
@@ -1147,7 +1149,7 @@ mod tests {
         ) = s
             .eval("local a,b,c,d,e,f,g,h,i = GetRaidRosterInfo(1) return a,b,c,d,e,f,g,h,i")
             .unwrap();
-        assert_eq!(name, "Me");
+        assert_eq!(name, "Raider0");
         assert_eq!(rank, 2, "as stored, no adjustment");
         assert_eq!(subgroup, 1, "stored 0 → exposed 1 (`0x4bb61a inc eax`)");
         assert_eq!(level, 60);
@@ -1198,7 +1200,7 @@ mod tests {
     fn unit_in_raid_answers_one_not_an_index() {
         let mut s = UiScript::new().unwrap();
         s.set_party(ten_player_raid());
-        s.set_unit("player", Some(unit(true, 0x100)));
+        s.set_unit("player", Some(unit(true, 0x109))); // the last row
         s.set_unit("target", Some(unit(true, 0x105))); // roster row 6
         s.set_unit("mouseover", Some(unit(true, 0xDEAD)));
 
@@ -1714,21 +1716,22 @@ mod tests {
         let officer = |s: &UiScript| s.eval::<Option<i64>>("return IsRaidOfficer()").unwrap();
         let mut s = UiScript::new().unwrap();
         assert_eq!(officer(&s), None, "ungrouped");
+        // We are the last row, a plain member under row 1's lead.
         let mut raid = ten_player_raid();
-        raid.raid[0].rank = 0; // we are a plain member
         raid.raid[1].rank = 1; // someone else assists
         s.set_party(raid.clone());
         assert_eq!(officer(&s), None, "no player unit yet");
-        s.set_unit("player", Some(unit(true, 0x100)));
+        s.set_unit("player", Some(unit(true, 0x109)));
         assert_eq!(
             officer(&s),
             None,
             "a member, another row's rank does not count"
         );
-        raid.raid[0].rank = 1;
+        raid.raid[9].rank = 1;
         s.set_party(raid.clone());
         assert_eq!(officer(&s), Some(1), "assistant");
-        raid.raid[0].rank = 2;
+        raid.raid[0].rank = 0;
+        raid.raid[9].rank = 2;
         s.set_party(raid);
         assert_eq!(officer(&s), Some(1), "leader");
         s.set_unit("player", Some(unit(true, 0x999)));
