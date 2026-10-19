@@ -278,7 +278,7 @@ impl CastLadder<'_, '_> {
         self.ground.clear();
         self.reports.changed();
         let _ = self.commands.0.send(cmd);
-        // The send's own signal (`0x6e589d`).
+        // The send's own signal (`0x6e589d`), ungated as the attempt's send is (#1583).
         self.reports.changed();
         let auto_repeat = self
             .spells
@@ -897,8 +897,10 @@ fn send_spell_cast(
             },
         },
     });
-    // The send's own signal (`0x6e589d`), for the active player's every send: the precast it
-    // tests against (`[caster+0xc8c]`) is not built.
+    // The send's own signal (`0x6e589d`), for the active player's send. The reference signals
+    // only beside the precast visual it starts there (`0x6e5898`), so not for a spell whose
+    // precast already plays (`0x6e588f`, the unit's `[+0xc8c]`, which `0x6ec220` sets through
+    // `0x60d020`); benilla starts no precast at the send (#1583), so it signals every send.
     core.reports.changed();
     // The in-flight slot (`0xceca88`, `0x6e5026`): every cast holds it until its result, a ranged
     // shot included; only an auto-repeat spell is popped after the send, which signals

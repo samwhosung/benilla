@@ -52,7 +52,8 @@ pub(crate) enum CastReport {
     /// slot's push and pop signal it (`SetInFlightSpell 0x6e4ad0`, when the slot changes), and so
     /// do the attempt's arm (`0x6e5333`), its end (`0x6e51e3`) and its arm refusal (`0x6e5069`),
     /// a cancel's word clear (`0x6e495c`), the binds (`0x6e60cb`, `0x6e615d`), the send
-    /// (`0x6e589d`) and the active player's form change (`0x5de016`).
+    /// (`0x6e589d`) and the active player's form change (`0x5de016`). The trade slot's bind
+    /// (`0x6e6939`) signals it too; benilla does not build that bind (#88).
     Changed,
 }
 
