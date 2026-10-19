@@ -177,9 +177,10 @@ pub(crate) fn submit(lua: &Lua, call: ScriptCall) {
     drain(lua);
 }
 
-/// Apply the queue through the lent host, front to back. The calls an applied call makes while its
-/// host is out go next, ahead of the rest; those its tail makes apply inside the tail.
-fn drain(lua: &Lua) {
+/// Apply the queue through the lent host, front to back, each call and its tail under exactly the
+/// input events its verb ran under. The calls an applied call makes while its host is out go next,
+/// ahead of the rest; those its tail makes apply inside the tail.
+pub(crate) fn drain(lua: &Lua) {
     if !super::host::free(lua) {
         return;
     }
@@ -216,7 +217,7 @@ fn drain(lua: &Lua) {
             break;
         };
         // The reference does the call inside the verb, so what it signals runs inside the key,
-        // click or Enter that made it: a queued call gets its events raised again.
+        // click or Enter that made it, and only inside that: a queued call gets exactly its events.
         let tail = script.with_input_events(input, |script| {
             super::host::with_host(lua, |host| host.apply(script, call)).flatten()
         });
@@ -290,6 +291,7 @@ impl UiScript {
 #[cfg(test)]
 mod tests {
     use super::super::host::{CallHost, CallTail};
+    use super::super::InputEvents;
     use super::*;
 
     /// A host that records each call it applies, and for the first one runs `inner` with the host
@@ -432,5 +434,83 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.run("ClearTarget()").unwrap();
         assert_eq!(s.take_script_calls(), vec![ScriptCall::ClearTarget]);
+    }
+
+    /// A key's input event raised alone.
+    const KEY: InputEvents = InputEvents {
+        binding: true,
+        ..InputEvents::NONE
+    };
+
+    /// A host that records the input events each call applies under, and those its tail runs
+    /// under.
+    #[derive(Default)]
+    struct Events {
+        applied: Vec<(ScriptCall, InputEvents)>,
+        tails: std::rc::Rc<std::cell::RefCell<Vec<InputEvents>>>,
+    }
+
+    impl CallHost for Events {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            self.applied.push((call, script.input_events()));
+            let tails = self.tails.clone();
+            Some(Box::new(move |script: &mut UiScript| {
+                tails.borrow_mut().push(script.input_events());
+            }))
+        }
+    }
+
+    /// A call an entry with no host left (an `OnUpdate`'s) applies under the events its verb ran
+    /// under, none, though a key's body is the entry that applies it.
+    #[test]
+    fn a_call_left_by_an_unhosted_entry_applies_under_its_own_events() {
+        let mut s = UiScript::new().unwrap();
+        s.run(r#"TargetUnit("player")"#).unwrap();
+        let mut host = Events::default();
+        s.hosted(&mut host, |s| s.run_binding("ClearTarget()"))
+            .unwrap();
+        assert_eq!(
+            host.applied,
+            vec![
+                (select("player"), InputEvents::NONE),
+                (ScriptCall::ClearTarget, KEY)
+            ]
+        );
+        assert_eq!(*host.tails.borrow(), vec![InputEvents::NONE, KEY]);
+    }
+
+    /// What an unhosted entry left is applied when the host is lent, before the entry's script
+    /// runs, so that script reads the state those calls made.
+    #[test]
+    fn a_lend_applies_what_was_left_queued_before_its_script_runs() {
+        let mut s = UiScript::new().unwrap();
+        s.run(r#"TargetUnit("player")"#).unwrap();
+        let mut host = Events::default();
+        let left = s.hosted(&mut host, |s| s.take_script_calls());
+        assert_eq!(left, vec![]);
+        assert_eq!(host.applied, vec![(select("player"), InputEvents::NONE)]);
+    }
+
+    /// A call queued with the host out, under no input event, applies under none and its tail
+    /// runs under none, though a key's body raised its event by the time it is drained.
+    #[test]
+    fn a_call_and_its_tail_never_run_under_the_draining_entrys_events() {
+        let mut s = UiScript::new().unwrap();
+        let mut host = Events::default();
+        s.hosted(&mut host, |s| {
+            let lua = s.lua().clone();
+            super::super::host::with_host(&lua, |_| s.run(r#"TargetUnit("player")"#))
+                .expect("lent")
+                .unwrap();
+            s.run_binding("ClearTarget()").unwrap();
+        });
+        assert_eq!(
+            host.applied,
+            vec![
+                (select("player"), InputEvents::NONE),
+                (ScriptCall::ClearTarget, KEY)
+            ]
+        );
+        assert_eq!(*host.tails.borrow(), vec![InputEvents::NONE, KEY]);
     }
 }

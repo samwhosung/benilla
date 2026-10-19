@@ -92,9 +92,14 @@ pub(crate) fn free(lua: &Lua) -> bool {
 impl UiScript {
     /// Run `f` with `host` lent to the VM: each script call a verb makes meanwhile applies before
     /// the verb returns, in call order, through [`CallHost::apply`], as the reference's verbs do.
+    /// What an entry with no host left queued (an `OnUpdate`, an event's handler) was made before
+    /// `f` runs, so it applies first, each call under its own events.
     pub fn hosted<R>(&mut self, host: &mut dyn CallHost, f: impl FnOnce(&mut UiScript) -> R) -> R {
         let lua = self.lua().clone();
-        lend(&lua, host, || f(self))
+        lend(&lua, host, || {
+            super::calls::drain(&lua);
+            f(self)
+        })
     }
 
     /// Whether a host is lent and free to apply a call now.
