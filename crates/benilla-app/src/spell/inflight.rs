@@ -1,7 +1,6 @@
 //! The player's own cast state: the pending cast (`SPELLCAST` at `0xceac48` and the inflight id
-//! `0xceca88`), the queued on-next-swing strike, the running channel (`0xceac58`), the
-//! auto-repeat key (`0xceac30`), and the local abort on a move, jump or Esc (`AbortCast
-//! 0x6e4940`).
+//! `0xceca88`), the queued on-next-swing strike, the running channel, the auto-repeat key
+//! (`0xceac30`), and the local abort on a move, jump or Esc (`AbortCast 0x6e4940`).
 
 use std::time::{Duration, Instant};
 
@@ -251,7 +250,6 @@ pub(crate) struct CastState<'w, 's> {
     pending: Res<'w, PendingCast>,
     queued_melee: Res<'w, QueuedMeleeSpell>,
     targeting: Res<'w, SpellTargeting>,
-    channel: Res<'w, ActiveChannel>,
     auto_repeat: Res<'w, AutoRepeatActive>,
     me: Query<'w, 's, SelfCastFacts, With<crate::net::SelfPlayer>>,
 }
@@ -271,7 +269,6 @@ impl CastState<'_, '_> {
             slot: inflight(&self.pending, &self.queued_melee, &self.targeting, now)
                 .map(Inflight::spell_id),
             targeting: self.targeting.spell(),
-            channel: self.channel.current(now),
             auto_repeat: self.auto_repeat.0,
             attacking: me.is_some_and(|(engaged, _)| engaged),
             form: me
@@ -284,8 +281,9 @@ impl CastState<'_, '_> {
 /// Slack past the named channel end, so a lost `MSG_CHANNEL_UPDATE(0)` cannot pin the ring on.
 const CHANNEL_SLACK: Duration = Duration::from_secs(2);
 
-/// Our running channel, the client's `0xceac58`: `IsCurrentAction 0x4e53a0` keeps a channeled
-/// spell's button checked while it runs. `MSG_CHANNEL_UPDATE(0)` ends it, finished or interrupted.
+/// Our running channel, from `MSG_CHANNEL_START` to `MSG_CHANNEL_UPDATE(0)`, finished or
+/// interrupted: what the move cancel stops (`0x515145`-`0x515193`, which reads the player's
+/// `UNIT_CHANNEL_SPELL`).
 #[derive(Resource, Default)]
 pub(crate) struct ActiveChannel(Option<(u32, Instant)>);
 
@@ -528,11 +526,11 @@ mod tests {
 
     const FIREBALL: u32 = 133;
 
-    /// A channel whose bar is suppressed still arms [`ActiveChannel`]: the reference writes
-    /// `0xceac58` at cast send (`0x6e4f88`) and the channel-start handler `0x6e7550` never
-    /// touches it.
+    /// A channel whose bar is suppressed still arms [`ActiveChannel`]: the move cancel reads the
+    /// unit's `UNIT_CHANNEL_SPELL` (`0x51514e`), which the bar's gate in the channel-start
+    /// handler `0x6e7550` never touches.
     #[test]
-    fn suppressing_the_channel_bar_does_not_clear_the_channel_mirror() {
+    fn suppressing_the_channel_bar_still_arms_the_running_channel() {
         let t0 = Instant::now();
         // Blood Siphon 24322, a suppressed row.
         let mut channel = ActiveChannel::default();
@@ -541,6 +539,79 @@ mod tests {
             channel.current(t0 + Duration::from_secs(1)),
             Some(24322),
             "the wire edge arms the mirror regardless of what the bar does with it"
+        );
+    }
+
+    /// `ActionSlotIsCurrent 0x4e53a0` holds a spell slot against the in-flight spell (`0x6e3d10`)
+    /// and the cursor's (`0x6e48e0`) alone: a running channel is in neither, and a strike under a
+    /// cast is in the save, so only the cast's button is checked until the cast pops.
+    #[test]
+    fn the_checked_test_reads_the_slot_and_the_cursor_alone() {
+        use bevy::ecs::system::RunSystemOnce;
+        const ARCANE_MISSILES: u32 = 5143;
+        const HEROIC_STRIKE: u32 = 78;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<PendingCast>()
+            .init_resource::<QueuedMeleeSpell>()
+            .init_resource::<SpellTargeting>()
+            .init_resource::<ActiveChannel>()
+            .init_resource::<AutoRepeatActive>()
+            .init_resource::<CastReports>()
+            .insert_resource(NetCommands(tx));
+        let current = |app: &mut App, spell: u32| {
+            app.world_mut()
+                .run_system_once(move |state: CastState| {
+                    benilla_ui::script::ActionState {
+                        spell: Some(spell),
+                        ..Default::default()
+                    }
+                    .is_current(&state.view())
+                })
+                .unwrap()
+        };
+        app.world_mut().resource_mut::<ActiveChannel>().start(
+            ARCANE_MISSILES,
+            5_000,
+            Instant::now(),
+        );
+        assert!(
+            !current(&mut app, ARCANE_MISSILES),
+            "a channel is not in flight"
+        );
+
+        app.world_mut()
+            .resource_mut::<QueuedMeleeSpell>()
+            .arm(HEROIC_STRIKE);
+        assert!(current(&mut app, HEROIC_STRIKE));
+        app.world_mut()
+            .run_system_once(
+                |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
+                    slots.core(&net).push(
+                        FIREBALL,
+                        super::super::Held::Cast { item_flags: None },
+                        Instant::now(),
+                    );
+                },
+            )
+            .unwrap();
+        assert!(current(&mut app, FIREBALL));
+        assert!(
+            !current(&mut app, HEROIC_STRIKE),
+            "the strike is the save's"
+        );
+        app.world_mut()
+            .run_system_once(
+                |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
+                    slots
+                        .core(&net)
+                        .cancel(false, false, super::super::REASON_ERROR);
+                },
+            )
+            .unwrap();
+        assert!(
+            current(&mut app, HEROIC_STRIKE),
+            "popped back into the slot"
         );
     }
 

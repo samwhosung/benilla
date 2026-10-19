@@ -136,8 +136,9 @@ fn cast_bar_label(spells: Option<&crate::ui_action::Spells>, id: u32) -> String 
 /// `AttributesEx` bit 29 set, else the Lua global `CHANNELING` off the player's chain (`""` when
 /// missing, and the event still fires).
 ///
-/// This gates the event only: the reference's channel mirror (`0xceac58`) is written at the cast
-/// send (`0x6e4f88`), never here, so `ActiveChannel` still arms for a suppressed channel.
+/// This gates the event only: the move cancel reads the channel off the unit's
+/// `UNIT_CHANNEL_SPELL` (`0x51514e`), which the bar never touches, so `ActiveChannel` still arms
+/// for a suppressed channel.
 fn channel_start_name(
     script: &UiScript,
     spells: Option<&crate::ui_action::Spells>,

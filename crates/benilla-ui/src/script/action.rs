@@ -68,7 +68,9 @@ pub struct ActionState {
 impl ActionState {
     /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: the Attack slot while
     /// attacking (`0x4e5467`), else the slot's spell when it is in flight or awaiting its target
-    /// (`0x4e54c1`, `0x4e54d0`), or channelled, or when its form is the player's (`0x4e558b`).
+    /// (`0x4e54c1`, `0x4e54d0`), or when its form is the player's (`0x4e558b`). It reads no
+    /// channel: a channel leaves the in-flight slot at its cast result, so its button unchecks as
+    /// it begins.
     pub fn is_current(&self, view: &CastView) -> bool {
         if self.is_attack {
             return view.attacking;
@@ -76,7 +78,7 @@ impl ActionState {
         let Some(spell) = self.spell else {
             return false;
         };
-        [view.slot, view.channel, view.targeting].contains(&Some(spell))
+        [view.slot, view.targeting].contains(&Some(spell))
             || (view.form != 0 && self.form == Some(u32::from(view.form)))
     }
 
@@ -95,10 +97,9 @@ pub struct CastView {
     /// The spell in the in-flight slot (`0xceca88`, `0x6e3d10`): a cast from its attempt to its
     /// result, a queued strike nothing is pushed over, or the cursor's spell its attempt pushed.
     pub slot: Option<u32>,
-    /// The spell awaiting its target (`GetTargetingSpellId 0x6e48e0`).
+    /// The spell awaiting its target (`GetTargetingSpellId 0x6e48e0`): the pending record's spell
+    /// (`0xceac58`) while the targeting word is up.
     pub targeting: Option<u32>,
-    /// The running channel.
-    pub channel: Option<u32>,
     /// The auto-repeat spell (`0xceac30`).
     pub auto_repeat: Option<u32>,
     /// The player is attacking (`[player+0xc48]`).
