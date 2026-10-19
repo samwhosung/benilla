@@ -272,6 +272,7 @@ fn on_worldport(
     mut e: Edges,
     mut b: Bridge,
     mut group: ResMut<crate::ui_party::GroupState>,
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
 ) {
     if let SessionEvent::Worldport {
         map_id,
@@ -281,7 +282,14 @@ fn on_worldport(
     } = ev
     {
         // Every streamed roster member is about to be purged; the reference deactivates each.
-        crate::ui_party::net::roster_deactivated(&mut group, &b.index, &b.stores, &b.names, &b.net);
+        crate::ui_party::net::roster_deactivated(
+            &mut group,
+            &b.index,
+            &b.stores,
+            &b.names,
+            script.as_deref(),
+            &b.net,
+        );
         worldport(
             map_id,
             position,

@@ -14,6 +14,7 @@ use crate::go_templates::GameObjectTemplates;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::query_cache::Ask;
+use benilla_ui::script::UiScript;
 use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
@@ -186,7 +187,7 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     sc.field_notices.write_batch(fired);
 }
 
-fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
+fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
     if let SessionEvent::ObjectCreate {
         guid,
         kind,
@@ -237,7 +238,7 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
                 .write_batch(crate::field_watch::guild_tag(guid));
         }
         if let Some(fields) = other_player {
-            compare_party_record(&mut sc, guid, &fields);
+            compare_party_record(&mut sc, guid, &fields, script.as_deref());
         }
     }
 }
@@ -247,7 +248,12 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
 /// on a re-create (`0x5decb7`): the stored party or raid record, an empty one off the roster
 /// (`0x5f0bfe`), against a live one built off the descriptor and the held pet (`0x5f0c0b`), the
 /// difference signalled through `0x5e5720` (`0x5f0c42`). Neither record is written back.
-fn compare_party_record(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
+fn compare_party_record(
+    sc: &mut Scene,
+    guid: u64,
+    fields: &ObjectFields,
+    script: Option<&UiScript>,
+) {
     let old = sc.group.stats.get(&guid).cloned().unwrap_or_default();
     let pet_guid = fields.unit_pet_guid();
     let pet = pet_guid
@@ -256,8 +262,9 @@ fn compare_party_record(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
     let pet_name = pet_guid
         .zip(pet)
         .and_then(|(g, p)| sc.names.resolve_unit(g, Some(p), Ask::Read));
+    let pet_name = crate::ui_party::net::snapshot_pet_name(pet_name, script);
     let mut live = old.clone();
-    live.snapshot_descriptor(fields, pet.map(|p| &p.0), pet_name);
+    live.snapshot_descriptor(fields, pet.map(|p| &p.0), &pet_name);
     let notices = crate::ui_party::record_notices(guid, &old, &live);
     sc.field_notices.write_batch(notices);
 }
@@ -466,7 +473,7 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
 
 /// The party hook runs first: the reference's deactivate reads the descriptor about to go, as
 /// the item's does (`0x5d8660`).
-fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
+fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
     if let SessionEvent::ObjectDestroyed(guid) = ev {
         crate::death::net::forget_corpse(guid, &mut sc.death_net);
         let gone = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).destroyed(guid);
@@ -478,6 +485,7 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
             held(guid),
             held,
             &sc.names,
+            script.as_deref(),
             &sc.net,
         );
         object_destroyed(guid, &mut sc.commands, &mut sc.index);
@@ -491,7 +499,7 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
 /// `ClntObjMgrGetActivePlayer` (`0x465f39` → `0x468550`, `0x465f3e`, `0x465f42`) and jumps past
 /// `0x464920` (`0x465f45` → `0x465f54`), the deactivate included; a player's guid is outside the
 /// second round's types (`0x465f19`, `0x465f28`), so no later pass reaches it.
-fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene) {
+fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
     if let SessionEvent::ObjectsRemoved(mut guids) = ev {
         guids.retain(|g| sc.self_guid.0 != Some(*g));
         for guid in &guids {
@@ -504,6 +512,7 @@ fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene) {
                 held(*guid),
                 held,
                 &sc.names,
+                script.as_deref(),
                 &sc.net,
             );
         }

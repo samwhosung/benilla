@@ -292,6 +292,15 @@ pub fn power_token(ty: u8) -> &'static str {
 }
 
 impl super::UiScript {
+    /// [`unknownobject`]'s text, for a reader outside the VM that copies it, as the deactivate
+    /// snapshot copies it into a record's pet name (`0x5f0a63`-`0x5f0a70`).
+    pub fn unknown_object_text(&self) -> String {
+        unknownobject(self.lua())
+            .ok()
+            .and_then(|s| s.to_str().ok().map(|s| s.to_string()))
+            .unwrap_or_else(|| "Unknown Being".to_string())
+    }
+
     /// Push, or clear with `None`, a token's snapshot; the app's feed calls it each frame before
     /// event dispatch, so a frame's `OnEvent` sees current values.
     pub fn set_unit(&mut self, token: &str, state: Option<UnitState>) {

@@ -4,6 +4,7 @@
 //! [`roster_deactivated`] are the object layer's hooks on a roster member's stream-out.
 
 use benilla_protocol::messages::{GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -321,17 +322,31 @@ fn seat_new_records(
     }
 }
 
+/// The pet name the deactivate snapshot (`0x5f0880`) writes for a held pet: `0x609210`'s answer
+/// (`0x5f0a63`), the cached `name`, else the VM's `UNKNOWNOBJECT` text as it reads at the snapshot
+/// (`0x609324`-`0x60933c`, [`benilla_ui::script::UiScript::unknown_object_text`]). With no VM up,
+/// as between the world-entry edge and the interface's load, there is no text to copy, and the
+/// name is left empty.
+pub(crate) fn snapshot_pet_name(name: Option<&str>, script: Option<&UiScript>) -> String {
+    match (name, script) {
+        (Some(name), _) => name.to_string(),
+        (None, Some(script)) => script.unknown_object_text(),
+        (None, None) => String::new(),
+    }
+}
+
 /// The despawn hook, the reference's deactivate virtual `0x5e9aa0` (object destroyed or out of
 /// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), their
-/// pet's too while `held` finds it, with the name `names` holds for it, then request their stats
-/// (`0x4e8646`). Nothing happens off the roster or without an object, since the hook is a virtual
-/// on the object.
+/// pet's too while `held` finds it, with the name `names` holds for it or `UNKNOWNOBJECT` on a miss
+/// ([`snapshot_pet_name`]), then request their stats (`0x4e8646`). Nothing happens off the roster
+/// or without an object, since the hook is a virtual on the object.
 pub(crate) fn member_deactivated<'a>(
     guid: u64,
     group: &mut GroupState,
     store: Option<&'a ObjectStore>,
     held: impl Fn(u64) -> Option<&'a ObjectStore>,
     names: &NameCache,
+    script: Option<&UiScript>,
     net_commands: &NetCommands,
 ) {
     let Some(store) = store else {
@@ -345,11 +360,12 @@ pub(crate) fn member_deactivated<'a>(
     let pet_name = pet_guid
         .zip(pet)
         .and_then(|(g, p)| names.resolve_unit(g, Some(p), Ask::Read));
-    group
-        .stats
-        .entry(guid)
-        .or_default()
-        .snapshot_descriptor(&store.0, pet.map(|p| &p.0), pet_name);
+    let pet_name = snapshot_pet_name(pet_name, script);
+    group.stats.entry(guid).or_default().snapshot_descriptor(
+        &store.0,
+        pet.map(|p| &p.0),
+        &pet_name,
+    );
     let _ = net_commands
         .0
         .send(ClientCommand::RequestPartyMemberStats { guid });
@@ -362,6 +378,7 @@ pub(crate) fn roster_deactivated(
     index: &GuidIndex,
     stores: &Query<&mut ObjectStore>,
     names: &NameCache,
+    script: Option<&UiScript>,
     net_commands: &NetCommands,
 ) {
     let streamed: Vec<u64> = group
@@ -372,7 +389,7 @@ pub(crate) fn roster_deactivated(
         .collect();
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     for guid in streamed {
-        member_deactivated(guid, group, held(guid), held, names, net_commands);
+        member_deactivated(guid, group, held(guid), held, names, script, net_commands);
     }
 }
 
@@ -673,6 +690,7 @@ mod tests {
             Some(&store),
             |_| None,
             &NameCache::default(),
+            None,
             &net,
         );
 
@@ -729,7 +747,7 @@ mod tests {
         let held = |g: u64| (g == pet_guid).then_some(&pet);
         let mut names = NameCache::default();
         names.insert_pet(4, "Whelp".into());
-        member_deactivated(guid, &mut group, Some(&store), held, &names, &net);
+        member_deactivated(guid, &mut group, Some(&store), held, &names, None, &net);
 
         let rec = group.stats.get(&guid).expect("the member has a record");
         assert_eq!(
@@ -748,12 +766,71 @@ mod tests {
         assert_eq!(rec.pet_auras, Some(vec![]));
         assert_eq!(rec.pet_auras_negative, Some(vec![(40, 770)]));
 
+        // A pet whose name the cache misses: `0x609210` answers `UNKNOWNOBJECT` (`0x609324`) and
+        // the record takes that, never the name it held (`0x5f0a70`).
+        let unnamed = NameCache::default();
+        let vm = benilla_ui::script::UiScript::new().unwrap();
+        vm.run(r#"UNKNOWNOBJECT = "Unknown""#).unwrap();
+        member_deactivated(
+            guid,
+            &mut group,
+            Some(&store),
+            held,
+            &unnamed,
+            Some(&vm),
+            &net,
+        );
+        assert_eq!(group.stats[&guid].pet_name.as_deref(), Some("Unknown"));
+
         // The pet not held: its block is emptied, not left as it was.
-        member_deactivated(guid, &mut group, Some(&store), |_| None, &names, &net);
+        member_deactivated(guid, &mut group, Some(&store), |_| None, &names, None, &net);
         let rec = group.stats.get(&guid).unwrap();
         assert_eq!((rec.pet_guid, rec.pet_auras_negative.clone()), (None, None));
         assert_eq!(rec.pet_name, None, "and its name with it (`0x5f0a0f`)");
         assert_eq!(rec.auras, Some(vec![(0, 1126)]));
+    }
+
+    /// The snapshot reads the VM's `UNKNOWNOBJECT` as it stands at the snapshot (`0x609324`), so a
+    /// list that landed before the VM came up leaves nothing stale to copy; an empty global reads
+    /// the literal (`0x60933c`), and with no VM there is no text to copy.
+    #[test]
+    fn a_snapshot_reads_unknownobject_off_the_vm_it_runs_beside() {
+        use benilla_ui::script::UiScript;
+        const SUMMON: u16 = 8;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let pet_guid = 0xF140_0000_0000_0099;
+        let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+            (HEALTH, 2400),
+            (SUMMON, pet_guid as u32),
+            (SUMMON + 1, (pet_guid >> 32) as u32),
+        ]));
+        let pet = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
+            HEALTH, 900,
+        )]));
+        let held = |g: u64| (g == pet_guid).then_some(&pet);
+        let named = |global: Option<&str>| {
+            let vm = global.map(|g| {
+                let vm = UiScript::new().unwrap();
+                vm.run(&format!("UNKNOWNOBJECT = {g:?}")).unwrap();
+                vm
+            });
+            // The list lands with no VM up, as in the world entry's window before the interface.
+            let mut group = grouped(&[member(0x22, "Brisca")]);
+            member_deactivated(
+                0x22,
+                &mut group,
+                Some(&store),
+                held,
+                &NameCache::default(),
+                vm.as_ref(),
+                &net,
+            );
+            group.stats[&0x22].pet_name.clone()
+        };
+        assert_eq!(named(Some("Unknown")).as_deref(), Some("Unknown"));
+        assert_eq!(named(Some("")).as_deref(), Some("Unknown Being"));
+        assert_eq!(named(None).as_deref(), Some(""), "no VM");
     }
 
     #[test]
@@ -772,6 +849,7 @@ mod tests {
             Some(&store),
             |_| None,
             &NameCache::default(),
+            None,
             &net,
         );
         assert!(asked(&rx).is_empty());
@@ -784,6 +862,7 @@ mod tests {
             None,
             |_| None,
             &NameCache::default(),
+            None,
             &net,
         );
         assert!(asked(&rx).is_empty());

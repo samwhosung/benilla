@@ -249,8 +249,9 @@ impl PartyMemberStatsInfo {
     /// raw; [`Self::shown_power`] divides at the read. AFK and DND are cleared, as in the client.
     /// `pet` is the object of the member's pet guid ([`ObjectFields::unit_pet_guid`]) when held:
     /// its block is copied, and without one the pet block is emptied (`0x5f0a1f`-`0x5f0b72`).
-    /// `pet_name` is that pet's cached name (`0x609210`, copied into `+0x88` at `0x5f0a70`); a
-    /// pet whose name the cache does not hold yet keeps the name the record had.
+    /// `pet_name` is what `0x609210` answers for that pet (`0x5f0a63`), copied into `+0x88`
+    /// (`0x5f0a70`): its cached name, or on a miss the `UNKNOWNOBJECT` text (`0x609324`), so the
+    /// record never keeps the name of a pet it named before.
     ///
     /// Deviation: zone and position are kept, not set to the viewer's zone and the object's
     /// position, because nothing in benilla reads them.
@@ -260,7 +261,7 @@ impl PartyMemberStatsInfo {
         &mut self,
         fields: &crate::messages::update_object::ObjectFields,
         pet: Option<&crate::messages::update_object::ObjectFields>,
-        pet_name: Option<&str>,
+        pet_name: &str,
     ) {
         let mut status = member_status::ONLINE;
         if fields.player_is_ghost() {
@@ -296,9 +297,7 @@ impl PartyMemberStatsInfo {
             Some((guid, pet)) => {
                 let power_type = pet.unit_power_type();
                 self.pet_guid = Some(guid);
-                if let Some(name) = pet_name {
-                    self.pet_name = Some(name.to_string());
-                }
+                self.pet_name = Some(pet_name.to_string());
                 self.pet_model_id = Some(pet.unit_displayid().unwrap_or(0) as u16);
                 self.pet_cur_hp = Some(pet.unit_health().unwrap_or(0) as u16);
                 self.pet_max_hp = Some(pet.unit_max_health().unwrap_or(0) as u16);
