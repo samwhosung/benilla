@@ -602,8 +602,8 @@ fn cast_result(
     let now = Instant::now();
     if !success {
         // `HandleCastFailed 0x6e1a00` clears the GCD armed at send (`0x6e1d83 → 0x6e1630`), and the
-        // bit-25 revert below drops a parked record; the spell's own recovery starts at SPELL_GO,
-        // which a failed cast never reaches. A failing cached auto-repeat spell with reason ≠ 0x17
+        // bit-25 revert after it drops a parked record; the spell's own recovery starts at
+        // SPELL_GO, which a failed cast never reaches. A failing cached auto-repeat spell with reason ≠ 0x17
         // runs the full local cancel (`0x6e1cd9`–`0x6e1cea` → `0x6ea080`, the
         // `SMSG_CANCEL_AUTO_REPEAT` routine). A deselect arrives as this failure (vmangos
         // `HandleSetSelectionOpcode` → `Spell::cancel` → `SendCastResult(INTERRUPTED)`); target
@@ -618,15 +618,6 @@ fn cast_result(
         }
         if !dont_report {
             cooldowns.clear_gcd(spell_id, now);
-            // The bit-25 revert (`6e73cc–6e73e6`): a non-0x3c failure of a cooldown-on-event spell
-            // removes its parked record (a failed Feign Death or Stealth).
-            if reason != Some(0x3c)
-                && spells
-                    .and_then(|s| s.catalog.get(spell_id))
-                    .is_some_and(|d| d.cooldown_on_event())
-            {
-                cooldowns.clear_spell(spell_id);
-            }
         }
         let fail = crate::ui_action::CastFail::server(spell_id, reason.unwrap_or(0), arg);
         let reaches = crate::ui_action::report_reaches_pop(
@@ -640,6 +631,16 @@ fn cast_result(
         // The line, then the tail: the spell in flight popped with its failed flag and no packet
         // (`0x6e2213`), its event fired while the record's caster holds.
         core.report(fail, true, reaches);
+        // The bit-25 revert (`0x6e73cc`-`0x6e73e6`), the handler's, after the report: every
+        // failure but 0x3c of a cooldown-on-event spell removes its parked record (a failed Feign
+        // Death, Stealth or Shadowform), 0x17 too, which leaves only the report early.
+        if reason != Some(0x3c)
+            && spells
+                .and_then(|s| s.catalog.get(spell_id))
+                .is_some_and(|d| d.cooldown_on_event())
+        {
+            cooldowns.clear_spell(spell_id);
+        }
         if *crate::net::CAST_TRACE {
             info!("cast-trace: RECV CAST_RESULT failure — spell {spell_id} reason={reason:?}; reaches_tail={reaches}");
         }
@@ -1380,6 +1381,42 @@ mod tests {
         assert!(info.start > t0, "and reads the event's start");
     }
 
+    /// The bit-25 revert (`0x6e73cc`-`0x6e73e6`) runs after the report for every failure but
+    /// 0x3c, so for 0x17 too, which leaves only the report early (`0x6e1ce4`): the record the
+    /// send parked (`StartGlobalCooldown 0x6e2de0`, held from bit 25) goes, and the spell is
+    /// usable again; a NOT_READY failure keeps it held.
+    #[test]
+    fn a_failed_cooldown_on_event_spell_drops_its_held_record_unless_not_ready() {
+        const SHADOWFORM: u32 = 15473;
+        let form = || benilla_formats::SpellDisplay {
+            start_recovery_category: 133,
+            start_recovery_ms: 1_500,
+            attributes: 0x0200_0000,
+            ..Default::default()
+        };
+        let form_row = form();
+        for (reason, held) in [(0x17, false), (0x0a, false), (0x3c, true)] {
+            let t0 = Instant::now();
+            let mut s = CastSeq::new();
+            s.app.insert_resource(catalog_with(SHADOWFORM, form()));
+            s.app.world_mut().resource_mut::<Cooldowns>().start_gcd(
+                SHADOWFORM,
+                &form_row,
+                t0,
+                &crate::spell::SpellModifiers::default(),
+            );
+            s.commit(SHADOWFORM, None);
+            s.result(SHADOWFORM, Some(reason));
+            let info = s.app.world().resource::<Cooldowns>().info(
+                SHADOWFORM,
+                0,
+                Some(&form_row),
+                t0 + Duration::from_secs(3),
+            );
+            assert_eq!(!info.enabled, held, "reason {reason:#04x}");
+        }
+    }
+
     /// A catalog holding one row, so the announce tests can name a real `Attributes` value.
     fn catalog_with(id: u32, display: benilla_formats::SpellDisplay) -> Spells {
         let mut spells = Spells::empty_for_tests();
@@ -1741,7 +1778,8 @@ mod tests {
                           mut core: crate::spell::CastSlots,
                           mut cooldowns: ResMut<Cooldowns>,
                           mut auto_repeat: ResMut<AutoRepeatActive>,
-                          net: Res<crate::net::NetCommands>| {
+                          net: Res<crate::net::NetCommands>,
+                          spells: Option<Res<Spells>>| {
                         cast_result(
                             spell_id,
                             fail.is_none(),
@@ -1755,7 +1793,7 @@ mod tests {
                             &mut core.core(&net),
                             &mut cooldowns,
                             &mut auto_repeat,
-                            None,
+                            spells.as_deref(),
                             None,
                             &net,
                             1,
