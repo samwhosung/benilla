@@ -219,7 +219,7 @@ pub(super) fn arm_pet_gcd(
 /// the drag writes. A toggle asks the usability predicate first (`0x4bcbcf`), so on an unusable
 /// pet it flips nothing and sends nothing. The stops do not (`0x4bd650`); the drag's writes were
 /// gated where the VM applied them (`0x4bc9d0`), on the answer the bar last pushed.
-pub(super) fn drain_pet_actions(
+pub(crate) fn drain_pet_actions(
     script: Option<NonSendMut<UiScript>>,
     mut bar: ResMut<PetBar>,
     commands: Res<NetCommands>,

@@ -27,7 +27,7 @@ use super::group_relation::{GroupInputs, GroupRoster};
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid, SelfPlayer};
-use crate::target::{can_assist, can_attack, Assist, Factions, Selection};
+use crate::target::{Factions, RelUnit, Relations, Selection, UnitLookup};
 use benilla_protocol::messages::OwnerFallback;
 
 /// `TARGET_FLAG_*` bits of the client's targeting flag word (`0xcecac0`).
@@ -140,30 +140,68 @@ pub(super) fn owner_store<'a>(
 }
 
 impl TargetRelations<'_> {
-    /// `CanAssist 0x6066f0` toward the candidate, which the caster always is for himself. The
+    /// `CanAssist 0x6066f0(caster, candidate)`, which the caster always is for himself. The
     /// binder's assist arm and the world pick's relation leg both ask it.
     pub(super) fn assistable(&self, is_self: bool) -> bool {
         is_self
-            || can_assist(
-                self.target_store,
-                self.factions,
-                self.reputations,
-                self.self_store,
-                |_| self.target_owner_store.cloned(),
-                Assist::PlayerToUnit,
-            )
+            || self
+                .pair()
+                .is_some_and(|(me, target)| self.relations().can_assist(&me, &target))
     }
 
-    /// `CanAttack 0x606980` toward the candidate, never the caster. The binder's enemy arm and the
+    /// `CanAttack 0x606980(caster, candidate)`, never the caster. The binder's enemy arm and the
     /// world pick's relation leg both ask it.
     pub(super) fn attackable(&self, is_self: bool) -> bool {
         !is_self
-            && can_attack(
-                self.target_store,
-                self.factions,
-                self.reputations,
-                self.self_store,
-            )
+            && self
+                .pair()
+                .is_some_and(|(me, target)| self.relations().can_attack(&me, &target))
+    }
+
+    /// The relation functions over the binder's units: the caster, the candidate and their owners.
+    pub(super) fn relations(&self) -> Relations<'_> {
+        Relations {
+            factions: self.factions,
+            reputations: self.reputations,
+            me: self.group.self_guid,
+            roster: self.group.roster,
+            units: self,
+        }
+    }
+
+    /// The caster and the candidate as the relation functions read them; `None` until both
+    /// have streamed and their guids are known.
+    pub(super) fn pair(&self) -> Option<(RelUnit, RelUnit)> {
+        Some((
+            self.unit_of(self.group.self_guid?, self.self_store?),
+            self.unit_of(self.group.target_guid?, self.target_store?),
+        ))
+    }
+
+    fn unit_of(&self, guid: u64, store: &ObjectStore) -> RelUnit {
+        let unit = RelUnit::of(guid, store);
+        match self.types.names {
+            Some(names) => unit.with_record(store, names),
+            None => unit,
+        }
+    }
+}
+
+/// The object manager as the binder holds it: the caster, the candidate and the charmer or
+/// creator of each, whichever have streamed.
+impl UnitLookup for TargetRelations<'_> {
+    fn unit(&self, guid: u64) -> Option<RelUnit> {
+        let owner = |s: Option<&ObjectStore>| s?.0.unit_owner(OwnerFallback::CreatedBy);
+        let held = [
+            (self.group.self_guid, self.self_store),
+            (self.group.target_guid, self.target_store),
+            (owner(self.self_store), self.group.self_owner_store),
+            (owner(self.target_store), self.target_owner_store),
+        ];
+        let store = held
+            .into_iter()
+            .find_map(|(g, store)| store.filter(|_| guid != 0 && g == Some(guid)))?;
+        store.is_unit().then(|| self.unit_of(guid, store))
     }
 }
 
@@ -575,7 +613,11 @@ mod tests {
             factions: None,
             reputations: &Reputations::default(),
             types: Default::default(),
-            group: Default::default(),
+            group: GroupInputs {
+                self_guid: Some(1),
+                target_guid: Some(42),
+                ..Default::default()
+            },
         };
         let ice_armor = spell(0, 1);
         assert_eq!(
@@ -647,7 +689,11 @@ mod tests {
             factions: Some(&factions),
             reputations: &reputations,
             types: Default::default(),
-            group: Default::default(),
+            group: GroupInputs {
+                self_guid: Some(1),
+                target_guid: Some(2),
+                ..Default::default()
+            },
         };
 
         assert!(

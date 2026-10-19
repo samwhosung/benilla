@@ -62,7 +62,9 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
     } else {
         u.level.to_string()
     };
-    // `CORPSE` when dead, "Race Class" for a player, the creature type only if hostile or neutral.
+    // `CORPSE` when dead, "Race Class" for a player, else the creature type, only when the player's
+    // reaction toward the unit is below friendly (`0x52a2d9`-`0x52a2de`, `UnitReaction` 4 or
+    // less) and never without an active player (`0x52a2d0`).
     let class_slot = if u.dead {
         get("CORPSE")
     } else if u.is_player {
@@ -72,7 +74,10 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
             (None, Some(c)) => Some(c.clone()),
             (None, None) => None,
         }
-    } else if u.reaction != 0 && u.reaction <= 4 && u.creature_type != CREATURE_TYPE_NOT_SPECIFIED {
+    } else if u.player_reaction != 0
+        && u.player_reaction <= 4
+        && u.creature_type != CREATURE_TYPE_NOT_SPECIFIED
+    {
         // Type 10 is no word here (`0x52a2c1` resolves the type, `0x52a2c6` compares it with 10
         // and skips the row); `UnitCreatureType` answers its word.
         u.creature_type_name.clone()

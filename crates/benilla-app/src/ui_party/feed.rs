@@ -375,8 +375,6 @@ pub(crate) fn feed_party(
                 s.is_player = true;
                 s.raid_target = group.raid_target_index(*guid);
                 s.faction_group = own_group.clone();
-                // A same-faction friendly player, as in `member_unit_state`.
-                s.reaction = 5;
                 Some(s)
             } else {
                 let m = group.members.iter().find(|m| m.guid == *guid)?;
@@ -741,10 +739,7 @@ fn member_unit_state(
         },
     };
     s.is_player = true;
-    // A party member is always a same-faction friendly player: the popup's `UnitCanCooperate`
-    // gate reads the reaction, which neither leg resolves for a party token.
     s.raid_target = group.raid_target_index(m.guid);
-    s.reaction = 5;
     s.faction_group = own_group;
     // A held member's predicates read its descriptor alone (`0x517b16`, `0x517bef`, `0x5164d1`,
     // `0x51659f`): `snapshot`'s, the roster byte never.

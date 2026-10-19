@@ -38,21 +38,13 @@ pub(crate) fn hover_probe_armed() -> bool {
 }
 pub(crate) mod lock;
 mod price_discount;
-mod relations;
+pub(crate) mod relations;
 mod reticle;
 // `pub(crate)` for the hover inspector too: its faction catalog feeds `go_highlightable`.
 pub(crate) mod ring;
 mod scan;
 mod script;
 pub(crate) use script::ScriptSelect;
-
-/// `Faction.dbc` and our reputation table as one [`SystemParam`], since every reaction function
-/// takes both; `factions` is `Option` so a UI-only harness runs without client data.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct ReactionInputs<'w> {
-    pub(crate) factions: Option<Res<'w, Factions>>,
-    pub(crate) reputations: Res<'w, crate::net::Reputations>,
-}
 
 pub(crate) use cursor_mode::{
     corpse_mouseover_eligible, CursorKind, WorldCursor, GO_TYPE_GENERIC, SERVICE_RANGE_SQ,
@@ -65,8 +57,9 @@ pub(crate) use flash::CombatFlash;
 pub(crate) use price_discount::vendor_price_discount;
 #[cfg(test)]
 pub(crate) use price_discount::{stormwind_fixture, HUMAN_WARRIOR};
+// The one relation model, two units in: reaction, attack, assist, cooperation, interaction.
 pub(crate) use relations::{
-    can_assist, can_attack, can_interact, corpse_friendly, is_possessed_by, is_selectable, Assist,
+    corpse_friendly, is_possessed_by, is_selectable, RelUnit, RelationWorld, Relations, UnitLookup,
     UNIT_FLAG_POSSESSED,
 };
 // The attack validator's target half, run in the call that asks, for the player's Attack and the
@@ -81,14 +74,10 @@ pub(crate) use by_name::{
 };
 // The one SetSelection path, for the loot response's select (`0x48f3a0`).
 pub(crate) use by_name::SelectCommit;
-// The reaction decode and its faction catalog, which also tint the target frame
-// (`TargetFrame_CheckFaction`); `duel_rung` is the same walk, for `/reaction`.
-pub(crate) use ring::{
-    both_reactions_at_least_neutral, duel_rung, ring_reaction, selection_variant, Factions,
-    RingVariant,
-};
+// The selector's colour and the faction catalog it and the model read.
 #[cfg(test)]
 pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};
+pub(crate) use ring::{selection_variant, Factions, RingVariant};
 
 pub use click::Interact;
 pub(crate) use click::{clear_selection_on_world_teardown, deselect_on_ui_shutdown, DeselectGuid};
@@ -372,7 +361,12 @@ impl Plugin for TargetPlugin {
                     (
                         by_name::target_by_name_requests,
                         by_name::assist_requests,
-                        by_name::follow_requests,
+                        // After the pet bar's and pet book's drains, which write `PetBar`. The
+                        // two commute: the `FollowUnit` resolver reads only the pet's guid
+                        // (`spells.pet_guid`), which neither writes; the order keeps them declared.
+                        by_name::follow_requests
+                            .after(crate::ui_pet::drain_pet_actions)
+                            .after(crate::ui_pet_book::drain_pet_book),
                     )
                         .chain(),
                     scan::auto_acquire_attacker,

@@ -519,7 +519,8 @@ impl Plugin for QuestMarkersPlugin {
         app.add_systems(
             Update,
             (
-                query_statuses,
+                // After the roster publish, whose party slots the questgivers' reactions read.
+                query_statuses.after(crate::spell::group_relation::publish_group_roster),
                 sync_markers,
                 build_markers,
                 pose_markers,

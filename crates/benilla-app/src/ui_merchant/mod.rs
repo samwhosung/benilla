@@ -118,8 +118,10 @@ impl Plugin for UiMerchantPlugin {
                     feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     // Before `feed_char`: the `UNIT_INVENTORY_CHANGED` a repair fires refreshes the
                     // Repair All button from this total (`PaperDollFrame.lua:717-724`).
+                    // After the roster publish, whose party slots the vendor's reaction reads.
                     feed_repair_costs
                         .in_set(UiFeed)
+                        .after(crate::spell::group_relation::publish_group_roster)
                         .before(crate::ui_char::feed_char),
                     drain_merchant.after(UiInput),
                 ),
@@ -384,9 +386,36 @@ fn vendor_store<'a>(
     open: &MerchantOpen,
     units: &'a Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
 ) -> Option<&'a ObjectStore> {
+    vendor_unit(open, units).map(|(_, store)| store)
+}
+
+/// The open vendor's guid and descriptor, `None` with none open or its unit not streamed.
+fn vendor_unit<'a>(
+    open: &MerchantOpen,
+    units: &'a Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+) -> Option<(u64, &'a ObjectStore)> {
     open.vendor
         .and_then(|g| units.iter().find(|(guid, _)| guid.0 == g))
-        .map(|(_, store)| store)
+        .map(|(guid, store)| (guid.0, store))
+}
+
+/// The open vendor's price discount for the player whose descriptor is `player` (`0x612b80`), 0
+/// with no vendor or no player unit.
+fn open_vendor_discount(
+    open: &MerchantOpen,
+    units: &Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+    relations: &crate::target::RelationWorld,
+    player: &ObjectStore,
+) -> f64 {
+    let (Some((guid, vendor)), Some(me)) = (vendor_unit(open, units), relations.me()) else {
+        return 0.0;
+    };
+    crate::target::vendor_price_discount(
+        &relations.get(),
+        &relations.unit_of(guid, vendor),
+        &me,
+        player,
+    )
 }
 
 /// The open vendor's `UNIT_NPC_FLAGS`, 0 with none open or its unit not streamed.
@@ -405,7 +434,7 @@ pub(crate) struct RepairPurse<'w, 's> {
     items: Res<'w, Items>,
     tables: Option<Res<'w, RepairTables>>,
     units: Query<'w, 's, (&'static Guid, &'static ObjectStore), Without<SelfPlayer>>,
-    reactions: crate::target::ReactionInputs<'w>,
+    relations: crate::target::RelationWorld<'w, 's>,
     sink: crate::ui_action::MessageSink<'w>,
 }
 
@@ -422,14 +451,7 @@ impl RepairPurse<'_, '_> {
         guids: impl IntoIterator<Item = u64>,
     ) -> bool {
         // `0x4faf30` keeps the full price unless it resolves the vendor's unit.
-        let discount = vendor_store(open, &self.units).map_or(0.0, |vendor| {
-            crate::target::vendor_price_discount(
-                self.reactions.factions.as_deref(),
-                &self.reactions.reputations,
-                vendor,
-                player,
-            )
-        });
+        let discount = open_vendor_discount(open, &self.units, &self.relations, player);
         let cost = guids.into_iter().filter(|&g| g != 0).fold(0u32, |sum, g| {
             let item = self.tables.as_deref().map_or(0, |t| {
                 item_repair_cost(g, &self.objects, &self.items, t, discount)
@@ -464,7 +486,7 @@ fn feed_repair_costs(
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
-    reactions: crate::target::ReactionInputs,
+    relations: crate::target::RelationWorld,
     tables: Option<Res<RepairTables>>,
     mut memo: Local<crate::ui_script::VmMemo<RepairFeedMemo>>,
 ) {
@@ -478,14 +500,7 @@ fn feed_repair_costs(
     };
     let vendor = vendor_store(&open, &units);
     // The open vendor's price discount (`0x4faf8a`), 0 with none open.
-    let discount = vendor.map_or(0.0, |vendor| {
-        crate::target::vendor_price_discount(
-            reactions.factions.as_deref(),
-            &reactions.reputations,
-            vendor,
-            player,
-        )
-    });
+    let discount = open_vendor_discount(&open, &units, &relations, player);
     let repairer = vendor.is_some_and(|store| store.0.unit_npc_flags() & NPC_FLAG_REPAIR != 0);
     let objects_moved = inv.changes.moved();
     let self_changed = !inv.self_changed.is_empty();
@@ -1088,11 +1103,17 @@ mod tests {
             ]),
             false,
         );
-        // The sword in the main hand (slot 15); the current honor rank byte 8.
+        // A human warrior player, the sword in the main hand (slot 15); the current honor rank
+        // byte 8. The vendor's standing leg needs the player's type, flag `0x8` and template
+        // (`0x606576`-`0x6065b6`).
         let main_hand = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 15;
         app.world_mut().spawn((
             SelfPlayer,
+            Guid(0x10),
             ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19), // OBJECT_FIELD_TYPE
+                (FIELD_UNIT_FACTIONTEMPLATE, 1),
+                (FIELD_UNIT_FLAGS, 0x8),
                 (BYTES_0, crate::target::HUMAN_WARRIOR),
                 (PLAYER_BYTES_3, 8 << 24),
                 (main_hand, SWORD as u32),

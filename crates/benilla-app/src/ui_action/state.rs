@@ -97,8 +97,7 @@ pub(super) fn feed_action_state(
     // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
-    factions: Option<Res<crate::target::Factions>>,
-    reputations: Res<crate::net::Reputations>,
+    relations: crate::target::RelationWorld,
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<StateMemory>>,
@@ -201,9 +200,8 @@ pub(super) fn feed_action_state(
                 if let (Some((store, _, _, _)), Some(sp)) = (me, spells.as_deref()) {
                     let ctx = usable::UsableCtx {
                         store,
-                        target_store: target.map(|(s, _)| s),
-                        factions: factions.as_deref(),
-                        reputations: &reputations,
+                        target: selection.guid.zip(target.map(|(s, _)| s)),
+                        rel: relations.get(),
                         cooldowns: &cooldowns,
                         stacks: &stacks,
                         spell_mods,
@@ -282,9 +280,8 @@ pub(super) fn feed_action_state(
                 if let Some((store, _, _, _)) = me {
                     let ctx = usable::UsableCtx {
                         store,
-                        target_store: target.map(|(s, _)| s),
-                        factions: factions.as_deref(),
-                        reputations: &reputations,
+                        target: selection.guid.zip(target.map(|(s, _)| s)),
+                        rel: relations.get(),
                         cooldowns: &cooldowns,
                         stacks: &stacks,
                         spell_mods,

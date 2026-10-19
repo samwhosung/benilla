@@ -429,8 +429,7 @@ mod tests {
             group_mask,
             friend_group_mask,
             enemy_group_mask,
-            enemies: [0; 4],
-            friends: [0; 4],
+            ..Default::default()
         };
         let world = f.app.world_mut();
         world.insert_resource(crate::target::Factions::from_catalog(
@@ -563,8 +562,9 @@ mod tests {
             (FRIEND, r#"CastSpellByName("Fortitude", 1)"#, Some(ME)),
         ] {
             let mut f = frame(true);
-            // `CanAssist` passes a friendly player-controlled unit (`UNIT_FLAG_PLAYER_CONTROLLED`).
-            with_factions(&mut f, selected_template, &[(FLAGS, 0x8)]);
+            // A player (`OBJECT_FIELD_TYPE` 0x19, `UNIT_FLAG_PLAYER_CONTROLLED`): `CanAssist`
+            // judges him on his own player's rungs, then the templates.
+            with_factions(&mut f, selected_template, &[(2, 0x19), (FLAGS, 0x8)]);
             with_fortitude(&mut f);
             run(&mut f, lua);
             let sent: Vec<_> = target.into_iter().map(|t| (FORTITUDE, Some(t))).collect();
@@ -801,8 +801,8 @@ mod tests {
         use benilla_ui::script::{PartyMemberInfo, PartyRequest, PartyState};
         for (health, resolved) in [(100, true), (0, false)] {
             let mut f = frame(false);
-            // OLD is a friendly player-controlled unit, our groupmate "Olly" in `party1`.
-            with_factions(&mut f, FRIEND, &[(FLAGS, 0x8), (HEALTH, health)]);
+            // OLD is a friendly player, our groupmate "Olly" in `party1`.
+            with_factions(&mut f, FRIEND, &[(2, 0x19), (FLAGS, 0x8), (HEALTH, health)]);
             let world = f.app.world_mut();
             let mut names = world.resource_mut::<crate::names::NameCache>();
             names.insert_player(OLD, "Olly".into(), None);

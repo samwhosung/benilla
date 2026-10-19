@@ -12,19 +12,13 @@
 
 use bevy::prelude::*;
 
-use benilla_protocol::messages::{ObjectType, OwnerFallback};
-
 use super::cast_target::TargetRelations;
 use crate::net::ObjectStore;
 use crate::ui_party::{raid_row_guids, GroupState};
 
-/// `UNIT_FIELD_FLAGS & 0x8`, `UNIT_FLAG_PLAYER_CONTROLLED` (vmangos `UnitDefines.h:548`), which
-/// both predicates test on both units (`606c5e`, `606c76`, `606d5e`, `606d76`).
-const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
-
 /// The two tables `0x4e7f70` and `0x4baee0` read: the guids in the party slots and in the raid
 /// roster, as the frame began.
-#[derive(Resource, Default, Debug, PartialEq, Eq)]
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GroupRoster {
     /// The party slots `[0xbc6f48 + 8i]`, `i < 4` (`4e7f96`-`4e7fb0`); none once an opcode emptied
     /// them.
@@ -38,6 +32,19 @@ impl GroupRoster {
     /// `0x4e7f70`: a nonzero guid that is the active player's (`4e7f84`) or in a party slot.
     pub(crate) fn in_party(&self, me: Option<u64>, guid: u64) -> bool {
         guid != 0 && (me == Some(guid) || self.party.contains(&guid))
+    }
+
+    /// The party slots alone, as `partyN` reads them (`GroupState::party_slots`), none after a
+    /// leave or a kick (`slots_emptied`, `0x4e84a0`).
+    pub(crate) fn party_of(group: &GroupState) -> Self {
+        Self {
+            party: if group.slots_emptied {
+                Vec::new()
+            } else {
+                group.party_slots().map(|m| m.guid).collect()
+            },
+            raid: Vec::new(),
+        }
     }
 
     /// `0x4918e0`: [`Self::in_party`], or a nonzero guid in the raid roster (`4918ee`).
@@ -58,14 +65,9 @@ pub(crate) fn publish_group_roster(
     if !group.is_changed() {
         return;
     }
-    let party = if group.slots_emptied {
-        Vec::new()
-    } else {
-        group.party_slots().map(|m| m.guid).collect()
-    };
     let now = GroupRoster {
-        party,
         raid: raid_row_guids(&group),
+        ..GroupRoster::party_of(&group)
     };
     if *roster != now {
         *roster = now;
@@ -100,53 +102,31 @@ impl TargetRelations<'_> {
     }
 
     /// The shape both predicates share: the caster is the candidate, or both are player-controlled
-    /// (`606c4f`-`606c79`), each answers to a player ([`controller`]), and one of the two
-    /// controllers is the active player and the other a member (`606ca3`-`606d02`), tried both
-    /// ways round. A member's pet is such a unit. Whoever has not streamed answers no controller
-    /// and no relation.
+    /// (`606c4f`-`606c79`), each answers to a player (`0x606170`, [`crate::target::Relations::controller`]), and
+    /// one of the two controllers is the active player and the other a member (`606ca3`-`606d02`),
+    /// tried both ways round. A member's pet is such a unit. Whoever has not streamed answers no
+    /// controller and no relation.
     fn related(&self, is_self: bool, member: fn(&GroupRoster, Option<u64>, u64) -> bool) -> bool {
         if is_self {
             return true;
         }
-        let group = &self.group;
-        let (Some(me), Some(target), Some(me_store), Some(store)) = (
-            group.self_guid,
-            group.target_guid,
-            self.self_store,
-            self.target_store,
-        ) else {
+        let (Some(me), Some((caster, target))) = (self.group.self_guid, self.pair()) else {
             return false;
         };
-        if me_store.0.unit_flags() & store.0.unit_flags() & UNIT_FLAG_PLAYER_CONTROLLED == 0 {
+        if !caster.player_controlled() || !target.player_controlled() {
             return false;
         }
-        let (Some(mine), Some(theirs)) = (
-            controller(me_store, me, group.self_owner_store),
-            controller(store, target, self.target_owner_store),
-        ) else {
+        let rel = self.relations();
+        let (Some(mine), Some(theirs)) = (rel.controller(&caster), rel.controller(&target)) else {
             return false;
         };
         let member = |guid| {
-            group
+            self.group
                 .roster
                 .is_some_and(|roster| member(roster, Some(me), guid))
         };
-        mine == me && member(theirs) || theirs == me && member(mine)
+        mine.guid == me && member(theirs.guid) || theirs.guid == me && member(mine.guid)
     }
-}
-
-/// `0x606170`: the player a unit answers to, its charmer else its creator (`606170`-`60619f`)
-/// or the unit itself when neither is set, and only when that object is a player (`6061c6`-
-/// `6061cf`, `TYPEMASK_PLAYER`). `owner_store` is the charmer's or creator's descriptor, `None`
-/// while it has not streamed.
-fn controller(store: &ObjectStore, guid: u64, owner_store: Option<&ObjectStore>) -> Option<u64> {
-    let (owner, owner_store) = match store.0.unit_owner(OwnerFallback::CreatedBy) {
-        Some(owner) => (owner, owner_store),
-        None => (guid, Some(store)),
-    };
-    owner_store
-        .is_some_and(|s| s.0.object_type() == Some(ObjectType::Player))
-        .then_some(owner)
 }
 
 /// The stores the group tests stand up, over the faction rows of [`super::targeting::corpse_fixture`]
@@ -230,6 +210,7 @@ mod tests {
     const MEMBER_PET: u64 = 5;
     const NPC: u64 = 6;
     const ORC_MEMBER: u64 = 7;
+    const ORC_RAIDER: u64 = 8;
 
     /// `TARGET_FLAG_UNIT_RAID` and `TARGET_FLAG_UNIT_PARTY`, the words implicit targets 57 and 35
     /// set.
@@ -240,7 +221,7 @@ mod tests {
     fn roster() -> GroupRoster {
         GroupRoster {
             party: vec![MEMBER],
-            raid: vec![ME, MEMBER, RAIDER],
+            raid: vec![MEMBER, RAIDER, ME],
         }
     }
 
@@ -477,18 +458,20 @@ mod tests {
 
     /// The party bit `0x8` and the raid bit `0x4` clear for the group the predicates name and
     /// `CanAssist` passes (`6e5cad`-`6e5d2f`), and only the raid bit for a raid member outside
-    /// the party.
+    /// the party. A party member of the other faction is friendly by `UnitReaction`'s party rung
+    /// (`0x6062b0`), which reads the party slots alone, so it binds both and a raid member of
+    /// the other faction neither.
     #[test]
     fn the_party_and_raid_bits_clear_for_the_group_and_only_when_assistable() {
         let factions = fx::factions();
         let reputations = Reputations::default();
         let roster = GroupRoster {
             party: vec![MEMBER, ORC_MEMBER],
-            raid: vec![ME, MEMBER, RAIDER, ORC_MEMBER],
+            raid: vec![MEMBER, RAIDER, ORC_MEMBER, ORC_RAIDER, ME],
         };
         let me = player(1);
         let (member, raider, stranger) = (player(1), player(1), player(1));
-        let orc_member = player(2);
+        let (orc_member, orc_raider) = (player(2), player(2));
         let member_pet = pet_of(MEMBER, 1, false);
         // A friendly creature that can be assisted but answers to nobody.
         let npc = npc(1, PVP);
@@ -518,7 +501,7 @@ mod tests {
             bool,
             bool,
         );
-        let cases: [Case; 6] = [
+        let cases: [Case; 7] = [
             ("a party member", MEMBER, &member, None, true, true),
             (
                 "a raid member of another group",
@@ -545,11 +528,19 @@ mod tests {
                 true,
             ),
             ("a friendly creature", NPC, &npc, None, false, false),
-            // In the party, and no friend: `CanAssist` refuses after the predicate passes.
             (
-                "a member of the other faction",
+                "a party member of the other faction",
                 ORC_MEMBER,
                 &orc_member,
+                None,
+                true,
+                true,
+            ),
+            // In the raid, and no friend: `CanAssist` refuses after the predicate passes.
+            (
+                "a raid member of the other faction",
+                ORC_RAIDER,
+                &orc_raider,
                 None,
                 false,
                 false,

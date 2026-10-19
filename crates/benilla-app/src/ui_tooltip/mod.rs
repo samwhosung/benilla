@@ -19,7 +19,9 @@ use crate::query_cache::Ask;
 use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
 use crate::ui_script::UiFeed;
 use crate::ui_trainer::TrainerFeed;
-use crate::ui_unit::{enrich_unit, snapshot, unit_reaction, SnapshotTables, UnitFeed};
+use crate::ui_unit::{
+    enrich_unit, player_reaction, snapshot, unit_reaction, SnapshotTables, UnitFeed,
+};
 
 mod spell_deps;
 mod spell_feed;
@@ -114,7 +116,7 @@ fn drive_mouseover_tooltip(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    rx: crate::target::ReactionInputs,
+    relations: crate::target::RelationWorld,
     // The lock chain's data, shared with the click router (`target::lock`) so hover and click
     // agree on whether a lock can be opened.
     go_inputs: crate::target::lock::GoLockInputs,
@@ -158,16 +160,19 @@ fn drive_mouseover_tooltip(
         let name = names
             .resolve_unit(guid, Some(store), ask)
             .map(str::to_string);
-        let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
+        let (rel, me) = (relations.get(), relations.me());
+        let subject = relations.unit_of(guid, store);
+        let reaction = unit_reaction(&rel, &subject, me.as_ref());
         // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
         // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
         let mut s = snapshot(store, guid, name, reaction, chr, types);
+        s.player_reaction = player_reaction(&rel, &subject, me.as_ref());
         enrich_unit(
             &mut s,
             guid,
             &names,
             store,
-            rx.factions.as_deref(),
+            relations.factions(),
             self_store,
         );
         Some((guid, s))

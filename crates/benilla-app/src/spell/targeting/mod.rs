@@ -1259,11 +1259,22 @@ mod tests {
                 false,
                 false,
             ),
+            // Friendly by `UnitReaction`'s party rung (`0x6062b0`), which reads the party slots
+            // alone: a party member of the other faction binds both words, a raid member neither.
             (
                 "a party member of the other faction",
                 gf::player(2),
                 None,
                 (ALLY, Party),
+                false,
+                true,
+                true,
+            ),
+            (
+                "a raid member of the other faction",
+                gf::player(2),
+                None,
+                (ALLY, Raid),
                 false,
                 false,
                 false,

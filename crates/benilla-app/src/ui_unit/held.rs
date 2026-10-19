@@ -13,27 +13,28 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{NameCandidate, UiScript, UnitState};
 
-use super::{enrich_unit, faction_group, faction_group_localized, snapshot, unit_reaction};
+use super::{
+    enrich_unit, faction_group, faction_group_localized, player_reaction, snapshot, unit_reaction,
+};
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
-use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::target::{Candidacy, Factions, NameSearch};
+use crate::target::{Candidacy, NameSearch, RelUnit, Relations};
 use crate::ui_script::{gate, VmMemo};
 
 /// What a held unit's snapshot reads beside its descriptor.
 pub(super) struct HeldUnits<'a> {
     pub(super) names: &'a NameCache,
     pub(super) commands: &'a NetCommands,
-    pub(super) factions: Option<&'a Factions>,
-    pub(super) reputations: &'a Reputations,
     pub(super) group: &'a crate::ui_party::GroupState,
-    /// Our own descriptor, which reaction, attackability and the faction line read.
+    /// Our own descriptor, which the faction line reads.
     pub(super) self_store: Option<&'a ObjectStore>,
     pub(super) unit_names: super::UnitNames<'a>,
     pub(super) types: CreatureTypeSources<'a>,
-    /// The object manager's lookup by guid (`0x468460`), which `CanAssist`'s owner leg reads.
-    pub(super) by_guid: &'a dyn Fn(u64) -> Option<ObjectStore>,
+    /// The relation functions, over the object manager, and the active player they judge from.
+    pub(super) rel: Relations<'a>,
+    pub(super) me: Option<RelUnit>,
 }
 
 impl HeldUnits<'_> {
@@ -53,43 +54,15 @@ impl HeldUnits<'_> {
 
     /// [`Self::state`] under a name the caller looked up, which sends no name query.
     fn state_named(&self, store: &ObjectStore, guid: u64, name: Option<String>) -> UnitState {
-        let reaction = unit_reaction(self.factions, self.reputations, store, self.self_store);
+        let unit = RelUnit::of(guid, store).with_record(store, self.names);
+        let factions = self.rel.factions;
+        let reaction = unit_reaction(&self.rel, &unit, self.me.as_ref());
         let mut s = snapshot(store, guid, name, reaction, self.unit_names, self.types);
+        s.player_reaction = player_reaction(&self.rel, &unit, self.me.as_ref());
         s.raid_target = self.group.raid_target_index(guid);
-        s.faction_group = faction_group(store, self.factions);
-        s.faction_group_localized = faction_group_localized(store, self.factions);
-        // `CanAttack` (`0x606980`); `UnitCanAttack` gates the target frame's level colour.
-        s.can_attack = crate::target::can_attack(
-            Some(store),
-            self.factions,
-            self.reputations,
-            self.self_store,
-        );
-        // `CanAssist` (`0x6066f0`), the player toward the unit; `UnitCanAssist` reads it.
-        s.can_assist = crate::target::can_assist(
-            Some(store),
-            self.factions,
-            self.reputations,
-            self.self_store,
-            self.by_guid,
-            crate::target::Assist::PlayerToUnit,
-        );
-        s.can_assist_player = crate::target::can_assist(
-            Some(store),
-            self.factions,
-            self.reputations,
-            self.self_store,
-            self.by_guid,
-            crate::target::Assist::UnitToPlayer,
-        );
-        enrich_unit(
-            &mut s,
-            guid,
-            self.names,
-            store,
-            self.factions,
-            self.self_store,
-        );
+        s.faction_group = faction_group(store, factions);
+        s.faction_group_localized = faction_group_localized(store, factions);
+        enrich_unit(&mut s, guid, self.names, store, factions, self.self_store);
         s
     }
 }
@@ -125,8 +98,7 @@ pub(super) fn feed_chain_units(
     stores: Query<&ObjectStore>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     changed: Query<(), (Changed<ObjectStore>, Without<crate::items::ItemObject>)>,
@@ -152,8 +124,7 @@ pub(super) fn feed_chain_units(
     let stores_changed = !changed.is_empty();
     let stores_removed = !removed.is_empty();
     let group_changed = group.is_changed();
-    let reps_changed = reputations.is_changed();
-    let factions_changed = factions.as_ref().is_some_and(|r| r.is_changed());
+    let relations_changed = world.inputs_changed();
     removed.clear();
     let gate = gate::Gate::new(
         vm_reset
@@ -162,26 +133,21 @@ pub(super) fn feed_chain_units(
             || stores_changed
             || stores_removed
             || group_changed
-            || reps_changed
-            || factions_changed,
+            || relations_changed,
     );
     if gate.skip() {
         return;
     }
 
-    let by_guid = |guid: u64| -> Option<ObjectStore> {
-        stores.get(*index.as_ref()?.0.get(&guid)?).ok().cloned()
-    };
     let held = HeldUnits {
         names: &names,
         commands: &commands,
-        factions: factions.as_deref(),
-        reputations: &reputations,
         group: &group,
         self_store: self_q.iter().next(),
         unit_names: tables.unit_names(),
         types: tables.types(&names),
-        by_guid: &by_guid,
+        rel: world.get(),
+        me: world.me(),
     };
     let built: HashMap<u64, UnitState> = ends
         .iter()
@@ -255,13 +221,10 @@ pub(crate) fn feed_name_candidates(
     // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
     // this feed in an undeclared order against every system that moves a unit.
     units: Query<(&Guid, &GlobalTransform, Option<Ref<ObjectStore>>)>,
-    index: Option<Res<crate::net::GuidIndex>>,
-    all_stores: Query<&ObjectStore>,
     self_q: Query<(&Guid, &GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     mut memo: Local<VmMemo<CandidateMemo>>,
 ) {
@@ -269,24 +232,17 @@ pub(crate) fn feed_name_candidates(
         return;
     };
     let (memo, vm_reset) = memo.get_reset(&script);
-    let rebuild = vm_reset
-        || group.is_changed()
-        || reputations.is_changed()
-        || factions.as_ref().is_some_and(|r| r.is_changed());
+    let rebuild = vm_reset || group.is_changed() || world.inputs_changed();
     let me = self_q.single().ok();
-    let by_guid = |guid: u64| -> Option<ObjectStore> {
-        all_stores.get(*index.as_ref()?.0.get(&guid)?).ok().cloned()
-    };
     let held = HeldUnits {
         names: &names,
         commands: &commands,
-        factions: factions.as_deref(),
-        reputations: &reputations,
         group: &group,
         self_store: me.and_then(|(_, _, s)| s),
         unit_names: tables.unit_names(),
         types: tables.types(&names),
-        by_guid: &by_guid,
+        rel: world.get(),
+        me: world.me(),
     };
     memo.seen.clear();
     let origin = me.map(|(_, tf, _)| tf.translation());
@@ -331,6 +287,9 @@ pub(crate) fn feed_name_candidates(
                 ..Default::default()
             },
         };
+        let unit = store
+            .as_deref()
+            .map(|s| (RelUnit::of(guid, s).with_record(s, &names), s));
         script.set_name_candidate(
             guid,
             Some(NameCandidate {
@@ -339,11 +298,9 @@ pub(crate) fn feed_name_candidates(
                 state,
                 selectable: crate::target::is_selectable(store.as_deref(), self_guid),
                 assistable_alive: crate::target::assistable_alive(
-                    store.as_deref(),
-                    factions.as_deref(),
-                    &reputations,
-                    me.and_then(|(_, _, s)| s),
-                    by_guid,
+                    &held.rel,
+                    held.me.as_ref(),
+                    unit.as_ref().map(|(u, s)| (u, *s)),
                 ),
             }),
         );
@@ -363,7 +320,7 @@ pub(crate) fn feed_name_candidates(
 mod tests {
     use super::*;
     use crate::names::CreatureRecord;
-    use crate::net::GuidIndex;
+    use crate::net::{GuidIndex, Reputations};
     use crate::target::Selection;
     use crate::ui_party::{GroupState, GROUPTYPE_RAID};
     use benilla_protocol::messages::{member_status, GroupMemberEntry};
@@ -787,16 +744,19 @@ mod tests {
         assert_eq!(health(&app, "raid2target"), 0);
     }
 
-    /// `UnitCanAssist` (`0x516bb0`) over a chain's end reads the feed's `CanAssist` verdict
-    /// (`0x6066f0`): the player's template toward the unit's friendly, the unit not
-    /// unselectable, and, for a unit that is not player-controlled, PvP-flagged.
+    /// `UnitCanAssist` (`0x516bb0`) over a chain's end asks `CanAssist` (`0x6066f0`) of the units
+    /// the tokens name, in their order: the player's template toward the unit's friendly, the
+    /// unit not unselectable, and, for a unit that is not player-controlled, PvP-flagged.
     #[test]
-    fn unit_can_assist_reads_the_feeds_can_assist_for_a_chain_end() {
+    fn unit_can_assist_judges_a_chain_end_by_the_model() {
         use crate::spell::targeting::corpse_fixture as fx;
         const TEMPLATE: u16 = 35;
         const FLAGS: u16 = 46;
         let mut app = app();
-        app.insert_resource(fx::factions());
+        app.insert_resource(fx::factions()).add_systems(
+            Update,
+            crate::ui_unit::relations::feed_unit_relations.before(crate::ui_aura::AuraEvents),
+        );
         let with = |extra: &[(u16, u32)], target: u64, kind: u32| {
             let mut pairs = vec![
                 (OBJECT_TYPE, kind),
@@ -833,6 +793,7 @@ mod tests {
                 "player",
                 Some(UnitState {
                     exists: true,
+                    guid: ME,
                     ..Default::default()
                 }),
             );

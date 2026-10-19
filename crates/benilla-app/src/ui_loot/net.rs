@@ -1126,15 +1126,16 @@ mod tests {
                 .into_created(ObjectType::Unit),
             )
         };
+        let rel = crate::target::Relations {
+            factions: Some(&factions),
+            reputations: &reps,
+            me: None,
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        };
+        let me = crate::target::RelUnit::of(1, &me_store);
         let hostile = (1u32..4096)
-            .find(|&t| {
-                crate::target::can_attack(
-                    Some(&creature(t, 100)),
-                    Some(&factions),
-                    &reps,
-                    Some(&me_store),
-                )
-            })
+            .find(|&t| rel.can_attack(&me, &crate::target::RelUnit::of(2, &creature(t, 100))))
             .expect("a template a Stormwind human can attack");
 
         let (mut world, rx) = tabbed_world();

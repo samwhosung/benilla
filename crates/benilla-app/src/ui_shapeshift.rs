@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use benilla_ui::script::{ShapeshiftFormView, UiScript};
 
 use crate::items::Items;
-use crate::net::{ClientCommand, ObjectStore, Objects, Reputations, SelfPlayer};
+use crate::net::{ClientCommand, ObjectStore, Objects, SelfPlayer};
 use crate::spell::Cooldowns;
 use crate::spell::{usable, CastCommit};
 use crate::target::Selection;
@@ -147,8 +147,7 @@ fn feed_shapeshift_bar(
     // The selection's guid index, and the bag walk behind each form's reagent leg.
     objects: Objects,
     units: Query<&ObjectStore, Without<SelfPlayer>>,
-    factions: Option<Res<crate::target::Factions>>,
-    reputations: Res<Reputations>,
+    relations: crate::target::RelationWorld,
     items: Res<Items>,
     clock: Res<crate::ui_script::UiClock>,
     spell_mods: Res<crate::spell::SpellModifiers>,
@@ -208,9 +207,8 @@ fn feed_shapeshift_bar(
                 || store.is_none_or(|s| {
                     let ctx = usable::UsableCtx {
                         store: s,
-                        target_store,
-                        factions: factions.as_deref(),
-                        reputations: &reputations,
+                        target: selection.guid.zip(target_store),
+                        rel: relations.get(),
                         cooldowns: &cooldowns,
                         stacks: &stacks,
                         spell_mods: &spell_mods,
@@ -283,6 +281,7 @@ pub(crate) fn cast_form(cast: &mut crate::spell::ScriptCast, spell_id: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Reputations;
     use benilla_formats::SpellDisplay;
     use benilla_protocol::ObjectFields;
 

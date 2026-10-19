@@ -34,9 +34,9 @@ use benilla_ui::script::{JustifyH, JustifyV, Outline};
 
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
-use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::target::{selection_variant, CombatFlash, Factions, RingVariant, Selection};
+use crate::target::{selection_variant, CombatFlash, RingVariant, Selection};
 use crate::ui_text::{layout_text_quads, FontSpec, Justify, TextSeat, UiFontAtlas};
 use benilla_world::view::WorldCamera;
 
@@ -407,7 +407,8 @@ pub(crate) fn drive_nameplates(
         // Whether the body is drawn: a unit outside the scene has nothing to float a name over.
         Option<&InheritedVisibility>,
     )>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
+    // The selector's relation inputs: `CanAttack` both ways, the reaction toward the player.
+    relations: crate::target::RelationWorld,
     // The optimistic AFK mirror (`[0xb6e5cc]`), the own player's `<AFK>` override.
     mirror: Res<crate::ui_chat::AfkMirror>,
     // The show-gate inputs, one tuple param for Bevy's 16-param ceiling.
@@ -430,8 +431,6 @@ pub(crate) fn drive_nameplates(
     // The guild cache, the a5 line's text; `ResMut` because a miss sends `CMSG_GUILD_QUERY`.
     mut guilds: ResMut<crate::ui_guild::GuildState>,
     net_commands: Res<NetCommands>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
     camera: Query<&Transform, With<WorldCamera>>,
     mut atlas: Option<ResMut<UiFontAtlas>>,
     mut plates: ResMut<Nameplates>,
@@ -489,6 +488,7 @@ pub(crate) fn drive_nameplates(
     }
     // The billboard facing: screen-aligned (the camera's own rotation), this frame's camera.
     let facing = cam_tf.rotation;
+    let (rel, me) = (relations.get(), relations.me());
     let mut seen = bevy::ecs::entity::EntityHashSet::default();
     for (entity, net, guid, tf, store, is_self, drawn) in &units {
         // A name needs a drawn body; this precedes the ShouldShowName ladder.
@@ -557,11 +557,11 @@ pub(crate) fn drive_nameplates(
             NamePaint::Flash
         } else {
             NamePaint::Variant(selection_variant(
-                factions.as_deref(),
-                &reputations,
-                store,
-                self_store.single().ok(),
+                &rel,
+                store.map(|s| relations.unit_of(guid.0, s)).as_ref(),
+                me.as_ref(),
                 net.kind == EntityKind::Player,
+                store.is_some_and(|s| s.0.unit_is_dead()),
                 group.members.iter().any(|m| m.guid == guid.0),
             ))
         };

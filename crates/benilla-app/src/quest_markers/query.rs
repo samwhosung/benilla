@@ -16,7 +16,6 @@ use benilla_protocol::EntityKind;
 
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::target::cursor_mode::go_reaction;
-use crate::target::ring::Factions;
 use crate::ui_quest::QuestGiver;
 
 /// `UNIT_NPC_FLAGS` questgiver service bit.
@@ -70,8 +69,7 @@ pub(super) fn query_statuses(
         Without<SelfPlayer>,
     >,
     index: Res<GuidIndex>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<crate::net::Reputations>,
+    relations: crate::target::RelationWorld,
     mut quest: ResMut<QuestGiver>,
     commands: Res<NetCommands>,
     mut ecs: Commands,
@@ -113,10 +111,10 @@ pub(super) fn query_statuses(
     // A sweep frame, the only time a GameObject is asked about.
     let swept = state.generation != generation || full;
     state.generation = generation;
-    // Off a sweep, a unit's verdict depends only on its descriptor and the two reaction
-    // catalogs; with all three still it is a no-op, so the unit is skipped.
-    let catalogs_moved =
-        reputations.is_changed() || factions.as_ref().is_some_and(|f| f.is_changed());
+    // Off a sweep, a unit's verdict depends only on its descriptor and the reaction's other
+    // inputs; with all still it is a no-op, so the unit is skipped.
+    let catalogs_moved = relations.inputs_changed();
+    let (rel, me_unit) = (relations.get(), relations.me());
     for (entity, guid, net, obj, ask, fm) in &objects {
         // A unit with no key has not been judged since it was created: its store's change may
         // have gone to a run with no self.
@@ -136,15 +134,12 @@ pub(super) fn query_statuses(
         match net.kind {
             // Typemask exactly `OBJECT|UNIT` (`0x5eb0d3`): a player, `0x19`, leaves the sweep here.
             EntityKind::Unit => {
-                // The unit's reaction toward us (`0x6061e0`, this = the unit, at `0x5eb12a`), the
-                // direction `ring_reaction` resolves: `<= 1` is Hated or Hostile, and a missing
-                // input reads Neutral, so a cold catalog never blanks a marker.
-                let reaction = crate::target::ring_reaction(
-                    factions.as_deref(),
-                    &reputations,
-                    Some(&*obj),
-                    Some(&store),
-                );
+                // The unit's reaction toward us (`0x6061e0`, this = the unit, at `0x5eb12a`):
+                // `<= 1` is Hated or Hostile, and a missing input reads Neutral, so a cold catalog
+                // never blanks a marker.
+                let reaction = me_unit.map_or(benilla_formats::Reaction::Neutral as u8, |me| {
+                    rel.reaction(&relations.unit_of(guid.0, &obj), &me)
+                });
                 if reaction <= 1 {
                     // The sweep's one teardown (`0x5eb143`), questgiver or not. A keyless judgement
                     // brings the marker back through a `0x607380` when the reaction recovers.
@@ -190,7 +185,7 @@ pub(super) fn query_statuses(
                 // faction-less object reads Neutral, and `None` (no catalog yet) passes, as in the
                 // cursor's gate.
                 let reaction = go_reaction(
-                    factions.as_deref(),
+                    relations.factions(),
                     obj.0.gameobject_faction(),
                     Some(&store),
                 );

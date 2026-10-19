@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use crate::net::{ObjectStore, Reputations, SelfPlayer};
+use crate::net::{ObjectStore, SelfPlayer};
 
 use super::ring::Factions;
 use super::{go_is_nearest, Hovered, HoveredObject};
@@ -583,8 +583,7 @@ pub(super) fn classify_cursor(
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct CursorInputs<'w, 's> {
-    factions: Option<Res<'w, Factions>>,
-    reputations: Res<'w, Reputations>,
+    relations: super::RelationWorld<'w, 's>,
     // `own_control_lost` is the attack leg's `[0xb4b3e4]` clear.
     player: Res<'w, crate::player::Player>,
     approach: Res<'w, crate::player::Approach>,
@@ -619,8 +618,7 @@ pub(super) fn classify(
     hovered_object: &HoveredObject,
 ) -> (WorldCursor, AttackFork) {
     let CursorInputs {
-        factions,
-        reputations,
+        relations,
         player,
         approach,
         units,
@@ -645,7 +643,7 @@ pub(super) fn classify(
         let store = store?;
         let (self_tf, self_store) = self_q.single().ok()?;
         let reaction = go_reaction(
-            factions.as_deref(),
+            relations.factions(),
             store.0.gameobject_faction(),
             Some(self_store),
         );
@@ -732,14 +730,11 @@ pub(super) fn classify(
             return None; // a plain corpse: Point
         }
 
+        let rel = relations.get();
+        let (me, unit) = (relations.me()?, relations.unit_of(hovered.guid?, store));
         // `CanInteract 0x6067f0`, asked at `0x482310` through `CanInteractNow 0x606880`, picks
         // the ladder; it is not a reaction threshold.
-        if super::can_interact(
-            Some(store),
-            factions.as_deref(),
-            reputations,
-            Some(self_store),
-        ) {
+        if rel.can_interact(&me, &unit) {
             let status = hovered.guid.and_then(|g| quest.status(g));
             // No matching bit clears the cursor (`je 0x4826cb`) without reaching the attack leg:
             // Point, never the sword.
@@ -748,12 +743,7 @@ pub(super) fn classify(
         }
         // `CanAttack 0x606980` (`0x482680`), the predicate TAB, the combat flash and
         // `UnitCanAttack` share; not attackable clears the cursor (`0x4826cb`): Point.
-        if !super::can_attack(
-            Some(store),
-            factions.as_deref(),
-            reputations,
-            Some(self_store),
-        ) {
+        if !rel.can_attack(&me, &unit) {
             return None;
         }
         attack_fork.set(true);

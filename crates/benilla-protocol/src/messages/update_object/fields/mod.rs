@@ -45,6 +45,8 @@ const FIELD_UNIT_CHARMEDBY: u16 = 10;
 /// The summoner of a pet, guardian or totem; with CREATEDBY, the "owned by me" test of `0x5efea0`.
 const FIELD_UNIT_SUMMONEDBY: u16 = 12;
 const FIELD_UNIT_CREATEDBY: u16 = 14;
+/// The unit that persuaded this one (`UpdateFields_1_12_1.h:47`), descriptor byte `0x30`.
+const FIELD_UNIT_PERSUADED: u16 = 18;
 /// The channel's target, possibly the caster (`UpdateFields_1_12_1.h:48`). Public, so another
 /// unit's channel renders from it; `MSG_CHANNEL_START`/`UPDATE` reach only the caster.
 const FIELD_UNIT_CHANNEL_OBJECT: u16 = 20;

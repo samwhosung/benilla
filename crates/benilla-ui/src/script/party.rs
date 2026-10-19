@@ -1872,32 +1872,6 @@ mod tests {
     }
 
     #[test]
-    fn unit_can_cooperate_needs_a_friendly_player() {
-        let mut s = UiScript::new().unwrap();
-        let mut friendly = unit(true, 0x30);
-        friendly.is_player = true;
-        friendly.reaction = 5;
-        s.set_unit("target", Some(friendly.clone()));
-        assert_eq!(
-            s.eval::<i64>(r#"return UnitCanCooperate("player", "target")"#)
-                .unwrap(),
-            1
-        );
-        let mut hostile = friendly.clone();
-        hostile.reaction = 2;
-        s.set_unit("target", Some(hostile));
-        assert!(s
-            .eval::<bool>(r#"return UnitCanCooperate("player", "target") == nil"#)
-            .unwrap());
-        let mut npc = friendly;
-        npc.is_player = false;
-        s.set_unit("target", Some(npc));
-        assert!(s
-            .eval::<bool>(r#"return UnitCanCooperate("player", "target") == nil"#)
-            .unwrap());
-    }
-
-    #[test]
     fn the_raid_verbs_queue_what_they_name() {
         let mut s = UiScript::new().unwrap();
         hold(&mut s, "player", 0x5E1F, "Me");

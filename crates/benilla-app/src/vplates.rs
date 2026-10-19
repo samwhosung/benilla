@@ -22,6 +22,7 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use benilla_formats::Reaction;
 use benilla_protocol::EntityKind;
 use benilla_ui::script::{
     unit_is_grey, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
@@ -29,9 +30,9 @@ use benilla_ui::script::{
 
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
-use crate::net::{Guid, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::target::{ring_reaction, Factions, Hovered, Selection, TargetUpdate};
+use crate::target::{Hovered, Selection, TargetUpdate};
 use benilla_world::view::WorldCamera;
 
 /// The plate border, sharp-resampled so its 128x32 art stays crisp when magnified.
@@ -297,8 +298,7 @@ struct PlateWorld<'w, 's> {
         Without<SelfPlayer>,
     >,
     self_q: Query<'w, 's, (&'static Transform, Option<&'static ObjectStore>), With<SelfPlayer>>,
-    factions: Option<Res<'w, Factions>>,
-    reputations: Res<'w, Reputations>,
+    relations: crate::target::RelationWorld<'w, 's>,
     selection: Res<'w, Selection>,
     // With `selection`, the highlight's pair: the watcher's globals `[0xb4e2c8]`/`[0xb4e2d8]`.
     hovered: Res<'w, Hovered>,
@@ -381,6 +381,7 @@ fn drive_vplates(
     let clicked = script.take_nameplate_clicks();
     let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
     let has_target = world.selection.target.is_some();
+    let (rel, me) = (world.relations.get(), world.relations.me());
 
     let (pw, ph) = (gx(PLATE_W), gx(PLATE_H));
     let scale = window.map_or(1.0, |w| w.scale_factor());
@@ -429,20 +430,16 @@ fn drive_vplates(
         // The category is `CanAttack` from the player (a rep faction answers by its at-war bit);
         // the bar colour is the unit's reaction toward us (by standing). A not-at-war neutral NPC
         // is a friendly plate with a yellow bar.
-        let rank = ring_reaction(
-            world.factions.as_deref(),
-            &world.reputations,
-            store,
-            self_store,
-        );
         let is_player = net.kind == EntityKind::Player;
-        let friendly = crate::target::ring::plate_is_friendly(
-            world.factions.as_deref(),
-            &world.reputations,
-            store,
-            self_store,
-            is_player,
-        );
+        let pair = store
+            .map(|s| world.relations.unit_of(guid.0, s))
+            .zip(me.as_ref());
+        let rank = pair.map_or(Reaction::Neutral as u8, |(u, me)| rel.reaction(&u, me));
+        // A unit whose descriptor has not streamed is attackable by nobody, so friendly unless a
+        // player, whom `CanCooperate` cannot pass.
+        let friendly = pair.map_or(!is_player, |(u, me)| {
+            crate::target::ring::plate_is_friendly(&rel, &u, me, is_player)
+        });
         if friendly && !mode.friends || !friendly && !mode.enemies {
             continue;
         }

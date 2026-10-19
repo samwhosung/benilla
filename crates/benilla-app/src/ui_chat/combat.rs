@@ -10,7 +10,9 @@ use crate::ui_chat::event::ChatEventKind;
 
 use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid};
 use crate::query_cache::Ask;
+use crate::target::relations::StoreLookup;
 use crate::target::ring::Factions;
+use crate::target::{RelUnit, Relations, UnitLookup};
 use crate::ui_party::GroupState;
 
 /// Read-only `ObjectStore` lookup by entity, the one thing [`classify`] needs from the world.
@@ -240,7 +242,7 @@ impl UnitClass {
 /// Classify one guid against the active player, the reference's `0x5efea0`. This reads the owner
 /// (`UNIT_FIELD_CHARMEDBY`, then `UNIT_FIELD_CREATEDBY`) for every unit, tests party (your own
 /// subgroup) before hostility, and runs `CanAttack` (`0x606980`) only with the player attacking
-/// ([`crate::target::ring::can_attack_from_player`]). The reference reads the owner only for a
+/// ([`Relations::can_attack`]). The reference reads the owner only for a
 /// unit that is not a player (`0x5f0006`-`0x5f0019`); a player is hostile only if each can attack
 /// the other (`0x5eff85`-`0x5effad`), and that test comes before party (`0x5effcd`).
 pub(crate) fn classify(
@@ -290,16 +292,21 @@ pub(crate) fn classify(
         return UnitClass::PartyPet;
     }
 
-    // Friend or foe is `CanAttack` on this unit itself, never its owner (`0x5f00e3`/`0x5f00f2`).
+    // Friend or foe is `CanAttack` from the player on this unit itself, never its owner
+    // (`0x5f00e3`/`0x5f00f2`).
     let hostile = {
-        let me_store = index.0.get(&me).copied().and_then(|e| stores.store(e));
-        crate::target::ring::can_attack_from_player(
+        let units = StoreLookup::new(|g| stores.store(*index.0.get(&g)?));
+        let roster = group.map(crate::spell::group_relation::GroupRoster::party_of);
+        let rel = Relations {
             factions,
             reputations,
-            Some(store),
-            me_store,
-            benilla_protocol::guid::is_player(guid),
-        )
+            me: Some(me),
+            roster: roster.as_ref(),
+            units: &units,
+        };
+        units
+            .unit(me)
+            .is_some_and(|me| rel.can_attack(&me, &RelUnit::of(guid, store)))
     };
 
     if benilla_protocol::guid::is_player(guid) {

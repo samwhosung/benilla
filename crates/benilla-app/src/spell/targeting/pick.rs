@@ -262,7 +262,11 @@ mod tests {
             factions: Some(&factions),
             reputations: &Reputations::default(),
             types: Default::default(),
-            group: Default::default(),
+            group: GroupInputs {
+                self_guid: Some(1),
+                target_guid: Some(if is_self { 1 } else { 2 }),
+                ..Default::default()
+            },
         };
         PickFlags::of(word).admits(is_self, &rel, in_party)
     }
@@ -366,7 +370,11 @@ mod tests {
             factions: Some(&factions),
             reputations: &Reputations::default(),
             types: Default::default(),
-            group: Default::default(),
+            group: GroupInputs {
+                self_guid: Some(1),
+                target_guid: Some(2),
+                ..Default::default()
+            },
         };
         assert!(!PickFlags::of(UNIT).admits(false, &rel, || false));
         assert!(PickFlags::of(UNIT | DEAD_ONLY).admits(false, &rel, || true));

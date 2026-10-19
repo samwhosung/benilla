@@ -4,16 +4,17 @@
 //! bright arc toward the camera. The vertical fade on wall and ledge pieces is matched to
 //! captures: the reference's edge-fade ramp (`0x6147f0`) is untraced.
 
-use benilla_formats::{load_faction_catalog, reputation_rank, FactionCatalog, Reaction};
+use benilla_formats::{load_faction_catalog, FactionCatalog, Reaction};
 use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
-use crate::net::{Guid, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
 use benilla_assets::{LockRecover, WorldAssets};
 use benilla_world::decal::{DecalFrame, WorldDecal};
 use benilla_world::particles::buffer::EffectVertex;
 
 use super::click::{clear, deselect};
+use super::relations::{RelUnit, RelationWorld, Relations};
 use super::{CombatFlash, Selection, SelectionRadius};
 use crate::creature_anim::Engaged;
 use benilla_world::view::WorldCamera;
@@ -62,9 +63,9 @@ const RING_PARTY: Color = Color::linear_rgb(0.667, 0.667, 1.0); // 0xFFAAAAFF
 const RING_PARTY_PVP: Color = Color::linear_rgb(0.667, 1.0, 0.667); // 0xFFAAFFAA
 
 /// The FactionTemplate.dbc catalog; absent if it failed to load, and the faction legs then read
-/// neutral.
-#[derive(Resource)]
-pub(crate) struct Factions(FactionCatalog);
+/// neutral. Shared, so the Lua API's copy of the relation inputs costs no table.
+#[derive(Resource, Clone)]
+pub(crate) struct Factions(std::sync::Arc<FactionCatalog>);
 
 impl Factions {
     pub(crate) fn catalog(&self) -> &FactionCatalog {
@@ -74,7 +75,7 @@ impl Factions {
     /// Wrap a catalog, for tests; a running client builds the resource once, from the DBC.
     #[cfg(test)]
     pub(crate) fn from_catalog(catalog: FactionCatalog) -> Self {
-        Self(catalog)
+        Self(std::sync::Arc::new(catalog))
     }
 }
 
@@ -125,8 +126,8 @@ pub(crate) struct PlayerPath {
     pub(crate) attacks_us: bool,
     /// Y, `CanAttack(player → unit)` (`0x605bc8`, `0x605c0b`).
     pub(crate) attackable: bool,
-    /// `IsPvP 0x605ff0`: the unit's `UNIT_FLAG_PVP`; the reference reads its `CHARMEDBY`, else
-    /// `CREATEDBY` owner's when it has one, and answers no for a unit flagged `0x100`.
+    /// `IsPvP 0x605ff0` (`0x605c32`): the `UNIT_FLAG_PVP` of the unit's charmer, else its
+    /// creator, when it has one held, and no for such a unit flagged `0x100`; else its own.
     pub(crate) pvp: bool,
     /// `0x4e7f70`: you or a member of the party table `0xbc6f48`; the selector tests itself first
     /// (`0x605c46`), so here it is a member.
@@ -138,7 +139,8 @@ pub(crate) struct PlayerPath {
 pub(crate) enum SelectorInput {
     /// The player path, which never grays.
     Player(PlayerPath),
-    /// Any other unit: [`ring_reaction`]'s rank `0..=6`, and whether it is dead.
+    /// Any other unit: its reaction toward the player ([`Relations::reaction`], `0..=7`), and
+    /// whether it is dead.
     Npc { rank: u8, dead: bool },
 }
 
@@ -168,29 +170,39 @@ pub(crate) fn ring_variant(input: SelectorInput) -> RingVariant {
     }
 }
 
-/// `GetSelectionCircleColor 0x605960` below the combat flash, read off the stores: the ground ring
-/// and the overhead name both paint with it.
+/// `GetSelectionCircleColor 0x605960` below the combat flash, over the unit and the active player:
+/// the ground ring and the overhead name both paint with it. A unit whose descriptor has not
+/// streamed reads as neither attacking nor attackable, neutral and alive.
 pub(crate) fn selection_variant(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
+    rel: &Relations,
+    unit: Option<&RelUnit>,
+    me: Option<&RelUnit>,
     is_player: bool,
+    dead: bool,
     in_party: bool,
 ) -> RingVariant {
-    let attack =
-        |attacker| can_attack_between(factions, reputations, store, self_store, true, attacker);
+    let pair = unit.zip(me);
+    let attack = |attacker_is_unit: bool| {
+        pair.is_some_and(|(unit, me)| {
+            if attacker_is_unit {
+                rel.can_attack(unit, me)
+            } else {
+                rel.can_attack(me, unit)
+            }
+        })
+    };
     ring_variant(if is_player {
         SelectorInput::Player(PlayerPath {
-            attacks_us: attack(Attacker::Unit),
-            attackable: attack(Attacker::Player),
-            pvp: store.is_some_and(|s| s.0.unit_flags() & UNIT_FLAG_PVP != 0),
+            attacks_us: attack(true),
+            attackable: attack(false),
+            // `IsPvP` of the unit (`0x605c32`).
+            pvp: unit.is_some_and(|u| rel.is_pvp(u)),
             in_party,
         })
     } else {
         SelectorInput::Npc {
-            rank: ring_reaction(factions, reputations, store, self_store),
-            dead: store.is_some_and(|s| s.0.unit_is_dead()),
+            rank: pair.map_or(Reaction::Neutral as u8, |(unit, me)| rel.reaction(unit, me)),
+            dead,
         }
     })
 }
@@ -211,7 +223,7 @@ pub(super) fn load_factions(mut commands: Commands, world_assets: Option<Res<Wor
     match load_faction_catalog(&mut chain) {
         Ok(catalog) => {
             info!("faction catalog: {} template rows", catalog.len());
-            commands.insert_resource(Factions(catalog));
+            commands.insert_resource(Factions(std::sync::Arc::new(catalog)));
         }
         Err(e) => warn!("faction catalog unavailable, ring stays neutral: {e:#}"),
     }
@@ -223,8 +235,7 @@ pub(super) fn load_factions(mut commands: Commands, world_assets: Option<Res<Wor
 #[allow(clippy::type_complexity)]
 pub(super) fn update_ring(
     mut selection: ResMut<Selection>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: RelationWorld,
     flash: Res<CombatFlash>,
     mut state: ResMut<RingState>,
     camera: Query<&GlobalTransform, With<WorldCamera>>,
@@ -255,7 +266,6 @@ pub(super) fn update_ring(
         // The party roster: the selector's party table `0xbc6f48`.
         Res<crate::ui_party::GroupState>,
     ),
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
     // Our auto-attack; both clear paths end it, as the reference's death and teardown edges do.
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
 ) {
@@ -292,12 +302,12 @@ pub(super) fn update_ring(
                         *fade_angle
                     })
                 };
-                let rank = ring_reaction(
-                    factions.as_deref(),
-                    &reputations,
-                    store,
-                    self_store.single().ok(),
-                );
+                let rel = world.get();
+                let me = world.me();
+                let subject = store.zip(selection.guid).map(|(s, g)| world.unit_of(g, s));
+                let rank = subject
+                    .zip(me)
+                    .map_or(Reaction::Neutral as u8, |(u, me)| rel.reaction(&u, &me));
                 let is_player = net.is_some_and(|n| n.kind == EntityKind::Player);
                 let in_party = selection
                     .guid
@@ -325,10 +335,7 @@ pub(super) fn update_ring(
                         "target: guid {:?} ftpl {:?} (self ftpl {:?}) → rank {rank}{}{}",
                         selection.guid,
                         store.and_then(|s| s.0.unit_faction_template()),
-                        self_store
-                            .single()
-                            .ok()
-                            .and_then(|s| s.0.unit_faction_template()),
+                        me.and_then(|m| m.template),
                         if is_player { " [player path]" } else { "" },
                         if is_dead { " [dead→gray]" } else { "" },
                     );
@@ -338,11 +345,11 @@ pub(super) fn update_ring(
                     flash.color
                 } else {
                     selection_variant(
-                        factions.as_deref(),
-                        &reputations,
-                        store,
-                        self_store.single().ok(),
+                        &rel,
+                        subject.as_ref(),
+                        me.as_ref(),
                         is_player,
+                        is_dead,
                         in_party,
                     )
                     .color()
@@ -445,579 +452,145 @@ pub(super) fn push_ring(
     batch.tris();
 }
 
-/// The target's reaction toward our player as a rank `0..=6`, the direction every NPC colour
-/// uses (`0x605960` and `0x7cbaa0` ask `UnitReaction 0x6061e0` with the unit as `this`). One
-/// object toward itself is friendly before any rung (`0x606200`). When both carry
-/// `UNIT_FIELD_FLAGS` bit 3, a duel (`0x606296`) or mutual FFA decides next. Then
-/// `0x606530`: a faction with a reputation slot (`0x605fc0`) answers with our reputation rank
-/// (`0x4d63a0`), even in GM mode; any other goes to the template comparator (`0x606640`). Neutral
-/// when anything is missing. `0x606439` caps that answer at 6, so Revered and Exalted both read 6.
-/// The forced-reaction table ([`forced_rank`]) answers ahead of both, at `0x6065e6`. Not applied:
-/// the party rung (`0x6062b0`), the contested guard (`0x6065be`, ahead of that call) and the summon
-/// tail.
-pub(crate) fn ring_reaction(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-) -> u8 {
-    if let (Some(target), Some(own)) = (target_store, self_store) {
-        if let Some(rank) = leading_rungs(target, own) {
-            return rank;
-        }
-    }
-    let resolved = (|| {
-        let catalog = &factions?.0;
-        let self_store = self_store?;
-        let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-        // The forced-reaction table (`0x4d6490` at `0x6065e6`), ahead of every faction rule.
-        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
-            return Some(rank);
-        }
-        // A reputation faction: our rank with it.
-        if let Some(info) = catalog.reputation_faction(target_tpl.faction) {
-            let standing = reputations
-                .slots
-                .get(info.rep_index as usize)
-                .map_or(0, |&(_flags, s)| s);
-            let race = self_store.0.unit_race().unwrap_or(0);
-            let class = self_store.0.unit_class().unwrap_or(0);
-            return Some(reputation_rank(info.base_for(race, class) + standing));
-        }
-        // The template comparator: 1, 3 or 4 on the rank scale.
-        let self_tpl = catalog.template(self_store.0.unit_faction_template()?)?;
-        Some(target_tpl.reaction_toward(self_tpl) as u8)
-    })();
-    // `0x606439` (`cmp esi,6` / `jl` / `mov esi,6`) caps `0x606530`'s answer: Exalted's 7 reads 6.
-    resolved.map_or(Reaction::Neutral as u8, |rank| rank.min(REACTION_CAP))
-}
-
-/// Revered, the highest rank `UnitReaction`'s generic leg answers (`0x606439`).
-const REACTION_CAP: u8 = 6;
-
-/// Whether two stores are one object: the reference compares object pointers (`UnitReaction`
-/// `0x606200`, `CanCooperate` `0x606ba6`), and an entity holds one store.
-fn same_object(a: &ObjectStore, b: &ObjectStore) -> bool {
-    std::ptr::eq(a, b)
-}
-
-/// `UnitReaction`'s rungs ahead of the faction legs, the same in both directions: one object
-/// toward itself is friendly (`0x606200`), then the duel and both-FFA rungs. Not built: the
-/// party rung between them (`0x6062b0`).
-fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
-    if same_object(target, own) {
-        return Some(Reaction::Friendly as u8);
-    }
-    if let Some(rank) = duel_reaction(&target.0, &own.0) {
-        return Some(rank);
-    }
-    ffa_reaction(&target.0, &own.0).then_some(Reaction::Hostile as u8)
-}
-
-/// The forced reaction the server set for a `Faction.dbc` id (`SMSG_SET_FORCED_REACTIONS`, a
-/// `SPELL_AURA_FORCE_REACTION` aura such as *King of the Gordok*'s); `None` when the faction is not
-/// forced. The lookup `0x4d6490` returns the stored rank verbatim (`0x4d64b3`) and answers both
-/// directions of `UnitReaction` ahead of the reputation branch and the template comparator: the
-/// player toward the unit at `0x6063e0`, returned uncapped (`0x6063e5`), and the unit toward the
-/// player at `0x6065e6`, whose caller caps it at 6 (`0x606439`).
-///
-/// Deviation: the rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the
-/// reference keeps any value; a server rank past 7 would index outside our palette.
-pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
-    reputations
-        .forced
-        .iter()
-        .find(|&&(id, _)| id == faction)
-        .map(|&(_, rank)| rank.min(7) as u8)
-}
-
-/// `UNIT_FIELD_FLAGS` bit 3, player-controlled in behaviour: players and their pets carry it, wild
-/// creatures do not. `UnitReaction` needs it on both sides before any player-vs-player rung
-/// (`0x606217`, `0x60622f`), and `CanAttack` picks its reaction arm by it (`0x606a13`).
-const UNIT_FLAG_PVP_ATTACKABLE: u32 = 1 << 3;
-
-/// The duel rung of `UnitReaction` (`0x60626b`–`0x6062ad`): hostile (1) between opposing teams,
-/// friendly (4) on one team, `None` when no duel relates the two. It needs team and arbiter both:
-/// `PLAYER_DUEL_ARBITER` is set at the challenge, `PLAYER_DUEL_TEAM` only when the countdown ends
-/// (`Player::UpdateDuelFlag`), so the arbiter alone would turn the opponent red during the count.
-fn duel_reaction(
-    target: &benilla_protocol::ObjectFields,
-    own: &benilla_protocol::ObjectFields,
-) -> Option<u8> {
-    match duel_rung(target, own) {
-        DuelRung::Engaged { rank, .. } => Some(rank),
-        _ => None,
-    }
-}
-
-/// The both-FFA rung of `UnitReaction` (`0x60632c`): two player-controlled units both flagged
-/// free-for-all (`PLAYER_FLAGS` bit 7, vmangos `Player.h:322`) are hostile whatever their factions.
-/// A plain PvP flag has no such rung: a same-faction player flagged for PvP stays friendly.
-fn ffa_reaction(
-    target: &benilla_protocol::ObjectFields,
-    own: &benilla_protocol::ObjectFields,
-) -> bool {
-    const PLAYER_FLAGS_FFA_PVP: u32 = 0x80;
-    let player_controlled =
-        |u: &benilla_protocol::ObjectFields| u.unit_flags() & UNIT_FLAG_PVP_ATTACKABLE != 0;
-    player_controlled(target)
-        && player_controlled(own)
-        && target.player_flags() & PLAYER_FLAGS_FFA_PVP != 0
-        && own.player_flags() & PLAYER_FLAGS_FFA_PVP != 0
-}
-
-/// Target `UNIT_FIELD_FLAGS` bits, any one of which makes `CanAttack` refuse
-/// (`0x6069b7`–`0x6069ff`); their vanilla names are unconfirmed, so none is used.
-const CANNOT_BE_ATTACKED: u32 = 0x2 | 0x80 | 0x1_0000 | 0x10_0000 | 0x200_0000;
-/// The cross-flag immunity bits `CanAttack` reads on both sides (`0x606a05`–`0x606a8a`), each
-/// against the other unit's bit 3.
-const IMMUNE_TO_PLAYER_CONTROLLED: u32 = 0x100;
-const IMMUNE_TO_UNCONTROLLED: u32 = 0x200;
-/// The PvP flag, which `CanAttack`'s player-vs-player arm accepts on its target (`0x606b5c`).
-const UNIT_FLAG_PVP: u32 = 0x1000;
-
-/// The local player's reaction toward a unit, `0x6061e0` with the player as `this`. This direction
-/// reaches leg 3 (`0x606372`), which answers a reputation faction by the at-war bit alone, never
-/// the standing, so a not-at-war neutral NPC is friendly here and neutral to [`ring_reaction`]: a
-/// friendly-category plate with a yellow bar. The forced-reaction table ([`forced_rank`]) answers
-/// ahead of both legs, at `0x6063e0`. Not applied, each only ever making a unit friendlier: the party rung and
-/// the charmed-player case.
-pub(crate) fn reaction_from_player(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-) -> u8 {
-    // The identity leg and the player-vs-player block (`0x606217`) run first in both directions.
-    if let (Some(target), Some(own)) = (target_store, self_store) {
-        if let Some(rank) = leading_rungs(target, own) {
-            return rank;
-        }
-    }
-    let resolved = (|| {
-        let catalog = &factions?.0;
-        let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-        // The forced-reaction table (`0x4d6490` at `0x6063e0`), ahead of every faction rule.
-        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
-            return Some(rank);
-        }
-        // Leg 3: a reputation faction answers by the at-war bit alone.
-        if let Some(at_war) = at_war_with(catalog, reputations, target_tpl.faction) {
-            return Some(if at_war {
-                Reaction::Hostile as u8
-            } else {
-                Reaction::Friendly as u8
-            });
-        }
-        // Leg 4: the template comparator, player toward unit.
-        let self_tpl = catalog.template(self_store?.0.unit_faction_template()?)?;
-        Some(self_tpl.reaction_toward(target_tpl) as u8)
-    })();
-    resolved.unwrap_or(Reaction::Neutral as u8)
-}
-
-/// Leg 3: whether we are at war with the `Faction.dbc` faction a unit's template names; `None` when
-/// it has no reputation slot. The bit is the one the reputation pane's war checkbox writes, so
-/// declaring war moves the plate, the cursor and attackability at once. `/reaction` prints it.
-pub(crate) fn at_war_with(
-    catalog: &benilla_formats::FactionCatalog,
-    reputations: &Reputations,
-    faction_id: u32,
-) -> Option<bool> {
-    let info = catalog.reputation_faction(faction_id)?;
-    Some(
-        usize::try_from(info.rep_index)
-            .ok()
-            .and_then(|i| reputations.slots.get(i))
-            .is_some_and(|&(flags, _)| flags & benilla_formats::faction_flags::AT_WAR != 0),
-    )
-}
-
-/// `CanInteract` from the local player (`0x6067f0`), the world cursor's service gate at
-/// `0x482310`: bit 25 of `UNIT_FIELD_FLAGS` clear (`0x606835`), some `UNIT_NPC_FLAGS`
-/// (`0x60683d`), and both reactions at least neutral, [`ring_reaction`] (`0x606847`) and
-/// [`reaction_from_player`] (`0x606854`). Not applied, each only ever making a unit less
-/// interactable: the `CanInteractNow 0x606880` wrapper's gates (`0x606893`, charm, alive,
-/// shapeshift `0x60e9f0`, `0x613230`, `0x60ecd0`) and the ghost leg `0x605f70`.
-pub(crate) fn can_interact_from_player(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-) -> bool {
-    let Some(target) = target_store else {
-        return false; // fields not streamed yet
-    };
-    const UNIT_FLAG_NOT_SELECTABLE: u32 = 1 << 25;
-    if target.0.unit_flags() & UNIT_FLAG_NOT_SELECTABLE != 0 || target.0.unit_npc_flags() == 0 {
-        return false;
-    }
-    both_reactions_at_least_neutral(factions, reputations, target_store, self_store)
-}
-
-/// Both `UnitReaction` directions between a unit and the local player are neutral or better: the
-/// unit's toward the player ([`ring_reaction`], `this` the unit) and the player's toward the unit
-/// ([`reaction_from_player`]), each `>= 3` on the internal scale. The test of `CanInteract`
-/// (`0x606847`, `0x606854`) and of the select greeting (`0x60c2d9`–`0x60c2f2`).
-pub(crate) fn both_reactions_at_least_neutral(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-) -> bool {
-    const NEUTRAL: u8 = Reaction::Neutral as u8;
-    ring_reaction(factions, reputations, target_store, self_store) >= NEUTRAL
-        && reaction_from_player(factions, reputations, target_store, self_store) >= NEUTRAL
-}
-
-/// Which side of `CanAttack 0x606980` (`this` the attacker, the argument the victim) the local
-/// player takes; the selector asks both ways (`0x605bb9`, `0x605bc8`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Attacker {
-    Player,
-    Unit,
-}
-
-/// `CanAttack` from the local player (`0x606980`), every leg in the reference's order; the V-plate
-/// category turns on it. Not a reaction threshold: an unflagged opposite-faction player on a PvE
-/// realm is hostile yet not attackable, a same-faction duel opponent friendly yet attackable.
-pub(crate) fn can_attack_from_player(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-    target_is_player: bool,
-) -> bool {
-    can_attack_between(
-        factions,
-        reputations,
-        target_store,
-        self_store,
-        target_is_player,
-        Attacker::Player,
-    )
-}
-
-/// `CanAttack 0x606980` between a unit and the local player, the player attacking or attacked.
-fn can_attack_between(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    unit_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-    unit_is_player: bool,
-    attacker: Attacker,
-) -> bool {
-    let (Some(unit), Some(own)) = (unit_store, self_store) else {
-        return false; // fields not streamed yet; the reference's null path refuses too
-    };
-    let player_attacks = attacker == Attacker::Player;
-    let (att, vic, victim_is_player) = if player_attacks {
-        (own, unit, unit_is_player)
-    } else {
-        (unit, own, true)
-    };
-    // `UnitReaction(this → arg)`: [`reaction_from_player`] with the player as `this`,
-    // [`ring_reaction`] with the unit.
-    let reaction = |player_is_this: bool| {
-        if player_is_this {
-            reaction_from_player(factions, reputations, unit_store, self_store)
-        } else {
-            ring_reaction(factions, reputations, unit_store, self_store)
-        }
-    };
-    let forward = || reaction(player_attacks);
-    let (vflags, aflags) = (vic.0.unit_flags(), att.0.unit_flags());
-    // (a) The ghost gate (`0x606987`): only a creature whose type flags carry `0x2` may attack a
-    // ghost player (`0x605f70`); a player has no creature record, and no NPC's flags are held.
-    const PLAYER_FLAGS_GHOST: u32 = 0x10;
-    if victim_is_player && vic.0.player_flags() & PLAYER_FLAGS_GHOST != 0 {
-        return false;
-    }
-    // (b) Five victim-flag disqualifiers.
-    if vflags & CANNOT_BE_ATTACKED != 0 {
-        return false;
-    }
-    // (c) The four cross-flag immunity legs.
-    let (v_controlled, a_controlled) = (
-        vflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
-        aflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
-    );
-    if a_controlled && vflags & IMMUNE_TO_PLAYER_CONTROLLED != 0
-        || !a_controlled && vflags & IMMUNE_TO_UNCONTROLLED != 0
-        || aflags & IMMUNE_TO_PLAYER_CONTROLLED != 0 && v_controlled
-        || aflags & IMMUNE_TO_UNCONTROLLED != 0 && !v_controlled
-    {
-        return false;
-    }
-    // (d) The three terminal arms, selected by the two bit-3 flags.
-    match (a_controlled, v_controlled) {
-        // Neither player-controlled: hostile in either direction suffices.
-        (false, false) => {
-            forward() <= Reaction::Hostile as u8
-                || reaction(!player_attacks) <= Reaction::Hostile as u8
-        }
-        // Both: a friendly reaction refuses; else a live duel, the victim's PvP flag or mutual
-        // FFA. The reference's charm-owner resolve (`0x606170`) is not applied.
-        (true, true) => {
-            if forward() >= Reaction::Friendly as u8 {
-                return false;
-            }
-            matches!(duel_rung(&vic.0, &att.0), DuelRung::Engaged { .. })
-                || vflags & UNIT_FLAG_PVP != 0
-                || ffa_reaction(&vic.0, &att.0)
-        }
-        // Mixed, a player-controlled unit against an ordinary one: worse than friendly.
-        _ => forward() < Reaction::Friendly as u8,
-    }
-}
-
-/// A unit's `FactionTemplate` faction-group mask (`row + 0xc`), the one number `CanCooperate`
-/// compares: 3 on every Alliance race row, 5 on every Horde one. `/reaction` prints it.
-pub(crate) fn faction_group_mask(
-    factions: Option<&Factions>,
-    store: Option<&ObjectStore>,
-) -> Option<u32> {
-    let catalog = &factions?.0;
-    Some(
-        catalog
-            .template(store?.0.unit_faction_template()?)?
-            .group_mask,
-    )
-}
-
-/// `CanCooperate` from the local player (`0x606ba0`): equal faction-group masks, neither side
-/// charmed, and not the same unit; it reads no party or raid state.
-pub(crate) fn can_cooperate_with_player(
-    factions: Option<&Factions>,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-) -> bool {
-    let (Some(target), Some(own)) = (target_store, self_store) else {
-        return false;
-    };
-    // The first leg: a unit never cooperates with itself (`0x606ba6`).
-    if same_object(target, own) {
-        return false;
-    }
-    if target.0.unit_charmed_by().is_some_and(|g| g != 0)
-        || own.0.unit_charmed_by().is_some_and(|g| g != 0)
-    {
-        return false;
-    }
-    let resolved = (|| {
-        let catalog = &factions?.0;
-        let target_tpl = catalog.template(target.0.unit_faction_template()?)?;
-        let self_tpl = catalog.template(own.0.unit_faction_template()?)?;
-        Some(target_tpl.group_mask == self_tpl.group_mask)
-    })();
-    resolved.unwrap_or(false)
-}
-
 /// The V-plate category (`0x60f6b7`–`0x60f6f1`): `true` is the friendly bucket (Shift-V, bit
-/// `0x8`), `false` the enemy one (V, bit `0x1`). A unit is friendly when `CanAttack` refuses it,
-/// and a player only when `CanCooperate` also passes; no reaction rank takes part.
+/// `0x8`), `false` the enemy one (V, bit `0x1`). A unit is friendly when `CanAttack` from the
+/// active player refuses it, and a player only when `CanCooperate` also passes; no reaction rank
+/// takes part.
 pub(crate) fn plate_is_friendly(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    target_store: Option<&ObjectStore>,
-    self_store: Option<&ObjectStore>,
-    target_is_player: bool,
+    rel: &Relations,
+    unit: &RelUnit,
+    me: &RelUnit,
+    is_player: bool,
 ) -> bool {
-    let attackable = can_attack_from_player(
-        factions,
-        reputations,
-        target_store,
-        self_store,
-        target_is_player,
-    );
-    if target_is_player {
-        can_cooperate_with_player(factions, target_store, self_store) && !attackable
+    let attackable = rel.can_attack(me, unit);
+    if is_player {
+        rel.can_cooperate(me, unit) && !attackable
     } else {
         !attackable
     }
 }
 
-/// Why [`duel_reaction`]'s rung did or did not fire, with the values it judged; `/reaction` prints
-/// it from this same walk.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DuelRung {
-    /// A side lacks `UNIT_FIELD_FLAGS` bit 3, so no player-vs-player rung runs.
-    NotPlayerControlled { own: bool, target: bool },
-    /// `PLAYER_DUEL_TEAM` is 0 on a side: no duel, or its countdown has not ended.
-    NoTeam { own: u32, target: u32 },
-    /// Both have a team but are not duelling each other, or the arbiter has not streamed.
-    ArbiterMismatch { own: u64, target: u64 },
-    /// The rung fires: 1 (hostile) on opposing teams, 4 (friendly) on one team.
-    Engaged {
-        rank: u8,
-        own_team: u32,
-        target_team: u32,
-    },
-}
-
-/// The duel rung's walk, reporting the gate that decided.
-pub(crate) fn duel_rung(
-    target: &benilla_protocol::ObjectFields,
-    own: &benilla_protocol::ObjectFields,
-) -> DuelRung {
-    let own_pc = own.unit_flags() & UNIT_FLAG_PVP_ATTACKABLE != 0;
-    let target_pc = target.unit_flags() & UNIT_FLAG_PVP_ATTACKABLE != 0;
-    if !own_pc || !target_pc {
-        return DuelRung::NotPlayerControlled {
-            own: own_pc,
-            target: target_pc,
-        };
-    }
-    let own_team = own.player_duel_team();
-    let target_team = target.player_duel_team();
-    if own_team == 0 || target_team == 0 {
-        return DuelRung::NoTeam {
-            own: own_team,
-            target: target_team,
-        };
-    }
-    let arbiter = own.player_duel_arbiter();
-    let target_arbiter = target.player_duel_arbiter();
-    if arbiter == 0 || arbiter != target_arbiter {
-        return DuelRung::ArbiterMismatch {
-            own: arbiter,
-            target: target_arbiter,
-        };
-    }
-    DuelRung::Engaged {
-        rank: if own_team == target_team {
-            Reaction::Friendly as u8
-        } else {
-            Reaction::Hostile as u8
-        },
-        own_team,
-        target_team,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        can_attack_from_player, can_cooperate_with_player, plate_is_friendly, reaction_from_player,
-        ring_reaction, ring_variant, selection_variant, Factions, PlayerPath, RingVariant,
-        SelectorInput, UNIT_FLAG_PVP_ATTACKABLE,
-    };
-    use crate::net::{ObjectStore, Reputations};
-    use benilla_protocol::field::{
-        FIELD_PLAYER_FLAGS, FIELD_UNIT_FACTIONTEMPLATE, FIELD_UNIT_FLAGS,
-    };
-    use benilla_protocol::ObjectFields;
+    use super::{plate_is_friendly, ring_variant, selection_variant, PlayerPath, RingVariant};
+    use super::{Factions, SelectorInput};
+    use crate::net::Reputations;
+    use crate::target::relations::fixture::*;
+    use crate::target::relations::RelUnit;
 
-    /// A store carrying only the forced-reaction `table`, as the server's packet leaves it.
-    fn forced_table(table: Vec<(u32, u32)>) -> Reputations {
-        let mut reps = Reputations::default();
-        reps.set_forced(table);
-        reps
+    const ME: u64 = 0x10;
+    const OTHER: u64 = 0x11;
+    const NPC: u64 = 0x20;
+
+    fn shipped_factions() -> Option<Factions> {
+        let data = benilla_formats::wow_data_or_skip!(None);
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        Some(Factions::from_catalog(
+            benilla_formats::load_faction_catalog(&mut chain).expect("faction tables"),
+        ))
     }
 
-    /// `PLAYER_FLAGS_FFA_PVP` and `UNIT_FLAG_PVP`.
-    const FFA: u32 = 0x80;
-    const PVP: u32 = 0x1000;
-
-    /// A player-controlled player: faction template, `UNIT_FIELD_FLAGS` beside bit 3, `PLAYER_FLAGS`.
-    fn player(template: u32, unit_flags: u32, player_flags: u32) -> ObjectStore {
-        ObjectStore(ObjectFields::from_pairs(&[
-            (FIELD_UNIT_FACTIONTEMPLATE, template),
-            (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP_ATTACKABLE | unit_flags),
-            (FIELD_PLAYER_FLAGS, player_flags),
-        ]))
-    }
-
-    /// One object toward itself: `UnitReaction` answers 4 before any rung (`0x606200`), so the
-    /// both-FFA rung never makes you hostile to yourself and `CanAttack` refuses (`0x606b03`).
-    #[test]
-    fn you_are_friendly_to_yourself_in_a_free_for_all_area() {
-        let reps = Reputations::default();
-        for unit_flags in [0, PVP] {
-            let me = player(1, unit_flags, FFA);
-            assert_eq!(ring_reaction(None, &reps, Some(&me), Some(&me)), 4);
-            assert!(!can_attack_from_player(
-                None,
-                &reps,
-                Some(&me),
-                Some(&me),
-                true
-            ));
-        }
-        // Another FFA player is still hostile and attackable.
-        let (me, them) = (player(1, 0, FFA), player(1, 0, FFA));
-        assert_eq!(ring_reaction(None, &reps, Some(&them), Some(&me)), 1);
-        assert!(can_attack_from_player(
-            None,
-            &reps,
-            Some(&them),
-            Some(&me),
-            true
-        ));
-    }
-
-    /// The selector's player path (`0x605bb6`–`0x605cf6`): `CanAttack` both ways, X the unit
+    /// The selector's player path (`0x605bb6`-`0x605cf6`): `CanAttack` both ways, X the unit
     /// attacking us and Y us attacking it. X∧Y red, X∧¬Y blue, ¬X∧Y yellow, else the PvP split.
-    /// No catalog here, so every faction leg reads neutral (3) and only the flags decide.
+    /// No catalog here, so every faction leg reads neutral and only the flags decide.
     #[test]
     fn the_player_path_is_the_mutual_attackability_matrix() {
-        let reps = Reputations::default();
-        let variant = |unit: &ObjectStore, me: &ObjectStore| {
-            selection_variant(None, &reps, Some(unit), Some(me), true, false)
+        let variant = |unit: RelUnit, me: RelUnit, in_party| {
+            let mut scene = Scene::new(me, None);
+            let unit = scene.hold(unit);
+            selection_variant(&scene.rel(), Some(&unit), Some(&me), true, false, in_party)
         };
-        // Yourself in the FFA ring keeps your PvP colour: neither direction attacks.
-        let me = player(1, 0, FFA);
-        assert_eq!(variant(&me, &me), RingVariant::Player, "unflagged self");
-        let me = player(1, PVP, FFA);
-        assert_eq!(variant(&me, &me), RingVariant::Friendly, "flagged self");
-        // Another player in the ring: both FFA, both attack.
-        let ffa = |flags| player(1, flags, FFA);
-        assert_eq!(variant(&ffa(0), &ffa(0)), RingVariant::Hostile);
+        // Yourself in the free-for-all ring keeps your PvP colour: neither direction attacks.
+        let me = flagged(player(ME, HUMAN), FFA);
+        assert_eq!(
+            variant(me, me, false),
+            RingVariant::Player,
+            "unflagged self"
+        );
+        let me = with_flags(me, PVP);
+        assert_eq!(
+            variant(me, me, false),
+            RingVariant::Friendly,
+            "flagged self"
+        );
+        // Another player in the ring: both free-for-all, both attack.
+        let ffa = |guid| flagged(player(guid, HUMAN), FFA);
+        assert_eq!(variant(ffa(OTHER), ffa(ME), false), RingVariant::Hostile);
         // Outside it, each side attacks the other only when that other is flagged.
-        let open = |flags| player(1, flags, 0);
-        assert_eq!(variant(&open(PVP), &open(PVP)), RingVariant::Hostile, "X∧Y");
-        assert_eq!(variant(&open(0), &open(PVP)), RingVariant::Player, "X∧¬Y");
-        assert_eq!(variant(&open(PVP), &open(0)), RingVariant::Neutral, "¬X∧Y");
-        assert_eq!(variant(&open(0), &open(0)), RingVariant::Player, "¬X∧¬Y");
+        let open = |guid, flags| with_flags(player(guid, HUMAN), flags);
+        let (them, us) = (|f| open(OTHER, f), |f| open(ME, f));
+        assert_eq!(
+            variant(them(PVP), us(PVP), false),
+            RingVariant::Hostile,
+            "X∧Y"
+        );
+        assert_eq!(
+            variant(them(0), us(PVP), false),
+            RingVariant::Player,
+            "X∧¬Y"
+        );
+        assert_eq!(
+            variant(them(PVP), us(0), false),
+            RingVariant::Neutral,
+            "¬X∧Y"
+        );
+        assert_eq!(variant(them(0), us(0), false), RingVariant::Player, "¬X∧¬Y");
         // The party split rides the last arm only.
-        assert_eq!(
-            selection_variant(None, &reps, Some(&open(0)), Some(&open(0)), true, true),
-            RingVariant::Party
-        );
-        assert_eq!(
-            selection_variant(None, &reps, Some(&open(PVP)), Some(&open(PVP)), true, true),
-            RingVariant::Hostile
-        );
+        assert_eq!(variant(them(0), us(0), true), RingVariant::Party);
+        assert_eq!(variant(them(PVP), us(PVP), true), RingVariant::Hostile);
     }
 
-    /// On the real templates, a Human toward an Orc (2) and a Gnome (115).
+    /// The PvP split asks `IsPvP` of the unit (`0x605c32`), which answers with a charmer's flag:
+    /// a flagged player we mind-control reads as our unflagged self, blue, not green, and green
+    /// once we are flagged. Neither side attacks the other: our controller is his.
     #[test]
-    fn enemy_and_ally_players_read_by_attackability_on_the_real_dbc() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        let reps = Reputations::default();
-        let variant = |unit: &ObjectStore, me: &ObjectStore| {
-            selection_variant(Some(&factions), &reps, Some(unit), Some(me), true, false)
+    fn a_mind_controlled_player_takes_the_pvp_split_off_his_charmer() {
+        let variant = |me: RelUnit| {
+            let mut scene = Scene::new(me, None);
+            let thrall = scene.hold(RelUnit {
+                charmed_by: ME,
+                ..with_flags(player(OTHER, HUMAN), PVP)
+            });
+            selection_variant(&scene.rel(), Some(&thrall), Some(&me), true, false, false)
         };
-        let (me, me_flagged) = (player(1, 0, 0), player(1, PVP, 0));
-        let (orc, orc_flagged) = (player(2, 0, 0), player(2, PVP, 0));
-        assert_eq!(variant(&orc_flagged, &me_flagged), RingVariant::Hostile);
-        assert_eq!(variant(&orc, &me_flagged), RingVariant::Player);
-        assert_eq!(variant(&orc_flagged, &me), RingVariant::Neutral);
-        assert_eq!(variant(&orc, &me), RingVariant::Player);
-        // An ally never attacks or is attacked, flagged or not: the PvP split.
+        assert_eq!(variant(player(ME, HUMAN)), RingVariant::Player);
         assert_eq!(
-            variant(&player(115, PVP, 0), &me_flagged),
+            variant(with_flags(player(ME, HUMAN), PVP)),
             RingVariant::Friendly
         );
-        assert_eq!(variant(&player(115, 0, 0), &me), RingVariant::Player);
-        // Yourself in the ring, on the real templates too.
-        let me = player(1, PVP, FFA);
-        assert_eq!(variant(&me, &me), RingVariant::Friendly);
     }
 
-    /// The four player-path arms (`0x605bb6`–`0x605cf6`), and the party split on the last.
+    /// On the shipped templates, a new human toward an Orc (2) and a Gnome (115): the Horde
+    /// factions are at war from the first reputation list, so a flagged Orc attacks and is
+    /// attacked, and an ally never is, flagged or not.
+    #[test]
+    fn enemy_and_ally_players_read_by_attackability_on_the_real_dbc() {
+        let Some(factions) = shipped_factions() else {
+            return;
+        };
+        let reputations = new_human_reputations(factions.catalog());
+        let mut scene = Scene::new(human_warrior(ME), Some(factions));
+        scene.reputations = reputations;
+        let mut variant = |unit: RelUnit, me: RelUnit| {
+            scene.hold(me);
+            let unit = scene.hold(unit);
+            selection_variant(&scene.rel(), Some(&unit), Some(&me), true, false, false)
+        };
+        let (me, me_flagged) = (human_warrior(ME), with_flags(human_warrior(ME), PVP));
+        let orc = |flags| with_flags(player(OTHER, ORC), flags);
+        assert_eq!(variant(orc(PVP), me_flagged), RingVariant::Hostile);
+        assert_eq!(variant(orc(0), me_flagged), RingVariant::Player);
+        assert_eq!(variant(orc(PVP), me), RingVariant::Neutral);
+        assert_eq!(variant(orc(0), me), RingVariant::Player);
+        let gnome = |flags| with_flags(player(OTHER, 115), flags);
+        assert_eq!(variant(gnome(PVP), me_flagged), RingVariant::Friendly);
+        assert_eq!(variant(gnome(0), me), RingVariant::Player);
+        // Yourself in the ring, on the shipped templates too.
+        let me = flagged(me_flagged, FFA);
+        assert_eq!(variant(me, me), RingVariant::Friendly);
+    }
+
+    /// The four player-path arms (`0x605bb6`-`0x605cf6`), and the party split on the last.
     #[test]
     fn player_ring_matrix_party_and_pvp_split() {
         let v = |attacks_us, attackable, pvp, in_party| {
@@ -1073,260 +646,56 @@ mod tests {
     /// friendly: the two run the reaction in opposite directions.
     #[test]
     fn the_plate_category_reproduces_the_reference_on_the_real_dbc() {
-        use crate::net::{ObjectStore, Reputations};
-        use benilla_protocol::ObjectFields;
-
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        // Field indices: 35 = UNIT_FIELD_FACTIONTEMPLATE, 46 = UNIT_FIELD_FLAGS.
-        let unit = |tpl: u32| ObjectStore(ObjectFields::from_pairs(&[(35, tpl)]));
-        // Us: a player-controlled Human, faction template 1.
-        let me = ObjectStore(ObjectFields::from_pairs(&[
-            (35, 1),
-            (46, UNIT_FLAG_PVP_ATTACKABLE),
-        ]));
-        let quiet = Reputations::default(); // nothing at war
-        let category = |unit: &ObjectStore, reps: &Reputations| {
-            plate_is_friendly(Some(&factions), reps, Some(unit), Some(&me), false)
+        let Some(factions) = shipped_factions() else {
+            return;
         };
-        let rank = |unit: &ObjectStore, reps: &Reputations| {
-            ring_reaction(Some(&factions), reps, Some(unit), Some(&me))
+        let me = player(ME, HUMAN);
+        let mut scene = Scene::new(me, Some(factions));
+        // (category, the unit's rank toward us) under a reputation list.
+        let mut judge = |unit: RelUnit, reps: Reputations| {
+            scene.reputations = reps;
+            let rel = scene.rel();
+            (
+                plate_is_friendly(&rel, &unit, &me, false),
+                rel.reaction(&unit, &me),
+            )
+        };
+        let quiet = Reputations::default;
+        let forced = |table| {
+            let mut reps = Reputations::default();
+            reps.set_forced(table);
+            reps
+        };
+        let at_war = || {
+            let mut slots = vec![(0u8, 0i32); 64];
+            slots[1] = (benilla_formats::faction_flags::AT_WAR, 0); // Booty Bay = slot 1
+            Reputations::from_slots(slots)
         };
 
         // A Chicken, template 31 with no reputation slot: neutral, attackable, the enemy bucket.
-        let chicken = unit(31);
-        assert!(!category(&chicken, &quiet), "a critter is enemy-category");
-        assert_eq!(rank(&chicken, &quiet), 3, "and its bar is neutral yellow");
+        let chicken = creature(NPC, 31);
+        assert_eq!(judge(chicken, quiet()), (false, 3));
         // `SMSG_SET_FORCED_REACTIONS` naming the chicken's faction (28) makes it friendly, ahead
-        // of the templates — the King of the Gordok's ogres; a table naming another faction does not.
-        let forced = forced_table(vec![(28, 4)]);
-        assert_eq!(
-            rank(&chicken, &forced),
-            4,
-            "a forced faction answers its forced rank"
-        );
-        assert!(category(&chicken, &forced), "…and is friendly-category");
-        let elsewhere = forced_table(vec![(29, 4)]);
-        assert_eq!(
-            rank(&chicken, &elsewhere),
-            3,
-            "another faction's entry changes nothing"
-        );
+        // of the templates; a table naming another faction does not.
+        assert_eq!(judge(chicken, forced(vec![(28, 4)])), (true, 4));
+        assert_eq!(judge(chicken, forced(vec![(29, 4)])), (false, 3));
 
-        // A League of Arathor Emissary, template 1577, reputation slot 53, not at war.
-        let emissary = unit(1577);
-        assert!(category(&emissary, &quiet), "friendly-category at neutral");
-        assert_eq!(
-            rank(&emissary, &quiet),
-            3,
-            "…while the BAR stays yellow: the two halves run the reaction in opposite \
-             directions, and this disagreement is the reference's own"
-        );
+        // A League of Arathor Emissary, template 1577, reputation slot 53, not at war: friendly
+        // category while the bar stays yellow.
+        let emissary = creature(NPC + 1, 1577);
+        assert_eq!(judge(emissary, quiet()), (true, 3));
 
         // Booty Bay, template 120: the comparator says 3, so only the at-war leg makes it friendly.
-        let goblin = unit(120);
-        assert!(category(&goblin, &quiet), "Booty Bay: friendly, not at war");
-        let mut slots = vec![(0u8, 0i32); 64];
-        slots[1] = (benilla_formats::faction_flags::AT_WAR, 0); // Booty Bay = slot 1
-        let at_war = Reputations::from_slots(slots);
-        assert!(!category(&goblin, &at_war), "at war → enemy category");
+        let goblin = creature(NPC + 2, 120);
+        assert!(judge(goblin, quiet()).0, "Booty Bay: friendly, not at war");
+        assert!(!judge(goblin, at_war()).0, "at war: the enemy category");
         assert!(
-            category(&emissary, &at_war),
-            "…and only that faction's own bit moves"
+            judge(emissary, at_war()).0,
+            "only that faction's own bit moves"
         );
 
         // A Stormwind guard, template 12, faction 72, slot 19: friendly by both routes.
-        assert!(category(&unit(12), &quiet));
-        assert_eq!(rank(&unit(12), &quiet), 4);
-    }
-
-    /// The forced table answers ahead of the reputation faction rules in both directions
-    /// (`0x6065e6`, `0x6063e0`): Booty Bay's goblin, whose at-war slot makes the player's reaction
-    /// hostile (leg 3) and leaves the unit's toward the player at our standing, reads 4 both ways
-    /// once the server forces its faction to 4.
-    #[test]
-    fn a_forced_rank_beats_an_at_war_reputation_faction_in_both_directions() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        let me = ObjectStore(ObjectFields::from_pairs(&[
-            (FIELD_UNIT_FACTIONTEMPLATE, 1),
-            (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP_ATTACKABLE),
-        ]));
-        // Booty Bay, template 120, reputation slot 1.
-        let goblin = ObjectStore(ObjectFields::from_pairs(&[(
-            FIELD_UNIT_FACTIONTEMPLATE,
-            120,
-        )]));
-        let faction = factions.0.template(120).expect("template 120").faction;
-        let mut slots = vec![(0u8, 0i32); 64];
-        slots[1] = (benilla_formats::faction_flags::AT_WAR, 0);
-        let at_war = Reputations::from_slots(slots.clone());
-        let toward =
-            |reps: &Reputations| ring_reaction(Some(&factions), reps, Some(&goblin), Some(&me));
-        let from = |reps: &Reputations| {
-            reaction_from_player(Some(&factions), reps, Some(&goblin), Some(&me))
-        };
-        assert_eq!(from(&at_war), 1, "at war, the player's leg 3 is hostile");
-        assert_ne!(toward(&at_war), 4, "and its own leg is our standing's");
-
-        let mut forced = Reputations::from_slots(slots);
-        forced.set_forced(vec![(faction, 4)]);
-        assert_eq!(toward(&forced), 4, "unit toward player");
-        assert_eq!(from(&forced), 4, "player toward unit");
-    }
-
-    /// The lookup returns the stored rank verbatim (`0x4d64b3`): the player's own direction
-    /// returns it uncapped (`0x6063e5`) while the unit's is capped at 6 by its caller (`0x606439`),
-    /// so a forced 7 reads 6 from [`ring_reaction`] and 7 from [`reaction_from_player`]. A rank
-    /// past 7 is held to 7, our deviation from the reference's any value.
-    #[test]
-    fn a_forced_seven_reads_six_toward_the_player_and_seven_from_the_player() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        let me = ObjectStore(ObjectFields::from_pairs(&[
-            (FIELD_UNIT_FACTIONTEMPLATE, 1),
-            (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP_ATTACKABLE),
-        ]));
-        // A Chicken, template 31, faction 28, no reputation slot.
-        let chicken = ObjectStore(ObjectFields::from_pairs(&[(
-            FIELD_UNIT_FACTIONTEMPLATE,
-            31,
-        )]));
-        for (stored, from_player) in [(6, 6), (7, 7), (200, 7)] {
-            let reps = forced_table(vec![(28, stored)]);
-            assert_eq!(
-                ring_reaction(Some(&factions), &reps, Some(&chicken), Some(&me)),
-                stored.min(6) as u8,
-                "forced {stored}, unit toward player"
-            );
-            assert_eq!(
-                reaction_from_player(Some(&factions), &reps, Some(&chicken), Some(&me)),
-                from_player,
-                "forced {stored}, player toward unit"
-            );
-        }
-    }
-
-    /// The reputation leg walks the ladder up to Revered and stops: `0x606439` caps the rank at 6,
-    /// so a Stormwind unit reads the same to a Revered and an Exalted human, while the ladder
-    /// itself, which the reputation pane reads, still reaches 7.
-    #[test]
-    fn the_reputation_rank_is_capped_at_revered() {
-        use crate::net::ObjectStore;
-        use crate::target::{stormwind_fixture, HUMAN_WARRIOR};
-        use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
-        use benilla_protocol::ObjectFields;
-
-        /// `UNIT_FIELD_BYTES_0`, absolute descriptor index.
-        const BYTES_0: u16 = 36;
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let me = ObjectStore(ObjectFields::from_pairs(&[(BYTES_0, HUMAN_WARRIOR)]));
-        // Both sides of the Honored, Revered and Exalted thresholds, and the wire's own ceiling.
-        for (total, want) in [
-            (8_999, 4),
-            (9_000, 5),
-            (20_999, 5),
-            (21_000, 6),
-            (41_999, 6),
-            (42_000, 6),
-            (42_999, 6),
-        ] {
-            let (factions, template, reps) = stormwind_fixture(&mut chain, total);
-            let unit = ObjectStore(ObjectFields::from_pairs(&[(
-                FIELD_UNIT_FACTIONTEMPLATE,
-                template,
-            )]));
-            assert_eq!(
-                ring_reaction(Some(&factions), &reps, Some(&unit), Some(&me)),
-                want,
-                "standing {total}"
-            );
-        }
-        assert_eq!(
-            benilla_formats::reputation_rank(42_000),
-            7,
-            "the ladder is not capped"
-        );
-    }
-
-    /// Cenarion Circle, faction 609 with reputation slot 36: not at war, its NPCs are neither
-    /// attackable nor, without a service bit, interactable, while the rank stays neutral.
-    #[test]
-    fn a_not_at_war_cenarion_circle_npc_takes_no_cursor_at_neutral() {
-        use crate::net::{ObjectStore, Reputations};
-        use benilla_protocol::ObjectFields;
-
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        // 35 = UNIT_FIELD_FACTIONTEMPLATE, 46 = UNIT_FIELD_FLAGS, 147 = UNIT_NPC_FLAGS.
-        let npc = |tpl: u32, npc_flags: u32| {
-            ObjectStore(ObjectFields::from_pairs(&[(35, tpl), (147, npc_flags)]))
-        };
-        let me = ObjectStore(ObjectFields::from_pairs(&[
-            (35, 1), // Human
-            (46, UNIT_FLAG_PVP_ATTACKABLE),
-        ]));
-        let quiet = Reputations::default(); // nothing at war
-        let mut slots = vec![(0u8, 0i32); 64];
-        slots[36] = (benilla_formats::faction_flags::AT_WAR, 0); // Cenarion Circle = slot 36
-        let at_war = Reputations::from_slots(slots);
-
-        let attackable = |u: &ObjectStore, r: &Reputations| {
-            can_attack_from_player(Some(&factions), r, Some(u), Some(&me), false)
-        };
-        let interactable = |u: &ObjectStore, r: &Reputations| {
-            crate::target::ring::can_interact_from_player(Some(&factions), r, Some(u), Some(&me))
-        };
-
-        // Template 996, faction 609, with no service bit.
-        let silent = npc(996, 0);
-        assert_eq!(
-            ring_reaction(Some(&factions), &quiet, Some(&silent), Some(&me)),
-            3,
-            "neutral standing — the ring and the bar are RIGHT and must not move"
-        );
-        assert!(
-            !attackable(&silent, &quiet),
-            "not at war → CanAttack says no: the sword was the bug"
-        );
-        assert!(
-            !interactable(&silent, &quiet),
-            "and with no service bit it is not interactable either → the cursor CLEARS to Point"
-        );
-
-        // One that gossips keeps its speech bubble.
-        let gossip = npc(996, crate::target::cursor_mode::npc_flags::GOSSIP);
-        assert!(interactable(&gossip, &quiet), "gossip NPC still talks");
-        assert!(!attackable(&gossip, &quiet));
-
-        // At war: the gossiper leaves the ladder, the silent one takes the sword.
-        assert!(
-            attackable(&silent, &at_war),
-            "at war → the sword is correct"
-        );
-        assert!(attackable(&gossip, &at_war));
-        assert!(
-            !interactable(&gossip, &at_war),
-            "at war → no more gossip cursor; the reference leaves the ladder entirely"
-        );
-        assert_eq!(
-            ring_reaction(Some(&factions), &at_war, Some(&silent), Some(&me)),
-            3,
-            "the STANDING is still neutral — at-war does not touch the bar"
-        );
-
-        // A Chicken, template 31 with no reputation slot, still takes the sword.
-        let chicken = npc(31, 0);
-        assert!(
-            attackable(&chicken, &quiet),
-            "a neutral critter still takes the sword — the comparator, not at-war"
-        );
-        assert!(!interactable(&chicken, &quiet));
+        assert_eq!(judge(creature(NPC + 3, 12), quiet()), (true, 4));
     }
 
     /// A player is friendly only if `CanCooperate`, faction-group-mask equality (`0x606ba0`), also
@@ -1334,104 +703,50 @@ mod tests {
     /// mask 0, so a GM-mode character leaves every player's friendly bucket while NPCs keep theirs.
     #[test]
     fn the_player_subject_category_on_the_real_dbc() {
-        use crate::net::{ObjectStore, Reputations};
-        use benilla_protocol::ObjectFields;
-
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        let reps = Reputations::default();
-        let player = |tpl: u32| {
-            ObjectStore(ObjectFields::from_pairs(&[
-                (35, tpl),
-                (46, UNIT_FLAG_PVP_ATTACKABLE),
-            ]))
+        let Some(factions) = shipped_factions() else {
+            return;
         };
-        let category = |subject: &ObjectStore, me: &ObjectStore| {
-            plate_is_friendly(Some(&factions), &reps, Some(subject), Some(me), true)
-        };
-
         // Us: a Human, template 1, mask 3.
-        let me = player(1);
-        // A Gnome, template 115: another row with the same mask.
+        let me = player(ME, HUMAN);
+        let mut scene = Scene::new(me, Some(factions));
+        let mut category = |subject: RelUnit, me: RelUnit, is_player| {
+            scene.hold(me);
+            let subject = scene.hold(subject);
+            let rel = scene.rel();
+            let friendly = plate_is_friendly(&rel, &subject, &me, is_player);
+            (
+                friendly,
+                rel.can_attack(&me, &subject),
+                rel.can_cooperate(&me, &me),
+            )
+        };
+        let them = |template| player(OTHER, template);
         assert!(
-            category(&player(115), &me),
+            category(them(115), me, true).0,
             "an Alliance player is friendly"
         );
-        assert!(category(&player(1), &me), "…same race, same answer");
-        // An Orc, template 2, mask 5: the enemy bucket, flagged or not.
-        assert!(!category(&player(2), &me), "a Horde player is enemy");
+        assert!(category(them(HUMAN), me, true).0, "same race, same answer");
+        assert!(!category(them(ORC), me, true).0, "a Horde player is enemy");
         // A GM-mode player, template 35, mask 0, matches no one: enemy, though not attackable.
-        assert!(!category(&player(35), &me), "a GM-mode player is enemy");
-        assert!(
-            !can_attack_from_player(Some(&factions), &reps, Some(&player(35)), Some(&me), true),
-            "…and not because we can attack them",
-        );
+        let (friendly, attackable, self_cooperates) = category(them(35), me, true);
+        assert!(!friendly, "a GM-mode player is enemy");
+        assert!(!attackable, "and not because we can attack them");
+        assert!(!self_cooperates, "nobody cooperates with himself");
 
-        // A GM-mode observer loses the friendly bucket for every player…
-        let gm = player(35);
-        for tpl in [1u32, 3, 4, 115, 2, 5, 6, 116] {
+        // A GM-mode observer loses the friendly bucket for every player, while NPCs keep theirs:
+        // `CanCooperate` is never asked for an NPC.
+        let gm = player(ME, 35);
+        for template in [1u32, 3, 4, 115, 2, 5, 6, 116] {
             assert!(
-                !category(&player(tpl), &gm),
-                "FT {tpl} is enemy-category to a GM-mode observer",
+                !category(them(template), gm, true).0,
+                "template {template} is enemy-category to a GM-mode observer",
             );
         }
-        // …while NPCs keep theirs: `CanCooperate` is never asked for an NPC.
-        let npc = |tpl: u32| ObjectStore(ObjectFields::from_pairs(&[(35, tpl)]));
-        let npc_category = |subject: &ObjectStore, me: &ObjectStore| {
-            plate_is_friendly(Some(&factions), &reps, Some(subject), Some(me), false)
-        };
-        assert!(npc_category(&npc(12), &gm), "the guard keeps his bucket");
-        assert!(!npc_category(&npc(14), &gm), "and the mob keeps his");
-
-        // Nobody cooperates with themselves (`0x606ba6`).
-        assert!(!can_cooperate_with_player(
-            Some(&factions),
-            Some(&me),
-            Some(&me)
-        ));
-    }
-
-    /// `CanAttack`'s flag refusals (`0x6069b7`–`0x6069ff`) beat a hostile reaction.
-    #[test]
-    fn an_unattackable_flag_beats_a_hostile_reaction() {
-        use crate::net::{ObjectStore, Reputations};
-        use benilla_protocol::ObjectFields;
-
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
-        let me = ObjectStore(ObjectFields::from_pairs(&[
-            (35, 1),
-            (46, UNIT_FLAG_PVP_ATTACKABLE),
-        ]));
-        let reps = Reputations::default();
-        let mob = |flags: u32| ObjectStore(ObjectFields::from_pairs(&[(35, 14), (46, flags)]));
-
-        // Template 14, Monster: hostile by the comparator.
-        assert_eq!(
-            ring_reaction(Some(&factions), &reps, Some(&mob(0)), Some(&me)),
-            1
-        );
         assert!(
-            !plate_is_friendly(Some(&factions), &reps, Some(&mob(0)), Some(&me), false),
-            "a plain hostile mob is enemy-category"
+            category(creature(NPC, 12), gm, false).0,
+            "the guard keeps his bucket"
         );
-        // Each of these refusal bits alone flips the category.
-        for bit in [0x2u32, 0x80, 0x1_0000, 0x10_0000] {
-            assert!(
-                plate_is_friendly(Some(&factions), &reps, Some(&mob(bit)), Some(&me), false),
-                "flag {bit:#x} refuses the attack → friendly category"
-            );
-        }
-        // Bit 8 (`0x100`) refuses because we are player-controlled: the cross-flag leg.
-        assert!(plate_is_friendly(
-            Some(&factions),
-            &reps,
-            Some(&mob(0x100)),
-            Some(&me),
-            false
-        ));
+        assert!(!category(creature(NPC, 14), gm, false).0, "and the mob his");
     }
 
     /// A torn-down object stops being an object at the teardown, not when its model has faded:

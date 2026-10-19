@@ -6,7 +6,7 @@
 //! press skips recently tabbed guids; a fighting-me bonus, not Classic's hard combat lock, ranks
 //! attackers first without pinning TAB to them.
 //!
-//! Kept from 1.12: the validity filters (`0x493e40`, [`can_attack`] `0x606980`, critters), the
+//! Kept from 1.12: the validity filters (`0x493e40`, `CanAttack 0x606980`, critters), the
 //! [`commit`] through `SetSelection` (`0x493540`), the attack acquire (`0x612df0` at `0x6130b5`),
 //! the ATTACKERSTATEUPDATE acquire (`0x6259c9`–`0x6259fe`) and the 41 yd range.
 
@@ -17,13 +17,12 @@ use bevy::prelude::*;
 
 use crate::creature_anim::{Engaged, SwingMessage};
 use crate::names::NameCache;
-use crate::net::{ClientCommand, Guid, GuidIndex, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{ClientCommand, Guid, GuidIndex, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use benilla_assets::{LockRecover, WorldAssets};
 
-use super::relations::{can_assist, can_attack, Assist};
-use super::ring::reaction_from_player;
-use super::{Factions, Selection};
+use super::relations::{RelUnit, RelationWorld, Relations};
+use super::Selection;
 
 // == The Classic-priority dials ==
 // Each names the Classic Era cvar it stands in for; the values are tuned.
@@ -226,8 +225,8 @@ pub(crate) struct TargetScan<'w, 's> {
         (&'static Camera, &'static Transform),
         (With<benilla_world::view::WorldCamera>, Without<SelfPlayer>),
     >,
-    factions: Option<Res<'w, Factions>>,
-    reputations: Res<'w, Reputations>,
+    /// The relation functions' inputs, `CanAttack`'s and `CanAssist`'s.
+    relations: RelationWorld<'w, 's>,
     names: Res<'w, NameCache>,
     creature_types: Option<Res<'w, CreatureTypes>>,
     /// Every store, ours included: `CanAssist`'s owner chase must reach our body.
@@ -240,36 +239,21 @@ pub(crate) struct TargetScan<'w, 's> {
 
 impl TargetScan<'_, '_> {
     /// The per-candidate filter (`0x493e40`), the one place [`ScanSide`] forks.
-    fn is_valid(
-        &self,
-        side: ScanSide,
-        guid: u64,
-        store: Option<&ObjectStore>,
-        self_store: Option<&ObjectStore>,
-    ) -> bool {
+    fn is_valid(&self, side: ScanSide, guid: u64, store: Option<&ObjectStore>) -> bool {
+        let rel = self.relations.get();
+        let pair = self.pair(guid, store);
         match side {
             // Mode 1 (`0x493e73`): the reads-dead triple `0x605f90`, then `CanAttack`.
             ScanSide::Enemy => {
                 if store.is_some_and(|s| s.0.unit_reads_dead()) {
                     return false;
                 }
-                can_attack(
-                    store,
-                    self.factions.as_deref(),
-                    &self.reputations,
-                    self_store,
-                )
+                pair.is_some_and(|(me, unit)| rel.can_attack(&me, &unit))
             }
             // Mode 2 (`0x493eca`): `CanAssist 0x6066f0`, then raw health (no reads-dead triple).
             ScanSide::Friend => {
-                can_assist(
-                    store,
-                    self.factions.as_deref(),
-                    &self.reputations,
-                    self_store,
-                    |owner| self.store_of(owner).cloned(),
-                    Assist::PlayerToUnit,
-                ) && !store.is_some_and(|s| s.0.unit_is_dead())
+                pair.is_some_and(|(me, unit)| rel.can_assist(&me, &unit))
+                    && !store.is_some_and(|s| s.0.unit_is_dead())
             }
             // Modes 3 and 4 open on `cmp esi,ecx`, the candidate is not us, which our own body's
             // absence from [`Self::units`] already gives.
@@ -284,7 +268,12 @@ impl TargetScan<'_, '_> {
         }
     }
 
-    /// A guid's descriptor, whichever entity holds it: `CanAssist`'s owner chase.
+    /// The active player and the unit `guid` names off `store`, the scan's two relation sides.
+    fn pair(&self, guid: u64, store: Option<&ObjectStore>) -> Option<(RelUnit, RelUnit)> {
+        Some((self.relations.me()?, self.relations.unit_of(guid, store?)))
+    }
+
+    /// A guid's descriptor, whichever entity holds it.
     fn store_of(&self, guid: u64) -> Option<&ObjectStore> {
         let entity = *self.index.as_ref()?.0.get(&guid)?;
         self.stores.get(entity).ok()
@@ -308,7 +297,7 @@ impl TargetScan<'_, '_> {
 
     /// Filter, project, score and sort every known unit, fresh each press.
     fn build(&self, side: ScanSide) -> Vec<Candidate> {
-        let Ok((self_tf, self_store, self_guid)) = self.self_q.single() else {
+        let Ok((self_tf, _, self_guid)) = self.self_q.single() else {
             return Vec::new();
         };
         let me = self_guid.map(|g| g.0);
@@ -347,7 +336,7 @@ impl TargetScan<'_, '_> {
             if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
                 continue;
             }
-            if !self.is_valid(side, guid_c.0, store, self_store) {
+            if !self.is_valid(side, guid_c.0, store) {
                 trace_unit(
                     guid_c.0,
                     tf,
@@ -711,12 +700,9 @@ impl AttackPick<'_, '_> {
         };
         // The final gate's target legs; its actor legs (`0x61312e`, `0x613139`) repeat phase A's
         // dead and mounted refusals, which the caller ran.
-        if !attack_target_valid(
-            Some(store),
-            self.scan.factions.as_deref(),
-            &self.scan.reputations,
-            self.scan.self_store(),
-        ) {
+        let me = self.scan.relations.me();
+        let unit = self.scan.relations.unit_of(guid, store);
+        if !attack_target_valid(&self.scan.relations.get(), me.as_ref(), &unit, store) {
             debug!("attack: {guid:#x} fails the final gate (ERR_INVALID_ATTACK_TARGET)");
             errors
                 .0
@@ -728,39 +714,36 @@ impl AttackPick<'_, '_> {
 
     /// `0x6130a3`'s keep test: the actor's reaction to the held unit alone (`0x61309b`), not the
     /// final gate's `CanAttack`, so a neutral mob is kept. A guid that does not resolve
-    /// (`0x613099`) is kept as well, for the second resolve to refuse. Actor → target is
-    /// [`reaction_from_player`] (the at-war bit), never `ring_reaction`. The reference's actor is
-    /// the caller, a pet on the pet arm (`0x4bd40d`), which vmangos gives its owner's faction
-    /// (`Pet.cpp:248`). The reaction to oneself is 4 before any faction rung (`0x606200`), so a
-    /// passed caster is never kept, FFA flag or not.
+    /// (`0x613099`) is kept as well, for the second resolve to refuse. The reaction is the
+    /// actor's toward the target, the player's here; the reference's actor is the caller, a pet
+    /// on the pet arm (`0x4bd40d`), which vmangos gives its owner's faction (`Pet.cpp:248`). The
+    /// reaction to oneself is 4 before any faction rung (`0x606200`), so a passed caster is never
+    /// kept, FFA flag or not.
     fn keeps(&self, guid: u64) -> bool {
         if self.scan.self_guid() == Some(guid) {
             return false;
         }
+        let rel = self.scan.relations.get();
         self.scan.store_of(guid).is_none_or(|store| {
-            reaction_from_player(
-                self.scan.factions.as_deref(),
-                &self.scan.reputations,
-                Some(store),
-                self.scan.self_store(),
-            ) < 4
+            self.scan
+                .pair(guid, Some(store))
+                .is_none_or(|(me, unit)| rel.reaction(&me, &unit) < 4)
         })
     }
 }
 
 /// The final gate's target legs (`0x613152`–`0x613169`): alive, where a zero-health target passes
-/// iff `UNIT_DYNAMIC_FLAGS` bit 5 is set (`0x613159`), and the full `CanAttack 0x606980`. A target
-/// with no descriptor fails [`can_attack`]; the reference always holds a live unit here.
+/// iff `UNIT_DYNAMIC_FLAGS` bit 5 is set (`0x613159`), and the full `CanAttack 0x606980` from the
+/// player. No player fails; the reference always holds one here.
 pub(super) fn attack_target_valid(
-    store: Option<&ObjectStore>,
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    self_store: Option<&ObjectStore>,
+    rel: &Relations,
+    me: Option<&RelUnit>,
+    unit: &RelUnit,
+    store: &ObjectStore,
 ) -> bool {
-    let alive = store.is_none_or(|s| {
-        s.0.unit_health().is_none_or(|h| h > 0) || s.0.unit_dynamic_flags() & (1 << 5) != 0
-    });
-    alive && can_attack(store, factions, reputations, self_store)
+    let alive =
+        store.0.unit_health().is_none_or(|h| h > 0) || store.0.unit_dynamic_flags() & (1 << 5) != 0;
+    alive && me.is_some_and(|me| rel.can_attack(me, unit))
 }
 
 /// The melee probe's press with nothing selected: the player's Attack, which acquires.
@@ -782,8 +765,7 @@ pub(super) fn remember_last_enemy(
     selection: Res<Selection>,
     stores: Query<&ObjectStore>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: RelationWorld,
     mut last: ResMut<LastEnemy>,
 ) {
     let Some((entity, guid)) = selection.target.zip(selection.guid) else {
@@ -804,7 +786,11 @@ pub(super) fn remember_last_enemy(
         return;
     }
     // Conjunct 5: `CanAttack(player, new)`.
-    if can_attack(store, factions.as_deref(), &reputations, Some(me)) {
+    let attackable = (|| {
+        let (me, unit) = (world.me()?, world.unit_of(guid, store?));
+        Some(world.get().can_attack(&me, &unit))
+    })();
+    if attackable == Some(true) {
         last.0 = Some(guid);
     }
 }
@@ -861,6 +847,7 @@ pub(super) fn auto_acquire_attacker(
 mod tests {
     use super::*;
     use crate::net::NetCommands;
+    use crate::net::Reputations;
 
     /// One `commit` through a one-shot system, returning its outcome.
     fn go(
@@ -1192,8 +1179,15 @@ mod tests {
         let unit = |pairs: &[(u16, u32)]| ObjectStore(ObjectFields::from_pairs(pairs));
         // With no catalog both reactions are neutral, which `CanAttack`'s mixed arm (< 4) admits,
         // so the legs below decide.
-        let me = unit(&[(TPL, 1), (FLAGS, 1 << 3)]);
-        let valid = |s: &ObjectStore| attack_target_valid(Some(s), None, &reps, Some(&me));
+        let me = RelUnit::of(1, &unit(&[(TPL, 1), (FLAGS, 1 << 3)]));
+        let rel = Relations {
+            factions: None,
+            reputations: &reps,
+            me: Some(1),
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        };
+        let valid = |s: &ObjectStore| attack_target_valid(&rel, Some(&me), &RelUnit::of(2, s), s);
 
         assert!(valid(&unit(&[(HEALTH, 120)])), "a live mob");
         assert!(!valid(&unit(&[(HEALTH, 0)])), "a corpse");
@@ -1205,13 +1199,13 @@ mod tests {
             !valid(&unit(&[(HEALTH, 120), (FLAGS, 1 << 25)])),
             "NOT_SELECTABLE is one of CanAttack's disqualifiers"
         );
-        // No descriptor on either side is refused.
-        assert!(!attack_target_valid(None, None, &reps, Some(&me)));
+        // No player is refused.
+        let mob = unit(&[(HEALTH, 120)]);
         assert!(!attack_target_valid(
-            Some(&unit(&[(HEALTH, 120)])),
+            &rel,
             None,
-            &reps,
-            None
+            &RelUnit::of(2, &mob),
+            &mob
         ));
     }
 
@@ -1472,6 +1466,7 @@ mod tests {
         world.init_resource::<LastEnemy>();
         world.spawn((
             SelfPlayer,
+            crate::net::Guid(0x1),
             store(&[
                 (F_TYPE, TYPE_PLAYER),
                 (F_FLAGS, CONTROLLED),

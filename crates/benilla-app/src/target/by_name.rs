@@ -91,7 +91,8 @@ pub(crate) struct AssistRequest {
     pub(crate) name: Option<String>,
 }
 
-/// The follow start gate (`0x60fed0`'s mode-3 chain) as a pure function, its order pinned by test:
+/// The follow start gate's refusals with lines (`0x60fed0`'s mode-3 chain, after its silent arms)
+/// as a pure function, its order pinned by test; "we" are the active mover:
 ///
 /// | check | site | failure |
 /// |---|---|---|
@@ -106,12 +107,12 @@ pub(crate) struct AssistRequest {
 /// never fires (`0x6110c8`).
 fn follow_refusal_key(
     followee_is_player: bool,
-    can_assist_followee: bool,
+    we_cooperate: bool,
     we_are_dead: bool,
     we_are_stunned: bool,
     we_are_casting: bool,
 ) -> Option<&'static str> {
-    if !followee_is_player || !can_assist_followee {
+    if !followee_is_player || !we_cooperate {
         return Some("ERR_INVALID_FOLLOW_TARGET");
     }
     if we_are_dead {
@@ -124,6 +125,15 @@ fn follow_refusal_key(
         return Some("ERR_TOOBUSYTOFOLLOW");
     }
     None
+}
+
+/// Why a follow request starts nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FollowRefusal {
+    /// The error line `CGGameUI::DisplayError` shows, by its GlobalStrings key.
+    Line(&'static str),
+    /// The start gate's silent return (`0x60ff8a`).
+    Silent,
 }
 
 /// Everything a by-name search reads.
@@ -146,11 +156,9 @@ pub(crate) struct ByNameScan<'w, 's> {
     /// Read-only: a sweep fires no name query, so an uncached name does not match, as in the
     /// reference.
     names: Res<'w, NameCache>,
-    /// The reaction inputs behind `CanAssist`, for [`Filter::AssistableAlive`] and the follow gate.
-    factions: Option<Res<'w, super::Factions>>,
-    reputations: Res<'w, crate::net::Reputations>,
-    /// The guid to entity map, for the owner `CanAssist`'s PvP arm reads.
-    index: Res<'w, GuidIndex>,
+    /// The relation inputs behind `CanAssist`, for [`Filter::AssistableAlive`], and
+    /// `CanCooperate`, for the follow gate.
+    relations: super::RelationWorld<'w, 's>,
 }
 
 impl ByNameScan<'_, '_> {
@@ -164,41 +172,56 @@ impl ByNameScan<'_, '_> {
     }
 
     /// [`assistable_alive`] for a unit the scan walks.
-    fn assistable_alive(&self, store: Option<&ObjectStore>) -> bool {
-        let self_store = self.self_q.single().ok().and_then(|(_, _, _, s)| s);
+    fn assistable_alive(&self, guid: u64, store: Option<&ObjectStore>) -> bool {
+        let unit = store.map(|s| (self.relations.unit_of(guid, s), s));
         assistable_alive(
-            store,
-            self.factions.as_deref(),
-            &self.reputations,
-            self_store,
-            |guid| {
-                let entity = self.index.0.get(&guid)?;
-                self.units.get(*entity).ok()?.3.cloned()
-            },
+            &self.relations.get(),
+            self.relations.me().as_ref(),
+            unit.as_ref().map(|(u, s)| (u, *s)),
         )
     }
 
-    /// The follow start gate ([`follow_refusal_key`], entered at `0x60ff59`): the key of the first
-    /// refusal, for `CGGameUI::DisplayError`. `FollowUnit` skips the resolver but not this gate.
+    /// Why a follow of `followee` by `mover`, each a guid and its unit descriptor, starts nothing,
+    /// from the entry points' own lookups to the start gate `0x60fed0`'s mode-3 chain; `None`
+    /// starts it. No followee object shows `missing`, the entry point's line (`0x489e8f` for
+    /// `FollowUnit`; `0x489fa5`, else `0x489fbd`, for `FollowByName`); no active mover, which
+    /// lost control zeroes (`0x5fa600`), shows `ERR_GENERIC_NO_TARGET` from both (`0x489e61`,
+    /// `0x489f74`). The gate then returns silently when the followee is the mover itself
+    /// (`0x60feeb`-`0x60fef1`), before [`follow_refusal_key`], whose `this` is the mover too.
+    ///
+    /// The gate's two other silent arms, a `this` that is not the active mover (`0x60fef7`) and a
+    /// followee with no object (`0x60ff25`), never fire from these callers: both found those
+    /// objects first.
     fn follow_refusal(
         &self,
-        followee: u64,
-        followee_store: Option<&ObjectStore>,
+        mover: Option<(u64, &ObjectStore)>,
+        followee: Option<(u64, &ObjectStore)>,
+        missing: &'static str,
         casting: bool,
-    ) -> Option<&'static str> {
-        let self_store = self.self_q.single().ok().and_then(|(_, _, _, s)| s);
+    ) -> Option<FollowRefusal> {
+        let Some((guid, store)) = followee else {
+            return Some(FollowRefusal::Line(missing));
+        };
+        let Some((mover_guid, mover_store)) = mover else {
+            return Some(FollowRefusal::Line("ERR_GENERIC_NO_TARGET"));
+        };
+        if guid == mover_guid {
+            return Some(FollowRefusal::Silent);
+        }
+        let (mover, unit) = (
+            self.relations.unit_of(mover_guid, mover_store),
+            self.relations.unit_of(guid, store),
+        );
+        // `CanCooperate(this = mover, followee)` (`0x60ff6a`): the faction group, so a duel or
+        // free-for-all opponent of our side is followed and a charmed player is not.
         follow_refusal_key(
-            guid::is_player(followee),
-            super::ring_reaction(
-                self.factions.as_deref(),
-                &self.reputations,
-                followee_store,
-                self_store,
-            ) >= 4,
-            self_store.is_some_and(|s| s.0.unit_is_dead()),
-            self_store.is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_STUNNED != 0),
+            unit.is_player,
+            self.relations.get().can_cooperate(&mover, &unit),
+            mover_store.0.unit_is_dead(),
+            mover_store.0.unit_flags() & crate::player::UNIT_FLAG_STUNNED != 0,
             casting,
         )
+        .map(FollowRefusal::Line)
     }
 
     /// Resolve a name to a unit through [`scan_units`], the mode argument deciding the filter.
@@ -220,31 +243,24 @@ impl ByNameScan<'_, '_> {
             filter,
             mode,
             Roster::default(),
-            |store| self.assistable_alive(store),
+            |guid, store| self.assistable_alive(guid, store),
         )
         // With no roster every pick is a held unit.
         .and_then(|(e, g, n)| Some((e?, g, n)))
     }
 }
 
-/// The mode-2 filter (`0x493eca`): `CanAssist 0x6066f0` toward the active player and
-/// `UNIT_FIELD_HEALTH > 0` (`[unit+0x110]+0x40`). `owner_store` finds an owner's descriptor, for
-/// [`super::can_assist`]'s PvP arm. The follow gate and the VM's by-name candidates share it.
+/// The mode-2 filter (`0x493eca`): `CanAssist 0x6066f0` from the active player and
+/// `UNIT_FIELD_HEALTH > 0` (`[unit+0x110]+0x40`), over the unit and its descriptor. The follow
+/// search and the VM's by-name candidates share it; no player or no descriptor refuses.
 pub(crate) fn assistable_alive(
-    store: Option<&ObjectStore>,
-    factions: Option<&super::Factions>,
-    reputations: &crate::net::Reputations,
-    self_store: Option<&ObjectStore>,
-    owner_store: impl FnOnce(u64) -> Option<ObjectStore>,
+    rel: &super::Relations,
+    me: Option<&super::RelUnit>,
+    unit: Option<(&super::RelUnit, &ObjectStore)>,
 ) -> bool {
-    super::can_assist(
-        store,
-        factions,
-        reputations,
-        self_store,
-        owner_store,
-        super::Assist::PlayerToUnit,
-    ) && store.is_some_and(|s| s.0.unit_health().unwrap_or(0) > 0)
+    unit.zip(me).is_some_and(|((unit, store), me)| {
+        rel.can_assist(me, unit) && store.0.unit_health().unwrap_or(0) > 0
+    })
 }
 
 /// One unit query's candidates, positioned by [`GlobalTransform`] as the VM's candidate feed
@@ -284,7 +300,7 @@ fn scan_units<'a>(
     filter: Filter,
     mode: Match,
     roster: Roster<'_>,
-    assistable: impl Fn(Option<&ObjectStore>) -> bool,
+    assistable: impl Fn(u64, Option<&ObjectStore>) -> bool,
 ) -> Option<(Option<Entity>, u64, String)> {
     let query = query.trim();
     if query.is_empty() {
@@ -306,7 +322,7 @@ fn scan_units<'a>(
                 guid,
                 dist2: pos.distance_squared(origin),
                 is_player: guid::is_player(guid),
-                assistable_alive: filter == Filter::AssistableAlive && assistable(store),
+                assistable_alive: filter == Filter::AssistableAlive && assistable(guid, store),
             }),
         }
     }
@@ -397,7 +413,7 @@ impl PlayerLookup<'_, '_> {
             Filter::AcceptAll,
             Match::PrefixOk,
             roster,
-            |_| true,
+            |_, _| true,
         )
         .map(|(_, g, _)| g)
     }
@@ -487,70 +503,72 @@ pub(super) fn assist_requests(
 
 /// Drain `/follow [name]` into [`crate::player`]; follow sends nothing on the wire. The followee's
 /// name is latched here for `AUTOFOLLOW_BEGIN` ([`crate::ui_follow`]).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn follow_requests(
     mut requests: MessageReader<crate::player::FollowRequest>,
     scan_params: ByNameScan,
     selection: Res<Selection>,
-    group: Res<crate::ui_party::GroupState>,
-    index: Res<GuidIndex>,
-    stores: Query<&ObjectStore>,
+    tokens: crate::ui_unit::UnitTokens,
+    mover: Query<(&Guid, &ObjectStore), With<crate::net::ActiveMover>>,
     cast: Res<crate::spell::PendingCast>,
     mut errors: ResMut<crate::ui_action::UiErrorKeys>,
     mut follow: ResMut<crate::player::FollowState>,
     mut approach: ResMut<crate::player::Approach>,
 ) {
+    use crate::player::FollowRequest;
     for request in requests.read() {
-        let resolved = match request {
-            crate::player::FollowRequest::Name { name, exact } => scan_params
-                .resolve(
-                    name,
-                    NameSearch::PlayerOnly,
-                    Filter::AssistableAlive,
-                    if *exact {
-                        Match::ExactOnly
-                    } else {
-                        Match::PrefixOk
-                    },
-                )
-                .map(|(_, guid, name)| (guid, name)),
-            // `"target"` skips `player_token_guid`, whose players-only filter would make a
-            // creature a silent miss: the start gate must refuse it with its error line.
-            crate::player::FollowRequest::Unit(token) => match token.as_str() {
-                "target" => selection.guid,
-                tok => crate::ui_unit::player_token_guid(tok, &selection, &group),
+        // The followee each entry point finds, and the line it shows when that is no unit.
+        let (guid, missing) = match request {
+            // `FollowByName` (`0x489ec0`): a nonempty name through the mode-2 scan (`0x489f23`),
+            // which finds nobody as `ERR_UNIT_NOT_FOUND` (`0x489fa5`); an empty one the
+            // selection (`0x489f2a`), whose miss is `ERR_GENERIC_NO_TARGET` (`0x489fbd`).
+            FollowRequest::Name { name, exact } if !name.is_empty() => (
+                scan_params
+                    .resolve(
+                        name,
+                        NameSearch::PlayerOnly,
+                        Filter::AssistableAlive,
+                        if *exact {
+                            Match::ExactOnly
+                        } else {
+                            Match::PrefixOk
+                        },
+                    )
+                    .map(|(_, guid, _)| guid),
+                "ERR_UNIT_NOT_FOUND",
+            ),
+            FollowRequest::Name { .. } => (selection.guid, "ERR_GENERIC_NO_TARGET"),
+            // `FollowUnit` (`0x489e00`): the unit the token names (`0x515940`), any token.
+            FollowRequest::Unit(token) => (
+                tokens.resolve(token, &selection).map(|(_, guid)| guid),
+                "ERR_GENERIC_NO_TARGET",
+            ),
+        };
+        // Both look the followee up with the unit typemask (`0x489e5c`, `0x489f46`).
+        let followee = guid.and_then(|guid| {
+            let store = tokens.stores.get(tokens.held(guid)?.0).ok();
+            Some((guid, store.filter(|s| s.is_unit())?))
+        });
+        let mover = mover.iter().next().map(|(guid, store)| (guid.0, store));
+        let casting = cast.in_flight(std::time::Instant::now());
+        match scan_params.follow_refusal(mover, followee, missing, casting) {
+            // A refusal leaves a follow in progress alone: the gate returns before `0x611130`.
+            Some(FollowRefusal::Line(key)) => {
+                info!("follow: refused — {key}");
+                errors.0.push(crate::ui_action::UiError::key(key));
             }
-            .map(|guid| {
+            Some(FollowRefusal::Silent) => info!("follow: the mover itself — nothing"),
+            None => {
+                let guid = followee.map_or(0, |(guid, _)| guid);
                 let name = scan_params
                     .names
                     .resolve_unit(guid, None, Ask::Read)
                     .unwrap_or_default()
                     .to_string();
-                (guid, name)
-            }),
-        };
-        // The start gate, whichever way the subject was found.
-        if let Some((guid, _)) = &resolved {
-            let followee = index.0.get(guid).and_then(|e| stores.get(*e).ok());
-            if let Some(key) = scan_params.follow_refusal(
-                *guid,
-                followee,
-                cast.in_flight(std::time::Instant::now()),
-            ) {
-                info!("follow: refused — {key}");
-                errors.0.push(crate::ui_action::UiError::key(key));
-                continue;
-            }
-        }
-        match resolved {
-            Some((guid, name)) => {
                 info!("follow: now following \"{name}\" guid {guid:#x}");
                 // The arm `0x611130` cancels what runs first: one auto-move cell.
                 approach.stop();
                 follow.start(guid, name);
-            }
-            None => {
-                // No subject by name or token: a follow in progress is left alone.
-                info!("follow: nothing to follow");
             }
         }
     }
@@ -576,8 +594,7 @@ pub(crate) struct SelectCommit<'w, 's> {
     pub(super) stores: Query<'w, 's, &'static ObjectStore>,
     /// The guid to entity map, `0x489a40`'s `0x468460` lookup.
     index: Res<'w, GuidIndex>,
-    factions: Option<Res<'w, super::Factions>>,
-    reputations: Res<'w, crate::net::Reputations>,
+    relations: super::RelationWorld<'w, 's>,
     /// `assistAttack`, the assist tail's second leg.
     assist_attack: Res<'w, super::AssistAttack>,
     /// The returns ahead of every selection `SetSelection` makes: charmed, and the cursor's bind.
@@ -613,12 +630,14 @@ impl SelectCommit<'_, '_> {
         // its tail, a sheath snap; not yet fighting, the second leg opens a fresh swing.
         let me = self.me.single().ok();
         let engaged = me.is_some_and(|(_, _, engaged)| engaged);
-        let attackable = super::relations::can_attack(
-            self.stores.get(entity).ok(),
-            self.factions.as_deref(),
-            &self.reputations,
-            me.and_then(|(_, store, _)| store),
-        );
+        let attackable = (|| {
+            let target = self.relations.unit_of(guid, self.stores.get(entity).ok()?);
+            Some(
+                self.relations
+                    .get()
+                    .can_attack(&self.relations.me()?, &target),
+            )
+        })() == Some(true);
         self.commit(entity, guid);
         // The second leg. `0x5ecb70`'s attackability test is the caller's here, so a friendly
         // target is selected, not swung at.
@@ -659,12 +678,11 @@ impl SelectCommit<'_, '_> {
         let me = self.me.single().ok();
         // The re-swing's gate is `StartAttack`'s on the new target (`0x5ecc16`): alive, then
         // `CanAttack`, so a body is switched to and never swung at.
-        let attackable = scan::attack_target_valid(
-            self.stores.get(entity).ok(),
-            self.factions.as_deref(),
-            &self.reputations,
-            me.and_then(|(_, store, _)| store),
-        );
+        let attackable = self.stores.get(entity).ok().is_some_and(|store| {
+            let unit = self.relations.unit_of(guid, store);
+            let rel = self.relations.get();
+            scan::attack_target_valid(&rel, self.relations.me().as_ref(), &unit, store)
+        });
         scan::commit(
             &mut self.selection,
             &mut self.seam,
@@ -741,7 +759,7 @@ mod tests {
             follow_refusal_key(false, true, false, false, false),
             Some("ERR_INVALID_FOLLOW_TARGET")
         );
-        // An enemy player fails CanAssist, and shares the creature's line.
+        // An enemy player fails CanCooperate, and shares the creature's line.
         assert_eq!(
             follow_refusal_key(true, false, false, false, false),
             Some("ERR_INVALID_FOLLOW_TARGET")
@@ -825,20 +843,279 @@ mod tests {
                 (28, 50),
             ]))
         };
-        let me = unit(1, 0x8, 50);
+        let me = super::super::RelUnit::of(1, &unit(1, 0x8, 50));
+        let rel = super::super::Relations {
+            factions: Some(&factions),
+            reputations: &reps,
+            me: Some(1),
+            roster: None,
+            units: &super::super::relations::NoUnits,
+        };
         let ask = |u: &ObjectStore| {
-            assistable_alive(Some(u), Some(&factions), &reps, Some(&me), |_| None)
+            let target = super::super::RelUnit::of(2, u);
+            assistable_alive(&rel, Some(&me), Some((&target, u)))
         };
         assert!(ask(&unit(1, 0x1000, 50)));
         assert!(!ask(&unit(1, 0x1000, 0)), "dead");
         assert!(!ask(&unit(2, 0x1000, 50)), "an enemy");
-        assert!(!assistable_alive(
+        assert!(!assistable_alive(&rel, Some(&me), None));
+    }
+
+    const ME: u64 = 0x10;
+    const THEM: u64 = 0x20;
+    /// A party member the object manager does not hold.
+    const AWAY: u64 = 0x30;
+    const ARBITER: u64 = 0xF110_0000_0000_0001;
+
+    /// Us, named "Me", the active mover, and one other living player, "Them", judged by the
+    /// relation fixture's tables; "Away" is in our party slots with no object, and `party` puts
+    /// "Them" there too. Nothing is selected. Returns his entity.
+    fn follow_world(
+        me: super::super::RelUnit,
+        them: super::super::RelUnit,
+        party: bool,
+    ) -> (World, Entity) {
+        use crate::target::relations::fixture::{factions, store_of};
+        use benilla_protocol::messages::{member_status, GroupMemberEntry};
+        // `UNIT_FIELD_HEALTH` and `_MAXHEALTH`.
+        let alive = |u: &super::super::RelUnit| {
+            let mut store = store_of(u);
+            store.0.merge(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+            ]));
+            store
+        };
+        let mut world = World::new();
+        world.insert_resource(factions());
+        world.init_resource::<crate::net::Reputations>();
+        world.init_resource::<Selection>();
+        world.init_resource::<crate::spell::PendingCast>();
+        world.init_resource::<crate::ui_action::UiErrorKeys>();
+        world.init_resource::<crate::player::FollowState>();
+        world.init_resource::<crate::player::Approach>();
+        world.init_resource::<Messages<crate::player::FollowRequest>>();
+        let mut names = NameCache::default();
+        names.insert_player(ME, "Me".into(), None);
+        names.insert_player(them.guid, "Them".into(), None);
+        names.insert_player(AWAY, "Away".into(), None);
+        world.insert_resource(names);
+        let mut slots = vec![AWAY];
+        slots.extend(party.then_some(them.guid));
+        world.insert_resource(crate::spell::group_relation::GroupRoster {
+            party: slots.clone(),
+            raid: Vec::new(),
+        });
+        let mut group = crate::ui_party::GroupState::default();
+        let entry = |guid| GroupMemberEntry {
+            name: String::new(),
+            guid,
+            status: member_status::ONLINE,
+            flags: 0,
+        };
+        group.apply_list(
+            0,
+            0,
+            slots.into_iter().map(entry).collect(),
+            ME,
             None,
-            Some(&factions),
-            &reps,
-            Some(&me),
-            |_| None
-        ));
+            Some(ME),
+        );
+        world.insert_resource(group);
+        let mut index = GuidIndex::default();
+        let e = world
+            .spawn((
+                SelfPlayer,
+                crate::net::ActiveMover,
+                Guid(me.guid),
+                GlobalTransform::default(),
+                alive(&me),
+            ))
+            .id();
+        index.0.insert(me.guid, e);
+        let t = world
+            .spawn((
+                Guid(them.guid),
+                GlobalTransform::from_translation(Vec3::X),
+                alive(&them),
+            ))
+            .id();
+        index.0.insert(them.guid, t);
+        world.insert_resource(index);
+        (world, t)
+    }
+
+    /// Select `guid` at `entity`.
+    fn select(world: &mut World, target: Option<(Entity, u64)>) {
+        let mut selection = world.resource_mut::<Selection>();
+        selection.target = target.map(|(e, _)| e);
+        selection.guid = target.map(|(_, g)| g);
+    }
+
+    /// One request through the follow drain: the error lines it queued, and whom we follow after.
+    fn drain(
+        world: &mut World,
+        request: crate::player::FollowRequest,
+    ) -> (Vec<&'static str>, Option<u64>) {
+        world.write_message(request);
+        world
+            .run_system_cached(follow_requests)
+            .expect("the drain runs");
+        let keys = std::mem::take(&mut world.resource_mut::<crate::ui_action::UiErrorKeys>().0)
+            .into_iter()
+            .map(|e| e.key)
+            .collect();
+        (keys, world.resource::<crate::player::FollowState>().guid)
+    }
+
+    fn unit(token: &str) -> crate::player::FollowRequest {
+        crate::player::FollowRequest::Unit(token.into())
+    }
+
+    fn name(name: &str) -> crate::player::FollowRequest {
+        crate::player::FollowRequest::Name {
+            name: name.into(),
+            exact: false,
+        }
+    }
+
+    /// `/follow <name>` keeps only the candidates `CanAssist` passes (`0x493eca`), its
+    /// player-controlled arm included (`0x60673e`-`0x60679d`): a Human in someone else's duel, or
+    /// free-for-all while we are not, is no candidate, nor is our own duel opponent; a plain
+    /// Human is.
+    #[test]
+    fn the_follow_search_refuses_a_duel_or_free_for_all_candidate() {
+        use crate::target::relations::fixture::{duelling, flagged, player, FFA, HUMAN};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let candidate = |me, them| {
+            let (mut world, _) = follow_world(me, them, false);
+            world
+                .run_system_once(|scan: ByNameScan| {
+                    scan.resolve(
+                        "Them",
+                        NameSearch::PlayerOnly,
+                        Filter::AssistableAlive,
+                        Match::ExactOnly,
+                    )
+                    .map(|(_, guid, _)| guid)
+                })
+                .expect("the scan runs as a one-shot system")
+        };
+        let (me, human) = (player(ME, HUMAN), player(THEM, HUMAN));
+        assert_eq!(candidate(me, human), Some(THEM));
+        assert_eq!(
+            candidate(me, duelling(human, ARBITER, 1)),
+            None,
+            "in someone else's duel"
+        );
+        assert_eq!(
+            candidate(duelling(me, ARBITER, 2), duelling(human, ARBITER, 1)),
+            None,
+            "our duel opponent"
+        );
+        assert_eq!(
+            candidate(me, flagged(human, FFA)),
+            None,
+            "free-for-all while we are not"
+        );
+    }
+
+    /// The follow start gate asks `CanCooperate(mover, followee)` (`0x60ff6a`), the faction group
+    /// alone: our duel opponent and a Human free-for-all while we are one too are followed, though
+    /// hostile and attackable; an Orc in our party is not, though friendly, nor a charmed Human
+    /// (`0x606bab`).
+    #[test]
+    fn the_follow_gate_asks_cooperation_not_reaction() {
+        use crate::target::relations::fixture::{duelling, flagged, player, FFA, HUMAN, ORC};
+
+        let follow = |me, them, party| {
+            let (mut world, t) = follow_world(me, them, party);
+            select(&mut world, Some((t, THEM)));
+            drain(&mut world, unit("target"))
+        };
+        const INVALID: (&[&str], Option<u64>) = (&["ERR_INVALID_FOLLOW_TARGET"], None);
+        let followed: (&[&str], Option<u64>) = (&[], Some(THEM));
+        let (me, human) = (player(ME, HUMAN), player(THEM, HUMAN));
+        let check = |got: (Vec<&'static str>, Option<u64>), want: (&[&str], Option<u64>), why| {
+            assert_eq!((got.0.as_slice(), got.1), want, "{why}");
+        };
+        check(follow(me, human, false), followed, "a Human");
+        check(
+            follow(duelling(me, ARBITER, 1), duelling(human, ARBITER, 2), false),
+            followed,
+            "our duel opponent",
+        );
+        check(
+            follow(flagged(me, FFA), flagged(human, FFA), false),
+            followed,
+            "both free-for-all",
+        );
+        check(
+            follow(me, player(THEM, ORC), true),
+            INVALID,
+            "an Orc in our party",
+        );
+        let charmed = super::super::RelUnit {
+            charmed_by: 0x40,
+            ..human
+        };
+        check(follow(me, charmed, false), INVALID, "a charmed Human");
+    }
+
+    /// The gate returns at once, with no line, when the followee is the mover itself
+    /// (`0x60feeb`-`0x60fef1`), ahead of `CanCooperate`, which refuses one object (`0x606ba6`):
+    /// `FollowUnit("player")`, `"target"` on yourself, `/follow` with your own name, and a
+    /// free-for-all you, whose reaction toward himself stays friendly. A follow in progress is
+    /// left alone.
+    #[test]
+    fn following_yourself_does_nothing_and_says_nothing() {
+        use crate::target::relations::fixture::{flagged, player, FFA, HUMAN};
+
+        let nothing: (Vec<&'static str>, Option<u64>) = (Vec::new(), None);
+        for me in [player(ME, HUMAN), flagged(player(ME, HUMAN), FFA)] {
+            let (mut world, _) = follow_world(me, player(THEM, HUMAN), false);
+            assert_eq!(drain(&mut world, unit("player")), nothing);
+            let me_entity = world.resource::<GuidIndex>().0[&ME];
+            select(&mut world, Some((me_entity, ME)));
+            assert_eq!(drain(&mut world, unit("target")), nothing);
+            assert_eq!(drain(&mut world, name("Me")), nothing);
+        }
+        let (mut world, t) = follow_world(player(ME, HUMAN), player(THEM, HUMAN), false);
+        select(&mut world, Some((t, THEM)));
+        assert_eq!(drain(&mut world, unit("target")), (Vec::new(), Some(THEM)));
+        assert_eq!(
+            drain(&mut world, unit("player")),
+            (Vec::new(), Some(THEM)),
+            "still following"
+        );
+    }
+
+    /// The entry points find the followee's unit and the mover before the gate, and a miss is
+    /// their own line: `FollowUnit` on a party member with no object, or with no active mover,
+    /// `ERR_GENERIC_NO_TARGET` (`0x489e61`-`0x489e8f`); `FollowByName` with a name that finds
+    /// nobody `ERR_UNIT_NOT_FOUND` (`0x489fa5`), and with an empty name the selection
+    /// (`0x489f2a`), nobody selected `ERR_GENERIC_NO_TARGET` (`0x489fbd`).
+    #[test]
+    fn a_followee_or_mover_with_no_unit_shows_the_entry_points_line() {
+        use crate::target::relations::fixture::{player, HUMAN};
+
+        let (mut world, t) = follow_world(player(ME, HUMAN), player(THEM, HUMAN), false);
+        let no_target = (vec!["ERR_GENERIC_NO_TARGET"], None);
+        assert_eq!(drain(&mut world, unit("party1")), no_target, "out of view");
+        assert_eq!(
+            drain(&mut world, name("Nobody")),
+            (vec!["ERR_UNIT_NOT_FOUND"], None)
+        );
+        assert_eq!(drain(&mut world, name("")), no_target, "nobody selected");
+        select(&mut world, Some((t, THEM)));
+        assert_eq!(drain(&mut world, name("")), (Vec::new(), Some(THEM)));
+        world.resource_mut::<crate::player::FollowState>().stop();
+        let me_entity = world.resource::<GuidIndex>().0[&ME];
+        world
+            .entity_mut(me_entity)
+            .remove::<crate::net::ActiveMover>();
+        assert_eq!(drain(&mut world, unit("target")), no_target, "no mover");
     }
 
     /// `DoEmote`'s search (`0x49fde9`, typemask 0x10, mode 0) runs the roster passes: a groupmate

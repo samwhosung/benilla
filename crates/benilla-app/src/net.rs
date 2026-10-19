@@ -709,7 +709,7 @@ pub(crate) fn send_query_time(
 /// faction a `SPELL_AURA_FORCE_REACTION` aura forces, which answers with that rank whatever its
 /// templates or our standing say. Both halves live on one resource so a change to either wakes the
 /// unit feed and the questgiver-marker re-query that read reactions.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct Reputations {
     pub(crate) slots: Vec<(u8, i32)>,
     pub(crate) forced: Vec<(u32, u32)>,

@@ -1444,7 +1444,7 @@ mod tests {
             .unwrap();
         app.world_mut()
             .entity_mut(me)
-            .insert(player(slot_field, money));
+            .insert((player(slot_field, money), crate::net::Guid(0x5e1f)));
         {
             let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
             script.take_sounds();

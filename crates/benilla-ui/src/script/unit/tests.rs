@@ -80,81 +80,16 @@ fn spell_can_target_unit_answers_per_validated_token() {
 }
 
 #[test]
-fn unit_reaction_reports_the_scale_value_or_nil() {
+fn unit_is_player_reads_the_snapshot() {
     let mut s = UiScript::new().unwrap();
-    // 4 is neutral.
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            reaction: 4,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(
-        s.eval::<i64>(r#"return UnitReaction("target", "player")"#)
-            .unwrap(),
-        4
-    );
-    // 0 is unresolved, which answers nil.
-    s.set_unit(
-        "player",
-        Some(UnitState {
-            exists: true,
-            reaction: 0,
-            ..Default::default()
-        }),
-    );
-    assert!(s
-        .eval::<bool>(r#"return UnitReaction("player", "target") == nil"#)
-        .unwrap());
-}
-
-/// A player target branches on `UnitIsEnemy` and an NPC on `UnitReaction` (2 hostile, 5
-/// friendly), so a friendly player is blue, never the reaction colour.
-#[test]
-fn the_name_plate_faction_branch_picks_player_red_blue_over_the_reaction_swatch() {
-    let mut s = UiScript::new().unwrap();
-    let plate = r#"
-            local u = "target"
-            if UnitIsPlayer(u) then
-                if UnitIsEnemy(u, "player") then return "red" else return "blue" end
-            else
-                return UnitReaction(u, "player") and "reaction" or "reaction-blue"
-            end
-        "#;
-    let decide = |s: &mut UiScript| s.eval::<String>(plate).unwrap();
-
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            is_player: true,
-            reaction: 5,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(decide(&mut s), "blue");
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            is_player: true,
-            reaction: 2,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(decide(&mut s), "red");
     s.set_unit(
         "target",
         Some(UnitState {
             exists: true,
             is_player: false,
-            reaction: 5,
             ..Default::default()
         }),
     );
-    assert_eq!(decide(&mut s), "reaction");
     assert!(s
         .eval::<bool>(r#"return UnitIsPlayer("target") == nil"#)
         .unwrap());
@@ -250,7 +185,7 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
 }
 
 #[test]
-fn corpse_can_attack_and_green_range_bindings() {
+fn corpse_and_green_range_bindings() {
     use crate::script::PlayerReqState;
     let mut s = UiScript::new().unwrap();
     // `UnitIsCorpse` is an object-type check (`0x5161c0`): a dead unit is not a corpse.
@@ -277,31 +212,6 @@ fn corpse_can_attack_and_green_range_bindings() {
         s.eval::<i64>(r#"return UnitIsCorpse("target")"#).unwrap(),
         1
     );
-    // `UnitCanAttack` reads the non-player token's verdict in either argument order.
-    assert!(s
-        .eval::<bool>(r#"return UnitCanAttack("player", "target") == nil"#)
-        .unwrap());
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            can_attack: true,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(
-        s.eval::<i64>(r#"return UnitCanAttack("player", "target")"#)
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        s.eval::<i64>(r#"return UnitCanAttack("target", "player")"#)
-            .unwrap(),
-        1
-    );
-    assert!(s
-        .eval::<bool>(r#"return UnitIsCorpse("target") == nil"#)
-        .unwrap());
     // `GetQuestGreenRange`: the grey band for the player's level, 12 past the table.
     for (pl, want) in [(3u32, 4i64), (46, 9), (120, 12)] {
         s.set_player_req_state(PlayerReqState {
@@ -314,128 +224,6 @@ fn corpse_can_attack_and_green_range_bindings() {
             "green range at level {pl}"
         );
     }
-}
-
-/// `UnitCanAssist` (`0x516bb0`): both arguments `lua_isstring`-gated, both tokens resolved
-/// (`0x515940` raises on an unknown one), nil when either names no unit, else `CanAssist`'s verdict
-/// as the number 1 or nil.
-#[test]
-fn unit_can_assist_gates_resolves_and_answers_one_or_nil() {
-    let mut s = UiScript::new().unwrap();
-    let usage = r#"Usage: UnitCanAssist("unit", "otherUnit")"#;
-    for call in [
-        "UnitCanAssist()",
-        r#"UnitCanAssist("player")"#,
-        r#"UnitCanAssist(nil, "target")"#,
-        r#"UnitCanAssist("player", {})"#,
-        r#"UnitCanAssist(true, "target")"#,
-    ] {
-        let err = s.run(call).expect_err(call).to_string();
-        assert!(err.contains(usage), "{call}: {err}");
-    }
-    // A number is a string to `lua_isstring`; the resolver then refuses it.
-    let err = s
-        .run(r#"UnitCanAssist(5, "target")"#)
-        .expect_err("a numeric token")
-        .to_string();
-    assert!(err.contains("Unknown unit name: 5"), "{err}");
-    // Both tokens are resolved: the second one's refusal is raised too.
-    let err = s
-        .run(r#"UnitCanAssist("player", "bogus")"#)
-        .expect_err("the second token")
-        .to_string();
-    assert!(err.contains("Unknown unit name: bogus"), "{err}");
-
-    // Neither unit held: nil. Only the target held: still nil, the player is missing.
-    assert!(s
-        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
-        .unwrap());
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            can_assist: true,
-            ..Default::default()
-        }),
-    );
-    assert!(s
-        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
-        .unwrap());
-    // Both held: the number 1, not a boolean.
-    s.set_unit("player", Some(player()));
-    assert_eq!(
-        s.eval::<i64>(r#"return UnitCanAssist("player", "target")"#)
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        s.eval::<String>(r#"return type(UnitCanAssist("player", "target"))"#)
-            .unwrap(),
-        "number"
-    );
-    // The verdict fails: nil, not 0.
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            can_assist: false,
-            ..Default::default()
-        }),
-    );
-    assert!(s
-        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
-        .unwrap());
-    // Case-folded tokens resolve as the resolver folds them.
-    s.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            can_assist: true,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(
-        s.eval::<i64>(r#"return UnitCanAssist("PLAYER", "Target")"#)
-            .unwrap(),
-        1
-    );
-}
-
-/// `UnitCanAssist(a, b)` is `a` toward `b` (`0x516c03`): with the player first it reads the other
-/// unit's player-to-unit verdict, with the player second the first unit's unit-to-player one, and
-/// two units that are neither are not modelled.
-#[test]
-fn unit_can_assist_takes_the_first_unit_as_the_assister() {
-    let mut s = UiScript::new().unwrap();
-    s.set_unit(
-        "player",
-        Some(UnitState {
-            exists: true,
-            guid: 1,
-            ..Default::default()
-        }),
-    );
-    let unit = |guid, can_assist, can_assist_player| UnitState {
-        exists: true,
-        guid,
-        can_assist,
-        can_assist_player,
-        ..Default::default()
-    };
-    // A unit the player can assist but which will not assist the player, and its mirror.
-    s.set_unit("target", Some(unit(2, true, false)));
-    s.set_unit("npc", Some(unit(3, false, true)));
-    let one = |s: &UiScript, call: &str| s.eval::<Option<i64>>(&format!("return {call}")).unwrap();
-    assert_eq!(one(&s, r#"UnitCanAssist("player", "target")"#), Some(1));
-    assert_eq!(one(&s, r#"UnitCanAssist("target", "player")"#), None);
-    assert_eq!(one(&s, r#"UnitCanAssist("player", "npc")"#), None);
-    assert_eq!(one(&s, r#"UnitCanAssist("npc", "player")"#), Some(1));
-    // A token that names the player by guid is the player; two other units are not modelled.
-    s.set_unit("party1", Some(unit(1, true, true)));
-    assert_eq!(one(&s, r#"UnitCanAssist("party1", "target")"#), Some(1));
-    assert_eq!(one(&s, r#"UnitCanAssist("target", "party1")"#), None);
-    assert_eq!(one(&s, r#"UnitCanAssist("target", "npc")"#), None);
-    assert_eq!(one(&s, r#"UnitCanAssist("npc", "target")"#), None);
 }
 
 /// `UnitIsTrivial` (`0x519d70`) over `0x5f0700`: false for a player, else true when the player
@@ -1528,16 +1316,6 @@ fn a_unit_token_resolves_whatever_its_case() {
         );
     }
 
-    // `pick_unit_token`'s own `"player"` test folds too, or `"Player"` would read as the other
-    // unit.
-    assert!(
-        s.eval::<bool>(
-            r#"return UnitIsEnemy("Player", "target") == UnitIsEnemy("player", "target")"#
-        )
-        .unwrap(),
-        "the directional pick folds case too"
-    );
-
     for spelling in ["Party1", "PARTY1", "raid9", "MouseOver"] {
         assert!(
             !s.eval::<bool>(&format!(r#"return UnitExists("{spelling}")"#))
@@ -2180,43 +1958,6 @@ fn every_unit_predicate_is_one_or_nil_and_never_a_boolean() {
             UnitState {
                 exists: true,
                 has_relic_slot: true,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitCanAttack",
-            r#"UnitCanAttack("player", "target")"#,
-            UnitState {
-                exists: true,
-                can_attack: true,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitIsEnemy",
-            r#"UnitIsEnemy("player", "target")"#,
-            UnitState {
-                exists: true,
-                reaction: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitIsFriend",
-            r#"UnitIsFriend("player", "target")"#,
-            UnitState {
-                exists: true,
-                reaction: 5,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitCanCooperate",
-            r#"UnitCanCooperate("player", "target")"#,
-            UnitState {
-                exists: true,
-                is_player: true,
-                reaction: 5,
                 ..Default::default()
             },
         ),

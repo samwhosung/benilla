@@ -825,10 +825,7 @@ fn poll_area_spirit_healer(
         ),
         Without<SelfPlayer>,
     >,
-    factions: Option<Res<crate::target::Factions>>,
-    reputations: Res<crate::net::Reputations>,
-    index: Option<Res<crate::net::GuidIndex>>,
-    stores: Query<&ObjectStore>,
+    relations: crate::target::RelationWorld,
     commands: Res<NetCommands>,
     mut script: Option<NonSendMut<UiScript>>,
 ) {
@@ -873,10 +870,9 @@ fn poll_area_spirit_healer(
         return;
     }
 
-    // Acquire: `can_assist` is `0x6066f0`; its owner lookup wants a store by guid.
-    let store_of = |guid: u64| -> Option<ObjectStore> {
-        let entity = *index.as_ref()?.0.get(&guid)?;
-        stores.get(entity).ok().cloned()
+    // Acquire: `CanAssist 0x6066f0` with the guide as `this` (`0x492506`).
+    let (rel, Some(me)) = (relations.get(), relations.me()) else {
+        return;
     };
     let mut adopted = None;
     for (guid, kind, store, tf) in units.iter() {
@@ -890,14 +886,7 @@ fn poll_area_spirit_healer(
         {
             continue;
         }
-        if !crate::target::can_assist(
-            Some(store),
-            factions.as_deref(),
-            &reputations,
-            Some(self_store),
-            store_of,
-            crate::target::Assist::UnitToPlayer,
-        ) {
+        if !rel.can_assist(&relations.unit_of(guid.0, store), &me) {
             continue;
         }
         adopted = Some(guid.0); // last wins: the callback never stops the walk
@@ -1215,6 +1204,7 @@ mod tests {
         }
         world.spawn((
             SelfPlayer,
+            crate::net::Guid(0x1),
             fields(&[
                 (PLAYER_FLAGS_FIELD, if ghost { 0x10 } else { 0 }),
                 (FACTION_TEMPLATE_FIELD, 1),
@@ -1303,7 +1293,7 @@ mod tests {
         let _ = queries(&rx);
 
         let guide = world
-            .query_filtered::<Entity, With<crate::net::Guid>>()
+            .query_filtered::<Entity, (With<crate::net::Guid>, Without<SelfPlayer>)>()
             .iter(&world)
             .next()
             .expect("the guide entity");

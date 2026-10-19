@@ -37,8 +37,8 @@ use bevy::prelude::*;
 use benilla_formats::NpcGreetingCatalog;
 use benilla_protocol::EntityKind;
 
-use crate::net::{ActiveMover, GuidIndex, NetEntity, ObjectStore, Reputations, SelfPlayer};
-use crate::target::{both_reactions_at_least_neutral, Factions};
+use crate::net::{ActiveMover, Guid, GuidIndex, NetEntity, ObjectStore, SelfPlayer};
+use crate::target::{RelUnit, RelationWorld, Relations};
 use crate::ui_session::LatchVocal;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use benilla_world::schedule::WorldStage;
@@ -139,16 +139,15 @@ fn player_may_hear(me: Option<&ObjectStore>) -> bool {
 
 /// The select greeting's two gates (`0x60c270`): both reaction directions between the unit and the
 /// active mover at least neutral (`0x60c2d9`, `0x60c2ef`), none streamed bailing (`0x60c2d0`), then
-/// [`player_may_hear`] on the local player (`0x60c31d`).
+/// [`player_may_hear`] on the local player (`0x60c31d`). A unit whose descriptor has not streamed
+/// reads neutral both ways.
 fn select_greeting_allowed(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    npc: Option<&ObjectStore>,
-    mover: Option<&ObjectStore>,
+    rel: &Relations,
+    npc: Option<&RelUnit>,
+    mover: Option<&RelUnit>,
     me: Option<&ObjectStore>,
 ) -> bool {
-    mover.is_some()
-        && both_reactions_at_least_neutral(factions, reputations, npc, mover)
+    mover.is_some_and(|mover| npc.is_none_or(|npc| rel.both_at_least_neutral(mover, npc)))
         && player_may_hear(me)
 }
 
@@ -217,10 +216,10 @@ fn play_select_greetings(
     mut reqs: MessageReader<NpcGreetingRequest>,
     mut seq: ResMut<GreetSeq>,
     units: Query<(&NetEntity, &Transform, Option<&ObjectStore>)>,
+    guids: Query<&Guid>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    mover: Query<&ObjectStore, With<ActiveMover>>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    mover: Query<(&Guid, &ObjectStore), With<ActiveMover>>,
+    relations: RelationWorld,
     greetings: Option<Res<NpcGreetings>>,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
@@ -244,11 +243,14 @@ fn play_select_greetings(
         if !speaks(net.kind) {
             continue;
         }
+        let npc = npc_store
+            .zip(guids.get(req.npc).ok())
+            .map(|(s, g)| relations.unit_of(g.0, s));
+        let mover = mover.single().ok().map(|(g, s)| relations.unit_of(g.0, s));
         let allowed = select_greeting_allowed(
-            factions.as_deref(),
-            &reputations,
-            npc_store,
-            mover.single().ok(),
+            &relations.get(),
+            npc.as_ref(),
+            mover.as_ref(),
             self_store.single().ok(),
         );
         let dead = npc_store.is_some_and(|s| s.0.unit_is_dead());
@@ -382,10 +384,17 @@ mod tests {
     };
     use benilla_protocol::ObjectFields;
 
+    use crate::net::Reputations;
+    use crate::target::Factions;
+
+    /// The active player's guid.
+    const ME: u64 = 1;
+
     /// A player-controlled player on faction template 1 (Human), with the given health and
     /// `PLAYER_FLAGS`.
     fn player(health: u32, player_flags: u32) -> ObjectStore {
         ObjectStore(ObjectFields::from_pairs(&[
+            (2, 0x19),
             (FIELD_UNIT_FACTIONTEMPLATE, 1),
             (FIELD_UNIT_FLAGS, 1 << 3),
             (FIELD_UNIT_HEALTH, health),
@@ -421,31 +430,43 @@ mod tests {
                 template,
             )]))
         };
-        let allowed = |npc: &ObjectStore, mover: Option<&ObjectStore>, me: &ObjectStore| {
-            select_greeting_allowed(Some(&factions), &reps, Some(npc), mover, Some(me))
+        let rel = Relations {
+            factions: Some(&factions),
+            reputations: &reps,
+            me: Some(ME),
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        };
+        let allowed = |npc: &ObjectStore, mover: Option<&RelUnit>, me: &ObjectStore| {
+            select_greeting_allowed(&rel, Some(&RelUnit::of(2, npc)), mover, Some(me))
         };
         let me = player(100, 0);
+        let mover = RelUnit::of(ME, &me);
         assert!(
-            !allowed(&unit(14), Some(&me), &me),
+            !allowed(&unit(14), Some(&mover), &me),
             "a hostile monster is silent"
         );
         assert!(
-            allowed(&unit(31), Some(&me), &me),
+            allowed(&unit(31), Some(&mover), &me),
             "a neutral critter greets"
         );
         assert!(
-            !allowed(&unit(31), Some(&me), &player(0, 0)),
+            !allowed(&unit(31), Some(&mover), &player(0, 0)),
             "a dead player hears no greeting"
         );
         assert!(
-            !allowed(&unit(31), Some(&me), &player(1, 0x10)),
+            !allowed(&unit(31), Some(&mover), &player(1, 0x10)),
             "nor does a ghost"
         );
 
         // The reaction pair is with the active mover, not the player: a monster hostile to the
-        // player greets the creature we possess, which is its own kind, and a friend of the player
-        // is refused when the mover is hostile to it. No mover streamed, no greeting.
-        let possessed = unit(14);
+        // player greets the creature we possess, which is its own kind. No mover streamed, no
+        // greeting.
+        let possessed = RelUnit {
+            charmed_by: ME,
+            flags: 1 << 3,
+            ..RelUnit::of(3, &unit(14))
+        };
         assert!(allowed(&unit(14), Some(&possessed), &me));
         assert!(!allowed(&unit(14), None, &me));
     }
@@ -455,27 +476,27 @@ mod tests {
     #[test]
     fn the_reaction_gate_is_the_pair_not_one_direction() {
         let reps = Reputations::default();
-        let ffa = ObjectStore(ObjectFields::from_pairs(&[
-            (FIELD_UNIT_FLAGS, 1 << 3),
-            (FIELD_PLAYER_FLAGS, 0x80),
-        ]));
-        let other = ObjectStore(ObjectFields::from_pairs(&[
-            (FIELD_UNIT_FLAGS, 1 << 3),
-            (FIELD_PLAYER_FLAGS, 0x80),
-        ]));
+        let rel = Relations {
+            factions: None,
+            reputations: &reps,
+            me: Some(ME),
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        };
+        let ffa = player(100, 0x80);
+        let (me, other) = (RelUnit::of(ME, &ffa), RelUnit::of(2, &ffa));
         assert!(!select_greeting_allowed(
-            None,
-            &reps,
+            &rel,
             Some(&other),
-            Some(&ffa),
+            Some(&me),
             Some(&ffa)
         ));
         let calm = player(100, 0);
+        let (me, other) = (RelUnit::of(ME, &calm), RelUnit::of(2, &calm));
         assert!(select_greeting_allowed(
-            None,
-            &reps,
-            Some(&calm),
-            Some(&calm),
+            &rel,
+            Some(&other),
+            Some(&me),
             Some(&calm)
         ));
     }

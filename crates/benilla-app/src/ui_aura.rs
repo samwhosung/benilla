@@ -16,10 +16,8 @@ use benilla_protocol::messages::{UnitAuraSlot, AURA_FLAG_CANCELABLE, UNIT_AURA_P
 use benilla_ui::script::{AuraState, TrackingState, UiScript};
 
 use crate::client_state::ClientState;
-use crate::net::{
-    ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Reputations, SelfPlayer,
-};
-use crate::target::{can_assist, Assist, Factions, Selection};
+use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::target::{RelUnit, Relations, Selection};
 use crate::ui_action::Spells;
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
@@ -313,28 +311,12 @@ fn record_inputs<'a>(
 /// has `UNIT_FLAG_AURAS_VISIBLE` or the uncharmed player can assist it (`0x5195aa`-`0x5195f7`),
 /// else every index is nil; `UnitDebuff` has no gate. vmangos sets the flag for Detect Magic
 /// (`UnitDefines.h:572`) and for a GM viewer (`Object.cpp:765-766`), so it is read as received.
-fn buffs_visible_on(
-    store: &ObjectStore,
-    self_store: Option<&ObjectStore>,
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    owner_store: impl FnOnce(u64) -> Option<ObjectStore>,
-) -> bool {
-    if store.0.unit_flags() & UNIT_FLAG_AURAS_VISIBLE != 0 {
+fn buffs_visible_on(rel: &Relations, unit: &RelUnit, me: Option<&RelUnit>) -> bool {
+    if unit.flags & UNIT_FLAG_AURAS_VISIBLE != 0 {
         return true;
     }
-    // While charmed you assist nobody (`0x5195f1`-`0x5195f7`).
-    if self_store.is_some_and(|s| s.0.unit_charmed_by().is_some()) {
-        return false;
-    }
-    can_assist(
-        Some(store),
-        factions,
-        reputations,
-        self_store,
-        owner_store,
-        Assist::PlayerToUnit,
-    )
+    // While charmed you assist nobody (`0x5195f1`-`0x5195f7`); with no player, nobody either.
+    me.is_some_and(|me| me.charmed_by == 0 && rel.can_assist(me, unit))
 }
 
 /// `UNIT_FIELD_FLAGS` bit 27, `0x08000000` (`0x5195b6`).
@@ -422,9 +404,8 @@ fn feed_auras(
     stores: Query<&ObjectStore>,
     spells: Option<Res<Spells>>,
     index: Res<GuidIndex>,
-    // The `UnitBuff` gate's inputs, the same reaction the selection ring and nameplates use.
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    // The `UnitBuff` gate's inputs, the relation model the selection ring and nameplates use.
+    relations: crate::target::RelationWorld,
     // Read-only: the net path writes the stamps and only the session's end drops them.
     durations: Res<AuraDurations>,
     mut cache: ResMut<PlayerAuraCache>,
@@ -547,15 +528,9 @@ fn feed_auras(
     // player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel and FFA-PvP
     // state) passes for your own pet, leaving only the charm, selectable and reaction clauses to
     // hide its buffs.
+    let (rel, me) = (relations.get(), relations.me());
     let buffs_visible = |guid: u64, unit: &ObjectStore| {
-        guid == pet_guid
-            || buffs_visible_on(
-                unit,
-                Some(store),
-                factions.as_deref(),
-                &reputations,
-                |owner| held(owner).cloned(),
-            )
+        guid == pet_guid || buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
     };
     let target_guid = units.selection.guid.unwrap_or(0);
     // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the pick,
@@ -669,6 +644,7 @@ fn drain_aura_cancels(script: Option<NonSendMut<UiScript>>, net: Res<NetCommands
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Reputations;
 
     /// [`other_unit_inputs`] as the list.
     fn other_unit_auras(
@@ -995,8 +971,6 @@ mod tests {
 
     /// `UNIT_FIELD_FLAGS`'s index.
     const F_FLAGS: u16 = 46;
-    /// `UNIT_FIELD_CHARMEDBY`'s low dword; the high half is the next index.
-    const F_CHARMEDBY: u16 = 10;
 
     /// The Ridge Stalker's two slots: 5916 helpful, 22766 harmful.
     fn ridge_stalker_slots(flags: u32) -> ObjectStore {
@@ -1035,45 +1009,79 @@ mod tests {
     fn detect_magic_or_gm_mode_opens_the_gate_on_the_flag_alone() {
         let reputations = Reputations::default();
         // No factions catalog: the reaction is neutral (3), below the `>= 4` bar.
-        let hostile = ridge_stalker_slots(0);
+        let rel = no_catalog(&reputations);
+        let me = gate_viewer(0);
+        let gate = |s: &ObjectStore| buffs_visible_on(&rel, &RelUnit::of(2, s), Some(&me));
         assert!(
-            !buffs_visible_on(&hostile, None, None, &reputations, |_| None),
+            !gate(&ridge_stalker_slots(0)),
             "neutral reaction, not player-controlled, no PvP flag → no buffs"
         );
-
-        let detected = ridge_stalker_slots(UNIT_FLAG_AURAS_VISIBLE);
         assert!(
-            buffs_visible_on(&detected, None, None, &reputations, |_| None),
+            gate(&ridge_stalker_slots(UNIT_FLAG_AURAS_VISIBLE)),
             "UNIT_FLAG_AURAS_VISIBLE alone opens it, whatever the reaction says"
         );
+    }
+
+    /// The relation inputs with no faction catalog, every faction leg neutral.
+    fn no_catalog(reputations: &Reputations) -> Relations<'_> {
+        Relations {
+            factions: None,
+            reputations,
+            me: Some(1),
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        }
+    }
+
+    /// The viewing player, guid 1, charmed by `charmer` when it is nonzero.
+    fn gate_viewer(charmer: u64) -> RelUnit {
+        RelUnit {
+            guid: 1,
+            is_player: true,
+            flags: 0x8,
+            charmed_by: charmer,
+            ..Default::default()
+        }
     }
 
     /// `NOT_SELECTABLE` is `CanAssist`'s; the charm clause is `UnitBuff`'s (`0x5195f1`-`0x5195f7`).
     #[test]
     fn not_selectable_and_being_charmed_each_close_the_gate_on_their_own() {
         let reputations = Reputations::default();
+        let rel = no_catalog(&reputations);
+        let gate =
+            |s: &ObjectStore, me: &RelUnit| buffs_visible_on(&rel, &RelUnit::of(2, s), Some(me));
 
         // AURAS_VISIBLE is tested before `CanAssist`, so it wins over NOT_SELECTABLE.
         let both = ridge_stalker_slots(UNIT_FLAG_AURAS_VISIBLE | (1 << 25));
         assert!(
-            buffs_visible_on(&both, None, None, &reputations, |_| None),
+            gate(&both, &gate_viewer(0)),
             "AURAS_VISIBLE is tested FIRST and short-circuits CanAssist entirely"
         );
 
-        // Being charmed closes the gate before `CanAssist` runs.
-        let friendly_pc = ridge_stalker_slots(0x8);
-        let charmed_self = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-            (F_CHARMEDBY, 0x1234),
-            (F_CHARMEDBY + 1, 0),
-        ]));
+        // Being charmed closes the gate before `CanAssist` runs: a PvP-flagged human creature, whose
+        // buffs a human sees (`IsPvP`, `0x6067bd`), is closed to a charmed one.
+        let factions = crate::spell::targeting::corpse_fixture::factions();
+        let rel = Relations {
+            factions: Some(&factions),
+            ..rel
+        };
+        let flagged_human = RelUnit {
+            template: Some(1),
+            flags: 0x1000,
+            ..RelUnit::of(2, &ridge_stalker_slots(0))
+        };
+        let human_viewer = |charmer| RelUnit {
+            template: Some(1),
+            ..gate_viewer(charmer)
+        };
+        assert!(buffs_visible_on(
+            &rel,
+            &flagged_human,
+            Some(&human_viewer(0))
+        ));
         assert!(
-            !buffs_visible_on(
-                &friendly_pc,
-                Some(&charmed_self),
-                None,
-                &reputations,
-                |_| None
-            ),
+            !buffs_visible_on(&rel, &flagged_human, Some(&human_viewer(0x1234))),
             "activePlayer.CHARMEDBY != 0 → no buffs on anyone"
         );
     }

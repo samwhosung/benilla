@@ -22,8 +22,8 @@ use super::Model;
 /// (`0x48ba00`, from the `.rdata` at `0x804498`, `0x804490`, `0x80448c`, `0x8044a4`).
 pub const INTERACT_DIST_SQ: [f64; 4] = [100.0, 123.45678, 100.0, 900.0];
 
-/// `CanInspect`'s threshold squared (`0xb4d918`, the `.rdata` 10.0 at `0x804498` squared by
-/// `0x48a1b0`); vmangos checks the same 10 yards (`INSPECT_DISTANCE`, `ObjectDefines.h:26`).
+/// `CanInspect`'s threshold squared (`0xb4d918`, the `.rdata` 10.0 at `0x804498` squared by the
+/// initialiser `0x48cc80`); vmangos checks the same 10 yards (`INSPECT_DISTANCE`, `ObjectDefines.h:26`).
 pub const CAN_INSPECT_DIST_SQ: f64 = 100.0;
 
 /// One unit this frame, as the two range verbs read it. An entry exists only for a live unit
@@ -34,9 +34,10 @@ pub const CAN_INSPECT_DIST_SQ: f64 = 100.0;
 pub struct UnitReach {
     /// Squared distance from the player.
     pub dist_sq: f64,
-    /// A player, and not a valid attack target: vmangos's inspect refusals besides distance
-    /// (`MiscHandler.cpp:945-956`). Only `CanInspect` reads it: `CheckInteractDistance` is a pure
-    /// distance test, so a creature or an enemy player still answers it.
+    /// `0x4944a0`'s legs besides distance: a player unit that is the active player or one it can
+    /// cooperate with (`CanCooperate 0x606ba0`, `0x4944e4`). Only `CanInspect` reads it:
+    /// `CheckInteractDistance` is a pure distance test, so a creature or an enemy player still
+    /// answers it.
     pub inspectable: bool,
 }
 
@@ -121,9 +122,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // CanInspect(unit) → 1/nil (`0x48a1b0`), the gate of `InspectFrame_Show`
-    // (`Blizzard_InspectUI.lua:8`): in range unless `100.0 < d²`, and `test ah,0x41; jne` counts an
-    // unordered compare as in range, so a NaN distance passes. The player and attackability legs
-    // ride in [`UnitReach::inspectable`].
+    // (`Blizzard_InspectUI.lua:8`), answered by `0x4944a0` (`0x48a2a1`): in range unless
+    // `100.0 < d²`, and `test ah,0x41; je` counts an unordered compare as in range, so a NaN
+    // distance passes. The player and cooperation legs ride in [`UnitReach::inspectable`].
     g.set(
         "CanInspect",
         lua.create_function(|lua, unit: Option<String>| {

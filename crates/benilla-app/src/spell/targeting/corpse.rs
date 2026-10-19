@@ -174,8 +174,7 @@ pub(crate) mod fixture {
             group_mask,
             friend_group_mask,
             enemy_group_mask,
-            enemies: [0; 4],
-            friends: [0; 4],
+            ..Default::default()
         };
         Factions::from_catalog(FactionCatalog::from_rows(
             HashMap::from([(1, tpl(1, 3, 2, 12)), (2, tpl(2, 5, 4, 10))]),

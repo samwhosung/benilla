@@ -9,10 +9,9 @@ use super::super::binding_abi::flag;
 use super::super::calls::{submit, ScriptCall};
 use super::super::protected::select_may_cast;
 use super::super::Model;
-use super::UnitState;
 use super::{
-    check_unit_token, classification_word, grey_band, level_reads_unknown, pick_unit_token,
-    unit_is_grey, unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
+    check_unit_token, classification_word, grey_band, level_reads_unknown, unit_is_grey,
+    unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -210,67 +209,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitCanAttack (`0x516c50`) delegates to `CanAttack` (`0x606980`). The snapshot holds only
-    // whether the player can attack the unit, fed for `target`, `targettarget` and `npc`, and that
-    // answers both argument orders; the reverse direction stock FrameXML also asks
-    // (`TargetFrame.lua:147`) is not built.
-    g.set(
-        "UnitCanAttack",
-        lua.create_function(|lua, (a, b): (Value, Value)| {
-            // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let a = Some(crate::script::binding_abi::string_arg(
-                lua,
-                a,
-                r#"Usage: UnitCanAttack("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
-                lua,
-                b,
-                r#"Usage: UnitCanAttack("unit", "otherUnit")"#,
-            )?);
-            let token = pick_unit_token(&a, &b);
-            unit_predicate(lua, &token, |u| u.can_attack)
-        })?,
-    )?;
-
-    // UnitCanAssist (`0x516bb0`) delegates to `CanAssist` (`0x6066f0`), the first unit `this`
-    // (`0x516c03`). Both tokens are `lua_isstring`-gated and both resolved (`0x515940`, which raises
-    // on an unknown one) before either is judged; nil when either names no unit. The snapshots hold
-    // `CanAssist` with the player on one side only: `can_assist` with the player as `this`, and
-    // `can_assist_player` with the unit as `this`. So the first unit being the player reads the
-    // second's `can_assist`, the second being the player reads the first's `can_assist_player`,
-    // and two units that are neither are not modelled and answer nil.
-    g.set(
-        "UnitCanAssist",
-        lua.create_function(|lua, (a, b): (Value, Value)| {
-            let a = Some(crate::script::binding_abi::string_arg(
-                lua,
-                a,
-                r#"Usage: UnitCanAssist("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
-                lua,
-                b,
-                r#"Usage: UnitCanAssist("unit", "otherUnit")"#,
-            )?);
-            check_unit_token(&a)?;
-            check_unit_token(&b)?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let named = |t: &Option<String>| t.as_ref().and_then(|t| model.unit(t));
-            let player_guid = model.unit("player").map_or(0, |p| p.guid);
-            let is_player = |t: &Option<String>, u: &UnitState| {
-                t.as_deref()
-                    .is_some_and(|t| t.eq_ignore_ascii_case("player"))
-                    || (u.guid != 0 && u.guid == player_guid)
-            };
-            let ok = match (named(&a), named(&b)) {
-                (Some(ua), Some(ub)) if is_player(&a, ua) => ub.can_assist,
-                (Some(ua), Some(ub)) if is_player(&b, ub) => ua.can_assist_player,
-                _ => false,
-            };
-            Ok(flag(ok))
-        })?,
-    )?;
+    super::relations::register(lua, &["UnitCanAttack", "UnitCanAssist"])?;
 
     // UnitIsTrivial (`0x519d70`): `0x5f0700` on the token's object (`0x515940`; nil with none,
     // `0x519da8`), false for a player (object type bit `0x10`), else true when the player's level
@@ -342,74 +281,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitReaction(unit, other) (`0x5167e0`): `0x6061e0(unit, other)` plus one (`0x51683e`), so
-    // 1-based, 5 for a unit toward itself, never 0; nil (`0x51685f`) only when a token names no
-    // unit. Our reaction 0 means "not fed" and also answers nil, where the reference answers a
-    // number. The snapshot holds the reaction toward the player, so `other` is checked, not read.
-    g.set(
-        "UnitReaction",
-        lua.create_function(|lua, (token, _other): (Value, Value)| {
-            // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let token = Some(crate::script::binding_abi::string_arg(
-                lua,
-                token,
-                r#"Usage: UnitReaction("unit", "otherUnit")"#,
-            )?);
-            let _other = Some(crate::script::binding_abi::string_arg(
-                lua,
-                _other,
-                r#"Usage: UnitReaction("unit", "otherUnit")"#,
-            )?);
-            let r = with_unit(lua, &token, 0u8, |u| u.reaction)?;
-            Ok(if r == 0 {
-                Value::Nil
-            } else {
-                Value::Integer(i64::from(r))
-            })
-        })?,
-    )?;
-
-    // UnitIsEnemy/UnitIsFriend (`0x516890`/`0x516930`) threshold the reaction `UnitReaction`
-    // reads: enemy at 1 or 2, friend at 5 and up, and an unfed 0 is neither. The snapshot holds the
-    // reaction toward the player, so the non-player argument names the unit.
-    g.set(
-        "UnitIsEnemy",
-        lua.create_function(|lua, (a, b): (Value, Value)| {
-            // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let a = Some(crate::script::binding_abi::string_arg(
-                lua,
-                a,
-                r#"Usage: UnitIsEnemy("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
-                lua,
-                b,
-                r#"Usage: UnitIsEnemy("unit", "otherUnit")"#,
-            )?);
-            let token = pick_unit_token(&a, &b);
-            let r = with_unit(lua, &token, 0u8, |u| u.reaction)?;
-            Ok(flag((1..=2).contains(&r)))
-        })?,
-    )?;
-    g.set(
-        "UnitIsFriend",
-        lua.create_function(|lua, (a, b): (Value, Value)| {
-            // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let a = Some(crate::script::binding_abi::string_arg(
-                lua,
-                a,
-                r#"Usage: UnitIsFriend("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
-                lua,
-                b,
-                r#"Usage: UnitIsFriend("unit", "otherUnit")"#,
-            )?);
-            let token = pick_unit_token(&a, &b);
-            let r = with_unit(lua, &token, 0u8, |u| u.reaction)?;
-            Ok(flag(r >= 5))
-        })?,
-    )?;
+    super::relations::register(lua, &["UnitReaction", "UnitIsEnemy", "UnitIsFriend"])?;
 
     // UnitIsCivilian(unit): killing the unit would be dishonorable, the predicate `0x612550`. It
     // shares `is_civilian_kill` with the tooltip's civilian line and `UnitPVPName`, so all agree.
@@ -601,30 +473,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Deviation: UnitCanCooperate answers 1 for a friendly (5 and up) player, because the engine
-    // carries no faction templates; the reference resolves their cooperation masks. The verdict
-    // matches for the unit popup's invite and whisper gates.
-    g.set(
-        "UnitCanCooperate",
-        lua.create_function(|lua, (a, b): (Value, Value)| {
-            // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let a = Some(crate::script::binding_abi::string_arg(
-                lua,
-                a,
-                r#"Usage: UnitCanCooperate("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
-                lua,
-                b,
-                r#"Usage: UnitCanCooperate("unit", "otherUnit")"#,
-            )?);
-            let token = pick_unit_token(&a, &b);
-            let ok = with_unit(lua, &token, false, |u| {
-                u.exists && u.is_player && u.reaction >= 5
-            })?;
-            Ok(flag(ok))
-        })?,
-    )?;
+    super::relations::register(lua, &["UnitCanCooperate"])?;
 
     // GetRaidTargetIndex(unit): the mark, 1 to 8, or nil.
     g.set(
@@ -660,12 +509,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitIsPVP",
         lua.create_function(|lua, token: Value| {
-            let token = Some(crate::script::binding_abi::string_arg(
-                lua,
-                token,
-                r#"Usage: UnitIsPVP("unit")"#,
-            )?);
-            unit_predicate(lua, &token, |u| u.pvp)
+            let token =
+                crate::script::binding_abi::string_arg(lua, token, r#"Usage: UnitIsPVP("unit")"#)?;
+            super::relations::unit_is_pvp(lua, &token)
         })?,
     )?;
     g.set(

@@ -1198,6 +1198,8 @@ pub(crate) struct Model {
     pub(crate) xml_creating: bool,
     /// Per live-unit guid, reach for `CanInspect`/`CheckInteractDistance`; absent: nil.
     pub(crate) unit_reach: HashMap<u64, super::UnitReach>,
+    /// The host's relation functions the six relation verbs ask; `None` holds no unit.
+    pub(crate) unit_relations: Option<std::rc::Rc<dyn super::UnitRelations>>,
 
     /// The skills pane's snapshot and the display tree built from it.
     pub(crate) skills: skills::SkillsState,
@@ -1912,6 +1914,7 @@ impl Model {
             world_frame_made: false,
             xml_creating: false,
             unit_reach: HashMap::new(),
+            unit_relations: None,
             chat_input: Vec::new(),
             skills: skills::SkillsState::default(),
             skills_groups: Vec::new(),

@@ -11,10 +11,10 @@
 use bevy::prelude::*;
 
 use crate::creature_anim::Engaged;
-use crate::net::{ObjectStore, Reputations, SelfPlayer};
+use crate::net::SelfPlayer;
 
-use super::relations::can_attack;
-use super::{Factions, Selection};
+use super::relations::RelationWorld;
+use super::Selection;
 
 /// This frame's flash verdict and the global pulse clock, read by the ring and the nameplate.
 #[derive(Resource)]
@@ -62,10 +62,7 @@ pub(super) fn drive_flash(
     time: Res<Time>,
     selection: Res<Selection>,
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    units: Query<Option<&ObjectStore>, Without<SelfPlayer>>,
+    world: RelationWorld,
 ) {
     let was = flash.unit;
     flash.unit = (|| {
@@ -75,15 +72,9 @@ pub(super) fn drive_flash(
         if engaged.is_empty() {
             return None;
         }
-        // `CanAttack 0x606980`: a neutral target flashes too.
-        let store = units.get(target).ok()?;
-        can_attack(
-            store,
-            factions.as_deref(),
-            &reputations,
-            self_store.single().ok(),
-        )
-        .then_some(target)
+        // `CanAttack 0x606980` from the player: a neutral target flashes too.
+        let (me, unit) = (world.me()?, world.unit(selection.guid?)?);
+        world.get().can_attack(&me, &unit).then_some(target)
     })();
     if flash.unit.is_some() {
         // Only a qualifying frame advances the global wave.

@@ -110,10 +110,10 @@ pub(super) struct InspectStores<'w, 's> {
     motion: Query<'w, 's, MotionReadout>,
     /// The MCNK height under the hovered unit, the `ground` line's `terrain`.
     points: benilla_world::world_point::WorldPoint<'w, 's>,
-    factions: Option<Res<'w, crate::target::ring::Factions>>,
     self_store: Query<'w, 's, &'static ObjectStore, With<crate::net::SelfPlayer>>,
-    /// The live standings: `ring_reaction` takes the reputation branch before the template one.
-    reputations: Res<'w, crate::net::Reputations>,
+    /// The relation model's inputs, the live standings among them: the unit's reaction toward us
+    /// takes the reputation branch before the template one.
+    relations: crate::target::RelationWorld<'w, 's>,
     /// This frame's rendered plate verdict, not a re-derivation, so the card matches the screen.
     plates: Res<'w, crate::vplates::VPlates>,
     /// The two master bits, so a `plate ✗` can say whether the category gate refused it.
@@ -205,9 +205,13 @@ pub(super) fn inspect_ui(
         .entity
         .and_then(|e| parents.get(e).ok())
         .map(|c| c.parent());
-    let (factions, self_store) = (stores.factions.as_deref(), stores.self_store.single().ok());
-    let (reputations, plates, plate_mode) =
-        (&*stores.reputations, &stores.plates.0, &*stores.plate_mode);
+    let relations = &stores.relations;
+    let (factions, self_store) = (relations.factions(), stores.self_store.single().ok());
+    let (reputations, plates, plate_mode) = (
+        stores.relations.reputations(),
+        &stores.plates.0,
+        &*stores.plate_mode,
+    );
     let go_templates = &*stores.go_templates;
     let queued_area = stores.stone.as_deref().map_or(0, |s| s.area);
     let hovered_go = &*stores.hovered_go;
@@ -435,7 +439,12 @@ pub(super) fn inspect_ui(
     // Why this unit does or does not carry a plate: every input of `vplates::drive_vplates`'s
     // gate and the verdict read from [`crate::vplates::VPlates`].
     let plate_line = store.filter(|_| is_unit).map(|s| {
-        let rank = crate::target::ring::ring_reaction(factions, reputations, Some(s), self_store);
+        let guid = net_entity
+            .and_then(|p| guids.get(p).ok())
+            .map_or(0, |g| g.0);
+        let rel = relations.get();
+        let unit = relations.unit_of(guid, s);
+        let rank = relations.me().map_or(3, |me| rel.reaction(&unit, &me));
         let word = match rank {
             0 => "hated",
             1 => "hostile",
@@ -453,7 +462,7 @@ pub(super) fn inspect_ui(
             s.0.unit_faction_template()
                 .and_then(|t| factions?.catalog().template(t))
                 .map(|t| {
-                    if crate::target::ring::forced_rank(reputations, t.faction).is_some() {
+                    if crate::target::relations::forced_rank(reputations, t.faction).is_some() {
                         "forced"
                     } else if factions
                         .is_some_and(|f| f.catalog().reputation_faction(t.faction).is_some())

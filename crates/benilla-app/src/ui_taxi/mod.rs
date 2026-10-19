@@ -130,7 +130,7 @@ fn feed_taxi(
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    reactions: crate::target::ReactionInputs,
+    relations: crate::target::RelationWorld,
     mut last: crate::ui_script::WindowMemo<Option<TaxiUiState>>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
@@ -196,14 +196,16 @@ fn feed_taxi(
             .0
             .get(&open.flightmaster)
             .and_then(|&e| stores.get(e).ok());
-        let discount = flightmaster.zip(self_q.iter().next()).map(|(master, me)| {
-            crate::target::vendor_price_discount(
-                reactions.factions.as_deref(),
-                &reactions.reputations,
-                master,
-                me,
-            )
-        });
+        let discount = (|| {
+            let (master, player, me) = (flightmaster?, self_q.iter().next()?, relations.me()?);
+            let master = relations.unit_of(open.flightmaster, master);
+            Some(crate::target::vendor_price_discount(
+                &relations.get(),
+                &master,
+                &me,
+                player,
+            ))
+        })();
         let (map_id, nodes, resolved) = build_nodes(open, &catalogs, discount)?;
         cache.0 = resolved;
         Some(TaxiUiState {
@@ -343,7 +345,10 @@ impl Plugin for UiTaxiPlugin {
                 Update,
                 (
                     load_taxi_catalogs,
-                    feed_taxi.in_set(UiFeed),
+                    // After the roster publish, whose party slots the master's reaction reads.
+                    feed_taxi
+                        .in_set(UiFeed)
+                        .after(crate::spell::group_relation::publish_group_roster),
                     feed_on_taxi.in_set(UiFeed),
                     drain_taxi.after(UiInput),
                 ),
@@ -429,9 +434,15 @@ mod tests {
             .insert_resource(factions)
             .insert_resource(reps)
             .insert_non_send_resource(UiScript::new().unwrap());
+        // A human warrior player: the master's standing leg needs the player's type, flag `0x8`
+        // and template (`0x606576`-`0x6065b6`).
         app.world_mut().spawn((
             SelfPlayer,
+            crate::net::Guid(0x10),
             ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19), // OBJECT_FIELD_TYPE
+                (FIELD_UNIT_FACTIONTEMPLATE, 1),
+                (benilla_protocol::field::FIELD_UNIT_FLAGS, 0x8),
                 (BYTES_0, crate::target::HUMAN_WARRIOR),
                 (PLAYER_BYTES_3, 6 << 24),
             ])),

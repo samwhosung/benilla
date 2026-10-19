@@ -93,10 +93,15 @@ pub struct UnitState {
     pub charmed: bool,
     /// `UnitIsGhost`: `PLAYER_FLAGS` bit `0x10`, so players only.
     pub ghost: bool,
-    /// The reaction toward the player on `UnitReaction`'s scale, 1 hated to 7 revered, which
-    /// Exalted reads too (`0x606439` caps the rank), 0 unknown (nil). Fed for the tokens naming
-    /// another unit; `"player"` and `"pet"` stay 0.
+    /// The unit's reaction toward the player, `0x6061e0(unit, player)` plus one: 1 hated to 7
+    /// revered, which Exalted reads too (`0x606439` caps the rank), 0 unknown. The tooltip's and
+    /// the dishonorable-kill tests read it; the six relation verbs ask [`UnitRelations`]. Fed for
+    /// the tokens naming another unit; `"player"` and `"pet"` stay 0.
     pub reaction: u8,
+    /// The other direction, the player's reaction toward the unit (`0x6061e0` with the player as
+    /// `this`), on the same scale, 0 unknown: the tooltip's creature-type gate (`0x52a2d9`) reads
+    /// it. Fed where [`Self::reaction`] is.
+    pub player_reaction: u8,
     /// `UnitRace`'s localized first return, from `UNIT_FIELD_BYTES_0` byte 0; `None` answers
     /// `nil, nil`.
     pub race: Option<String>,
@@ -155,7 +160,9 @@ pub struct UnitState {
     pub civilian: bool,
     /// The creature racial-leader flag, the tooltip's LEADER line when PvP-flagged (`0x6125c0`).
     pub racial_leader: bool,
-    /// `UNIT_FIELD_FLAGS`' PvP bit: `UnitIsPVP` and the tooltip's PvP line.
+    /// The unit's own PvP flag, `UNIT_FIELD_FLAGS` bit 12, which the tooltip's PvP line reads
+    /// (`0x52a866`); for a party member out of view, the roster's bit. `UnitIsPVP` reads it only
+    /// for a unit the host does not hold, and asks `IsPvP` of one it does.
     pub pvp: bool,
     /// `UNIT_FIELD_FLAGS`' skinnable bit, the tooltip's red Skinnable line.
     pub skinnable: bool,
@@ -193,16 +200,6 @@ pub struct UnitState {
     pub guid: u64,
     /// `GetRaidTargetIndex`: 0 none, else the mark 1..=8, from the group's raid-target board.
     pub raid_target: u8,
-    /// Whether the player can attack the unit, `UnitCanAttack("player", unit)`, which the binding
-    /// (`0x516c50`, delegating to `CanAttack` `0x606980`) answers for both argument orders. Fed for
-    /// `target`, `targettarget`, `npc` and the units a chain ends on; other tokens read false.
-    pub can_attack: bool,
-    /// Whether the player can assist the unit, `UnitCanAssist("player", unit)`: `CanAssist`
-    /// (`0x6066f0`, `this` the player, the argument the unit). Fed where [`Self::can_attack`] is.
-    pub can_assist: bool,
-    /// The same with the unit as `this` and the player the argument (`0x6066f0` reads the reaction
-    /// of `this` toward the argument): `UnitCanAssist(unit, "player")`.
-    pub can_assist_player: bool,
     /// `UnitIsCorpse` (`0x5161c0`): the token names a `TYPEID_CORPSE` object, which a dead unit
     /// is not. No feed sets it.
     pub corpse_object: bool,
@@ -494,16 +491,6 @@ impl super::UiScript {
     }
 }
 
-/// The non-`"player"` token of a two-unit call such as `UnitIsEnemy(a, b)`, which the snapshot
-/// holds the relationship on; the test folds case, as the resolver does.
-fn pick_unit_token(a: &Option<String>, b: &Option<String>) -> Option<String> {
-    match (a, b) {
-        (Some(x), _) if !x.eq_ignore_ascii_case("player") => Some(x.clone()),
-        (_, Some(y)) => Some(y.clone()),
-        (x, _) => x.clone(),
-    }
-}
-
 use resolve::token_recognised;
 
 /// The resolver's token check: an unrecognised token raises `Unknown unit name`, as `0x515970`
@@ -552,10 +539,12 @@ mod bindings;
 pub mod by_name;
 #[cfg(test)]
 mod chain_tests;
+mod relations;
 mod resolve;
 #[cfg(test)]
 mod tests;
 
+pub use relations::UnitRelations;
 pub use resolve::{parse_unit_token, UnitBase, UnitGuids, UnitTokenParse};
 
 pub(super) use bindings::install;

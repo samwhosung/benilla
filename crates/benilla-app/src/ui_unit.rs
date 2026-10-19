@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_formats::{ChrClasses, ChrRaces};
+use benilla_formats::{ChrClasses, ChrRaces, Reaction};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
     parse_unit_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse, WornDisplay,
@@ -16,12 +16,13 @@ use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::target::{ring_reaction, Factions, Selection};
+use crate::target::{Factions, RelUnit, Relations, Selection};
 use crate::ui_script::{gate, SweepApp, UiInput};
 
 pub(crate) mod control_gate;
 pub(crate) mod field_events;
 mod held;
+mod relations;
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
 /// interface exists; the demo override orders itself after it.
@@ -162,6 +163,15 @@ impl Plugin for UiUnitPlugin {
             )
                 .chain()
                 .in_set(UnitFeed),
+        )
+        // The relation functions the six relation verbs ask, ahead of every feed whose events a
+        // handler asks them in: the unit snapshots' `PLAYER_TARGET_CHANGED` and the aura feed's.
+        .add_systems(
+            Update,
+            relations::feed_unit_relations
+                .in_set(UnitFeed)
+                .before(UnitSnapshots)
+                .before(crate::ui_aura::AuraEvents),
         )
         .add_systems(Update, drain_pvp_toggles.after(UiInput))
         .add_systems(Update, drain_worn_display_toggles.after(UiInput))
@@ -879,9 +889,11 @@ fn feed_farsight_focus(
 }
 
 /// Feed the unit reach map: per held unit a token can name, its squared distance and whether it
-/// passes inspect's two other refusals, a non-player and an attackable one (vmangos
-/// `MiscHandler.cpp:945-956`; that the client checks them is inferred, `0x48a1b0` being partly
-/// undecoded). The guids are the resolver's own inputs, which the aura feed pushes each frame
+/// passes `0x4944a0`'s other legs, the one `CanInspect` answers by (`0x48a2a1`): a player unit
+/// (`0x4944d8`) that is the active player (`0x4944dd`) or one it can cooperate with (`0x4944e4`).
+/// Cooperation is the faction group, not attackability: an unflagged enemy-faction player is not
+/// inspectable, a same-faction duel opponent is. The guids are the resolver's own inputs, which
+/// the aura feed pushes each frame
 /// ([`UiScript::held_unit_guids`], so this runs after it): the bases and each unit a `target`
 /// chain reaches, and the VM resolves a verb's token to one of them or to a guid with no entry. Ungated: distances move every
 /// frame, and no event keys off the map.
@@ -890,14 +902,14 @@ fn feed_unit_reach(
     tokens: UnitTokens,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
     transforms: Query<&Transform>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: crate::target::RelationWorld,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let mut reach = HashMap::new();
-    if let Some((self_tf, self_store)) = self_q.iter().next() {
+    let (rel, me) = (world.get(), world.me());
+    if let Some((self_tf, _)) = self_q.iter().next() {
         for guid in script.held_unit_guids() {
             let Some((entity, _)) = tokens.held(guid) else {
                 continue;
@@ -905,14 +917,14 @@ fn feed_unit_reach(
             let Ok(tf) = transforms.get(entity) else {
                 continue;
             };
-            let store = tokens.stores.get(entity).ok();
-            let inspectable = benilla_protocol::guid::is_player(guid)
-                && !crate::target::can_attack(
-                    store,
-                    factions.as_deref(),
-                    &reputations,
-                    Some(self_store),
-                );
+            let unit = tokens
+                .stores
+                .get(entity)
+                .ok()
+                .map(|s| world.unit_of(guid, s));
+            let inspectable = unit.zip(me.as_ref()).is_some_and(|(unit, me)| {
+                unit.is_player && (unit.guid == me.guid || rel.can_cooperate(me, &unit))
+            });
             reach.insert(
                 guid,
                 benilla_ui::script::UnitReach {
@@ -963,16 +975,19 @@ impl SnapshotTables<'_> {
     }
 }
 
-/// `UnitReaction(unit, "player")` (`0x5167e0`): [`ring_reaction`] plus one (`0x51683e`), so
-/// `1..=7`, Hated to Revered, and Exalted reads 7 too (`0x606439`). Stock `UnitReactionColor`
-/// has seven entries (`TargetFrame.lua:6-14`), one per value.
-pub(crate) fn unit_reaction(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    store: &ObjectStore,
-    self_store: Option<&ObjectStore>,
-) -> u8 {
-    ring_reaction(factions, reputations, Some(store), self_store) + 1
+/// `UnitReaction(unit, "player")` (`0x5167e0`): the unit's reaction toward the player plus one
+/// (`0x51683e`), so `1..=7`, Hated to Revered, and Exalted reads 7 too (`0x606439`). Stock
+/// `UnitReactionColor` has seven entries (`TargetFrame.lua:6-14`), one per value. Before the
+/// player's object streams it reads neutral.
+pub(crate) fn unit_reaction(rel: &Relations, unit: &RelUnit, me: Option<&RelUnit>) -> u8 {
+    me.map_or(Reaction::Neutral as u8, |me| rel.reaction(unit, me)) + 1
+}
+
+/// The player's reaction toward the unit, `0x6061e0(player, unit)`, on the same scale as
+/// [`unit_reaction`]; 0 before the player's object, where the tooltip's creature-type gate shows
+/// no type (`0x52a2d0`).
+pub(crate) fn player_reaction(rel: &Relations, unit: &RelUnit, me: Option<&RelUnit>) -> u8 {
+    me.map_or(0, |me| rel.reaction(me, unit) + 1)
 }
 
 /// Build a unit snapshot from a streamed descriptor, its guid, its cached name and its
@@ -1227,13 +1242,6 @@ pub(crate) fn faction_group_localized(
         .map(str::to_string)
 }
 
-/// `CanAssist` (`0x6066f0`) of the player toward itself, `UnitCanAssist("player", "player")`: one
-/// object toward itself is friendly (`0x606200`), so `UNIT_FLAG_NOT_SELECTABLE` is the only refusal
-/// left.
-fn self_can_assist(store: &ObjectStore) -> bool {
-    crate::target::is_selectable(Some(store), None)
-}
-
 /// `"player"`'s snapshot off our own descriptor: no reaction (the unit is ours), the raid icon,
 /// both faction-group spellings and the guild. One builder for [`feed_units`] and for the seat a
 /// `/reload`'s load runs under ([`live_player_seat`]).
@@ -1262,7 +1270,6 @@ fn player_snapshot(
         tables.types(names),
     );
     s.is_player = true;
-    s.can_assist = self_can_assist(store);
     s.raid_target = group.raid_target_index(guid);
     s.faction_group = faction_group(store, factions);
     s.faction_group_localized = faction_group_localized(store, factions);
@@ -1342,8 +1349,7 @@ fn feed_units(
     mut feed: ResMut<UnitFeedState>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    factions: Option<Res<Factions>>,
-    reputations: Res<Reputations>,
+    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     // Chat and the message-sound queue, for the rest and PvP lines.
     mut sink: crate::ui_action::MessageSink,
@@ -1367,8 +1373,7 @@ fn feed_units(
     let stores_changed = !stores.changed.is_empty();
     let stores_removed = !stores.removed.is_empty();
     let group_changed = group.is_changed();
-    let reps_changed = reputations.is_changed();
-    let factions_changed = factions.as_ref().is_some_and(|r| r.is_changed());
+    let relations_changed = world.inputs_changed();
     // The interaction NPC moves when nothing else does, and `MERCHANT_SHOW` reads `"npc"`.
     let interact_changed = interact.as_ref().is_some_and(|r| r.is_changed());
     // A selection call showed its pick as `"target"` inside its chunk, past this memo.
@@ -1383,8 +1388,7 @@ fn feed_units(
             ("stores", stores_changed),
             ("removed", stores_removed),
             ("group", group_changed),
-            ("reputations", reps_changed),
-            ("factions", factions_changed),
+            ("relations", relations_changed),
             ("interact", interact_changed),
             ("target_view", target_view_moved),
         ],
@@ -1397,8 +1401,7 @@ fn feed_units(
             || stores_changed
             || stores_removed
             || group_changed
-            || reps_changed
-            || factions_changed
+            || relations_changed
             || interact_changed
             || target_view_moved,
     );
@@ -1417,7 +1420,7 @@ fn feed_units(
             &names,
             &commands,
             &group,
-            factions.as_deref(),
+            world.factions(),
             &mut guild,
         )
     });
@@ -1437,19 +1440,15 @@ fn feed_units(
         feed.warned_sideless = sideless;
     }
     // What the three snapshots below (target, target-of-target, NPC) read besides a descriptor.
-    let by_guid = |guid: u64| -> Option<ObjectStore> {
-        stores.all.get(*index.as_ref()?.0.get(&guid)?).ok().cloned()
-    };
     let held = held::HeldUnits {
         names: &names,
         commands: &commands,
-        factions: factions.as_deref(),
-        reputations: &reputations,
         group: &group,
         self_store: self_pair.map(|(s, _)| s),
         unit_names: chr,
         types,
-        by_guid: &by_guid,
+        rel: world.get(),
+        me: world.me(),
     };
     let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
         let store = stores.all.get(e).ok()?;
@@ -1709,6 +1708,7 @@ pub(crate) fn add_unit_feed(app: &mut App) {
         .add_systems(
             Update,
             (
+                relations::feed_unit_relations,
                 feed_units,
                 fire_faction_on_forced_table,
                 field_events::fire_field_notices,
@@ -2358,13 +2358,13 @@ mod tests {
         const B: u64 = 0x1002;
         const MOB: u64 = 0xF130_0000_0000_0001;
         const A_PET: u64 = 0xF140_0000_0000_1001;
-        /// `OBJECT_FIELD_TYPE`, `UNIT_FIELD_SUMMON`, `UNIT_FIELD_TARGET` and `UNIT_FIELD_FLAGS`.
+        /// `OBJECT_FIELD_TYPE`, `UNIT_FIELD_SUMMON`, `UNIT_FIELD_TARGET` and
+        /// `UNIT_FIELD_FACTIONTEMPLATE`.
         const OBJECT_TYPE: u16 = 2;
         const SUMMON: u16 = 8;
         const TARGET: u16 = 16;
-        const FLAGS: u16 = 46;
-        /// `UNIT_FIELD_FLAGS` bit 1 (NON_ATTACKABLE), which `can_attack` refuses.
-        const NON_ATTACKABLE: u32 = 1 << 1;
+        const TEMPLATE: u16 = 35;
+        use crate::target::relations::fixture::{factions, HUMAN};
 
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
@@ -2375,6 +2375,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Reputations>()
             .init_resource::<crate::ui_party::GroupState>()
+            .insert_resource(factions())
             .insert_resource(NetCommands(tx))
             .add_plugins(crate::ui_aura::UiAuraPlugin)
             .add_systems(Update, feed_unit_reach.after(crate::ui_aura::AuraEvents));
@@ -2382,9 +2383,9 @@ mod tests {
 
         // We at the origin, party1 (`A`) 5 yards off with a pet 15 yards off, the mob 20 yards
         // off, and `B` 3 yards off. We and `A` target the mob, the mob targets `B`, the pet
-        // targets `B`, and `B` targets nobody. The players are not attackable, so inspectable.
+        // targets `B`, and `B` targets nobody. All are Human, so the players cooperate with us.
         let mut spawn = |guid: u64, kind: u32, summon: u64, target: u64, yards: f32| {
-            let mut pairs = vec![(OBJECT_TYPE, kind), (FLAGS, NON_ATTACKABLE)];
+            let mut pairs = vec![(OBJECT_TYPE, kind), (TEMPLATE, HUMAN)];
             for (field, guid) in [(SUMMON, summon), (TARGET, target)] {
                 pairs.push((field, guid as u32));
                 pairs.push((field + 1, (guid >> 32) as u32));
@@ -2949,59 +2950,66 @@ mod tests {
         );
     }
 
-    /// The player-only refusal rides in the entry, so a boar in interact range is not inspectable.
+    /// `CanInspect` answers by `0x4944a0` (`0x48a2a1`), whose player and cooperation legs ride in
+    /// the entry: a boar in interact range is not inspectable, nor an unflagged Orc, while a Human
+    /// duel or free-for-all opponent is, `CanCooperate 0x606ba0` reading the faction group alone.
+    /// You are, and a charmed Human is not (`0x606bab`). `CheckInteractDistance` is distance alone.
     #[test]
     fn a_creature_target_enters_the_reach_map_at_its_real_distance() {
-        use benilla_protocol::messages::ObjectFields;
+        use crate::target::relations::fixture::{
+            creature, duelling, factions, flagged, player, store_of, FFA, HUMAN, ORC,
+        };
+        use crate::target::RelUnit;
         use bevy::ecs::system::RunSystemOnce;
 
-        /// `UNIT_FIELD_FLAGS` bit 1 (NON_ATTACKABLE), which `can_attack` refuses.
-        const NON_ATTACKABLE: u32 = 1 << 1;
-        const FIELD_UNIT_FLAGS: u16 = 46;
         const ME: u64 = 0x0000_0000_0000_0001;
         const BOAR: u64 = 0xF130_0000_0000_0002;
-        const FRIEND: u64 = 0x0000_0000_0000_0003;
+        const OTHER: u64 = 0x0000_0000_0000_0003;
+        const ARBITER: u64 = 0xF110_0000_0000_0004;
 
-        /// Seat one target `yards` away and answer `expr` against it.
-        fn ask(guid: u64, flags: u32, yards: f32, expr: &str) -> bool {
+        /// Seat `me` and one target `yards` away and answer `expr` against them.
+        fn ask(me: RelUnit, target: RelUnit, yards: f32, expr: &str) -> bool {
             let mut app = App::new();
             app.init_resource::<crate::ui_party::GroupState>()
-                .init_resource::<Reputations>();
+                .init_resource::<Reputations>()
+                .insert_resource(factions());
             app.insert_non_send_resource(UiScript::new().unwrap());
 
-            let me = app
+            let me_entity = app
                 .world_mut()
                 .spawn((
                     SelfPlayer,
-                    Guid(ME),
-                    ObjectStore(ObjectFields::default()),
+                    Guid(me.guid),
+                    store_of(&me),
                     Transform::from_xyz(0.0, 0.0, 0.0),
                 ))
                 .id();
-            let target = app
+            let target_entity = app
                 .world_mut()
                 .spawn((
-                    Guid(guid),
-                    ObjectStore(ObjectFields::from_pairs(&[(FIELD_UNIT_FLAGS, flags)])),
+                    Guid(target.guid),
+                    store_of(&target),
                     // Along one axis, so d² is exactly yards².
                     Transform::from_xyz(yards, 0.0, 0.0),
                 ))
                 .id();
             app.insert_resource(crate::net::GuidIndex(
-                [(ME, me), (guid, target)].into_iter().collect(),
+                [(me.guid, me_entity), (target.guid, target_entity)]
+                    .into_iter()
+                    .collect(),
             ));
             app.insert_resource(Selection {
-                target: Some(target),
-                guid: Some(guid),
+                target: Some(target_entity),
+                guid: Some(target.guid),
                 ..Default::default()
             });
             // The resolver's inputs the aura feed would push: us and the target, both held.
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
                 .set_unit_guids(&benilla_ui::script::UnitGuids {
-                    player: ME,
-                    target: guid,
-                    held: HashMap::from([(ME, 0), (guid, 0)]),
+                    player: me.guid,
+                    target: target.guid,
+                    held: HashMap::from([(me.guid, 0), (target.guid, 0)]),
                     ..Default::default()
                 });
 
@@ -3012,10 +3020,12 @@ mod tests {
                 .unwrap()
         }
 
+        let me = player(ME, HUMAN);
+        let boar = creature(BOAR, ORC);
         assert!(
             ask(
-                BOAR,
-                0,
+                me,
+                boar,
                 40.0,
                 r#"return CheckInteractDistance("target", 4) == nil"#
             ),
@@ -3023,8 +3033,8 @@ mod tests {
         );
         assert!(
             ask(
-                BOAR,
-                0,
+                me,
+                boar,
                 15.0,
                 r#"return CheckInteractDistance("target", 4) ~= nil"#
             ),
@@ -3032,37 +3042,84 @@ mod tests {
         );
         assert!(
             ask(
-                BOAR,
-                0,
+                me,
+                boar,
                 15.0,
                 r#"return CheckInteractDistance("target", 1) == nil"#
             ),
             "…and outside the 10-yard one: the table is indexed, not a constant"
         );
-
         assert!(
             ask(
-                BOAR,
-                0,
+                me,
+                boar,
                 3.0,
                 r#"return CheckInteractDistance("target", 1) ~= nil"#
             ),
             "a creature 3 yards away is in interact range"
         );
         assert!(
-            ask(BOAR, 0, 3.0, r#"return CanInspect("target") == nil"#),
-            "…and is still not inspectable — the players-only leg rides in the entry"
+            ask(me, boar, 3.0, r#"return CanInspect("target") == nil"#),
+            "…and is still not inspectable: the player leg rides in the entry"
         );
-        // The control: a non-attackable player there is inspectable, so the refusal is the type.
+
+        let inspectable = |me: RelUnit, them: RelUnit, yards: f32| {
+            ask(me, them, yards, r#"return CanInspect("target") ~= nil"#)
+        };
+        let human = player(OTHER, HUMAN);
+        assert!(inspectable(me, human, 3.0), "a Human 3 yards away");
+        assert!(!inspectable(me, human, 15.0), "…not 15 yards away");
         assert!(
-            ask(
-                FRIEND,
-                NON_ATTACKABLE,
-                3.0,
-                r#"return CanInspect("target") ~= nil"#
-            ),
-            "a non-attackable player 3 yards away is inspectable"
+            !inspectable(me, player(OTHER, ORC), 3.0),
+            "an unflagged Orc: not attackable, and not one to cooperate with"
         );
+        assert!(
+            inspectable(duelling(me, ARBITER, 1), duelling(human, ARBITER, 2), 3.0),
+            "a Human duel opponent: attackable, and still of our faction group"
+        );
+        assert!(
+            inspectable(flagged(me, FFA), flagged(human, FFA), 3.0),
+            "a Human free-for-all opponent"
+        );
+        let charmed = RelUnit {
+            charmed_by: BOAR,
+            ..human
+        };
+        assert!(!inspectable(me, charmed, 3.0), "a charmed Human");
+        assert!(
+            ask(me, boar, 3.0, r#"return CanInspect("player") ~= nil"#),
+            "yourself, ahead of the cooperation leg (`0x4944dd`)"
+        );
+    }
+
+    /// The two reaction fields run opposite ways: `UnitReaction`'s is the unit's toward the player,
+    /// the tooltip's creature-type gate the player's toward the unit (`0x52a2d9`). The Cenarion
+    /// Circle, template 996, not at war, reads neutral toward the player and friendly from him, so
+    /// its tooltip shows no creature type. No active player reads 0, which shows none.
+    #[test]
+    fn the_player_reaction_is_the_players_toward_the_unit() {
+        use crate::target::relations::fixture::{creature, human_warrior, Scene};
+
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions = crate::target::Factions::from_catalog(
+            benilla_formats::load_faction_catalog(&mut chain).expect("faction tables"),
+        );
+        let me = human_warrior(0x10);
+        let mut scene = Scene::new(me, Some(factions));
+        let druid = scene.hold(creature(0xF130_0000_0000_0011, 996));
+        let rel = scene.rel();
+        assert_eq!(
+            unit_reaction(&rel, &druid, Some(&me)),
+            4,
+            "neutral toward us"
+        );
+        assert_eq!(
+            player_reaction(&rel, &druid, Some(&me)),
+            5,
+            "friendly from us"
+        );
+        assert_eq!(player_reaction(&rel, &druid, None), 0);
     }
 
     /// Either half moving pushes; only the count, the one byte the client watches, fires.
@@ -3194,25 +3251,6 @@ mod tests {
             [[0; 3]; 20],
             "a creature has no PLAYER block"
         );
-    }
-
-    /// The player can assist itself unless its descriptor says `UNIT_FLAG_NOT_SELECTABLE`
-    /// (`0x6066f0`'s first refusal; the reaction of one object toward itself is friendly,
-    /// `0x606200`).
-    #[test]
-    fn the_player_assists_itself_unless_it_is_unselectable() {
-        use benilla_protocol::messages::ObjectFields;
-
-        const OBJECT_TYPE: u16 = 2;
-        const FLAGS: u16 = 46;
-        let me = |flags: u32| {
-            ObjectStore(ObjectFields::from_pairs(&[
-                (OBJECT_TYPE, 0x19),
-                (FLAGS, flags),
-            ]))
-        };
-        assert!(self_can_assist(&me(0x8)));
-        assert!(!self_can_assist(&me(0x8 | (1 << 25))));
     }
 
     /// The rank getter's two gates (`0x605620`), through `enrich_unit`'s wiring.

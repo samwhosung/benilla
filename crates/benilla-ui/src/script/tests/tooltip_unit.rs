@@ -31,6 +31,7 @@ fn wolf() -> UnitState {
         max_health: 50,
         level: 10,
         reaction: 2, // hostile
+        player_reaction: 2,
         creature_type_name: Some("Beast".into()),
         rank: 2, // rare-elite prints ELITE (the byte table)
         skinnable: true,
@@ -85,6 +86,7 @@ fn unqueried_wolf() -> UnitState {
         max_health: 50,
         level: 10,
         reaction: 2, // hostile
+        player_reaction: 2,
         skinnable: true,
         guid: 0xF130_0000_0000_0001,
         ..Default::default()
@@ -268,6 +270,7 @@ fn the_tooltip_title_is_the_pvp_name() {
             name: Some("Defias Civilian".into()),
             level: 20,
             reaction: 2,
+            player_reaction: 2,
             pvp: true,
             civilian: true,
             ..Default::default()
@@ -303,6 +306,7 @@ fn faction_line_and_civilian_gate() {
             name: Some("Marshal McBride".into()),
             level: 20,
             reaction: 6, // friendly
+            player_reaction: 6,
             creature_type_name: Some("Humanoid".into()),
             faction_name: Some("Stormwind".into()),
             pvp: true,
@@ -332,6 +336,7 @@ fn faction_line_and_civilian_gate() {
             name: Some("Defias Civilian".into()),
             level: 20,
             reaction: 2, // hostile
+            player_reaction: 2,
             creature_type_name: Some("Humanoid".into()),
             pvp: true,
             civilian: true,
@@ -359,6 +364,7 @@ fn faction_line_and_civilian_gate() {
             name: Some("Defias Civilian".into()),
             level: 25,
             reaction: 2,
+            player_reaction: 2,
             creature_type_name: Some("Humanoid".into()),
             pvp: true,
             civilian: true,
@@ -422,6 +428,7 @@ fn level_line_variants() {
             level: 3,
             dead: true,
             reaction: 2,
+            player_reaction: 2,
             creature_type_name: Some("Beast".into()),
             ..Default::default()
         }),
@@ -443,6 +450,7 @@ fn level_line_variants() {
             name: Some("Kazzak".into()),
             level: 63,
             reaction: 2,
+            player_reaction: 2,
             creature_type_name: Some("Demon".into()),
             rank: 3,
             ..Default::default()
@@ -463,6 +471,7 @@ fn level_line_variants() {
         name: Some("Elder".into()),
         level: 70,
         reaction,
+        player_reaction: reaction,
         is_player,
         creature_type_name: (!is_player).then(|| "Beast".into()),
         race: is_player.then(|| "Orc".into()),
@@ -525,6 +534,7 @@ fn a_players_level_line_ignores_the_snapshots_creature_type() {
         name: Some("Fenwick".into()),
         level: 40,
         reaction,
+        player_reaction: reaction,
         is_player: true,
         race: Some("Night Elf".into()),
         class: Some("Druid".into()),
@@ -576,6 +586,7 @@ fn a_type_ten_creature_has_no_word_in_the_level_line_but_unitcreaturetype_answer
         name: Some("Wisp".into()),
         level: 60,
         reaction,
+        player_reaction: reaction,
         creature_type: id,
         creature_type_name: Some(word.into()),
         ..Default::default()
@@ -602,6 +613,59 @@ fn a_type_ten_creature_has_no_word_in_the_level_line_but_unitcreaturetype_answer
         "#,
         )
         .unwrap_or_else(|e| panic!("reaction {reaction}: {e}"));
+    }
+    assert!(s.take_errors().is_empty());
+}
+
+/// The creature type shows by the player's reaction toward the unit, not the unit's toward the
+/// player (`0x6061e0(player, unit)`, `0x52a2d9`, under 4 internal): a not-at-war reputation
+/// faction such as the Cenarion Circle reads neutral toward the player while the player reads it
+/// friendly, so it shows no type, and neither does a guard turned hostile on a contested player,
+/// whom the player still reads friendly. No active player shows none (`0x52a2d0`).
+#[test]
+fn the_creature_type_reads_the_players_reaction_toward_the_unit() {
+    let mut s = script();
+    seed_level_strings(&mut s);
+    s.set_screen_size(800.0, 600.0);
+    s.set_player_req_state(PlayerReqState {
+        level: 60,
+        ..Default::default()
+    });
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "UF4"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+    "#,
+    )
+    .unwrap();
+    let druid = |reaction: u8, player_reaction: u8| UnitState {
+        guid: 0xF130_0000_0000_010A,
+        exists: true,
+        has_object: true,
+        name: Some("Cenarion Druid".into()),
+        level: 60,
+        reaction,
+        player_reaction,
+        creature_type: 7,
+        creature_type_name: Some("Humanoid".into()),
+        ..Default::default()
+    };
+    for (reaction, player_reaction, line) in [
+        (4, 5, "[LEVEL 60]"),
+        (2, 5, "[LEVEL 60]"),
+        (5, 4, "[LEVEL_CLASS 60 Humanoid]"),
+        (2, 3, "[LEVEL_CLASS 60 Humanoid]"),
+        (4, 0, "[LEVEL 60]"),
+    ] {
+        s.set_unit("target", Some(druid(reaction, player_reaction)));
+        s.run(&format!(
+            r#"
+            TT:SetOwner(UF4, "ANCHOR_RIGHT"); TT:SetUnit("target")
+            assert(TTTextLeft2:GetText() == "{line}", "got " .. TTTextLeft2:GetText())
+        "#
+        ))
+        .unwrap_or_else(|e| panic!("reaction {reaction}, player's {player_reaction}: {e}"));
     }
     assert!(s.take_errors().is_empty());
 }

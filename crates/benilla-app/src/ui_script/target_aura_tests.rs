@@ -31,6 +31,9 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\PartyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\TargetFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetFrame.xml");
+    // `GetDifficultyColor` (`QuestLogFrame.lua:585`), which `TargetFrame_CheckLevel` asks for an
+    // attackable target (`TargetFrame.lua:130`).
+    load_xml(&s, r"Interface\FrameXML\QuestLogFrame.lua");
     load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
 
     // `TargetofTargetFrame` loads shown (`TargetFrame.xml:515`) and hides only after the rows
@@ -40,12 +43,26 @@ fn harness() -> UiScript {
     s
 }
 
-/// Target a unit of the given reaction (2 = hostile, 5 = friendly) carrying `auras`.
+/// Target a unit of the given reaction (2 = hostile, 5 = friendly) carrying `auras`: a creature of
+/// the orc or the human template, toward us, a human player, in the relation functions.
 fn target(s: &mut UiScript, reaction: u8, auras: Vec<AuraState>) {
+    use crate::target::relations::fixture::{creature, factions, player, Scene, HUMAN, ORC};
+    let mut scene = Scene::new(player(1, HUMAN), Some(factions()));
+    scene.hold(creature(TARGET, if reaction >= 5 { HUMAN } else { ORC }));
+    s.set_unit_relations(Some(scene.relations()));
+    s.set_unit(
+        "player",
+        Some(UnitState {
+            exists: true,
+            guid: 1,
+            ..UnitState::default()
+        }),
+    );
     s.set_unit(
         "target",
         Some(UnitState {
             exists: true,
+            guid: TARGET,
             name: Some("Subject".into()),
             health: 40,
             max_health: 40,

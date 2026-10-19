@@ -344,7 +344,8 @@ pub(super) fn drain_chat_input(
                 }
             }
             ParsedChat::Reaction { name } => {
-                // In the ladder's order: the duel gates, the faction work, then `can_attack`.
+                // In the model's order: the controlling players' rungs, the faction work, then the
+                // predicates the cursor, the plate and the Lua verbs ask.
                 let subject_guid = match &name {
                     Some(n) => crate::ui_duel::streamed_player_named(n, guids, &names),
                     None => selection.guid,
@@ -355,16 +356,36 @@ pub(super) fn drain_chat_input(
                 let is_player = subject_entity
                     .and_then(|e| kinds.get(e).ok())
                     .is_some_and(|n| n.kind == benilla_protocol::EntityKind::Player);
+                let units = crate::target::relations::StoreLookup::new(|g| {
+                    stores.get(*guids.0.get(&g)?).ok()
+                });
+                let roster = crate::spell::group_relation::GroupRoster::party_of(&group);
+                let rel = crate::target::Relations {
+                    factions: factions.as_deref(),
+                    reputations,
+                    me: self_guid.0,
+                    roster: Some(&roster),
+                    units: &units,
+                };
+                let subject = subject_guid
+                    .zip(target_store)
+                    .map(|(g, s)| crate::target::RelUnit::of(g, s));
+                let me = self_guid
+                    .0
+                    .zip(own_store)
+                    .map(|(g, s)| crate::target::RelUnit::of(g, s));
+                let pair = subject.zip(me);
                 let mut lines = Vec::new();
                 let describe = |label: &str, s: Option<&crate::net::ObjectStore>| match s {
                     Some(s) => format!(
                         "reaction: {label} flags 0x{:08x} (player-controlled {}) faction_tpl {:?} \
-                         duel_team {} duel_arbiter 0x{:016x}",
+                         duel_team {} duel_arbiter 0x{:016x} player_flags 0x{:x}",
                         s.0.unit_flags(),
                         s.0.unit_flags() & (1 << 3) != 0,
                         s.0.unit_faction_template(),
                         s.0.player_duel_team(),
                         s.0.player_duel_arbiter(),
+                        s.0.player_flags(),
                     ),
                     None => format!("reaction: {label} — no ObjectStore"),
                 };
@@ -376,40 +397,44 @@ pub(super) fn drain_chat_input(
                 ));
                 lines.push(describe("target", target_store));
                 lines.push(describe("self  ", own_store));
-                match (target_store, own_store) {
-                    (Some(t), Some(o)) => {
+                match pair {
+                    Some((t, o)) => {
+                        let (ct, co) = (rel.controller(&t), rel.controller(&o));
                         lines.push(format!(
-                            "reaction: duel rung {:?}",
-                            crate::target::duel_rung(&t.0, &o.0)
+                            "reaction: controlling players target {:?} self {:?}",
+                            ct.map(|c| format!("0x{:016x}", c.guid)),
+                            co.map(|c| format!("0x{:016x}", c.guid)),
+                        ));
+                        lines.push(match (ct, co) {
+                            (Some(ct), Some(co))
+                                if t.player_controlled() && o.player_controlled() =>
+                            {
+                                format!(
+                                    "reaction: duel rung {:?}",
+                                    crate::target::relations::duel_rung(&ct, &co)
+                                )
+                            }
+                            _ => "reaction: duel rung not run (a side is not player-controlled \
+                                  or has no controlling player)"
+                                .into(),
+                        });
+                        lines.push(format!(
+                            "reaction: RANK {} unit→player · {} player→unit → can_attack {}",
+                            rel.reaction(&t, &o),
+                            rel.reaction(&o, &t),
+                            rel.can_attack(&o, &t),
                         ));
                     }
-                    _ => {
-                        lines.push("reaction: duel rung not evaluated (a store is missing)".into())
-                    }
+                    None => lines.push("reaction: not evaluated (a store is missing)".into()),
                 }
-                let rank = crate::target::ring_reaction(
-                    factions.as_deref(),
-                    reputations,
-                    target_store,
-                    own_store,
-                );
-                lines.push(format!(
-                    "reaction: RANK {rank} → can_attack {}",
-                    crate::target::can_attack(
-                        target_store,
-                        factions.as_deref(),
-                        reputations,
-                        own_store
-                    )
-                ));
                 // The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): when it names the
                 // unit's faction it answers both directions ahead of every faction rule, so a green
                 // ogre under *King of the Gordok* is explained by this line and no other. The
-                // leading rungs (identity, duel, free-for-all) still run first.
+                // leading rungs (identity, the controlling players') still run first.
                 if let Some(line) = (|| {
                     let catalog = factions.as_deref()?.catalog();
                     let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-                    let rank = crate::target::ring::forced_rank(reputations, tpl.faction)?;
+                    let rank = crate::target::relations::forced_rank(reputations, tpl.faction)?;
                     Some(format!(
                         "reaction: faction {} is FORCED to rank {rank} by the server's table ({} \
                          entries); the faction rules below are not reached",
@@ -419,17 +444,18 @@ pub(super) fn drain_chat_input(
                 })() {
                     lines.push(line);
                 }
-                // The at-war bit: the whole of the player-to-unit reaction's leg 3 for a faction
-                // with a reputation slot, which the cursor, the plate and `UnitCanAttack` turn on.
+                // The at-war bit: the whole of the player-to-unit reaction's reputation leg for a
+                // faction with a reputation slot, which the cursor, the plate and `UnitCanAttack`
+                // turn on.
                 let war = (|| {
                     let catalog = factions.as_deref()?.catalog();
                     let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
                     let at_war =
-                        crate::target::ring::at_war_with(catalog, reputations, tpl.faction);
+                        crate::target::relations::at_war_with(catalog, reputations, tpl.faction);
                     Some(match at_war {
                         Some(at_war) => format!(
-                            "faction {} {:?} owns reputation slot {} → leg 3 answers with AT WAR \
-                             = {at_war} (reaction {}); the standing is never read",
+                            "faction {} {:?} owns reputation slot {} → the player's leg answers \
+                             with AT WAR = {at_war} (reaction {}); the standing is never read",
                             tpl.faction,
                             catalog.faction_name(tpl.faction).unwrap_or("<unnamed>"),
                             catalog
@@ -449,18 +475,8 @@ pub(super) fn drain_chat_input(
                 lines.push(format!("reaction: {war}"));
                 // The world cursor's two predicates in `0x482200`'s order: `CanInteract` picks the
                 // service ladder, then `CanAttack` the sword. Neither is a reaction threshold.
-                let interactable = crate::target::can_interact(
-                    target_store,
-                    factions.as_deref(),
-                    reputations,
-                    own_store,
-                );
-                let attackable = crate::target::can_attack(
-                    target_store,
-                    factions.as_deref(),
-                    reputations,
-                    own_store,
-                );
+                let interactable = pair.is_some_and(|(t, o)| rel.can_interact(&o, &t));
+                let attackable = pair.is_some_and(|(t, o)| rel.can_attack(&o, &t));
                 lines.push(format!(
                     "reaction: CURSOR npc_flags 0x{:04x} · can_interact {interactable} · \
                      can_attack {attackable} → {}",
@@ -477,36 +493,25 @@ pub(super) fn drain_chat_input(
                 // `CanCooperate` for a player), printed with the faction-group masks it compares.
                 // A GM-mode character is mask 0 on vmangos (`.gm on` sets faction template 35),
                 // so a friendly player can plate as an enemy.
-                let mask = |s| {
-                    crate::target::ring::faction_group_mask(factions.as_deref(), s)
-                        .map_or("none".to_string(), |m| m.to_string())
+                let mask = |u: Option<crate::target::RelUnit>| {
+                    u.and_then(|u| {
+                        crate::target::relations::faction_group_mask(factions.as_deref(), &u)
+                    })
+                    .map_or("none".to_string(), |m| m.to_string())
                 };
-                let friendly = crate::target::ring::plate_is_friendly(
-                    factions.as_deref(),
-                    reputations,
-                    target_store,
-                    own_store,
-                    is_player,
-                );
+                let friendly = pair.map_or(!is_player, |(t, o)| {
+                    crate::target::ring::plate_is_friendly(&rel, &t, &o, is_player)
+                });
                 lines.push(format!(
                     "reaction: plate is_player {is_player} (OBJECT_FIELD_TYPE says {:?}; the two \
                      must agree — the predicates read the field) · faction-group mask self {} \
-                     target {} · can_cooperate {} · can_attack(player→unit) {}",
+                     target {} · can_cooperate {} · can_attack(player→unit) {attackable} · \
+                     can_assist(player→unit) {}",
                     target_store.and_then(|s| s.0.object_type()),
-                    mask(own_store),
-                    mask(target_store),
-                    crate::target::ring::can_cooperate_with_player(
-                        factions.as_deref(),
-                        target_store,
-                        own_store
-                    ),
-                    crate::target::ring::can_attack_from_player(
-                        factions.as_deref(),
-                        reputations,
-                        target_store,
-                        own_store,
-                        is_player,
-                    ),
+                    mask(me),
+                    mask(subject),
+                    pair.is_some_and(|(t, o)| rel.can_cooperate(&o, &t)),
+                    pair.is_some_and(|(t, o)| rel.can_assist(&o, &t)),
                 ));
                 lines.push(format!(
                     "reaction: PLATE CATEGORY {} — this unit plates under {}",

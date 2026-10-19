@@ -18,11 +18,11 @@ use benilla_formats::{
 };
 
 use crate::items::Items;
-use crate::net::{ObjectStore, Objects, Reputations};
+use crate::net::{ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::spell::Cooldowns;
 use crate::spell::{SpellModifiers, OP_COST};
-use crate::target::{can_attack, ring_reaction, Factions};
+use crate::target::{RelUnit, Relations};
 
 use crate::ui_action::Spells;
 
@@ -34,13 +34,14 @@ use crate::player::UNIT_FLAG_IN_COMBAT;
 const IMPLICIT_TARGET_ENEMY: u32 = 6;
 const IMPLICIT_TARGET_FRIEND: u32 = 21;
 
-/// Everything the walk reads besides the spell. `target_store` is the current target's (leg 10
-/// reads the current-target global `0xb4e2d8`, not an explicit cast target).
+/// Everything the walk reads besides the spell. `store` is the caster's, the active player's
+/// ([`Relations::me`]), and `target` the current target's guid and descriptor (leg 10 reads the
+/// current-target global `0xb4e2d8`, not an explicit cast target).
 pub(crate) struct UsableCtx<'a> {
     pub(crate) store: &'a ObjectStore,
-    pub(crate) target_store: Option<&'a ObjectStore>,
-    pub(crate) factions: Option<&'a Factions>,
-    pub(crate) reputations: &'a Reputations,
+    pub(crate) target: Option<(u64, &'a ObjectStore)>,
+    /// The relation functions leg 10b's fork asks.
+    pub(crate) rel: Relations<'a>,
     pub(crate) cooldowns: &'a Cooldowns,
     /// The talent spell-modifier tables leg 12's cost goes through.
     pub(crate) spell_mods: &'a SpellModifiers,
@@ -380,24 +381,25 @@ pub(crate) fn spell_usable(
     // Legs 10/10b (`0x6e3f58`): no current target is unusable; then the aura-state bit; then the
     // relation fork.
     if d.target_aura_state != 0 {
-        let Some(target) = ctx.target_store else {
+        let Some((target_guid, target)) = ctx.target else {
             return (false, false);
         };
         if target.0.unit_aura_state() & (1 << (d.target_aura_state - 1)) == 0 {
             return (false, false);
         }
+        // The caster is the active player's object; without its guid there is no unit to ask.
+        let Some(me) = ctx.rel.me else {
+            return (false, false);
+        };
+        let caster = RelUnit::of(me, ctx.store);
+        let target = RelUnit::of(target_guid, target);
         match d.implicit_target_a1 {
             // `CanAttack 0x606980`.
-            IMPLICIT_TARGET_ENEMY
-                if !can_attack(Some(target), ctx.factions, ctx.reputations, Some(ctx.store)) =>
-            {
+            IMPLICIT_TARGET_ENEMY if !ctx.rel.can_attack(&caster, &target) => {
                 return (false, false);
             }
-            // Reaction friendly or better, standing in for `CanAssist 0x6066f0`.
-            IMPLICIT_TARGET_FRIEND
-                if ring_reaction(ctx.factions, ctx.reputations, Some(target), Some(ctx.store))
-                    < 4 =>
-            {
+            // `CanAssist 0x6066f0`, the caster as `this` (`0x6e3f98`-`0x6e3f9b`).
+            IMPLICIT_TARGET_FRIEND if !ctx.rel.can_assist(&caster, &target) => {
                 return (false, false);
             }
             _ => {}
@@ -504,6 +506,7 @@ pub(crate) fn can_afford(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Reputations;
     use benilla_protocol::ObjectFields;
 
     // Field indices, private in the protocol crate: health 22, power1 23, max health 28, flags
@@ -692,6 +695,17 @@ mod tests {
         assert!(fits(0, true));
     }
 
+    /// The relation functions with nothing held and no catalog: every faction leg neutral.
+    fn no_relations(reputations: &Reputations) -> Relations<'_> {
+        Relations {
+            factions: None,
+            reputations,
+            me: None,
+            roster: None,
+            units: &crate::target::relations::NoUnits,
+        }
+    }
+
     fn ctx<'a>(
         store: &'a ObjectStore,
         cooldowns: &'a Cooldowns,
@@ -701,9 +715,8 @@ mod tests {
     ) -> UsableCtx<'a> {
         UsableCtx {
             store,
-            target_store: None,
-            factions: None,
-            reputations,
+            target: None,
+            rel: no_relations(reputations),
             cooldowns,
             stacks,
             spell_mods,
@@ -936,6 +949,55 @@ mod tests {
         assert_eq!(walk(&tradeskill, &dead), (true, false));
     }
 
+    /// Leg 10b's friend arm is `CanAssist(caster, target)` (`0x6e3f98`-`0x6e3f9b`), not the
+    /// reaction: a friendly creature the caster may not assist, being no PvP-flagged one
+    /// (`0x6067bd`), greys the spell, and the same creature flagged lights it; a not-selectable
+    /// friend greys it whatever its flag (`0x606706`).
+    #[test]
+    fn the_friend_arm_asks_can_assist_of_the_caster() {
+        use crate::target::relations::fixture::{factions, Scene, HUMAN};
+        let me = player(&[(2, 0x19), (35, HUMAN)]);
+        let cooldowns = Cooldowns::default();
+        let spells = Spells::empty_for_tests();
+        let items = Items::default();
+        let mut objs = crate::ui_items::TestObjects::new();
+        let objects = objs.get();
+        let stacks = crate::ui_items::stack_counts(&me.0, &objects);
+        // An implicit-21 spell gated on the target's aura state 2.
+        let friend_spell = SpellDisplay {
+            target_aura_state: 2,
+            implicit_target_a1: 21,
+            ..Default::default()
+        };
+        let scene = Scene::new(RelUnit::of(1, &me), Some(factions()));
+        let friend = |flags: u32| {
+            ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x09),
+                (22, 100),
+                (35, HUMAN),
+                (46, flags),
+                (125, 0x2),
+            ]))
+        };
+        for (flags, usable) in [(0, false), (0x1000, true), (0x1000 | (1 << 25), false)] {
+            let target = friend(flags);
+            let ctx = UsableCtx {
+                store: &me,
+                target: Some((2, &target)),
+                rel: scene.rel(),
+                cooldowns: &cooldowns,
+                stacks: &stacks,
+                spell_mods: &SpellModifiers::default(),
+                control_lost: false,
+            };
+            assert_eq!(
+                spell_usable(1, &friend_spell, &spells, &ctx, &objects, &items).0,
+                usable,
+                "flags {flags:#x}"
+            );
+        }
+    }
+
     /// Leg 10: the aura-state bit gates, and CanAttack passes on the default neutral reaction.
     #[test]
     fn target_aura_state_reads_the_current_target() {
@@ -955,12 +1017,20 @@ mod tests {
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let stacks = crate::ui_items::stack_counts(&me.0, &objects);
-        for (target, expect) in [(&healthy, false), (&low, true)] {
+        // Without the active player's guid there is no caster to ask the relation of, so the fork
+        // refuses even the low target: no relation unit is built with guid 0.
+        for (me_guid, target, expect) in [
+            (Some(1), &healthy, false),
+            (Some(1), &low, true),
+            (None, &low, false),
+        ] {
             let ctx = UsableCtx {
                 store: &me,
-                target_store: Some(target),
-                factions: None,
-                reputations: &reputations,
+                target: Some((2, target)),
+                rel: Relations {
+                    me: me_guid,
+                    ..no_relations(&reputations)
+                },
                 cooldowns: &cooldowns,
                 stacks: &stacks,
                 spell_mods: &SpellModifiers::default(),
@@ -968,7 +1038,8 @@ mod tests {
             };
             assert_eq!(
                 spell_usable(5308, &execute, &spells, &ctx, &objects, &items),
-                (expect, false)
+                (expect, false),
+                "{me_guid:?}"
             );
         }
     }

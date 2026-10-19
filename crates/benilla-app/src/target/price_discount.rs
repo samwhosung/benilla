@@ -3,9 +3,13 @@
 //! taxi map's fare (`0x4dc3d0`, callers `0x4dc45d` and `0x4dc4a2`). The merchant's goods and the
 //! trainer's services are the server's prices, shown as sent.
 
-use crate::net::{ObjectStore, Reputations};
+use crate::net::ObjectStore;
+#[cfg(test)]
+use crate::net::Reputations;
 
-use super::{ring_reaction, Factions};
+use super::relations::{RelUnit, Relations};
+#[cfg(test)]
+use super::Factions;
 
 /// `0x801620`, the f32 0.1 the reputation term loads (`0x612b9d`).
 const REPUTATION_TERM: f32 = 0.1;
@@ -34,19 +38,19 @@ fn price_discount(reaction: u8, vendor_unit_flags: u32, pvp_rank: u8) -> f64 {
     d
 }
 
-/// [`price_discount`] for `vendor` and the player: the vendor's reaction toward the player
-/// ([`ring_reaction`], `vendor->UnitReaction(player)` at `0x612b93`), the vendor's own
+/// [`price_discount`] for `vendor` and the player `me`, whose descriptor is `player`: the vendor's
+/// reaction toward the player (`vendor->UnitReaction(player)` at `0x612b93`), the vendor's own
 /// `UNIT_FIELD_FLAGS` (`[[vendor+0x110]+0xa0]`) and the player's current honor rank,
 /// `PLAYER_BYTES_3` byte 3 (`[[player+0xe68]+0x1f]`), not the highest rank held.
 pub(crate) fn vendor_price_discount(
-    factions: Option<&Factions>,
-    reputations: &Reputations,
-    vendor: &ObjectStore,
+    rel: &Relations,
+    vendor: &RelUnit,
+    me: &RelUnit,
     player: &ObjectStore,
 ) -> f64 {
     price_discount(
-        ring_reaction(factions, reputations, Some(vendor), Some(player)),
-        vendor.0.unit_flags(),
+        rel.reaction(vendor, me),
+        vendor.flags,
         player.0.player_pvp_rank().unwrap_or(0),
     )
 }
@@ -166,8 +170,16 @@ mod tests {
         let rank_8 = store(&[(PLAYER_BYTES_3, 8 << 24), (PLAYER_FIELD_BYTES, 0)]);
         let held_8 = store(&[(PLAYER_BYTES_3, 0), (PLAYER_FIELD_BYTES, 8 << 24)]);
         let flagged_player = store(&[(PLAYER_BYTES_3, 8 << 24), (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP)]);
-        let disc =
-            |v: &ObjectStore, p: &ObjectStore| vendor_price_discount(None, &reps, v, p).to_bits();
+        let rel = Relations {
+            factions: None,
+            reputations: &reps,
+            me: Some(2),
+            roster: None,
+            units: &super::super::relations::NoUnits,
+        };
+        let disc = |v: &ObjectStore, p: &ObjectStore| {
+            vendor_price_discount(&rel, &RelUnit::of(1, v), &RelUnit::of(2, p), p).to_bits()
+        };
         assert_eq!(disc(&pvp_vendor, &rank_8), D10, "two honor steps");
         assert_eq!(
             disc(&pvp_vendor, &held_8),
@@ -197,8 +209,24 @@ mod tests {
                 FIELD_UNIT_FACTIONTEMPLATE,
                 template,
             )]));
-            let me = ObjectStore(ObjectFields::from_pairs(&[(BYTES_0, HUMAN_WARRIOR)]));
-            let got = vendor_price_discount(Some(&factions), &reps, &vendor, &me);
+            // A human warrior player: the template comparator (`0x606576`) needs both rows
+            // before the standing leg.
+            let me = ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (FIELD_UNIT_FACTIONTEMPLATE, 1),
+                (BYTES_0, HUMAN_WARRIOR),
+                (FIELD_UNIT_FLAGS, 0x8),
+            ]));
+            let units = std::collections::HashMap::from([(2, RelUnit::of(2, &me))]);
+            let rel = Relations {
+                factions: Some(&factions),
+                reputations: &reps,
+                me: Some(2),
+                roster: None,
+                units: &units,
+            };
+            let got =
+                vendor_price_discount(&rel, &RelUnit::of(1, &vendor), &RelUnit::of(2, &me), &me);
             assert_eq!(got.to_bits(), want, "standing {total}: got {got:e}");
         }
     }
