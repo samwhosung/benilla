@@ -1824,24 +1824,48 @@ mod tests {
             .unwrap());
     }
 
+    /// `UnitInParty` (`0x516290`) resolves the token to a guid (`0x515970`) and asks `0x4e7f70`:
+    /// the player's own guid or one of the four slots'. No object and no group are needed.
     #[test]
-    fn unit_in_party_matches_roster_guids() {
+    fn unit_in_party_answers_for_the_guid_the_token_names() {
         let mut s = UiScript::new().unwrap();
-        s.set_party(two_member_party());
-        s.set_unit("player", Some(unit(true, 0x10)));
-        s.set_unit("party1", Some(unit(true, 0xA11CE)));
-        s.set_unit("target", Some(unit(true, 0xA11CE)));
-        assert_eq!(s.eval::<i64>(r#"return UnitInParty("target")"#).unwrap(), 1);
-        assert_eq!(s.eval::<i64>(r#"return UnitInParty("party1")"#).unwrap(), 1);
-        s.set_unit("target", Some(unit(true, 0xDEAD)));
-        assert!(s
-            .eval::<bool>(r#"return UnitInParty("target") == nil"#)
-            .unwrap());
-        // Ungrouped: everything is nil, the player included.
-        s.set_party(crate::script::PartyState::default());
-        assert!(s
-            .eval::<bool>(r#"return UnitInParty("player") == nil"#)
-            .unwrap());
+        let guids = |party: [u64; 4], target: u64| crate::script::UnitGuids {
+            player: 0x10,
+            target,
+            party,
+            ..Default::default()
+        };
+        let one =
+            |s: &UiScript, call: &str| s.eval::<bool>(&format!("return {call} == 1")).unwrap();
+        let nil =
+            |s: &UiScript, call: &str| s.eval::<bool>(&format!("return {call} == nil")).unwrap();
+
+        // The reported shape: solo, the player is in their own party.
+        s.set_unit_guids(&guids([0; 4], 0));
+        assert!(one(&s, r#"UnitInParty("player")"#), "solo");
+        assert!(nil(&s, r#"UnitInParty("party1")"#));
+        assert!(nil(&s, r#"UnitInParty("target")"#), "no target");
+
+        // party2 is out of view and has no snapshot; `target` names them too.
+        s.set_unit_guids(&guids([0xA11CE, 0xB0B, 0, 0], 0xB0B));
+        assert!(one(&s, r#"UnitInParty("party2")"#), "no object needed");
+        assert!(one(&s, r#"UnitInParty("target")"#), "by guid, not by text");
+        assert!(one(&s, r#"UnitInParty("player")"#));
+        s.set_unit_guids(&guids([0xA11CE, 0xB0B, 0, 0], 0xDEAD));
+        assert!(nil(&s, r#"UnitInParty("target")"#), "a stranger");
+
+        // Nobody is guid 0, a miss; an unrecognised token raises in the resolver.
+        for nobody in [
+            "UnitInParty()",
+            r#"UnitInParty("")"#,
+            r#"UnitInParty("party5")"#,
+        ] {
+            assert!(nil(&s, nobody), "{nobody}");
+        }
+        assert!(s.run(r#"UnitInParty("bogus")"#).is_err());
+        // With no player object `player` names nobody (`0x5159c9`).
+        s.set_unit_guids(&crate::script::UnitGuids::default());
+        assert!(nil(&s, r#"UnitInParty("player")"#));
     }
 
     #[test]

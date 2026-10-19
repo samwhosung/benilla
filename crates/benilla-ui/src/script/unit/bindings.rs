@@ -11,9 +11,8 @@ use super::super::protected::select_may_cast;
 use super::super::Model;
 use super::UnitState;
 use super::{
-    check_unit_token, classification_word, grey_band, level_reads_unknown, parse_unit_token,
-    pick_unit_token, unit_is_grey, unit_predicate, unknownobject, with_unit, PlayerRecord,
-    SelectionRequest, UnitBase, UnitTokenParse,
+    check_unit_token, classification_word, grey_band, level_reads_unknown, pick_unit_token,
+    unit_is_grey, unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -571,41 +570,23 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitInParty(unit): the grouped player or a party member, by token or by roster GUID.
+    // UnitInParty(unit) (`0x516290`): the token's guid (`0x515970`) is the player's or one of the
+    // four party slots' (`0x4e7f70`, `0x468550` and `0xbc6f48`), the tables the resolver itself
+    // reads. No object and no group are asked, so solo `UnitInParty("player")` is 1, and a token
+    // naming an out-of-view member is 1 however it spells them; nobody is guid 0, a miss. No
+    // `Usage:` gate; an unrecognised token raises in the resolver.
     g.set(
         "UnitInParty",
         lua.create_function(|lua, token: Option<String>| {
-            check_unit_token(&token)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(t) = token else {
-                return Ok(Value::Nil);
+            let guids = &model.unit_guids;
+            let guid = match token.as_deref() {
+                Some(t) => guids.guid_of(t)?.unwrap_or(0),
+                None => 0,
             };
-            let Some(u) = model.unit(&t) else {
-                return Ok(Value::Nil);
-            };
-            let grouped = !model.party.members.is_empty();
-            if !u.exists || !grouped {
-                return Ok(Value::Nil);
-            }
-            // A `partyN` token itself names a member; a chain off one (`party1target`) names
-            // whoever that member targets, which the guid arms below judge.
-            let party_slot = matches!(
-                parse_unit_token(&t),
-                UnitTokenParse::Unit {
-                    base: UnitBase::Party(_),
-                    hops: 0
-                }
-            );
-            let hit = party_slot
-                || t.eq_ignore_ascii_case("player")
-                || (u.guid != 0
-                    && (model.unit("player").is_some_and(|p| p.guid == u.guid)
-                        || model
-                            .party
-                            .members
-                            .iter()
-                            .any(|m| m.guid != 0 && m.guid == u.guid)));
-            Ok(flag(hit))
+            Ok(flag(
+                guid != 0 && (guid == guids.player || guids.party.contains(&guid)),
+            ))
         })?,
     )?;
 
