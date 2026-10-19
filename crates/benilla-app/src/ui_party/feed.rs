@@ -286,7 +286,8 @@ pub(crate) fn feed_party(
             .name(areas.0.top_zone(area).unwrap_or(area))
             .map(str::to_string)
     };
-    let raid = raid_roster(&group, me.as_ref(), &names, chr, &zone_name);
+    let held_store = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
+    let raid = raid_roster(&group, me.as_ref(), &held_store, &names, chr, &zone_name);
     // The `RAID_ROSTER_UPDATE` key, taken before the roster moves into the snapshot.
     let raid_key: Vec<(u64, u32, u32, bool)> = raid
         .iter()
@@ -617,9 +618,18 @@ fn raid_name_of(
 /// `GetRaidRosterInfo`'s array (`0x4bb560`) in [`raid_row_guids`]' order: empty outside a raid,
 /// so `GetNumRaidMembers()` answers 0 in a party. The reference's array holds the local player
 /// and the wire's list does not, so our row comes from [`RaidSelf`].
-fn raid_roster(
+///
+/// A row whose unit the object manager holds (`0x4bb64b`, `held`) reads it: online (`0x4bb777`),
+/// its descriptor's level (`0x4bb65d`), the zone under us (`0x4bb739`, `[0xb4e314]`) and dead for
+/// health 0 or below (`0x4bb796`). A row with no object reads its record's online bit
+/// (`[row+0x18] & 1`), which gates the level (`0x4bb668`-`0x4bb682`), the zone (`0x4bb6e5`, the
+/// binding's `PLAYER_OFFLINE`) and dead, which needs the record's dead bit too (`0x4bb70a`-
+/// `0x4bb717`). The roster status byte reaches none of them: a list writes only the record's bit 0
+/// (`0x4ba947`-`0x4ba960`).
+fn raid_roster<'a>(
     group: &GroupState,
     me: Option<&RaidSelf>,
+    held: &dyn Fn(u64) -> Option<&'a ObjectStore>,
     names: &NameCache,
     unit_names: crate::ui_unit::UnitNames<'_>,
     zone_name: &dyn Fn(u32) -> Option<String>,
@@ -662,6 +672,7 @@ fn raid_roster(
             ninth,
         }
     };
+    let our_zone = || me.and_then(|me| me.area).and_then(zone_name);
     let mut roster = Vec::with_capacity(group.members.len() + 1);
     if let Some(me) = me {
         roster.push(row(
@@ -673,28 +684,50 @@ fn raid_roster(
                 .to_string(),
             me.flags,
             me.level,
-            me.area.and_then(zone_name),
+            our_zone(),
             true,
             me.dead,
             me.class,
         ));
     }
     for m in &group.members {
-        let stats = group.stats.get(&m.guid);
-        let online = m.status & member_status::ONLINE != 0;
+        let class = names.player_traits(m.guid).map(|(_, class, _)| class);
+        let (level, zone, online, ninth) = match held(m.guid) {
+            Some(store) => (
+                store.0.unit_level().unwrap_or(0),
+                our_zone(),
+                true,
+                store.0.unit_health().unwrap_or(0) as i32 <= 0,
+            ),
+            None => {
+                let record = group.stats.get(&m.guid);
+                let online = record.is_some_and(PartyMemberStatsInfo::is_online);
+                let status = record.and_then(|r| r.status).unwrap_or(0);
+                (
+                    record
+                        .filter(|_| online)
+                        .and_then(|r| r.level)
+                        .map_or(0, u32::from),
+                    record
+                        .filter(|_| online)
+                        .and_then(|r| r.zone)
+                        .and_then(|z| zone_name(u32::from(z))),
+                    online,
+                    // Both `0x4` and `0x1`, vmangos's `DEAD` and `ONLINE` (`Group/Group.cpp:45-63`):
+                    // an offline dead member answers nil.
+                    online && status & member_status::DEAD != 0,
+                )
+            }
+        };
         roster.push(row(
             m.guid,
             m.name.clone(),
             m.flags,
-            stats.and_then(|s| s.level).map_or(0, u32::from),
-            stats
-                .and_then(|s| s.zone)
-                .and_then(|z| zone_name(u32::from(z))),
+            level,
+            zone,
             online,
-            // Return 9's cached arm needs both `0x4` and `0x1` in `[edi+0x18]`, vmangos's `DEAD`
-            // and `ONLINE` (`Group/Group.cpp:45-63`): an offline dead member answers nil.
-            online && m.status & member_status::DEAD != 0,
-            names.player_traits(m.guid).map(|(_, class, _)| class),
+            ninth,
+            class,
         ));
     }
     roster
@@ -2093,8 +2126,11 @@ mod tests {
         assert!(!group.test, "the real wire always wins");
     }
 
+    /// The roster status bytes here say the opposite of each record, so every column shows which
+    /// one `0x4bb560` reads: a held row its object, an unheld one its record, never the byte.
     #[test]
     fn the_raid_roster_maps_the_wire_to_get_raid_roster_info() {
+        const CAROL: u64 = 0xCA201;
         let mut names = NameCache::default();
         // Our own name has no traits, as live: the login seeds it without them.
         names.insert_player(0x5E1F, "Me".into(), None);
@@ -2112,40 +2148,62 @@ mod tests {
             own_flags: 0,
             leader: 0x5E1F,
             members: vec![
-                // Alice: subgroup 2 (stored), an assistant, online and dead.
+                // Alice: subgroup 2 (stored), an assistant; the byte says offline.
                 member(
                     0xA11CE,
                     "Alice",
-                    member_status::ONLINE | member_status::DEAD,
+                    member_status::OFFLINE,
                     2 | GROUP_MEMBER_ASSISTANT,
                 ),
-                // Bob: subgroup 0, offline and dead, which must not set return 9.
-                member(0xB0B, "Bob", member_status::DEAD, 0),
+                // Bob: subgroup 0; the byte says online and alive.
+                member(0xB0B, "Bob", member_status::ONLINE, 0),
+                // Carol: held; the byte says offline.
+                member(CAROL, "Carol", member_status::OFFLINE, 1),
             ],
             ..Default::default()
         };
+        let record = |status: u8, level: u16| PartyMemberStatsInfo {
+            status: Some(status),
+            level: Some(level),
+            zone: Some(1537),
+            ..Default::default()
+        };
+        // Alice's record: online and dead.
         group.stats.insert(
             0xA11CE,
-            PartyMemberStatsInfo {
-                level: Some(58),
-                zone: Some(1537),
-                ..Default::default()
-            },
+            record(member_status::ONLINE | member_status::DEAD, 58),
         );
-        let zone = |id: u32| (id == 1537).then(|| "Ironforge".to_string());
+        // Bob's: offline and dead.
+        group.stats.insert(0xB0B, record(member_status::DEAD, 40));
+        // Carol's: offline, but her object is held, at 0 health.
+        group
+            .stats
+            .insert(CAROL, record(member_status::OFFLINE, 12));
+        let carol = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+            (22, 0),   // UNIT_FIELD_HEALTH
+            (28, 900), // UNIT_FIELD_MAXHEALTH
+            (34, 33),  // UNIT_FIELD_LEVEL
+        ]));
+        let held = |guid: u64| (guid == CAROL).then_some(&carol);
+        let zone = |id: u32| match id {
+            1537 => Some("Ironforge".to_string()),
+            1519 => Some("Stormwind City".to_string()),
+            _ => None,
+        };
         let me = RaidSelf {
             guid: 0x5E1F,
             flags: 0,
             level: 60,
-            area: Some(1537),
+            // We stand in Stormwind, the member records in Ironforge.
+            area: Some(1519),
             dead: false,
             // Off our descriptor, the only source of it for us. 11 is Druid.
             class: Some(11),
         };
 
         let korean = crate::ui_unit::TestNames::korean();
-        let roster = raid_roster(&group, Some(&me), &names, korean.names(), &zone);
-        assert_eq!(roster.len(), 3, "the player is spliced back in");
+        let roster = raid_roster(&group, Some(&me), &held, &names, korean.names(), &zone);
+        assert_eq!(roster.len(), 4, "the player is spliced back in");
 
         // Row 1, us: leader (rank 2), subgroup stored 0, class off the descriptor.
         assert_eq!(roster[0].name, "Me");
@@ -2161,25 +2219,36 @@ mod tests {
             Some("드루이드"),
             "the display name is the table's, the token is not localized"
         );
-        assert_eq!(roster[0].zone.as_deref(), Some("Ironforge"));
+        assert_eq!(roster[0].zone.as_deref(), Some("Stormwind City"));
         assert!(roster[0].online && !roster[0].ninth);
 
-        // Row 2: an assistant, online and dead, the pair the reference's cached arm tests.
+        // Row 2: an assistant, whose record is online and dead, the pair the reference's
+        // no-object arm tests (`0x4bb70a`-`0x4bb717`), with its level and zone (`0x4bb66e`,
+        // `0x4bb740`).
         assert_eq!((roster[1].rank, roster[1].subgroup), (1, 2));
-        assert_eq!(roster[1].level, 58);
         assert_eq!(roster[1].class_file.as_deref(), Some("WARRIOR"));
         assert!(roster[1].online && roster[1].ninth, "online AND dead");
+        assert_eq!(roster[1].level, 58);
+        assert_eq!(roster[1].zone.as_deref(), Some("Ironforge"));
 
-        // Row 3: offline, so return 9 is nil though dead, and an unresolved class is nil.
+        // Row 3: the record is offline, so level 0 (`0x4bb680`), the binding's offline zone, and
+        // return 9 nil though dead; an unresolved class is nil.
         assert!(!roster[2].online, "offline");
+        assert_eq!(roster[2].level, 0, "an offline record's level is not read");
         assert!(!roster[2].ninth, "0x4 without 0x1 is not the arm");
         assert_eq!(roster[2].class, None);
-        assert_eq!(roster[2].zone, None, "no stats packet, no zone");
+
+        // Row 4: held, so online whatever the record (`0x4bb777`), the descriptor's level
+        // (`0x4bb65d`), the zone under us (`0x4bb739`) and dead at 0 health (`0x4bb796`).
+        assert!(roster[3].online);
+        assert_eq!(roster[3].level, 33);
+        assert_eq!(roster[3].zone.as_deref(), Some("Stormwind City"));
+        assert!(roster[3].ninth);
 
         // A party is not a raid: the list is empty, so `GetNumRaidMembers()` answers 0, while
         // `IsRaidLeader()` still answers 1.
         group.group_type = 0;
-        assert!(raid_roster(&group, Some(&me), &names, korean.names(), &zone).is_empty());
+        assert!(raid_roster(&group, Some(&me), &held, &names, korean.names(), &zone).is_empty());
     }
 
     #[test]

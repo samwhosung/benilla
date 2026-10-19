@@ -36,7 +36,7 @@ fn fired(app: &mut App) -> u32 {
 /// `SMSG_GROUP_LIST` as the server sends it: members `1..` with their status byte, led by us, of
 /// the given group type. `names_pending` is what the name cache told the handler.
 fn send(app: &mut App, group_type: u8, statuses: &[u8], names_pending: bool) {
-    let list = statuses
+    let list: Vec<GroupMemberEntry> = statuses
         .iter()
         .enumerate()
         .map(|(i, &status)| GroupMemberEntry {
@@ -46,9 +46,30 @@ fn send(app: &mut App, group_type: u8, statuses: &[u8], names_pending: bool) {
             flags: 0,
         })
         .collect();
-    app.world_mut()
-        .resource_mut::<GroupState>()
-        .apply_list_awaiting(group_type, 0, list, ME, None, Some(ME), names_pending);
+    let mut group = app.world_mut().resource_mut::<GroupState>();
+    let seats: Vec<(u64, bool)> = list.iter().map(|m| (m.guid, m.listed_online())).collect();
+    group.apply_list_awaiting(group_type, 0, list, ME, None, Some(ME), names_pending);
+    // The handler's record leg (`net::seat_new_records`): a member new to the roster is seated at
+    // 1/1 with the row's online bit.
+    for (guid, online) in seats {
+        group
+            .stats
+            .entry(guid)
+            .or_insert_with(|| PartyMemberStatsInfo::placeholder(online));
+    }
+}
+
+/// `SMSG_PARTY_MEMBER_STATS` carrying member `i`'s status alone, as vmangos sends it on a ghost
+/// toggle or a resurrection (`SpellAuras.cpp:5600`, `Player.cpp:15513`).
+fn status(app: &mut App, i: u64, status: u8) {
+    app.world_mut().resource_mut::<GroupState>().apply_stats(
+        member(i),
+        false,
+        PartyMemberStatsInfo {
+            status: Some(status),
+            ..Default::default()
+        },
+    );
 }
 
 fn raid(app: &mut App, statuses: &[u8]) {
@@ -85,7 +106,9 @@ fn dead(app: &mut App, row: u32) -> Option<f64> {
 
 /// The reported shape: a raid member dies, then releases, out of view. The list that says so moves
 /// their status alone, no guid, rank, subgroup or online bit, and the writer signals all the same
-/// (`0x4babef`, with no compare against the old roster).
+/// (`0x4babef`, with no compare against the old roster). The list writes only the record's online
+/// bit (`0x4ba947`-`0x4ba960`), so the dead column follows the record, which a stats packet's
+/// status moves.
 #[test]
 fn a_raid_list_that_moves_only_a_members_dead_bit_fires_raid_roster_update() {
     let mut app = app();
@@ -97,9 +120,14 @@ fn a_raid_list_that_moves_only_a_members_dead_bit_fires_raid_roster_update() {
 
     raid(&mut app, &[DEAD, ON]);
     assert_eq!(fired(&mut app), 1, "member 1 died");
-    assert_eq!(dead(&mut app, 1), Some(1.0), "and the roster says so");
+    assert_eq!(dead(&mut app, 1), None, "the list's byte reaches no column");
+    status(&mut app, 1, DEAD);
+    frame(&mut app);
+    assert_eq!(dead(&mut app, 1), Some(1.0), "the record's does");
     raid(&mut app, &[GHOST, ON]);
     assert_eq!(fired(&mut app), 1, "member 1 released");
+    status(&mut app, 1, GHOST);
+    frame(&mut app);
     assert_eq!(dead(&mut app, 1), None);
     assert_eq!(fired(&mut app), 0);
 }
@@ -300,11 +328,12 @@ fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
     assert_eq!(fired(&mut app), 1, "the raid ended");
 }
 
-/// The stock raid UI, loaded whole off the player's own chain: a raid member dies out of view and
-/// the list that says so moves nothing but their dead bit. The raid tab's grid also repaints on
-/// `PARTY_MEMBERS_CHANGED` (`RaidFrame_OnEvent`), which every list signals, but a group pullout
-/// re-reads its rows on `RAID_ROSTER_UPDATE` alone (`RaidPullout_OnEvent`); this harness sends no
-/// member stats, so no `UNIT_HEALTH` repaints the row in its place.
+/// The stock raid UI, loaded whole off the player's own chain: a raid member dies out of view, their
+/// record takes the dead bit, and the list that follows moves nothing but their status byte. The
+/// raid tab's grid also repaints on `PARTY_MEMBERS_CHANGED` (`RaidFrame_OnEvent`), which every list
+/// signals, but a group pullout re-reads its rows on `RAID_ROSTER_UPDATE` alone
+/// (`RaidPullout_OnEvent`); this harness writes the record with no unit events, so no
+/// `UNIT_HEALTH` repaints the row in its place.
 #[test]
 fn the_stock_raid_ui_repaints_a_member_who_dies_out_of_view() {
     benilla_formats::wow_data_or_skip!();
@@ -344,11 +373,13 @@ fn the_stock_raid_ui_repaints_a_member_who_dies_out_of_view() {
     assert_eq!(text_colour(&mut app), warrior, "the grid's row");
     assert_eq!(pullout_colour(&mut app), warrior, "the pullout's row");
 
+    status(&mut app, 1, DEAD);
     raid(&mut app, &[DEAD, ON]);
     frame(&mut app);
     assert_eq!(text_colour(&mut app), red, "the grid repaints");
     assert_eq!(pullout_colour(&mut app), red, "and so does the pullout");
 
+    status(&mut app, 1, ON);
     raid(&mut app, &[ON, ON]);
     frame(&mut app);
     assert_eq!(text_colour(&mut app), warrior);
