@@ -11,6 +11,8 @@
 //!   identity and the open device's rate, backed by cpal's stream error callback. Nothing is an analogue of
 //!   `kAudioDeviceProcessorOverload`, so the overload meter reads zero.
 //! - Realtime: no workgroups; [`set_realtime`] is `SCHED_FIFO` on unix and MMCSS on Windows.
+//! - COM, on Windows: cpal keeps one device enumerator for the process, made in the apartment of
+//!   whichever thread asks first; [`host`] makes it in an apartment that outlives every thread.
 //!
 //! An unsupported target compiles to cpal's Null host, reports no device and runs silent.
 
@@ -37,6 +39,65 @@ const MAX_CYCLE_FRAMES: usize = 8192;
 pub(super) fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
+/// cpal's default host. Every device read here comes through it, so on Windows cpal's device
+/// enumerator is made in the MTA (`com`) before any thread reads a device.
+fn host() -> cpal::Host {
+    #[cfg(windows)]
+    com::anchor();
+    cpal::default_host()
+}
+
+/// cpal's WASAPI host caches one `IMMDeviceEnumerator` for the process, made by the first thread to
+/// ask, inside a single-threaded apartment of that thread's own. When that thread exits, cpal's
+/// `CoUninitialize` closes the apartment and unloads the DLLs it loaded, the enumerator's among
+/// them, and every later read calls through a dead vtable: `STATUS_ACCESS_VIOLATION`
+/// (RustAudio/cpal#1302). So it is made once, on a thread of our own inside the multithreaded
+/// apartment, which `CoIncrementMTAUsage` keeps for the life of the process.
+#[cfg(windows)]
+mod com {
+    use cpal::traits::HostTrait as _;
+    use windows_sys::Win32::System::Com::{
+        CoIncrementMTAUsage, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
+    };
+
+    /// Make cpal's enumerator in the MTA, once; later calls return at once.
+    pub(super) fn anchor() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let made = std::thread::Builder::new()
+                .name("audio-com".into())
+                .spawn(make_in_mta)
+                .map_err(|e| e.to_string())
+                .and_then(|t| t.join().unwrap_or_else(|_| Err("panicked".into())));
+            if let Err(e) = made {
+                bevy::log::warn!("audio: cpal's device enumerator is not in the MTA ({e})");
+            }
+        });
+    }
+
+    fn make_in_mta() -> Result<(), String> {
+        let mut cookie = std::ptr::null_mut();
+        // SAFETY: an out-parameter; the cookie is never decremented, so the MTA stands for the
+        // life of the process.
+        let hr = unsafe { CoIncrementMTAUsage(&mut cookie) };
+        if hr < 0 {
+            return Err(format!("CoIncrementMTAUsage: {hr:#010x}"));
+        }
+        // SAFETY: joins this thread to the MTA explicitly, balanced by the `CoUninitialize` below,
+        // so cpal's own STA join here answers `RPC_E_CHANGED_MODE`, which it keeps without
+        // uninitializing.
+        let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
+        if hr < 0 {
+            return Err(format!("CoInitializeEx(MTA): {hr:#010x}"));
+        }
+        // Any call that reaches the enumerator makes it; whether a device exists does not matter.
+        let _ = cpal::default_host().default_output_device();
+        // SAFETY: balances this thread's `CoInitializeEx` above.
+        unsafe { CoUninitialize() };
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -135,7 +196,7 @@ fn choice() -> std::sync::MutexGuard<'static, Choice> {
 pub(super) fn default_output() -> Result<Device> {
     // Prime the clock's epoch on the main thread, not first in the audio callback.
     now_ns();
-    let host = cpal::default_host();
+    let host = host();
     let default = host.default_output_device();
     let watched = default.as_ref().and_then(Identity::of);
     let refused = choice().refused.clone();
@@ -511,7 +572,7 @@ impl Listeners {
                     }
                     // Compared with the default this device was chosen against, so a stand-in is
                     // not rebuilt every poll for a default that still will not open.
-                    match cpal::default_host().default_output_device() {
+                    match host().default_output_device() {
                         None if is_default => {
                             notices.device_died.store(true, Ordering::Release);
                             return;
