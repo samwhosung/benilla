@@ -29,6 +29,8 @@ pub(crate) struct ChatCtx<'a> {
     pub factions: Option<&'a crate::target::ring::Factions>,
     pub reputations: &'a Reputations,
     pub spells: Option<&'a crate::ui_action::Spells>,
+    /// The creature records, whose VISIBLE_TO_GHOSTS bit `CanAttack` reads.
+    pub names: Option<&'a crate::names::NameCache>,
     /// The display ranges: the reference's `0x8629e0` table, CVar-backed.
     pub ranges: &'a combat::CombatLogRanges,
     /// `CombatLogPeriodicSpells`, for its two chat-only read sites; the whole-packet gate is in
@@ -46,6 +48,7 @@ impl ChatCtx<'_> {
             stores,
             self.factions,
             self.reputations,
+            self.names,
         )
     }
 

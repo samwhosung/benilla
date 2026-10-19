@@ -33,6 +33,7 @@ pub(crate) struct Ctx<'w> {
     factions: Option<Res<'w, crate::target::ring::Factions>>,
     reputations: Res<'w, Reputations>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
+    names: Option<Res<'w, NameCache>>,
     /// The eight display ranges.
     ranges: Res<'w, CombatLogRanges>,
     /// `CombatLogPeriodicSpells`.
@@ -48,6 +49,7 @@ impl Ctx<'_> {
             factions: self.factions.as_deref(),
             reputations: &self.reputations,
             spells: self.spells.as_deref(),
+            names: self.names.as_deref(),
             ranges: &self.ranges,
             periodic: self.periodic.0,
         }

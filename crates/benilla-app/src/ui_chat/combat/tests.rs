@@ -553,3 +553,179 @@ fn a_set_cvar_moves_the_range_the_gate_compares_against() {
     assert!(!r.set("mousespeed", 10.0));
     assert_eq!(r.class(C::Me), 100_000.0);
 }
+
+// ── the unit classifier, `0x5efea0` ─────────────────────────────────────────────────────────
+
+impl Stores for std::collections::HashMap<Entity, ObjectStore> {
+    fn store(&self, entity: Entity) -> Option<&ObjectStore> {
+        self.get(&entity)
+    }
+}
+
+/// Descriptors held by guid, each at an entity of its own, for [`classify`].
+struct Held {
+    world: World,
+    index: GuidIndex,
+    stores: std::collections::HashMap<Entity, ObjectStore>,
+}
+
+impl Held {
+    fn new() -> Self {
+        Self {
+            world: World::new(),
+            index: GuidIndex::default(),
+            stores: Default::default(),
+        }
+    }
+
+    fn hold(&mut self, guid: u64, store: ObjectStore) {
+        let e = self.world.spawn_empty().id();
+        self.index.0.insert(guid, e);
+        self.stores.insert(e, store);
+    }
+
+    fn unit(&mut self, u: &RelUnit) {
+        self.hold(u.guid, crate::target::relations::fixture::store_of(u));
+    }
+
+    /// The class of `guid` to the active player `me`, with `party` in the party slots.
+    fn class(&self, me: u64, party: &[u64], guid: u64) -> UnitClass {
+        let group = GroupState {
+            in_group: !party.is_empty(),
+            members: party
+                .iter()
+                .map(|&guid| benilla_protocol::messages::GroupMemberEntry {
+                    name: String::new(),
+                    guid,
+                    status: 1,
+                    flags: 0,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let factions = crate::target::relations::fixture::factions();
+        classify(
+            guid,
+            &SelfGuid(Some(me)),
+            Some(&group),
+            &self.index,
+            &self.stores,
+            Some(&factions),
+            &Reputations::default(),
+            None,
+        )
+    }
+}
+
+/// `0x5eff85`-`0x5effad`: a player is hostile only when each can attack the other. An enemy who is
+/// PvP-flagged while you are not is one you can attack and who cannot attack you: a friendly
+/// player's lines, 4, until you flag too.
+#[test]
+fn a_player_is_hostile_only_when_each_can_attack_the_other() {
+    use crate::target::relations::fixture::{player, with_flags, HUMAN, ORC, PVP};
+    let me = player(1, HUMAN);
+    let flagged_orc = with_flags(player(2, ORC), PVP);
+    let mut held = Held::new();
+    held.unit(&me);
+    held.unit(&flagged_orc);
+    assert_eq!(held.class(1, &[], 2), UnitClass::FriendlyPlayer);
+
+    let mut held = Held::new();
+    held.unit(&with_flags(me, PVP));
+    held.unit(&flagged_orc);
+    assert_eq!(held.class(1, &[], 2), UnitClass::HostilePlayer);
+}
+
+/// `0x5effcd` comes after the mutual `CanAttack`: a party member you are duelling is a hostile
+/// player, 6, and the same member out of the duel is a party member, 2.
+#[test]
+fn a_party_member_in_a_duel_with_you_is_a_hostile_player() {
+    use crate::target::relations::fixture::{duelling, player, HUMAN};
+    let mut held = Held::new();
+    held.unit(&duelling(player(1, HUMAN), 99, 1));
+    held.unit(&duelling(player(2, HUMAN), 99, 2));
+    assert_eq!(held.class(1, &[2], 2), UnitClass::HostilePlayer);
+
+    let mut held = Held::new();
+    held.unit(&player(1, HUMAN));
+    held.unit(&player(2, HUMAN));
+    assert_eq!(held.class(1, &[2], 2), UnitClass::Party);
+}
+
+/// `0x5f0006` is reached only for a unit that is not a player: a player you mind-control is judged
+/// as a player, never as your pet; a creature you charm is your pet, 1.
+#[test]
+fn a_charmed_player_is_never_classified_by_its_controller() {
+    use crate::target::relations::fixture::{creature, player, HUMAN, ORC};
+    let me = player(1, HUMAN);
+    let charmed = RelUnit {
+        charmed_by: 1,
+        ..player(2, ORC)
+    };
+    let charmed_mob = RelUnit {
+        charmed_by: 1,
+        ..creature(3, ORC)
+    };
+    let mut held = Held::new();
+    held.unit(&me);
+    held.unit(&charmed);
+    held.unit(&charmed_mob);
+    assert_eq!(held.class(1, &[], 2), UnitClass::FriendlyPlayer);
+    assert_eq!(held.class(1, &[], 3), UnitClass::MyPet);
+}
+
+/// `0x5f00e3`-`0x5f00fd`: another player's pet is hostile, 7, when the pet and you can each
+/// attack the other, else friendly, 5; a pet whose owner is not held is a creature, 8.
+#[test]
+fn another_players_pet_takes_the_mutual_test_on_itself() {
+    use crate::target::relations::fixture::{pet_of, player, with_flags, HUMAN, ORC, PVP};
+    let me = with_flags(player(1, HUMAN), PVP);
+    let owner = with_flags(player(2, ORC), PVP);
+    let mut held = Held::new();
+    held.unit(&me);
+    held.unit(&owner);
+    held.unit(&pet_of(3, &owner));
+    assert_eq!(held.class(1, &[], 3), UnitClass::HostilePet);
+
+    let mut held = Held::new();
+    held.unit(&player(1, HUMAN));
+    held.unit(&owner);
+    held.unit(&pet_of(3, &owner));
+    assert_eq!(held.class(1, &[], 3), UnitClass::FriendlyPet);
+
+    let mut held = Held::new();
+    held.unit(&me);
+    held.unit(&pet_of(3, &owner));
+    assert_eq!(held.class(1, &[], 3), UnitClass::Creature);
+}
+
+/// `0x5eff1e`-`0x5eff45`: a game object stands for its creator, one class up on the player arms:
+/// your own is 1, a party member's 3; a creature's object takes the creature's 8.
+#[test]
+fn a_game_object_classifies_as_its_creator_one_class_up() {
+    use crate::target::relations::fixture::{creature, player, HUMAN};
+    let object = |creator: u64| {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x21),
+            (6, creator as u32),
+            (7, (creator >> 32) as u32),
+        ]))
+    };
+    let mut held = Held::new();
+    held.unit(&player(1, HUMAN));
+    held.unit(&player(2, HUMAN));
+    held.unit(&creature(3, HUMAN));
+    held.hold(10, object(1));
+    held.hold(11, object(2));
+    held.hold(12, object(3));
+    held.hold(13, object(77));
+    assert_eq!(held.class(1, &[2], 10), UnitClass::MyPet);
+    assert_eq!(held.class(1, &[2], 11), UnitClass::PartyPet);
+    assert_eq!(held.class(1, &[], 11), UnitClass::FriendlyPet);
+    assert_eq!(held.class(1, &[], 12), UnitClass::Creature);
+    assert_eq!(
+        held.class(1, &[], 13),
+        UnitClass::Unknown,
+        "no creator held"
+    );
+}

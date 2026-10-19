@@ -10,7 +10,6 @@ use crate::ui_chat::event::ChatEventKind;
 
 use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid};
 use crate::query_cache::Ask;
-use crate::target::relations::StoreLookup;
 use crate::target::ring::Factions;
 use crate::target::{RelUnit, Relations, UnitLookup};
 use crate::ui_party::GroupState;
@@ -239,12 +238,45 @@ impl UnitClass {
     }
 }
 
-/// Classify one guid against the active player, the reference's `0x5efea0`. This reads the owner
-/// (`UNIT_FIELD_CHARMEDBY`, then `UNIT_FIELD_CREATEDBY`) for every unit, tests party (your own
-/// subgroup) before hostility, and runs `CanAttack` (`0x606980`) only with the player attacking
-/// ([`Relations::can_attack`]). The reference reads the owner only for a
-/// unit that is not a player (`0x5f0006`-`0x5f0019`); a player is hostile only if each can attack
-/// the other (`0x5eff85`-`0x5effad`), and that test comes before party (`0x5effcd`).
+/// The object manager as [`classify`] asks it: a guid's descriptor through the index, and a unit
+/// read with its creature record, as [`crate::target::RelationWorld::unit`] reads one.
+struct Objects<'a, S: Stores> {
+    index: &'a GuidIndex,
+    stores: &'a S,
+    names: Option<&'a NameCache>,
+}
+
+impl<S: Stores> Objects<'_, S> {
+    fn store(&self, guid: u64) -> Option<&ObjectStore> {
+        self.stores.store(*self.index.0.get(&guid)?)
+    }
+}
+
+impl<S: Stores> UnitLookup for Objects<'_, S> {
+    fn unit(&self, guid: u64) -> Option<RelUnit> {
+        let store = self.store(guid).filter(|s| s.is_unit())?;
+        let unit = RelUnit::of(guid, store);
+        Some(match self.names {
+            Some(names) => unit.with_record(store, names),
+            None => unit,
+        })
+    }
+}
+
+/// `ClassifyGuidForPlayer 0x5efea0`, one guid's standing to the active player. Both the active
+/// player and the guid's object must be held (`0x5efefc`, `0x5eff04`); a game object stands for
+/// the unit that created it (`GAMEOBJECT_CREATED_BY`, `0x5eff1e`-`0x5eff45`).
+/// - The active player is 0 (`0x5eff5c`).
+/// - A player is hostile, 6, when it and the active player can each attack the other
+///   (`0x5eff85`-`0x5effad`), before any party test; else a party member, 2 (`0x5effcd`); else
+///   friendly, 4. A game object's creator takes the class one up (`0x5effa1`-`0x5effad`).
+/// - Any other unit goes by its charmer, else its creator (`0x5f0006`-`0x5f0019`), never a
+///   player's: none is a creature, 8; the active player 1; a party member 3; any other held
+///   player 7 when the unit itself and the active player can each attack the other
+///   (`0x5f00e3`-`0x5f00fd`), else 5; an owner that is no held player, 8.
+///
+/// [`Relations::can_attack`] is `CanAttack 0x606980` with its argument order kept: the unit
+/// attacking the player is asked first.
 pub(crate) fn classify(
     guid: u64,
     self_guid: &SelfGuid,
@@ -253,77 +285,88 @@ pub(crate) fn classify(
     stores: &impl Stores,
     factions: Option<&Factions>,
     reputations: &Reputations,
+    names: Option<&NameCache>,
 ) -> UnitClass {
-    let Some(me) = self_guid.0 else {
-        return UnitClass::Unknown;
+    let objects = Objects {
+        index,
+        stores,
+        names,
     };
-    if guid == me {
-        return UnitClass::Me;
-    }
-    let Some(entity) = index.0.get(&guid).copied() else {
-        return UnitClass::Unknown;
+    let roster = group.map(crate::spell::group_relation::GroupRoster::party_of);
+    let rel = Relations {
+        factions,
+        reputations,
+        me: self_guid.0,
+        roster: roster.as_ref(),
+        units: &objects,
     };
-    let Some(store) = stores.store(entity) else {
-        return UnitClass::Unknown;
-    };
-    // CHARMEDBY first, then CREATEDBY (`0x5f000c`/`0x5f0019`): an owned unit classifies by owner.
-    let owner = store
-        .0
-        .unit_charmed_by()
-        .or_else(|| store.0.unit_created_by());
-    let owned_by = |g: u64| owner == Some(g);
+    classify_in(&rel, guid, |g| objects.store(g))
+}
 
-    if owned_by(me) {
-        return UnitClass::MyPet;
-    }
-    // The party slots hold your own subgroup only; `flags` bits 0-2 are the subgroup on both sides.
-    let in_party = |g: u64| {
-        group.is_some_and(|s| {
-            s.in_group
-                && s.members
-                    .iter()
-                    .any(|m| m.guid == g && m.flags & 0x7 == s.own_flags & 0x7)
-        })
+/// [`classify`] over the relation inputs and a guid's descriptor of any object type.
+fn classify_in<'a>(
+    rel: &Relations,
+    guid: u64,
+    object: impl Fn(u64) -> Option<&'a ObjectStore>,
+) -> UnitClass {
+    use benilla_protocol::messages::ObjectType;
+    use UnitClass as C;
+    let (Some(me), Some(store)) = (rel.me.and_then(|g| rel.units.unit(g)), object(guid)) else {
+        return C::Unknown;
     };
-    if in_party(guid) {
-        return UnitClass::Party;
-    }
-    if owner.is_some_and(in_party) {
-        return UnitClass::PartyPet;
-    }
-
-    // Friend or foe is `CanAttack` from the player on this unit itself, never its owner
-    // (`0x5f00e3`/`0x5f00f2`).
-    let hostile = {
-        let units = StoreLookup::new(|g| stores.store(*index.0.get(&g)?));
-        let roster = group.map(crate::spell::group_relation::GroupRoster::party_of);
-        let rel = Relations {
-            factions,
-            reputations,
-            me: Some(me),
-            roster: roster.as_ref(),
-            units: &units,
-        };
-        units
-            .unit(me)
-            .is_some_and(|me| rel.can_attack(&me, &RelUnit::of(guid, store)))
+    let (unit, from_object) = match store.0.object_type() {
+        Some(ObjectType::Unit | ObjectType::Player) => (rel.units.unit(guid), false),
+        Some(ObjectType::GameObject) => (
+            store
+                .0
+                .gameobject_created_by()
+                .and_then(|g| rel.units.unit(g)),
+            true,
+        ),
+        _ => (None, false),
     };
-
-    if benilla_protocol::guid::is_player(guid) {
-        return if hostile {
-            UnitClass::HostilePlayer
+    let Some(unit) = unit else {
+        return C::Unknown;
+    };
+    let up = |class: C| {
+        if from_object {
+            C::from_index(class as usize + 1)
         } else {
-            UnitClass::FriendlyPlayer
-        };
+            class
+        }
+    };
+    if unit.guid == me.guid {
+        return up(C::Me);
     }
-    if owner.is_some_and(benilla_protocol::guid::is_player) {
-        return if hostile {
-            UnitClass::HostilePet
+    let mutual = |unit: &RelUnit| rel.can_attack(unit, &me) && rel.can_attack(&me, unit);
+    if unit.is_player {
+        return up(if mutual(&unit) {
+            C::HostilePlayer
+        } else if rel.in_party(unit.guid) {
+            C::Party
         } else {
-            UnitClass::FriendlyPet
-        };
+            C::FriendlyPlayer
+        });
     }
-    UnitClass::Creature
+    let owner = if unit.charmed_by != 0 {
+        unit.charmed_by
+    } else {
+        unit.created_by
+    };
+    if owner == 0 {
+        return C::Creature;
+    }
+    if owner == me.guid {
+        return C::MyPet;
+    }
+    if rel.in_party(owner) {
+        return C::PartyPet;
+    }
+    match rel.units.unit(owner) {
+        Some(o) if o.is_player && mutual(&unit) => C::HostilePet,
+        Some(o) if o.is_player => C::FriendlyPet,
+        _ => C::Creature,
+    }
 }
 
 // ─────────────────────────────── the msgType selectors ────────────────────────────────

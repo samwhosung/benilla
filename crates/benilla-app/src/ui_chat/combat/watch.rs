@@ -23,6 +23,8 @@ pub(crate) struct WatchCtx<'w> {
     pub factions: Option<Res<'w, Factions>>,
     pub reputations: Res<'w, Reputations>,
     pub spells: Option<Res<'w, crate::ui_action::Spells>>,
+    /// The creature records, whose VISIBLE_TO_GHOSTS bit `CanAttack` reads.
+    pub names: Option<Res<'w, crate::names::NameCache>>,
     /// The live display ranges: the reference's `0x8629e0` table plus `CombatDeathLogRange`.
     pub ranges: Res<'w, CombatLogRanges>,
 }
@@ -37,6 +39,7 @@ impl WatchCtx<'_> {
             stores,
             self.factions.as_deref(),
             &self.reputations,
+            self.names.as_deref(),
         )
     }
 
