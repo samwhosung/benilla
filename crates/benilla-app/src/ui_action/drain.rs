@@ -225,12 +225,14 @@ pub(crate) enum UseOutcome {
     Done,
     /// The Attack slot passed `TryCast`'s dead rung: the player's Attack ([`AttackPress`]) runs.
     Attack,
+    /// A macro slot: its lines run inside the press (`0x4e6098 call 0x4f1460`), once the caller
+    /// has the VM's host back, so the calls they make apply line by line.
+    Macro(u32),
 }
 
-/// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast, an item use or a macro run, at the
-/// selection as the calls before it left it, or the Attack slot, which it hands back for the
-/// player's Attack to run. A macro's lines run inside it (`0x4e6098 call 0x4f1460`), so the calls
-/// they make queue for [`crate::script_calls`] to apply next.
+/// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast or an item use, at the selection as the
+/// calls before it left it, or the Attack slot or a macro, which it hands back for the caller to
+/// run: the player's Attack, or the macro's lines (`0x4e6098 call 0x4f1460`).
 pub(crate) fn use_action(
     p: &mut ActionPress,
     script: &mut UiScript,
@@ -409,17 +411,8 @@ pub(crate) fn use_action(
             }
         }
         // The macro arm (`0x4e5ee0` calls `0x4f1460`): each body line goes through the chat
-        // input, as if typed.
-        Some(b) if b.kind == ACTION_KIND_MACRO => {
-            // The press's input events are up around the whole call
-            // ([`crate::script_calls::in_call_order`]), so the lines run inside them.
-            if !crate::ui_macro::run_macro(script, b.action) {
-                debug!(
-                    "ui_action: macro action {action} (macro {}) is empty",
-                    b.action
-                );
-            }
-        }
+        // input, as if typed, under the press's input events.
+        Some(b) if b.kind == ACTION_KIND_MACRO => return UseOutcome::Macro(b.action),
         Some(b) => {
             debug!(
                 "ui_action: action {action} kind {:#04x} has no use path",

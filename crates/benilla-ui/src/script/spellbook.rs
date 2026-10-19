@@ -169,6 +169,14 @@ impl super::UiScript {
         }
     }
 
+    /// Tell the VM which spell awaits its target (`GetTargetingSpellId 0x6e48e0`): `true` when it
+    /// differs from the last one told, the change `CURRENT_SPELL_CAST_CHANGED` is signalled on, so
+    /// a change told inside a call is not signalled again by the next frame's push.
+    pub fn tell_targeting_spell(&mut self, spell: Option<u32>) -> bool {
+        let mut model = self.model_mut();
+        std::mem::replace(&mut model.targeting_spell, spell) != spell
+    }
+
     /// Take the `SpellStopTargeting()` calls, the ESC chain's rung (`UIParent.lua:1490`), out of
     /// the call stream: whether there was one. The app clears its targeting mode.
     pub fn take_stop_targeting(&mut self) -> bool {
@@ -533,11 +541,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // pet book's `CMSG_PET_ACTION` fork (`0x4b34c8`) is not gated.
                 let pet = is_pet_book(&book_type);
                 let may_cast = pet || protected::gate(lua, Tag::CAST);
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                if let Some(slot) = book_slot(&model, id, &book_type) {
-                    if !slot.passive {
-                        let spell_id = slot.spell_id;
-                        model.queue_call(if pet {
+                let spell_id = book_slot(
+                    &lua.app_data_ref::<Model>().expect("model app_data"),
+                    id,
+                    &book_type,
+                )
+                .filter(|slot| !slot.passive)
+                .map(|slot| slot.spell_id);
+                if let Some(spell_id) = spell_id {
+                    super::calls::submit(
+                        lua,
+                        if pet {
                             ScriptCall::CastPetSpell { spell_id, on_self }
                         } else {
                             ScriptCall::CastSpell {
@@ -545,8 +559,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                                 on_self,
                                 may_cast,
                             }
-                        });
-                    }
+                        },
+                    );
                 }
                 Ok(())
             },
@@ -640,14 +654,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `TryCastSpell`'s gate, tag 2 (`0x6e4bc1`), behind the cancels as for `CastSpell`. The
             // name resolves in the player book alone, whose leg is the gated one.
             let may_cast = protected::gate(lua, Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(slot) = resolve_spell_by_name(&model.spellbook, &name) {
-                let spell_id = slot.spell_id;
-                model.queue_call(ScriptCall::CastSpell {
-                    spell_id,
-                    on_self,
-                    may_cast,
-                });
+            let spell_id = resolve_spell_by_name(
+                &lua.app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .spellbook,
+                &name,
+            )
+            .map(|slot| slot.spell_id);
+            if let Some(spell_id) = spell_id {
+                super::calls::submit(
+                    lua,
+                    ScriptCall::CastSpell {
+                        spell_id,
+                        on_self,
+                        may_cast,
+                    },
+                );
             }
             Ok(())
         })?,
@@ -673,9 +695,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The gate's tag 2 opens the function (`0x6e6e88`); a refusal answers nil, as nothing
             // to stop does (`0x6e6edd`).
             let may_stop = protected::gate(lua, Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if may_stop && model.casting {
-                model.queue_call(ScriptCall::SpellStopCasting);
+            let casting = lua.app_data_ref::<Model>().expect("model app_data").casting;
+            if may_stop && casting {
+                super::calls::submit(lua, ScriptCall::SpellStopCasting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -721,9 +743,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // The gate's tag 2 opens the function (`0x6e6e38`); a refusal answers nil (`0x6e6e69`).
             let may_stop = protected::gate(lua, Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if may_stop && model.spell_targeting {
-                model.queue_call(ScriptCall::SpellStopTargeting);
+            let targeting = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .spell_targeting;
+            if may_stop && targeting {
+                super::calls::submit(lua, ScriptCall::SpellStopTargeting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -1602,6 +1627,63 @@ mod tests {
         assert_eq!(
             s.eval::<String>("return (GetSpellTabInfo('1'))").unwrap(),
             s.eval::<String>("return (GetSpellTabInfo(1))").unwrap()
+        );
+    }
+
+    /// The book's casts and the two stops each apply inside their call with a host lent: the cast
+    /// reaches `ArmCastTargets 0x6e5250` before `CastSpell` (`0x4b42f0`) or `CastSpellByName`
+    /// (`0x4b4ab0`) returns.
+    #[test]
+    fn casts_and_stops_apply_in_the_call_with_a_host_lent() {
+        use crate::script::ScriptCall;
+        let mut s = UiScript::new().unwrap();
+        s.set_spellbook(book());
+        s.set_pet_book(PetBookState {
+            token: Some("PET".into()),
+            slots: vec![SpellSlotView {
+                spell_id: 2649,
+                name: "Growl".into(),
+                ..Default::default()
+            }],
+        });
+        let cast = |spell_id| ScriptCall::CastSpell {
+            spell_id,
+            on_self: false,
+            may_cast: true,
+        };
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(
+                &mut s,
+                "CastSpell(1, BOOKTYPE_SPELL)"
+            ),
+            vec![cast(133)]
+        );
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(
+                &mut s,
+                r#"CastSpellByName("Frost Armor")"#
+            ),
+            vec![cast(168)]
+        );
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(
+                &mut s,
+                "CastSpell(1, BOOKTYPE_PET)"
+            ),
+            vec![ScriptCall::CastPetSpell {
+                spell_id: 2649,
+                on_self: false
+            }]
+        );
+        s.set_casting(true);
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(&mut s, "SpellStopCasting()"),
+            vec![ScriptCall::SpellStopCasting]
+        );
+        s.set_spell_targeting(true);
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(&mut s, "SpellStopTargeting()"),
+            vec![ScriptCall::SpellStopTargeting]
         );
     }
 }

@@ -2477,3 +2477,46 @@ fn an_unseeded_player_record_answers_the_references_four_ways() {
         "…which for UnitSex is the same 2, by the binding's own unresolved-token default"
     );
 }
+
+/// The unit frames' selecting verbs and `SpellTargetUnit` each apply inside their call with a host
+/// lent: `TargetUnit` (`0x4899d0`), `AssistUnit` (`0x489b80`), `TargetLastEnemy`, `TargetByName`
+/// (`0x489d60`), `ClearTarget` (`0x489ff0`) and, with the cursor up, `SpellTargetUnit`
+/// (`0x6e6d90`).
+#[test]
+fn the_unit_verbs_apply_in_the_call_with_a_host_lent() {
+    use crate::script::{ScriptCall, SelectionRequest};
+    let mut s = UiScript::new().unwrap();
+    let calls = crate::script::host::test_support::applied_in_call(
+        &mut s,
+        r#"TargetUnit("player") AssistUnit("player") TargetLastEnemy() TargetByName("Rag")
+        ClearTarget()"#,
+    );
+    assert_eq!(
+        calls,
+        vec![
+            ScriptCall::Select {
+                request: SelectionRequest::Unit("player".into()),
+                may_cast: true,
+            },
+            ScriptCall::Select {
+                request: SelectionRequest::Assist("player".into()),
+                may_cast: true,
+            },
+            ScriptCall::Select {
+                request: SelectionRequest::LastEnemy,
+                may_cast: true,
+            },
+            ScriptCall::TargetByName {
+                name: "Rag".into(),
+                exact: false,
+                may_cast: true,
+            },
+            ScriptCall::ClearTarget,
+        ]
+    );
+    s.set_spell_targeting(true);
+    assert_eq!(
+        crate::script::host::test_support::applied_in_call(&mut s, r#"SpellTargetUnit("player")"#),
+        vec![ScriptCall::SpellTargetUnit("player".into())]
+    );
+}

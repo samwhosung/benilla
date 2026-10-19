@@ -125,8 +125,7 @@ fn push(lua: &Lua, input: BindingInput) {
 }
 
 fn push_call(lua: &Lua, call: ScriptCall) {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    model.queue_call(call);
+    super::calls::submit(lua, call);
 }
 
 /// A zoom's optional amount: `0x6f34d0` (is-number, a numeric string passes) then `0x6f3620`,
@@ -570,5 +569,43 @@ mod tests {
                 ScriptCall::ClearTarget,
             ]
         );
+    }
+
+    /// The TAB cyclers, `TargetLastTarget` and `AttackTarget` apply inside their call with a host
+    /// lent.
+    #[test]
+    fn the_targeting_keys_apply_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        let calls = crate::script::host::test_support::applied_in_call(
+            &mut s,
+            "TargetNearestEnemy() TargetNearestFriend() TargetNearestPartyMember() \
+             TargetNearestRaidMember() TargetLastTarget() AttackTarget()",
+        );
+        let modes: Vec<_> = calls
+            .iter()
+            .filter_map(|c| match c {
+                ScriptCall::TargetNearest { mode, .. } => Some(*mode),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                NearestMode::Enemy,
+                NearestMode::Friend,
+                NearestMode::PartyMember,
+                NearestMode::RaidMember
+            ]
+        );
+        assert!(matches!(
+            calls[4..],
+            [
+                ScriptCall::TargetLastTarget { may_cast: true },
+                ScriptCall::AttackTarget {
+                    may_pick: true,
+                    may_cast: true
+                }
+            ]
+        ));
     }
 }

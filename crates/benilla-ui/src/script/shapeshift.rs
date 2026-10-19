@@ -147,9 +147,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // the cancels of an active form (`0x4b496b`, `0x4b497c`) run ahead of it, so the call
             // is queued whatever the gate said and carries the answer to the cast alone.
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(spell_id) = form_at(&model, i).map(|f| f.view.spell_id) {
-                model.queue_call(super::ScriptCall::CastShapeshiftForm { spell_id, may_cast });
+            let spell_id = form_at(&lua.app_data_ref::<Model>().expect("model app_data"), i)
+                .map(|f| f.view.spell_id);
+            if let Some(spell_id) = spell_id {
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::CastShapeshiftForm { spell_id, may_cast },
+                );
             }
             Ok(())
         })?,
@@ -269,5 +273,19 @@ mod tests {
         let (start, _, _) = poll(&s);
         assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
         assert!((start - 10.02).abs() < 1e-9);
+    }
+
+    /// `CastShapeshiftForm` casts through `TryCastSpell` inside the call (`0x4b4992` → `0x6e5a90`).
+    #[test]
+    fn a_form_cast_applies_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        s.set_shapeshift_forms(forms());
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(&mut s, "CastShapeshiftForm(2)"),
+            vec![crate::script::ScriptCall::CastShapeshiftForm {
+                spell_id: 71,
+                may_cast: true
+            }]
+        );
     }
 }

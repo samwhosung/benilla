@@ -296,18 +296,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let check_cursor = bool_or_default(rest.front(), false);
             let on_self = bool_or_default(rest.get(1), false);
             let may_cast = protected::gate(lua, Tag::CAST);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             if check_cursor && model.cursor.is_some() {
                 drop(model);
                 super::cursor::place_action(lua, action);
             } else {
                 let item_locks = model.item_locks.iter().copied().collect();
-                model.queue_call(super::ScriptCall::UseAction(ActionUse {
-                    action,
-                    on_self,
-                    item_locks,
-                    may_cast,
-                }));
+                drop(model);
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::UseAction(ActionUse {
+                        action,
+                        on_self,
+                        item_locks,
+                        may_cast,
+                    }),
+                );
             }
             Ok(())
         })?,
@@ -757,5 +761,26 @@ mod tests {
                 "{call} must raise, got {err}"
             );
         }
+    }
+
+    /// `UseAction` hands its press to the lent host inside the call (`0x4e7140` → `0x4e5ee0`).
+    #[test]
+    fn use_action_applies_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        let calls = crate::script::host::test_support::applied_in_call(&mut s, "UseAction(1)");
+        assert!(
+            matches!(
+                calls.as_slice(),
+                [crate::script::ScriptCall::UseAction(
+                    crate::script::ActionUse {
+                        action: 1,
+                        on_self: false,
+                        may_cast: true,
+                        ..
+                    }
+                )]
+            ),
+            "{calls:?}"
+        );
     }
 }

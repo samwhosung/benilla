@@ -198,13 +198,25 @@ pub(super) fn use_inventory_item(lua: &Lua, id: u32, on_self: bool) {
     verb(lua, clear_cursor);
     // The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2.
     let may_cast = protected::gate(lua, Tag::CAST);
-    verb(lua, |model| use_cleared(model, id, on_self, may_cast));
+    let mut call = None;
+    verb(lua, |model| {
+        use_cleared(model, id, on_self, may_cast, &mut call)
+    });
+    if let Some(call) = call {
+        crate::script::calls::submit(lua, call);
+    }
 }
 
 /// `UseInventoryItem` past its clear. Outside repair mode a locked worn item is refused in the
 /// call, `CGItem::Use`'s first gate (`0x4c7af0` → `0x5d8d32`), so a later call's lock does not
 /// reach it.
-fn use_cleared(model: &mut Model, id: u32, on_self: bool, may_cast: bool) {
+fn use_cleared(
+    model: &mut Model,
+    id: u32,
+    on_self: bool,
+    may_cast: bool,
+    call: &mut Option<crate::script::ScriptCall>,
+) {
     if !model.repair_mode {
         let locked = model
             .inv_slot("player", id as usize)
@@ -227,7 +239,7 @@ fn use_cleared(model: &mut Model, id: u32, on_self: bool, may_cast: bool) {
         if let Some(key) = refusal.filter(|_| !locked) {
             model.push_ui_error(key);
         } else if !locked {
-            model.queue_call(crate::script::ScriptCall::UseInventoryItem {
+            *call = Some(crate::script::ScriptCall::UseInventoryItem {
                 slot: id,
                 on_self,
                 may_cast,
@@ -1293,5 +1305,20 @@ mod tests {
         s.set_player_control(false);
         s.run("UseInventoryItem(13)").unwrap();
         assert!(s.take_ui_errors().is_empty());
+    }
+
+    /// `UseInventoryItem` hands its use to the lent host inside the call (`0x4c79a9`).
+    #[test]
+    fn a_worn_item_use_applies_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(&mut s, "UseInventoryItem(1)"),
+            vec![crate::script::ScriptCall::UseInventoryItem {
+                slot: 1,
+                on_self: false,
+                may_cast: true
+            }]
+        );
     }
 }

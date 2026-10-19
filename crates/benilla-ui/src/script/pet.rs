@@ -455,16 +455,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !protected::gate(lua, Tag::CAST) {
                 return Ok(());
             }
-            super::tick::verb(lua, |model| {
+            let pressed = super::tick::verb(lua, |model| {
                 let Some(packed) = slot_at(model, i)
                     .filter(|s| s.view.name.is_some())
                     .map(|s| s.view.packed)
                 else {
-                    return;
+                    return false;
                 };
                 latch_press(model, packed);
-                model.queue_call(super::ScriptCall::PetAction(i));
+                true
             });
+            if pressed {
+                super::calls::submit(lua, super::ScriptCall::PetAction(i));
+            }
             Ok(())
         })?,
     )?;
@@ -671,12 +674,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !protected::gate(lua, Tag::CAST) {
                     return Ok(());
                 }
-                super::tick::verb(lua, |model| {
+                let pressed = super::tick::verb(lua, |model| {
                     if model.pet_bar.has_bar {
                         latch_press(model, packed);
-                        model.queue_call(super::ScriptCall::PetOrder(packed));
                     }
+                    model.pet_bar.has_bar
                 });
+                if pressed {
+                    super::calls::submit(lua, super::ScriptCall::PetOrder(packed));
+                }
                 Ok(())
             })?,
         )?;
@@ -1405,5 +1411,25 @@ mod tests {
         let (start, _, _) = poll(&s);
         assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
         assert!((start - 10.02).abs() < 1e-9);
+    }
+
+    /// `CastPetAction` and the six one-shot orders re-enter `PressPetAction` (`0x4bd1d0`) inside
+    /// the call, so each hands its press to the lent host before it returns.
+    #[test]
+    fn pet_presses_apply_in_the_call_with_a_host_lent() {
+        use crate::script::ScriptCall;
+        let mut s = UiScript::new().unwrap();
+        s.set_pet_actions(true, true, true, slots());
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(&mut s, "CastPetAction(1)"),
+            vec![ScriptCall::PetAction(1)]
+        );
+        let orders = crate::script::host::test_support::applied_in_call(
+            &mut s,
+            "PetPassiveMode() PetDefensiveMode() PetAggressiveMode() PetWait() PetFollow() \
+             PetAttack()",
+        );
+        assert_eq!(orders.len(), 6, "{orders:?}");
+        assert!(orders.iter().all(|c| matches!(c, ScriptCall::PetOrder(_))));
     }
 }

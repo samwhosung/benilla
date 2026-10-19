@@ -585,13 +585,14 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
             equip_slots: s.equip_slots.clone(),
         }
     };
-    verb(lua, |model| {
+    let targeting = verb(lua, |model| {
         clear_cursor(model);
-        // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
-        if model.spell_targeting {
-            model.queue_call(super::ScriptCall::SpellStopTargeting);
-        }
+        model.spell_targeting
     });
+    // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
+    if targeting {
+        super::calls::submit(lua, super::ScriptCall::SpellStopTargeting);
+    }
     pick_up_item(lua, item);
     true
 }
@@ -1612,6 +1613,22 @@ mod tests {
                 "ACTIONBAR_HIDEGRID 1 nil",
                 "CURSOR_UPDATE nil nil"
             ]
+        );
+    }
+
+    /// `SplitContainerItem` stops an armed spell's targeting inside the call (`0x4fa07d`,
+    /// `0x6e4900`) with a host lent.
+    #[test]
+    fn a_split_stops_targeting_in_the_call_with_a_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(one_item_backpack()));
+        s.set_spell_targeting(true);
+        assert_eq!(
+            crate::script::host::test_support::applied_in_call(
+                &mut s,
+                "SplitContainerItem(0, 1, 2)"
+            ),
+            vec![crate::script::ScriptCall::SpellStopTargeting]
         );
     }
 }

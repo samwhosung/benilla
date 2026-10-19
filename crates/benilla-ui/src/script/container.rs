@@ -467,13 +467,14 @@ fn custom_cursor(model: &mut super::Model, name: &str) -> bool {
 /// its lock here, in the call, so a later call reads it as the reference's does: the withdraw and
 /// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the open (`0x5edcd9`) and the wrap
 /// paper (`0x5edea0`). The equip arm is not done here: it returns its item, which the call puts on
-/// the cursor ([`use_equip_arm`]). The app sends each arm.
+/// the cursor ([`use_equip_arm`]). The app sends each arm, from the call left in `call`.
 fn use_cleared(
     model: &mut super::Model,
     bag: i64,
     slot: u32,
     on_self: bool,
     may_cast: bool,
+    call: &mut Option<super::ScriptCall>,
 ) -> Option<CursorItem> {
     let s = model
         .containers
@@ -516,7 +517,7 @@ fn use_cleared(
             return None;
         }
     }
-    model.queue_call(super::ScriptCall::UseContainerItem(ContainerUse {
+    *call = Some(super::ScriptCall::UseContainerItem(ContainerUse {
         bag,
         slot,
         guid,
@@ -544,12 +545,18 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
     let step = cursor::equip::auto_equip_from(lua, item, false);
     super::tick::verb(lua, |model| {
-        // An item the verb refused (in the trade window) sends nothing, but still locks (`0x4fa418`).
-        if matches!(
-            step,
-            cursor::equip::AutoEquip::Sent { .. } | cursor::equip::AutoEquip::Asked { .. }
-        ) {
-            model.queue_call(super::ScriptCall::UseContainerItem(ContainerUse {
+        if !projectile {
+            cursor::lock_item(model, guid);
+        }
+    });
+    // An item the verb refused (in the trade window) sends nothing, but still locks (`0x4fa418`).
+    if matches!(
+        step,
+        cursor::equip::AutoEquip::Sent { .. } | cursor::equip::AutoEquip::Asked { .. }
+    ) {
+        super::calls::submit(
+            lua,
+            super::ScriptCall::UseContainerItem(ContainerUse {
                 bag,
                 slot,
                 guid,
@@ -557,12 +564,9 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool
                 asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
                 on_self,
                 may_cast,
-            }));
-        }
-        if !projectile {
-            cursor::lock_item(model, guid);
-        }
-    });
+            }),
+        );
+    }
 }
 
 /// The wrap arm `0x5edea0`: the paper at `(bag, slot)` locks, the cursor takes mode 2 (the cast
@@ -1019,9 +1023,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::tick::verb(lua, cursor::clear_cursor);
             // The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2.
             let may_cast = protected::gate(lua, Tag::CAST);
-            if let Some(item) = super::tick::verb(lua, |model| {
-                use_cleared(model, bag, slot, on_self, may_cast)
-            }) {
+            let mut call = None;
+            let equip = super::tick::verb(lua, |model| {
+                use_cleared(model, bag, slot, on_self, may_cast, &mut call)
+            });
+            if let Some(call) = call {
+                super::calls::submit(lua, call);
+            }
+            if let Some(item) = equip {
                 use_equip_arm(lua, bag, slot, item, on_self, may_cast);
             }
             Ok(())
@@ -2602,5 +2611,29 @@ mod tests {
         let (start, _, _) = poll(&s);
         assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
         assert!((start - 100.02).abs() < 1e-9);
+    }
+
+    /// `UseContainerItem`'s use and equip arms hand their call to the lent host inside the call.
+    #[test]
+    fn container_uses_apply_in_the_call_with_a_host_lent() {
+        use crate::script::ScriptCall;
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        let used =
+            crate::script::host::test_support::applied_in_call(&mut s, "UseContainerItem(0, 1)");
+        let used_slot = |u: &super::ContainerUse| (u.bag, u.slot) == (0, 1);
+        assert!(
+            matches!(used.as_slice(), [ScriptCall::UseContainerItem(u)] if used_slot(u)),
+            "{used:?}"
+        );
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(forked_bag(super::UseFork::Equip)));
+        let equipped =
+            crate::script::host::test_support::applied_in_call(&mut s, "UseContainerItem(0, 1)");
+        let equip_arm = super::UseArm::Item(super::UseFork::Equip);
+        assert!(
+            matches!(equipped.as_slice(), [ScriptCall::UseContainerItem(u)] if u.arm == equip_arm),
+            "{equipped:?}"
+        );
     }
 }

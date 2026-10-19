@@ -114,6 +114,9 @@ impl HandlerArg {
 pub(crate) struct Model {
     /// Which FrameScript state this VM is: it picks the event table and the frame types.
     pub(crate) vm: super::glue::VmKind,
+    /// [`super::UiScript::session`], for a handle made inside a verb
+    /// ([`super::UiScript::reentrant`]).
+    pub(crate) session: u64,
     /// Every discovered addon in load order: the AddOn API's registry, filled at world entry.
     pub(crate) addons: Vec<super::addon::AddOnInfo>,
     /// The Lua index space into `addons`, a title-sorted, hidden-filtered list (`0x51da70`).
@@ -417,6 +420,11 @@ pub(crate) struct Model {
     pub(crate) tracking: Option<super::aura::TrackingState>,
     /// The calls that touch the selection, the cast or the targeting cursor, in call order.
     pub(crate) script_calls: Vec<super::calls::QueuedCall>,
+    /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
+    /// it applied ([`super::calls::submit`]).
+    pub(crate) call_depth: u8,
+    /// Calls made past the nesting bound, for the next frame's drain.
+    pub(crate) deferred_calls: Vec<super::calls::QueuedCall>,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
     /// The selection change a script call made and the input events it ran under, for the event
@@ -646,6 +654,9 @@ pub(crate) struct Model {
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
+    /// The spell awaiting its target as the host last told this VM (`0x6e48e0`), so the host's
+    /// pushes signal `CURRENT_SPELL_CAST_CHANGED` once per change, whichever push sees it.
+    pub(crate) targeting_spell: Option<u32>,
     /// The units, by guid, for which `SpellCanTargetUnit`'s armed unit word clears fully, which
     /// stock unit frames ask before they call `SpellTargetUnit`; a token resolves to its guid
     /// through [`Self::unit_guids`].
@@ -1386,6 +1397,7 @@ impl Model {
     pub(crate) fn new() -> Model {
         Model {
             vm: super::glue::VmKind::InGame,
+            session: 0,
             addons: Vec::new(),
             addon_index: Vec::new(),
             addon_reply: None,
@@ -1492,6 +1504,8 @@ impl Model {
             cancel_aura_requests: Vec::new(),
             tracking: None,
             script_calls: Vec::new(),
+            call_depth: 0,
+            deferred_calls: Vec::new(),
             input: Default::default(),
             protected: Default::default(),
             selection_cause: None,
@@ -1593,6 +1607,7 @@ impl Model {
             pet_spell_autocasts: Vec::new(),
             casting: false,
             spell_targeting: false,
+            targeting_spell: None,
             spell_targetable_units: HashSet::new(),
             talents: super::talent::TalentUiState::default(),
             talent_learns: Vec::new(),

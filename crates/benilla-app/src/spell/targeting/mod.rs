@@ -416,36 +416,47 @@ pub(crate) fn publish_picks_self(
 /// item half, and `CURRENT_SPELL_CAST_CHANGED` on each edge. That event hides the enchant confirm
 /// popups (`UIParent.lua:449`); its one emitter `0x4b3250` is called from the cast arm, abort and
 /// bind sites, `StopTargeting 0x6e4900` among them. It fires on the spell changing, so a cancel
-/// and re-arm in one frame still counts.
+/// and re-arm in one frame still counts. A script call pushes the same view inside the call
+/// ([`ScriptCursor::push_view`]), and the VM holds the spell it was told, so one change signals
+/// once.
 pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
     checks: BindChecks,
     tokens: crate::ui_unit::UnitTokens,
-    mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
     if let Some(mut script) = script {
-        let last = last.get(&script);
-        script.set_spell_targeting(targeting.active());
-        script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
-        // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
-        // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones the
-        // resolver's inputs list, the `target` chains' included.
-        let targetable: Vec<u64> = script
-            .held_unit_guids()
-            .into_iter()
-            .filter(|&guid| {
-                tokens
-                    .held(guid)
-                    .is_some_and(|(entity, _)| targeting.can_target_unit(entity, &checks))
-            })
-            .collect();
-        script.set_spell_targetable_units(targetable);
-        if *last != targeting.spell() {
-            *last = targeting.spell();
+        if push_targeting_view(&mut script, &targeting, &checks, &tokens) {
             script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
         }
     }
+}
+
+/// Push what the VM reads of the targeting word: `SpellIsTargeting`, the pickup reroute's item
+/// half, `SpellCanTargetUnit`'s units and the spell awaiting its target, answering whether that
+/// spell changed since the VM was last told, the edge `CURRENT_SPELL_CAST_CHANGED` is signalled on.
+fn push_targeting_view(
+    script: &mut benilla_ui::script::UiScript,
+    targeting: &SpellTargeting,
+    checks: &BindChecks,
+    tokens: &crate::ui_unit::UnitTokens,
+) -> bool {
+    script.set_spell_targeting(targeting.active());
+    script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
+    // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
+    // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones the
+    // resolver's inputs list, the `target` chains' included.
+    let targetable: Vec<u64> = script
+        .held_unit_guids()
+        .into_iter()
+        .filter(|&guid| {
+            tokens
+                .held(guid)
+                .is_some_and(|(entity, _)| targeting.can_target_unit(entity, checks))
+        })
+        .collect();
+    script.set_spell_targetable_units(targetable);
+    script.tell_targeting_spell(targeting.spell())
 }
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
@@ -508,6 +519,13 @@ pub(crate) struct ScriptCursor<'w, 's> {
 }
 
 impl ScriptCursor<'_, '_> {
+    /// Push the targeting view into the VM after a script call, inside the call, as the reference's
+    /// `SpellIsTargeting` (`0x6e6cd0`) reads the word the call left: whether the spell awaiting its
+    /// target changed, which the caller signals once the host is back.
+    pub(crate) fn push_view(&self, script: &mut benilla_ui::script::UiScript) -> bool {
+        push_targeting_view(script, &self.ladder.ground, &self.checks, &self.tokens)
+    }
+
     /// `SpellTargetUnit(unit)` (`0x6e6d90`). The binding already raised the usage and
     /// unknown-token errors and dropped a call made while not targeting. Here a token that names
     /// no unit raises "Out of range." (0x59) and ends targeting, as the reference's abort clears
