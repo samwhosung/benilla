@@ -315,3 +315,42 @@ fn an_attack_toggled_off_cancels_its_queued_strike_with_a_pair_then_stop() {
         None
     );
 }
+
+/// A refusal whose report leaves before its line and its tail (`report_reaches_pop`): a form the
+/// spell needs with no name to show, "Must be in %s" (0x56, `0x6e20c6`), refused by the attempt
+/// itself, shows nothing and fires nothing; with its form named the line shows, and the tail,
+/// nothing in flight, fires `SPELLCAST_FAILED`.
+#[test]
+fn a_local_refusal_that_skips_its_text_skips_its_tail() {
+    for (named, expected) in [
+        (false, ""),
+        (true, "SPELL_FAILED_ONLY_SHAPESHIFT,SPELLCAST_FAILED"),
+    ] {
+        let mut f = frame(true);
+        with_book_spell(
+            &mut f,
+            HEAL,
+            "Heal",
+            benilla_formats::SpellDisplay {
+                stances: 1,
+                ..Default::default()
+            },
+        );
+        if named {
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_action::Spells>()
+                .forms
+                .insert(
+                    1,
+                    benilla_formats::ShapeshiftForm {
+                        name: "Cat Form".into(),
+                        ..Default::default()
+                    },
+                );
+        }
+        run_hosted(&mut f, &format!(r#"CastSpellByName("Heal") {SNAPSHOT}"#));
+        assert_eq!(seen(&mut f), expected, "named {named}");
+        assert_eq!(casts_and_cancels(&f), vec![], "named {named}");
+    }
+}
