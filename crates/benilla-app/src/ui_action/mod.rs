@@ -148,6 +148,15 @@ impl Spells {
     }
 }
 
+/// One pass of the action-state feed, for a test that reads a slot's pushed state.
+#[cfg(test)]
+pub(crate) fn run_feed_action_state_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(state::feed_action_state)
+        .expect("the action-state feed runs as a one-shot system");
+}
+
 /// The 5875 spell data; `None` skips where the install is absent.
 #[cfg(test)]
 pub(crate) fn real_spells() -> Option<Spells> {

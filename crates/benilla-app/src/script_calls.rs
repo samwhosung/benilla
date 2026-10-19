@@ -61,7 +61,15 @@ pub(crate) struct ScriptCallHost<'w, 's> {
         (
             crate::target::ScriptSelect<'w, 's>,
             crate::spell::ScriptCursor<'w, 's>,
-            crate::spell::SelfCancel<'w, 's>,
+            // The cast's own state: its cancel, and the view the VM reads after each call.
+            ParamSet<
+                'w,
+                's,
+                (
+                    crate::spell::SelfCancel<'w, 's>,
+                    crate::spell::CastState<'w, 's>,
+                ),
+            >,
             crate::spell::ScriptCast<'w, 's>,
             crate::ui_action::ActionPress<'w, 's>,
             crate::ui_items::ScriptItemUse<'w, 's>,
@@ -96,7 +104,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::AttackTarget { may_pick, .. } => attack_in_order!(appliers, may_pick),
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
-            ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
+            ScriptCall::SpellStopCasting => appliers.p2().p0().stop_casting(),
             ScriptCall::CastSpell {
                 spell_id, on_self, ..
             } => {
@@ -169,8 +177,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 fail.input = input;
             }
         }
-        // The word the call left, for the script's next line: `SpellIsTargeting` (`0x6e6cd0`)
-        // reads it, and `SpellTargetUnit` binds to it.
+        // The cast state the call left, for the script's next line: `SpellStopCasting`
+        // (`0x6e6e80`) finds the cast it sent in flight (`0x6e5026`), and `IsCurrentAction`
+        // (`0x4e53a0`) checks its slot, as stock `ActionButtonUp` reads straight after `UseAction`
+        // (`ActionButton.lua:54-55`).
+        let view = appliers.p2().p1().view();
+        script.set_cast_view(view);
+        // The word the call left: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
+        // binds to it.
         if appliers.p1().push_view(script) {
             // 1.12.1 signals at the arm (`0x6e5333`), before its bind or send, and again at the
             // attempt's end (`0x6e51e3`); here once per change of the awaited spell (#1986).
@@ -251,6 +265,8 @@ mod tests {
     use benilla_ui::script::{PetBookState, SpellBookState, SpellSlotView, SpellTabView};
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::Receiver;
+
+    mod cast_reports;
 
     const ME: u64 = 0x10;
     /// The unit selected before the script runs.

@@ -44,7 +44,10 @@ fn stock_ui(tag: &str) -> UiScript {
             use_spell: None,
         }),
     );
-    s.set_casting(true);
+    s.set_cast_view(benilla_ui::script::CastView {
+        cast: Some(FIREBALL),
+        ..Default::default()
+    });
     s.set_spell_targeting(true);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.tick(0.1);
@@ -133,7 +136,7 @@ fn a_stock_key_binding_casts() {
     // the targeting cursor.
     assert!(s.execute_binding("TOGGLEGAMEMENU", true).unwrap());
     assert_eq!(s.take_script_calls(), [ScriptCall::SpellStopCasting]);
-    s.set_casting(false);
+    s.set_cast_view(Default::default());
     assert!(s.execute_binding("TOGGLEGAMEMENU", true).unwrap());
     assert_eq!(s.take_script_calls(), [ScriptCall::SpellStopTargeting]);
     // The stock TAB body targets through the tag-4 verb.

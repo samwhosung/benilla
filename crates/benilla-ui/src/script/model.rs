@@ -648,9 +648,10 @@ pub(crate) struct Model {
     pub(crate) macro_icon_source: Option<MacroIconSource>,
     /// `ToggleSpellAutocast` ids for `CMSG_PET_SPELL_AUTOCAST` (`0x2F3`), which names a spell.
     pub(crate) pet_spell_autocasts: Vec<u32>,
-    /// An auto-repeat or cast that `SpellStopCasting()` can stop, not a channel (`0x6e6e80`). Its
-    /// 1 or nil matters: the ESC chain (`UIParent.lua:1489`) reaches `CloseAllWindows()` on nil.
-    pub(crate) casting: bool,
+    /// The player's cast state, which `IsCurrentAction`, `IsAutoRepeatAction` and
+    /// `SpellStopCasting()` (`0x6e6e80`) read: the last's 1 or nil matters, as the ESC chain
+    /// (`UIParent.lua:1489`) reaches `CloseAllWindows()` on nil.
+    pub(crate) cast_view: super::action::CastView,
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
@@ -1620,7 +1621,7 @@ impl Model {
             macro_icons: Vec::new(),
             macro_icon_source: None,
             pet_spell_autocasts: Vec::new(),
-            casting: false,
+            cast_view: Default::default(),
             spell_targeting: false,
             targeting_spell: None,
             spell_targetable_units: HashSet::new(),

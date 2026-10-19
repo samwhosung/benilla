@@ -254,11 +254,15 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
         1,
         Some(ActionState {
             usable: true,
-            current: true,
+            spell: Some(133),
             cooldown: Some((6_000, 10_000, true)),
             ..Default::default()
         }),
     );
+    s.set_cast_view(benilla_ui::script::CastView {
+        cast: Some(133),
+        ..Default::default()
+    });
     s.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
     assert!(s.eval::<bool>("return ActionButton1:GetChecked()").unwrap());
 

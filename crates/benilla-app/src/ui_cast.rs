@@ -1,16 +1,12 @@
 //! The cast-bar feed: our own cast's wire edges become the `SPELLCAST_*` events stock
-//! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the VM's casting flag
-//! is pushed each frame. The cast lifecycle it reads is `crate::spell`'s.
-
-use std::time::Instant;
+//! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the VM's cast state is
+//! pushed each frame. The cast lifecycle it reads is `crate::spell`'s.
 
 use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
-use crate::creature_anim::Casting;
-use crate::net::{GuidIndex, SelfGuid};
-use crate::spell::{inflight, PendingCast, QueuedMeleeSpell};
+use crate::spell::CastState;
 use crate::ui_action::Spells;
 use crate::ui_unit::UnitFeed;
 
@@ -89,38 +85,20 @@ fn channel_start_name(
 /// `SPELLCAST_CHANNEL_UPDATE(ms)` and the argless rest. A channel update of 0 is
 /// `SPELLCAST_CHANNEL_STOP`: vmangos ends a channel that way, finished or interrupted.
 ///
-/// First it pushes the flag `SpellStopCasting` (`0x6e6e80`) answers from: auto-repeat or the
-/// in-flight slot, never a channel, taken after the local cancel. A queued strike and the spell
-/// awaiting its click count, so the first Esc stops it and `ToggleGameMenu` skips `ClearTarget()`
-/// (`UIParent.lua:1489-1492`).
+/// First it pushes the cast state the frame's packets and cancels left ([`CastState`]), which
+/// `SpellStopCasting` (`0x6e6e80`) and the bar's checked tests read: a queued strike and the spell
+/// awaiting its click count as in flight, so the first Esc stops it and `ToggleGameMenu` skips
+/// `ClearTarget()` (`UIParent.lua:1489-1492`).
 pub(crate) fn feed_cast_bar(
     script: Option<NonSendMut<UiScript>>,
     mut feed: ResMut<CastBarFeed>,
     spells: Option<Res<Spells>>,
-    pending: Res<PendingCast>,
-    queued_melee: Res<QueuedMeleeSpell>,
-    targeting: Res<crate::spell::SpellTargeting>,
-    auto_repeat: Res<crate::spell::AutoRepeatActive>,
-    self_guid: Res<SelfGuid>,
-    index: Res<GuidIndex>,
-    casting: Query<&Casting>,
+    cast_state: CastState,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    let now = Instant::now();
-    // The auto-repeat key (`0xceac30`), which the reference reads first, then the in-flight slot
-    // the cancel resolves, so the flag and the cancel agree.
-    let started = self_guid
-        .0
-        .as_ref()
-        .and_then(|g| index.0.get(g))
-        .and_then(|&e| casting.get(e).ok())
-        .map(|c| c.spell_id);
-    script.set_casting(
-        auto_repeat.0.is_some()
-            || inflight(&pending, &queued_melee, &targeting, started, now).is_some(),
-    );
+    script.set_cast_view(cast_state.view());
     for edge in feed.0.drain(..) {
         let Some((event, args)): Option<(&str, Vec<ScriptValue>)> = (match edge {
             CastBarEdge::Start {

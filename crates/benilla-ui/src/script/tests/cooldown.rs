@@ -23,8 +23,8 @@ fn action_state_bindings_answer_the_reference_conventions() {
             not_enough_mana: true,
             in_range: Some(false),
             has_range: true,
-            current: true,
-            auto_repeat: false,
+            spell: Some(133),
+            form: None,
             is_attack: false,
             equipped: false,
             // 4 s remaining of a 10 s cooldown, running: started at GetTime 94.
@@ -37,6 +37,12 @@ fn action_state_bindings_answer_the_reference_conventions() {
         .unwrap());
     assert!(s.eval::<bool>("return IsActionInRange(3) == 0").unwrap());
     assert!(s.eval::<bool>("return ActionHasRange(3) == 1").unwrap());
+    assert!(s.eval::<bool>("return IsCurrentAction(3) == nil").unwrap());
+    // Checked while its spell is the one in flight, read live off the cast state.
+    s.set_cast_view(CastView {
+        cast: Some(133),
+        ..Default::default()
+    });
     assert!(s.eval::<bool>("return IsCurrentAction(3) == 1").unwrap());
     assert!(s
         .eval::<bool>("return IsAutoRepeatAction(3) == nil")

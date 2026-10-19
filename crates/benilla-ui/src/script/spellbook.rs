@@ -142,13 +142,6 @@ impl super::UiScript {
         })
     }
 
-    /// Whether `SpellStopCasting()` has something to stop: an auto-repeat or an in-flight cast,
-    /// never a channel (`0x6e6e80` reads only the auto-repeat key `0xceac30` and the in-flight
-    /// id `0xceca88`, which is 0 mid-channel). Pushed each frame before the ESC chain runs.
-    pub fn set_casting(&mut self, casting: bool) {
-        self.model_mut().casting = casting;
-    }
-
     /// Take the `SpellStopCasting()` calls out of the call stream: whether there was one. The app
     /// stops the auto-repeat first, else the in-flight cast, the reference's order.
     pub fn take_spell_stop(&mut self) -> bool {
@@ -696,8 +689,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The gate's tag 2 opens the function (`0x6e6e88`); a refusal answers nil, as nothing
             // to stop does (`0x6e6edd`).
             let may_stop = protected::gate(lua, Tag::CAST);
-            let casting = lua.app_data_ref::<Model>().expect("model app_data").casting;
-            if may_stop && casting {
+            // `0x6e6e80` reads only the auto-repeat key `0xceac30` and the in-flight id
+            // `0xceca88`, which is 0 mid-channel, as the call that cast last left them.
+            let stoppable = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .cast_view
+                .stoppable();
+            if may_stop && stoppable {
                 super::calls::submit(lua, ScriptCall::SpellStopCasting);
                 Ok(Value::Integer(1))
             } else {
@@ -1676,7 +1675,10 @@ mod tests {
                 on_self: false
             }]
         );
-        s.set_casting(true);
+        s.set_cast_view(crate::script::CastView {
+            cast: Some(168),
+            ..Default::default()
+        });
         assert_eq!(
             crate::script::host::test_support::applied_in_call(&mut s, "SpellStopCasting()"),
             vec![ScriptCall::SpellStopCasting]

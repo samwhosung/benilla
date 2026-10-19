@@ -49,10 +49,13 @@ pub struct ActionState {
     pub in_range: Option<bool>,
     /// `ActionHasRange`: the action's spell has a range to test.
     pub has_range: bool,
-    /// `IsCurrentAction`: the Attack action while auto-attack is on, or the spell being cast.
-    pub current: bool,
-    /// `IsAutoRepeatAction`: the action's spell is the live autorepeat spell (`0xceac30`).
-    pub auto_repeat: bool,
+    /// The book spell the slot resolves to (`0x4e5a50`, a macro through its binding), which
+    /// `IsCurrentAction` and `IsAutoRepeatAction` hold against the live [`CastView`]; `None` for an
+    /// item, an empty or a dead slot.
+    pub spell: Option<u32>,
+    /// The form that spell's shapeshift aura (aura 36) takes, `IsCurrentAction`'s form arm
+    /// (`0x4e5560`-`0x4e558b`).
+    pub form: Option<u32>,
     /// `IsAttackAction`: the action is the melee auto-attack.
     pub is_attack: bool,
     /// `IsEquippedAction`: an item action currently worn.
@@ -60,6 +63,61 @@ pub struct ActionState {
     /// `(start_ms, duration_ms, enabled)`, the start absolute on the `GetTime` clock, so a running
     /// cooldown re-pushes the same triple and a re-arm a new one (`0x6e13e0` returns the start).
     pub cooldown: Option<(i64, u32, bool)>,
+}
+
+impl ActionState {
+    /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: the Attack slot while
+    /// attacking (`0x4e5467`), else the slot's spell when it is cast, queued, channelled or
+    /// awaiting its target (`0x4e54c1`, `0x4e54d0`), or when its form is the player's
+    /// (`0x4e558b`).
+    pub fn is_current(&self, view: &CastView) -> bool {
+        if self.is_attack {
+            return view.attacking;
+        }
+        let Some(spell) = self.spell else {
+            return false;
+        };
+        [view.cast, view.strike, view.channel, view.targeting].contains(&Some(spell))
+            || (view.form != 0 && self.form == Some(u32::from(view.form)))
+    }
+
+    /// `0x4e55b0`: the slot's spell is the auto-repeat spell (`0x6e9fd0`).
+    pub fn is_auto_repeat(&self, view: &CastView) -> bool {
+        self.spell.is_some() && self.spell == view.auto_repeat
+    }
+}
+
+/// The player's cast state as the reference's globals hold it, which the action bar's checked
+/// tests (`0x4e53a0`, `0x4e55b0`) and `SpellStopCasting` (`0x6e6e80`) read live. The app pushes it
+/// each frame and after every script call it applies, so a script's next line reads what the
+/// call left.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CastView {
+    /// The cast in the in-flight slot (`0xceca88`) from its attempt to its result.
+    pub cast: Option<u32>,
+    /// The queued on-next-swing strike, which the reference also keeps in `0xceca88`.
+    pub strike: Option<u32>,
+    /// The spell awaiting its target (`GetTargetingSpellId 0x6e48e0`).
+    pub targeting: Option<u32>,
+    /// The running channel.
+    pub channel: Option<u32>,
+    /// The auto-repeat spell (`0xceac30`).
+    pub auto_repeat: Option<u32>,
+    /// The player is attacking (`[player+0xc48]`).
+    pub attacking: bool,
+    /// The player's form byte (`UNIT_FIELD_BYTES_1` byte 2).
+    pub form: u8,
+}
+
+impl CastView {
+    /// What `SpellStopCasting` (`0x6e6e80`) can stop: the auto-repeat (`0x6e9fd0`), else a spell
+    /// in flight (`IsCastInFlight 0x6e3d30`), never a channel, whose spell is not in flight.
+    pub fn stoppable(&self) -> bool {
+        self.auto_repeat.is_some()
+            || self.cast.is_some()
+            || self.strike.is_some()
+            || self.targeting.is_some()
+    }
 }
 
 /// [`ActionState`] with its cooldown in `GetTime` seconds.
@@ -139,6 +197,12 @@ impl super::UiScript {
                 model.action_states.remove(&action);
             }
         }
+    }
+
+    /// Push the player's cast state ([`CastView`]), which the checked tests and `SpellStopCasting`
+    /// read.
+    pub fn set_cast_view(&mut self, view: CastView) {
+        self.model_mut().cast_view = view;
     }
 
     /// Push the current bonus-bar page offset (0 = the plain main bar; warrior stances 1..3).
@@ -360,6 +424,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         }
     }
 
+    /// 1 or nil for a slot's test against the live cast state.
+    fn live_flag(lua: &Lua, action: u32, pick: impl Fn(&ActionState, &CastView) -> bool) -> Value {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        match model.action_states.get(&action) {
+            Some(s) if pick(&s.state, &model.cast_view) => Value::Integer(1),
+            _ => Value::Nil,
+        }
+    }
+
     g.set(
         "IsUsableAction",
         lua.create_function(|lua, action: Value| {
@@ -411,7 +484,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsCurrentAction(slot)` (`0x84c0b0`, `0x4e733f`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsCurrentAction(slot)")?;
-            Ok(state_flag(lua, action, |s| s.current))
+            Ok(live_flag(lua, action, ActionState::is_current))
         })?,
     )?;
     g.set(
@@ -420,7 +493,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: IsAutorepeatAction(slot)` (`0x84c0d0`, `0x4e73af`), the
             // client's own text naming `IsAutorepeatAction`.
             let action = binding_abi::index_arg32(lua, action, "Usage: IsAutorepeatAction(slot)")?;
-            Ok(state_flag(lua, action, |s| s.auto_repeat))
+            Ok(live_flag(lua, action, ActionState::is_auto_repeat))
         })?,
     )?;
     g.set(

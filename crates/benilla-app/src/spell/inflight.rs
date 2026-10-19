@@ -13,6 +13,7 @@ use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
 use crate::ui_cast::{CastBarEdge, CastBarFeed};
 use benilla_protocol::messages::ITEM_FLAG_PLAYERCAST;
+use benilla_ui::script::CastView;
 
 /// The in-flight window from send until `SMSG_SPELL_START` names the cast time; the server
 /// answers every `CMSG_CAST_SPELL`, so a packet always clears it first.
@@ -226,6 +227,48 @@ pub(crate) fn inflight(
         .map(Inflight::Targeting)
         .or_else(|| pending.current(now).or(started).map(Inflight::Cast))
         .or_else(|| queued_melee.current().map(Inflight::Strike))
+}
+
+/// The player's cast state as the VM reads it ([`CastView`]): what the action bar's checked tests
+/// and `SpellStopCasting` hold the slots against, pushed each frame and after every script call.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CastState<'w, 's> {
+    pending: Res<'w, PendingCast>,
+    queued_melee: Res<'w, QueuedMeleeSpell>,
+    targeting: Res<'w, SpellTargeting>,
+    channel: Res<'w, ActiveChannel>,
+    auto_repeat: Res<'w, AutoRepeatActive>,
+    me: Query<'w, 's, SelfCastFacts, With<crate::net::SelfPlayer>>,
+}
+
+/// The player's own cast facts: a started cast, the attack flag and the form byte's store.
+type SelfCastFacts = (
+    Option<&'static Casting>,
+    Has<crate::creature_anim::Engaged>,
+    Option<&'static crate::net::ObjectStore>,
+);
+
+impl CastState<'_, '_> {
+    /// The view as it stands now. The cast is the in-flight slot's, or the self `Casting`'s for a
+    /// started cast that never armed the send guard.
+    pub(crate) fn view(&self) -> CastView {
+        let now = Instant::now();
+        let me = self.me.iter().next();
+        CastView {
+            cast: self
+                .pending
+                .current(now)
+                .or_else(|| me.and_then(|(c, _, _)| c.map(|c| c.spell_id))),
+            strike: self.queued_melee.current(),
+            targeting: self.targeting.spell(),
+            channel: self.channel.current(now),
+            auto_repeat: self.auto_repeat.0,
+            attacking: me.is_some_and(|(_, engaged, _)| engaged),
+            form: me
+                .and_then(|(_, _, store)| store)
+                .map_or(0, |store| store.0.unit_shapeshift_form()),
+        }
+    }
 }
 
 /// Slack past the named channel end, so a lost `MSG_CHANNEL_UPDATE(0)` cannot pin the ring on.

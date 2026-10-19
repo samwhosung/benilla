@@ -358,7 +358,10 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     );
 
     // Press 0, mid-cast with a dropdown open: `CloseMenus` eats it.
-    s.set_casting(true);
+    s.set_cast_view(benilla_ui::script::CastView {
+        cast: Some(133),
+        ..Default::default()
+    });
     // Stock `DropDownList` `OnShow` sizes its buttons from `maxWidth`, which
     // `UIDropDownMenu_Initialize` normally sets (`UIDropDownMenuTemplates.xml:237-245`).
     s.run("DropDownList1.maxWidth = 100 DropDownList1:Show()")
@@ -380,7 +383,10 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     assert!(!s.take_target_clear());
 
     // Press 1, mid-cast: `SpellStopCasting` eats it.
-    s.set_casting(true);
+    s.set_cast_view(benilla_ui::script::CastView {
+        cast: Some(133),
+        ..Default::default()
+    });
     s.run("ToggleGameMenu()").unwrap();
     assert!(
         bag_open(&s, 0),
@@ -396,7 +402,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     );
 
     // Press 2, the cast over: `CloseAllWindows` eats it.
-    s.set_casting(false);
+    s.set_cast_view(Default::default());
     s.run("ToggleGameMenu()").unwrap();
     assert!(
         !bag_open(&s, 0),
@@ -475,7 +481,10 @@ fn escape_ladder_targeting_rung_after_cast_before_windows() {
 
     // Press 2, casting and targeting both (the state the app pushes while the cursor is up, the
     // targeting spell being in flight): the cast rung is first.
-    s.set_casting(true);
+    s.set_cast_view(benilla_ui::script::CastView {
+        cast: Some(133),
+        ..Default::default()
+    });
     s.run("ToggleGameMenu()").unwrap();
     assert!(s.take_spell_stop(), "the cast rung eats first");
     assert!(
@@ -484,7 +493,7 @@ fn escape_ladder_targeting_rung_after_cast_before_windows() {
     );
 
     // Press 3, idle: both rungs answer nil and `CloseAllWindows` eats it.
-    s.set_casting(false);
+    s.set_cast_view(Default::default());
     s.set_spell_targeting(false);
     s.run("ToggleGameMenu()").unwrap();
     assert!(!s.take_stop_targeting(), "no stray trigger when idle");

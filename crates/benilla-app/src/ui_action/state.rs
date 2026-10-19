@@ -16,7 +16,7 @@ use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPELL};
 use benilla_ui::script::{ActionState, UiScript};
 
-use crate::creature_anim::{Casting, Engaged};
+use crate::creature_anim::Engaged;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
@@ -31,6 +31,8 @@ use crate::spell::AutoRepeatActive;
 #[derive(Default)]
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
+    /// The cast state the last frame's checked tests were held against.
+    view: benilla_ui::script::CastView,
     last_generation: Option<u64>,
     engaged: bool,
     auto_repeat: Option<u32>,
@@ -78,13 +80,10 @@ pub(super) fn feed_action_state(
     mut cooldowns: ResMut<Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
-    // One tuple for Bevy's 16-param ceiling: cast tracking, macro bindings, spell mods, the
+    // One tuple for Bevy's 16-param ceiling: the cast state, macro bindings, spell mods, the
     // range units and the control flag.
     cast_state: (
-        Res<crate::spell::PendingCast>,
-        Res<crate::spell::QueuedMeleeSpell>,
-        Res<crate::spell::ActiveChannel>,
-        Res<crate::spell::SpellTargeting>,
+        crate::spell::CastState,
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
         // The caster's and the target's reach and motion, which the range compare reads.
@@ -92,7 +91,7 @@ pub(super) fn feed_action_state(
         // `[0xb4b3e4]`, which the usable walk reads.
         Option<Res<crate::player::Player>>,
     ),
-    self_q: Query<(&ObjectStore, &Transform, Has<Engaged>, Option<&Casting>), With<SelfPlayer>>,
+    self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
     selection: Res<Selection>,
     // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
@@ -122,22 +121,17 @@ pub(super) fn feed_action_state(
         memory.last_cd_trace = Some(now);
     }
 
-    let (pending, queued_melee, channel, targeting, bound, spell_mods, range_units, player) =
-        &cast_state;
+    let (cast_state, bound, spell_mods, range_units, player) = &cast_state;
+    let view = cast_state.view();
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
     // The bags, walked once per frame for every reagent and totem count below.
     let stacks = me
-        .map(|(s, _, _, _)| stack_counts(&s.0, &objects))
+        .map(|(s, _, _)| stack_counts(&s.0, &objects))
         .unwrap_or_default();
-    let engaged = me.is_some_and(|(_, _, e, _)| e);
-    let form_byte = me
-        .map(|(s, _, _, _)| s.0.unit_shapeshift_form())
-        .unwrap_or(0);
-    let casting_spell = me.and_then(|(_, _, _, c)| c.map(|c| c.spell_id));
-    let current_cast = pending.current(now).or(casting_spell);
+    let engaged = me.is_some_and(|(_, _, e)| e);
     let caster = range_units.caster();
-    let self_pos = me.map(|(_, t, _, _)| t.translation);
+    let self_pos = me.map(|(_, t, _)| t.translation);
     // The target's reach, motion and squared distance (the reference tests dx²+dy²+dz²,
     // `0x6e47b0`).
     let target_entity = selection.guid.and_then(|g| objects.entity(g));
@@ -181,23 +175,13 @@ pub(super) fn feed_action_state(
                     continue;
                 };
                 st.is_attack = d.is_melee_auto_attack();
-                // `IsCurrentAction 0x4e53a0`: Attack while engaged; a spell while in flight
-                // (`0xceca88`, which a queued on-swing strike holds), channelled (`0xceac58`), or
-                // when its form is ours (`0x4e5556`). The form arm is not the icon's aura scan:
-                // a form granted by another spell lights the check but not the icon.
-                st.current = if st.is_attack {
-                    engaged
-                } else {
-                    current_cast == Some(button.action)
-                        || queued_melee.current() == Some(button.action)
-                        || channel.current(now) == Some(button.action)
-                        // Checked while its ground click is pending (`0x4e54d0`, `0x6e48e0`).
-                        || targeting.spell() == Some(button.action)
-                        || (form_byte != 0 && d.shapeshift_form == Some(u32::from(form_byte)))
-                };
-                st.auto_repeat = auto_repeat.0 == Some(button.action);
+                // What `IsCurrentAction 0x4e53a0` and `IsAutoRepeatAction 0x4e55b0` hold against
+                // the live cast state. The form arm is not the icon's aura scan: a form granted by
+                // another spell lights the check but not the icon.
+                st.spell = Some(button.action);
+                st.form = d.shapeshift_form;
                 // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
-                if let (Some((store, _, _, _)), Some(sp)) = (me, spells.as_deref()) {
+                if let (Some((store, _, _)), Some(sp)) = (me, spells.as_deref()) {
                     let ctx = usable::UsableCtx {
                         store,
                         target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -262,7 +246,7 @@ pub(super) fn feed_action_state(
                 let count = script.action_slot(action).map_or(0, |slot| slot.count);
                 // `IsEquippedAction`, the green border: `0x622270` at mask 1 (`0x4e5377`-`0x4e5380`),
                 // the walker over the worn slots, so a broken copy is not worn.
-                st.equipped = me.is_some_and(|(s, _, _, _)| {
+                st.equipped = me.is_some_and(|(s, _, _)| {
                     crate::ui_items::find_item(
                         &s.0,
                         &objects,
@@ -277,7 +261,7 @@ pub(super) fn feed_action_state(
                 // `0x4e5050`'s item arm runs the count, `IsItemOnCooldown` and the on-use spell
                 // through the same `0x6e3d60` walk. With no player the reference answers (0, 0)
                 // (`0x4e5080`), the default state.
-                if let Some((store, _, _, _)) = me {
+                if let Some((store, _, _)) = me {
                     let ctx = usable::UsableCtx {
                         store,
                         target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -323,16 +307,17 @@ pub(super) fn feed_action_state(
         .collect();
     for action in keys {
         let (new, old) = (fresh.get(&action), memory.pushed.get(&action));
+        let d = ActionState::default();
+        let (n, o) = (new.unwrap_or(&d), old.unwrap_or(&d));
+        let checked = |s: &ActionState, v| (s.is_current(v), s.is_auto_repeat(v));
+        if checked(n, &view) != checked(o, &memory.view) {
+            state_changed = true;
+        }
         if new == old {
             continue;
         }
-        let d = ActionState::default();
-        let (n, o) = (new.unwrap_or(&d), old.unwrap_or(&d));
         if (n.usable, n.not_enough_mana) != (o.usable, o.not_enough_mana) {
             usable_changed = true;
-        }
-        if (n.current, n.auto_repeat) != (o.current, o.auto_repeat) {
-            state_changed = true;
         }
         if n.cooldown != o.cooldown && benilla_assets::trace::enabled() {
             benilla_assets::trace::line(
@@ -347,6 +332,7 @@ pub(super) fn feed_action_state(
         script.set_action_state(action, new.copied());
     }
     memory.pushed = fresh;
+    memory.view = view;
 
     // The events in the reference's flush order, the `ACTIONBAR_*` one first.
     if gen_changed {
