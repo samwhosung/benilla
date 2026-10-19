@@ -1159,3 +1159,37 @@ fn a_global_index_metamethod_may_touch_the_model_during_a_plates_font_lookup() {
     assert_eq!(s.eval::<i64>("return hits").unwrap(), 4);
     assert!(s.take_errors().is_empty());
 }
+
+/// The fill is a bar texture like any other (`0x7cb329` → `0x783140`), so it cuts its drawn rect
+/// to the health: 40, 20 and 10 of 40 draw it whole, half and a quarter as wide.
+#[test]
+fn the_plates_fill_shrinks_with_health() {
+    use crate::script::QuadContent;
+    let mut s = vm();
+    let fill_width = |s: &mut UiScript| {
+        s.extract()
+            .iter()
+            .find_map(|q| match &q.content {
+                QuadContent::Texture { path: Some(p), .. } if p.contains("BarFill") => {
+                    q.rect.map(|r| r.right - r.left)
+                }
+                _ => None,
+            })
+            .expect("a drawn fill")
+    };
+    drive(&mut s, &[plate("Wolf", 40.0, 40.0)]);
+    s.tick(0.0);
+    assert!(s
+        .eval::<bool>(
+            "return WorldFrame:GetChildren():GetChildren():GetStatusBarTexture()\
+             :GetTexCoordModifiesRect() == 1"
+        )
+        .unwrap());
+    let whole = fill_width(&mut s);
+    assert!(whole > 0.0);
+    for (health, part) in [(20.0, 0.5), (10.0, 0.25)] {
+        drive(&mut s, &[plate("Wolf", health, 40.0)]);
+        s.tick(0.0);
+        crate::assert_near!(fill_width(&mut s), whole * part);
+    }
+}

@@ -103,7 +103,8 @@ struct Plate {
     skull: RegionHandle,
     raid: RegionHandle,
     bar: FrameHandle,
-    fill: RegionHandle,
+    /// `None` when the fill's file failed to load (`0x7831b4`).
+    fill: Option<RegionHandle>,
     /// Last frame's state, so [`Plate::drive`] writes only what moved; `None` while retired.
     last: Option<PlateState>,
     /// The geometry its anchors were written under, `None` before the first lay-out. Kept per
@@ -528,23 +529,16 @@ impl Plate {
         let bar = model.arena.create(FrameKind::StatusBar, None, Some(frame));
         model.arena.set_frame_strata(bar, strata);
         model.arena.set_frame_level(bar, BAR_LEVEL, true);
-        let fill = model
-            .arena
-            .create_region(bar, RegionKind::Texture, DrawLayer::Artwork, 0)
+        // The fill is `SetStatusBarTexture`'s path leg on layer 2 (`0x7cb31a`-`0x7cb329`), so it
+        // is installed, flagged to cut its rect and pinned to the bar like any bar texture; a file
+        // that fails to load leaves the bar without one. The bar's ctor (`0x7cc340` → `0x782d80`)
+        // sets no range and no value.
+        super::statusbar::set_bar_path_model(model, bar, BAR_FILL_TEXTURE, DrawLayer::Artwork)
             .expect("live bar");
-        model.set_texel(
-            fill,
-            super::texel::TexSet::File(BAR_FILL_TEXTURE.to_string()),
-        );
-        let fill_data = model.region_data.entry(fill).or_default();
-        // The fill keeps `CSimpleTexture`'s default BLEND (`0x76fc40`), written out as a fact.
-        fill_data.blend = BlendMode::Blend;
-        // The bar's ctor (`0x7cc340` → `0x782d80`) sets no range and no value.
-        if let Some(KindState::StatusBar(sb)) =
-            model.arena.frame_mut(bar).map(|f| &mut f.kind_state)
-        {
-            sb.bar = Some(fill);
-        }
+        let fill = match model.arena.frame(bar).map(|f| &f.kind_state) {
+            Some(KindState::StatusBar(sb)) => sb.bar,
+            _ => None,
+        };
 
         for rh in [glow, skull, raid] {
             model.set_region_hidden(rh, true);
@@ -728,14 +722,16 @@ impl Plate {
         {
             // The boost rides the draw ([`lit_fill_boost`]): it can pass 1, which the packed
             // colour cannot hold.
-            if state.lit {
-                model.nameplates.lit_fills.insert(fill);
-            } else {
-                model.nameplates.lit_fills.remove(&fill);
+            if let Some(fill) = fill {
+                if state.lit {
+                    model.nameplates.lit_fills.insert(fill);
+                } else {
+                    model.nameplates.lit_fills.remove(&fill);
+                }
+                let c = state.bar_colour;
+                model.region_data.entry(fill).or_default().vertex_color =
+                    Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0]));
             }
-            let c = state.bar_colour;
-            model.region_data.entry(fill).or_default().vertex_color =
-                Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0]));
         }
 
         if last.as_ref().is_none_or(|l| l.name != state.name) {

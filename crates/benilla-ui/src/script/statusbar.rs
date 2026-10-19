@@ -105,6 +105,17 @@ pub(super) fn install_loaded(
 fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    set_bar_path_model(&mut model, h, path, layer)
+}
+
+/// [`set_bar_path`] on the model, as the engine's own bars call `0x783140` (the nameplate's,
+/// `0x7cb329`).
+pub(super) fn set_bar_path_model(
+    model: &mut Model,
+    h: crate::widget::FrameHandle,
+    path: &str,
+    layer: DrawLayer,
+) -> mlua::Result<()> {
     let existing = match &model
         .arena
         .frame(h)
@@ -114,10 +125,10 @@ fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::
         KindState::StatusBar(sb) => sb.bar,
         _ => return Err(mlua::Error::runtime("not a StatusBar")),
     };
-    if let Some(rh) = load_path_leg(&mut model, h, existing, layer, path)? {
+    if let Some(rh) = load_path_leg(model, h, existing, layer, path)? {
         // `SetAllPoints` onto the bar (`0x7831bf`).
-        super::region::implicit_creation_anchor(&mut model, rh);
-        install_bar_model(&mut model, h, Some(rh), layer)?;
+        super::region::implicit_creation_anchor(model, rh);
+        install_bar_model(model, h, Some(rh), layer)?;
     }
     Ok(())
 }
