@@ -58,17 +58,6 @@ pub(crate) struct UnitCombatFeedback {
     pub(crate) school: u32,
 }
 
-/// One `COMBAT_TEXT_UPDATE` (event `0x21E`, via `0x703f50`), fired at packet parse by every
-/// producer, melee included (`0x6255b0` → `0x629d30`); `data`/`extra` are `arg2`/`arg3`. Fired only
-/// when the unit the line is about is the player: each emitter tests that unit's class (`0x5efea0`)
-/// for 0 before its helper (`0x629ef1`, `0x62d046`, `0x62834b`).
-#[derive(Message, Clone)]
-pub(crate) struct CombatTextEvent {
-    pub(crate) message_type: &'static str,
-    pub(crate) data: Option<String>,
-    pub(crate) extra: Option<String>,
-}
-
 /// The feed's change-tracking memory: what we last told the VM, plus one server-side log-once.
 #[derive(Resource, Default)]
 struct UnitFeedState {
@@ -121,7 +110,6 @@ impl Plugin for UiUnitPlugin {
         // system-validation panic; declaring twice is idempotent.
         .init_resource::<crate::sound::MessageSounds>()
         .add_message::<UnitCombatFeedback>()
-        .add_message::<CombatTextEvent>()
         .add_message::<crate::net::WorldportMessage>()
         .add_message::<crate::field_watch::FieldNotice>()
         .init_world_leave_sweep()
@@ -159,7 +147,6 @@ impl Plugin for UiUnitPlugin {
                 feed_farsight_focus,
                 melee_unit_combat,
                 fire_unit_combat,
-                fire_combat_text,
             )
                 .chain()
                 .in_set(UnitFeed),
@@ -434,7 +421,7 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
 }
 
 /// The melee `UNIT_COMBAT` producer, on the swing's impact keyframe, `text_only` flushes included;
-/// the center combat text is not here, as the reference fires it at packet parse.
+/// the swing's `COMBAT_TEXT_UPDATE` rides its combat-log line, at packet parse.
 fn melee_unit_combat(
     mut impacts: MessageReader<crate::creature_anim::SwingImpact>,
     mut out: MessageWriter<UnitCombatFeedback>,
@@ -452,25 +439,24 @@ fn melee_unit_combat(
     }
 }
 
-/// Drain [`CombatTextEvent`] into `COMBAT_TEXT_UPDATE(messageType, data, extra)`.
-fn fire_combat_text(
-    script: Option<NonSendMut<UiScript>>,
-    mut events: MessageReader<CombatTextEvent>,
+/// `COMBAT_TEXT_UPDATE(messageType, data, extra)` (event `0x21e`, through the five helpers
+/// `0x626890`-`0x6269d0`): `data` and `extra` are `arg2` and `arg3`, nil when absent. Each combat-log
+/// formatter raises it right after its line, so the line's drain fires it.
+pub(crate) fn fire_combat_text(
+    script: &mut UiScript,
+    message_type: &str,
+    data: Option<String>,
+    extra: Option<String>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for ev in events.read() {
-        let arg = |v: &Option<String>| v.clone().map_or(ScriptValue::Nil, ScriptValue::Str);
-        script.fire_event(
-            "COMBAT_TEXT_UPDATE",
-            vec![
-                ScriptValue::Str(ev.message_type.to_string()),
-                arg(&ev.data),
-                arg(&ev.extra),
-            ],
-        );
-    }
+    let arg = |v: Option<String>| v.map_or(ScriptValue::Nil, ScriptValue::Str);
+    script.fire_event(
+        "COMBAT_TEXT_UPDATE",
+        vec![
+            ScriptValue::Str(message_type.to_string()),
+            arg(data),
+            arg(extra),
+        ],
+    );
 }
 
 /// Drain [`UnitCombatFeedback`] into `UNIT_COMBAT` for `"player"` and `"target"` only; the

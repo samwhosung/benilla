@@ -352,6 +352,18 @@ impl ChatLog {
             .collect()
     }
 
+    /// The parked combat lines, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_combat(&self) -> Vec<&super::combat::PendingCombat> {
+        self.pending
+            .iter()
+            .filter_map(|p| match p {
+                Pending::Combat(line) => Some(&**line),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The parked rank lines as `(faction, rank, female)`, in order.
     #[cfg(test)]
     pub(crate) fn pending_standing(&self) -> Vec<(String, u8, bool)> {
@@ -458,6 +470,28 @@ pub(super) fn xp_gain_line(
 /// The `_EXHAUSTION1` template's state word. 1.12 has no GlobalString for it and the reference's
 /// own table is untraced; rested is the only bonus state vmangos sets (`Player.cpp:17990-17993`).
 const RESTED_STATE: &str = "Rested";
+
+/// A combat line whose names are in: composed, routed, then the word its formatter raises after
+/// it. A line that does not compose (no template, no school name) writes neither.
+pub(super) fn write_combat_line(
+    script: &mut benilla_ui::script::UiScript,
+    windows: &mut ChatWindows,
+    line: &super::combat::PendingCombat,
+) {
+    let Some(text) = super::combat::compose_line(script, line.family, line.variant, &line.fills)
+    else {
+        return;
+    };
+    route(script, windows, &ChatEvent::text_only(line.kind, text));
+    if let Some(word) = &line.word {
+        crate::ui_unit::fire_combat_text(
+            script,
+            word.message_type,
+            line.word_data(word),
+            word.extra.clone(),
+        );
+    }
+}
 
 /// The honor line (`0x625270`): `COMBATLOG_HONORAWARD` with no victim, `COMBATLOG_HONORGAIN` for
 /// `honor > 0`, else `COMBATLOG_DISHONORGAIN`. No `rank_title` leaves the rank slot empty, as in
@@ -1043,6 +1077,14 @@ pub(super) fn feed_chat(
                         &mut windows,
                         &ChatEvent::text_only(ChatEventKind::CombatHonorGain, text),
                     );
+                    // `HONOR_GAINED` follows its line (`0x62539d`, `0x6253e4`), signed: the stock
+                    // handler prefixes "+" only to a positive number (`Blizzard_CombatText.lua:234`).
+                    crate::ui_unit::fire_combat_text(
+                        &mut script,
+                        "HONOR_GAINED",
+                        Some(honor.to_string()),
+                        None,
+                    );
                 }
             }
             Pending::TextEmote {
@@ -1122,15 +1164,7 @@ pub(super) fn feed_chat(
                     }
                     continue;
                 }
-                let composed =
-                    super::combat::compose_line(&script, line.family, line.variant, &line.fills);
-                if let Some(text) = composed {
-                    route(
-                        &mut script,
-                        &mut windows,
-                        &ChatEvent::text_only(line.kind, text),
-                    );
-                }
+                write_combat_line(&mut script, &mut windows, &line);
             }
             Pending::Standing {
                 faction,

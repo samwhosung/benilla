@@ -748,8 +748,13 @@ pub(crate) fn compose_line(
 ) -> Option<String> {
     let key = family.key(variant);
     let template = global_string(lua, &key)?;
-    // Resolved before the walk so the borrows outlive it.
-    let school = fills.school.and_then(|s| school_word(lua, s));
+    // Resolved before the walk so the borrows outlive it. A school with no name writes no line,
+    // whatever the template takes: each formatter that names a school returns first on it
+    // (`0x62cd99`, `0x628117`, `0x629d50`, `0x62ca3e`).
+    let school = match fills.school {
+        Some(s) => Some(school_word(lua, s)?),
+        None => None,
+    };
     let power = fills.power.and_then(|p| power_word(lua, p));
     let power2 = fills.power2.and_then(|p| power_word(lua, p));
     let mut args: Vec<Arg> = Vec::with_capacity(family.slots.len());
@@ -919,6 +924,80 @@ pub(crate) struct PendingCombat {
     pub fills: Fills,
     pub named: Named,
     pub tries: u16,
+    /// The `COMBAT_TEXT_UPDATE` the formatter raises once the line is written, and only then: a
+    /// missing template, range or spell writes neither.
+    pub word: Option<LineWord>,
+}
+
+/// One `COMBAT_TEXT_UPDATE` a line raises: a type name of the table `0x862920`, then `arg2` and
+/// `arg3` as the helpers `0x626890`-`0x6269d0` format them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LineWord {
+    pub message_type: &'static str,
+    pub data: WordText,
+    pub extra: Option<String>,
+}
+
+impl LineWord {
+    /// The type alone, as `0x6269d0` raises it.
+    pub(crate) fn bare(message_type: &'static str) -> Self {
+        Self {
+            message_type,
+            data: WordText::Text(None),
+            extra: None,
+        }
+    }
+
+    /// The type and one argument: a number (`0x626960`) or a name (`0x6269b0`).
+    pub(crate) fn with(message_type: &'static str, data: impl ToString) -> Self {
+        Self {
+            message_type,
+            data: WordText::Text(Some(data.to_string())),
+            extra: None,
+        }
+    }
+
+    /// The type, the name the line gives its subject, and a number (`0x626890`).
+    pub(crate) fn named(message_type: &'static str, extra: impl ToString) -> Self {
+        Self {
+            message_type,
+            data: WordText::SubjectName,
+            extra: Some(extra.to_string()),
+        }
+    }
+
+    /// The type and two numbers (`0x6268f0`).
+    pub(crate) fn pair(
+        message_type: &'static str,
+        data: impl ToString,
+        extra: impl ToString,
+    ) -> Self {
+        Self {
+            message_type,
+            data: WordText::Text(Some(data.to_string())),
+            extra: Some(extra.to_string()),
+        }
+    }
+}
+
+/// A word's `arg2`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum WordText {
+    /// This text, or nil.
+    Text(Option<String>),
+    /// The name the line gives its subject, the healer's or the caster's `GetObjectName`
+    /// (`0x62c8ea`, `0x627414`), filled with the line's own names.
+    SubjectName,
+}
+
+impl PendingCombat {
+    /// The word's `arg2` once the names are in.
+    pub(crate) fn word_data(&self, word: &LineWord) -> Option<String> {
+        match &word.data {
+            WordText::Text(text) => text.clone(),
+            WordText::SubjectName => Some(self.fills.attacker.clone()),
+        }
+    }
 }
 
 impl PendingCombat {
@@ -1002,11 +1081,14 @@ pub(crate) fn queue(
         fills,
         named,
         tries: 0,
+        word: None,
     })
 }
 
 mod families;
 pub(crate) use families::*;
+mod outcome;
+pub(crate) use outcome::*;
 
 pub(crate) mod watch;
 

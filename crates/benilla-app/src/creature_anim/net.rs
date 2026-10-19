@@ -13,7 +13,6 @@ use super::{
 use crate::net::{AiReactionMessage, EmoteKind, EmoteMessage, GuidIndex, NetHandlerApp, SelfGuid};
 use crate::swing_refusal::SwingRefusalEdge;
 use crate::ui_action::{UiError, UiErrorKeys};
-use crate::ui_unit::CombatTextEvent;
 
 /// Register the layer's handlers, from [`super::CreatureAnimPlugin`].
 pub(super) fn register(app: &mut App) {
@@ -119,7 +118,6 @@ fn on_attacker_state(
     self_guid: Res<SelfGuid>,
     mut swings: MessageWriter<SwingMessage>,
     mut impacts: MessageWriter<SwingImpact>,
-    mut center: MessageWriter<CombatTextEvent>,
     mut sheaths: MessageWriter<SheathRequest>,
     mut edges: MessageWriter<SwingRefusalEdge>,
     stores: Query<&mut crate::net::ObjectStore>,
@@ -132,7 +130,6 @@ fn on_attacker_state(
             &self_guid,
             &mut swings,
             &mut impacts,
-            &mut center,
             &mut sheaths,
             &mut edges,
             &stores,
@@ -233,15 +230,14 @@ fn ai_reaction(
 }
 
 /// One melee swing (`SMSG_ATTACKERSTATEUPDATE`): the attacker's swing plays now and the victim's
-/// feedback waits for the clip's attack-hit key (`0x6247d0`), except the center combat text, which
-/// the client shows at parse (`0x6255b0` → `0x629d30` → `0x703f50`).
+/// feedback waits for the clip's attack-hit key (`0x6247d0`); the combat-log line and its
+/// `COMBAT_TEXT_UPDATE` word come off the same packet in [`crate::combat_log`].
 fn attacker_state(
     mut s: AttackerState,
     index: &GuidIndex,
     self_guid: &SelfGuid,
     swings: &mut MessageWriter<SwingMessage>,
     impacts: &mut MessageWriter<SwingImpact>,
-    center: &mut MessageWriter<CombatTextEvent>,
     sheaths: &mut MessageWriter<SheathRequest>,
     edges: &mut MessageWriter<SwingRefusalEdge>,
     stores: &Query<&mut crate::net::ObjectStore>,
@@ -262,28 +258,7 @@ fn attacker_state(
             ),
         );
     }
-    // The full-block synthesis (`0x625e20`): a resolved victim, no damage and a blocked amount
-    // read as state 5, BLOCK, before any consumer; a partial block stays state 1.
-    if victim.is_some() && s.damage == 0 && s.blocked != 0 {
-        s.victim_state = 5;
-    }
-    // The center text for a hit on us, after the synthesis so a full block reads BLOCK, not MISS.
-    if self_guid.0 == Some(s.victim) {
-        if let Some((message_type, data, extra)) = crate::combat_log::text::melee_center_text(
-            s.hit_info,
-            s.victim_state,
-            s.damage,
-            s.absorb,
-            s.resist,
-            s.blocked,
-        ) {
-            center.write(CombatTextEvent {
-                message_type,
-                data,
-                extra,
-            });
-        }
-    }
+    s.mark_full_block(victim.is_some());
     let swing = SwingMessage {
         attacker: Entity::PLACEHOLDER, // filled per branch below
         victim,

@@ -1065,6 +1065,7 @@ fn combat_log_battery(log: &mut super::feed::ChatLog, get: &dyn Fn(&str) -> Opti
         named: super::combat::Named::Ready,
         fills: f,
         tries: 0,
+        word: None,
     };
     let battery = [
         // Your own melee, plain and crit, and the school form.

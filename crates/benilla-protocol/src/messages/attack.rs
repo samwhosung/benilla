@@ -43,6 +43,15 @@ impl AttackerState {
     pub fn displayed(&self) -> bool {
         self.melee_spell_id == 0 || self.victim_state == 1
     }
+
+    /// `0x625e20`, run as the record is read (`0x625e0e`), before every consumer: a swing with no
+    /// damage and a blocked amount, on a victim the client holds as a unit, reads as state 5,
+    /// BLOCK. A partial block stays state 1.
+    pub fn mark_full_block(&mut self, victim_held: bool) {
+        if victim_held && self.damage == 0 && self.blocked != 0 {
+            self.victim_state = 5;
+        }
+    }
 }
 
 /// `SMSG_ATTACKERSTATEUPDATE`: `HitInfo`, attacker then victim packed guid, `TotalDamage`, a `u8`

@@ -81,6 +81,7 @@ fn queue_one(
         fills,
         named,
         tries: 0,
+        word: None,
     });
 }
 
@@ -305,6 +306,7 @@ pub(crate) fn pet_loyalty_lines(
             fills: Fills::default(),
             named: Named::Ready,
             tries: 0,
+            word: None,
         });
     }
 }

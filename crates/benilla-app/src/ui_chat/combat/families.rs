@@ -1,6 +1,6 @@
 //! The combat log's message families: each family's GlobalString stem, its keying and the slots
-//! its templates consume, in the order the enUS template takes them, with the reference's two
-//! outcome switches that pick one, the spell-miss reason (`0x62bb50`) and the swing (`0x629b60`).
+//! its templates consume, in the order the enUS template takes them. The switches that pick one
+//! from a packet's figures are [`super::outcome`].
 
 use super::{Family, Keying, Slot};
 
@@ -677,69 +677,3 @@ pub(crate) const ALL_FAMILIES: &[Family] = &[
     VSENV_SLIME,
     VSENV_FIRE,
 ];
-
-/// The family that words a `SpellMissInfo` byte (vmangos `SpellDefines.h:160-174`), as the
-/// reference's miss switch `0x62bb50` maps it.
-pub(crate) fn miss_family(miss_info: u8) -> Family {
-    match miss_info {
-        2 => SPELLRESIST,
-        3 => SPELLDODGED,
-        4 => SPELLPARRIED,
-        5 => SPELLBLOCKED,
-        6 => SPELLEVADED,
-        // 7 IMMUNE and 8 IMMUNE2 are one outcome with two server-side spellings.
-        7 | 8 => SPELLIMMUNE,
-        9 => SPELLDEFLECTED,
-        11 => SPELLREFLECT,
-        // 10 ABSORB, 0, 1 and anything out of range take the default arm `0x62c0e0`, not
-        // `SPELLLOGABSORB`, which belongs to the direct-damage path.
-        _ => SPELLMISS,
-    }
-}
-
-/// The melee family a swing selects, the reference's dispatcher `0x629b60` arm for arm; the order
-/// matters because the tests overlap. The bits are vmangos's `HitInfo` in its `> 1.9.4` branch
-/// (`Objects/UnitDefines.h:250-268`) and `VictimState` (`:237-248`).
-pub(crate) fn melee_family(
-    hit_info: u32,
-    victim_state: u32,
-    damage: u32,
-    school: u8,
-) -> Option<Family> {
-    const MISS: u32 = 0x10;
-    const ABSORB: u32 = 0x20;
-    const RESIST: u32 = 0x40;
-    const CRIT: u32 = 0x80;
-    if hit_info & MISS != 0 {
-        return Some(MISSED);
-    }
-    if victim_state == 5 {
-        return Some(VSBLOCK);
-    }
-    if damage == 0 {
-        if hit_info & ABSORB != 0 {
-            return Some(VSABSORB);
-        }
-        if hit_info & RESIST != 0 {
-            return Some(VSRESIST);
-        }
-    }
-    if victim_state == 1 && damage > 0 {
-        return Some(match (hit_info & CRIT != 0, school != 0) {
-            (false, false) => COMBATHIT,
-            (true, false) => COMBATHITCRIT,
-            (false, true) => COMBATHITSCHOOL,
-            (true, true) => COMBATHITCRITSCHOOL,
-        });
-    }
-    // `0x62a710` words only a state its flag table `0x8628f8` marks (`0x62a720`) and its jump
-    // table `0x62a8ec` covers: 0, 1 without damage, 4, 9 and 10 or more print nothing.
-    match victim_state {
-        2 => Some(VSDODGE),
-        3 => Some(VSPARRY),
-        6 => Some(VSEVADE),
-        7 => Some(VSIMMUNE),
-        8 => Some(VSDEFLECT),
-        _ => None,
-    }
-}

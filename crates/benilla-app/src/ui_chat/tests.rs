@@ -3082,3 +3082,85 @@ fn an_engine_shown_line_fires_the_feeds_system_arguments() {
         benilla_ui::script::system_chat_args(text)
     );
 }
+
+/// A combat formatter raises its word right after it writes its line, and never without one: the
+/// word helper follows the write (`0x62862b`-`0x628696`), and a missing school name or template
+/// returns first (`0x62cd99`, `0x6286ab`). A name word is the line's own subject's.
+#[test]
+fn a_combat_word_follows_its_line_and_only_a_written_one() {
+    use super::combat::{
+        spell_kind, Fills, LineWord, Named, PendingCombat, UnitClass, Variant, HEALED,
+        SPELLLOGABSORB,
+    };
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = chat_vm();
+    let mut windows = super::frames::ChatWindows::default();
+    let damage = spell_kind(UnitClass::Creature, UnitClass::Me, false).unwrap();
+    let buffs = spell_kind(UnitClass::Creature, UnitClass::Me, true).unwrap();
+    s.run(&format!(
+        r#"
+        Seen = {{}}
+        Spy = CreateFrame("Frame", "BenillaWordSpy")
+        Spy:SetScript("OnEvent", function()
+            if event == "COMBAT_TEXT_UPDATE" then
+                table.insert(Seen, arg1.."|"..tostring(arg2).."|"..tostring(arg3))
+            else
+                table.insert(Seen, event)
+            end
+        end)
+        Spy:RegisterEvent("COMBAT_TEXT_UPDATE")
+        Spy:RegisterEvent("{}")
+        Spy:RegisterEvent("{}")
+    "#,
+        super::event::event_name(damage),
+        super::event::event_name(buffs),
+    ))
+    .unwrap();
+    let line = |kind, family, school, word| PendingCombat {
+        kind,
+        family,
+        variant: Variant::OtherSelf,
+        subject: 2,
+        object: 1,
+        fills: Fills {
+            attacker: "Shaman".into(),
+            spell: "Firebolt".into(),
+            school,
+            amount: 75,
+            ..Default::default()
+        },
+        named: Named::Ready,
+        tries: 0,
+        word: Some(word),
+    };
+    let seen = |s: &benilla_ui::script::UiScript| s.eval::<Vec<String>>("return Seen").unwrap();
+
+    let absorbed = LineWord::with("SPELL_ABSORBED", "Firebolt");
+    super::feed::write_combat_line(
+        &mut s,
+        &mut windows,
+        &line(damage, SPELLLOGABSORB, Some(2), absorbed.clone()),
+    );
+    assert_eq!(
+        seen(&s),
+        [
+            super::event::event_name(damage).to_string(),
+            "SPELL_ABSORBED|Firebolt|nil".into()
+        ]
+    );
+    // No school name, no line, no word.
+    super::feed::write_combat_line(
+        &mut s,
+        &mut windows,
+        &line(damage, SPELLLOGABSORB, Some(9), absorbed),
+    );
+    assert_eq!(seen(&s).len(), 2);
+    // The healer's name is the line's subject.
+    super::feed::write_combat_line(
+        &mut s,
+        &mut windows,
+        &line(buffs, HEALED, None, LineWord::named("HEAL", 75)),
+    );
+    assert_eq!(seen(&s)[3], "HEAL|Shaman|75");
+    assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
+}

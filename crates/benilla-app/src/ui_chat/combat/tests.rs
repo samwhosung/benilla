@@ -290,51 +290,6 @@ fn the_fill_is_vsnprintf_and_refuses_a_mismatch() {
     assert_eq!(fill("%f", &[Arg::Num(1)]), None);
 }
 
-/// `0x629b60`'s arm order: a blocked swing with damage is `VSBLOCK`, and a fully absorbed one
-/// `VSABSORB`, not `MISSED`.
-#[test]
-fn the_melee_dispatcher_follows_the_reference_order() {
-    let f = |h, v, d, s| melee_family(h, v, d, s).expect("a family").stem;
-    // A plain landed swing, and its crit and school variants.
-    assert_eq!(f(0, 1, 120, 0), "COMBATHIT");
-    assert_eq!(f(0x80, 1, 120, 0), "COMBATHITCRIT");
-    assert_eq!(f(0, 1, 120, 2), "COMBATHITSCHOOL");
-    assert_eq!(f(0x80, 1, 120, 2), "COMBATHITCRITSCHOOL");
-    // MISS wins over everything, including a VictimState that would say otherwise.
-    assert_eq!(f(0x10, 2, 0, 0), "MISSED");
-    // BLOCKS wins over the damage test: a partial block still lands damage.
-    assert_eq!(f(0, 5, 90, 0), "VSBLOCK");
-    // Zero damage + the absorb/resist bits.
-    assert_eq!(f(0x20, 1, 0, 0), "VSABSORB");
-    assert_eq!(f(0x40, 1, 0, 0), "VSRESIST");
-    // ...but the same bits with damage through are a landed hit, not a full absorb.
-    assert_eq!(f(0x20, 1, 90, 0), "COMBATHIT");
-    // The VictimState words.
-    assert_eq!(f(0, 2, 0, 0), "VSDODGE");
-    assert_eq!(f(0, 3, 0, 0), "VSPARRY");
-    assert_eq!(f(0, 6, 0, 0), "VSEVADE");
-    assert_eq!(f(0, 7, 0, 0), "VSIMMUNE");
-    assert_eq!(f(0, 8, 0, 0), "VSDEFLECT");
-}
-
-/// `0x62a710` prints nothing for a VictimState whose byte in `0x8628f8`, `[0,0,1,1,0,1,1,1,1,0]`,
-/// is 0. State 1 words a hit only with damage through, in arm 5.
-#[test]
-fn the_silent_victim_states_emit_no_melee_line() {
-    for state in [0, 1, 4, 9] {
-        assert!(
-            melee_family(0, state, 0, 0).is_none(),
-            "VictimState {state} must emit no line"
-        );
-    }
-    // The same states still word normally when an earlier arm claims them: the MISS bit, and
-    // state 1 with damage through.
-    assert!(melee_family(0x10, 0, 0, 0).is_some(), "the MISS bit wins");
-    assert!(melee_family(0, 1, 120, 0).is_some(), "a landed hit wins");
-    // Index 5 of the table is a 1, and unreachable: arm 2 claims a block.
-    assert_eq!(melee_family(0, 5, 0, 0).map(|f| f.stem), Some("VSBLOCK"));
-}
-
 /// The melee msgType matrix of `0x62a0d0`/`0x62a2e0`, through the 94-entry type table at
 /// `0x804710`, whose 1-based index is the selector's return plus one.
 #[test]
@@ -764,4 +719,28 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
     assert!(!made.fill_names(named, |_| ItemName::Waiting, "Unknown"));
     assert!(made.fill_names(named, |_| ItemName::Named("Linen Cloth".into()), "Unknown"));
     assert_eq!(made.fills.named, "Linen Cloth");
+}
+
+/// A school with no name writes no line, even where the template names none: each formatter that
+/// takes a school returns on its name first (`0x62cd99`, `0x628117`), before the line and its word.
+#[test]
+fn a_school_with_no_name_writes_no_line() {
+    let script = benilla_ui::script::UiScript::new().expect("VM");
+    script
+        .run(r#"SPELLLOGABSORBOTHERSELF = "You absorb %s's %s."; SPELL_SCHOOL2_CAP = "Fire""#)
+        .expect("strings");
+    let fills = |school| Fills {
+        attacker: "Imp".into(),
+        spell: "Firebolt".into(),
+        school: Some(school),
+        ..Default::default()
+    };
+    assert_eq!(
+        compose_line(&script, SPELLLOGABSORB, Variant::OtherSelf, &fills(2)).as_deref(),
+        Some("You absorb Imp's Firebolt.")
+    );
+    assert_eq!(
+        compose_line(&script, SPELLLOGABSORB, Variant::OtherSelf, &fills(9)),
+        None
+    );
 }

@@ -1,8 +1,8 @@
 //! The combat log: the handlers for the combat packets. The reference answers each packet from one
-//! handler with two consumers, the chat line ([`chat`], the display dispatcher `0x629b60`) and the
-//! floating number with the portrait's `UNIT_COMBAT` flash ([`text`]; `0x629d30` fires
-//! `COMBAT_TEXT_UPDATE`); they run in that order. The two legs have different CVar gates and
-//! classification rules.
+//! handler with two consumers: the chat line with the `COMBAT_TEXT_UPDATE` word its formatter
+//! raises after it ([`chat`], the display dispatcher `0x629b60`), and the floating number with the
+//! portrait's `UNIT_COMBAT` flash ([`text`]); they run in that order. The two legs have different
+//! CVar gates and classification rules.
 //!
 //! The completed swing and the environmental-damage log also drive animation; those handlers
 //! ([`crate::creature_anim::net`]) register after these, so the line runs before the animation.
@@ -15,11 +15,11 @@ use bevy::prelude::*;
 use crate::combat_text::{CombatTextSpawn, DamageTextGates};
 use crate::names::NameCache;
 use crate::net::{
-    GuidIndex, NetCommands, NetHandlerApp, ObjectStore, Reputations, SelfGuid, ServerSoundMessage,
+    GuidIndex, NetHandlerApp, ObjectStore, Reputations, SelfGuid, ServerSoundMessage,
 };
 use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
-use crate::ui_unit::{CombatTextEvent, UnitCombatFeedback};
+use crate::ui_unit::UnitCombatFeedback;
 
 pub(crate) mod chat;
 pub(crate) mod text;
@@ -64,11 +64,8 @@ pub(crate) struct Sinks<'w, 's> {
     stores: Query<'w, 's, &'static mut ObjectStore>,
     poses: Query<'w, 's, &'static mut Transform>,
     log: ResMut<'w, ChatLog>,
-    names: Res<'w, NameCache>,
-    net: Res<'w, NetCommands>,
     text: MessageWriter<'w, CombatTextSpawn>,
     feedback: MessageWriter<'w, UnitCombatFeedback>,
-    center: MessageWriter<'w, CombatTextEvent>,
 }
 
 /// The combat log's handler registration. Added ahead of
@@ -119,10 +116,8 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             &l.stores,
             c.spells.as_deref(),
             *l.damage_text,
-            c.periodic.0,
             &mut l.text,
             &mut l.feedback,
-            &mut l.center,
         );
     }
 }
@@ -145,9 +140,6 @@ fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             *l.damage_text,
             &mut l.text,
             &mut l.feedback,
-            &mut l.center,
-            &l.names,
-            &l.net,
         );
     }
 }
@@ -156,24 +148,15 @@ fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::SpellHealLog(s) = ev {
         let ctx = c.ctx();
         chat::spell_heal_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
-        text::spell_heal_log(
-            s,
-            &c.index,
-            &c.self_guid,
-            &l.stores,
-            &mut l.feedback,
-            &mut l.center,
-            &l.names,
-            &l.net,
-        );
+        text::spell_heal_log(s, &c.index, &mut l.feedback);
     }
 }
 
 fn on_spell_energize_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::SpellEnergizeLog(s) = ev {
         let ctx = c.ctx();
+        // `0x494770`, the energize `UNIT_COMBAT`, is an empty stub: no flash, only the line.
         chat::spell_energize_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
-        text::spell_energize_log(s, &c.self_guid, &mut l.center);
     }
 }
 
@@ -206,7 +189,6 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             *l.damage_text,
             &mut l.text,
             &mut l.feedback,
-            &mut l.center,
         );
     }
 }
@@ -306,9 +288,7 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
     }
 }
 
-/// An honor award: the combat-log line (name-resolved, so it queues) and the `HONOR_GAINED`
-/// number. A dishonorable kill carries negative honor, passed signed: the stock handler prefixes
-/// "+" only to a positive number (`Blizzard_CombatText.lua:234`).
+/// An honor award: the combat-log line, which raises the `HONOR_GAINED` word once written.
 fn on_pvp_credit(In(ev): In<SessionEvent>, mut l: Sinks) {
     if let SessionEvent::PvpCredit(credit) = ev {
         l.log.push_pvp_credit(
@@ -316,10 +296,5 @@ fn on_pvp_credit(In(ev): In<SessionEvent>, mut l: Sinks) {
             credit.victim_guid,
             u8::try_from(credit.victim_rank).unwrap_or(0),
         );
-        l.center.write(CombatTextEvent {
-            message_type: "HONOR_GAINED",
-            data: Some(credit.honor.to_string()),
-            extra: None,
-        });
     }
 }

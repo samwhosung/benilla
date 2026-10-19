@@ -16,10 +16,10 @@ use benilla_protocol::messages::{
     SpellLogMiss, SpellOutcomeLog,
 };
 
-use crate::ui_chat::combat::{self, Family, Fills, UnitClass};
+use crate::ui_chat::combat::{self, Family, Fills, LineWord, Poses, Stores, UnitClass};
 use crate::ui_chat::ChatLog;
 
-use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid};
+use crate::net::{GuidIndex, Reputations, SelfGuid};
 
 /// The classification inputs every line needs, built per packet from `super::Ctx`.
 pub(crate) struct ChatCtx<'a> {
@@ -39,7 +39,7 @@ pub(crate) struct ChatCtx<'a> {
 }
 
 impl ChatCtx<'_> {
-    fn classify(&self, guid: u64, stores: &Query<&mut ObjectStore>) -> UnitClass {
+    fn classify(&self, guid: u64, stores: &impl Stores) -> UnitClass {
         combat::classify(
             guid,
             self.self_guid,
@@ -53,7 +53,7 @@ impl ChatCtx<'_> {
     }
 
     /// One endpoint's half of the display-range gate, [`combat::in_range`].
-    fn in_range(&self, guid: u64, class: UnitClass, poses: &Query<&mut Transform>) -> bool {
+    fn in_range(&self, guid: u64, class: UnitClass, poses: &impl Poses) -> bool {
         combat::in_range(
             guid,
             self.ranges.class(class),
@@ -79,15 +79,16 @@ impl ChatCtx<'_> {
     }
 }
 
-/// `SMSG_ATTACKERSTATEUPDATE`: the melee line, every `COMBAT_*` family. `school`, the first
-/// sub-damage's, selects the `…SCHOOL` template; physical (0) takes the plain one.
+/// `SMSG_ATTACKERSTATEUPDATE`: the melee line and its word, every `COMBAT_*` family. `school`, the
+/// first sub-damage's, selects the `…SCHOOL` template; physical (0) takes the plain one.
 pub(super) fn attacker_state(
-    s: AttackerState,
+    mut s: AttackerState,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
+    s.mark_full_block(ctx.index.0.contains_key(&s.victim));
     // `0x625e40`, checked before the dispatcher (`0x629b3e`, `0x629b45`): a swing from a spell
     // that did not land plainly emits no line; the floating number has the same gate.
     if !s.displayed() {
@@ -96,7 +97,7 @@ pub(super) fn attacker_state(
     let attacker = ctx.classify(s.attacker, stores);
     let victim = ctx.classify(s.victim, stores);
     // `0x62a710` emits nothing for VictimState 0, 1, 4 or 9.
-    let Some(family) = combat::melee_family(s.hit_info, s.victim_state, s.damage, s.school) else {
+    let Some((family, word)) = combat::melee_outcome(&s) else {
         return;
     };
     // The chat type pair is hits/misses: only a landed hit is "hits", a dodge or parry "misses".
@@ -118,7 +119,7 @@ pub(super) fn attacker_state(
         }),
         ..Default::default()
     };
-    queue(
+    queue_worded(
         log,
         ctx,
         poses,
@@ -127,35 +128,34 @@ pub(super) fn attacker_state(
         (s.attacker, attacker),
         (s.victim, victim),
         fills,
+        to_me(victim, word),
     );
 }
 
-/// `SMSG_SPELLNONMELEEDAMAGELOG`: a spell's damage line, or the absorbed, blocked or resisted
-/// wording when nothing got through. The `periodic` flag routes it to the `SPELL_PERIODIC_*`
-/// types and the `PERIODICAURADAMAGE` wording, as the reference does.
+/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`): split damage, then a periodic hit, then a direct
+/// one, each its own formatter.
 pub(super) fn spell_damage_log(
     s: SpellDamageLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let attacker = ctx.classify(s.attacker, stores);
     let victim = ctx.classify(s.target, stores);
-    // `SPELL_HIT_TYPE_CRIT` (vmangos `SpellDefines.h:179`), the bit the floating text reads.
-    let crit = s.hit_info & 0x2 != 0;
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
     };
 
     // Split damage (`hit_info & 8`, to `0x62de60`) is tested first, before the periodic split: it
-    // reads "%s's %s causes %s %d damage.", has no `…SELFSELF` key and no trailers.
+    // reads "%s's %s causes %s %d damage.", has no `…SELFSELF` key and no trailers, and words the
+    // split amount to its target (`0x62dfd9`).
     const SPELL_HIT_TYPE_SPLIT: u32 = 0x8;
     if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
         let Some(kind) = combat::spell_kind(attacker, victim, false) else {
             return;
         };
-        return queue(
+        return queue_worded(
             log,
             ctx,
             poses,
@@ -164,10 +164,11 @@ pub(super) fn spell_damage_log(
             (s.attacker, attacker),
             (s.target, victim),
             Fills {
-                spell: spell.clone(),
+                spell,
                 amount: i64::from(s.damage),
                 ..Default::default()
             },
+            to_me(victim, LineWord::with("SPLIT_DAMAGE", s.damage)),
         );
     }
     if s.periodic {
@@ -176,62 +177,77 @@ pub(super) fn spell_damage_log(
         if !ctx.periodic {
             return;
         }
-        // The target's class, not the caster's: the formatter `0x628100` selects on the victim
-        // (`0x628235`).
-        let Some(kind) = combat::periodic_kind(victim, false) else {
-            return;
-        };
-        let fills = Fills {
-            spell,
-            school: Some(s.school),
-            amount: i64::from(s.damage),
-            // `0x628341` passes zero for blocked and HitInfo: absorb and resist trailers only.
-            trailers: Some(combat::Trailers {
-                absorbed: s.absorb,
-                resisted: s.resist,
-                blocked: 0,
-                hit_info: 0,
-            }),
-            ..Default::default()
-        };
-        return queue(
+        return periodic_damage(
             log,
             ctx,
             poses,
-            kind,
-            combat::PERIODICAURADAMAGE,
+            &spell,
             (s.attacker, attacker),
             (s.target, victim),
-            fills,
+            PeriodicHit {
+                damage: s.damage,
+                school: s.school,
+                absorbed: s.absorb,
+                resisted: s.resist,
+            },
         );
     }
+    direct_damage(
+        log,
+        ctx,
+        poses,
+        &spell,
+        s.spell_id,
+        (s.attacker, attacker),
+        (s.target, victim),
+        &s,
+    );
+}
 
-    let Some(kind) = combat::spell_kind(attacker, victim, false) else {
+/// `0x62cd80`, a direct spell hit. Nothing through is worded as the reason, tested absorbed
+/// (`0x6285b0`), blocked (the miss formatter with code 5, `0x62cec7`), then resisted
+/// (`0x628720`); nothing at all writes no line. Damage through takes `SPELLLOG` and its crit and
+/// school forms, with trailers, and [`combat::spell_hit_word`].
+fn direct_damage(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    spell_id: u32,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    s: &SpellDamageLog,
+) {
+    let school = Some(s.school);
+    if s.damage == 0 {
+        if s.absorb != 0 {
+            absorbed_line(log, ctx, poses, spell, caster, target, school, false);
+        } else if s.blocked != 0 {
+            spell_miss(
+                log, ctx, poses, spell, spell_id, caster, target, 5, false, school,
+            );
+        } else if s.resist != 0 {
+            resisted_line(log, ctx, poses, spell, caster, target, school, false);
+        }
+        return;
+    }
+    let Some(kind) = combat::spell_kind(caster.1, target.1, false) else {
         return;
     };
-    // Nothing through: worded as the reason, tested absorb, block, then resist (`0x62cd80`).
-    let family = if s.damage == 0 && s.absorb > 0 {
-        combat::SPELLLOGABSORB
-    } else if s.damage == 0 && s.blocked > 0 {
-        combat::SPELLBLOCKED
-    } else if s.damage == 0 && s.resist > 0 {
-        combat::SPELLRESIST
-    } else {
-        match (crit, s.school != 0) {
-            (false, false) => combat::SPELLLOG,
-            (true, false) => combat::SPELLLOGCRIT,
-            (false, true) => combat::SPELLLOGSCHOOL,
-            (true, true) => combat::SPELLLOGCRITSCHOOL,
-        }
+    // `SPELL_HIT_TYPE_CRIT` (vmangos `SpellDefines.h:179`).
+    let crit = s.hit_info & 0x2 != 0;
+    let family = match (crit, s.school != 0) {
+        (false, false) => combat::SPELLLOG,
+        (true, false) => combat::SPELLLOGCRIT,
+        (false, true) => combat::SPELLLOGSCHOOL,
+        (true, true) => combat::SPELLLOGCRITSCHOOL,
     };
-    // `0x62d03c` passes a real `blocked` but HitInfo 0, so never GLANCING or CRUSHING; the
-    // absorbed, blocked and resisted wordings take no trailer.
-    let landed = family.stem.starts_with("SPELLLOG") && family.stem != "SPELLLOGABSORB";
     let fills = Fills {
-        spell,
-        school: Some(s.school),
+        spell: spell.to_owned(),
+        school,
         amount: i64::from(s.damage),
-        trailers: landed.then_some(combat::Trailers {
+        // `0x62d03c` passes a real `blocked` but HitInfo 0, so never GLANCING or CRUSHING.
+        trailers: Some(combat::Trailers {
             absorbed: s.absorb,
             resisted: s.resist,
             blocked: s.blocked,
@@ -239,60 +255,255 @@ pub(super) fn spell_damage_log(
         }),
         ..Default::default()
     };
-    queue(
+    let word = combat::spell_hit_word(s.damage, s.absorb, s.resist, s.blocked);
+    queue_worded(
         log,
         ctx,
         poses,
         kind,
         family,
-        (s.attacker, attacker),
-        (s.target, victim),
+        caster,
+        target,
         fills,
+        to_me(target.1, word),
     );
 }
 
-/// `SMSG_SPELLLOGMISS`: one line per missed target, worded by its own `SpellMissInfo`.
+/// One periodic damage tick's figures, as `0x628100` takes them.
+pub(super) struct PeriodicHit {
+    pub damage: u32,
+    pub school: u8,
+    pub absorbed: u32,
+    pub resisted: i32,
+}
+
+/// `0x628100`, a periodic damage tick, from `SMSG_PERIODICAURALOG` and from a periodic
+/// `SMSG_SPELLNONMELEEDAMAGELOG` alike. Nothing through is worded absorbed, then resisted, on the
+/// periodic types (`0x6281e5`, `0x62820e`), or not at all; damage through takes
+/// `PERIODICAURADAMAGE`, typed off the target (`0x628235`), with absorb and resist trailers
+/// (`0x628341` passes zero for blocked and HitInfo) and [`combat::periodic_hit_word`].
+fn periodic_damage(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    hit: PeriodicHit,
+) {
+    let school = Some(hit.school);
+    if hit.damage == 0 {
+        if hit.absorbed != 0 {
+            absorbed_line(log, ctx, poses, spell, caster, target, school, true);
+        } else if hit.resisted != 0 {
+            resisted_line(log, ctx, poses, spell, caster, target, school, true);
+        }
+        return;
+    }
+    let Some(kind) = combat::periodic_kind(target.1, false) else {
+        return;
+    };
+    let fills = Fills {
+        spell: spell.to_owned(),
+        school,
+        amount: i64::from(hit.damage),
+        trailers: Some(combat::Trailers {
+            absorbed: hit.absorbed,
+            resisted: hit.resisted,
+            blocked: 0,
+            hit_info: 0,
+        }),
+        ..Default::default()
+    };
+    let word = combat::periodic_hit_word(hit.damage, hit.absorbed, hit.resisted);
+    queue_worded(
+        log,
+        ctx,
+        poses,
+        kind,
+        combat::PERIODICAURADAMAGE,
+        caster,
+        target,
+        fills,
+        to_me(target.1, word),
+    );
+}
+
+/// `0x6285b0`, a hit absorbed whole: `SPELLLOGABSORB`, typed by the damage matrix, or by the
+/// periodic selector on the target when `periodic` (`0x628603`), and worded `SPELL_ABSORBED` with
+/// the spell's name (`0x628696`). `school` is the caller's school-name gate.
+fn absorbed_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    school: Option<u8>,
+    periodic: bool,
+) {
+    reason_line(
+        log,
+        ctx,
+        poses,
+        combat::SPELLLOGABSORB,
+        LineWord::with("SPELL_ABSORBED", spell),
+        spell,
+        caster,
+        target,
+        school,
+        periodic,
+    );
+}
+
+/// `0x628720`, a hit resisted whole: [`absorbed_line`]'s shape, `SPELLRESIST` worded
+/// `SPELL_RESISTED` (`0x628806`).
+fn resisted_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    school: Option<u8>,
+    periodic: bool,
+) {
+    reason_line(
+        log,
+        ctx,
+        poses,
+        combat::SPELLRESIST,
+        LineWord::with("SPELL_RESISTED", spell),
+        spell,
+        caster,
+        target,
+        school,
+        periodic,
+    );
+}
+
+/// The body `0x6285b0` and `0x628720` share.
+fn reason_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    family: Family,
+    word: LineWord,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    school: Option<u8>,
+    periodic: bool,
+) {
+    let kind = if periodic {
+        combat::periodic_kind(target.1, false)
+    } else {
+        combat::spell_kind(caster.1, target.1, false)
+    };
+    let Some(kind) = kind else {
+        return;
+    };
+    queue_worded(
+        log,
+        ctx,
+        poses,
+        kind,
+        family,
+        caster,
+        target,
+        Fills {
+            spell: spell.to_owned(),
+            school,
+            ..Default::default()
+        },
+        to_me(target.1, word),
+    );
+}
+
+/// `0x62bab0`, the spell-miss formatter, one line per missed target. Code 0 writes nothing
+/// (`0x62babb`). `damage_shield` is its fifth argument: set, the line is typed by the
+/// damage-shield selector on the caster (`0x62c140`), clear, by the spell's own damage or buff
+/// matrix (`0x627d30`). The word carries the spell's name ([`combat::miss_word`]). `school` is a
+/// caller's school-name gate, `0x62cd80`'s.
+pub(super) fn spell_miss(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    spell_id: u32,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    miss_info: u8,
+    damage_shield: bool,
+    school: Option<u8>,
+) {
+    if miss_info == 0 {
+        return;
+    }
+    let kind = if damage_shield {
+        Some(combat::damage_shield_kind(caster.1))
+    } else {
+        combat::spell_kind(caster.1, target.1, !ctx.spell_harmful(spell_id))
+    };
+    let Some(kind) = kind else {
+        return;
+    };
+    queue_worded(
+        log,
+        ctx,
+        poses,
+        kind,
+        combat::miss_family(miss_info),
+        caster,
+        target,
+        Fills {
+            spell: spell.to_owned(),
+            school,
+            ..Default::default()
+        },
+        to_me(target.1, combat::miss_word(miss_info, spell)),
+    );
+}
+
+/// `SMSG_SPELLLOGMISS` (`0x5e7e00`): one line per missed target, worded by its own
+/// `SpellMissInfo`. Its caller passes the formatter's fifth argument as 1 (`0x5e7f31`), so every
+/// line off this packet is typed as a damage-shield line; addons filter on the chat type the
+/// reference shows.
 pub(super) fn spell_log_miss(
     s: &SpellLogMiss,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    let attacker = ctx.classify(s.caster, stores);
+    let caster = ctx.classify(s.caster, stores);
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
     };
-    // Every line off this packet is typed as a damage-shield line: its caller passes the
-    // formatter's 5th argument as 1 (`0x5e7f31`), routing `0x62bc5a` to the damage-shield selector
-    // `0x62c140` instead of the spell matrix. Addons filter on the chat type the reference shows.
-    let kind = combat::damage_shield_kind(attacker);
     for &(target, miss_info) in &s.misses {
-        let family = combat::miss_family(miss_info);
         let victim = ctx.classify(target, stores);
-        let fills = Fills {
-            spell: spell.clone(),
-            ..Default::default()
-        };
-        queue(
+        spell_miss(
             log,
             ctx,
             poses,
-            kind,
-            family,
-            (s.caster, attacker),
+            &spell,
+            s.spell_id,
+            (s.caster, caster),
             (target, victim),
-            fills,
+            miss_info,
+            true,
+            None,
         );
     }
 }
 
-/// `SMSG_SPELLHEALLOG`: a heal line, a BUFF type.
+/// `SMSG_SPELLHEALLOG`: a heal line, a BUFF type (`0x62c770`), worded `HEAL` or `HEAL_CRIT` with
+/// the healer's name and the amount (`0x62c8ea`).
 pub(super) fn spell_heal_log(
     s: SpellHealLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let healer = ctx.classify(s.healer, stores);
@@ -300,10 +511,10 @@ pub(super) fn spell_heal_log(
     let Some(kind) = combat::spell_kind(healer, target, true) else {
         return;
     };
-    let family = if s.critical {
-        combat::HEALEDCRIT
+    let (family, word) = if s.critical {
+        (combat::HEALEDCRIT, "HEAL_CRIT")
     } else {
-        combat::HEALED
+        (combat::HEALED, "HEAL")
     };
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
@@ -313,7 +524,7 @@ pub(super) fn spell_heal_log(
         amount: i64::from(s.amount),
         ..Default::default()
     };
-    queue(
+    queue_worded(
         log,
         ctx,
         poses,
@@ -322,6 +533,7 @@ pub(super) fn spell_heal_log(
         (s.healer, healer),
         (s.target, target),
         fills,
+        to_me(target, LineWord::named(word, s.amount)),
     );
 }
 
@@ -330,121 +542,166 @@ pub(super) fn spell_heal_log(
 pub(super) fn spell_energize_log(
     s: SpellEnergizeLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let caster = ctx.classify(s.caster, stores);
     let target = ctx.classify(s.target, stores);
-    let Some(kind) = combat::spell_kind(caster, target, true) else {
-        return;
-    };
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
     };
-    let fills = Fills {
-        spell,
-        power: Some(s.power),
-        amount: power_gain(s.power, s.amount),
-        ..Default::default()
+    power_gain_line(
+        log,
+        ctx,
+        poses,
+        &spell,
+        (s.caster, caster),
+        (s.target, target),
+        s.power,
+        s.amount,
+        false,
+    );
+}
+
+/// `0x627520`, a power gain, from `SMSG_SPELLENERGIZELOG` with its periodic flag clear and from a
+/// periodic energize tick with it set. The flag picks the chat type, the periodic selector on the
+/// caster (`0x6275fb`) or the buff matrix, and only a direct gain raises the word (`0x6276e2`).
+fn power_gain_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    power: u32,
+    amount: u32,
+    periodic: bool,
+) {
+    let kind = if periodic {
+        combat::periodic_kind(caster.1, true)
+    } else {
+        combat::spell_kind(caster.1, target.1, true)
     };
-    queue(
+    let Some(kind) = kind else {
+        return;
+    };
+    let amount = power_gain(power, amount);
+    let word = combat::power_gain_word(power, amount).filter(|_| !periodic);
+    queue_worded(
         log,
         ctx,
         poses,
         kind,
         combat::POWERGAIN,
-        (s.caster, caster),
-        (s.target, target),
-        fills,
+        caster,
+        target,
+        Fills {
+            spell: spell.to_owned(),
+            power: Some(power),
+            amount,
+            ..Default::default()
+        },
+        word.and_then(|w| to_me(target.1, w)),
     );
 }
 
-/// `SMSG_PERIODICAURALOG`: one line per tick, worded by its aura type. The periodic chat-type
-/// selectors take one class, not a pair.
+/// `SMSG_PERIODICAURALOG` (`0x626dd0`): one line per tick, worded by its aura type.
 pub(super) fn periodic_aura_log(
     s: &PeriodicAuraLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    let caster = ctx.classify(s.caster, stores);
-    let target = ctx.classify(s.target, stores);
+    let caster = (s.caster, ctx.classify(s.caster, stores));
+    let target = (s.target, ctx.classify(s.target, stores));
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
     };
     for tick in &s.ticks {
-        let (family, buff, fills) = match *tick {
-            PeriodicTick::Damage { amount, school, .. } => (
-                combat::PERIODICAURADAMAGE,
-                false,
-                Fills {
-                    spell: spell.clone(),
-                    // A u32 on this packet, the same `SPELL_SCHOOL<n>_NAME` index as direct damage.
-                    school: u8::try_from(school).ok(),
-                    amount: i64::from(amount),
-                    ..Default::default()
+        match *tick {
+            PeriodicTick::Damage {
+                amount,
+                school,
+                absorb,
+                resist,
+            } => periodic_damage(
+                log,
+                ctx,
+                poses,
+                &spell,
+                caster,
+                target,
+                PeriodicHit {
+                    damage: amount,
+                    // A u32 on this packet, the same `SPELL_SCHOOL<n>_NAME` index as direct
+                    // damage; one past any name fails the formatter's school gate (`0x628117`).
+                    school: u8::try_from(school).unwrap_or(u8::MAX),
+                    absorbed: absorb,
+                    resisted: resist,
                 },
             ),
-            PeriodicTick::Heal { amount } => (
-                combat::PERIODICAURAHEAL,
-                true,
-                Fills {
-                    spell: spell.clone(),
-                    amount: i64::from(amount),
-                    ..Default::default()
-                },
-            ),
+            PeriodicTick::Heal { amount } => {
+                periodic_heal(log, ctx, poses, &spell, caster, target, amount)
+            }
             // The same displayed-figure divide, at `0x627087` in `0x626dd0`.
-            PeriodicTick::Energize { power, amount } => (
-                combat::POWERGAIN,
-                true,
-                Fills {
-                    spell: spell.clone(),
-                    power: Some(power),
-                    amount: power_gain(power, amount),
-                    ..Default::default()
-                },
-            ),
+            PeriodicTick::Energize { power, amount } => {
+                power_gain_line(log, ctx, poses, &spell, caster, target, power, amount, true)
+            }
             // Aura 64 goes to the same formatter as the execute log's `POWER_DRAIN` (`0x627910`
             // to `0x627930`, periodic flag set), which makes every wording choice.
             PeriodicTick::ManaLeech {
                 power,
                 amount,
                 multiplier,
-            } => {
-                power_drain_line(
-                    log,
-                    ctx,
-                    stores,
-                    poses,
-                    &spell,
-                    s.spell_id,
-                    (s.caster, caster),
-                    (s.target, target),
-                    power,
-                    periodic_leech_amount(power, amount),
-                    multiplier,
-                    true,
-                );
-                continue;
-            }
-        };
-        let Some(kind) = combat::periodic_kind(periodic_subject(tick, caster, target), buff) else {
-            continue;
-        };
-        queue(
-            log,
-            ctx,
-            poses,
-            kind,
-            family,
-            (s.caster, caster),
-            (s.target, target),
-            fills,
-        );
+            } => power_drain_line(
+                log,
+                ctx,
+                stores,
+                poses,
+                &spell,
+                s.spell_id,
+                caster,
+                target,
+                power,
+                periodic_leech_amount(power, amount),
+                multiplier,
+                true,
+            ),
+        }
     }
+}
+
+/// `0x627240`, a periodic heal tick: `PERIODICAURAHEAL`, typed off the target (`0x62732c`), and
+/// worded `PERIODIC_HEAL` with the caster's name and the amount (`0x627414`).
+fn periodic_heal(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    spell: &str,
+    caster: (u64, UnitClass),
+    target: (u64, UnitClass),
+    amount: u32,
+) {
+    let Some(kind) = combat::periodic_kind(target.1, true) else {
+        return;
+    };
+    queue_worded(
+        log,
+        ctx,
+        poses,
+        kind,
+        combat::PERIODICAURAHEAL,
+        caster,
+        target,
+        Fills {
+            spell: spell.to_owned(),
+            amount: i64::from(amount),
+            ..Default::default()
+        },
+        to_me(target.1, LineWord::named("PERIODIC_HEAL", amount)),
+    );
 }
 
 /// `SMSG_SPELLDAMAGESHIELD`: the Thorns-style return hit. The sentence's subject is the packet's
@@ -455,8 +712,8 @@ pub(super) fn periodic_aura_log(
 pub(super) fn damage_shield(
     s: DamageShield,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let bearer = ctx.classify(s.victim, stores);
@@ -485,8 +742,8 @@ pub(super) fn damage_shield(
 pub(super) fn party_kill_log(
     s: PartyKillLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let killer = ctx.classify(s.killer, stores);
@@ -513,8 +770,8 @@ pub(super) fn party_kill_log(
 pub(super) fn spell_insta_kill_log(
     s: SpellInstaKillLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let victim = ctx.classify(s.victim, stores);
@@ -548,8 +805,8 @@ pub(super) fn spell_outcome_log(
     s: SpellOutcomeLog,
     immune: bool,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     // The periodic gate, on `IMMUNESPELL` alone.
@@ -592,8 +849,8 @@ pub(super) fn spell_outcome_log(
 pub(super) fn spell_dispel_log(
     s: &SpellDispelLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let bearer = ctx.classify(s.victim, stores);
@@ -623,8 +880,8 @@ pub(super) fn spell_dispel_log(
 pub(super) fn dispel_failed(
     s: &DispelFailed,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let caster = ctx.classify(s.caster, stores);
@@ -662,8 +919,8 @@ pub(super) fn dispel_failed(
 pub(super) fn enchantment_log(
     s: EnchantmentLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let owner = ctx.classify(s.owner, stores);
@@ -720,8 +977,8 @@ pub(super) fn enchantment_log(
 pub(super) fn spell_log_execute(
     s: &SpellLogExecute,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     use benilla_protocol::messages::ExecuteLog as E;
@@ -918,18 +1175,6 @@ fn power_gain(power: u32, amount: u32) -> i64 {
     i64::from(amount) / power_divisor(power)
 }
 
-/// Which endpoint a periodic tick's formatter hands its msg-id selector, choosing
-/// `SPELL_PERIODIC_SELF_*` or `…_CREATURE_*`. `0x628100` (`PERIODICAURADAMAGE`) and `0x627240`
-/// (`PERIODICAURAHEAL`) hand the target (`0x628235`, `0x62732c`); `0x627520` (`POWERGAIN`) and
-/// `0x627930` (`SPELLPOWERLEECH`/`…DRAIN`) the caster (`0x6275fb`, `0x627a0f`/`0x627a3a`).
-/// [`power_drain_line`] applies the `ManaLeech` row directly.
-fn periodic_subject(tick: &PeriodicTick, caster: UnitClass, target: UnitClass) -> UnitClass {
-    match tick {
-        PeriodicTick::Damage { .. } | PeriodicTick::Heal { .. } => target,
-        PeriodicTick::Energize { .. } | PeriodicTick::ManaLeech { .. } => caster,
-    }
-}
-
 /// Arm 5 of `0x627930`: a real multiplier means the caster gained what the target lost.
 /// `0x6279ff` compares `|multiplier|` with `[0x8029d4]` = `2^-22`, and equality is a leech.
 fn leech_family(multiplier: f32) -> Family {
@@ -989,8 +1234,8 @@ fn periodic_leech_amount(power: u32, amount: u32) -> u32 {
 fn power_drain_line(
     log: &mut ChatLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     spell: &str,
     spell_id: u32,
     caster: (u64, UnitClass),
@@ -1050,8 +1295,8 @@ fn power_drain_line(
 fn happiness_drain_line(
     log: &mut ChatLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     pet: (u64, UnitClass),
     amount: u32,
 ) -> bool {
@@ -1072,13 +1317,14 @@ fn happiness_drain_line(
             ..Default::default()
         },
         combat::Named::Unit(pet.0),
+        None,
     )
 }
 
 /// A unit's owner guid, `CHARMEDBY` then `CREATEDBY`, the pair [`combat::classify`] reads.
-fn unit_owner(guid: u64, ctx: &ChatCtx, stores: &Query<&mut ObjectStore>) -> Option<u64> {
+fn unit_owner(guid: u64, ctx: &ChatCtx, stores: &impl Stores) -> Option<u64> {
     let entity = ctx.index.0.get(&guid).copied()?;
-    let store = stores.get(entity).ok()?;
+    let store = stores.store(entity)?;
     store
         .0
         .unit_charmed_by()
@@ -1093,8 +1339,8 @@ fn unit_owner(guid: u64, ctx: &ChatCtx, stores: &Query<&mut ObjectStore>) -> Opt
 pub(super) fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     ctx: &ChatCtx,
-    stores: &Query<&mut ObjectStore>,
-    poses: &Query<&mut Transform>,
+    stores: &impl Stores,
+    poses: &impl Poses,
     log: &mut ChatLog,
 ) {
     let victim = ctx.classify(e.victim, stores);
@@ -1183,6 +1429,7 @@ pub(crate) fn faction_standing(
             },
             named: combat::Named::Ready,
             tries: 0,
+            word: None,
         });
     }
 }
@@ -1192,14 +1439,14 @@ pub(crate) fn faction_standing(
 fn queue(
     log: &mut ChatLog,
     ctx: &ChatCtx,
-    poses: &Query<&mut Transform>,
+    poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
     family: Family,
     subject: (u64, UnitClass),
     object: (u64, UnitClass),
     fills: Fills,
 ) {
-    queue_named(
+    queue_reported(
         log,
         ctx,
         poses,
@@ -1209,6 +1456,7 @@ fn queue(
         object,
         fills,
         combat::Named::Ready,
+        None,
     );
 }
 
@@ -1217,7 +1465,7 @@ fn queue(
 fn queue_named(
     log: &mut ChatLog,
     ctx: &ChatCtx,
-    poses: &Query<&mut Transform>,
+    poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
     family: Family,
     subject: (u64, UnitClass),
@@ -1225,7 +1473,42 @@ fn queue_named(
     fills: Fills,
     named: combat::Named,
 ) {
-    queue_reported(log, ctx, poses, kind, family, subject, object, fills, named);
+    queue_reported(
+        log, ctx, poses, kind, family, subject, object, fills, named, None,
+    );
+}
+
+/// [`queue`] for a formatter that raises a `COMBAT_TEXT_UPDATE` after its line: the word rides
+/// the line and fires only once the line is written.
+fn queue_worded(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    poses: &impl Poses,
+    kind: crate::ui_chat::ChatEventKind,
+    family: Family,
+    subject: (u64, UnitClass),
+    object: (u64, UnitClass),
+    fills: Fills,
+    word: Option<LineWord>,
+) {
+    queue_reported(
+        log,
+        ctx,
+        poses,
+        kind,
+        family,
+        subject,
+        object,
+        fills,
+        combat::Named::Ready,
+        word,
+    );
+}
+
+/// A word, for a line about you: each formatter tests the class of the unit its line is about
+/// for 0 before raising one (`0x629ef1`, `0x62d046`, `0x62834b`).
+fn to_me(class: UnitClass, word: LineWord) -> Option<LineWord> {
+    (class == UnitClass::Me).then_some(word)
 }
 
 /// [`queue_named`], answering whether a line was queued: `0x627de0` reports it to `0x627930` in
@@ -1234,257 +1517,26 @@ fn queue_named(
 fn queue_reported(
     log: &mut ChatLog,
     ctx: &ChatCtx,
-    poses: &Query<&mut Transform>,
+    poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
     family: Family,
     subject: (u64, UnitClass),
     object: (u64, UnitClass),
     fills: Fills,
     named: combat::Named,
+    word: Option<LineWord>,
 ) -> bool {
     // An OR, not an AND (`0x626630`): either endpoint within its class's range shows the line.
     if !ctx.in_range(subject.0, subject.1, poses) && !ctx.in_range(object.0, object.1, poses) {
         return false;
     }
-    let Some(line) = combat::queue(kind, family, subject, object, fills, named) else {
+    let Some(mut line) = combat::queue(kind, family, subject, object, fills, named) else {
         return false;
     };
+    line.word = word;
     log.push_combat(line);
     true
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        combat, leech_family, leech_figures, periodic_leech_amount, periodic_subject, power_gain,
-        rounded_product, PeriodicTick, UnitClass,
-    };
-
-    /// A spell's line with its catalog row, for the tests that need a known spell.
-    pub(crate) fn spells_with(rows: &[(u32, &str, u32)]) -> crate::ui_action::Spells {
-        crate::ui_action::Spells {
-            catalog: benilla_formats::SpellCatalog::from_displays(
-                rows.iter()
-                    .map(|&(id, name, attributes)| {
-                        (
-                            id,
-                            benilla_formats::SpellDisplay {
-                                id,
-                                name: name.into(),
-                                attributes,
-                                ..Default::default()
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            ..crate::ui_action::Spells::empty_for_tests()
-        }
-    }
-
-    /// No line for a spell the Spell store has no record of, as for one flagged `0x180` or with
-    /// an empty name: the test each spell formatter makes first (`0x62bac3`-`0x62bb07`).
-    #[test]
-    fn a_spell_with_no_record_writes_no_line() {
-        let spells = spells_with(&[
-            (133, "Fireball", 0),
-            (8893, "Malfunction", 0x180),
-            (7, "", 0),
-        ]);
-        let (self_guid, index, reputations) = (
-            crate::net::SelfGuid(Some(1)),
-            crate::net::GuidIndex::default(),
-            crate::net::Reputations::default(),
-        );
-        let ranges = combat::CombatLogRanges::default();
-        let ctx = super::ChatCtx {
-            self_guid: &self_guid,
-            group: None,
-            index: &index,
-            factions: None,
-            reputations: &reputations,
-            spells: Some(&spells),
-            names: None,
-            ranges: &ranges,
-            periodic: true,
-        };
-        assert_eq!(ctx.spell_name(133).as_deref(), Some("Fireball"));
-        assert_eq!(ctx.spell_name(24_000), None, "a server-only spell");
-        assert_eq!(ctx.spell_name(8893), None);
-        assert_eq!(ctx.spell_name(7), None);
-    }
-
-    /// A periodic line is typed off the endpoint its own formatter reads: a creature's DoT on you
-    /// is `…_PERIODIC_SELF_DAMAGE`, yours on a creature `…_PERIODIC_CREATURE_DAMAGE`.
-    #[test]
-    fn a_periodic_damage_or_heal_tick_is_typed_off_the_target() {
-        let dmg = PeriodicTick::Damage {
-            amount: 12,
-            school: 3,
-            absorb: 0,
-            resist: 0,
-        };
-        let heal = PeriodicTick::Heal { amount: 12 };
-        // A creature's DoT ticking me types SELF.
-        assert_eq!(
-            periodic_subject(&dmg, UnitClass::Creature, UnitClass::Me),
-            UnitClass::Me
-        );
-        // My DoT ticking a creature types CREATURE.
-        assert_eq!(
-            periodic_subject(&dmg, UnitClass::Me, UnitClass::Creature),
-            UnitClass::Creature
-        );
-        assert_eq!(
-            periodic_subject(&heal, UnitClass::Creature, UnitClass::Me),
-            UnitClass::Me
-        );
-        // The other two formatters read the caster.
-        let gain = PeriodicTick::Energize {
-            power: 1,
-            amount: 10,
-        };
-        let leech = PeriodicTick::ManaLeech {
-            power: 0,
-            amount: 40,
-            multiplier: 1.0,
-        };
-        assert_eq!(
-            periodic_subject(&gain, UnitClass::Creature, UnitClass::Me),
-            UnitClass::Creature
-        );
-        assert_eq!(
-            periodic_subject(&leech, UnitClass::Creature, UnitClass::Me),
-            UnitClass::Creature
-        );
-    }
-
-    /// A rage gain words the displayed figure. `Unbridled Wrath Effect` (12964) energizes rage by
-    /// base points 9 + 1 = 10 on the rage field's ×10 scale, and `SendEnergizeSpellLog` sends that
-    /// 10 (`SpellCaster.cpp:796-813`); the line reads 1.
-    #[test]
-    fn a_rage_gain_words_the_displayed_figure_not_the_wire_one() {
-        assert_eq!(power_gain(1, 10), 1, "Unbridled Wrath: one point of rage");
-        assert_eq!(power_gain(1, 100), 10, "Bloodrage: ten");
-        // Mana, focus and energy are one-to-one.
-        assert_eq!(power_gain(0, 300), 300);
-        assert_eq!(power_gain(2, 20), 20);
-        assert_eq!(power_gain(3, 20), 20);
-    }
-
-    /// `0x627930`'s three rules, one function for both of its packets.
-    #[test]
-    fn a_leech_divides_both_figures_and_drops_a_zero_drained_line() {
-        // Mana leeches one-to-one: 120 drained, half of it gained.
-        assert_eq!(leech_figures(0, 120, 0.5), Some((120, 60)));
-        // The product is truncated, then divided: `trunc(25 * 0.9) = 22`, `22 / 10 = 2`, not 1.
-        assert_eq!(leech_figures(1, 25, 0.9), Some((2, 2)));
-        // Below one displayed point, `drained == 0` drops the line.
-        assert_eq!(leech_figures(1, 9, 1.0), None);
-        assert_eq!(leech_figures(0, 0, 1.0), None);
-        // Happiness is ×1000: 1500 raw is one displayed point.
-        assert_eq!(leech_figures(4, 1500, 0.0), Some((1, 0)));
-    }
-
-    /// The leech/drain fork on `[0x8029d4] = 2^-22`: a multiplier exactly on it is a leech.
-    #[test]
-    fn the_leech_drain_fork_is_the_references_own_epsilon() {
-        const EPS: f32 = 1.0 / 4_194_304.0;
-        assert_eq!(leech_family(1.0).stem, "SPELLPOWERLEECH");
-        assert_eq!(
-            leech_family(EPS).stem,
-            "SPELLPOWERLEECH",
-            "equality leeches"
-        );
-        assert_eq!(leech_family(EPS / 2.0).stem, "SPELLPOWERDRAIN");
-        assert_eq!(leech_family(0.0).stem, "SPELLPOWERDRAIN");
-        // `fabs` first: the sign does not matter.
-        assert_eq!(leech_family(-1.0).stem, "SPELLPOWERLEECH");
-    }
-
-    /// `0x6278f0`'s table has five entries, happiness included (`HAPPINESS_POINTS`,
-    /// `GlobalStrings.lua:2117`), bounded by an unsigned `cmp ecx,5; jae`. Happiness lacks only a
-    /// `COMBAT_TEXT_UPDATE` tag.
-    #[test]
-    fn every_wire_power_tag_has_a_noun_and_nothing_past_the_table_does() {
-        for power in 0..=4 {
-            assert!(combat::power_has_word(power), "power {power} has a noun");
-        }
-        for power in [5, 6, 99, u32::MAX] {
-            assert!(!combat::power_has_word(power), "power {power} has none");
-        }
-    }
-
-    /// The gained figure goes through an f32 product (`0x627a95`); 2^24+1 is the smallest amount
-    /// where the narrowing shows, rounding to even one below.
-    #[test]
-    fn the_gained_figure_goes_through_the_references_f32_product() {
-        assert_eq!(rounded_product(25, 0.9), 22, "floor, not round");
-        assert_eq!(rounded_product(120, 0.5), 60);
-        assert_eq!(
-            rounded_product(16_777_217, 1.0),
-            16_777_216,
-            "the `fst` narrowing"
-        );
-    }
-
-    /// The periodic leg divides twice, as the reference does (`0x627126`/`0x627138`, then
-    /// `0x627930`): mana is unchanged, a wire 100 rage words as 1.
-    #[test]
-    fn a_periodic_leech_is_pre_divided_before_the_formatter_divides_again() {
-        assert_eq!(periodic_leech_amount(0, 400), 400, "mana: the identity");
-        assert_eq!(periodic_leech_amount(1, 100), 10, "rage: the first divide");
-        // End to end: 100 rage on the wire words as 1.
-        assert_eq!(
-            leech_figures(1, periodic_leech_amount(1, 100), 1.0),
-            Some((1, 1))
-        );
-        // The direct packet takes the same wire number through one divide only.
-        assert_eq!(leech_figures(1, 100, 1.0), Some((10, 10)));
-    }
-
-    /// A standing packet prints the "increased by" line for its first entry alone (`0x4d57dd`), and
-    /// not at all when that faction is `HIDDEN`; the factions a kill spills over to update
-    /// silently. On the real DBC, Booty Bay moving with Gadgetzan and Ratchet.
-    #[test]
-    fn a_standing_packet_prints_its_first_entry_only_and_never_a_hidden_one() {
-        use crate::net::Reputations;
-        use crate::target::ring::Factions;
-        use crate::ui_chat::ChatLog;
-        use benilla_formats::faction_flags::HIDDEN;
-
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let catalog = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
-        let slot =
-            |id: u32| u32::try_from(catalog.reputation_faction(id).unwrap().rep_index).unwrap();
-        let (booty, gadget, ratchet) = (slot(21), slot(369), slot(470));
-        let factions = Factions::from_catalog(catalog);
-        let packet = [(booty, 100), (gadget, 50), (ratchet, 50)];
-        let kinds = |reps: &Reputations, deltas: &[(u32, i32)]| {
-            let mut log = ChatLog::default();
-            super::faction_standing(deltas, reps, Some(&factions), &mut log);
-            log.pending_kinds()
-        };
-
-        let quiet = Reputations::default();
-        assert_eq!(
-            kinds(&quiet, &packet),
-            ["combat"],
-            "one line for the packet"
-        );
-
-        // Flag 4 on the first entry's slot silences the packet; on a later entry it changes nothing.
-        let mut v = vec![(0u8, 0i32); 64];
-        v[booty as usize].0 = HIDDEN;
-        assert!(kinds(&Reputations::from_slots(v), &packet).is_empty());
-        let mut v = vec![(0u8, 0i32); 64];
-        v[gadget as usize].0 = HIDDEN;
-        assert_eq!(kinds(&Reputations::from_slots(v), &packet), ["combat"]);
-
-        // An unchanged first entry prints nothing, and the entries behind it still stay silent.
-        let mut v = vec![(0u8, 0i32); 64];
-        v[booty as usize].1 = 100;
-        assert!(kinds(&Reputations::from_slots(v), &packet).is_empty());
-    }
-}
+mod tests;
