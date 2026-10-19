@@ -63,24 +63,10 @@ impl ChatCtx<'_> {
         )
     }
 
-    /// A spell's display name, or `None` when the reference emits no line for it (`0x62cd80`, like
-    /// every spell formatter):
-    /// - `Attributes & 0x180` at `SpellRec+0x18`, `SPELL_ATTR_DO_NOT_DISPLAY` and
-    ///   `SPELL_ATTR_DO_NOT_LOG` (vmangos `SpellDefines.h:799-800`), keeping proc triggers and
-    ///   aura tickers out;
-    /// - an empty localized name.
-    ///
-    /// A spell the catalog does not know is not gated: the line still carries its numbers, as the
-    /// reference degrades through `GetObjectName`'s `"UKNOWNOBJECT"` tail.
+    /// A spell's display name, or `None` where the formatter writes no line
+    /// ([`combat::logged_spell`]).
     fn spell_name(&self, spell_id: u32) -> Option<String> {
-        let Some(display) = self.spells.and_then(|s| s.catalog.get(spell_id)) else {
-            return Some(String::new());
-        };
-        const DO_NOT_DISPLAY_OR_LOG: u32 = 0x180;
-        if display.attributes & DO_NOT_DISPLAY_OR_LOG != 0 || display.name.is_empty() {
-            return None;
-        }
-        Some(display.name.clone())
+        combat::logged_spell(self.spells, spell_id).map(|d| d.name.clone())
     }
 
     /// `0x6ea280 == 2`, "this spell targets enemies": the predicate the chat-type stubs
@@ -1273,6 +1259,60 @@ mod tests {
         combat, leech_family, leech_figures, periodic_leech_amount, periodic_subject, power_gain,
         rounded_product, PeriodicTick, UnitClass,
     };
+
+    /// A spell's line with its catalog row, for the tests that need a known spell.
+    pub(crate) fn spells_with(rows: &[(u32, &str, u32)]) -> crate::ui_action::Spells {
+        crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                rows.iter()
+                    .map(|&(id, name, attributes)| {
+                        (
+                            id,
+                            benilla_formats::SpellDisplay {
+                                id,
+                                name: name.into(),
+                                attributes,
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            ..crate::ui_action::Spells::empty_for_tests()
+        }
+    }
+
+    /// No line for a spell the Spell store has no record of, as for one flagged `0x180` or with
+    /// an empty name: the test each spell formatter makes first (`0x62bac3`-`0x62bb07`).
+    #[test]
+    fn a_spell_with_no_record_writes_no_line() {
+        let spells = spells_with(&[
+            (133, "Fireball", 0),
+            (8893, "Malfunction", 0x180),
+            (7, "", 0),
+        ]);
+        let (self_guid, index, reputations) = (
+            crate::net::SelfGuid(Some(1)),
+            crate::net::GuidIndex::default(),
+            crate::net::Reputations::default(),
+        );
+        let ranges = combat::CombatLogRanges::default();
+        let ctx = super::ChatCtx {
+            self_guid: &self_guid,
+            group: None,
+            index: &index,
+            factions: None,
+            reputations: &reputations,
+            spells: Some(&spells),
+            names: None,
+            ranges: &ranges,
+            periodic: true,
+        };
+        assert_eq!(ctx.spell_name(133).as_deref(), Some("Fireball"));
+        assert_eq!(ctx.spell_name(24_000), None, "a server-only spell");
+        assert_eq!(ctx.spell_name(8893), None);
+        assert_eq!(ctx.spell_name(7), None);
+    }
 
     /// A periodic line is typed off the endpoint its own formatter reads: a creature's DoT on you
     /// is `…_PERIODIC_SELF_DAMAGE`, yours on a creature `…_PERIODIC_CREATURE_DAMAGE`.

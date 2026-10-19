@@ -369,6 +369,23 @@ fn classify_in<'a>(
     }
 }
 
+/// `SPELL_ATTR_DO_NOT_DISPLAY | SPELL_ATTR_DO_NOT_LOG`, `Attributes` (`SpellRec+0x18`) bits 7 and
+/// 8 (vmangos `SpellDefines.h:799-800`).
+const ATTR_DO_NOT_DISPLAY_OR_LOG: u32 = 0x180;
+
+/// The spell a combat-log formatter names, or `None` where it writes no line: each of the 22
+/// formatters that index the Spell store (`0xc0d788`) returns for an id out of range or with no
+/// record, for `Attributes & 0x180` and for an empty name in the client's locale, as the miss
+/// line's `0x62bac3`-`0x62bb07` does.
+pub(crate) fn logged_spell(
+    spells: Option<&crate::ui_action::Spells>,
+    spell_id: u32,
+) -> Option<&benilla_formats::SpellDisplay> {
+    let display = spells?.catalog.get(spell_id)?;
+    (display.attributes & ATTR_DO_NOT_DISPLAY_OR_LOG == 0 && !display.name.is_empty())
+        .then_some(display)
+}
+
 // ─────────────────────────────── the msgType selectors ────────────────────────────────
 
 /// The melee `(attacker, victim)` chat type, the reference's selector pair `0x62a0d0`/`0x62a2e0`;

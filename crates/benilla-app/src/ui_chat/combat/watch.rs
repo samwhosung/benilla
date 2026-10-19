@@ -43,17 +43,10 @@ impl WatchCtx<'_> {
         )
     }
 
-    /// The gates every spell-driven line takes, aura lines included: `Attributes & 0x180` or an
-    /// empty name drops the line.
+    /// A spell's display name, or `None` where the aura formatters write no line
+    /// ([`super::logged_spell`]).
     fn spell_name(&self, spell_id: u32) -> Option<String> {
-        let Some(display) = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id)) else {
-            return Some(String::new());
-        };
-        const DO_NOT_DISPLAY_OR_LOG: u32 = 0x180;
-        if display.attributes & DO_NOT_DISPLAY_OR_LOG != 0 || display.name.is_empty() {
-            return None;
-        }
-        Some(display.name.clone())
+        super::logged_spell(self.spells.as_deref(), spell_id).map(|d| d.name.clone())
     }
 
     /// The one-sided range test 15 reference formatters run in place of the two-ended `0x626630`.
