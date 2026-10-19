@@ -103,8 +103,8 @@ enum Pending {
         rank: u8,
         female: bool,
     },
-    /// One combat-log line, classified at the packet, waiting on its two endpoint names; the
-    /// reference's deferred queue (`0xc4e208`) waits only on an item name.
+    /// One combat-log line, classified at the packet; it waits only on an item's name, as the
+    /// reference's deferred queue (`0xc4e208`) does.
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),
@@ -1093,50 +1093,29 @@ pub(super) fn feed_chat(
                 route(&mut script, &mut windows, &event);
             }
             Pending::Combat(mut line) => {
-                // Both names, looked up with a callback as the line's (`0x6265a7`, `0x6265e0`); its
-                // retries within `tries` ask only a name the cache holds nothing for. Guid 0 is
-                // already filled (`/chattest`).
+                // Names looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), and
+                // asked again only on its first drain; a line waits on an item alone.
                 let ask = Ask::at(line.tries == 0, &commands);
-                let mut wait = false;
-                for (guid, slot) in [(line.subject, 0usize), (line.object, 1usize)] {
-                    if guid == 0 {
-                        continue;
-                    }
-                    match super::combat::object_name(
-                        guid,
-                        guids.0.get(&guid).and_then(|e| stores.get(*e).ok()),
-                        &names,
-                        ask,
-                    ) {
-                        Some(name) if slot == 0 => line.fills.attacker = name,
-                        Some(name) => line.fills.victim = name,
-                        None => wait = true,
-                    }
-                }
-                // An item the server answered unknown does not wait: the line composes with what
-                // the arm left in `named` (the reference falls back to `"UKNOWNOBJECT"`).
-                match line.named {
-                    super::combat::Named::Ready => {}
-                    super::combat::Named::Item(entry) => {
-                        match items.template(entry, 0, ask).map(|t| t.name.clone()) {
-                            Some(name) => line.fills.named = name,
-                            None if !items.template_answered_unknown(entry) => wait = true,
-                            None => {}
-                        }
-                    }
-                    super::combat::Named::Unit(guid) => {
-                        match super::combat::object_name(
+                let unknown = super::combat::unknown_object(&script);
+                let ready = line.fill_names(
+                    |guid| {
+                        super::combat::object_name(
                             guid,
                             guids.0.get(&guid).and_then(|e| stores.get(*e).ok()),
                             &names,
                             ask,
-                        ) {
-                            Some(name) => line.fills.named = name,
-                            None => wait = true,
+                        )
+                    },
+                    |entry| match items.template(entry, 0, ask).map(|t| t.name.clone()) {
+                        Some(name) => super::combat::ItemName::Named(name),
+                        None if items.template_answered_unknown(entry) => {
+                            super::combat::ItemName::Unknown
                         }
-                    }
-                }
-                if wait {
+                        None => super::combat::ItemName::Waiting,
+                    },
+                    &unknown,
+                );
+                if !ready {
                     if line.tries < NAME_MAX_TRIES {
                         line.tries += 1;
                         still.push(Pending::Combat(line));

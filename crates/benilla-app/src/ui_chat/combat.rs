@@ -878,10 +878,10 @@ pub(crate) fn power_word(script: &benilla_ui::script::UiScript, power: u32) -> O
     global_string(script, power_key(power)?)
 }
 
-/// One endpoint's display name, the reference's `GetObjectName` (`0x6264e0`); `None` until the
-/// name cache answers, and the caller retries, where the reference never waits and prints
-/// `UNKNOWNOBJECT`. A streamed unit names through its descriptor (`GetUnitName`, `0x609210`), which
-/// is how a pet is named.
+/// One endpoint's display name as `GetObjectName 0x6264e0` finds it: what the caches hold now, a
+/// lookup asked for what they do not (`0x6265a7`, `0x6265e0`, with an empty callback), and `None`
+/// for that, where the line prints [`unknown_object`]. A streamed unit names through its
+/// descriptor (`GetUnitName`, `0x609210`), which is how a pet is named.
 pub(crate) fn object_name(
     guid: u64,
     unit: Option<&ObjectStore>,
@@ -895,11 +895,17 @@ pub(crate) fn object_name(
     names.resolve_unit(guid, unit, ask).map(str::to_owned)
 }
 
+/// The name `GetObjectName` prints for an object nothing names: the `UNKNOWNOBJECT` string, else
+/// the literal `UKNOWNOBJECT` (`0x6265f4`-`0x62660c`).
+pub(crate) fn unknown_object(script: &benilla_ui::script::UiScript) -> String {
+    global_string(script, "UNKNOWNOBJECT").unwrap_or_else(|| "UKNOWNOBJECT".into())
+}
+
 // ────────────────────────── the queued line, awaiting its names ───────────────────────
 
-/// A combat-log line classified at the packet while both units are streamed, so a despawned
-/// creature still logs, with only its names outstanding. The reference's deferred queue
-/// (`0xc4e208`, replayed by `0x6294b0`) holds only a line waiting on an item name (`0x55ba30`).
+/// A combat-log line classified at the packet, composed at the drain with the names the caches
+/// hold then. The reference's deferred queue (`0xc4e208`, replayed by `0x6294b0`) holds only a
+/// line waiting on an item name (`0x55ba30`); a unit's name never holds one ([`Self::fill_names`]).
 #[derive(Clone, Debug)]
 pub(crate) struct PendingCombat {
     pub kind: ChatEventKind,
@@ -913,6 +919,52 @@ pub(crate) struct PendingCombat {
     pub fills: Fills,
     pub named: Named,
     pub tries: u16,
+}
+
+impl PendingCombat {
+    /// Fill the names as `GetObjectName 0x6264e0` names an object: a unit by what `unit` finds
+    /// now, never waiting, and `unknown` for one it does not. Only an item the item cache has not
+    /// answered holds the line (`0x628f40`, `0x629610`, `0x629760`, `0x6298a0` waiting through
+    /// `0x55ba30`); `false` while it holds. A guid of 0 is a name the fills already carry.
+    pub(crate) fn fill_names(
+        &mut self,
+        unit: impl Fn(u64) -> Option<String>,
+        item: impl FnOnce(u32) -> ItemName,
+        unknown: &str,
+    ) -> bool {
+        let name = |guid: u64| unit(guid).unwrap_or_else(|| unknown.to_owned());
+        if self.subject != 0 {
+            self.fills.attacker = name(self.subject);
+        }
+        if self.object != 0 {
+            self.fills.victim = name(self.object);
+        }
+        match self.named {
+            Named::Ready => true,
+            Named::Unit(guid) => {
+                self.fills.named = name(guid);
+                true
+            }
+            Named::Item(entry) => match item(entry) {
+                ItemName::Named(text) => {
+                    self.fills.named = text;
+                    true
+                }
+                // The server answered the item unknown: the line goes out with what the arm left.
+                ItemName::Unknown => true,
+                ItemName::Waiting => false,
+            },
+        }
+    }
+}
+
+/// What the item cache answers a line waiting on an item's name.
+pub(crate) enum ItemName {
+    Named(String),
+    /// The server answered that it has no such item.
+    Unknown,
+    /// No answer yet: the line keeps waiting.
+    Waiting,
 }
 
 /// What still has to be looked up before a line's [`Slot::Named`] can be filled: an item through

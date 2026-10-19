@@ -729,3 +729,39 @@ fn a_game_object_classifies_as_its_creator_one_class_up() {
         "no creator held"
     );
 }
+
+/// `0x6264e0` never waits: a unit no cache names prints `UNKNOWNOBJECT` at once, and only an item
+/// the item cache has not answered holds the line (`0x55ba30`).
+#[test]
+fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
+    let mut line = queue(
+        ChatEventKind::CombatCreatureVsSelfHits,
+        COMBATHIT,
+        (7, UnitClass::Creature),
+        (1, UnitClass::Me),
+        Fills::default(),
+        Named::Ready,
+    )
+    .unwrap();
+    let named = |guid: u64| (guid == 1).then(|| "Pat".to_string());
+    assert!(line.fill_names(named, |_| ItemName::Waiting, "Unknown"));
+    assert_eq!(
+        (line.fills.attacker.as_str(), line.fills.victim.as_str()),
+        ("Unknown", "Pat")
+    );
+
+    let mut pet = PendingCombat {
+        named: Named::Unit(9),
+        ..line.clone()
+    };
+    assert!(pet.fill_names(|_| None, |_| ItemName::Waiting, "Unknown"));
+    assert_eq!(pet.fills.named, "Unknown");
+
+    let mut made = PendingCombat {
+        named: Named::Item(2589),
+        ..line.clone()
+    };
+    assert!(!made.fill_names(named, |_| ItemName::Waiting, "Unknown"));
+    assert!(made.fill_names(named, |_| ItemName::Named("Linen Cloth".into()), "Unknown"));
+    assert_eq!(made.fills.named, "Linen Cloth");
+}
