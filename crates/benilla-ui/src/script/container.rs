@@ -209,7 +209,8 @@ pub struct RandomPropertyView {
 /// One bag's snapshot: its name, capacity, and occupied slots (1-based).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContainerState {
-    /// `GetBagName` (the bag item's own name; the backpack is the client-local "Backpack").
+    /// `GetBagName` for bags 1-10 (the bag item's own name); the backpack, the bank and the
+    /// keyring have none.
     pub name: Option<String>,
     pub num_slots: u32,
     pub slots: std::collections::HashMap<u32, ContainerSlot>,
@@ -846,6 +847,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 bag,
                 "Usage: GetContainerNumSlots(index)",
             )?);
+            // The backpack, the bank and bags 1-10 only; the keyring and anything else answer 0
+            // (`0x4f95c4`, `0x4f95de`, `0x4f95fb`).
+            if !(-1..=10).contains(&bag) {
+                return Ok(0);
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model.containers.get(&bag).map_or(0, |c| c.num_slots))
         })?,
@@ -860,9 +866,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 bag,
                 "Usage: GetBagName(index)",
             )?);
+            // Nil with no active player (`0x4fa6cf`), `BACKPACK_TOOLTIP` for the backpack
+            // (`0x4fa6f0`), the bag item's name for 1-10, nil for the bank, the keyring and the
+            // rest (`0x4fa712`, `0x4fa717`).
             let name = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.containers.get(&bag).and_then(|c| c.name.clone())
+                match model.containers.get(&bag) {
+                    Some(_) if bag == 0 => {
+                        Some(super::glue_core::global_text(lua, "BACKPACK_TOOLTIP"))
+                    }
+                    Some(c) if (1..=10).contains(&bag) => c.name.clone(),
+                    _ => None,
+                }
             };
             match name {
                 Some(n) => Ok(Value::String(lua.create_string(&n)?)),
@@ -1285,7 +1300,7 @@ mod tests {
             },
         );
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots,
         }
@@ -1376,9 +1391,11 @@ mod tests {
 
         s.set_container(0, Some(backpack()));
         assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
+        s.run("BACKPACK_TOOLTIP = 'Rucksack'").unwrap();
         assert_eq!(
             s.eval::<String>("return GetBagName(0)").unwrap(),
-            "Backpack"
+            "Rucksack",
+            "the backpack is named by its global, not by the snapshot (`0x4fa6f0`)"
         );
         // The five values `ContainerFrame.lua:241` reads, in its order.
         let (icon, count, quality) = s
@@ -1420,6 +1437,45 @@ mod tests {
         assert!(s
             .eval::<bool>("return GetContainerItemInfo(0, 2) == nil")
             .unwrap());
+    }
+
+    /// The keyring, the bank and an out-of-range id answer no slots and no name, however the
+    /// snapshot holds them (`0x4f95fb`, `0x4fa712`); the keyring is sized by `GetKeyRingSize`.
+    #[test]
+    fn keyring_and_bank_answer_no_slots_or_name() {
+        let mut s = UiScript::new().unwrap();
+        let named = |name: Option<&str>, num_slots| ContainerState {
+            name: name.map(Into::into),
+            num_slots,
+            slots: std::collections::HashMap::new(),
+        };
+        s.set_container(-2, Some(named(Some("Keyring"), 8)));
+        s.set_container(-1, Some(named(Some("Bank"), 24)));
+        s.set_container(4, Some(named(Some("Linen Bag"), 6)));
+        s.set_container(11, Some(named(Some("Stray"), 6)));
+        let slots = |bag: i64| {
+            s.eval::<i64>(&format!("return GetContainerNumSlots({bag})"))
+                .unwrap()
+        };
+        assert_eq!(slots(-2), 0, "the keyring is no container to this verb");
+        assert_eq!(slots(-1), 24);
+        assert_eq!(slots(4), 6);
+        assert_eq!(slots(11), 0);
+        for bag in [-2, -1, 11] {
+            assert!(
+                s.eval::<bool>(&format!("return GetBagName({bag}) == nil"))
+                    .unwrap(),
+                "GetBagName({bag})"
+            );
+        }
+        assert_eq!(
+            s.eval::<String>("return GetBagName(4)").unwrap(),
+            "Linen Bag"
+        );
+        assert!(
+            s.eval::<bool>("return GetBagName(0) == nil").unwrap(),
+            "no backpack, no active player"
+        );
     }
 
     /// The fourth value is the template's quality only when the template is cached and its
@@ -1633,7 +1689,7 @@ mod tests {
     /// One backpack slot of `fork`, its item entry 871.
     fn forked_bag(fork: super::UseFork) -> ContainerState {
         ContainerState {
-            name: Some("Backpack".into()),
+            name: None,
             num_slots: 16,
             slots: [(
                 1,
