@@ -20,6 +20,43 @@ pub struct UnitTooltipFacts {
     /// Raw `UNIT_FIELD_HEALTH` (`fields+0x40`), which feign death leaves standing where
     /// [`UnitState::health`] reads 0: the `RESURRECTABLE` gate reads it (`0x52a89f`-`0x52a8a4`).
     pub health: u32,
+    /// The owner line `0x52fd30` writes after the subtitle (`0x52a247`), `None` for a unit with no
+    /// charmer or creator, or whose owner is not in sight (`0x52fd8b`).
+    pub owner: Option<OwnerTitle>,
+}
+
+/// The owner line: the owner's name in one of four `UNITNAME_TITLE_*` templates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnerTitle {
+    pub kind: OwnerTitleKind,
+    /// The owner's `GetUnitName 0x609210` (`0x52fd98`); `None` is its `UNKNOWNOBJECT` miss.
+    pub name: Option<String>,
+}
+
+/// Which template names the owner: the key table `0x854140`, entries 1 to 4.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerTitleKind {
+    /// `UNITNAME_TITLE_PET`: a beast (creature type 1, `0x52fd6b`) with a charmer, or with a
+    /// creator whose spell summons neither a guardian nor an object.
+    Pet,
+    /// `UNITNAME_TITLE_MINION`: any other type in the same case.
+    Minion,
+    /// `UNITNAME_TITLE_GUARDIAN`: a creator's spell whose first effect is 42 (`0x52fe24`).
+    Guardian,
+    /// `UNITNAME_TITLE_CREATION`: one whose first effect summons an object, 50, 74, 87 to 90 or
+    /// 104 to 107 (`0x52fe2e`, the byte table `0x52fe44`).
+    Creation,
+}
+
+impl OwnerTitleKind {
+    fn key(self) -> &'static str {
+        match self {
+            OwnerTitleKind::Pet => "UNITNAME_TITLE_PET",
+            OwnerTitleKind::Minion => "UNITNAME_TITLE_MINION",
+            OwnerTitleKind::Guardian => "UNITNAME_TITLE_GUARDIAN",
+            OwnerTitleKind::Creation => "UNITNAME_TITLE_CREATION",
+        }
+    }
 }
 
 /// The active player as the builder reads it (`[ebp-0x4]`, found at `0x52a281`): none before its
@@ -191,6 +228,16 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     append_line(lua, this, (title, GOLD), None, false)?;
     if let Some(sub) = &u.subtitle {
         append_line(lua, this, (sub.clone(), WHITE), None, false)?;
+    }
+    // The owner line, white (`0x52a24c`-`0x52a266`): the template filled with the owner's name.
+    if let Some(owner) = u.tooltip.owner.as_ref().filter(|_| u.has_object) {
+        let name = match &owner.name {
+            Some(n) => n.clone(),
+            None => unknownobject(lua)?.to_str()?.to_string(),
+        };
+        if let Some(template) = crate::strings::global(lua, owner.kind.key()) {
+            append_line(lua, this, (fill(&template, &[Arg::S(&name)]), WHITE), None, false)?;
+        }
     }
     if let Some(level) = level_line(lua, &u, player_level, viewer.as_ref()) {
         append_line(lua, this, (level, WHITE), None, false)?;

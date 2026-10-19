@@ -86,7 +86,16 @@ pub(crate) fn feed_pet_unit(
                 spells.as_deref(),
                 creature_types.as_deref(),
             );
-            snapshot(store, pet_guid, name, 0, Default::default(), types)
+            let mut s = snapshot(store, pet_guid, name, 0, Default::default(), types);
+            let object = |g: u64| pet.store(g);
+            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+                names: &names,
+                catalog: spells.as_deref().map(|s| &s.catalog),
+                object: &object,
+            };
+            s.tooltip =
+                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
+            s
         });
 
     let dirty = match (&fresh, &memory.pushed) {

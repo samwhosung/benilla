@@ -175,6 +175,13 @@ fn drive_mouseover_tooltip(
             relations.factions(),
             self_store,
         );
+        let object = |g: u64| stores.get(tables.entity(g)?).ok();
+        let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+            names: &names,
+            catalog: tables.catalog(),
+            object: &object,
+        };
+        s.tooltip = crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
         Some((guid, s))
     });
     // The hovered GameObject, when nothing else was picked or it is nearer. Not gated on

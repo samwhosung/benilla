@@ -231,7 +231,10 @@ fn a_dead_player_the_player_may_assist_reads_resurrectable() {
 
     // Feigning: `UnitHealth` reads 0, the field does not.
     let feigning = UnitState {
-        tooltip: UnitTooltipFacts { health: 1200 },
+        tooltip: UnitTooltipFacts {
+            health: 1200,
+            ..Default::default()
+        },
         ..dead.clone()
     };
     s.set_unit("target", Some(feigning));
@@ -290,5 +293,45 @@ fn a_drunk_player_sees_a_lower_level_on_a_unit_it_can_attack() {
     s.set_unit("target", Some(UnitState { level: 30, ..creature() }));
     assert_eq!(lines(&s)[0], "[LEVEL 30]");
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 30);
+    assert!(s.take_errors().is_empty());
+}
+
+/// The owner line follows the subtitle, white (`0x52a24c`-`0x52a266`): the owner's name in the
+/// template its kind keys (`0x854140`), `UNKNOWNOBJECT` for an owner whose name is not known.
+#[test]
+fn the_owner_line_names_the_owner_in_its_kinds_template() {
+    let mut s = viewer_script(30, 0, Relations::default());
+    s.run(
+        r#"
+        UNITNAME_TITLE_PET = "[PET %s]"; UNITNAME_TITLE_MINION = "[MINION %s]"
+        UNITNAME_TITLE_GUARDIAN = "[GUARDIAN %s]"; UNITNAME_TITLE_CREATION = "[CREATION %s]"
+        UNKNOWNOBJECT = "[UNKNOWN]"
+    "#,
+    )
+    .unwrap();
+    for (kind, name, line) in [
+        (OwnerTitleKind::Pet, Some("Pfedh"), "[PET Pfedh]"),
+        (OwnerTitleKind::Minion, Some("Pfedh"), "[MINION Pfedh]"),
+        (OwnerTitleKind::Guardian, Some("Pfedh"), "[GUARDIAN Pfedh]"),
+        (OwnerTitleKind::Creation, None, "[CREATION [UNKNOWN]]"),
+    ] {
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                subtitle: Some("Sub".into()),
+                tooltip: UnitTooltipFacts {
+                    owner: Some(OwnerTitle {
+                        kind,
+                        name: name.map(str::to_string),
+                    }),
+                    ..Default::default()
+                },
+                ..creature()
+            }),
+        );
+        assert_eq!(lines(&s)[..3], ["Sub", line, "[LEVEL 20]"], "{kind:?}");
+        let (r, g, b): (f32, f32, f32) = s.eval("return STTextLeft3:GetTextColor()").unwrap();
+        assert!(r > 0.99 && g > 0.99 && b > 0.99, "white: {r} {g} {b}");
+    }
     assert!(s.take_errors().is_empty());
 }

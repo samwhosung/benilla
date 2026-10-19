@@ -55,6 +55,8 @@ pub(super) struct Lookup<'a, 'w, 's, 'q> {
     names: &'a NameCache,
     commands: &'a NetCommands,
     types: CreatureTypeSources<'a>,
+    /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
+    catalog: Option<&'a benilla_formats::SpellCatalog>,
 }
 
 impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
@@ -63,6 +65,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
         stores: &'a Query<'w, 's, &'q ObjectStore>,
         names: &'a Names,
         types: CreatureTypeSources<'a>,
+        catalog: Option<&'a benilla_formats::SpellCatalog>,
     ) -> Self {
         Self {
             index,
@@ -70,6 +73,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
             names: &names.cache,
             commands: &names.commands,
             types,
+            catalog,
         }
     }
 
@@ -139,7 +143,17 @@ pub(super) fn member_pet(
                 .names
                 .resolve_unit(guid, Some(store), Ask::New(look.commands))
                 .map(str::to_string);
-            crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types)
+            let mut s =
+                crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types);
+            let object = |g: u64| look.store(g);
+            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+                names: look.names,
+                catalog: look.catalog,
+                object: &object,
+            };
+            s.tooltip =
+                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
+            s
         }
         None => record_state(
             group,
