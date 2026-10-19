@@ -23,10 +23,13 @@ use benilla_world::interact::WorldClick;
 
 use super::TargetingWants;
 
-/// The terrain leg (`0x492580`): bind the press's ground point and send, with no range check and
-/// no error path, then arm the pending cast and GCD and end the mode. No ground hit (sky) commits
-/// nothing and keeps the mode. [`crate::target::click::select_on_click`] holds off while targeting,
-/// so the click neither selects nor deselects.
+/// The terrain leg (`0x492c90` → `0x492580`), a left click the press found no object under: bind
+/// the press's ground point and send, with no range check and no error path, then arm the pending
+/// cast and GCD and end the mode. A word without a location bit binds nothing and the mode stays,
+/// but `BindLocation 0x6e60f0` still signals (`0x6e615d`, ahead of its bound test). No ground hit
+/// (sky) is the nothing leg (`0x492d30`), which never calls it.
+/// [`crate::target::click::select_on_click`] holds off while targeting, so the click neither
+/// selects nor deselects.
 ///
 /// Runs after `select_on_click`, which reads the mode this clears.
 pub(crate) fn commit_ground_cast_on_click(
@@ -44,18 +47,30 @@ pub(crate) fn commit_ground_cast_on_click(
     if clicks.read().last().is_none() {
         return;
     }
-    // `TargetingWantsLocation 0x6e6320`: a word without it binds nothing and the mode stays.
-    let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Location) else {
-        return;
-    };
     let Some(point) = occlusion.point else {
         // Sky: the nothing leg, no commit, the mode stays.
         return;
     };
+    // An object the press picked takes the object leg instead (`0x481fb8`,
+    // [`commit_object_cast_on_click`]); the word's pick flags decide what it can pick.
+    let hovered = &press.hovered;
+    if hovered.target.is_some()
+        || hovered.corpse.is_some()
+        || hovered.refused
+        || (ladder.ground.wants(TargetingWants::GameObject)
+            && go_is_nearest(hovered, &press.object))
+    {
+        return;
+    }
     let at = bevy_to_wow(point);
-    // `BindLocation 0x6e60f0`: SOURCE (`0x20`) first, then DEST (`0x40`). `None` cannot happen
-    // behind `pending_for(Location)`; the `let else` fails closed.
-    let Some(bound) = ladder.ground.location_bind(at) else {
+    // `BindLocation 0x6e60f0`: SOURCE (`0x20`) first, then DEST (`0x40`), from a word in
+    // `TargetingWantsLocation 0x6e6320`.
+    let (Some((spell_id, commit)), Some(bound)) = (
+        ladder.ground.pending_for(TargetingWants::Location),
+        ladder.ground.location_bind(at),
+    ) else {
+        debug!("ui_action: a terrain click binds nothing the word wants — the cursor stays");
+        ladder.reports.changed();
         return;
     };
     debug!(
@@ -255,6 +270,59 @@ mod tests {
             rx.try_recv(),
             Ok(ClientCommand::CastSpellAtSource { .. })
         ));
+    }
+
+    /// `0x492580` calls `BindLocation 0x6e60f0` on every terrain click while a word stands, and
+    /// it signals (`0x6e615d`) whether or not the click binds: a unit word's terrain click sends
+    /// nothing and keeps the cursor, with one pair; a sky click (the nothing leg) and a click on
+    /// a unit the press picked (the object leg) never reach it.
+    #[test]
+    fn a_terrain_click_that_binds_nothing_still_signals_once() {
+        const HEAL: u32 = 2050;
+        let commit = crate::spell::cast_send::CastCommit::Spell;
+        let changes = |world: &mut World| {
+            let reports =
+                std::mem::take(&mut world.resource_mut::<crate::ui_cast::CastReports>().0);
+            reports
+                .iter()
+                .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))
+                .count()
+        };
+        for (label, point, unit, pairs) in [
+            ("terrain", Some(Vec3::new(1.0, 2.0, 3.0)), false, 1),
+            ("sky", None, false, 0),
+            ("a unit", Some(Vec3::new(1.0, 2.0, 3.0)), true, 0),
+        ] {
+            let (mut world, rx, _) = fixture();
+            let id = world.register_system(commit_ground_cast_on_click);
+            world
+                .resource_mut::<super::super::SpellTargeting>()
+                .enter(HEAL, commit, 0x0002);
+            let mut press = world.resource_mut::<crate::target::PressPick>();
+            press.occlusion = crate::target::PickOcclusion {
+                distance: 5.0,
+                point,
+                ray: None,
+            };
+            if unit {
+                press.hovered = Hovered {
+                    target: Some(Entity::from_raw_u32(2).unwrap()),
+                    guid: Some(0xF130_0000_0000_0001),
+                    distance: 5.0,
+                    ..Hovered::default()
+                };
+            }
+            world
+                .resource_mut::<Messages<WorldClick>>()
+                .write(WorldClick);
+            world.run_system(id).expect("the ground commit runs");
+            assert_eq!(changes(&mut world), pairs, "{label}");
+            assert!(rx.try_recv().is_err(), "{label}: nothing sent");
+            assert!(
+                world.resource::<super::super::SpellTargeting>().active(),
+                "{label}: the cursor stays"
+            );
+        }
     }
 
     /// A lock word, a chest under the cursor, one click: the cast at the chest, the mode ended.
