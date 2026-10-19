@@ -1,6 +1,7 @@
-# The gates of scripts/gates.sh that need neither a WoW install nor a display, on Linux, for a pull
-# request from a fork: a red one is seen before anyone builds it. The data-gated tests, the engine
-# boot checks and a live run happen on the maintainer's machine before it lands.
+# The gates of scripts/gates.sh that need neither a WoW install nor a display, on Linux, and the
+# workspace tests on Windows, for a pull request from a fork or a dispatch: a red one is seen
+# before anyone builds it. The data-gated tests, the engine boot checks and a live run happen on
+# the maintainer's machine before it lands.
 name: CI
 
 on:
@@ -62,3 +63,24 @@ jobs:
         run: cargo clippy -p benilla -p benilla-app --no-default-features -- -D warnings
       - name: player-tests
         run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
+
+  windows:
+    # The workspace tests on a Windows checkout, which no macOS or Linux gate runs: path separators,
+    # line endings and platform seams fail here first.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      WOW_DATA: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: test
+        run: cargo test --workspace
