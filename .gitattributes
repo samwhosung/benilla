@@ -1,7 +1,9 @@
+# Every text file checks out with LF on every platform: tests and `include_str!` read sources,
+# shaders, Lua and XML and match them on "\n", so a Windows checkout must read the same bytes.
+* text=auto eol=lf
+
 # Vendored benilla-re tables are compared and read byte for byte; no line-ending conversion.
 reference/*.tsv -text
 
-# Rust sources check out with LF on every platform: tests read their own and other sources and
-# split them on "\n". The vendored kira tree is CRLF in the index and stays byte for byte.
-*.rs text eol=lf
+# The vendored kira tree is CRLF in the index and stays byte for byte.
 third_party/kira/** -text
