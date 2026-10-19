@@ -458,7 +458,6 @@ fn drain_trade_skill(
     mut cast_events: MessageReader<CastEvent>,
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
-    mut seen_aborts: Local<u32>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -469,14 +468,6 @@ fn drain_trade_skill(
     for (spell_id, count) in script.take_trade_skill_dos() {
         debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
         ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-    }
-
-    // A cancelled targeting cursor is the cast abort with its disarm flag (`StopTargeting
-    // 0x6e4900`, `TryCast`'s supersede `0x6e4d71`, both `0x6e4940(cl=1)` → `0x4fd790`).
-    let aborts = ladder.ground.aborts();
-    if *seen_aborts != aborts {
-        *seen_aborts = aborts;
-        script.trade_skill_disarm();
     }
 
     let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
@@ -1003,41 +994,40 @@ mod tests {
     }
 
     /// A cancelled targeting cursor is the cast abort with its disarm flag (`0x6e4900`,
-    /// `0x6e4940(cl=1)` → `0x4fd790`): the armed batch disarms, with its signal.
+    /// `0x6e4940(cl=1)` → `0x4fd790`): the armed batch disarms, with its signal, when the cancel's
+    /// reports are signalled. Nothing up, nothing cancels (`0x6e4907`).
     #[test]
     fn a_cancelled_cursor_disarms_the_batch() {
+        use bevy::ecs::system::RunSystemOnce;
         let (mut app, _rx) = headless_tailor();
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run("DoTradeSkill(2, 3)")
             .unwrap();
         drain(&mut app);
-        assert_eq!(
+        let repeat = |app: &App| {
             app.world()
                 .non_send_resource::<UiScript>()
-                .trade_skill_repeat(),
-            (2963, 3)
-        );
-        {
-            let mut ground = app
+                .trade_skill_repeat()
+        };
+        assert_eq!(repeat(&app), (2963, 3));
+        let stop = |app: &mut App| {
+            let up = app
                 .world_mut()
-                .resource_mut::<crate::spell::targeting::SpellTargeting>();
-            ground.cancel();
-            assert_eq!(
-                ground.aborts(),
-                0,
-                "nothing up, nothing aborts (`0x6e4907`)"
-            );
-            ground.enter(133, crate::spell::CastCommit::Spell, 0x2);
-            ground.cancel();
-        }
-        drain(&mut app);
-        assert_eq!(
-            app.world()
-                .non_send_resource::<UiScript>()
-                .trade_skill_repeat(),
-            (0, 3)
-        );
+                .run_system_once(|mut ladder: CastLadder| ladder.stop_targeting())
+                .unwrap();
+            app.world_mut()
+                .run_system_once(crate::ui_cast::feed_cast_reports)
+                .unwrap();
+            up
+        };
+        assert!(!stop(&mut app), "nothing up");
+        assert_eq!(repeat(&app), (2963, 3), "nothing cancels (`0x6e4907`)");
+        app.world_mut()
+            .resource_mut::<crate::spell::targeting::SpellTargeting>()
+            .enter(133, crate::spell::CastCommit::Spell, 0x2);
+        assert!(stop(&mut app));
+        assert_eq!(repeat(&app), (0, 3));
     }
 
     /// The world-enter inits (`0x4fc750`, `0x4f5ee0`) on a worldport's cascade, whose VM

@@ -1,8 +1,8 @@
 //! The action bar's identity feed: each of the 120 slots' icon and count, pushed to the VM with
 //! `ACTIONBAR_SLOT_CHANGED` per changed slot; between resolves an item slot's count moves by the
 //! item watchers' recount ([`super::recount`]). [`feed_actions`] also drains the UI error queues
-//! and feeds the stance page (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc`
-//! BonusActionBar column, `0x4e4fc0`).
+//! (a refused cast's line rides the cast's reports, [`crate::ui_cast`]) and feeds the stance page
+//! (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc` BonusActionBar column, `0x4e4fc0`).
 
 use crate::query_cache::Ask;
 use crate::ui_items::action_count;
@@ -17,11 +17,11 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 
-use super::errors::{first_missing_totem, first_short_reagent, mount_result_key};
+use super::errors::mount_result_key;
 use super::weapon_icon::{auto_attack_icon, substitutes_weapon_icon};
 use super::{
-    cast_fail, show_messages, ui_error_text, CastErrors, MessageSink, MountErrors, PetTameFailures,
-    PlayerActions, Shown, Spells, UiError, UiErrorKeys, UiErrorTexts,
+    show_messages, ui_error_text, MessageSink, MountErrors, PetTameFailures, PlayerActions, Shown,
+    Spells, UiError, UiErrorKeys, UiErrorTexts,
 };
 
 /// An item action's icon when its template has not answered or its display id has no
@@ -43,34 +43,9 @@ pub(super) struct FeedMemory {
     macro_generation: u64,
 }
 
-/// The DBC name tables the cast-fail argument arms read, as one parameter to stay within Bevy's
-/// parameter limit; each is absent without game data. The shapeshift forms ride [`Spells`].
-#[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct FailNameTables<'w> {
-    /// `SpellFocusObject.dbc`, for `0x5e`.
-    focus: Option<Res<'w, crate::ui_tradeskill::SpellFocus>>,
-    /// `AreaTable.dbc`, for `0x5d`.
-    areas: Option<Res<'w, crate::area::AreaTableRes>>,
-    /// `SpellMechanic.dbc`, for `0x8d`.
-    mechanics: Option<Res<'w, super::SpellMechanics>>,
-}
-
-impl FailNameTables<'_> {
-    fn args<'a>(&'a self, spells: Option<&'a Spells>) -> cast_fail::FailArgs<'a> {
-        cast_fail::FailArgs {
-            arg: None,
-            focus: self.focus.as_deref().map(|f| &f.catalog),
-            areas: self.areas.as_deref().map(|a| &a.0),
-            mechanics: self.mechanics.as_deref().map(|m| &m.catalog),
-            forms: spells.map(|s| &s.forms),
-        }
-    }
-}
-
 pub(super) fn feed_actions(
     script: Option<NonSendMut<UiScript>>,
     mut actions: ResMut<PlayerActions>,
-    mut cast_errors: ResMut<CastErrors>,
     mut mount_errors: ResMut<MountErrors>,
     mut pet_tame_failures: ResMut<PetTameFailures>,
     // The by-key and resolved-text queues and the cover that holds the latter, as one parameter,
@@ -85,8 +60,6 @@ pub(super) fn feed_actions(
     objects: crate::net::Objects,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
-    name_tables: FailNameTables,
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
     mut sink: MessageSink,
@@ -96,188 +69,6 @@ pub(super) fn feed_actions(
     };
     let (mut ui_error_keys, mut ui_error_texts, cover) = ui_errors;
     let memory = memory.get(&script);
-
-    // Cast failures become error lines through [`cast_fail`], all resolved before any event
-    // fires. The drain owns the arms that need our bags or the item cache: `0x78` and `0x5c`
-    // (`0x6e1e7f`) name the failing slot's item, found as the pre-send check finds it. On a cache
-    // miss the entry stays queued, as the reference's callback `0x6e29b0` redisplays on the answer.
-    let self_store = self_q.iter().next();
-    let mut await_template: Vec<crate::ui_action::CastFail> = Vec::new();
-    // The same failures for the combat log: `0x6e1a00` calls both `DisplayError` and the log
-    // formatter `0x62c360`.
-    let mut fail_lines: Vec<crate::ui_chat::combat::PendingCombat> = Vec::new();
-    let fail_args = name_tables.args(spells.as_deref());
-    // Each first pass through the failure handler `0x6e1a00`, a local refusal or the server's,
-    // disarms the tradeskill repeat when it names the armed spell (`0x6e1a3c`-`0x6e1a55`).
-    let refused: Vec<u32> = cast_errors
-        .0
-        .iter()
-        .filter(|f| f.caster == crate::ui_action::Caster::Player && !f.redisplay)
-        .map(|f| f.spell_id)
-        .collect();
-    for spell_id in refused {
-        script.trade_skill_cast_failed(spell_id);
-    }
-    let texts: Vec<(cast_fail::CastFailLine, benilla_ui::script::InputEvents)> = cast_errors
-        .0
-        .drain(..)
-        .filter_map(|fail| {
-            let crate::ui_action::CastFail {
-                spell_id,
-                reason,
-                caster,
-                ..
-            } = fail;
-            let pet = caster == crate::ui_action::Caster::Pet;
-            let d = spells.as_ref().and_then(|s| s.catalog.get(spell_id));
-            let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-            // The displayed line first and the log line from it, the reference's order.
-            let line = (|| -> Option<cast_fail::CastFailLine> {
-                // `0x19`-`0x1b` (`0x6e1db7`, through `0x6e2380`): the singular subclass name,
-                // "Must have a Wand equipped"; a multi-bit mask names its `ItemSubClassMask.dbc`
-                // group, else the first subclass, where the tooltip (`0x52eea7`) uses the plural
-                // and joins. The pet's table fills it too (`0x6e904d`).
-                if let (0x19..=0x1b, Some(d), Some(subs)) = (reason, d, sub_classes.as_deref()) {
-                    if let Some(name) = (d.equipped_item_class >= 0)
-                        .then(|| {
-                            subs.0.requirement_display_name(
-                                d.equipped_item_class as u32,
-                                d.equipped_item_subclass_mask,
-                            )
-                        })
-                        .flatten()
-                    {
-                        let key = cast_fail::CAST_FAIL_KEYS[reason as usize];
-                        return get(key)
-                            .filter(|s| !s.is_empty())
-                            .map(|t| cast_fail::CastFailLine::passthrough(t.replace("%s", &name)));
-                    }
-                }
-                // `0x31` (`0x6e1e54`): the same helper for class 6 (Projectile), mask `1 << arg`,
-                // the shift masked to five bits as x86 `shl` masks it (`0x6e1e5c`). The player's
-                // arm only: the pet's table (`0x6e93d0`) has no `0x31` entry. vmangos never sends
-                // the word (`Spell.cpp:4419-4443`), so against it this declines to the stem.
-                if let (false, 0x31, Some(arg), Some(subs)) =
-                    (pet, reason, fail.arg, sub_classes.as_deref())
-                {
-                    const ITEM_CLASS_PROJECTILE: u32 = 6;
-                    if let Some(name) = subs
-                        .0
-                        .requirement_display_name(ITEM_CLASS_PROJECTILE, 1u32 << (arg & 31))
-                    {
-                        let key = cast_fail::CAST_FAIL_KEYS[reason as usize];
-                        return get(key)
-                            .filter(|s| !s.is_empty())
-                            .map(|t| cast_fail::CastFailLine::passthrough(t.replace("%s", &name)));
-                    }
-                }
-                // `0x78` and `0x5c`, the player's arms only: the pet's table sends both to its
-                // generic arm.
-                if !pet && (reason == 0x78 || reason == 0x5c) {
-                    let d = d?;
-                    let failing = if reason == 0x78 {
-                        self_store
-                            .and_then(|s| first_missing_totem(d, s, &objects))
-                            // No self store yet: name the first tool.
-                            .or_else(|| d.totems.iter().copied().find(|&t| t != 0))
-                    } else {
-                        self_store
-                            .and_then(|s| first_short_reagent(d, s, &objects))
-                            .or_else(|| d.reagents.iter().map(|&(id, _)| id).find(|&id| id != 0))
-                    }?;
-                    // The failure handler's lookup with the callback `0x6e29b0` (`0x6e1ea4`) on a
-                    // first pass; its redisplay only reads.
-                    let ask = if fail.redisplay {
-                        Ask::Read
-                    } else {
-                        Ask::Event(&commands)
-                    };
-                    let cached = items.template(failing, 0, ask).map(|i| i.name.clone());
-                    let name = match cached {
-                        Some(name) => name,
-                        // Answered unknown: the reference's callback literal (`0x838044`).
-                        None if items.template_answered_unknown(failing) => "UNKNOWN".to_string(),
-                        None => {
-                            // Pending: requeued as a redisplay, which is not logged.
-                            await_template.push(fail.requeued());
-                            return None;
-                        }
-                    };
-                    let key = if reason == 0x78 {
-                        "SPELL_FAILED_TOTEMS"
-                    } else {
-                        "SPELL_FAILED_REAGENTS"
-                    };
-                    return get(key)
-                        .filter(|s| !s.is_empty())
-                        .map(|t| cast_fail::CastFailLine::passthrough(t.replace("%s", &name)));
-                }
-                cast_fail::cast_fail_text(
-                    caster,
-                    reason,
-                    d,
-                    cast_fail::FailArgs {
-                        arg: fail.arg,
-                        ..fail_args
-                    },
-                    &get,
-                )
-            })();
-            // The reason, its wire word and both resolved buffers, so a declined arm is readable
-            // from a probe run.
-            debug!(
-                "ui_action: cast fail — {caster:?} spell {spell_id} reason {reason:#04x} \
-                 arg {:?} → {:?}",
-                fail.arg, line
-            );
-            // The combat-log line, after the display as in the reference (`DisplayError` at
-            // `0x6e21dd`, the log formatter `0x62c360` at `0x6e21fc`), from the argText buffer
-            // ([`CastFailLine::logged`]). Nothing is logged for a line that shows nothing, for a
-            // redisplay (`0x6e29b0` skips the log) or for the pet (`0x6e8eb0` never calls
-            // `0x62c360`). `SMSG_CAST_RESULT` goes to the caster alone, so the `OTHER` keys stay
-            // unused.
-            if let (Some(shown), Some(display), false, false) =
-                (line.as_ref(), d, pet, fail.redisplay)
-            {
-                // `0x62aff0`: `Attributes` bit 4 marks an ability, which "performs", not "casts".
-                const ATTR_IS_ABILITY: u32 = 0x10;
-                let family = if display.attributes & ATTR_IS_ABILITY != 0 {
-                    crate::ui_chat::combat::SPELLFAILPERFORM
-                } else {
-                    crate::ui_chat::combat::SPELLFAILCAST
-                };
-                if !display.name.is_empty() {
-                    fail_lines.push(crate::ui_chat::combat::PendingCombat {
-                        kind: crate::ui_chat::ChatEventKind::SpellFailedLocalPlayer,
-                        family,
-                        variant: crate::ui_chat::combat::Variant::SelfOther,
-                        subject: 0,
-                        object: 0,
-                        fills: crate::ui_chat::combat::Fills {
-                            spell: display.name.clone(),
-                            named: shown.logged().to_string(),
-                            ..Default::default()
-                        },
-                        named: crate::ui_chat::combat::Named::Ready,
-                        tries: 0,
-                    });
-                }
-            }
-            line.map(|l| (l, fail.input))
-        })
-        .collect();
-    cast_errors.0.extend(await_template);
-    for line in fail_lines {
-        sink.chat.push_combat(line);
-    }
-    show_messages(
-        &mut script,
-        &mut sink,
-        "ui_action",
-        texts
-            .into_iter()
-            .map(|(l, input)| Shown::keyed(l.key, l.text).under(input)),
-    );
 
     // (Dis)mount refusals by key ([`mount_result_key`]); none of these strings takes arguments.
     let mount_texts: Vec<(&'static str, String)> = mount_errors
@@ -316,7 +107,7 @@ pub(super) fn feed_actions(
         .drain(..)
         .filter_map(|e| {
             ui_error_text(&e, &|key| script.lua().globals().get::<String>(key).ok())
-                .map(|t| Shown::keyed(e.key, t).under(e.input))
+                .map(|t| Shown::keyed(e.key, t))
         })
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", key_lines);

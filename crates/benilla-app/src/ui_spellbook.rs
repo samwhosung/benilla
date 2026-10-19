@@ -465,7 +465,7 @@ pub(crate) fn cast_spell(cast: &mut crate::spell::ScriptCast, spell_id: u32, on_
     // nothing. Any other spell's cursor is aborted by the cast itself (`TryCast`, `0x6e4d62`).
     if ladder.ground.spell() == Some(spell_id) {
         debug!("ui_spellbook: cast {spell_id} re-pressed — targeting toggles off");
-        ladder.ground.cancel();
+        ladder.stop_targeting();
         return;
     }
     if let Some((sp, store, d)) = catalog_row {

@@ -1,5 +1,6 @@
 //! The UI error line's queues and resolvers, which `super::feed_actions` drains into
-//! [`show_messages`]; cast failures resolve in [`super::cast_fail`].
+//! [`show_messages`]; cast failures ride the cast's reports ([`crate::ui_cast::CastReports`]) and
+//! resolve in [`super::cast_fail`] and [`super::cast_lines`].
 
 use benilla_ui::messages::MessageRecord;
 use benilla_ui::script::{InputEvents, ScriptValue, UiScript};
@@ -10,13 +11,10 @@ use crate::sound::MessageSounds;
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
 use crate::ui_items::{count_of, InventoryScope};
 
-/// Cast failures for the UI error line; the spell id lets the display key on the spell's record.
-#[derive(Resource, Default)]
-pub(crate) struct CastErrors(pub Vec<CastFail>);
-
-/// One queued cast failure. `arg` fills the message's `%s` (the arm table `0x6e1d8e`); the
-/// reference raises its local refusals with none, except the crowd-control `0x8d` (`0x6094f0`),
-/// which names the blocking aura's `SpellMechanic.dbc` id.
+/// One cast failure, as `ReportCastFailure 0x6e1a00` gets it. `arg` fills the message's `%s` (the
+/// arm table `0x6e1d8e`); the reference raises its local refusals with none, except the missing
+/// totem or reagent (`0x6e4000`), which names the item's entry, and the crowd-control `0x8d`
+/// (`0x6094f0`), which names the blocking aura's `SpellMechanic.dbc` id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CastFail {
     pub spell_id: u32,
@@ -29,10 +27,6 @@ pub(crate) struct CastFail {
     /// cache callback `0x6e29b0`, calls `DisplayError` directly and never `0x62c360`, so a
     /// redisplay is not logged.
     pub redisplay: bool,
-    /// The input events the press ran under, when a script call's application raised this
-    /// refusal ([`crate::script_calls`]): the reference signals `UI_ERROR_MESSAGE` inside the
-    /// press, so a handler of it runs inside them. The server's failures carry none.
-    pub input: InputEvents,
 }
 
 /// Who failed to cast, which picks the reference's handler: `SMSG_CAST_RESULT` lands in
@@ -57,7 +51,32 @@ impl CastFail {
             arg: None,
             caster: Caster::Player,
             redisplay: false,
-            input: InputEvents::NONE,
+        }
+    }
+
+    /// A client-local refusal with its first argument word: the failing totem or reagent entry
+    /// (`0x6e4000` → `0x6e1a00(id, reason, entry, −1, 0)`), the crowd-control `0x8d`'s mechanic.
+    pub(crate) const fn local_arg(spell_id: u32, reason: u8, arg: u32) -> Self {
+        Self {
+            arg: Some(arg),
+            ..Self::local(spell_id, reason)
+        }
+    }
+
+    /// The server's `SMSG_CAST_RESULT` refusal, with the argument word its reason carries.
+    pub(crate) const fn server(spell_id: u32, reason: u8, arg: Option<u32>) -> Self {
+        Self {
+            arg,
+            ..Self::local(spell_id, reason)
+        }
+    }
+
+    /// The pet's `SMSG_PET_CAST_FAILED` refusal, which carries no argument word
+    /// (vmangos `Packets/Pet.cpp:127-132`).
+    pub(crate) const fn pet(spell_id: u32, reason: u8) -> Self {
+        Self {
+            caster: Caster::Pet,
+            ..Self::local(spell_id, reason)
         }
     }
 
@@ -67,38 +86,6 @@ impl CastFail {
             redisplay: true,
             ..self
         }
-    }
-}
-
-impl CastErrors {
-    /// Queue a [`CastFail::local`] refusal.
-    pub(crate) fn push_local(&mut self, spell_id: u32, reason: u8) {
-        self.0.push(CastFail::local(spell_id, reason));
-    }
-
-    /// Queue a client-local refusal with an argument word, the crowd-control `0x8d`.
-    pub(crate) fn push_local_arg(&mut self, spell_id: u32, reason: u8, arg: u32) {
-        self.0.push(CastFail {
-            spell_id,
-            reason,
-            arg: Some(arg),
-            caster: Caster::Player,
-            redisplay: false,
-            input: InputEvents::default(),
-        });
-    }
-
-    /// Queue the pet's `SMSG_PET_CAST_FAILED` refusal, which carries no argument word
-    /// (vmangos `Packets/Pet.cpp:127-132`).
-    pub(crate) fn push_pet(&mut self, spell_id: u32, reason: u8) {
-        self.0.push(CastFail {
-            spell_id,
-            reason,
-            arg: None,
-            caster: Caster::Pet,
-            redisplay: false,
-            input: InputEvents::default(),
-        });
     }
 }
 
@@ -133,8 +120,6 @@ pub(crate) enum FillArg {
 pub(crate) struct UiError {
     pub key: &'static str,
     pub args: Vec<FillArg>,
-    /// The input events the press ran under ([`CastFail::input`]).
-    pub input: InputEvents,
 }
 
 impl UiError {
@@ -158,11 +143,7 @@ impl UiError {
 
     /// A mixed list, for a template whose specifiers are not all `%s`.
     pub(crate) fn args(key: &'static str, args: Vec<FillArg>) -> Self {
-        Self {
-            key,
-            args,
-            input: InputEvents::default(),
-        }
+        Self { key, args }
     }
 
     /// The first string argument.
@@ -231,7 +212,8 @@ pub(crate) struct Shown {
     record: Option<&'static MessageRecord>,
     kind: MsgKind,
     text: String,
-    /// The input events the message's event is signalled under ([`CastFail::input`]).
+    /// The input events the message's event is signalled under: those of the verb that queued an
+    /// engine-side refusal ([`UiScript::take_ui_errors_with_input`]).
     input: InputEvents,
 }
 
@@ -269,8 +251,8 @@ impl Shown {
         }
     }
 
-    /// The same line, its event signalled under `input`: the reference signals it inside the press
-    /// that failed, and the app a frame later, with the press's events raised again.
+    /// The same line, its event signalled under `input`: the reference signals it inside the verb
+    /// that failed, and the app a frame later, with the verb's events raised again.
     pub(crate) fn under(self, input: InputEvents) -> Self {
         Self { input, ..self }
     }
@@ -306,13 +288,25 @@ pub(crate) fn show_messages(
     who: &str,
     lines: impl IntoIterator<Item = Shown>,
 ) {
-    for Shown {
-        record,
-        kind,
-        text,
-        input,
-    } in lines
-    {
+    for shown in lines {
+        let input = shown.input;
+        if let Some((event, args)) = shown.sink(sink, who) {
+            script.with_input_events(input, |script| script.fire_event(event, args));
+        }
+    }
+}
+
+impl Shown {
+    /// The line's world half, its sound and a chat surface's line, done now; what is left is the
+    /// VM's event, `UI_INFO_MESSAGE` or `UI_ERROR_MESSAGE` with the text.
+    pub(crate) fn sink(
+        self,
+        sink: &mut MessageSink,
+        who: &str,
+    ) -> Option<(&'static str, Vec<ScriptValue>)> {
+        let Shown {
+            record, kind, text, ..
+        } = self;
         debug!("{who}: message ({kind:?}) {text:?}");
         // The reference sounds a message beside its text, so the sound shares the display's guards.
         if let Some(record) = record {
@@ -322,13 +316,10 @@ pub(crate) fn show_messages(
             MsgKind::Chat => {
                 sink.chat
                     .push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                None
             }
-            MsgKind::Info => script.with_input_events(input, |script| {
-                script.fire_event("UI_INFO_MESSAGE", vec![ScriptValue::Str(text)]);
-            }),
-            MsgKind::Error => script.with_input_events(input, |script| {
-                script.fire_event("UI_ERROR_MESSAGE", vec![ScriptValue::Str(text)]);
-            }),
+            MsgKind::Info => Some(("UI_INFO_MESSAGE", vec![ScriptValue::Str(text)])),
+            MsgKind::Error => Some(("UI_ERROR_MESSAGE", vec![ScriptValue::Str(text)])),
         }
     }
 }
@@ -401,31 +392,25 @@ pub(crate) fn attack_actor_blocked(
 }
 
 /// The reference's pre-send check `0x6e4000`, run on every cast path before any packet: the first
-/// missing totem (a presence test), then the first short reagent (a count), refuses locally as
-/// `0x78` or `0x5c` and returns `true`. It is the only source of "Requires Mining Pick": vmangos
-/// answers a pickless cast with `ITEM_GONE` (`Spell.cpp:7301`). A missing self store skips the
-/// check, as the reference's active-player gate does.
+/// missing totem (a presence test), then the first short reagent (a count), is the refusal `0x78`
+/// or `0x5c` with that item's entry as its word (`0x6e1a00(id, reason, entry, −1, 0)`). It is the
+/// only source of "Requires Mining Pick": vmangos answers a pickless cast with `ITEM_GONE`
+/// (`Spell.cpp:7301`). A missing self store skips the check, as the reference's active-player gate
+/// does.
 pub(crate) fn reagent_totem_refusal(
     spell_id: u32,
     def: Option<&benilla_formats::SpellDisplay>,
     self_store: Option<&ObjectStore>,
     objects: &crate::net::Objects,
-    errors: &mut CastErrors,
-) -> bool {
-    let (Some(d), Some(store)) = (def, self_store) else {
-        return false;
-    };
+) -> Option<CastFail> {
+    let (d, store) = def.zip(self_store)?;
     // Totems before reagents, the reference's order.
-    let reason = if first_missing_totem(d, store, objects).is_some() {
-        0x78
-    } else if first_short_reagent(d, store, objects).is_some() {
-        0x5c
-    } else {
-        return false;
+    let (reason, entry) = match first_missing_totem(d, store, objects) {
+        Some(totem) => (0x78, totem),
+        None => (0x5c, first_short_reagent(d, store, objects)?),
     };
     debug!("cast {spell_id} refused locally — missing totem/reagent ({reason:#04x})");
-    errors.push_local(spell_id, reason);
-    true
+    Some(CastFail::local_arg(spell_id, reason, entry))
 }
 
 /// The first totem item absent from our bags: `0x6e4000`'s failing slot.
@@ -819,71 +804,46 @@ mod totem_reagent_tests {
         }
     }
 
-    /// Against empty bags: a totem spell refuses `0x78`, a reagent spell `0x5c`, totems first; a
-    /// spell with neither passes, and no spell or no store skips the check.
+    /// Against empty bags: a totem spell refuses `0x78`, a reagent spell `0x5c`, totems first, each
+    /// naming the failing entry as the report's first argument (`0x6e4000`); a spell with neither
+    /// passes, and no spell or no store skips the check.
     #[test]
     fn missing_materials_refuse_with_the_refs_reasons() {
         let mut objs = objects();
         let st = store();
         let mining = spell([2901, 0], [(0, 0); 8]);
-        let mut errors = CastErrors::default();
-        assert!(reagent_totem_refusal(
-            2575,
-            Some(&mining),
-            Some(&st),
-            &objs.get(),
-            &mut errors
-        ));
-        assert_eq!(errors.0.as_slice(), &[CastFail::local(2575, 0x78)]);
+        assert_eq!(
+            reagent_totem_refusal(2575, Some(&mining), Some(&st), &objs.get()),
+            Some(CastFail::local_arg(2575, 0x78, 2901))
+        );
 
         let mut reagents = [(0, 0); 8];
         reagents[0] = (17056, 1); // Slow Fall's Light Feather
         let slow_fall = spell([0, 0], reagents);
-        let mut errors = CastErrors::default();
-        assert!(reagent_totem_refusal(
-            130,
-            Some(&slow_fall),
-            Some(&st),
-            &objs.get(),
-            &mut errors
-        ));
-        assert_eq!(errors.0.as_slice(), &[CastFail::local(130, 0x5c)]);
+        assert_eq!(
+            reagent_totem_refusal(130, Some(&slow_fall), Some(&st), &objs.get()),
+            Some(CastFail::local_arg(130, 0x5c, 17056))
+        );
 
         let both = spell([2901, 0], reagents);
-        let mut errors = CastErrors::default();
-        assert!(reagent_totem_refusal(
-            1,
-            Some(&both),
-            Some(&st),
-            &objs.get(),
-            &mut errors
-        ));
-        assert_eq!(errors.0.as_slice(), &[CastFail::local(1, 0x78)]);
+        assert_eq!(
+            reagent_totem_refusal(1, Some(&both), Some(&st), &objs.get()),
+            Some(CastFail::local_arg(1, 0x78, 2901))
+        );
 
         let plain = spell([0, 0], [(0, 0); 8]);
-        let mut errors = CastErrors::default();
-        assert!(!reagent_totem_refusal(
-            133,
-            Some(&plain),
-            Some(&st),
-            &objs.get(),
-            &mut errors
-        ));
-        assert!(!reagent_totem_refusal(
-            2575,
-            None,
-            Some(&st),
-            &objs.get(),
-            &mut errors
-        ));
-        assert!(!reagent_totem_refusal(
-            2575,
-            Some(&mining),
-            None,
-            &objs.get(),
-            &mut errors
-        ));
-        assert!(errors.0.is_empty());
+        assert_eq!(
+            reagent_totem_refusal(133, Some(&plain), Some(&st), &objs.get()),
+            None
+        );
+        assert_eq!(
+            reagent_totem_refusal(2575, None, Some(&st), &objs.get()),
+            None
+        );
+        assert_eq!(
+            reagent_totem_refusal(2575, Some(&mining), None, &objs.get()),
+            None
+        );
     }
 
     /// `0x6e4000` counts the reagent with `0x622130` and finds the totem with `0x622270`, both at

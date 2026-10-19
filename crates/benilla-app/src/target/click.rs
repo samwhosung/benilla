@@ -186,12 +186,14 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Feedback<'w, 's> {
     errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
-    cast_errors: ResMut<'w, crate::ui_action::CastErrors>,
+    /// The skin's refusal, and the cast in flight its report's tail reads.
+    reports: ResMut<'w, crate::ui_cast::CastReports>,
+    pending: Res<'w, crate::spell::PendingCast>,
     // The mailbox's open, which registers on the interaction latch with the world in hand.
     windows: Commands<'w, 's>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     // The opener queue: this system cannot also hold `CastLadder` (a second `Items` and
-    // `CastErrors` borrow), so the lock verdict goes to `ui_action::drain::drain_go_openers`.
+    // `CastReports` borrow), so the lock verdict goes to `ui_action::drain::drain_go_openers`.
     openers: ResMut<'w, crate::ui_action::GoOpenerCasts>,
     // The stone's refusals need the roster, so they run in `drain_meeting_stone_joins`.
     stone_uses: MessageWriter<'w, crate::ui_dialog_verbs::MeetingStoneUse>,
@@ -576,7 +578,20 @@ impl Dispatch<'_, '_> {
             .and_then(|s| s.catalog.get(spell_id));
         if crate::spell::validator::cast_mounted_refusal(mounted, def) {
             debug!("right-click skin: refused locally — mounted (0x39)");
-            self.feedback.cast_errors.push_local(spell_id, 0x39);
+            // The reference casts through `TryCast` (`0x5f06dc` → `0x6e5a90` → `0x6e4b60`), whose
+            // validator refuses ahead of the push (`0x6e5026`), so the report's tail finds no skin
+            // in flight: another spell in flight fires nothing (`0x6e2228`), nothing in flight
+            // fires `SPELLCAST_FAILED` (`0x6e224a`).
+            self.feedback
+                .reports
+                .refused(crate::ui_action::CastFail::local(spell_id, 0x39));
+            let in_flight = self.feedback.pending.in_flight(std::time::Instant::now())
+                || self.seam.queued_melee.current().is_some();
+            if !in_flight {
+                self.feedback
+                    .reports
+                    .bar(crate::ui_cast::CastBarEdge::Failed);
+            }
         } else {
             debug!("right-click skin: {guid:#x} (spell {spell_id})");
             let _ = self.seam.net.0.send(ClientCommand::CastSpell {
@@ -2144,7 +2159,8 @@ mod tests {
         world.init_resource::<crate::ui_dialog_verbs::AreaSpiritHealer>();
         world.init_resource::<crate::ui_session::InteractNpc>();
         world.init_resource::<crate::ui_action::UiErrorKeys>();
-        world.init_resource::<crate::ui_action::CastErrors>();
+        world.init_resource::<crate::ui_cast::CastReports>();
+        world.init_resource::<crate::spell::PendingCast>();
         world.init_resource::<crate::ui_loot::LootState>();
         world.init_resource::<crate::ui_loot::LootLatch>();
         world.init_resource::<crate::ui_mail::MailOpen>();

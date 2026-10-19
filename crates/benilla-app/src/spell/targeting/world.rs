@@ -148,7 +148,7 @@ mod tests {
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::Cooldowns>();
         world.init_resource::<crate::spell::SpellModifiers>();
-        world.init_resource::<crate::ui_action::CastErrors>();
+        world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::ui_action::UiErrorKeys>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
@@ -407,7 +407,9 @@ mod tests {
         click(&mut world, id);
         assert!(rx.try_recv().is_err(), "out of range sends nothing");
         assert_eq!(
-            std::mem::take(&mut world.resource_mut::<crate::ui_action::CastErrors>().0),
+            world
+                .resource_mut::<crate::ui_cast::CastReports>()
+                .take_refusals(),
             vec![crate::ui_action::CastFail::local(HEAL, 0x59)],
             "\"Out of range.\""
         );
@@ -428,8 +430,8 @@ mod tests {
             })
         ));
         assert!(world
-            .resource::<crate::ui_action::CastErrors>()
-            .0
+            .resource::<crate::ui_cast::CastReports>()
+            .refusals()
             .is_empty());
         assert!(!world.resource::<super::super::SpellTargeting>().active());
     }
@@ -476,8 +478,9 @@ mod tests {
             );
             click(&mut world, id);
             let sent = rx.try_recv().ok();
-            let errors =
-                std::mem::take(&mut world.resource_mut::<crate::ui_action::CastErrors>().0);
+            let errors = world
+                .resource_mut::<crate::ui_cast::CastReports>()
+                .take_refusals();
             let armed = world.resource::<super::super::SpellTargeting>().active();
             (sent, errors, armed)
         };

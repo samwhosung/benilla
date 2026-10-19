@@ -31,10 +31,11 @@
 //! - an event the app fires after the input event that caused it has returned runs with no input
 //!   event up, where the reference fires it inside the key's `ExecuteBinding` with the binding flag
 //!   still raised ([`super::protected`]). A queued call is applied under the events it was made
-//!   under, which covers a macro's lines and whatever the application signals in place; the
-//!   selection change of a script call (`PLAYER_TARGET_CHANGED`) and the refusals a press raises
-//!   (`UI_ERROR_MESSAGE`, `UI_INFO_MESSAGE`) are signalled a step later, by the unit and action
-//!   feeds, under the events noted for them. Every other event those feeds raise from a state edge
+//!   under, which covers a macro's lines and whatever the application signals in place, its
+//!   refusals and its cast's events among them; the selection change of a script call
+//!   (`PLAYER_TARGET_CHANGED`) and the refusals a VM verb queues itself (`UI_ERROR_MESSAGE`,
+//!   `UI_INFO_MESSAGE`) are signalled a step later, by the unit and action feeds, under the events
+//!   noted for them. Every other event those feeds raise from a state edge
 //!   (auras, health, the action bar, `AUTOFOLLOW_*`) and the selection a world click makes natively
 //!   rather than by a call are signalled with none up.
 

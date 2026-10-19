@@ -61,13 +61,15 @@ pub(crate) struct ScriptCallHost<'w, 's> {
         (
             crate::target::ScriptSelect<'w, 's>,
             crate::spell::ScriptCursor<'w, 's>,
-            // The cast's own state: its cancel, and the view the VM reads after each call.
+            // The cast's own state: its cancel, the view the VM reads after each call, and the
+            // reports the call made.
             ParamSet<
                 'w,
                 's,
                 (
                     crate::spell::SelfCancel<'w, 's>,
                     crate::spell::CastState<'w, 's>,
+                    crate::ui_cast::CallReports<'w, 's>,
                 ),
             >,
             crate::spell::ScriptCast<'w, 's>,
@@ -86,10 +88,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // tag 2 passed there. The ladder reads it while this call applies.
         appliers.p3().ladder.permit(call.may_cast());
         let selected_before = appliers.p0().selected();
-        let error_marks = (
-            appliers.p4().error_count(),
-            appliers.p3().ladder.cast_errors.0.len(),
-        );
+        let report_mark = appliers.p2().p2().mark();
         let mut tail: Option<CallTail> = None;
         match call {
             ScriptCall::Select { request, .. } => appliers.p0().select(request),
@@ -162,21 +161,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
         if selected_after != selected_before {
             script.note_selection_cause(selected_after, input);
         }
-        // So are the refusals this call raised: the feed signals `UI_ERROR_MESSAGE` for them a
-        // frame later, inside the same events.
-        if input.any() {
-            appliers.p4().stamp_errors(error_marks.0, input);
-            for fail in appliers
-                .p3()
-                .ladder
-                .cast_errors
-                .0
-                .iter_mut()
-                .skip(error_marks.1)
-            {
-                fail.input = input;
-            }
-        }
+        // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
+        // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
+        // event, signalled below as the call returns, under its input events.
+        let ready = appliers.p2().p2().ready_since(script, report_mark);
         // The cast state the call left, for the script's next line: `SpellStopCasting`
         // (`0x6e6e80`) finds the cast it sent in flight (`0x6e5026`), and `IsCurrentAction`
         // (`0x4e53a0`) checks its slot, as stock `ActionButtonUp` reads straight after `UseAction`
@@ -185,18 +173,22 @@ impl CallHost for ScriptCallHost<'_, '_> {
         script.set_cast_view(view);
         // The word the call left: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
         // binds to it.
-        if appliers.p1().push_view(script) {
+        let changed = appliers.p1().push_view(script);
+        if ready.is_empty() && !changed {
+            return tail;
+        }
+        let macro_lines = tail.take();
+        Some(Box::new(move |script: &mut UiScript| {
+            crate::ui_cast::fire(script, ready);
             // 1.12.1 signals at the arm (`0x6e5333`), before its bind or send, and again at the
             // attempt's end (`0x6e51e3`); here once per change of the awaited spell (#1986).
-            let macro_lines = tail.take();
-            tail = Some(Box::new(move |script: &mut UiScript| {
+            if changed {
                 script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
-                if let Some(lines) = macro_lines {
-                    lines(script);
-                }
-            }));
-        }
-        tail
+            }
+            if let Some(lines) = macro_lines {
+                lines(script);
+            }
+        }))
     }
 }
 
@@ -369,8 +361,50 @@ mod tests {
                 }),
             );
         }
+        record_reports(&script);
         world.insert_non_send_resource(script);
         Frame { app, rx }
+    }
+
+    /// Every catalog line and cast-failure string defined as its own key, and a recorder of the
+    /// lines shown (`UI_ERROR_MESSAGE`) in `LINES`, and of those lines and the cast's events in
+    /// `REPORTS`, in the order they fire.
+    fn record_reports(script: &UiScript) {
+        let mut lua = String::new();
+        for key in benilla_ui::messages::CATALOG
+            .iter()
+            .map(|r| r.key)
+            .chain(crate::ui_action::CAST_FAIL_KEYS)
+            .filter(|k| !k.is_empty())
+        {
+            lua.push_str(&format!("{key} = \"{key}\"\n"));
+        }
+        lua.push_str(
+            r#"LINES, REPORTS = {}, {}
+            local r = CreateFrame("Frame")
+            for _, e in ipairs({"UI_ERROR_MESSAGE", "SPELLCAST_FAILED", "SPELLCAST_INTERRUPTED",
+                    "SPELLCAST_STOP"}) do
+                r:RegisterEvent(e)
+            end
+            r:SetScript("OnEvent", function()
+                if event == "UI_ERROR_MESSAGE" then
+                    table.insert(LINES, arg1)
+                    table.insert(REPORTS, arg1)
+                else
+                    table.insert(REPORTS, event)
+                end
+            end)"#,
+        );
+        script.run(&lua).expect("the recorder installs");
+    }
+
+    /// The lines and cast events [`record_reports`] saw since the last read, in order.
+    fn reports(f: &mut Frame) -> Vec<String> {
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Vec<String>>("local r = REPORTS REPORTS = {} return r")
+            .expect("the recorder reads")
     }
 
     /// Run `lua` in the VM, then this frame's one application of what it queued.
@@ -495,15 +529,13 @@ mod tests {
         (swings, stopped)
     }
 
-    /// The keys of the error lines raised.
-    fn errors(f: &Frame) -> Vec<&'static str> {
+    /// The keys of the error lines shown, each defined as its own key ([`record_reports`]).
+    fn errors(f: &Frame) -> Vec<String> {
         f.app
             .world()
-            .resource::<crate::ui_action::UiErrorKeys>()
-            .0
-            .iter()
-            .map(|e| e.key)
-            .collect()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("return LINES")
+            .expect("the recorder reads")
     }
 
     /// `CastSpellByName(name, onSelf)` (`0x4b4ab0`) and `CastSpell(slot, book, onSelf)` (`0x4b42f0`)
@@ -1000,7 +1032,7 @@ mod tests {
             run(&mut f, lua);
             assert_eq!(selected(&f), Some(MOB), "{lua}");
             assert_eq!(swings(&f), (vec![MOB], false), "{lua}");
-            assert_eq!(errors(&f), Vec::<&str>::new(), "{lua}");
+            assert_eq!(errors(&f), Vec::<String>::new(), "{lua}");
         }
     }
 
@@ -1377,33 +1409,40 @@ mod tests {
         );
     }
 
-    /// A refusal a call raises while it is applied is signalled by the feed a frame later, with the
-    /// input events the call ran under raised again (the reference signals it inside the press):
-    /// an attack with nothing to attack, pressed in a key's body, queues its refusal stamped with
-    /// the binding event, and pressed otherwise it carries none.
+    /// A refusal a call raises is signalled inside the call, under the input events it ran under,
+    /// as the reference shows it inside the press: the line's handler runs with the key's event
+    /// up, so a movement verb it calls passes the gate's tag 0 (`0x494b1a`, the client's own code
+    /// with an input event running), and outside a press it does not.
     #[test]
     fn a_refusal_a_call_raises_carries_the_events_it_ran_under() {
-        for (pressed, want) in [(true, true), (false, false)] {
+        for (pressed, moved) in [(true, true), (false, false)] {
             let mut f = frame(false);
             with_factions(&mut f, FRIEND, &[]);
+            f.app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run(
+                    r#"local h = CreateFrame("Frame")
+                    h:RegisterEvent("UI_ERROR_MESSAGE")
+                    h:SetScript("OnEvent", function() MoveForwardStart() end)"#,
+                )
+                .unwrap();
             if pressed {
                 run_pressed(&mut f, "AttackTarget()");
             } else {
                 run(&mut f, "AttackTarget()");
             }
-            let queued: Vec<_> = f
-                .app
-                .world()
-                .resource::<crate::ui_action::UiErrorKeys>()
-                .0
-                .iter()
-                .map(|e| (e.key, e.input.binding))
-                .collect();
             assert_eq!(
-                queued,
-                vec![("ERR_NO_ATTACK_TARGET", want)],
+                errors(&f),
+                vec!["ERR_NO_ATTACK_TARGET"],
                 "pressed: {pressed}"
             );
+            let inputs = f
+                .app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .take_binding_input();
+            assert_eq!(!inputs.is_empty(), moved, "pressed: {pressed}");
         }
     }
 
@@ -1569,15 +1608,11 @@ mod tests {
         run(&mut f, "UseAction(1)");
         assert_eq!(casts(&f), vec![]);
         assert_eq!(selected(&f), None);
-        let world = f.app.world();
         assert_eq!(
-            world.resource::<crate::ui_action::UiErrorKeys>().0,
-            vec![crate::ui_action::UiError::key("ERR_NO_ATTACK_TARGET")]
+            reports(&mut f),
+            vec!["ERR_NO_ATTACK_TARGET"],
+            "the pick's own line, which is no cast failure"
         );
-        assert!(world
-            .resource::<crate::ui_action::CastErrors>()
-            .0
-            .is_empty());
     }
 
     const POTION: u64 = 0x4000_0000_0000_0f07;
@@ -2099,34 +2134,26 @@ mod tests {
         let _ = f.rx.try_iter().count();
         run(&mut f, "UseAction(1)");
         assert_eq!(f.rx.try_iter().count(), 0, "nothing is sent");
-        let keys = |f: &Frame| -> Vec<&'static str> {
-            f.app
-                .world()
-                .resource::<crate::ui_action::UiErrorKeys>()
-                .0
-                .iter()
-                .map(|e| e.key)
-                .collect()
-        };
-        assert_eq!(keys(&f), vec!["ERR_CLIENT_LOCKED_OUT"]);
+        assert_eq!(reports(&mut f), vec!["ERR_CLIENT_LOCKED_OUT"]);
 
         // The spell is one the app fed as passing: the gate lets the use on to the cast.
-        f.app
-            .world_mut()
-            .resource_mut::<crate::ui_action::UiErrorKeys>()
-            .0
-            .clear();
         f.app
             .world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_control_bypass([4321].into());
         run(&mut f, "UseAction(1)");
-        assert!(keys(&f).is_empty(), "{:?}", keys(&f));
+        let shown = reports(&mut f);
+        assert!(shown.is_empty(), "{shown:?}");
     }
 
     /// A heal's targeting cursor up: `TARGET_FLAG_UNIT` (0x2), which any unit binds, in the app's
     /// word and the VM's view of it.
     fn with_the_cursor_up(f: &mut Frame) {
+        // The attempt that raised it filled the record with the player as its caster (`0x6e4fb1`).
+        f.app
+            .world_mut()
+            .resource_mut::<crate::spell::PendingCast>()
+            .fill_record();
         f.app
             .world_mut()
             .resource_mut::<crate::spell::SpellTargeting>()
@@ -2400,20 +2427,12 @@ mod tests {
         ] {
             let mut f = frame(true);
             with_the_cursor_up(&mut f);
-            let before = f
-                .app
-                .world()
-                .resource::<crate::spell::SpellTargeting>()
-                .aborts();
             run(&mut f, lua);
             assert!(!cursor_is_up(&f), "{lua}: the press stopped targeting");
             assert_eq!(
-                f.app
-                    .world()
-                    .resource::<crate::spell::SpellTargeting>()
-                    .aborts(),
-                before.wrapping_add(1),
-                "{lua}: as a cancel, not a commit"
+                reports(&mut f),
+                vec!["SPELLCAST_FAILED"],
+                "{lua}: as a cancel with its failed flag (`0x6e4900`), not a commit"
             );
             assert_eq!(casts(&f), vec![], "{lua}: and cast nothing");
         }
@@ -2631,17 +2650,14 @@ mod tests {
             );
             assert_eq!(cursor_is_up(&f), armed, "{lua}, dead {dead}");
             assert_eq!(casts(&f), vec![], "{lua}, dead {dead}");
-            let reasons: Vec<u8> = f
-                .app
-                .world()
-                .resource::<crate::ui_action::CastErrors>()
-                .0
-                .iter()
-                .map(|e| e.reason)
-                .collect();
-            // "You are dead" for the rung; the gate refuses silently.
-            let want: Vec<u8> = if dead { vec![0x13] } else { vec![] };
-            assert_eq!(reasons, want, "{lua}, dead {dead}");
+            // "You are dead" for the rung, and with nothing in flight its event (`0x6e224a`); the
+            // gate refuses silently.
+            let want: Vec<&str> = if dead {
+                vec!["SPELL_FAILED_CASTER_DEAD", "SPELLCAST_FAILED"]
+            } else {
+                vec![]
+            };
+            assert_eq!(reports(&mut f), want, "{lua}, dead {dead}");
         }
     }
 

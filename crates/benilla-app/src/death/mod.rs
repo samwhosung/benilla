@@ -506,10 +506,9 @@ pub(crate) fn drain_death(
                         entry,
                         ..
                     }) => {
+                        // Its failed flag disarms the trade-skill repeat on every branch
+                        // (`0x6e4abc`-`0x6e4ac2` into `0x4fd790`), queued with its event.
                         cast.p1().abort_cast();
-                        // The abort's `cl` flag disarms the trade-skill repeat on every branch
-                        // (`0x6e4abc`-`0x6e4ac2` into `0x4fd790`).
-                        script.trade_skill_disarm();
                         if crate::ui_items::item_use_refused(&script, Some(guid)) {
                             debug!("death: soulstone {guid:#x} is locked — refused");
                             Ok(())
@@ -785,6 +784,28 @@ mod tests {
         app.world_mut().run_system_once(drain_death).unwrap();
     }
 
+    /// The cast's bar edges the press queued.
+    fn edges(app: &App) -> Vec<&'static str> {
+        app.world()
+            .resource::<crate::ui_cast::CastReports>()
+            .edges()
+            .into_iter()
+            .map(|e| match e {
+                crate::ui_cast::CastBarEdge::Stop => "STOP",
+                crate::ui_cast::CastBarEdge::Failed => "FAILED",
+                crate::ui_cast::CastBarEdge::Interrupted => "INTERRUPTED",
+                _ => "OTHER",
+            })
+            .collect()
+    }
+
+    /// Signal the reports the press queued, as the frame's feed does.
+    fn signal(app: &mut App) {
+        app.world_mut()
+            .run_system_once(crate::ui_cast::feed_cast_reports)
+            .unwrap();
+    }
+
     /// `UseSoulstone`'s item leg is `CGItem::Use` (`0x48ae7d`), whose first gate refuses a
     /// locked item (`0x5d8d32`): the stone's use goes out only once the lock lifts.
     #[test]
@@ -870,22 +891,18 @@ mod tests {
             "the cancel leads the use: {sent:?}"
         );
         assert!(sent.len() > 1, "and the use follows it: {sent:?}");
-        let world = app.world();
-        assert!(!world
+        assert!(!app
+            .world()
             .resource::<crate::spell::PendingCast>()
             .in_flight(std::time::Instant::now()));
-        let feed = &world.resource::<crate::ui_cast::CastBarFeed>().0;
-        assert!(
-            matches!(
-                feed[..],
-                [
-                    crate::ui_cast::CastBarEdge::Failed,
-                    crate::ui_cast::CastBarEdge::Interrupted
-                ]
-            ),
-            "SPELLCAST_FAILED (cl=1, reason 0x1c), then the echo's interrupt"
+        assert_eq!(
+            edges(&app),
+            ["FAILED"],
+            "SPELLCAST_FAILED (cl=1, reason 0x1c); the echo's INTERRUPTED comes with the server's \
+             answer"
         );
-        let script = world.non_send_resource::<UiScript>();
+        signal(&mut app);
+        let script = app.world().non_send_resource::<UiScript>();
         assert_eq!(
             script.trade_skill_repeat(),
             (0, 3),
@@ -917,7 +934,6 @@ mod tests {
             .world()
             .resource::<crate::spell::targeting::SpellTargeting>();
         assert!(!targeting.active(), "the targeting cursor is gone");
-        assert_eq!(targeting.aborts(), 1, "and counted as an abort");
         let sent: Vec<_> = rx.try_iter().collect();
         assert!(
             !sent
@@ -926,11 +942,12 @@ mod tests {
             "a targeting spell was never sent, so nothing cancels on the wire: {sent:?}"
         );
         assert!(!sent.is_empty(), "the use goes out");
-        let feed = &app.world().resource::<crate::ui_cast::CastBarFeed>().0;
-        assert!(
-            matches!(feed[..], [crate::ui_cast::CastBarEdge::Failed]),
+        assert_eq!(
+            edges(&app),
+            ["FAILED"],
             "the event gate follows the targeting branch too (`0x6e4a04`-`0x6e4a1e`)"
         );
+        signal(&mut app);
         assert_eq!(
             app.world()
                 .non_send_resource::<UiScript>()
@@ -947,17 +964,14 @@ mod tests {
         arm_repeat(&mut app);
         let _ = rx.try_iter().count();
         press_soulstone(&mut app);
+        assert!(edges(&app).is_empty());
+        signal(&mut app);
         assert_eq!(
             app.world()
                 .non_send_resource::<UiScript>()
                 .trade_skill_repeat(),
             (0, 3)
         );
-        assert!(app
-            .world()
-            .resource::<crate::ui_cast::CastBarFeed>()
-            .0
-            .is_empty());
     }
 
     /// The item leg's cancel (`0x48ae6b`) comes before the use (`0x48ae7d`) and its gate, tag 2 at
@@ -1019,11 +1033,12 @@ mod tests {
         app.world_mut().run_system_once(drain_death).unwrap();
         assert!(
             app.world()
-                .resource::<crate::ui_action::CastErrors>()
-                .0
+                .resource::<crate::ui_cast::CastReports>()
+                .refusals()
                 .is_empty(),
             "the cast ladder was never entered"
         );
+        signal(&mut app);
         assert_eq!(
             app.world()
                 .non_send_resource::<UiScript>()
@@ -1034,8 +1049,8 @@ mod tests {
         press_soulstone(&mut app);
         let fails: Vec<u8> = app
             .world()
-            .resource::<crate::ui_action::CastErrors>()
-            .0
+            .resource::<crate::ui_cast::CastReports>()
+            .refusals()
             .iter()
             .map(|f| f.reason)
             .collect();

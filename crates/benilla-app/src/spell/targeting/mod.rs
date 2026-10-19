@@ -29,8 +29,9 @@
 //! Cancels: ESC through `UIParent.lua:1490` ([`feed_targeting_to_vm`], [`ScriptCursor::stop_targeting`]),
 //! the right-button down edge ([`cancel_targeting_on_right_press`]), a new spell's press, which
 //! aborts and proceeds (`TryCast 0x6e4b60` at `0x6e4d62`), and the bar's re-press of the same
-//! spell (`UseAction 0x4e5ee0`). A cancel clears the word and sends nothing; movement never
-//! cancels (`0x515090`).
+//! spell (`UseAction 0x4e5ee0`). Each is `StopTargeting 0x6e4900`, the cancel with its failed flag
+//! ([`crate::spell::CastCore::stop_targeting`]): the word clears, nothing is sent, and the record's
+//! caster fires `SPELLCAST_FAILED`. Movement never cancels (`0x515090`).
 
 mod corpse;
 mod cursor;
@@ -255,7 +256,7 @@ impl CursorPicks {
 /// The targeting mode, `Some` while the flag_word is nonzero. Entered by the cast-send path
 /// ([`super::cast_target::CastWireTarget::Targeting`]), cleared by a commit or a cancel.
 #[derive(Resource, Default)]
-pub(crate) struct SpellTargeting(Option<Targeting>, u32);
+pub(crate) struct SpellTargeting(Option<Targeting>);
 
 struct Targeting {
     spell_id: u32,
@@ -352,22 +353,9 @@ impl SpellTargeting {
         }
     }
 
+    /// The word cleared, by a commit or a cancel ([`crate::spell::CastCore::cancel`]).
     pub(crate) fn clear(&mut self) {
         self.0 = None;
-    }
-
-    /// A cancel, not a commit: `StopTargeting 0x6e4900`, or `TryCast`'s supersede (`0x6e4d62`),
-    /// both the cast abort with its disarm flag (`0x6e4940(cl=1)`), counted for the tradeskill
-    /// repeat's disarm ([`Self::aborts`]). Nothing up, nothing aborts (`0x6e4907`).
-    pub(crate) fn cancel(&mut self) {
-        if self.0.take().is_some() {
-            self.1 = self.1.wrapping_add(1);
-        }
-    }
-
-    /// The cancels so far, wrapping: only a change is read.
-    pub(crate) fn aborts(&self) -> u32 {
-        self.1
     }
 }
 
@@ -379,9 +367,9 @@ impl SpellTargeting {
 pub(crate) fn cancel_targeting_on_right_press(
     mut presses: MessageReader<WorldRightPress>,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
-    mut targeting: ResMut<SpellTargeting>,
+    mut cursor: crate::spell::CursorCancel,
 ) {
-    if !targeting.active() {
+    if !cursor.active() {
         // A press buffered while idle must not replay as a cancel once the mode turns on.
         presses.clear();
         return;
@@ -390,7 +378,7 @@ pub(crate) fn cancel_targeting_on_right_press(
         return;
     }
     debug!("ui_action: targeting cancelled (right-click)");
-    targeting.cancel();
+    cursor.stop_targeting();
 }
 
 /// [`SpellTargeting::picks_self`] as the frame began, which the world pick reads
@@ -486,13 +474,17 @@ fn bind_target_unit(
 }
 
 /// `BindTarget`'s merge (`6e602c`–`6e60d7`): a bind whose mask is in `0x8202`, a unit or a corpse,
-/// runs the range test `0x6e47b0` (`6e6063`). Out of range raises "Out of range." or "Target too
-/// close" and binds nothing; otherwise the emptied word commits (`SendCast 0x6e54f0`).
+/// runs the range test `0x6e47b0` (`6e6063`). Out of range is reported (`0x6e6089`, "Out of
+/// range." or "Target too close") and binds nothing; otherwise the emptied word commits (`SendCast
+/// 0x6e54f0`).
 ///
-/// Deviation: a range failure leaves targeting armed and working. The reference's report
-/// (`0x6e6089`) also cancels the cast (`0x6e2218` → `0x6e4940`), clearing its caster, and then
-/// restores the pre-click word, so every later click fails the caster test (`0x6e5b93`) and the
-/// cursor is stranded until a cancel; that is a defect, and staying armed is what a player can use.
+/// Deviation: a range failure leaves targeting armed and working. The reference's report cancels
+/// the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm,
+/// which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the
+/// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),
+/// so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a
+/// cancel. That is a defect: benilla sends nothing and re-arms the cursor with its caster, which
+/// is what a player can use.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
@@ -502,7 +494,12 @@ fn merge(
 ) {
     if let Some(reason) = range {
         debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
-        ladder.cast_errors.push_local(spell_id, reason);
+        let word = ladder.ground.pending().map(|(_, _, word)| word);
+        ladder.report_local(crate::ui_action::CastFail::local(spell_id, reason));
+        if let Some(word) = word {
+            ladder.ground.enter(spell_id, commit, word);
+            ladder.pending.fill_record();
+        }
         return;
     }
     debug!("ui_action: cast {spell_id} committed at {bound:x?}");
@@ -529,8 +526,9 @@ impl ScriptCursor<'_, '_> {
 
     /// `SpellTargetUnit(unit)` (`0x6e6d90`). The binding already raised the usage and
     /// unknown-token errors and dropped a call made while not targeting. Here a token that names
-    /// no unit raises "Out of range." (0x59) and ends targeting, as the reference's abort clears
-    /// the word, and a unit goes to [`bind_target_unit`].
+    /// no unit is reported as "Out of range." (0x59) for the record's spell (`0x6e6e12`-
+    /// `0x6e6e20`), whose tail cancels the cursor's spell in flight, and a unit goes to
+    /// [`bind_target_unit`].
     pub(crate) fn spell_target_unit(&mut self, token: &str) {
         // An earlier call may have bound or ended the cast: not targeting, no-op.
         let Some(spell_id) = self.ladder.ground.spell() else {
@@ -540,10 +538,10 @@ impl ScriptCursor<'_, '_> {
             Some((entity, guid)) => bind_target_unit(&mut self.ladder, &self.checks, entity, guid),
             None => {
                 debug!("ui_action: SpellTargetUnit({token}) names no unit — cast {spell_id} ends");
-                self.ladder
-                    .cast_errors
-                    .push_local(spell_id, super::validator::ERR_OUT_OF_RANGE);
-                self.ladder.ground.clear();
+                self.ladder.report_local(crate::ui_action::CastFail::local(
+                    spell_id,
+                    super::validator::ERR_OUT_OF_RANGE,
+                ));
             }
         }
     }
@@ -554,11 +552,10 @@ impl ScriptCursor<'_, '_> {
         self.picks.bind_all(&mut self.ladder, &self.checks);
     }
 
-    /// The ESC chain's `SpellStopTargeting()` (`0x6e6e30`): `StopTargeting 0x6e4900`, word
-    /// cleared, no packet.
+    /// The ESC chain's `SpellStopTargeting()` (`0x6e6e30`): `StopTargeting 0x6e4900`.
     pub(crate) fn stop_targeting(&mut self) {
         debug!("ui_action: targeting cancelled (ESC chain)");
-        self.ladder.ground.cancel();
+        self.ladder.stop_targeting();
     }
 }
 
@@ -592,7 +589,7 @@ mod tests {
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::Cooldowns>();
         world.init_resource::<crate::spell::SpellModifiers>();
-        world.init_resource::<crate::ui_action::CastErrors>();
+        world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
         world.init_resource::<SpellTargeting>();
@@ -697,7 +694,9 @@ mod tests {
     }
 
     fn errors(world: &mut World) -> Vec<crate::ui_action::CastFail> {
-        std::mem::take(&mut world.resource_mut::<crate::ui_action::CastErrors>().0)
+        world
+            .resource_mut::<crate::ui_cast::CastReports>()
+            .take_refusals()
     }
 
     /// `0x6e6d90` past the binding's checks: a token naming no unit ends the cast with "Out of

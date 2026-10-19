@@ -42,12 +42,13 @@ pub(crate) struct NewEnchant {
 }
 
 /// `0x495d60`'s verdict. Every exit but `Bind` returns before `BindTarget`, so the word and the
-/// cursor survive a refusal and both popups.
+/// cursor survive both popups; a refusal's report cancels the cursor's spell (`0x6e2218`), which
+/// drops it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ItemBind {
     /// `BindTarget 0x6e5b40`: bind the item and send.
     Bind,
-    /// `0x6e1a00(spell, 0x0a)`, no packet.
+    /// `0x6e1a00(spell, 0x0a)`, no packet: the line, `SPELLCAST_FAILED`, and the cursor down.
     Refuse(u8),
     /// Park the guid and fire `BIND_ENCHANT` (event 402, no args); its Yes, `BindEnchant
     /// 0x48d2e0`, re-runs the gate confirmed.
@@ -113,7 +114,7 @@ pub(crate) fn item_bind_verdict(
 /// [`item_bind_verdict`] and on a pass bind it for `SendCast 0x6e54f0` (`CMSG_CAST_SPELL` for an
 /// enchant, `CMSG_USE_ITEM` for a poison bottle). It also takes both popups' answers: `BindEnchant
 /// 0x48d2e0` re-runs `0x495d60` confirmed, `ReplaceEnchant 0x48d300` calls `0x6e5b40` directly. An
-/// empty slot (`0x495d60`'s null-item guard), a refusal or a confirm keeps the mode.
+/// empty slot (`0x495d60`'s null-item guard) or a confirm keeps the mode; a refusal ends it.
 pub(crate) fn commit_item_cast_on_pick(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     self_q: Query<&crate::net::ObjectStore, With<SelfPlayer>>,
@@ -213,11 +214,10 @@ pub(crate) fn commit_item_cast_on_pick(
             });
         match item_bind_verdict(def, &item, new, confirmed) {
             ItemBind::Refuse(reason) => {
-                debug!(
-                    "ui_action: cast {spell_id} refused at the item bind ({reason:#x}) — \
-                     the cursor stays up"
-                );
-                ladder.cast_errors.push_local(spell_id, reason);
+                // The validator reports for the cursor's spell (`0x496068`-`0x496152`, flag 0),
+                // whose tail cancels it in flight (`0x6e2218`): the cursor drops.
+                debug!("ui_action: cast {spell_id} refused at the item bind ({reason:#x})");
+                ladder.report_local(crate::ui_action::CastFail::local(spell_id, reason));
             }
             ItemBind::ConfirmBind => {
                 debug!("ui_action: item bind confirm for {spell_id} on item {item_guid:#x}");

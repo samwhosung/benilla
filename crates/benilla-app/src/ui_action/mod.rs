@@ -15,6 +15,8 @@ use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
 mod cast_fail;
+mod cast_lines;
+pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::{attack_nearest_probe, use_action, ActionPress, AttackPress, UseOutcome};
@@ -42,9 +44,11 @@ mod weapon_icon;
 pub(crate) struct CooldownEvents;
 
 pub(crate) use cast_fail::report_reaches_pop;
+#[cfg(test)]
+pub(crate) use cast_fail::CAST_FAIL_KEYS;
 pub(crate) use errors::{
     attack_actor_blocked, attack_actor_refusal, keyed_line, keyed_line_s, reagent_totem_refusal,
-    show_messages, ui_error_text, CastErrors, CastFail, Caster, FillArg, MessageSink, MountErrors,
+    show_messages, ui_error_text, CastFail, Caster, FillArg, MessageSink, MountErrors,
     PetTameFailures, Shown, UiError, UiErrorKeys, UiErrorTexts,
 };
 pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon, substitutes_weapon_icon};
@@ -266,7 +270,7 @@ impl Plugin for UiActionPlugin {
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
             .init_resource::<LearnedAbilities>()
-            .init_resource::<CastErrors>()
+            .init_resource::<CastFailRedisplays>()
             .init_resource::<MountErrors>()
             .init_resource::<PetTameFailures>()
             .init_resource::<UiErrorKeys>()

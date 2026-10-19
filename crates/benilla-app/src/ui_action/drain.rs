@@ -189,22 +189,6 @@ pub(super) fn drain_go_openers(
     }
 }
 
-impl ActionPress<'_, '_> {
-    /// How many by-key refusals are queued.
-    pub(crate) fn error_count(&self) -> usize {
-        self.ui_errors.0.len()
-    }
-
-    /// Stamp the refusals queued since `from` with the input events the call that raised them ran
-    /// under, so the feed signals `UI_ERROR_MESSAGE` for them as the reference does, inside the
-    /// press.
-    pub(crate) fn stamp_errors(&mut self, from: usize, input: benilla_ui::script::InputEvents) {
-        for e in self.ui_errors.0.iter_mut().skip(from) {
-            e.input = input;
-        }
-    }
-}
-
 /// What a `UseAction` press reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ActionPress<'w, 's> {
@@ -268,14 +252,14 @@ pub(crate) fn use_action(
         }
         Some(b) if b.kind == ACTION_KIND_SPELL => {
             // Re-pressing the spell whose targeting cursor is up cancels it before `TryCast`
-            // (`GetTargetingSpellId 0x6e48e0`, `StopTargeting 0x6e4900`), as `CastBookSpell`
+            // (`GetTargetingSpellId 0x4e60ea`, `StopTargeting 0x4e60f3`), as `CastBookSpell`
             // does for the spellbook (`0x4b3474`, [`crate::ui_spellbook::cast_spell`]).
             if ladder.ground.spell() == Some(b.action) {
                 debug!(
                     "ui_action: cast {} re-pressed — targeting toggles off",
                     b.action
                 );
-                ladder.ground.cancel();
+                ladder.stop_targeting();
                 return UseOutcome::Done;
             }
             // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel

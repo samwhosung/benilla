@@ -14,7 +14,8 @@ use benilla_assets::coords::wow_to_bevy;
 
 use super::PetBar;
 use crate::net::{GuidIndex, NetHandlerApp, PetDismissSoundMessage, PetTalkMessage};
-use crate::ui_action::{CastErrors, PetTameFailures, Spells, UiError, UiErrorKeys};
+use crate::ui_action::{PetTameFailures, Spells, UiError, UiErrorKeys};
+use crate::ui_cast::CastReports;
 
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
@@ -53,9 +54,9 @@ fn on_action_feedback(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>)
     }
 }
 
-fn on_cast_failed(In(ev): In<SessionEvent>, mut errors: ResMut<CastErrors>) {
+fn on_cast_failed(In(ev): In<SessionEvent>, mut reports: ResMut<CastReports>) {
     if let SessionEvent::PetCastFailed { spell_id, reason } = ev {
-        pet_cast_failed(spell_id, reason, &mut errors);
+        pet_cast_failed(spell_id, reason, &mut reports);
     }
 }
 
@@ -255,10 +256,10 @@ fn pet_dismiss_sound(
 /// `SMSG_PET_CAST_FAILED`: queued as the pet's, so the display uses the reference's pet table
 /// (`0x6e8eb0`, not the player's `0x6e1a00`). Our cast state is untouched, and unlike the
 /// player's it writes no combat-log line and plays no error sound (`0x62c360`, `0x458a50`).
-fn pet_cast_failed(spell_id: u32, reason: Option<u8>, errors: &mut CastErrors) {
+fn pet_cast_failed(spell_id: u32, reason: Option<u8>, reports: &mut CastReports) {
     debug!("net: pet cast failed — spell {spell_id} reason {reason:?}");
     if let Some(reason) = reason {
-        errors.push_pet(spell_id, reason);
+        reports.pet_refused(spell_id, reason);
     }
 }
 

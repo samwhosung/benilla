@@ -1,16 +1,20 @@
-//! The cast-bar feed: our own cast's wire edges become the `SPELLCAST_*` events stock
-//! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the VM's cast state is
-//! pushed each frame. The cast lifecycle it reads is `crate::spell`'s.
+//! Our own cast's reports, in the order the reference signals them: the refused cast's line
+//! (`ReportCastFailure 0x6e1a00`), the wire edges that become the `SPELLCAST_*` events stock
+//! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the tradeskill repeat's
+//! disarm. A script call's reports are signalled inside the call ([`crate::script_calls`]), the
+//! rest by the frame's feed ([`feed_cast_reports`]), which also pushes the VM's cast state. The
+//! cast lifecycle is `crate::spell`'s.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::spell::CastState;
-use crate::ui_action::Spells;
+use crate::ui_action::{CastFail, CastFailLines, MessageSink, Shown, Spells};
 use crate::ui_unit::UnitFeed;
 
-/// One edge of our own cast, queued by the spell's packet handlers and its local cancel.
+/// One edge of our own cast, queued by the spell's packet handlers, its reports and its cancels.
 pub(crate) enum CastBarEdge {
     /// `SMSG_SPELL_START` with a nonzero cast time; an instant opens no bar, as in the reference.
     Start { spell_id: u32, cast_time_ms: u32 },
@@ -19,9 +23,10 @@ pub(crate) enum CastBarEdge {
     /// Every cast gets one, an instant, a channel and an item use too; on a timed cast vmangos
     /// sends the result as the bar completes, just ahead of `SMSG_SPELL_GO`.
     Stop,
-    /// `SMSG_CAST_RESULT` failure: the bar, if shown, reads "Failed".
+    /// `SPELLCAST_FAILED`: a refusal's tail (`0x6e224a`) or a cancel with its failed flag
+    /// (`0x6e4a43`); the bar, if shown, reads "Failed".
     Failed,
-    /// `SMSG_SPELL_FAILED_OTHER`: our cast was interrupted.
+    /// `SPELLCAST_INTERRUPTED`: the same for reasons 0x23 and 0x24 (`0x6e2238`, `0x6e4a24`).
     Interrupted,
     /// `SMSG_SPELL_DELAYED`: pushback extends the cast by `delay_ms`; the bar slides, never
     /// cancels.
@@ -32,9 +37,74 @@ pub(crate) enum CastBarEdge {
     ChannelUpdate { remaining_ms: u32 },
 }
 
-/// The queue of [`CastBarEdge`]s, drained by [`feed_cast_bar`].
+/// One report of our own cast.
+pub(crate) enum CastReport {
+    /// A refusal through `ReportCastFailure 0x6e1a00`: the tradeskill repeat's check
+    /// (`0x6e1a3c`), then the line and its combat-log line. Its event tail is pushed beside it.
+    Refused(CastFail),
+    /// A cast-bar edge.
+    Bar(CastBarEdge),
+    /// `0x4fd790`, the end of a tradeskill repeat, which a cancel with its failed flag runs last
+    /// (`0x6e4abc`-`0x6e4ac2`).
+    TradeSkillDisarm,
+}
+
+/// Our cast's reports in the order they were made: one queue, so a refusal's line precedes its
+/// `SPELLCAST_FAILED` as `0x6e1a00` signals them.
 #[derive(Resource, Default)]
-pub(crate) struct CastBarFeed(pub(crate) Vec<CastBarEdge>);
+pub(crate) struct CastReports(pub(crate) Vec<CastReport>);
+
+impl CastReports {
+    pub(crate) fn bar(&mut self, edge: CastBarEdge) {
+        self.0.push(CastReport::Bar(edge));
+    }
+
+    /// A refusal's line; [`crate::spell::CastCore::report`] pushes its event tail after it.
+    pub(crate) fn refused(&mut self, fail: CastFail) {
+        self.0.push(CastReport::Refused(fail));
+    }
+
+    /// `SMSG_PET_CAST_FAILED` (`0x6e8eb0`): one message, no log line and no event.
+    pub(crate) fn pet_refused(&mut self, spell_id: u32, reason: u8) {
+        self.refused(CastFail::pet(spell_id, reason));
+    }
+
+    pub(crate) fn trade_skill_disarm(&mut self) {
+        self.0.push(CastReport::TradeSkillDisarm);
+    }
+
+    /// The refusals queued, in order.
+    #[cfg(test)]
+    pub(crate) fn refusals(&self) -> Vec<CastFail> {
+        self.0
+            .iter()
+            .filter_map(|r| match r {
+                CastReport::Refused(f) => Some(*f),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Take every report queued, answering the refusals among them, in order.
+    #[cfg(test)]
+    pub(crate) fn take_refusals(&mut self) -> Vec<CastFail> {
+        let refusals = self.refusals();
+        self.0.clear();
+        refusals
+    }
+
+    /// The cast-bar edges queued, in order.
+    #[cfg(test)]
+    pub(crate) fn edges(&self) -> Vec<&CastBarEdge> {
+        self.0
+            .iter()
+            .filter_map(|r| match r {
+                CastReport::Bar(e) => Some(e),
+                _ => None,
+            })
+            .collect()
+    }
+}
 
 /// `SPELLCAST_START`'s name argument: empty for an unknown spell, or when `AttributesEx3 & 0x4`
 /// is set, where the reference pushes `""` (`0x6e7a2d`) and still fires, so the bar is a
@@ -80,111 +150,232 @@ fn channel_start_name(
     Some(name)
 }
 
-/// Drain the queue into the stock events: `SPELLCAST_START(name, ms)`,
-/// `SPELLCAST_CHANNEL_START(ms, name)` (reversed, as `CastingBarFrame.lua:80-84` reads it),
-/// `SPELLCAST_CHANNEL_UPDATE(ms)` and the argless rest. A channel update of 0 is
-/// `SPELLCAST_CHANNEL_STOP`: vmangos ends a channel that way, finished or interrupted.
-///
-/// First it pushes the cast state the frame's packets and cancels left ([`CastState`]), which
-/// `SpellStopCasting` (`0x6e6e80`) and the bar's checked tests read: a queued strike and the spell
-/// awaiting its click count as in flight, so the first Esc stops it and `ToggleGameMenu` skips
-/// `ClearTarget()` (`UIParent.lua:1489-1492`).
-pub(crate) fn feed_cast_bar(
+/// An edge's stock event: `SPELLCAST_START(name, ms)`, `SPELLCAST_CHANNEL_START(ms, name)`
+/// (reversed, as `CastingBarFrame.lua:80-84` reads it), `SPELLCAST_CHANNEL_UPDATE(ms)` and the
+/// argless rest. A channel update of 0 is `SPELLCAST_CHANNEL_STOP`: vmangos ends a channel that
+/// way, finished or interrupted.
+fn edge_event(
+    edge: CastBarEdge,
+    script: &UiScript,
+    spells: Option<&Spells>,
+) -> Option<(&'static str, Vec<ScriptValue>)> {
+    match edge {
+        CastBarEdge::Start {
+            spell_id,
+            cast_time_ms,
+        } => Some((
+            "SPELLCAST_START",
+            vec![
+                ScriptValue::Str(cast_bar_label(spells, spell_id)),
+                ScriptValue::Int(i64::from(cast_time_ms)),
+            ],
+        )),
+        CastBarEdge::Stop => Some(("SPELLCAST_STOP", vec![])),
+        CastBarEdge::Failed => Some(("SPELLCAST_FAILED", vec![])),
+        CastBarEdge::Interrupted => Some(("SPELLCAST_INTERRUPTED", vec![])),
+        CastBarEdge::Delayed { delay_ms } => Some((
+            "SPELLCAST_DELAYED",
+            vec![ScriptValue::Int(i64::from(delay_ms))],
+        )),
+        CastBarEdge::ChannelStart {
+            spell_id,
+            duration_ms,
+        } => {
+            let name = channel_start_name(script, spells, spell_id, duration_ms);
+            // Traced here, where the `0x6e7550` gate is decided; other edges trace in
+            // `spell::net`.
+            if *crate::net::CAST_TRACE {
+                match name.as_deref() {
+                    Some(label) => info!(
+                        "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
+                         bar label {label:?}"
+                    ),
+                    None => info!(
+                        "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
+                         NO BAR (0x6e7550 gate: zero duration, no Spell.dbc row, or \
+                         AttributesEx3 & 0x2000)"
+                    ),
+                }
+            }
+            name.map(|name| {
+                (
+                    "SPELLCAST_CHANNEL_START",
+                    vec![
+                        ScriptValue::Int(i64::from(duration_ms)),
+                        ScriptValue::Str(name),
+                    ],
+                )
+            })
+        }
+        // `0x6e75f0`: nonzero re-times the bar, zero ends it, with no attribute gate; for a
+        // suppressed channel the stock Lua's `IsShown()` guards absorb these.
+        CastBarEdge::ChannelUpdate { remaining_ms } => {
+            let over = remaining_ms == 0;
+            if *crate::net::CAST_TRACE {
+                if over {
+                    info!("cast-trace: CHANNEL_STOP — update 0, the channel is over");
+                } else {
+                    info!("cast-trace: CHANNEL_UPDATE — {remaining_ms}ms left");
+                }
+            }
+            Some(if over {
+                ("SPELLCAST_CHANNEL_STOP", vec![])
+            } else {
+                (
+                    "SPELLCAST_CHANNEL_UPDATE",
+                    vec![ScriptValue::Int(i64::from(remaining_ms))],
+                )
+            })
+        }
+    }
+}
+
+/// A report made ready for the VM: everything outside it (a line's sound, a chat or combat-log
+/// line) is done, and what runs Lua is left, so it can run with the call host back in place.
+pub(crate) enum Ready {
+    /// `0x6e1a3c`: a refusal of the armed tradeskill repeat's spell ends the repeat.
+    TradeSkillCastFailed(u32),
+    /// `0x4fd790`: whatever repeat is armed ends.
+    TradeSkillDisarm,
+    /// An event and its arguments.
+    Event(&'static str, Vec<ScriptValue>),
+}
+
+/// Signal `ready` in order.
+pub(crate) fn fire(script: &mut UiScript, ready: Vec<Ready>) {
+    for r in ready {
+        match r {
+            Ready::TradeSkillCastFailed(spell_id) => script.trade_skill_cast_failed(spell_id),
+            Ready::TradeSkillDisarm => script.trade_skill_disarm(),
+            Ready::Event(event, args) => script.fire_event(event, args),
+        }
+    }
+}
+
+/// What readies our cast's reports: the refused cast's line ([`CastFailLines`]) and the sink its
+/// sound and log line go to.
+#[derive(SystemParam)]
+pub(crate) struct CastReporter<'w, 's> {
+    lines: CastFailLines<'w, 's>,
+    sink: MessageSink<'w>,
+}
+
+impl CastReporter<'_, '_> {
+    /// `reports`, readied in order: a refusal's tradeskill check (`0x6e1a3c`, the player's first
+    /// pass only), its line and its log line, an edge's event, a disarm.
+    pub(crate) fn ready(
+        &mut self,
+        script: &UiScript,
+        reports: impl IntoIterator<Item = CastReport>,
+    ) -> Vec<Ready> {
+        let mut out = Vec::new();
+        for report in reports {
+            match report {
+                CastReport::Refused(fail) => {
+                    if fail.caster == crate::ui_action::Caster::Player && !fail.redisplay {
+                        out.push(Ready::TradeSkillCastFailed(fail.spell_id));
+                    }
+                    if let Some(resolved) = self.lines.resolve(script, fail) {
+                        if let Some(log) = resolved.log {
+                            self.sink.chat.push_combat(log);
+                        }
+                        out.extend(self.line(resolved.shown));
+                    }
+                }
+                CastReport::Bar(edge) => out.extend(
+                    edge_event(edge, script, self.lines.spells())
+                        .map(|(event, args)| Ready::Event(event, args)),
+                ),
+                CastReport::TradeSkillDisarm => out.push(Ready::TradeSkillDisarm),
+            }
+        }
+        out
+    }
+
+    /// The refused lines whose item record has answered since (`0x6e29b0`).
+    pub(crate) fn redisplays(&mut self, script: &UiScript) -> Vec<Ready> {
+        let shown = self.lines.redisplays(script);
+        shown.into_iter().filter_map(|s| self.line(s)).collect()
+    }
+
+    /// A line's world half done, its event readied.
+    pub(crate) fn line(&mut self, shown: Shown) -> Option<Ready> {
+        shown
+            .sink(&mut self.sink, "ui_action")
+            .map(|(event, args)| Ready::Event(event, args))
+    }
+}
+
+/// The reports a script call makes, signalled inside it ([`crate::script_calls`]): the by-key
+/// refusals its verb raised (an item not ready, a slot that cannot be used), then its cast's
+/// reports in order. What was queued before the call stays for the frame's feed.
+#[derive(SystemParam)]
+pub(crate) struct CallReports<'w, 's> {
+    reports: ResMut<'w, CastReports>,
+    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    reporter: CastReporter<'w, 's>,
+}
+
+/// Where a call's reports start in each queue.
+#[derive(Clone, Copy)]
+pub(crate) struct ReportMark(usize, usize);
+
+impl CallReports<'_, '_> {
+    pub(crate) fn mark(&self) -> ReportMark {
+        ReportMark(self.ui_errors.0.len(), self.reports.0.len())
+    }
+
+    /// The reports queued since `mark`, taken off their queues and readied.
+    pub(crate) fn ready_since(&mut self, script: &UiScript, mark: ReportMark) -> Vec<Ready> {
+        let ReportMark(errors, reports) = mark;
+        let start = errors.min(self.ui_errors.0.len());
+        let errors: Vec<_> = self.ui_errors.0.drain(start..).collect();
+        let mut ready: Vec<Ready> = errors
+            .iter()
+            .filter_map(|e| {
+                crate::ui_action::ui_error_text(e, &|key| {
+                    script.lua().globals().get::<String>(key).ok()
+                })
+                .map(|t| Shown::keyed(e.key, t))
+            })
+            .filter_map(|shown| self.reporter.line(shown))
+            .collect();
+        let start = reports.min(self.reports.0.len());
+        let reports: Vec<_> = self.reports.0.drain(start..).collect();
+        ready.extend(self.reporter.ready(script, reports));
+        ready
+    }
+}
+
+/// Signal the reports made outside any script call, and push the cast state the frame's packets
+/// and cancels left ([`CastState`]), which `SpellStopCasting` (`0x6e6e80`) and the bar's checked
+/// tests read: a queued strike and the spell awaiting its click count as in flight, so the first
+/// Esc stops it and `ToggleGameMenu` skips `ClearTarget()` (`UIParent.lua:1489-1492`).
+pub(crate) fn feed_cast_reports(
     script: Option<NonSendMut<UiScript>>,
-    mut feed: ResMut<CastBarFeed>,
-    spells: Option<Res<Spells>>,
+    mut reports: ResMut<CastReports>,
+    mut reporter: CastReporter,
     cast_state: CastState,
 ) {
     let Some(mut script) = script else {
         return;
     };
     script.set_cast_view(cast_state.view());
-    for edge in feed.0.drain(..) {
-        let Some((event, args)): Option<(&str, Vec<ScriptValue>)> = (match edge {
-            CastBarEdge::Start {
-                spell_id,
-                cast_time_ms,
-            } => Some((
-                "SPELLCAST_START",
-                vec![
-                    ScriptValue::Str(cast_bar_label(spells.as_deref(), spell_id)),
-                    ScriptValue::Int(i64::from(cast_time_ms)),
-                ],
-            )),
-            CastBarEdge::Stop => Some(("SPELLCAST_STOP", vec![])),
-            CastBarEdge::Failed => Some(("SPELLCAST_FAILED", vec![])),
-            CastBarEdge::Interrupted => Some(("SPELLCAST_INTERRUPTED", vec![])),
-            CastBarEdge::Delayed { delay_ms } => Some((
-                "SPELLCAST_DELAYED",
-                vec![ScriptValue::Int(i64::from(delay_ms))],
-            )),
-            CastBarEdge::ChannelStart {
-                spell_id,
-                duration_ms,
-            } => {
-                let name = channel_start_name(&script, spells.as_deref(), spell_id, duration_ms);
-                // Traced here, where the `0x6e7550` gate is decided; other edges trace in
-                // `spell::net`.
-                if *crate::net::CAST_TRACE {
-                    match name.as_deref() {
-                        Some(label) => info!(
-                            "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
-                             bar label {label:?}"
-                        ),
-                        None => info!(
-                            "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
-                             NO BAR (0x6e7550 gate: zero duration, no Spell.dbc row, or \
-                             AttributesEx3 & 0x2000)"
-                        ),
-                    }
-                }
-                name.map(|name| {
-                    (
-                        "SPELLCAST_CHANNEL_START",
-                        vec![
-                            ScriptValue::Int(i64::from(duration_ms)),
-                            ScriptValue::Str(name),
-                        ],
-                    )
-                })
-            }
-            // `0x6e75f0`: nonzero re-times the bar, zero ends it, with no attribute gate; for a
-            // suppressed channel the stock Lua's `IsShown()` guards absorb these.
-            CastBarEdge::ChannelUpdate { remaining_ms } => {
-                let over = remaining_ms == 0;
-                if *crate::net::CAST_TRACE {
-                    if over {
-                        info!("cast-trace: CHANNEL_STOP — update 0, the channel is over");
-                    } else {
-                        info!("cast-trace: CHANNEL_UPDATE — {remaining_ms}ms left");
-                    }
-                }
-                Some(if over {
-                    ("SPELLCAST_CHANNEL_STOP", vec![])
-                } else {
-                    (
-                        "SPELLCAST_CHANNEL_UPDATE",
-                        vec![ScriptValue::Int(i64::from(remaining_ms))],
-                    )
-                })
-            }
-        }) else {
-            continue;
-        };
-        script.fire_event(event, args);
-    }
+    let mut ready = reporter.redisplays(&script);
+    ready.extend(reporter.ready(&script, std::mem::take(&mut reports.0)));
+    fire(&mut script, ready);
 }
 
-/// The cast-bar feed, drained before the VM ticks so an edge and its first `OnUpdate` share a
+/// The report feed, drained before the VM ticks so an edge and its first `OnUpdate` share a
 /// frame, and after the local cancel so a move or Esc kills the bar on the next tick.
 pub(crate) struct UiCastPlugin;
 
 impl Plugin for UiCastPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CastBarFeed>().add_systems(
+        app.init_resource::<CastReports>().add_systems(
             Update,
             // After the spell's local cancel, whose edges this drains the same frame.
-            feed_cast_bar
+            feed_cast_reports
                 .in_set(UnitFeed)
                 .after(crate::spell::LocalCancel),
         );
