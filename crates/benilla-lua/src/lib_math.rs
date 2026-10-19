@@ -9,9 +9,9 @@ pub fn open(vm: &mut Vm) {
     let t = vm.heap.new_table(0, 0);
     let fns: [(&'static str, crate::heap::NativeFn); 24] = [
         ("abs", |vm, n| un(vm, n, f64::abs)),
-        ("sin", |vm, n| un(vm, n, f64::sin)),
-        ("cos", |vm, n| un(vm, n, f64::cos)),
-        ("tan", |vm, n| un(vm, n, f64::tan)),
+        ("sin", |vm, n| un(vm, n, sin)),
+        ("cos", |vm, n| un(vm, n, cos)),
+        ("tan", |vm, n| un(vm, n, tan)),
         ("asin", |vm, n| un(vm, n, f64::asin)),
         ("acos", |vm, n| un(vm, n, f64::acos)),
         ("atan", |vm, n| un(vm, n, f64::atan)),
@@ -67,6 +67,41 @@ fn deg(x: f64) -> f64 {
 /// `math_rad`: a product with `RADIANS_PER_DEGREE`.
 fn rad(x: f64) -> f64 {
     x * RADIANS_PER_DEGREE
+}
+
+/// 2^63: `fsin`, `fcos` and `fptan` reduce only an operand below it in magnitude, and leave a
+/// finite one at or past it unchanged, with C2 set (Intel SDM, `FSIN`).
+const X87_TRIG_RANGE: f64 = 9_223_372_036_854_775_808.0;
+
+/// `math_sin` (`0x7fae10`) is a bare `fsin` (`0x7fae1d`): past the x87's range the operand is the
+/// answer.
+fn sin(x: f64) -> f64 {
+    if x.is_finite() && x.abs() >= X87_TRIG_RANGE {
+        x
+    } else {
+        x.sin()
+    }
+}
+
+/// `math_cos` (`0x7fae40`) is a bare `fcos` (`0x7fae4d`): past the x87's range the operand is the
+/// answer.
+fn cos(x: f64) -> f64 {
+    if x.is_finite() && x.abs() >= X87_TRIG_RANGE {
+        x
+    } else {
+        x.cos()
+    }
+}
+
+/// `math_tan` (`0x7fae70`): `fptan` (`0x7fae7d`) pushes 1.0 over the tangent and `0x7fae84` pops
+/// it. Past the x87's range `fptan` pushes nothing, so that pop takes the operand and the `fstp`
+/// at `0x7fae86` stores from an empty stack, the masked underflow's indefinite.
+fn tan(x: f64) -> f64 {
+    if x.is_finite() && x.abs() >= X87_TRIG_RANGE {
+        f64::from_bits(crate::number::INDEFINITE)
+    } else {
+        x.tan()
+    }
 }
 
 /// `math_exp` (`0x7fb100`) computes inline on the x87, `2^(x·log2 e)` split at `frndint`; for an

@@ -793,6 +793,9 @@ const SWEEP_FNS: &[&str] = &[
     "math.ldexp",
     "math.deg",
     "math.rad",
+    // `math.sin`, `math.cos` and `math.tan` are the x87's `fsin`, `fcos` and `fptan` (`0x7fae1d`,
+    // `0x7fae4d`, `0x7fae7d`): `1e300` is past their range, so the sine and the cosine answer it
+    // unchanged and the tangent the indefinite, on every platform.
     "math.sin",
     "math.cos",
     "math.tan",
@@ -855,6 +858,7 @@ const SWEEP_FNS: &[&str] = &[
     "ldexp",
     "deg",
     "rad",
+    // The x87's range, as above.
     "sin",
     "cos",
     "tan",
