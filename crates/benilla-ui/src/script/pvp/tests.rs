@@ -53,6 +53,7 @@ fn inspect_state() -> InspectHonorData {
 fn player() -> UnitState {
     UnitState {
         exists: true,
+        has_object: true,
         name: Some("Benilla".into()),
         sex: 3, // female
         is_player: true,
@@ -803,6 +804,7 @@ fn unit_pvp_name_decorates_a_ranked_player_and_falls_back_three_ways() {
         "target",
         Some(UnitState {
             exists: true,
+            has_object: true,
             name: Some("Timber Wolf".into()),
             level: 5,
             ..Default::default()
@@ -812,6 +814,17 @@ fn unit_pvp_name_decorates_a_ranked_player_and_falls_back_three_ways() {
         s.eval::<String>(r#"return UnitPVPName("target")"#).unwrap(),
         "Timber Wolf"
     );
+    // A unit with no object is none to it (`0x517309`, `0x51733e`), as a party member out of view.
+    s.set_unit(
+        "party1",
+        Some(UnitState {
+            has_object: false,
+            ..player()
+        }),
+    );
+    assert!(s
+        .eval::<bool>(r#"return UnitPVPName("party1") == nil"#)
+        .unwrap());
 
     // Leg B: the civilian prefix, on the tooltip's `0x612550` gate: PvP-flagged, hostile and grey
     // to the player.
@@ -821,6 +834,7 @@ fn unit_pvp_name_decorates_a_ranked_player_and_falls_back_three_ways() {
     });
     let civilian = |reaction: u8, pvp: bool| UnitState {
         exists: true,
+        has_object: true,
         name: Some("Innkeeper Renee".into()),
         level: 5,
         civilian: true,
@@ -853,6 +867,7 @@ fn unit_pvp_name_decorates_a_ranked_player_and_falls_back_three_ways() {
         "mouseover",
         Some(UnitState {
             exists: true,
+            has_object: true,
             name: None,
             ..Default::default()
         }),

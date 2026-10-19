@@ -209,10 +209,66 @@ fn a_token_without_a_hop_still_reads_its_own_push() {
         "Pia"
     );
     // And the entry is dropped with `None`.
-    s.set_unit_by_guid(P1, None);
+    s.set_unit_by_guid(MOB, None);
     assert!(eval::<bool>(
         &s,
-        r#"return UnitName("targettarget") == nil"#
+        r#"return UnitName("playertarget") == nil"#
+    ));
+}
+
+/// A chain end with no object answers as its group row's own token does, which carries the
+/// records the getters read without the object (`0x496400`, `0x496420`) and the roster's
+/// `UnitExists` (`0x491900`); a held end reads its own snapshot, and an end off the roster its
+/// own entry.
+#[test]
+fn an_unheld_end_on_the_roster_reads_its_rows_push() {
+    let mut s = world();
+    let row = UnitState {
+        exists: true,
+        guid: P1,
+        name: Some("Pia".into()),
+        health: 640,
+        ..Default::default()
+    };
+    let cached = |guid: u64, name: &str| UnitState {
+        guid,
+        name: Some(name.into()),
+        ..Default::default()
+    };
+    s.set_unit("party1", Some(row));
+    // `MOB` targets party1. Held, its own snapshot answers.
+    assert_eq!(eval::<i64>(&s, r#"return UnitHealth("targettarget")"#), 800);
+    assert!(eval::<bool>(
+        &s,
+        r#"return UnitIsVisible("targettarget") == 1"#
+    ));
+    // Out of view: the app's no-object entry loses to the row's push.
+    s.set_unit_by_guid(P1, Some(cached(P1, "Cached")));
+    assert_eq!(eval::<i64>(&s, r#"return UnitHealth("targettarget")"#), 640);
+    assert_eq!(
+        eval::<String>(&s, r#"return UnitName("targettarget")"#),
+        "Pia"
+    );
+    assert!(eval::<bool>(
+        &s,
+        r#"return UnitExists("targettarget") == 1"#
+    ));
+    assert!(eval::<bool>(
+        &s,
+        r#"return UnitIsVisible("targettarget") == nil"#
+    ));
+    // So does no entry at all.
+    s.set_unit_by_guid(P1, None);
+    assert_eq!(eval::<i64>(&s, r#"return UnitHealth("targettarget")"#), 640);
+    // `BOSS` targets `GONE`, off the roster: its own entry, a name and no unit.
+    s.set_unit_by_guid(GONE, Some(cached(GONE, "Gone")));
+    assert_eq!(
+        eval::<String>(&s, r#"return UnitName("party1targettarget")"#),
+        "Gone"
+    );
+    assert!(eval::<bool>(
+        &s,
+        r#"return UnitExists("party1targettarget") == nil"#
     ));
 }
 

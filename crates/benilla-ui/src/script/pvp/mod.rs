@@ -503,7 +503,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     //   B  else a unit passing the civilian predicate (`0x612550`): `PVP_RANK_CIVILIAN`, a space
     //      and the name. Only creatures reach it.
     //   C  else the plain name.
-    // No snapshot or an unresolved name answers nil.
+    // No snapshot, no object (the unit lookup `0x517309`, typemask 8, finds none and pushes nil
+    // at `0x51733e`) or an unresolved name answers nil.
     //
     // Deviation: a token resolving to guid 0 answers nil too. The reference jumps from the guid
     // test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its
@@ -524,7 +525,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.player_req.level,
                 )
             };
-            let Some(u) = unit else {
+            let Some(u) = unit.filter(|u| u.has_object) else {
                 return Ok(Value::Nil);
             };
             let Some(name) = u.name.clone() else {

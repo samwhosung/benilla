@@ -467,6 +467,7 @@ fn unit_is_trivial_is_the_grey_test_and_never_a_player() {
             "target",
             Some(UnitState {
                 exists: true,
+                has_object: true,
                 level,
                 is_player,
                 ..Default::default()
@@ -484,6 +485,21 @@ fn unit_is_trivial_is_the_grey_test_and_never_a_player() {
     assert_eq!(at(&mut s, 6, false), None, "a gap of 4");
     assert_eq!(at(&mut s, 5, false), None, "a gap equal to the band");
     assert_eq!(at(&mut s, 4, false), Some(1), "a gap past the band");
+    // With no object, `0x515940` finds none: nil, however low (`0x519da8`).
+    s.set_unit(
+        "party1",
+        Some(UnitState {
+            exists: true,
+            level: 1,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        s.eval::<Option<i64>>(r#"return UnitIsTrivial("party1")"#)
+            .unwrap(),
+        None,
+        "no object"
+    );
     assert_eq!(at(&mut s, 12, false), None, "a unit above the player");
     // A player never is, however low.
     assert_eq!(at(&mut s, 1, true), None, "a low player");
@@ -2519,4 +2535,32 @@ fn the_unit_verbs_apply_in_the_call_with_a_host_lent() {
         crate::script::host::test_support::applied_in_call(&mut s, r#"SpellTargetUnit("player")"#),
         vec![ScriptCall::SpellTargetUnit("player".into())]
     );
+}
+
+/// `UnitName` on a unit with no object reads the name cache by guid with a callback (`0x5171eb`):
+/// a miss goes back to the host to ask, once per read; a held unit or a named one asks nothing.
+#[test]
+fn unit_name_hands_a_no_object_miss_back_to_ask() {
+    let mut s = UiScript::new().unwrap();
+    let read = |s: &mut UiScript, unit: UnitState| {
+        s.set_unit("target", Some(unit));
+        s.eval::<String>(r#"return UnitName("target")"#).unwrap();
+        s.take_unit_name_asks()
+    };
+    let unheld = UnitState {
+        guid: 0x77,
+        ..Default::default()
+    };
+    assert_eq!(read(&mut s, unheld.clone()), vec![0x77]);
+    assert_eq!(read(&mut s, unheld.clone()), vec![0x77], "every read asks");
+    let held = UnitState {
+        has_object: true,
+        ..unheld.clone()
+    };
+    assert_eq!(read(&mut s, held), Vec::<u64>::new());
+    let named = UnitState {
+        name: Some("Wanderer".into()),
+        ..unheld
+    };
+    assert_eq!(read(&mut s, named), Vec::<u64>::new());
 }

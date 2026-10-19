@@ -131,11 +131,21 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 return Ok((name, Value::Nil));
             }
-            let name = with_unit(lua, &token, None, |u| Some(u.name.clone()))?;
+            let name = with_unit(lua, &token, None, |u| {
+                Some((u.name.clone(), u.has_object, u.guid))
+            })?;
             let name = match name {
                 None => Value::Nil,
-                Some(Some(n)) => Value::String(lua.create_string(&n)?),
-                Some(None) => Value::String(unknownobject(lua)?),
+                Some((Some(n), _, _)) => Value::String(lua.create_string(&n)?),
+                Some((None, held, guid)) => {
+                    // A unit with no object reads the name cache by guid with a callback
+                    // (`0x5171eb`), which asks on the miss: the host sends it.
+                    if !held && guid != 0 {
+                        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                        model.unit_name_asks.insert(guid);
+                    }
+                    Value::String(unknownobject(lua)?)
+                }
             };
             Ok((name, Value::Nil))
         })?,
@@ -262,9 +272,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitIsTrivial (`0x519d70`): `0x5f0700`, false for a player (object type bit `0x10`), else
-    // true when the player's level is above the unit's by more than the grey band
-    // ([`unit_is_grey`]). The unit's raw level is read, as `UnitLevel`'s raw 0 is.
+    // UnitIsTrivial (`0x519d70`): `0x5f0700` on the token's object (`0x515940`; nil with none,
+    // `0x519da8`), false for a player (object type bit `0x10`), else true when the player's level
+    // is above the unit's by more than the grey band ([`unit_is_grey`]). The unit's raw level is
+    // read, as `UnitLevel`'s raw 0 is.
     g.set(
         "UnitIsTrivial",
         lua.create_function(|lua, token: Value| {
@@ -279,7 +290,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .player_req
                 .level;
             unit_predicate(lua, &token, |u| {
-                !u.is_player && unit_is_grey(player_level, u.level)
+                u.has_object && !u.is_player && unit_is_grey(player_level, u.level)
             })
         })?,
     )?;

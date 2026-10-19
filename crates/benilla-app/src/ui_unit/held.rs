@@ -104,15 +104,18 @@ pub(super) struct ChainMemo {
     pushed: HashMap<u64, UnitState>,
 }
 
-/// Push the snapshot of each held unit a `target` chain can end on, by guid, so `UnitName`,
+/// Push the snapshot of each unit a `target` chain can end on, by guid, so `UnitName`,
 /// `UnitHealth` and the other getters answer for `party1target`, `raid3target` and `pettarget`
 /// (`0x515970` resolves the token, then each getter reads the guid's object, `0x468460`). The
 /// guids are the resolver's own inputs ([`UiScript::chain_end_guids`]), which the aura feed pushes
-/// each frame, so this runs after it. A guid the object manager does not hold, or holds as
-/// anything but a unit, gets no snapshot. The reference still answers such a guid: `UnitExists`
-/// from the roster (`0x491900`), `UnitHealth` from the roster or pet record (`0x496400`,
-/// `0x496420`), and `UnitName` from the pet record or the name cache, else `UNKNOWNOBJECT`
-/// (`0x5171da`-`0x517216`); those legs are not built for a chain's end. A token without a hop reads its own push, not these.
+/// each frame, so this runs after it. A held unit's snapshot reads its descriptor. A guid the
+/// object manager does not hold gets a no-object entry: its name from the name cache, asked on a
+/// miss as `UnitName`'s read asks it (`0x5171eb`, `0x55f080` on `0xc0e228`, else `UNKNOWNOBJECT`
+/// at `0x517216`), here when the end appears rather than when a script reads it, and its raid mark, which `GetRaidTargetIndex` reads by guid (`0x4bb4f1`); the
+/// getters that need an object answer it nil. The VM reads a group row's own push over it, which
+/// carries the records and the roster's `UnitExists` (`0x496400`, `0x496420`, `0x491900`). A guid
+/// held as anything but a unit gets no snapshot. A token without a hop reads its own push, not
+/// these.
 pub(super) fn feed_chain_units(
     script: Option<NonSendMut<UiScript>>,
     tables: super::SnapshotTables,
@@ -133,6 +136,11 @@ pub(super) fn feed_chain_units(
     let Some(mut script) = script else {
         return;
     };
+    // The names `UnitName` read off a unit with no object and missed, asked as its lookup with a
+    // callback asks (`0x5171eb`), whatever the gate below says.
+    for guid in script.take_unit_name_asks() {
+        let _ = names.resolve_player(guid, Ask::Event(&commands));
+    }
     let (memo, vm_reset) = memo.get_reset(&script);
     let ends = script.chain_end_guids();
 
@@ -178,7 +186,9 @@ pub(super) fn feed_chain_units(
     let built: HashMap<u64, UnitState> = ends
         .iter()
         .filter_map(|&guid| {
-            let entity = *index.as_ref()?.0.get(&guid)?;
+            let Some(&entity) = index.as_ref().and_then(|i| i.0.get(&guid)) else {
+                return Some((guid, unheld_state(&names, &group, guid)));
+            };
             let store = stores.get(entity).ok().filter(|s| s.is_unit())?;
             Some((guid, held.state(store, guid)))
         })
@@ -200,6 +210,22 @@ pub(super) fn feed_chain_units(
         }
     }
     memo.ends = ends;
+}
+
+/// A chain end the object manager does not hold, as the getters read a guid with no object: the
+/// player-name cache by guid whatever the guid is (`0x5171eb`), which vmangos answers only under a
+/// player's guid (`QueryHandler.cpp:48-60`), so a creature or a pet reads `UNKNOWNOBJECT`; the
+/// raid mark by guid (`0x4bb4f1`);
+/// nothing else. Off the roster it does not exist (`0x491900`); on it, the VM reads the row's push.
+/// The name is read without asking: the lookup asks when `UnitName` reads it, and the VM hands
+/// the miss back ([`UiScript::take_unit_name_asks`]).
+fn unheld_state(names: &NameCache, group: &crate::ui_party::GroupState, guid: u64) -> UnitState {
+    UnitState {
+        guid,
+        name: names.resolve_player(guid, Ask::Read).map(str::to_string),
+        raid_target: group.raid_target_index(guid),
+        ..Default::default()
+    }
 }
 
 /// [`feed_name_candidates`]' per-VM memory.
@@ -556,8 +582,8 @@ mod tests {
             &app,
             r#"UnitIsUnit("raid2target", "raid3target") == nil"#
         ));
-        // `BOSS` targets `GONE`, which nobody holds: 0 and nil, and a name the unbuilt name-cache leg
-        // would give (`0x5171eb`), so it is not asserted.
+        // `BOSS` targets `GONE`, which nobody holds: no record and off the roster, so 0 and nil
+        // ([`an_unheld_chain_end_answers_what_the_client_knows_of_it`] has its name).
         assert_eq!(health(&app, "party1targettarget"), 0);
         assert!(holds(&app, r#"UnitExists("party1targettarget") == nil"#));
         // `C` targets nobody; party4 is nobody.
@@ -584,6 +610,142 @@ mod tests {
                 }),
             );
         assert_eq!(name(&app, "target").as_deref(), Some("Pushed"));
+    }
+
+    /// A chain ending on a guid nobody holds answers what the client knows of it, each getter
+    /// by its no-object leg: `UnitName` the name cache by guid, which asks a miss as it reads it,
+    /// once while pending, and answers `UNKNOWNOBJECT` (`0x5171eb`, `0x517216`);
+    /// `GetRaidTargetIndex` the mark by guid (`0x4bb4f1`); a group member or its pet out of view their records and the roster's
+    /// `UnitExists` (`0x496400`, `0x496420`, `0x491900`), as their own tokens read them; and nil
+    /// from each getter that needs the object (`0x515ff5`, `0x516150`, `0x519da8`, `0x517310`).
+    #[test]
+    fn an_unheld_chain_end_answers_what_the_client_knows_of_it() {
+        /// A player nobody holds, whose name the cache holds.
+        const STRANGER: u64 = 0x2001;
+        /// Party slot 4 and raid row 4, out of view, and the pet its record names.
+        const D: u64 = 0x1004;
+        const D_PET: u64 = 0xF140_0000_0000_1004;
+        let mut app = app();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.init_resource::<crate::ui_chat::ChatLog>();
+        benilla_world::world_point::init_world_point_resources(app.world_mut());
+        app.add_systems(Update, crate::ui_party::feed_party);
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.run(r#"UNKNOWNOBJECT = "Unknown""#).unwrap();
+            // Level 60, so the level 0 of a unit with no object would read grey.
+            script.set_player_req_state(benilla_ui::script::PlayerReqState {
+                level: 60,
+                ..Default::default()
+            });
+        }
+        app.world_mut().resource_mut::<NameCache>().insert_player(
+            STRANGER,
+            "Wanderer".into(),
+            None,
+        );
+        let asked = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| -> Vec<u64> {
+            rx.try_iter()
+                .filter_map(|c| match c {
+                    crate::net::ClientCommand::NameQuery { guid } => Some(guid),
+                    _ => None,
+                })
+                .collect()
+        };
+        let retarget_boss = |app: &mut App, to: u64| {
+            let boss = app.world().resource::<GuidIndex>().0[&BOSS];
+            app.world_mut().entity_mut(boss).insert(creature(to, 4000));
+            app.update();
+        };
+        let chain = "party1targettarget";
+        let nil = |app: &App, getters: &[&str]| {
+            for getter in getters {
+                assert!(
+                    holds(app, &format!("{getter}({chain:?}) == nil")),
+                    "{getter}({chain})"
+                );
+            }
+        };
+        app.update();
+
+        // `GONE`, a creature: the player-name cache by its guid, which no answer fills, asked
+        // when `UnitName` reads it and not before.
+        assert_eq!(asked(&rx), Vec::<u64>::new(), "nothing has read the name");
+        assert_eq!(name(&app, chain).as_deref(), Some("Unknown"));
+        app.update();
+        assert_eq!(asked(&rx), vec![GONE], "the read's miss is asked");
+        assert_eq!(name(&app, chain).as_deref(), Some("Unknown"));
+        assert_eq!(health(&app, chain), 0);
+        nil(
+            &app,
+            &[
+                "UnitExists",
+                "UnitIsVisible",
+                "UnitIsPlayer",
+                "UnitIsTrivial",
+                "UnitPVPName",
+                "UnitIsConnected",
+                "GetRaidTargetIndex",
+            ],
+        );
+        // Marked, by guid alone; the rebuild asks the pending name no more.
+        app.world_mut().resource_mut::<GroupState>().raid_targets[2] = GONE;
+        app.update();
+        assert_eq!(number(&app, "GetRaidTargetIndex", chain), 3);
+        assert_eq!(
+            asked(&rx),
+            Vec::<u64>::new(),
+            "a pending name is asked once"
+        );
+
+        // A player out of view: the cached name, and still no unit.
+        retarget_boss(&mut app, STRANGER);
+        assert_eq!(name(&app, chain).as_deref(), Some("Wanderer"));
+        assert_eq!(asked(&rx), Vec::<u64>::new(), "a cached name is not asked");
+        nil(&app, &["UnitExists", "UnitIsPlayer", "UnitPVPName"]);
+
+        // A party member out of view: what `party4` reads, off the record.
+        let mut entries: Vec<GroupMemberEntry> =
+            [A, B, C, D].into_iter().map(group_entry).collect();
+        entries[3].name = "Dara".into();
+        {
+            let mut group = app.world_mut().resource_mut::<GroupState>();
+            group.apply_list(GROUPTYPE_RAID, 0, entries, ME, None, Some(ME));
+            group.apply_stats(
+                D,
+                true,
+                benilla_protocol::messages::PartyMemberStatsInfo {
+                    status: Some(member_status::ONLINE),
+                    cur_hp: Some(1234),
+                    max_hp: Some(2000),
+                    level: Some(41),
+                    pet_guid: Some(D_PET),
+                    pet_name: Some("Grub".into()),
+                    pet_cur_hp: Some(77),
+                    pet_max_hp: Some(99),
+                    ..Default::default()
+                },
+            );
+        }
+        retarget_boss(&mut app, D);
+        assert!(holds(&app, &format!("UnitExists({chain:?}) == 1")));
+        assert!(holds(&app, &format!("UnitIsPlayer({chain:?}) == 1")));
+        assert!(holds(&app, &format!("UnitIsConnected({chain:?}) == 1")));
+        assert_eq!(name(&app, chain).as_deref(), Some("Dara"));
+        assert_eq!(health(&app, chain), 1234);
+        assert_eq!(number(&app, "UnitHealthMax", chain), 2000);
+        assert_eq!(number(&app, "UnitLevel", chain), 41);
+        nil(&app, &["UnitIsVisible", "UnitPVPName"]);
+        assert_eq!(name(&app, chain), name(&app, "party4"));
+
+        // Its pet: the pet record, and on the roster while the owner's record is online.
+        retarget_boss(&mut app, D_PET);
+        assert!(holds(&app, &format!("UnitExists({chain:?}) == 1")));
+        assert_eq!(name(&app, chain).as_deref(), Some("Grub"));
+        assert_eq!(health(&app, chain), 77);
+        assert_eq!(number(&app, "UnitHealthMax", chain), 99);
+        nil(&app, &["UnitIsVisible", "UnitIsPlayer"]);
     }
 
     /// Each input of the feed's gate reaches the getters: a descriptor that moves, a chain that

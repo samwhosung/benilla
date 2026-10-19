@@ -1068,6 +1068,9 @@ pub(crate) struct Model {
     /// creator's and the giver's lookups pass a callback (`0x52e204`, `0x52e29d`) at every build,
     /// and a hovered bag or paper-doll slot's `OnUpdate` builds again each frame.
     pub(crate) item_name_asks: HashSet<u64>,
+    /// Guids `UnitName` read off a unit with no object and missed in the name cache, for the app
+    /// to ask: the no-object leg's lookup passes a callback (`0x5171eb`, `0x517205`).
+    pub(crate) unit_name_asks: HashSet<u64>,
     /// Charter item guids whose build missed the petition record or its owner's name, for the
     /// app to ask: both lookups pass a callback (`0x52b93b`, `0x52b9d2`) at every build.
     pub(crate) petition_asks: HashSet<u64>,
@@ -1381,14 +1384,24 @@ impl Model {
     }
 
     /// The unit a token with a `target` hop and no push of its own names: the resolver's guid
-    /// (`0x515970`, which the getters call before their own object lookup, `0x468460`), then that
-    /// guid's snapshot. A token without a hop is the app's to push, base by base, and reads
-    /// nothing here.
+    /// (`0x515970`, which the getters call before their own object lookup, `0x468460`), then what
+    /// each getter reads for that guid. A held unit's snapshot first; with no object, the group
+    /// row naming the guid, whose own token's push carries its records (`0x496400`, `0x496420`)
+    /// and the roster's `UnitExists` (`0x491900`); off the roster, the app's no-object entry, a
+    /// name from the name cache (`0x5171eb`) and nothing more. A token without a hop is the app's
+    /// to push, base by base, and reads nothing here.
     fn chained_unit(&self, token: &str) -> Option<&UnitState> {
         match parse_unit_token(token) {
             UnitTokenParse::Unit { base, hops } if hops > 0 => {
                 let guid = self.unit_guids.resolve_unit(base, hops)?;
-                self.units_by_guid.get(&guid)
+                match self.units_by_guid.get(&guid) {
+                    Some(held) if held.has_object => Some(held),
+                    unheld => self
+                        .unit_guids
+                        .roster_token(guid)
+                        .and_then(|t| self.pushed_unit(&t))
+                        .or(unheld),
+                }
             }
             _ => None,
         }
@@ -1805,6 +1818,7 @@ impl Model {
             item_sets: HashMap::new(),
             item_set_asks: HashSet::new(),
             item_name_asks: HashSet::new(),
+            unit_name_asks: HashSet::new(),
             petition_asks: HashSet::new(),
             random_properties: HashMap::new(),
             item_stat_asks: HashSet::new(),

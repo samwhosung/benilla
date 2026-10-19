@@ -13,6 +13,7 @@ use super::test_ui::load_ui as load_xml;
 fn player_unit() -> UnitState {
     UnitState {
         exists: true,
+        has_object: true,
         name: Some("Benilla".into()),
         health: 100,
         max_health: 100,

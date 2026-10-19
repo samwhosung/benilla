@@ -292,6 +292,12 @@ pub fn power_token(ty: u8) -> &'static str {
 }
 
 impl super::UiScript {
+    /// Drains the guids `UnitName` read off a unit with no object and found no name for, which the
+    /// reference's lookup asks the server for (`0x5171eb`).
+    pub fn take_unit_name_asks(&mut self) -> Vec<u64> {
+        self.model_mut().unit_name_asks.drain().collect()
+    }
+
     /// [`unknownobject`]'s text, for a reader outside the VM that copies it, as the deactivate
     /// snapshot copies it into a record's pet name (`0x5f0a63`-`0x5f0a70`).
     pub fn unknown_object_text(&self) -> String {

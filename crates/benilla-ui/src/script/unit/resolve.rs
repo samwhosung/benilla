@@ -299,6 +299,33 @@ impl UnitGuids {
         out
     }
 
+    /// The base token of the first group row naming `guid`, as a member or its pet, or `None`
+    /// off the roster: party rows 1 to 4, then raid rows. These are the units a getter answers
+    /// from a record when it holds no object (the party record, then the raid's, `0x496400`, then
+    /// the pet record, `0x496420`), so a chain ending on one reads what its own token reads.
+    pub(crate) fn roster_token(&self, guid: u64) -> Option<String> {
+        if guid == 0 {
+            return None;
+        }
+        let row = |members: &[u64], pets: &[u64], member: &str, pet: &str| {
+            members
+                .iter()
+                .zip(pets.iter().chain(std::iter::repeat(&0)))
+                .enumerate()
+                .find_map(|(i, (&m, &p))| {
+                    if m == guid {
+                        Some(format!("{member}{}", i + 1))
+                    } else if p == guid {
+                        Some(format!("{pet}{}", i + 1))
+                    } else {
+                        None
+                    }
+                })
+        };
+        row(&self.party, &self.party_pets, "party", "partypet")
+            .or_else(|| row(&self.raid, &self.raid_pets, "raid", "raidpet"))
+    }
+
     /// Whether `guid` carries the unit-field watchers: `0x51bbb0` registers them while the unit's
     /// token flags are nonzero (`0x60c4a0`), and `0x60c520` sets those for the active player,
     /// its pet, a party member or its pet, a raid member or its pet, and the target. `npc` and
@@ -617,5 +644,24 @@ mod tests {
             "2^32 + 1 wraps to 1, index 0"
         );
         assert_eq!(index_of(b"x"), (u32::MAX, 0));
+    }
+
+    /// The group row a guid answers from without its object: a party row before a raid row, a
+    /// member or its pet, and nothing off the roster.
+    #[test]
+    fn a_roster_guid_names_its_first_group_row() {
+        let g = guids();
+        assert_eq!(
+            g.roster_token(P1).as_deref(),
+            Some("party1"),
+            "before raid2"
+        );
+        assert_eq!(g.roster_token(P1_PET).as_deref(), Some("partypet1"));
+        assert_eq!(g.roster_token(FAR).as_deref(), Some("party2"));
+        assert_eq!(g.roster_token(R3).as_deref(), Some("raid3"));
+        assert_eq!(g.roster_token(PET).as_deref(), Some("raidpet1"));
+        assert_eq!(g.roster_token(ME).as_deref(), Some("raid1"));
+        assert_eq!(g.roster_token(MOB), None);
+        assert_eq!(g.roster_token(0), None, "an empty row is nobody's");
     }
 }
