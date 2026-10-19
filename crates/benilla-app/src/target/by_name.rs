@@ -672,7 +672,7 @@ impl SelectCommit<'_, '_> {
     /// `SelectTarget`'s front returns first ([`super::front`]): with the targeting cursor up the unit
     /// is bound to the cast and the selection stays.
     pub(super) fn commit(&mut self, entity: Entity, guid: u64) {
-        if self.front.takes(entity, guid) {
+        if self.front.takes(entity, guid, self.seam.slots.targeting()) {
             return;
         }
         let me = self.me.single().ok();

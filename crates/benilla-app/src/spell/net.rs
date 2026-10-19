@@ -182,14 +182,12 @@ fn on_cast_result(
         arg,
     } = ev
     {
-        // The handler's slot is the pushed one: a started cast whose guard lapsed is not in it.
         let mut core = super::CastCore {
             pending: &mut ladder.pending,
             queued_melee: &mut ladder.queued_melee,
             ground: &mut ladder.ground,
             reports: &mut ladder.reports,
             net: &ladder.commands,
-            started: None,
         };
         let chained = cast_result(
             spell_id,
@@ -318,7 +316,6 @@ fn on_spell_failed_other(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Sce
             &sc.casting,
             &mut sc.cast_events,
             &l.self_guid,
-            &mut l.queued_melee,
             l.play_seq.next(),
         );
     }
@@ -691,11 +688,10 @@ fn cast_result(
     //   is not 2 (`0x6e74c5`), with no caster test; the use of an item without the flag lands here.
     // The save `0xcecaa8` is cleared first when it holds the spell (`0x6e73ee`): a queued strike
     // a cast or a cursor sits over dies here, as the server's melee-slot interrupt arrives as a
-    // failure. A strike in the slot itself is the slot's pop's.
+    // failure. A strike in the slot is the slot's pop's, and a failing one a cast popped back over
+    // pops twice: the report's pop copies the save back over it, this pop empties it.
+    core.queued_melee.clear_save_if(spell_id);
     let slot = core.slot();
-    if !matches!(slot, Some(super::inflight::Inflight::Strike(_))) {
-        core.queued_melee.clear_if(spell_id);
-    }
     let slot_holds = slot.map(super::inflight::Inflight::spell_id) == Some(spell_id);
     if slot_holds {
         core.cancel(false, false, super::REASON_ERROR);
@@ -1122,18 +1118,14 @@ fn spell_failed_other(
     casting: &Query<&Casting>,
     cast_events: &mut MessageWriter<CastEvent>,
     self_guid: &SelfGuid,
-    queued_melee: &mut QueuedMeleeSpell,
     seq: u64,
 ) {
     debug!("net: spell failed (other) {spell_id} by {caster:#x}");
-    // No event: the handler (`0x6e8e40`) fires none. Our bar's red "Interrupted" is the failing
-    // `SMSG_CAST_RESULT`'s report, which vmangos sends beside it (`Spell::cancel`).
-    if self_guid.0 == Some(caster) {
-        if *crate::net::CAST_TRACE {
-            info!("cast-trace: RECV SPELL_FAILED_OTHER — spell {spell_id} (self)");
-        }
-        // The melee-slot interrupt's other half, beside the failing CAST_RESULT.
-        queued_melee.clear_if(spell_id);
+    // No event and no slot: the handler (`0x6e8e40`) stops the visual (`0x60d040`) and reaps
+    // (`0x614150`). Our bar's red "Interrupted" and a queued strike's pop are the failing
+    // `SMSG_CAST_RESULT`'s report, which vmangos sends after it (`Spell::cancel`).
+    if self_guid.0 == Some(caster) && *crate::net::CAST_TRACE {
+        info!("cast-trace: RECV SPELL_FAILED_OTHER — spell {spell_id} (self)");
     }
     // Keyed by spell id, like the reap (the 0x2A6 handler's `0x614150(spellId, 0)`).
     if let Some(&e) = index.0.get(&caster) {
@@ -1625,6 +1617,8 @@ mod tests {
     struct CastSeq {
         app: App,
         self_e: Entity,
+        /// What the handlers sent.
+        sent: crossbeam_channel::Receiver<crate::net::ClientCommand>,
     }
 
     impl CastSeq {
@@ -1654,6 +1648,8 @@ mod tests {
                 .init_resource::<crate::spell::SpellModifiers>()
                 .init_resource::<crate::ui_pet::PetBar>()
                 .init_resource::<crate::items::Items>();
+            let (tx, sent) = crossbeam_channel::unbounded();
+            app.insert_resource(crate::net::NetCommands(tx));
             let self_e = app
                 .world_mut()
                 .spawn((Guid(Self::SELF), SelfPlayer, ObjectStore::default()))
@@ -1663,15 +1659,42 @@ mod tests {
                 .0
                 .insert(Self::SELF, self_e);
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(Self::SELF);
-            Self { app, self_e }
+            Self { app, self_e, sent }
         }
 
         /// The attempt as the ladder commits it: the record fill (`0x6e4fb1`), then the push
-        /// (`0x6e5026`), which an item without `ITEM_FLAG_PLAYERCAST` skips.
+        /// (`0x6e5026`), which an item without `ITEM_FLAG_PLAYERCAST` skips. The push's own
+        /// signal is the attempt's, not the subject's, so it is dropped.
         fn commit(&mut self, spell_id: u32, item_flags: Option<u32>) {
-            let mut pending = self.app.world_mut().resource_mut::<PendingCast>();
-            pending.fill_record();
-            pending.push(spell_id, item_flags, Instant::now());
+            self.push(spell_id, crate::spell::Held::Cast { item_flags });
+        }
+
+        /// The record fill and the push of `held`, unsignalled.
+        fn push(&mut self, spell_id: u32, held: crate::spell::Held) {
+            let pushes = !matches!(
+                held,
+                crate::spell::Held::Cast { item_flags: Some(f) }
+                    if f & benilla_protocol::messages::ITEM_FLAG_PLAYERCAST == 0
+            );
+            let world = self.app.world_mut();
+            world.resource_mut::<PendingCast>().fill_record();
+            if pushes {
+                let before = world.resource::<CastReports>().0.len();
+                world
+                    .run_system_once(
+                        move |mut slots: crate::spell::CastSlots,
+                              net: Res<crate::net::NetCommands>| {
+                            slots.core(&net).push(spell_id, held, Instant::now());
+                        },
+                    )
+                    .unwrap();
+                world.resource_mut::<CastReports>().0.truncate(before);
+            }
+        }
+
+        /// What the handlers sent since the last call.
+        fn sent(&self) -> Vec<crate::net::ClientCommand> {
+            self.sent.try_iter().collect()
         }
 
         fn start(&mut self, spell_id: u32, cast_time_ms: u32) {
@@ -1707,7 +1730,6 @@ mod tests {
 
         /// `fail` is `None` for status 0, else the status-2 reason.
         fn result(&mut self, spell_id: u32, fail: Option<u8>) {
-            let (tx, _rx) = crossbeam_channel::unbounded();
             self.app
                 .world_mut()
                 .run_system_once(
@@ -1716,10 +1738,10 @@ mod tests {
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
                           mut cast_events: MessageWriter<CastEvent>,
-                          mut core: CoreParts,
+                          mut core: crate::spell::CastSlots,
                           mut cooldowns: ResMut<Cooldowns>,
-                          mut auto_repeat: ResMut<AutoRepeatActive>| {
-                        let net = crate::net::NetCommands(tx.clone());
+                          mut auto_repeat: ResMut<AutoRepeatActive>,
+                          net: Res<crate::net::NetCommands>| {
                         cast_result(
                             spell_id,
                             fail.is_none(),
@@ -1736,6 +1758,31 @@ mod tests {
                             None,
                             None,
                             &net,
+                            1,
+                        );
+                    },
+                )
+                .unwrap();
+        }
+
+        /// `SMSG_SPELL_FAILED_OTHER` for our own spell.
+        fn failed_other(&mut self, spell_id: u32) {
+            self.app
+                .world_mut()
+                .run_system_once(
+                    move |mut commands: Commands,
+                          index: Res<GuidIndex>,
+                          casting: Query<&Casting>,
+                          mut cast_events: MessageWriter<CastEvent>,
+                          self_guid: Res<SelfGuid>| {
+                        spell_failed_other(
+                            Self::SELF,
+                            spell_id,
+                            &mut commands,
+                            &index,
+                            &casting,
+                            &mut cast_events,
+                            &self_guid,
                             1,
                         );
                     },
@@ -1871,28 +1918,6 @@ mod tests {
     }
 
     use bevy::ecs::system::RunSystemOnce;
-
-    /// The reporters' state as `on_cast_result` lends it: the pushed slot only.
-    #[derive(SystemParam)]
-    struct CoreParts<'w> {
-        pending: ResMut<'w, PendingCast>,
-        queued_melee: ResMut<'w, QueuedMeleeSpell>,
-        ground: ResMut<'w, super::super::SpellTargeting>,
-        reports: ResMut<'w, CastReports>,
-    }
-
-    impl CoreParts<'_> {
-        fn core<'a>(&'a mut self, net: &'a NetCommands) -> super::super::CastCore<'a> {
-            super::super::CastCore {
-                pending: &mut self.pending,
-                queued_melee: &mut self.queued_melee,
-                ground: &mut self.ground,
-                reports: &mut self.reports,
-                net,
-                started: None,
-            }
-        }
-    }
 
     const FIREBALL: u32 = 133;
     const FORTITUDE: u32 = 1243;
@@ -2044,6 +2069,8 @@ mod tests {
                     ],
                     "reason {reason:#04x}, timed {timed}"
                 );
+                // The server's own failure cancels with no packet (`0x6e2213 sete`).
+                assert!(s.sent().is_empty(), "reason {reason:#04x}, timed {timed}");
                 assert!(!s
                     .app
                     .world()
@@ -2087,6 +2114,58 @@ mod tests {
         assert_eq!(s.stream(), ["REFUSED 0x23", "INTERRUPTED"]);
         s.result(FIREBALL, Some(0x61));
         assert_eq!(s.stream(), ["REFUSED 0x61"]);
+    }
+
+    /// A dead melee slot (vmangos `AttackStop` → `InterruptSpell(CURRENT_MELEE_SPELL)` →
+    /// `Spell::cancel`) arrives as `SMSG_SPELL_FAILED_OTHER`, whose handler touches no slot
+    /// (`0x6e8e40`), then a failing `SMSG_CAST_RESULT` 0x23, whose report pops the strike from the
+    /// slot (`0x6e2201` → `0x6e2218`): its pair, then its event while the record's caster holds.
+    #[test]
+    fn a_strikes_removal_signals_its_pop_at_the_cast_result() {
+        const HEROIC_STRIKE: u32 = 78;
+        let mut s = CastSeq::new();
+        s.push(HEROIC_STRIKE, crate::spell::Held::Strike);
+        s.failed_other(HEROIC_STRIKE);
+        assert_eq!(s.stream(), Vec::<String>::new());
+        assert_eq!(
+            s.app.world().resource::<QueuedMeleeSpell>().current(),
+            Some(HEROIC_STRIKE),
+            "the strike is still queued"
+        );
+        s.result(HEROIC_STRIKE, Some(0x23));
+        assert_eq!(s.stream(), ["REFUSED 0x23", "CHANGED", "INTERRUPTED"]);
+        assert_eq!(s.app.world().resource::<QueuedMeleeSpell>().current(), None);
+        assert!(s.sent().is_empty());
+    }
+
+    /// A strike a cast popped back over is in the slot and the save (`0x6e4b2c` copies, never
+    /// clears): its failure pops twice, the report's pop copying it back (`0x6e2218`), the save
+    /// clear (`0x6e73ee`), then the handler's own pop (`0x6e741a`).
+    #[test]
+    fn a_failing_strike_a_cast_popped_back_over_pops_twice() {
+        const HEROIC_STRIKE: u32 = 78;
+        let mut s = CastSeq::new();
+        s.push(HEROIC_STRIKE, crate::spell::Held::Strike);
+        s.commit(FORTITUDE, None);
+        s.result(FORTITUDE, None);
+        assert_eq!(
+            s.stream(),
+            ["CHANGED", "STOP"],
+            "the cast pops the strike back in"
+        );
+        assert_eq!(
+            s.app.world().resource::<QueuedMeleeSpell>().saved(),
+            Some(HEROIC_STRIKE)
+        );
+        s.failed_other(HEROIC_STRIKE);
+        s.result(HEROIC_STRIKE, Some(0x23));
+        assert_eq!(
+            s.stream(),
+            ["REFUSED 0x23", "CHANGED", "CHANGED"],
+            "two pops; the cast's STOP spent the caster word"
+        );
+        let q = s.app.world().resource::<QueuedMeleeSpell>();
+        assert_eq!((q.current(), q.saved()), (None, None));
     }
 
     /// The slot's own pop fires only while the caster word is the player's (`0x6e4a04`–`0x6e4a1e`)
@@ -2203,8 +2282,7 @@ mod tests {
                       index: Res<GuidIndex>,
                       casting: Query<&Casting>,
                       mut cast_events: MessageWriter<CastEvent>,
-                      self_guid: Res<SelfGuid>,
-                      mut queued_melee: ResMut<QueuedMeleeSpell>| {
+                      self_guid: Res<SelfGuid>| {
                     spell_failed_other(
                         10,
                         BLIZZARD,
@@ -2213,7 +2291,6 @@ mod tests {
                         &casting,
                         &mut cast_events,
                         &self_guid,
-                        &mut queued_melee,
                         1,
                     );
                 },
@@ -2806,7 +2883,7 @@ mod tests {
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
                           mut cast_events: MessageWriter<CastEvent>,
-                          mut core: CoreParts,
+                          mut core: crate::spell::CastSlots,
                           mut cooldowns: ResMut<Cooldowns>,
                           mut auto_repeat: ResMut<AutoRepeatActive>| {
                         let net = crate::net::NetCommands(tx.clone());
@@ -3266,12 +3343,15 @@ mod tests {
                 .insert(10, self_e);
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(10);
             app.world_mut().resource_mut::<AutoRepeatActive>().0 = r.running;
+            // A strike with a cast in flight is the save's, which the cast's push filled.
             if let Some(id) = r.pending {
+                app.world_mut()
+                    .resource_mut::<QueuedMeleeSpell>()
+                    .push(r.queued, None);
                 app.world_mut()
                     .resource_mut::<PendingCast>()
                     .push(id, None, Instant::now());
-            }
-            if let Some(id) = r.queued {
+            } else if let Some(id) = r.queued {
                 app.world_mut().resource_mut::<QueuedMeleeSpell>().arm(id);
             }
             let mut items = crate::items::Items::default();
@@ -3288,7 +3368,7 @@ mod tests {
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
                           mut cast_events: MessageWriter<CastEvent>,
-                          mut core: CoreParts,
+                          mut core: crate::spell::CastSlots,
                           mut cooldowns: ResMut<Cooldowns>,
                           mut auto_repeat: ResMut<AutoRepeatActive>| {
                         let net = crate::net::NetCommands(tx.clone());

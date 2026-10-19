@@ -39,7 +39,6 @@ pub(super) fn world_right_click_payload(
 pub(super) fn select_on_plate_click(
     mut plate: ResMut<crate::vplates::PlateClicks>,
     press: Res<PressPick>,
-    ground: Res<crate::spell::SpellTargeting>,
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
     mut front: super::front::SelectFront,
@@ -63,7 +62,7 @@ pub(super) fn select_on_plate_click(
         // The greeting fires on the select, plate or body, before SetTarget (`0x60c270`).
         greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
         // `SelectTarget`'s returns: charmed, or the cursor's bind in the select's place.
-        if front.takes(entity, guid.0) {
+        if front.takes(entity, guid.0, seam.slots.targeting()) {
             continue;
         }
         // Attack-classified only when the press was on this unit: a scripted click has no cursor.
@@ -79,7 +78,9 @@ pub(super) fn select_on_plate_click(
             attack,
         );
     }
-    if !ground.active() && right.into_iter().any(|e| press.hovered.target == Some(e)) {
+    if !seam.slots.targeting().active()
+        && right.into_iter().any(|e| press.hovered.target == Some(e))
+    {
         right_clicks.write(WorldRightClick);
     }
 }
@@ -96,7 +97,6 @@ pub(super) fn select_on_click(
     self_q: Query<(&Guid, Has<Engaged>), With<SelfPlayer>>,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
     mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
-    ground: Res<crate::spell::SpellTargeting>,
     click_cfg: Res<ClickConfig>,
     // Read at the commit, where the reference resolves it for `0x493540`'s `IsSelectable` gate.
     stores: Query<&ObjectStore>,
@@ -114,6 +114,7 @@ pub(super) fn select_on_click(
     // greeter runs ahead of `SelectTarget` for every unit the click names (`0x4927fd`) and nothing
     // before it tests targeting, so the unit the cursor's click binds is greeted as well, unless a
     // nearer GameObject takes the click.
+    let ground = seam.slots.targeting();
     if ground.active() {
         let object_click = ground.wants(crate::spell::TargetingWants::GameObject)
             && go_is_nearest(&hovered, &press.object);
@@ -186,9 +187,6 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Feedback<'w, 's> {
     errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
-    /// The skin's refusal, and the cast in flight its report's tail reads.
-    reports: ResMut<'w, crate::ui_cast::CastReports>,
-    pending: Res<'w, crate::spell::PendingCast>,
     // The mailbox's open, which registers on the interaction latch with the world in hand.
     windows: Commands<'w, 's>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
@@ -579,19 +577,20 @@ impl Dispatch<'_, '_> {
         if crate::spell::validator::cast_mounted_refusal(mounted, def) {
             debug!("right-click skin: refused locally — mounted (0x39)");
             // The reference casts through `TryCast` (`0x5f06dc` → `0x6e5a90` → `0x6e4b60`), whose
-            // validator refuses ahead of the push (`0x6e5026`), so the report's tail finds no skin
-            // in flight: another spell in flight fires nothing (`0x6e2228`), nothing in flight
-            // fires `SPELLCAST_FAILED` (`0x6e224a`).
-            self.feedback
-                .reports
-                .refused(crate::ui_action::CastFail::local(spell_id, 0x39));
-            let in_flight = self.feedback.pending.in_flight(std::time::Instant::now())
-                || self.seam.queued_melee.current().is_some();
-            if !in_flight {
-                self.feedback
-                    .reports
-                    .bar(crate::ui_cast::CastBarEdge::Failed);
-            }
+            // validator refuses ahead of the push (`0x6e5026`), through the reporter.
+            let fail = crate::ui_action::CastFail::local(spell_id, 0x39);
+            let reaches = crate::ui_action::report_reaches_pop(
+                fail.reason,
+                fail.arg,
+                def,
+                self.go_inputs.spells.as_ref().map(|s| &s.forms),
+                // No item rides this reason.
+                |_| false,
+            );
+            self.seam
+                .slots
+                .core(&self.seam.net)
+                .report(fail, false, reaches);
         } else {
             debug!("right-click skin: {guid:#x} (spell {spell_id})");
             let _ = self.seam.net.0.send(ClientCommand::CastSpell {
@@ -904,7 +903,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                   selection: &mut ResMut<Selection>| {
         // Both selects are `SelectTarget`'s (`0x492870`, `0x5eccaa`): charmed, or a standing
         // cursor's bind in its place.
-        if front.takes(entity, guid) {
+        if front.takes(entity, guid, seam.slots.targeting()) {
             return scan::CommitOutcome::default();
         }
         scan::commit(
@@ -2064,6 +2063,8 @@ mod tests {
             world.insert_resource(NetCommands(tx));
             world.init_resource::<InspectMode>();
             world.init_resource::<crate::spell::QueuedMeleeSpell>();
+            world.init_resource::<crate::spell::PendingCast>();
+            world.init_resource::<crate::ui_cast::CastReports>();
             world.init_resource::<crate::spell::AutoRepeatActive>();
             world.init_resource::<crate::ui_loot::LootState>();
             world.init_resource::<crate::ui_loot::LootLatch>();
@@ -2180,6 +2181,98 @@ mod tests {
             .spawn((Guid(BOAR), store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)])))
             .id();
         (world, boar)
+    }
+
+    /// The skin leg casts through `TryCast` (`0x5f06dc` → `0x6e5a90` → `0x6e4b60`), whose
+    /// validator refuses a rider (`0x609c6c`, 0x39) ahead of the push, through the reporter: the
+    /// line, then the tail, which with nothing in flight fires `SPELLCAST_FAILED` (`0x6e224a`) and
+    /// with another spell in flight nothing (`0x6e2228`).
+    #[test]
+    fn a_mounted_skin_is_refused_through_the_reporter() {
+        const SKINNING: u32 = 8613;
+        const FIREBALL: u32 = 133;
+        const F_MOUNT: u16 = benilla_protocol::field::FIELD_UNIT_MOUNTDISPLAYID;
+        const F_UNIT_FLAGS: u16 = benilla_protocol::field::FIELD_UNIT_FLAGS;
+        for in_flight in [false, true] {
+            let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+            let (mut world, boar) = right_click_world();
+            world.insert_resource(NetCommands(tx));
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert(store(&[
+                (F_HEALTH, 100),
+                (F_MAXHEALTH, 100),
+                (F_MOUNT, 14_337),
+            ]));
+            world.entity_mut(boar).insert(store(&[
+                (F_HEALTH, 0),
+                (F_MAXHEALTH, 100),
+                (F_UNIT_FLAGS, cursor_mode::UNIT_FLAG_SKINNABLE),
+            ]));
+            world
+                .resource_mut::<crate::ui_action::LearnedAbilities>()
+                .skinning = Some(SKINNING);
+            let mut spells = crate::ui_action::Spells::empty_for_tests();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(
+                [(SKINNING, benilla_formats::SpellDisplay::default())]
+                    .into_iter()
+                    .collect(),
+            );
+            world.insert_resource(spells);
+            if in_flight {
+                world.resource_mut::<crate::spell::PendingCast>().push(
+                    FIREBALL,
+                    None,
+                    std::time::Instant::now(),
+                );
+            }
+            *world.resource_mut::<PressPick>() = PressPick {
+                hovered: Hovered {
+                    target: Some(boar),
+                    guid: Some(BOAR),
+                    distance: 2.0,
+                    ..Hovered::default()
+                },
+                cursor: WorldCursor {
+                    kind: cursor_mode::CursorKind::Skin,
+                    unable: false,
+                },
+                ..PressPick::default()
+            };
+            world
+                .resource_mut::<Messages<WorldRightClick>>()
+                .write(WorldRightClick);
+            world.run_system_once(act_on_right_click).unwrap();
+            let reports = &world.resource::<crate::ui_cast::CastReports>().0;
+            assert!(
+                matches!(
+                    reports[..],
+                    [
+                        crate::ui_cast::CastReport::Refused(crate::ui_action::CastFail {
+                            reason: 0x39,
+                            ..
+                        }),
+                        ..
+                    ]
+                ),
+                "in flight {in_flight}: the line first"
+            );
+            assert_eq!(
+                world
+                    .resource::<crate::ui_cast::CastReports>()
+                    .edges()
+                    .len(),
+                usize::from(!in_flight),
+                "in flight {in_flight}"
+            );
+            assert!(
+                !rx.try_iter()
+                    .any(|c| matches!(c, ClientCommand::CastSpell { .. })),
+                "nothing cast"
+            );
+        }
     }
 
     /// A right-click begun on a plate acts on the plate's unit: [`act_on_right_click`] reads the

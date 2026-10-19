@@ -67,9 +67,8 @@ pub struct ActionState {
 
 impl ActionState {
     /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: the Attack slot while
-    /// attacking (`0x4e5467`), else the slot's spell when it is cast, queued, channelled or
-    /// awaiting its target (`0x4e54c1`, `0x4e54d0`), or when its form is the player's
-    /// (`0x4e558b`).
+    /// attacking (`0x4e5467`), else the slot's spell when it is in flight or awaiting its target
+    /// (`0x4e54c1`, `0x4e54d0`), or channelled, or when its form is the player's (`0x4e558b`).
     pub fn is_current(&self, view: &CastView) -> bool {
         if self.is_attack {
             return view.attacking;
@@ -77,7 +76,7 @@ impl ActionState {
         let Some(spell) = self.spell else {
             return false;
         };
-        [view.cast, view.strike, view.channel, view.targeting].contains(&Some(spell))
+        [view.slot, view.channel, view.targeting].contains(&Some(spell))
             || (view.form != 0 && self.form == Some(u32::from(view.form)))
     }
 
@@ -93,10 +92,9 @@ impl ActionState {
 /// call left.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CastView {
-    /// The cast in the in-flight slot (`0xceca88`) from its attempt to its result.
-    pub cast: Option<u32>,
-    /// The queued on-next-swing strike, which the reference also keeps in `0xceca88`.
-    pub strike: Option<u32>,
+    /// The spell in the in-flight slot (`0xceca88`, `0x6e3d10`): a cast from its attempt to its
+    /// result, a queued strike nothing is pushed over, or the cursor's spell its attempt pushed.
+    pub slot: Option<u32>,
     /// The spell awaiting its target (`GetTargetingSpellId 0x6e48e0`).
     pub targeting: Option<u32>,
     /// The running channel.
@@ -111,12 +109,10 @@ pub struct CastView {
 
 impl CastView {
     /// What `SpellStopCasting` (`0x6e6e80`) can stop: the auto-repeat (`0x6e9fd0`), else a spell
-    /// in flight (`IsCastInFlight 0x6e3d30`), never a channel, whose spell is not in flight.
+    /// in flight (`IsCastInFlight 0x6e3d30`), never a channel, whose spell is not in flight, nor a
+    /// cursor that holds no slot.
     pub fn stoppable(&self) -> bool {
-        self.auto_repeat.is_some()
-            || self.cast.is_some()
-            || self.strike.is_some()
-            || self.targeting.is_some()
+        self.auto_repeat.is_some() || self.slot.is_some()
     }
 }
 

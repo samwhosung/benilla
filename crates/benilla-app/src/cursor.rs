@@ -322,8 +322,11 @@ impl Plugin for CursorPlugin {
                 Update,
                 (read_glue_pointer, drive_displayed_cursor, macos::drive)
                     .chain()
-                    // After the tick: a FrameXML `SetCursor` made this frame is read here.
-                    .after(crate::ui_script::UiInput),
+                    // After the tick: a FrameXML `SetCursor` made this frame is read here; and
+                    // after the target chain, whose clicks, calls and selects end or raise the
+                    // targeting cursor.
+                    .after(crate::ui_script::UiInput)
+                    .after(crate::target::TargetUpdate),
             );
         #[cfg(not(target_os = "macos"))]
         app.init_resource::<other::PayloadCursorImages>()
@@ -337,8 +340,11 @@ impl Plugin for CursorPlugin {
                     other::drive_glue_hide,
                 )
                     .chain()
-                    // After the tick: a FrameXML `SetCursor` made this frame is read here.
-                    .after(crate::ui_script::UiInput),
+                    // After the tick: a FrameXML `SetCursor` made this frame is read here; and
+                    // after the target chain, whose clicks, calls and selects end or raise the
+                    // targeting cursor.
+                    .after(crate::ui_script::UiInput)
+                    .after(crate::target::TargetUpdate),
             );
     }
 }

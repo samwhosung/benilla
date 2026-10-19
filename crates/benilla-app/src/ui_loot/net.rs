@@ -924,6 +924,8 @@ mod tests {
         world.init_resource::<LootState>();
         world.init_resource::<LootLatch>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
+        world.init_resource::<crate::spell::PendingCast>();
+        world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<bevy::ecs::message::Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<GuidIndex>();

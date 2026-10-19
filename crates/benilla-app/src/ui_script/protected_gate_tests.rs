@@ -45,7 +45,7 @@ fn stock_ui(tag: &str) -> UiScript {
         }),
     );
     s.set_cast_view(benilla_ui::script::CastView {
-        cast: Some(FIREBALL),
+        slot: Some(FIREBALL),
         ..Default::default()
     });
     s.set_spell_targeting(true);

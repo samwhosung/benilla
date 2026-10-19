@@ -265,12 +265,20 @@ struct Targeting {
     commit: super::cast_send::CastCommit,
     /// The standing flag_word `0xcecac0`; more than one seam can answer yes to it.
     word: u16,
+    /// The spell holds the in-flight slot `0xceca88`: its attempt pushed it (`0x6e5026`), which
+    /// it does for no item or one with `ITEM_FLAG_PLAYERCAST` (`0x6e500b`-`0x6e501f`).
+    in_slot: bool,
 }
 
 impl SpellTargeting {
     /// `IsTargeting 0x6e48a0`.
     pub(crate) fn active(&self) -> bool {
         self.0.is_some()
+    }
+
+    /// The cursor's spell when it holds the in-flight slot ([`super::inflight::Inflight`]).
+    pub(crate) fn in_slot(&self) -> Option<u32> {
+        self.0.as_ref().filter(|t| t.in_slot).map(|t| t.spell_id)
     }
 
     /// `GetTargetingSpellId 0x6e48e0`, whatever the word wants: for the bar's checked state, the
@@ -313,6 +321,11 @@ impl SpellTargeting {
         self.0.as_ref().map(|t| (t.spell_id, t.commit, t.word))
     }
 
+    /// The standing word and whether its spell holds the slot.
+    fn word_in_slot(&self) -> Option<(u16, bool)> {
+        self.0.as_ref().map(|t| (t.word, t.in_slot))
+    }
+
     /// The pending spell when the standing word answers `wants`. A surface that draws or binds for
     /// one seam reads this, never [`Self::spell`], or an armed lockpick gets an AoE reticle.
     pub(crate) fn spell_for(&self, wants: TargetingWants) -> Option<u32> {
@@ -322,12 +335,33 @@ impl SpellTargeting {
             .map(|t| t.spell_id)
     }
 
+    /// The cursor up for a spell its attempt pushed.
+    #[cfg(test)]
     pub(crate) fn enter(&mut self, spell_id: u32, commit: super::cast_send::CastCommit, word: u16) {
+        self.enter_as(spell_id, commit, word, true);
+    }
+
+    /// The cursor up, holding the in-flight slot or not (`in_slot`).
+    pub(crate) fn enter_as(
+        &mut self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        word: u16,
+        in_slot: bool,
+    ) {
         self.0 = Some(Targeting {
             spell_id,
             commit,
             word,
+            in_slot,
         });
+    }
+
+    /// The pop of the cursor's spell (`0x6e4b2c`); the word stays as it stands.
+    pub(super) fn leave_slot(&mut self) {
+        if let Some(t) = &mut self.0 {
+            t.in_slot = false;
+        }
     }
 
     /// The pending cast when the standing word answers `wants`, so no commit fires on a word its
@@ -476,8 +510,8 @@ fn bind_target_unit(
 /// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),
 /// so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a
 /// cancel. That is a defect: benilla's cancel finds the cursor up, so it drops the word, with its
-/// signal (`0x6e495c`), instead of sending, and the cursor is re-armed with its caster, which is
-/// what a player can use.
+/// signal (`0x6e495c`), instead of sending, and the cursor is re-armed as its attempt left it,
+/// its caster and its hold on the slot included, which is what a player can use.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
@@ -487,11 +521,10 @@ fn merge(
 ) {
     if let Some(reason) = range {
         debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
-        let word = ladder.ground.pending().map(|(_, _, word)| word);
+        let word = ladder.ground.word_in_slot();
         ladder.report_local(crate::ui_action::CastFail::local(spell_id, reason));
-        if let Some(word) = word {
-            ladder.ground.enter(spell_id, commit, word);
-            ladder.pending.fill_record();
+        if let Some((word, in_slot)) = word {
+            ladder.core().rearm_cursor(spell_id, commit, word, in_slot);
         }
         return;
     }

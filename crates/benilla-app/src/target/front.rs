@@ -23,10 +23,10 @@ use bevy::prelude::*;
 use crate::net::{ObjectStore, SelfPlayer};
 use crate::spell::{CursorPicks, ScriptCastPermit, SpellTargeting};
 
-/// What the front reads, and where it parks a unit for the bind.
+/// What the front reads, and where it parks a unit for the bind. The targeting word it tests is
+/// the attack seam's ([`crate::creature_anim::AttackSeam`]), which every selection writer holds.
 #[derive(SystemParam)]
 pub(crate) struct SelectFront<'w, 's> {
-    targeting: Res<'w, SpellTargeting>,
     /// The gate's tag 2 for the script call being applied; absent in a world that applies none.
     permit: Option<Res<'w, ScriptCastPermit>>,
     picks: ResMut<'w, CursorPicks>,
@@ -35,8 +35,8 @@ pub(crate) struct SelectFront<'w, 's> {
 
 impl SelectFront<'_, '_> {
     /// Whether `SelectTarget` returns before selecting `guid`, the object `entity`: charmed, or
-    /// the cursor is up and the unit goes to the bind instead.
-    pub(super) fn takes(&mut self, entity: Entity, guid: u64) -> bool {
+    /// the cursor is up (`targeting`) and the unit goes to the bind instead.
+    pub(super) fn takes(&mut self, entity: Entity, guid: u64, targeting: &SpellTargeting) -> bool {
         // `0x49359c`: `UNIT_FIELD_CHARMEDBY` of the active player.
         if self
             .me
@@ -46,7 +46,7 @@ impl SelectFront<'_, '_> {
         {
             return true;
         }
-        if !self.targeting.active() {
+        if !targeting.active() {
             return false;
         }
         // `0x6e5ba5`: the gate refuses the bind, and `SelectTarget` returns all the same.

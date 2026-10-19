@@ -111,7 +111,7 @@ impl AttackPress<'_, '_> {
             e,
             guid,
             engaged,
-            &mut seam.queued_melee,
+            &mut seam.slots,
             &mut seam.auto_repeat,
             &mut seam.sheath,
             &mut seam.ecs,

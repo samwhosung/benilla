@@ -359,7 +359,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
 
     // Press 0, mid-cast with a dropdown open: `CloseMenus` eats it.
     s.set_cast_view(benilla_ui::script::CastView {
-        cast: Some(133),
+        slot: Some(133),
         ..Default::default()
     });
     // Stock `DropDownList` `OnShow` sizes its buttons from `maxWidth`, which
@@ -384,7 +384,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
 
     // Press 1, mid-cast: `SpellStopCasting` eats it.
     s.set_cast_view(benilla_ui::script::CastView {
-        cast: Some(133),
+        slot: Some(133),
         ..Default::default()
     });
     s.run("ToggleGameMenu()").unwrap();
@@ -482,7 +482,7 @@ fn escape_ladder_targeting_rung_after_cast_before_windows() {
     // Press 2, casting and targeting both (the state the app pushes while the cursor is up, the
     // targeting spell being in flight): the cast rung is first.
     s.set_cast_view(benilla_ui::script::CastView {
-        cast: Some(133),
+        slot: Some(133),
         ..Default::default()
     });
     s.run("ToggleGameMenu()").unwrap();

@@ -40,7 +40,7 @@ fn action_state_bindings_answer_the_reference_conventions() {
     assert!(s.eval::<bool>("return IsCurrentAction(3) == nil").unwrap());
     // Checked while its spell is the one in flight, read live off the cast state.
     s.set_cast_view(CastView {
-        cast: Some(133),
+        slot: Some(133),
         ..Default::default()
     });
     assert!(s.eval::<bool>("return IsCurrentAction(3) == 1").unwrap());

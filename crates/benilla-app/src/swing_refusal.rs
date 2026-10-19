@@ -164,8 +164,12 @@ impl Plugin for SwingRefusalPlugin {
             .add_systems(
                 Update,
                 // After the drain that writes the edges and before the unit feeds, so a queued
-                // key shows the same frame; chained so a refusal is latched before the tick.
-                (apply_swing_refusals, show_swing_refusal)
+                // key shows the same frame; chained so a refusal is latched before the tick. The
+                // stop's cancel reaches the targeting word, which the UI feed publishes after it.
+                (
+                    apply_swing_refusals.before(crate::ui_script::UiFeed),
+                    show_swing_refusal,
+                )
                     .chain()
                     .after(benilla_world::schedule::WorldStage::Net)
                     .before(crate::ui_unit::UnitFeed),

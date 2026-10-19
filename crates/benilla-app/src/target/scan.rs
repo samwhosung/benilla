@@ -567,7 +567,7 @@ pub(super) fn cycle(
     // instead. The cycle's index was stored before that call (`0x4941d4`), so the next press moves
     // past the pick whatever became of it; the history, which stands in for the index, records it
     // as visited without a selection to push.
-    if front.takes(entity, guid) {
+    if front.takes(entity, guid, seam.slots.targeting()) {
         if wrapped {
             history.visited.clear();
         }
@@ -670,7 +670,7 @@ impl AttackPick<'_, '_> {
                 .zip(selection.guid)
                 .filter(|&(_, guid)| Some(guid) == candidate)
             {
-                self.front.takes(entity, guid);
+                self.front.takes(entity, guid, seam.slots.targeting());
             }
         } else if may_pick {
             let engaged = self.engaged();
@@ -826,7 +826,7 @@ pub(super) fn auto_acquire_attacker(
         );
         // `0x6259fe` is `SelectTarget`, whose front may bind the attacker to a standing cursor's
         // cast instead; the packet handler runs in no script, whose gate context passes tag 2.
-        if front.takes(s.attacker, guid.0) {
+        if front.takes(s.attacker, guid.0, seam.slots.targeting()) {
             continue;
         }
         // The selection was empty, so no switch law: selection only.
@@ -896,6 +896,9 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
+        world.init_resource::<crate::spell::PendingCast>();
+        world.init_resource::<crate::spell::SpellTargeting>();
+        world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<crate::player::StandStateRequest>>();
@@ -1014,6 +1017,9 @@ mod tests {
         world
             .resource_mut::<crate::spell::QueuedMeleeSpell>()
             .arm(78);
+        world
+            .resource_mut::<crate::spell::PendingCast>()
+            .fill_record();
         world.resource_mut::<crate::spell::AutoRepeatActive>().0 = Some(75);
         let out = go(&mut world, 0xF, true, Some(1), true);
         assert!(out.changed && out.swung);
@@ -1026,6 +1032,14 @@ mod tests {
             None,
             "the switch un-queued Heroic Strike"
         );
+        // `CancelQueuedCast`'s cancel (`0x6e6f68`): the pop's signal, then `SPELLCAST_STOP`.
+        assert!(matches!(
+            world.resource::<crate::ui_cast::CastReports>().0[..],
+            [
+                crate::ui_cast::CastReport::Changed,
+                crate::ui_cast::CastReport::Bar(crate::ui_cast::CastBarEdge::Stop)
+            ]
+        ));
         assert_eq!(
             world.resource::<crate::spell::AutoRepeatActive>().0,
             None,

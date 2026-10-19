@@ -92,25 +92,6 @@ impl PendingCast {
         });
     }
 
-    /// The attempt's push and `SendCast`'s pop: an auto-repeat spell (`AttributesEx2 & 0x20`, Auto
-    /// Shot and wand Shoot) is popped once its packet is out (`0x6e5935` → `0x6e5989`), so only a
-    /// ranged shot that is not auto-repeat (Aimed Shot, Arcane Shot, Throw) stays in flight until
-    /// its result. The send's other pop (`0x6e58a2`–`0x6e58bd`) is for a record the push did not
-    /// make (an item without the flag) or another caster's (the pet bar), neither of which holds
-    /// this slot.
-    pub(crate) fn commit(
-        &mut self,
-        spell_id: u32,
-        item_flags: Option<u32>,
-        auto_repeat: bool,
-        now: Instant,
-    ) {
-        self.push(spell_id, item_flags, now);
-        if auto_repeat {
-            self.clear_if(spell_id);
-        }
-    }
-
     /// Tighten the deadline to the server's real cast time once `SMSG_SPELL_START` names it.
     pub(crate) fn refine(&mut self, cast_time_ms: u32, now: Instant) {
         if let Some(p) = &mut self.slot {
@@ -149,47 +130,84 @@ impl PendingCast {
     }
 }
 
-/// Our queued on-next-swing spell (Heroic Strike, Cleave: `Attributes & 0x404`). The reference
-/// keeps it in the inflight id `0xceca88`, and a new cast nests around it (`PushPopNestedCast
-/// 0x6e4ad0`); this second slot beside [`PendingCast`] gives the same observable.
+/// Our queued on-next-swing spell (Heroic Strike, Cleave: `Attributes & 0x404`) in the two places
+/// the reference keeps it: the in-flight slot `0xceca88`, which it holds while nothing is pushed
+/// over it, and the save `0xcecaa8`. `SetInFlightSpell 0x6e4ad0` saves what the slot held as it
+/// pushes (`0x6e4adf`) and copies the save back as it pops (`0x6e4b2c`), never clearing it, so a
+/// strike a cast popped back over is in both. Only a strike's save matters: the attempt refuses or
+/// cancels anything else in flight before it pushes (`0x6e4d62`, `0x6e4d97`).
 ///
-/// No deadline: cleared, keyed on the id, by `SMSG_SPELL_GO` when the swing fires or by the
-/// failing `SMSG_CAST_RESULT` and `SMSG_SPELL_FAILED_OTHER` vmangos sends when the melee slot
-/// dies. The reference clears it on a matching `SMSG_CAST_RESULT` alone (`0x6e7330`; its GO
-/// handler never touches `0xceca88`); vmangos sends the OK result just before the GO
-/// (`Spell.cpp:3669`, then `3703` or `3771`). A re-arm replaces it (the server's one
-/// `CURRENT_MELEE_SPELL`). Re-pressing the queued spell bails with no red line (`0x6e4d43`); it
-/// un-queues through the StopAttack chain (`0x5ecac0`, `CancelQueuedCast 0x6e6f30`), which an
-/// auto-repeat press also runs (`0x6e5976`), or through Esc, which cancels it as the inflight
-/// spell (`SpellStopCasting 0x6e6e80`).
+/// No deadline. The handler clears the save for its spell (`0x6e73ee`) and pops the slot for it
+/// (`0x6e7408`); vmangos answers a dead melee slot with `SMSG_SPELL_FAILED_OTHER`, which touches
+/// neither (`0x6e8e40`), then a failing `SMSG_CAST_RESULT` 0x23 (`Spell::cancel`). A re-arm
+/// replaces it (the server's one `CURRENT_MELEE_SPELL`). Re-pressing the queued spell bails with
+/// no red line (`0x6e4d43`); it un-queues through the StopAttack chain (`0x5ecac0`,
+/// `CancelQueuedCast 0x6e6f30`), which an auto-repeat press also runs (`0x6e5976`), or through
+/// Esc, which cancels it as the inflight spell (`SpellStopCasting 0x6e6e80`).
 #[derive(Resource, Default)]
-pub(crate) struct QueuedMeleeSpell(Option<u32>);
+pub(crate) struct QueuedMeleeSpell {
+    slot: Option<u32>,
+    save: Option<u32>,
+}
 
 impl QueuedMeleeSpell {
+    /// The strike in the in-flight slot.
     pub(crate) fn current(&self) -> Option<u32> {
-        self.0
+        self.slot
     }
 
+    /// The strike the save holds.
+    #[cfg(test)]
+    pub(crate) fn saved(&self) -> Option<u32> {
+        self.save
+    }
+
+    /// The strike in the slot with nothing over it, the save untouched.
+    #[cfg(test)]
     pub(crate) fn arm(&mut self, spell_id: u32) {
-        self.0 = Some(spell_id);
+        self.slot = Some(spell_id);
     }
 
+    /// The push (`0x6e4adf`-`0x6e4af8`): the save takes the strike the slot `held`, and the slot
+    /// `spell`, a strike's id or none for a spell [`PendingCast`] or the cursor holds.
+    pub(super) fn push(&mut self, held: Option<u32>, spell: Option<u32>) {
+        self.save = held;
+        self.slot = spell;
+    }
+
+    /// The pop (`0x6e4b2c`-`0x6e4b3d`): the save back into the slot, the save kept.
+    pub(super) fn restore(&mut self) {
+        self.slot = self.save;
+    }
+
+    /// `HandleCastResult`'s save clear (`0x6e73ee`-`0x6e73f6`).
+    pub(crate) fn clear_save_if(&mut self, spell_id: u32) {
+        if self.save == Some(spell_id) {
+            self.save = None;
+        }
+    }
+
+    /// `CancelQueuedCast`'s save leg (`0x6e701a`): the save emptied, its strike returned.
+    pub(super) fn take_save(&mut self) -> Option<u32> {
+        self.save.take()
+    }
+
+    /// The strike out of the slot, keyed on its id.
     pub(crate) fn clear_if(&mut self, spell_id: u32) {
-        if self.0 == Some(spell_id) {
-            self.0 = None;
+        if self.slot == Some(spell_id) {
+            self.slot = None;
         }
     }
 }
 
 /// What the reference's one inflight id `0xceca88` holds, joined from our slots: `IsCasting
-/// 0x6e3d30` and `AbortCast 0x6e4940` treat a cast, a spell awaiting its click and a queued strike
-/// alike.
+/// 0x6e3d30`, the attempt's in-flight rungs (`0x6e4d43`, `0x6e4d97`) and `AbortCast 0x6e4940` read
+/// a cast, a spell awaiting its click and a queued strike alike. It holds only what an attempt
+/// pushed (`0x6e5026`): a cast whose item lacks `ITEM_FLAG_PLAYERCAST` is never in it, though it
+/// runs and shows its bar.
 ///
-/// A cast started over a queued strike pushes it into the save `0xcecaa8` (`0x6e5026`), so the
-/// cast comes first and the first Esc takes it, the second the strike. Deviation: the reference's
-/// second Esc re-asserts the strike from the save it never clears (`0x6e4b2c`), where ours clears,
-/// because vmangos drops the melee slot on the first cancel whatever its id
-/// (`HandleCancelCastOpcode`) and both clients converge on that echo.
+/// A cast started over a queued strike pushes the strike into the save `0xcecaa8`, so the cast
+/// comes first and the first Esc takes it, the second the strike ([`QueuedMeleeSpell`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inflight {
     /// An ordinary cast, with a guard, a bar and a `Casting` to reap.
@@ -197,10 +215,9 @@ pub(crate) enum Inflight {
     /// A queued on-next-swing strike: no bar and no [`Casting`], so a cancel is the wire message
     /// and the slot.
     Strike(u32),
-    /// The spell awaiting its click. The attempt pushes it (`0x6e5026`) before the arm raises the
-    /// cursor (`0x6e5250`), and nothing on the cursor path pops it. Nothing is on the wire, so a
-    /// cancel is the local drop, and the movement cancels spare it (`IsTargeting` gates
-    /// `0x515090` and `Script::Jump`).
+    /// The spell awaiting its click, which the attempt pushed (`0x6e5026`) before the arm raised
+    /// the cursor (`0x6e5250`); nothing on the cursor path pops it. A cursor whose item lacks the
+    /// flag holds no slot, and the word stands alone ([`SpellTargeting`]).
     Targeting(u32),
 }
 
@@ -213,19 +230,17 @@ impl Inflight {
     }
 }
 
-/// The reference's inflight slot from ours. `started` is the self [`Casting`] spell id, which
-/// covers a started cast that never armed the send guard.
+/// The reference's inflight slot from ours.
 pub(crate) fn inflight(
     pending: &PendingCast,
     queued_melee: &QueuedMeleeSpell,
     targeting: &SpellTargeting,
-    started: Option<u32>,
     now: Instant,
 ) -> Option<Inflight> {
     targeting
-        .spell()
+        .in_slot()
         .map(Inflight::Targeting)
-        .or_else(|| pending.current(now).or(started).map(Inflight::Cast))
+        .or_else(|| pending.current(now).map(Inflight::Cast))
         .or_else(|| queued_melee.current().map(Inflight::Strike))
 }
 
@@ -241,31 +256,26 @@ pub(crate) struct CastState<'w, 's> {
     me: Query<'w, 's, SelfCastFacts, With<crate::net::SelfPlayer>>,
 }
 
-/// The player's own cast facts: a started cast, the attack flag and the form byte's store.
+/// The player's own cast facts: the attack flag and the form byte's store.
 type SelfCastFacts = (
-    Option<&'static Casting>,
     Has<crate::creature_anim::Engaged>,
     Option<&'static crate::net::ObjectStore>,
 );
 
 impl CastState<'_, '_> {
-    /// The view as it stands now. The cast is the in-flight slot's, or the self `Casting`'s for a
-    /// started cast that never armed the send guard.
+    /// The view as it stands now.
     pub(crate) fn view(&self) -> CastView {
         let now = Instant::now();
         let me = self.me.iter().next();
         CastView {
-            cast: self
-                .pending
-                .current(now)
-                .or_else(|| me.and_then(|(c, _, _)| c.map(|c| c.spell_id))),
-            strike: self.queued_melee.current(),
+            slot: inflight(&self.pending, &self.queued_melee, &self.targeting, now)
+                .map(Inflight::spell_id),
             targeting: self.targeting.spell(),
             channel: self.channel.current(now),
             auto_repeat: self.auto_repeat.0,
-            attacking: me.is_some_and(|(_, engaged, _)| engaged),
+            attacking: me.is_some_and(|(engaged, _)| engaged),
             form: me
-                .and_then(|(_, _, store)| store)
+                .and_then(|(_, store)| store)
                 .map_or(0, |store| store.0.unit_shapeshift_form()),
         }
     }
@@ -380,25 +390,31 @@ impl SelfCancel<'_, '_> {
         self.cancel_inflight(true, "soulstone");
     }
 
-    /// The player's entity and its started cast's spell.
-    fn self_cast(&self) -> (Option<Entity>, Option<u32>) {
-        let self_e = self
-            .self_guid
+    /// The player's entity.
+    fn self_entity(&self) -> Option<Entity> {
+        self.self_guid
             .0
             .as_ref()
             .and_then(|g| self.index.0.get(g))
-            .copied();
-        let started = self_e
-            .and_then(|e| self.casting.get(e).ok())
-            .map(|c| c.spell_id);
-        (self_e, started)
+            .copied()
     }
 
     /// `CancelCast(failed, 1, 0x1c)` ([`super::CastCore::cancel`]), then a popped cast's local
     /// teardown: its self `Casting` reaped with a `Fail` cast event, as `spell_failed_other`'s
     /// echo would, run early so the echo finds it done.
+    ///
+    /// Deviation: a strike in the slot that the save also holds, one a cast popped back over,
+    /// leaves the slot here, where the reference's pop copies it back from the save (`0x6e4b2c`)
+    /// and a second Esc sends its cancel again, until the server's echo pops it. vmangos drops the
+    /// melee slot on the first cancel whatever its id (`HandleCancelCastOpcode`), and both clients
+    /// converge on that echo.
     fn cancel_inflight(&mut self, failed: bool, why: &str) {
-        let (self_e, started) = self.self_cast();
+        let self_e = self.self_entity();
+        if let Some(strike) = self.queued_melee.current() {
+            if self.pending.current(Instant::now()).is_none() && !self.ground.active() {
+                self.queued_melee.clear_save_if(strike);
+            }
+        }
         let Self {
             pending,
             queued_melee,
@@ -417,7 +433,6 @@ impl SelfCancel<'_, '_> {
             ground,
             reports,
             net,
-            started,
         }
         .cancel(failed, true, super::REASON_ERROR);
         if *crate::net::CAST_TRACE {
@@ -440,12 +455,7 @@ impl SelfCancel<'_, '_> {
 
     fn cancel(&mut self, esc: bool, moved: bool) {
         let now = Instant::now();
-        let self_e = self
-            .self_guid
-            .0
-            .as_ref()
-            .and_then(|g| self.index.0.get(g))
-            .copied();
+        let self_e = self.self_entity();
         // Esc stops one thing, auto-repeat first (`0x6e6e80`).
         let esc = if esc && self.auto_repeat.0.is_some() {
             if *crate::net::CAST_TRACE {
@@ -474,20 +484,13 @@ impl SelfCancel<'_, '_> {
                 .is_none_or(pick)
         };
         // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
-        let (_, started) = self.self_cast();
-        if let Some(slot) = inflight(
-            &self.pending,
-            &self.queued_melee,
-            &self.ground,
-            started,
-            now,
-        ) {
+        if let Some(slot) = inflight(&self.pending, &self.queued_melee, &self.ground, now) {
             let spell_id = slot.spell_id();
             // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
-            // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`). It also spares the
-            // cursor's spell: `0x515090` and `Script::Jump` skip the whole test while targeting.
+            // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`). It skips the whole test
+            // while the word is up (`0x5150fd`, and `Script::Jump`).
             if esc
-                || (!matches!(slot, Inflight::Targeting(_))
+                || (!self.ground.active()
                     && flags_open(
                         &self.spells,
                         |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
@@ -585,17 +588,6 @@ mod tests {
         );
         g.push(FIREBALL, None, t0);
         assert!(g.in_flight(t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1)));
-    }
-
-    /// `0x6e5935` → `0x6e5989`: the send pops an auto-repeat spell and nothing else.
-    #[test]
-    fn the_send_pops_only_an_auto_repeat_spell() {
-        let t0 = Instant::now();
-        let mut g = PendingCast::default();
-        g.commit(FIREBALL, None, false, t0);
-        assert_eq!(g.current(t0), Some(FIREBALL));
-        g.commit(75, None, true, t0);
-        assert_eq!(g.current(t0), None, "Auto Shot is pushed and popped");
     }
 
     #[test]
@@ -731,6 +723,18 @@ mod tests {
             });
         }
 
+        /// The attempt's push of `spell_id` (`0x6e5026`), over whatever the slot holds.
+        fn push(app: &mut App, spell_id: u32, held: crate::spell::Held) {
+            app.world_mut()
+                .run_system_once(
+                    move |mut slots: crate::spell::CastSlots, net: Res<NetCommands>| {
+                        slots.core(&net).push(spell_id, held, Instant::now());
+                    },
+                )
+                .unwrap();
+            app.world_mut().resource_mut::<CastReports>().0.clear();
+        }
+
         fn run(app: &mut App, moved: bool) {
             app.world_mut().resource_mut::<LocalMoveStart>().0 = moved;
             app.world_mut().run_system_once(local_self_cancel).unwrap();
@@ -843,9 +847,11 @@ mod tests {
             );
         }
 
-        /// A started cast with no send guard still cancels through its `Casting`.
+        /// A cast running outside the slot, an item's without `ITEM_FLAG_PLAYERCAST`, is not
+        /// the move cancel's: `0x5150f2` reads the in-flight slot, which its attempt never
+        /// pushed, so nothing is sent and the server's own interrupt ends it.
         #[test]
-        fn a_started_item_cast_cancels_without_the_send_guard() {
+        fn a_started_cast_outside_the_slot_survives_a_move() {
             let (mut app, rx) = harness(HashMap::from([(
                 FIREBALL,
                 SpellDisplay {
@@ -857,15 +863,10 @@ mod tests {
 
             run(&mut app, true);
 
-            assert!(
-                matches!(
-                    rx.try_recv(),
-                    Ok(crate::net::ClientCommand::CancelCast { spell_id: FIREBALL })
-                ),
-                "the started cast cancels through the `Casting` half of the union"
-            );
+            assert!(rx.try_recv().is_err(), "no cancel goes out");
             let self_e = app.world().resource::<GuidIndex>().0[&10];
-            assert!(app.world().entity(self_e).get::<Casting>().is_none());
+            assert!(app.world().entity(self_e).get::<Casting>().is_some());
+            assert!(app.world().resource::<CastReports>().0.is_empty());
         }
 
         #[test]
@@ -1163,9 +1164,11 @@ mod tests {
                 .resource_mut::<QueuedMeleeSpell>()
                 .arm(HEROIC_STRIKE);
             fill_record(&mut app);
-            app.world_mut()
-                .resource_mut::<PendingCast>()
-                .push(FIREBALL, None, Instant::now());
+            push(
+                &mut app,
+                FIREBALL,
+                crate::spell::Held::Cast { item_flags: None },
+            );
             mark_casting(&mut app, FIREBALL);
 
             app.world_mut().run_system_once(feed_cast_reports).unwrap();

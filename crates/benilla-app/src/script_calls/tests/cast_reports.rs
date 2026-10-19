@@ -282,3 +282,36 @@ fn a_refusal_signals_no_change_and_a_cancel_signals_two() {
     run_hosted(&mut f, &format!("SpellStopTargeting() {CHANGES}"));
     assert_eq!(seen(&mut f), "A,C,A,C,SPELLCAST_FAILED");
 }
+
+/// Attack toggled off is StopAttack (`0x6131a0` → `0x5ecac0`): `CMSG_ATTACKSTOP`, then
+/// `CancelQueuedCast` (`0x6e6f30`), which cancels the strike in the slot as `SpellStopCasting`
+/// does (`0x6e6f68`): its `CMSG_CANCEL_CAST`, its pop's pair and `SPELLCAST_STOP`, inside the
+/// call, so the stock bar unchecks the strike's button with the swing.
+#[test]
+fn an_attack_toggled_off_cancels_its_queued_strike_with_a_pair_then_stop() {
+    const HEROIC_STRIKE: u32 = 78;
+    let mut f = frame(true);
+    with_factions(&mut f, FOE, &[(HEALTH, 100)]);
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(OLD));
+    world
+        .resource_mut::<crate::spell::QueuedMeleeSpell>()
+        .arm(HEROIC_STRIKE);
+    world
+        .resource_mut::<crate::spell::PendingCast>()
+        .fill_record();
+    record_changes(&mut f);
+    run_hosted(&mut f, &format!("AttackTarget() {CHANGES}"));
+    assert_eq!(seen(&mut f), "A,C,SPELLCAST_STOP");
+    assert_eq!(casts_and_cancels(&f), vec![("cancel", HEROIC_STRIKE)]);
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<crate::spell::QueuedMeleeSpell>()
+            .current(),
+        None
+    );
+}

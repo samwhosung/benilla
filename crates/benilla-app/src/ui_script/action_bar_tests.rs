@@ -260,7 +260,7 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
         }),
     );
     s.set_cast_view(benilla_ui::script::CastView {
-        cast: Some(133),
+        slot: Some(133),
         ..Default::default()
     });
     s.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);

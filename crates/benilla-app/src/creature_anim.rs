@@ -181,26 +181,19 @@ pub(crate) fn cancel_auto_repeat_local(
 }
 
 /// The local StopAttack, reference `0x5ecac0`: when attacking, `CMSG_ATTACKSTOP` (`0x624370`),
-/// then `CancelQueuedCast` (`0x6e6f30`) cancels a queued on-next-swing spell with
-/// `CMSG_CANCEL_CAST` (`0x6e4940`), which is why Auto Shot (`0x6e5976`) darkens a Raptor Strike
-/// ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo (`0x624e40`), as in the reference.
-pub(crate) fn stop_attack_local(
-    engaged: bool,
-    queued_melee: &mut crate::spell::QueuedMeleeSpell,
-    net: &crate::net::NetCommands,
-) {
+/// then `CancelQueuedCast` (`0x6e6f30`, [`crate::spell::CastCore::cancel_queued`]), which cancels
+/// a queued on-next-swing spell with `CMSG_CANCEL_CAST`: in the slot, as Esc does, with its pop's
+/// signal and `SPELLCAST_STOP`; in the save under a cast, by the packet alone, which is why Auto
+/// Shot (`0x6e5976`) darkens a Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo
+/// (`0x624e40`), as in the reference.
+pub(crate) fn stop_attack_local(engaged: bool, core: &mut crate::spell::CastCore) {
     if !engaged {
         // The reference's `!IsAttacking(0x60ecb0) && [+0xc50] == 0` early-out (`[+0xc50]`, a
         // locally started attack, is not modelled): nothing sent, a queued strike survives.
         return;
     }
-    let _ = net.0.send(crate::net::ClientCommand::AttackStop);
-    if let Some(spell_id) = queued_melee.current() {
-        let _ = net
-            .0
-            .send(crate::net::ClientCommand::CancelCast { spell_id });
-        queued_melee.clear_if(spell_id);
-    }
+    let _ = core.net.0.send(crate::net::ClientCommand::AttackStop);
+    core.cancel_queued();
 }
 
 /// The local StartAttack, reference `0x5ecb70`: the swing send (`0x5eccfd`) is skipped while
@@ -243,14 +236,14 @@ pub(crate) fn toggle_attack_local(
     entity: Entity,
     target: u64,
     engaged: bool,
-    queued_melee: &mut crate::spell::QueuedMeleeSpell,
+    slots: &mut crate::spell::CastSlots,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     sheath: &mut MessageWriter<SheathRequest>,
     commands: &mut Commands,
     net: &crate::net::NetCommands,
 ) {
     if engaged {
-        stop_attack_local(engaged, queued_melee, net);
+        stop_attack_local(engaged, &mut slots.core(net));
     } else {
         start_attack_local(
             entity,
@@ -270,7 +263,9 @@ pub(crate) fn toggle_attack_local(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) net: Res<'w, crate::net::NetCommands>,
-    pub(crate) queued_melee: ResMut<'w, crate::spell::QueuedMeleeSpell>,
+    /// The in-flight slot StopAttack's tail cancels a strike in, and the targeting word the
+    /// selection seams test first.
+    pub(crate) slots: crate::spell::CastSlots<'w>,
     pub(crate) auto_repeat: ResMut<'w, crate::spell::AutoRepeatActive>,
     pub(crate) sheath: MessageWriter<'w, SheathRequest>,
     pub(crate) ecs: Commands<'w, 's>,
@@ -318,7 +313,7 @@ impl AttackSeam<'_, '_> {
 
     /// StopAttack (`0x5ecac0`).
     pub(crate) fn stop(&mut self, engaged: bool) {
-        stop_attack_local(engaged, &mut self.queued_melee, &self.net);
+        stop_attack_local(engaged, &mut self.slots.core(&self.net));
     }
 
     /// StartAttack (`0x5ecb70`); a no-op before our own entity streams in.

@@ -1667,7 +1667,7 @@ mod tests {
             }]
         );
         s.set_cast_view(crate::script::CastView {
-            cast: Some(168),
+            slot: Some(168),
             ..Default::default()
         });
         assert_eq!(

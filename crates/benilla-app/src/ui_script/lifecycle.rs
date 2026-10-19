@@ -1577,6 +1577,9 @@ mod tests {
         world.insert_resource(crate::net::NetCommands(tx));
         world.init_resource::<crate::target::Selection>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
+        world.init_resource::<crate::spell::PendingCast>();
+        world.init_resource::<crate::spell::SpellTargeting>();
+        world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<crate::ui_loot::LootLatch>();

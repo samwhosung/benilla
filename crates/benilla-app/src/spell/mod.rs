@@ -41,7 +41,7 @@ pub(crate) use mods::{ModsDiff, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, O
 #[cfg(test)]
 pub(crate) use mods::{OP_COOLDOWN, OP_RANGE};
 pub(crate) use range_units::{RangeUnits, DEFAULT_REACH};
-pub(crate) use report::{CastCore, CursorCancel, REASON_ERROR};
+pub(crate) use report::{CastCore, CastSlots, CursorCancel, Held, REASON_ERROR};
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
     ground_cast_radius, CorpsePick, CursorPicks, PicksSelf, ScriptCursor, SpellTargeting,
