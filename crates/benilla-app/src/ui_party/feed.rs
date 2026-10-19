@@ -739,11 +739,16 @@ fn member_unit_state(
             // moves alone, so the roster byte is not read. A held member never gets here, its 1 is
             // `snapshot`'s (`0x517daf`); a member with no record has no bit to read.
             is_connected: stats.is_some_and(PartyMemberStatsInfo::is_online),
-            // Dead and ghost from the record, as the reference's `UnitIsDead` (`0x517b5d`,
-            // `+0x08 & 4`) and `UnitIsGhost` (`0x517c32`, `& 8`) read it: fresher than the roster
-            // byte, which only `SMSG_GROUP_LIST` moves. 1.12 has no AFK or DND predicate to feed.
-            dead: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::DEAD != 0),
-            ghost: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::GHOST != 0),
+            // The record's other status bits, the no-object leg of each predicate: `UnitIsDead`
+            // `+0x08 & 4` (`0x517b5d`), `UnitIsGhost` `& 8` (`0x517c32`), `UnitIsPVP` `& 2`
+            // (`0x516502`), `UnitIsPVPFreeForAll` `& 0x10` (`0x5165f1`). A list writes only bit 0
+            // of the record (`0x4e836e`-`0x4e837b`), so the roster byte reaches none of them; the
+            // deactivate snapshot and the stats packet's status do. 1.12 has no AFK or DND
+            // predicate to feed.
+            dead: record_bit(stats, member_status::DEAD),
+            ghost: record_bit(stats, member_status::GHOST),
+            pvp: record_bit(stats, member_status::PVP),
+            is_pvp_ffa: record_bit(stats, member_status::PVP_FFA),
             ..Default::default()
         },
     };
@@ -753,12 +758,14 @@ fn member_unit_state(
     s.raid_target = group.raid_target_index(m.guid);
     s.reaction = 5;
     s.faction_group = own_group;
-    // The roster status byte overlays both legs, but for `is_connected`, which is the record leg's.
-    s.is_pvp_ffa = m.status & member_status::PVP_FFA != 0;
-    s.pvp = s.pvp || m.status & member_status::PVP != 0;
-    s.ghost = s.ghost || m.status & member_status::GHOST != 0;
-    s.dead = s.dead || m.status & member_status::DEAD != 0;
+    // A held member's predicates read its descriptor alone (`0x517b16`, `0x517bef`, `0x5164d1`,
+    // `0x51659f`): `snapshot`'s, the roster byte never.
     s
+}
+
+/// A status bit of a member's record (`+0x08`), false with no record.
+fn record_bit(stats: Option<&PartyMemberStatsInfo>, bit: u8) -> bool {
+    stats.is_some_and(|s| s.status.unwrap_or(0) & bit != 0)
 }
 
 /// `"party1".."party4"` → the roster entry it names.
@@ -1441,7 +1448,7 @@ mod tests {
     /// vmangos re-sends a member's status on join, login and the AFK, DND, PvP, FFA and ghost
     /// toggles, never on a death, so the roster byte can say alive while the record says dead.
     #[test]
-    fn an_out_of_range_members_dead_and_ghost_come_off_the_record() {
+    fn an_out_of_range_members_dead_ghost_and_pvp_come_off_the_record() {
         let m = GroupMemberEntry {
             name: "Brisca".into(),
             guid: 0x1234,
@@ -1484,9 +1491,14 @@ mod tests {
         assert!(s.ghost);
         assert!(!s.dead, "a released ghost is not `dead` — only a ghost");
 
-        // The overlay ORs: a roster byte carrying the bit still wins over a record without it.
+        // A list writes only bit 0 of the record (`0x4e836e`-`0x4e837b`): a roster byte carrying
+        // the other bits reaches no predicate.
         let stale = GroupMemberEntry {
-            status: member_status::ONLINE | member_status::DEAD,
+            status: member_status::ONLINE
+                | member_status::DEAD
+                | member_status::GHOST
+                | member_status::PVP
+                | member_status::PVP_FFA,
             ..m.clone()
         };
         let s = member_unit_state(
@@ -1498,7 +1510,75 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        assert!(s.dead);
+        assert_eq!(
+            (s.dead, s.ghost, s.pvp, s.is_pvp_ffa),
+            (false, false, false, false)
+        );
+
+        // The record's PvP (`& 2`, `0x516502`) and free-for-all (`& 0x10`, `0x5165f1`) bits.
+        let flagged = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE | member_status::PVP | member_status::PVP_FFA),
+            ..PartyMemberStatsInfo::default()
+        };
+        let s = member_unit_state(
+            &m,
+            Some(&flagged),
+            None,
+            &GroupState::default(),
+            None,
+            Default::default(),
+            Default::default(),
+        );
+        assert!(s.pvp && s.is_pvp_ffa);
+    }
+
+    /// The reported shape, through the feed: a roster that lags a held member's descriptor moves
+    /// none of the four predicates, which read the object alone while it is held (`0x517b16`,
+    /// `0x517bef`, `0x5164d1`, `0x51659f`), on `partyN` and `raidN` alike.
+    #[test]
+    fn a_held_members_dead_ghost_and_pvp_come_off_the_descriptor_alone() {
+        const HEALTH: u16 = 22;
+        const MAXHEALTH: u16 = 28;
+        const UNIT_FLAGS: u16 = 46;
+        const PLAYER_FLAGS: u16 = 190;
+        let lagging = member_status::ONLINE
+            | member_status::DEAD
+            | member_status::GHOST
+            | member_status::PVP
+            | member_status::PVP_FFA;
+        let predicates = |app: &mut App, token: &str| {
+            [
+                "UnitIsDead",
+                "UnitIsGhost",
+                "UnitIsDeadOrGhost",
+                "UnitIsPVP",
+                "UnitIsPVPFreeForAll",
+            ]
+            .map(|p| flag(app, &format!("{p}('{token}')")))
+        };
+        for group_type in [0, GROUPTYPE_RAID] {
+            let token = if group_type == 0 { "party1" } else { "raid1" };
+            let mut app = app();
+            party(&mut app, 1, true);
+            let held = stream(&mut app, member(1), &[(HEALTH, 500), (MAXHEALTH, 900)]);
+            // Resurrected and unflagged in front of us; the roster still says otherwise.
+            seat(&mut app, group_type, lagging);
+            frame(&mut app);
+            assert_eq!(predicates(&mut app, token), [None; 5], "{token}");
+
+            // Dead, a ghost, PvP and free-for-all on the descriptor; the roster says none.
+            app.world_mut().entity_mut(held).insert(ObjectStore(
+                benilla_protocol::messages::ObjectFields::from_pairs(&[
+                    (HEALTH, 0),
+                    (MAXHEALTH, 900),
+                    (UNIT_FLAGS, 0x1000),
+                    (PLAYER_FLAGS, 0x10 | 0x80),
+                ]),
+            ));
+            seat(&mut app, group_type, member_status::ONLINE);
+            frame(&mut app);
+            assert_eq!(predicates(&mut app, token), [Some(1.0); 5], "{token}");
+        }
     }
 
     /// Send member 1 alone as the party or raid roster with `status`, as a server's list does: the
