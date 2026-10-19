@@ -742,6 +742,16 @@ fn render_loop(
 mod tests {
     use super::*;
 
+    /// A device read on a thread whose predecessor read first and exited answers as that one did,
+    /// as each test builds its client on a thread of its own. On Windows the second read went
+    /// through a COM object that died with the first reader, and faulted (`cpal.rs`, `host`).
+    #[test]
+    fn the_device_reads_the_same_once_its_first_reader_has_exited() {
+        let first = std::thread::spawn(probe_sample_rate).join().unwrap();
+        let again = std::thread::spawn(probe_sample_rate).join().unwrap();
+        assert_eq!(first, again);
+    }
+
     /// Opt-in (`WOW_AUDIO_LIVE=1`) since it opens the real output device: does the device layer
     /// open a stream, does the callback run, and does the render thread keep ahead? Off macOS it
     /// is the only run of this code.
