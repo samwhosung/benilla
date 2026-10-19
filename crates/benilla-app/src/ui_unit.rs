@@ -1091,6 +1091,12 @@ pub(crate) fn snapshot(
         },
         // `PLAYER_GUILDID`, the cache key of `GetGuildInfo` (`0x4c93a9`).
         guild_id: store.0.player_guild_id(),
+        // `PLAYER_BYTES_3` byte 1; a creature has no PLAYER block and reads 0.
+        drunk: store.0.player_drunk_byte().unwrap_or(0),
+        tooltip: benilla_ui::script::UnitTooltipFacts {
+            // The builder's raw read (`0x52a89f`), not `UnitHealth`'s feign-death zero.
+            health: store.0.unit_health().unwrap_or(0),
+        },
         // `is_player` and the creature-record fields come from [`enrich_unit`].
         ..Default::default()
     }

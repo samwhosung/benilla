@@ -214,6 +214,12 @@ pub struct UnitState {
     /// scans (`0x4dfebd`) and the `UNIT_QUEST_LOG_CHANGED` watch compares (`0x51bc63`). Whole, so
     /// a change anywhere in it is a snapshot change; a group mate's carries the ids alone.
     pub quest_log: [[u32; 3]; 20],
+    /// `PLAYER_BYTES_3` byte 1, the drunkenness, 0 off a player. The active player's lowers the
+    /// level `UnitLevel` (`0x5180a0`) and the unit tooltip (`0x52a397`) show of a unit it can
+    /// attack.
+    pub drunk: u8,
+    /// What the unit tooltip builder `0x529fe0` alone reads of the unit.
+    pub tooltip: super::tooltip_unit::UnitTooltipFacts,
 }
 
 /// The name of a unit whose name is not yet known, as the reference's `UnitName` (`0x517220`) and
@@ -250,20 +256,38 @@ pub fn unit_is_grey(player_level: u32, unit_level: u32) -> bool {
     player_level > unit_level && player_level - unit_level > grey_band(player_level)
 }
 
-/// The civilian gate (`0x612550`), a dishonorable kill: PvP-flagged, a civilian creature, hostile
-/// (`UnitReaction` <= 2) and grey. The tooltip's CIVILIAN line and `UnitPVPName`'s civilian prefix
-/// (`0x609370`) both read it. The terms are the tooltip line's; `0x612550`'s body is not traced.
+/// The civilian gate (`0x612550`), a dishonorable kill: PvP-flagged (`0x61255f`), a civilian
+/// creature record (`0x612571`), the unit's reaction toward the player 1 or less (`0x61259f`,
+/// `UnitReaction` <= 2 here) and grey to it (`0x5f0700`, `0x6125a6`). The tooltip's CIVILIAN line
+/// and `UnitPVPName`'s civilian prefix (`0x609370`) both read it.
 pub fn is_civilian_kill(u: &UnitState, player_level: u32) -> bool {
     u.civilian && u.pvp && u.reaction != 0 && u.reaction <= 2 && unit_is_grey(player_level, u.level)
 }
 
-/// The tooltip's "??" level gate (`0x529fe0`): never a player; level 0, world-boss rank 3, or a
-/// hostile (reaction <= 2) at least 10 levels above the player. `UnitLevel` (`0x517fc0`) answers
-/// the boss and hostile legs with -1, but returns a level of 0 as is.
+/// The tooltip's "??" level gate (`0x529fe0`): level 0, world-boss rank 3 (`0x52a373`), or a unit
+/// whose reaction toward the player is 1 or less (`0x52a342`-`0x52a34a`, `UnitReaction` <= 2 here)
+/// at least 10 levels above the player (`0x52a361`-`0x52a366`), players among them: neither this
+/// path nor `UnitLevel`'s (`0x517fc0`, `0x518057`-`0x51807b`) tests the unit's type. `UnitLevel`
+/// answers the boss and hostile legs with -1, but returns a level of 0 as is.
 pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
     let much_higher_hostile =
         u.reaction != 0 && u.reaction <= 2 && u.level >= player_level.saturating_add(10);
-    !u.is_player && (u.level == 0 || u.rank == 3 || much_higher_hostile)
+    u.level == 0 || u.rank == 3 || much_higher_hostile
+}
+
+/// The level a drunk player sees on a unit it can attack, the unit tooltip's arithmetic
+/// (`0x52a3c6`-`0x52a3f4`): `min(drunk, 100) · 0.05 + 0.5` truncated (`0x40a2b0`), off the level,
+/// at least 1. The client runs the x87 at 53 bits, so the f64 operations are its own.
+pub fn tooltip_drunk_level(level: u32, drunk: u8) -> u32 {
+    let cut = (f64::from(drunk.min(100)) * f64::from(0.05f32) + 0.5).trunc() as i64;
+    (i64::from(level) - cut).max(1) as u32
+}
+
+/// [`tooltip_drunk_level`] as `UnitLevel` computes it (`0x5180c8`-`0x5180ec`): the product formed
+/// as `drunk · 5.0 · 0.01`, which at 53 bits truncates one lower at 10, 30, 50, 70 and 90.
+pub fn unit_level_drunk_level(level: u32, drunk: u8) -> u32 {
+    let cut = (f64::from(drunk.min(100)) * 5.0 * f64::from(0.01f32) + 0.5).trunc() as i64;
+    (i64::from(level) - cut).max(1) as u32
 }
 
 /// `UnitClassification` (`0x516d90`): the word table at `0x850424` indexed by the gated

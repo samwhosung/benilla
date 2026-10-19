@@ -188,7 +188,7 @@ mod tooltip_unit;
 mod ui_errors;
 mod ui_scale;
 mod update_walk;
-pub use tooltip_unit::TooltipTint;
+pub use tooltip_unit::{TooltipTint, UnitTooltipFacts};
 mod trade;
 mod tradeskill;
 mod trainer;

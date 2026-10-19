@@ -160,6 +160,7 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
         }),
     );
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), -1);
+    // A hostile player far above reads -1 too: the gate has no player test (`0x518057`-`0x51807b`).
     s.set_unit(
         "target",
         Some(UnitState {
@@ -170,7 +171,7 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
             ..Default::default()
         }),
     );
-    assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 60);
+    assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), -1);
     // An unstreamed level 0 answers 0, not -1: `0x517fc0` pushes the raw field.
     s.set_unit(
         "target",

@@ -17,6 +17,11 @@ fn seed_level_strings(s: &mut UiScript) {
         PLAYER = "[PLAYER]"
         ELITE  = "[ELITE]"
         BOSS   = "[BOSS]"
+        PVP_ENABLED       = "[PVP]"
+        RESURRECTABLE     = "[RESURRECTABLE]"
+        UNIT_SKINNABLE    = "[SKINNABLE]"
+        PVP_RANK_CIVILIAN = "[CIVILIAN]"
+        PVP_RANK_LEADER   = "[LEADER]"
     "#,
     )
     .unwrap();
@@ -25,6 +30,7 @@ fn seed_level_strings(s: &mut UiScript) {
 fn wolf() -> UnitState {
     UnitState {
         exists: true,
+        has_object: true,
         guid: 0xF130_0000_4500_0001,
         name: Some("Timber Wolf".into()),
         health: 30,
@@ -39,7 +45,7 @@ fn wolf() -> UnitState {
     }
 }
 
-/// A creature: gold name, subtitle, the CLASS_TYPE level line, red Skinnable.
+/// A creature: gold name, subtitle, the CLASS_TYPE level line, red `UNIT_SKINNABLE`.
 #[test]
 fn creature_line_law() {
     let mut s = script();
@@ -61,7 +67,7 @@ fn creature_line_law() {
         assert(TTTextLeft1:GetText() == "Timber Wolf")
         assert(TTTextLeft2:GetText() == "Alpha")
         assert(TTTextLeft3:GetText() == "[LEVEL_CLASS_TYPE 10 Beast [ELITE]]", "got " .. TTTextLeft3:GetText())
-        assert(TTTextLeft4:GetText() == "Skinnable")
+        assert(TTTextLeft4:GetText() == "[SKINNABLE]")
         -- A RECOGNISED token naming nothing answers nil...
         assert(tt:SetUnit("party4") == nil, "a recognised but absent unit answers nil")
         -- ...while an UNRECOGNISED one raises, because SetUnit resolves through the client's one
@@ -119,7 +125,7 @@ fn a_pending_name_titles_unknownobject_and_the_answer_replaces_it() {
         -- bare TOOLTIP_UNIT_LEVEL template because both the CLASS and TYPE slots are the record's.
         assert(TTTextLeft2:GetText() == "[LEVEL 10]", "got " .. TTTextLeft2:GetText())
         -- The descriptor's own lines are NOT the record's and show anyway.
-        assert(TTTextLeft3:GetText() == "Skinnable")
+        assert(TTTextLeft3:GetText() == "[SKINNABLE]")
     "#,
     )
     .unwrap();
@@ -137,7 +143,7 @@ fn a_pending_name_titles_unknownobject_and_the_answer_replaces_it() {
         assert(TTTextLeft1:GetText() == "Timber Wolf", "the answer replaced UNKNOWNOBJECT")
         assert(TTTextLeft2:GetText() == "Alpha")
         assert(TTTextLeft3:GetText() == "[LEVEL_CLASS_TYPE 10 Beast [ELITE]]", "got " .. TTTextLeft3:GetText())
-        assert(TTTextLeft4:GetText() == "Skinnable")
+        assert(TTTextLeft4:GetText() == "[SKINNABLE]")
     "#,
     )
     .unwrap();
@@ -285,9 +291,9 @@ fn the_tooltip_title_is_the_pvp_name() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The faction line sits between the level line and "PvP" (`0x529fe0`). Civilian needs the PvP
-/// bit, the flag, hostility and a grey level (`0x612550`); Leader only the PvP bit and the flag
-/// (`0x6125c0`).
+/// The faction line sits between the level line and `PVP_ENABLED` (`0x529fe0`).
+/// `PVP_RANK_CIVILIAN` needs the PvP bit, the flag, hostility and a grey level (`0x612550`);
+/// `PVP_RANK_LEADER` only the PvP bit and the flag (`0x6125c0`).
 #[test]
 fn faction_line_and_civilian_gate() {
     let mut s = script();
@@ -304,6 +310,8 @@ fn faction_line_and_civilian_gate() {
             guid: 0xF130_0000_0000_0101,
             exists: true,
             name: Some("Marshal McBride".into()),
+            has_object: true,
+            flags: 0x1000,
             level: 20,
             reaction: 6, // friendly
             player_reaction: 6,
@@ -322,7 +330,7 @@ fn faction_line_and_civilian_gate() {
         tt:SetUnit("target")
         assert(TTTextLeft2:GetText() == "[LEVEL 20]", "friendly creature: no type word; got " .. TTTextLeft2:GetText())
         assert(TTTextLeft3:GetText() == "Stormwind", "faction line before PvP; got " .. TTTextLeft3:GetText())
-        assert(TTTextLeft4:GetText() == "PvP")
+        assert(TTTextLeft4:GetText() == "[PVP]")
         assert(TTTextLeft5 == nil or TTTextLeft5:GetText() == nil, "friendly civilian shows NO Civilian line")
     "#,
     )
@@ -333,6 +341,8 @@ fn faction_line_and_civilian_gate() {
         Some(UnitState {
             guid: 0xF130_0000_0000_0102,
             exists: true,
+            has_object: true,
+            flags: 0x1000,
             name: Some("Defias Civilian".into()),
             level: 20,
             reaction: 2, // hostile
@@ -349,9 +359,9 @@ fn faction_line_and_civilian_gate() {
         TT:SetOwner(UF9, "ANCHOR_RIGHT")
         TT:SetUnit("target")
         assert(TTTextLeft2:GetText() == "[LEVEL_CLASS 20 Humanoid]", "got " .. TTTextLeft2:GetText())
-        assert(TTTextLeft3:GetText() == "PvP")
-        assert(TTTextLeft4:GetText() == "Civilian", "hostile+grey+pvp civilian warns; got " .. TTTextLeft4:GetText())
-        assert(TTTextLeft5:GetText() == "Leader")
+        assert(TTTextLeft3:GetText() == "[PVP]")
+        assert(TTTextLeft4:GetText() == "[CIVILIAN]", "hostile+grey+pvp civilian warns; got " .. TTTextLeft4:GetText())
+        assert(TTTextLeft5:GetText() == "[LEADER]")
     "#,
     )
     .unwrap();
@@ -361,6 +371,8 @@ fn faction_line_and_civilian_gate() {
         Some(UnitState {
             guid: 0xF130_0000_0000_0103,
             exists: true,
+            has_object: true,
+            flags: 0x1000,
             name: Some("Defias Civilian".into()),
             level: 25,
             reaction: 2,
@@ -375,7 +387,7 @@ fn faction_line_and_civilian_gate() {
         r#"
         TT:SetOwner(UF9, "ANCHOR_RIGHT")
         TT:SetUnit("target")
-        assert(TTTextLeft3:GetText() == "PvP")
+        assert(TTTextLeft3:GetText() == "[PVP]")
         assert(TTTextLeft4 == nil or TTTextLeft4:GetText() == nil, "a non-grey civilian does not warn")
     "#,
     )
@@ -383,7 +395,9 @@ fn faction_line_and_civilian_gate() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Players read "Race Class (Player)"; the dead read "Corpse"; a world boss reads "??".
+/// Players read "Race Class (Player)"; the dead read "Corpse"; a world boss reads "??", and so
+/// does any unit hostile to the player ten or more levels above it, a player too: the path from
+/// `0x52a338` to `0x52a366` tests no type.
 #[test]
 fn level_line_variants() {
     let mut s = script();
@@ -399,11 +413,13 @@ fn level_line_variants() {
             guid: 0xF130_0000_0000_0104,
             exists: true,
             name: Some("Bandit".into()),
+            has_object: true,
             level: 32,
             is_player: true,
             race: Some("Human".into()),
             class: Some("Rogue".into()),
             pvp: true,
+            flags: 0x1000,
             ..Default::default()
         }),
     );
@@ -414,7 +430,7 @@ fn level_line_variants() {
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetUnit("target")
         assert(TTTextLeft2:GetText() == "[LEVEL_CLASS_TYPE 32 Human Rogue [PLAYER]]", "got " .. TTTextLeft2:GetText())
-        assert(TTTextLeft3:GetText() == "PvP")
+        assert(TTTextLeft3:GetText() == "[PVP]")
     "#,
     )
     .unwrap();
@@ -495,12 +511,22 @@ fn level_line_variants() {
     "#,
     )
     .unwrap();
-    // Players never read "??".
+    // A hostile player ten up reads "??" too, and `UnitLevel` -1.
     s.set_unit("target", Some(ten_up(2, true)));
     s.run(
         r#"
         TT:SetOwner(UF2, "ANCHOR_RIGHT"); TT:SetUnit("target")
-        assert(TTTextLeft2:GetText() == "[LEVEL_CLASS_TYPE 70 Orc Shaman [PLAYER]]", "hostile player, got " .. TTTextLeft2:GetText())
+        assert(TTTextLeft2:GetText() == "[LEVEL_CLASS_TYPE ?? Orc Shaman [PLAYER]]", "hostile player, got " .. TTTextLeft2:GetText())
+        assert(UnitLevel("target") == -1, "UnitLevel's hostile leg has no player test either")
+    "#,
+    )
+    .unwrap();
+    // An unfriendly player ten up shows the level.
+    s.set_unit("target", Some(ten_up(3, true)));
+    s.run(
+        r#"
+        TT:SetOwner(UF2, "ANCHOR_RIGHT"); TT:SetUnit("target")
+        assert(TTTextLeft2:GetText() == "[LEVEL_CLASS_TYPE 70 Orc Shaman [PLAYER]]", "unfriendly player, got " .. TTTextLeft2:GetText())
     "#,
     )
     .unwrap();

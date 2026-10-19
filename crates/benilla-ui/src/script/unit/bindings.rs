@@ -174,9 +174,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitLevel (`0x517fc0`): the raw level (a raw 0 stays 0), or -1 for a world boss or a hostile
-    // unit 10 or more levels above the player. The reference's attackable-decay override
-    // (`max(1, raw - round(min(b, 100) * 0.05))`, `b` an untraced byte not seen set) is not built.
+    // UnitLevel (`0x517fc0`): the raw level (a raw 0 stays 0), or -1 for a world boss or a unit
+    // hostile to the player 10 or more levels above it; else, for a unit the drunk player can
+    // attack (`0x518092`-`0x5180b1`), the level its drunkenness lowers (`0x5180b3`-`0x5180ec`).
     g.set(
         "UnitLevel",
         lua.create_function(|lua, token: Value| {
@@ -190,13 +190,29 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(u) = token.as_ref().and_then(|t| model.unit(t)) else {
                 return Ok(0i64);
             };
-            Ok(if u.level == 0 {
-                0
-            } else if level_reads_unknown(u, model.player_req.level) {
-                -1
-            } else {
-                i64::from(u.level)
-            })
+            if u.level == 0 {
+                return Ok(0);
+            }
+            if level_reads_unknown(u, model.player_req.level) {
+                return Ok(-1);
+            }
+            // The drunk leg needs the unit's object and the active player (`0x518096`).
+            let me = model.unit_guids.player;
+            let drunk = model.unit("player").map_or(0, |p| p.drunk);
+            let attackable = || {
+                model
+                    .unit_relations
+                    .as_deref()
+                    .and_then(|r| r.can_attack(me, u.guid))
+                    .unwrap_or(false)
+            };
+            Ok(i64::from(
+                if u.has_object && me != 0 && drunk != 0 && attackable() {
+                    super::unit_level_drunk_level(u.level, drunk)
+                } else {
+                    u.level
+                },
+            ))
         })?,
     )?;
 
