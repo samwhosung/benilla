@@ -592,6 +592,7 @@ fn a_notice_under_the_loading_cover_fires_at_the_reveal() {
 fn report_feed(spells: crate::ui_action::Spells, reports: crate::ui_cast::CastReports) -> App {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>();
     app.insert_resource(reports)
         .insert_resource(spells)
         .init_resource::<Items>()
@@ -910,4 +911,56 @@ fn a_charged_item_slot_shows_the_uses_left() {
         .insert_template(JERKY, Some(info));
     app.update();
     assert_eq!(jerky_count(&mut app), 2, "|-2| charges, one item");
+}
+
+/// The active player's form change (`OnShapeshiftFormChanged 0x5de010`, the `UNIT_FIELD_BYTES_1`
+/// byte 2 watcher) signals the pair (`0x5de016` → `0x4b3250`): `ACTIONBAR_UPDATE_STATE`, then
+/// `CURRENT_SPELL_CAST_CHANGED`. Another byte of the field, or another unit's form, signals
+/// nothing.
+#[test]
+fn the_players_form_change_signals_the_cast_changed_pair() {
+    use benilla_protocol::field::FIELD_UNIT_BYTES_1;
+    use benilla_protocol::messages::ObjectType;
+    let mut app = report_feed(
+        crate::ui_action::Spells::empty_for_tests(),
+        crate::ui_cast::CastReports::default(),
+    );
+    let me = app.world_mut().spawn(crate::net::SelfPlayer).id();
+    let other = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"FIRED = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ACTIONBAR_UPDATE_STATE")
+            f:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            f:SetScript("OnEvent", function() table.insert(FIRED, event) end)"#,
+        )
+        .unwrap();
+    let edge = |entity, old: u32, new: u32| crate::net::FieldChanged {
+        entity,
+        guid: 1,
+        kind: ObjectType::Player,
+        index: FIELD_UNIT_BYTES_1,
+        old,
+        new,
+    };
+    let fired = |app: &mut App| {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("local f = FIRED FIRED = {} return f")
+            .unwrap()
+    };
+    // Bear Form (1) in byte 2; byte 0 alone moving is no form change.
+    app.world_mut()
+        .write_message(edge(me, 0x0000_0001, 0x0000_0002));
+    app.world_mut().write_message(edge(other, 0, 0x0001_0000));
+    app.update();
+    assert_eq!(fired(&mut app), Vec::<String>::new());
+    app.world_mut().write_message(edge(me, 0, 0x0001_0000));
+    app.update();
+    assert_eq!(
+        fired(&mut app),
+        ["ACTIONBAR_UPDATE_STATE", "CURRENT_SPELL_CAST_CHANGED"]
+    );
 }

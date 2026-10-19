@@ -270,14 +270,22 @@ impl CastLadder<'_, '_> {
                 },
             },
         };
+        // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`).
+        self.ground.clear();
+        self.reports.changed();
         let _ = self.commands.0.send(cmd);
+        // The send's own signal (`0x6e589d`).
+        self.reports.changed();
         let now = Instant::now();
         let def = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
         record_commit(&mut self.pending, &self.items, commit, spell_id, def, now);
+        if def.is_some_and(|d| d.auto_repeat()) && pushes(&self.items, commit) {
+            // The send's pop of an auto-repeat spell (`0x6e5989`).
+            self.reports.changed();
+        }
         if let Some(d) = def {
             self.cooldowns.start_gcd(spell_id, d, now, &self.spell_mods);
         }
-        self.ground.clear();
     }
 
     /// TryCast's dead rung alone, for the Attack button, whose short-circuit (`0x6e4c7a`) leaves
@@ -432,6 +440,17 @@ fn record_commit(
         def.is_some_and(|d| d.auto_repeat()),
         now,
     );
+}
+
+/// Whether the attempt pushes the spell into the in-flight slot (`0x6e500b`–`0x6e5021`): a cast
+/// with no item, or an item whose flags carry [`benilla_protocol::messages::ITEM_FLAG_PLAYERCAST`].
+fn pushes(items: &Items, commit: CastCommit) -> bool {
+    match commit {
+        CastCommit::Spell => true,
+        CastCommit::Item { entry, .. } => items
+            .template(entry, 0, Ask::Read)
+            .is_some_and(|t| t.flags & benilla_protocol::messages::ITEM_FLAG_PLAYERCAST != 0),
+    }
 }
 
 /// The attempt's push alone (`0x6e5026` → `SetInFlightSpell 0x6e4ad0`), for a cast the arm then
@@ -807,22 +826,46 @@ fn send_spell_cast(
     // Every rung passed: the attempt fills the pending record with the player as its caster
     // (`0x6e4fb1`), ahead of the arm and whatever it decides.
     core.pending.fill_record();
+    // The push changes the slot and signals (`0x6e5026` → `0x6e4ad0`): the same spell bailed
+    // above, so the slot never holds it here. The arm signals whatever it then decides
+    // (`0x6e5333`).
+    let pushed = pushes(items, commit);
+    if pushed {
+        core.reports.changed();
+    }
+    core.reports.changed();
     // The deferred ArmCast-false refusal (`6e5045`-`6e50a9`): every rung passed and nothing
     // bound. The attempt pushed the spell before the arm (`0x6e5026`), so its report finds it in
     // flight and cancels it (`0x6e2201` → `0x6e2218` → `0x6e4940(1, 1, reason)`): the word is
     // already zero (`0x6e5057`, `0x6e5098`), so the cancel goes on the wire (`0x6e4970`), the pop
     // restores the save, and the record's caster fires `SPELLCAST_FAILED`. An item without
-    // `ITEM_FLAG_PLAYERCAST` was never pushed, and its report fires the event itself.
+    // `ITEM_FLAG_PLAYERCAST` was never pushed, and its report fires the event itself. The tail
+    // signals once more as it leaves (`0x6e5069`).
     if let Some(reason) = deferred_refusal {
         debug!("ui_action: cast {spell_id} refused locally — the cast-arm tail ({reason:#x})");
         push_in_flight(core, items, commit, spell_id, def, now);
-        refuse!(CastFail::local(spell_id, reason));
+        refuse(
+            core,
+            spells,
+            items,
+            commands,
+            CastFail::local(spell_id, reason),
+        );
+        core.reports.changed();
+        return;
     }
-    // The deferred cursor entry (`6e50c8`): every rung passed, the cursor waits for its click.
+    // The deferred cursor entry (`6e50c8`): every rung passed, the cursor waits for its click, and
+    // the attempt signals as it returns (`0x6e51e3`).
     if let Some(word) = pending_word {
         debug!("ui_action: cast {spell_id} awaits its click — targeting cursor up ({word:#06x})");
         core.ground.enter(spell_id, commit, word);
+        core.reports.changed();
         return;
+    }
+    // A candidate the arm bound goes through `BindTarget`'s merge, which signals before it sends
+    // (`0x6e60cb`); a word of 0 sends with no bind (`0x6e5349`).
+    if explicit_object.is_some() || item_target.is_some() || target.is_some() {
+        core.reports.changed();
     }
     // The wand handoff (`0x60959e`): a new cast cancels the running repeat only when it carries
     // `AttributesEx3 & 0x400000` (wand Shoot 5019), so Auto Shot survives. `CMSG_CANCEL_CAST`
@@ -892,13 +935,19 @@ fn send_spell_cast(
             },
         },
     });
+    // The send's own signal (`0x6e589d`), for the active player's every send: the precast it
+    // tests against (`[caster+0xc8c]`) is not built.
+    core.reports.changed();
     // The in-flight slot (`0xceca88`, `0x6e5026`): every cast holds it until its result, a ranged
-    // shot included; only an auto-repeat spell is popped after the send. The item arm's window is
-    // shorter because vmangos answers some `CMSG_USE_ITEM` legs with
-    // `SMSG_INVENTORY_CHANGE_FAILURE` and no cast result.
+    // shot included; only an auto-repeat spell is popped after the send, which signals
+    // (`0x6e5989`). The item arm's window is shorter because vmangos answers some
+    // `CMSG_USE_ITEM` legs with `SMSG_INVENTORY_CHANGE_FAILURE` and no cast result.
     record_commit(core.pending, items, commit, spell_id, def, now);
     if on_next_swing {
         core.queued_melee.arm(spell_id);
+    }
+    if pushed && def.is_some_and(|d| d.auto_repeat()) {
+        core.reports.changed();
     }
     // TryCast's post-send tail (`6e51b5`): a spell that initiates auto-attack (on-next-swing
     // `0x404` or `AttributesEx & 0x200`, not the GO-deferred Ex2 bit 20) starts the swing at its
@@ -933,6 +982,8 @@ fn send_spell_cast(
     if let Some(d) = def {
         cooldowns.start_gcd(spell_id, d, now, spell_mods);
     }
+    // The attempt signals as it returns (`0x6e51e3`).
+    core.reports.changed();
 }
 
 #[cfg(test)]
@@ -1094,7 +1145,8 @@ mod tests {
     /// The arm's refusal (`0x6e5045`-`0x6e50a9`) comes after the attempt's push (`0x6e5026`), so
     /// its report finds the spell in flight and cancels it (`0x6e2218` → `0x6e4940(1, 1,
     /// reason)`): no word is up, so the cancel goes on the wire (`0x6e4970`), and the record's
-    /// caster fires `SPELLCAST_FAILED` after the line, then the tradeskill disarm.
+    /// caster fires `SPELLCAST_FAILED` after the line, then the tradeskill disarm. The slot's push
+    /// and pop and the attempt's arm and tail each signal `CURRENT_SPELL_CAST_CHANGED`.
     #[test]
     fn an_arm_refusal_cancels_the_spell_it_pushed_on_the_wire() {
         use crate::ui_cast::{CastBarEdge, CastReport};
@@ -1133,19 +1185,62 @@ mod tests {
             matches!(
                 reports[..],
                 [
+                    CastReport::Changed,
+                    CastReport::Changed,
                     CastReport::Refused(CastFail {
                         spell_id: ROCKBITER,
                         ..
                     }),
+                    CastReport::Changed,
                     CastReport::Bar(CastBarEdge::Failed),
                     CastReport::TradeSkillDisarm,
+                    CastReport::Changed,
                 ]
             ),
-            "the line, its event, the disarm"
+            "the push's and the arm's signals (`0x6e5026`, `0x6e5333`), the line, the pop's \
+             signal, its event, the disarm, and the tail's signal (`0x6e5069`)"
         );
         assert!(!world
             .resource::<crate::spell::PendingCast>()
             .in_flight(Instant::now()));
+    }
+
+    /// A standing enemy word with nothing to bind is refused by the attempt's tail after the arm
+    /// (`0x6e507b`-`0x6e50a9`, "You have no target" with no selection), so the spell was pushed:
+    /// its report cancels it on the wire and fires `SPELLCAST_FAILED`.
+    #[test]
+    fn an_enemy_spell_with_no_target_is_refused_at_the_arm() {
+        use benilla_formats::SpellDisplay;
+        const FIREBALL: u32 = 133;
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [(
+                FIREBALL,
+                SpellDisplay {
+                    implicit_target_a1: 6,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        send(&mut world, FIREBALL, CastCommit::Spell);
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::CancelCast { spell_id: FIREBALL }]),
+            "{sent:?}"
+        );
+        let reports = world.resource::<CastReports>();
+        assert_eq!(
+            reports.refusals(),
+            vec![CastFail::local(FIREBALL, cast_target::ERR_NO_TARGET)]
+        );
+        assert!(matches!(
+            reports.edges()[..],
+            [crate::ui_cast::CastBarEdge::Failed]
+        ));
     }
 
     /// TryCast's dead rung (`0x6e4c49`): a corpse and a ghost (health 1, the `PLAYER_FLAGS` bit)

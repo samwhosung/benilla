@@ -400,14 +400,10 @@ pub(crate) fn publish_picks_self(
 }
 
 /// Push the targeting state into the VM each frame, before the input pass, so a word armed last
-/// frame stands for this frame's clicks: the ESC chain's word, the bag and doll pickup reroute's
-/// item half, and `CURRENT_SPELL_CAST_CHANGED` when the awaited spell changes. That event hides the
-/// enchant confirm popups (`UIParent.lua:449`). Its one emitter `0x4b3250` fires at each arm
-/// (`0x6e5333`), the attempt's end (`0x6e51e3`), the send (`0x6e54f0`), the bind (`0x6e5b40`) and
-/// the cancel (`0x6e4940`); here it is signalled once per change of the spell, so a cancel and an
-/// arm of another spell in one frame still count (#1986). A script call pushes the same view inside
-/// the call ([`ScriptCursor::push_view`]), and the VM holds the spell it was told, so one change
-/// signals once.
+/// frame stands for this frame's clicks: the ESC chain's word and the bag and doll pickup
+/// reroute's item half. A script call pushes the same view inside the call
+/// ([`ScriptCursor::push_view`]). The word's changes signal `CURRENT_SPELL_CAST_CHANGED` where they
+/// are made ([`crate::ui_cast::CastReport::Changed`]).
 pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
     checks: BindChecks,
@@ -415,21 +411,18 @@ pub(crate) fn feed_targeting_to_vm(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
     if let Some(mut script) = script {
-        if push_targeting_view(&mut script, &targeting, &checks, &tokens) {
-            script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
-        }
+        push_targeting_view(&mut script, &targeting, &checks, &tokens);
     }
 }
 
 /// Push what the VM reads of the targeting word: `SpellIsTargeting`, the pickup reroute's item
-/// half, `SpellCanTargetUnit`'s units and the spell awaiting its target, answering whether that
-/// spell changed since the VM was last told, which benilla signals `CURRENT_SPELL_CAST_CHANGED` on.
+/// half and `SpellCanTargetUnit`'s units.
 fn push_targeting_view(
     script: &mut benilla_ui::script::UiScript,
     targeting: &SpellTargeting,
     checks: &BindChecks,
     tokens: &crate::ui_unit::UnitTokens,
-) -> bool {
+) {
     script.set_spell_targeting(targeting.active());
     script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
     // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
@@ -445,7 +438,6 @@ fn push_targeting_view(
         })
         .collect();
     script.set_spell_targetable_units(targetable);
-    script.tell_targeting_spell(targeting.spell())
 }
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
@@ -483,8 +475,9 @@ fn bind_target_unit(
 /// which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the
 /// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),
 /// so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a
-/// cancel. That is a defect: benilla sends nothing and re-arms the cursor with its caster, which
-/// is what a player can use.
+/// cancel. That is a defect: benilla's cancel finds the cursor up, so it drops the word, with its
+/// signal (`0x6e495c`), instead of sending, and the cursor is re-armed with its caster, which is
+/// what a player can use.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
@@ -518,10 +511,9 @@ pub(crate) struct ScriptCursor<'w, 's> {
 
 impl ScriptCursor<'_, '_> {
     /// Push the targeting view into the VM after a script call, inside the call, as the reference's
-    /// `SpellIsTargeting` (`0x6e6cd0`) reads the word the call left: whether the spell awaiting its
-    /// target changed, which the caller signals once the host is back.
-    pub(crate) fn push_view(&self, script: &mut benilla_ui::script::UiScript) -> bool {
-        push_targeting_view(script, &self.ladder.ground, &self.checks, &self.tokens)
+    /// `SpellIsTargeting` (`0x6e6cd0`) reads the word the call left.
+    pub(crate) fn push_view(&self, script: &mut benilla_ui::script::UiScript) {
+        push_targeting_view(script, &self.ladder.ground, &self.checks, &self.tokens);
     }
 
     /// `SpellTargetUnit(unit)` (`0x6e6d90`). The binding already raised the usage and

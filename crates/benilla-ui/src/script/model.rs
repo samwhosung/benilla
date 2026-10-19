@@ -655,9 +655,6 @@ pub(crate) struct Model {
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
-    /// The spell awaiting its target as the host last told this VM (`0x6e48e0`), so the host's
-    /// pushes signal `CURRENT_SPELL_CAST_CHANGED` once per change, whichever push sees it.
-    pub(crate) targeting_spell: Option<u32>,
     /// The units, by guid, for which `SpellCanTargetUnit`'s armed unit word clears fully, which
     /// stock unit frames ask before they call `SpellTargetUnit`; a token resolves to its guid
     /// through [`Self::unit_guids`].
@@ -1623,7 +1620,6 @@ impl Model {
             pet_spell_autocasts: Vec::new(),
             cast_view: Default::default(),
             spell_targeting: false,
-            targeting_spell: None,
             spell_targetable_units: HashSet::new(),
             talents: super::talent::TalentUiState::default(),
             talent_learns: Vec::new(),

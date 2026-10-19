@@ -54,16 +54,20 @@ impl CastCore<'_> {
     }
 
     /// `CancelCast 0x6e4940(failed, send, reason)`. A targeting word up is cleared with no packet
-    /// (`0x6e4955`); else a spell in flight is cancelled on the wire when `send` is set
-    /// (`0x6e4970`). The pop restores what the push saved (`0x6e49d6`). While the record's caster
-    /// is the player (`0x6e4a04`-`0x6e4a1e`) it fires `SPELLCAST_STOP` for `failed` 0, else the
+    /// (`0x6e4955`) and signalled (`0x6e495c`); else a spell in flight is cancelled on the wire
+    /// when `send` is set (`0x6e4970`). The pop restores what the push saved (`0x6e49d6`), a
+    /// change of the slot that signals (`SetInFlightSpell 0x6e4ad0`). While the record's caster is
+    /// the player (`0x6e4a04`-`0x6e4a1e`) it fires `SPELLCAST_STOP` for `failed` 0, else the
     /// failure's edge, and clears the caster (`0x6e4a5a`); with `failed` set it ends a tradeskill
     /// repeat last (`0x6e4ac2`). Every caller gates it on a slot or a word but the soulstone's.
     /// What it popped is returned for the caller's local teardown.
     pub(crate) fn cancel(&mut self, failed: bool, send: bool, reason: u8) -> Option<Inflight> {
         let slot = self.slot();
         match slot {
-            Some(Inflight::Targeting(_)) => self.ground.clear(),
+            Some(Inflight::Targeting(_)) => {
+                self.ground.clear();
+                self.reports.changed();
+            }
             Some(Inflight::Cast(spell_id) | Inflight::Strike(spell_id)) if send => {
                 let _ = self.net.0.send(ClientCommand::CancelCast { spell_id });
             }
@@ -73,6 +77,10 @@ impl CastCore<'_> {
             Some(Inflight::Cast(spell_id)) => self.pending.clear_if(spell_id),
             Some(Inflight::Strike(spell_id)) => self.queued_melee.clear_if(spell_id),
             Some(Inflight::Targeting(_)) | None => {}
+        }
+        // The cursor's spell sits in the slot too, pushed by its attempt (`0x6e5026`).
+        if slot.is_some() {
+            self.reports.changed();
         }
         if self.pending.take_caster_event() {
             self.reports.bar(if failed {

@@ -192,3 +192,93 @@ fn a_cancelled_cursor_fails_inside_the_call() {
         "and the cast goes on"
     );
 }
+
+/// The pair `0x4b3250` signals, in its order, and the cast's events, as a script sees them: `A`
+/// for `ACTIONBAR_UPDATE_STATE` (`0x4e5bf0`), `C` for `CURRENT_SPELL_CAST_CHANGED` (`0x4b325a`),
+/// the rest by name.
+fn record_changes(f: &mut Frame) {
+    f.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"CHANGES = {}
+            local c = CreateFrame("Frame")
+            for _, e in ipairs({"ACTIONBAR_UPDATE_STATE", "CURRENT_SPELL_CAST_CHANGED",
+                    "SPELLCAST_FAILED", "SPELLCAST_STOP", "UI_ERROR_MESSAGE"}) do
+                c:RegisterEvent(e)
+            end
+            c:SetScript("OnEvent", function()
+                if event == "ACTIONBAR_UPDATE_STATE" then table.insert(CHANGES, "A")
+                elseif event == "CURRENT_SPELL_CAST_CHANGED" then table.insert(CHANGES, "C")
+                elseif event == "UI_ERROR_MESSAGE" then table.insert(CHANGES, arg1)
+                else table.insert(CHANGES, event) end
+            end)"#,
+        )
+        .unwrap();
+}
+
+/// `CHANGES` as the chunk's last line saw it.
+const CHANGES: &str = r#"SEEN = table.concat(CHANGES, ",") CHANGES = {}"#;
+
+/// A spell with no target word sends from the arm (`0x6e5338` → `0x6e5349`), and the attempt
+/// signals the pair four times inside the call: the push (`0x6e5026`), the arm (`0x6e5333`), the
+/// send (`0x6e589d`) and its end (`0x6e51e3`). The spell is on no action bar slot, and still
+/// signals: the pair is the cast's, not the bar's.
+#[test]
+fn a_cast_from_no_bar_slot_signals_its_four_changes_inside_the_call() {
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        HEAL,
+        "Heal",
+        benilla_formats::SpellDisplay::default(),
+    );
+    record_changes(&mut f);
+    run_hosted(&mut f, &format!(r#"CastSpellByName("Heal") {CHANGES}"#));
+    assert_eq!(seen(&mut f), "A,C,A,C,A,C,A,C");
+    assert_eq!(casts(&f), vec![(HEAL, None)]);
+}
+
+/// A cast bound to the selection goes through `BindTarget`'s merge, which signals once more before
+/// the send (`0x6e60cb`): five pairs.
+#[test]
+fn a_cast_bound_to_the_selection_signals_five_changes() {
+    let mut f = frame(true);
+    // A friendly player (`OBJECT_FIELD_TYPE` 0x19, `UNIT_FLAG_PLAYER_CONTROLLED`), whom
+    // `CanAssist` passes.
+    with_factions(&mut f, FRIEND, &[(2, 0x19), (FLAGS, 0x8)]);
+    with_book_spell(
+        &mut f,
+        MOTW,
+        "Mark of the Wild",
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        },
+    );
+    record_changes(&mut f);
+    run_hosted(
+        &mut f,
+        &format!(r#"CastSpellByName("Mark of the Wild") {CHANGES}"#),
+    );
+    assert_eq!(seen(&mut f), "A,C,A,C,A,C,A,C,A,C");
+    assert_eq!(casts(&f), vec![(MOTW, Some(OLD))]);
+}
+
+/// A refusal ahead of the push signals no change, only its line and event; a cursor cancelled
+/// signals its word's clear (`0x6e495c`) and the slot's pop (`0x6e49d6`) ahead of its
+/// `SPELLCAST_FAILED` (`0x6e4a50`).
+#[test]
+fn a_refusal_signals_no_change_and_a_cancel_signals_two() {
+    let mut f = frame(true);
+    dead(&mut f);
+    record_changes(&mut f);
+    run_hosted(&mut f, &format!(r#"CastSpellByName("Heal") {CHANGES}"#));
+    assert_eq!(seen(&mut f), "SPELL_FAILED_CASTER_DEAD,SPELLCAST_FAILED");
+
+    let mut f = frame(true);
+    with_the_cursor_up(&mut f);
+    record_changes(&mut f);
+    run_hosted(&mut f, &format!("SpellStopTargeting() {CHANGES}"));
+    assert_eq!(seen(&mut f), "A,C,A,C,SPELLCAST_FAILED");
+}

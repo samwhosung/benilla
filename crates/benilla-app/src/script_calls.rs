@@ -163,7 +163,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
         }
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
-        // event, signalled below as the call returns, under its input events.
+        // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, all signalled
+        // below as the call returns, under its input events.
         let ready = appliers.p2().p2().ready_since(script, report_mark);
         // The cast state the call left, for the script's next line: `SpellStopCasting`
         // (`0x6e6e80`) finds the cast it sent in flight (`0x6e5026`), and `IsCurrentAction`
@@ -173,18 +174,13 @@ impl CallHost for ScriptCallHost<'_, '_> {
         script.set_cast_view(view);
         // The word the call left: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
         // binds to it.
-        let changed = appliers.p1().push_view(script);
-        if ready.is_empty() && !changed {
+        appliers.p1().push_view(script);
+        if ready.is_empty() {
             return tail;
         }
         let macro_lines = tail.take();
         Some(Box::new(move |script: &mut UiScript| {
             crate::ui_cast::fire(script, ready);
-            // 1.12.1 signals at the arm (`0x6e5333`), before its bind or send, and again at the
-            // attempt's end (`0x6e51e3`); here once per change of the awaited spell (#1986).
-            if changed {
-                script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
-            }
             if let Some(lines) = macro_lines {
                 lines(script);
             }
@@ -2662,8 +2658,9 @@ mod tests {
     }
 
     /// `CURRENT_SPELL_CAST_CHANGED` (`0x4b3250`) is signalled inside the call that armed the
-    /// cursor and inside the one that bound it, and the next frame's feed does not signal either
-    /// change again. How many times 1.12.1 signals it per cast is #1986.
+    /// cursor, three times: the slot's push (`0x6e5026`), the arm (`0x6e5333`) and the attempt's
+    /// end (`0x6e51e3`); and inside the one that bound it, twice: `BindTarget`'s merge
+    /// (`0x6e60cb`) and the send (`0x6e589d`). The next frame's feed signals neither again.
     #[test]
     fn current_spell_cast_changed_fires_inside_the_call_and_not_again_from_the_feed() {
         let mut f = frame(true);
@@ -2688,27 +2685,26 @@ mod tests {
             )
             .unwrap();
         let feed = |f: &mut Frame| {
-            f.app
-                .world_mut()
+            let world = f.app.world_mut();
+            world
                 .run_system_once(crate::spell::targeting::feed_targeting_to_vm)
+                .unwrap();
+            world
+                .run_system_once(crate::ui_cast::feed_cast_reports)
                 .unwrap();
         };
         run_hosted(
             &mut f,
             r#"CastSpellByName("Mark of the Wild") SEEN = FIRED"#,
         );
-        let armed = global(&mut f, "SEEN");
-        assert!(armed.is_some(), "inside the arming call");
+        assert_eq!(global(&mut f, "SEEN"), Some(3), "inside the arming call");
         feed(&mut f);
-        assert_eq!(global(&mut f, "FIRED"), armed, "not again from the feed");
+        assert_eq!(global(&mut f, "FIRED"), Some(3), "not again from the feed");
         run_hosted(&mut f, r#"SpellTargetUnit("party1") SEEN = FIRED"#);
-        let bound = global(&mut f, "SEEN");
-        assert!(
-            bound > armed,
-            "inside the binding call: {armed:?} then {bound:?}"
-        );
+        assert_eq!(global(&mut f, "SEEN"), Some(5), "inside the binding call");
         feed(&mut f);
-        assert_eq!(global(&mut f, "FIRED"), bound, "not again from the feed");
+        assert_eq!(global(&mut f, "FIRED"), Some(5), "not again from the feed");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 
     /// A key's body runs inside `CBindings::ExecuteBinding` (`0x4b7990`) with its input event up

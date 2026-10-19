@@ -94,7 +94,8 @@ pub(crate) enum CastWireTarget {
     Targeting(u16),
     /// Do not send; show this client error.
     Refused(u8),
-    /// A refusal the reference raises in its cast tail after `ArmCast` returns false (`0x6e5045`).
+    /// A refusal the reference raises in its cast tail after `ArmCast` returns false (`0x6e5045`):
+    /// the empty weapon hand's (`0x6e504b`) and the standing enemy word's (`0x6e507b`).
     /// That tail runs after the requirement validator `0x6094f0`, so it fires at the cursor-entry
     /// point in [`super::send_spell_cast`], not at the resolver's return.
     RefusedAtArm(u8),
@@ -529,10 +530,11 @@ pub(crate) fn resolve_cast_target(
             }
         }
     }
-    // A standing enemy word refuses locally. Every other residual unit word proceeds to
-    // `BindTarget`'s hand cursor.
+    // A standing enemy word is refused by the attempt's tail once the arm returns false
+    // (`0x6e507b`-`0x6e50a9`): "Invalid target" with a selection, else "You have no target", with
+    // the spell in flight. Every other residual unit word proceeds to `BindTarget`'s hand cursor.
     if word & TF_UNIT_ENEMY != 0 {
-        CastWireTarget::Refused(if cand.selection.is_some() {
+        CastWireTarget::RefusedAtArm(if cand.selection.is_some() {
             ERR_INVALID_TARGET
         } else {
             ERR_NO_TARGET
@@ -628,8 +630,8 @@ mod tests {
         let fireball = spell(0, 6);
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), true, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET),
-            "enemy words retain the no-target refusal"
+            CastWireTarget::RefusedAtArm(ERR_NO_TARGET),
+            "enemy words retain the no-target refusal, the arm's"
         );
         // Neutral (3) is attackable by the mixed arm's `< 4` and not assistable by `>= 4`.
         assert_eq!(
@@ -659,7 +661,7 @@ mod tests {
         // A hostile-required cast never self-binds.
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), false, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET)
+            CastWireTarget::RefusedAtArm(ERR_NO_TARGET)
         );
         // Unknown spell: the selection passes through.
         assert_eq!(

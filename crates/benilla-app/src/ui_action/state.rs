@@ -1,10 +1,11 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM with the reference's events
 //! on each change: the cooldown trio (`0x4b31b0`, `0x4f93d0`), the usable pair (`0x4b31c0`, on a
-//! cache change only, `0x4e5c00`), the state pair (`0x4b3250`), combat enter and leave
-//! (`0x6256ff`, `0x625778`), and autorepeat start and stop (`0x6e5952`, `0x6ea170`). Usability is
-//! `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30` key, and
-//! range the squared distance against `GetMinMaxRange 0x6e3480`.
+//! cache change only, `0x4e5c00`), combat enter and leave (`0x6256ff`, `0x625778`), and
+//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
+//! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
+//! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
+//! key, and range the squared distance against `GetMinMaxRange 0x6e3480`.
 
 use crate::ui_items::stack_counts;
 use std::collections::HashMap;
@@ -31,8 +32,6 @@ use crate::spell::AutoRepeatActive;
 #[derive(Default)]
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
-    /// The cast state the last frame's checked tests were held against.
-    view: benilla_ui::script::CastView,
     last_generation: Option<u64>,
     engaged: bool,
     auto_repeat: Option<u32>,
@@ -80,10 +79,9 @@ pub(super) fn feed_action_state(
     mut cooldowns: ResMut<Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
-    // One tuple for Bevy's 16-param ceiling: the cast state, macro bindings, spell mods, the
-    // range units and the control flag.
+    // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units and the
+    // control flag.
     cast_state: (
-        crate::spell::CastState,
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
         // The caster's and the target's reach and motion, which the range compare reads.
@@ -121,8 +119,7 @@ pub(super) fn feed_action_state(
         memory.last_cd_trace = Some(now);
     }
 
-    let (cast_state, bound, spell_mods, range_units, player) = &cast_state;
-    let view = cast_state.view();
+    let (bound, spell_mods, range_units, player) = &cast_state;
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
     // The bags, walked once per frame for every reagent and totem count below.
@@ -297,7 +294,6 @@ pub(super) fn feed_action_state(
     }
 
     let mut usable_changed = false;
-    let mut state_changed = false;
     let keys: Vec<u32> = fresh
         .keys()
         .chain(memory.pushed.keys())
@@ -309,10 +305,6 @@ pub(super) fn feed_action_state(
         let (new, old) = (fresh.get(&action), memory.pushed.get(&action));
         let d = ActionState::default();
         let (n, o) = (new.unwrap_or(&d), old.unwrap_or(&d));
-        let checked = |s: &ActionState, v| (s.is_current(v), s.is_auto_repeat(v));
-        if checked(n, &view) != checked(o, &memory.view) {
-            state_changed = true;
-        }
         if new == old {
             continue;
         }
@@ -332,7 +324,6 @@ pub(super) fn feed_action_state(
         script.set_action_state(action, new.copied());
     }
     memory.pushed = fresh;
-    memory.view = view;
 
     // The events in the reference's flush order, the `ACTIONBAR_*` one first.
     if gen_changed {
@@ -343,10 +334,6 @@ pub(super) fn feed_action_state(
     if usable_changed {
         script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
-    }
-    if state_changed {
-        script.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
-        script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
     }
     if engaged != memory.engaged {
         memory.engaged = engaged;

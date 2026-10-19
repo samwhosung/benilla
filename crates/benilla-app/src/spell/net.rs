@@ -1839,6 +1839,7 @@ mod tests {
                     crate::ui_cast::CastReport::Bar(CastBarEdge::Interrupted) => {
                         Some("INTERRUPTED".into())
                     }
+                    crate::ui_cast::CastReport::Changed => Some("CHANGED".into()),
                     _ => None,
                 })
                 .collect()
@@ -2036,7 +2037,11 @@ mod tests {
                 s.result(FIREBALL, Some(reason));
                 assert_eq!(
                     s.stream(),
-                    [format!("REFUSED {reason:#04x}"), edge.to_string()],
+                    [
+                        format!("REFUSED {reason:#04x}"),
+                        "CHANGED".into(),
+                        edge.to_string()
+                    ],
                     "reason {reason:#04x}, timed {timed}"
                 );
                 assert!(!s
@@ -2046,6 +2051,20 @@ mod tests {
                     .in_flight(Instant::now()));
             }
         }
+    }
+
+    /// The handler's own pop (`0x6e741a` → `0x6e4940(0, 0, 0x1c)` → `0x6e49d6`) changes the slot
+    /// and signals `CURRENT_SPELL_CAST_CHANGED` ahead of its STOP; a result for a spell in no slot
+    /// pops nothing and signals nothing.
+    #[test]
+    fn a_results_pop_signals_the_slots_change() {
+        let mut s = CastSeq::new();
+        s.commit(FIREBALL, None);
+        s.result(FIREBALL, None);
+        assert_eq!(s.stream(), ["CHANGED", "STOP"]);
+        let mut s = CastSeq::new();
+        s.result(FORTITUDE, None);
+        assert_eq!(s.stream(), ["STOP"]);
     }
 
     /// With nothing in flight the tail fires the failure's event itself, with no caster test

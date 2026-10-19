@@ -448,8 +448,8 @@ mod tests {
             );
         }
 
-        /// Hibernate at a unit of another type binds nothing, so the enemy word refuses locally
-        /// with "Invalid target"; a Beast binds.
+        /// Hibernate at a unit of another type binds nothing, so the enemy word is refused by the
+        /// attempt's tail with "Invalid target" (`0x6e507b`); a Beast binds.
         #[test]
         fn a_creature_type_mask_refuses_the_wrong_type_locally() {
             let hibernate = SpellDisplay {
@@ -470,7 +470,7 @@ mod tests {
             for entry in [HUMANOID_ENTRY, 999] {
                 assert_eq!(
                     press(&hibernate, &creature(entry), false, true),
-                    CastWireTarget::Refused(ERR_INVALID_TARGET),
+                    CastWireTarget::RefusedAtArm(ERR_INVALID_TARGET),
                     "entry {entry}: a Humanoid, and a creature with no cached template"
                 );
             }

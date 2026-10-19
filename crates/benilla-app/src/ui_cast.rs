@@ -47,6 +47,13 @@ pub(crate) enum CastReport {
     /// `0x4fd790`, the end of a tradeskill repeat, which a cancel with its failed flag runs last
     /// (`0x6e4abc`-`0x6e4ac2`).
     TradeSkillDisarm,
+    /// `SignalCurrentSpellCastChanged 0x4b3250`: `ACTIONBAR_UPDATE_STATE` (`0x4e5bf0`), then
+    /// `CURRENT_SPELL_CAST_CHANGED` (`0x4b325a`), the two events' only emitter. The in-flight
+    /// slot's push and pop signal it (`SetInFlightSpell 0x6e4ad0`, when the slot changes), and so
+    /// do the attempt's arm (`0x6e5333`), its end (`0x6e51e3`) and its arm refusal (`0x6e5069`),
+    /// a cancel's word clear (`0x6e495c`), the binds (`0x6e60cb`, `0x6e615d`), the send
+    /// (`0x6e589d`) and the active player's form change (`0x5de016`).
+    Changed,
 }
 
 /// Our cast's reports in the order they were made: one queue, so a refusal's line precedes its
@@ -71,6 +78,11 @@ impl CastReports {
 
     pub(crate) fn trade_skill_disarm(&mut self) {
         self.0.push(CastReport::TradeSkillDisarm);
+    }
+
+    /// `0x4b3250` ([`CastReport::Changed`]).
+    pub(crate) fn changed(&mut self) {
+        self.0.push(CastReport::Changed);
     }
 
     /// The refusals queued, in order.
@@ -287,6 +299,10 @@ impl CastReporter<'_, '_> {
                         .map(|(event, args)| Ready::Event(event, args)),
                 ),
                 CastReport::TradeSkillDisarm => out.push(Ready::TradeSkillDisarm),
+                CastReport::Changed => out.extend([
+                    Ready::Event("ACTIONBAR_UPDATE_STATE", vec![]),
+                    Ready::Event("CURRENT_SPELL_CAST_CHANGED", vec![]),
+                ]),
             }
         }
         out
@@ -350,13 +366,26 @@ impl CallReports<'_, '_> {
 /// Signal the reports made outside any script call, and push the cast state the frame's packets
 /// and cancels left ([`CastState`]), which `SpellStopCasting` (`0x6e6e80`) and the bar's checked
 /// tests read: a queued strike and the spell awaiting its click count as in flight, so the first
-/// Esc stops it and `ToggleGameMenu` skips `ClearTarget()` (`UIParent.lua:1489-1492`).
+/// Esc stops it and `ToggleGameMenu` skips `ClearTarget()` (`UIParent.lua:1489-1492`). The active
+/// player's form change is signalled here too, off its descriptor edge (`OnShapeshiftFormChanged
+/// 0x5de010` → `0x5de016`), after the book's push, whose checked ring it lights.
 pub(crate) fn feed_cast_reports(
     script: Option<NonSendMut<UiScript>>,
     mut reports: ResMut<CastReports>,
     mut reporter: CastReporter,
     cast_state: CastState,
+    mut edges: MessageReader<crate::net::FieldChanged>,
+    me: Query<Entity, With<crate::net::SelfPlayer>>,
 ) {
+    let me = me.iter().next();
+    let form_changed = edges.read().any(|e| {
+        e.unit_field(benilla_protocol::field::FIELD_UNIT_BYTES_1)
+            && Some(e.entity) == me
+            && (e.old >> 16) as u8 != (e.new >> 16) as u8
+    });
+    if form_changed {
+        reports.0.insert(0, CastReport::Changed);
+    }
     let Some(mut script) = script else {
         return;
     };

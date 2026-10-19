@@ -162,15 +162,6 @@ impl super::UiScript {
         }
     }
 
-    /// Tell the VM which spell awaits its target (`GetTargetingSpellId 0x6e48e0`): `true` when it
-    /// differs from the last one told. benilla signals `CURRENT_SPELL_CAST_CHANGED` once per such
-    /// change, so one told inside a call is not signalled again by the next frame's push, where
-    /// `0x4b3250` fires at each arm, the attempt's end, the send, the bind and the cancel (#1986).
-    pub fn tell_targeting_spell(&mut self, spell: Option<u32>) -> bool {
-        let mut model = self.model_mut();
-        std::mem::replace(&mut model.targeting_spell, spell) != spell
-    }
-
     /// Take the `SpellStopTargeting()` calls, the ESC chain's rung (`UIParent.lua:1490`), out of
     /// the call stream: whether there was one. The app clears its targeting mode.
     pub fn take_stop_targeting(&mut self) -> bool {

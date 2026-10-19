@@ -57,7 +57,8 @@ impl Plugin for UiSpellbookPlugin {
                 // re-read its cooldowns. A click's cast is a script call (`cast_spell`).
                 feed_spellbook
                     .in_set(UnitFeed)
-                    .before(crate::ui_action::CooldownEvents),
+                    .before(crate::ui_action::CooldownEvents)
+                    .before(crate::ui_cast::feed_cast_reports),
             );
     }
 }
@@ -234,13 +235,9 @@ fn feed_spellbook(
     }
     if fresh != memory.pushed {
         gate.audit("feed_spellbook", "the spellbook snapshot");
-        // A checked-ring move fires `CURRENT_SPELL_CAST_CHANGED`, a book change `SPELLS_CHANGED`.
-        let ring_moved = fresh.slots.len() != memory.pushed.slots.len()
-            || fresh
-                .slots
-                .iter()
-                .zip(&memory.pushed.slots)
-                .any(|(a, b)| a.current != b.current);
+        // A book change fires `SPELLS_CHANGED`. The checked ring follows the form byte, whose
+        // change signals `CURRENT_SPELL_CAST_CHANGED` (`0x5de016`, [`crate::ui_cast`]) after this
+        // push.
         let book_changed = fresh.tabs != memory.pushed.tabs
             || fresh.slots.len() != memory.pushed.slots.len()
             || fresh.slots.iter().zip(&memory.pushed.slots).any(|(a, b)| {
@@ -248,7 +245,7 @@ fn feed_spellbook(
                     != (b.spell_id, &b.name, &b.rank, &b.texture, b.passive)
             });
         debug!(
-            "ui_spellbook: fed {} tab(s), {} spell(s) (book {book_changed}, ring {ring_moved})",
+            "ui_spellbook: fed {} tab(s), {} spell(s) (book {book_changed})",
             fresh.tabs.len(),
             fresh.slots.len()
         );
@@ -256,9 +253,6 @@ fn feed_spellbook(
         memory.pushed = fresh;
         if book_changed {
             script.fire_event("SPELLS_CHANGED", vec![]);
-        }
-        if ring_moved {
-            script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
         }
     }
     // The tab flash after `SPELLS_CHANGED` (`0x4b2b5a` before `0x4b2b92`), outside the diff: the

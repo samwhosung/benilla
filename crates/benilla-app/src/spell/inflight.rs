@@ -688,6 +688,7 @@ mod tests {
             let (tx, rx) = crossbeam_channel::unbounded();
             let mut app = App::new();
             app.add_message::<CastEvent>()
+                .add_message::<crate::net::FieldChanged>()
                 .init_resource::<CastReports>()
                 .init_resource::<crate::items::Items>()
                 .init_resource::<crate::ui_action::CastFailRedisplays>()
@@ -1214,9 +1215,9 @@ mod tests {
             ));
             assert_eq!(app.world().resource::<QueuedMeleeSpell>().current(), None);
             assert!(
-                app.world().resource::<CastReports>().0.is_empty(),
+                app.world().resource::<CastReports>().edges().is_empty(),
                 "the first press's event cleared the caster word (`0x6e4a5a`), so the second \
-                 fires nothing (`0x6e4a1e`)"
+                 fires none (`0x6e4a1e`); only the strike's pop signals"
             );
         }
 
