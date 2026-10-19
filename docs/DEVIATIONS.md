@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 234
+- [benilla-app](#benilla-app): 235
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 19
@@ -51,6 +51,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The stock FCF\_ChatTabFadeFinished (FloatingChatFrame.lua:989-992) nils oldAlpha even under a live hover, so leaving and re-entering within CHAT\_FRAME\_FADE\_TIME (a flick to the scroll buttons, outside the hover box, does it) stops the plate fading in (l.873) for the rest of the session; this keeps oldAlpha while hover is set. ([`assets/ui/FrameXMLFixes.xml:6`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L6))
 - Re-runs UIParent\_ManageFramePositions after DurabilityFrame's own OnEvent. ([`assets/ui/FrameXMLFixes.xml:20`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L20))
 - Friendly plates the player turned on come back at every world entry. The stock UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again at once (l.775-776), and FRIENDNAMEPLATES\_ON is never saved, since l.182 registers NAMEPLATES\_ON a second time. ([`assets/ui/FrameXMLFixes.xml:33`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L33))
+- A button whose key moved away keeps the old key's label while it holds an action with no range (a stance, a self buff). ([`assets/ui/FrameXMLFixes.xml:51`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L51))
 - The rungs are the 1.15 era client's ESC menu, because its settings screens replace 1.12's, which are much worse to use; the era's AddOns rung is dropped, since the character-select AddOns screen is the only addon UI. ([`assets/ui/GameMenuAdapters.xml:4`](../crates/benilla-app/assets/ui/GameMenuAdapters.xml#L4))
 - The layout is the era Settings panel's Keybindings page (collapsible category sections), because 1.12's settings screens are much worse to use. ([`assets/ui/KeyBindingsPage.xml:5`](../crates/benilla-app/assets/ui/KeyBindingsPage.xml#L5))
 - Every bind, unbind and reset saves at once, as the era panel commits, where 1.12 had Okay and Cancel; only Reset To Default and leaving the character set confirm. ([`assets/ui/KeyBindingsPage.xml:11`](../crates/benilla-app/assets/ui/KeyBindingsPage.xml#L11))
