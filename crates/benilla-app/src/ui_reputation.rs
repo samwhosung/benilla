@@ -42,9 +42,11 @@ impl Plugin for UiReputationPlugin {
         app.add_systems(
             Update,
             (
+                // A seat: the world-enter cascade's rebuild signals over the list it pushes.
                 feed_reputation
                     .in_set(UiFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes),
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                    .in_set(crate::ui_unit::WorldEnterSeats),
                 drain_reputation_sends.after(UiInput),
             ),
         );
@@ -239,7 +241,9 @@ type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 /// Push the snapshot and fire `UPDATE_FACTION` when it differs. The build (54 rows of names and
 /// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
 /// move, and the equality check behind it keeps a change to no listed row quiet. The first push
-/// fires too: the stock watch bar initializes off `UPDATE_FACTION` at login.
+/// into a VM is silent: it needs the active player, as the rebuild does (`0x4d5453`), and comes on
+/// the frame the world-enter cascade runs over it, whose rebuild signals with the player seated
+/// (`crate::ui_unit::WorldEnterSeats`).
 pub(crate) fn feed_reputation(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
@@ -325,14 +329,15 @@ pub(crate) fn faction_standings(
 }
 
 /// How many bare `UPDATE_FACTION` signals a transition makes. The standing, flag and rebuild
-/// producers (`0x4d569e`, `0x4d56f6`, `0x4d5984`, `0x4d5db0`) signal bare through `0x703e50`; a
-/// first push is the initialize message, which signals twice: the rebuild `0x4d5430` calls the
-/// sorter `0x4d5c40` (`0x4d55de`), which ends in a bare signal (`0x4d5db0`), and the message ends
-/// in another (`0x4d569e`). The watched index is pushed here and signals `("player")` from its
-/// own field watch (`0x5ddcce`, [`crate::field_watch`]), never from this diff.
+/// producers (`0x4d569e`, `0x4d56f6`, `0x4d5984`, `0x4d5db0`) signal bare through `0x703e50`. A
+/// first push signals none: the initialize message lands before the player's create (vmangos
+/// `SendInitialPacketsBeforeAddToMap`, `Player.cpp:19256`), so its rebuild finds no player
+/// (`0x4d5453`) and the list is the world-enter rebuild's (`0x4909d3`), which signals itself. The
+/// watched index is pushed here and signals `("player")` from its own field watch (`0x5ddcce`,
+/// [`crate::field_watch`]), never from this diff.
 fn faction_fires(prev: Option<&ReputationState>, fresh: &ReputationState) -> usize {
     match prev {
-        None => 2,
+        None => 0,
         Some(p) => usize::from(p.entries != fresh.entries),
     }
 }
@@ -373,8 +378,8 @@ fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<Ne
 mod tests {
     use super::*;
 
-    /// A live feed over an empty catalog: the first push is the initialize message's two bare
-    /// signals, and a watched-index change is pushed with no signal, its watch's to fire.
+    /// A live feed over an empty catalog: the first push and a watched-index change are pushed
+    /// with no signal, the world-enter rebuild's and the watch's to fire.
     #[test]
     fn the_list_signals_bare_and_the_watched_index_is_pushed_silently() {
         use benilla_formats::FactionCatalog;
@@ -418,19 +423,14 @@ mod tests {
             s.run("SEEN = {}").unwrap();
             out
         };
-        assert_eq!(
-            seen(&mut app),
-            vec!["UPDATE_FACTION nil"; 2],
-            "initialize: the sorter's signal and the message's"
-        );
-        assert!(seen(&mut app).is_empty());
+        assert!(seen(&mut app).is_empty(), "the world-enter rebuild signals");
         *app.world_mut().get_mut::<ObjectStore>(me).unwrap() = ObjectStore(
             benilla_protocol::ObjectFields::from_pairs(&[(FIELD_WATCHED, 3)]),
         );
         assert!(seen(&mut app).is_empty());
     }
 
-    /// The list's bare signals: two for the initialize message, one per list change, none for the
+    /// The list's bare signals: none for the first push, one per list change, none for the
     /// watched index alone.
     #[test]
     fn the_list_and_the_watched_index_are_two_producers() {
@@ -454,7 +454,7 @@ mod tests {
             entries: vec![entry(1)],
             watched: None,
         };
-        assert_eq!(faction_fires(None, &base), 2);
+        assert_eq!(faction_fires(None, &base), 0);
         let watched = ReputationState {
             watched: Some(3),
             ..base.clone()

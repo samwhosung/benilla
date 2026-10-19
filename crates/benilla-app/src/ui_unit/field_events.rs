@@ -687,4 +687,84 @@ mod tests {
             .unwrap();
         assert_eq!(seen(&mut app), ["PLAYER_ENTERING_WORLD 3"]);
     }
+
+    /// The login in the server's order: the faction list lands before the player's create (vmangos
+    /// `SendInitialPacketsBeforeAddToMap`, `Player.cpp:19256`), so the list's first push and the
+    /// world-enter cascade share the create's frame. The cascade's rebuild signals
+    /// `UPDATE_FACTION` after `PLAYER_ENTERING_WORLD` (`0x4909d3`), the player seated, so
+    /// `ReputationWatchBar_Update` reads the level and a 60 trades the XP bar for the max-level art
+    /// (`ReputationFrame.lua:236-239`), a 59 keeps it (`:241-243`). Skips without client data.
+    #[test]
+    fn the_world_enter_rebuild_sets_the_xp_bar_by_the_seated_level() {
+        benilla_formats::wow_data_or_skip!();
+        const WATCHED: u16 = 1261;
+        const XP: u16 = 716;
+        let mut headless = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut headless,
+            crate::ui_reputation::feed_reputation,
+            super::super::feed_units
+        ));
+
+        for (level, xp_bar) in [(60, false), (59, true)] {
+            let (mut app, _) = feed_world(
+                &[
+                    (benilla_protocol::field::FIELD_UNIT_LEVEL, level),
+                    (WATCHED, u32::MAX),
+                    // `PLAYER_XP` and `PLAYER_NEXT_LEVEL_XP`: a 60 on vmangos reads 0 / 217400.
+                    (XP, 0),
+                    (XP + 1, 217_400),
+                    // `PLAYER_BYTES_2` byte 3, rest state 2, normal: `ExhaustionTick_Update`
+                    // compares `GetRestState()` at `PLAYER_ENTERING_WORLD`.
+                    (194, 2 << 24),
+                ],
+                "",
+            );
+            app.insert_resource(crate::target::Factions::from_catalog(
+                benilla_formats::FactionCatalog::from_rows(Default::default(), Default::default()),
+            ));
+            {
+                let s = app.world().non_send_resource::<UiScript>();
+                for file in [
+                    r"Interface\FrameXML\GlobalStrings.lua",
+                    r"Interface\FrameXML\Fonts.xml",
+                    r"Interface\FrameXML\UIParent.xml",
+                    r"Interface\FrameXML\MoneyFrame.lua",
+                    r"Interface\FrameXML\MoneyFrame.xml",
+                    r"Interface\FrameXML\GameTooltip.xml",
+                    r"Interface\FrameXML\UIPanelTemplates.lua",
+                    r"Interface\FrameXML\UIPanelTemplates.xml",
+                    r"Interface\FrameXML\OptionsFrameTemplates.xml",
+                    r"Interface\FrameXML\TextStatusBar.lua",
+                    r"Interface\FrameXML\TextStatusBar.xml",
+                    r"Interface\FrameXML\MainMenuBar.xml",
+                    r"Interface\FrameXML\Cooldown.xml",
+                    r"Interface\FrameXML\ActionButtonTemplate.xml",
+                    r"Interface\FrameXML\ActionBarFrame.xml",
+                    r"Interface\FrameXML\ReputationFrame.xml",
+                    r"Interface\FrameXML\BonusActionBarFrame.xml",
+                ] {
+                    crate::ui_script::test_ui::load_ui(s, file);
+                }
+            }
+            app.world_mut()
+                .run_system_once(crate::ui_reputation::feed_reputation)
+                .unwrap();
+            app.world_mut()
+                .run_system_once(super::super::feed_units)
+                .unwrap();
+            let s = app.world().non_send_resource::<UiScript>();
+            let shown = |frame: &str| {
+                s.eval::<bool>(&format!("return {frame}:IsShown() ~= nil"))
+                    .unwrap()
+            };
+            assert_eq!(shown("MainMenuExpBar"), xp_bar, "level {level}: the XP bar");
+            assert_eq!(
+                shown("MainMenuBarMaxLevelBar"),
+                !xp_bar,
+                "level {level}: the max-level art"
+            );
+            assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+        }
+    }
 }

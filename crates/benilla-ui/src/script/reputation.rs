@@ -114,6 +114,15 @@ impl super::UiScript {
         model.reputation = state;
     }
 
+    /// The world-enter cascade's rebuild (`0x4909d3` calls `0x4d5430`): the player in the world,
+    /// it re-lists the factions with every header expanded and "Inactive" collapsed (`0x4d5479`),
+    /// and its sort signals `UPDATE_FACTION` (`0x4d55de` → `0x4d5db0`).
+    pub(crate) fn reputation_enter_world(&mut self) {
+        let state = std::mem::take(&mut self.model_mut().reputation);
+        self.set_reputation(state);
+        self.fire_event("UPDATE_FACTION", Vec::new());
+    }
+
     /// Push every reputation-indexed faction's standing, the base plus the wire (`0x4d6370`): what
     /// the quest log's turn-in test reads (`0x4df6ce`, `0x4df6e3`). A faction left out reads 0, as
     /// one with no reputation index does (`0x4d6377`).

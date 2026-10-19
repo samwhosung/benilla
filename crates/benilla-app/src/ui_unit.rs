@@ -30,7 +30,7 @@ pub(crate) struct UnitFeed;
 
 /// The feeds that seat a new VM with what the reference's caches hold across a `/reload`, ahead of
 /// the world-enter cascade whose handlers read it: the quest log's records, slots and creature
-/// names, and the item records.
+/// names, the item records, and the reputation list the cascade's rebuild signals over.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WorldEnterSeats;
 
