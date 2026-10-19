@@ -188,6 +188,8 @@ pub(super) fn plugin(app: &mut App) {
             load_camera_pose
                 .after(super::ControlRestore)
                 .before(super::control)
+                // And before the input pass's script calls, which read the player it restores.
+                .before(crate::script_calls::CallHosts)
                 .in_set(InWorldGated),
         )
         .add_systems(OnExit(ClientState::InWorld), save_on_session_end);

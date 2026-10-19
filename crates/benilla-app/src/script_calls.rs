@@ -6,9 +6,11 @@
 //! `/target Bob` then `/cast Flash Heal` heals Bob, `/cast` then `/target` casts at the old target,
 //! and `SpellIsTargeting()` on the line after a cast reads the word it armed.
 //!
-//! An entry that lends the host to the VM ([`benilla_ui::script::UiScript::hosted`]) has each
-//! call apply inside its verb. A call made where none is lent waits in the VM's queue for
-//! [`apply_script_calls`], which drains it through the same host once a frame.
+//! The entries that run a script with an input event up, where a cast may pass the gate's tag 2
+//! (`0x494a92`), lend the host to the VM ([`benilla_ui::script::UiScript::hosted`]): the mouse and
+//! key feed and the bindings pass, so each call applies inside its verb. A call made elsewhere (an
+//! `OnUpdate`, a handler a feed's event runs) waits in the VM's queue for [`apply_script_calls`],
+//! which drains it through the same host once a frame.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -39,6 +41,13 @@ macro_rules! pet_in_order {
         }
     }};
 }
+
+/// The systems that lend [`ScriptCallHost`] to the VM: after what moves the world ahead of the
+/// input pass, so the calls read it as [`apply_script_calls`] does. Their calls apply with the
+/// rest of their input event, before the frame's world clicks; the reference dispatches each
+/// input record whole in the order it arrived (`0x423920` → `0x4239a0`, `0x4245b0`).
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CallHosts;
 
 /// The engine half of every script call: one applier per owner of the state a call touches.
 #[derive(SystemParam)]
@@ -180,6 +189,19 @@ impl ScriptCallHost<'_, '_> {
     /// in their place.
     fn bind_parked(&mut self) {
         self.appliers.p1().bind_parked();
+    }
+}
+
+/// Run `f` on `script` with `host` lent, when the entry has one: a harness without the appliers'
+/// state runs it unhosted, and its calls wait in the queue.
+pub(crate) fn lent<R>(
+    script: &mut UiScript,
+    host: Option<&mut ScriptCallHost>,
+    f: impl FnOnce(&mut UiScript) -> R,
+) -> R {
+    match host {
+        Some(host) => script.hosted(host, f),
+        None => f(script),
     }
 }
 
@@ -2645,5 +2667,111 @@ mod tests {
             Some(2),
             "the bind ends it inside its call too"
         );
+    }
+
+    /// A key's body runs inside `CBindings::ExecuteBinding` (`0x4b7990`) with its input event up
+    /// (`0x4b7b02`), and the bindings pass lends the host around it: SmartRes on a key casts, binds
+    /// and reads the result inside the body, with no drain after it.
+    #[test]
+    fn a_bound_keys_body_casts_and_binds_inside_the_bindings_pass() {
+        let mut f = frame(false);
+        with_factions(&mut f, FRIEND, &[(FLAGS, 0x8)]);
+        with_friendly_party1(&mut f, false);
+        with_book_spell(
+            &mut f,
+            RESURRECTION,
+            "Resurrection",
+            benilla_formats::SpellDisplay {
+                targets: 0x8000,
+                ..Default::default()
+            },
+        );
+        let world = f.app.world_mut();
+        {
+            let mut script = world.non_send_resource_mut::<UiScript>();
+            script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(
+                "bind F SMARTRES\r\n",
+            ));
+            script.load_binding_set(1);
+            script.register_bindings(
+                &benilla_ui::bindings_xml::parse(
+                    r#"<Bindings><Binding name="SMARTRES">
+                        CastSpellByName("Resurrection", 0)
+                        ARMED = SpellIsTargeting()
+                        SpellTargetUnit("party1")
+                        if not SpellIsTargeting() then SENT = 1 end
+                    </Binding></Bindings>"#,
+                )
+                .expect("well-formed"),
+            );
+        }
+        world.write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::KeyF,
+            logical_key: bevy::input::keyboard::Key::Character("f".into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        crate::bindings::dispatch_once(world);
+        assert_eq!(global(&mut f, "ARMED"), Some(1));
+        assert_eq!(global(&mut f, "SENT"), Some(1));
+        assert_eq!(casts(&f), vec![(RESURRECTION, Some(NEW))]);
+    }
+
+    /// FuBar_CorkFu casts from its plugin's click: a button's `OnClick` run by the mouse raises the
+    /// click event (`0x779890`), and the input pass lends the host around it, so the cast arms
+    /// and the next line binds it inside the handler.
+    #[test]
+    fn a_clicks_handler_casts_and_binds_inside_the_input_pass() {
+        let mut f = frame(true);
+        with_factions(&mut f, FOE, &[(FLAGS, 0x8)]);
+        with_friendly_party1(&mut f, true);
+        with_book_spell(
+            &mut f,
+            MOTW,
+            "Mark of the Wild",
+            benilla_formats::SpellDisplay {
+                implicit_target_a1: 21,
+                ..Default::default()
+            },
+        );
+        let world = f.app.world_mut();
+        {
+            let mut script = world.non_send_resource_mut::<UiScript>();
+            script.set_screen_size(1024.0, 768.0);
+            script
+                .run(
+                    r#"local b = CreateFrame("Button", "CorkButton")
+                    b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(1024) b:SetHeight(768)
+                    b:SetScript("OnClick", function()
+                        CastSpellByName("Mark of the Wild")
+                        FIRST = SpellIsTargeting()
+                        if SpellIsTargeting() then SpellTargetUnit("party1") end
+                        SECOND = SpellIsTargeting()
+                    end)"#,
+                )
+                .expect("the button builds");
+            script.resolve();
+        }
+        let mut window = Window {
+            resolution: UVec2::new(1024, 768).into(),
+            ..default()
+        };
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        world.spawn((window, bevy::window::PrimaryWindow));
+        for down in [true, false] {
+            let mut buttons = world.resource_mut::<ButtonInput<MouseButton>>();
+            buttons.clear();
+            if down {
+                buttons.press(MouseButton::Left);
+            } else {
+                buttons.release(MouseButton::Left);
+            }
+            crate::ui_script::feed_input_once(world);
+        }
+        assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
+        assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 }

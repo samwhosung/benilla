@@ -61,7 +61,10 @@ impl Plugin for TransportPlugin {
                 )
                     .chain()
                     .after(benilla_world::schedule::WorldStage::Net)
-                    .before(benilla_world::schedule::WorldStage::Input),
+                    .before(benilla_world::schedule::WorldStage::Input)
+                    // A script call applies in the input pass, against the decks as they stand
+                    // this frame, as the calls' drain after the input stage reads them.
+                    .before(crate::script_calls::CallHosts),
             )
             // The ride frame last, after `PlayerControlSet` decides what we stand on; its
             // consumers, the particle and ribbon sims, run in `PostUpdate`.

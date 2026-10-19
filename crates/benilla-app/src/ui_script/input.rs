@@ -172,6 +172,8 @@ pub(super) fn feed_ui_input(
     state: Option<Res<State<crate::client_state::ClientState>>>,
     // The characters the active layout makes, which name a key for a keyboard frame.
     layout: Res<crate::bindings::LayoutNames>,
+    // Lent to the VM for the pass, so a click's or an Enter's script calls apply in the call.
+    mut host: Option<crate::script_calls::ScriptCallHost>,
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
     // In the world the bindings pass sends the key-ups, in event order with the presses it
@@ -207,134 +209,137 @@ pub(super) fn feed_ui_input(
         return;
     };
     let wl_display = textinput::wayland_display(raw_handle);
-    // The pick routes the world drop: an object keeps the payload, terrain or sky drops it.
-    script.set_world_pick(world_pick);
-    // ── Modifiers ── before the mouse feed, so a click's `IsShiftKeyDown` sees the click's state.
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
-    script.set_modifiers(shift, ctrl, alt);
-    // ── Mouse ── A cursor off the window skips only the mouse feed.
-    // The headless hover probe's aim stands in for a missing cursor, so `PointerOverUi` rises and
-    // falls over a panel in an automated run as it does for a person; a real pointer always wins.
-    if let Some(cursor) = window
-        .cursor_position()
-        .or_else(crate::target::hover_probe_point)
-        .filter(|_| !synthetic)
-    {
-        // The window cursor in the root's y-up 768-high units, as `GetCursorPosition` answers it.
-        let Vec2 { x, y } = super::window_to_ui(window.height(), cursor);
-        // `WOW_HIT_COST=1` meters this call's per-frame hit-test rebuild, one line a second.
-        static HIT_COST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let metering =
-            *HIT_COST.get_or_init(|| std::env::var("WOW_HIT_COST").as_deref() == Ok("1"));
-        let t0 = metering.then(std::time::Instant::now);
-        // The world frame is mouse-enabled, so an addon's handlers can hover it, but its hit is
-        // the world's: camera look, world clicks and hover targeting stay live over it.
-        hover.0 = script
-            .mouse_move(x, y)
-            .filter(|id| !script.is_world_frame(*id));
-        if let Some(t0) = t0 {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static ACC_US: AtomicU64 = AtomicU64::new(0);
-            static CALLS: AtomicU64 = AtomicU64::new(0);
-            static LAST: AtomicU64 = AtomicU64::new(0);
-            ACC_US.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
-            let calls = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
-            let now_s = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            if LAST.swap(now_s, Ordering::Relaxed) != now_s && calls > 1 {
-                let us = ACC_US.swap(0, Ordering::Relaxed);
-                let n = CALLS.swap(0, Ordering::Relaxed);
-                eprintln!(
-                    "[hit-cost] mouse_move_us/frame={:.1} frames={n}",
-                    us as f64 / n.max(1) as f64
-                );
-            }
-        }
-        for (btn, name) in UI_MOUSE_BUTTONS {
-            if buttons.just_pressed(btn) {
-                // A left press that would drop into the world (`world_drop_click`: any payload over
-                // terrain or nothing) is consumed now: the drop fires on the release, but the world
-                // click-pick and camera orbit act on the press. Over an object the reference runs
-                // SELECT with the payload still held.
-                if btn == MouseButton::Left && hover.0.is_none() {
-                    use benilla_ui::script::WorldPick;
-                    let would_drop =
-                        script.cursor_payload().is_some() && world_pick != WorldPick::Object;
-                    if would_drop {
-                        click_consumed.0 = true;
-                    }
+    let feed = |script: &mut UiScript| {
+        // The pick routes the world drop: an object keeps the payload, terrain or sky drops it.
+        script.set_world_pick(world_pick);
+        // ── Modifiers ── before the mouse feed, so a click's `IsShiftKeyDown` sees its state.
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+        script.set_modifiers(shift, ctrl, alt);
+        // ── Mouse ── A cursor off the window skips only the mouse feed.
+        // The headless hover probe's aim stands in for a missing cursor, so `PointerOverUi` rises
+        // and falls over a panel in an automated run as for a person; a real pointer wins.
+        if let Some(cursor) = window
+            .cursor_position()
+            .or_else(crate::target::hover_probe_point)
+            .filter(|_| !synthetic)
+        {
+            // The window cursor in the root's y-up 768-high units, `GetCursorPosition`'s answer.
+            let Vec2 { x, y } = super::window_to_ui(window.height(), cursor);
+            // `WOW_HIT_COST=1` meters this call's per-frame hit-test rebuild, one line a second.
+            static HIT_COST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let metering =
+                *HIT_COST.get_or_init(|| std::env::var("WOW_HIT_COST").as_deref() == Ok("1"));
+            let t0 = metering.then(std::time::Instant::now);
+            // The world frame is mouse-enabled, so an addon's handlers can hover it, but its hit is
+            // the world's: camera look, world clicks and hover targeting stay live over it.
+            hover.0 = script
+                .mouse_move(x, y)
+                .filter(|id| !script.is_world_frame(*id));
+            if let Some(t0) = t0 {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static ACC_US: AtomicU64 = AtomicU64::new(0);
+                static CALLS: AtomicU64 = AtomicU64::new(0);
+                static LAST: AtomicU64 = AtomicU64::new(0);
+                ACC_US.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+                let calls = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+                let now_s = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                if LAST.swap(now_s, Ordering::Relaxed) != now_s && calls > 1 {
+                    let us = ACC_US.swap(0, Ordering::Relaxed);
+                    let n = CALLS.swap(0, Ordering::Relaxed);
+                    eprintln!(
+                        "[hit-cost] mouse_move_us/frame={:.1} frames={n}",
+                        us as f64 / n.max(1) as f64
+                    );
                 }
-                // A press the UI consumed is not the world's, hovered frame or not.
-                press_consumed.0 |= script.mouse_button(x, y, name, true);
             }
-            if buttons.just_released(btn) {
-                script.mouse_button(x, y, name, false);
+            for (btn, name) in UI_MOUSE_BUTTONS {
+                if buttons.just_pressed(btn) {
+                    // A left press that would drop into the world (`world_drop_click`: any payload
+                    // over terrain or nothing) is consumed now: the drop fires on the release, but
+                    // the world click-pick and camera orbit act on the press. Over an object the
+                    // reference runs SELECT with the payload still held.
+                    if btn == MouseButton::Left && hover.0.is_none() {
+                        use benilla_ui::script::WorldPick;
+                        let would_drop =
+                            script.cursor_payload().is_some() && world_pick != WorldPick::Object;
+                        if would_drop {
+                            click_consumed.0 = true;
+                        }
+                    }
+                    // A press the UI consumed is not the world's, hovered frame or not.
+                    press_consumed.0 |= script.mouse_button(x, y, name, true);
+                }
+                if buttons.just_released(btn) {
+                    script.mouse_button(x, y, name, false);
+                }
             }
+        } else if !synthetic {
+            // The OS pointer left: leave the hovered frame once, and disarm any press or drag every
+            // frame, since no release ends it and a stale gesture would fire on re-entry.
+            if hover.0.take().is_some() {
+                script.pointer_left_hover();
+            }
+            script.pointer_left_window();
         }
-    } else if !synthetic {
-        // The OS pointer left: leave the hovered frame once, and disarm any press or drag every
-        // frame, since no release ends it and a stale gesture would fire on re-entry.
-        if hover.0.take().is_some() {
-            script.pointer_left_hover();
+
+        // ── Keyboard capture gate ── read after the mouse feed (a click may have just focused a
+        // box) and before the keys (an Escape that clears focus still counts as captured).
+        capture.typing = script.has_keyboard_focus();
+        capture.consumed.clear();
+        // egui's keyboard focus is the last pass's: a key in the very frame a click focuses an egui
+        // field still reaches the game.
+        let egui_keyboard = pointer.egui_keyboard.0;
+        if egui_keyboard {
+            capture.typing = true;
         }
-        script.pointer_left_window();
-    }
+        script.set_alt_down(alt);
+        // ── The alt-arrow exemption ──────────────────────────────────────────────────────────────
+        // An EditBox in alt-arrow mode (`ignoreArrows`, set on the chat box at `ChatFrame.xml:21`)
+        // passes the arrows on unless ALT is held: its handler returns 0 at `0x77b1c4` and the
+        // binding runs at `CGWorldFrame`; a focused box swallows any other key (`0x77b35e` returns
+        // 1), PRINTSCREEN excepted (`0x77b17f`, see `crate::bindings`).
+        capture.arrows_fall_through = !alt && script.editbox_alt_arrow_mode() && !egui_keyboard;
 
-    // ── Keyboard capture gate ── read after the mouse feed (a click may have just focused a box)
-    // and before the keys (an Escape that clears focus still counts as captured this frame).
-    capture.typing = script.has_keyboard_focus();
-    capture.consumed.clear();
-    // egui's keyboard focus is the last pass's: a key in the very frame a click focuses an egui
-    // field still reaches the game.
-    let egui_keyboard = pointer.egui_keyboard.0;
-    if egui_keyboard {
-        capture.typing = true;
-    }
-    script.set_alt_down(alt);
-    // ── The alt-arrow exemption ────────────────────────────────────────────────────────────────
-    // An EditBox in alt-arrow mode (`ignoreArrows`, set on the chat box at `ChatFrame.xml:21`)
-    // passes the arrows on unless ALT is held: its handler returns 0 at `0x77b1c4` and the
-    // binding runs at `CGWorldFrame`; a focused box swallows any other key (`0x77b35e` returns 1),
-    // PRINTSCREEN excepted (`0x77b17f`, see `crate::bindings`).
-    capture.arrows_fall_through = !alt && script.editbox_alt_arrow_mode() && !egui_keyboard;
+        // ── Keyboard → VM ── every press is one key-down walk by name (`0x765f10`), in which a box
+        // is a frame like the rest; a box the walk reached then takes the key's editing action
+        // through the per-OS chord table as an `EditAction` or a clipboard operation (the macOS
+        // NSPasteboard needs this main-thread system), and the characters go to `char_input`, a
+        // walk of its own. A repeat goes to the frame that took the press instead (`0x766070`), a
+        // release likewise (`0x765fd0`).
+        let sup = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
+        let mods = keymap::Mods {
+            shift,
+            ctrl,
+            alt,
+            sup,
+        };
+        feed_keys(
+            script,
+            capture,
+            past_egui(keyboard.read(), egui_keyboard),
+            keys,
+            &mut pressed,
+            releases,
+            mods,
+            &layout,
+            clipboard,
+            wl_display,
+        );
 
-    // ── Keyboard → VM ── every press is one key-down walk by name (`0x765f10`), in which a box is
-    // a frame like the rest; a box the walk reached then takes the key's editing action through
-    // the per-OS chord table as an `EditAction` or a clipboard operation (the macOS NSPasteboard
-    // needs this main-thread system), and the characters go to `char_input`, a walk of its own.
-    // A repeat goes to the frame that took the press instead (`0x766070`), a release likewise
-    // (`0x765fd0`).
-    let sup = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
-    let mods = keymap::Mods {
-        shift,
-        ctrl,
-        alt,
-        sup,
+        // The payload-held mirror, written last so a same-frame pickup or ESC clear shows: the
+        // Send-side view the world-click deselect gates on.
+        payload_held.0 = script.cursor_payload().is_some();
+
+        for err in script.take_errors() {
+            warn!("ui_script(input): {err}");
+        }
     };
-    feed_keys(
-        &mut script,
-        capture,
-        past_egui(keyboard.read(), egui_keyboard),
-        keys,
-        &mut pressed,
-        releases,
-        mods,
-        &layout,
-        clipboard,
-        wl_display,
-    );
-
-    // The payload-held mirror, written last so a same-frame pickup or ESC clear shows: the
-    // Send-side view the world-click deselect gates on.
-    payload_held.0 = script.cursor_payload().is_some();
-
-    for err in script.take_errors() {
-        warn!("ui_script(input): {err}");
-    }
+    crate::script_calls::lent(&mut script, host.as_mut(), feed);
 }
 
 /// The events the UI gets while a dev overlay's text field may hold the keyboard: none of the

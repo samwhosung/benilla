@@ -268,7 +268,11 @@ impl Plugin for PlayerPlugin {
         )
         // The world camera renders only in world or under the loading screen, whose covered
         // render compiles the world's pipelines before the first visible frame.
-        .add_systems(Update, setup::gate_world_camera)
+        // Before the input pass, whose script calls read the cameras: the gate is settled first.
+        .add_systems(
+            Update,
+            setup::gate_world_camera.before(crate::script_calls::CallHosts),
+        )
         // Off in capture mode, where the harness pins the camera, and in world only, so the glue
         // screens keep the cursor and send no movement.
         .add_systems(

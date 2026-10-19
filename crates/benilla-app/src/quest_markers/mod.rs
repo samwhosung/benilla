@@ -526,7 +526,10 @@ impl Plugin for QuestMarkersPlugin {
                 bake_seat_scale,
             )
                 .chain()
-                .after(benilla_world::schedule::WorldStage::Net),
+                .after(benilla_world::schedule::WorldStage::Net)
+                // The markers' poses are settled before the input pass's script calls read the
+                // world's transforms; neither reads what the other writes.
+                .before(crate::script_calls::CallHosts),
         )
         .add_systems(
             PostUpdate,

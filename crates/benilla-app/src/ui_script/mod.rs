@@ -411,9 +411,12 @@ impl Plugin for UiScriptPlugin {
                 Update,
                 (
                     extract::tick_script,
-                    input::feed_ui_input.run_if(
-                        in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
-                    ),
+                    input::feed_ui_input
+                        .run_if(
+                            in_state(crate::client_state::ClientState::InWorld)
+                                .or(glue::glue_ui_up),
+                        )
+                        .in_set(crate::script_calls::CallHosts),
                     input::feed_ui_wheel.run_if(
                         in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
                     ),
@@ -470,6 +473,16 @@ impl Plugin for UiScriptPlugin {
                 .run_if(capture_ui_active),
         );
     }
+}
+
+/// The mouse and key feed once, for a test over the whole client: the input pass's Lua, with the
+/// call host the world lends.
+#[cfg(test)]
+pub(crate) fn feed_input_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(input::feed_ui_input)
+        .expect("the input feeds");
 }
 
 /// Whether a capture includes the player UI: world baselines stay UI-free unless
