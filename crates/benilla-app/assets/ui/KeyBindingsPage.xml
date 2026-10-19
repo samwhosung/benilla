@@ -468,6 +468,11 @@
                 BenillaKeyBindings_Output("")
                 BenillaKeyBindingsPage_Refresh()
             end,
+            -- The stock entry's own (`Blizzard_BindingUI.lua:21-23`): `StaticPopup_OnUpdate`
+            -- compares the timeout with 0 every frame (`StaticPopup.lua:1713`).
+            timeout = 0,
+            whileDead = 1,
+            showAlert = 1,
         }
         -- Reset To Default confirms, as the era's does; our string, since 1.12 has none.
         StaticPopupDialogs["BENILLA_CONFIRM_RESET_KEYBINDINGS"] = {
@@ -482,6 +487,8 @@
                 BenillaKeyBindings_Output("")
                 BenillaKeyBindingsPage_Refresh()
             end,
+            timeout = 0,
+            whileDead = 1,
         }
 
         -- ── Search ── a binding's tag is its display name uppercased, as the era's.
