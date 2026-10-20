@@ -406,17 +406,23 @@ fn format_time(time: &WowTime) -> String {
     )
 }
 
-/// The in-game clock (`SMSG_LOGIN_SETTIMESPEED` and the other time messages), advanced each frame.
-/// It is built once and no logout resets it (`0x6c61a0` clears only the handlers).
+/// The in-game clock (`SMSG_LOGIN_SETTIMESPEED` and the other time messages), advanced each frame
+/// in the world. It is built once and no logout resets it (`0x6c61a0` clears only the handlers).
 #[derive(Resource, Default)]
 pub(crate) struct ServerTime(pub(crate) GameTime);
 
 /// The clock's per-frame systems. In the net stage, after the drain that may have set the clock:
-/// the lighting resolve runs after it and reads this frame's clock.
+/// the lighting resolve runs after it and reads this frame's clock. The frame advance runs only
+/// in the world: the reference registers it with `ClientInitializeGame` at world entry
+/// (`0x401684`) and `ClientDestroyGame` removes it (`0x401f04`), while the clock, built once at
+/// start-up, outlives both, so it stands where the world left it.
 pub(super) fn register(app: &mut App) {
     app.add_systems(
         Update,
-        (tick_game_time, publish_world_time)
+        (
+            tick_game_time.in_set(crate::client_state::InWorldGated),
+            publish_world_time,
+        )
             .chain()
             .after(super::apply_net_updates)
             .in_set(WorldStage::Net),
