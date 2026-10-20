@@ -1,7 +1,7 @@
 //! `ChrRaces.dbc` column 9: the creature type a player's race reads as, the last stage of the
 //! creature-type resolver (`0x605570`: race byte → row `[0xc0dee0][race]`, offset `0x24`, at
-//! `0x6055ca`). The runtime uses a frozen copy, `spell::unit_type::race_creature_type`; this
-//! loader backs the test that pins it.
+//! `0x6055ca`). The runtime uses a frozen copy, `creature_type::race_creature_type` in
+//! `benilla-app`; this loader backs the test that pins it.
 
 use std::collections::HashMap;
 
