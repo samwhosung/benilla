@@ -583,7 +583,17 @@ fn send_spell_cast(
             }
             // Its ammo leg, the request passing the ammo flag (`0x6e4dfd`).
             let flags = |class, subclass| sub_classes.map_or(0, |c| c.flags(class, subclass));
-            if let Some(ammo_type) = super::usable::ammo_refusal(d, store, objects, items, &flags) {
+            let held = |entry| {
+                crate::ui_items::count_of(
+                    &store.0,
+                    objects,
+                    entry,
+                    crate::ui_items::InventoryScope::DEFAULT,
+                )
+            };
+            if let Some(ammo_type) =
+                super::usable::ammo_refusal(d, store, objects, items, &flags, &held)
+            {
                 debug!("ui_action: cast {spell_id} refused locally — no ammo of type {ammo_type}");
                 refuse!(CastFail::local_arg(spell_id, 0x2f, ammo_type));
             }

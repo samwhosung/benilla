@@ -155,19 +155,22 @@ fn first_fitting_item(
     )
 }
 
-/// The ammo leg of `0x6e40e0` (`0x6e41f6`-`0x6e4373`), which the cast request and the usable walk
-/// run, both with the ammo flag set (`0x6e4dfd`, `0x6e3e65`); the spell tooltip searches the worn
-/// items alone (`0x52ef73`). `Some(ammo type)` refuses, `0x2f` `SPELL_FAILED_NEED_AMMO` with the
-/// type as its argument (`0x6e434d`, `0x6e4372`). `subclass_flags` is `ItemSubClass.dbc`'s
-/// `Flags` for a class and subclass, 0 for no row.
+/// The ammo leg of `0x6e40e0` (`0x6e41f6`-`0x6e4373`). Its two callers both pass the ammo flag:
+/// the cast request (`0x6e4dff`) and the usable walk (`0x6e3e67`); the spell tooltip calls the
+/// worn-item search `0x5f0c50` alone (`0x52ef73`). `Some(ammo type)` refuses, `0x2f`
+/// `SPELL_FAILED_NEED_AMMO` with the type as its argument (`0x6e434d`, `0x6e4372`).
+/// `subclass_flags` is `ItemSubClass.dbc`'s `Flags` for a class and subclass, 0 for no row;
+/// `held` is the inventory walk's count of an entry at mask 0 (`0x622420`).
 pub(crate) fn ammo_refusal(
     d: &SpellDisplay,
     store: &ObjectStore,
     objects: &Objects,
     items: &Items,
     subclass_flags: &dyn Fn(u32, u32) -> u32,
+    held: &dyn Fn(u32) -> u32,
 ) -> Option<u32> {
-    /// `ItemSubClass.dbc` `Flags & 0x10` (`0x6e4264`): a weapon that fires no ammo, the wand.
+    /// `ItemSubClass.dbc` `Flags & 0x10` (`0x6e4264`): a weapon that fires no ammo, in 5875 the
+    /// Thrown row (2, 16) alone.
     const SUBCLASS_NO_AMMO: u32 = 0x10;
     /// `ITEM_CLASS_PROJECTILE`, the class the carried walk's callback takes (`0x6e43ab`).
     const CLASS_PROJECTILE: u32 = 6;
@@ -191,12 +194,7 @@ pub(crate) fn ammo_refusal(
         && items
             .template(ammo_id, 0, Ask::Read)
             .is_some_and(|t| t.class == CLASS_PROJECTILE && t.subclass == ammo_type)
-        && crate::ui_items::count_of(
-            &store.0,
-            objects,
-            ammo_id,
-            crate::ui_items::InventoryScope::DEFAULT,
-        ) > 0;
+        && held(ammo_id) > 0;
     (!carried).then_some(ammo_type)
 }
 
@@ -406,8 +404,13 @@ pub(crate) fn spell_usable(
             return (false, false);
         }
     }
-    // Leg 4 (`0x6e40e0`): some worn item matches the class and subclass mask.
+    // Leg 4 (`0x6e40e0`): some worn item matches the class and subclass mask, and its ammo leg,
+    // the walk passing the ammo flag (`0x6e3e67`), finds a loaded and carried projectile.
     if !equipped_item_fits(d, ctx.store, objects, items, &mut Unrecorded) {
+        return (false, false);
+    }
+    let flags = |class, subclass| ctx.sub_classes.map_or(0, |c| c.flags(class, subclass));
+    if ammo_refusal(d, ctx.store, objects, items, &flags, &stacks).is_some() {
         return (false, false);
     }
     // Leg 5 (`0x6e3e7a`..`0x6e3eb2`): a finishing move (`AttributesEx & 0x500000`, one any-of
@@ -889,13 +892,22 @@ mod tests {
             let store = ObjectStore(ObjectFields::from_pairs(&pairs));
             let flags = c.flags;
             deps.with_objects(|objects, items, _| {
-                ammo_refusal(&shot, &store, objects, items, &|class, subclass| {
+                let held = |entry| {
+                    crate::ui_items::count_of(
+                        &store.0,
+                        objects,
+                        entry,
+                        crate::ui_items::InventoryScope::DEFAULT,
+                    )
+                };
+                let flags = |class, subclass| {
                     if (class, subclass) == (2, 2) {
                         flags
                     } else {
                         0
                     }
-                })
+                };
+                ammo_refusal(&shot, &store, objects, items, &flags, &held)
             })
         };
 
