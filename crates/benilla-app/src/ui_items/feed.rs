@@ -1971,6 +1971,53 @@ mod tests {
         assert_eq!((pending.guid, pending.item_class), (0xA3, None));
     }
 
+    /// A charter's slot carries the signature count beside its petition record: the object's
+    /// slot-0 enchantment duration (`flds+0x44`, `0x52ba51`).
+    #[test]
+    fn a_charters_slot_carries_its_signature_count() {
+        use crate::items::{test_template, Items, RollCatalogs};
+        use crate::names::NameCache;
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::ObjectFields;
+
+        let mut objs = TestObjects::new();
+        // OBJECT_FIELD_ENTRY 3; the petition id at 22, the count at 23, the charges at 24.
+        objs.spawn(
+            0xC1,
+            ObjectFields::from_pairs(&[(3, 5863), (22, 0x51), (23, 4), (24, 9)]),
+        );
+        let mut items = Items::default();
+        let mut charter = test_template("Guild Charter");
+        charter.flags = benilla_protocol::messages::ITEM_FLAG_CHARTER;
+        items.insert_template(5863, Some(charter));
+        let mut petitions = crate::ui_petition::PetitionState::default();
+        crate::ui_petition::net::query_response(
+            &mut petitions,
+            benilla_protocol::messages::PetitionQueryResponse {
+                petition_id: 0x51,
+                name: "Pact".into(),
+                ..Default::default()
+            },
+        );
+        let slot = resolve_slot(
+            0xC1,
+            &objs.get(),
+            &items,
+            None,
+            RollCatalogs::NONE,
+            &crate::spell::Cooldowns::default(),
+            None,
+            &NameCache::default(),
+            &petitions,
+            std::time::Instant::now(),
+            0.0,
+            false,
+        )
+        .expect("an occupied slot");
+        let petition = slot.petition.expect("the record is cached");
+        assert_eq!((petition.title.as_str(), petition.signatures), ("Pact", 4));
+    }
+
     /// A bag slot holding a container says how many of its seats are filled, which
     /// `ClickTradeButton` refuses a bag on (`0x4bff50`); any other item says nothing.
     #[test]
