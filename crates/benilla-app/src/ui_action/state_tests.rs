@@ -19,6 +19,8 @@ const ME: u64 = 0x10;
 fn feed_inputs(app: &mut App) {
     app.add_message::<crate::net::FieldChanged>()
         .add_message::<crate::item_watch::ItemNotice>()
+        .add_message::<crate::net::WorldEnterCascadeMessage>()
+        .init_resource::<crate::ui_items::feed::BagUpdates>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
         .init_resource::<Selection>()
@@ -1549,4 +1551,127 @@ fn the_feed_runs_before_the_events_its_producers_precede() {
         let key = named(later).unwrap_or_else(|| panic!("{later} is scheduled"));
         assert!(seen.contains(&key), "the feed runs before {later}");
     }
+}
+
+/// Sets the player's mana to `mana` with no values block, so no watcher runs.
+fn set_mana_quietly(app: &mut App, mana: u32) {
+    let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    let mut fields: Vec<(u16, u32)> = PLAYER.to_vec();
+    fields.retain(|&(i, _)| i != 23);
+    fields.push((23, mana));
+    app.world_mut()
+        .entity_mut(me)
+        .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(
+            &fields,
+        )));
+}
+
+/// Placing, clearing or recounting a slot runs `0x4e58e0`, which stores the slot's new pair
+/// (`0x4e590a`, `0x4e5914`) and signals only `ACTIONBAR_SLOT_CHANGED`: no usable event, and the
+/// next refresh finds that pair already stored.
+#[test]
+fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
+    use benilla_protocol::messages::ActionButton;
+    let mut app = feed_app(
+        &[(0, 133, ACTION_KIND_SPELL)],
+        catalog(
+            vec![
+                (133, SpellDisplay::default()),
+                (116, SpellDisplay::default()),
+            ],
+            &[],
+        ),
+        5.0,
+    );
+    record(
+        &mut app,
+        &["ACTIONBAR_UPDATE_USABLE", "SPELL_UPDATE_USABLE"],
+    );
+    assert!(frame(&mut app).is_empty(), "the bar as it stands at load");
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .buttons
+        .insert(
+            1,
+            ActionButton {
+                slot: 1,
+                action: 116,
+                kind: ACTION_KIND_SPELL,
+            },
+        );
+    assert!(frame(&mut app).is_empty(), "a placed spell");
+    edge(
+        &mut app,
+        ME,
+        benilla_protocol::messages::ObjectType::Player,
+        22,
+        100,
+        90,
+    );
+    assert_eq!(
+        frame(&mut app),
+        ["SPELL_UPDATE_USABLE"],
+        "a refresh finds the placed pair stored"
+    );
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .buttons
+        .remove(&1);
+    assert!(frame(&mut app).is_empty(), "a cleared slot");
+}
+
+/// `0x4e5c00` signals `ACTIONBAR_UPDATE_USABLE` alone for its callers other than `0x4b31c0`: a
+/// reload's world entry against the cache the last VM left (`0x4e4f90`; the cache is zeroed only
+/// by `InitializeGame`, `0x4e4f50`), each `BAG_UPDATE` (`0x4f9374`) and `EditMacro` (`0x4f132e`).
+/// A pair that changed with no refresh signals nothing. Our player's arrival writes every slot
+/// before its enter cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing.
+#[test]
+fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
+    const FROSTBOLT: u32 = 116;
+    let costly = SpellDisplay {
+        mana_cost: 400,
+        ..Default::default()
+    };
+    let mut app = feed_app(
+        &[(0, FROSTBOLT, ACTION_KIND_SPELL)],
+        catalog(vec![(FROSTBOLT, costly)], &[]),
+        5.0,
+    );
+    const USABLE: [&str; 2] = ["ACTIONBAR_UPDATE_USABLE", "SPELL_UPDATE_USABLE"];
+    record(&mut app, &USABLE);
+    assert!(frame(&mut app).is_empty());
+
+    set_mana_quietly(&mut app, 100);
+    assert!(frame(&mut app).is_empty(), "no caller, no event");
+    app.insert_non_send_resource(UiScript::new().unwrap());
+    record(&mut app, &USABLE);
+    assert_eq!(
+        frame(&mut app),
+        ["ACTIONBAR_UPDATE_USABLE"],
+        "a reload's world entry finds the pair the last VM's cache held changed"
+    );
+
+    set_mana_quietly(&mut app, 500);
+    assert!(frame(&mut app).is_empty());
+    app.world_mut()
+        .resource_mut::<crate::ui_items::feed::BagUpdates>()
+        .0 += 1;
+    assert_eq!(frame(&mut app), ["ACTIONBAR_UPDATE_USABLE"], "a BAG_UPDATE");
+
+    set_mana_quietly(&mut app, 100);
+    assert!(frame(&mut app).is_empty());
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run("CreateMacro('m', 1, '/say hi', 1) EditMacro(1, 'n')")
+        .unwrap();
+    assert_eq!(frame(&mut app), ["ACTIONBAR_UPDATE_USABLE"], "an EditMacro");
+
+    set_mana_quietly(&mut app, 500);
+    assert!(frame(&mut app).is_empty());
+    app.world_mut()
+        .write_message(crate::net::WorldEnterCascadeMessage);
+    assert!(
+        frame(&mut app).is_empty(),
+        "our player's arrival stores every slot ahead of its refresh"
+    );
 }
