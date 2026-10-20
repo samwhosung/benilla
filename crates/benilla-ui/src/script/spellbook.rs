@@ -841,6 +841,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 #[cfg(test)]
+mod by_name_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         pickup_spell, PetBookState, SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
