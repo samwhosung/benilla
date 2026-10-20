@@ -877,10 +877,12 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     }
 }
 
-/// The create hook of an object not yet shown (the table `0x465e78`): an item's record set-up
-/// (`0x5d8400` → `0x5d8300`); a player's `PostInit` (`0x5debe0`), its guild tag (`0x5dec19`)
-/// ahead of another player's party record (`0x5dec5f`, the active player skipped at
-/// `0x5dec48`-`0x5dec5b`).
+/// The create hook of an object not yet shown (the table `0x465e78`), which alone asks the
+/// object's record: an item's record set-up (`0x5d8400` → `0x5d8300`); a unit's `PostInit`
+/// (`0x5fb880`), whose display resolve asks a creature's record (`0x60afb0`, at `0x60b15b`); a
+/// player's (`0x5debe0`), its name (`0x5dec09`) and guild tag (`0x5dec19`) ahead of another
+/// player's party record (`0x5dec5f`, the active player skipped at `0x5dec48`-`0x5dec5b`); a game
+/// object's template (`0x5f7c40`, at `0x5f7d81`), whose lockId decides use-vs-cast.
 fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScript>) {
     let Some(fields) = sc
         .index
@@ -904,11 +906,16 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             sc.item_notices.write_batch(hook);
         }
         Created::World(EntityKind::Player) => {
+            sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
                 .write_batch(crate::field_watch::guild_tag(guid));
             if sc.self_guid.0 != Some(guid) {
                 compare_party_record(sc, guid, &fields, script);
             }
+        }
+        Created::World(EntityKind::Unit) => sc.names.lookup_fields(guid, &fields, &sc.net),
+        Created::World(EntityKind::GameObject) => {
+            sc.go_templates.request_at_create(guid, &fields, &sc.net)
         }
         Created::World(_) => {}
     }
@@ -916,22 +923,20 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
 
 /// Vtable slot 3 of an object the packet brought back: a player's `PostUpdate` (`0x5dec90`)
 /// compares its party record (`0x5decb7`), with no active-player gate, as the active player is
-/// never released.
+/// never released; a game object's (`0x5f7ed0`) asks its template when it holds none (`+0x214`,
+/// `0x558560` at `0x5f7f31`).
 fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     let Some(e) = sc.index.0.get(&guid).copied() else {
         return;
     };
-    let player = sc
-        .stores
-        .get(e)
-        .is_ok_and(|s| s.0.created_as() == Some(ObjectType::Player));
-    if !player {
-        return;
-    }
     let Some(fields) = sc.stores.get(e).ok().map(|s| s.0.clone()) else {
         return;
     };
-    compare_party_record(sc, guid, &fields, script);
+    match fields.created_as() {
+        Some(ObjectType::Player) => compare_party_record(sc, guid, &fields, script),
+        Some(ObjectType::GameObject) => sc.go_templates.request_at_create(guid, &fields, &sc.net),
+        _ => {}
+    }
 }
 
 /// `CGPlayer_C::ComparePartyRecord` (`0x5f0b80`): the stored party or raid record, an empty one

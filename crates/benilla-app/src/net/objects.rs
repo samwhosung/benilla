@@ -474,17 +474,7 @@ fn object_create(
             local_pos: [t.pos.x, t.pos.y, t.pos.z],
             local_orientation: t.orientation,
         });
-    // Warm the name cache as a unit streams in, the reference's timing: its create path
-    // (`0x5fb880`) looks up every creature's record (`0x60afb0`, at `0x60b15b`), whose name is the
-    // record's field 0 (`0x60934b`). Its `CreatureCache.wdb` answers without the wire; ours lasts
-    // a session.
-    if matches!(kind, EntityKind::Unit | EntityKind::Player) {
-        sc.names.lookup_fields(guid, fields, &sc.net);
-    }
-    // Warm the template cache as a GameObject streams in: only the query carries its lockId,
-    // which decides use-vs-cast on a right-click.
     if matches!(kind, EntityKind::GameObject) {
-        sc.go_templates.request_at_create(guid, fields, &sc.net);
         // Where and how big, under `RUST_LOG=benilla_app::net::objects=debug`.
         debug!(
             "gameobject spawn: entry {:?} display {display_id:?} type {go_type:?} \
