@@ -1,7 +1,8 @@
 //! The reference's outcome switches: which family a packet's figures select, and the
 //! `COMBAT_TEXT_UPDATE` word (a type of the table `0x862920`) its formatter raises once that line
-//! is written. A formatter raises its word only when the unit its line is about is you, class 0;
-//! the emitters in [`crate::combat_log::chat`] make that test.
+//! is written. Each word here is raised only when the unit its line is about is you, class 0, and
+//! the emitters in [`crate::combat_log::chat`] make that test. Not every formatter's word is so
+//! gated: the reputation line raises `FACTION` with no class test (`0x62c5f0`, `0x62c667`).
 
 use benilla_protocol::messages::AttackerState;
 
