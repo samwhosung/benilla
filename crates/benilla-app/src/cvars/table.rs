@@ -700,9 +700,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `SetDeviceGammaRamp`, except when windowed (`byte[dev+0x20b]`). Deviation: benilla, which
     // has no exclusive mode, applies the same curve in the composite pass
     // ([`crate::ui_gamma::DisplayGamma`]), because the skipped upload would make a slider that
-    // moves no pixel. Spelled "1.000000" because `SetGamma 0x4891f0` formats with `"%f"`, and
-    // Restore Defaults must compare equal to the default; [`sync_cvars`] seeds it the same way.
-    same("gamma", "1.000000"),
+    // moves no pixel. `SetGamma 0x4891f0` writes `"%f"` ("1.000000"), which `SaveConfig`
+    // (`0x63da4a`) keeps as a diff against the default "1.0", as the reference does.
+    same("gamma", "1.0"),
     // `DesktopGamma` (`0x402d4d`: name `0x82e930`, default "0" `0x82e570`, flags 0, callback
     // `0x403500`, record `[0x8826d4]`), the stock window's Use Desktop Gamma box, which it also
     // sets whenever Windowed Mode is ticked (`OptionsFrame.lua:399-408`). On 1 the callback puts

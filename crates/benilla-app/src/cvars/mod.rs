@@ -2302,6 +2302,32 @@ mod tests {
         assert_eq!(out.get("FutureKnob").map(String::as_str), Some("3"));
     }
 
+    /// `gamma` registers `"1.0"` (`0x402d70`, string `0x82e92c`): a fresh `GetCVar` and
+    /// `GetCVarDefault` answer that text. `SetGamma` writes `"%f"` of `1 - v` (`0x4891f0`), so a
+    /// slider left at its centre reads `"1.000000"`, which `SaveConfig` (`0x63da4a`) finds unequal
+    /// to the default and writes, as the reference does.
+    #[test]
+    fn gamma_answers_the_registered_string_until_the_setter_spells_it_with_six_decimals() {
+        let mut cvars = Cvars::default();
+        assert_eq!(cvars.get("gamma"), Some("1.0"));
+        let mut script = UiScript::new().expect("VM");
+        script.seed_cvars(cvars.vm_seed());
+        let text = |script: &UiScript, code: &str| script.eval::<String>(code).unwrap();
+        assert_eq!(text(&script, r#"return GetCVar("gamma")"#), "1.0");
+        assert_eq!(text(&script, r#"return GetCVarDefault("gamma")"#), "1.0");
+        assert_eq!(script.eval::<f64>("return GetGamma()").unwrap(), 0.0);
+        script.run("SetGamma(0)").unwrap();
+        assert_eq!(text(&script, r#"return GetCVar("gamma")"#), "1.000000");
+        assert_eq!(text(&script, r#"return GetCVarDefault("gamma")"#), "1.0");
+        for (name, value) in script.take_cvar_changes() {
+            cvars.set_from_vm(&name, &value);
+        }
+        assert_eq!(
+            cvars.compose().get("gamma").map(String::as_str),
+            Some("1.000000")
+        );
+    }
+
     /// A reference CVar nothing here reads (pfUI's afkcam sets `cameraCustomViewSmoothing`,
     /// `0x50bad0`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
     /// a diff like any row, and its flag-bit1 neighbour stays latched.

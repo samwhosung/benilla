@@ -1734,9 +1734,15 @@ fn defaults_resets_the_graphics_page_to_registered_defaults() {
         changes.contains(&("farclip".to_string(), "350".to_string())),
         "{changes:?}"
     );
+    // The Brightness row restores through `SetGamma(0)`, which writes `"%f"` of `1 - 0`
+    // (`0x4891f0`): "1.000000" against the registered "1.0".
+    assert!(
+        changes.contains(&("gamma".to_string(), "1.000000".to_string())),
+        "{changes:?}"
+    );
     assert_eq!(
         changes.len(),
-        2,
+        3,
         "only the default writes queue — never the dead pending: {changes:?}"
     );
     // 357, not 350: the registered 350 is off the reference's 177 + n * 60 ladder
