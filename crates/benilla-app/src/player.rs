@@ -229,7 +229,11 @@ impl Plugin for PlayerPlugin {
         // and the hold releases at once.
         app.add_systems(
             Update,
-            (world_focus::publish_viewer, world_focus::publish_view_focus)
+            (
+                world_focus::publish_viewer,
+                world_focus::resolve_entry_eye.before(world_focus::publish_view_focus),
+                world_focus::publish_view_focus,
+            )
                 .after(benilla_world::schedule::WorldStage::Input)
                 .before(benilla_world::schedule::WorldStage::Stream),
         )

@@ -422,9 +422,7 @@ fn drive_game_tip(
         crate::loading_screen::TipEdge::Pick => raise(
             &mut tips,
             setting.show,
-            roster
-                .as_ref()
-                .is_some_and(|r| r.pending_level() == Some(0)),
+            roster.as_ref().is_some_and(|r| r.pending_new_character()),
             setting.next,
         ),
         crate::loading_screen::TipEdge::Clear => {
@@ -477,14 +475,14 @@ fn load_game_tips(mut tips: ResMut<GameTips>, assets: Option<Res<benilla_assets:
 }
 
 /// Picks the row for a rising screen and returns the index to store. `show` is `showGameTips` and
-/// `level_is_zero` is `[selChar+0x10a]`; either suppresses the tip and the advance.
+/// `new_character` is `[selChar+0x10a]`; either suppresses the tip and the advance.
 pub(crate) fn raise(
     tips: &mut GameTips,
     show: bool,
-    level_is_zero: bool,
+    new_character: bool,
     stored: i64,
 ) -> Option<u32> {
-    if !show || level_is_zero {
+    if !show || new_character {
         tips.shown = None;
         return None;
     }
@@ -576,7 +574,11 @@ mod tests {
         let mut t = tips(&["a", "b", "c"]);
         assert_eq!(raise(&mut t, false, false, 1), None, "showGameTips off");
         assert_eq!(t.shown(), None);
-        assert_eq!(raise(&mut t, true, true, 1), None, "the level-zero guard");
+        assert_eq!(
+            raise(&mut t, true, true, 1),
+            None,
+            "the new-character guard"
+        );
         assert_eq!(t.shown(), None);
         // The next armed raise still reads 1.
         assert_eq!(raise(&mut t, true, false, 1), Some(2));

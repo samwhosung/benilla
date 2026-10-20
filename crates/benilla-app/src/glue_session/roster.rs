@@ -95,19 +95,49 @@ impl Roster {
         self.pending_row().map(|c| c.map)
     }
 
-    /// The pending pick's level: the reference suppresses the loading tip when it arrived as 0 in
-    /// `SMSG_CHAR_ENUM` (`0x5b42a0` sets `[selChar+0x10a]`); vmangos always sends a real level.
-    pub(crate) fn pending_level(&self) -> Option<u8> {
-        self.pending_row().map(|c| c.level)
+    /// Whether the pending pick's record has its new-character byte (`+0x10a`) set: the list parse
+    /// sets it for a wire level of 0 (`0x5b44e8`-`0x5b44f9`), and the reference then enters at the
+    /// race's intro eye (`0x46c203`) and picks no loading tip (`0x46b671`); vmangos never sends
+    /// level 0.
+    pub(crate) fn pending_new_character(&self) -> bool {
+        self.pending_row().is_some_and(|c| c.new_character)
+    }
+
+    /// The race of a pending new character whose intro eye is yet to be looked up
+    /// ([`Self::resolve_entry_eye`]).
+    fn unresolved_entry_race(&self) -> Option<u8> {
+        let c = self.pending_row().filter(|c| c.new_character)?;
+        (self.entry_eye.map(|(race, _)| race) != Some(c.race)).then_some(c.race)
+    }
+
+    /// Whether the pending pick is a new character whose race has not been looked up.
+    pub(crate) fn wants_entry_eye(&self) -> bool {
+        self.unresolved_entry_race().is_some()
+    }
+
+    /// Look up, once per race, the eye `0x46c2c0` writes over a new character's entry position
+    /// (`0x46c214`); a miss is kept, as the reference leaves the position and moves on.
+    pub(crate) fn resolve_entry_eye(&mut self, eye: impl FnOnce(u8) -> Option<[f32; 3]>) {
+        if let Some(race) = self.unresolved_entry_race() {
+            self.entry_eye = Some((race, eye(race)));
+        }
     }
 
     /// The picked character's `(map, wow xyz)`, a round trip before `SMSG_LOGIN_VERIFY_WORLD`; the
-    /// streamers aim at it during world entry.
-    pub(crate) fn resolve_entry_eye(&mut self, _eye: impl FnOnce(u8) -> Option<[f32; 3]>) {}
-
+    /// streamers aim at it during world entry. `ClientInitializeGame` opens the map around the
+    /// record's position (`0x46c1ef`-`0x46c236`), or around the race's intro eye for a new
+    /// character the lookup found one for.
     pub(crate) fn pending_entry(&self) -> Option<(u32, [f32; 3])> {
-        self.pending_row()
-            .map(|c| (c.map, [c.position.x, c.position.y, c.position.z]))
+        self.pending_row().map(|c| {
+            let eye = self
+                .entry_eye
+                .filter(|(race, _)| c.new_character && *race == c.race)
+                .and_then(|(_, eye)| eye);
+            (
+                c.map,
+                eye.unwrap_or([c.position.x, c.position.y, c.position.z]),
+            )
+        })
     }
 
     /// The roster row for the pick in flight: the only description of the character until the
