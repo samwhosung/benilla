@@ -342,7 +342,7 @@ impl PartyMemberStatsInfo {
             / power_display_scale(u32::from(self.shown_power_type()))
     }
 
-    /// `UnitPowerType` from the pet block (`+0xd8`, `0x5179d2`'s pet leg), 0 when it has none.
+    /// `UnitPowerType` from the pet block (`+0xd8`, the pet leg `0x5179ff`), 0 when it has none.
     pub fn shown_pet_power_type(&self) -> u8 {
         self.pet_power_type.unwrap_or(0)
     }
