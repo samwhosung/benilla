@@ -71,6 +71,8 @@ pub(super) fn control(
         ResMut<super::OwnControlLost>,
         // The body mid-cast, which the posture verbs refuse on.
         Query<Has<crate::creature_anim::Casting>, (With<Embodied>, Without<FlyCam>)>,
+        // `ChrClasses.dbc`, whose relic flag the sheath toggle's ranged candidate reads.
+        Option<Res<crate::chr_classes::ChrClassTable>>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -501,6 +503,7 @@ pub(super) fn control(
             &mut net.10,
             &mut net.15,
             reads,
+            speed_capsule.12.as_deref().map(|t| &t.0),
             moving,
             turned,
         );

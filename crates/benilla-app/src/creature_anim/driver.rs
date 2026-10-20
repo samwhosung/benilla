@@ -22,7 +22,9 @@ use super::select::{
     self, current_special, defense_anim, is_swing_id, route_mounted, route_oneshot,
     swing_anim_main, swing_anim_off, unify, Mode, OneShotRoute, DEATH, DEFAULT_WALK_SPEED, STAND,
 };
-use super::sheath::{advance_sheath_ceremony, model_refuses_toggle, start_sheath_ceremony};
+use super::sheath::{
+    advance_sheath_ceremony, model_refuses_toggle, setter_refuses, start_sheath_ceremony,
+};
 use super::{
     find_resolved, move_flags, AnimData, AnimDriver, AutoRepeatArmed, BaseAnimRecompute, CastHold,
     DefenseAnim, EmoteAnim, Engaged, MovementState, NockLatch, Overlay, OverlayFade, SheathRequest,
@@ -313,13 +315,17 @@ pub(super) fn drive_animations(
         // The open NPC session's unit (`[0xb4e2d0]`): its state emote is passed over when the
         // row's `EmoteFlags` carry `0x2000` (`0x5fd7e2`-`0x5fd7fd`).
         Option<Res<crate::ui_session::InteractNpc>>,
+        // `ChrClasses.dbc`, for the setter's class test on the ranged state.
+        Option<Res<crate::chr_classes::ChrClassTable>>,
     ),
     // The variation roll's LCG, the reference's single CRT `_rand` stream shared by every play.
     mut rng: ResMut<benilla_assets::AnimRng>,
     // The last anim trace line per traced unit; the trace writes only on change.
     mut anim_trace_last: Local<std::collections::HashMap<Entity, String>>,
 ) {
-    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders, interact) = aux;
+    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders, interact, class_table) =
+        aux;
+    let classes = class_table.as_deref().map(|t| &t.0);
     let dt = time.delta_secs();
     // This frame's one-shot plays per unit, replayed in the reference's call order (`PlaySeq`
     // stamps): a later call overwrites an earlier, and the combat fast path keys on what is playing
@@ -712,10 +718,18 @@ pub(super) fn drive_animations(
         // byte whenever it changes (`0x604c70`). Every SetSheatheState (`0x611cf0`) snaps except
         // the manual toggle's ceremony, which carries the draw/stow sound.
         let sheath_frame_start = drv.sheath_cur;
-        let sheath_byte = store.and_then(|s| s.0.unit_sheath_state()).unwrap_or(0);
-        if drv.sheath_cur.is_none() || drv.sheath_byte != Some(sheath_byte) {
+        let fields = store.map(|s| &s.0);
+        let sheath_byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
+        // The constructor seeds the state from the byte untested (`0x5fafa0`); a later change goes
+        // through the setter (`0x604c70`: `0x611cf0(byte, 1, 0)`), whose class test can refuse it.
+        if drv.sheath_cur.is_none() {
             drv.sheath_cur = Some(sheath_byte);
             drv.sheath_byte = Some(sheath_byte);
+        } else if drv.sheath_byte != Some(sheath_byte) {
+            drv.sheath_byte = Some(sheath_byte);
+            if !setter_refuses(sheath_byte, fields, classes) {
+                drv.sheath_cur = Some(sheath_byte);
+            }
         }
         // The setter: a no-op when unchanged (`newState == CUR`), else commit, volunteer
         // `CMSG_SETSHEATHED` for the local player, and for the manual toggle play the ceremony,
@@ -724,7 +738,10 @@ pub(super) fn drive_animations(
             let cur = drv.sheath_cur.unwrap_or(0);
             // Deviation: a mounted draw is refused at the setter, because our rider track never
             // replays the reference's per-play force-stow (`0x5fdf80`); the result is the same.
-            if req.state != cur && !(mounted && req.state != 0) {
+            if req.state != cur
+                && !(mounted && req.state != 0)
+                && !setter_refuses(req.state, fields, classes)
+            {
                 debug!(
                     "sheath: unit {entity} {cur} -> {} (request, ceremony {})",
                     req.state, req.ceremony
@@ -1349,7 +1366,8 @@ pub(super) fn drive_animations(
         // so a model lacking the clip still stows by the requested row.
         // It runs on plays only, this frame's one-shot first: re-running it on a silent frame
         // would undo a masked stow against the base gait. A mounted unit still drawn (the byte
-        // adopt bypasses the setter) forces once, as our rider track never plays.
+        // adopt skips the request's mounted refusal) forces once, as our rider track never plays.
+        // Each force is a setter call (`0x611cf0`), so its class test applies.
         if played_oneshot.is_some()
             || hold_played.is_some()
             || base_played
@@ -1374,7 +1392,7 @@ pub(super) fn drive_animations(
                 } else {
                     forced
                 };
-                if forced != cur {
+                if forced != cur && !setter_refuses(forced, fields, classes) {
                     debug!(
                         "sheath: unit {entity} {cur} -> {forced} (anim {anim} flags {flags:#x}, \
                          engaged {engaged})"

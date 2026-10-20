@@ -114,6 +114,18 @@ pub(super) fn model_refuses_toggle(anims: &ModelAnimations, armed: Option<u16>) 
     armed.is_some_and(holds_the_toggle) || !anims.owns(90) || !anims.owns(89)
 }
 
+/// `SetSheatheState`'s class test (`0x611cff`-`0x611d44`), ahead of its same-state test: state 2
+/// is refused for a player (`OBJECT_FIELD_TYPE` bit `0x10`, `0x611d0a`) whose class has no ranged
+/// sheathe state ([`benilla_formats::ChrClasses::has_ranged_sheath`]). Without the table, none is
+/// refused.
+pub(super) fn setter_refuses(
+    _state: u8,
+    _fields: Option<&benilla_protocol::ObjectFields>,
+    _classes: Option<&benilla_formats::ChrClasses>,
+) -> bool {
+    false
+}
+
 /// One arm's planned leg: the clip, and whether the arm ends with its weapon in hand (the
 /// client's `+0xd58` phase bit, set by the drawers and cleared by the stows in `0x611b60`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

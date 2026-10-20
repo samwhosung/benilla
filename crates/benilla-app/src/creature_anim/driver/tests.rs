@@ -2301,6 +2301,68 @@ fn the_toggle_draws_nothing_on_a_model_without_sheathe_animations_or_mid_shot() 
     assert_eq!(sheath(&app, idle), Some(1), "the same model standing draws");
 }
 
+/// The setter's class test (`0x611cff`-`0x611d44`): a Paladin player takes no ranged state, not
+/// from a request nor from its `UNIT_FIELD_BYTES_2` byte (`0x604c70` calls the setter), while a
+/// Warrior adopts it. Only the constructor's seed (`0x5fafa0`) takes the byte untested.
+#[test]
+fn a_relic_class_player_refuses_the_ranged_sheath_state() {
+    let mut app = app();
+    app.insert_resource(crate::chr_classes::ChrClassTable(
+        benilla_formats::ChrClasses::from_rows([
+            (1, "Warrior", "WARRIOR"),
+            (2, "Paladin", "PALADIN"),
+        ])
+        .with_relic_slot(2),
+    ));
+    // `OBJECT_FIELD_TYPE` (2) object | unit | player, `UNIT_FIELD_BYTES_0` (36) byte 1 the class,
+    // `UNIT_FIELD_BYTES_2` (164) byte 0 the sheath state.
+    let player = |class: u32, sheath: u32| {
+        crate::net::ObjectStore(ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (36, class << 8),
+            (164, sheath),
+        ]))
+    };
+    let spawn = |app: &mut App, store| {
+        app.world_mut()
+            .spawn((
+                caster_model(),
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+                store,
+            ))
+            .id()
+    };
+    let paladin = spawn(&mut app, player(2, 1));
+    let warrior = spawn(&mut app, player(1, 1));
+    let seeded = spawn(&mut app, player(2, 2));
+    app.update();
+    let sheath = |app: &App, unit| drv_of(app, unit).sheath_state();
+    assert_eq!(sheath(&app, paladin), Some(1), "seeded drawn");
+    assert_eq!(
+        sheath(&app, seeded),
+        Some(2),
+        "the constructor's seed is untested"
+    );
+
+    for unit in [paladin, warrior] {
+        let class = if unit == paladin { 2 } else { 1 };
+        app.world_mut().entity_mut(unit).insert(player(class, 2));
+    }
+    app.update();
+    assert_eq!(sheath(&app, paladin), Some(1), "the adopted 2 is refused");
+    assert_eq!(sheath(&app, warrior), Some(2), "a Warrior adopts it");
+
+    app.world_mut().write_message(SheathRequest {
+        entity: paladin,
+        state: 2,
+        ceremony: false,
+    });
+    app.update();
+    assert_eq!(sheath(&app, paladin), Some(1), "a request for 2 is refused");
+}
+
 /// A root that wipes the direction bits the frame a cast arrives: against the base's flags the edge
 /// re-arms Stand(0), not locomotion, so Stand overwrites the cast with no transplant.
 #[test]

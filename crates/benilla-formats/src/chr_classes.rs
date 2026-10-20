@@ -20,10 +20,11 @@
 //! `0x6e6b30`), cached in `[0xcecaac]` by its one non-zeroing writer, `0x6e6ca0` (called from
 //! `0x5debcc`). The shipped values are vmangos `SpellFamilyNames`.
 //!
-//! Field 16, the relic-slot flag, read by `UnitHasRelicSlot` (`0x519e50`) and nothing else: no
+//! Field 16, the relic-slot flag, read at the row's `+0x40` by `UnitHasRelicSlot` (`0x519ebb`),
+//! the slot check (`0x5ea7c8`) and the sheathe toggle and setter (`0x5eb639`, `0x611d41`): no
 //! class id is compared, the table is the data. It is set for Paladin, Shaman and Druid, and
-//! `IsValidForSlot` (`0x5da1d0`) enforces it: INVSLOT 17 takes a relic (`InventoryType` 28) for
-//! those three and a ranged weapon for everyone else.
+//! `IsValidForSlot` (`0x5da1d0`), which the slot check calls, enforces it: INVSLOT 17 takes a relic
+//! (`InventoryType` 28) for those three and a ranged weapon for everyone else.
 
 use std::collections::HashMap;
 
@@ -134,6 +135,22 @@ impl ChrClasses {
         self.0.get(&class).is_some_and(|c| c.has_relic_slot)
     }
 
+    /// Whether a unit of `class` may hold the ranged sheathe state: a row whose relic flag is
+    /// clear. The sheathe toggle (`0x5eb616`-`0x5eb640`) and setter (`0x611d12`-`0x611d44`) read
+    /// the flag as [`Self::has_relic_slot`] does, but a class with no row fails their test too.
+    pub fn has_ranged_sheath(&self, class: u32) -> bool {
+        self.0.get(&class).is_some_and(|c| !c.has_relic_slot)
+    }
+
+    /// Sets `class`'s relic flag, for a table built by [`Self::from_rows`]; a class with no row
+    /// is left without one.
+    pub fn with_relic_slot(mut self, class: u32) -> Self {
+        if let Some(c) = self.0.get_mut(&class) {
+            c.has_relic_slot = true;
+        }
+        self
+    }
+
     /// The class spell family, which the reference caches in `[0xcecaac]` and matches against a
     /// spell's `SpellFamilyName` before a talent modifier applies. A class with no row answers 0,
     /// the global's value from world-enter (`0x6e7150`) until the player resolves, which the
@@ -233,6 +250,25 @@ mod tests {
         // No row: the reference's nil leg.
         assert!(!t.has_relic_slot(6));
         assert!(!t.has_relic_slot(0));
+    }
+
+    /// The sheathe class test (`0x5eb616`-`0x5eb640`, `0x611d12`-`0x611d44`): a relic class has
+    /// no ranged sheathe state, and neither has a class with no row, where `UnitHasRelicSlot`
+    /// answers nil.
+    #[test]
+    fn a_relic_class_and_a_class_without_a_row_have_no_ranged_sheath() {
+        let t = ChrClasses::from_rows([(1, "Warrior", "WARRIOR"), (2, "Paladin", "PALADIN")])
+            .with_relic_slot(2);
+        assert!(t.has_ranged_sheath(1), "a Warrior draws a bow");
+        assert!(
+            !t.has_ranged_sheath(2),
+            "a Paladin's libram is no ranged weapon"
+        );
+        assert!(!t.has_ranged_sheath(6), "no row");
+        assert!(
+            !t.has_relic_slot(6),
+            "while UnitHasRelicSlot says no relic slot there"
+        );
     }
 
     /// Field 14 is the class file string the create screen keys its icons by

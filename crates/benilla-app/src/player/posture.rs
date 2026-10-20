@@ -32,6 +32,7 @@ pub(super) fn update(
     asks: &mut MessageReader<StandStateRequest>,
     server: &mut MessageReader<super::ServerStandState>,
     reads: PlayerReads,
+    classes: Option<&benilla_formats::ChrClasses>,
     moving: bool,
     turned: bool,
 ) -> u8 {
@@ -121,12 +122,7 @@ pub(super) fn update(
             } else {
                 // Melee, ranged, stowed, skipping what is not worn; `None` makes no call at all.
                 let w = wielded.copied().unwrap_or_default();
-                // `GetWeapon(slot, 0)` at `0x5eb5f0`, `0x5eb600` and `0x5eb610`: a disarmed hand
-                // is not worn.
-                let worn = (
-                    w.armed_main().is_some() || w.armed_off().is_some(),
-                    w.ranged.is_some(),
-                );
+                let worn = toggle_worn(&w, store.map(|s| &s.0), classes);
                 let next =
                     crate::creature_anim::toggle_sheath_next(drv.sheath_state().unwrap_or(0), worn);
                 if let Some(state) = next {
@@ -190,6 +186,21 @@ fn toggle_refused(fields: Option<&ObjectFields>, gates: ToggleGates) -> bool {
         || gates.precast
         || gates.seated
         || gates.mid_ceremony
+}
+
+/// What the toggle cycles over: a hand holding a weapon and a ranged candidate, as
+/// `GetWeapon(slot, 0)` reads them (`0x5eb5f0`, `0x5eb600`, `0x5eb610`: a disarmed hand is not
+/// worn), the ranged one kept only for a class with a ranged sheathe state (`0x5eb616`-`0x5eb640`,
+/// [`benilla_formats::ChrClasses::has_ranged_sheath`]). Without the table, it is kept.
+fn toggle_worn(
+    w: &crate::creature_anim::Wielded,
+    _fields: Option<&ObjectFields>,
+    _classes: Option<&benilla_formats::ChrClasses>,
+) -> (bool, bool) {
+    (
+        w.armed_main().is_some() || w.armed_off().is_some(),
+        w.ranged.is_some(),
+    )
 }
 
 /// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after

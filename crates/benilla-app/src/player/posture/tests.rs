@@ -7,8 +7,10 @@ use bevy::prelude::*;
 
 use super::super::{UNIT_FLAG_STUNNED, UNIT_FLAG_TAXI_FLIGHT};
 use super::{
-    local_apply, stand_gates, stop_attack_for_stand_state, toggle_refused, LocalApply, ToggleGates,
+    local_apply, stand_gates, stop_attack_for_stand_state, toggle_refused, toggle_worn, LocalApply,
+    ToggleGates,
 };
+use crate::creature_anim::{toggle_sheath_next, Wielded};
 use crate::net::{ClientCommand, NetCommands};
 
 /// A living, standing player's descriptor with `extra` fields on top.
@@ -179,4 +181,66 @@ fn the_stand_state_stop_sends_the_attack_stop_only_while_attacking() {
         .run_system_cached(stop_attack_for_stand_state)
         .unwrap();
     assert_eq!(sent(&rx), ["AttackStop"], "the attack ends");
+}
+
+/// The toggle's class test (`0x5eb616`-`0x5eb640`): a Paladin's libram, worn in slot 17 as vmangos
+/// shows it, is no ranged candidate, so Z from drawn stows; a Warrior's bow is, so Z reaches for it.
+#[test]
+fn a_paladin_with_a_libram_goes_from_drawn_to_stowed() {
+    let classes = benilla_formats::ChrClasses::from_rows([
+        (1, "Warrior", "WARRIOR"),
+        (2, "Paladin", "PALADIN"),
+    ])
+    .with_relic_slot(2);
+    // `UNIT_FIELD_BYTES_0` (36) byte 1, the class the test reads at `+0x79`.
+    let of_class = |class: u32| alive(&[(36, class << 8)]);
+    let sword = Wielded {
+        main: Some((2, 7)),
+        ..Default::default()
+    };
+    let with_libram = Wielded {
+        ranged: Some((4, 7)), // armour, Libram
+        ..sword
+    };
+    let with_bow = Wielded {
+        ranged: Some((2, 2)),
+        ..sword
+    };
+
+    let paladin = toggle_worn(&with_libram, Some(&of_class(2)), Some(&classes));
+    assert_eq!(paladin, (true, false), "the libram is no ranged candidate");
+    assert_eq!(
+        toggle_sheath_next(1, paladin),
+        Some(0),
+        "drawn, then stowed"
+    );
+    let libram_only = Wielded {
+        main: None,
+        ..with_libram
+    };
+    assert_eq!(
+        toggle_sheath_next(
+            0,
+            toggle_worn(&libram_only, Some(&of_class(2)), Some(&classes))
+        ),
+        None,
+        "a libram alone draws nothing (`0x5eb697`)"
+    );
+
+    let warrior = toggle_worn(&with_bow, Some(&of_class(1)), Some(&classes));
+    assert_eq!(
+        toggle_sheath_next(1, warrior),
+        Some(2),
+        "a Warrior reaches for the bow"
+    );
+    assert_eq!(
+        toggle_worn(&with_bow, Some(&of_class(6)), Some(&classes)),
+        (true, false),
+        "a class with no row fails the test too"
+    );
+    assert_eq!(
+        toggle_worn(&with_bow, Some(&of_class(1)), None),
+        (true, true),
+        "without the table the bow is kept"
+    );
 }
