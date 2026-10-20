@@ -421,20 +421,64 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetPortraitToTexture(textureName, path), an engine global: sets the texture, drawn masked
-    // to its inscribed circle, and drops any unit binding. It takes the name, as both stock
-    // callers pass (`ContainerFrame.lua:419`, `MailFrame.lua:174`); whether the reference also
-    // takes a region object is untraced.
+    // SetPortraitToTexture(texture, path), an engine global: sets the texture, drawn masked to
+    // its inscribed circle, and drops any unit binding. The reference (`0x48d780`) takes arg 1 as
+    // a name (a string or a number, `0x6f3510`) or as a Texture object (a table, `lua_type == 5`,
+    // `0x48d7fa`): stock `ContainerFrame.lua:419` and `MailFrame.lua:174` pass a name,
+    // `Turtle_ShopUI.lua:779` passes the object. A table with no `this` raises `Couldn't find
+    // 'this' in texture object` (`0x48d829`), a widget that is no Texture `Wrong object type,
+    // expected texture` (`0x48d865`). Arg 2 is read only when it is a string or a number
+    // (`0x48d878`..`0x48d898`); any other value, a nil icon of an uncached item included, changes
+    // nothing and raises nothing.
     lua.globals().set(
         "SetPortraitToTexture",
-        lua.create_function(|lua, (name, path): (String, String)| {
+        lua.create_function(|lua, (target, path): (Value, Value)| {
+            let rh = match &target {
+                Value::Table(t) => {
+                    let model = lua.app_data_ref::<Model>().expect("model");
+                    let Ok(id) = decode_id(t) else {
+                        return Err(mlua::Error::runtime(
+                            "SetPortraitToTexture(): Couldn't find 'this' in texture object",
+                        ));
+                    };
+                    let rh = model.id_to_region.get(&id).copied().filter(|&rh| {
+                        model.arena.region(rh).map(|r| r.kind) == Some(RegionKind::Texture)
+                    });
+                    match rh {
+                        Some(rh) => rh,
+                        None => {
+                            return Err(mlua::Error::runtime(
+                                "SetPortraitToTexture(): Wrong object type, expected texture",
+                            ))
+                        }
+                    }
+                }
+                other => {
+                    // A name: the unknown-name raise (`0x48d7db`) is not mirrored here.
+                    let Some(name) = lua.coerce_string(other.clone())? else {
+                        return Ok(());
+                    };
+                    let name = name.to_str()?.to_string();
+                    let model = lua.app_data_ref::<Model>().expect("model");
+                    let Some(id) = model.region_by_name.get(&name).copied() else {
+                        return Ok(());
+                    };
+                    let Some(rh) = model.id_to_region.get(&id).copied() else {
+                        return Ok(());
+                    };
+                    rh
+                }
+            };
+            let path = match &path {
+                Value::String(_) | Value::Integer(_) | Value::Number(_) => {
+                    match lua.coerce_string(path.clone())? {
+                        Some(p) => p.to_str()?.to_string(),
+                        None => return Ok(()),
+                    }
+                }
+                _ => return Ok(()),
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            let Some(id) = model.region_by_name.get(&name).copied() else {
-                return Ok(());
-            };
-            let Some(rh) = model.id_to_region.get(&id).copied() else {
-                return Ok(());
-            };
             model.set_texel(rh, super::texel::TexSet::Portrait(path));
             let data = model.region_data.entry(rh).or_default();
             data.circular = true;

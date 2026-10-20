@@ -1740,3 +1740,94 @@ fn an_engine_vertex_colour_collapses_a_gradient() {
         "{color:?}"
     );
 }
+
+/// `SetPortraitToTexture` (`0x48d780`) takes arg 1 as a name or as a Texture object, and reads
+/// arg 2 only when it is a string or a number. `Turtle_ShopUI.lua:779` passes the object, and
+/// the icon of an item the client has not cached yet is nil.
+#[test]
+fn set_portrait_to_texture_takes_a_texture_object() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        ObjHost = CreateFrame("Frame", "ObjHost")
+        ObjTex = ObjHost:CreateTexture("ObjHostIcon", "ARTWORK")
+        SetPortraitToTexture(ObjTex, "Interface\\Icons\\INV_Misc_Token")
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return ObjTex:GetTexture()").unwrap(),
+        "Interface\\Icons\\INV_Misc_Token"
+    );
+    assert!(s.errors().is_empty());
+}
+
+#[test]
+fn set_portrait_to_texture_name_still_works_and_number_path_is_text() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        NameHost = CreateFrame("Frame", "NameHost")
+        NameTex = NameHost:CreateTexture("NameHostIcon", "ARTWORK")
+        SetPortraitToTexture("NameHostIcon", "Interface\\Icons\\A")
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return NameTex:GetTexture()").unwrap(),
+        "Interface\\Icons\\A"
+    );
+    // A number is a path too (`0x6f3510` accepts a number where it accepts a string).
+    s.run(r#"SetPortraitToTexture(NameTex, 42)"#).unwrap();
+    assert_eq!(
+        s.eval::<String>("return NameTex:GetTexture()").unwrap(),
+        "42"
+    );
+}
+
+#[test]
+fn set_portrait_to_texture_ignores_a_path_that_is_no_string() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        NilHost = CreateFrame("Frame", "NilHost")
+        NilTex = NilHost:CreateTexture("NilHostIcon", "ARTWORK")
+        SetPortraitToTexture(NilTex, "Interface\\Icons\\Kept")
+        SetPortraitToTexture(NilTex, nil)
+        SetPortraitToTexture(NilTex, {})
+        SetPortraitToTexture(NilTex, true)
+        SetPortraitToTexture("NilHostIcon", nil)
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return NilTex:GetTexture()").unwrap(),
+        "Interface\\Icons\\Kept",
+        "a nil, table or boolean path changes nothing"
+    );
+    assert!(s.errors().is_empty());
+}
+
+#[test]
+fn set_portrait_to_texture_raises_for_a_bad_object() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        BadHost = CreateFrame("Frame", "BadHost")
+        BadStr = BadHost:CreateFontString("BadHostText", "ARTWORK")
+        "#,
+    )
+    .unwrap();
+    let msg = |code: &str| {
+        s.eval::<String>(&format!(
+            "local ok, e = pcall(function() {code} end) return tostring(e)"
+        ))
+        .unwrap()
+    };
+    assert!(msg("SetPortraitToTexture({}, 'x')")
+        .contains("SetPortraitToTexture(): Couldn't find 'this' in texture object"));
+    assert!(msg("SetPortraitToTexture(BadStr, 'x')")
+        .contains("SetPortraitToTexture(): Wrong object type, expected texture"));
+    assert!(msg("SetPortraitToTexture(BadHost, 'x')")
+        .contains("SetPortraitToTexture(): Wrong object type, expected texture"));
+}
