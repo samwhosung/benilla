@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 236
+- [benilla-app](#benilla-app): 237
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 19
@@ -176,6 +176,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### net
 
+- UTC days, where `mktime` reads the host's local time zone, because the app has no time zone source (`benilla_ui::civil` has the same). ([`src/net/game_time.rs:313`](../crates/benilla-app/src/net/game_time.rs#L313))
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
 - The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:407`](../crates/benilla-app/src/net/io.rs#L407))
 - The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1172`](../crates/benilla-app/src/net/io.rs#L1172))
@@ -610,7 +611,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:683`](../crates/benilla-protocol/src/events.rs#L683))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:684`](../crates/benilla-protocol/src/events.rs#L684))
 
 #### examples
 
@@ -626,9 +627,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Zone and position are kept, not set to the viewer's zone and the object's position, because nothing in benilla reads them. ([`src/messages/group.rs:256`](../crates/benilla-protocol/src/messages/group.rs#L256))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1003`](../crates/benilla-protocol/src/messages/opcode.rs#L1003))
-- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:609`](../crates/benilla-protocol/src/messages/packet.rs#L609))
-- A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:295`](../crates/benilla-protocol/src/messages/parse.rs#L295))
+- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1008`](../crates/benilla-protocol/src/messages/opcode.rs#L1008))
+- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:619`](../crates/benilla-protocol/src/messages/packet.rs#L619))
+- A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:296`](../crates/benilla-protocol/src/messages/parse.rs#L296))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:75`](../crates/benilla-protocol/src/messages/pet.rs#L75))
 - Both are read, told apart exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's. ([`src/messages/pet.rs:195`](../crates/benilla-protocol/src/messages/pet.rs#L195))
 
@@ -688,7 +689,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A value outside 0..1 clamps, where the reference keeps the low byte (alpha 2.0 stores 254, -1.0 stores 1), because no FrameXML or addon caller passes one. ([`src/script/chat_window.rs:17`](../crates/benilla-ui/src/script/chat_window.rs#L17))
 - An id outside the seven built windows raises, where the reference serves ten records and silently ignores any other id (`0x4a0be1`), because benilla keeps only the seven and every caller loops `1, NUM_CHAT_WINDOWS`. ([`src/script/chat_window.rs:221`](../crates/benilla-ui/src/script/chat_window.rs#L221))
 - One past `i32::MAX` clamps where the reference keeps the low 32 bits, for the colours' reason. ([`src/script/chat_window.rs:481`](../crates/benilla-ui/src/script/chat_window.rs#L481))
-- The reference reads the clock live at each call (`0x42c010`); ours is the session clock the tick advances by the paced frame step, one value per frame, so `GetTime()` deltas and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame and kin) assumes. ([`src/script/clock.rs:53`](../crates/benilla-ui/src/script/clock.rs#L53))
+- The reference reads the clock live at each call (`0x42c010`); ours is the session clock the tick advances by the paced frame step, one value per frame, so `GetTime()` deltas and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame and kin) assumes. ([`src/script/clock.rs:55`](../crates/benilla-ui/src/script/clock.rs#L55))
 - With no wheel it scales by the strip's, because the reference reads the missing wheel unguarded. ([`src/script/colorselect.rs:379`](../crates/benilla-ui/src/script/colorselect.rs#L379))
 - The reference's `set` registers an unknown name as a new category-5 record (`0x63d569`-`0x63d582`); benilla refuses it, because nothing would read the row and `config.toml` keeps an unknown key anyway. ([`src/script/console_exec.rs:120`](../crates/benilla-ui/src/script/console_exec.rs#L120))
 - A row the session owns (an env lever) is passed, because the env chose its value for this run and the file never holds it, so a reset would undo the lever and save nothing. ([`src/script/console_exec.rs:199`](../crates/benilla-ui/src/script/console_exec.rs#L199))
