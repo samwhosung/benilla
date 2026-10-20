@@ -441,6 +441,7 @@ mod tests {
             .init_resource::<Reputations>()
             .init_resource::<NameCache>()
             .init_resource::<GroupState>()
+            .init_resource::<crate::ui_guild::GuildState>()
             .insert_resource(NetCommands(tx))
             .add_plugins(crate::ui_aura::UiAuraPlugin)
             .add_systems(Update, feed_chain_units.after(crate::ui_aura::AuraEvents));
@@ -870,6 +871,42 @@ mod tests {
             &app,
             r#"UnitCanAssist("player", "raid2target") == nil"#
         ));
+    }
+
+    /// `GetGuildInfo` (`0x4c9330`) resolves any token (`0x515940`) and reads that object's guild,
+    /// `[[unit+0xe68]+0xc]` (`0x4c93a3`), from the cache (`0x4c93d2`), so a held player a chain
+    /// ends on answers its guild as a base token does; a record that lands later answers on the
+    /// next frame. `targettarget` here is a chain: no feed in this world pushes it by name.
+    #[test]
+    fn get_guild_info_answers_for_the_player_a_chain_ends_on() {
+        /// `PLAYER_GUILDID` and `PLAYER_GUILDRANK`.
+        const GUILD_ID: u16 = 191;
+        const GUILD_RANK: u16 = 192;
+        let mut app = app();
+        let a = app.world().resource::<GuidIndex>().0[&A];
+        app.world_mut()
+            .get_mut::<ObjectStore>(a)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(GUILD_ID, 7), (GUILD_RANK, 2)]));
+        app.update();
+        let info = |app: &App, token: &str| -> (Option<String>, i64) {
+            script(app)
+                .eval::<(Option<String>, Option<String>, i64)>(&format!(
+                    "return GetGuildInfo({token:?})"
+                ))
+                .map(|(name, _, rank)| (name, rank))
+                .unwrap()
+        };
+        assert_eq!(info(&app, "targettarget"), (None, 0), "not cached yet");
+        app.world_mut()
+            .resource_mut::<crate::ui_guild::GuildState>()
+            .land_for_test(7, "Probe Guild");
+        app.update();
+        for token in ["targettarget", "playertargettarget"] {
+            let want = (Some("Probe Guild".to_string()), 2);
+            assert_eq!(info(&app, token), want, "GetGuildInfo({token})");
+        }
     }
 
     /// The chain feed reads the resolver inputs the aura feed pushes in the same frame, so the
