@@ -58,8 +58,9 @@ pub(in crate::script) struct ItemInstance {
     /// `ITEM_FIELD_DURATION`: the client displays from the packet (`Objects/Item.cpp:1093`).
     pub duration_ms: Option<u64>,
     /// The source holds a live item object (the guid arguments of `0x52b650`): the LOCKED gate
-    /// reads its UNLOCKED flag (`0x52bdb3`..`0x52bdc4`). A block source, a template source and an
-    /// inspected unit's item have none.
+    /// reads its UNLOCKED flag (`0x52bdb3`..`0x52bdc4`), and only it shows the open and read
+    /// hints (`0x52e2e0`). A block source, a template source and an inspected unit's item have
+    /// none.
     pub object: bool,
     /// The block's lock id (`[this+0x430]`, set by the trade target's setter, `0x534563`), 0 for
     /// none or no block. With no lock row from the template it names one (`0x52bd78`..`0x52bda9`),
@@ -703,9 +704,8 @@ pub(super) fn render_view_flagged(
     if !v.description.is_empty() {
         addw((format!("\"{}\"", v.description), GOLD))?;
     }
-    // The reference gates the rest on an item object (`0x52e1c7`, `0x52e2e0`). Here only a template
-    // source (`None`) stops, so a link, loot, mail or auction hover, which has an instance but no
-    // object, still reaches READABLE.
+    // The creator line needs an item object or a block (`0x52e1c1`, `0x52e1c7`), so a template
+    // source (`None`) stops here; the open and read hints need the object itself (`0x52e2e0`).
     let Some(inst) = inst else { return Ok(live) };
     // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`. The arm is picked once, at
     // `0x52b78f`..`0x52b7b0`: an item object with WRAPPED `0x8` (`0x52b789`) takes the gift arm,
@@ -736,10 +736,15 @@ pub(super) fn render_view_flagged(
         };
         keyed(key, &[Arg::S(name)], WHITE, false)?;
     }
-    // One green line, OPENABLE winning (`0x52e2f2..0x52e35d`). Openable: a p6=0 source and either
-    // the loot flag `0x4` behind its lock gate (a lock needs UNLOCKED) or a wrapped gift (`0x200`
-    // and WRAPPED `0x8`). Readable: PageText (`0x5d9e10`) or the letter text. The lock gate is the
+    // One green line, OPENABLE winning (`0x52e2f2..0x52e35d`), only with an item object
+    // (`0x52e2e0 test edi,edi; je 0x52e376`): a link, loot, roll, mail, auction or trade-partner
+    // source passes a zero guid and shows neither. Openable: a p6=0 source and either the loot
+    // flag `0x4` behind its lock gate (a lock needs UNLOCKED) or a wrapped gift (`0x200` and
+    // WRAPPED `0x8`). Readable: PageText (`0x5d9e10`) or the letter text. The lock gate is the
     // line's only: the click tests the bare flag (`ItemInfo::opens_loot`), and READABLE wins there.
+    if !inst.object {
+        return Ok(live);
+    }
     let openable = inst.openable_source
         && ((v.flags & 0x4 != 0 && (v.lock_id == 0 || inst.flags & 0x4 != 0))
             || (v.flags & 0x200 != 0 && inst.flags & 0x8 != 0));
