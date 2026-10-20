@@ -236,6 +236,16 @@ pub(crate) struct Creatures {
 }
 
 impl Creatures {
+    /// The display row a unit's records come from (`0x60afb0`).
+    pub(crate) fn records_row(&self, display_id: u32) -> Option<u32> {
+        self.catalog.records_row(display_id)
+    }
+
+    /// Whether `display_id` names other records than the `held` row's (`0x60ae10`).
+    pub(crate) fn display_records_differ(&self, display_id: u32, held: u32) -> bool {
+        self.catalog.display_records_differ(display_id, held)
+    }
+
     /// Whether a display id has a model row behind it (`CreatureDisplayInfo` → `CreatureModelData`),
     /// the chain `0x5ec480` walks after the race row's id.
     pub(crate) fn resolves_model(&self, display_id: u32) -> bool {

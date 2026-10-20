@@ -106,6 +106,8 @@ pub(crate) struct Scene<'w, 's> {
     go_models:
         Query<'w, 's, &'static benilla_assets::ModelAnimations, With<crate::go_anim::GoAnim>>,
     pending: Query<'w, 's, (Entity, &'static Guid), With<update::ReleasePending>>,
+    creatures: Option<Res<'w, crate::entities::Creatures>>,
+    held_displays: Query<'w, 's, &'static mut update::HeldDisplay>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).
@@ -1751,8 +1753,8 @@ mod tests {
     }
 
     /// A game object brought back asks its record when it has none (`0x5f7ed0`: `+0x214` clear,
-    /// `0x558560` at `0x5f7f31`); a unit brought back asks nothing, its slot 3 never reaching
-    /// `0x60afb0`.
+    /// `0x558560` at `0x5f7f31`); a unit brought back with its display unchanged asks nothing, its
+    /// slot 3's display rebuild finding the same records (`0x5fbe28` → `0x60abe0` → `0x60ae10`).
     #[test]
     fn a_released_game_object_brought_back_asks_its_missing_record() {
         const ENTRY: u32 = 1234;
@@ -1778,6 +1780,134 @@ mod tests {
 
         super::super::handlers::dispatch(app.world_mut(), super::wire(creates));
         assert_eq!(record_asks(&rx), (0, 1), "the game object's slot 3 asks");
+    }
+
+    /// The display tables of the display tests: 10 and 12 share model 1, whose sound is no row,
+    /// so they name the same records; 11 is model 2, with a sound row.
+    fn display_tables() -> crate::entities::Creatures {
+        crate::entities::Creatures::from_catalog(
+            benilla_formats::CreatureCatalog::from_record_rows(
+                &[(10, 1, 0, 0), (11, 2, 0, 0), (12, 1, 0, 0)],
+                &[(1, 0), (2, 50)],
+                &[50],
+            ),
+        )
+    }
+
+    /// A unit of `ENTRY` at `display`, alive, as `type_mask` (9 a creature, `0x19` a player).
+    fn displayed(guid: u64, kind: EntityKind, type_mask: u32, display: u32) -> SessionEvent {
+        use benilla_protocol::field::{FIELD_UNIT_DISPLAYID, FIELD_UNIT_HEALTH};
+        use benilla_protocol::messages::ObjectType;
+        let as_type = match kind {
+            EntityKind::Player => ObjectType::Player,
+            _ => ObjectType::Unit,
+        };
+        SessionEvent::ObjectCreate {
+            guid,
+            kind,
+            display_id: Some(display),
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: None,
+            transport: None,
+            spline: None,
+            fields: ObjectFields::from_pairs(&[
+                (2, type_mask),
+                (3, 1234),
+                (FIELD_UNIT_HEALTH, 100),
+                (FIELD_UNIT_DISPLAYID, display),
+            ])
+            .into_created(as_type),
+        }
+    }
+
+    /// A creature asks its record again when its display names a new record set: the display
+    /// watcher (`0x6049b5`) runs `0x60abe0`, whose `0x60ae10` finds the records changed, and the
+    /// resolve asks (`0x60ac21` → `0x60b15b`). A display with the same records, or one with no
+    /// row (`0x60ae36`), changes nothing; a player never asks (`0x60b134`).
+    #[test]
+    fn a_new_display_record_set_asks_the_creature_record_again() {
+        use benilla_protocol::field::FIELD_UNIT_DISPLAYID;
+        const ENTRY: u32 = 1234;
+        let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        const PLAYER: u64 = 0x0000_0000_0000_0042;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+        app.world_mut().insert_resource(display_tables());
+        let display = |world: &mut World, guid: u64, id: u32| {
+            super::super::handlers::dispatch(
+                world,
+                super::wire(vec![SessionEvent::ObjectValues {
+                    guid,
+                    fields: ObjectFields::from_pairs(&[(FIELD_UNIT_DISPLAYID, id)]),
+                }]),
+            );
+        };
+
+        let world = app.world_mut();
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![
+                displayed(mob, EntityKind::Unit, 9, 10),
+                displayed(PLAYER, EntityKind::Player, 0x19, 10),
+            ]),
+        );
+        assert_eq!(record_asks(&rx), (1, 0), "the creature's create hook alone");
+        // Refused: the next lookup with a callback asks at once.
+        world.resource_mut::<NameCache>().insert_creature(ENTRY, None);
+
+        display(world, mob, 12);
+        assert_eq!(record_asks(&rx), (0, 0), "12 names 10's records");
+        display(world, mob, 999);
+        assert_eq!(record_asks(&rx), (0, 0), "no row: no change");
+        display(world, PLAYER, 11);
+        assert_eq!(record_asks(&rx), (0, 0), "a player resolves, never asks");
+        display(world, mob, 11);
+        assert_eq!(record_asks(&rx), (1, 0), "a new model: the records changed");
+        display(world, mob, 11);
+        assert_eq!(record_asks(&rx), (0, 0), "no edge, no watcher");
+    }
+
+    /// The health watcher rebuilds the display of a unit come back to life (`0x6047ee` →
+    /// `0x604835`), whose records the display watcher did not see change: here the display table
+    /// was not up when it did.
+    #[test]
+    fn a_unit_back_to_life_rebuilds_its_display() {
+        use benilla_protocol::field::{FIELD_UNIT_DISPLAYID, FIELD_UNIT_HEALTH};
+        const ENTRY: u32 = 1234;
+        let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+        app.world_mut().insert_resource(display_tables());
+        let world = app.world_mut();
+        let values = |world: &mut World, pairs: &[(u16, u32)]| {
+            super::super::handlers::dispatch(
+                world,
+                super::wire(vec![SessionEvent::ObjectValues {
+                    guid: mob,
+                    fields: ObjectFields::from_pairs(pairs),
+                }]),
+            );
+        };
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![displayed(mob, EntityKind::Unit, 9, 10)]),
+        );
+        world.resource_mut::<NameCache>().insert_creature(ENTRY, None);
+        let _ = record_asks(&rx);
+
+        let tables = world.remove_resource::<crate::entities::Creatures>().unwrap();
+        values(world, &[(FIELD_UNIT_DISPLAYID, 11)]);
+        world.insert_resource(tables);
+        values(world, &[(FIELD_UNIT_HEALTH, 0)]);
+        assert_eq!(record_asks(&rx), (0, 0), "dying rebuilds nothing");
+        values(world, &[(FIELD_UNIT_HEALTH, 50)]);
+        assert_eq!(record_asks(&rx), (1, 0), "coming back does");
     }
 
     /// A create block for a live item runs the watchers over what it moved, never the create's

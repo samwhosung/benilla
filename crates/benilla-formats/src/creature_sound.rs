@@ -79,7 +79,7 @@ impl CreatureVoiceCatalog {
     }
 }
 
-fn csd_schema() -> Schema {
+pub(crate) fn csd_schema() -> Schema {
     let mut s = Schema::new("CreatureSoundData");
     for i in 0..30 {
         s.add_field(SchemaField::new(format!("f{i}"), FieldType::UInt32));

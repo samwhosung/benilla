@@ -2,7 +2,7 @@
 //! `CreatureDisplayInfo` and `CreatureModelData`. A humanoid NPC's look is not on the wire: it
 //! comes from `CreatureDisplayInfoExtra` and a baked atlas under `Textures\BakedNpcTextures\`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::Chain;
 use anyhow::{Context, Result};
@@ -13,6 +13,7 @@ use crate::dbc::{f32_at, parse, str_at, u32_at};
 const CREATURE_MODEL_DATA: &str = "DBFilesClient\\CreatureModelData.dbc";
 const CREATURE_DISPLAY_INFO: &str = "DBFilesClient\\CreatureDisplayInfo.dbc";
 const CREATURE_DISPLAY_INFO_EXTRA: &str = "DBFilesClient\\CreatureDisplayInfoExtra.dbc";
+const CREATURE_SOUND_DATA: &str = "DBFilesClient\\CreatureSoundData.dbc";
 
 /// A resolved creature display: model, scale, skins and, for a humanoid NPC, its appearance.
 #[derive(Debug, Clone)]
@@ -69,6 +70,8 @@ struct DisplayRow {
     /// `CreatureModelAlpha` (field 5, +0x14), 0..=255: the `baseAlpha` of the reference's unit
     /// alpha product (`0x60d2d0`, × 1/255), which is a flat 1.0 for players.
     model_alpha: u32,
+    /// `SoundID` (field 2, +0x8): the display's own `CreatureSoundData` row, 0 for none.
+    sound_id: u32,
 }
 
 /// One CreatureModelData row (the parts we use).
@@ -111,9 +114,89 @@ pub struct CreatureCatalog {
     display: HashMap<u32, DisplayRow>,
     models: HashMap<u32, ModelRow>,
     extra: HashMap<u32, NpcAppearance>,
+    /// Every `CreatureModelData` row by id, named or not, with its `SoundID` (field 13, +0x34).
+    model_sounds: HashMap<u32, u32>,
+    /// The `CreatureSoundData` row ids.
+    sound_rows: HashSet<u32>,
+    /// The first `CreatureDisplayInfo` record, the fallback of an unknown display (`0x60b01a`).
+    first_display: Option<u32>,
 }
 
 impl CreatureCatalog {
+    /// The display row a unit's records come from (`0x60afb0`): `display_id`'s, else the table's
+    /// first, after the `NOUNITDISPLAYID` line (`0x60affc`-`0x60b033`). `None` for an empty table.
+    pub fn records_row(&self, display_id: u32) -> Option<u32> {
+        if self.display.contains_key(&display_id) {
+            Some(display_id)
+        } else {
+            self.first_display
+        }
+    }
+
+    /// `CGUnit_C::DisplayRecordsChanged` (`0x60ae10`): whether `display_id` names other records
+    /// than those resolved from `held` ([`Self::records_row`]). An unknown display changes
+    /// nothing (`0x60ae36`), nor does the held row; else the extra id (`+0xc`), the model row
+    /// (`+0x4`) or the sound row decides, the new display's own sound against the held one, which
+    /// fell back to its model's (`0x60b0a9`).
+    pub fn display_records_differ(&self, display_id: u32, held: u32) -> bool {
+        let Some(row) = self.display.get(&display_id) else {
+            return false;
+        };
+        if display_id == held {
+            return false;
+        }
+        let Some(was) = self.display.get(&held) else {
+            return true;
+        };
+        if row.extended_id != was.extended_id {
+            return true;
+        }
+        let model_row = |id: u32| self.model_sounds.contains_key(&id).then_some(id);
+        if model_row(row.model_id) != model_row(was.model_id) {
+            return true;
+        }
+        let sound_row = |id: u32| self.sound_rows.contains(&id).then_some(id);
+        let held_sound = sound_row(was.sound_id).or_else(|| {
+            self.model_sounds
+                .get(&was.model_id)
+                .and_then(|&id| sound_row(id))
+        });
+        sound_row(row.sound_id) != held_sound
+    }
+
+    /// A catalog of bare display rows, for tests and tools that compare records: `(display id,
+    /// model id, sound id, extra id)` in file order, `(model id, sound id)` and sound row ids.
+    pub fn from_record_rows(
+        displays: &[(u32, u32, u32, u32)],
+        models: &[(u32, u32)],
+        sounds: &[u32],
+    ) -> Self {
+        CreatureCatalog {
+            display: displays
+                .iter()
+                .map(|&(id, model_id, sound_id, extended_id)| {
+                    (
+                        id,
+                        DisplayRow {
+                            model_id,
+                            extended_id,
+                            scale: 1.0,
+                            textures: [None, None, None],
+                            blood_level: 0,
+                            size_class: -1,
+                            model_alpha: 255,
+                            sound_id,
+                        },
+                    )
+                })
+                .collect(),
+            model_sounds: models.iter().copied().collect(),
+            sound_rows: sounds.iter().copied().collect(),
+            first_display: displays.first().map(|d| d.0),
+            ..Default::default()
+        }
+    }
+
     /// A display's own `creatureModelScale`, the mount scale law: a mount renders at
     /// `OBJECT_FIELD_SCALE_X × creatureModelScale`, without `modelScale` (`0x613ef0`).
     pub fn display_scale(&self, display_id: u32) -> Option<f32> {
@@ -347,6 +430,7 @@ pub(crate) fn creature_display_info_extra_schema() -> Schema {
 
 /// Load the creature DBCs from the patch chain into a [`CreatureCatalog`].
 pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
+    let mut model_sounds = HashMap::new();
     let models = {
         let bytes = chain
             .read_file(CREATURE_MODEL_DATA)
@@ -354,6 +438,9 @@ pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
         let rs = parse(&bytes, creature_model_data_schema(), "CreatureModelData")?;
         let mut m = HashMap::with_capacity(rs.records().len());
         for r in rs.records() {
+            if let Some(id) = u32_at(r, 0) {
+                model_sounds.insert(id, u32_at(r, 13).unwrap_or(0));
+            }
             if let (Some(id), Some(name)) = (u32_at(r, 0), str_at(&rs, r, 2)) {
                 m.insert(
                     id,
@@ -377,6 +464,7 @@ pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
         m
     };
 
+    let first_display;
     let display = {
         let bytes = chain
             .read_file(CREATURE_DISPLAY_INFO)
@@ -387,6 +475,7 @@ pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
             "CreatureDisplayInfo",
         )?;
         let mut d = HashMap::with_capacity(rs.records().len());
+        first_display = rs.records().first().and_then(|r| u32_at(r, 0));
         for r in rs.records() {
             if let (Some(id), Some(model_id)) = (u32_at(r, 0), u32_at(r, 1)) {
                 d.insert(
@@ -399,6 +488,7 @@ pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
                         blood_level: u32_at(r, 10).unwrap_or(0),
                         size_class: u32_at(r, 9).map_or(-1, |v| v as i32),
                         model_alpha: u32_at(r, 5).unwrap_or(255),
+                        sound_id: u32_at(r, 2).unwrap_or(0),
                     },
                 );
             }
@@ -408,12 +498,30 @@ pub fn load_creature_catalog(chain: &mut Chain) -> Result<CreatureCatalog> {
 
     // Best-effort: without it only humanoid NPCs lose their skins; the caller logs `extra_len()`.
     let extra = load_creature_display_info_extra(chain).unwrap_or_default();
+    // Best-effort: without it every sound row compares absent.
+    let sound_rows = load_creature_sound_rows(chain).unwrap_or_default();
 
     Ok(CreatureCatalog {
         display,
         models,
         extra,
+        model_sounds,
+        sound_rows,
+        first_display,
     })
+}
+
+/// The `CreatureSoundData.dbc` row ids, which the display records point into (`0xc0de54`).
+fn load_creature_sound_rows(chain: &mut Chain) -> Result<HashSet<u32>> {
+    let bytes = chain
+        .read_file(CREATURE_SOUND_DATA)
+        .with_context(|| format!("reading {CREATURE_SOUND_DATA}"))?;
+    let rs = parse(
+        &bytes,
+        crate::creature_sound::csd_schema(),
+        "CreatureSoundData",
+    )?;
+    Ok(rs.records().iter().filter_map(|r| u32_at(r, 0)).collect())
 }
 
 /// Load CreatureDisplayInfoExtra.dbc: `extendedDisplayInfoId` → [`NpcAppearance`].
@@ -451,6 +559,34 @@ fn load_creature_display_info_extra(chain: &mut Chain) -> Result<HashMap<u32, Np
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x60ae10` over bare rows: no row changes nothing; then the extra id, the model row and the
+    /// own sound row, against a held sound that fell back to its model's (`0x60b0a9`).
+    #[test]
+    fn display_records_differ_as_the_compare_reads_them() {
+        let cat = CreatureCatalog::from_record_rows(
+            &[
+                (10, 1, 0, 0), // held: model 1's sound 7
+                (11, 1, 0, 3), // another extra
+                (12, 2, 0, 0), // another model
+                (13, 1, 7, 0), // its own sound, model 1's
+                (14, 1, 0, 0), // no own sound: none against the held 7
+                (20, 4, 0, 0), // held: model 4 has no sound row
+                (21, 4, 0, 0), // same model, extra and no sound: the same records
+            ],
+            &[(1, 7), (2, 7), (4, 0)],
+            &[7],
+        );
+        assert!(!cat.display_records_differ(999, 10), "no row (`0x60ae36`)");
+        assert!(!cat.display_records_differ(10, 10), "the held row");
+        assert!(cat.display_records_differ(11, 10), "extra");
+        assert!(cat.display_records_differ(12, 10), "model");
+        assert!(!cat.display_records_differ(13, 10), "the same sound row");
+        assert!(cat.display_records_differ(14, 10), "no own sound row");
+        assert!(!cat.display_records_differ(21, 20), "nothing differs");
+        assert_eq!(cat.records_row(999), Some(10), "an unknown display: the first row");
+        assert_eq!(cat.records_row(12), Some(12));
+    }
 
     /// `BloodID = −1` is a tier-2 miss, so 595 displays reach tier 3 and bleed red.
     #[test]

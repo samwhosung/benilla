@@ -95,6 +95,12 @@ impl ObjectList {
 #[derive(Component)]
 pub(crate) struct ReleasePending;
 
+/// The display row a unit's records were resolved from (`+0xb34`, `0x60afb0`), which a new
+/// `UNIT_FIELD_DISPLAYID` is compared against (`0x60ae10`); `None` until its create hook resolves
+/// them, or with no display table loaded. It lives as long as the object, across a release.
+#[derive(Component, Clone, Copy, Default)]
+pub(crate) struct HeldDisplay(Option<u32>);
+
 /// A block the notify pass reads again.
 enum Notify {
     /// A values block (`0x465330`) and the fields its mask sent, ascending.
@@ -141,6 +147,8 @@ enum Body {
         /// Bit 3 of the unit's `+0xc58`, which only the constructor clears (`0x5fae7a`): the
         /// object a block brings back is the one that left.
         xp_awarded: bool,
+        /// A unit's resolved records, which its slot 3 compares (`0x5fbe28`).
+        display: Option<HeldDisplay>,
     },
     /// An item or a container, with its countdown cells.
     Item {
@@ -280,14 +288,15 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             }),
         ) => {
             let moved = write_fields(&mut store, fields.clone());
-            let (pose, modes, xp_awarded) = match body {
+            let (pose, modes, xp_awarded, display) = match body {
                 Body::World {
                     pose,
                     modes,
                     xp_awarded,
+                    display,
                     ..
-                } => (Some(pose), modes, xp_awarded),
-                Body::Item { .. } => (None, None, false),
+                } => (Some(pose), modes, xp_awarded, display),
+                Body::Item { .. } => (None, None, false, None),
             };
             // Only a unit takes the block's movement (`0x46638c`); any other type keeps its pose.
             let unit = matches!(kind, EntityKind::Unit | EntityKind::Player);
@@ -299,13 +308,16 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             if xp_awarded {
                 sc.commands.entity(e).insert(XpAwarded);
             }
+            if let Some(display) = display {
+                sc.commands.entity(e).insert(display);
+            }
             sc.pass.reactivated.push(guid);
             moved
         }
         (None, None) => {
             allocate(&mut sc, guid, world_type(kind));
             let store = fields.clone();
-            object_create(
+            let e = object_create(
                 &mut sc,
                 block,
                 &fields,
@@ -314,6 +326,9 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
                     kept_pose: None,
                 },
             );
+            if matches!(kind, EntityKind::Unit | EntityKind::Player) {
+                sc.commands.entity(e).insert(HeldDisplay::default());
+            }
             sc.pass.unshown.insert(guid);
             Vec::new()
         }
@@ -539,6 +554,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             modes,
             rider,
             xp_awarded,
+            display,
         } => {
             let mut entity = sc.commands.spawn((
                 Guid(guid),
@@ -564,6 +580,9 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             }
             if xp_awarded {
                 entity.insert(XpAwarded);
+            }
+            if let Some(display) = display {
+                entity.insert(display);
             }
             let e = entity.id();
             sc.index.0.insert(guid, e);
@@ -743,6 +762,7 @@ fn release(sc: &mut Scene, guid: u64) {
                         local_orientation: r.local_orientation,
                     }),
                     xp_awarded: sc.xp_awarded.contains(e),
+                    display: sc.held_displays.get(e).ok().copied(),
                 }
             };
             Some(Kept { fields, body })
@@ -826,6 +846,22 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             old,
             new,
         }));
+    // The `UNIT_FIELD_DISPLAYID` watcher (`0x604990`) and the health watcher's return to life
+    // (`0x6046f0`: old health not above 0, new above, `0x6047ee`-`0x604835`) rebuild the display.
+    if matches!(kind, ObjectType::Unit | ObjectType::Player)
+        && block.edges().any(|(index, old, new)| {
+            index == benilla_protocol::field::FIELD_UNIT_DISPLAYID
+                || (index == benilla_protocol::field::FIELD_UNIT_HEALTH
+                    && old as i32 <= 0
+                    && new as i32 > 0)
+        })
+    {
+        let fields = fields.clone();
+        display_changed(sc, e, guid, &fields);
+    }
+    let Some(fields) = sc.stores.get(e).ok().map(|s| &s.0) else {
+        return;
+    };
     // The `GAMEOBJECT_STATE` watcher stores the state its state player arms from (`0x5f89e0`).
     if kind == ObjectType::GameObject {
         let state = block
@@ -916,6 +952,7 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             sc.item_notices.write_batch(hook);
         }
         Created::World(EntityKind::Player) => {
+            resolve_display_records(sc, guid, &fields);
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
                 .write_batch(crate::field_watch::guild_tag(guid));
@@ -923,7 +960,10 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
                 compare_party_record(sc, guid, &fields, script);
             }
         }
-        Created::World(EntityKind::Unit) => sc.names.lookup_fields(guid, &fields, &sc.net),
+        Created::World(EntityKind::Unit) => {
+            resolve_display_records(sc, guid, &fields);
+            sc.names.lookup_fields(guid, &fields, &sc.net);
+        }
         Created::World(EntityKind::GameObject) => {
             sc.go_templates.request_at_create(guid, &fields, &sc.net)
         }
@@ -931,10 +971,11 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
     }
 }
 
-/// Vtable slot 3 of an object the packet brought back: a player's `PostUpdate` (`0x5dec90`)
-/// compares its party record (`0x5decb7`), with no active-player gate, as the active player is
-/// never released; a game object's (`0x5f7ed0`) asks its template when it holds none (`+0x214`,
-/// `0x558560` at `0x5f7f31`).
+/// Vtable slot 3 of an object the packet brought back: a unit's (`0x5fbe00`) rebuilds its display
+/// when its records changed while it was away (`0x5fbe28` → `0x60abe0`); a player's `PostUpdate`
+/// (`0x5dec90`) runs the unit's, then compares its party record (`0x5decb7`), with no
+/// active-player gate, as the active player is never released; a game object's (`0x5f7ed0`) asks
+/// its template when it holds none (`+0x214`, `0x558560` at `0x5f7f31`).
 fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     let Some(e) = sc.index.0.get(&guid).copied() else {
         return;
@@ -943,10 +984,59 @@ fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
         return;
     };
     match fields.created_as() {
-        Some(ObjectType::Player) => compare_party_record(sc, guid, &fields, script),
+        Some(ObjectType::Unit) => display_changed(sc, e, guid, &fields),
+        Some(ObjectType::Player) => {
+            display_changed(sc, e, guid, &fields);
+            compare_party_record(sc, guid, &fields, script);
+        }
         Some(ObjectType::GameObject) => sc.go_templates.request_at_create(guid, &fields, &sc.net),
         _ => {}
     }
+}
+
+/// `CGUnit_C::ResolveDisplayRecords` from the unit's `PostInit` (`0x5fb88b` → `0x60afb0`): the
+/// records held off the display row ([`HeldDisplay`]); its creature ask is the create hook's
+/// ([`NameCache::lookup_fields`]).
+///
+/// [`NameCache::lookup_fields`]: crate::names::NameCache::lookup_fields
+fn resolve_display_records(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
+    let Some(e) = sc.index.0.get(&guid).copied() else {
+        return;
+    };
+    let row = sc
+        .creatures
+        .as_deref()
+        .and_then(|c| c.records_row(unit_display(fields)));
+    if let Ok(mut held) = sc.held_displays.get_mut(e) {
+        held.0 = row;
+    }
+}
+
+/// `CGUnit_C::OnDisplayChanged` (`0x60abe0`), from the `UNIT_FIELD_DISPLAYID` watcher
+/// (`0x6049b5`), the health watcher's return to life (`0x604835`) and slot 3 (`0x5fbe28`): when
+/// `0x60ae10` sees a new record set the unit resolves its records again (`0x60ac21`), and a
+/// creature asks its record (`0x60b15b`).
+fn display_changed(sc: &mut Scene, e: Entity, guid: u64, fields: &ObjectFields) {
+    let Some(creatures) = sc.creatures.as_deref() else {
+        return;
+    };
+    let Ok(mut held) = sc.held_displays.get_mut(e) else {
+        return;
+    };
+    let display = unit_display(fields);
+    let Some(was) = held.0 else {
+        return;
+    };
+    if !creatures.display_records_differ(display, was) {
+        return;
+    }
+    held.0 = creatures.records_row(display);
+    sc.names.ask_creature_record(guid, fields, &sc.net);
+}
+
+/// `UNIT_FIELD_DISPLAYID` as the resolve reads it, absent as 0 (vmangos omits zero fields).
+fn unit_display(fields: &ObjectFields) -> u32 {
+    fields.unit_displayid().map_or(0, |d| d as u32)
 }
 
 /// `CGPlayer_C::ComparePartyRecord` (`0x5f0b80`): the stored party or raid record, an empty one

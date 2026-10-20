@@ -212,16 +212,36 @@ impl NameCache {
     }
 
     /// A unit's create (`0x5fb880`): every cache its name comes from looked up with a callback,
-    /// the creature record by the descriptor's entry (`0x60b15b`) whatever the name key, and a
-    /// player's name by `GetUnitName` right after `PostInit` (`0x5dec09`, `0x5dec12`). A refusal
-    /// is asked again at once, as the reference's next lookup does.
+    /// a player's name by `GetUnitName` right after `PostInit` (`0x5dec09`, `0x5dec12`), and the
+    /// display resolve's creature record ([`Self::ask_creature_record`]). A refusal is asked again
+    /// at once, as the reference's next lookup does.
     pub(crate) fn lookup_fields(&self, guid_val: u64, unit: &ObjectFields, commands: &NetCommands) {
-        let ask = Ask::Event(commands);
         if let Some(NameKey::Player(_) | NameKey::Pet(_)) = NameKey::of(guid_val, Some(unit)) {
-            self.resolve_fields(guid_val, Some(unit), ask);
+            self.resolve_fields(guid_val, Some(unit), Ask::Event(commands));
+        }
+        self.ask_creature_record(guid_val, unit, commands);
+    }
+
+    /// The display resolve's ask (`0x60afb0`, at `0x60b15b`): the creature record by the
+    /// descriptor's entry, for a creature or a pet alone, type mask 9 (`0x60b134`), so never for a
+    /// player.
+    pub(crate) fn ask_creature_record(
+        &self,
+        guid_val: u64,
+        unit: &ObjectFields,
+        commands: &NetCommands,
+    ) {
+        // Every object's create carries its mask; a descriptor without one (0, as absent reads) is
+        // a player by its guid.
+        let creature = unit
+            .object_type_mask()
+            .filter(|&mask| mask != 0)
+            .map_or(!guid::is_player(guid_val), |mask| mask == 9);
+        if !creature {
+            return;
         }
         if let Some(entry) = unit.object_entry() {
-            self.resolve_creature(entry, guid_val, ask);
+            self.resolve_creature(entry, guid_val, Ask::Event(commands));
         }
     }
 
