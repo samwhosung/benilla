@@ -40,8 +40,10 @@ struct HostSlot {
     open: Cell<u32>,
 }
 
-/// Install the empty slot at the VM's birth: app data is never inserted while any is borrowed
-/// (`handler_prof::install`), and a lend may come while a verb holds the model.
+/// Install the empty slot at the VM's birth, a fork's included: every verb asks it
+/// (`calls::submit`) and a lend holds its cell across Lua, so it is installed once and
+/// never replaced. A later `set_app_data` would collide with no borrow (benilla-mlua keeps each
+/// entry in a cell of its own) but would hand later lookups a second slot beside the lent one.
 pub(super) fn install(lua: &Lua) {
     lua.set_app_data(HostSlot::default());
 }
