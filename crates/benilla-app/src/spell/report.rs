@@ -55,7 +55,7 @@ pub(crate) struct CastCore<'a> {
 impl CastCore<'_> {
     /// What the in-flight slot `0xceca88` holds.
     pub(crate) fn slot(&self) -> Option<Inflight> {
-        inflight(self.pending, self.queued_melee, self.ground, Instant::now())
+        inflight(self.pending, self.queued_melee, self.ground)
     }
 
     /// `SetInFlightSpell(spell)` as the attempt calls it (`0x6e5026`): the same spell leaves the
@@ -94,6 +94,22 @@ impl CastCore<'_> {
         }
         self.queued_melee.restore();
         self.reports.changed();
+    }
+
+    /// A cast whose deadline passed with no result ([`PendingCast::lapsed`]) leaves the slot as
+    /// its result's pop takes it (`0x6e4b2c`): the save copied back, a strike under it included,
+    /// and signalled. The deadline is benilla's own net for a lost result, which the reference
+    /// waits on.
+    pub(crate) fn reap_lapsed(&mut self, now: Instant) {
+        let Some(spell_id) = self.pending.lapsed(now) else {
+            return;
+        };
+        let slot = self.slot();
+        if slot == Some(Inflight::Cast(spell_id)) {
+            self.pop(slot);
+        } else {
+            self.pending.clear_if(spell_id);
+        }
     }
 
     /// The send's pop of an auto-repeat spell once its packet is out (`0x6e597d`-`0x6e5989`): only

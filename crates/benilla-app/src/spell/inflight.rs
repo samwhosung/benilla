@@ -40,7 +40,9 @@ const CAST_SLACK: Duration = Duration::from_secs(2);
 /// [`inflight`] joins the three into the reference's one slot.
 ///
 /// Cleared by the spell's `SMSG_CAST_RESULT`, success or failure (`0x6e7408` → `0x6e741a`), keyed
-/// on the spell id, or by [`local_self_cancel`]; `deadline` covers a lost result.
+/// on the spell id, or by [`local_self_cancel`]. `deadline` covers a lost result, which the
+/// reference has no answer for: [`reap_lapsed_cast`] pops a cast past it as its result would,
+/// once a frame, so every reader in between sees the slot the same.
 ///
 /// It also carries the pending record's caster word (`0xceac48 + 0x08`, `0xceac50`), the one gate
 /// on the cancel's events: see [`Self::fill_record`] and [`Self::take_caster_event`].
@@ -56,17 +58,22 @@ struct PendingCastState {
 }
 
 impl PendingCast {
-    /// A cast is outstanding, inside its deadline: the next press meets `0x6e4d97`'s refusal.
-    pub(crate) fn in_flight(&self, now: Instant) -> bool {
-        self.current(now).is_some()
+    /// A cast is outstanding: the next press meets `0x6e4d97`'s refusal.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.current().is_some()
     }
 
     /// The outstanding cast's spell id, which `HandleCastResult 0x6e7330` (`0x6e7408`) and
     /// `IsCurrentAction`'s checked state key on.
-    pub(crate) fn current(&self, now: Instant) -> Option<u32> {
+    pub(crate) fn current(&self) -> Option<u32> {
+        self.slot.as_ref().map(|p| p.spell_id)
+    }
+
+    /// The outstanding cast, when its deadline has passed at `now`.
+    pub(crate) fn lapsed(&self, now: Instant) -> Option<u32> {
         self.slot
             .as_ref()
-            .filter(|p| now < p.deadline)
+            .filter(|p| now >= p.deadline)
             .map(|p| p.spell_id)
     }
 
@@ -229,12 +236,11 @@ pub(crate) fn inflight(
     pending: &PendingCast,
     queued_melee: &QueuedMeleeSpell,
     targeting: &SpellTargeting,
-    now: Instant,
 ) -> Option<Inflight> {
     targeting
         .in_slot()
         .map(Inflight::Targeting)
-        .or_else(|| pending.current(now).map(Inflight::Cast))
+        .or_else(|| pending.current().map(Inflight::Cast))
         .or_else(|| queued_melee.current().map(Inflight::Strike))
 }
 
@@ -258,10 +264,9 @@ type SelfCastFacts = (
 impl CastState<'_, '_> {
     /// The view as it stands now.
     pub(crate) fn view(&self) -> CastView {
-        let now = Instant::now();
         let me = self.me.iter().next();
         CastView {
-            slot: inflight(&self.pending, &self.queued_melee, &self.targeting, now)
+            slot: inflight(&self.pending, &self.queued_melee, &self.targeting)
                 .map(Inflight::spell_id),
             targeting: self.targeting.spell(),
             auto_repeat: self.auto_repeat.0,
@@ -348,6 +353,12 @@ pub(super) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: S
     }
 }
 
+/// The guard's deadline, once a frame ahead of the local cancel, so a move that frame reads the
+/// slot the lapse left: a cast past it pops ([`super::CastCore::reap_lapsed`]).
+pub(super) fn reap_lapsed_cast(mut slots: super::CastSlots, net: Res<NetCommands>) {
+    slots.core(&net).reap_lapsed(Instant::now());
+}
+
 /// What [`local_self_cancel`] reads and writes, shared with the Esc cancel, which is a script call
 /// (`SpellStopCasting`) and lands in call order ([`crate::script_calls`]).
 #[derive(bevy::ecs::system::SystemParam)]
@@ -404,7 +415,7 @@ impl SelfCancel<'_, '_> {
     fn cancel_inflight(&mut self, failed: bool, why: &str) {
         let self_e = self.self_entity();
         if let Some(strike) = self.queued_melee.current() {
-            if self.pending.current(Instant::now()).is_none() && !self.ground.active() {
+            if self.pending.current().is_none() && !self.ground.active() {
                 self.queued_melee.clear_save_if(strike);
             }
         }
@@ -477,7 +488,7 @@ impl SelfCancel<'_, '_> {
                 .is_none_or(pick)
         };
         // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
-        if let Some(slot) = inflight(&self.pending, &self.queued_melee, &self.ground, now) {
+        if let Some(slot) = inflight(&self.pending, &self.queued_melee, &self.ground) {
             let spell_id = slot.spell_id();
             // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
             // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`). It skips the whole test
@@ -613,10 +624,7 @@ mod tests {
     #[test]
     fn a_fresh_guard_is_open() {
         let g = PendingCast::default();
-        assert!(
-            !g.in_flight(Instant::now()),
-            "nothing sent yet — casting allowed"
-        );
+        assert!(!g.in_flight(), "nothing sent yet — casting allowed");
     }
 
     #[test]
@@ -625,14 +633,11 @@ mod tests {
         let mut g = PendingCast::default();
         g.push(FIREBALL, None, t0);
         assert!(
-            g.in_flight(t0),
+            g.in_flight(),
             "a cast is in flight — a second one is refused"
         );
         g.clear_if(FIREBALL); // SMSG_SPELL_GO / a failing SMSG_CAST_RESULT for our cast
-        assert!(
-            !g.in_flight(t0),
-            "our cast resolved — casting allowed again"
-        );
+        assert!(!g.in_flight(), "our cast resolved — casting allowed again");
     }
 
     /// `0x6e500b`–`0x6e501f`: an item use is pushed only when its template flags carry
@@ -643,17 +648,19 @@ mod tests {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
         g.push(FIREBALL, Some(0), t0);
-        assert!(!g.in_flight(t0), "flags 0 (a potion) push nothing");
+        assert!(!g.in_flight(), "flags 0 (a potion) push nothing");
         g.push(FIREBALL, Some(0x2 | 0x200), t0);
-        assert!(!g.in_flight(t0), "other bits do not count");
+        assert!(!g.in_flight(), "other bits do not count");
         g.push(FIREBALL, Some(0x40), t0);
-        assert!(g.in_flight(t0), "the flag pushes");
-        assert!(
-            !g.in_flight(t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1)),
+        assert!(g.in_flight(), "the flag pushes");
+        let past_item = t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1);
+        assert_eq!(
+            g.lapsed(past_item),
+            Some(FIREBALL),
             "on the item's own deadline"
         );
         g.push(FIREBALL, None, t0);
-        assert!(g.in_flight(t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1)));
+        assert_eq!(g.lapsed(past_item), None);
     }
 
     #[test]
@@ -663,18 +670,25 @@ mod tests {
         g.push(FIREBALL, None, t0);
         g.clear_if(FIREBALL + 1); // a triggered proc's GO for some other spell mid-cast
         assert!(
-            g.in_flight(t0),
+            g.in_flight(),
             "a different spell's resolution must not open the guard on our cast"
         );
     }
 
     #[test]
-    fn the_guard_opens_when_its_safety_deadline_lapses() {
+    fn the_guard_lapses_at_its_safety_deadline() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
         g.push(FIREBALL, None, t0);
-        assert!(g.in_flight(t0 + SEND_PROVISIONAL - Duration::from_secs(1)));
-        assert!(!g.in_flight(t0 + SEND_PROVISIONAL + Duration::from_secs(1)));
+        assert_eq!(
+            g.lapsed(t0 + SEND_PROVISIONAL - Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            g.lapsed(t0 + SEND_PROVISIONAL + Duration::from_secs(1)),
+            Some(FIREBALL)
+        );
+        assert!(g.in_flight(), "until the reaper pops it");
     }
 
     #[test]
@@ -684,8 +698,9 @@ mod tests {
         g.push(FIREBALL, None, t0);
         g.refine(1_000, t0); // deadline t0 + 1 s + 2 s slack
         g.delay(500, t0); // pushed to t0 + 3.5 s
-        assert!(
-            g.in_flight(t0 + Duration::from_millis(3_200)),
+        assert_eq!(
+            g.lapsed(t0 + Duration::from_millis(3_200)),
+            None,
             "the pushback kept the guard shut past the original refined deadline"
         );
     }
@@ -697,10 +712,61 @@ mod tests {
         g.push(FIREBALL, None, t0);
         g.refine(1_500, t0); // SMSG_SPELL_START: 1.5 s + 2 s slack
         let at_four = t0 + Duration::from_secs(4);
-        assert!(
-            !g.in_flight(at_four),
-            "refined to 1.5s + slack, the guard has opened by t+4s (it would still be shut at the \
+        assert_eq!(
+            g.lapsed(at_four),
+            Some(FIREBALL),
+            "refined to 1.5s + slack, the guard has lapsed by t+4s (it would still hold at the \
              5s provisional)"
+        );
+    }
+
+    /// A lapsed cast leaves the slot as its result's pop would (`0x6e4b2c`): a strike the push
+    /// saved under it comes back to the slot, signalled, so the late result finds it queued and
+    /// the strike survives. Inside its deadline the reaper leaves the cast alone.
+    #[test]
+    fn a_lapsed_cast_pops_back_the_strike_it_was_pushed_over() {
+        use bevy::ecs::system::RunSystemOnce;
+        const HEROIC_STRIKE: u32 = 78;
+        let mut app = App::new();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.init_resource::<PendingCast>()
+            .init_resource::<QueuedMeleeSpell>()
+            .init_resource::<SpellTargeting>()
+            .init_resource::<CastReports>()
+            .insert_resource(NetCommands(tx));
+        let t0 = Instant::now();
+        let reap = |app: &mut App, now: Instant| {
+            app.world_mut()
+                .run_system_once(
+                    move |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
+                        slots.core(&net).reap_lapsed(now);
+                    },
+                )
+                .unwrap();
+            std::mem::take(&mut app.world_mut().resource_mut::<CastReports>().0).len()
+        };
+        app.world_mut()
+            .run_system_once(
+                move |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
+                    let mut core = slots.core(&net);
+                    core.push(HEROIC_STRIKE, super::super::Held::Strike, t0);
+                    core.push(FIREBALL, super::super::Held::Cast { item_flags: None }, t0);
+                },
+            )
+            .unwrap();
+        app.world_mut().resource_mut::<CastReports>().0.clear();
+        assert_eq!(reap(&mut app, t0), 0, "inside its deadline");
+        assert!(app.world().resource::<PendingCast>().in_flight());
+        assert_eq!(
+            reap(&mut app, t0 + SEND_PROVISIONAL + Duration::from_millis(1)),
+            1,
+            "one pop, signalled"
+        );
+        assert!(!app.world().resource::<PendingCast>().in_flight());
+        assert_eq!(
+            app.world().resource::<QueuedMeleeSpell>().current(),
+            Some(HEROIC_STRIKE),
+            "the strike is back in the slot"
         );
     }
 
@@ -823,9 +889,7 @@ mod tests {
                 "the move edge ships CMSG_CANCEL_CAST for the in-flight cast"
             );
             assert!(
-                !app.world()
-                    .resource::<PendingCast>()
-                    .in_flight(Instant::now()),
+                !app.world().resource::<PendingCast>().in_flight(),
                 "the in-flight guard opens with the local cancel"
             );
             assert!(
@@ -866,9 +930,7 @@ mod tests {
 
             assert!(rx.try_recv().is_err(), "no wire cancel for a spared spell");
             assert!(
-                app.world()
-                    .resource::<PendingCast>()
-                    .in_flight(Instant::now()),
+                app.world().resource::<PendingCast>().in_flight(),
                 "the guard keeps holding — the cast runs on"
             );
             assert!(app.world().resource::<CastReports>().0.is_empty());
@@ -930,10 +992,7 @@ mod tests {
             run(&mut app, false);
 
             assert!(rx.try_recv().is_err());
-            assert!(app
-                .world()
-                .resource::<PendingCast>()
-                .in_flight(Instant::now()));
+            assert!(app.world().resource::<PendingCast>().in_flight());
             assert!(app.world().resource::<CastReports>().0.is_empty());
         }
 
@@ -999,9 +1058,7 @@ mod tests {
             assert!(rx.try_recv().is_err(), "the cast survives the first press");
             assert!(app.world().resource::<AutoRepeatActive>().0.is_none());
             assert!(
-                app.world()
-                    .resource::<PendingCast>()
-                    .in_flight(Instant::now()),
+                app.world().resource::<PendingCast>().in_flight(),
                 "the send guard still holds — one press stopped one thing"
             );
             assert!(

@@ -695,8 +695,6 @@ fn cast_result(
     } else if success && slot.is_none() {
         core.reports.bar(CastBarEdge::Stop);
     }
-    // A guard whose deadline lapsed is in no slot, and goes with its result.
-    core.pending.clear_if(spell_id);
     if *crate::net::CAST_TRACE {
         info!("cast-trace: RECV CAST_RESULT — spell {spell_id} success={success}; in_slot={slot_holds}");
     }
@@ -1990,10 +1988,7 @@ mod tests {
         s.go(FORTITUDE);
         assert!(s.events().is_empty());
         assert!(
-            !s.app
-                .world()
-                .resource::<PendingCast>()
-                .in_flight(Instant::now()),
+            !s.app.world().resource::<PendingCast>().in_flight(),
             "the result opened the slot"
         );
     }
@@ -2028,10 +2023,7 @@ mod tests {
         let mut s = CastSeq::new();
         s.commit(MINOR_HEALING, Some(0));
         assert!(
-            !s.app
-                .world()
-                .resource::<PendingCast>()
-                .in_flight(Instant::now()),
+            !s.app.world().resource::<PendingCast>().in_flight(),
             "the potion never entered the slot"
         );
         s.start(MINOR_HEALING, 0);
@@ -2102,11 +2094,7 @@ mod tests {
                 );
                 // The server's own failure cancels with no packet (`0x6e2213 sete`).
                 assert!(s.sent().is_empty(), "reason {reason:#04x}, timed {timed}");
-                assert!(!s
-                    .app
-                    .world()
-                    .resource::<PendingCast>()
-                    .in_flight(Instant::now()));
+                assert!(!s.app.world().resource::<PendingCast>().in_flight());
             }
         }
     }
@@ -3445,10 +3433,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-            let armed = app
-                .world()
-                .resource::<PendingCast>()
-                .in_flight(Instant::now());
+            let armed = app.world().resource::<PendingCast>().in_flight();
             let queued = app.world().resource::<QueuedMeleeSpell>().current();
             (chained, armed, queued)
         };

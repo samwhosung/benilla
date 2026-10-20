@@ -1163,9 +1163,7 @@ mod tests {
             "the push's and the arm's signals (`0x6e5026`, `0x6e5333`), the line, the pop's \
              signal, its event, the disarm, and the tail's signal (`0x6e5069`)"
         );
-        assert!(!world
-            .resource::<crate::spell::PendingCast>()
-            .in_flight(Instant::now()));
+        assert!(!world.resource::<crate::spell::PendingCast>().in_flight());
     }
 
     /// A standing enemy word with nothing to bind is refused by the attempt's tail after the arm
@@ -1422,10 +1420,9 @@ mod tests {
             matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == AIMED_SHOT),
             "the shot goes out"
         );
-        let now = Instant::now();
         let pending = world.resource::<crate::spell::PendingCast>();
-        assert_eq!(pending.current(now), Some(AIMED_SHOT), "and holds the slot");
-        assert!(pending.in_flight(now));
+        assert_eq!(pending.current(), Some(AIMED_SHOT), "and holds the slot");
+        assert!(pending.in_flight());
 
         send_at(&mut world, SERPENT_STING, MOB);
         assert!(
@@ -1462,9 +1459,7 @@ mod tests {
             Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == AUTO_SHOT
         ));
         assert_eq!(
-            world
-                .resource::<crate::spell::PendingCast>()
-                .current(Instant::now()),
+            world.resource::<crate::spell::PendingCast>().current(),
             None,
             "an auto-repeat spell is popped after the send"
         );
@@ -1484,9 +1479,7 @@ mod tests {
             Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == RAPTOR_STRIKE
         ));
         assert_eq!(
-            world
-                .resource::<crate::spell::PendingCast>()
-                .current(Instant::now()),
+            world.resource::<crate::spell::PendingCast>().current(),
             None
         );
         send_at(&mut world, SERPENT_STING, MOB);
@@ -1547,9 +1540,7 @@ mod tests {
             "a different spell mid-cast is \"Another action is in progress\", whatever its class"
         );
         assert_eq!(
-            world
-                .resource::<crate::spell::PendingCast>()
-                .current(Instant::now()),
+            world.resource::<crate::spell::PendingCast>().current(),
             Some(FROSTBOLT),
             "the Frostbolt still holds the guard"
         );
@@ -1961,9 +1952,7 @@ mod tests {
             send(&mut world, POTION_SPELL, potion);
             assert!(matches!(rx.try_recv(), Ok(ClientCommand::UseItem { .. })));
             assert_eq!(
-                world
-                    .resource::<crate::spell::PendingCast>()
-                    .current(Instant::now()),
+                world.resource::<crate::spell::PendingCast>().current(),
                 None,
                 "cached={cached}: the potion pushed nothing"
             );
@@ -2267,9 +2256,7 @@ mod tests {
             "the commit clears the one word"
         );
         assert!(
-            world
-                .resource::<crate::spell::PendingCast>()
-                .in_flight(Instant::now()),
+            world.resource::<crate::spell::PendingCast>().in_flight(),
             "and arms the in-flight guard the click owes"
         );
 

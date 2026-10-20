@@ -550,7 +550,7 @@ pub(super) fn follow_requests(
             Some((guid, store.filter(|s| s.is_unit())?))
         });
         let mover = mover.iter().next().map(|(guid, store)| (guid.0, store));
-        let casting = cast.in_flight(std::time::Instant::now());
+        let casting = cast.in_flight();
         match scan_params.follow_refusal(mover, followee, missing, casting) {
             // A refusal leaves a follow in progress alone: the gate returns before `0x611130`.
             Some(FollowRefusal::Line(key)) => {

@@ -894,7 +894,7 @@ mod tests {
         assert!(!app
             .world()
             .resource::<crate::spell::PendingCast>()
-            .in_flight(std::time::Instant::now()));
+            .in_flight());
         assert_eq!(
             edges(&app),
             ["FAILED"],

@@ -86,7 +86,8 @@ impl Plugin for SpellPlugin {
             .add_systems(
                 Update,
                 (
-                    inflight::local_self_cancel
+                    (inflight::reap_lapsed_cast, inflight::local_self_cancel)
+                        .chain()
                         .in_set(UnitFeed)
                         .in_set(LocalCancel),
                     mods::track_class_family
@@ -99,14 +100,17 @@ impl Plugin for SpellPlugin {
                     // hover verdict is asked for.
                     targeting::feed_targeting_to_vm
                         .in_set(UnitFeed)
+                        .after(LocalCancel)
                         .after(crate::ui_pet::pet_stop_on_old_target_clear)
                         .after(crate::ui_aura::AuraEvents),
+                    // Readers of the word, which the local cancel can clear.
                     (
                         targeting::publish_picks_self,
                         targeting::publish_corpse_pick,
                         targeting::publish_unit_pick,
                     )
-                        .in_set(UiFeed),
+                        .in_set(UiFeed)
+                        .after(LocalCancel),
                     // The party slots and raid roster the party and raid words read, before
                     // the feed's targeting push asks them.
                     group_relation::publish_group_roster
