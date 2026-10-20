@@ -255,7 +255,7 @@ mod tests {
             255, 0, 0, 255, /* blue */ 0, 255, 0, 255, /* green */
             0, 0, 255, 255, /* red */ 255, 255, 255, 128, /* white a=128 */
         ];
-        let (w, h, rgba) = tga_to_rgba(&tga(2, 2, 2, 32, 0, &px)).unwrap();
+        let (w, h, rgba) = tga_to_rgba(&tga(2, 2, 2, 32, 8, &px)).unwrap();
         assert_eq!((w, h), (2, 2));
         // Top-down output, as RGBA: red, white, then blue, green.
         assert_eq!(
@@ -296,12 +296,142 @@ mod tests {
         assert_eq!(rgba, vec![7, 7, 7, 255]);
     }
 
+    /// The reference orients a TGA through descriptor bit 5 alone (`0x5a4070`); no read-path
+    /// routine tests bit 4 (`0x5a3660`, `0x5a3a30`, `0x5a3c80`, `0x5a3d70`, `0x5a4070`): only the
+    /// writer's builder sets it (`0x5a43c0`).
+    #[test]
+    fn descriptor_bit_4_does_not_mirror_the_rows() {
+        // 2×2, 24-bit, blue and red over green and white.
+        let px = [
+            255, 0, 0, /* blue */ 0, 0, 255, /* red */
+            0, 255, 0, /* green */ 255, 255, 255, /* white */
+        ];
+        for origin in [0x00, 0x20] {
+            let plain = tga_to_rgba(&tga(2, 2, 2, 24, origin, &px)).unwrap();
+            let bit4 = tga_to_rgba(&tga(2, 2, 2, 24, origin | 0x10, &px)).unwrap();
+            assert_eq!(bit4, plain, "origin bits {origin:#04x}");
+        }
+        // Stored left to right, top row first, as a top-origin file lists it.
+        let (_, _, rgba) = tga_to_rgba(&tga(2, 2, 2, 24, 0x30, &px)).unwrap();
+        assert_eq!(
+            rgba,
+            vec![
+                0, 0, 255, 255, 255, 0, 0, 255, //
+                0, 255, 0, 255, 255, 255, 255, 255,
+            ]
+        );
+        // The run-length reader orients the same way.
+        let rle = [0x80, 255, 0, 0, 0x80, 0, 0, 255];
+        let plain = tga_to_rgba(&tga(10, 2, 1, 24, 0x20, &rle)).unwrap();
+        assert_eq!(tga_to_rgba(&tga(10, 2, 1, 24, 0x30, &rle)).unwrap(), plain);
+    }
+
+    /// `0x5a37e0` admits a truecolour image (types 2 and 10, from `0x5a3ace` and `0x5a3ae9`) only
+    /// when its depth less its alpha bits is 24; `0x5a37c5` first clears the 8 alpha bits a 24-bit
+    /// image declares. A 32-bit image with no alpha bits fails at `0x5a3809`.
+    #[test]
+    fn a_truecolour_depth_less_alpha_bits_must_be_24() {
+        let bgr = [255, 0, 0];
+        let bgra = [255, 0, 0, 77];
+        // 24 bits with no alpha bits, or with 8 (cleared): opaque.
+        for alpha_bits in [0, 8] {
+            let (_, _, rgba) = tga_to_rgba(&tga(2, 1, 1, 24, 0x20 | alpha_bits, &bgr)).unwrap();
+            assert_eq!(
+                rgba,
+                vec![0, 0, 255, 255],
+                "24-bit, alpha bits {alpha_bits}"
+            );
+        }
+        // 32 bits with 8 alpha bits: byte 3 is alpha.
+        let (_, _, rgba) = tga_to_rgba(&tga(2, 1, 1, 32, 0x28, &bgra)).unwrap();
+        assert_eq!(rgba, vec![0, 0, 255, 77]);
+        let rle = [0x80, 255, 0, 0, 77];
+        let (_, _, rgba) = tga_to_rgba(&tga(10, 1, 1, 32, 0x28, &rle)).unwrap();
+        assert_eq!(rgba, vec![0, 0, 255, 77]);
+
+        // 32 bits with no alpha bits: 32 - 0 is not 24.
+        for (image_type, data) in [(2, &bgra[..]), (10, &rle[..])] {
+            let err = tga_to_rgba(&tga(image_type, 1, 1, 32, 0x20, data)).unwrap_err();
+            assert!(
+                err.to_string().contains("alpha bits"),
+                "type {image_type}: {err}"
+            );
+        }
+        // Any other pair that does not leave 24 is refused, whatever the bytes could mean.
+        for (bpp, alpha_bits) in [(32, 4), (32, 1), (24, 4), (24, 1), (16, 0), (16, 1)] {
+            assert!(
+                tga_to_rgba(&tga(2, 1, 1, bpp, 0x20 | alpha_bits, &bgra)).is_err(),
+                "{bpp} bits, {alpha_bits} alpha bits"
+            );
+        }
+    }
+
+    /// The addon corpus: every TGA that a descriptor bit 4 would change decodes the same without
+    /// it, and every truecolour TGA whose depth less its alpha bits is not 24 (with `0x5a37c5`'s
+    /// 24-bit case first cleared) is refused, as `0x5a37e0` refuses it.
+    #[test]
+    fn addon_tgas_follow_the_references_descriptor_rules() {
+        let corpus = crate::addon_corpus_or_skip!();
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("tga"))
+                {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&corpus, &mut files);
+        assert!(
+            files.len() > 100,
+            "only {} TGAs under {corpus:?}",
+            files.len()
+        );
+        let (mut decoded, mut refused) = (0usize, 0usize);
+        for path in files {
+            let Ok(mut bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if bytes.len() < 18 {
+                continue;
+            }
+            let (image_type, bpp, mut alpha_bits) = (bytes[2], bytes[16], bytes[17] & 0xf);
+            if bpp == 24 && alpha_bits == 8 {
+                alpha_bits = 0;
+            }
+            let result = tga_to_rgba(&bytes);
+            if matches!(image_type, 2 | 10) && usize::from(bpp) != 24 + usize::from(alpha_bits) {
+                assert!(
+                    result.is_err(),
+                    "{path:?}: {bpp} bits, {alpha_bits} alpha bits"
+                );
+                refused += 1;
+            }
+            if let Ok(decoded_plain) = result {
+                bytes[17] |= 0x10;
+                let with_bit_4 = tga_to_rgba(&bytes).unwrap();
+                assert_eq!(with_bit_4, decoded_plain, "{path:?}");
+                decoded += 1;
+            }
+        }
+        assert!(decoded > 100, "only {decoded} TGAs decoded");
+        eprintln!("{decoded} corpus TGAs decode, {refused} are refused by depth");
+    }
+
     #[test]
     fn garbage_and_unsupported_types_are_loud_misses() {
         assert!(tga_to_rgba(b"BLP2xxxxxxxxxxxxxxxxxx").is_err()); // a BLP is not a TGA
         assert!(tga_to_rgba(&[0u8; 4]).is_err()); // truncated header
         assert!(tga_to_rgba(&tga(1, 2, 2, 8, 0, &[0; 32])).is_err()); // colour-mapped, no map
         assert!(tga_to_rgba(&tga(2, 2, 2, 16, 0, &[0; 32])).is_err()); // 16-bit
-        assert!(tga_to_rgba(&tga(2, 2, 2, 32, 0, &[0; 4])).is_err()); // truncated pixels
+        assert!(tga_to_rgba(&tga(2, 2, 2, 32, 8, &[0; 4])).is_err()); // truncated pixels
     }
 }
