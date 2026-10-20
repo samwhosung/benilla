@@ -548,16 +548,13 @@ fn the_race_group_skips_the_other_side_s_nodes() {
     assert_eq!(types(Some((8, &factions))), all, "a race with no row");
     assert_eq!(types(None), all, "no player");
 
-    // Group 3: 11 goes the long road behind 7; 2 keeps its direct path's count, price and
-    // activate, with no line.
+    // Group 3: 11 goes the long road behind 7; 2, never routed, keeps its direct path's count and
+    // price, with no line and no route.
     let (_, ui, resolved) =
         build_nodes_for(&open, &cat, Some(0.0), Some((1, &factions))).expect("map builds");
     assert_eq!(resolved[10].chain, vec![1, 7, 11]);
-    assert_eq!(
-        resolved[1].chain,
-        vec![1, 2],
-        "TakeTaxiNode's direct activate"
-    );
+    assert_eq!(resolved[1].node, 2);
+    assert!(resolved[1].chain.is_empty());
     assert!(ui[1].routes.is_empty());
     assert_eq!(ui[1].cost, 20);
     let s = vm_of(ui);
@@ -575,7 +572,8 @@ fn a_known_node_with_no_route_stays_listed_as_none() {
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let cat = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
     let (_, ui, resolved) = build_nodes(&open_at(7, &[2, 7]), &cat, Some(0.0)).expect("map");
-    assert!(resolved[0].chain.is_empty(), "TakeTaxiNode sends nothing");
+    assert_eq!(resolved[0].node, 2);
+    assert!(resolved[0].chain.is_empty(), "no route");
     let pos = ui[0].pos;
     let s = vm_of(ui);
     let text = |lua: &str| s.eval::<String>(lua).unwrap();
@@ -609,11 +607,7 @@ fn shipped_routes_follow_the_flight_paths_length() {
         (&horde[..], 10, 21, vec![10, 13, 17, 21], 1490),
     ] {
         let (_, ui, resolved) = build_nodes(&open_at(from, known), &cat, Some(0.0)).expect("map");
-        let i = ui
-            .iter()
-            .zip(&resolved)
-            .position(|(_, r)| r.chain.last() == Some(&to))
-            .expect("listed");
+        let i = resolved.iter().position(|r| r.node == to).expect("listed");
         assert_eq!(resolved[i].chain, want, "{from} to {to}");
         assert_eq!(
             (resolved[i].cost, ui[i].cost),
@@ -714,5 +708,5 @@ fn shipped_maps_skip_the_other_faction_s_flight_points() {
     let crossroads = index_of(&ui, "Crossroads, The Barrens");
     assert_eq!(type_of(&ui, "Crossroads, The Barrens"), "NONE");
     assert_eq!(ui[crossroads].cost, 110);
-    assert_eq!(resolved[crossroads].chain, vec![80, 25]);
+    assert!(resolved[crossroads].chain.is_empty());
 }

@@ -213,14 +213,15 @@ fn feed_taxi(
                 .zip(relations.factions())
                 .map(|(me, factions)| (me.race, factions.catalog()));
             let (map_id, nodes, resolved) = build_nodes_for(open, &catalogs, discount, player)?;
-            cache.0 = resolved;
+            cache.current = open.nearest_node;
+            cache.slots = resolved;
             Some(TaxiUiState {
                 art: format!("Interface\\TaxiFrame\\TAXIMAP{map_id}"),
                 nodes,
             })
         });
         if fresh.is_none() {
-            cache.0.clear();
+            cache.slots.clear();
         }
 
         // The flight master's name is tracked so its landing re-fires `TAXIMAP_OPENED`, whose stock
@@ -279,17 +280,22 @@ fn feed_on_taxi(
     })
 }
 
-/// Drain the Lua intents. `TakeTaxiNode(i)` sends `CMSG_ACTIVATETAXI` when a direct `TaxiPath`
-/// edge joins the current node and the target, whatever route the search found, and otherwise
-/// `CMSG_ACTIVATETAXIEXPRESS` with the chain and its fare, as the reference's `0x4dbad0` test
-/// decides; the `Current` node sends nothing. `CloseTaxiMap()` runs the core, with no packet.
+/// Drain the Lua intents. `TakeTaxiNode(i)` (`0x4dc8d0`) takes a slot under the count
+/// (`0x4dc8dc`), then in order: a mounted player is refused with `0xb2`,
+/// `ERR_TAXIPLAYERALREADYMOUNTED` (`0x4dc909`-`0x4dc918`), and the current node with `0xaa`,
+/// `ERR_TAXISAMENODE` (`0x4dc939`-`0x4dc942`); a `TaxiPath` from the current node to the slot's
+/// sends `CMSG_ACTIVATETAXI`, routed or not (`0x4dc952`, `0x4dc9be`); else the slot's route sends
+/// `CMSG_ACTIVATETAXIEXPRESS` with its raw fare sum (`0x4dc965`-`0x4dc98e`). `CloseTaxiMap()` runs
+/// the core, with no packet.
 fn drain_taxi(
     mut hosted_vm: crate::script_calls::HostedVm,
     state: Res<TaxiState>,
     cache: Res<TaxiRouteCache>,
     catalogs: Option<Res<TaxiCatalogs>>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
     mut world_commands: Commands,
+    mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -297,39 +303,50 @@ fn drain_taxi(
         };
         for idx in script.take_taxi_node() {
             let Some(open) = &state.open else { continue };
-            let Some(resolved) = idx.checked_sub(1).and_then(|i| cache.0.get(i)) else {
+            let Some(slot) = idx.checked_sub(1).and_then(|i| cache.slots.get(i)) else {
                 continue;
             };
-            let chain = resolved.chain.as_slice();
-            let (Some(&src), Some(&dest)) = (chain.first(), chain.last()) else {
-                continue;
+            // `UNIT_FIELD_MOUNTDISPLAYID` read signed (`[+0x110]+0x1fc`, `jle` at `0x4dc911`).
+            let mounted = self_q
+                .iter()
+                .next()
+                .is_some_and(|s| s.0.unit_mount_display_id() as i32 > 0);
+            let refusal = if mounted {
+                Some("ERR_TAXIPLAYERALREADYMOUNTED")
+            } else if slot.node == cache.current {
+                Some("ERR_TAXISAMENODE")
+            } else {
+                None
             };
-            if src == dest {
-                debug!("ui_taxi: TakeTaxiNode({idx}) is the current node — ignored");
+            if let Some(key) = refusal {
+                debug!("ui_taxi: TakeTaxiNode({idx}) refused — {key}");
+                let line = crate::ui_action::keyed_line(script, key);
+                crate::ui_action::show_messages(script, &mut sink, "ui_taxi", line);
                 continue;
             }
+            let (src, dest) = (cache.current, slot.node);
             let direct = catalogs
                 .as_ref()
                 .is_some_and(|c| c.paths.between(src, dest).is_some());
             if direct {
                 debug!(
-                    "ui_taxi: activate {src} -> {dest} (direct edge, {} copper)",
-                    resolved.cost
+                    "ui_taxi: activate {src} -> {dest} (direct path, {} copper)",
+                    slot.cost
                 );
                 let _ = commands.0.send(ClientCommand::ActivateTaxi {
                     guid: open.flightmaster,
                     source_node: src,
                     dest_node: dest,
                 });
-            } else {
+            } else if !slot.chain.is_empty() {
                 debug!(
-                    "ui_taxi: activate express {chain:?} ({} copper)",
-                    resolved.cost
+                    "ui_taxi: activate express {:?} ({} copper)",
+                    slot.chain, slot.cost
                 );
                 let _ = commands.0.send(ClientCommand::ActivateTaxiExpress {
                     guid: open.flightmaster,
-                    total_cost: resolved.cost,
-                    nodes: chain.to_vec(),
+                    total_cost: slot.cost,
+                    nodes: slot.chain.clone(),
                 });
             }
         }

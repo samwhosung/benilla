@@ -133,17 +133,31 @@ fn take(
 }
 
 /// The feed filters the route search by the player's race (`0x4dbd2d`-`0x4dbd56`): a human at
-/// Ratchet gets no route to the Horde-only Crossroads, though a path joins the two.
+/// Ratchet gets no route to the Horde-only Crossroads, though a path joins the two. The take tests
+/// the path, not the route (`0x4dc952`), so it still activates.
 #[test]
 fn the_feed_filters_the_route_search_by_the_player_s_race() {
     let data = benilla_formats::wow_data_or_skip!();
-    let (mut app, _rx) = taxi_app(&data, 80, &[25, 80], 1, 0);
+    let (mut app, rx) = taxi_app(&data, 80, &[25, 80], 1, 0);
     app.world_mut().run_system_once(feed_taxi).unwrap();
     let crossroads = slot_of(&mut app, "Crossroads, The Barrens");
     assert_eq!(
         eval::<String>(&mut app, &format!("return TaxiNodeGetType({crossroads})")),
         "NONE"
     );
+    let (sent, shown) = take(&mut app, &rx, crossroads);
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ClientCommand::ActivateTaxi {
+                guid: MASTER,
+                source_node: 80,
+                dest_node: 25
+            }]
+        ),
+        "{sent:?}"
+    );
+    assert!(shown.is_empty());
 }
 
 /// `TakeTaxiNode` refuses a mounted player first, with `0xb2` (`0x4dc909`-`0x4dc918`), then the

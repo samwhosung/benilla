@@ -271,17 +271,22 @@ fn shown_fare(price: u32, discount: f64) -> u32 {
     f64::from(product).round_ties_even() as u32
 }
 
-/// A listed node's route for `drain_taxi`, which sends the direct activate when a path joins the
-/// chain's ends, the express with the chain and its raw fare sum otherwise (`0x4dc8d0`), and
-/// nothing for an empty chain.
+/// A listed node as `TakeTaxiNode` (`0x4dc8d0`) reads its slot: the node, and its route from the
+/// current node (`+0x14`, `+0x18`), empty when never routed, with the route's raw fare sum
+/// (`+0x10`).
 pub(super) struct ResolvedTaxiNode {
+    pub(super) node: u32,
     pub(super) chain: Vec<u32>,
     pub(super) cost: u32,
 }
 
-/// The pushed node list's routes, index for index, so `TakeTaxiNode(i)` finds its route.
+/// The pushed node list's slots, index for index, so `TakeTaxiNode(i)` finds its own, and the
+/// current node (`[0xbb4a80]`).
 #[derive(Resource, Default)]
-pub(super) struct TaxiRouteCache(pub(super) Vec<ResolvedTaxiNode>);
+pub(super) struct TaxiRouteCache {
+    pub(super) current: u32,
+    pub(super) slots: Vec<ResolvedTaxiNode>,
+}
 
 /// The listed nodes, as the builder `0x4db710` makes its slots: every known id from 1 to 256
 /// whose `TaxiNodes` row lies on the current node's continent and inside its taxi rect, ends
@@ -374,14 +379,11 @@ pub(super) fn build_nodes_for(
             routes,
             num_routes,
         });
-        // `TakeTaxiNode` (`0x4dc8d0`): a direct path activates whether or not routed, a route goes
-        // express, and an unrouted slot without a path sends nothing.
-        let chain = match (route, direct) {
-            (Some(route), _) => route.chain,
-            (None, Some(_)) => vec![current.id, n.id],
-            (None, None) => Vec::new(),
-        };
-        resolved.push(ResolvedTaxiNode { chain, cost: fare });
+        resolved.push(ResolvedTaxiNode {
+            node: n.id,
+            chain: route.map_or_else(Vec::new, |route| route.chain),
+            cost: fare,
+        });
     }
     Some((current.map_id, ui, resolved))
 }
