@@ -3,7 +3,10 @@
 
 use std::collections::HashMap;
 
-use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_FLAGS, FIELD_UNIT_NPC_FLAGS};
+use benilla_protocol::field::{
+    FIELD_UNIT_BYTES_1, FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH,
+    FIELD_UNIT_NPC_FLAGS,
+};
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{ContainerSlot, ContainerState, MerchantItem, MerchantState, UiScript};
 use benilla_world::interact::WorldRightClick;
@@ -65,9 +68,38 @@ impl Fix {
         unit
     }
 
-    /// The press `latch_press_pick` leaves for a click begun on `unit`; `unable` is the cursor's
-    /// range gray.
-    fn press_on(&mut self, unit: Entity, guid: u64, attack: bool, unable: bool) {
+    /// The press `latch_press_pick` leaves for a click begun on `unit`, the classifier's cursor.
+    fn press_on(&mut self, unit: Entity, guid: u64, attack: bool) {
+        self.latch(
+            unit,
+            guid,
+            attack,
+            cursor_mode::WorldCursor {
+                kind: if attack {
+                    cursor_mode::CursorKind::Attack
+                } else {
+                    cursor_mode::CursorKind::Speak
+                },
+                unable: false,
+            },
+        );
+    }
+
+    /// The same press with a spell cursor up: the cursor the press latched is the spell's, and
+    /// `unable` is its verdict on the unit, whatever the interaction's own range says.
+    fn press_under_spell(&mut self, unit: Entity, guid: u64, attack: bool, unable: bool) {
+        self.latch(
+            unit,
+            guid,
+            attack,
+            cursor_mode::WorldCursor {
+                kind: cursor_mode::CursorKind::Cast,
+                unable,
+            },
+        );
+    }
+
+    fn latch(&mut self, unit: Entity, guid: u64, attack: bool, cursor: cursor_mode::WorldCursor) {
         *self.app.world_mut().resource_mut::<PressPick>() = PressPick {
             hovered: Hovered {
                 target: Some(unit),
@@ -75,14 +107,7 @@ impl Fix {
                 distance: 3.0,
                 ..Hovered::default()
             },
-            cursor: cursor_mode::WorldCursor {
-                kind: if attack {
-                    cursor_mode::CursorKind::Attack
-                } else {
-                    cursor_mode::CursorKind::Speak
-                },
-                unable,
-            },
+            cursor,
             attack_fork: cursor_mode::AttackFork(attack),
             ..PressPick::default()
         };
@@ -100,7 +125,10 @@ impl Fix {
             .expect("the right-click runs");
     }
 
-    /// A right-click on `unit`'s nameplate, begun on what `press_on` latched.
+    /// A right-click on `unit`'s nameplate, begun on what the press latched, through the systems
+    /// in the schedule's order (`plate_right_click_runs_after_the_script_calls_head` pins it):
+    /// the click's `SelectTarget`, the head of the script calls' pass that binds what it parked,
+    /// then the unit's interact.
     fn plate_right_click(&mut self, unit: Entity) {
         self.app
             .world_mut()
@@ -111,10 +139,11 @@ impl Fix {
             .world_mut()
             .run_system_once(click::select_on_plate_click)
             .expect("the plate click runs");
+        self.bind();
         self.app
             .world_mut()
-            .run_system_once(click::act_on_right_click)
-            .expect("the right-click runs");
+            .run_system_once(click::act_on_interact)
+            .expect("the unit's interact runs");
     }
 
     /// Everything sent since the last look.
@@ -222,7 +251,7 @@ fn a_shapeshifted_player_cannot_talk_to_an_npc() {
         (2, Some(0x8), false),
         (3, Some(0x1), false),
     ] {
-        for unable in [false, true] {
+        for far in [false, true] {
             let mut f = fix(false);
             f.app.world_mut().init_resource::<crate::player::Player>();
             let mut spells = crate::ui_action::Spells::empty_for_tests();
@@ -237,16 +266,20 @@ fn a_shapeshifted_player_cannot_talk_to_an_npc() {
             }
             f.app.world_mut().insert_resource(spells);
             f.merge_mine(&[(FIELD_UNIT_BYTES_1, form << 16)]);
-            let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
-            f.press_on(npc, NPC, false, unable);
+            let npc = f.unit_with(
+                NPC,
+                if far { 20.0 } else { 3.0 },
+                &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)],
+            );
+            f.press_on(npc, NPC, false);
             f.right_click();
-            let what = format!("form {form}, row {flags:?}, out of reach {unable}");
+            let what = format!("form {form}, row {flags:?}, out of reach {far}");
             if refused {
                 assert_eq!(f.errors(), ["ERR_CANT_INTERACT_SHAPESHIFTED"], "{what}");
                 assert!(!greeted(&f.sent(), NPC), "{what}");
             } else {
                 assert!(f.errors().is_empty(), "{what}: {:?}", f.errors());
-                assert_eq!(greeted(&f.sent(), NPC), !unable, "{what}");
+                assert_eq!(greeted(&f.sent(), NPC), !far, "{what}");
             }
         }
     }
@@ -273,7 +306,7 @@ fn a_right_click_attack_is_refused_by_start_attacks_own_gates() {
         }
         f.merge_mine(&[(FIELD_UNIT_FLAGS, 0x8 | flags)]);
         let foe = f.unit_with(FOE, 3.0, &[]);
-        f.press_on(foe, FOE, true, false);
+        f.press_on(foe, FOE, true);
         f.right_click();
         let sent = f.sent();
         assert_eq!(swung_at(&sent, FOE), swings, "{what}: {sent:?}");
@@ -311,7 +344,7 @@ fn a_charmed_players_world_right_click_does_nothing_and_a_plates_still_interacts
         let mut f = fix(charmed);
         f.app.world_mut().init_resource::<crate::player::Player>();
         let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
-        f.press_on(npc, NPC, false, false);
+        f.press_on(npc, NPC, false);
         if plate {
             f.plate_right_click(npc);
         } else {
@@ -355,36 +388,161 @@ fn a_charmed_players_ground_right_click_walks_nowhere() {
     }
 }
 
+/// The wire's commands that mark a plate right-click's steps, in the order they went out.
+fn steps(sent: &[ClientCommand]) -> Vec<&'static str> {
+    sent.iter()
+        .filter_map(|c| match c {
+            ClientCommand::CastSpell {
+                target: Some(_), ..
+            } => Some("cast"),
+            ClientCommand::SetSelection { .. } => Some("select"),
+            ClientCommand::AttackSwing { .. } => Some("swing"),
+            ClientCommand::GossipHello { .. } => Some("gossip"),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A plate's right-click (`0x7cb910` → `0x4949f0` action 4 → `0x492820`) runs `SelectTarget`
-/// (`0x492870`), which binds a standing targeting cursor's cast to the unit and returns, and then
-/// the unit's interact (`0x492881`); no world-frame press came first to cancel the cursor
+/// (`0x492870`), which with a targeting cursor up binds its cast to the unit (`0x6e5b40`, which
+/// empties the word and sends) and returns; then the unit's interact (`0x492881`) runs, and its
+/// attack leg's own `SelectTarget` (`0x5eccaa`) finds no cursor, so it selects, and swings. The
+/// wire reads cast, select, swing; and cast, gossip on the service leg, which selects nothing.
+/// With no cursor the select comes first. No world-frame press came first to cancel the cursor
 /// (`0x492c20`).
 #[test]
-fn a_plate_right_click_with_the_cursor_up_binds_its_unit_and_interacts() {
-    let mut f = fix(false);
-    f.app.world_mut().init_resource::<crate::player::Player>();
-    f.cursor_up();
-    let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
-    f.press_on(npc, NPC, false, false);
-    f.plate_right_click(npc);
-    f.bind();
-    let sent = f.sent();
-    assert!(
-        sent.iter().any(|c| matches!(
-            c,
-            ClientCommand::CastSpell { spell_id, target: Some(NPC) } if *spell_id == super::front_tests::HEAL
-        )),
-        "the heal is bound to the plate's unit: {sent:?}"
-    );
-    assert!(
-        greeted(&sent, NPC),
-        "and the unit's interact runs: {sent:?}"
-    );
-    assert!(!sent
-        .iter()
-        .any(|c| matches!(c, ClientCommand::SetSelection { .. })));
-    assert_eq!(f.selected(), Some(OLD));
-    assert!(!f.cursor_is_up());
+fn a_plate_right_click_binds_then_selects_then_acts_in_the_references_order() {
+    // (the leg, the cursor is up, the wire's steps)
+    for (attack, cursor, want) in [
+        (true, true, vec!["cast", "select", "swing"]),
+        (true, false, vec!["select", "swing"]),
+        (false, true, vec!["cast", "gossip"]),
+        (false, false, vec!["select", "gossip"]),
+    ] {
+        let mut f = fix(false);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        if cursor {
+            f.cursor_up();
+        }
+        let (guid, fields): (u64, &[(u16, u32)]) = if attack {
+            (FOE, &[])
+        } else {
+            (NPC, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)])
+        };
+        let unit = f.unit_with(guid, 3.0, fields);
+        f.press_on(unit, guid, attack);
+        f.plate_right_click(unit);
+        let sent = f.sent();
+        let what = format!("attack leg {attack}, cursor up {cursor}: {sent:?}");
+        assert_eq!(steps(&sent), want, "{what}");
+        if cursor {
+            assert!(
+                sent.iter().any(|c| matches!(
+                    c,
+                    ClientCommand::CastSpell { spell_id, target: Some(t) }
+                        if *spell_id == super::front_tests::HEAL && *t == guid
+                )),
+                "the heal is bound to the plate's unit: {what}"
+            );
+            assert!(!f.cursor_is_up(), "{what}");
+        }
+        let selected = if attack || !cursor {
+            Some(guid)
+        } else {
+            Some(OLD)
+        };
+        assert_eq!(f.selected(), selected, "{what}");
+    }
+}
+
+/// A unit `x` yd off under a press that latched a spell cursor with `spell_unable` as its
+/// verdict, against the interact's own range: (the unit's distance, the verdict, in reach). The
+/// verdict says the opposite of the range in both rows.
+const REACH_CASES: [(f32, bool, bool); 2] = [(3.0, true, true), (20.0, false, false)];
+
+const CORPSE: u64 = 0x53;
+
+/// `0x5f0130` takes the player-to-unit distance (`0x5f01b9`-`0x5f01fd`) against 5.5556 yd, not
+/// the spell cursor's verdict the press latched.
+#[test]
+fn the_talk_leg_measures_its_own_reach_not_the_spell_cursors() {
+    for (x, spell_unable, in_reach) in REACH_CASES {
+        let mut f = fix(false);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        let npc = f.unit_with(NPC, x, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
+        f.press_under_spell(npc, NPC, false, spell_unable);
+        f.right_click();
+        assert_eq!(
+            greeted(&f.sent(), NPC),
+            in_reach,
+            "at {x} yd, the spell cursor unable {spell_unable}"
+        );
+    }
+}
+
+/// Loot rides `CanLootNow` (`0x5ec110`), the melee reach.
+#[test]
+fn the_loot_leg_measures_its_own_reach_not_the_spell_cursors() {
+    for (x, spell_unable, in_reach) in REACH_CASES {
+        let mut f = fix(false);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        let body = f.unit_with(
+            CORPSE,
+            x,
+            &[(FIELD_UNIT_HEALTH, 0), (FIELD_UNIT_DYNAMIC_FLAGS, 0x1)],
+        );
+        f.press_under_spell(body, CORPSE, false, spell_unable);
+        f.right_click();
+        let looted = f
+            .sent()
+            .iter()
+            .any(|c| matches!(c, ClientCommand::Loot { guid: CORPSE }));
+        assert_eq!(
+            looted, in_reach,
+            "at {x} yd, the spell cursor unable {spell_unable}"
+        );
+    }
+}
+
+/// Skin rides the melee reach: out of it the click walks there (`0x5f06a1`) and casts nothing, in
+/// it the click casts.
+#[test]
+fn the_skin_leg_measures_its_own_reach_not_the_spell_cursors() {
+    const SKINNING: u32 = 8613;
+    for (x, spell_unable, in_reach) in REACH_CASES {
+        let mut f = fix(false);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        f.app
+            .world_mut()
+            .resource_mut::<crate::player::Approach>()
+            .enabled = true;
+        f.app
+            .world_mut()
+            .resource_mut::<crate::ui_action::LearnedAbilities>()
+            .skinning = Some(SKINNING);
+        let body = f.unit_with(
+            CORPSE,
+            x,
+            &[
+                (FIELD_UNIT_HEALTH, 0),
+                (FIELD_UNIT_FLAGS, cursor_mode::UNIT_FLAG_SKINNABLE),
+            ],
+        );
+        f.press_under_spell(body, CORPSE, false, spell_unable);
+        f.right_click();
+        let cast = !f
+            .app
+            .world()
+            .resource::<crate::ui_action::ClickCasts>()
+            .0
+            .is_empty();
+        let walking = f.app.world().resource::<crate::player::Approach>().active();
+        assert_eq!(
+            (cast, walking),
+            (in_reach, !in_reach),
+            "at {x} yd, the spell cursor unable {spell_unable}"
+        );
+    }
 }
 
 /// The router's legs for a payload still held at the release (`0x481f60`): the ground and nothing

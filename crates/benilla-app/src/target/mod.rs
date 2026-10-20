@@ -350,19 +350,18 @@ impl Plugin for TargetPlugin {
                     crate::spell::targeting::commit_ground_cast_on_click,
                     crate::spell::targeting::commit_object_cast_on_click,
                     // The verb a walk owes runs at its stop, ahead of this frame's click.
-                    (
-                        click::act_on_arrival,
-                        click::act_on_right_click,
-                        click::act_on_interact,
-                    )
-                        .chain(),
+                    (click::act_on_arrival, click::act_on_right_click).chain(),
                     // The loot close's guid-scoped deselect.
                     click::clear_target_requests,
                     // The script calls that touch the selection, the cast or the targeting cursor
                     // (`TargetUnit`, `/target`, `ClearTarget`, `/cast`, `UseAction`, …), applied
-                    // in the order the script made them; then `DropItemOnUnit`'s pet leg.
+                    // in the order the script made them; then the unit interact of a nameplate's
+                    // right-click and a crate's `Interact`, after the pass's head bound the
+                    // cursor's parked picks (the cast goes out ahead of the interact it came
+                    // with); then `DropItemOnUnit`'s pet leg.
                     (
                         crate::script_calls::apply_script_calls,
+                        click::act_on_interact,
                         crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),

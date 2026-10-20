@@ -33,12 +33,14 @@ pub(super) fn world_right_click_payload(
     }
 }
 
-/// A right-click begun on a nameplate, replayed for [`act_on_right_click`]: the plate's
-/// click slot (`0x7cb910`) goes to `0x4949f0` and so to `InteractWithObjectByClick` (`0x492820`),
-/// not through the world click router (`0x481f60`), whose charmed return and payload legs it
-/// skips.
+/// A right-click begun on a nameplate, replayed for [`act_on_interact`]: the plate's click slot
+/// (`0x7cb910`) goes to `0x4949f0` and so to `InteractWithObjectByClick` (`0x492820`), not
+/// through the world click router (`0x481f60`), whose charmed return and payload legs it skips.
+/// It carries what the click's `SelectTarget` (`0x492870`) did, which ran at the click.
 #[derive(Message, Clone, Copy)]
-pub(super) struct PlateRightClick;
+pub(super) struct PlateRightClick {
+    pub(super) selected: scan::CommitOutcome,
+}
 
 /// A plate click is a click on its unit (the click slot `0x7cb910`). The left button carries the
 /// plate's unit, as a scripted `plate:Click()` (pfUI, `nameplates.lua:1228`) has no cursor; the
@@ -47,10 +49,11 @@ pub(super) struct PlateRightClick;
 ///
 /// The left click is the body click's select (`0x4949f0` action 1 → `0x4925d0` → `SelectTarget`
 /// `0x49280c`), so with the targeting cursor up the unit goes to the cast's bind and the target
-/// stays ([`super::front`]). The right is the interact (`0x492820`), whose `SelectTarget`
-/// (`0x492870`) binds the same way and then runs the unit's interact either way
-/// ([`act_on_right_click`]); the plate's press never reached the world frame's right-press
-/// targeting cancel (`0x492c20`), so the cursor stands up to here.
+/// stays ([`super::front`]). The right is the interact (`0x492820`): its `SelectTarget`
+/// (`0x492870`) runs here and binds the same way, and the unit's interact (`0x492881`) follows
+/// either way, in [`act_on_interact`], after the bind has emptied the cursor's word; the plate's
+/// press never reached the world frame's right-press targeting cancel (`0x492c20`), so the cursor
+/// stands up to here.
 pub(super) fn select_on_plate_click(
     mut plate: ResMut<crate::vplates::PlateClicks>,
     press: Res<PressPick>,
@@ -93,8 +96,29 @@ pub(super) fn select_on_plate_click(
             attack,
         );
     }
-    if right.into_iter().any(|e| press.hovered.target == Some(e)) {
-        right_clicks.write(PlateRightClick);
+    for entity in right {
+        // The press pick must name it: a scripted click has no cursor to interact by.
+        if press.hovered.target != Some(entity) {
+            continue;
+        }
+        let Ok((guid, store)) = units.get(entity) else {
+            continue;
+        };
+        let selected = if front.takes(entity, guid.0, seam.slots.targeting()) {
+            scan::CommitOutcome::default()
+        } else {
+            scan::commit(
+                &mut selection,
+                &mut seam,
+                entity,
+                guid.0,
+                store,
+                engaged,
+                self_guid,
+                press.attack(),
+            )
+        };
+        right_clicks.write(PlateRightClick { selected });
     }
 }
 
@@ -324,6 +348,28 @@ impl Dispatch<'_, '_> {
             (Some((it, _)), Some(me)) => cursor_mode::melee_reach(it, me),
             _ => cursor_mode::MELEE_FLOOR,
         }
+    }
+
+    // The unit legs measure their own reach, as the reference's dispatchers do, never the
+    // press's latched cursor: with a spell cursor up at the press that gray is the spell's
+    // verdict (`spell::targeting::cursor`), not the interaction's.
+
+    /// `0x5f0130`'s range test (`0x5f01b9`-`0x5f01fd`, `0x5f0238`): centre to centre against
+    /// 5.5556 yd squared, boundary-inclusive, a NaN passing.
+    fn in_service_reach(&self, target: Entity) -> bool {
+        let d2 = self.dist_sq(target).unwrap_or(f32::INFINITY);
+        d2.is_nan() || d2 <= SERVICE_RANGE_SQ
+    }
+
+    /// Inside the melee reach, which the skin cast's range rides (`0x6e3480`).
+    fn in_melee_reach(&self, target: Entity) -> bool {
+        let reach = self.melee_reach(target);
+        self.dist_sq(target).is_some_and(|d2| d2 <= reach * reach)
+    }
+
+    /// `CanLootNow 0x5ec110`: the melee reach, skipped under `CanAutoInteract` (`0x5ec11b`).
+    fn can_loot_unit(&self, target: Entity) -> bool {
+        self.auto.can_auto_interact() || self.in_melee_reach(target)
     }
 
     fn approach(
@@ -624,7 +670,7 @@ impl Dispatch<'_, '_> {
     /// nothing else, no walk and no gesture, in reach or not. Out of the 5.5556 yd reach it then
     /// walks there when `walk`, returning before the ladder and the gesture (`0x5f022f`), and
     /// otherwise sends nothing.
-    fn talk(&mut self, entity: Entity, guid: u64, in_reach: bool, walk: bool) {
+    fn talk(&mut self, entity: Entity, guid: u64, walk: bool) {
         if self.shapeshifted_from_npcs() {
             debug!("right-click interact: {guid:#x} — refused, shapeshifted");
             self.feedback.errors.0.push(crate::ui_action::UiError::key(
@@ -632,7 +678,7 @@ impl Dispatch<'_, '_> {
             ));
             return;
         }
-        if !in_reach {
+        if !self.in_service_reach(entity) {
             if walk {
                 self.approach(
                     crate::player::ApproachVerb::Talk,
@@ -732,24 +778,19 @@ impl Dispatch<'_, '_> {
     }
 }
 
-/// The right-click on the press pick, by the entry it came in by. A nameplate's click enters at
-/// `0x4949f0` and is the INTERACT leg `0x492820` alone: select the unit, which a charmed player or
-/// a standing targeting cursor takes in its place, then [`interact`] either way. A world click
-/// goes through the router (`0x481f60`): a charmed player takes the nothing leg with zero points
-/// (`0x481f98`, `0x48204e`), so nothing is selected, interacted with or walked to; otherwise the
-/// ground and the sky walk (`0x5e0378`, `0x492d50`) and an object takes `0x492820`.
+/// The world click router (`0x481f60`) on the press pick, for a right-click. A charmed player
+/// takes the nothing leg with zero points (`0x481f98`, `0x48204e`), so nothing is selected,
+/// interacted with or walked to; otherwise the ground and the sky walk (`0x5e0378`, `0x492d50`)
+/// and an object takes the INTERACT leg `0x492820`: select it, then [`interact`]. A nameplate's
+/// click does not come through here ([`PlateRightClick`]).
 pub(super) fn act_on_right_click(
     mut clicks: MessageReader<WorldRightClick>,
-    mut plate_clicks: MessageReader<PlateRightClick>,
     // The press pick: the reference picks once, on the down edge (`0x481f00`).
     press: Res<PressPick>,
     mut selection: ResMut<Selection>,
     mut dispatch: Dispatch,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
 ) {
-    if plate_clicks.read().last().is_some() {
-        interact(&mut dispatch, &press, Select::First(&mut selection));
-    }
     if clicks.read().last().is_none() || dispatch.seam.player_is_charmed() {
         return;
     }
@@ -771,19 +812,34 @@ pub(super) fn act_on_right_click(
 }
 
 /// Where [`interact`] selects its unit, if it does: the world click's entry (`0x492820`) selects
-/// first, whatever leg follows; a crate's [`Interact`] runs the dispatcher alone, and only its
-/// attack leg selects, through StartAttack (`0x5ecb70`, `SetSelection` at `0x5eccaa`).
+/// first, whatever leg follows; a nameplate's click made that select already, at the click
+/// ([`select_on_plate_click`]), and the dispatcher runs after the cast it bound; a crate's
+/// [`Interact`] runs the dispatcher alone. The attack leg selects again through StartAttack
+/// (`0x5ecb70`, `SetSelection` at `0x5eccaa`), which finds the unit selected or, after a bind
+/// emptied the cursor's word, selects it.
 enum Select<'a, 'w> {
     First(&'a mut ResMut<'w, Selection>),
+    Done(&'a mut ResMut<'w, Selection>, scan::CommitOutcome),
     OnAttack(&'a mut ResMut<'w, Selection>),
+}
+
+impl<'a, 'w> Select<'a, 'w> {
+    fn selection(&mut self) -> &mut ResMut<'w, Selection> {
+        match self {
+            Select::First(selection) | Select::Done(selection, _) | Select::OnAttack(selection) => {
+                selection
+            }
+        }
+    }
 }
 
 /// Act on a pick by the cursor's classification of it: a GameObject, a corpse, an attack, loot,
 /// skin, or the `UNIT_NPC_FLAGS` ladder ([`service_arm`]); only the click selects first
-/// (`0x493540`), and the attack leg of an [`Interact`] selects through StartAttack. The range gray
-/// (`unable`) suppresses every send but attack, which the server holds until in reach; with Click
-/// to Move on, each dispatcher walks there instead (`CanAutoInteract` is their approach flag,
-/// `0x60c170`, `0x5d6c6f`).
+/// (`0x493540`), and the attack leg selects through StartAttack. The unit legs measure their own
+/// reach ([`Dispatch::in_service_reach`]); a GameObject's and a corpse's still ride the range gray
+/// the press latched (`unable`). Out of reach every send but attack is suppressed, the server
+/// holds attack until in reach; with Click to Move on, each dispatcher walks there instead
+/// (`CanAutoInteract` is their approach flag, `0x60c170`, `0x5d6c6f`).
 fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
     let (hovered, hovered_object, cursor) = (&press.hovered, &press.object, &press.cursor);
     let walk = dispatch.auto.can_auto_interact();
@@ -956,6 +1012,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
     };
     let mut outcome = match &mut select {
         Select::First(selection) => commit(&mut dispatch.seam, &mut dispatch.front, selection),
+        Select::Done(_, done) => *done,
         Select::OnAttack(_) => scan::CommitOutcome::default(),
     };
     match unit_branch(attack, dead_fork, leg) {
@@ -985,13 +1042,17 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                 // refused: the selection stands, no swing, nothing said
             } else {
                 // StartAttack's own select (`0x5eccaa`), past its gates and before the swing
-                // (`0x5eccfd`): the click's commit, with its stop and re-swing mid-combat.
-                if let Select::OnAttack(selection) = &mut select {
-                    outcome = commit(&mut dispatch.seam, &mut dispatch.front, selection);
-                }
+                // (`0x5eccfd`): the click's commit, with its stop and re-swing mid-combat. A
+                // unit already selected is its dedupe, and a cursor's bind has emptied the word
+                // by now, so a plate's unit is selected here, ahead of the swing.
+                let second = commit(&mut dispatch.seam, &mut dispatch.front, select.selection());
+                outcome = scan::CommitOutcome {
+                    changed: outcome.changed || second.changed,
+                    swung: outcome.swung || second.swung,
+                };
                 debug!("right-click attack: {guid:#x}");
-                // `0x5ecb70`'s body through the seam; `swung` means the commit's re-swing already
-                // went out, which `0x5eccda` keeps from sending twice.
+                // `0x5ecb70`'s body through the seam; `swung` means the commit already asked it
+                // for its re-swing, which `0x5eccda` keeps from sending twice.
                 let engaged = me.is_some_and(|(_, _, e)| e);
                 dispatch.seam.start(guid, engaged || outcome.swung, false);
             }
@@ -1009,19 +1070,21 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                     .0
                     .push(crate::ui_action::UiError::key("ERR_LOOT_NOTSTANDING"));
             } else {
-                dispatch.loot_unit(entity, guid, !cursor.unable, walk);
+                let can_loot = dispatch.can_loot_unit(entity);
+                dispatch.loot_unit(entity, guid, can_loot, walk);
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Skin) => {
             // The skin leg (`0x60c01f`): the known Skinning spell (`[0xb700e4]`) at a corpse the
             // loot leg declined, lootable ones included while mounted.
             if let Some(spell_id) = dispatch.learned.skinning {
+                let in_reach = dispatch.in_melee_reach(entity);
                 dispatch.skin(
                     entity,
                     guid,
                     spell_id,
                     crate::player::Subject::Unit { dead: true },
-                    !cursor.unable,
+                    in_reach,
                     walk,
                 );
             }
@@ -1031,7 +1094,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
         UnitBranch::Dead(DeadUnitLeg::Nothing) => {
             debug!("right-click unit {guid:#x}: dead fork took no leg — nothing sent");
         }
-        UnitBranch::Service => dispatch.talk(entity, guid, !cursor.unable, walk),
+        UnitBranch::Service => dispatch.talk(entity, guid, walk),
     }
 }
 
@@ -1042,14 +1105,27 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
 #[derive(Message, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Interact(pub Entity);
 
-/// Each [`Interact`], its object classified as a press over it would be.
+/// Each nameplate right-click's unit interact (`0x492881`), then each [`Interact`], its object
+/// classified as a press over it would be. Runs after the head of the script calls' pass, which
+/// binds a standing cursor's parked picks: a plate's `SelectTarget` gave its unit to the cast, and
+/// the interact that follows finds the cursor's word empty, so its attack leg selects the unit
+/// and its service leg talks, after the cast on the wire.
 pub(super) fn act_on_interact(
     mut requests: MessageReader<Interact>,
+    mut plate_clicks: MessageReader<PlateRightClick>,
+    press: Res<PressPick>,
     mut selection: ResMut<Selection>,
     kinds: Query<(&Guid, &crate::net::NetEntity)>,
     mut set: ParamSet<(cursor_mode::CursorInputs, Dispatch)>,
 ) {
     use benilla_protocol::EntityKind;
+    for &PlateRightClick { selected } in plate_clicks.read() {
+        interact(
+            &mut set.p1(),
+            &press,
+            Select::Done(&mut selection, selected),
+        );
+    }
     for &Interact(entity) in requests.read() {
         let Ok((guid, net)) = kinds.get(entity) else {
             continue;
@@ -1105,7 +1181,7 @@ pub(super) fn act_on_arrival(
         d2.sqrt()
     );
     match verb {
-        ApproachVerb::Talk if unit => dispatch.talk(entity, guid, d2 <= SERVICE_RANGE_SQ, false),
+        ApproachVerb::Talk if unit => dispatch.talk(entity, guid, false),
         // `0x5df2a0`'s own lootable test (`0x6003a0`), which the click's dead fork made earlier.
         ApproachVerb::Loot if unit => {
             if dispatch
@@ -1113,8 +1189,7 @@ pub(super) fn act_on_arrival(
                 .get(entity)
                 .is_ok_and(|(s, _)| s.0.unit_lootable())
             {
-                let reach = dispatch.melee_reach(entity);
-                let can_loot = dispatch.auto.can_auto_interact() || d2 <= reach * reach;
+                let can_loot = dispatch.can_loot_unit(entity);
                 dispatch.loot_unit(entity, guid, can_loot, false);
             }
         }
@@ -2245,14 +2320,19 @@ mod tests {
                 .query_filtered::<Entity, With<SelfPlayer>>()
                 .single(&world)
                 .unwrap();
-            world
-                .entity_mut(me)
-                .insert(store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]));
-            world.entity_mut(boar).insert(store(&[
-                (F_HEALTH, 0),
-                (F_MAXHEALTH, 100),
-                (F_UNIT_FLAGS, cursor_mode::UNIT_FLAG_SKINNABLE),
-            ]));
+            world.entity_mut(me).insert((
+                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+                Transform::default(),
+            ));
+            // The click measures the melee reach itself: 5 yd for these two.
+            world.entity_mut(boar).insert((
+                store(&[
+                    (F_HEALTH, 0),
+                    (F_MAXHEALTH, 100),
+                    (F_UNIT_FLAGS, cursor_mode::UNIT_FLAG_SKINNABLE),
+                ]),
+                Transform::from_xyz(if in_reach { 2.0 } else { 20.0 }, 0.0, 0.0),
+            ));
             world
                 .resource_mut::<crate::ui_action::LearnedAbilities>()
                 .skinning = Some(SKINNING);
@@ -2422,37 +2502,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// A right-click begun on a plate acts on the plate's unit: [`act_on_right_click`] reads the
-    /// [`PressPick`], and a plate leaves no body under the cursor for a live hover to find.
-    #[test]
-    fn a_right_click_begun_on_a_plate_acts_on_the_plates_unit() {
-        let (mut world, boar) = right_click_world();
-        // The press latch as `latch_press_pick` writes it: the plate's unit, distance 0.0
-        // (topmost UI), classified Attack.
-        *world.resource_mut::<PressPick>() = PressPick {
-            hovered: Hovered {
-                target: Some(boar),
-                guid: Some(BOAR),
-                distance: 0.0,
-                ..Hovered::default()
-            },
-            cursor: WorldCursor {
-                kind: cursor_mode::CursorKind::Attack,
-                unable: false,
-            },
-            ..PressPick::default()
-        };
-        world
-            .resource_mut::<Messages<PlateRightClick>>()
-            .write(PlateRightClick);
-        world.run_system_once(act_on_right_click).unwrap();
-        assert_eq!(
-            world.resource::<Selection>().guid,
-            Some(BOAR),
-            "the release must act on the unit whose plate the press was over"
-        );
     }
 
     /// The dispatcher's attack arm (`0x60c18c`) is taken on the fork, not the sword: a ghost over

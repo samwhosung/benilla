@@ -442,7 +442,9 @@ impl TabHistory {
     }
 }
 
-/// What one [`commit`] did; `swung` means it already sent `CMSG_ATTACKSWING`, so a caller must not.
+/// What one [`commit`] did; `swung` means it ran the re-swing (`0x4938c8`), so a caller must not ask
+/// again. StartAttack's own gate may have refused it ([`crate::creature_anim::StartGate`]), and the
+/// caller's would refuse alike: `swung` says it was asked, not that `CMSG_ATTACKSWING` went out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CommitOutcome {
     pub(super) changed: bool,
@@ -497,7 +499,8 @@ pub(super) fn commit(
     let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
     let swung = stop_and_repoint && new_attackable && self_guid != Some(guid);
     if swung {
-        // `0x4938c8`: the swing goes out despite the lock, and cancels auto-repeat (`0x6ea080`).
+        // `0x4938c8`: the swing goes out despite the lock, and cancels auto-repeat (`0x6ea080`),
+        // unless StartAttack's gate returns first.
         seam.start(guid, engaged, true);
     }
     CommitOutcome {

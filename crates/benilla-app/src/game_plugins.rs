@@ -1291,6 +1291,59 @@ pub(crate) mod schedule_tests {
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));
     }
 
+    /// A nameplate's right-click is `SelectTarget` (`0x492870`), which with a targeting cursor up
+    /// binds the cast and returns, and then the unit's interact (`0x492881`), so the cast goes out
+    /// ahead of what the interact does. The click's select parks the unit; the script calls'
+    /// pass binds it at its head; the interact runs after that, or its attack leg would swing
+    /// before the cast and select nothing.
+    #[test]
+    fn a_plates_interact_runs_after_the_bind_of_the_unit_its_click_parked() {
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let (select, bind, interact) = (
+            one("::target::click::select_on_plate_click"),
+            one("::script_calls::apply_script_calls"),
+            one("::target::click::act_on_interact"),
+        );
+        let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            succ.entry(*a).or_default().push(*b);
+        }
+        let runs_before = |from: SystemKey, to: SystemKey| {
+            let mut seen = HashSet::new();
+            let mut stack = vec![from];
+            while let Some(n) = stack.pop() {
+                for m in succ.get(&n).into_iter().flatten() {
+                    if seen.insert(*m) {
+                        stack.push(*m);
+                    }
+                }
+            }
+            seen.contains(&to)
+        };
+        assert!(
+            runs_before(select, bind),
+            "the click parks before the pass binds"
+        );
+        assert!(
+            runs_before(bind, interact),
+            "the interact runs after the pass's bind"
+        );
+    }
+
     /// The `Startup` VM, the stock glue's, is built after the glyph cache:
     /// its first screen sizes frames by measured text in the show (`TOSFrameHeader` off
     /// `TOSFrameTitle:GetWidth()`, `AccountLogin.lua`), which with no cache measures 0.
