@@ -29,12 +29,12 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 234
+- [benilla-app](#benilla-app): 235
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 19
 - [benilla-lua](#benilla-lua): 11
-- [benilla-protocol](#benilla-protocol): 22
+- [benilla-protocol](#benilla-protocol): 25
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 123
 - [benilla-world](#benilla-world): 49
@@ -177,8 +177,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### net
 
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
-- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:397`](../crates/benilla-app/src/net/io.rs#L397))
-- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1158`](../crates/benilla-app/src/net/io.rs#L1158))
+- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:407`](../crates/benilla-app/src/net/io.rs#L407))
+- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1172`](../crates/benilla-app/src/net/io.rs#L1172))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
@@ -229,9 +229,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### realmlist
 
-- The value lives in `config.toml` with every other CVar and is edited from a login-screen control, because local state is one folder and one config file. ([`src/realmlist.rs:5`](../crates/benilla-app/src/realmlist.rs#L5))
-- The local machine's server, not the reference's `us.logon.worldofwarcraft.com:3724`, because that host no longer resolves. ([`src/realmlist.rs:41`](../crates/benilla-app/src/realmlist.rs#L41))
-- 64, where the reference's login boxes cap at 16 (`AccountLogin.xml`), because a hostname needs more. ([`src/realmlist.rs:45`](../crates/benilla-app/src/realmlist.rs#L45))
+- The value lives in `config.toml` with every other CVar and is edited from a login-screen control, because local state is one folder and one config file. ([`src/realmlist.rs:6`](../crates/benilla-app/src/realmlist.rs#L6))
+- The local machine's server, not the reference's `us.logon.worldofwarcraft.com:3724`, because that host no longer resolves. ([`src/realmlist.rs:42`](../crates/benilla-app/src/realmlist.rs#L42))
+- 64, where the reference's login boxes cap at 16 (`AccountLogin.xml`), because a hostname needs more. ([`src/realmlist.rs:46`](../crates/benilla-app/src/realmlist.rs#L46))
+- A host name may carry a port, where the reference resolves a name whole (`0x43ba0e`) and takes a port only on a dotted address (`0x43f3d0`), because a server on a non-default logon port behind a host name is everyday use. ([`src/realmlist.rs:143`](../crates/benilla-app/src/realmlist.rs#L143))
 
 #### screenshot
 
@@ -309,7 +310,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_chat
 
 - Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:216`](../crates/benilla-app/src/ui_chat.rs#L216))
-- A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:148`](../crates/benilla-app/src/ui_chat/broadcast.rs#L148))
+- A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:152`](../crates/benilla-app/src/ui_chat/broadcast.rs#L152))
 - With a blank city word the reference composes `"Trade - "` (its capital arm checks the row pointer, not the string, `0x49a2d0`-`0x49a2f6`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:150`](../crates/benilla-app/src/ui_chat/channels.rs#L150))
 - A probe's bare `/assist` assists the live selection, where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:632`](../crates/benilla-app/src/ui_chat/input/mod.rs#L632))
 - The files live in `benilla-config/Logs/`, not the install's `Logs`, because the install is read-only. ([`src/ui_chat/logging.rs:4`](../crates/benilla-app/src/ui_chat/logging.rs#L4))
@@ -426,7 +427,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference's size callback only re-scales `GlueParent` and re-lays it out (`0x46ac51`, `0x46ac56`), as its root keeps `gxResolution`'s aspect until a rebuild (`0x41ad10` at `0x46a828`) and its window keeps that shape while dragged (`0x5989d7`); here the root is the window's, which takes any shape, so the box follows it on every resize, where a rebuild would reset the screen (the create screen's character and name, the typed password, the selection). ([`src/ui_script/glue.rs:296`](../crates/benilla-app/src/ui_script/glue.rs#L296))
 - The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1362`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1362))
 - The character is the platform's Unicode text, so a player can type any language on any platform. ([`src/ui_script/input.rs:471`](../crates/benilla-app/src/ui_script/input.rs#L471))
-- A capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce. ([`src/ui_script/lifecycle.rs:144`](../crates/benilla-app/src/ui_script/lifecycle.rs#L144))
+- A capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce. ([`src/ui_script/lifecycle.rs:145`](../crates/benilla-app/src/ui_script/lifecycle.rs#L145))
 - The files are under `benilla-config/Logs/`, since the install is read-only. ([`src/ui_script/load_log.rs:5`](../crates/benilla-app/src/ui_script/load_log.rs#L5))
 - `FULLSCREEN_QUADS_RESEAT` re-sizes the full-screen quads, which the stock files size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would stop short of the new screen. ([`src/ui_script/manifest.rs:64`](../crates/benilla-app/src/ui_script/manifest.rs#L64))
 - No `FrameXML.toc` signature check, where `UI_Init` loads on a failed one and then quits (`0x401560(0xa)` at `0x48ff90`), because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/manifest.rs:161`](../crates/benilla-app/src/ui_script/manifest.rs#L161))
@@ -593,6 +594,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2281`](../crates/benilla-lua/src/vm.rs#L2281))
 ### benilla-protocol
 
+#### (crate root)
+
+- A named piece takes a `:port` here, where the reference hands a name to `gethostbyname` whole (`0x43ba0e`) and only a dotted piece takes a port (`0x43f3d0`), because a server on a non-default logon port behind a host name is everyday use. ([`src/lib.rs:174`](../crates/benilla-protocol/src/lib.rs#L174))
+
 #### auth
 
 - The patch state downloads no patch and starts no updater, because benilla runs no code a server sends. ([`src/auth.rs:52`](../crates/benilla-protocol/src/auth.rs#L52))
@@ -625,10 +630,12 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### world
 
-- The reference waits forever; a bound tells a server that died mid-queue from a long wait. ([`src/world/session.rs:17`](../crates/benilla-protocol/src/world/session.rs#L17))
-- Zeros until one does, where the reference's words are never initialised (the session is allocated without zero-fill, `ui/billing` in benilla-re). ([`src/world/session.rs:58`](../crates/benilla-protocol/src/world/session.rs#L58))
-- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:94`](../crates/benilla-protocol/src/world/session.rs#L94))
-- Benilla runs no Warden module and answers nothing, where the reference hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`). ([`src/world/session.rs:218`](../crates/benilla-protocol/src/world/session.rs#L218))
+- A size past 23 bits is refused, where the reference sends it with bit 23 folded into the flag (`0x5b5712` `or dl,0x80` keeps one byte), because no client packet comes near 8 MB and a refusal beats a corrupt header. ([`src/world/mod.rs:139`](../crates/benilla-protocol/src/world/mod.rs#L139))
+- 10 s of silence ends the wait, where the reference has no timer and waits for the reply, a disconnect or the player's Cancel (`0x46b720`; its connect reports only success or a socket error, `0x5b60c6`-`0x5b61ac`), because each wait here is a blocking read on the net thread, which a server that stays connected and never answers would hold for good. ([`src/world/session.rs:15`](../crates/benilla-protocol/src/world/session.rs#L15))
+- The reference waits forever; a bound tells a server that died mid-queue from a long wait. ([`src/world/session.rs:22`](../crates/benilla-protocol/src/world/session.rs#L22))
+- Zeros until one does, where the reference's words are never initialised (the session is allocated without zero-fill, `ui/billing` in benilla-re). ([`src/world/session.rs:65`](../crates/benilla-protocol/src/world/session.rs#L65))
+- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:102`](../crates/benilla-protocol/src/world/session.rs#L102))
+- Benilla runs no Warden module and answers nothing, where the reference hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`). ([`src/world/session.rs:244`](../crates/benilla-protocol/src/world/session.rs#L244))
 ### benilla-srp
 
 #### (crate root)
