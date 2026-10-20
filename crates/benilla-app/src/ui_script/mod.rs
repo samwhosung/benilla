@@ -143,8 +143,9 @@ pub(crate) struct UiKeyboardCapture {
 pub(crate) struct PlayerUiClickConsumed(pub(crate) bool);
 
 /// A press the UI consumed this frame, whatever is under the pointer: the layout drag's press
-/// returns at `0x766353`–`0x76635b`, before any frame, the world frame included, sees it, so the
-/// world latch takes no press this frame even with no UI frame hovered.
+/// returns at `0x766353`–`0x76635b`, and a right press with a payload held at the world input
+/// hook (`0x492b50`, `0x766370`), each before any frame, the world frame included, sees it, so
+/// the world latch takes no press this frame even with no UI frame hovered.
 #[derive(Resource, Default)]
 pub(crate) struct PlayerUiPressConsumed(pub(crate) bool);
 
