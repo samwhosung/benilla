@@ -281,18 +281,20 @@ pub(crate) struct ActionEvents {
 /// [`fire_action_events`].
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_action_state(
-    // The cooldowns, the auto-repeat key and the selection with the relations and positions
-    // `IsActionInRange`'s pre-check reads, which the call host also reaches.
+    // The cooldowns, the auto-repeat key, the selection with the relations and positions
+    // `IsActionInRange`'s pre-check reads, and the pet's bar (the gate and the history a macro
+    // bound to a pet spell reads), which the call host also reaches.
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, Cooldowns>,
         Res<'static, AutoRepeatActive>,
         crate::spell::cast_target::CastTargeting<'static, 'static>,
+        Option<Res<'static, crate::ui_pet::PetBar>>,
     )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     clock: Res<crate::ui_script::UiClock>,
     // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units, the
-    // control flag, the skill lines, the active player's creation and the pet's bar.
+    // control flag, the skill lines and the active player's creation.
     cast_state: (
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
@@ -305,8 +307,6 @@ pub(super) fn feed_action_state(
         Option<Res<crate::ui_spellbook::SkillLines>>,
         // The active player's creation, whose arrival (`0x5dea86`) empties the reactive list.
         Query<(), Added<SelfPlayer>>,
-        // The pet's bar: the gate and the history a macro bound to a pet spell reads.
-        Option<Res<crate::ui_pet::PetBar>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
     // One param for the guid index and the item store, for the same ceiling.
@@ -330,7 +330,7 @@ pub(super) fn feed_action_state(
     // The reactive list, which lives from one arrival to the next, not for a VM.
     mut reactive: Local<super::reactive::ReactiveList>,
 ) {
-    vm.turn(|script, (mut cooldowns, auto_repeat, targeting)| {
+    vm.turn(|script, (mut cooldowns, auto_repeat, targeting, pet_bar)| {
         let Some(script) = script else {
             return;
         };
@@ -351,8 +351,7 @@ pub(super) fn feed_action_state(
             memory.last_cd_trace = Some(now);
         }
 
-        let (bound, spell_mods, range_units, own_control, skill_lines, created, pet_bar) =
-            &cast_state;
+        let (bound, spell_mods, range_units, own_control, skill_lines, created) = &cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let me = self_q.iter().next();
         let control_lost = own_control.as_ref().is_some_and(|c| c.0);
