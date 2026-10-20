@@ -187,10 +187,7 @@ impl ItemBuild {
         let Some(kept) = self.inst.take() else {
             return self;
         };
-        let live = kept
-            .object
-            .then(|| live_object(model, kept.guid))
-            .flatten();
+        let live = kept.object.then(|| live_object(model, kept.guid)).flatten();
         let mut inst = match live {
             Some(held) => {
                 let inst = ItemInstance {

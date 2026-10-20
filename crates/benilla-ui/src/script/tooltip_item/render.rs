@@ -159,17 +159,13 @@ impl ItemInstance {
         if self.wrapped() {
             return None;
         }
-        let object = self
-            .durability
-            .filter(|&(_, max)| self.object && max > 0);
+        let object = self.durability.filter(|&(_, max)| self.object && max > 0);
         let block = || {
             let (cur, max) = self.block_durability;
             let max = if max == u32::MAX { template_max } else { max };
             (self.block_valid() && max > 0).then_some((cur, max))
         };
-        object
-            .or_else(block)
-            .map(|(cur, max)| (cur.min(max), max))
+        object.or_else(block).map(|(cur, max)| (cur.min(max), max))
     }
 }
 
@@ -221,8 +217,8 @@ pub(super) fn render_view_flagged(
     let mut live = false;
     let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let known = v.required_spell != 0
-            && v.knows_required_spell(|id| model.known_spells.contains(&id));
+        let known =
+            v.required_spell != 0 && v.knows_required_spell(|id| model.known_spells.contains(&id));
         // The first slot's taught spell, or a higher rank of it, known to the player, or to the
         // pet for a pet-target teach (`0x52d54f`..`0x52d5bb`): the always-red ITEM_SPELL_KNOWN.
         let taught = v.teaches.as_ref().is_some_and(|t| {

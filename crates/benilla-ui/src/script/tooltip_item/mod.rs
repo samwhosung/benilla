@@ -155,12 +155,10 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
             flags & WRAPPED == 0 && durability.is_some_and(|(cur, max)| max > 0 && cur == 0);
         !broken && flags & BROKEN == 0
     };
-    let worn_copy = |s: &&crate::script::InvSlotView| {
-        s.item_id == item_id && usable(s.flags, s.durability)
-    };
-    let held_copy = |s: &&crate::script::ContainerSlot| {
-        s.item_id == item_id && usable(s.flags, s.durability)
-    };
+    let worn_copy =
+        |s: &&crate::script::InvSlotView| s.item_id == item_id && usable(s.flags, s.durability);
+    let held_copy =
+        |s: &&crate::script::ContainerSlot| s.item_id == item_id && usable(s.flags, s.durability);
     let held = |bag: i64| -> Option<render::ItemInstance> {
         let c = model.containers.get(&bag)?;
         let mut slots: Vec<_> = c.slots.iter().collect();
@@ -673,10 +671,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .filter(|&n| n < super::trade::TRADE_SLOTS);
                 let source = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let side = model
-                        .trade
-                        .as_ref()
-                        .map(|t| if player_side { &t.player } else { &t.target });
+                    let trade = model.trade.as_ref();
+                    let side = trade.map(|t| if player_side { &t.player } else { &t.target });
                     // The seventh slot alone proposes the spell cast on it (`0x534391`,
                     // `0x534598`, the block's `+0x40c`).
                     let proposed = side

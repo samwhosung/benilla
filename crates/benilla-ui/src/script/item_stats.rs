@@ -223,9 +223,10 @@ pub(super) fn item_refusal_by_id(model: &super::Model, item_id: u32) -> Option<&
     if item_id == 0 {
         return None;
     }
-    model.item_templates.get(&item_id).and_then(|v| {
-        item_refusal(v, &model.player_req, |id| model.known_spells.contains(&id))
-    })
+    model
+        .item_templates
+        .get(&item_id)
+        .and_then(|v| item_refusal(v, &model.player_req, |id| model.known_spells.contains(&id)))
 }
 
 /// The client's item-usable predicate `0x5ea930`, whose answer the merchant getters push as
