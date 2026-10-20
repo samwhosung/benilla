@@ -1,9 +1,10 @@
-//! The aura bindings, over the lists the app pushes in display order: the player's in the
-//! reference's insertion-ordered cache (`0xbc6040`), kept by `benilla::ui_aura`, every other unit's
-//! by guid, in ascending aura slot. A token resolves to its guid as the reference's resolver
-//! `0x515970` does ([`super::UnitGuids`]), so `"mouseover"`, `"party1target"` and `"PLAYER"` read
-//! the list of the unit they name, and a token naming the player reads the player's list in cache
-//! order, where the reference's `UnitBuff("player", i)` reads by slot.
+//! The aura bindings, over the lists the app pushes: the player's buff cache in the reference's
+//! insertion order (`0xbc6040`), kept by `benilla::ui_aura`, which the `GetPlayerBuff` family and
+//! `GameTooltip:SetPlayerBuff` read; and every unit's by guid, the player's too, in ascending aura
+//! slot, which `UnitBuff`, `UnitDebuff` and `GameTooltip:SetUnitBuff` read, as the reference walks
+//! the unit's own fields for every unit (`0x51960f`, `0x534bfb`). A token resolves to its guid as
+//! the reference's resolver `0x515970` does ([`super::UnitGuids`]), so `"mouseover"`,
+//! `"party1target"` and `"PLAYER"` read the list of the unit they name.
 //!
 //! `UnitBuff` and `UnitDebuff` take a token and a 1-based index into the sign-filtered list and
 //! answer nothing past the end. The 1.12 `GetPlayerBuff`
@@ -115,20 +116,16 @@ fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<Mul
 }
 
 /// The list of the unit `token` names, through the resolver (`0x515970`, which `UnitBuff` calls at
-/// `0x519542`): the player's cache list for the player, else that guid's; `None` for nobody or a
-/// unit with no list. A token the resolver does not recognise raises `Unknown unit name`.
+/// `0x519542`), the player's by slot as any unit's; `None` for nobody or a unit with no list. A
+/// token the resolver does not recognise raises `Unknown unit name`.
 pub(crate) fn auras_of<'m>(
     model: &'m Model,
     token: &str,
-) -> mlua::Result<Option<std::borrow::Cow<'m, UnitAuraList>>> {
-    let guids = &model.unit_guids;
-    Ok(guids.guid_of(token)?.and_then(|g| {
-        if g == guids.player {
-            Some(std::borrow::Cow::Owned(model.player_auras.clone().into()))
-        } else {
-            model.unit_auras.get(&g).map(std::borrow::Cow::Borrowed)
-        }
-    }))
+) -> mlua::Result<Option<&'m UnitAuraList>> {
+    Ok(model
+        .unit_guids
+        .guid_of(token)?
+        .and_then(|g| model.unit_auras.get(&g)))
 }
 
 /// `UnitBuff`'s and `UnitDebuff`'s walk over `list`: the half the verb names, the buffs only
@@ -155,7 +152,7 @@ fn nth_aura(
         match token {
             Some(t) => auras_of(&model, t)?
                 .filter(|_| index >= 1)
-                .and_then(|list| listed(&list, helpful).nth((index - 1) as usize).cloned()),
+                .and_then(|list| listed(list, helpful).nth((index - 1) as usize).cloned()),
             None => None,
         }
     };
@@ -166,13 +163,15 @@ fn nth_aura(
 }
 
 impl super::UiScript {
-    /// Push the player's aura list in the cache's order (`0xbc6040`), durations joined.
+    /// Push the player's buff cache in its order (`0xbc6040`), durations joined: the `GetPlayerBuff`
+    /// family's list. The player's slots, which `UnitBuff("player")` reads, are its
+    /// [`Self::set_unit_auras`] list.
     pub fn set_player_auras(&mut self, auras: Vec<AuraState>) {
         self.model_mut().player_auras = auras;
     }
 
-    /// Push or clear a unit's aura list by guid, in ascending aura slot; any token naming the unit
-    /// reads it. The player's is [`Self::set_player_auras`].
+    /// Push or clear a unit's aura list by guid, in ascending aura slot, the player's too; any token
+    /// naming the unit reads it.
     pub fn set_unit_auras(&mut self, guid: u64, auras: Option<UnitAuraList>) {
         let mut model = self.model_mut();
         match auras {
@@ -222,7 +221,7 @@ impl super::UiScript {
         auras_of(&model, token)
             .ok()
             .flatten()
-            .map(|list| listed(&list, helpful).map(|a| a.spell_id).collect())
+            .map(|list| listed(list, helpful).map(|a| a.spell_id).collect())
             .unwrap_or_default()
     }
 
@@ -336,11 +335,17 @@ mod tests {
     #[test]
     fn unit_buff_enumerates_the_pushed_order_not_the_spell_id_order() {
         let mut s = script();
-        s.set_player_auras(vec![
-            aura(2457, "Battle Stance", true, true),
-            aura(1126, "Mark of the Wild", true, true),
-            aura(589, "Shadow Word: Pain", false, false),
-        ]);
+        s.set_unit_auras(
+            ME,
+            Some(
+                vec![
+                    aura(2457, "Battle Stance", true, true),
+                    aura(1126, "Mark of the Wild", true, true),
+                    aura(589, "Shadow Word: Pain", false, false),
+                ]
+                .into(),
+            ),
+        );
         assert_eq!(
             s.eval::<String>(r#"return (UnitBuff("player", 1))"#)
                 .unwrap(),
@@ -466,11 +471,13 @@ mod tests {
     #[test]
     fn an_emptied_player_list_answers_nil() {
         let mut s = script();
-        s.set_player_auras(vec![aura(2457, "Stance", true, true)]);
+        s.set_unit_auras(ME, Some(vec![aura(2457, "Stance", true, true)].into()));
         assert!(s
             .eval::<bool>(r#"return UnitBuff("player", 1) ~= nil"#)
             .unwrap());
-        s.set_player_auras(Vec::new());
+        // The buff cache is the `GetPlayerBuff` family's, never `UnitBuff`'s.
+        s.set_player_auras(vec![aura(2457, "Stance", true, true)]);
+        s.set_unit_auras(ME, Some(Vec::new().into()));
         assert!(s
             .eval::<bool>(r#"return UnitBuff("player", 1) == nil"#)
             .unwrap());
@@ -502,11 +509,17 @@ mod tests {
             .collect(),
             ..Default::default()
         });
-        s.set_player_auras(vec![
-            aura(2457, "Battle Stance", true, true),
-            aura(1126, "Mark of the Wild", true, true),
-            aura(11976, "Strike", false, false),
-        ]);
+        s.set_unit_auras(
+            ME,
+            Some(
+                vec![
+                    aura(2457, "Battle Stance", true, true),
+                    aura(1126, "Mark of the Wild", true, true),
+                    aura(11976, "Strike", false, false),
+                ]
+                .into(),
+            ),
+        );
         for (guid, base, name) in [
             (TARGET, 100, "on the target"),
             (MOB, 200, "on the mouseover"),
@@ -563,8 +576,8 @@ mod tests {
             .unwrap());
     }
 
-    /// A token naming the player, in any case or down a chain, reads the player's list in cache
-    /// order, as `"player"` does.
+    /// A token naming the player, in any case or down a chain, reads the player's list, as
+    /// `"player"` does.
     #[test]
     fn a_token_naming_the_player_reads_the_player_list() {
         let s = group_script();

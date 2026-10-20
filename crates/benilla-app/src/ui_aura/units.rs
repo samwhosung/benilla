@@ -1,4 +1,4 @@
-//! Every unit's aura list but the player's, one per guid, and the unit-token resolver's inputs
+//! Every unit's aura list, the player's too, one per guid, and the unit-token resolver's inputs
 //! (`0x515970`, [`UnitGuids`]) that `UnitBuff 0x519500` and `UnitDebuff 0x5198f0` read them through:
 //! the guid globals, the group tables, and each held unit a `target` chain can reach. A list is the
 //! live unit's slots, gated as any unit's; a group member or pet with no live object diverts to its
@@ -46,7 +46,8 @@ fn fill_group<'a>(
 /// What [`UnitAuras::feed`] reads this frame.
 pub(super) struct Inputs<'g, 'a, H, V> {
     pub(super) group: Option<&'g GroupState>,
-    /// Our guid: a token naming us reads the player's list, which the caller pushes.
+    /// Our guid, whose slots list as any held unit's: `UnitBuff("player")` walks the fields, not
+    /// the buff cache (`0x51960f`).
     pub(super) me: u64,
     /// `pet`, `target`, `mouseover` and `npc`'s guids, 0 for none.
     pub(super) pet: u64,
@@ -143,9 +144,7 @@ impl UnitAuras {
                 g.held.insert(guid, next);
                 walk.push((next, false));
             }
-            if guid != me {
-                self.refresh(guid, store, record_ok, group, &buffs_visible, catalog);
-            }
+            self.refresh(guid, store, record_ok, group, &buffs_visible, catalog);
         }
         script.set_unit_guids(&g);
         self.guids = g;
@@ -365,6 +364,44 @@ mod tests {
             .non_send_resource::<UiScript>()
             .eval::<Vec<String>>("local s = SEEN SEEN = {} return s")
             .unwrap()
+    }
+
+    /// The player's slots list under its guid as any held unit's: `UnitBuff("player")` walks the
+    /// fields in slot order (`0x51960f`), where the buff cache keeps the order auras arrived in.
+    #[test]
+    fn the_player_token_reads_the_slots_in_slot_order() {
+        let mut app = party_app();
+        let me = app.world().resource::<GuidIndex>().0[&ME];
+        let seat = |app: &mut App, fields: &[(u16, u32)]| {
+            app.world_mut()
+                .entity_mut(me)
+                .insert(ObjectStore(ObjectFields::from_pairs(fields)));
+            app.update();
+        };
+        // Stance lands first, in slot 1; then Mark, in slot 0.
+        seat(
+            &mut app,
+            &[(FLAGS, 0x0800_0000), (AURA + 1, 2457), (AURAFLAGS, 0x90)],
+        );
+        seat(
+            &mut app,
+            &[
+                (FLAGS, 0x0800_0000),
+                (AURA, 1126),
+                (AURA + 1, 2457),
+                (AURAFLAGS, 0x99),
+            ],
+        );
+        assert_eq!(listed(&mut app, "player", false), [1126, 2457]);
+        let cache = &app
+            .world()
+            .resource::<super::super::PlayerAuraCache>()
+            .auras;
+        assert_eq!(
+            cache.iter().map(|c| c.spell_id).collect::<Vec<_>>(),
+            [2457, 1126],
+            "the cache keeps arrival order"
+        );
     }
 
     /// A live member reads its own `UNIT_FIELD_AURA` slots; `UnitBuff` keeps the unit gate, open

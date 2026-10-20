@@ -1170,7 +1170,7 @@ fn seat_a_session(script: &mut UiScript) {
         player: 1,
         ..Default::default()
     });
-    script.set_player_auras(vec![benilla_ui::script::AuraState {
+    let fortitude = vec![benilla_ui::script::AuraState {
         spell_id: 1243,
         name: Some("Power Word: Fortitude".into()),
         icon: Some("Interface\\Icons\\Spell_Holy_WordFortitude".into()),
@@ -1178,7 +1178,10 @@ fn seat_a_session(script: &mut UiScript) {
         helpful: true,
         cancelable: true,
         ..Default::default()
-    }]);
+    }];
+    // Both of the player's lists: the buff cache and the slots `UnitBuff("player")` reads.
+    script.set_unit_auras(1, Some(fortitude.clone().into()));
+    script.set_player_auras(fortitude);
     script.set_action(
         1,
         Some(benilla_ui::script::ActionSlot {

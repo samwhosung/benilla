@@ -406,10 +406,10 @@ pub(crate) struct Model {
     /// `"target"` from the committed selection, whatever its memo holds.
     pub(crate) target_view_moved: bool,
     /// The player's auras in the reference cache's insertion order (`0xbc6040`), durations joined:
-    /// the `GetPlayerBuff` family's list, and any token naming the player's.
+    /// the `GetPlayerBuff` family's list.
     pub(crate) player_auras: Vec<AuraState>,
-    /// Every other unit's auras by guid, ascending aura slot: one list per unit, whatever token
-    /// names it.
+    /// Every unit's auras by guid, the player's too, ascending aura slot: one list per unit,
+    /// whatever token names it.
     pub(crate) unit_auras: HashMap<u64, super::UnitAuraList>,
     /// The unit-token resolver's inputs (`0x515970`), which the aura bindings resolve through.
     pub(crate) unit_guids: super::UnitGuids,

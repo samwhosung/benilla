@@ -547,8 +547,8 @@ fn feed_auras(
 
     let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
     let pet_guid = units.pet.spells.pet_guid;
-    // `UnitBuff`'s unit gate on a live unit. `unit` is never `store`, the player's, which is the
-    // gate's second argument. The pet is ungated; the reference gates a pet too, but `CanAssist`'s
+    // `UnitBuff`'s unit gate on a live unit, the player included, whom the gate tests as any unit
+    // (`0x5195aa`-`0x5195f7`). The pet is ungated; the reference gates a pet too, but `CanAssist`'s
     // player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel and FFA-PvP
     // state) passes for your own pet, leaving only the charm, selectable and reaction clauses to
     // hide its buffs.
@@ -581,14 +581,8 @@ fn feed_auras(
         },
     );
 
-    let target_moved =
-        unit_changed.contains(&target_guid) || (target_guid == self_guid.0 && changed);
-    if target_moved && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
-        let l = if target_guid == self_guid.0 {
-            Some(list.as_slice())
-        } else {
-            memo.units.list(target_guid).map(|l| l.auras.as_slice())
-        };
+    if unit_changed.contains(&target_guid) && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
+        let l = memo.units.list(target_guid).map(|l| l.auras.as_slice());
         let l = l.unwrap_or_default();
         info!("aura dump: {} aura(s) on the target rows", l.len());
         for a in l {

@@ -289,21 +289,20 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         return Ok(());
                     }
                     // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks.
-                    list.as_deref()
-                        .and_then(|l| {
-                            l.auras
-                                .iter()
-                                .filter(|a| a.helpful == helpful)
-                                .nth(ordinal as usize)
-                        })
-                        .map(|a| {
-                            let key = AuraKey {
-                                spell_id: a.spell_id,
-                                level: a.level,
-                                stack: a.count,
-                            };
-                            (key, a.name.clone())
-                        })
+                    list.and_then(|l| {
+                        l.auras
+                            .iter()
+                            .filter(|a| a.helpful == helpful)
+                            .nth(ordinal as usize)
+                    })
+                    .map(|a| {
+                        let key = AuraKey {
+                            spell_id: a.spell_id,
+                            level: a.level,
+                            stack: a.count,
+                        };
+                        (key, a.name.clone())
+                    })
                 };
                 let Some((key, name)) = hit else {
                     return Ok(());

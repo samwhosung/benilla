@@ -643,6 +643,73 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
+/// `UnitBuff("player")` and `GameTooltip:SetUnitBuff("player")` walk the player's slots, as any
+/// unit's (`0x51960f`, `0x534bfb`), at the slot's live `AURALEVELS` byte (`0x534ceb`);
+/// `GetPlayerBuff` and `SetPlayerBuff` read the buff cache, in its insertion order and at the
+/// level its record holds (`0x532bbf`).
+#[test]
+fn the_player_token_reads_the_slots_and_set_player_buff_the_cache() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&crate::script::UnitGuids {
+        player: 0x10,
+        ..Default::default()
+    });
+    let aura = |spell_id, name: &str, level| AuraState {
+        spell_id,
+        name: Some(name.into()),
+        level,
+        count: 1,
+        helpful: true,
+        until_cancelled: true,
+        ..Default::default()
+    };
+    // The cache: Mark first, then Fortitude at the level its record holds.
+    s.set_player_auras(vec![
+        aura(1126, "Mark of the Wild", 10),
+        aura(1243, "Power Word: Fortitude", 20),
+    ]);
+    // The slots: Fortitude in slot 0, recast at level 40, Mark in slot 1.
+    s.set_unit_auras(
+        0x10,
+        Some(
+            vec![
+                aura(1243, "Power Word: Fortitude", 40),
+                aura(1126, "Mark of the Wild", 10),
+            ]
+            .into(),
+        ),
+    );
+    for level in [20, 40] {
+        s.set_aura_tooltip(
+            AuraKey {
+                spell_id: 1243,
+                level,
+                stack: 1,
+            },
+            aura_view(
+                "Power Word: Fortitude",
+                &format!("Stamina at level {level}."),
+            ),
+        );
+    }
+    assert_eq!(s.aura_spell_ids("player", true), [1243, 1126]);
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        TT:SetUnitBuff("player", 1)
+        assert(TTTextLeft2:GetText() == "Stamina at level 40.", "the slot's live level")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        TT:SetPlayerBuff(1)
+        assert(TTTextLeft2:GetText() == "Stamina at level 20.", "the record's level")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// The aura setters' misses return before the builder and leave the tooltip as it was: an index
 /// out of `SetUnitBuff`'s 32 or `SetUnitDebuff`'s 16 (`0x534bcb`, `0x534f3e`) or past the unit's
 /// list (`0x534c9c`, `0x53501d`), a position outside the 48 buff records (`0x532bbd`), and no
