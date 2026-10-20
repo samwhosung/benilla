@@ -191,6 +191,7 @@ impl CastFailLines<'_, '_> {
                 arg: fail.arg,
                 found: found.as_deref(),
                 redisplay: fail.redisplay,
+                power: self.self_q.iter().next().map(|s| s.0.unit_power_type()),
                 ..self.names.args(spells)
             },
             &get,

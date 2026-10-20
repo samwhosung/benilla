@@ -174,18 +174,21 @@ pub(crate) const CAST_FAIL_KEYS: [&str; 146] = [
     "SPELL_FAILED_UNKNOWN",                      // 0x91
 ];
 
-/// A power type (`SpellRec+0x7c`) to its NO_POWER key (the reference's table `0x8118dc`) and
-/// its power noun; health is -2.
-fn power_keys(power_type: u32) -> (&'static str, &'static str) {
+/// A spell's power type (`SpellRec+0x7c`) to its NO_POWER key (the reference's table `0x8118dc`);
+/// health is -2.
+fn no_power_key(power_type: u32) -> &'static str {
     match power_type {
-        1 => ("ERR_OUT_OF_RAGE", "RAGE"),
-        2 => ("ERR_OUT_OF_FOCUS", "FOCUS"),
-        3 => ("ERR_OUT_OF_ENERGY", "ENERGY"),
-        4 => ("ERR_NOT_HAPPY_ENOUGH", "HAPPINESS"),
-        0xFFFFFFFE => ("ERR_OUT_OF_HEALTH", "HEALTH"),
-        _ => ("ERR_OUT_OF_MANA", "MANA"),
+        1 => "ERR_OUT_OF_RAGE",
+        2 => "ERR_OUT_OF_FOCUS",
+        3 => "ERR_OUT_OF_ENERGY",
+        4 => "ERR_NOT_HAPPY_ENOUGH",
+        0xFFFFFFFE => "ERR_OUT_OF_HEALTH",
+        _ => "ERR_OUT_OF_MANA",
     }
 }
+
+/// The power nouns `0x02` names by the player's power byte, the table `0x6e213a`-`0x6e2156` builds.
+const POWER_NOUNS: [&str; 5] = ["MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS"];
 
 /// The spell categories (`SpellRec+0x8`) the `0x28` and `0x3c` cooldown picks test.
 fn is_potion(d: &SpellDisplay) -> bool {
@@ -441,15 +444,14 @@ pub(super) fn cast_fail_text(
         .unwrap_or_default();
     // The argument arms (`0x6e1d8e`).
     let text = match reason {
-        // `0x6e211f`: the power noun alone; a missing one leaves past the display (`0x6e2176`).
-        0x02 if player => {
-            let power = spell.map_or(0, |d| d.power_type);
-            get_text(power_keys(power).1)?
-        }
+        // `0x6e211f`: the noun of the active player's own power (`[[player+0x110]+0x7b]`) alone,
+        // leaving past the display and the log on a byte of 5 or more (`0x6e2131`) or an empty
+        // noun (`0x6e2176`).
+        0x02 if player => get_text(POWER_NOUNS.get(usize::from(args.power?))?)?,
         // `0x6e20eb`, and the pet's `0x6e8f6a`: health takes `0x123`, the rest the five ids of
         // `0x8118dc` (the pet's `0x8118f0` holds the same), with an empty text (`0x6e20fd`).
         0x4D => {
-            error = Some(power_keys(spell.map_or(0, |d| d.power_type)).0);
+            error = Some(no_power_key(spell.map_or(0, |d| d.power_type)));
             String::new()
         }
         _ => match args.fill(caster, reason, spell) {
