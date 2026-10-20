@@ -72,7 +72,7 @@ pub struct CraftRecipe {
     pub tools: Vec<(String, bool)>,
     pub tooltip: CraftTooltip,
     /// `Spell.dbc` `spellLevel` (`+0x74`), the Beast Training comparator's rank key. The
-    /// reference's `requiredLevel` return comes from it; here that return is 0.
+    /// `requiredLevel` return reads the learned spell's instead (`0x4f705f` → `0x60c840`).
     pub spell_level: u32,
     /// The name of the recipe's group key, the skill line of the spell's ability (row `+0x04`,
     /// `0x4f61b1`), for `GetCraftSkillLine`; `None` when `SkillLine.dbc` has no such row.
@@ -301,7 +301,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
     // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); a miss pushes the seven too.
-    // `isExpanded` is always nil; Beast Training's cost and level answer 0, not built.
+    // `isExpanded` is always nil. Not built: the cost and the level, which the reference reads off
+    // the pet bar's unit (`0xb714a0`) for the spell a pet-learn effect teaches (`0x4f6fe6`-
+    // `0x4f7093`); both answer 0, its answer with no pet.
     g.set(
         "GetCraftInfo",
         lua.create_function(|lua, index: Value| {
