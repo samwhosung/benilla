@@ -224,6 +224,10 @@ mod tests {
                 refused("9e4394"),
                 format!("Malformed message recieved: Id = {id}, Len = 5, Read = 6")
             );
+            assert_eq!(
+                refused(""),
+                format!("Malformed message recieved: Id = {id}, Len = 2, Read = 3")
+            );
         }
     }
 
@@ -256,6 +260,10 @@ mod tests {
         assert_eq!(
             refused("9e43"),
             "Malformed message recieved: Id = 66, Len = 4, Read = 5"
+        );
+        assert_eq!(
+            refused(""),
+            "Malformed message recieved: Id = 66, Len = 2, Read = 3"
         );
     }
 

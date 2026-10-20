@@ -12,6 +12,7 @@
 use benilla_protocol::{SessionEvent, WowTime};
 use benilla_world::frame_pace::FrameStep;
 use benilla_world::lighting::WorldTime;
+use benilla_world::schedule::WorldStage;
 use bevy::prelude::*;
 
 /// The rate the constructor stores and the lowest the clamp takes, the `f32` 1/60 at `0x80e45c`.
@@ -409,6 +410,18 @@ fn format_time(time: &WowTime) -> String {
 /// It is built once and no logout resets it (`0x6c61a0` clears only the handlers).
 #[derive(Resource, Default)]
 pub(crate) struct ServerTime(pub(crate) GameTime);
+
+/// The clock's per-frame systems. In the net stage, after the drain that may have set the clock:
+/// the lighting resolve runs after it and reads this frame's clock.
+pub(super) fn register(app: &mut App) {
+    app.add_systems(
+        Update,
+        (tick_game_time, publish_world_time)
+            .chain()
+            .after(super::apply_net_updates)
+            .in_set(WorldStage::Net),
+    );
+}
 
 /// The millisecond clock `0x42c010` reads, here the paced frame clock the frame time is taken from.
 pub(crate) fn clock_tick(step: &FrameStep) -> u32 {
@@ -1003,6 +1016,81 @@ mod tests {
         assert!((t.minute_f - 870.0).abs() < 1e-3);
         let serial = (26 * 372 + 9 * 31 + 17) as f64;
         assert!((t.day - (serial + 870.0 / 1440.0)).abs() < 1e-6);
+    }
+
+    /// The clock and its two systems under the real lifecycle gate, the screen set by `start`.
+    fn world_app(start: crate::client_state::ClientState, clock: GameTime) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .add_plugins(crate::client_state::ClientStatePlugin { start })
+            .init_resource::<benilla_world::schedule::WorldLive>()
+            .init_resource::<FrameStep>()
+            .init_resource::<WorldTime>()
+            .insert_resource(ServerTime(clock));
+        register(&mut app);
+        app
+    }
+
+    /// One frame of `secs` of frame time.
+    fn frame(app: &mut App, secs: u64) {
+        let delta = std::time::Duration::from_secs(secs);
+        let mut step = app.world_mut().resource_mut::<FrameStep>();
+        step.delta = delta;
+        step.elapsed += delta;
+        app.update();
+    }
+
+    fn held(app: &App) -> GameTime {
+        app.world().resource::<ServerTime>().0
+    }
+
+    /// `0x401684`, `0x401f04`: `ClientInitializeGame` registers the frame advance (`0x401ec0`) at
+    /// world entry and `ClientDestroyGame` removes it, so a clock at the glue does not advance and a
+    /// banked skip is not paid there.
+    #[test]
+    fn the_clock_does_not_advance_at_the_glue() {
+        use crate::client_state::ClientState;
+        // Never given a time: `GetGameTime` keeps answering -1, -1 past a minute of frame time.
+        let mut app = world_app(ClientState::Login, GameTime::new(0));
+        frame(&mut app, 180);
+        assert_eq!(hm(&held(&app)), (-1, -1));
+        // Given one, with ten minutes banked to skip: nothing moves at either glue screen.
+        let mut clock = at(14, 30);
+        clock.sync(sunday(14, 20), 0);
+        let mut app = world_app(ClientState::CharSelect, clock);
+        frame(&mut app, 120);
+        let c = held(&app);
+        assert_eq!((hm(&c), c.skip()), ((14, 30), 10));
+    }
+
+    /// The reference's object outlives the world and only its tick is unregistered, so a logout
+    /// leaves the clock frozen at the value it had.
+    #[test]
+    fn the_clock_runs_in_the_world_and_holds_after_a_logout() {
+        use crate::client_state::ClientState;
+        let mut app = world_app(ClientState::InWorld, at(14, 30));
+        frame(&mut app, 60);
+        assert_eq!(
+            hm(&held(&app)),
+            (14, 31),
+            "a minute of frame time at a sixtieth"
+        );
+        app.world_mut()
+            .resource_mut::<NextState<ClientState>>()
+            .set(ClientState::CharSelect);
+        frame(&mut app, 600);
+        frame(&mut app, 600);
+        assert_eq!(
+            hm(&held(&app)),
+            (14, 31),
+            "frozen at the glue after the logout"
+        );
+        // The next world entry takes the frame time from there, with no catch-up.
+        app.world_mut()
+            .resource_mut::<NextState<ClientState>>()
+            .set(ClientState::InWorld);
+        frame(&mut app, 60);
+        assert_eq!(hm(&held(&app)), (14, 32));
     }
 
     /// `0x401ec0`: each frame builds the clock's fraction from the frame time.

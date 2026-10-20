@@ -74,15 +74,7 @@ impl Plugin for NetPlugin {
         if !self.connect {
             app.insert_resource(NetOffline);
         }
-        // In the net stage, after the drain that may have set the clock: the lighting resolve runs
-        // after it and reads this frame's clock.
-        app.add_systems(
-            Update,
-            (game_time::tick_game_time, game_time::publish_world_time)
-                .chain()
-                .after(apply_net_updates)
-                .in_set(benilla_world::schedule::WorldStage::Net),
-        );
+        game_time::register(app);
         world::register(app);
         session::register(app);
         objects::register(app);
