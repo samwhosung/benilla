@@ -633,8 +633,8 @@ fn open_state(vm: VmKind) -> mlua::Result<Lua> {
     let mut model = Model::new();
     model.vm = vm;
     lua.set_app_data(model);
-    // Before anything can fire a handler and while no app-data borrow is held, as the
-    // profiler's slot and the call host's require.
+    // Before anything can fire a handler: every VM carries the profiler's slot and the call
+    // host's.
     handler_prof::install(&lua);
     host::install(&lua);
 

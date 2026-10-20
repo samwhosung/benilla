@@ -307,8 +307,9 @@ fn print_report(rows: &[HandlerRow], window: f32, frames: u32, nested: u32) {
     }
 }
 
-/// Install the profiler's `app_data` slot, armed from the environment. Unconditional: mlua refuses
-/// to insert app data while any is borrowed, so the slot must exist before the VM runs.
+/// Install the profiler's `app_data` slot, armed from the environment. Every VM gets one, where
+/// its app data is made, because [`UiScript::profile_handlers`] and every reader do nothing on a
+/// VM without it.
 pub(super) fn install(lua: &Lua) {
     let period = env_period();
     lua.set_app_data(HandlerProf {
