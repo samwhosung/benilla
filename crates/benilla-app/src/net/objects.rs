@@ -29,7 +29,7 @@ use super::{
 
 mod update;
 
-pub(crate) use update::{Listed, Released};
+pub(crate) use update::{release_unheld, Listed, Released};
 
 /// `SMSG_GAMEOBJECT_CUSTOM_ANIM`, bridged to [`crate::go_anim`], which rejects `anim_id >= 4` and
 /// maps the rest to AnimationData 153..156; the fishing bobber's splash is `anim_id` 0.

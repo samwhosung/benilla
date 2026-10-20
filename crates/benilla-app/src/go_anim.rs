@@ -86,6 +86,28 @@ struct Transient {
     node: AnimationNodeIndex,
 }
 
+#[cfg(test)]
+impl GoAnim {
+    /// A machine settled on Closed and playing Despawn, which holds its object.
+    pub(crate) fn holding() -> Self {
+        Self {
+            state: Some(GO_STATE_READY),
+            shown: Some(GO_STATE_READY),
+            dispatched: Some(GO_STATE_READY),
+            transient: Some(Transient {
+                id: ANIM_DESPAWN,
+                node: AnimationNodeIndex::new(0),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The played window ends, as [`retire_transient_anim`] retires it.
+    pub(crate) fn end_hold(&mut self) {
+        self.transient = None;
+    }
+}
+
 /// The stored state (`go+0x27c`) every consumer reads (the animation, `usable`, the lock chain's
 /// per-slot Action gate): [`GoAnim::state`] when animated, since it holds what the wire never
 /// sends, else the wire field, else `0`, ACTIVE, the value vmangos omits.

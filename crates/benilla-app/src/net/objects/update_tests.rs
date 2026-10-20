@@ -731,3 +731,102 @@ fn a_new_guild_timestamp_asks_the_guild_again_and_refreshes_its_members() {
         "every held member of the guild in list order, none of another"
     );
 }
+
+// ── Holds ───────────────────────────────────────────────────────────────────────────────────────
+
+const DOOR: u64 = 0xF110_0000_0000_0E66;
+
+/// A gameobject, created and then held by its state machine's play (`0x5f3b27`).
+fn held_door(world: &mut World) -> Entity {
+    send(
+        world,
+        [created(
+            DOOR,
+            EntityKind::GameObject,
+            [1.0, 2.0, 3.0],
+            &[(ENTRY, 0x12)],
+        )],
+    );
+    let e = world.resource::<GuidIndex>().0[&DOOR];
+    world
+        .entity_mut(e)
+        .insert(crate::go_anim::GoAnim::holding());
+    e
+}
+
+/// The play ends and drops its hold (`0x5f4120` → `0x468410`); the unhold's release runs.
+fn end_hold(world: &mut World, e: Entity) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .get_mut::<crate::go_anim::GoAnim>(e)
+        .unwrap()
+        .end_hold();
+    world.run_system_once(crate::net::release_unheld).unwrap();
+}
+
+/// The out-of-range list's release of a held object only marks it release-pending (`0x464942` →
+/// `0x614f00`, `0x46494f`): it stays live, indexed and drawn. The unhold releases it then
+/// (`0x468410` → `0x46844a`) into the released table, so a values block brings it back.
+#[test]
+fn a_held_object_leaves_range_only_when_its_hold_drops() {
+    let mut app = client();
+    let world = app.world_mut();
+    let e = held_door(world);
+
+    send(world, [out_of_range(&[DOOR])]);
+    assert!(held(world, DOOR), "held: still live");
+    assert!(world.get::<Guid>(e).is_some());
+    assert!(world.get::<DespawnFade>(e).is_none(), "and drawn");
+
+    end_hold(world, e);
+    assert!(!held(world, DOOR), "the unhold released it");
+    assert!(world.get::<DespawnFade>(e).is_some());
+    send(world, [values(DOOR, &[])]);
+    assert!(held(world, DOOR), "out of the released table");
+    assert_eq!(field(world, DOOR, ENTRY), Some(0x12));
+}
+
+/// `SMSG_DESTROY_OBJECT` releases through the same `0x464920` (`0x4674cf`): a held object stays
+/// live, and the destroy finds no released object to free (`0x467521`). The unhold releases it
+/// into the released table, where a block still brings it back.
+#[test]
+fn a_held_object_outlives_its_destroy_until_the_hold_drops() {
+    let mut app = client();
+    let world = app.world_mut();
+    let e = held_door(world);
+
+    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(DOOR)]);
+    assert!(held(world, DOOR), "held: still live");
+    assert!(world.get::<DespawnFade>(e).is_none());
+
+    end_hold(world, e);
+    assert!(!held(world, DOOR), "the unhold released it");
+    assert!(world.get::<DespawnFade>(e).is_some());
+    send(world, [values(DOOR, &[])]);
+    assert!(held(world, DOOR), "released, not freed");
+    assert_eq!(field(world, DOOR, ENTRY), Some(0x12));
+}
+
+/// A values or near-objects block that finds the pending object live clears its pending bit
+/// (`0x464530` → `0x4645b2`), so its unhold releases nothing.
+#[test]
+fn a_block_that_finds_a_pending_object_cancels_its_release() {
+    let mut app = client();
+    let world = app.world_mut();
+    let e = held_door(world);
+
+    send(world, [out_of_range(&[DOOR])]);
+    send(world, [values(DOOR, &[])]);
+    end_hold(world, e);
+    assert!(held(world, DOOR), "a values block");
+    assert!(world.get::<DespawnFade>(e).is_none());
+
+    world
+        .entity_mut(e)
+        .insert(crate::go_anim::GoAnim::holding());
+    send(world, [out_of_range(&[DOOR])]);
+    send(world, [SessionEvent::ObjectsNear(vec![DOOR])]);
+    end_hold(world, e);
+    assert!(held(world, DOOR), "a near-objects block");
+    assert!(world.get::<DespawnFade>(e).is_none());
+}

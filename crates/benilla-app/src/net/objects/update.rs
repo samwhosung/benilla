@@ -659,6 +659,9 @@ fn release(sc: &mut Scene, guid: u64) {
     }
 }
 
+/// `ClntObjMgrUnholdObject`'s release (`0x468410`, `0x46844a`): not built.
+pub(crate) fn release_unheld() {}
+
 /// The end of the packet: the notify pass over every block (`0x46522d`-`0x46528b`), then each
 /// brought-back object's vtable slot 3 (`0x465290`-`0x4652ff`).
 fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
