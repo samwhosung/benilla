@@ -830,13 +830,13 @@ pub(crate) mod schedule_tests {
     ///   `portrait::panes::sync_panes`, `portrait::sync_portraits`,
     ///   `portrait::test_bake::sync_test_portraits`,
     ///   `sound::emitter_pool::pump_emitters`, `sound::liquid_loop::drive_liquid_loops` and
-    ///   `ui_models::sync_tiles`. It reads its two units' poses for the display range; those move
-    ///   booth, emitter and tile entities, never a unit.
+    ///   `quest_markers::bake_seat_scale`. It reads its two units' poses for the display range;
+    ///   those move booth, emitter and marker-seat entities, never a unit.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_814;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_823;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
