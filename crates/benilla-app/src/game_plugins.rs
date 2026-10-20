@@ -162,6 +162,7 @@ impl PluginGroup for GamePlugins {
             .add(crate::realmlist::RealmlistPlugin)
             .add(crate::cvars::CvarPlugin)
             .add(crate::console::ConsolePlugin)
+            .add(crate::player_commands::PlayerCommandsPlugin)
             .add(crate::bindings::BindingsPlugin)
             .add(UiUnitPlugin)
             .add(UiPartyPlugin)

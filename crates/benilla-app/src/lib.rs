@@ -77,6 +77,7 @@ mod npc_text;
 mod perf;
 mod pipe_warm;
 mod player;
+mod player_commands;
 mod poi_marker;
 mod portrait;
 #[cfg(feature = "dev")]

@@ -39,6 +39,8 @@ pub(crate) const DEBUG: ConsoleCategory = 0;
 pub(crate) const GRAPHICS: ConsoleCategory = 1;
 /// `console`.
 const CONSOLE: ConsoleCategory = 2;
+/// `game`.
+pub(crate) const GAME: ConsoleCategory = 4;
 /// `default`.
 const DEFAULT: ConsoleCategory = 5;
 
