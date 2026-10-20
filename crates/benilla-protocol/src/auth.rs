@@ -501,4 +501,62 @@ mod tests {
         assert_eq!(plain.flags, 0x02);
         assert_eq!(plain.population, 1.5);
     }
+
+    /// A one-realm `CMD_REALM_LIST_Server` named `name`, whose address is `127.0.0.1:8085`.
+    fn realm_named(name: &[u8]) -> RealmInfo {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(name);
+        body.push(0);
+        body.extend_from_slice(b"127.0.0.1:8085\0");
+        body.extend_from_slice(&1.5f32.to_le_bytes());
+        body.extend_from_slice(&[0, 1, 0]);
+        let mut packet = vec![CMD_REALM_LIST];
+        packet.extend_from_slice(&(body.len() as u16 + 3).to_le_bytes());
+        packet.extend_from_slice(&0u32.to_le_bytes());
+        packet.push(1);
+        packet.extend_from_slice(&body);
+        packet.extend_from_slice(&0u16.to_le_bytes());
+        read_realm_list(&mut packet.as_slice()).unwrap().remove(0)
+    }
+
+    /// The realm record fill (`0x5b2230`) turns each of `"*/:<>?\|` in a name into a space
+    /// (`0x5b2376`-`0x5b2391`, the table `0x5b2450`) and leaves every other character: the other
+    /// punctuation, the dot and the space inside a name, and bytes past `0x7c`.
+    #[test]
+    fn a_realm_name_loses_the_nine_characters_a_file_name_cannot_hold() {
+        for c in "\"*/:<>?\\|".chars() {
+            assert_eq!(
+                realm_named(format!("A{c}B").as_bytes()).name,
+                "A B",
+                "{c:?}"
+            );
+        }
+        let kept = "A!#$%&'()+,-;=@[]^_`{}~B C.D";
+        assert_eq!(realm_named(kept.as_bytes()).name, kept);
+        assert_eq!(realm_named("Königreich Å".as_bytes()).name, "Königreich Å");
+    }
+
+    /// Trailing spaces and dots are cut (`0x5b23a6`-`0x5b23c5` through `0x5b24b0` with its
+    /// trailing flag set), after the nine characters became spaces: `Test:Realm.` lists as
+    /// `Test Realm`, and a name of nothing but those characters lists empty.
+    #[test]
+    fn a_realm_name_loses_its_trailing_spaces_and_dots() {
+        let cleaned = |name: &str| realm_named(name.as_bytes()).name;
+        assert_eq!(cleaned("Test:Realm."), "Test Realm");
+        assert_eq!(cleaned("Realm. . "), "Realm");
+        assert_eq!(cleaned("Realm:"), "Realm");
+        assert_eq!(cleaned("A:."), "A");
+        assert_eq!(cleaned("Königreich:"), "Königreich");
+        assert_eq!(cleaned("..."), "");
+        assert_eq!(cleaned("*|"), "");
+        assert_eq!(cleaned(" Lead.dot"), " Lead.dot", "only the end is cut");
+    }
+
+    /// Only the name is cleaned: the address keeps its colon, so the dial still has its port.
+    #[test]
+    fn the_address_is_not_cleaned() {
+        assert_eq!(realm_named(b"R").address, "127.0.0.1:8085");
+    }
 }
