@@ -3296,7 +3296,8 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
             Order = {}
             Ord = CreateFrame("Frame", "BenillaOrderSpy")
             Ord:SetScript("OnEvent", function()
-                table.insert(Order, event .. (event == "UNIT_COMBAT" and (" " .. arg1 .. " " .. arg2) or ""))
+                local who = event == "UNIT_COMBAT" and (" " .. arg1 .. " " .. arg2) or ""
+                table.insert(Order, event .. who)
             end)
             Ord:RegisterEvent("UNIT_COMBAT")
             Ord:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")

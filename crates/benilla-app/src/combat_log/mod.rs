@@ -119,12 +119,17 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::PvpCredit, on_pvp_credit)
             // Written by the missile flight; declared here too, as registering is idempotent.
             .add_message::<MissileMiss>()
-            // After the flight that writes the arrivals, and the party drain whose roster the
-            // classifier reads.
+            // After the flight that writes the arrivals (`entities::move_missiles`), so the
+            // flash and the line queue together, in `0x61dd50`'s order, the frame the missile
+            // lands. The flight runs after the frame's feeds (the sheath request it follows is
+            // after `ChatDrain` and `WorldStage::Input`), so the drain fires them the next frame,
+            // as it does the swing's impact flash. After the stream stage and the party drain,
+            // whose resources it shares.
             .add_systems(
                 Update,
                 on_missile_miss
                     .after(crate::entities::EntityVisualsSet)
+                    .after(benilla_world::schedule::WorldStage::Stream)
                     .after(crate::ui_party::drain_party),
             );
     }
