@@ -112,8 +112,10 @@ impl CastCore<'_> {
     /// when `send` is set (`0x6e4970`). Then the pop (`0x6e49d6`). While the record's caster is
     /// the player (`0x6e4a04`-`0x6e4a1e`) it fires `SPELLCAST_STOP` for `failed` 0, else the
     /// failure's edge, and clears the caster (`0x6e4a5a`); with `failed` set it ends a tradeskill
-    /// repeat last (`0x6e4ac2`). Every caller gates it on a slot or a word but the soulstone's.
-    /// What it popped is returned for the caller's local teardown.
+    /// repeat last (`0x6e4ac2`). Most callers gate it on the slot or the word; the soulstone's
+    /// (`0x48ae6b`), `0x495920`'s (`0x495932`) and the death handler's (`0x5e9a6c`) do not, and
+    /// `StartMeleeAttack`'s reads the caster's precast spell (`0x5ecc56`-`0x5ecc85`). What it
+    /// popped is returned for the caller's local teardown.
     pub(crate) fn cancel(&mut self, failed: bool, send: bool, reason: u8) -> Option<Inflight> {
         let slot = self.slot();
         if self.ground.active() {

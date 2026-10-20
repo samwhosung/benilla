@@ -684,7 +684,8 @@ fn cast_result(
     // - the slot's own pop, `0x6e741a` → `0x6e4940(0, 0, 0x1c)`, while the caster word is the
     //   player's: a success, or a failure whose report left the spell in flight. Every cast holds
     //   the slot until here, an instant, a channel and a `ITEM_FLAG_PLAYERCAST` item too, so each
-    //   gets its STOP, before its GO;
+    //   gets its STOP, before its GO, but an auto-repeat spell, which its send popped
+    //   (`0x6e5989`);
     // - `0x6e74cb`, a spell not in the slot: when nothing is in flight (`0x6e3d30`) and the status
     //   is not 2 (`0x6e74c5`), with no caster test; the use of an item without the flag lands here.
     // The save `0xcecaa8` is cleared first when it holds the spell (`0x6e73ee`): a queued strike
