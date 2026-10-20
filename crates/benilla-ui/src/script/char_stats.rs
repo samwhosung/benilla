@@ -456,6 +456,24 @@ impl Model {
             .clone()
     }
 
+    /// The bag-slot item object behind the player's live id `slot` in the vault and keyring bands,
+    /// which `SetInventoryItem` resolves through the player's slot list as it does a worn item
+    /// (`0x53314e` → `0x6228a0`); `None` for every other band.
+    pub(super) fn inv_container_slot(
+        &self,
+        slot: usize,
+    ) -> Option<&super::container::ContainerSlot> {
+        let (bag, first) = if BANK_INV_SLOTS.contains(&slot) {
+            (BANK_CONTAINER, *BANK_INV_SLOTS.start())
+        } else if KEYRING_INV_SLOTS.contains(&slot) {
+            (KEYRING_CONTAINER, *KEYRING_INV_SLOTS.start())
+        } else {
+            return None;
+        };
+        let n = (slot - first + 1) as u32;
+        self.containers.get(&bag)?.slots.get(&n)
+    }
+
     /// The player's repair cost at live id `slot`, the vault and keyring bands by their container
     /// slots.
     pub(super) fn inv_repair_cost(&self, slot: usize) -> u32 {

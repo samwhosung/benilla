@@ -531,21 +531,33 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         .filter(|s| s.item_id != 0)
                         .map(|s| {
                             (s.item_id, s.name.clone(), s.quality, {
-                                // Only the player's own doll holds item objects; an
-                                // inspected unit's item is a block (`0x532ee0`). `0x532ee0`
-                                // has p6=0 legs too (`0x533106`, `0x5332ad`), but nothing
-                                // openable is equippable.
+                                // Only the player's own slots hold item objects; an inspected
+                                // unit's item is a block (`0x533354`).
                                 let player = unit.eq_ignore_ascii_case("player");
-                                let mut inst = worn_instance(&s, player);
                                 // The player's own item answers the cooldown query
                                 // (`0x5331ec`), unless it is charged and spent
                                 // (`0x53318a`-`0x53319b`, the feed's `None`); an inspected
-                                // record has none.
+                                // record has none. A running one takes the p6=1 leg
+                                // (`0x533267`), every other the p6=0 leg (`0x5332ad`), whose
+                                // open hint a lootable box in the vault shows.
+                                let cooldown = player.then(|| model.inv_slot_cooldown(slot));
+                                let cooldown = cooldown.flatten();
+                                let running = cooldown
+                                    .is_some_and(|(start, dur, on)| on && start > 0.0 && dur > 0.0);
+                                // The vault and keyring are bag slots, read as the object they
+                                // hold: its text id, flags and charter all reach the builder.
+                                let mut inst = match player.then(|| model.inv_container_slot(slot))
+                                {
+                                    Some(Some(c)) => slot_instance(c, !running),
+                                    _ => {
+                                        let mut inst = worn_instance(&s, player);
+                                        inst.openable_source = player && !running;
+                                        inst
+                                    }
+                                };
                                 if player {
-                                    inst.cooldown_ms = super::tooltip_spell::live_remaining_ms(
-                                        model.inv_slot_cooldown(slot),
-                                        model.now,
-                                    );
+                                    inst.cooldown_ms =
+                                        super::tooltip_spell::live_remaining_ms(cooldown, model.now);
                                 }
                                 inst
                             })
