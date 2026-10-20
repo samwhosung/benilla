@@ -320,7 +320,7 @@ pub(super) fn control(
         // (`0x5fa600`), so steering a possessed creature, or pressing while feared, ends a cast but
         // not a channel.
         let active_mover = world_q.3.iter().next();
-        let autorun_on = binds.fired(crate::bindings::Input::ToggleAutoRun) && !player.autorun;
+        let autorun_on = input::toggle_autorun(binds, &mut player);
         if input::cancels_cast(
             binds,
             autorun_on,
@@ -339,6 +339,13 @@ pub(super) fn control(
         //   carry no guid, so driving would write one body's pose onto another.
         // Possession is none of these: it runs the ordinary path below, on the creature.
         if player.server_riding || player.control_lost || player.reseat {
+            // The latch outlives the yield: lost control and an unresolved reseat leave the tick
+            // no unit (`0x51466e`), but a ride keeps the mover and fails `0x5144e0`, so the tick
+            // the ride's monster move runs (`0x602053`), and each press's, clears the bit
+            // (`0x514748`).
+            if player.server_riding && active_mover.is_some() {
+                player.autorun = false;
+            }
             // The moving body's transform is the truth; without this the camera stays behind
             // during a fear. Not while reseating, when `Player` still holds the body let go.
             if player.control_lost && !player.reseat {

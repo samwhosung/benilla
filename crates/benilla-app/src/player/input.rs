@@ -100,7 +100,21 @@ pub(super) struct MoveAxes {
     pub turn_right: bool,
 }
 
-/// Decodes the movement keys into [`MoveAxes`], running the autorun latch and its cancel set.
+/// `ToggleAutoRun` (`0x513de0`, bound by 1.12 to NUMLOCK and BUTTON4, winit's `Forward`): reads
+/// the held bit 0x1000 (`0x513de7`) and presses it when clear, storing it at `0x514907`, or
+/// releases it when set (`0x514b70`), whatever drives the body. Whether this frame's press set it:
+/// the on edge, a press in the cancel mask. The window-deactivate handler (`0x514490`, called only
+/// from the WM_ACTIVATE slot at `0x493058`) releases every direction bit and keeps `0x1000`.
+pub(super) fn toggle_autorun(binds: &crate::bindings::BindingsState, player: &mut Player) -> bool {
+    if !binds.fired(crate::bindings::Input::ToggleAutoRun) {
+        return false;
+    }
+    player.autorun = !player.autorun;
+    player.autorun
+}
+
+/// Decodes the movement keys into [`MoveAxes`], running autorun's cancel set on the latch
+/// [`toggle_autorun`] has set this frame.
 pub(super) fn move_axes(
     binds: &crate::bindings::BindingsState,
     buttons: &ButtonInput<MouseButton>,
@@ -112,12 +126,6 @@ pub(super) fn move_axes(
     may_translate: bool,
     may_turn: bool,
 ) -> MoveAxes {
-    // ── Autorun ── TOGGLEAUTORUN, a latch (1.12 defaults NUMLOCK and BUTTON4, winit's
-    // `Forward`). The reference's window-deactivate handler (`0x514490`, called only from the
-    // WM_ACTIVATE slot at `0x493058`) releases every direction bit and keeps `0x1000`.
-    if binds.fired(crate::bindings::Input::ToggleAutoRun) {
-        player.autorun = !player.autorun;
-    }
     // Name an extra mouse button the bindings do not know, rather than fail silently.
     for b in buttons.get_just_pressed() {
         if let MouseButton::Other(n) = b {
@@ -131,9 +139,10 @@ pub(super) fn move_axes(
     //   axis is built (`0x5150a7`, emitter tail `0x5151a0`). The release path `0x514b70` restores
     //   nothing, so letting go of S after reversing leaves you standing.
     // - The transition into both buttons held (`0x514a73`, the same helper).
-    // - Losing the mover, a level: the emitter gate `0x514560` down (health `<= 0`,
+    // - The unit unable to translate, a level: the emitter gate `0x514560` down (health `<= 0`,
     //   `MOVEMENTFLAGS & 0x1200`, stand state 7) makes writer `0x514748` clear the bit at the next
-    //   emit; ours is `state::may_translate`. The server-ride term is benilla's own.
+    //   emit; ours is `state::may_translate`. A server ride fails it too (`0x5144e0`), and
+    //   `control` clears the bit on that path, which never reaches here.
     // A jump, a chat EditBox taking focus and a zone change leave it set; mounting is untraced and
     // leaves it set here. A focused chat box releases nothing, so W held through ENTER still runs.
     let both_buttons_engaged = both_engaged(binds, rig, both_buttons);
@@ -141,7 +150,7 @@ pub(super) fn move_axes(
         binds.just_pressed(crate::bindings::Input::MoveForward),
         binds.just_pressed(crate::bindings::Input::MoveBackward),
         both_buttons_engaged,
-        !may_translate || player.server_riding,
+        !may_translate,
     ) {
         player.autorun = false;
     }
@@ -252,7 +261,7 @@ mod tests {
     ) -> bool {
         let binds = BindingsState::after_calls(earlier, now);
         let rig = CameraControl::default();
-        let autorun_on = binds.fired(crate::bindings::Input::ToggleAutoRun) && !player.autorun;
+        let autorun_on = toggle_autorun(&binds, player);
         let both = both_engaged(&binds, &rig, binds.steering());
         move_axes(
             &binds,
