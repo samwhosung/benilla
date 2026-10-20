@@ -1429,6 +1429,62 @@ mod tests {
         );
     }
 
+    /// `0x46a400` reads the four `read*` options into the flag cells once, at `0x402b36`; after
+    /// that only the accepts store them (`0x46aef0` and its siblings, a census of the eight
+    /// cells). A glue rebuild (`0x46a7b0`) seats the same cells: a `read*` option changed by a
+    /// console write is not read again, and an accept outlives the option it wrote.
+    #[test]
+    fn the_agreement_flags_are_seeded_once_and_a_rebuild_keeps_them() {
+        use crate::client_state::ClientState;
+        use benilla_ui::script::{GlueNotice, NoticeState};
+        let accepted = NoticeState {
+            accepted: true,
+            show_notice: false,
+        };
+        let flags = |world: &World| {
+            let script = world.non_send_resource::<UiScript>();
+            GlueNotice::ALL.map(|n| script.glue_notice(n))
+        };
+        let mut world = World::new();
+        world.insert_resource(State::new(ClientState::Login));
+        world.insert_resource(crate::cvars::Cvars::with_value("readTOS", "1"));
+        world.init_non_send_resource::<super::super::glue_mgr::SharedGlueMgr>();
+        setup_script(&mut world);
+        let seeded = [
+            accepted,
+            NoticeState::default(),
+            NoticeState::default(),
+            NoticeState::default(),
+        ];
+        assert_eq!(flags(&world), seeded, "the startup read");
+
+        // The options move with no accept; the next glue build does not read them.
+        {
+            let mut cvars = world.resource_mut::<crate::cvars::Cvars>();
+            cvars.set("readTOS", "0");
+            cvars.set("readEULA", "1");
+        }
+        install_glue_side_vm(&mut world, "login");
+        assert_eq!(flags(&world), seeded, "a rebuild keeps the cells");
+
+        // An accept stores its cell, and a rebuild after the option was reset keeps that too.
+        world
+            .non_send_resource::<UiScript>()
+            .run("AcceptScanning()")
+            .unwrap();
+        world
+            .resource_mut::<crate::cvars::Cvars>()
+            .set("readScanning", "0");
+        install_glue_side_vm(&mut world, "login");
+        let mut want = seeded;
+        want[GlueNotice::Scanning as usize] = accepted;
+        assert_eq!(
+            flags(&world),
+            want,
+            "an accept outlives the option it wrote"
+        );
+    }
+
     /// The world holds the glue VM outside the world, at startup on the login screen
     /// (`0x402b65`) and back from the world on the screen the exit enters (`0x402090`); a
     /// `ReloadUI()` never builds the glue.
