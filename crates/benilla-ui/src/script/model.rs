@@ -1075,6 +1075,9 @@ pub(crate) struct Model {
     /// `ItemRandomProperties` id to its view, pushed whole at startup: a clicked tooltip cannot
     /// repaint on a late answer. The reference reads its loaded store `0xc0dbd4` (`0x52c991`).
     pub(crate) random_properties: HashMap<u32, super::RandomPropertyView>,
+    /// `SpellItemEnchantment` id to the name a tooltip's enchant line prints, pushed whole at
+    /// startup for the sources that carry a bare id, as a link's block does (`0x52c9f2`).
+    pub(crate) enchant_names: HashMap<u32, String>,
     /// The player's level, class, race and skills, for a tooltip's red requirement lines.
     pub(crate) player_req: PlayerReqState,
     /// `Lock.dbc` by lock id, pushed whole at startup, and what the active player opens locks with
@@ -1837,6 +1840,7 @@ impl Model {
             unit_name_asks: HashSet::new(),
             petition_asks: HashSet::new(),
             random_properties: HashMap::new(),
+            enchant_names: HashMap::new(),
             item_stat_asks: HashSet::new(),
             item_stat_reads: HashSet::new(),
             player_req: PlayerReqState::default(),

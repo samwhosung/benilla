@@ -312,6 +312,12 @@ impl super::UiScript {
         self.model_mut().random_properties = rows;
     }
 
+    /// Pushes the `SpellItemEnchantment` names once, at load, keyed by id: a chat link carries a
+    /// bare enchant id, and a clicked tooltip cannot repaint on a late answer.
+    pub fn set_enchant_names(&mut self, names: HashMap<u32, String>) {
+        self.model_mut().enchant_names = names;
+    }
+
     /// Pushes the player state the red lines compare against.
     pub fn set_player_req_state(&mut self, state: PlayerReqState) {
         self.model_mut().player_req = state;

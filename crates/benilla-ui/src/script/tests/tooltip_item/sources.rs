@@ -152,3 +152,79 @@ fn a_bank_vault_item_keeps_its_text_and_its_open_hint() {
     assert_eq!(chest, ["Battered Chest", "[ITEM_OPENABLE]"]);
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
+
+/// `SetHyperlink` stores the link's enchant as the block's first enchant (`0x5321d3`) and builds
+/// with p6 = 1 (`0x532198`), so the no-object enchant loop names it from `SpellItemEnchantment`
+/// (`0x52c9f2`, `0x52ca0c`..`0x52ca1e`): green for a positive id, pure red for a negative one
+/// (`0x52ca38`..`0x52ca46`), ahead of the roll's slots.
+#[test]
+fn a_link_shows_its_enchant() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        9300,
+        ItemTemplateView {
+            name: "Runed Blade".into(),
+            quality: 2,
+            ..Default::default()
+        },
+    );
+    s.set_enchant_names(HashMap::from([(1900, "Crusader".to_string())]));
+    s.run(r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")"#)
+        .unwrap();
+    let texts = texts_after(&mut s, r#"TT:SetHyperlink("item:9300:1900:0:0")"#);
+    assert_eq!(texts, ["Runed Blade", "Crusader"]);
+    let lines = lines_of(&mut s);
+    assert_eq!(lines[1].1, [0.0, 1.0, 0.0, 1.0], "a positive id is green");
+    let texts = texts_after(&mut s, r#"TT:SetHyperlink("item:9300:-1900:0:0")"#);
+    assert_eq!(texts, ["Runed Blade", "Crusader"]);
+    let lines = lines_of(&mut s);
+    assert_eq!(lines[1].1, [1.0, 0.0, 0.0, 1.0], "a negative id is pure red");
+    // An id with no row adds nothing (`0x52ca06`).
+    let texts = texts_after(&mut s, r#"TT:SetHyperlink("item:9300:1901:0:0")"#);
+    assert_eq!(texts, ["Runed Blade"]);
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// Setting the item the shown tooltip already holds hides it (`0x5320c7`..`0x5320e9`): the shown
+/// bit at `+0xd0` and the kept entry at `+0x398`, so a second click on the same item link closes
+/// the plate, and the third opens it again.
+#[test]
+fn the_same_item_link_twice_hides_the_tooltip() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    for (id, name) in [(9301, "Iron Ring"), (9302, "Gold Ring")] {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: name.into(),
+                quality: 1,
+                ..Default::default()
+            },
+        );
+    }
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "LinkSlot"); a:SetPoint("CENTER", 0, 0)
+        a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetHyperlink("item:9301:0:0:0")
+        assert(tt:IsShown(), "the first click shows")
+        tt:SetHyperlink("item:9301:0:0:0")
+        assert(not tt:IsShown(), "the same item again hides")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetHyperlink("item:9301:0:0:0")
+        assert(tt:IsShown(), "and the next click shows it again")
+        -- The entry decides, not the whole link: another roll of the same item hides it too.
+        tt:SetHyperlink("item:9301:0:5:0")
+        assert(not tt:IsShown(), "the same entry hides")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetHyperlink("item:9301:0:0:0")
+        tt:SetHyperlink("item:9302:0:0:0")
+        assert(tt:IsShown() and TTTextLeft1:GetText() == "Gold Ring", "another item replaces it")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
