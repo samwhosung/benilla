@@ -403,7 +403,7 @@ fn a_player_logging_out_is_refused_ahead_of_the_crowd_control() {
 
 // ── The interrupt-flag stance rungs and the posture rungs (`0x609ba1`-`0x609cbd`) ──
 
-/// `0x41` "You must have your weapon drawn" for interrupt flag `0x200` with the weapon away, arm A
+/// `0x41` "You must be unsheathed" for interrupt flag `0x200` with the weapon away, arm A
 /// on the aura flags, arm B on the channel flags of a channelled spell (`0x609ba1`-`0x609bf3`).
 #[test]
 fn an_unsheathed_only_spell_needs_a_drawn_weapon() {
