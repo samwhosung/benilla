@@ -118,6 +118,9 @@ case " $pkgs " in *" benilla-app "* | *" benilla "*)
 esac
 # Every test binary runs whatever another fails (`scripts/unit-tests.sh`), and the doctests after.
 run test env BENILLA_SKIP_LOG="$skips" "$root/scripts/unit-tests.sh" $pflags
+# The gates' test-no-install, scoped: a test that reads the install without `wow_data_or_skip!`
+# fails here, not at the land. `WOW_DATA=` builds nothing new, so the binaries above are reused.
+run test-no-install env -u BENILLA_REQUIRE_DATA WOW_DATA= "$root/scripts/unit-tests.sh" $pflags
 # shellcheck disable=SC2086 # one word per package
 run doctest "$root/scripts/doc-tests.sh" $pkgs
 # Data-gated tests skip without the install or the addon corpus and libtest swallows their line,
