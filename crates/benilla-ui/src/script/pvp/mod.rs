@@ -233,7 +233,8 @@ pub struct RankTitle {
     /// `PLAYER_BYTES_3` byte 3 (`UnitPVPRank`), the internal rank 0..=18; 19 is the racial
     /// "Leader" the keys still name.
     pub rank: u8,
-    /// The team digit from the race: 0 Horde, 1 Alliance, -1 no side.
+    /// The team digit, 0 Horde, 1 Alliance, -1 no side: a unit name's from its race, an honor
+    /// credit's from its victim's faction template group (`0x6252de`).
     pub team: i8,
     /// Female takes the `_FEMALE` twin (`0x612bf0`) and falls back to the base key.
     pub female: bool,

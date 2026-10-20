@@ -373,14 +373,61 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
     }
 }
 
-/// An honor award: the combat-log line, which raises the `HONOR_GAINED` word once written.
-fn on_pvp_credit(In(ev): In<SessionEvent>, mut l: Sinks) {
-    if let SessionEvent::PvpCredit(credit) = ev {
-        l.log.push_pvp_credit(
-            credit.honor,
-            credit.victim_guid,
-            u8::try_from(credit.victim_rank).unwrap_or(0),
-        );
+/// An honor credit (`0x625270`): the combat-log line, which raises the `HONOR_GAINED` word once
+/// written. A kill needs its victim held as a unit (`0x62529f`, `0x6252ab`), and an honorable one
+/// a victim on a side ([`honor_side`]); otherwise nothing at all.
+fn on_pvp_credit(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+    let SessionEvent::PvpCredit(credit) = ev else {
+        return;
+    };
+    let rank = u8::try_from(credit.victim_rank).unwrap_or(0);
+    let side = if credit.victim_guid == 0 {
+        0
+    } else {
+        let Some(victim) = c
+            .index
+            .0
+            .get(&credit.victim_guid)
+            .and_then(|&e| l.stores.get(e).ok())
+            .filter(|s| {
+                use benilla_protocol::messages::ObjectType;
+                matches!(
+                    s.0.object_type(),
+                    Some(ObjectType::Unit | ObjectType::Player)
+                )
+            })
+        else {
+            return;
+        };
+        if credit.honor > 0 {
+            match honor_side(victim, c.factions.as_deref()) {
+                Some(side) => side,
+                None => return,
+            }
+        } else {
+            0
+        }
+    };
+    l.log
+        .push_pvp_credit(credit.honor, credit.victim_guid, rank, side);
+}
+
+/// The side an honorable kill's rank title is read on (`0x6252de`-`0x625321`): the victim's
+/// `UNIT_FIELD_FACTIONTEMPLATE` row in `FactionTemplate.dbc`, its group mask (`+0xc`) `4`, the
+/// Horde, giving 0, else `2`, the Alliance, giving 1; any other drops the credit.
+fn honor_side(
+    victim: &ObjectStore,
+    factions: Option<&crate::target::ring::Factions>,
+) -> Option<u8> {
+    let template = factions?
+        .catalog()
+        .template(victim.0.unit_faction_template()?)?;
+    if template.group_mask & 0x4 != 0 {
+        Some(0)
+    } else if template.group_mask & 0x2 != 0 {
+        Some(1)
+    } else {
+        None
     }
 }
 
@@ -576,5 +623,49 @@ mod tests {
             .collect();
         assert_eq!(lines, [("SPELLRESIST", MOB, ME)]);
         assert_eq!(left(&mut app).1, 1);
+    }
+
+    /// `0x625270` drops a kill whose victim is no unit the client holds (`0x6252ab`), and an
+    /// honorable kill whose victim's faction template group is neither Horde (side 0) nor
+    /// Alliance (side 1) (`0x62530c`-`0x625321`); a dishonorable kill takes no side, and an award
+    /// has no victim.
+    #[test]
+    fn an_honor_credit_needs_its_victim_held_and_on_a_side() {
+        use crate::target::relations::fixture::factions;
+        const ORC_PLAYER: u64 = 3;
+        const NEUTRAL: u64 = 4;
+        let credit = |victim_guid, honor| {
+            let mut app = world(&[ME, MOB]);
+            app.insert_resource(factions());
+            for unit in [player(ORC_PLAYER, ORC), creature(NEUTRAL, 99)] {
+                let e = app
+                    .world_mut()
+                    .spawn((Guid(unit.guid), store_of(&unit)))
+                    .id();
+                app.world_mut()
+                    .resource_mut::<GuidIndex>()
+                    .0
+                    .insert(unit.guid, e);
+            }
+            let packet = SessionEvent::PvpCredit(benilla_protocol::messages::PvpCredit {
+                honor,
+                victim_guid,
+                victim_rank: 8,
+            });
+            app.world_mut()
+                .run_system_once_with(on_pvp_credit, packet)
+                .unwrap();
+            app.world().resource::<ChatLog>().pending_honor()
+        };
+        assert_eq!(credit(ORC_PLAYER, 120), [(ORC_PLAYER, 120, 8, 0)]);
+        assert_eq!(
+            credit(MOB, 120),
+            [(MOB, 120, 8, 0)],
+            "an orc creature is Horde too"
+        );
+        assert!(credit(NEUTRAL, 120).is_empty(), "no side");
+        assert_eq!(credit(NEUTRAL, -40), [(NEUTRAL, -40, 8, 0)]);
+        assert!(credit(77, 120).is_empty(), "not held");
+        assert_eq!(credit(0, 25), [(0, 25, 8, 0)]);
     }
 }

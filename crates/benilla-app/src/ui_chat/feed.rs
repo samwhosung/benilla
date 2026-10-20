@@ -77,13 +77,13 @@ enum Pending {
         bonus: u32,
         tries: u16,
     },
-    /// An honor award waiting on the victim's name; `rank` (0 none) becomes a title at the drain,
-    /// from the victim's side in the same name-query record.
+    /// An honor award; `rank` (0 none) becomes a title at the drain, on the victim's `side` (0
+    /// Horde, 1 Alliance), read off its object at the packet.
     HonorGain {
         victim: u64,
         honor: i32,
         rank: u8,
-        tries: u16,
+        side: u8,
     },
     /// A text emote waiting on its performer's name: the reference's `PENDINGTEXTEMOTE` node
     /// (`0x49cc00`), queued when `0x49dbe0` finds no cached name and drained by `0x49d0d0`.
@@ -288,13 +288,13 @@ impl ChatLog {
     }
 
     /// Queue an honor award's line (`SMSG_PVP_CREDIT`); victim 0 is a bonus or objective award.
-    pub(crate) fn push_pvp_credit(&mut self, honor: i32, victim: u64, rank: u8) {
+    pub(crate) fn push_pvp_credit(&mut self, honor: i32, victim: u64, rank: u8, side: u8) {
         // Both forks park: the template resolves at the drain.
         self.pending.push(Pending::HonorGain {
             victim,
             honor,
             rank,
-            tries: 0,
+            side,
         });
     }
 
@@ -348,6 +348,23 @@ impl ChatLog {
                 Pending::Standing { .. } => "standing",
                 Pending::Combat(_) => "combat",
                 Pending::Event(_) => "event",
+            })
+            .collect()
+    }
+
+    /// The parked honor credits as `(victim, honor, rank, side)`, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_honor(&self) -> Vec<(u64, i32, u8, u8)> {
+        self.pending
+            .iter()
+            .filter_map(|p| match *p {
+                Pending::HonorGain {
+                    victim,
+                    honor,
+                    rank,
+                    side,
+                } => Some((victim, honor, rank, side)),
+                _ => None,
             })
             .collect()
     }
@@ -491,6 +508,27 @@ pub(super) fn write_combat_line(
             word.extra.clone(),
         );
     }
+}
+
+/// An honor credit's line, routed, then the `HONOR_GAINED` word `0x625270` raises after it
+/// (`0x62539d`, `0x6253e4`), signed: the stock handler prefixes "+" only to a positive number
+/// (`Blizzard_CombatText.lua:234`). A missing template writes neither (`0x6253ee`).
+pub(super) fn write_honor_line(
+    script: &mut benilla_ui::script::UiScript,
+    windows: &mut ChatWindows,
+    victim: Option<&str>,
+    rank_title: Option<&str>,
+    honor: i32,
+) {
+    let Some(text) = honor_gain_line(victim, rank_title, honor, &globals(script)) else {
+        return;
+    };
+    route(
+        script,
+        windows,
+        &ChatEvent::text_only(ChatEventKind::CombatHonorGain, text),
+    );
+    crate::ui_unit::fire_combat_text(script, "HONOR_GAINED", Some(honor.to_string()), None);
 }
 
 /// The honor line (`0x625270`): `COMBATLOG_HONORAWARD` with no victim, `COMBATLOG_HONORGAIN` for
@@ -1028,64 +1066,34 @@ pub(super) fn feed_chat(
                 victim,
                 honor,
                 rank,
-                tries,
+                side,
             } => {
-                // `victim == 0` is the award form: no name, no rank title.
-                let name = if victim == 0 {
-                    None
-                } else {
-                    let resolved = names
-                        .resolve_unit(
-                            victim,
-                            guids.0.get(&victim).and_then(|&e| stores.get(e).ok()),
-                            Ask::at(tries == 0, &commands),
-                        )
-                        .map(str::to_string);
-                    if resolved.is_none() && tries < NAME_MAX_TRIES {
-                        still.push(Pending::HonorGain {
-                            victim,
-                            honor,
-                            rank,
-                            tries: tries + 1,
-                        });
-                        continue;
-                    }
-                    resolved
-                };
-                // The title's side is the victim's and its gender ours (`0x625270` genders against
-                // the local player). No name record means side 0: a creature, where only a racial
-                // leader is ranked (19, "Leader" either side, `HonorMgr.cpp:1075-1076`).
-                let team = names
-                    .player_traits(victim)
-                    .and_then(|(race, _, _)| crate::ui_unit::race_faction_group(race))
-                    .map_or(0, |group| u8::from(group == "Alliance"));
+                // `victim == 0` is the award form: no name, no rank title. A victim's name never
+                // waits (`0x609210`), and its title genders against the local player
+                // (`0x612bf0` on the active player, `0x625374`); a dishonorable kill's template
+                // names no rank.
+                let name = (victim != 0).then(|| {
+                    super::combat::object_name(
+                        victim,
+                        guids.0.get(&victim).and_then(|e| stores.get(*e).ok()),
+                        &names,
+                        Ask::at(true, &commands),
+                    )
+                    .unwrap_or_else(|| super::combat::unknown_object(&script))
+                });
                 let female = self_guid
                     .0
                     .and_then(|g| names.player_traits(g))
                     .is_some_and(|(_, _, gender)| gender == 1);
-                let title = (victim != 0).then(|| script.pvp_rank_title(rank, team, female));
-                let name = (victim != 0).then(|| name.unwrap_or_else(|| "Unknown".into()));
-                let line = honor_gain_line(
+                let title =
+                    (victim != 0 && honor > 0).then(|| script.pvp_rank_title(rank, side, female));
+                write_honor_line(
+                    &mut script,
+                    &mut windows,
                     name.as_deref(),
                     title.flatten().as_deref(),
                     honor,
-                    &globals(&script),
                 );
-                if let Some(text) = line {
-                    route(
-                        &mut script,
-                        &mut windows,
-                        &ChatEvent::text_only(ChatEventKind::CombatHonorGain, text),
-                    );
-                    // `HONOR_GAINED` follows its line (`0x62539d`, `0x6253e4`), signed: the stock
-                    // handler prefixes "+" only to a positive number (`Blizzard_CombatText.lua:234`).
-                    crate::ui_unit::fire_combat_text(
-                        &mut script,
-                        "HONOR_GAINED",
-                        Some(honor.to_string()),
-                        None,
-                    );
-                }
             }
             Pending::TextEmote {
                 performer,

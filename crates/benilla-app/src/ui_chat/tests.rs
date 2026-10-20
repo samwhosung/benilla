@@ -3164,3 +3164,35 @@ fn a_combat_word_follows_its_line_and_only_a_written_one() {
     assert_eq!(seen(&s)[3], "HEAL|Shaman|75");
     assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
 }
+
+/// `0x625270` raises `HONOR_GAINED` after its line, signed, and not at all when the line's
+/// template is missing (`0x6253ca`-`0x6253ee`).
+#[test]
+fn honor_gained_follows_its_line_and_only_a_written_one() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = chat_vm();
+    let mut windows = super::frames::ChatWindows::default();
+    s.run(
+        r#"
+        Seen = {}
+        Spy = CreateFrame("Frame", "BenillaHonorSpy")
+        Spy:SetScript("OnEvent", function()
+            if event == "COMBAT_TEXT_UPDATE" then
+                table.insert(Seen, arg1.."|"..tostring(arg2))
+            else
+                table.insert(Seen, event)
+            end
+        end)
+        Spy:RegisterEvent("COMBAT_TEXT_UPDATE")
+        Spy:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+    "#,
+    )
+    .unwrap();
+    let seen = |s: &benilla_ui::script::UiScript| s.eval::<Vec<String>>("return Seen").unwrap();
+    super::feed::write_honor_line(&mut s, &mut windows, Some("Grimtusk"), None, -40);
+    assert_eq!(seen(&s), ["CHAT_MSG_COMBAT_HONOR_GAIN", "HONOR_GAINED|-40"]);
+    s.run("COMBATLOG_HONORAWARD = nil").unwrap();
+    super::feed::write_honor_line(&mut s, &mut windows, None, None, 25);
+    assert_eq!(seen(&s).len(), 2);
+    assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
+}
