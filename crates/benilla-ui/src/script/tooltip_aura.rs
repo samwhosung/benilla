@@ -90,7 +90,7 @@ impl super::UiScript {
         let auras = model
             .player_auras
             .iter()
-            .chain(model.unit_auras.values().flatten())
+            .chain(model.unit_auras.values().flat_map(|l| &l.auras))
             .map(|a| AuraKey {
                 spell_id: a.spell_id,
                 level: a.level,
@@ -288,19 +288,22 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     if ordinal >= slots {
                         return Ok(());
                     }
-                    list.and_then(|a| {
-                        a.iter()
-                            .filter(|a| a.helpful == helpful)
-                            .nth(ordinal as usize)
-                    })
-                    .map(|a| {
-                        let key = AuraKey {
-                            spell_id: a.spell_id,
-                            level: a.level,
-                            stack: a.count,
-                        };
-                        (key, a.name.clone())
-                    })
+                    // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks.
+                    list.as_deref()
+                        .and_then(|l| {
+                            l.auras
+                                .iter()
+                                .filter(|a| a.helpful == helpful)
+                                .nth(ordinal as usize)
+                        })
+                        .map(|a| {
+                            let key = AuraKey {
+                                spell_id: a.spell_id,
+                                level: a.level,
+                                stack: a.count,
+                            };
+                            (key, a.name.clone())
+                        })
                 };
                 let Some((key, name)) = hit else {
                     return Ok(());

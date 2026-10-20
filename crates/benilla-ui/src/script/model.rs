@@ -410,7 +410,7 @@ pub(crate) struct Model {
     pub(crate) player_auras: Vec<AuraState>,
     /// Every other unit's auras by guid, ascending aura slot: one list per unit, whatever token
     /// names it.
-    pub(crate) unit_auras: HashMap<u64, Vec<AuraState>>,
+    pub(crate) unit_auras: HashMap<u64, super::UnitAuraList>,
     /// The unit-token resolver's inputs (`0x515970`), which the aura bindings resolve through.
     pub(crate) unit_guids: super::UnitGuids,
     /// Spell ids the cancel verbs queued (`CancelPlayerBuff`, `CancelTrackingBuff`, …), one

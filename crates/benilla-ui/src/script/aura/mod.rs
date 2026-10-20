@@ -53,6 +53,28 @@ pub struct AuraState {
     pub channeled: bool,
 }
 
+/// One unit's auras as the app pushes them ([`crate::script::UiScript::set_unit_auras`]): every
+/// live aura in ascending slot, and `UnitBuff`'s unit gate over the helpful half.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UnitAuraList {
+    pub auras: Vec<AuraState>,
+    /// `UnitBuff 0x519500`'s unit gate on a live unit (`0x5195aa`-`0x5195f7`): false answers nil
+    /// at every buff index. `UnitDebuff` has none, nor has `GameTooltip:SetUnitBuff`, whose walk
+    /// follows the same lookup straight into the slots (`0x534bee`-`0x534bfb`); a roster record's
+    /// list is never gated (`0x519735`).
+    pub buffs_visible: bool,
+}
+
+impl From<Vec<AuraState>> for UnitAuraList {
+    /// An ungated list.
+    fn from(auras: Vec<AuraState>) -> Self {
+        Self {
+            auras,
+            buffs_visible: true,
+        }
+    }
+}
+
 /// The player's active tracking aura, the reference's tracking global (`0xbc6378`): the cache
 /// rebuild records a spell with a tracking effect (`0x2c`, `0x2d`, `0x97`) there instead of in
 /// the display cache, and `GetTrackingTexture` (`0x4e4a20`) reads it.
@@ -95,15 +117,27 @@ fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<Mul
 /// The list of the unit `token` names, through the resolver (`0x515970`, which `UnitBuff` calls at
 /// `0x519542`): the player's cache list for the player, else that guid's; `None` for nobody or a
 /// unit with no list. A token the resolver does not recognise raises `Unknown unit name`.
-pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> mlua::Result<Option<&'m [AuraState]>> {
+pub(crate) fn auras_of<'m>(
+    model: &'m Model,
+    token: &str,
+) -> mlua::Result<Option<std::borrow::Cow<'m, UnitAuraList>>> {
     let guids = &model.unit_guids;
     Ok(guids.guid_of(token)?.and_then(|g| {
         if g == guids.player {
-            Some(model.player_auras.as_slice())
+            Some(std::borrow::Cow::Owned(model.player_auras.clone().into()))
         } else {
-            model.unit_auras.get(&g).map(Vec::as_slice)
+            model.unit_auras.get(&g).map(std::borrow::Cow::Borrowed)
         }
     }))
+}
+
+/// `UnitBuff`'s and `UnitDebuff`'s walk over `list`: the half the verb names, the buffs only
+/// through the unit gate ([`UnitAuraList::buffs_visible`]).
+fn listed(list: &UnitAuraList, helpful: bool) -> impl Iterator<Item = &AuraState> {
+    let gate_open = !helpful || list.buffs_visible;
+    list.auras
+        .iter()
+        .filter(move |a| gate_open && a.helpful == helpful)
 }
 
 /// The `index`-th (1-based) buff (`helpful`) or debuff of `token`, in pushed order; out of range
@@ -121,12 +155,7 @@ fn nth_aura(
         match token {
             Some(t) => auras_of(&model, t)?
                 .filter(|_| index >= 1)
-                .and_then(|list| {
-                    list.iter()
-                        .filter(|a| a.helpful == helpful)
-                        .nth((index - 1) as usize)
-                        .cloned()
-                }),
+                .and_then(|list| listed(&list, helpful).nth((index - 1) as usize).cloned()),
             None => None,
         }
     };
@@ -144,7 +173,7 @@ impl super::UiScript {
 
     /// Push or clear a unit's aura list by guid, in ascending aura slot; any token naming the unit
     /// reads it. The player's is [`Self::set_player_auras`].
-    pub fn set_unit_auras(&mut self, guid: u64, auras: Option<Vec<AuraState>>) {
+    pub fn set_unit_auras(&mut self, guid: u64, auras: Option<UnitAuraList>) {
         let mut model = self.model_mut();
         match auras {
             Some(a) => {
@@ -193,12 +222,7 @@ impl super::UiScript {
         auras_of(&model, token)
             .ok()
             .flatten()
-            .map(|list| {
-                list.iter()
-                    .filter(|a| a.helpful == helpful)
-                    .map(|a| a.spell_id)
-                    .collect()
-            })
+            .map(|list| listed(&list, helpful).map(|a| a.spell_id).collect())
             .unwrap_or_default()
     }
 
@@ -276,7 +300,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::script::{AuraState, TrackingState, UiScript, UnitGuids};
+    use crate::script::{AuraState, TrackingState, UiScript, UnitAuraList, UnitGuids};
 
     const ME: u64 = 0x10;
     const TARGET: u64 = 0xF130_0000_0000_0001;
@@ -364,7 +388,7 @@ mod tests {
         let mut debuff = aura(589, "Shadow Word: Pain", false, false);
         debuff.count = 3;
         debuff.debuff_type = Some("Magic".into());
-        s.set_unit_auras(TARGET, Some(vec![buff, debuff]));
+        s.set_unit_auras(TARGET, Some(vec![buff, debuff].into()));
 
         let (icon, count, third) = s
             .eval::<(String, i64, Option<String>)>(
@@ -491,10 +515,13 @@ mod tests {
         ] {
             s.set_unit_auras(
                 guid,
-                Some(vec![
-                    aura(base + 1, name, true, true),
-                    aura(base + 2, name, false, false),
-                ]),
+                Some(
+                    vec![
+                        aura(base + 1, name, true, true),
+                        aura(base + 2, name, false, false),
+                    ]
+                    .into(),
+                ),
             );
         }
         s
@@ -615,5 +642,44 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("Unknown unit name: bogus"), "{err}");
+    }
+
+    /// A closed unit gate answers nil at every `UnitBuff` index (`0x5195aa`-`0x5195f7`) and
+    /// leaves `UnitDebuff` alone; `GameTooltip:SetUnitBuff` has no gate (`0x534bfb`) and still
+    /// shows the buff.
+    #[test]
+    fn a_closed_unit_gate_hides_the_buffs_from_unit_buff_alone() {
+        let mut s = group_script();
+        s.set_unit_auras(
+            MOB,
+            Some(UnitAuraList {
+                auras: vec![
+                    aura(201, "a buff", true, true),
+                    aura(202, "a debuff", false, false),
+                ],
+                buffs_visible: false,
+            }),
+        );
+        assert_eq!(s.arity(r#"UnitBuff("mouseover", 1)"#).unwrap(), 1);
+        assert!(s
+            .eval::<bool>(r#"return UnitBuff("mouseover", 1) == nil"#)
+            .unwrap());
+        assert_eq!(
+            icon_of(&s, r#"UnitDebuff("mouseover", 1)"#).as_deref(),
+            Some("Interface\\Icons\\Spell_202")
+        );
+        assert!(s.aura_spell_ids("mouseover", true).is_empty());
+        s.run(
+            r#"local a = CreateFrame("Button", "TF1")
+               a:SetPoint("CENTER", 0, 0) a:SetWidth(10) a:SetHeight(10)
+               TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+               TT:SetOwner(a, "ANCHOR_BOTTOMRIGHT")
+               TT:SetUnitBuff("mouseover", 1)"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<String>("return TTTextLeft1:GetText()").unwrap(),
+            "a buff"
+        );
     }
 }

@@ -540,20 +540,23 @@ fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
     });
     s.set_unit_auras(
         7,
-        Some(vec![
-            AuraState {
-                spell_id: 1126,
-                name: Some("Mark of the Wild".into()),
-                helpful: true,
-                ..Default::default()
-            },
-            AuraState {
-                spell_id: 589,
-                name: Some("Shadow Word: Pain".into()),
-                helpful: false,
-                ..Default::default()
-            },
-        ]),
+        Some(
+            vec![
+                AuraState {
+                    spell_id: 1126,
+                    name: Some("Mark of the Wild".into()),
+                    helpful: true,
+                    ..Default::default()
+                },
+                AuraState {
+                    spell_id: 589,
+                    name: Some("Shadow Word: Pain".into()),
+                    helpful: false,
+                    ..Default::default()
+                },
+            ]
+            .into(),
+        ),
     );
     s.run(
         r#"
@@ -670,7 +673,7 @@ fn an_aura_setters_miss_leaves_the_tooltip_as_it_was() {
             ..Default::default()
         },
     ];
-    s.set_unit_auras(7, Some(auras.clone()));
+    s.set_unit_auras(7, Some(auras.clone().into()));
     s.set_player_auras(auras);
     s.run(
         r#"
@@ -743,14 +746,17 @@ fn an_aura_hover_asks_for_its_own_level_and_stack() {
     });
     s.set_unit_auras(
         7,
-        Some(vec![AuraState {
-            spell_id: 11597,
-            name: Some("Sunder Armor".into()),
-            level: 60,
-            count: 3,
-            helpful: false,
-            ..Default::default()
-        }]),
+        Some(
+            vec![AuraState {
+                spell_id: 11597,
+                name: Some("Sunder Armor".into()),
+                level: 60,
+                count: 3,
+                helpful: false,
+                ..Default::default()
+            }]
+            .into(),
+        ),
     );
     s.run(
         r#"
@@ -1461,9 +1467,9 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
     s.set_player_auras(vec![aura(1459, 60, 1), aura(11597, 30, 5)]);
     // The pet's, the target-of-target's and party1's lists, by guid; party1's from its roster
     // record, level 0 and stack 1.
-    s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172, 20, 1)]));
-    s.set_unit_auras(0x21, Some(vec![aura(589, 60, 1)]));
-    s.set_unit_auras(0x22, Some(vec![aura(8921, 0, 1)]));
+    s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172, 20, 1)].into()));
+    s.set_unit_auras(0x21, Some(vec![aura(589, 60, 1)].into()));
+    s.set_unit_auras(0x22, Some(vec![aura(8921, 0, 1)].into()));
     s.set_tracking(Some(TrackingState {
         spell_id: 2580,
         name: Some("Find Minerals".into()),

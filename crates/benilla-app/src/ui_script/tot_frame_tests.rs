@@ -409,10 +409,13 @@ fn the_debuff_row_draws_what_the_unit_carries() {
     s.set_unit_guids(&unit_guids());
     s.set_unit_auras(
         TOT,
-        Some(vec![
-            debuff(1000, "Rend", None),
-            debuff(1001, "Curse of Agony", Some("Curse")),
-        ]),
+        Some(
+            vec![
+                debuff(1000, "Rend", None),
+                debuff(1001, "Curse of Agony", Some("Curse")),
+            ]
+            .into(),
+        ),
     );
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("targettarget".into())]);
     s.tick(0.016);
@@ -443,7 +446,7 @@ fn the_target_rows_wrap_short_while_the_frame_stands_beside_them() {
     let mut s = load_tot();
     // A hostile target, so the debuffs lead and the buffs hang off them.
     s.set_unit_guids(&unit_guids());
-    s.set_unit_auras(TARGET, Some(vec![debuff(2000, "Sunder", None)]));
+    s.set_unit_auras(TARGET, Some(vec![debuff(2000, "Sunder", None)].into()));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
 
     let anchor = |s: &mut UiScript, frame: &str| -> String {

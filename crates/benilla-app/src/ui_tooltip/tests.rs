@@ -1366,11 +1366,14 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     });
     script.set_unit_auras(
         TOT,
-        Some(vec![AuraState {
-            spell_id: 589,
-            name: Some("Shadow Word: Pain".into()),
-            ..Default::default()
-        }]),
+        Some(
+            vec![AuraState {
+                spell_id: 589,
+                name: Some("Shadow Word: Pain".into()),
+                ..Default::default()
+            }]
+            .into(),
+        ),
     );
     app.insert_non_send_resource(script);
     app.update();

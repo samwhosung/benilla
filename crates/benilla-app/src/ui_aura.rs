@@ -288,18 +288,17 @@ fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraSt
         .collect()
 }
 
-/// Another unit's auras as `UnitBuff 0x519500` and `UnitDebuff 0x5198f0` read them: ascending
-/// slot within each half, no durations, through the display filter. `buffs_visible` false drops
-/// the helpful half, the unit-level gate's nil at every index ([`buffs_visible_on`]).
+/// Another unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
+/// `SetUnitBuff 0x534ac0` read them: ascending slot within each half, no durations, through the
+/// display filter, every one whatever the unit gate says ([`buffs_visible_on`]), which the list
+/// carries beside them.
 fn other_unit_inputs<'a>(
     store: &'a ObjectStore,
     catalog: Option<&'a SpellCatalog>,
-    buffs_visible: bool,
 ) -> impl Iterator<Item = AuraInput> + 'a {
     store
         .0
         .unit_auras()
-        .filter(move |a| buffs_visible || a.slot >= UNIT_AURA_POSITIVE_SLOTS)
         .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
         .map(|a| AuraInput {
             slot: a.slot,
@@ -333,7 +332,7 @@ fn record_inputs<'a>(
 
 /// `UnitBuff 0x519500`'s unit-level gate, before any slot: a unit's buffs are listed only if it
 /// has `UNIT_FLAG_AURAS_VISIBLE` or the uncharmed player can assist it (`0x5195aa`-`0x5195f7`),
-/// else every index is nil; `UnitDebuff` has no gate. vmangos sets the flag for Detect Magic
+/// else every index is nil; `UnitDebuff` and `GameTooltip:SetUnitBuff` have no gate. vmangos sets the flag for Detect Magic
 /// (`UnitDefines.h:572`) and for a GM viewer (`Object.cpp:765-766`), so it is read as received.
 fn buffs_visible_on(rel: &Relations, unit: &RelUnit, me: Option<&RelUnit>) -> bool {
     if unit.flags & UNIT_FLAG_AURAS_VISIBLE != 0 {
@@ -588,7 +587,7 @@ fn feed_auras(
         let l = if target_guid == self_guid.0 {
             Some(list.as_slice())
         } else {
-            memo.units.list(target_guid)
+            memo.units.list(target_guid).map(|l| l.auras.as_slice())
         };
         let l = l.unwrap_or_default();
         info!("aura dump: {} aura(s) on the target rows", l.len());
@@ -672,12 +671,8 @@ mod tests {
     use crate::net::Reputations;
 
     /// [`other_unit_inputs`] as the list.
-    fn other_unit_auras(
-        store: &ObjectStore,
-        catalog: Option<&SpellCatalog>,
-        buffs_visible: bool,
-    ) -> Vec<AuraState> {
-        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, buffs_visible).collect();
+    fn other_unit_auras(store: &ObjectStore, catalog: Option<&SpellCatalog>) -> Vec<AuraState> {
+        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog).collect();
         aura_list(catalog, &inputs)
     }
 
@@ -1013,24 +1008,18 @@ mod tests {
         ]))
     }
 
-    /// Denied, `UnitBuff` is nil at every index; `UnitDebuff` is untouched.
+    /// The list holds both halves whatever the gate says: the gate rides beside it for `UnitBuff`
+    /// alone, and `GameTooltip:SetUnitBuff` still reads 5916 (`0x534bfb`).
     #[test]
-    fn the_unit_gate_drops_the_whole_helpful_half_and_never_the_harmful_one() {
+    fn the_list_keeps_the_helpful_half_the_unit_gate_hides() {
         let store = ridge_stalker_slots(0);
-
-        let denied = other_unit_auras(&store, None, false);
+        let list = other_unit_auras(&store, None);
         assert_eq!(
-            denied.iter().map(|a| a.spell_id).collect::<Vec<_>>(),
-            [22766],
-            "a hostile creature shows its debuffs and NOT its buffs — `UnitBuff`'s unit gate"
-        );
-        assert!(denied.iter().all(|a| !a.helpful));
-
-        let allowed = other_unit_auras(&store, None, true);
-        assert_eq!(
-            allowed.iter().map(|a| a.spell_id).collect::<Vec<_>>(),
-            [5916, 22766],
-            "with the gate open both halves enumerate, ascending slot"
+            list.iter()
+                .map(|a| (a.spell_id, a.helpful))
+                .collect::<Vec<_>>(),
+            [(5916, true), (22766, false)],
+            "ascending slot, both halves"
         );
     }
 

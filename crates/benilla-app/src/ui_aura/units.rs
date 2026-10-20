@@ -9,7 +9,7 @@
 use std::collections::hash_map::{Entry, HashMap};
 
 use benilla_formats::SpellCatalog;
-use benilla_ui::script::{AuraState, UiScript, UnitGuids};
+use benilla_ui::script::{UiScript, UnitAuraList, UnitGuids};
 
 use super::{aura_list, other_unit_inputs, record_inputs, AuraInput};
 use crate::net::ObjectStore;
@@ -66,7 +66,7 @@ pub(super) struct Inputs<'g, 'a, H, V> {
 struct GuidList {
     /// What the list was built from; the list is rebuilt only when these move.
     inputs: Vec<AuraInput>,
-    list: Vec<AuraState>,
+    list: UnitAuraList,
     /// Taken from [`UnitAuras::versions`] each time the list changes.
     version: u64,
     /// The frame that last read it; an entry no token can name this frame is dropped.
@@ -173,14 +173,14 @@ impl UnitAuras {
     }
 
     /// `guid`'s list as last built, `None` for a unit with none.
-    pub(super) fn list(&self, guid: u64) -> Option<&[AuraState]> {
-        self.by_guid.get(&guid).map(|e| e.list.as_slice())
+    pub(super) fn list(&self, guid: u64) -> Option<&UnitAuraList> {
+        self.by_guid.get(&guid).map(|e| &e.list)
     }
 
-    /// Rebuild `guid`'s list this frame if what it is built from moved: the live unit's gated
-    /// slots (`store`, the object manager's answer), else, for a guid a group token names, the
-    /// roster record's block. A guid neither held nor a group token's gets no list, as
-    /// `UnitBuff`'s roster walk finds nothing for it.
+    /// Rebuild `guid`'s list this frame if what it is built from moved: the live unit's slots
+    /// (`store`, the object manager's answer) with its unit gate, else, for a guid a group token
+    /// names, the roster record's block, which has none (`0x519735`). A guid neither held nor a
+    /// group token's gets no list, as `UnitBuff`'s roster walk finds nothing for it.
     fn refresh(
         &mut self,
         guid: u64,
@@ -198,27 +198,31 @@ impl UnitAuras {
             return;
         }
         self.scratch.clear();
-        match store {
-            Some(store) => self.scratch.extend(other_unit_inputs(
-                store,
-                catalog,
-                buffs_visible(guid, store),
-            )),
+        let gate = match store {
+            Some(store) => {
+                self.scratch.extend(other_unit_inputs(store, catalog));
+                buffs_visible(guid, store)
+            }
             None if record_ok => {
                 if let Some(group) = group {
                     self.scratch
                         .extend(record_inputs(group.roster_aura_slots(guid), catalog));
                 }
+                true
             }
             None => return,
-        }
+        };
+        let build = |inputs: &[AuraInput]| UnitAuraList {
+            auras: aura_list(catalog, inputs),
+            buffs_visible: gate,
+        };
         match self.by_guid.entry(guid) {
             Entry::Occupied(mut e) => {
                 let e = e.get_mut();
                 e.frame = self.frame;
-                if e.inputs != self.scratch {
+                if e.inputs != self.scratch || e.list.buffs_visible != gate {
                     std::mem::swap(&mut e.inputs, &mut self.scratch);
-                    let list = aura_list(catalog, &e.inputs);
+                    let list = build(&e.inputs);
                     if list != e.list {
                         e.list = list;
                         self.versions += 1;
@@ -229,7 +233,7 @@ impl UnitAuras {
             Entry::Vacant(e) => {
                 self.versions += 1;
                 let inputs = self.scratch.clone();
-                let list = aura_list(catalog, &inputs);
+                let list = build(&inputs);
                 e.insert(GuidList {
                     inputs,
                     list,
