@@ -55,7 +55,7 @@ pub struct MacroView {
     pub id: u32,
     pub name: String,
     /// The icon's texture path, kept by name because the reference saves the icon by name
-    /// (`MACRO %d "%s" %s`, `0x44cb60`).
+    /// (`MACRO %d "%s" %s`, `0x84cb60`).
     pub texture: Option<String>,
     /// The macro's lines, `\n`-separated.
     pub body: String,
