@@ -285,13 +285,14 @@ pub(crate) struct CandidateMemo {
     seen: HashSet<u64>,
 }
 
-/// Push every unit `TargetByName` can pick, by guid, so the binding resolves its name against
-/// them and shows the pick as `"target"` to the rest of its chunk, as `0x489d60` commits before it
-/// returns: the by-name scan's candidates (typemask 8, a cached name, no query sent) with their
-/// distance each frame, and each one's snapshot when it is new, its descriptor, name or creature
-/// record moved, or an input every snapshot reads did; another name's answer rebuilds nothing.
-/// It is a view for the rest of a chunk, which [`super::feed_units`] replaces with the committed
-/// selection's next frame.
+/// Push every unit `TargetByName` can pick, by guid: the VM's by-name walks rank them, and a
+/// selection a script call commits is seated as `"target"` from them for the rest of its chunk
+/// (`UiScript::seat_selection`), as `SetSelection 0x493540` commits before each selecting verb
+/// returns. They are the by-name scan's candidates (typemask 8, a cached name, no query sent)
+/// with their distance each frame, and each one's snapshot when it is new, its descriptor, name or
+/// creature record moved, or an input every snapshot reads did; another name's answer rebuilds
+/// nothing. It is a view for the rest of a chunk, which [`super::feed_units`] replaces with the
+/// committed selection's next frame.
 /// A move of our own descriptor does not rebuild the rest, so a reaction can lag our own faction
 /// change until the unit's next update. Without an active player object nothing is a candidate,
 /// as the reference resolves nothing then (`0x493ae0`).
@@ -342,7 +343,6 @@ pub(crate) fn feed_name_candidates(
         };
         memo.seen.clear();
         let origin = me.map(|(_, tf, _)| tf.translation());
-        let self_guid = me.map(|(g, _, _)| g.0);
         for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
             let guid = guid.0;
             let Candidacy::Named(name) = NameSearch::AnyUnit.candidacy(&names, guid) else {
@@ -392,7 +392,6 @@ pub(crate) fn feed_name_candidates(
                     name: name.to_string(),
                     dist2,
                     state,
-                    selectable: crate::target::is_selectable(store.as_deref(), self_guid),
                     assistable_alive: crate::target::assistable_alive(
                         &held.rel,
                         held.me.as_ref(),

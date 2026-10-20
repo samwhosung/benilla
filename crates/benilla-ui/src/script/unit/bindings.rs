@@ -918,24 +918,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, ()| Ok(Value::Nil))?,
     )?;
 
-    // TargetUnit(unit): queue the token for the app to resolve and select; a token naming no unit
-    // is a no-op, as in the reference. A held, selectable unit is shown as `"target"` at once, as
-    // `0x4899d0` commits before it returns, unless the targeting cursor is up: `SelectTarget` binds
-    // the unit to the cast then and selects nothing (`0x4935d5`). The gate's tag 2 of that bind
+    // TargetUnit(unit) (`0x4899d0`): the host resolves the token and selects through `SetSelection
+    // 0x493540` before the verb returns, so the next line reads the new `"target"`; a token naming
+    // no unit is a no-op, as in the reference. With the targeting cursor up `SelectTarget` binds
+    // the unit to the cast instead and selects nothing (`0x4935d5`); the gate's tag 2 of that bind
     // (`0x6e5ba5`) is asked here, where the stack that decides it is.
     g.set(
         "TargetUnit",
         lua.create_function(|lua, token: Option<String>| {
             if let Some(token) = token {
                 let may_cast = select_may_cast(lua);
-                {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    if !model.selection_call_declined() {
-                        if let Some(state) = model.held_unit_view(&token) {
-                            model.show_selection(Some(state));
-                        }
-                    }
-                }
                 submit(
                     lua,
                     ScriptCall::Select {
@@ -994,10 +986,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // number is taken as its string. Deviation: among whole-name matches ours picks the nearest,
     // because the reference's first-walked pick is order-dependent and reads as a bug. A miss
     // shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8` ERR_GENERIC_NO_TARGET for an empty name
-    // (`0x489dbd`, `0x489dcf`), from the app's commit. The pick is shown as `"target"` at once,
-    // from the app's candidates (`by_name`), so `UnitName("target")` on the next line names it,
-    // unless it is not selectable and `SetSelection` returns (`0x4935ee`); the call still commits
-    // it.
+    // (`0x489dbd`, `0x489dcf`), from the app's commit, which selects through `SetSelection
+    // 0x493540` before the verb returns, so `UnitName("target")` on the next line names the pick.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {
@@ -1006,17 +996,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // Argument 2 comes from `0x6f1c10` with default 0: it never raises, and 0 is absent.
             let exact = super::super::binding_abi::bool_or_default(exact.as_ref(), false);
             let may_cast = select_may_cast(lua);
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                // With the targeting cursor up the pick is bound, not selected (`0x4935d5`), and a
-                // charmed player's select returns first (`0x49359c`).
-                let pick = model
-                    .named_unit(&name, exact)
-                    .filter(|c| c.selectable && !model.selection_call_declined());
-                if let Some(state) = pick.map(|c| c.state.clone()) {
-                    model.show_selection(Some(state));
-                }
-            }
             submit(
                 lua,
                 ScriptCall::TargetByName {
@@ -1079,21 +1058,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ClearTarget() (`0x489ff0`): 1 when it cleared a target, nil when there was none, which
-    // `ToggleGameMenu`'s Escape chain needs to fall through to the menu. The deselect is queued
-    // either way: it reads the selection as the calls before it leave it (`0x489ff0`-`0x489fff`),
-    // so `TargetUnit("player") ClearTarget()` ends with nothing selected, and `"target"` reads
-    // nothing for the rest of the chunk.
+    // `ToggleGameMenu`'s Escape chain needs to fall through to the menu. The deselect is the host's
+    // either way, inside the verb: it reads the selection as the calls before it leave it
+    // (`0x489ff0`-`0x489fff`), so `TargetUnit("player") ClearTarget()` ends with nothing selected,
+    // and `"target"` reads nothing for the rest of the chunk.
     g.set(
         "ClearTarget",
         lua.create_function(|lua, ()| {
             let had = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let had = model.unit("target").is_some_and(|u| u.exists);
-                // A charmed player's deselect returns first (`0x49359c`).
-                if had && !model.unit("player").is_some_and(|u| u.charmed) {
-                    model.show_selection(None);
-                }
-                had
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.unit("target").is_some_and(|u| u.exists)
             };
             submit(lua, ScriptCall::ClearTarget)?;
             Ok(flag(had))

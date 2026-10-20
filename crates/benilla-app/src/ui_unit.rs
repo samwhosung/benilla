@@ -3691,11 +3691,12 @@ mod tests {
         );
     }
 
-    /// A selection call shows its pick as `"target"` to the rest of its chunk (`TargetByName`,
-    /// `0x489d60`); when the commit does not follow (here the call is dropped), the next frame
-    /// re-pushes `"target"` from the committed selection, though nothing the feed diffs moved.
+    /// The host seats each selection a call commits as `"target"` for the rest of its chunk
+    /// ([`UiScript::seat_selection`]), from a snapshot without the guild leg; the next frame
+    /// re-pushes `"target"` from the committed selection, though nothing the feed diffs moved, as
+    /// when a chunk selects a unit and goes back to the one it started on.
     #[test]
-    fn a_target_view_the_commit_did_not_follow_is_re_pushed_the_next_frame() {
+    fn a_seated_target_view_is_re_pushed_from_the_selection_the_next_frame() {
         use crate::names::CreatureRecord;
         use benilla_protocol::messages::ObjectType;
         use benilla_protocol::ObjectFields;
@@ -3716,10 +3717,7 @@ mod tests {
             .init_resource::<crate::ui_guild::GuildState>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
-        // No engine behind it: the VM keeps its calls, and none is applied.
-        let mut script = UiScript::new().unwrap();
-        script.keep_calls();
-        app.insert_non_send_resource(script);
+        app.insert_non_send_resource(UiScript::new().unwrap());
         let mut names = NameCache::default();
         names.insert_creature(
             69,
@@ -3778,20 +3776,15 @@ mod tests {
                     name: Some("Druid".into()),
                     ..Default::default()
                 },
-                selectable: true,
                 assistable_alive: true,
             }),
         );
+        script.seat_selection(Some(DRUID));
         assert_eq!(
-            target_name(&mut app, "TargetByName('Druid')").as_deref(),
+            target_name(&mut app, "").as_deref(),
             Some("Druid"),
-            "the chunk reads its pick"
+            "the chunk reads the seat"
         );
-        let dropped = app
-            .world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .take_script_calls();
-        assert_eq!(dropped.len(), 1, "the call, never applied");
         app.update();
         assert_eq!(
             target_name(&mut app, "").as_deref(),

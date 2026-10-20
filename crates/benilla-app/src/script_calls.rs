@@ -204,11 +204,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
         }
         // Whatever casts next is the engine's own, which asks no gate.
         appliers.p3().ladder.permit(true);
-        // The reference signals `PLAYER_TARGET_CHANGED` inside `SetSelection`, so inside this
-        // call's input events; the unit feed signals it a step later, and asks for them.
+        // The selection the call committed (`SetSelection 0x493540`, inside every selecting
+        // verb) is `"target"` for the script's next line. The reference signals
+        // `PLAYER_TARGET_CHANGED` there too, so inside this call's input events; the unit feed
+        // signals it a step later, and asks for them.
         let selected_after = appliers.p0().selected();
         let input = script.input_events();
         if selected_after != selected_before {
+            script.seat_selection(selected_after);
             script.note_selection_cause(selected_after, input);
         }
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
@@ -1190,9 +1193,9 @@ mod tests {
         }
     }
 
-    /// The candidate feed marks a `UNIT_FLAG_NOT_SELECTABLE` unit as the commit's `IsSelectable`
-    /// does (`0x4935ee`): the nearer namesake is the ranked pick and it is refused, so the chunk
-    /// keeps the old target's view and the commit keeps its selection, not the farther namesake.
+    /// The commit's `IsSelectable` (`0x4935ee`) refuses a `UNIT_FLAG_NOT_SELECTABLE` unit: the nearer
+    /// namesake is the ranked pick and it is refused, so the commit keeps its selection, not the
+    /// farther namesake, and the chunk keeps the old target's view.
     #[test]
     fn target_by_name_shows_nothing_when_the_commit_refuses_its_pick() {
         /// `UNIT_FLAG_NOT_SELECTABLE`, `UNIT_FIELD_FLAGS` bit 25.

@@ -1726,7 +1726,6 @@ mod tests {
                 is_player: true,
                 ..Default::default()
             },
-            selectable: true,
             assistable_alive,
         }
     }

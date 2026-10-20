@@ -1,8 +1,8 @@
 //! The by-name resolver (`CGGameUI::ClosestObjectMatch 0x493aa0`), shared by every caller: the app's
-//! `/target`, `/assist` and `/follow` scans, `TargetByName`, which shows the pick to the rest of its
-//! chunk (in the reference the binding `0x489d60` commits through `SetSelection 0x493540` before it
-//! returns, so `UnitName("target")` on the next line already names the new unit), and
-//! `SetLootMethod`'s master name (`0x4e9418`). A name matches whole-string first (`0x64a4c0` → CRT
+//! `/target`, `/assist` and `/follow` scans and `TargetByName`'s commit (`0x489d60`), and
+//! `SetLootMethod`'s master name (`0x4e9418`). The candidates the app pushes for it also give a
+//! selection a script call commits its `"target"` view for the rest of the chunk
+//! ([`super::super::UiScript::seat_selection`]). A name matches whole-string first (`0x64a4c0` → CRT
 //! `0x414310`), else by the longest common prefix (`0x493cb6`-`0x493cf6`), both case-insensitive.
 //!
 //! [`resolve`] runs the reference's three passes over the one matcher `0x493c60`: the four party
@@ -257,9 +257,6 @@ pub struct NameCandidate {
     pub dist2: f32,
     /// The unit as a token naming it reads it.
     pub state: UnitState,
-    /// `IsSelectable`, which `SetSelection` asks before it selects (`0x4935ee`): a pick that is not
-    /// selectable leaves the selection and so the `"target"` view as it was.
-    pub selectable: bool,
     /// [`Filter::AssistableAlive`]'s test (`0x493eca`): `CanAssist` toward the active player and
     /// `UNIT_FIELD_HEALTH > 0`.
     pub assistable_alive: bool,
@@ -288,43 +285,24 @@ impl super::super::UiScript {
     }
 
     /// Whether a selection call moved the `"target"` view since the last ask; the app's unit feed
-    /// then re-pushes `"target"` from the committed selection.
+    /// then re-pushes `"target"` from the committed selection, with its guild leg.
     pub fn take_target_view_moved(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().target_view_moved)
+    }
+
+    /// Seat the selection a script call just committed as `"target"` for the rest of its chunk,
+    /// `guid` `None` for nothing selected: every selecting verb commits through `SetSelection
+    /// 0x493540` before it returns, so `UnitName("target")` on the next line names the new unit.
+    /// The view is the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare
+    /// held unit; the next frame's unit feed replaces it with the committed selection's own push.
+    pub fn seat_selection(&mut self, guid: Option<u64>) {
+        let mut model = self.model_mut();
+        let state = guid.map(|guid| model.held_view(guid));
+        model.show_selection(state);
     }
 }
 
 impl Model {
-    /// The candidate `TargetByName(name, exactMatch)` ranks first, the scan's walk over this
-    /// frame's candidates: the query trimmed, an empty one nothing. Selectable or not, as the
-    /// resolver ranks before `SetSelection` refuses (`0x4935ee`).
-    pub(crate) fn named_unit(&self, query: &str, exact: bool) -> Option<&NameCandidate> {
-        let query = query.trim();
-        if query.is_empty() {
-            return None;
-        }
-        let search = Search {
-            query,
-            kinds: Kinds::AnyUnit,
-            filter: Filter::AcceptAll,
-            exact: if exact {
-                Match::ExactOnly
-            } else {
-                Match::PrefixOk
-            },
-            // The app pushes candidates only while it holds the active player.
-            active_player: true,
-        };
-        // No roster: the app selects a held unit only (`Selection::target` is an entity).
-        resolve(
-            search,
-            std::iter::empty(),
-            std::iter::empty(),
-            self.held_candidates(),
-        )
-        .and_then(|pick| pick.object)
-    }
-
     /// The pushed candidates as the resolver's object pass sees them.
     pub(crate) fn held_candidates(&self) -> impl Iterator<Item = Held<'_, &NameCandidate>> {
         self.name_candidates.iter().map(|(&guid, c)| Held {
@@ -370,34 +348,36 @@ impl Model {
         resolve(search, members, raid, self.held_candidates()).map(|pick| pick.guid)
     }
 
-    /// What `TargetUnit(token)` shows as `"target"`: the unit the token names when the object
-    /// manager holds it, the app's own commit condition, and `SetSelection` accepts it
-    /// (`0x4935ee`); its by-name snapshot when it has one, else the token's own push, whose
-    /// selectability the VM cannot see.
-    pub(crate) fn held_unit_view(&self, token: &str) -> Option<UnitState> {
-        let guid = self.unit_guids.resolve(token).ok().flatten();
-        match guid.and_then(|g| self.name_candidates.get(&g)) {
-            Some(c) => c.selectable.then(|| c.state.clone()),
-            None => self.unit(token).filter(|u| u.has_object).cloned(),
+    /// The snapshot a held unit's `"target"` view seats with ([`UiScript::seat_selection`]): its
+    /// by-name candidate's, else a token's or a chain end's push of the same guid, else the unit
+    /// as its guid alone (a unit whose name is not cached yet), which the next frame's feed fills.
+    ///
+    /// [`UiScript::seat_selection`]: super::super::UiScript::seat_selection
+    fn held_view(&self, guid: u64) -> UnitState {
+        // Of several tokens naming the unit, the first by name, so the pick never follows the map.
+        let pushed = || {
+            self.units_by_lower
+                .iter()
+                .filter(|(_, u)| u.guid == guid && u.has_object)
+                .min_by(|a, b| a.0.cmp(b.0))
+                .map(|(_, u)| u)
+                .or_else(|| self.units_by_guid.get(&guid).filter(|u| u.has_object))
+        };
+        match self.name_candidates.get(&guid) {
+            Some(c) => c.state.clone(),
+            None => pushed().cloned().unwrap_or_else(|| UnitState {
+                exists: true,
+                has_object: true,
+                is_connected: true,
+                guid,
+                ..Default::default()
+            }),
         }
     }
 
-    /// Whether a selection call made now will not move the selection when the app applies it, as
-    /// far as the VM can know: `SelectTarget` returns first for a charmed player (`0x49359c`), and
-    /// binds the unit to the cast in the selection's place while the targeting cursor is up
-    /// (`0x4935d5`). Both are the frame's last push. A cursor an earlier call of the same chunk arms
-    /// (`CastSpellByName("Heal")` with nothing selected) is the app's to decide when it applies
-    /// that call, so it is not seen here: the view is eager for the rest of such a chunk until the
-    /// next frame's feed corrects it.
-    pub(crate) fn selection_call_declined(&self) -> bool {
-        self.spell_targeting || self.unit("player").is_some_and(|u| u.charmed)
-    }
-
-    /// Show a selection call's outcome to the rest of its chunk: the resolver's target guid and the
-    /// `"target"` snapshot, `None` for nothing selected. The call itself stays queued, and the app
-    /// commits it (`CMSG_SET_SELECTION`, the attack re-point, the loot close) when its turn comes;
-    /// the next frame's feed replaces this view with the committed selection's.
-    pub(crate) fn show_selection(&mut self, state: Option<UnitState>) {
+    /// Show a committed selection to the rest of its chunk: the resolver's target guid and the
+    /// `"target"` snapshot, `None` for nothing selected.
+    fn show_selection(&mut self, state: Option<UnitState>) {
         // Already shown: the feed's own push, which carries the guild leg, stays.
         if state.as_ref().is_some_and(|s| {
             s.guid != 0 && s.guid == self.unit_guids.target && self.pushed_unit("target").is_some()
