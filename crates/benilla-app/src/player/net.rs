@@ -60,7 +60,7 @@ fn feed_player_skinned(script: Option<NonSendMut<UiScript>>, mut feed: ResMut<Sk
 mod tests {
     use super::*;
 
-    /// Each packet signals once, in order, with its byte's truth as `arg1` (`0x5e7d52`,
+    /// Each packet signals once, in order, with its byte's truth as `arg1` (`0x5e7d54`,
     /// `0x48f407`), once the interface is up to hear it.
     #[test]
     fn player_skinned_signals_its_byte_as_arg1() {

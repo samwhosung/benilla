@@ -923,7 +923,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
 /// The create hook of an object not yet shown (the table `0x465e78`), which alone asks the
 /// object's record: an item's record set-up (`0x5d8400` → `0x5d8300`); a unit's `PostInit`
 /// (`0x5fb880`), whose display resolve asks a creature's record (`0x60afb0`, at `0x60b15b`); a
-/// player's (`0x5debe0`), its name (`0x5dec09`) and guild tag (`0x5dec19`) ahead of another
+/// player's (`0x5debe0`), its name (`0x5dec12` → `0x609210`) and guild tag (`0x5dec19`) ahead of another
 /// player's party record (`0x5dec5f`, the active player skipped at `0x5dec48`-`0x5dec5b`); a game
 /// object's template (`0x5f7c40`, at `0x5f7d81`), whose lockId decides use-vs-cast.
 fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScript>) {

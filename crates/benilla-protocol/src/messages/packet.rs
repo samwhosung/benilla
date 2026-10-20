@@ -895,7 +895,7 @@ pub enum ServerPacket {
         delay_ms: u32,
     },
     /// `SMSG_PLAYER_SKINNED`: whether its one byte is nonzero, which the handler hands on as is
-    /// (`0x5e7d52`); vmangos sends `freeRepop` 0 (`Packets/Misc.h:816`).
+    /// (`0x5e7d54`); vmangos sends `freeRepop` 0 (`Packets/Misc.h:816`).
     PlayerSkinned {
         free_repop: bool,
     },
