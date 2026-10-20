@@ -42,7 +42,10 @@ impl WowTime {
     /// `0x642c30` on a packed date.
     pub fn decode(packed: u32) -> Self {
         // `0x642b3c` and its six siblings: a field equal to its mask is stored as -1.
-        let field = |shift: u32, mask: u32| ((packed >> shift) & mask) as i32;
+        let field = |shift: u32, mask: u32| match (packed >> shift) & mask {
+            m if m == mask => -1,
+            v => v as i32,
+        };
         Self {
             minute: field(0, 0x3f),
             hour: field(6, 0x1f),
@@ -61,8 +64,16 @@ impl WowTime {
 /// applied. A longer body leaves the cursor at the opcode plus the fields; a short read sets it to
 /// the size plus one (`0x418ec4`, `0x418ec6`, `0x419144`, `0x419146`).
 pub(super) fn exact_body(opcode: u16, body: &[u8], want: usize) -> io::Result<()> {
-    let _ = (opcode, body, want);
-    Ok(())
+    let len = body.len() + 2;
+    let read = match body.len().cmp(&want) {
+        std::cmp::Ordering::Equal => return Ok(()),
+        std::cmp::Ordering::Greater => 2 + want,
+        std::cmp::Ordering::Less => len + 1,
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("Malformed message recieved: Id = {opcode}, Len = {len}, Read = {read}"),
+    ))
 }
 
 #[cfg(test)]
