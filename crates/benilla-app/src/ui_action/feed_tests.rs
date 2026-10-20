@@ -654,6 +654,44 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
     );
 }
 
+/// `0x62c360` logs no refusal of a spell flagged `Attributes & 0x180` (`0x62c4bd`), though the
+/// red line still shows.
+#[test]
+fn a_refused_spell_flagged_not_to_log_writes_no_combat_log_line() {
+    use crate::ui_action::{CastFail, Spells};
+    use benilla_formats::{SpellCatalog, SpellDisplay};
+
+    let logged = |attributes| {
+        let mut reports = crate::ui_cast::CastReports::default();
+        reports.refused(CastFail::server(1, 0x5F, None));
+        let mut app = report_feed(
+            Spells {
+                catalog: SpellCatalog::from_displays(HashMap::from([(
+                    1,
+                    SpellDisplay {
+                        name: "Growl".into(),
+                        attributes,
+                        ..Default::default()
+                    },
+                )])),
+                ..Spells::empty_for_tests()
+            },
+            reports,
+        );
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(r#"SPELL_FAILED_ROOTED = "You are unable to move";"#)
+            .unwrap();
+        app.update();
+        app.world()
+            .resource::<crate::ui_chat::ChatLog>()
+            .pending_len()
+    };
+    assert_eq!(logged(0), 1);
+    assert_eq!(logged(0x100), 0, "SPELL_ATTR_DO_NOT_LOG");
+    assert_eq!(logged(0x80), 0, "SPELL_ATTR_DO_NOT_DISPLAY");
+}
+
 /// `0x6e6a20` resolves `PETTAME_<reason>` first and passes the string to `DisplayError(0xee)`,
 /// so `ERR_TAME_FAILED` ("%s.") prints the sentence, not the key.
 #[test]

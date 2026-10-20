@@ -216,13 +216,9 @@ impl CastFailLines<'_, '_> {
         if fail.caster == Caster::Pet || fail.redisplay {
             return None;
         }
-        let display = self
-            .spells
-            .as_deref()
-            .and_then(|s| s.catalog.get(fail.spell_id))?;
-        if display.name.is_empty() {
-            return None;
-        }
+        // `0x62c360` writes nothing for an id out of range or with no record, for `Attributes &
+        // 0x180` (`0x62c4bd`) or for an empty name (`0x62c4d7`).
+        let display = crate::ui_chat::combat::logged_spell(self.spells.as_deref(), fail.spell_id)?;
         // `0x62aff0`: `Attributes` bit 4 marks an ability, which "performs", not "casts".
         const ATTR_IS_ABILITY: u32 = 0x10;
         let family = if display.attributes & ATTR_IS_ABILITY != 0 {
