@@ -205,22 +205,56 @@ fn loose_open_for(path: &str, open: LooseOpen) -> LooseOpen {
 
 /// Whether an interface texture's open of `path` makes a texture, in the loose files or the chain,
 /// for the probes that answer `SetTexture`'s 1|nil before anything decodes: a candidate that opens
-/// and, if it is a TGA, whose header passes the size gate ([`makes_texture`]).
+/// and, if it is a TGA, whose header passes the size gate ([`makes_texture`]). A fresh
+/// [`SpriteProbe`] answers it, reading a TGA each time; a host asked per frame keeps one.
 pub fn sprite_found(chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> bool {
-    let open = loose_open_for(path, LooseOpen::Index);
-    let candidates = sprite_candidates(path);
-    // The loose files first, outside the chain's lock.
-    let hits: Vec<Option<LooseFile>> = candidates.iter().map(|c| loose.find(c, open)).collect();
-    candidates.iter().zip(hits).any(|(candidate, hit)| {
-        if !candidate.ends_with(".tga") {
-            return hit.is_some() || chain.lock_recover().contains(candidate);
-        }
-        let bytes = match hit {
-            Some(file) => file.read(),
-            None => chain.lock_recover().read_file(candidate).ok(),
-        };
-        bytes.is_some_and(|b| makes_texture(candidate, &b))
-    })
+    SpriteProbe::default().found(chain, loose, path)
+}
+
+/// `SetTexture`'s 1|nil probe ([`sprite_found`]).
+#[derive(Default)]
+pub struct SpriteProbe {
+    /// How many TGA headers [`Self::found`] has read.
+    header_reads: std::cell::Cell<usize>,
+}
+
+impl SpriteProbe {
+    /// See [`sprite_found`].
+    pub fn found(&self, chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> bool {
+        let open = loose_open_for(path, LooseOpen::Index);
+        let candidates = sprite_candidates(path);
+        // The loose files first, outside the chain's lock.
+        let hits: Vec<Option<LooseFile>> = candidates.iter().map(|c| loose.find(c, open)).collect();
+        candidates.iter().zip(hits).any(|(candidate, hit)| {
+            let opens = hit.is_some() || chain.lock_recover().contains(candidate);
+            if !opens || !candidate.ends_with(".tga") {
+                return opens;
+            }
+            let key = match &hit {
+                Some(file) => source_key(file),
+                None => format!("chain:{candidate}"),
+            };
+            self.gate(&key, candidate, || match hit {
+                Some(file) => file.read(),
+                None => chain.lock_recover().read_file(candidate).ok(),
+            })
+        })
+    }
+
+    /// Whether a `.tga` candidate makes a texture, from the bytes `read` gives, for the resolved
+    /// file `key` names.
+    fn gate(&self, _key: &str, candidate: &str, read: impl FnOnce() -> Option<Vec<u8>>) -> bool {
+        self.header_reads.set(self.header_reads.get() + 1);
+        read().is_some_and(|bytes| makes_texture(candidate, &bytes))
+    }
+}
+
+/// The file an entry opens, as a key: the path on disk, and an archive's member.
+fn source_key(file: &LooseFile) -> String {
+    match file {
+        LooseFile::Plain(path) => path.display().to_string(),
+        LooseFile::Archive { archive, member } => format!("{}!{member}", archive.display()),
+    }
 }
 
 /// Whether `TextureCreate` (`0x449d90`) makes a texture of a candidate's bytes: a TGA the loader
@@ -1387,5 +1421,58 @@ mod tests {
         let mut out = refused_tga(w, h, &vec![9; usize::from(w) * usize::from(h) * 4]);
         out[17] = 0x28;
         out
+    }
+    /// `SetTexture` runs per frame in the addons that set an icon every `OnUpdate`: a TGA's header
+    /// is read once for a resolved file, and a read that fails is asked again.
+    #[test]
+    fn the_size_gate_reads_a_resolved_file_once() {
+        let probe = SpriteProbe::default();
+        let tga = "interface\\addons\\foo\\icon.tga";
+        let good = refused_tga(8, 4, &[]);
+        let reads = std::cell::Cell::new(0);
+        let read = |bytes: Option<&Vec<u8>>| {
+            reads.set(reads.get() + 1);
+            bytes.cloned()
+        };
+        for _ in 0..3 {
+            assert!(probe.gate("loose", tga, || read(Some(&good))));
+        }
+        assert_eq!(reads.get(), 1, "the same file answered from the memo");
+        assert_eq!(probe.header_reads.get(), 1);
+
+        // Another resolved file under the same name is its own question: the chain's copy, once a
+        // loose one shadows it, or the other way round.
+        assert!(!probe.gate("chain", tga, || read(Some(&refused_tga(3, 4, &[])))));
+        assert!(!probe.gate("chain", tga, || read(Some(&good))));
+        assert_eq!(reads.get(), 2);
+
+        // A file that will not read says no and is asked again.
+        assert!(!probe.gate("gone", tga, || read(None)));
+        assert!(probe.gate("gone", tga, || read(Some(&good))));
+        assert_eq!(reads.get(), 4);
+    }
+
+    /// The same, through the store: a second `SetTexture` of the path reads no file.
+    #[test]
+    fn a_second_probe_of_a_tga_reads_no_file() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = Mutex::new(Chain::open(&data).expect("open the chain"));
+        let addons = Tree::new("probe");
+        let dir = addons.0.join("Foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Icon.tga"), refused_tga(8, 4, &[0; 128])).unwrap();
+        std::fs::write(dir.join("Odd.tga"), refused_tga(6, 4, &[0; 96])).unwrap();
+        let loose = LooseFiles {
+            addons: Some(addons.0.clone()),
+            install: None,
+        };
+        let probe = SpriteProbe::default();
+        for _ in 0..3 {
+            assert!(probe.found(&chain, &loose, "Interface\\AddOns\\Foo\\Icon"));
+            assert!(!probe.found(&chain, &loose, "Interface\\AddOns\\Foo\\Odd"));
+            assert!(!probe.found(&chain, &loose, "Interface\\AddOns\\Foo\\Missing"));
+        }
+        // One read each of the two files, and none of a name that is not there.
+        assert_eq!(probe.header_reads.get(), 2);
     }
 }

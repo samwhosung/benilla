@@ -212,9 +212,10 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
     let size_loose = loose.clone();
     let font_chain = chain.clone();
     let font_loose = loose.clone();
-    script.set_texture_probe(Box::new(move |path| {
-        benilla_assets::sprite_found(&chain, &loose, path)
-    }));
+    // `SetTexture` runs per frame in the addons that set an icon every `OnUpdate`: the probe
+    // keeps what it read of a file.
+    let probe = benilla_assets::SpriteProbe::default();
+    script.set_texture_probe(Box::new(move |path| probe.found(&chain, &loose, path)));
     // Keyed by the path exactly as the region carries it, so a hit allocates nothing (this is
     // asked per zero-size textured region per layout pass); misses are cached too.
     let sizes: std::cell::RefCell<std::collections::HashMap<String, Option<(u32, u32)>>> =
