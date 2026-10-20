@@ -170,18 +170,23 @@ struct Route {
 }
 
 /// The route search over the slots: each slot's direct paths to other slots, in slot order, as
-/// `(slot, price, length back)`.
+/// `(slot, price, length back)`, and whether the faction filter skips each ([`skips`]).
 struct Search<'a> {
     ids: &'a [u32],
     hops: Vec<Vec<(usize, u32, f32)>>,
+    skipped: Vec<bool>,
 }
 
 impl Search<'_> {
-    /// `0x4dbce0(to, from, price)`: `from`'s route plus the hop, kept when `to` has no route yet
-    /// (`0x4dbe17`) or the total is strictly shorter (`0x4dbe2b`), then every slot `to` has a path
-    /// to relaxed in slot order, depth first. The total is the f32 sum of the hop's length back
-    /// and `from`'s (`0x4dbe06`, `0x4dbe14`); fares and hop counts never decide.
+    /// `0x4dbce0(to, from, price)`: nothing for a slot the faction filter skips (`0x4dbffc`), else
+    /// `from`'s route plus the hop, kept when `to` has no route yet (`0x4dbe17`) or the total is
+    /// strictly shorter (`0x4dbe2b`), then every slot `to` has a path to relaxed in slot order,
+    /// depth first. The total is the f32 sum of the hop's length back and `from`'s (`0x4dbe06`,
+    /// `0x4dbe14`); fares and hop counts never decide.
     fn relax(&self, routes: &mut [Option<Route>], to: usize, from: usize, price: u32, back: f32) {
+        if self.skipped[to] {
+            return;
+        }
         let Some(prev) = &routes[from] else {
             return; // never: the seed and every relaxation start from a routed slot
         };
@@ -209,7 +214,7 @@ impl Search<'_> {
 /// The seed `0x4dc010`: the current node's slot, slot 0 when none matches (`0x4dc039`), takes the
 /// route `[current]` at fare and length 0, and every slot the current node has a path to is
 /// relaxed from it in slot order. A slot left `None` was never reached.
-fn search(cat: &TaxiCatalogs, ids: &[u32], current: u32) -> Vec<Option<Route>> {
+fn search(cat: &TaxiCatalogs, ids: &[u32], current: u32, skipped: Vec<bool>) -> Vec<Option<Route>> {
     let mut routes = vec![None; ids.len()];
     if ids.is_empty() {
         return routes;
@@ -228,6 +233,7 @@ fn search(cat: &TaxiCatalogs, ids: &[u32], current: u32) -> Vec<Option<Route>> {
         hops: (0..ids.len())
             .map(|slot| hops_from(ids[slot], slot))
             .collect(),
+        skipped,
     };
     let seed = ids.iter().position(|&id| id == current).unwrap_or(0);
     routes[seed] = Some(Route {
@@ -239,6 +245,22 @@ fn search(cat: &TaxiCatalogs, ids: &[u32], current: u32) -> Vec<Option<Route>> {
         search.relax(&mut routes, slot, seed, price, back);
     }
     routes
+}
+
+/// The faction filter (`0x4dbd59`-`0x4dbdeb`) on a node's two mount ids (`+0x38`, `+0x3c`), for
+/// the player's group: group 3 skips a node naming a Horde mount (`0x8b0`, `0xdf6`) and no
+/// Alliance one (`0xefd`, `0x21d`), group 5 the reverse, and any other group, or none, skips
+/// nothing.
+fn skips(group: Option<u32>, node: &TaxiNode) -> bool {
+    const HORDE: [u32; 2] = [2224, 3574];
+    const ALLIANCE: [u32; 2] = [3837, 541];
+    let names =
+        |side: [u32; 2]| side.contains(&node.mount_horde) || side.contains(&node.mount_alliance);
+    match group {
+        Some(3) => names(HORDE) && !names(ALLIANCE),
+        Some(5) => names(ALLIANCE) && !names(HORDE),
+        _ => false,
+    }
 }
 
 /// `TaxiNodeCost`'s fare (`0x4dc3d0`): the price times `1 - discount`, both in f64 with nothing
@@ -284,12 +306,15 @@ pub(super) fn build_nodes(
     build_nodes_for(open, cat, discount, None)
 }
 
-/// [`build_nodes`] for a player, its race and the faction tables.
+/// [`build_nodes`] for the active player, its race and the faction tables: the search skips the
+/// other side's nodes by the group mask (`+0xc`) of the `FactionTemplate` row whose id is the race
+/// (`0x4dbd2d`-`0x4dbd56`), not the race's own template, so races 7 and 8 skip nothing. No player
+/// or no such row skips nothing (`0x4dbd21`, `0x4dbd50`).
 pub(super) fn build_nodes_for(
     open: &TaxiOpen,
     cat: &TaxiCatalogs,
     discount: Option<f64>,
-    _player: Option<(u8, &FactionCatalog)>,
+    player: Option<(u8, &FactionCatalog)>,
 ) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
     let current = cat.nodes.get(open.nearest_node)?;
     let cont = cat.continents.get(current.map_id)?;
@@ -311,7 +336,11 @@ pub(super) fn build_nodes_for(
         return None; // `0x4dba40`
     }
     let ids: Vec<u32> = slots.iter().map(|n| n.id).collect();
-    let routes = search(cat, &ids, current.id);
+    let group = player
+        .and_then(|(race, factions)| factions.template(u32::from(race)))
+        .map(|template| template.group_mask);
+    let skipped = slots.iter().map(|n| skips(group, n)).collect();
+    let routes = search(cat, &ids, current.id, skipped);
 
     let mut ui = Vec::with_capacity(slots.len());
     let mut resolved = Vec::with_capacity(slots.len());
