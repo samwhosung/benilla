@@ -220,6 +220,9 @@ pub(crate) struct CastContext<'a> {
     /// The caster's movement flags (the client's `[unit+0x9e8]`), read by the requirement
     /// validator's moving gate.
     pub(crate) self_move_flags: u32,
+    /// `[0xb4b3e4]` is clear: the start of melee the cast's tail makes returns at it
+    /// (`0x5ecbc0`).
+    pub(crate) self_control_lost: bool,
 }
 
 impl CastContext<'_> {
@@ -363,6 +366,7 @@ impl CastTargeting<'_, '_> {
                 .and_then(|s| s.0.player_inv_slot(EQUIPMENT_SLOT_MAINHAND))
                 .filter(|&g| g != 0),
             self_move_flags: self.player.as_deref().map_or(0, |p| p.move_flags()),
+            self_control_lost: self.player.as_deref().is_some_and(|p| p.own_control_lost),
         }
     }
 }

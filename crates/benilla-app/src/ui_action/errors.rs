@@ -372,11 +372,10 @@ pub(crate) fn attack_actor_refusal(
     true
 }
 
-/// The same ladder without the message, in the reference's gate order. The world right-click
-/// asks this: its path (`0x60bea0` to `0x5ecb70`) shows no error text and never reaches
-/// `0x612df0`, whose callers are the pet bar, Attack and TryCast (`0x6e4efb`). That path's own
-/// gate set overlaps this one but is not transcribed.
-pub(crate) fn attack_actor_blocked(
+/// The same ladder without the message, in the reference's gate order. Its callers are the Attack
+/// action, the pet bar and TryCast (`0x6e4efb`); the world right-click's path (`0x60bea0` to
+/// `0x5ecb70`) never reaches `0x612df0` and has its own gates (`creature_anim::StartGate`).
+fn attack_actor_blocked(
     actor: Option<&ObjectStore>,
     self_guid: Option<u64>,
 ) -> Option<&'static str> {

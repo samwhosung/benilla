@@ -127,7 +127,7 @@ pub(crate) mod npc_flags {
 }
 
 pub(super) const UNIT_FLAG_SKINNABLE: u32 = 0x0400_0000;
-const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
+pub(crate) const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
 
 /// The hovered unit is one the unit dispatcher `0x60bea0` forks to its attack arm for (`0x60c192`):
 /// alive or feigning, refused by `CanInteract` and passed by `CanAttack`. The sword also needs the

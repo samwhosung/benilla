@@ -196,21 +196,60 @@ pub(crate) fn stop_attack_local(engaged: bool, core: &mut crate::spell::CastCore
     core.cancel_queued();
 }
 
-/// The local StartAttack, reference `0x5ecb70`: the swing send (`0x5eccfd`) is skipped while
-/// attacking unless a stop is in flight (`[+0xc54]`, which the target switch passes as
-/// `stop_in_flight`); the tail, melee sheath snap then auto-repeat cancel (`0x5ecd78`), always
-/// runs, so melee and auto-shot are exclusive. Callers own the entry checks: no call from a cast
-/// press while engaged (`0x6e51cb`), the attackability walk (`0x606980`) and `[0xb4b3e4]`.
+/// What StartAttack (`0x5ecb70`) reads of the active player before it does anything: the pacified
+/// bit of `UNIT_FIELD_FLAGS` (`0x5ecbaa`) and the player-control flag `[0xb4b3e4]` (`0x5ecbc0`)
+/// each end it silently, with no stand (`0x5ecc9b`), select, swing, sheath or auto-repeat
+/// cancel. Every caller reads it from its own state ([`StartGate::of`]) and hands it to
+/// [`start_attack_local`]; a caller that selects first asks [`StartGate::refuses`] ahead of the
+/// select (`0x5eccaa`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StartGate {
+    pacified: bool,
+    control_lost: bool,
+}
+
+impl StartGate {
+    /// The gate from the player's descriptor and `Player::own_control_lost`.
+    pub(crate) fn of(own: Option<&crate::net::ObjectStore>, control_lost: bool) -> Self {
+        Self {
+            pacified: own.is_some_and(|me| {
+                me.0.unit_flags() & crate::target::cursor_mode::UNIT_FLAG_PACIFIED != 0
+            }),
+            control_lost,
+        }
+    }
+
+    /// StartAttack returns before anything.
+    pub(crate) fn refuses(self) -> bool {
+        self.pacified || self.control_lost
+    }
+
+    /// `[0xb4b3e4]` is set: the Attack toggle's stop arm needs it too (`0x6131ce`).
+    pub(crate) fn has_control(self) -> bool {
+        !self.control_lost
+    }
+}
+
+/// The local StartAttack, reference `0x5ecb70`: it returns first when [`StartGate::refuses`];
+/// the swing send (`0x5eccfd`) is skipped while attacking unless a stop is in flight (`[+0xc54]`,
+/// which the target switch passes as `stop_in_flight`); the tail, melee sheath snap then
+/// auto-repeat cancel (`0x5ecd78`), always runs, so melee and auto-shot are exclusive. Callers own
+/// the other entry checks: no call from a cast press while engaged (`0x6e51cb`) and the
+/// attackability walk (`0x606980`).
 pub(crate) fn start_attack_local(
     entity: Entity,
     target: u64,
     engaged: bool,
     stop_in_flight: bool,
+    gate: StartGate,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     sheath: &mut MessageWriter<SheathRequest>,
     commands: &mut Commands,
     net: &crate::net::NetCommands,
 ) {
+    if gate.refuses() {
+        return;
+    }
     // Starting an attack stands you up (`0x5ecc9b`), after the attackability check but before
     // the range logic and the already-attacking skip, so a re-issued or out-of-reach attack
     // stands you too.
@@ -230,19 +269,20 @@ pub(crate) fn start_attack_local(
 }
 
 /// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when
-/// attacking, else start. Only the start arm cancels auto-repeat, so toggling melee off leaves
-/// Auto Shot running. The stop arm's `[0xb4b3e4]` world gate is not modelled.
+/// attacking with control (`0x6131ce`), else start, which returns at a clear `[0xb4b3e4]` too. Only
+/// the start arm cancels auto-repeat, so toggling melee off leaves Auto Shot running.
 pub(crate) fn toggle_attack_local(
     entity: Entity,
     target: u64,
     engaged: bool,
+    gate: StartGate,
     slots: &mut crate::spell::CastSlots,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     sheath: &mut MessageWriter<SheathRequest>,
     commands: &mut Commands,
     net: &crate::net::NetCommands,
 ) {
-    if engaged {
+    if engaged && gate.has_control() {
         stop_attack_local(engaged, &mut slots.core(net));
     } else {
         start_attack_local(
@@ -250,6 +290,7 @@ pub(crate) fn toggle_attack_local(
             target,
             engaged,
             false,
+            gate,
             auto_repeat,
             sheath,
             commands,
@@ -271,8 +312,10 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) ecs: Commands<'w, 's>,
     /// Our own entity.
     pub(crate) me: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
-    /// Our own descriptor, for [`Self::player_is_charmed`].
+    /// Our own descriptor, for [`Self::player_is_charmed`] and [`Self::start_gate`].
     self_store: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    /// `[0xb4b3e4]`, for [`Self::start_gate`]; the body exists only in world.
+    player: Option<Res<'w, crate::player::Player>>,
     /// The open loot, which the selection teardown closes when it loots the outgoing target.
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
@@ -288,6 +331,14 @@ impl AttackSeam<'_, '_> {
             .iter()
             .next()
             .is_some_and(|me| me.0.unit_charmed_by().is_some())
+    }
+
+    /// StartAttack's two silent returns about the player (`0x5ecbaa`, `0x5ecbc0`).
+    pub(crate) fn start_gate(&self) -> StartGate {
+        StartGate::of(
+            self.self_store.iter().next(),
+            self.player.as_deref().is_some_and(|p| p.own_control_lost),
+        )
     }
 
     /// The selection teardown's loot close (`0x493910`, `0x493959`–`0x493974`): a window looting
@@ -319,11 +370,13 @@ impl AttackSeam<'_, '_> {
     /// StartAttack (`0x5ecb70`); a no-op before our own entity streams in.
     pub(crate) fn start(&mut self, target: u64, engaged: bool, stop_in_flight: bool) {
         let Ok(e) = self.me.single() else { return };
+        let gate = self.start_gate();
         start_attack_local(
             e,
             target,
             engaged,
             stop_in_flight,
+            gate,
             &mut self.auto_repeat,
             &mut self.sheath,
             &mut self.ecs,
@@ -950,6 +1003,7 @@ mod attack_stand_tests {
                     0xdead_beef,
                     true, // already engaged: the skip leg
                     false,
+                    StartGate::default(),
                     &mut auto_repeat,
                     &mut sheath,
                     &mut commands,

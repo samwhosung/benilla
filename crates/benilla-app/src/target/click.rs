@@ -956,10 +956,11 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
             }
             // Silent after the select: the click's `0x60c247 call 0x5ecb70` has no `DisplayError`,
             // and the red `ERR_ATTACK_*` lines are `0x612df0`'s (the Attack action, pet attack,
-            // TryCast). The predicate is `0x612df0`'s; `0x5ecb70`'s own set is not transcribed.
-            if crate::ui_action::attack_actor_blocked(dispatch.self_store(), me.map(|(_, g, _)| g))
-                .is_some()
-            {
+            // TryCast), which this path never reaches. The arm's own returns are the dead and
+            // mounted player (`0x60c1a1`, `0x60c1bc`), and StartAttack's the pacified flag and a
+            // clear `[0xb4b3e4]` (`0x5ecbaa`, `0x5ecbc0`).
+            let gate = dispatch.seam.start_gate();
+            if refused || gate.refuses() {
                 // refused: the selection stands, no swing, nothing said
             } else {
                 // StartAttack's own select (`0x5eccaa`), past its gates and before the swing

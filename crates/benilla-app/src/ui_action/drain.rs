@@ -107,10 +107,12 @@ impl AttackPress<'_, '_> {
             "attack {} at {guid:#x}",
             if engaged { "toggled off" } else { "swing" }
         );
+        let gate = seam.start_gate();
         crate::creature_anim::toggle_attack_local(
             e,
             guid,
             engaged,
+            gate,
             &mut seam.slots,
             &mut seam.auto_repeat,
             &mut seam.sheath,

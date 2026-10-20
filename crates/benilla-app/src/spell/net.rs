@@ -87,6 +87,8 @@ pub(crate) struct Scene<'w, 's> {
     go_targets: MessageWriter<'w, SpellGoTargets>,
     go_lid: MessageWriter<'w, crate::go_anim::GoLidOpen>,
     sheaths: MessageWriter<'w, crate::creature_anim::SheathRequest>,
+    /// `[0xb4b3e4]`, for the GO-deferred swing's gate; the body exists only in world.
+    player: Option<Res<'w, crate::player::Player>>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -253,6 +255,15 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
     } = ev
     {
         let engaged = !sc.engaged_self.is_empty();
+        let own = l
+            .self_guid
+            .0
+            .and_then(|guid| l.index.0.get(&guid))
+            .and_then(|&entity| sc.stores.get(entity).ok());
+        let start_gate = crate::creature_anim::StartGate::of(
+            own,
+            sc.player.as_deref().is_some_and(|p| p.own_control_lost),
+        );
         spell_go(
             caster,
             spell_id,
@@ -281,7 +292,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &mut l.pet_bar,
                 &l.spell_mods,
             ),
-            (&mut l.auto_repeat, &mut sc.sheaths, engaged),
+            (&mut l.auto_repeat, &mut sc.sheaths, engaged, start_gate),
             l.play_seq.next(),
         );
     }
@@ -842,12 +853,14 @@ fn spell_go(
         &mut crate::ui_pet::PetBar,
         &crate::spell::SpellModifiers,
     ),
-    // The GO-deferred auto-attack start's writes (`0x6e83c0`) and the attack lock it gates on
-    // (`Engaged`, the reference's `[player+0xc48]`).
+    // The GO-deferred auto-attack start's writes (`0x6e83c0`), the attack lock it gates on
+    // (`Engaged`, the reference's `[player+0xc48]`) and StartAttack's own gate (`0x5ecbaa`,
+    // `0x5ecbc0`).
     attack_ctx: (
         &mut crate::spell::AutoRepeatActive,
         &mut MessageWriter<crate::creature_anim::SheathRequest>,
         bool,
+        crate::creature_anim::StartGate,
     ),
     seq: u64,
 ) {
@@ -878,7 +891,7 @@ fn spell_go(
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
     let (cooldowns, spells, items, net_commands, pet_bar, spell_mods) = cooldown_ctx;
-    let (auto_repeat, sheath, engaged) = attack_ctx;
+    let (auto_repeat, sheath, engaged, start_gate) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
@@ -930,6 +943,7 @@ fn spell_go(
                     guid,
                     engaged,
                     false,
+                    start_gate,
                     auto_repeat,
                     sheath,
                     commands,
@@ -1844,6 +1858,7 @@ mod tests {
                                 &mut crate::spell::AutoRepeatActive::default(),
                                 &mut sheath,
                                 false,
+                                crate::creature_anim::StartGate::default(),
                             ),
                             1,
                         );
@@ -2511,6 +2526,7 @@ mod tests {
                             &mut crate::spell::AutoRepeatActive::default(),
                             &mut sheath,
                             false,
+                            crate::creature_anim::StartGate::default(),
                         ),
                         1,
                     );
@@ -2710,6 +2726,7 @@ mod tests {
                             &mut crate::spell::AutoRepeatActive::default(),
                             &mut sheath,
                             false,
+                            crate::creature_anim::StartGate::default(),
                         ),
                         1,
                     );
@@ -2996,9 +3013,13 @@ mod tests {
             radii: Default::default(),
         };
 
-        // `caster` casts `spell_id`, landing on 20; `engaged` is our mirror of `[+0xc48]`.
-        // Returns every command the seam put on the wire.
-        let fire = |caster: u64, spell_id: u32, engaged: bool| -> Vec<ClientCommand> {
+        // `caster` casts `spell_id`, landing on 20; `engaged` is our mirror of `[+0xc48]`, `gate`
+        // StartAttack's own. Returns every command the seam put on the wire.
+        let fire = |caster: u64,
+                    spell_id: u32,
+                    engaged: bool,
+                    gate: crate::creature_anim::StartGate|
+         -> Vec<ClientCommand> {
             let mut app = App::new();
             app.add_message::<CastEvent>()
                 .add_message::<SpellGoTargets>()
@@ -3083,6 +3104,7 @@ mod tests {
                                 &mut crate::spell::AutoRepeatActive::default(),
                                 &mut sheath,
                                 engaged,
+                                gate,
                             ),
                             1,
                         );
@@ -3101,23 +3123,40 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        use crate::creature_anim::StartGate;
+        let open = StartGate::default();
         assert_eq!(
-            swings(&fire(10, BACKSTAB, false)),
+            swings(&fire(10, BACKSTAB, false, open)),
             vec![20],
             "a bit20 spell's own GO starts the swing at its first hit target"
         );
         assert!(
-            swings(&fire(10, SERPENT_STING, false)).is_empty(),
+            swings(&fire(10, SERPENT_STING, false, open)).is_empty(),
             "Serpent Sting carries Ex2 bit 17, not bit 20 — it starts nothing"
         );
         assert!(
-            swings(&fire(10, BACKSTAB, true)).is_empty(),
+            swings(&fire(10, BACKSTAB, true, open)).is_empty(),
             "already swinging: `0x6e83e7`'s attack-lock gate refuses"
         );
         assert!(
-            swings(&fire(11, BACKSTAB, false)).is_empty(),
+            swings(&fire(11, BACKSTAB, false, open)).is_empty(),
             "somebody else's Backstab is not our attack-start"
         );
+        let pacified = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+            46, 0x2_0000,
+        )]));
+        for (gate, why) in [
+            (StartGate::of(None, true), "without control (`0x5ecbc0`)"),
+            (
+                StartGate::of(Some(&pacified), false),
+                "pacified (`0x5ecbaa`)",
+            ),
+        ] {
+            assert!(
+                swings(&fire(10, BACKSTAB, false, gate)).is_empty(),
+                "StartAttack returns {why}"
+            );
+        }
     }
     /// The `modalNextSpell` chain (`HandleCastResult 0x6e7330`, `0x6e7408`-`0x6e74aa`):
     /// - a successful sting chains Auto Shot (`0x6e735a jne` past the report to `0x6e73eb`);
