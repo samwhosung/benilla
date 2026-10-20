@@ -25,6 +25,7 @@ fn action_state_bindings_answer_the_reference_conventions() {
             has_range: true,
             spell: Some(133),
             form: None,
+            profession: None,
             is_attack: false,
             equipped: false,
             // 4 s remaining of a 10 s cooldown, running: started at GetTime 94.

@@ -204,7 +204,7 @@ mod worn_display;
 pub(crate) mod xml_layout;
 mod zone_text;
 
-pub use action::{ActionSlot, ActionState, ActionUse, CastView};
+pub use action::{ActionSlot, ActionState, ActionUse, CastView, OpenProfessions, Profession};
 pub use addon::{addon_load_context, AddOnInfo, AddonLoad, AddonReply, AddonSecurity};
 pub use addon_enable::{AddonStateFiles, EnableHash, EnableStore};
 pub use addon_message::{AddonDistribution, AddonSend};

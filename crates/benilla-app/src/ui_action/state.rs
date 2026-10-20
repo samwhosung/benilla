@@ -70,6 +70,27 @@ fn resolve_through_macro(
     }
 }
 
+/// The profession window a profession opener opens (`Effect[0]` 47, `0x4e54fe`), which
+/// `IsCurrentAction` holds against the one open: a craft by its `EffectMiscValue[0]` (`0x4e5507`),
+/// else a trade skill by its `SkillLineAbility` line (`0x6de040`, `0x4e5522`), as the opener opens
+/// it (`0x6e4bd7`). A trade skill whose row is not loaded opens nothing, and checks nothing.
+fn profession(
+    spell_id: u32,
+    d: &benilla_formats::SpellDisplay,
+    skill_lines: Option<&crate::ui_spellbook::SkillLines>,
+) -> Option<benilla_ui::script::Profession> {
+    use benilla_ui::script::Profession;
+    if d.effects[0] != benilla_formats::SPELL_EFFECT_TRADE_SKILL {
+        return None;
+    }
+    match u32::try_from(d.effect_misc_value[0]).unwrap_or(0) {
+        0 => skill_lines
+            .and_then(|s| s.catalog.spell_to_line(spell_id))
+            .map(Profession::TradeSkill),
+        craft => Some(Profession::Craft(craft)),
+    }
+}
+
 /// Computes and diff-pushes every occupied slot's state, and fires the reference's events.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_action_state(
@@ -79,8 +100,8 @@ pub(super) fn feed_action_state(
     mut cooldowns: ResMut<Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
-    // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units and the
-    // control flag.
+    // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units, the
+    // control flag and the skill lines.
     cast_state: (
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
@@ -88,6 +109,8 @@ pub(super) fn feed_action_state(
         crate::spell::RangeUnits,
         // `[0xb4b3e4]`, which the usable walk reads.
         Option<Res<crate::player::Player>>,
+        // A profession opener's line (`0x6de040`), which the checked test reads.
+        Option<Res<crate::ui_spellbook::SkillLines>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
     selection: Res<Selection>,
@@ -119,7 +142,7 @@ pub(super) fn feed_action_state(
         memory.last_cd_trace = Some(now);
     }
 
-    let (bound, spell_mods, range_units, player) = &cast_state;
+    let (bound, spell_mods, range_units, player, skill_lines) = &cast_state;
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
     // The bags, walked once per frame for every reagent and totem count below.
@@ -177,6 +200,7 @@ pub(super) fn feed_action_state(
                 // another spell lights the check but not the icon.
                 st.spell = Some(button.action);
                 st.form = d.shapeshift_form;
+                st.profession = profession(button.action, d, skill_lines.as_deref());
                 // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
                 if let (Some((store, _, _)), Some(sp)) = (me, spells.as_deref()) {
                     let ctx = usable::UsableCtx {
@@ -363,6 +387,36 @@ pub(super) fn feed_action_state(
 mod tests {
     use super::*;
     use benilla_formats::SpellDisplay;
+
+    /// A profession opener (`Effect[0]` 47) names the window `IsCurrentAction` checks it against
+    /// (`0x4e54fe`): a nonzero `EffectMiscValue[0]` the craft of that type (Enchanting 3), zero
+    /// the trade skill of its `SkillLineAbility` line (Tailoring 3908, line 197); any other spell
+    /// none.
+    #[test]
+    fn a_profession_opener_names_its_window() {
+        use benilla_ui::script::Profession;
+        let lines = crate::ui_spellbook::SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([(3908, 197)]),
+        };
+        let opener = |misc| SpellDisplay {
+            effects: [benilla_formats::SPELL_EFFECT_TRADE_SKILL, 0, 0],
+            effect_misc_value: [misc, 0, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            profession(7411, &opener(3), Some(&lines)),
+            Some(Profession::Craft(3))
+        );
+        assert_eq!(
+            profession(3908, &opener(0), Some(&lines)),
+            Some(Profession::TradeSkill(197))
+        );
+        assert_eq!(profession(3908, &opener(0), None), None, "no rows loaded");
+        assert_eq!(
+            profession(133, &SpellDisplay::default(), Some(&lines)),
+            None
+        );
+    }
 
     /// `[rec+0x564]`'s three values (`0x4e5a50`): a live spell, a bare macro, and grey.
     #[test]

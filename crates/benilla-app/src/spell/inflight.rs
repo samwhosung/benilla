@@ -567,7 +567,7 @@ mod tests {
                         spell: Some(spell),
                         ..Default::default()
                     }
-                    .is_current(&state.view())
+                    .is_current(&state.view(), Default::default())
                 })
                 .unwrap()
         };

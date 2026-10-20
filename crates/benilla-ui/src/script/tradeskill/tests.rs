@@ -1221,3 +1221,41 @@ fn the_cooldown_left_is_read_off_the_clock_at_the_call() {
         "a recipe not cooling down"
     );
 }
+
+/// `IsCurrentAction`'s tradeskill arm (`0x4e54fe`-`0x4e5549`): a profession opener's slot is
+/// checked while its window is open, by the trade skill's line (`[0xbde040]`) or the craft's type
+/// (`[0xbdcfb8]`), and not once a close, `CloseTradeSkill()` included, zeroes the marker.
+#[test]
+fn a_profession_openers_slot_is_current_while_its_window_is_open() {
+    use crate::script::{ActionState, Profession};
+    let mut s = UiScript::new().unwrap();
+    let slot = |profession| ActionState {
+        spell: Some(3908),
+        profession: Some(profession),
+        ..Default::default()
+    };
+    s.set_action_state(3, Some(slot(Profession::TradeSkill(197))));
+    s.set_action_state(4, Some(slot(Profession::TradeSkill(164))));
+    s.set_action_state(5, Some(slot(Profession::Craft(3))));
+    let current = |s: &UiScript, action: u32| {
+        s.eval::<bool>(&format!("return IsCurrentAction({action}) == 1"))
+            .unwrap()
+    };
+    assert!(!current(&s, 3), "closed");
+    s.set_trade_skill(Some(two_recipe_state()));
+    assert!(current(&s, 3), "Tailoring's window, line 197");
+    assert!(!current(&s, 4), "another line");
+    assert!(!current(&s, 5), "no craft is open");
+    s.run("CloseTradeSkill()").unwrap();
+    assert!(!current(&s, 3), "the close zeroes the marker");
+    s.set_craft(Some(crate::script::craft::CraftState {
+        name: "Enchanting".into(),
+        rank: 1,
+        max_rank: 75,
+        craft_type: 3,
+        recipes: Vec::new(),
+    }));
+    assert!(current(&s, 5), "the craft of type 3");
+    s.set_craft(None);
+    assert!(!current(&s, 5));
+}

@@ -1310,6 +1310,23 @@ pub(crate) struct Model {
 }
 
 impl Model {
+    /// The profession windows open (`[0xbde040]`, `[0xbdcfb8]`): the trade skill's line and the
+    /// craft's type while each window is open, which a close zeroes (`0x4fc870`, `0x4f5fe0`).
+    pub(crate) fn open_professions(&self) -> super::OpenProfessions {
+        super::OpenProfessions {
+            trade_skill: self
+                .trade_skill
+                .as_ref()
+                .filter(|_| self.trade_skill_open)
+                .map(|t| t.line),
+            craft: self
+                .craft
+                .as_ref()
+                .filter(|_| self.craft_open)
+                .map(|c| c.craft_type),
+        }
+    }
+
     /// The charsets the character name check holds a name to: this client's `Region` and locale.
     pub(crate) fn name_charsets(&self) -> super::NameCharsets {
         super::NameCharsets::for_client(self.client_region, self.locale)

@@ -56,6 +56,9 @@ pub struct ActionState {
     /// The form that spell's shapeshift aura (aura 36) takes, `IsCurrentAction`'s form arm
     /// (`0x4e5560`-`0x4e558b`).
     pub form: Option<u32>,
+    /// The profession window that spell opens, `IsCurrentAction`'s tradeskill arm
+    /// (`0x4e54fe`-`0x4e5549`).
+    pub profession: Option<Profession>,
     /// `IsAttackAction`: the action is the melee auto-attack.
     pub is_attack: bool,
     /// `IsEquippedAction`: an item action currently worn.
@@ -65,13 +68,34 @@ pub struct ActionState {
     pub cooldown: Option<(i64, u32, bool)>,
 }
 
+/// The profession window a spell opens (`Effect[0]` 47, `TRADE_SKILL`, tested at `0x4e54fe`): a
+/// craft by its `EffectMiscValue[0]` (`0x4e5507`), else a trade skill by its skill line, the
+/// `SkillLineAbility` row `0x6de040` finds for it (`0x4e5522`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profession {
+    /// The `SkillLine.dbc` id, which the open trade skill (`[0xbde040]`) is compared with.
+    TradeSkill(u32),
+    /// The craft type, which the open craft (`[0xbdcfb8]`) is compared with.
+    Craft(u32),
+}
+
+/// The profession windows open, as `IsCurrentAction`'s tradeskill arm reads them: the trade
+/// skill's line (`[0xbde040]`, `0x4e552b`) and the craft's type (`[0xbdcfb8]`, `0x4e5541`), each
+/// `None` while closed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpenProfessions {
+    pub trade_skill: Option<u32>,
+    pub craft: Option<u32>,
+}
+
 impl ActionState {
     /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: the Attack slot while
     /// attacking (`0x4e5467`), else the slot's spell when it is in flight or awaiting its target
-    /// (`0x4e54c1`, `0x4e54d0`), or when its form is the player's (`0x4e558b`). It reads no
+    /// (`0x4e54c1`, `0x4e54d0`), when it opens the profession window that is open
+    /// (`0x4e54fe`-`0x4e5549`), or when its form is the player's (`0x4e558b`). It reads no
     /// channel: a channel leaves the in-flight slot at its cast result, so its button unchecks as
     /// it begins.
-    pub fn is_current(&self, view: &CastView) -> bool {
+    pub fn is_current(&self, view: &CastView, open: OpenProfessions) -> bool {
         if self.is_attack {
             return view.attacking;
         }
@@ -79,6 +103,11 @@ impl ActionState {
             return false;
         };
         [view.slot, view.targeting].contains(&Some(spell))
+            || match self.profession {
+                Some(Profession::TradeSkill(line)) => open.trade_skill == Some(line),
+                Some(Profession::Craft(kind)) => open.craft == Some(kind),
+                None => false,
+            }
             || (view.form != 0 && self.form == Some(u32::from(view.form)))
     }
 
@@ -481,7 +510,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsCurrentAction(slot)` (`0x84c0b0`, `0x4e733f`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsCurrentAction(slot)")?;
-            Ok(live_flag(lua, action, ActionState::is_current))
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let open = model.open_professions();
+            Ok(match model.action_states.get(&action) {
+                Some(s) if s.state.is_current(&model.cast_view, open) => Value::Integer(1),
+                _ => Value::Nil,
+            })
         })?,
     )?;
     g.set(
