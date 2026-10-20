@@ -390,4 +390,15 @@ mod tests {
             "`add_every_instrument` lists the probe fleet"
         );
     }
+
+    /// The fleet builds into a second app in the same process, as a test binary that runs its
+    /// tests on threads builds many: an instrument with process-wide state keeps one copy of it.
+    #[test]
+    fn the_instrument_fleet_builds_twice_in_one_process() {
+        for _ in 0..2 {
+            let _app = crate::game_plugins::schedule_tests::headless_client_with(
+                super::add_every_instrument,
+            );
+        }
+    }
 }
