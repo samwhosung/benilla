@@ -197,24 +197,28 @@ pub(crate) fn melee_text(hit_info: u32, victim_state: u32, damage: u32) -> Optio
 }
 
 /// The spell and periodic emitter split (`0x5e85e0`/`0x626dd0`): damage floats a number, category
-/// 2 on `SPELL_HIT_TYPE_CRIT 0x2` (periodic ticks never crit); zero damage floats ABSORB or
-/// RESIST, a choice inferred from the packet's fields, as `0x5e88d1` is untraced.
+/// 2 on `SPELL_HIT_TYPE_CRIT 0x2` (periodic ticks never crit); nothing through floats the first of
+/// ABSORB, BLOCK and RESIST (`0x5e888a`-`0x5e88c5`; the periodic arm, `0x626f4e`-`0x626f79`, has
+/// no blocked amount), or nothing.
 pub(crate) fn spell_text(
     damage: u32,
     absorb: u32,
     resist: i32,
+    blocked: u32,
     crit: bool,
 ) -> Option<(u8, String)> {
-    if damage > 0 {
+    let code = if damage != 0 {
         return Some((if crit { 2 } else { 0 }, damage.to_string()));
-    }
-    if absorb > 0 {
-        return miss_word(10).map(|(w, c)| (c, w.to_string()));
-    }
-    if resist > 0 {
-        return miss_word(2).map(|(w, c)| (c, w.to_string()));
-    }
-    None
+    } else if absorb != 0 {
+        10
+    } else if blocked != 0 {
+        5
+    } else if resist != 0 {
+        2
+    } else {
+        return None;
+    };
+    miss_word(code).map(|(w, c)| (c, w.to_string()))
 }
 
 /// The gx pixel round (`0x5c7010`/`0x5c6fa0`): add 0.5 and truncate, half away from zero.
@@ -418,11 +422,12 @@ mod tests {
         assert_eq!(melee_text(0x42, 1, 0), Some((3, "Resist".into()))); // full resist: bit 0x40
                                                                         // Zero damage: Miss.
         assert_eq!(melee_text(0x2, 1, 0), Some((3, "Miss".into())));
-        assert_eq!(spell_text(120, 0, 0, false), Some((0, "120".into())));
-        assert_eq!(spell_text(240, 0, 0, true), Some((2, "240".into())));
-        assert_eq!(spell_text(0, 50, 0, false), Some((1, "Absorb".into())));
-        assert_eq!(spell_text(0, 0, 80, false), Some((3, "Resist".into())));
-        assert_eq!(spell_text(0, 0, 0, false), None);
+        assert_eq!(spell_text(120, 0, 0, 0, false), Some((0, "120".into())));
+        assert_eq!(spell_text(240, 0, 0, 0, true), Some((2, "240".into())));
+        assert_eq!(spell_text(0, 50, 80, 40, false), Some((1, "Absorb".into())));
+        assert_eq!(spell_text(0, 0, 80, 40, false), Some((3, "Block".into())));
+        assert_eq!(spell_text(0, 0, 80, 0, false), Some((3, "Resist".into())));
+        assert_eq!(spell_text(0, 0, 0, 0, false), None);
         assert_eq!(miss_word(11), Some(("Reflect", 3)));
         assert_eq!(miss_word(0), None);
         assert_eq!(miss_word(12), None);

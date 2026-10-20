@@ -125,10 +125,11 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
 }
 
 /// `CombatLogPeriodicSpells` gates the whole packet: the handler `0x626dd0` reads it first
-/// (`0x626dee`) and a zero jumps to the epilogue `0x6271b4`, so no line, number or word.
+/// (`0x626dee`) and a zero jumps to the epilogue `0x6271b4`, so no line, number or word. So does
+/// a target the client does not hold as a unit (`0x626e8a`-`0x626ea9`).
 fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::PeriodicAuraLog(s) = ev {
-        if !c.periodic.0 {
+        if !c.periodic.0 || !c.index.0.contains_key(&s.target) {
             return;
         }
         let ctx = c.ctx();
@@ -298,5 +299,93 @@ fn on_pvp_credit(In(ev): In<SessionEvent>, mut l: Sinks) {
             credit.victim_guid,
             u8::try_from(credit.victim_rank).unwrap_or(0),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use benilla_protocol::messages::{PeriodicAuraLog, PeriodicTick};
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+    use crate::target::relations::fixture::{creature, player, store_of, HUMAN, ORC};
+
+    const ME: u64 = 1;
+    const MOB: u64 = 2;
+    const CORRUPTION: u32 = 172;
+
+    /// The handler's world: you and a creature held, Corruption known, the log empty.
+    fn world(held: &[u64]) -> App {
+        let mut app = App::new();
+        app.add_message::<CombatTextSpawn>()
+            .add_message::<UnitCombatFeedback>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<Reputations>()
+            .init_resource::<CombatLogRanges>()
+            .init_resource::<DamageTextGates>()
+            .init_resource::<ChatLog>()
+            .insert_resource(SelfGuid(Some(ME)))
+            .insert_resource(LogPeriodicSpells(true))
+            .insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(
+                        CORRUPTION,
+                        benilla_formats::SpellDisplay {
+                            id: CORRUPTION,
+                            name: "Corruption".into(),
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            });
+        for unit in [player(ME, HUMAN), creature(MOB, ORC)] {
+            if held.contains(&unit.guid) {
+                let e = app.world_mut().spawn(store_of(&unit)).id();
+                app.world_mut()
+                    .resource_mut::<GuidIndex>()
+                    .0
+                    .insert(unit.guid, e);
+            }
+        }
+        app
+    }
+
+    /// Your Corruption ticking on the creature, and what it left: the parked lines and the
+    /// flashes.
+    fn tick(held: &[u64]) -> (usize, usize) {
+        let mut app = world(held);
+        let packet = SessionEvent::PeriodicAuraLog(PeriodicAuraLog {
+            target: MOB,
+            caster: ME,
+            spell_id: CORRUPTION,
+            ticks: vec![PeriodicTick::Damage {
+                amount: 40,
+                school: 5,
+                absorb: 0,
+                resist: 0,
+            }],
+        });
+        app.world_mut()
+            .run_system_once_with(on_periodic_aura_log, packet)
+            .unwrap();
+        let lines = app.world().resource::<ChatLog>().pending_kinds().len();
+        let flashes = app
+            .world_mut()
+            .resource_mut::<Messages<UnitCombatFeedback>>()
+            .drain()
+            .count();
+        (lines, flashes)
+    }
+
+    /// `0x626dd0` skips the whole packet when its target is no unit the client holds
+    /// (`0x626e8a`-`0x626ea9`): no line, though you, its caster, resolve; no flash.
+    #[test]
+    fn a_periodic_tick_on_a_target_not_held_leaves_nothing() {
+        assert_eq!(tick(&[ME, MOB]), (1, 1));
+        assert_eq!(tick(&[ME]), (0, 0));
     }
 }

@@ -386,6 +386,22 @@ pub(crate) fn logged_spell(
         .then_some(display)
 }
 
+/// `SPELL_ATTR_DO_NOT_LOG`, `Attributes` bit 8 (vmangos `SpellDefines.h:800`).
+const ATTR_DO_NOT_LOG: u32 = 0x100;
+
+/// The spell record a packet's `UNIT_COMBAT` and floating text need: the handlers test for a
+/// record without `Attributes & 0x100` before either (`0x5e87e3`-`0x5e87f4`, `0x626f1b`,
+/// `0x5e7f0b`-`0x5e7f18`), apart from the line's own test, [`logged_spell`].
+pub(crate) fn feedback_spell(
+    spells: Option<&crate::ui_action::Spells>,
+    spell_id: u32,
+) -> Option<&benilla_formats::SpellDisplay> {
+    spells?
+        .catalog
+        .get(spell_id)
+        .filter(|d| d.attributes & ATTR_DO_NOT_LOG == 0)
+}
+
 // ─────────────────────────────── the msgType selectors ────────────────────────────────
 
 /// The melee `(attacker, victim)` chat type, the reference's selector pair `0x62a0d0`/`0x62a2e0`;

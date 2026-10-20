@@ -18,7 +18,7 @@ use benilla_protocol::messages::{
 use crate::combat_text::{
     damage_color, miss_word, spell_text, CombatTextSpawn, DamageSource, DamageTextGates,
 };
-use crate::ui_chat::ChatLog;
+use crate::ui_chat::{combat, ChatLog};
 use crate::ui_unit::UnitCombatFeedback;
 
 use crate::net::{GuidIndex, ObjectStore, SelfGuid};
@@ -56,33 +56,43 @@ pub(crate) fn classify_source(
 
 /// The colour law's `B` bit for a spell-packet emit, from the spell's record via
 /// [`crate::combat_text::melee_styled`]: a ranged basic shot floats white, a spell gold.
-pub(super) fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: u32) -> bool {
+fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: u32) -> bool {
     crate::combat_text::melee_styled(spells.and_then(|s| s.catalog.get(spell_id)))
 }
 
-/// The spell arms' `UNIT_COMBAT` action and descriptor: a landed amount is `WOUND` (`CRITICAL` on
-/// a crit); zero damage takes `ABSORB` before `RESIST`, the order the reference's emitter
-/// `0x494600` tests them (`0x49463b`); a clean miss arrives via `SMSG_SPELLLOGMISS` instead.
-fn spell_feedback(
-    damage: u32,
-    absorb: u32,
-    resist: i32,
-    crit: bool,
-) -> Option<(&'static str, &'static str)> {
-    if damage > 0 {
-        Some(("WOUND", if crit { "CRITICAL" } else { "" }))
-    } else if absorb > 0 {
-        Some(("WOUND", "ABSORB"))
-    } else if resist > 0 {
-        Some(("WOUND", "RESIST"))
+/// `UNIT_COMBAT`'s descriptor, as its one emitter `0x494600` picks it from the packet's flags:
+/// with an amount, `CRITICAL` (`0x80`), `GLANCING` (`0x4000`), `CRUSHING` (`0x8000`); without one,
+/// `ABSORB` (`0x20`), `BLOCK` (`0x800`), `RESIST` (`0x40`); else empty, which the stock portrait
+/// shows as "Miss" (`CombatFeedback.lua:57-58`).
+pub(crate) fn wound_descriptor(amount: u32, flags: u32) -> &'static str {
+    // The amount is tested signed (`0x49460a`, `jle`).
+    let tests: [(u32, &str); 3] = if amount as i32 > 0 {
+        [
+            (0x80, "CRITICAL"),
+            (0x4000, "GLANCING"),
+            (0x8000, "CRUSHING"),
+        ]
     } else {
-        None
-    }
+        [(0x20, "ABSORB"), (0x800, "BLOCK"), (0x40, "RESIST")]
+    };
+    tests
+        .into_iter()
+        .find(|&(bit, _)| flags & bit != 0)
+        .map_or("", |(_, word)| word)
 }
 
-/// `SMSG_SPELLNONMELEEDAMAGELOG`: the spell-damage number (crit on `SPELL_HIT_TYPE_CRIT` `0x2`) or
-/// the zero-damage absorb or resist word over the target (`0x5e85e0`); only my spells and my
-/// pet's (`PetSpellDamage`-gated) draw, number and word coloured alike.
+/// The flags a spell hit hands `0x494600`: crit `0x80`, and each partial nonzero, absorbed `0x20`,
+/// blocked `0x800`, resisted `0x40` (`0x5e87fa`-`0x5e8825`).
+fn hit_flags(crit: bool, absorb: u32, resist: i32, blocked: u32) -> u32 {
+    let bit = |set: bool, bit: u32| if set { bit } else { 0 };
+    bit(crit, 0x80) | bit(absorb != 0, 0x20) | bit(blocked != 0, 0x800) | bit(resist != 0, 0x40)
+}
+
+/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`), after its line: for a spell with a record and no
+/// `Attributes & 0x100`, `UNIT_COMBAT` `WOUND` over the target, and the spell-damage number or the
+/// stopped hit's word over it; only my spells and my pet's (`PetSpellDamage`-gated) draw, number
+/// and word coloured alike. Split damage flashes `WOUND` with no flags and floats nothing
+/// (`0x5e872d`-`0x5e876a`).
 pub(super) fn spell_damage_log(
     s: SpellDamageLog,
     index: &GuidIndex,
@@ -93,41 +103,49 @@ pub(super) fn spell_damage_log(
     text: &mut MessageWriter<CombatTextSpawn>,
     feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
+    let crit = s.hit_info & 0x2 != 0;
     if benilla_assets::trace::enabled() {
         benilla_assets::trace::line(
             "fct",
             &format!(
-                "recv spelldmg atk={:#x} target={:#x} dmg={} crit={}",
-                s.attacker,
-                s.target,
-                s.damage,
-                s.hit_info & 0x2 != 0
+                "recv spelldmg atk={:#x} target={:#x} dmg={} crit={crit}",
+                s.attacker, s.target, s.damage
             ),
         );
     }
-    // UNIT_COMBAT: any source, any recipient including self, before the returns below.
-    if let (Some(&unit), Some((action, flags))) = (
-        index.0.get(&s.target),
-        spell_feedback(s.damage, s.absorb, s.resist, s.hit_info & 0x2 != 0),
-    ) {
+    let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
+        return;
+    };
+    let split = s.hit_info & 0x8 != 0;
+    // UNIT_COMBAT: any source, any recipient including self.
+    if let Some(&unit) = index.0.get(&s.target) {
+        let flags = if split {
+            0
+        } else {
+            hit_flags(crit, s.absorb, s.resist, s.blocked)
+        };
         feedback.write(UnitCombatFeedback {
             unit,
-            action,
-            flags,
+            action: "WOUND",
+            flags: wound_descriptor(s.damage, flags),
             amount: s.damage,
             school: u32::from(s.school),
         });
+    }
+    if split {
+        return;
     }
     let Some(source) = classify_source(s.attacker, index, self_guid, stores) else {
         return; // K = other: never drawn
     };
     // A ranged basic shot (Throw, Auto Shot: `AttributesEx3 & 0x8000`) floats white.
-    let Some(color) = damage_color(gates, source, melee_styled(spells, s.spell_id)) else {
+    let melee = crate::combat_text::melee_styled(Some(display));
+    let Some(color) = damage_color(gates, source, melee) else {
         return; // the CombatDamage / PetSpellDamage gates
     };
     if let (Some(anchor), Some((category, body))) = (
         gated_anchor(s.target, index, self_guid),
-        spell_text(s.damage, s.absorb, s.resist, s.hit_info & 0x2 != 0),
+        spell_text(s.damage, s.absorb, s.resist, s.blocked, crit),
     ) {
         text.write(CombatTextSpawn {
             anchor,
@@ -138,8 +156,12 @@ pub(super) fn spell_damage_log(
     }
 }
 
-/// `SMSG_PERIODICAURALOG`: damage ticks float like direct damage, never as a crit (`0x626dd0`);
-/// heal, energize and leech ticks float nothing, as heals never float in the 1.12 client.
+/// `SMSG_PERIODICAURALOG` (`0x626dd0`): per tick of a spell with a record and no
+/// `Attributes & 0x100` (`0x626f1b`, `0x62700f`, `0x627095`), a damage tick floats like direct
+/// damage, never as a crit, and flashes `WOUND` with its absorbed and resisted flags
+/// (`0x626f87`-`0x626fb4`); a heal tick flashes `HEAL` (`0x627033`) and floats nothing, as heals
+/// never float in the 1.12 client. Energize (`0x494770` is an empty stub) and leech ticks do
+/// neither.
 pub(super) fn periodic_aura_log(
     s: PeriodicAuraLog,
     index: &GuidIndex,
@@ -161,8 +183,9 @@ pub(super) fn periodic_aura_log(
             ),
         );
     }
-    // UNIT_COMBAT: every tick, any source; damage is `WOUND`, a heal `HEAL`, which shows on the
-    // portrait though heals never float as worldtext.
+    let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
+        return;
+    };
     if let Some(&unit) = index.0.get(&s.target) {
         for tick in &s.ticks {
             let (action, flags, amount, school) = match *tick {
@@ -171,16 +194,13 @@ pub(super) fn periodic_aura_log(
                     school,
                     absorb,
                     resist,
-                } => {
-                    let Some((action, flags)) = spell_feedback(amount, absorb, resist, false)
-                    else {
-                        continue;
-                    };
-                    (action, flags, amount, school)
-                }
+                } => (
+                    "WOUND",
+                    wound_descriptor(amount, hit_flags(false, absorb, resist, 0)),
+                    amount,
+                    school,
+                ),
                 PeriodicTick::Heal { amount } => ("HEAL", "", amount, 0),
-                // No ENERGIZE: the string is absent from the 1.12 client; power reaches the centre
-                // text only.
                 PeriodicTick::Energize { .. } | PeriodicTick::ManaLeech { .. } => continue,
             };
             feedback.write(UnitCombatFeedback {
@@ -196,7 +216,8 @@ pub(super) fn periodic_aura_log(
         return; // K = other: never drawn
     };
     // `0x626dd0` pushes the spell's record to the same `0x6128b0` law as direct damage.
-    let Some(color) = damage_color(gates, source, melee_styled(spells, s.spell_id)) else {
+    let melee = crate::combat_text::melee_styled(Some(display));
+    let Some(color) = damage_color(gates, source, melee) else {
         return;
     };
     let Some(anchor) = gated_anchor(s.target, index, self_guid) else {
@@ -212,7 +233,7 @@ pub(super) fn periodic_aura_log(
         else {
             continue;
         };
-        if let Some((category, body)) = spell_text(amount, absorb, resist, false) {
+        if let Some((category, body)) = spell_text(amount, absorb, resist, 0, false) {
             text.write(CombatTextSpawn {
                 anchor,
                 text: body,
@@ -514,5 +535,255 @@ mod tests {
             vec![("Immune".to_string(), 3, Some(COLOR_SPELL_GOLD), victim_e)],
             "gold, category 3, over the immune target"
         );
+    }
+
+    const ME: u64 = 10;
+    const MOB: u64 = 20;
+    const FIREBALL: u32 = 133;
+    const HIDDEN: u32 = 7;
+
+    /// You and a creature held by guid, and Fireball with a record, `HIDDEN` flagged `0x100`.
+    struct Leg {
+        app: App,
+        spells: std::sync::Arc<crate::ui_action::Spells>,
+    }
+
+    impl Leg {
+        fn new() -> Self {
+            let display = |id, name: &str, attributes| {
+                (
+                    id,
+                    benilla_formats::SpellDisplay {
+                        id,
+                        name: name.into(),
+                        attributes,
+                        ..Default::default()
+                    },
+                )
+            };
+            let spells = crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [
+                        display(FIREBALL, "Fireball", 0),
+                        display(HIDDEN, "Hidden", 0x100),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            };
+            let mut app = App::new();
+            app.add_message::<CombatTextSpawn>()
+                .add_message::<UnitCombatFeedback>()
+                .init_resource::<GuidIndex>()
+                .init_resource::<SelfGuid>();
+            for guid in [ME, MOB] {
+                let e = app
+                    .world_mut()
+                    .spawn((Guid(guid), ObjectStore::default()))
+                    .id();
+                app.world_mut()
+                    .resource_mut::<GuidIndex>()
+                    .0
+                    .insert(guid, e);
+            }
+            app.world_mut().resource_mut::<SelfGuid>().0 = Some(ME);
+            Self {
+                app,
+                spells: std::sync::Arc::new(spells),
+            }
+        }
+
+        /// Run one packet through the leg; the flashes as `(action, descriptor, amount)` and the
+        /// floats' text.
+        fn run(
+            &mut self,
+            packet: impl Packet,
+        ) -> (Vec<(&'static str, &'static str, u32)>, Vec<String>) {
+            let spells = self.spells.clone();
+            let mut packet = Some(packet);
+            self.app
+                .world_mut()
+                .run_system_once(
+                    move |index: Res<GuidIndex>,
+                          self_guid: Res<SelfGuid>,
+                          stores: Query<&mut ObjectStore>,
+                          mut text: MessageWriter<CombatTextSpawn>,
+                          mut feedback: MessageWriter<UnitCombatFeedback>| {
+                        if let Some(packet) = packet.take() {
+                            packet.emit(
+                                &index,
+                                &self_guid,
+                                &stores,
+                                &spells,
+                                &mut text,
+                                &mut feedback,
+                            );
+                        }
+                    },
+                )
+                .unwrap();
+            let world = self.app.world_mut();
+            let flashes = world
+                .resource_mut::<Messages<UnitCombatFeedback>>()
+                .drain()
+                .map(|f| (f.action, f.flags, f.amount))
+                .collect();
+            let floats = world
+                .resource_mut::<Messages<CombatTextSpawn>>()
+                .drain()
+                .map(|t| t.text)
+                .collect();
+            (flashes, floats)
+        }
+    }
+
+    /// A packet the leg takes.
+    trait Packet: Send + Sync + 'static {
+        fn emit(
+            self,
+            index: &GuidIndex,
+            self_guid: &SelfGuid,
+            stores: &Query<&mut ObjectStore>,
+            spells: &crate::ui_action::Spells,
+            text: &mut MessageWriter<CombatTextSpawn>,
+            feedback: &mut MessageWriter<UnitCombatFeedback>,
+        );
+    }
+
+    impl Packet for SpellDamageLog {
+        fn emit(
+            self,
+            index: &GuidIndex,
+            self_guid: &SelfGuid,
+            stores: &Query<&mut ObjectStore>,
+            spells: &crate::ui_action::Spells,
+            text: &mut MessageWriter<CombatTextSpawn>,
+            feedback: &mut MessageWriter<UnitCombatFeedback>,
+        ) {
+            spell_damage_log(
+                self,
+                index,
+                self_guid,
+                stores,
+                Some(spells),
+                DamageTextGates::default(),
+                text,
+                feedback,
+            );
+        }
+    }
+
+    impl Packet for PeriodicAuraLog {
+        fn emit(
+            self,
+            index: &GuidIndex,
+            self_guid: &SelfGuid,
+            stores: &Query<&mut ObjectStore>,
+            spells: &crate::ui_action::Spells,
+            text: &mut MessageWriter<CombatTextSpawn>,
+            feedback: &mut MessageWriter<UnitCombatFeedback>,
+        ) {
+            periodic_aura_log(
+                self,
+                index,
+                self_guid,
+                stores,
+                Some(spells),
+                DamageTextGates::default(),
+                text,
+                feedback,
+            );
+        }
+    }
+
+    /// My spell on the creature.
+    fn hit(spell_id: u32, damage: u32, absorb: u32, resist: i32, blocked: u32) -> SpellDamageLog {
+        SpellDamageLog {
+            target: MOB,
+            attacker: ME,
+            spell_id,
+            damage,
+            school: 2,
+            absorb,
+            resist,
+            periodic: false,
+            blocked,
+            hit_info: 0,
+        }
+    }
+
+    /// `0x5e85e0` flashes `WOUND` for any hit of a logged spell, its descriptor the first of
+    /// `ABSORB`, `BLOCK` and `RESIST` when nothing got through (`0x49463b`-`0x494656`), and floats
+    /// the same reason (`0x5e888a`-`0x5e88c5`); a hit with no reason at all flashes `WOUND` bare,
+    /// the portrait's "Miss", and floats nothing.
+    #[test]
+    fn a_stopped_spell_hit_flashes_and_floats_its_reason() {
+        let mut leg = Leg::new();
+        assert_eq!(
+            leg.run(hit(FIREBALL, 0, 0, 30, 40)),
+            (vec![("WOUND", "BLOCK", 0)], vec!["Block".to_string()])
+        );
+        assert_eq!(
+            leg.run(hit(FIREBALL, 0, 50, 30, 40)),
+            (vec![("WOUND", "ABSORB", 0)], vec!["Absorb".to_string()])
+        );
+        assert_eq!(
+            leg.run(hit(FIREBALL, 0, 0, 0, 0)),
+            (vec![("WOUND", "", 0)], vec![])
+        );
+        // Through: the crit is the descriptor, and the partials are not.
+        let crit = SpellDamageLog {
+            hit_info: 0x2,
+            ..hit(FIREBALL, 300, 50, 0, 0)
+        };
+        assert_eq!(
+            leg.run(crit),
+            (vec![("WOUND", "CRITICAL", 300)], vec!["300".to_string()])
+        );
+    }
+
+    /// The flash and the float need the spell's record without `Attributes & 0x100`
+    /// (`0x5e87e3`-`0x5e87f4`); split damage flashes `WOUND` with no flags and floats nothing
+    /// (`0x5e8744`-`0x5e876a`).
+    #[test]
+    fn a_hidden_or_unknown_spell_flashes_nothing_and_a_split_floats_nothing() {
+        let mut leg = Leg::new();
+        assert_eq!(leg.run(hit(HIDDEN, 300, 0, 0, 0)), (vec![], vec![]));
+        assert_eq!(leg.run(hit(24_000, 300, 0, 0, 0)), (vec![], vec![]));
+        let split = SpellDamageLog {
+            hit_info: 0x8 | 0x2,
+            ..hit(FIREBALL, 120, 0, 0, 0)
+        };
+        assert_eq!(leg.run(split), (vec![("WOUND", "", 120)], vec![]));
+    }
+
+    /// A periodic tick flashes `WOUND` with its absorbed and resisted flags alone
+    /// (`0x626f87`-`0x626fb4`), and a hidden spell's ticks flash and float nothing (`0x626f21`).
+    #[test]
+    fn a_periodic_tick_flashes_its_partials_for_a_logged_spell_only() {
+        let mut leg = Leg::new();
+        let tick = |spell_id| PeriodicAuraLog {
+            target: MOB,
+            caster: ME,
+            spell_id,
+            ticks: vec![
+                PeriodicTick::Damage {
+                    amount: 0,
+                    school: 2,
+                    absorb: 0,
+                    resist: 12,
+                },
+                PeriodicTick::Heal { amount: 9 },
+            ],
+        };
+        assert_eq!(
+            leg.run(tick(FIREBALL)),
+            (
+                vec![("WOUND", "RESIST", 0), ("HEAL", "", 9)],
+                vec!["Resist".to_string()]
+            )
+        );
+        assert_eq!(leg.run(tick(HIDDEN)), (vec![], vec![]));
     }
 }
