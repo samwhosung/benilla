@@ -299,7 +299,8 @@ pub(super) fn spell_outcome_log(
 
 /// `SMSG_SPELLDISPELLOG`: "Your %s is removed." or "%s's %s is removed.", one line per aura. The
 /// chat type is the literal `0x45` `SPELL_BREAK_AURA` (`0x62d480`); the dispeller is classified
-/// only for the range gate.
+/// only for the range gate. An `AURADISPELSELF` line raises `SPELL_DISPELLED` with the spell's name
+/// (`0x62d5ce`-`0x62d5e8`).
 pub(super) fn spell_dispel_log(
     s: &SpellDispelLog,
     ctx: &ChatCtx,
@@ -313,7 +314,8 @@ pub(super) fn spell_dispel_log(
         let Some(spell) = ctx.spell_name(spell_id) else {
             continue;
         };
-        queue(
+        let word = to_me(bearer, LineWord::with("SPELL_DISPELLED", &spell));
+        queue_worded(
             log,
             ctx,
             poses,
@@ -325,12 +327,15 @@ pub(super) fn spell_dispel_log(
                 spell,
                 ..Default::default()
             },
+            word,
         );
     }
 }
 
 /// `SMSG_DISPEL_FAILED`: "You fail to dispel %s's %s.", one line per aura. The format variant is
 /// picked once per packet (`0x628c20`); the chat type per line, since `0x627d30` asks the spell.
+/// When the second unit is you, each line raises `DISPEL_FAILED` with its spell's name
+/// (`0x628daa`-`0x628db8`).
 pub(super) fn dispel_failed(
     s: &DispelFailed,
     ctx: &ChatCtx,
@@ -348,7 +353,8 @@ pub(super) fn dispel_failed(
         let Some(kind) = combat::spell_kind(caster, victim, !ctx.spell_harmful(spell_id)) else {
             continue;
         };
-        queue(
+        let word = to_me(victim, LineWord::with("DISPEL_FAILED", &spell));
+        queue_worded(
             log,
             ctx,
             poses,
@@ -360,6 +366,7 @@ pub(super) fn dispel_failed(
                 spell,
                 ..Default::default()
             },
+            word,
         );
     }
 }
