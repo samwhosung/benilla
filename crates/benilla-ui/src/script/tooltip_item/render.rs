@@ -262,9 +262,8 @@ pub(super) fn render_view_flagged(
         } else {
             ("PETITION_TITLE", "PETITION_CREATOR")
         };
-        if !p.title.is_empty() {
-            keyed(title_key, &[Arg::S(&p.title)], WHITE, false)?;
-        }
+        // Formatted and added whatever the title, and wrapped (`0x52b99c`, `0x52b9a4`).
+        keyed(title_key, &[Arg::S(&p.title)], WHITE, true)?;
         if let Some(owner) = p.owner.as_deref().filter(|o| !o.is_empty()) {
             keyed(creator_key, &[Arg::S(owner)], WHITE, false)?;
         }
