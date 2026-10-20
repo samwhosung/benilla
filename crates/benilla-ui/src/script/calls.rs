@@ -118,6 +118,14 @@ pub enum ScriptCall {
     /// `RandomRoll(min, max)` (`0x48c7b0`) past its range check (`0x48c807`-`0x48c830`):
     /// `MSG_RANDOM_ROLL` (`0x48c832`).
     RandomRoll { min: u32, max: u32 },
+    /// A bag or paper-doll click while targeting wants an item (`PickupContainerItem` at
+    /// `0x4f9c54`, `PickupInventoryItem` through `0x4c7300` at `0x4c76df`): the item seam
+    /// `ValidateSpellItemTarget 0x495d60` on the clicked slot, which binds and sends, raises a
+    /// confirm, or refuses before the verb returns.
+    PickItem(super::ItemPick),
+    /// `BindEnchant()` (`0x48d2e0`) or `ReplaceEnchant()` (`0x48d300`): a confirm popup's Yes on
+    /// the item the seam parked.
+    EnchantConfirm(super::EnchantAnswer),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that
@@ -144,6 +152,8 @@ impl ScriptCall {
             ScriptCall::UseAction(press) => press.may_cast,
             ScriptCall::UseContainerItem(item) => item.may_cast,
             ScriptCall::UseInventoryItem { may_cast, .. } => *may_cast,
+            ScriptCall::PickItem(pick) => pick.may_cast,
+            ScriptCall::EnchantConfirm(answer) => answer.may_cast,
             ScriptCall::CastSpell { may_cast, .. } => *may_cast,
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             ScriptCall::Select { may_cast, .. }

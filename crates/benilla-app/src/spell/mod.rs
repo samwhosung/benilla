@@ -123,10 +123,6 @@ impl Plugin for SpellPlugin {
                     group_relation::publish_group_roster
                         .in_set(UiFeed)
                         .before(UnitFeed),
-                    // The item-target commit (`0x495d60`): after the input pass so a bag click
-                    // binds the same frame; outside the target chain, as its clicks never reach
-                    // the world.
-                    targeting::commit_item_cast_on_pick.in_set(crate::ui_script::UiDrain),
                 ),
             )
             .add_systems(OnEnter(ClientState::InWorld), mods::clear_on_world_enter);

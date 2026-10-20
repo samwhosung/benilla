@@ -17,17 +17,21 @@ use super::{
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
 /// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
 /// held. Returns whether to repaint.
-pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> bool {
+pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind the
     // gate's tag 2.
     let may_cast = protected::gate(lua, Tag::CAST);
-    match verb(lua, |model| doll_click(model, id, may_cast)) {
+    Ok(match verb(lua, |model| doll_click(model, id, may_cast)) {
         DollClick::Done(repaint) => repaint,
         DollClick::PickUp(item) => {
             pick_up_item(lua, item);
             true
         }
-    }
+        DollClick::Pick(pick) => {
+            crate::script::calls::submit(lua, crate::script::ScriptCall::PickItem(pick))?;
+            false
+        }
+    })
 }
 
 /// What a doll click did inside its segment, or the pickup it owes past it.
@@ -37,6 +41,8 @@ pub(super) enum DollClick {
     /// The item to pick up: `SetCursorItem(1, …)` and `LockItem` (`0x4c7838`, `0x4c783f`), whose
     /// inner clear signals in a segment of its own ([`pick_up_item`]).
     PickUp(CursorItem),
+    /// The armed item-targeting spell's pick (`0x4c76df`), a call for the host.
+    Pick(super::ItemPick),
 }
 
 /// [`pickup_inventory_item`]'s decision and every arm but the pickup.
@@ -65,7 +71,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
             .inv_slot("player", id as usize)
             .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
         if usable && model.item_pick_armed {
-            model.item_picks.push(super::ItemPick {
+            return DollClick::Pick(super::ItemPick {
                 bag: EQUIPMENT_BAG,
                 slot: id,
                 may_cast,
@@ -174,7 +180,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
 }
 
 /// `EquipCursorItem(id)`: placing the held item on doll slot `id`.
-pub(super) fn equip_cursor_item(lua: &Lua, id: u32) -> bool {
+pub(super) fn equip_cursor_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     pickup_inventory_item(lua, id)
 }
 
@@ -283,7 +289,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The slot reader (`0x4c8db3`) else `Invalid inventory slot in PickupInventoryItem`
             // (`0x848af8`); Lua 0, the ammo leg, passes.
             let id = inventory_slot(lua, id, "Invalid inventory slot in PickupInventoryItem")?;
-            pickup_inventory_item(lua, id);
+            pickup_inventory_item(lua, id)?;
             Ok(())
         })?,
     )?;
@@ -292,7 +298,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, id: Value| {
             // `is-number` else `Usage: EquipCursorItem(slot)` (`0x8425b4`, `0x489678`).
             let id = binding_abi::index_arg32(lua, id, "Usage: EquipCursorItem(slot)")?;
-            equip_cursor_item(lua, id);
+            equip_cursor_item(lua, id)?;
             Ok(())
         })?,
     )?;
@@ -349,8 +355,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::{auto_equip_cursor_item, equip_cursor_item, pickup_inventory_item};
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
-    use crate::script::ItemPick;
     use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
+    use crate::script::{ItemPick, ScriptCall};
 
     /// `IsInventoryItemLocked`'s slot reader (`0x4c8520`) raises for any id outside {0, 1-23,
     /// 40-69, 82-113}, a negative included (`0x4c8e7c`); the ammo leg (0) answers nil; 99 is the
@@ -523,7 +529,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
 
         assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
-        assert!(pickup_inventory_item(&s.lua, 1));
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
         let held = s.cursor_item().expect("picked up");
         assert_eq!(
             (held.bag, held.slot, held.item_id),
@@ -538,8 +544,8 @@ mod tests {
     fn pickup_same_doll_slot_cancels_no_move() {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
-        assert!(pickup_inventory_item(&s.lua, 1));
-        assert!(pickup_inventory_item(&s.lua, 1));
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
         assert!(s.cursor_item().is_none());
         assert!(s.take_container_moves().is_empty());
         assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
@@ -554,7 +560,7 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![1]);
 
-        assert!(pickup_inventory_item(&s.lua, 1));
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
         assert!(s.cursor_item().is_none(), "a plain clear, no hop");
         assert_eq!(
             s.take_container_moves(),
@@ -578,14 +584,14 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(pickup_inventory_item(&s.lua, 2));
+        assert!(pickup_inventory_item(&s.lua, 2).unwrap());
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
         assert!(s.take_container_moves().is_empty());
 
         // The helm off HeadSlot (1) onto Tabard (19): back to its slot, nothing sent.
         s.run("PickupInventoryItem(1)").unwrap();
-        assert!(pickup_inventory_item(&s.lua, 19));
+        assert!(pickup_inventory_item(&s.lua, 19).unwrap());
         assert!(s.cursor_item().is_none());
         assert!(s.take_container_autoequips().is_empty());
         assert!(s.take_container_moves().is_empty());
@@ -596,10 +602,10 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
 
-        assert!(pickup_inventory_item(&s.lua, 11));
+        assert!(pickup_inventory_item(&s.lua, 11).unwrap());
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![11, 12]);
 
-        assert!(pickup_inventory_item(&s.lua, 12));
+        assert!(pickup_inventory_item(&s.lua, 12).unwrap());
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -625,7 +631,7 @@ mod tests {
         let held = s.cursor_item().expect("a split carry");
         assert_eq!(held.count, Some(2));
 
-        assert!(!pickup_inventory_item(&s.lua, 1));
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
         let held = s.cursor_item().expect("kept — can't equip a partial stack");
         assert_eq!(held.count, Some(2));
         assert!(s.take_container_moves().is_empty());
@@ -675,8 +681,8 @@ mod tests {
         s.set_inventory_slots(slots);
 
         // Ammo (0) is refused; Bag0Slot (20) picks up the equipped bag.
-        assert!(!pickup_inventory_item(&s.lua, 0));
-        assert!(pickup_inventory_item(&s.lua, 20));
+        assert!(!pickup_inventory_item(&s.lua, 0).unwrap());
+        assert!(pickup_inventory_item(&s.lua, 20).unwrap());
         let held = s.cursor_item().expect("bag picked up from the bar");
         assert_eq!(
             (held.bag, held.slot, held.item_id),
@@ -734,7 +740,7 @@ mod tests {
         s.run("PickupContainerItem(0, 3)").unwrap();
         assert!(s.eval::<bool>("return CursorCanGoInSlot(21)").unwrap());
 
-        assert!(pickup_inventory_item(&s.lua, 21));
+        assert!(pickup_inventory_item(&s.lua, 21).unwrap());
         assert!(s.cursor_item().is_none(), "a plain clear on place");
         assert_eq!(
             s.take_container_moves(),
@@ -874,7 +880,7 @@ mod tests {
         s.lock_item(guid);
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
-        assert!(!pickup_inventory_item(&s.lua, 1));
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_moves().is_empty());
     }
@@ -983,8 +989,8 @@ mod tests {
         }));
         s.run("ShowRepairCursor()").unwrap();
 
-        assert!(!pickup_inventory_item(&s.lua, 1));
-        assert!(!pickup_inventory_item(&s.lua, 1));
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
         s.run("UseInventoryItem(1)").unwrap();
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_inventory_repairs(), vec![1, 1, 1]);
@@ -1073,7 +1079,7 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(equip_cursor_item(&s.lua, 1));
+        assert!(equip_cursor_item(&s.lua, 1).unwrap());
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -1115,9 +1121,12 @@ mod tests {
         s.run_binding(r#"RunScript("PickupInventoryItem(1)")"#)
             .unwrap();
         assert_eq!(
-            s.take_item_picks()
-                .iter()
-                .map(|p| (p.slot, p.may_cast))
+            s.take_script_calls()
+                .into_iter()
+                .map(|c| match c {
+                    ScriptCall::PickItem(p) => (p.slot, p.may_cast),
+                    other => panic!("not a pick: {other:?}"),
+                })
                 .collect::<Vec<_>>(),
             [(1, true), (1, false), (1, true)]
         );
@@ -1126,19 +1135,20 @@ mod tests {
     #[test]
     fn the_armed_item_half_reroutes_bag_and_doll_clicks() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
 
         // Unarmed, both seams do their ordinary gesture and queue nothing.
-        assert!(pickup_inventory_item(&s.lua, 1));
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
         assert!(s.cursor_item().is_some());
-        assert!(s.take_item_picks().is_empty());
+        assert!(s.take_script_calls().is_empty());
 
         // Armed but holding: the payload wins.
         s.set_item_pick_armed(true);
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(
-            s.take_item_picks().is_empty(),
+            s.take_script_calls().is_empty(),
             "a click while carrying an item is a place, not a bind"
         );
         // The server's answer to the swap releases both ends.
@@ -1149,21 +1159,21 @@ mod tests {
         // Armed with an empty cursor: both seams bind and leave the cursor empty.
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_item().is_none());
-        assert!(!pickup_inventory_item(&s.lua, 1));
+        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(
-            s.take_item_picks(),
+            s.take_script_calls(),
             vec![
-                ItemPick {
+                ScriptCall::PickItem(ItemPick {
                     bag: EQUIPMENT_BAG,
                     slot: 1,
                     may_cast: true
-                },
-                ItemPick {
+                }),
+                ScriptCall::PickItem(ItemPick {
                     bag: 0,
                     slot: 1,
                     may_cast: true
-                }
+                })
             ],
             "the doll reports in the ONE bag space; the bag reports its own id"
         );
@@ -1184,9 +1194,9 @@ mod tests {
             texture: None,
         });
         s.set_cursor_for_test(macro_payload.clone());
-        assert!(!pickup_inventory_item(&s.lua, 2), "an empty slot");
+        assert!(!pickup_inventory_item(&s.lua, 2).unwrap(), "an empty slot");
         assert_eq!(s.cursor_payload(), Some(macro_payload));
-        assert!(pickup_inventory_item(&s.lua, 1));
+        assert!(pickup_inventory_item(&s.lua, 1).unwrap());
         assert_eq!(s.cursor_item().map(|i| i.slot), Some(1));
         s.run("ClearCursor()").unwrap();
 
@@ -1207,7 +1217,7 @@ mod tests {
             }),
         ] {
             s.set_cursor_for_test(held.clone());
-            assert!(!pickup_inventory_item(&s.lua, 1));
+            assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
             assert_eq!(s.cursor_payload(), Some(held));
         }
     }

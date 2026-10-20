@@ -834,8 +834,9 @@ impl super::UiScript {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 impl super::UiScript {
     /// Arm or disarm the targeting cursor's item half (`TargetingWantsItem`, `0x6e6330`): while
-    /// armed, a bag or paper-doll click queues its `(bag, slot)` as a pick instead of picking up,
-    /// as the reference's two pickups do (`0x4f9b30` at `0x4f9c54`, `0x4c7300` at `0x4c76df`).
+    /// armed, a bag or paper-doll click hands its `(bag, slot)` to the host as a pick instead of
+    /// picking up, as the reference's two pickups do (`0x4f9b30` at `0x4f9c54`, `0x4c7300` at
+    /// `0x4c76df`).
     pub fn set_item_pick_armed(&mut self, armed: bool) {
         self.model_mut().item_pick_armed = armed;
     }
@@ -846,20 +847,10 @@ impl super::UiScript {
     pub fn set_spell_targetable_units(&mut self, guids: impl IntoIterator<Item = u64>) {
         self.model_mut().spell_targetable_units = guids.into_iter().collect();
     }
-
-    /// Drain the picks since the last call; a paper-doll pick reports as [`EQUIPMENT_BAG`] and
-    /// its 1-based inventory slot.
-    pub fn take_item_picks(&mut self) -> Vec<ItemPick> {
-        std::mem::take(&mut self.model_mut().item_picks)
-    }
-
-    /// Drain the enchant-confirm answers since the last call; both answer the pick the app parked.
-    pub fn take_enchant_confirms(&mut self) -> Vec<EnchantAnswer> {
-        std::mem::take(&mut self.model_mut().enchant_confirms)
-    }
 }
 
-/// A bag or paper-doll click made while targeting wants an item (`0x4f9c54`, `0x4c76df`).
+/// A bag or paper-doll click made while targeting wants an item (`0x4f9c54`, `0x4c76df`); a
+/// paper-doll pick is [`EQUIPMENT_BAG`] and its 1-based inventory slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemPick {
     pub bag: i64,
@@ -896,7 +887,7 @@ pub enum EnchantConfirm {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `BindEnchant()`, `ReplaceEnchant()`: queue an intent for the app; nothing is sent from here.
+    // `BindEnchant()`, `ReplaceEnchant()`: the host answers the parked pick inside the verb.
     for (name, answer) in [
         ("BindEnchant", EnchantConfirm::Bind),
         ("ReplaceEnchant", EnchantConfirm::Replace),
@@ -905,12 +896,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, ()| {
                 let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.enchant_confirms.push(EnchantAnswer {
-                    confirm: answer,
-                    may_cast,
-                });
-                Ok(())
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::EnchantConfirm(EnchantAnswer {
+                        confirm: answer,
+                        may_cast,
+                    }),
+                )
             })?,
         )?;
     }

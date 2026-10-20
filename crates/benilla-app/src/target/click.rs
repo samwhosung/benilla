@@ -2306,6 +2306,7 @@ mod tests {
         world.init_resource::<Selection>();
         world.init_resource::<crate::spell::SpellTargeting>();
         world.init_resource::<crate::spell::CursorPicks>();
+        world.init_resource::<crate::spell::targeting::EnchantConfirmItem>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<crate::creature_anim::UnitEdits>();

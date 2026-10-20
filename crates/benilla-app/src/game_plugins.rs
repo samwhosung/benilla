@@ -1715,10 +1715,6 @@ pub(crate) mod schedule_tests {
          "`pending` holds only the VM's own `Screenshot()` asks, and the take spawns a capture, publishing nothing"),
         ("screenshot.rs", "report_captures", Because::FilledByVm,
          "the outcome chain starts with the VM's own `Screenshot()` call"),
-        ("spell/targeting/item.rs", "commit_item_cast_on_pick", Because::FilledByVm,
-         "the picks and answers are the VM's own: a bag or paper-doll click with an item-targeting \
-          spell on the cursor, and the bind and replace popups' `BindEnchant` and \
-          `ReplaceEnchant`; the two events it fires answer them"),
         ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
          "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,

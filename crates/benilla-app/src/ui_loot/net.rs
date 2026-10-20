@@ -935,6 +935,7 @@ mod tests {
         world.init_resource::<crate::target::Selection>();
         world.init_resource::<crate::spell::SpellTargeting>();
         world.init_resource::<crate::spell::CursorPicks>();
+        world.init_resource::<crate::spell::targeting::EnchantConfirmItem>();
         world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::player::Player>();

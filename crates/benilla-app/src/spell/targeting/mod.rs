@@ -43,7 +43,7 @@ mod world;
 pub(crate) use corpse::fixture as corpse_fixture;
 pub(crate) use corpse::{corpse_pick_admits, publish_corpse_pick, CorpsePick};
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
-pub(crate) use item::{commit_item_cast_on_pick, EnchantConfirmItem};
+pub(crate) use item::EnchantConfirmItem;
 pub(crate) use pick::{publish_unit_pick, PickChecks, UnitPick};
 pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
 
@@ -597,6 +597,9 @@ pub(crate) struct ScriptCursor<'w, 's> {
     checks: BindChecks<'w, 's>,
     ladder: crate::spell::CastLadder<'w, 's>,
     picks: ResMut<'w, CursorPicks>,
+    /// The item a confirm popup stands over, and the enchant rows the item gate reads.
+    parked: ResMut<'w, EnchantConfirmItem>,
+    enchants: Option<Res<'w, crate::items::Enchants>>,
 }
 
 impl ScriptCursor<'_, '_> {
@@ -639,6 +642,31 @@ impl ScriptCursor<'_, '_> {
         debug!("ui_action: targeting cancelled (ESC chain)");
         self.ladder.stop_targeting();
     }
+
+    /// A bag or paper-doll click while targeting wants an item ([`item::pick_item`]); the confirm
+    /// popup it raised, if any.
+    pub(crate) fn pick_item(&mut self, pick: benilla_ui::script::ItemPick) -> item::ConfirmPopup {
+        item::pick_item(
+            &mut self.ladder,
+            self.enchants.as_deref(),
+            &mut self.parked,
+            pick,
+        )
+    }
+
+    /// `BindEnchant()` or `ReplaceEnchant()` ([`item::confirm_enchant`]); the popup a bind's
+    /// rerun raised, if any.
+    pub(crate) fn confirm_enchant(
+        &mut self,
+        answer: benilla_ui::script::EnchantAnswer,
+    ) -> item::ConfirmPopup {
+        item::confirm_enchant(
+            &mut self.ladder,
+            self.enchants.as_deref(),
+            &mut self.parked,
+            answer,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -678,6 +706,7 @@ mod tests {
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
         world.init_resource::<SpellTargeting>();
         world.init_resource::<CursorPicks>();
+        world.init_resource::<EnchantConfirmItem>();
         world.init_resource::<crate::spell::HeldForPick>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<crate::ui_party::GroupState>();

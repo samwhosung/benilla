@@ -168,9 +168,9 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
 /// occupant that is no container, or is locked, returns (`0x4c7bbf`, `0x4c7bc8`); a container is
 /// picked up, its setter's clear dropping any other payload. It never places or swaps, and the
 /// client has no empty-bag rule: the server refuses with `EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS`.
-pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) {
+pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) -> mlua::Result<()> {
     if !accepts(live) {
-        return;
+        return Ok(());
     }
     let (gated, occupied) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -183,7 +183,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) {
         (gated, occupied)
     };
     if gated {
-        return;
+        return Ok(());
     }
     verb(lua, |model| {
         if matches!(model.cursor, Some(CursorPayload::Item(_))) {
@@ -191,8 +191,8 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) {
         }
     });
     if !occupied {
-        super::doll::pickup_inventory_item(lua, live);
-        return;
+        super::doll::pickup_inventory_item(lua, live)?;
+        return Ok(());
     }
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -201,6 +201,7 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) {
     if let Some(item) = picked {
         pick_up_item(lua, item);
     }
+    Ok(())
 }
 
 /// `PickupBagFromSlot`'s grab: an unlocked container in `live` (`0x4c7bc1`), which it picks up
@@ -268,8 +269,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `Invalid bag slot in PickupBagFromSlot` (`0x848ba8`) on the same two tests
             // (`0x4c8fb3`, `0x4c8fbf`).
             let live = bag_slot(lua, live, "Invalid bag slot in PickupBagFromSlot")?;
-            pickup_bag_from_slot(lua, live);
-            Ok(())
+            pickup_bag_from_slot(lua, live)
         })?,
     )?;
 

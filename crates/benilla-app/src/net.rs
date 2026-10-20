@@ -566,6 +566,11 @@ impl Objects<'_, '_> {
         self.me.single().ok()
     }
 
+    /// Our own player's descriptor fields, once in the world.
+    pub(crate) fn player_fields(&self) -> Option<&ObjectFields> {
+        self.stores.get(self.player()?).ok().map(|s| &s.0)
+    }
+
     /// An item object's countdown cells.
     pub(crate) fn countdowns(&self, guid: u64) -> Option<&crate::items::Countdowns> {
         self.index

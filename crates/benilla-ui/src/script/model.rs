@@ -786,10 +786,6 @@ pub(crate) struct Model {
     pub(crate) container_repairs: Vec<(i64, u32)>,
     /// Targeting wants an item (`0x6e6330`): a bag or paper-doll click becomes a pick.
     pub(crate) item_pick_armed: bool,
-    /// Picked `(bag, slot)`s; a paper-doll click is `EQUIPMENT_BAG` and its 1-based inventory slot.
-    pub(crate) item_picks: Vec<cursor::ItemPick>,
-    /// `BindEnchant()` and `ReplaceEnchant()`, the enchant popups' answers.
-    pub(crate) enchant_confirms: Vec<cursor::EnchantAnswer>,
     /// `DeleteCursorItem`'s `(bag, slot, count)`, 0 for the whole stack, as `CMSG_DESTROYITEM`.
     pub(crate) container_destroys: Vec<(i64, u32, u32)>,
     /// The wrapping paper a right-click armed (`0x5edea0`: lock it, cursor mode 2, no packet). Not
@@ -1719,8 +1715,6 @@ impl Model {
             container_moves: Vec::new(),
             container_repairs: Vec::new(),
             item_pick_armed: false,
-            item_picks: Vec::new(),
-            enchant_confirms: Vec::new(),
             container_destroys: Vec::new(),
             pending_wrap: None,
             container_wraps: Vec::new(),

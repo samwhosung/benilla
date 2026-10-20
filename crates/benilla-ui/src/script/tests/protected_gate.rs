@@ -534,7 +534,6 @@ fn effects(s: &mut UiScript) -> Vec<String> {
             .iter()
             .map(|t| format!("drop {t}")),
     );
-    out.extend(s.take_enchant_confirms().iter().map(|a| format!("{a:?}")));
     out.extend(
         s.take_pet_autocast_toggles()
             .iter()

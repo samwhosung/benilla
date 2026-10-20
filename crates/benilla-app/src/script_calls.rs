@@ -103,6 +103,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
         let selected_before = appliers.p0().selected();
         let report_mark = appliers.p2().p2().mark();
         let mut tail: Option<CallTail> = None;
+        // The confirm popup an item pick or a Yes raised, signalled with the call's reports.
+        let mut popup = None;
         match call {
             ScriptCall::Select { request, .. } => appliers.p0().select(request),
             ScriptCall::TargetByName { name, exact, .. } => {
@@ -163,6 +165,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::PetOrder(packed) => pet_in_order!(appliers, begin_order(packed)),
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
+            ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
+            ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
@@ -209,9 +213,12 @@ impl CallHost for ScriptCallHost<'_, '_> {
         }
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
-        // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, all signalled
-        // below as the call returns, under its input events.
-        let ready = appliers.p2().p2().ready_since(script, report_mark);
+        // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, and the item gate's
+        // confirm (`0x495d60`), all signalled below as the call returns, under its input events.
+        let mut ready = appliers.p2().p2().ready_since(script, report_mark);
+        if let Some((event, args)) = popup {
+            ready.push(crate::ui_cast::Ready::Event(event, args));
+        }
         // The cast state the call left, for the script's next line: `SpellStopCasting`
         // (`0x6e6e80`) finds the cast it sent in flight (`0x6e5026`), and `IsCurrentAction`
         // (`0x4e53a0`) checks its slot, as stock `ActionButtonUp` reads straight after `UseAction`
