@@ -1779,6 +1779,18 @@ pub(super) fn writer_loop(
                     ClientCommand::TogglePvp => w.toggle_pvp(),
                     ClientCommand::ToggleHelm => w.toggle_helm(),
                     ClientCommand::ToggleCloak => w.toggle_cloak(),
+                    ClientCommand::TeleportCheat { pos, facing } => w.teleport_cheat(pos, facing),
+                    ClientCommand::TeleportToUnit { text } => w.teleport_to_unit(&text),
+                    ClientCommand::SetRawPosition { pos, facing } => {
+                        w.set_raw_position(pos, facing)
+                    }
+                    ClientCommand::WorldTeleport {
+                        time_ms,
+                        map,
+                        pos,
+                        facing,
+                    } => w.world_teleport(time_ms, map, pos, facing),
+                    ClientCommand::Whois { text } => w.whois(&text),
                     ClientCommand::FriendListRequest => w.friend_list(),
                     ClientCommand::AddFriend { name } => w.add_friend(&name),
                     ClientCommand::SetLookingForGroup { slots, comment } => {

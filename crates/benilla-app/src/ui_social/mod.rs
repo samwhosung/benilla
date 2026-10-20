@@ -11,10 +11,12 @@
 use benilla_protocol::messages::{friend_result, friend_status, FriendEntry, FriendStatusUpdate};
 use bevy::prelude::*;
 
+use crate::console::ConsoleCommandApp;
 use crate::ui_script::{UiFeed, UiInput};
 
 mod feed;
 mod query;
+mod whois;
 
 pub(crate) use query::parse as who_query;
 
@@ -296,6 +298,13 @@ pub(crate) struct UiSocialPlugin;
 impl Plugin for UiSocialPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        // Category 0 (`0x5adcfd`).
+        app.console_command(
+            "whois",
+            crate::console::DEBUG,
+            Some(whois::HELP),
+            whois::whois,
+        );
         app.init_resource::<SocialState>()
             .add_systems(
                 Startup,

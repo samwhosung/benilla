@@ -1957,6 +1957,32 @@ pub(crate) enum ClientCommand {
     ToggleHelm,
     /// `CMSG_TOGGLE_CLOAK`, as [`Self::ToggleHelm`].
     ToggleCloak,
+    // ── The console's own sends ── (vmangos acts on them for administrators alone)
+    /// `MSG_MOVE_TELEPORT_CHEAT`: the `port x y` command.
+    TeleportCheat {
+        pos: [f32; 3],
+        facing: f32,
+    },
+    /// `CMSG_TELEPORT_TO_UNIT`: the `port <name>` command's whole argument text.
+    TeleportToUnit {
+        text: String,
+    },
+    /// `CMSG_MOVE_SET_RAW_POSITION`: the `setrawpos` command.
+    SetRawPosition {
+        pos: [f32; 3],
+        facing: f32,
+    },
+    /// `CMSG_WORLD_TELEPORT`: the `worldport` command, with the client's millisecond clock.
+    WorldTeleport {
+        time_ms: u32,
+        map: u32,
+        pos: [f32; 3],
+        facing: f32,
+    },
+    /// `CMSG_WHOIS`: the `whois` command's whole argument text.
+    Whois {
+        text: String,
+    },
     // ── Guild ──
     // Members by name; rank 0 is the guild master. A change is answered by a fresh
     // `SMSG_GUILD_ROSTER`, never applied at the send; a refusal by `SMSG_GUILD_COMMAND_RESULT`.
