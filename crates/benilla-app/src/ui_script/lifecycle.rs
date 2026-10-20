@@ -640,12 +640,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
 /// The live player's seat off the world, through the unit feed's own builder; `None` before our
 /// own create. A world without the feed's resources (a bare test world) has none to read.
 fn live_player_seat(world: &mut World) -> Option<crate::ui_unit::LivePlayerSeat> {
-    world
-        .run_system_cached(crate::ui_unit::live_player_seat)
-        .unwrap_or_else(|e| {
-            warn!("ui_script: no live player to seat for the load ({e}); the roster stands in");
-            None
-        })
+    crate::script_calls::run_cached(world, crate::ui_unit::live_player_seat).unwrap_or_else(|e| {
+        warn!("ui_script: no live player to seat for the load ({e}); the roster stands in");
+        None
+    })
 }
 
 /// The wire's gender byte (0 male, 1 female) on `UnitSex`'s 2/3 scale, as `ui_unit::snapshot`
@@ -800,9 +798,9 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
             .get_resource::<crate::ui_loot::LootState>()
             .and_then(crate::ui_loot::LootState::source);
         // A harness without the target stack has no selection to drop.
-        let deselected = world
-            .run_system_cached(crate::target::deselect_on_ui_shutdown)
-            .unwrap_or(false);
+        let deselected =
+            crate::script_calls::run_cached(world, crate::target::deselect_on_ui_shutdown)
+                .unwrap_or(false);
         // The teardown's own loot close, on a window looting the target (`0x493959`-`0x493974`).
         let loot_closed = looting.is_some()
             && world
@@ -810,7 +808,7 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
                 .and_then(crate::ui_loot::LootState::source)
                 .is_none();
         if loot_closed {
-            let _ = world.run_system_cached(crate::ui_loot::tell_loot_closed);
+            let _ = crate::script_calls::run_cached(world, crate::ui_loot::tell_loot_closed);
         }
         if deselected {
             crate::script_calls::with_hosted_vm(world, |script| {
@@ -822,7 +820,10 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
             });
         }
     } else {
-        let _ = world.run_system_cached(crate::target::clear_selection_on_world_teardown);
+        let _ = crate::script_calls::run_cached(
+            world,
+            crate::target::clear_selection_on_world_teardown,
+        );
     }
     if let Some(net) = world.get_resource::<crate::net::NetCommands>() {
         let _ = net.0.send(crate::net::ClientCommand::CancelTrade);
@@ -833,9 +834,9 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
 /// Click to Move walk in flight is cancelled and the mover stopped, a follow telling the VM
 /// `AUTOFOLLOW_END` (`0x60fb84`), so the new VM starts with none.
 fn cancel_move_action(world: &mut World) {
-    let followed = world
-        .run_system_cached(crate::player::cancel_move_action_on_ui_shutdown)
-        .unwrap_or(false);
+    let followed =
+        crate::script_calls::run_cached(world, crate::player::cancel_move_action_on_ui_shutdown)
+            .unwrap_or(false);
     if followed {
         crate::script_calls::with_hosted_vm(world, |script| {
             if let Some(script) = script {
@@ -1863,6 +1864,59 @@ mod tests {
                 .eval::<i64>("return SEEN_LOGOUT")
                 .unwrap(),
             0
+        );
+    }
+
+    /// A one-shot the shutdown runs from its exclusive edge applies the unit edits it queued as it
+    /// returns, as it applies its commands. The `/reload` head's loot close fires `LOOT_CLOSED`,
+    /// whose handler stops a running auto-repeat (`SpellStopCasting`, `0x6e6e80` → `0x6ea080`):
+    /// the arm is off our player before the head's next step.
+    #[test]
+    fn a_shutdown_one_shot_applies_its_unit_edits_as_it_returns() {
+        const ME: u64 = 0x10;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        let world = app.world_mut();
+        let me = world
+            .spawn((
+                crate::net::SelfPlayer,
+                crate::net::Guid(ME),
+                crate::creature_anim::AutoRepeatArmed,
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ME, me);
+        world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+        // Auto Shot.
+        world.resource_mut::<crate::spell::AutoRepeatActive>().0 = Some(75);
+        let mut script = UiScript::new().expect("a VM");
+        // The view the cast state pushed after the call that armed it.
+        script.set_cast_view(benilla_ui::script::CastView {
+            auto_repeat: Some(75),
+            ..Default::default()
+        });
+        script
+            .run(
+                "local f = CreateFrame('Frame') f:RegisterEvent('LOOT_CLOSED') \
+                 f:SetScript('OnEvent', function() SpellStopCasting() end)",
+            )
+            .unwrap();
+        world.insert_non_send_resource(script);
+        crate::script_calls::run_cached(world, crate::ui_loot::tell_loot_closed)
+            .expect("the loot close runs");
+        assert_eq!(
+            world.resource::<crate::spell::AutoRepeatActive>().0,
+            None,
+            "the handler's call applied"
+        );
+        assert!(
+            !world
+                .entity(me)
+                .contains::<crate::creature_anim::AutoRepeatArmed>(),
+            "and its edit, before the one-shot returned"
         );
     }
 }

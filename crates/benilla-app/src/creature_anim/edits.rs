@@ -3,9 +3,11 @@
 //! removes only through a sync point, so the seams that change them (`SelfCancel`, `CastLadder`,
 //! `AttackSeam`) queue the change here and hold no `Commands`: the call host they sit in carries
 //! no deferred buffer, and the VM pass's hosts need no sync point between them.
-//! The net drain applies the queue after each handler ([`apply_unit_edits`]), as it applies a
-//! handler's commands, and the pass's end set hands it to the sync point ahead of the readers
-//! ([`flush_unit_edits`]).
+//! An exclusive caller applies the queue where it applies the commands of what it runs
+//! ([`apply_unit_edits`]): the net drain after each handler, the world's hosted entries and
+//! one-shots as they return ([`crate::script_calls::with_hosted_vm`],
+//! [`crate::script_calls::run_cached`]). The pass's end set, and a flush in each other schedule
+//! that can queue one, hand it to the sync point ahead of the readers ([`flush_unit_edits`]).
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

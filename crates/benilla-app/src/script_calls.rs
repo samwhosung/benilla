@@ -353,6 +353,18 @@ pub(crate) fn apply_waiting(world: &mut World, script: &mut UiScript) {
     crate::creature_anim::apply_unit_edits(world);
 }
 
+/// Run `system` as a one-shot from an exclusive caller, as [`World::run_system_cached`] does, and
+/// apply the unit edits it queued as it returns, as that applies its commands: a one-shot that
+/// holds the host or a seam leaves nothing for a later flush to find.
+pub(crate) fn run_cached<O: 'static, M, S: IntoSystem<(), O, M> + 'static>(
+    world: &mut World,
+    system: S,
+) -> Result<O, bevy::ecs::system::RegisteredSystemError<(), O>> {
+    let r = world.run_system_cached(system);
+    crate::creature_anim::apply_unit_edits(world);
+    r
+}
+
 /// Bind the units a selection writer outside the calls (a loot window's select, the chat layer's
 /// `/target`) found the targeting cursor up for (`SelectTarget`, `0x4935d5`), in the target chain:
 /// a call binds its own as it applies.

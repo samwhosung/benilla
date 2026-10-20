@@ -774,7 +774,7 @@ fn drain_trade_touches(world: &mut World) {
     {
         return;
     }
-    let _ = world.run_system_cached(resignal_trade_items);
+    let _ = crate::script_calls::run_cached(world, resignal_trade_items);
 }
 
 /// The item watchers' trade half, after the action bar's recount in each handler: an item of
