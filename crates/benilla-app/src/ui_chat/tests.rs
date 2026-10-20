@@ -305,15 +305,15 @@ fn xp_gain_lines_pick_the_reference_form() {
     // `COMBATLOG_XPGAIN_FIRSTPERSON`, `COMBATLOG_XPGAIN_EXHAUSTION1` (rested) and
     // `COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED` (`GlobalStrings.lua:801`, `:789`, `:804`).
     assert_eq!(
-        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 35, 35, normal(), g)).as_deref(),
+        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 35, 35, 1.0, normal(), g)).as_deref(),
         Some("Kobold Vermin dies, you gain 35 experience.")
     );
     assert_eq!(
-        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 52, 35, rested(), g)).as_deref(),
+        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 52, 35, 1.0, rested(), g)).as_deref(),
         Some("Kobold Vermin dies, you gain 52 experience. (+17 exp Rested bonus)")
     );
     assert_eq!(
-        with_strings(|g| xp_gain_line(None, 120, 120, None, g)).as_deref(),
+        with_strings(|g| xp_gain_line(None, 120, 120, 1.0, None, g)).as_deref(),
         Some("You gain 120 experience.")
     );
     // The shipped lavender, 0x6F6FFF, chat-cache row 46.
@@ -349,6 +349,7 @@ fn the_xp_line_follows_the_rest_states_exhaustion_row() {
             Some("Defias Thug"),
             total,
             base,
+            1.0,
             Some(RestState { state, row }),
             &get,
         )
@@ -380,9 +381,12 @@ fn the_xp_line_follows_the_rest_states_exhaustion_row() {
     // State 3's key is `NULL`, no global: an empty template, and no empty line.
     assert_eq!(line(60, 40, 3, Some(("Tired", 0.75))), None);
     // A named kill with no active player writes nothing; the unnamed form needs none.
-    assert_eq!(xp_gain_line(Some("Defias Thug"), 60, 40, None, &get), None);
     assert_eq!(
-        xp_gain_line(None, 60, 40, None, &get).as_deref(),
+        xp_gain_line(Some("Defias Thug"), 60, 40, 1.0, None, &get),
+        None
+    );
+    assert_eq!(
+        xp_gain_line(None, 60, 40, 1.0, None, &get).as_deref(),
         Some("You gain 60 experience.")
     );
     // An XP loss prints the packet's value negated as a signed 32-bit number (`0x637f70`).
@@ -3315,7 +3319,7 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
     {
         let mut log = feed.world.resource_mut::<super::ChatLog>();
         log.push_unit_combat(flash(7, "DODGE"));
-        log.push_xp_gain(0, 10, 10);
+        log.push_xp_gain(0, 10, 10, 1.0);
         log.push_unit_combat(flash(7, "PARRY"));
         log.push_unit_combat(flash(8, "MISS"));
     }
@@ -3420,7 +3424,7 @@ fn a_kills_unnamed_victim_is_the_unit_getters_miss() {
     feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     {
         let mut log = feed.world.resource_mut::<super::ChatLog>();
-        log.push_xp_gain(VICTIM, 60, 60);
+        log.push_xp_gain(VICTIM, 60, 60, 1.0);
         log.push_pvp_credit(30, VICTIM, 8, 0);
     }
     feed.drain();

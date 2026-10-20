@@ -47,6 +47,8 @@ fn a_spell_with_no_record_writes_no_line() {
         names: None,
         skill_lines: None,
         enchants: None,
+        items: None,
+        gameobjects: None,
         ranges: &ranges,
         periodic: true,
     };
@@ -214,6 +216,8 @@ mod emitters {
         factions: Factions,
         spells: crate::ui_action::Spells,
         enchants: benilla_formats::EnchantCatalog,
+        items: crate::items::Items,
+        gameobjects: crate::go_templates::GameObjectTemplates,
     }
 
     impl Bench {
@@ -229,6 +233,8 @@ mod emitters {
                     [(CRUSADER, "Crusader".to_string())].into(),
                     [(CRUSADER, 0), (ROCKBITER, 0x2)].into(),
                 ),
+                items: crate::items::Items::default(),
+                gameobjects: crate::go_templates::GameObjectTemplates::default(),
             };
             bench.hold(&player(ME, HUMAN));
             bench.hold(&creature(MOB, ORC));
@@ -294,6 +300,8 @@ mod emitters {
                 names: None,
                 skill_lines: None,
                 enchants: Some(&self.enchants),
+                items: Some(&self.items),
+                gameobjects: Some(&self.gameobjects),
                 ranges: &ranges,
                 periodic: true,
             };

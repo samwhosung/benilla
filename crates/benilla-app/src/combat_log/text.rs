@@ -334,9 +334,10 @@ pub(super) fn xp_gain(
         if x.total == 0 {
             return;
         }
-        chat_log.push_xp_gain(x.victim, x.total, x.base);
+        chat_log.push_xp_gain(x.victim, x.total, x.base, x.group);
     } else {
-        chat_log.push_xp_gain(0, x.total, x.base);
+        // The unnamed forms never see a float (`0x637f90` passes 1.0).
+        chat_log.push_xp_gain(0, x.total, x.base, 1.0);
     }
     if let Some(&me) = self_guid.0.as_ref().and_then(|g| index.0.get(g)) {
         text.write(CombatTextSpawn {

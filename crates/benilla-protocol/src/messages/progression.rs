@@ -5,7 +5,7 @@ use std::io::{self, Read};
 use crate::wire::{read_f32_le, read_i32_le, read_u32_le, read_u64_le, read_u8};
 
 /// `SMSG_LOG_XPGAIN`: an XP award; `victim` is 0 for non-kill XP (vmangos `Misc.cpp:512-522`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct XpGain {
     pub victim: u64,
     pub total: u32,
@@ -13,26 +13,30 @@ pub struct XpGain {
     /// `total - base` is the chat line's "(+N exp Rested bonus)".
     pub base: u32,
     pub kill: bool,
+    /// The group float after the base XP (`0x637e83`-`0x637e96`); only a kill carries it, else
+    /// 1.0, the handler's own initial value (`0x637e7c`). vmangos always sends 1.0
+    /// (`Player.cpp:3039`).
+    pub group: f32,
 }
 
 /// Read `SMSG_LOG_XPGAIN`: `u64 victim, u32 total, u8 type` (0 kill, 1 other), then for a kill
-/// `u32 base, f32 groupBonus`. The group bonus is read and dropped, its chat line not built;
-/// vmangos always sends 1.0, meaning none (`Player.cpp:3039`).
+/// `u32 base, f32 group`.
 pub(super) fn read_xp_gain(r: &mut impl Read) -> io::Result<XpGain> {
     let victim = read_u64_le(r)?;
     let total = read_u32_le(r)?;
     let xp_type = read_u8(r)?;
     let kill = xp_type == 0;
-    let mut base = total;
+    let (mut base, mut group) = (total, 1.0);
     if kill {
         base = read_u32_le(r)?;
-        let _group_bonus = read_f32_le(r)?;
+        group = read_f32_le(r)?;
     }
     Ok(XpGain {
         victim,
         total,
         base,
         kill,
+        group,
     })
 }
 

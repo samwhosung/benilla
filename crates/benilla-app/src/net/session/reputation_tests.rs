@@ -103,7 +103,7 @@ fn delta(app: &mut App, slot: u32, standing: i32) {
 fn xp_gain(app: &mut App) {
     app.world_mut()
         .resource_mut::<crate::ui_chat::ChatLog>()
-        .push_xp_gain(0, 100, 100);
+        .push_xp_gain(0, 100, 100, 1.0);
 }
 
 fn rank_lines(app: &App) -> Vec<(String, u8, bool)> {

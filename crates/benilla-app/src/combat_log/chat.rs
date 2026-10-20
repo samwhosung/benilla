@@ -41,6 +41,10 @@ pub(crate) struct ChatCtx<'a> {
     pub skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
     /// `SpellItemEnchantment.dbc` (`0xc0d7d8`), which the enchantment lines name.
     pub enchants: Option<&'a benilla_formats::EnchantCatalog>,
+    /// The item cache (`0xc0e2a0`), which `LogOpenLock` reads for an opened item.
+    pub items: Option<&'a crate::items::Items>,
+    /// The game object cache (`0xc0e318`), which `LogOpenLock` reads for an opened object.
+    pub gameobjects: Option<&'a crate::go_templates::GameObjectTemplates>,
     /// The display ranges: the reference's `0x8629e0` table, CVar-backed.
     pub ranges: &'a combat::CombatLogRanges,
     /// `CombatLogPeriodicSpells`, for its two chat-only read sites; the whole-packet gate is in

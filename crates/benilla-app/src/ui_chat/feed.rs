@@ -72,8 +72,14 @@ enum Pending {
         guid: u64,
         tries: u16,
     },
-    /// An XP award; `victim` 0 is the unnamed form.
-    XpGain { victim: u64, total: u32, base: u32 },
+    /// An XP award; `victim` 0 is the unnamed form. `group` is the packet's float, 1.0 for the
+    /// forms that never read one.
+    XpGain {
+        victim: u64,
+        total: u32,
+        base: u32,
+        group: f32,
+    },
     /// An XP loss, `total` as the packet carries it.
     XpLoss { total: u32 },
     /// An honor award; `rank` (0 none) becomes a title at the drain, on the victim's `side` (0
@@ -271,11 +277,12 @@ impl ChatLog {
     }
 
     /// Queue an XP gain's line (`SMSG_LOG_XPGAIN`); `victim` 0 is the unnamed form.
-    pub(crate) fn push_xp_gain(&mut self, victim: u64, total: u32, base: u32) {
+    pub(crate) fn push_xp_gain(&mut self, victim: u64, total: u32, base: u32, group: f32) {
         self.pending.push(Pending::XpGain {
             victim,
             total,
             base,
+            group,
         });
     }
 
@@ -383,9 +390,10 @@ impl ChatLog {
             .collect()
     }
 
-    /// The parked XP lines as `(victim, total, base)`, in order; victim 0 is the unnamed form.
+    /// The parked XP lines as `(victim, total, base, group)`, in order; victim 0 is the unnamed
+    /// form.
     #[cfg(test)]
-    pub(crate) fn pending_xp(&self) -> Vec<(u64, u32, u32)> {
+    pub(crate) fn pending_xp(&self) -> Vec<(u64, u32, u32, f32)> {
         self.pending
             .iter()
             .filter_map(|p| match *p {
@@ -393,7 +401,8 @@ impl ChatLog {
                     victim,
                     total,
                     base,
-                } => Some((victim, total, base)),
+                    group,
+                } => Some((victim, total, base, group)),
                 _ => None,
             })
             .collect()
@@ -527,6 +536,7 @@ pub(super) fn xp_gain_line(
     victim: Option<&str>,
     total: u32,
     base: u32,
+    _group: f32,
     rest: Option<RestState>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -1141,6 +1151,7 @@ pub(super) fn feed_chat(
                 victim,
                 total,
                 base,
+                group,
             } => {
                 // A victim's name never waits: each template names it through `GetUnitName`
                 // (`0x609210`, from `0x637ac0`), whose miss without `UNKNOWNOBJECT` is the literal
@@ -1164,7 +1175,8 @@ pub(super) fn feed_chat(
                     state,
                     row: row.as_ref().map(|(n, f)| (n.as_str(), *f)),
                 });
-                let line = xp_gain_line(name.as_deref(), total, base, rest, &globals(&script));
+                let line =
+                    xp_gain_line(name.as_deref(), total, base, group, rest, &globals(&script));
                 if let Some(text) = line {
                     route(
                         &mut script,

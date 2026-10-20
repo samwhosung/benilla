@@ -948,7 +948,7 @@ fn combat_log_wire_golden() {
     body.extend_from_slice(&250u32.to_le_bytes()); // total
     body.push(0); // xpType: kill
     body.extend_from_slice(&200u32.to_le_bytes()); // base xp (kept: rested bonus = total − base)
-    body.extend_from_slice(&1.25f32.to_le_bytes()); // group bonus (dropped)
+    body.extend_from_slice(&1.25f32.to_le_bytes()); // group float
     let packet = messages::parse_server(messages::opcode::SMSG_LOG_XPGAIN, &body).unwrap();
     match &packet {
         ServerPacket::XpGain(x) => {
@@ -959,6 +959,7 @@ fn combat_log_wire_golden() {
                     total: 250,
                     base: 200,
                     kill: true,
+                    group: 1.25,
                 }
             );
         }
@@ -982,6 +983,7 @@ fn combat_log_wire_golden() {
                     total: 50,
                     base: 50, // non-kill carries no base on the wire; base = total
                     kill: false,
+                    group: 1.0, // nor a float: the handler's own 1.0
                 }
             );
         }

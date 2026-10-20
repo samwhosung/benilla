@@ -54,6 +54,8 @@ pub(crate) struct Ctx<'w> {
     names: Option<Res<'w, NameCache>>,
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     enchants: Option<Res<'w, crate::items::Enchants>>,
+    items: Option<Res<'w, crate::items::Items>>,
+    gameobjects: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
     /// The eight display ranges.
     ranges: Res<'w, CombatLogRanges>,
     /// `CombatLogPeriodicSpells`.
@@ -72,6 +74,8 @@ impl Ctx<'_> {
             names: self.names.as_deref(),
             skill_lines: self.skill_lines.as_deref().map(|s| &s.catalog),
             enchants: self.enchants.as_deref().map(|e| &e.0),
+            items: self.items.as_deref(),
+            gameobjects: self.gameobjects.as_deref(),
             ranges: &self.ranges,
             periodic: self.periodic.0,
         }
@@ -860,6 +864,7 @@ mod tests {
                 total,
                 base: 40,
                 kill,
+                group: 1.0,
             });
             app.world_mut()
                 .run_system_once_with(on_xp_gain, packet)
@@ -873,21 +878,24 @@ mod tests {
                 .count();
             (lines, kinds, floats)
         };
-        assert_eq!(gain(MOB, 60, true), (vec![(MOB, 60, 40)], vec!["xp"], 1));
+        assert_eq!(
+            gain(MOB, 60, true),
+            (vec![(MOB, 60, 40, 1.0)], vec!["xp"], 1)
+        );
         assert_eq!(
             gain(77, 60, true),
-            (vec![(0, 60, 40)], vec!["xp"], 1),
+            (vec![(0, 60, 40, 1.0)], vec!["xp"], 1),
             "not held"
         );
         assert_eq!(
             gain(MOB, 60, false),
-            (vec![(0, 60, 40)], vec!["xp"], 1),
+            (vec![(0, 60, 40, 1.0)], vec!["xp"], 1),
             "no kill"
         );
         assert_eq!(gain(MOB, 0, true), (vec![], vec![], 0), "a zero kill");
         assert_eq!(
             gain(0, 0, false),
-            (vec![(0, 0, 40)], vec!["xp"], 1),
+            (vec![(0, 0, 40, 1.0)], vec!["xp"], 1),
             "a zero award"
         );
         assert_eq!(

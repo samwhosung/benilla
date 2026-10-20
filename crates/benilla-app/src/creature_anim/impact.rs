@@ -552,7 +552,7 @@ mod tests {
         receive(&mut app, swing(a, Some(v), 1));
         app.world_mut()
             .resource_mut::<ChatLog>()
-            .push_xp_gain(0, 10, 10);
+            .push_xp_gain(0, 10, 10, 1.0);
         tag(&mut app, a, *b"$CAH");
         assert_eq!(kinds(&app), ["xp", "unit combat"]);
         let flashed = app.world().resource::<ChatLog>().pending_unit_combat();
