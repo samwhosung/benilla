@@ -35,6 +35,11 @@ impl ScriptSelect<'_, '_> {
         self.commit.selection.guid
     }
 
+    /// The unit selected now.
+    pub(crate) fn target(&self) -> Option<Entity> {
+        self.commit.selection.target
+    }
+
     /// `TargetUnit` (`0x4899d0`), `AssistUnit` (`0x489b80`) and `TargetLastEnemy` share the
     /// reference's helper `0x489a40`: a resolved unit or a roster member is committed, anything
     /// else is a no-op, never a deselect. Here a token must name a streamed unit, so an

@@ -76,6 +76,13 @@ pub(crate) struct ScriptCallHost<'w, 's> {
     >,
 }
 
+impl ScriptCallHost<'_, '_> {
+    /// The selected unit, as the calls applied so far left it.
+    pub(crate) fn target(&mut self) -> Option<Entity> {
+        self.appliers.p0().target()
+    }
+}
+
 impl CallHost for ScriptCallHost<'_, '_> {
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
         let appliers = &mut self.appliers;
@@ -206,11 +213,17 @@ pub(crate) struct HostedVm<'w, 's> {
     host: Option<ScriptCallHost<'w, 's>>,
 }
 
-impl HostedVm<'_, '_> {
+impl<'w, 's> HostedVm<'w, 's> {
     /// Run `f` on the VM with the host lent around all of it ([`hosted`]); `f` gets `None` with
     /// no VM.
     pub(crate) fn run<R>(&mut self, f: impl FnOnce(Option<&mut UiScript>) -> R) -> R {
         hosted(&mut self.script, &mut self.host, f)
+    }
+
+    /// The VM and the host apart, for a drain that lends the host to each item's Lua in turn
+    /// ([`lent`]) and reads what the calls moved through the host between them.
+    pub(crate) fn parts(&mut self) -> (Option<&mut UiScript>, Option<&mut ScriptCallHost<'w, 's>>) {
+        (self.script.as_deref_mut(), self.host.as_mut())
     }
 }
 
@@ -240,11 +253,6 @@ pub(crate) struct VmWith<'w, 's, P: SystemParam + 'static> {
 }
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
-    /// Whether there is a VM to run on.
-    pub(crate) fn has_vm(&self) -> bool {
-        self.script.is_some()
-    }
-
     /// `P`, read or written outside any Lua.
     pub(crate) fn own(&mut self) -> bevy::ecs::system::SystemParamItem<'_, '_, P> {
         self.set.p0()
