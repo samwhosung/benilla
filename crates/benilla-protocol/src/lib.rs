@@ -160,8 +160,13 @@ fn atoi(text: &str) -> i32 {
 }
 
 /// The hosts of a realmlist the logon resolves, in order: the text cut at each `;` (`SStrChr2` at
-/// `0x43b8f6`) up to the first empty piece, which ends the list (`0x43b941`), each with port 3724
-/// (`0xe8c`, `0x5bc400`) unless it names one.
+/// `0x43b8f6`) up to the first empty piece, which ends the list (`0x43b941`), each split by
+/// [`host_port`] with the request's port 3724 (`0xe8c`, `0x5bc400`) when it names none. The
+/// reference branches on a piece's first byte (`0x43b947`, `0x43b94f`, `'0'..'9'`): a digit-led
+/// piece splits a `:port` (`0x43f3d0`: `SStrChr`, `SStrToInt`, then `inet_addr` unchecked, so a
+/// failed parse stores 255.255.255.255), while a name goes to `gethostbyname` whole, `:port`
+/// included (`0x43ba0e`), every address it returns taking 3724 (`0x43ba86`); a name's port here
+/// is the deviation below.
 fn logon_pieces(realmlist: &str) -> Vec<(&str, u16)> {
     realmlist
         .split(';')
@@ -181,10 +186,10 @@ fn pick(addrs: &[SocketAddr], draw: u32) -> Option<SocketAddr> {
 }
 
 /// The address a logon dials, and the realmlist's hosts for a failure to name. The list is every
-/// IPv4 address of each piece in order: one for a dotted piece, every `AF_INET` address
-/// `gethostbyname` gives for a name (`0x43b890`, `0x43ba07`-`0x43baf6`), none for a piece that
-/// resolves to none. One is drawn at random ([`pick`]), as `ClientLink::Connect` (`0x5bc3e0`)
-/// hands the list to `ConnectToRandomAddress`.
+/// IPv4 address of each piece in order, at the piece's port ([`logon_pieces`]): one for a dotted
+/// address, every `AF_INET` address `gethostbyname` gives for a name (`0x43ba07`-`0x43baf6`), none
+/// for a name that resolves to none (`0x43ba18`). One is drawn at random ([`pick`]), as
+/// `ClientLink::Connect` (`0x5bc3e0`) hands the list to `ConnectToRandomAddress`.
 fn logon_target(realmlist: &str) -> Result<(SocketAddr, String)> {
     use std::net::ToSocketAddrs;
     let pieces = logon_pieces(realmlist);
@@ -287,7 +292,7 @@ impl Logon {
 }
 
 /// The full SRP6 logon against a vanilla `realmd`, then the realm list. `realmlist` is one or more
-/// `host[:port]` separated by `;`, the server dialled one of their addresses ([`logon_target`]).
+/// `host[:port]` separated by `;`, the server dialled one of their addresses (`logon_target`).
 /// `locale` is the client's locale tag the challenge carries ([`auth::write_logon_challenge`]).
 pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Result<Logon> {
     let username_n =
@@ -438,7 +443,7 @@ mod dial_tests {
         assert_eq!(world_host_port("10.0.0.1:8085"), ("10.0.0.1", 8085));
     }
 
-    /// The cut is at the first `:`, and `_atoi` (`0x414411`) skips C-locale spaces, takes one
+    /// The cut is at the first `:`, and `_atol` (`0x414411`) skips C-locale spaces, takes one
     /// sign and reads digits up to the first other character, 0 with none; the dial keeps the
     /// low 16 bits (`0x5b6e94`).
     #[test]

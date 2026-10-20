@@ -136,7 +136,9 @@ pub fn observe_sends(observer: SendObserver) {
 /// A client header and its length: the size, counting the 4-byte opcode and the body, big-endian
 /// in two bytes up to [`SHORT_SIZE_MAX`], else in three, `(N >> 16) | 0x80, N >> 8, N`
 /// (`0x5b5712`-`0x5b572b`); then the opcode widened to four bytes little-endian. `None` past
-/// [`LONG_SIZE_MAX`], which no size header holds.
+/// [`LONG_SIZE_MAX`]. Deviation: a size past 23 bits is refused, where the reference sends it with
+/// bit 23 folded into the flag (`0x5b5712` `or dl,0x80` keeps one byte), because no client packet
+/// comes near 8 MB and a refusal beats a corrupt header.
 fn client_header(opcode: u16, body_len: usize) -> Option<([u8; 7], usize)> {
     let size = body_len + 4;
     let mut header = [0u8; 7];
