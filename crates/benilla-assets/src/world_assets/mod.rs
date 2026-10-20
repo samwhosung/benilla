@@ -213,10 +213,10 @@ pub fn sprite_found(chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> boo
 }
 
 /// `SetTexture`'s 1|nil probe ([`sprite_found`]), which keeps the size gate's answer for each
-/// resolved file it has read: an addon sets an icon from its `OnUpdate`, every frame, and the
-/// install and the addons' files do not change while the client runs. A file that will not read
-/// is asked again, and whether a name opens at all is asked each time, since the loose index
-/// can change.
+/// resolved file it has read: an addon sets an icon from its `OnUpdate`, every frame. The host
+/// makes one probe per UI load, so an answer lasts that load and a `/reload` asks again; a file
+/// edited meanwhile is not read again. A file that will not read is asked again, and whether a
+/// name opens at all is asked each time, since the loose index can change.
 #[derive(Default)]
 pub struct SpriteProbe {
     /// The gate's answer by resolved file ([`source_key`]).

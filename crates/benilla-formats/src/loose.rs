@@ -500,8 +500,6 @@ mod tests {
         file.map(|f| String::from_utf8(f.read().unwrap()).unwrap())
     }
 
-    /// Both walks enter files by their path below the folder walked, the base folder's first, and
-    /// a name matches without case, written with `\\` and not with `/`.
     /// A prefix reads no further than asked and all of a shorter file.
     #[test]
     fn a_prefix_of_a_plain_file_reads_only_its_head() {
@@ -516,6 +514,8 @@ mod tests {
         assert_eq!(gone.read_prefix(4), None);
     }
 
+    /// Both walks enter files by their path below the folder walked, the base folder's first, and
+    /// a name matches without case, written with `\\` and not with `/`.
     #[test]
     fn the_base_folder_is_walked_before_data_and_keys_ignore_case() {
         let t = Tree::new("order");
