@@ -2,7 +2,9 @@
 //! streamed unit. The environmental-damage log also feeds [`crate::combat_log`], whose handler is
 //! registered first and so runs first. The swing's handler registers ahead of the combat log's
 //! (`net_handler_ahead`): `0x62578d` flushes and dispatches the victim's feedback before it
-//! writes the packet's line, last (`0x625a2c`, `0x625a78`).
+//! writes the packet's line, last (`0x625a2c`, `0x625a78`). The attack start and stop signal the
+//! active player's combat events in their packet, queued among the lines and feedback around
+//! them ([`crate::ui_chat::ChatLog::push_signal`]).
 
 use benilla_protocol::messages::{AttackSwingError, AttackerState, EnvironmentalDamageLog};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -34,9 +36,15 @@ pub(crate) fn register(app: &mut App) {
         .net_handler(K::EnvironmentalDamageLog, on_environmental_damage_log);
 }
 
-fn on_attack_start(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<GuidIndex>) {
+fn on_attack_start(
+    In(ev): In<SessionEvent>,
+    mut commands: Commands,
+    index: Res<GuidIndex>,
+    self_guid: Res<SelfGuid>,
+    log: Res<crate::ui_chat::ChatLog>,
+) {
     if let SessionEvent::AttackStart { attacker, victim } = ev {
-        attack_start(attacker, victim, &mut commands, &index);
+        attack_start(attacker, victim, &mut commands, &index, &self_guid, &log);
     }
 }
 
@@ -44,6 +52,8 @@ fn on_attack_stop(
     In(ev): In<SessionEvent>,
     mut commands: Commands,
     index: Res<GuidIndex>,
+    self_guid: Res<SelfGuid>,
+    log: Res<crate::ui_chat::ChatLog>,
     mut pending: ResMut<PendingImpacts>,
     mut sinks: ImpactSinks,
 ) {
@@ -53,6 +63,7 @@ fn on_attack_stop(
             victim,
             &mut commands,
             &index,
+            (&self_guid, &log),
             &mut pending,
             &mut sinks,
         );
@@ -166,12 +177,24 @@ fn on_play_spell_visual(
 }
 
 /// A unit began melee auto-attack (`SMSG_ATTACKSTART`, including our own echo).
-fn attack_start(attacker: u64, victim: u64, commands: &mut Commands, index: &GuidIndex) {
+fn attack_start(
+    attacker: u64,
+    victim: u64,
+    commands: &mut Commands,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    log: &crate::ui_chat::ChatLog,
+) {
     // The Ready idle rides this window: the client's gate is the auto-attack target being set.
     debug!("net: attack start {attacker:#x} → {victim:#x}");
     if let Some(&e) = index.0.get(&attacker) {
         // The precast is not touched: only the local StartAttack clears its bit (`0x5ecd87`).
         commands.entity(e).insert(Engaged(victim));
+        // A held attacker that is the active player (`0x6256f1` → `0x5fa6d0`) signals
+        // `PLAYER_ENTER_COMBAT` inside the packet (`0x6256ff`).
+        if self_guid.0 == Some(attacker) {
+            log.push_signal("PLAYER_ENTER_COMBAT");
+        }
     }
 }
 
@@ -181,6 +204,7 @@ fn attack_stop(
     victim: u64,
     commands: &mut Commands,
     index: &GuidIndex,
+    (self_guid, log): (&SelfGuid, &crate::ui_chat::ChatLog),
     pending: &mut PendingImpacts,
     sinks: &mut ImpactSinks,
 ) {
@@ -188,6 +212,11 @@ fn attack_stop(
     if let Some(&e) = index.0.get(&attacker) {
         commands.entity(e).remove::<Engaged>();
         stop_swing(e, pending, sinks);
+        // After `StopAttack`'s swing flush (`0x625763` → `0x624e40`), the active player's
+        // `PLAYER_LEAVE_COMBAT` (`0x62576a` → `0x5fa6d0`, `0x625778`).
+        if self_guid.0 == Some(attacker) {
+            log.push_signal("PLAYER_LEAVE_COMBAT");
+        }
     }
 }
 
@@ -407,7 +436,15 @@ mod tests {
         world.insert_resource(index);
         world
             .run_system_once(|mut commands: Commands, index: Res<GuidIndex>| {
-                attack_start(SHOOTER, 30, &mut commands, &index);
+                let log = crate::ui_chat::ChatLog::default();
+                attack_start(
+                    SHOOTER,
+                    30,
+                    &mut commands,
+                    &index,
+                    &SelfGuid::default(),
+                    &log,
+                );
             })
             .unwrap();
         assert!(world.get::<Engaged>(e).is_some());

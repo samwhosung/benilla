@@ -3622,8 +3622,9 @@ fn honor_gained_follows_its_line_and_only_a_written_one() {
 }
 
 /// The drain fires a queued `UNIT_COMBAT` at its place among the lines queued beside it, so a
-/// handler's order reaches Lua: here a flash, a line, a flash. Only the tokens naming the unit
-/// fire, `"player"` for your own guid.
+/// handler's order reaches Lua: here a flash, a line, a flash, and the attack stop's
+/// `PLAYER_LEAVE_COMBAT` after its flush (`0x625778`). Only the tokens naming the unit fire,
+/// `"player"` for your own guid.
 #[test]
 fn unit_combat_fires_at_its_place_in_the_drain() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -3640,6 +3641,7 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
             end)
             Ord:RegisterEvent("UNIT_COMBAT")
             Ord:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+            Ord:RegisterEvent("PLAYER_LEAVE_COMBAT")
         "#,
         )
         .unwrap();
@@ -3656,6 +3658,7 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
         log.push_xp_gain(0, 10, 10, 1.0);
         log.push_unit_combat(flash(7, "PARRY"));
         log.push_unit_combat(flash(8, "MISS"));
+        log.push_signal("PLAYER_LEAVE_COMBAT");
     }
     feed.drain();
     let order = feed.script().eval::<Vec<String>>("return Order").unwrap();
@@ -3664,7 +3667,8 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
         [
             "UNIT_COMBAT player DODGE",
             "CHAT_MSG_COMBAT_XP_GAIN",
-            "UNIT_COMBAT player PARRY"
+            "UNIT_COMBAT player PARRY",
+            "PLAYER_LEAVE_COMBAT"
         ]
     );
 }

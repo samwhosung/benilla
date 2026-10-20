@@ -5,8 +5,9 @@
 //! order: the cooldown pair (`0x4b31b0`) on a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a
 //! refresh of the usable cache (`0x4e5c00`) finds a pair changed, each reactive spell's
 //! `SPELL_ACTIVE` ([`super::reactive`]) and `SPELL_UPDATE_USABLE` from the usable refresh
-//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs; then combat enter
-//! and leave (`0x6256ff`, `0x625778`) and autorepeat start and stop (`0x6e5952`, `0x6ea170`).
+//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs; then autorepeat
+//! start and stop (`0x6e5952`, `0x6ea170`). Combat enter and leave are signalled in their attack
+//! packets (`crate::creature_anim`).
 //! `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is signalled where the
 //! cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
@@ -47,7 +48,6 @@ pub(super) struct StateMemory {
     /// The VM's macro edits and the bag feed's `BAG_UPDATE`s as last read.
     macro_edits: u64,
     bag_updates: u64,
-    engaged: bool,
     auto_repeat: Option<u32>,
     last_cd_trace: Option<Instant>,
 }
@@ -268,8 +268,6 @@ pub(crate) struct ActionEvents {
     activated: Vec<String>,
     /// `BAG_UPDATE_COOLDOWN`.
     bags: bool,
-    /// `PLAYER_ENTER_COMBAT` (true) or `PLAYER_LEAVE_COMBAT`.
-    combat: Option<bool>,
     /// `START_AUTOREPEAT_SPELL` (true) or `STOP_AUTOREPEAT_SPELL`.
     auto_repeat: Option<bool>,
 }
@@ -367,7 +365,6 @@ pub(super) fn feed_action_state(
         let stacks = me
             .map(|(s, _, _)| stack_counts(&s.0, &objects))
             .unwrap_or_default();
-        let engaged = me.is_some_and(|(_, _, e)| e);
         let caster = range_units.caster();
         let selection = &targeting.selection;
         let target = selection
@@ -701,10 +698,6 @@ pub(super) fn feed_action_state(
         owed.refresh |= refresh;
         owed.activated.extend(activated);
         owed.bags |= bags;
-        if engaged != memory.engaged {
-            memory.engaged = engaged;
-            owed.combat = Some(engaged);
-        }
         if auto_repeat.0 != memory.auto_repeat {
             memory.auto_repeat = auto_repeat.0;
             owed.auto_repeat = Some(auto_repeat.0.is_some());
@@ -745,16 +738,6 @@ pub(super) fn fire_action_events(
         }
         if owed.bags {
             script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
-        }
-        if let Some(engaged) = owed.combat {
-            script.fire_event(
-                if engaged {
-                    "PLAYER_ENTER_COMBAT"
-                } else {
-                    "PLAYER_LEAVE_COMBAT"
-                },
-                vec![],
-            );
         }
         if let Some(on) = owed.auto_repeat {
             script.fire_event(

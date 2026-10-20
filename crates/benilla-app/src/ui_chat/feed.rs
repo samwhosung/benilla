@@ -45,6 +45,10 @@ pub(super) fn load_emote_texts(mut commands: Commands, assets: Option<Res<WorldA
 enum Pending {
     /// A `UNIT_COMBAT`, fired at its place among the lines its handler raised beside it.
     UnitCombat(crate::ui_unit::UnitCombatFeedback),
+    /// An argless event a packet handler signals among its lines (`FrameScript_SignalEvent
+    /// 0x703e50`), fired at its place: the attack handler's `PLAYER_ENTER_COMBAT` and
+    /// `PLAYER_LEAVE_COMBAT` (`0x6256ff`, `0x625778`).
+    Signal(&'static str),
     /// A decoded `SMSG_MESSAGECHAT`; the player types wait on the sender's name.
     Wire { msg: ChatMessage, tries: u16 },
     /// A channel notice with guids to name (`b_guid` is a kick's or ban's actor, 0 when absent).
@@ -333,6 +337,12 @@ impl ChatLog {
         self.q().pending.push(Pending::UnitCombat(ev));
     }
 
+    /// Queue an argless `event` behind what is already queued, so it fires in the order its
+    /// packet handler signalled it against the lines and `UNIT_COMBAT`s around it.
+    pub(crate) fn push_signal(&self, event: &'static str) {
+        self.q().pending.push(Pending::Signal(event));
+    }
+
     /// Queue an honor award's line (`SMSG_PVP_CREDIT`); victim 0 is a bonus or objective award.
     pub(crate) fn push_pvp_credit(&self, honor: i32, victim: u64, rank: u8, side: u8) {
         // Both forks park: the template resolves at the drain.
@@ -391,6 +401,7 @@ impl ChatLog {
                 Pending::XpGain { .. } => "xp",
                 Pending::XpLoss { .. } => "xp loss",
                 Pending::UnitCombat(_) => "unit combat",
+                Pending::Signal(event) => event,
                 Pending::HonorGain { .. } => "honor",
                 Pending::TextEmote { .. } => "emote",
                 Pending::Discovery { .. } => "discovery",
@@ -972,6 +983,7 @@ pub(super) fn feed_chat(
                         is_target,
                     );
                 }
+                Pending::Signal(event) => script.fire_event(event, vec![]),
                 Pending::Event(mut event) => {
                     deliver(script, &mut windows, &mut channels, &mut event);
                 }
