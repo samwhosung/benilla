@@ -2119,8 +2119,10 @@ mod tests {
         ];
         for (method, key) in (0u8..).zip(keys) {
             // From a method it differs from, at the threshold the cell already holds.
-            let mut g = GroupState::default();
-            g.loot_stored = tail(if method == 1 { 2 } else { 1 }, 0, 2);
+            let mut g = GroupState {
+                loot_stored: tail(if method == 1 { 2 } else { 1 }, 0, 2),
+                ..GroupState::default()
+            };
             let (lines, _) = loot_list(&mut g, tail(method, 0, 2));
             assert_eq!(lines, [UiError::key(key)], "method {method}");
         }
@@ -2157,8 +2159,10 @@ mod tests {
         );
 
         // The master moves under group loot: stored, silent.
-        let mut g = GroupState::default();
-        g.loot_stored = tail(3, 0, 2);
+        let mut g = GroupState {
+            loot_stored: tail(3, 0, 2),
+            ..GroupState::default()
+        };
         let (lines, _) = loot_list(&mut g, tail(3, THRALL, 2));
         assert_eq!(lines, []);
         let (lines, _) = loot_list(&mut g, tail(2, THRALL, 2));
@@ -2169,8 +2173,10 @@ mod tests {
         );
 
         // A master the cache has no name for says nothing, now or after the name arrives.
-        let mut g = GroupState::default();
-        g.loot_stored = tail(2, 0, 2);
+        let mut g = GroupState {
+            loot_stored: tail(2, 0, 2),
+            ..GroupState::default()
+        };
         let (lines, _) = loot_list(&mut g, tail(2, 0x99, 2));
         assert_eq!(lines, []);
         assert_eq!(g.loot_stored.master, 0x99);
