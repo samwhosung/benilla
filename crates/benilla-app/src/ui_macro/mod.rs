@@ -4,7 +4,8 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{MacroState, ScriptValue, UiScript};
+use benilla_protocol::messages::ACTION_KIND_MACRO;
+use benilla_ui::script::{MacroState, ScriptValue, UiScript, MAX_MACROS};
 
 use crate::client_state::InWorldGated;
 use benilla_assets::{LockRecover, WorldAssets};
@@ -164,7 +165,8 @@ fn load_macros(
 /// the buttons move once: afterwards a word in 19 to 36 can be an account macro's. If the write
 /// fails nothing moves and the next load tries again. Each button then goes out as a placement's
 /// does, through the VM's queue to `drain_action_sets`, which stores it and sends
-/// `CMSG_SET_ACTION_BUTTON`. A button whose old place holds no macro is left as it is.
+/// `CMSG_SET_ACTION_BUTTON`. A button whose old place holds no macro is cleared the same way: its
+/// word would read as an account macro of that id, and misbind once one takes it.
 fn migrate_character_bar(
     script: &mut UiScript,
     actions: &crate::ui_action::PlayerActions,
@@ -183,13 +185,17 @@ fn migrate_character_bar(
         .iter()
         .filter_map(|(&slot, b)| {
             let word = (u32::from(b.kind) << 24) | b.action;
-            let (_, new) = moves.iter().find(|(old, _)| *old == word)?;
-            Some((u32::from(slot) + 1, *new))
+            let old_numbering = b.kind == ACTION_KIND_MACRO
+                && (MAX_MACROS as u32 + 1..=2 * MAX_MACROS as u32).contains(&b.action);
+            match moves.iter().find(|(old, _)| *old == word) {
+                Some((_, new)) => Some((u32::from(slot) + 1, *new)),
+                None => old_numbering.then_some((u32::from(slot) + 1, 0)),
+            }
         })
         .collect();
     writes.sort_unstable();
     info!(
-        "ui_macro: {} character macro button(s) moved to macro ids",
+        "ui_macro: {} character macro button(s) moved to macro ids or cleared",
         writes.len()
     );
     script.queue_action_sets(writes);

@@ -541,8 +541,8 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
          MACRO 3 \"Charlie\" Ability_Ambush\n/say c\nEND\n",
     )
     .unwrap();
-    // `(wire slot, word)`: three character macros, one past the last, a spell, an account macro,
-    // and a word past 36.
+    // `(wire slot, word)`: three character macros, one past the last (cleared), a spell, an
+    // account macro, and a word past 36.
     let placed = [
         (0u8, 0x4000_0013u32),
         (1, 0x4000_0015),
@@ -589,26 +589,26 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     app.update();
     assert_eq!(
         sent(&rx),
-        [(0, 0x4100_0001), (1, 0x4100_0003), (2, 0x4100_0002)],
-        "Alpha, Charlie and Bravo by their ids, each once"
+        [(0, 0x4100_0001), (1, 0x4100_0003), (2, 0x4100_0002), (3, 0)],
+        "Alpha, Charlie and Bravo by their ids, the button past the last macro cleared, each once"
     );
     let word = |app: &App, slot: u8| {
-        let b = app.world().resource::<PlayerActions>().buttons[&slot];
-        (u32::from(b.kind) << 24) | b.action
+        let b = app.world().resource::<PlayerActions>().buttons.get(&slot)?;
+        Some((u32::from(b.kind) << 24) | b.action)
     };
-    let held: Vec<u32> = (0..7).map(|slot| word(&app, slot)).collect();
+    let held: Vec<Option<u32>> = (0..7).map(|slot| word(&app, slot)).collect();
     assert_eq!(
         held,
         [
-            0x4100_0001,
-            0x4100_0003,
-            0x4100_0002,
-            0x4000_0016,
-            133,
-            0x4000_0001,
-            0x4000_0025
+            Some(0x4100_0001),
+            Some(0x4100_0003),
+            Some(0x4100_0002),
+            None,
+            Some(133),
+            Some(0x4000_0001),
+            Some(0x4000_0025)
         ],
-        "the local store follows; a button with no macro behind it and the rest stay"
+        "the local store follows; the spell, the account macro and the word past 36 stay"
     );
     let file = std::fs::read_to_string(&character).unwrap();
     assert!(
@@ -634,7 +634,7 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     app.insert_non_send_resource(UiScript::new().unwrap());
     app.update();
     assert!(sent(&rx).is_empty(), "nothing is sent again");
-    assert_eq!(word(&app, 9), 0x4000_0013);
+    assert_eq!(word(&app, 9), Some(0x4000_0013));
     assert_eq!(
         app.world()
             .non_send_resource::<UiScript>()
