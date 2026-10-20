@@ -194,12 +194,14 @@ fn toggle_refused(fields: Option<&ObjectFields>, gates: ToggleGates) -> bool {
 /// [`benilla_formats::ChrClasses::has_ranged_sheath`]). Without the table, it is kept.
 fn toggle_worn(
     w: &crate::creature_anim::Wielded,
-    _fields: Option<&ObjectFields>,
-    _classes: Option<&benilla_formats::ChrClasses>,
+    fields: Option<&ObjectFields>,
+    classes: Option<&benilla_formats::ChrClasses>,
 ) -> (bool, bool) {
+    // The class byte `[+0x79]`, `UNIT_FIELD_BYTES_0` byte 1.
+    let class = u32::from(fields.and_then(ObjectFields::unit_class).unwrap_or(0));
     (
         w.armed_main().is_some() || w.armed_off().is_some(),
-        w.ranged.is_some(),
+        w.ranged.is_some() && classes.is_none_or(|t| t.has_ranged_sheath(class)),
     )
 }
 

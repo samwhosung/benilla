@@ -87,9 +87,8 @@ pub(crate) struct SheathRequest {
 
 /// The state a Z press asks for next, or `None` where the reference makes no call (`ToggleSheath`,
 /// `0x5eb642`–`0x5eb6a8`, over the committed state `[unit+0xd40]`): melee, then ranged, then
-/// stowed, each gated on what is worn (`GetWeapon(0/1/2)` at `0x5eb5f0`–`0x5eb610`).
-/// Deviation: the class lookup that can also clear the ranged candidate (`0x5eb616`–`0x5eb640`,
-/// `0xc0def4`, meaning inferred) is skipped, because a class failing it cannot equip one.
+/// stowed, each gated on what is worn (`GetWeapon(0/1/2)` at `0x5eb5f0`–`0x5eb610`), the ranged
+/// candidate past the class test (`0x5eb616`–`0x5eb640`), which the caller applies.
 pub(crate) fn toggle_sheath_next(cur: u8, (melee, ranged): (bool, bool)) -> Option<u8> {
     match cur {
         0 if melee => Some(1),
@@ -119,11 +118,17 @@ pub(super) fn model_refuses_toggle(anims: &ModelAnimations, armed: Option<u16>) 
 /// sheathe state ([`benilla_formats::ChrClasses::has_ranged_sheath`]). Without the table, none is
 /// refused.
 pub(super) fn setter_refuses(
-    _state: u8,
-    _fields: Option<&benilla_protocol::ObjectFields>,
-    _classes: Option<&benilla_formats::ChrClasses>,
+    state: u8,
+    fields: Option<&benilla_protocol::ObjectFields>,
+    classes: Option<&benilla_formats::ChrClasses>,
 ) -> bool {
-    false
+    use benilla_protocol::messages::ObjectType;
+    state == 2
+        && fields.is_some_and(|f| {
+            f.object_type() == Some(ObjectType::Player)
+                && classes
+                    .is_some_and(|t| !t.has_ranged_sheath(u32::from(f.unit_class().unwrap_or(0))))
+        })
 }
 
 /// One arm's planned leg: the clip, and whether the arm ends with its weapon in hand (the
