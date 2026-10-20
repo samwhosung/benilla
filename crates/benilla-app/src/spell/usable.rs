@@ -899,10 +899,7 @@ mod tests {
 
         assert_eq!(refusal(Case { ..base }), None, "loaded and carried");
         assert_eq!(
-            refusal(Case {
-                ammo_id: 0,
-                ..base
-            }),
+            refusal(Case { ammo_id: 0, ..base }),
             Some(2),
             "nothing loaded"
         );

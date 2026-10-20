@@ -369,7 +369,11 @@ pub(crate) fn caster_refusal(
                 && d.attributes_ex & ATTR_EX_DISMISS_PET_FIRST == 0
             {
                 // 4 "You already control a charmed creature" while charming, else 5 (`0x6098ce`).
-                return Some(Refusal::of(if fields.unit_charm().is_some() { 4 } else { 5 }));
+                return Some(Refusal::of(if fields.unit_charm().is_some() {
+                    4
+                } else {
+                    5
+                }));
             }
             let at_pet = d.effect_implicit_target_a[i] == TARGET_PET
                 || d.effect_implicit_target_b[i] == TARGET_PET;

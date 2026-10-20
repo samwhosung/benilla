@@ -42,12 +42,10 @@ fn no_auras() -> impl FnMut(u32) -> CcExemption {
 /// A scan answering per aura type, as `0x6e9ca0` does for each.
 fn scans(by_type: &'static [(u32, bool, u32)]) -> impl FnMut(u32) -> CcExemption {
     move |ty: u32| {
-        by_type
-            .iter()
-            .find(|(t, _, _)| *t == ty)
-            .map_or_else(CcExemption::default, |&(_, exempt, mechanic)| {
-                CcExemption { exempt, mechanic }
-            })
+        by_type.iter().find(|(t, _, _)| *t == ty).map_or_else(
+            CcExemption::default,
+            |&(_, exempt, mechanic)| CcExemption { exempt, mechanic },
+        )
     }
 }
 
@@ -118,7 +116,8 @@ impl Me {
     }
 
     fn refuse(&self, d: &SpellDisplay) -> Option<u8> {
-        self.refusal_with(Some(d), &mut no_auras()).map(|r| r.reason)
+        self.refusal_with(Some(d), &mut no_auras())
+            .map(|r| r.reason)
     }
 }
 
@@ -153,7 +152,10 @@ fn crowd_control_refuses_by_prevention_type_except_the_unconditional_arms() {
 
     // No record claims no prevention.
     assert_eq!(cc(0, &cast), None);
-    assert_eq!(cast_cc_refusal(SILENCED, false, None, &mut no_auras()), None);
+    assert_eq!(
+        cast_cc_refusal(SILENCED, false, None, &mut no_auras()),
+        None
+    );
     assert_eq!(
         cast_cc_refusal(STUNNED, false, None, &mut no_auras()).map(|r| r.reason),
         Some(0x64),
@@ -231,7 +233,10 @@ fn a_dead_caster_takes_no_crowd_control_refusal() {
     assert_eq!(stunned.clone().with(HEALTH, 1).refuse(&cast), Some(0x64));
     assert_eq!(stunned.without(HEALTH).refuse(&cast), Some(0x64));
     // Our own charm is no charm (`0x60995e`).
-    assert_eq!(Me::default().with(CHARMED_BY, ME as u32).refuse(&cast), None);
+    assert_eq!(
+        Me::default().with(CHARMED_BY, ME as u32).refuse(&cast),
+        None
+    );
 }
 
 // ── The wrappers over the scan (`0x6e9e60`, `0x6e9ec0`, `0x6e9f60`) ──
@@ -252,7 +257,12 @@ fn a_later_aura_type_that_exempts_lifts_the_arm() {
         "silence {{27, 12, 60}}: 27 refuses, 12 exempts"
     );
     assert_eq!(
-        cast_cc_refusal(0, true, Some(&cast), &mut scans(&[(6, false, 3), (2, true, 0)])),
+        cast_cc_refusal(
+            0,
+            true,
+            Some(&cast),
+            &mut scans(&[(6, false, 3), (2, true, 0)])
+        ),
         None,
         "charm {{6, 177, 2}}: 6 refuses, 2 exempts (`0x6e9fa9`)"
     );
@@ -373,9 +383,7 @@ fn the_effect_loop_runs_before_the_control_block() {
         Some(5)
     );
     assert_eq!(
-        Me::default()
-            .with(FLAGS, STUNNED)
-            .refuse(&summon_then_pet),
+        Me::default().with(FLAGS, STUNNED).refuse(&summon_then_pet),
         Some(0x4c)
     );
 }

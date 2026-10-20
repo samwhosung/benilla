@@ -2311,7 +2311,12 @@ mod tests {
             .collect(),
         );
         world.insert_resource(spells);
-        crate::items::test_spawn_item(&mut world, BOW, ObjectFields::from_pairs(&[(3, BOW_ENTRY)]), false);
+        crate::items::test_spawn_item(
+            &mut world,
+            BOW,
+            ObjectFields::from_pairs(&[(3, BOW_ENTRY)]),
+            false,
+        );
         crate::items::test_spawn_item(
             &mut world,
             ARROWS,

@@ -462,9 +462,8 @@ const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x0000_0100;
 fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
     let fields = rel.target_store.map(|s| &s.0);
     let dead = fields.is_some_and(|f| !unit_alive(f));
-    let player = fields.is_some_and(|f| {
-        f.object_type() == Some(benilla_protocol::messages::ObjectType::Player)
-    });
+    let player = fields
+        .is_some_and(|f| f.object_type() == Some(benilla_protocol::messages::ObjectType::Player));
     let pet = fields.is_some_and(|f| f.unit_pet_number() != 0);
     let flags = fields.map_or(0, |f| f.unit_flags());
     // Arms 1 to 4 clear `0x400` beside their bit on a dead unit (`0x6e5ddb`, `0x6e5d89`).
@@ -482,12 +481,16 @@ fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
         return bind(TF_UNIT_ENEMY);
     }
     if word & TF_UNIT != 0 && flags & UNIT_FLAG_IMMUNE_TO_PLAYER == 0 {
-        return Some(word & !(if dead { TF_UNIT | CORPSE_WORD_BITS } else { TF_UNIT }));
+        return Some(
+            word & !(if dead {
+                TF_UNIT | CORPSE_WORD_BITS
+            } else {
+                TF_UNIT
+            }),
+        );
     }
     if word & TF_CORPSE_ALLY != 0 && dead && (player || pet) {
-        return rel
-            .assistable(is_self)
-            .then_some(word & !TF_CORPSE_ALLY);
+        return rel.assistable(is_self).then_some(word & !TF_CORPSE_ALLY);
     }
     if word & TF_CORPSE_ENEMY != 0 && dead && player && !rel.assistable(is_self) {
         return Some(word & !TF_CORPSE_ENEMY);
@@ -988,7 +991,8 @@ mod tests {
                 world.insert_resource(crate::net::ServerTime(clock));
             }
             // `UNIT_FIELD_BYTES_1` (138) byte 0 and `UNIT_FIELD_BYTES_2` (164) byte 0.
-            let fields = benilla_protocol::ObjectFields::from_pairs(&[(138, stand), (164, sheathe)]);
+            let fields =
+                benilla_protocol::ObjectFields::from_pairs(&[(138, stand), (164, sheathe)]);
             world.spawn((SelfPlayer, ObjectStore(fields)));
             world
                 .run_system_once(|targeting: CastTargeting| {
@@ -1035,8 +1039,14 @@ mod tests {
         assert!(unit_word_binds(0x8000, true, &rel(&dead_pet)));
         // 0x200: dead, a player, and `CanAssist` refused (`0x6e5ead`-`0x6e5ee7`).
         assert!(unit_word_binds(0x200, false, &rel(&dead_player)));
-        assert!(!unit_word_binds(0x200, false, &rel(&corpse)), "not a player");
-        assert!(!unit_word_binds(0x200, true, &rel(&dead_player)), "assistable");
+        assert!(
+            !unit_word_binds(0x200, false, &rel(&corpse)),
+            "not a player"
+        );
+        assert!(
+            !unit_word_binds(0x200, true, &rel(&dead_player)),
+            "assistable"
+        );
         // The 0x8000 arm's refusal ends the walk before 0x200 (`0x6e5e7f`).
         assert!(!unit_word_binds(0x8200, false, &rel(&dead_player)));
         // The first arm wins: the assist arm binds and leaves 0x2 standing, so nothing commits.
