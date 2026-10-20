@@ -90,7 +90,11 @@ impl super::UiScript {
     }
 }
 
-/// A node by 1-based Lua index.
+/// What `TaxiNodePosition` and `TaxiNodeCost` raise for a slot the map lacks (`0x84b008`).
+const INVALID_SLOT: &str = "Invalid taxi node slot";
+
+/// A node by 1-based Lua index: the reference compares the index less 1, unsigned, with the count
+/// (`0x4dc380`, `0x4dcbc5`, `0x4dcc63`), so 0, a negative index and an empty list miss.
 fn node(model: &Model, i: i64) -> Option<&TaxiUiNode> {
     let nodes = &model.taxi.as_ref()?.nodes;
     usize::try_from(i)
@@ -135,8 +139,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeTaxiNodeLocation(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            let (x, y) = node(&model, i).map_or((0.0, 0.0), |n| n.pos);
-            Ok((x, y))
+            let n =
+                node(&model, i).ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
+            Ok(n.pos)
         })?,
     )?;
 
@@ -150,7 +155,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeName(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(node(&model, i).map_or(String::new(), |n| n.name.clone()))
+            // `INVALID` (`0x84afc8`) out of range (`0x4dc388`).
+            Ok(node(&model, i).map_or_else(|| "INVALID".to_owned(), |n| n.name.clone()))
         })?,
     )?;
 
@@ -164,7 +170,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: TaxiNodeCost(slot)",
             )?);
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(node(&model, i).map_or(0, |n| n.cost) as i64)
+            let n =
+                node(&model, i).ok_or_else(|| mlua::Error::RuntimeError(INVALID_SLOT.into()))?;
+            Ok(i64::from(n.cost))
         })?,
     )?;
 

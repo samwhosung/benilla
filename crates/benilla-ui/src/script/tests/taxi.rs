@@ -75,10 +75,10 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Slot 0, a slot past the count and any slot with no map open: `TaxiNodePosition` and
-/// `TaxiNodeCost` raise `Invalid taxi node slot` (`0x84b008`) on the unsigned compare of the slot
-/// less 1 with the count (`0x4dcbc5`, `0x4dcc63`), and `TaxiNodeName` answers `INVALID`
-/// (`0x4dc388`, `0x84afc8`).
+/// Slot 0, a slot past the count and any slot of an empty list (no map built, count 0 from
+/// `0x4db36d`): `TaxiNodePosition` and `TaxiNodeCost` raise `Invalid taxi node slot` (`0x84b008`)
+/// on the unsigned compare of the slot less 1 with the count (`0x4dcbc5`, `0x4dcc63`), and
+/// `TaxiNodeName` answers `INVALID` (`0x4dc388`, `0x84afc8`).
 #[test]
 fn out_of_range_taxi_slots_raise_or_answer_invalid() {
     let mut s = script();
