@@ -142,6 +142,9 @@ pub struct UnitState {
     /// `GetGuildInfo(unit)`, from descriptor fields 191-192 and the guild-name cache; `None`
     /// when guildless or not yet streamed.
     pub guild: Option<super::guild::UnitGuild>,
+    /// `PLAYER_GUILDID` (field 191), the key `GetGuildInfo` looks its record up by; 0 for none
+    /// and for a creature.
+    pub guild_id: u32,
     /// The creature template's subname ("Stable Master"), the tooltip's second line.
     pub subtitle: Option<String>,
     /// The word ("Beast") from `CreatureType.dbc` for the type the reference's resolver `0x605570`

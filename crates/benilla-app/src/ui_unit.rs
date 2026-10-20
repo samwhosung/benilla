@@ -1087,6 +1087,8 @@ pub(crate) fn snapshot(
         } else {
             Default::default()
         },
+        // `PLAYER_GUILDID`, the cache key of `GetGuildInfo` (`0x4c93a9`).
+        guild_id: store.0.player_guild_id(),
         // `is_player` and the creature-record fields come from [`enrich_unit`].
         ..Default::default()
     }
