@@ -244,26 +244,45 @@ pub(super) fn select(model: &mut Model, index: u32) {
     model.trade_skill_selection = entry.map_or(0, |ei| (ei + 1) as u32);
 }
 
-/// Folds or unfolds the group whose header is visible row `id`; 0 is every group, as the stock
-/// collapse-all button passes, and any other row is a no-op.
-pub(super) fn set_collapsed(model: &mut Model, id: usize, collapse: bool) {
-    if id == 0 && !collapse {
-        model.trade_skill_collapsed.clear();
-        return;
+/// What a fold verb's index names (`0x5000c0`, `0x500140`).
+pub(super) enum Fold {
+    /// Every group, the stock collapse-all button's 0.
+    All,
+    /// The group of a header row.
+    Group((u32, u32)),
+}
+
+/// The fold verbs' target for an `_ftol`'d index: `index - 1` below 0 is every group (`jns` at
+/// `0x5000f5` and `0x500175`); otherwise the visible row there must be a header, whose group
+/// `0x4fd650` finds, and a recipe row or one past the rows is `None`, which the verbs raise.
+pub(super) fn fold_target(model: &Model, index: i32) -> Option<Fold> {
+    let Ok(n) = usize::try_from(index.wrapping_sub(1)) else {
+        return Some(Fold::All);
+    };
+    match rows(model).get(n)? {
+        Row::Header { key, .. } => Some(Fold::Group(*key)),
+        Row::Entry(_) => None,
     }
-    let targets: Vec<(u32, u32)> = if id == 0 {
-        let Some(t) = model.trade_skill.as_ref() else {
+}
+
+/// Folds or unfolds `target`: every group takes the collapse mask 0 or all ones (`0x5000f9`,
+/// `0x50017a`), one group its bit (`0x500133`, `0x5001b2`).
+pub(super) fn set_collapsed(model: &mut Model, target: Fold, collapse: bool) {
+    let targets: Vec<(u32, u32)> = match target {
+        Fold::All if !collapse => {
+            model.trade_skill_collapsed.clear();
             return;
-        };
-        build_groups(&t.recipes)
-            .into_iter()
-            .map(|g| g.key)
-            .collect()
-    } else {
-        match rows(model).get(id - 1) {
-            Some(Row::Header { key, .. }) => vec![*key],
-            _ => Vec::new(),
         }
+        Fold::All => {
+            let Some(t) = model.trade_skill.as_ref() else {
+                return;
+            };
+            build_groups(&t.recipes)
+                .into_iter()
+                .map(|g| g.key)
+                .collect()
+        }
+        Fold::Group(key) => vec![key],
     };
     for k in targets {
         if collapse {

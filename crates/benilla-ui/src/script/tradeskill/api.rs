@@ -7,8 +7,8 @@ use crate::script::item_stats::item_link;
 use crate::script::Model;
 
 use super::view::{
-    build_groups, first_recipe_index, inv_slot_token, num_rows, present_inv_slots, recipe_at, rows,
-    select, selected_visible_index, set_collapsed, Row,
+    build_groups, first_recipe_index, fold_target, inv_slot_token, num_rows, present_inv_slots,
+    recipe_at, rows, select, selected_visible_index, set_collapsed, Row,
 };
 
 /// The index of the two filter getters: `is-number` (raising the usage error), then `_ftol` minus
@@ -289,30 +289,24 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i; 0 is all. The
-    // fold re-sorts and signals `TRADE_SKILL_UPDATE` in place (`0x4fd750`).
+    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i, every group
+    // for an i below 1 ([`fold_target`]); any other row raises the verb's own line.
     g.set(
         "ExpandTradeSkillSubClass",
         lua.create_function(|lua, id: Value| {
             // `is-number` else `Usage: ExpandTradeSkillSubClass(index)` (`0x84e914`, `0x500151`).
-            let id = binding_abi::index_arg(lua, id, "Usage: ExpandTradeSkillSubClass(index)")?;
-            crate::script::tick::verb(lua, |model| {
-                set_collapsed(model, id, false);
-                raise_update(model);
-            });
-            Ok(())
+            let id = number_arg(lua, id, "Usage: ExpandTradeSkillSubClass(index)")?;
+            // The reference's own wording, "skill line" (`0x84e8e8`, `0x50018e`).
+            fold(lua, id, false, "Bad skill line in ExpandTradeSkillSubClass")
         })?,
     )?;
     g.set(
         "CollapseTradeSkillSubClass",
         lua.create_function(|lua, id: Value| {
             // `is-number` else `Usage: CollapseTradeSkillSubClass(index)` (`0x84e8bc`, `0x5000d1`).
-            let id = binding_abi::index_arg(lua, id, "Usage: CollapseTradeSkillSubClass(index)")?;
-            crate::script::tick::verb(lua, |model| {
-                set_collapsed(model, id, true);
-                raise_update(model);
-            });
-            Ok(())
+            let id = number_arg(lua, id, "Usage: CollapseTradeSkillSubClass(index)")?;
+            // `0x84e890`, `0x50010d`.
+            fold(lua, id, true, "Bad sub class in CollapseTradeSkillSubClass")
         })?,
     )?;
 
@@ -647,6 +641,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 /// the bindings derive on read, then `TRADE_SKILL_UPDATE` (`0x13a`) in place.
 fn raise_update(model: &mut Model) {
     model.raise("TRADE_SKILL_UPDATE", Vec::new());
+}
+
+/// A fold verb past its usage check (`0x5000c0`, `0x500140`): the target, or the verb's `bad` line
+/// with nothing touched and no update; then the mask write and its tail (`0x4fd750`).
+fn fold(lua: &Lua, index: i32, collapse: bool, bad: &'static str) -> mlua::Result<()> {
+    crate::script::tick::verb(lua, |model| {
+        let target = fold_target(model, index)?;
+        set_collapsed(model, target, collapse);
+        raise_update(model);
+        Some(())
+    })
+    .ok_or_else(|| mlua::Error::RuntimeError(bad.into()))
 }
 
 /// `SetTradeSkillSubClassFilter`'s write (`0x4ffc70` → `0x4fd710`), the arguments already checked.
