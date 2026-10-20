@@ -13,6 +13,12 @@
 //! the three-byte-a-pixel buffer `0x5a3820` allocates and never zeroes, so the rest of the colours
 //! are heap garbage; a 32-bit map is read a byte an entry short and the pixels start inside it.
 //!
+//! Deviation: a colour-mapped image whose descriptor has alpha bits decodes as its picture, where
+//! the reference has no defined result to copy. `0x5a3820` sizes each pixel as 24 plus the alpha
+//! bits (`0x5a382b`-`0x5a383d`, stored at `0x5a3973`) but copies 3-byte entries (`0x5a38f3`), then
+//! `0x5a3b80` moves `(bpp + 7) >> 3` bytes a pixel (`0x5a3c00`-`0x5a3c13`): each pixel after the
+//! first takes its bytes from its neighbours, and the last read heap that was never written.
+//!
 //! Deviation: a truecolour image whose depth less its alpha bits is 24, but whose depth is not 24
 //! or 32, is refused where the reference crashes. The check `0x5a37e0` admits it (25 to 31 bits
 //! with 1 to 7 alpha bits, 33 to 39 with 9 to 15), then `0x5a41f0` returns 0 for a depth that is
@@ -102,7 +108,7 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         );
     }
     // A colour-mapped pixel is an index, its palette entry a width of its own (`0x5a3b40`). The
-    // truecolour depths other than 24 and 32 are refused, the crash pairs by the third Deviation.
+    // truecolour depths other than 24 and 32 are refused, the crash pairs by the fourth Deviation.
     let bytes_per_pixel = match (bpp, paletted, grayscale) {
         (8, true, _) => 1,
         (24, false, false) => 3,
@@ -326,6 +332,29 @@ mod tests {
         );
     }
 
+    /// The module's third Deviation: alpha bits in a colour-mapped image's descriptor change
+    /// nothing, where the reference garbles it (`0x5a3820`, `0x5a3b80`).
+    #[test]
+    fn colour_mapped_images_with_alpha_bits_decode_as_the_picture() {
+        let pal = [0, 0, 255, 0, 255, 0, 255, 0, 0];
+        let plain = tga_paletted(1, 3, 1, &pal, 24, &[0, 1, 2]);
+        let want = tga_to_rgba(&plain).unwrap().2;
+        assert_eq!(want, vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]);
+        for descriptor in [0x28, 0x08, 0x21, 0x2f] {
+            let mut raw = plain.clone();
+            raw[17] = descriptor;
+            assert_eq!(
+                tga_to_rgba(&raw).unwrap().2,
+                want,
+                "descriptor {descriptor:#04x}"
+            );
+        }
+        // The run-length type is expanded the same way.
+        let mut rle = tga_paletted(9, 3, 1, &pal, 24, &[0x02, 0, 1, 2]);
+        rle[17] = 0x28;
+        assert_eq!(tga_to_rgba(&rle).unwrap().2, want);
+    }
+
     /// A minimal TGA: an 18-byte header and pixels.
     fn tga(image_type: u8, w: u16, h: u16, bpp: u8, descriptor: u8, data: &[u8]) -> Vec<u8> {
         let mut out = vec![0u8; 18];
@@ -449,7 +478,7 @@ mod tests {
         }
         // Any other pair that does not leave 24 is refused, whatever the bytes could mean. So are
         // the pairs that do, bar 24 and 32 bits: `0x5a37e0` admits them and the reference crashes
-        // at `0x4492c4` (the module's third Deviation).
+        // at `0x4492c4` (the module's fourth Deviation).
         for (bpp, alpha_bits) in [
             (32, 4),
             (32, 1),
