@@ -325,7 +325,7 @@ pub(super) fn control(
             binds,
             autorun_on,
             input::both_engaged(binds, &rig, both_buttons),
-            body.single().is_ok(),
+            active_mover.is_some(),
         ) {
             net.7.pressed = true;
             net.7.mover_is_player = active_mover == Some(true);

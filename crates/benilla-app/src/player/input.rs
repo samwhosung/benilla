@@ -207,11 +207,12 @@ pub(super) fn both_engaged(
 /// `Script::Jump` (`0x513c43`) decide it: a press that newly set forward, back, strafe or autorun
 /// (the mask `0x10f0` at `0x5150ce`; a Start on a held bit is no edge, `0x51484c`), the press that
 /// completed both mouse bits (`0x5150e2`), or the Jump command, which cancels ahead of its own
-/// checks once the mover exists (`0x513c02`). It reads the commands alone: nothing between the
-/// press and the cancel tests root or stun, as the tick `0x514640` that applies them runs after
-/// (`0x5151a0`). The turn and pitch bits (`0x100`-`0x800`) never cancel, even while the right
-/// button makes a turn key strafe, and neither does follow's forward, which presses `0x100000`
-/// through the same handler (`0x60e7ab`), outside the mask and no mouse bit.
+/// checks once the active mover resolves (`0x513be0`-`0x513c02`), so not while control is lost
+/// (`0x5fa600` zeroes it) or a claimed unit is unstreamed. It reads the commands alone: nothing
+/// between the press and the cancel tests root or stun, as the tick `0x514640` that applies them
+/// runs after (`0x5151a0`). The turn and pitch bits (`0x100`-`0x800`) never cancel, even while
+/// the right button makes a turn key strafe, and neither does follow's forward, which presses
+/// `0x100000` through the same handler (`0x60e7ab`), outside the mask and no mouse bit.
 pub(super) fn cancels_cast(
     binds: &crate::bindings::BindingsState,
     autorun_on: bool,
