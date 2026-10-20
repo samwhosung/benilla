@@ -10,10 +10,7 @@ use super::table::{all_rows, Reference};
 
 /// `same` rows whose shipped default is not yet the registered string, each with the issue that
 /// fixes it. The test fails on any other, and on a listed row that has come right.
-const KNOWN: &[(&str, &str)] = &[
-    ("WorldDetail", "#1279"),
-    ("Sound_EnableSoundWhenGameIsInBG", "#545"),
-];
+const KNOWN: &[(&str, &str)] = &[("Sound_EnableSoundWhenGameIsInBG", "#545")];
 
 /// Every registered name, lower-cased, with the defaults the client registers it with (a
 /// conditional default lists each arm).

@@ -388,7 +388,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // (`OptionsFrame.lua:27`); stops 0/1/2 are `frillDensity` 16/32/48. `SetWorldDetail 0x488dd0`
     // also writes `SmallCull` {0.07, 0.04, 0.01}, and `GetWorldDetail` reads only `SmallCull`,
     // whose registered 0.04 is stop 1: the reference's slider boots at Medium.
-    same("WorldDetail", "1"),
+    ours(
+        "WorldDetail",
+        "1",
+        "the Environment Detail stop our Graphics page and `GetWorldDetail` read; 1.12 keeps the \
+         stop in `smallCull` and `frillDensity` and registers no CVar of this name",
+    ),
     // `SmallCull` (`0x68854a`: name `0x8696f8`, default `0x869718` "0.04", flags 1, callback
     // `0x688b10`, record `[0xc7f330]`). The callback refuses outside [0.001, 2.0] and stores into
     // `[0x868620]`, which nothing reads: no mechanism here either. Its readers are Lua ones:
