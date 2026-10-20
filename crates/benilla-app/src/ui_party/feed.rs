@@ -3,7 +3,8 @@
 //! into `CMSG_*` sends. The state and its lines live in the parent module.
 
 use benilla_protocol::messages::{
-    member_status, GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo, GROUP_MEMBER_ASSISTANT,
+    member_status, GroupLootInfo, GroupMemberEntry, ObjectType, PartyMemberStatsInfo,
+    GROUP_MEMBER_ASSISTANT,
 };
 use benilla_ui::script::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, SavedInstanceInfo, ScriptValue,
@@ -800,6 +801,8 @@ pub(crate) fn drain_party(
     mut group: ResMut<GroupState>,
     selection: Res<Selection>,
     names: Res<NameCache>,
+    index: Res<GuidIndex>,
+    stores: Query<&ObjectStore>,
     self_q: Query<&Guid, With<SelfPlayer>>,
     commands: Res<NetCommands>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
@@ -811,6 +814,7 @@ pub(crate) fn drain_party(
         return;
     };
     let self_guid = self_q.iter().next().map(|g| g.0);
+    let held = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
     for req in script.take_party_requests() {
         // In the sandbox the server holds no group, so the group-changing intents apply to the
         // mirror as its echo would. Invites and accept/decline stay real: a real group ends it.
@@ -862,10 +866,8 @@ pub(crate) fn drain_party(
                 }
             }
             PartyRequest::UninviteUnit(token) => {
-                if let Some(m) = member_for_token(&group, &token) {
-                    let _ = commands.0.send(ClientCommand::GroupUninvite {
-                        name: m.name.clone(),
-                    });
+                if let Some(guid) = member_for_token(&group, &token).map(|m| m.guid) {
+                    uninvite_by_guid(guid, held(guid), &names, &commands, &script);
                 }
             }
             PartyRequest::PromoteUnit(token) => {
@@ -969,14 +971,9 @@ pub(crate) fn drain_party(
                     .0
                     .send(ClientCommand::GroupAssistantLeader { guid, grant });
             }
-            PartyRequest::UninviteRaid(index) => {
-                // Sent by name. The reference's `UninviteFromRaid` and `UninviteFromParty` share
-                // the sender `0x5e9510`, which kicks by name when the target's object is present
-                // and by `CMSG_GROUP_UNINVITE_GUID` (`0x5e953e`) only when it is absent.
-                if let Some(name) = raid_guid_at(&group, index)
-                    .and_then(|g| raid_name_of(&group, self_guid, &names, g))
-                {
-                    let _ = commands.0.send(ClientCommand::GroupUninvite { name });
+            PartyRequest::UninviteRaid(row) => {
+                if let Some(guid) = raid_guid_at(&group, row) {
+                    uninvite_by_guid(guid, held(guid), &names, &commands, &script);
                 }
             }
             PartyRequest::ReadyCheckStart => {
@@ -990,6 +987,32 @@ pub(crate) fn drain_party(
             }
         }
     }
+}
+
+/// `UninviteByGuid` (`0x5e9510`), the sender `UninviteFromParty` (`0x48a560`) and
+/// `UninviteFromRaid` (`0x48a5ed`) both end in. It asks the object manager for the guid's player
+/// object (`0x5e951f`, type mask `0x10`): one held is kicked by its unit's name in
+/// `CMSG_GROUP_UNINVITE` (`0x5e95a7`-`0x5e95d0`), which `GetUnitName` (`0x609210`) reads from the
+/// player-name cache with a callback, else as `UNKNOWNOBJECT`; any other, by its guid in
+/// `CMSG_GROUP_UNINVITE_GUID` (`0x5e953e`). Only `UninviteByName` always sends the name
+/// (`0x48a62a`).
+fn uninvite_by_guid(
+    guid: u64,
+    held: Option<&ObjectStore>,
+    names: &NameCache,
+    commands: &NetCommands,
+    script: &UiScript,
+) {
+    let player = held.filter(|s| matches!(s.0.object_type(), Some(ObjectType::Player)));
+    let command = match player {
+        Some(store) => ClientCommand::GroupUninvite {
+            name: names
+                .resolve_unit(guid, Some(store), Ask::Event(commands))
+                .map_or_else(|| script.unknown_object_text(), str::to_string),
+        },
+        None => ClientCommand::GroupUninviteGuid { guid },
+    };
+    let _ = commands.0.send(command);
 }
 
 /// The sandbox half of [`drain_party`]: apply one group-changing intent to the mirror as the
