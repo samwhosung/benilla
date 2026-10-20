@@ -305,7 +305,6 @@ mod tests {
             "party1targetfoo",
             // `npc` is an exact compare with no chain.
             "npctarget",
-            "bogus",
             "",
         ] {
             let call = format!(r#"CheckInteractDistance("{token}", 4)"#);
@@ -315,5 +314,63 @@ mod tests {
         }
         assert!(answers(&s, r#"CheckInteractDistance("PARTY1TARGET", 1)"#));
         assert!(answers(&s, r#"CanInspect("Party1Target")"#));
+    }
+
+    /// `CanInspect` (`0x48a1b0`) raises `Usage: CanInspect(unit)` unless its argument is a string
+    /// or a number (`0x48a1ca`), and the resolver raises for a token it does not know (`0x515940`
+    /// through `0x515970`). Before it answers by `0x4944a0` (`0x48a2a1`), each refusal shows its
+    /// error through `0x496720`: no object `ERR_UNIT_NOT_FOUND` (`0x48a2df`), or
+    /// `ERR_GENERIC_NO_TARGET` for an empty token (`0x48a2ee`); a unit that is no player, or
+    /// another one the player cannot cooperate with, `ERR_INVALID_INSPECT_TARGET` (`0x48a2c7`); one
+    /// beyond 10 yards `ERR_OUT_OF_RANGE` (`0x48a292`). An inspectable unit in range shows none.
+    #[test]
+    fn can_inspect_raises_and_shows_each_refusal_before_it_answers() {
+        let mut s = seeded();
+        for chunk in ["CanInspect()", "CanInspect({})", "CanInspect(nil)"] {
+            let err = s.run(chunk).expect_err(chunk).to_string();
+            assert!(err.contains("Usage: CanInspect(unit)"), "{chunk}: {err}");
+        }
+        for chunk in ["CanInspect(\"bogus\")", "CanInspect(5)"] {
+            let err = s.run(chunk).expect_err(chunk).to_string();
+            assert!(err.contains("Unknown unit name"), "{chunk}: {err}");
+        }
+        assert!(s.take_ui_errors().is_empty(), "a raise shows nothing");
+        for (token, shown) in [
+            ("party1", None),
+            ("party2", Some("ERR_UNIT_NOT_FOUND")),
+            ("party3", Some("ERR_UNIT_NOT_FOUND")),
+            ("", Some("ERR_GENERIC_NO_TARGET")),
+            ("target", Some("ERR_INVALID_INSPECT_TARGET")),
+            ("partypet1", Some("ERR_INVALID_INSPECT_TARGET")),
+        ] {
+            let call = format!(r#"CanInspect("{token}")"#);
+            assert_eq!(answers(&s, &call), shown.is_none(), "{call}");
+            assert_eq!(s.take_ui_errors(), Vec::from_iter(shown), "{call}");
+        }
+        // party1 20 yards off: inspectable, out of range.
+        s.set_unit_reach(HashMap::from([(P1, reach(400.0, true))]));
+        assert!(!answers(&s, r#"CanInspect("party1")"#));
+        assert_eq!(s.take_ui_errors(), vec!["ERR_OUT_OF_RANGE"]);
+    }
+
+    /// `CheckInteractDistance` (`0x48ba00`) checks both arguments first (`0x48ba11`-`0x48ba2c`),
+    /// then the resolver raises for a token it does not know (`0x48ba7e` → `0x515940`); it shows
+    /// no error on any arm.
+    #[test]
+    fn check_interact_distance_raises_for_an_unknown_token_and_shows_nothing() {
+        let mut s = seeded();
+        let err = s
+            .run(r#"CheckInteractDistance("bogus", 1)"#)
+            .expect_err("an unknown token")
+            .to_string();
+        assert!(err.contains("Unknown unit name"), "{err}");
+        let err = s
+            .run(r#"CheckInteractDistance("bogus", {})"#)
+            .expect_err("a bad index")
+            .to_string();
+        assert!(err.contains("Usage: CheckInteractDistance"), "{err}");
+        assert!(!answers(&s, r#"CheckInteractDistance("party2", 4)"#));
+        assert!(!answers(&s, r#"CheckInteractDistance("", 4)"#));
+        assert!(s.take_ui_errors().is_empty());
     }
 }
