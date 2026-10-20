@@ -293,9 +293,25 @@ pub(crate) const MAGIC_POPULATIONS: [(u32, u32, u8); 3] = [
     (0x43c8_0000, 0x4100_0000, 0x80), // 400.0 → 8.0,   Full
 ];
 
+/// The characters the realm record fill (`0x5b2230`) turns into spaces in a realm name: those
+/// `0x5b2450` maps to the case that stores a space (`0x5b2391`).
+const NAME_FORBIDDEN: &str = "\"*/:<>?\\|";
+
+/// A realm name as the record fill leaves it: each of [`NAME_FORBIDDEN`] becomes a space
+/// (`0x5b2376`-`0x5b2391`), then the trailing spaces and dots are cut (`0x5b23a6`-`0x5b23c5`,
+/// through `0x5b24b0` with its trailing flag set).
+fn clean_realm_name(name: &str) -> String {
+    let spaced: String = name
+        .chars()
+        .map(|c| if NAME_FORBIDDEN.contains(c) { ' ' } else { c })
+        .collect();
+    spaced.trim_end_matches([' ', '.']).to_string()
+}
+
 /// Read `CMD_REALM_LIST_Server` into the advertised realms, rewriting [`MAGIC_POPULATIONS`] here
 /// as the reference parser does: the realm-list screen averages every realm's population, and an
-/// unswapped Recommended `600.0` would skew that mean for every row.
+/// unswapped Recommended `600.0` would skew that mean for every row. Each name is cleaned
+/// ([`clean_realm_name`]) before anything shows it.
 pub fn read_realm_list(r: &mut impl Read) -> Result<Vec<RealmInfo>> {
     let opcode = read_u8(r)?;
     if opcode != CMD_REALM_LIST {
@@ -323,7 +339,7 @@ pub fn read_realm_list(r: &mut impl Read) -> Result<Vec<RealmInfo>> {
             flags |= bit;
         }
         realms.push(RealmInfo {
-            name,
+            name: clean_realm_name(&name),
             address,
             population,
             characters,
