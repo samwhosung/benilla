@@ -517,8 +517,11 @@ fn drain_restart_gx(
                 commands.trigger(event);
             }
         }
-        info!("video: RestartGx — {committed} staged setting(s) committed; re-asserting the display mode and present mode");
-})
+        info!(
+            "video: RestartGx — {committed} staged setting(s) committed; re-asserting the \
+               display mode and present mode"
+        );
+    })
 }
 
 /// The reference's three filters on the resolution list (`0x48bcfa` to `0x48bd18`): keep when

@@ -1638,7 +1638,9 @@ pub(crate) mod schedule_tests {
                 ));
             } else {
                 offenders.push(format!(
-                    "{}: no declared side of the tick — `.in_set(UiFeed)` for a push the tick must see this frame, `.in_set(crate::ui_script::UiDrain)` for a drain of what the tick produced",
+                    "{}: no declared side of the tick — `.in_set(UiFeed)` for a push the tick must \
+                     see this frame, `.in_set(crate::ui_script::UiDrain)` for a drain of what the \
+                     tick produced",
                     s.name
                 ));
             }
@@ -1704,7 +1706,9 @@ pub(crate) mod schedule_tests {
         ("capture/probe_bg.rs", "bg_probe", Because::SelfHealing,
          "the battleground probe: dev-only (`WOW_PROBE_BG`, `cfg(feature = \"dev\")`) so it is not in a player build at all, and its `mem::take` is of its OWN pending-events string, not a queue anything else fills. Its one real VM dependency is the Lua event tap, which self-heals: `EVENT_DRAIN` returns a `<tap-gone>` sentinel when the tap's globals are missing — the case this window causes, since a tap installed in the glue VM is discarded when `mint_entry_vm` builds the interface — and the probe re-installs on the next frame"),
         ("capture/probes/act.rs", "fire_probe_drag", Because::FilledByVm,
-         "the drag probe: dev-only (`WOW_PROBE_DRAG`), it starts past `WOW_PROBE_DRAG_AT` with the player's body in the world, and its `.drain(..)` is of the VM's own script errors, raised by the gesture it just made"),
+         "the drag probe: dev-only (`WOW_PROBE_DRAG`), it starts past `WOW_PROBE_DRAG_AT` with the \
+          player's body in the world, and its `.drain(..)` is of the VM's own script errors, \
+          raised by the gesture it just made"),
         ("death/mod.rs", "feed_death", Because::MemoLatched,
          "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo makes the first snapshot an edge and re-announces a held offer, confirm and corpse range"),
         ("net/objects/update.rs", "on_update_end", Because::Deliberate,
@@ -1714,7 +1718,9 @@ pub(crate) mod schedule_tests {
         ("screenshot.rs", "report_captures", Because::FilledByVm,
          "the outcome chain starts with the VM's own `Screenshot()` call"),
         ("spell/targeting/item.rs", "commit_item_cast_on_pick", Because::FilledByVm,
-         "the picks and answers are the VM's own: a bag or paper-doll click with an item-targeting spell on the cursor, and the bind and replace popups' `BindEnchant` and `ReplaceEnchant`; the two events it fires answer them"),
+         "the picks and answers are the VM's own: a bag or paper-doll click with an item-targeting \
+          spell on the cursor, and the bind and replace popups' `BindEnchant` and \
+          `ReplaceEnchant`; the two events it fires answer them"),
         ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
          "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
@@ -1730,7 +1736,8 @@ pub(crate) mod schedule_tests {
         ("ui_char.rs", "feed_char", Because::MemoLatched,
          "`feed.vm: VmMemo<CharFeedMemo>`; `vm_reset` fires every transition on a fresh memo"),
         ("ui_chat/feed.rs", "played_time_bridge", Because::FilledByVm,
-         "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM never makes"),
+         "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM \
+          never makes"),
         ("ui_dialog_verbs.rs", "feed_meeting_stone", Because::SelfHealing,
          "the query waits for the world-enter cascade (`meeting_stone_enter_world`), our own create a server round trip past the login edge, and every `/reload` re-asks onto its new VM"),
         ("ui_duel.rs", "feed_duel", Because::PlayerRoundTrip,

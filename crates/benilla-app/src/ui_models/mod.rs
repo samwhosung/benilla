@@ -1195,7 +1195,9 @@ fn sync_tiles(
                     let eye = leg.camera.translation;
                     let fwd = leg.camera.forward().as_vec3();
                     leg_trace = format!(
-                        "persp[cam {:?} slot {slot} t={file_ms}ms] fov={:.5} aspect={aspect:.4} near={:.4} far={:.3} eye={:.3},{:.3},{:.3} fwd={:.3},{:.3},{:.3} root(s={:.4} pos={:?}) m00={:.4} m11={:.4}",
+                        "persp[cam {:?} slot {slot} t={file_ms}ms] fov={:.5} aspect={aspect:.4} \
+                         near={:.4} far={:.3} eye={:.3},{:.3},{:.3} fwd={:.3},{:.3},{:.3} \
+                         root(s={:.4} pos={:?}) m00={:.4} m11={:.4}",
                         req.camera,
                         record.fov,
                         record.near,
@@ -1307,7 +1309,9 @@ fn sync_tiles(
                     })
                     .collect();
                 info!(
-                    "tile-trace: {} {} leg={} cell=({},{} {}x{}) px/unit={:.2} pos_px/unit={:.2} armed={:?} cursor={:.3}s slot={:?} clock={}ms light={light_trace} alphas={:?} rows=[{}]",
+                    "tile-trace: {} {} leg={} cell=({},{} {}x{}) px/unit={:.2} pos_px/unit={:.2} \
+                     armed={:?} cursor={:.3}s slot={:?} clock={}ms light={light_trace} alphas={:?} \
+                     rows=[{}]",
                     req.path,
                     script.frame_name(*handle).unwrap_or_default(),
                     leg_trace,
@@ -1402,7 +1406,7 @@ fn sync_tiles(
             &mut cams,
             !bridge.cells.is_empty() && bridge.atlas.is_some(),
         );
-})
+    })
 }
 
 /// The orthographic leg's root in camera space, pixels, `y` up: the pane's bottom-left `origin`

@@ -410,10 +410,10 @@ fn bg_probe(
                         "PROBE bg: FAILURE — GM mode is still on after {GM_DROP_WAIT:.0}s. A \
                          battleground is the one place it cannot be left on: \
                          `CanUseBattleGroundObject` refuses a GM outright (vmangos \
-                         `Player.cpp:20576`), so every objective fails silently while the queue, the \
-                         port, the census and the scoreboard all keep working. Re-run with \
-                         `WOW_GM=off` — and if it WAS set, look for `probe-shield:` lines: the drop \
-                         is sequenced behind the shield and a refused command shows up there."
+                         `Player.cpp:20576`), so every objective fails silently while the queue, \
+                         the port, the census and the scoreboard all keep working. Re-run with \
+                         `WOW_GM=off` — and if it WAS set, look for `probe-shield:` lines: the \
+                         drop is sequenced behind the shield and a refused command shows up there."
                     );
                     finish(&mut probe, &net);
                     return;
@@ -481,13 +481,16 @@ fn bg_probe(
                     }
                     Some(false) if corrected => {
                         error!(
-                            "PROBE bg: FAILURE — `.debug bg` reads OFF after two sends; the account \
-                             may be below SEC_ADMINISTRATOR (6) for it"
+                            "PROBE bg: FAILURE — `.debug bg` reads OFF after two sends; the \
+                             account may be below SEC_ADMINISTRATOR (6) for it"
                         );
                         finish(&mut probe, &net);
                     }
                     Some(false) => {
-                        info!("PROBE bg: TESTING was on; that send turned it OFF — sending once more");
+                        info!(
+                            "PROBE bg: TESTING was on; that send turned it OFF — sending once \
+                               more"
+                        );
                         toggle_testing(&mut probe, &net);
                         probe.phase = Phase::Toggled {
                             sent_at: now,
@@ -499,8 +502,8 @@ fn bg_probe(
                         // text.
                         warn!(
                             "PROBE bg: TESTING unread — no `.debug bg` reply reached the tap in \
-                             {TOGGLE_REPLY_WINDOW:.0}s; continuing, but if the queue never pops, this \
-                             is the first thing to doubt"
+                             {TOGGLE_REPLY_WINDOW:.0}s; continuing, but if the queue never pops, \
+                             this is the first thing to doubt"
                         );
                         probe.phase = Phase::Scanning { since: now };
                     }
@@ -528,7 +531,8 @@ fn bg_probe(
                     };
                 } else if now - sent_at > 15.0 {
                     error!(
-                        "PROBE bg: FAILURE — {} (entry {}) never streamed within {NEAR_YD:.0} yd in 15 s",
+                        "PROBE bg: FAILURE — {} (entry {}) never streamed within {NEAR_YD:.0} yd \
+                         in 15 s",
                         arena.npc_name, arena.npc_entry
                     );
                     finish(&mut probe, &net);
@@ -563,10 +567,15 @@ fn bg_probe(
                 });
                 if let Some(index) = ready {
                     let slot = index + 1; // the verbs are 1-based
-                    info!("PROBE bg: CONFIRM — slot {slot} is ready; AcceptBattlefieldPort({slot}, 1)");
+                    info!(
+                        "PROBE bg: CONFIRM — slot {slot} is ready; AcceptBattlefieldPort({slot}, \
+                           1)"
+                    );
                     if let Some(script) = script {
-                        if let Err(e) = script.eval::<()>(&format!("AcceptBattlefieldPort({slot}, 1)"))
-                        {
+                        if let Err(e) = script.eval::<()>(&format!(
+                            "AcceptBattlefieldPort({slot}, \
+                                                                    1)"
+                        )) {
                             error!("PROBE bg: FAILURE — AcceptBattlefieldPort raised: {e}");
                             finish(&mut probe, &net);
                             return;
@@ -607,18 +616,19 @@ fn bg_probe(
                         })
                         .collect();
                     error!(
-                        "PROBE bg: FAILURE — no slot reached status 2 in 30 s (slots: {}). {} \
-                         Also worth checking: Deserter (26013) on the body, a bracket the server \
-                         refused, or a battleground this body is still registered in from a killed run.",
+                        "PROBE bg: FAILURE — no slot reached status 2 in 30 s (slots: {}). {} Also \
+                         worth checking: Deserter (26013) on the body, a bracket the server \
+                         refused, or a battleground this body is still registered in from a killed \
+                         run.",
                         slots.join(" "),
                         if probe.testing_confirmed {
                             "The testing flag was READ BACK as on before the join, so the cause is \
                              probably not that."
                         } else {
-                            "The testing flag was NEVER READ BACK (no `.debug bg` reply reached the \
-                             tap), so it is the first suspect: a previous run that died before its \
-                             own restore leaves the lever inverted, and a queue entry is only ever \
-                             evaluated when a join or a leave schedules it."
+                            "The testing flag was NEVER READ BACK (no `.debug bg` reply reached \
+                             the tap), so it is the first suspect: a previous run that died before \
+                             its own restore leaves the lever inverted, and a queue entry is only \
+                             ever evaluated when a join or a leave schedules it."
                         },
                     );
                     finish(&mut probe, &net);
@@ -628,7 +638,8 @@ fn bg_probe(
                 let here = map.as_ref().map_or(0, |m| m.0);
                 if here == arena.map {
                     info!(
-                        "PROBE bg: ENTERED map {} after {:.1}s — census every {CENSUS_EVERY:.0}s × {}",
+                        "PROBE bg: ENTERED map {} after {:.1}s — census every {CENSUS_EVERY:.0}s × \
+                         {}",
                         arena.map,
                         now - sent_at,
                         census_samples(),
@@ -685,8 +696,8 @@ fn bg_probe(
                 // countdown runs (it only decrements while testing is off, `BattleGround.cpp:337`).
                 if samples == 1 {
                     info!(
-                        "PROBE bg: TESTING — inside the instance; the lever has done its job and the \
-                         premature-finish countdown is frozen while it is on"
+                        "PROBE bg: TESTING — inside the instance; the lever has done its job and \
+                         the premature-finish countdown is frozen while it is on"
                     );
                     leave_testing_as_found(&mut probe, &net);
                 }
@@ -696,12 +707,18 @@ fn bg_probe(
                     // battleground death is the only way to reach the area spirit healer.
                     match arena.flag {
                         Some((entry, [x, y, z])) => {
-                            info!("PROBE bg: FLAG — hopping to {entry} at ({x}, {y}, {z}) to take it");
+                            info!(
+                                "PROBE bg: FLAG — hopping to {entry} at ({x}, {y}, {z}) to take \
+                                   it"
+                            );
                             gm(&net, format!(".go xyz {x} {y} {z} {}", arena.map));
                             probe.phase = Phase::FlagHop { at: now };
                         }
                         None => {
-                            info!("PROBE bg: FLAG — none for this battleground; on to the graveyard");
+                            info!(
+                                "PROBE bg: FLAG — none for this battleground; on to the \
+                                   graveyard"
+                            );
                             gm(&net, ".die");
                             probe.phase = Phase::Dying { sent_at: now };
                         }
@@ -750,7 +767,8 @@ fn bg_probe(
                         // `CMSG_GAMEOBJ_USE`, as here; the lock is logged, not assumed.
                         let lock = go_templates.of(&store.0).map_or(u32::MAX, |t| t.lock_id);
                         info!(
-                            "PROBE bg: FLAG {entry} streamed at {:.1} yd, lock_id={lock} — CMSG_GAMEOBJ_USE",
+                            "PROBE bg: FLAG {entry} streamed at {:.1} yd, lock_id={lock} — \
+                             CMSG_GAMEOBJ_USE",
                             tf.translation.distance(player.pos)
                         );
                         let _ = net.0.send(ClientCommand::GameObjUse { guid: guid.0 });
@@ -760,7 +778,10 @@ fn bg_probe(
                         };
                     }
                     None if now - at > 20.0 => {
-                        error!("PROBE bg: FLAG FAILURE — {entry} never streamed within 15 yd in 20 s");
+                        error!(
+                            "PROBE bg: FLAG FAILURE — {entry} never streamed within 15 yd in 20 \
+                                s"
+                        );
                         gm(&net, ".die");
                         probe.phase = Phase::Dying { sent_at: now };
                     }
@@ -827,7 +848,8 @@ fn bg_probe(
                     };
                 } else if now - sent_at > 15.0 {
                     error!(
-                        "PROBE bg: FAILURE — still alive 15 s after `.die` (is the shield re-armed?)"
+                        "PROBE bg: FAILURE — still alive 15 s after `.die` (is the shield \
+                         re-armed?)"
                     );
                     finish(&mut probe, &net);
                 }
@@ -858,12 +880,14 @@ fn bg_probe(
                 let wave = script
                     .eval::<String>(
                         "return tostring(GetAreaSpiritHealerTime()) .. \" popup=\" .. \
-                         tostring(StaticPopup_Visible and StaticPopup_Visible(\"AREA_SPIRIT_HEAL\"))",
+                         tostring(StaticPopup_Visible and \
+                         StaticPopup_Visible(\"AREA_SPIRIT_HEAL\"))",
                     )
                     .unwrap_or_else(|e| format!("<raised: {e}>"));
                 let events = drain_events(&mut probe, script);
                 info!(
-                    "PROBE bg: GHOST t={:.0}s ghost={ghost} pos=({:.0},{:.0},{:.0}) area={:?} guide={} wave={wave}{}",
+                    "PROBE bg: GHOST t={:.0}s ghost={ghost} pos=({:.0},{:.0},{:.0}) area={:?} \
+                     guide={} wave={wave}{}",
                     now - released_at,
                     player.pos.x,
                     player.pos.y,
@@ -895,7 +919,7 @@ fn bg_probe(
             }
             Phase::Done => {}
         }
-})
+    })
 }
 
 /// Ends the process once [`Phase::Done`] is reached and the body has left the battleground map

@@ -1485,9 +1485,9 @@ fn feed_units(
                 warn!(
                     "faction: our own template names no side (usually GM mode — vmangos forces \
                      template 35, group mask 0). Every UnitFactionGroup-derived surface loses its \
-                     side while this holds — the PvP flag icon stays hidden however flagged you are. \
-                     `.gm off` restores it. (The Honor tab's rank title is NOT one of these: its team \
-                     digit comes from your race, not your template.)"
+                     side while this holds — the PvP flag icon stays hidden however flagged you \
+                     are. `.gm off` restores it. (The Honor tab's rank title is NOT one of these: \
+                     its team digit comes from your race, not your template.)"
                 );
             }
             feed.warned_sideless = sideless;

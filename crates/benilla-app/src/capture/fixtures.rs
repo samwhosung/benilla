@@ -116,7 +116,8 @@ pub(super) fn seed_ui_fixture(
     mut trainer: ResMut<crate::ui_trainer::TrainerOpen>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
 ) {
-    vm.turn(|mut script, (mut merchant, mut loot, mut names, mut selection, mut player, store, rest)| {
+    vm.turn(|mut script, parts| {
+        let (mut merchant, mut loot, mut names, mut selection, mut player, store, rest) = parts;
         let (mut actions, mut bank, mut exit, mut loading) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
@@ -135,9 +136,9 @@ pub(super) fn seed_ui_fixture(
         // exits non-zero, as the window-size refusal does.
         if script.is_none() {
             error!(
-                "capture: REFUSING this capture — scenario {:?} declares a UI fixture but no script \
-                 VM exists, so its window cannot be opened and the shot would be a UI-less world \
-                 wearing the scenario's name.",
+                "capture: REFUSING this capture — scenario {:?} declares a UI fixture but no \
+                 script VM exists, so its window cannot be opened and the shot would be a UI-less \
+                 world wearing the scenario's name.",
                 scenario.name
             );
             exit.write(AppExit::error());
@@ -364,10 +365,10 @@ pub(super) fn seed_ui_fixture(
                 // covers the stock `GossipResize` per-row height, the scroll frame and its
                 // scrollbar.
                 let judgement = [
-                    "I slay the man on the spot as my liege would expect me to, as he has broken the \
-                     law of the land and it is my sworn duty to enforce it.",
-                    "I turn over the man to my liege for punishment, as he has stolen, and I am not \
-                     the arbiter of his fate.",
+                    "I slay the man on the spot as my liege would expect me to, as he has broken \
+                     the law of the land and it is my sworn duty to enforce it.",
+                    "I turn over the man to my liege for punishment, as he has stolen, and I am \
+                     not the arbiter of his fate.",
                     "I confiscate the corn he has stolen, warn him that stealing is a path towards \
                      doom and destruction, but I let him go to return to his family.",
                     "I allow the man to take enough corn to feed his family for a couple of days, \
@@ -417,7 +418,8 @@ pub(super) fn seed_ui_fixture(
                 const G_STONE: u64 = 0x2004;
                 const G_BANKBAG: u64 = 0x2005;
                 let obj = |entry: u32, stack: u32| {
-                    ObjectFields::from_pairs(&[(3, entry), (14, stack)]) // OBJECT_ENTRY, STACK_COUNT
+                    // OBJECT_ENTRY, STACK_COUNT
+                    ObjectFields::from_pairs(&[(3, entry), (14, stack)])
                 };
                 for (guid, entry, stack, name, disp, quality) in [
                     (G_SHIELD, 94_001, 1, "Small Shield", DISP_SHIELD, 2),
@@ -426,7 +428,13 @@ pub(super) fn seed_ui_fixture(
                     (G_STONE, 94_004, 1, "Hearthstone", DISP_STONE, 1),
                     (G_BANKBAG, 94_005, 1, "Small Brown Pouch", DISP_STONE, 1),
                 ] {
-                    crate::items::spawn_item(&mut commands, &mut index, guid, obj(entry, stack), false);
+                    crate::items::spawn_item(
+                        &mut commands,
+                        &mut index,
+                        guid,
+                        obj(entry, stack),
+                        false,
+                    );
                     let mut t = template(name, quality);
                     t.display_info_id = disp;
                     if guid == G_BANKBAG {
@@ -553,26 +561,29 @@ pub(super) fn seed_ui_fixture(
                 // Quests".
                 quest.open(
                     NPC_GUID,
-                    crate::ui_quest::QuestView::Greeting(benilla_protocol::messages::QuestGiverList {
-                        npc: NPC_GUID,
-                        greeting: "Greetings, $N. The town of Goldshire needs able hands.".into(),
-                        emote_delay: 0,
-                        emote: 0,
-                        quests: vec![
-                            benilla_protocol::messages::QuestListEntry {
-                                quest_id: 84,
-                                icon: 0,
-                                level: 4,
-                                title: "Brotherhood of Thieves".into(),
-                            },
-                            benilla_protocol::messages::QuestListEntry {
-                                quest_id: 40,
-                                icon: 0,
-                                level: 3,
-                                title: "Eagan Peltskinner".into(),
-                            },
-                        ],
-                    }),
+                    crate::ui_quest::QuestView::Greeting(
+                        benilla_protocol::messages::QuestGiverList {
+                            npc: NPC_GUID,
+                            greeting: "Greetings, $N. The town of Goldshire needs able hands."
+                                .into(),
+                            emote_delay: 0,
+                            emote: 0,
+                            quests: vec![
+                                benilla_protocol::messages::QuestListEntry {
+                                    quest_id: 84,
+                                    icon: 0,
+                                    level: 4,
+                                    title: "Brotherhood of Thieves".into(),
+                                },
+                                benilla_protocol::messages::QuestListEntry {
+                                    quest_id: 40,
+                                    icon: 0,
+                                    level: 3,
+                                    title: "Eagan Peltskinner".into(),
+                                },
+                            ],
+                        },
+                    ),
                 );
             }
             UiFixture::QuestLog => {
@@ -641,13 +652,16 @@ pub(super) fn seed_ui_fixture(
                     point_y: 0.0,
                     point_opt: 0,
                     title: "A Threat Within".into(),
-                    objectives_text: "Slay 10 Kobold Vermin and recover 5 Chipped Boar Tusks, then \
+                    objectives_text:
+                        "Slay 10 Kobold Vermin and recover 5 Chipped Boar Tusks, then \
                                       return to Marshal McBride."
-                        .into(),
-                    details: "Your first task is one of cleansing. A clan of kobolds have infested \
-                              the woods to the north. Go there and fight the kobold vermin you find. \
-                              Reduce their numbers so that we may one day drive them from Northshire."
-                        .into(),
+                            .into(),
+                    details:
+                        "Your first task is one of cleansing. A clan of kobolds have infested \
+                              the woods to the north. Go there and fight the kobold vermin you \
+                              find. Reduce their numbers so that we may one day drive them from \
+                              Northshire."
+                            .into(),
                     end_text: String::new(),
                     objectives: [
                         QuestObjective {
@@ -848,7 +862,8 @@ pub(super) fn seed_ui_fixture(
                         spell_lines: vec![benilla_ui::script::ItemSpellLine {
                             trigger: 0,
                             spell_id: 72,
-                            text: "Restores 243 health over 21 sec.  Must remain seated while eating."
+                            text: "Restores 243 health over 21 sec.  Must remain seated while \
+                                   eating."
                                 .into(),
                             charges: 1,
                             block: 0,
@@ -896,7 +911,8 @@ pub(super) fn seed_ui_fixture(
                 if let Err(e) = script.run(
                     "local i = IsBagOpen(0)\n\
                      if i then\n\
-                         ContainerFrameItemButton_OnEnter(getglobal(\"ContainerFrame\"..i..\"Item16\"))\n\
+                         local button = getglobal(\"ContainerFrame\"..i..\"Item16\")\n\
+                         ContainerFrameItemButton_OnEnter(button)\n\
                      end",
                 ) {
                     warn!("capture: ui-tooltip seed failed to open the tooltip: {e}");
@@ -1019,12 +1035,19 @@ pub(super) fn seed_ui_fixture(
                 // The item objects and their templates; the bow borrows the hearthstone display as
                 // a stand-in.
                 let obj = |entry: u32, stack: u32| {
-                    ObjectFields::from_pairs(&[(3, entry), (14, stack)]) // OBJECT_ENTRY, STACK_COUNT
+                    // OBJECT_ENTRY, STACK_COUNT
+                    ObjectFields::from_pairs(&[(3, entry), (14, stack)])
                 };
                 crate::items::spawn_item(&mut commands, &mut index, G_CHEST, obj(93_010, 1), false);
                 crate::items::spawn_item(&mut commands, &mut index, G_SWORD, obj(93_011, 1), false);
                 crate::items::spawn_item(&mut commands, &mut index, G_BOW, obj(93_013, 1), false);
-                crate::items::spawn_item(&mut commands, &mut index, G_ARROWS, obj(93_012, 200), false);
+                crate::items::spawn_item(
+                    &mut commands,
+                    &mut index,
+                    G_ARROWS,
+                    obj(93_012, 200),
+                    false,
+                );
                 let mut chest = template("Tarnished Chainmail", 1);
                 chest.display_info_id = DISP_SHIELD;
                 chest.inventory_type = 5;
@@ -1145,7 +1168,8 @@ pub(super) fn seed_ui_fixture(
                 // live open and select paths.
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowAudio:Click()",
+                    "ShowUIPanel(BenillaOptionsFrame); \
+                     BenillaOptionsFrameCategoryListRowAudio:Click()",
                 ) {
                     warn!("capture: ui-options-audio seed failed: {e}");
                 }
@@ -1156,9 +1180,10 @@ pub(super) fn seed_ui_fixture(
                 };
                 // The Graphics page, as the Audio fixture.
                 script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) =
-                    script.run("ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowGraphics:Click()")
-                {
+                if let Err(e) = script.run(
+                    "ShowUIPanel(BenillaOptionsFrame); \
+                                BenillaOptionsFrameCategoryListRowGraphics:Click()",
+                ) {
                     warn!("capture: ui-options-graphics seed failed: {e}");
                 }
             }
@@ -1170,7 +1195,8 @@ pub(super) fn seed_ui_fixture(
                 // saved variable `ChatFrame.xml` declares, so it paints unchecked, the shipped "0".
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowChat:Click()",
+                    "ShowUIPanel(BenillaOptionsFrame); \
+                     BenillaOptionsFrameCategoryListRowChat:Click()",
                 ) {
                     warn!("capture: ui-options-chat seed failed: {e}");
                 }
@@ -1198,8 +1224,10 @@ pub(super) fn seed_ui_fixture(
                 // (`UIDropDownMenu.lua:405`), which the engine answers in the same call.
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowControls:Click(); \
-                     BenillaOptionsFrameContainerBodyControlsRowCameraFollowStyleDropdownButton:Click()",
+                    "ShowUIPanel(BenillaOptionsFrame); \
+                     BenillaOptionsFrameCategoryListRowControls:Click(); \
+                     BenillaOptionsFrameContainerBodyControlsRowCameraFollowStyleDropdownButton\
+                     :Click()",
                 ) {
                     warn!("capture: ui-options-dropdown seed failed: {e}");
                 }
@@ -1228,9 +1256,10 @@ pub(super) fn seed_ui_fixture(
                 // box is focused, so the caret shows at the text's end.
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameSearchBox:SetText(\"volume\"); BenillaOptionsFrameSearchBox:SetFocus()",
-                )
-                {
+                    "ShowUIPanel(BenillaOptionsFrame); \
+                     BenillaOptionsFrameSearchBox:SetText(\"volume\"); \
+                     BenillaOptionsFrameSearchBox:SetFocus()",
+                ) {
                     warn!("capture: ui-options-search seed failed: {e}");
                 }
             }
@@ -1246,7 +1275,7 @@ pub(super) fn seed_ui_fixture(
                 commands.spawn((
                     crate::net::ObjectStore(ObjectFields::from_pairs(&[
                         (34, 12),              // UNIT_FIELD_LEVEL
-                        (36, 1 | 1 << 8),      // UNIT_FIELD_BYTES_0: human (race 1), warrior (class 1)
+                        (36, 1 | 1 << 8),      // UNIT_FIELD_BYTES_0: race 1 human, class 1 warrior
                         (516, G_SWORD as u32), // main-hand item guid (INV_SLOT_HEAD 486 + 15·2)
                     ])),
                     crate::net::SelfPlayer,
@@ -1577,7 +1606,7 @@ pub(super) fn seed_ui_fixture(
                 set_enemy_plates(script.as_deref(), false);
             }
         }
-})
+    })
 }
 
 /// The `GetTime()` the cooldown filmstrip pins the VM's session clock at, seconds. Large, as

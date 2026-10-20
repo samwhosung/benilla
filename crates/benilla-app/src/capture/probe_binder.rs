@@ -254,8 +254,8 @@ fn binder_probe(
                 });
                 if let Some((guid, ..)) = found {
                     info!(
-                        "PROBE_BINDER: PASS (1 hop) — innkeeper {:#x} streamed within {SCAN_RANGE}yd \
-                         of the landing",
+                        "PROBE_BINDER: PASS (1 hop) — innkeeper {:#x} streamed within \
+                         {SCAN_RANGE}yd of the landing",
                         guid.0
                     );
                     probe.passes += 1;
@@ -266,8 +266,9 @@ fn binder_probe(
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     warn!(
                         "PROBE_BINDER: SKIP (1 hop) — no entry {INNKEEPER_ENTRY}/innkeeper-flagged \
-                         unit streamed in within {SCAN_TIMEOUT_SECS}s of the hop (the `.go` may have \
-                         been refused, or Teldrassil never streamed) — environmental, not a defect"
+                         unit streamed in within {SCAN_TIMEOUT_SECS}s of the hop (the `.go` may \
+                         have been refused, or Teldrassil never streamed) — environmental, not a \
+                         defect"
                     );
                     probe.phase = Phase::Done;
                 }
@@ -320,8 +321,8 @@ fn binder_probe(
                 if pending && fired && !area.is_empty() {
                     info!(
                         "PROBE_BINDER: PASS (5 confirm) — SMSG_BINDER_CONFIRM parked on \
-                         {innkeeper:#x} and CONFIRM_BINDER fired with area {area:?} (the dialog reads \
-                         \"Do you want to make {area} your new home?\")"
+                         {innkeeper:#x} and CONFIRM_BINDER fired with area {area:?} (the dialog \
+                         reads \"Do you want to make {area} your new home?\")"
                     );
                     probe.passes += 1;
                     probe.phase = Phase::Accept {
@@ -332,9 +333,9 @@ fn binder_probe(
                     error!(
                         "PROBE_BINDER: FAIL (5 confirm) — no answered question within \
                          {CONFIRM_TIMEOUT_SECS}s of the select: BinderState pending={:?} (wanted \
-                         {innkeeper:#x}), CONFIRM_BINDER fired={fired}, arg1={area:?}. A packet with \
-                         no parse arm at all falls through to \
-                         ServerPacket::Other — that is what this reading looks like.",
+                         {innkeeper:#x}), CONFIRM_BINDER fired={fired}, arg1={area:?}. A packet \
+                         with no parse arm at all falls through to ServerPacket::Other — that is \
+                         what this reading looks like.",
                         binder.npc()
                     );
                     probe.fails += 1;
@@ -349,15 +350,15 @@ fn binder_probe(
                     home.0 = None;
                     if let Err(e) = script.run("ConfirmBinder()") {
                         warn!(
-                            "PROBE_BINDER: SKIP (6 bind) — ConfirmBinder() would not run in the live \
-                             VM: {e} (environmental, not a wire failure)"
+                            "PROBE_BINDER: SKIP (6 bind) — ConfirmBinder() would not run in the \
+                             live VM: {e} (environmental, not a wire failure)"
                         );
                         probe.phase = Phase::Done;
                         return;
                     }
                     info!(
-                        "PROBE_BINDER: (6 bind) ConfirmBinder() run in the live VM — HomeBind cleared \
-                         from {:?}, waiting for a fresh SMSG_BINDPOINTUPDATE",
+                        "PROBE_BINDER: (6 bind) ConfirmBinder() run in the live VM — HomeBind \
+                         cleared from {:?}, waiting for a fresh SMSG_BINDPOINTUPDATE",
                         probe.baseline_area
                     );
                     probe.phase = Phase::Accept {
@@ -374,8 +375,8 @@ fn binder_probe(
                 let vm = vm_bind_location(script);
                 if !name.is_empty() && vm == name {
                     info!(
-                        "PROBE_BINDER: PASS (6 bind) — HomeBind repopulated to area {:?} = {name:?} \
-                         (was {:?}), and the VM's GetBindLocation() agrees: {vm:?}",
+                        "PROBE_BINDER: PASS (6 bind) — HomeBind repopulated to area {:?} = \
+                         {name:?} (was {:?}), and the VM's GetBindLocation() agrees: {vm:?}",
                         home.0, probe.baseline_area
                     );
                     probe.passes += 1;
@@ -384,8 +385,8 @@ fn binder_probe(
                 } else if now - since > BIND_TIMEOUT_SECS {
                     error!(
                         "PROBE_BINDER: FAIL (6 bind) — the hearthstone did not take within \
-                         {BIND_TIMEOUT_SECS}s of ConfirmBinder(): HomeBind={:?} AreaTable name={name:?} \
-                         GetBindLocation()={vm:?} (was area {:?} before the clear)",
+                         {BIND_TIMEOUT_SECS}s of ConfirmBinder(): HomeBind={:?} AreaTable \
+                         name={name:?} GetBindLocation()={vm:?} (was area {:?} before the clear)",
                         home.0, probe.baseline_area
                     );
                     probe.fails += 1;
@@ -403,8 +404,8 @@ fn binder_probe(
                     probe.phase = Phase::Done;
                 } else if now - since > LINE_TIMEOUT_SECS {
                     error!(
-                        "PROBE_BINDER: FAIL (7 line) — no {want:?} within {LINE_TIMEOUT_SECS}s of the \
-                         bind; CHAT_MSG_SYSTEM lines seen: {lines:?}"
+                        "PROBE_BINDER: FAIL (7 line) — no {want:?} within {LINE_TIMEOUT_SECS}s of \
+                         the bind; CHAT_MSG_SYSTEM lines seen: {lines:?}"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -429,7 +430,7 @@ fn binder_probe(
                 });
             }
         }
-})
+    })
 }
 
 /// Steps 3 and 4: the bind row's icon, then the click. Sets `probe.phase` on every path.

@@ -224,7 +224,12 @@ fn book_probe(
         let now = time.elapsed_secs_f64();
         let sample = Sample {
             convert: cost.convert,
-            total: cost.tick + cost.resolve + cost.measure + cost.extract + cost.convert + cost.diff,
+            total: cost.tick
+                + cost.resolve
+                + cost.measure
+                + cost.extract
+                + cost.convert
+                + cost.diff,
             skipped: cost.skipped,
         };
         let phase = probe.phase;
@@ -234,7 +239,10 @@ fn book_probe(
                 // Arm the pass's per-phase split for this run.
                 wanted.0 = true;
                 let [x, y, z] = PLAQUE_AT;
-                info!("PROBE_BOOK: heading to the Old Town plaque ({x} {y} {z}) — GameObject type 9, page_text 2676");
+                info!(
+                    "PROBE_BOOK: heading to the Old Town plaque ({x} {y} {z}) — GameObject type \
+                       9, page_text 2676"
+                );
                 let _ = net.0.send(ClientCommand::Chat {
                     kind: ChatKind::Say,
                     target: None,
@@ -255,13 +263,17 @@ fn book_probe(
                 });
                 if let Some((guid, ..)) = plaque {
                     info!(
-                        "PROBE_BOOK: plaque {:#x} in range — sampling {SAMPLE_FRAMES} frames with the reader CLOSED",
+                        "PROBE_BOOK: plaque {:#x} in range — sampling {SAMPLE_FRAMES} frames with \
+                         the reader CLOSED",
                         guid.0
                     );
                     probe.plaque = Some(guid.0);
                     probe.phase = Phase::Closed;
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                    error!("PROBE_BOOK: FAIL — no type-9 GameObject streamed in within {SCAN_TIMEOUT_SECS}s");
+                    error!(
+                        "PROBE_BOOK: FAIL — no type-9 GameObject streamed in within \
+                            {SCAN_TIMEOUT_SECS}s"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                 }
@@ -270,7 +282,10 @@ fn book_probe(
                 probe.closed.push(sample);
                 if probe.closed.len() >= SAMPLE_FRAMES {
                     let guid = probe.plaque.unwrap_or_default();
-                    info!("PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own route — `ItemTextOpen::read_pages`)");
+                    info!(
+                        "PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own \
+                           route — `ItemTextOpen::read_pages`)"
+                    );
                     reader.read_pages(guid);
                     probe.phase = Phase::WaitReady { since: now };
                 }
@@ -280,10 +295,16 @@ fn book_probe(
                 if shown && chars > 0 {
                     probe.page_chars = chars;
                     probe.fails += report_render(script);
-                    info!("PROBE_BOOK: reader painted a {chars}-char body — sampling {SAMPLE_FRAMES} frames with it OPEN");
+                    info!(
+                        "PROBE_BOOK: reader painted a {chars}-char body — sampling \
+                           {SAMPLE_FRAMES} frames with it OPEN"
+                    );
                     probe.phase = Phase::Open;
                 } else if now - since > READY_TIMEOUT_SECS {
-                    error!("PROBE_BOOK: FAIL — reader never painted a page within {READY_TIMEOUT_SECS}s (shown={shown} chars={chars})");
+                    error!(
+                        "PROBE_BOOK: FAIL — reader never painted a page within \
+                            {READY_TIMEOUT_SECS}s (shown={shown} chars={chars})"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                 }
@@ -303,9 +324,11 @@ fn book_probe(
                 report("OPEN", &probe.open);
                 let (closed_mean, ..) =
                     stats(&probe.closed.iter().map(|s| s.convert).collect::<Vec<_>>());
-                let (open_mean, ..) = stats(&probe.open.iter().map(|s| s.convert).collect::<Vec<_>>());
+                let (open_mean, ..) =
+                    stats(&probe.open.iter().map(|s| s.convert).collect::<Vec<_>>());
                 info!(
-                    "PROBE_BOOK: DONE page={} chars, reader costs {:+.0}us/frame in the paint pass fail={}",
+                    "PROBE_BOOK: DONE page={} chars, reader costs {:+.0}us/frame in the paint pass \
+                     fail={}",
                     probe.page_chars,
                     open_mean - closed_mean,
                     probe.fails
@@ -319,5 +342,5 @@ fn book_probe(
                 });
             }
         }
-})
+    })
 }

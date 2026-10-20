@@ -198,7 +198,10 @@ fn mail_probe(
             Phase::Wait => {
                 probe.char_name = std::env::var("WOW_CHAR").unwrap_or_default();
                 if probe.char_name.is_empty() {
-                    error!("PROBE_MAIL: FAIL — WOW_CHAR is unset; nothing to GM-mail or self-send to");
+                    error!(
+                        "PROBE_MAIL: FAIL — WOW_CHAR is unset; nothing to GM-mail or self-send \
+                            to"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                     return;
@@ -221,13 +224,19 @@ fn mail_probe(
                     error!("PROBE_MAIL: installing the UI_ERROR_MESSAGE hook: {e}");
                 }
                 let name = &probe.char_name;
-                info!("PROBE_MAIL: GM-mailing {name} (plain letter, money, item) then heading to the Goldshire mailbox");
+                info!(
+                    "PROBE_MAIL: GM-mailing {name} (plain letter, money, item) then heading to \
+                       the Goldshire mailbox"
+                );
                 // The three GM sends and the teleport, as plain Say lines.
                 let [x, y, z] = MAILBOX_AT;
                 for text in [
                     format!(".send mail {name} \"probe letter\" \"hello\""),
                     format!(".send money {name} \"probe money\" \"here is money\" {MONEY_COPPER}"),
-                    format!(".send items {name} \"probe items\" \"here are items\" {ITEM_ENTRY}:{ITEM_COUNT}"),
+                    format!(
+                        ".send items {name} \"probe items\" \"here are items\" \
+                             {ITEM_ENTRY}:{ITEM_COUNT}"
+                    ),
                     format!(".go xyz {x} {y} {z} 0"),
                 ] {
                     let _ = net.0.send(ClientCommand::Chat {
@@ -260,7 +269,10 @@ fn mail_probe(
                     });
                     probe.phase = Phase::WaitList { clicked_at: now };
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                    error!("PROBE_MAIL: FAIL (a) — no type-19 GameObject streamed in within {SCAN_TIMEOUT_SECS}s of the mailbox spawn");
+                    error!(
+                        "PROBE_MAIL: FAIL (a) — no type-19 GameObject streamed in within \
+                            {SCAN_TIMEOUT_SECS}s of the mailbox spawn"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                 }
@@ -297,14 +309,20 @@ fn mail_probe(
                     probe.passes += 1;
                     probe.phase = Phase::OpenLetter;
                 } else if now - clicked_at > LIST_TIMEOUT_SECS {
-                    error!("PROBE_MAIL: FAIL (a) — no SMSG_MAIL_LIST_RESULT within {LIST_TIMEOUT_SECS}s of the click");
+                    error!(
+                        "PROBE_MAIL: FAIL (a) — no SMSG_MAIL_LIST_RESULT within \
+                            {LIST_TIMEOUT_SECS}s of the click"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                 }
             }
             Phase::OpenLetter => {
                 let Some(letter_id) = find_by(&mail, |e| e.item.is_none() && e.money == 0) else {
-                    error!("PROBE_MAIL: FAIL (b) — no plain-letter row found (the `.send mail` GM send should always land one)");
+                    error!(
+                        "PROBE_MAIL: FAIL (b) — no plain-letter row found (the `.send mail` GM \
+                            send should always land one)"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                     return;
@@ -315,13 +333,19 @@ fn mail_probe(
                 };
                 // `CheckInbox()` twice: `0x4aeab0` throttles it to once per 60 s, so the re-call is
                 // a no-op.
-                if let Err(e) = script.run(&format!("CheckInbox() CheckInbox() GetInboxText({idx})")) {
+                if let Err(e) = script.run(&format!(
+                    "CheckInbox() CheckInbox() \
+                                                     GetInboxText({idx})"
+                )) {
                     error!("PROBE_MAIL: FAIL (b) — GetInboxText({idx}) errored: {e}");
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                     return;
                 }
-                info!("PROBE_MAIL: (b) opened letter row {idx} (message {letter_id}) — mark-read + ask-once body queued");
+                info!(
+                    "PROBE_MAIL: (b) opened letter row {idx} (message {letter_id}) — mark-read + \
+                       ask-once body queued"
+                );
                 probe.phase = Phase::WaitBody { since: now };
             }
             Phase::WaitBody { since } => {
@@ -344,7 +368,8 @@ fn mail_probe(
                     };
                 } else if now - since > BODY_TIMEOUT_SECS {
                     error!(
-                        "PROBE_MAIL: FAIL (b) — letter body never landed within {BODY_TIMEOUT_SECS}s"
+                        "PROBE_MAIL: FAIL (b) — letter body never landed within \
+                         {BODY_TIMEOUT_SECS}s"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::CopyLetter {
@@ -367,7 +392,10 @@ fn mail_probe(
                     sent,
                 ) {
                     (Some(true), false) => {
-                        warn!("PROBE_MAIL: SKIP (b2) — letter {letter_id} already COPIED (leftover of a prior run; the UI hides the letter button for it)");
+                        warn!(
+                            "PROBE_MAIL: SKIP (b2) — letter {letter_id} already COPIED (leftover \
+                               of a prior run; the UI hides the letter button for it)"
+                        );
                         probe.phase = Phase::ReadLetter {
                             since: now,
                             slot: None,
@@ -386,14 +414,20 @@ fn mail_probe(
                             };
                             return;
                         }
-                        info!("PROBE_MAIL: (b2) TakeInboxTextItem({idx}) sent (CMSG_MAIL_CREATE_TEXT_ITEM, message {letter_id})");
+                        info!(
+                            "PROBE_MAIL: (b2) TakeInboxTextItem({idx}) sent \
+                               (CMSG_MAIL_CREATE_TEXT_ITEM, message {letter_id})"
+                        );
                         probe.phase = Phase::CopyLetter {
                             since: now,
                             sent: true,
                         };
                     }
                     (Some(true), true) => {
-                        info!("PROBE_MAIL: PASS (b2) — letter {letter_id} re-synced COPIED (textCreated): the permanent copy landed");
+                        info!(
+                            "PROBE_MAIL: PASS (b2) — letter {letter_id} re-synced COPIED \
+                               (textCreated): the permanent copy landed"
+                        );
                         probe.passes += 1;
                         probe.phase = Phase::ReadLetter {
                             since: now,
@@ -402,7 +436,10 @@ fn mail_probe(
                     }
                     (Some(false), true) => {
                         if now - since > ACTION_TIMEOUT_SECS {
-                            error!("PROBE_MAIL: FAIL (b2) — letter {letter_id} never re-synced COPIED within {ACTION_TIMEOUT_SECS}s");
+                            error!(
+                                "PROBE_MAIL: FAIL (b2) — letter {letter_id} never re-synced \
+                                    COPIED within {ACTION_TIMEOUT_SECS}s"
+                            );
                             probe.fails += 1;
                             probe.phase = Phase::ReadLetter {
                                 since: now,
@@ -427,16 +464,22 @@ fn mail_probe(
                         // encoded bag*100+slot (-1 = not there yet).
                         let found = script
                             .eval::<i64>(
-                                "for bag=0,4 do local n=GetContainerNumSlots(bag) or 0 \
-                                 for slot=1,n do local link=GetContainerItemLink(bag,slot) \
-                                 if link and string.find(link,'item:8383',1,true) then return bag*100+slot end end end \
-                                 return -1",
+                                "for bag=0,4 do local n=GetContainerNumSlots(bag) or 0 for \
+                                 slot=1,n do local link=GetContainerItemLink(bag,slot) if link and \
+                                 string.find(link,'item:8383',1,true) then return bag*100+slot end \
+                                 end end return -1",
                             )
                             .unwrap_or(-1);
                         if found >= 0 {
                             let (bag, lslot) = (found / 100, found % 100);
-                            if let Err(e) = script.run(&format!("UseContainerItem({bag}, {lslot})")) {
-                                error!("PROBE_MAIL: FAIL (b3) — UseContainerItem({bag}, {lslot}) errored: {e}");
+                            if let Err(e) = script.run(&format!(
+                                "UseContainerItem({bag}, \
+                                                                 {lslot})"
+                            )) {
+                                error!(
+                                    "PROBE_MAIL: FAIL (b3) — UseContainerItem({bag}, {lslot}) \
+                                        errored: {e}"
+                                );
                                 probe.fails += 1;
                                 probe.phase = Phase::TakeMoney {
                                     since: now,
@@ -444,13 +487,19 @@ fn mail_probe(
                                 };
                                 return;
                             }
-                            info!("PROBE_MAIL: (b3) Plain Letter at bag {bag} slot {lslot} — right-clicked (the read route, no CMSG_USE_ITEM)");
+                            info!(
+                                "PROBE_MAIL: (b3) Plain Letter at bag {bag} slot {lslot} — \
+                                   right-clicked (the read route, no CMSG_USE_ITEM)"
+                            );
                             probe.phase = Phase::ReadLetter {
                                 since: now,
                                 slot: Some((bag, lslot)),
                             };
                         } else if now - since > ACTION_TIMEOUT_SECS {
-                            error!("PROBE_MAIL: FAIL (b3) — no Plain Letter (8383) in the bags within {ACTION_TIMEOUT_SECS}s of the copy");
+                            error!(
+                                "PROBE_MAIL: FAIL (b3) — no Plain Letter (8383) in the bags \
+                                    within {ACTION_TIMEOUT_SECS}s of the copy"
+                            );
                             probe.fails += 1;
                             probe.phase = Phase::TakeMoney {
                                 since: now,
@@ -461,12 +510,16 @@ fn mail_probe(
                     Some((bag, lslot)) => {
                         let painted = script
                             .eval::<bool>(
-                                "return ItemTextFrame:IsShown() \
-                                 and string.find(ItemTextPageText:GetText() or '', 'hello', 1, true) ~= nil",
+                                "return ItemTextFrame:IsShown() and \
+                                 string.find(ItemTextPageText:GetText() or '', 'hello', 1, true) \
+                                 ~= nil",
                             )
                             .unwrap_or(false);
                         if painted {
-                            info!("PROBE_MAIL: PASS (b3) — the reader painted the letter body (title/creator/text via ITEM_TEXT_BEGIN→READY)");
+                            info!(
+                                "PROBE_MAIL: PASS (b3) — the reader painted the letter body \
+                                   (title/creator/text via ITEM_TEXT_BEGIN→READY)"
+                            );
                             probe.passes += 1;
                             // Cleanup: close the reader, destroy the copy (else bags gain one per
                             // run).
@@ -480,7 +533,10 @@ fn mail_probe(
                                 taken: None,
                             };
                         } else if now - since > ACTION_TIMEOUT_SECS {
-                            error!("PROBE_MAIL: FAIL (b3) — the reader never painted the body within {ACTION_TIMEOUT_SECS}s of the click");
+                            error!(
+                                "PROBE_MAIL: FAIL (b3) — the reader never painted the body \
+                                    within {ACTION_TIMEOUT_SECS}s of the click"
+                            );
                             probe.fails += 1;
                             probe.phase = Phase::TakeMoney {
                                 since: now,
@@ -509,14 +565,22 @@ fn mail_probe(
                                 probe.phase = next;
                                 return;
                             }
-                            info!("PROBE_MAIL: (c) money row found (message {money_id}) — TakeInboxMoney({idx}) sent");
+                            info!(
+                                "PROBE_MAIL: (c) money row found (message {money_id}) — \
+                                   TakeInboxMoney({idx}) sent"
+                            );
                             probe.phase = Phase::TakeMoney {
                                 since: now,
                                 taken: Some(money_id),
                             };
                         }
                         None if now - since > ROW_GRACE_SECS => {
-                            error!("PROBE_MAIL: FAIL (c) — no money row within {ROW_GRACE_SECS}s. Probe accounts are gmlevel 6, so `.send money` (SEC_ADMINISTRATOR 6) should have landed one — check the `net: server says` lines for the GM send's own answer");
+                            error!(
+                                "PROBE_MAIL: FAIL (c) — no money row within {ROW_GRACE_SECS}s. \
+                                    Probe accounts are gmlevel 6, so `.send money` \
+                                    (SEC_ADMINISTRATOR 6) should have landed one — check the `net: \
+                                    server says` lines for the GM send's own answer"
+                            );
                             probe.fails += 1;
                             probe.phase = next;
                         }
@@ -536,7 +600,10 @@ fn mail_probe(
                             probe.passes += 1;
                             probe.phase = next;
                         } else if now - since > ACTION_TIMEOUT_SECS {
-                            error!("PROBE_MAIL: FAIL (c) — money row {money_id} never re-synced to 0 within {ACTION_TIMEOUT_SECS}s");
+                            error!(
+                                "PROBE_MAIL: FAIL (c) — money row {money_id} never re-synced to \
+                                    0 within {ACTION_TIMEOUT_SECS}s"
+                            );
                             probe.fails += 1;
                             probe.phase = next;
                         }
@@ -561,14 +628,22 @@ fn mail_probe(
                                 probe.phase = next;
                                 return;
                             }
-                            info!("PROBE_MAIL: (d) item row found (message {item_id}) — TakeInboxItem({idx}) sent");
+                            info!(
+                                "PROBE_MAIL: (d) item row found (message {item_id}) — \
+                                   TakeInboxItem({idx}) sent"
+                            );
                             probe.phase = Phase::TakeItem {
                                 since: now,
                                 taken: Some(item_id),
                             };
                         }
                         None if now - since > ROW_GRACE_SECS => {
-                            error!("PROBE_MAIL: FAIL (d) — no item row within {ROW_GRACE_SECS}s. Probe accounts are gmlevel 6, so `.send items` (SEC_ADMINISTRATOR 6) should have landed one — check the `net: server says` lines for the GM send's own answer");
+                            error!(
+                                "PROBE_MAIL: FAIL (d) — no item row within {ROW_GRACE_SECS}s. \
+                                    Probe accounts are gmlevel 6, so `.send items` \
+                                    (SEC_ADMINISTRATOR 6) should have landed one — check the `net: \
+                                    server says` lines for the GM send's own answer"
+                            );
                             probe.fails += 1;
                             probe.phase = next;
                         }
@@ -577,11 +652,17 @@ fn mail_probe(
                     Some(item_id) => {
                         let has_item = entry_of(&mail, item_id).map(|e| e.item.is_some());
                         if matches!(has_item, Some(false) | None) {
-                            info!("PROBE_MAIL: PASS (d) — item row {item_id} taken (item attachment cleared)");
+                            info!(
+                                "PROBE_MAIL: PASS (d) — item row {item_id} taken (item \
+                                   attachment cleared)"
+                            );
                             probe.passes += 1;
                             probe.phase = next;
                         } else if now - since > ACTION_TIMEOUT_SECS {
-                            error!("PROBE_MAIL: FAIL (d) — item row {item_id} never re-synced within {ACTION_TIMEOUT_SECS}s");
+                            error!(
+                                "PROBE_MAIL: FAIL (d) — item row {item_id} never re-synced \
+                                    within {ACTION_TIMEOUT_SECS}s"
+                            );
                             probe.fails += 1;
                             probe.phase = next;
                         }
@@ -607,7 +688,10 @@ fn mail_probe(
                         };
                         return;
                     }
-                    info!("PROBE_MAIL: (e) SendMail('{name}', …) sent — expecting CANNOT_SEND_TO_SELF");
+                    info!(
+                        "PROBE_MAIL: (e) SendMail('{name}', …) sent — expecting \
+                           CANNOT_SEND_TO_SELF"
+                    );
                     probe.phase = Phase::SendSelf {
                         since: now,
                         sent: true,
@@ -622,7 +706,10 @@ fn mail_probe(
                         info!("PROBE_MAIL: PASS (e) — surfaced error: {text:?}");
                         probe.passes += 1;
                     } else {
-                        error!("PROBE_MAIL: FAIL (e) — unexpected surfaced text: {text:?} (wanted \"yourself\")");
+                        error!(
+                            "PROBE_MAIL: FAIL (e) — unexpected surfaced text: {text:?} (wanted \
+                                \"yourself\")"
+                        );
                         probe.fails += 1;
                     }
                     probe.phase = Phase::SendBad {
@@ -631,7 +718,10 @@ fn mail_probe(
                         baseline: events_len(script),
                     };
                 } else if now - since > ACTION_TIMEOUT_SECS {
-                    error!("PROBE_MAIL: FAIL (e) — no UI_ERROR_MESSAGE observed within {ACTION_TIMEOUT_SECS}s");
+                    error!(
+                        "PROBE_MAIL: FAIL (e) — no UI_ERROR_MESSAGE observed within \
+                            {ACTION_TIMEOUT_SECS}s"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::SendBad {
                         since: now,
@@ -646,9 +736,10 @@ fn mail_probe(
                 baseline,
             } => {
                 if !sent {
-                    if let Err(e) =
-                        script.run("SendMail('Zzznonexistent', 'probe bad-send', 'this should refuse')")
-                    {
+                    if let Err(e) = script.run(
+                        "SendMail('Zzznonexistent', 'probe bad-send', 'this should \
+                                    refuse')",
+                    ) {
                         error!("PROBE_MAIL: FAIL (f) — SendMail(nonexistent) errored: {e}");
                         probe.fails += 1;
                         probe.phase = Phase::DeleteLetter {
@@ -657,7 +748,10 @@ fn mail_probe(
                         };
                         return;
                     }
-                    info!("PROBE_MAIL: (f) SendMail('Zzznonexistent', …) sent — expecting RECIPIENT_NOT_FOUND");
+                    info!(
+                        "PROBE_MAIL: (f) SendMail('Zzznonexistent', …) sent — expecting \
+                           RECIPIENT_NOT_FOUND"
+                    );
                     probe.phase = Phase::SendBad {
                         since: now,
                         sent: true,
@@ -672,7 +766,10 @@ fn mail_probe(
                         info!("PROBE_MAIL: PASS (f) — surfaced error: {text:?}");
                         probe.passes += 1;
                     } else {
-                        error!("PROBE_MAIL: FAIL (f) — unexpected surfaced text: {text:?} (wanted \"recipient\")");
+                        error!(
+                            "PROBE_MAIL: FAIL (f) — unexpected surfaced text: {text:?} (wanted \
+                                \"recipient\")"
+                        );
                         probe.fails += 1;
                     }
                     probe.phase = Phase::DeleteLetter {
@@ -680,7 +777,10 @@ fn mail_probe(
                         sent: false,
                     };
                 } else if now - since > ACTION_TIMEOUT_SECS {
-                    error!("PROBE_MAIL: FAIL (f) — no UI_ERROR_MESSAGE observed within {ACTION_TIMEOUT_SECS}s");
+                    error!(
+                        "PROBE_MAIL: FAIL (f) — no UI_ERROR_MESSAGE observed within \
+                            {ACTION_TIMEOUT_SECS}s"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::DeleteLetter {
                         since: now,
@@ -695,7 +795,10 @@ fn mail_probe(
                 };
                 if !sent {
                     let Some(idx) = index_of(&mail, letter_id) else {
-                        error!("PROBE_MAIL: FAIL (g) — the read letter (message {letter_id}) is already gone");
+                        error!(
+                            "PROBE_MAIL: FAIL (g) — the read letter (message {letter_id}) is \
+                                already gone"
+                        );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
                         return;
@@ -714,11 +817,17 @@ fn mail_probe(
                     return;
                 }
                 if index_of(&mail, letter_id).is_none() {
-                    info!("PROBE_MAIL: PASS (g) — DELETED OK (message {letter_id} gone from the list)");
+                    info!(
+                        "PROBE_MAIL: PASS (g) — DELETED OK (message {letter_id} gone from the \
+                           list)"
+                    );
                     probe.passes += 1;
                     probe.phase = Phase::Done;
                 } else if now - since > ACTION_TIMEOUT_SECS {
-                    error!("PROBE_MAIL: FAIL (g) — message {letter_id} still listed {ACTION_TIMEOUT_SECS}s after delete");
+                    error!(
+                        "PROBE_MAIL: FAIL (g) — message {letter_id} still listed \
+                            {ACTION_TIMEOUT_SECS}s after delete"
+                    );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
                 }
@@ -742,5 +851,5 @@ fn mail_probe(
                 });
             }
         }
-})
+    })
 }

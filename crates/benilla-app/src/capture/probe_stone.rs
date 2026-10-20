@@ -275,14 +275,15 @@ fn stone_probe(
                         probe.phase = Phase::WaitQueue { since: now };
                     } else {
                         info!(
-                            "PROBE_STONE: level {level} — clicking BELOW the band; nothing may go out"
+                            "PROBE_STONE: level {level} — clicking BELOW the band; nothing may go \
+                             out"
                         );
                         probe.phase = Phase::Refused { since: now };
                     }
                 } else if now - since > LEVEL_TIMEOUT_SECS {
                     error!(
-                        "PROBE_STONE: FAIL — `.character level {want}` never took (still {level}) in \
-                         {LEVEL_TIMEOUT_SECS}s. Check the account's GM level: the command needs \
+                        "PROBE_STONE: FAIL — `.character level {want}` never took (still {level}) \
+                         in {LEVEL_TIMEOUT_SECS}s. Check the account's GM level: the command needs \
                          SEC_DEVELOPER 5 and a probe account is 6"
                     );
                     probe.fails += 1;
@@ -324,9 +325,10 @@ fn stone_probe(
                     probe.phase = Phase::Joined;
                 } else if now - since > QUEUE_TIMEOUT_SECS {
                     error!(
-                        "PROBE_STONE: FAIL — no SMSG 0x295 within {QUEUE_TIMEOUT_SECS}s of the join. \
-                         Either CMSG 0x292 never left, or the server refused it (it re-checks leader / \
-                         raid / full and interact distance, never the level band)"
+                        "PROBE_STONE: FAIL — no SMSG 0x295 within {QUEUE_TIMEOUT_SECS}s of the \
+                         join. Either CMSG 0x292 never left, or the server refused it (it \
+                         re-checks leader / raid / full and interact distance, never the level \
+                         band)"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -383,7 +385,8 @@ fn stone_probe(
                 }
                 probe.exited = true;
                 info!(
-                    "PROBE_STONE: DONE stone={:#x} band={:?} area={} icon={} darkened={} text={:?} fail={}",
+                    "PROBE_STONE: DONE stone={:#x} band={:?} area={} icon={} darkened={} text={:?} \
+                     fail={}",
                     probe.stone.unwrap_or_default(),
                     probe.tmpl.map(|t| (t.min_level, t.max_level)),
                     probe.joined_area,
@@ -400,5 +403,5 @@ fn stone_probe(
                 });
             }
         }
-})
+    })
 }

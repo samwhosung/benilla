@@ -208,7 +208,10 @@ fn watch_skill_ups(
                                         &[Arg::S(&name), Arg::D(i64::from(value))],
                                     );
                                 } else {
-                                    debug!("chat: skill-up silenced ({name} {old}→{value}, the 0x402 gate)");
+                                    debug!(
+                                        "chat: skill-up silenced ({name} {old}→{value}, the \
+                                            0x402 gate)"
+                                    );
                                 }
                             }
                         }
@@ -217,10 +220,16 @@ fn watch_skill_ups(
                             if let Some(name) = name() {
                                 if announces() {
                                     debug!("chat: skill-gain announced ({name} at {value})");
-                                    skill_line(script, &chat, "ERR_SKILL_GAINED_S", &[Arg::S(&name)]);
+                                    skill_line(
+                                        script,
+                                        &chat,
+                                        "ERR_SKILL_GAINED_S",
+                                        &[Arg::S(&name)],
+                                    );
                                 } else {
                                     debug!(
-                                        "chat: skill-gain silenced ({name} at {value}, the 0x402 gate)"
+                                        "chat: skill-gain silenced ({name} at {value}, the 0x402 \
+                                         gate)"
                                     );
                                 }
                             }
@@ -232,7 +241,7 @@ fn watch_skill_ups(
                 *prev = Some((guid, cur));
             }
         }
-})
+    })
 }
 
 /// The skills-pane feed: every `PLAYER_SKILL_INFO` line the reference lists, as a flat

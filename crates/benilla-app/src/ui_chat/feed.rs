@@ -1036,7 +1036,8 @@ pub(super) fn feed_chat(
                             || names.resolve_unit(subject_guid, None, Ask::Read).is_some()
                         {
                             debug!(
-                                "chat: dropping unexpandable [{:#04x}] {:?} (subject {subject_guid:#x})",
+                                "chat: dropping unexpandable [{:#04x}] {:?} (subject \
+                                 {subject_guid:#x})",
                                 msg.chat_type, msg.text
                             );
                             return; // the reference prints no line

@@ -261,7 +261,8 @@ fn rebind_macro_spells(
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
 
-        let (macros, book, pet_book) = (script.macros(), script.spellbook(), script.pet_spellbook());
+        let (macros, book, pet_book) =
+            (script.macros(), script.spellbook(), script.pet_spellbook());
         let mut fresh = std::collections::HashMap::new();
         for m in macros.views() {
             // The records are new on a VM's first pass, with no book selector to keep.
@@ -278,8 +279,8 @@ fn rebind_macro_spells(
             };
             fresh.insert(m.id, next);
         }
-        // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
-        // it.
+        // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM
+        // has it.
         script.set_macro_bindings(
             fresh
                 .iter()

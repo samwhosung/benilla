@@ -215,16 +215,18 @@ fn chest_probe(
                 });
                 if let Some((guid, ..)) = chest {
                     info!(
-                        "PROBE_CHEST: chest {:#x} in range — sampling {SAMPLE_FRAMES} frames with it SHUT",
+                        "PROBE_CHEST: chest {:#x} in range — sampling {SAMPLE_FRAMES} frames with \
+                         it SHUT",
                         guid.0
                     );
                     probe.chest = Some(guid.0);
                     probe.phase = Phase::Before;
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     error!(
-                        "PROBE_CHEST: FAIL — no type-{GO_TYPE_CHEST} GameObject within {SCAN_RANGE} yd \
-                         in {SCAN_TIMEOUT_SECS}s. A chest is a respawning spawn point: if it was looted \
-                         recently it is simply not there yet. This is NOT a passing run"
+                        "PROBE_CHEST: FAIL — no type-{GO_TYPE_CHEST} GameObject within \
+                         {SCAN_RANGE} yd in {SCAN_TIMEOUT_SECS}s. A chest is a respawning spawn \
+                         point: if it was looted recently it is simply not there yet. This is NOT \
+                         a passing run"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -259,8 +261,8 @@ fn chest_probe(
                     }
                     GoAction::OpenByKey { .. } | GoAction::Refuse(_) => {
                         error!(
-                            "PROBE_CHEST: FAIL — the lock chain refuses this object (key/unmet). Aim \
-                             the probe at a chest this character can actually open"
+                            "PROBE_CHEST: FAIL — the lock chain refuses this object (key/unmet). \
+                             Aim the probe at a chest this character can actually open"
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
@@ -272,14 +274,15 @@ fn chest_probe(
             Phase::WaitLoot { since } => {
                 if window_open(script, &loot) {
                     info!(
-                        "PROBE_CHEST: loot window up on {:#x} — sampling {SAMPLE_FRAMES} frames OPEN",
+                        "PROBE_CHEST: loot window up on {:#x} — sampling {SAMPLE_FRAMES} frames \
+                         OPEN",
                         loot.source().unwrap_or_default()
                     );
                     probe.phase = Phase::Open;
                 } else if now - since > LOOT_TIMEOUT_SECS {
                     error!(
-                        "PROBE_CHEST: FAIL — no loot window within {LOOT_TIMEOUT_SECS}s of the use; \
-                         the anim question can't be asked at all"
+                        "PROBE_CHEST: FAIL — no loot window within {LOOT_TIMEOUT_SECS}s of the \
+                         use; the anim question can't be asked at all"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -301,7 +304,8 @@ fn chest_probe(
                     probe.phase = Phase::After;
                 } else if now - since > CLOSE_TIMEOUT_SECS {
                     error!(
-                        "PROBE_CHEST: FAIL — the loot window never closed within {CLOSE_TIMEOUT_SECS}s"
+                        "PROBE_CHEST: FAIL — the loot window never closed within \
+                         {CLOSE_TIMEOUT_SECS}s"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -323,7 +327,8 @@ fn chest_probe(
                 fails += report("OPEN", ANIM_LOOT, &probe.open);
                 fails += report("AFTER", ANIM_STAND, &probe.after);
                 info!(
-                    "PROBE_CHEST: DONE chest={:#x} latch-while-open={:?} kneel-while-open={} fail={fails}",
+                    "PROBE_CHEST: DONE chest={:#x} latch-while-open={:?} kneel-while-open={} \
+                     fail={fails}",
                     probe.chest.unwrap_or_default(),
                     probe.latch_open.map(|g| format!("{g:#x}")),
                     probe.kneel_open,
@@ -337,5 +342,5 @@ fn chest_probe(
                 });
             }
         }
-})
+    })
 }

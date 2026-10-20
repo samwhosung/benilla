@@ -817,7 +817,8 @@ fn resignal_trade_items(
                     let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
                         continue;
                     };
-                    info!(target: "trade", "item {guid:#x} gone from slot {}; sending CMSG_CLEAR_TRADE_ITEM", slot + 1);
+                    info!(target: "trade", "item {guid:#x} gone from slot {}; sending \
+                                            CMSG_CLEAR_TRADE_ITEM", slot + 1);
                     trade.send_edit(
                         &commands,
                         ClientCommand::ClearTradeItem { trade_slot: slot },
@@ -842,7 +843,8 @@ fn resignal_trade_items(
                     ) else {
                         continue;
                     };
-                    info!(target: "trade", "item {guid:#x} in slot {} changed; sending CMSG_SET_TRADE_ITEM", slot + 1);
+                    info!(target: "trade", "item {guid:#x} in slot {} changed; sending \
+                                            CMSG_SET_TRADE_ITEM", slot + 1);
                     trade.send_edit(
                         &commands,
                         ClientCommand::SetTradeItem {
@@ -856,7 +858,7 @@ fn resignal_trade_items(
                 }
             }
         }
-})
+    })
 }
 
 /// Push the trade into the VM and fire its events on a change, diffed against `Local` memory;
@@ -920,7 +922,8 @@ fn feed_trade(
         };
         if changed {
             let mut pushed = fresh.clone();
-            if let (Some(p), Some(held), Some(_)) = (pushed.as_mut(), held_player.as_ref(), &*last) {
+            if let (Some(p), Some(held), Some(_)) = (pushed.as_mut(), held_player.as_ref(), &*last)
+            {
                 for (i, slot) in p.player.slots.iter_mut().enumerate() {
                     if !source_moved(i) {
                         *slot = held[i].clone();
@@ -948,15 +951,15 @@ fn feed_trade(
                 // landing repaints through `TRADE_UPDATE` and signals no slot.
                 let record =
                     |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count, s.lock_id));
-                let changed_slots = |mine: &[Option<TradeSlotItem>],
-                                     theirs: &[Option<TradeSlotItem>]| {
-                    mine.iter()
-                        .zip(theirs.iter())
-                        .enumerate()
-                        .filter(|(_, (a, b))| record(a) != record(b))
-                        .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
-                        .collect::<Vec<_>>()
-                };
+                let changed_slots =
+                    |mine: &[Option<TradeSlotItem>], theirs: &[Option<TradeSlotItem>]| {
+                        mine.iter()
+                            .zip(theirs.iter())
+                            .enumerate()
+                            .filter(|(_, (a, b))| record(a) != record(b))
+                            .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
+                            .collect::<Vec<_>>()
+                    };
                 // A moved source fires only where it differs from the VM's column by the item each
                 // slot holds, so the store catching up with a click, its richer row included, is no
                 // change.
@@ -970,9 +973,9 @@ fn feed_trade(
                     .enumerate()
                     .filter(|(i, (a, b))| source_moved(*i) && item(a) != item(b))
                     .map(|(i, _)| ScriptValue::Int(i as i64 + 1));
+                let was_invalidated = |n: i64| invalidated.iter().any(|&i| i64::from(i) + 1 == n);
                 for slot in player_changed {
-                    if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
-                    {
+                    if matches!(slot, ScriptValue::Int(n) if was_invalidated(n)) {
                         continue;
                     }
                     script.fire_event("TRADE_PLAYER_ITEM_CHANGED", vec![slot]);
@@ -1060,7 +1063,7 @@ fn feed_trade(
 
         *last = fresh;
         *last_open = trade.is_open();
-})
+    })
 }
 
 /// `TRADE_UPDATE`, whose one producer is the callback `0x4c0340` (`0x4c034f`) that the item

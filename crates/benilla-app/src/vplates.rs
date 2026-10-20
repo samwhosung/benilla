@@ -460,9 +460,12 @@ fn drive_vplates(
                 &anchor_q.3,
                 &anchor_q.4,
             );
-            let Some(screen) =
-                crate::ui_pass::project_overlay(cam, &cam_tf, anchor + Vec3::Y * PLATE_LIFT, viewport)
-            else {
+            let Some(screen) = crate::ui_pass::project_overlay(
+                cam,
+                &cam_tf,
+                anchor + Vec3::Y * PLATE_LIFT,
+                viewport,
+            ) else {
                 continue;
             };
             cands.push((
@@ -488,7 +491,8 @@ fn drive_vplates(
             let tint = plate_tint(rank, is_player);
             // `WOW_VPLATE_TRACE=1` prints each plate rect in logical px.
             static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            let trace = *TRACE.get_or_init(|| std::env::var("WOW_VPLATE_TRACE").as_deref() == Ok("1"));
+            let trace =
+                *TRACE.get_or_init(|| std::env::var("WOW_VPLATE_TRACE").as_deref() == Ok("1"));
             // The seat (`0x509ec0`): the plate hangs from its top centre on the projected point, is
             // solved off the plates already claimed, then clamped half a plate inside the screen.
             let desired = Rect::new(
@@ -511,7 +515,8 @@ fn drive_vplates(
                     "vpl",
                     &format!(
                         "e={} vp=({:.0},{:.0}) anchor=[{:.4},{:.4},{:.4}] cam=[{:.4},{:.4},{:.4}] \
-                         fwd=[{:.4},{:.4},{:.4}] scr=({:.3},{:.3}) solved=({:.3},{:.3}) plate=({:.1},{:.1})",
+                         fwd=[{:.4},{:.4},{:.4}] scr=({:.3},{:.3}) solved=({:.3},{:.3}) \
+                         plate=({:.1},{:.1})",
                         entity.index(),
                         viewport.x,
                         viewport.y,
@@ -537,11 +542,13 @@ fn drive_vplates(
             let hover = hovered_key == Some(guid.0);
             // The mouseover or the target lights the bar; `hover` joins directly so the brighten
             // does not lag the yellow name by the frame the mouseover takes to publish.
-            let lit =
-                hover || world.hovered.target == Some(entity) || world.selection.target == Some(entity);
+            let lit = hover
+                || world.hovered.target == Some(entity)
+                || world.selection.target == Some(entity);
             if trace {
                 eprintln!(
-                    "vplate-trace: viewport={viewport:?} screen=({:.2},{:.2}) plate=({:.1},{:.1})..({:.1},{:.1}) lit={lit}",
+                    "vplate-trace: viewport={viewport:?} screen=({:.2},{:.2}) \
+                     plate=({:.1},{:.1})..({:.1},{:.1}) lit={lit}",
                     screen.x, screen.y, plate.min.x, plate.min.y, plate.max.x, plate.max.y
                 );
             }
@@ -628,7 +635,7 @@ fn drive_vplates(
             },
             &states,
         );
-})
+    })
 }
 
 /// The plate driver's set; the overhead-name driver runs after it.

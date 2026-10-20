@@ -233,8 +233,8 @@ fn bank_probe(
                     probe.phase = Phase::Activating { sent_at: now };
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     error!(
-                        "PROBE_BANK: FAIL (1 teleport) — no entry {BANKER_ENTRY}/banker-flagged unit \
-                         streamed in within {SCAN_TIMEOUT_SECS}s of the hop"
+                        "PROBE_BANK: FAIL (1 teleport) — no entry {BANKER_ENTRY}/banker-flagged \
+                         unit streamed in within {SCAN_TIMEOUT_SECS}s of the hop"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -242,7 +242,10 @@ fn bank_probe(
             }
             Phase::Activating { sent_at } => {
                 if open.is_open() {
-                    info!("PROBE_BANK: PASS (2 activate) — BankOpen is_open (SMSG_SHOW_BANK landed)");
+                    info!(
+                        "PROBE_BANK: PASS (2 activate) — BankOpen is_open (SMSG_SHOW_BANK \
+                           landed)"
+                    );
                     probe.passes += 1;
                     probe.phase = Phase::EnsureItem {
                         since: now,
@@ -286,8 +289,8 @@ fn bank_probe(
                     };
                 } else if now - since > ITEM_TIMEOUT_SECS {
                     error!(
-                        "PROBE_BANK: FAIL (3 deposit) — no pack item within {ITEM_TIMEOUT_SECS}s of \
-                         `.additem`"
+                        "PROBE_BANK: FAIL (3 deposit) — no pack item within {ITEM_TIMEOUT_SECS}s \
+                         of `.additem`"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -330,8 +333,8 @@ fn bank_probe(
                 let back_in_pack = find_pack_item(store).is_some_and(|(_, g)| g == item_guid);
                 if bank_empty && back_in_pack {
                     info!(
-                        "PROBE_BANK: PASS (4 withdraw) — {item_guid:#x} back in the pack, bank slot \
-                         {bank_idx} empty"
+                        "PROBE_BANK: PASS (4 withdraw) — {item_guid:#x} back in the pack, bank \
+                         slot {bank_idx} empty"
                     );
                     probe.passes += 1;
                     probe.phase = Phase::BuySlot {
@@ -341,8 +344,8 @@ fn bank_probe(
                     };
                 } else if now - since > ACTION_TIMEOUT_SECS {
                     error!(
-                        "PROBE_BANK: FAIL (4 withdraw) — {item_guid:#x} never round-tripped back to \
-                         the pack within {ACTION_TIMEOUT_SECS}s (bank_empty={bank_empty} \
+                        "PROBE_BANK: FAIL (4 withdraw) — {item_guid:#x} never round-tripped back \
+                         to the pack within {ACTION_TIMEOUT_SECS}s (bank_empty={bank_empty} \
                          back_in_pack={back_in_pack})"
                     );
                     probe.fails += 1;
@@ -387,14 +390,17 @@ fn bank_probe(
                         .unwrap_or(0);
                     probe.next_cost = cost;
                     info!(
-                        "PROBE_BANK: (5 buy_slot) baseline purchased={purchased} money={money}c next \
-                         rung costs {cost}c"
+                        "PROBE_BANK: (5 buy_slot) baseline purchased={purchased} money={money}c \
+                         next rung costs {cost}c"
                     );
                     if money < cost && !funded {
                         // Fund the rung and come back next tick; `.modify money <n>` adds `n`
                         // copper (vmangos `CharacterCommands.cpp:4477`).
                         let grant = cost - money + FUND_MARGIN_COPPER;
-                        info!("PROBE_BANK: (5 buy_slot) purse {money}c < {cost}c — granting {grant}c with `.modify money`");
+                        info!(
+                            "PROBE_BANK: (5 buy_slot) purse {money}c < {cost}c — granting \
+                               {grant}c with `.modify money`"
+                        );
                         let _ = net.0.send(ClientCommand::Chat {
                             kind: ChatKind::Say,
                             text: format!(".modify money {grant}"),
@@ -411,8 +417,8 @@ fn bank_probe(
                     if money < cost {
                         error!(
                             "PROBE_BANK: FAIL (5 buy_slot) — purse is still {money}c against a \
-                             {cost}c rung after `.modify money` — the grant did not land (check the \
-                             `net: server says` lines)"
+                             {cost}c rung after `.modify money` — the grant did not land (check \
+                             the `net: server says` lines)"
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Refusal {
@@ -479,8 +485,8 @@ fn bank_probe(
                     let [bx, by, bz] = BANKER_AT;
                     let x = bx + REFUSAL_OFFSET_X;
                     info!(
-                        "PROBE_BANK: (6 refusal, bonus) hopping {REFUSAL_OFFSET_X}yd out of range to \
-                         ({x}, {by}, {bz})"
+                        "PROBE_BANK: (6 refusal, bonus) hopping {REFUSAL_OFFSET_X}yd out of range \
+                         to ({x}, {by}, {bz})"
                     );
                     let _ = net.0.send(ClientCommand::Chat {
                         kind: ChatKind::Say,
@@ -553,5 +559,5 @@ fn bank_probe(
                 });
             }
         }
-})
+    })
 }

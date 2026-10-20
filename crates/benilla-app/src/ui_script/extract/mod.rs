@@ -730,7 +730,8 @@ pub(super) fn paint_script(
         // The focused editbox's per-byte advances, measured as it draws, for click and scroll.
         if let Some(atlas) = font_atlas.as_deref_mut() {
             if let Some(req) = script.editbox_advances_request() {
-                let (cum, rows, cell_h) = crate::ui_text::editbox_advances(&mut atlas.lock(), s, &req);
+                let (cum, rows, cell_h) =
+                    crate::ui_text::editbox_advances(&mut atlas.lock(), s, &req);
                 script.set_editbox_advances(req.id, req.key, cum, rows, cell_h);
             }
         }
@@ -1084,7 +1085,8 @@ pub(super) fn paint_script(
                     Some(i) => {
                         let (b, a) = (&quads.quads[i], &out[i]);
                         eprintln!(
-                            "[ui-diff-base] quad {i}/{n_quads}: tex={:?} rect {:?} -> {:?} uv_changed={} color_changed={}",
+                            "[ui-diff-base] quad {i}/{n_quads}: tex={:?} rect {:?} -> {:?} \
+                             uv_changed={} color_changed={}",
                             a.texture.as_ref().and_then(|t| t.path()),
                             b.rect,
                             a.rect,
@@ -1130,7 +1132,7 @@ pub(super) fn paint_script(
                 );
             }
         }
-})
+    })
 }
 
 /// One extracted entry to its screen quads, plus the side channels some arms write: link spans,

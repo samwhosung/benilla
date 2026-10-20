@@ -183,7 +183,8 @@ pub(super) fn drain_chat_input(
     table: Res<super::commands::SlashCommands>,
     probes: ChatProbes,
 ) {
-    vm.turn(|script, (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out)| {
+    vm.turn(|script, parts| {
+        let (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out) = parts;
         let ChatProbes {
             camera: world_camera,
             clock,
@@ -265,7 +266,8 @@ pub(super) fn drain_chat_input(
                     };
                     let (_, rot, eye_bevy) = cam.to_scale_rotation_translation();
                     let eye = benilla_assets::coords::bevy_to_wow(eye_bevy);
-                    let look = benilla_assets::coords::bevy_to_wow(eye_bevy + rot * Vec3::NEG_Z * 50.0);
+                    let look =
+                        benilla_assets::coords::bevy_to_wow(eye_bevy + rot * Vec3::NEG_Z * 50.0);
                     let minute = clock.as_deref().map(|c| c.minute).unwrap_or(720);
                     let snippet = format!(
                         "eye: [{:.1}, {:.1}, {:.1}], look: [{:.1}, {:.1}, {:.1}], minute: {minute}",
@@ -382,8 +384,8 @@ pub(super) fn drain_chat_input(
                     let mut lines = Vec::new();
                     let describe = |label: &str, s: Option<&crate::net::ObjectStore>| match s {
                         Some(s) => format!(
-                            "reaction: {label} flags 0x{:08x} (player-controlled {}) faction_tpl {:?} \
-                             duel_team {} duel_arbiter 0x{:016x} player_flags 0x{:x}",
+                            "reaction: {label} flags 0x{:08x} (player-controlled {}) faction_tpl \
+                             {:?} duel_team {} duel_arbiter 0x{:016x} player_flags 0x{:x}",
                             s.0.unit_flags(),
                             s.0.unit_flags() & (1 << 3) != 0,
                             s.0.unit_faction_template(),
@@ -418,9 +420,11 @@ pub(super) fn drain_chat_input(
                                         crate::target::relations::duel_rung(&ct, &co)
                                     )
                                 }
-                                _ => "reaction: duel rung not run (a side is not player-controlled \
+                                _ => {
+                                    "reaction: duel rung not run (a side is not player-controlled \
                                       or has no controlling player)"
-                                    .into(),
+                                        .into()
+                                }
                             });
                             lines.push(format!(
                                 "reaction: RANK {} unit→player · {} player→unit → can_attack {}",
@@ -440,8 +444,8 @@ pub(super) fn drain_chat_input(
                         let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
                         let rank = crate::target::relations::forced_rank(reputations, tpl.faction)?;
                         Some(format!(
-                            "reaction: faction {} is FORCED to rank {rank} by the server's table ({} \
-                             entries); the faction rules below are not reached",
+                            "reaction: faction {} is FORCED to rank {rank} by the server's table \
+                             ({} entries); the faction rules below are not reached",
                             tpl.faction,
                             reputations.forced.len(),
                         ))
@@ -454,12 +458,16 @@ pub(super) fn drain_chat_input(
                     let war = (|| {
                         let catalog = factions.as_deref()?.catalog();
                         let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-                        let at_war =
-                            crate::target::relations::at_war_with(catalog, reputations, tpl.faction);
+                        let at_war = crate::target::relations::at_war_with(
+                            catalog,
+                            reputations,
+                            tpl.faction,
+                        );
                         Some(match at_war {
                             Some(at_war) => format!(
-                                "faction {} {:?} owns reputation slot {} → the player's leg answers \
-                                 with AT WAR = {at_war} (reaction {}); the standing is never read",
+                                "faction {} {:?} owns reputation slot {} → the player's leg \
+                                 answers with AT WAR = {at_war} (reaction {}); the standing is \
+                                 never read",
                                 tpl.faction,
                                 catalog.faction_name(tpl.faction).unwrap_or("<unnamed>"),
                                 catalog
@@ -475,7 +483,11 @@ pub(super) fn drain_chat_input(
                             ),
                         })
                     })()
-                    .unwrap_or_else(|| "at-war not evaluated (no catalog, store or template)".into());
+                    .unwrap_or_else(|| {
+                        "at-war not evaluated (no catalog, store or \
+                                        template)"
+                            .into()
+                    });
                     lines.push(format!("reaction: {war}"));
                     // The world cursor's two predicates in `0x482200`'s order: `CanInteract` picks
                     // the service ladder, then `CanAttack` the sword. Neither is a reaction
@@ -508,9 +520,9 @@ pub(super) fn drain_chat_input(
                         crate::target::ring::plate_is_friendly(&rel, &t, &o, is_player)
                     });
                     lines.push(format!(
-                        "reaction: plate is_player {is_player} (OBJECT_FIELD_TYPE says {:?}; the two \
-                         must agree — the predicates read the field) · faction-group mask self {} \
-                         target {} · can_cooperate {} · can_attack(player→unit) {attackable} · \
+                        "reaction: plate is_player {is_player} (OBJECT_FIELD_TYPE says {:?}; the \
+                         two must agree — the predicates read the field) · faction-group mask self \
+                         {} target {} · can_cooperate {} · can_attack(player→unit) {attackable} · \
                          can_assist(player→unit) {}",
                         target_store.and_then(|s| s.0.object_type()),
                         mask(me),
@@ -717,7 +729,10 @@ pub(super) fn drain_chat_input(
                             .single()
                             .is_ok_and(|s| crate::player::self_controlled(s.0.unit_flags()));
                         if controlled {
-                            debug!("chat: emote {text_id} refused — moving (ERR_NOEMOTEWHILERUNNING)");
+                            debug!(
+                                "chat: emote {text_id} refused — moving \
+                                    (ERR_NOEMOTEWHILERUNNING)"
+                            );
                             chat_out
                                 .ui_errors
                                 .push(crate::ui_action::UiError::key("ERR_NOEMOTEWHILERUNNING"));
@@ -929,7 +944,9 @@ pub(super) fn drain_chat_input(
                             continue;
                         }
                         C::DisplayOwner { name } => ClientCommand::ChannelOwner { name },
-                        C::SetOwner { name, player } => ClientCommand::ChannelSetOwner { name, player },
+                        C::SetOwner { name, player } => {
+                            ClientCommand::ChannelSetOwner { name, player }
+                        }
                         C::SetPassword { name, password } => {
                             ClientCommand::ChannelPassword { name, password }
                         }
@@ -946,7 +963,9 @@ pub(super) fn drain_chat_input(
                         C::Unmute { name, player } => ClientCommand::ChannelUnmute { name, player },
                         C::Unban { name, player } => ClientCommand::ChannelUnban { name, player },
                         C::Moderate { name } => ClientCommand::ChannelModerate { name },
-                        C::ToggleAnnouncements { name } => ClientCommand::ChannelAnnouncements { name },
+                        C::ToggleAnnouncements { name } => {
+                            ClientCommand::ChannelAnnouncements { name }
+                        }
                     };
                     let _ = commands.0.send(cmd);
                 }
@@ -955,7 +974,8 @@ pub(super) fn drain_chat_input(
                     // stock one with no arm here.
                     if let Some(rest) = msg.strip_prefix('/') {
                         let rest = rest.trim();
-                        let (cmd, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                        let (cmd, args) =
+                            rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
                         if script.run_slash_command(cmd, args.trim()) {
                             continue;
                         }
@@ -978,7 +998,7 @@ pub(super) fn drain_chat_input(
                 }
             }
         }
-})
+    })
 }
 
 /// `/chattest`: one synthetic line of every renderable form (kinds, flags, the language header,

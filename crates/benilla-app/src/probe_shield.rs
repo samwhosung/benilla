@@ -229,7 +229,8 @@ fn drive_shield(
         if let Ok(store) = self_q.single() {
             let dead = store.0.unit_is_dead() || store.0.player_is_ghost();
             match shield.was_dead {
-                None => shield.was_dead = Some(dead), // first read of this entry: a state, not an edge
+                // The first read of this entry: a state, not an edge.
+                None => shield.was_dead = Some(dead),
                 Some(false) if dead => {
                     shield.was_dead = Some(true);
                     warn!(

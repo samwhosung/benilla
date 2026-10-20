@@ -15,7 +15,7 @@
 //! addon's or a macro's cast passes the gate's tag 2 (`0x494a92`) only inside an input event; the
 //! client's own code passes it outside any (`0x494a5a` → `0x494b11`).
 
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
 use benilla_ui::script::{CallHost, CallTail, ScriptCall, UiScript};
@@ -253,7 +253,7 @@ pub(crate) struct VmWith<'w, 's, P: SystemParam + 'static> {
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     /// `P`, read or written outside any Lua.
-    pub(crate) fn own(&mut self) -> bevy::ecs::system::SystemParamItem<'_, '_, P> {
+    pub(crate) fn own(&mut self) -> SystemParamItem<'_, '_, P> {
         self.set.p0()
     }
 
@@ -273,7 +273,7 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     /// dropped.
     pub(crate) fn turn<R>(
         &mut self,
-        f: impl FnOnce(Option<&mut UiScript>, bevy::ecs::system::SystemParamItem<'_, '_, P>) -> R,
+        f: impl FnOnce(Option<&mut UiScript>, SystemParamItem<'_, '_, P>) -> R,
     ) -> R {
         let Some(script) = self.script.as_deref_mut() else {
             return f(None, self.set.p0());
@@ -294,7 +294,7 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     /// its pass, so its handlers read every push it made.
     pub(crate) fn feed(
         &mut self,
-        f: impl FnOnce(Option<&mut UiScript>, bevy::ecs::system::SystemParamItem<'_, '_, P>, &mut Fires),
+        f: impl FnOnce(Option<&mut UiScript>, SystemParamItem<'_, '_, P>, &mut Fires),
     ) {
         let mut fires = Fires::default();
         self.turn(|script, p| f(script, p, &mut fires));

@@ -425,7 +425,10 @@ fn auction_probe(
                     return;
                 }
                 let [x, y, z] = AUCTIONEER_AT;
-                info!("PROBE_AUCTION: hopping to Auctioneer Fitch (entry {AUCTIONEER_ENTRY}) at ({x}, {y}, {z})");
+                info!(
+                    "PROBE_AUCTION: hopping to Auctioneer Fitch (entry {AUCTIONEER_ENTRY}) at \
+                       ({x}, {y}, {z})"
+                );
                 // GM commands ride as Say lines. The fixture is not granted here: step (5) reuses a
                 // stack from the bags first, since each cancel returns its stack by mail.
                 let _ = net.0.send(ClientCommand::Chat {
@@ -458,7 +461,8 @@ fn auction_probe(
                         )
                     })
                     .min_by(|a, b| a.3.total_cmp(&b.3));
-                if let Some((guid, entry, flags, dist)) = nearest.filter(|n| n.3 <= INTERACT_MAX_YD) {
+                if let Some((guid, entry, flags, dist)) = nearest.filter(|n| n.3 <= INTERACT_MAX_YD)
+                {
                     info!(
                         "PROBE_AUCTION: PASS (1 reach) — auctioneer {guid:#x} (entry {entry}) \
                          streamed in {dist:.1} yd away, npc_flags {flags:#x} — inside the server's \
@@ -468,7 +472,10 @@ fn auction_probe(
                     probe.auctioneer = Some(guid);
                     // What a right-click on a pure auctioneer sends; the reply opens the window.
                     let _ = net.0.send(ClientCommand::AuctionHello { auctioneer: guid });
-                    info!("PROBE_AUCTION: (2 greet) MSG_AUCTION_HELLO sent — the window opens on the REPLY, not on this");
+                    info!(
+                        "PROBE_AUCTION: (2 greet) MSG_AUCTION_HELLO sent — the window opens on \
+                           the REPLY, not on this"
+                    );
                     probe.phase = Phase::Greet {
                         sent_at: now,
                         show_baseline: event_count(script, "AUCTION_HOUSE_SHOW"),
@@ -476,15 +483,17 @@ fn auction_probe(
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     match nearest {
                         Some((guid, entry, _, dist)) => error!(
-                            "PROBE_AUCTION: FAIL (1 reach) — the nearest auctioneer {guid:#x} (entry \
-                             {entry}) is {dist:.1} yd away, past the server's {INTERACT_MAX_YD} yd \
-                             interaction distance, so a greeting would be refused with no packet. The \
-                             `.go` landed short of the spawn this probe aims at"
+                            "PROBE_AUCTION: FAIL (1 reach) — the nearest auctioneer {guid:#x} \
+                             (entry {entry}) is {dist:.1} yd away, past the server's \
+                             {INTERACT_MAX_YD} yd interaction distance, so a greeting would be \
+                             refused with no packet. The `.go` landed short of the spawn this \
+                             probe aims at"
                         ),
                         None => error!(
                             "PROBE_AUCTION: FAIL (1 reach) — no auctioneer-flagged unit within \
-                             {SCAN_RANGE} yd {SCAN_TIMEOUT_SECS}s after the `.go` (did the teleport \
-                             land? check the preflight banner and the `net: server says` lines)"
+                             {SCAN_RANGE} yd {SCAN_TIMEOUT_SECS}s after the `.go` (did the \
+                             teleport land? check the preflight banner and the `net: server says` \
+                             lines)"
                         ),
                     }
                     probe.fails += 1;
@@ -510,7 +519,8 @@ fn auction_probe(
                     if right && house_ok {
                         info!(
                             "PROBE_AUCTION: PASS (2 greet) — the hello REPLY opened the session: \
-                             auctioneer {:#x}, house_id {house} (in 1..=7), AUCTION_HOUSE_SHOW fired",
+                             auctioneer {:#x}, house_id {house} (in 1..=7), AUCTION_HOUSE_SHOW \
+                             fired",
                             auction.auctioneer.unwrap_or(0)
                         );
                         probe.passes += 1;
@@ -529,8 +539,8 @@ fn auction_probe(
                     if opened {
                         error!(
                             "PROBE_AUCTION: FAIL (2 greet) — the reply opened the session \
-                             (auctioneer {:?}, house_id {}) but AUCTION_HOUSE_SHOW never fired within \
-                             {HELLO_TIMEOUT_SECS}s, so no window would have appeared",
+                             (auctioneer {:?}, house_id {}) but AUCTION_HOUSE_SHOW never fired \
+                             within {HELLO_TIMEOUT_SECS}s, so no window would have appeared",
                             auction.auctioneer, auction.house_id
                         );
                         probe.fails += 1;
@@ -540,7 +550,8 @@ fn auction_probe(
                             "PROBE_AUCTION: FAIL (2 greet) — no MSG_AUCTION_HELLO reply within \
                              {HELLO_TIMEOUT_SECS}s, so the window never opened and everything \
                              downstream is unreachable. The server answers nothing at all when the \
-                             player is out of `GetNPCIfCanInteractWith` range or the unit lacks bit 12"
+                             player is out of `GetNPCIfCanInteractWith` range or the unit lacks \
+                             bit 12"
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
@@ -565,7 +576,10 @@ fn auction_probe(
                         probe.phase = Phase::Done;
                         return;
                     }
-                    info!("PROBE_AUCTION: (3 browse) QueryAuctionItems(default filter, page 0) queued");
+                    info!(
+                        "PROBE_AUCTION: (3 browse) QueryAuctionItems(default filter, page 0) \
+                           queued"
+                    );
                     probe.phase = Phase::Browse {
                         since: now,
                         sent: true,
@@ -580,8 +594,8 @@ fn auction_probe(
                         .unwrap_or((-1, -1));
                     info!(
                         "PROBE_AUCTION: PASS (3 browse) — SMSG_AUCTION_LIST_RESULT landed; \
-                         GetNumAuctionItems(\"list\") = rows={batch} total={total} (an empty auction \
-                         house is a legitimate result — the assertion is the round trip)"
+                         GetNumAuctionItems(\"list\") = rows={batch} total={total} (an empty \
+                         auction house is a legitimate result — the assertion is the round trip)"
                     );
                     probe.passes += 1;
                     probe.phase = Phase::BrowseEvent {
@@ -590,8 +604,8 @@ fn auction_probe(
                     };
                 } else if now - since > LIST_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (3 browse) — no list result within {LIST_TIMEOUT_SECS}s \
-                         (browse queries actually sent: {})",
+                        "PROBE_AUCTION: FAIL (3 browse) — no list result within \
+                         {LIST_TIMEOUT_SECS}s (browse queries actually sent: {})",
                         auction.wire.browse_sent
                     );
                     probe.fails += 1;
@@ -603,15 +617,19 @@ fn auction_probe(
                 event_baseline,
             } => {
                 if event_count(script, "AUCTION_ITEM_LIST_UPDATE") > event_baseline {
-                    info!("PROBE_AUCTION: PASS (3b list-event) — AUCTION_ITEM_LIST_UPDATE fired for the result");
+                    info!(
+                        "PROBE_AUCTION: PASS (3b list-event) — AUCTION_ITEM_LIST_UPDATE fired \
+                           for the result"
+                    );
                     probe.passes += 1;
                 } else if now - since > EVENT_GRACE_SECS {
                     error!(
                         "PROBE_AUCTION: FAIL (3b list-event) — the result landed but \
                          AUCTION_ITEM_LIST_UPDATE never fired within {EVENT_GRACE_SECS}s: \
-                         `feed_auction` fires the list events only when the pushed snapshot DIFFERS, \
-                         so a result that changes nothing (an empty house, a repeated search) is \
-                         silent — and the Browse pane only clears `isSearching` on that event"
+                         `feed_auction` fires the list events only when the pushed snapshot \
+                         DIFFERS, so a result that changes nothing (an empty house, a repeated \
+                         search) is silent — and the Browse pane only clears `isSearching` on that \
+                         event"
                     );
                     probe.fails += 1;
                 } else {
@@ -643,11 +661,17 @@ fn auction_probe(
                         probe.phase = ensure_item(now);
                         return;
                     }
-                    info!("PROBE_AUCTION: (4 throttle) CanSendAuctionQuery() is false — issuing a second query that must be refused");
+                    info!(
+                        "PROBE_AUCTION: (4 throttle) CanSendAuctionQuery() is false — issuing a \
+                           second query that must be refused"
+                    );
                     if let Err(e) =
                         script.run(r#"QueryAuctionItems("", "", "", nil, nil, nil, 0, nil, -1)"#)
                     {
-                        error!("PROBE_AUCTION: FAIL (4 throttle) — the second QueryAuctionItems errored: {e}");
+                        error!(
+                            "PROBE_AUCTION: FAIL (4 throttle) — the second QueryAuctionItems \
+                                errored: {e}"
+                        );
                         probe.fails += 1;
                         probe.phase = ensure_item(now);
                         return;
@@ -677,7 +701,8 @@ fn auction_probe(
                 if auction.wire.list_results[LIST] > results_baseline {
                     error!(
                         "PROBE_AUCTION: FAIL (4 throttle) — a second list result came back \
-                         (list_results {results_baseline} -> {}) though nothing was supposed to go out",
+                         (list_results {results_baseline} -> {}) though nothing was supposed to go \
+                         out",
                         auction.wire.list_results[LIST]
                     );
                     probe.fails += 1;
@@ -712,11 +737,17 @@ fn auction_probe(
                         .eval::<bool>("return CanSendAuctionQuery() and true or false")
                         .unwrap_or(false);
                     if can {
-                        info!("PROBE_AUCTION: (4b throttle-recovers) CanSendAuctionQuery() came back — issuing a third query, which must go out");
-                        if let Err(e) =
-                            script.run(r#"QueryAuctionItems("", "", "", nil, nil, nil, 0, nil, -1)"#)
+                        info!(
+                            "PROBE_AUCTION: (4b throttle-recovers) CanSendAuctionQuery() came \
+                               back — issuing a third query, which must go out"
+                        );
+                        if let Err(e) = script
+                            .run(r#"QueryAuctionItems("", "", "", nil, nil, nil, 0, nil, -1)"#)
                         {
-                            error!("PROBE_AUCTION: FAIL (4b throttle-recovers) — the third QueryAuctionItems errored: {e}");
+                            error!(
+                                "PROBE_AUCTION: FAIL (4b throttle-recovers) — the third \
+                                    QueryAuctionItems errored: {e}"
+                            );
                             probe.fails += 1;
                             probe.phase = ensure_item(now);
                             return;
@@ -728,8 +759,9 @@ fn auction_probe(
                         };
                     } else if now - since > RECOVER_TIMEOUT_SECS {
                         error!(
-                            "PROBE_AUCTION: FAIL (4b throttle-recovers) — CanSendAuctionQuery() still \
-                             false {RECOVER_TIMEOUT_SECS}s after the refusal; the gate never cleared"
+                            "PROBE_AUCTION: FAIL (4b throttle-recovers) — CanSendAuctionQuery() \
+                             still false {RECOVER_TIMEOUT_SECS}s after the refusal; the gate never \
+                             cleared"
                         );
                         probe.fails += 1;
                         probe.phase = ensure_item(now);
@@ -746,8 +778,8 @@ fn auction_probe(
                     probe.phase = ensure_item(now);
                 } else if now - since > ACTION_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (4b throttle-recovers) — CanSendAuctionQuery() was true \
-                         but the query never reached the wire within {ACTION_TIMEOUT_SECS}s"
+                        "PROBE_AUCTION: FAIL (4b throttle-recovers) — CanSendAuctionQuery() was \
+                         true but the query never reached the wire within {ACTION_TIMEOUT_SECS}s"
                     );
                     probe.fails += 1;
                     probe.phase = ensure_item(now);
@@ -769,17 +801,26 @@ fn auction_probe(
                     if let Err(e) = script.run(&format!(
                         "PickupContainerItem({bag}, {lslot}) ClickAuctionSellItemButton()"
                     )) {
-                        error!("PROBE_AUCTION: FAIL (5 sell) — attaching bag {bag} slot {lslot} errored: {e}");
+                        error!(
+                            "PROBE_AUCTION: FAIL (5 sell) — attaching bag {bag} slot {lslot} \
+                                errored: {e}"
+                        );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
                         return;
                     }
-                    info!("PROBE_AUCTION: (5 sell) fixture {ITEM_ENTRY} at bag {bag} slot {lslot} — picked up and dropped in the sell slot");
+                    info!(
+                        "PROBE_AUCTION: (5 sell) fixture {ITEM_ENTRY} at bag {bag} slot {lslot} \
+                           — picked up and dropped in the sell slot"
+                    );
                     probe.phase = Phase::Attach { since: now };
                     return;
                 }
                 if !sent {
-                    info!("PROBE_AUCTION: (5 sell) nothing to reuse in the bags — `.additem {ITEM_ENTRY} {ITEM_COUNT}`");
+                    info!(
+                        "PROBE_AUCTION: (5 sell) nothing to reuse in the bags — `.additem \
+                           {ITEM_ENTRY} {ITEM_COUNT}`"
+                    );
                     let _ = net.0.send(ClientCommand::Chat {
                         kind: ChatKind::Say,
                         target: None,
@@ -792,9 +833,9 @@ fn auction_probe(
                     };
                 } else if now - since > ITEM_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (5 sell) — item {ITEM_ENTRY} never appeared in the bags \
-                         within {ITEM_TIMEOUT_SECS}s of `.additem` (bags full? check the `net: server \
-                         says` lines for the GM command's own answer)"
+                        "PROBE_AUCTION: FAIL (5 sell) — item {ITEM_ENTRY} never appeared in the \
+                         bags within {ITEM_TIMEOUT_SECS}s of `.additem` (bags full? check the \
+                         `net: server says` lines for the GM command's own answer)"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -806,7 +847,8 @@ fn auction_probe(
                 // flight.
                 let (name, count, price) = script
                     .eval::<(String, i64, i64)>(
-                        "local n, _, c, _, _, p = GetAuctionSellItemInfo() return n or \"\", c or 0, p or 0",
+                        "local n, _, c, _, _, p = GetAuctionSellItemInfo() return n or \"\", c or \
+                         0, p or 0",
                     )
                     .unwrap_or_default();
                 if !name.is_empty() && price > 0 {
@@ -821,8 +863,8 @@ fn auction_probe(
                     let buyout = min_bid * 2;
                     let money = store.0.player_money().unwrap_or(0);
                     info!(
-                        "PROBE_AUCTION: (5 sell) slot reads {name:?} x{count}, stack value {price}c; \
-                         CalculateAuctionDeposit({DURATION_MINUTES}) = {deposit}c at \
+                        "PROBE_AUCTION: (5 sell) slot reads {name:?} x{count}, stack value \
+                         {price}c; CalculateAuctionDeposit({DURATION_MINUTES}) = {deposit}c at \
                          GetAuctionHouseDepositRate()={}%; listing for min_bid {min_bid}c buyout \
                          {buyout}c; purse {money}c",
                         script
@@ -846,9 +888,10 @@ fn auction_probe(
                     probe.phase = Phase::Sell { since: now };
                 } else if now - since > ACTION_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (5 sell) — the sell slot never read back a priced item \
-                         within {ACTION_TIMEOUT_SECS}s (name={name:?} count={count} price={price}); \
-                         ClickAuctionSellItemButton took nothing, or the item template never landed"
+                        "PROBE_AUCTION: FAIL (5 sell) — the sell slot never read back a priced \
+                         item within {ACTION_TIMEOUT_SECS}s (name={name:?} count={count} \
+                         price={price}); ClickAuctionSellItemButton took nothing, or the item \
+                         template never landed"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -893,9 +936,9 @@ fn auction_probe(
                 None if now - since > ACTION_TIMEOUT_SECS => {
                     error!(
                         "PROBE_AUCTION: FAIL (5 sell) — no SMSG_AUCTION_COMMAND_RESULT at all \
-                             within {ACTION_TIMEOUT_SECS}s of StartAuction: either the packet never \
-                             went out (the drain resolves the sell slot to a wire item guid at send \
-                             time and drops a zero silently) or bid/etime were zero"
+                         within {ACTION_TIMEOUT_SECS}s of StartAuction: either the packet never \
+                         went out (the drain resolves the sell slot to a wire item guid at send \
+                         time and drops a zero silently) or bid/etime were zero"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -915,8 +958,8 @@ fn auction_probe(
                     let deposit = probe.deposit;
                     if spent == deposit && deposit > 0 {
                         info!(
-                            "PROBE_AUCTION: PASS (5b deposit) — purse {} -> {money} c, down exactly \
-                             the {deposit} c the client quoted",
+                            "PROBE_AUCTION: PASS (5b deposit) — purse {} -> {money} c, down \
+                             exactly the {deposit} c the client quoted",
                             probe.baseline_money
                         );
                         probe.passes += 1;
@@ -924,9 +967,9 @@ fn auction_probe(
                     } else if now - since > ACTION_TIMEOUT_SECS {
                         if deposit == 0 {
                             warn!(
-                                "PROBE_AUCTION: SKIP (5b deposit) — the client quoted a ZERO deposit \
-                                 for this stack (value {}c), so there is nothing to observe in the \
-                                 purse (which moved by {spent}c)",
+                                "PROBE_AUCTION: SKIP (5b deposit) — the client quoted a ZERO \
+                                 deposit for this stack (value {}c), so there is nothing to \
+                                 observe in the purse (which moved by {spent}c)",
                                 probe.stack_value
                             );
                         } else {
@@ -949,7 +992,10 @@ fn auction_probe(
                         .eval::<bool>("return GetAuctionSellItemInfo() ~= nil")
                         .unwrap_or(false);
                     if !occupied {
-                        info!("PROBE_AUCTION: PASS (5c sell-slot) — the sell slot emptied once the auction was away");
+                        info!(
+                            "PROBE_AUCTION: PASS (5c sell-slot) — the sell slot emptied once the \
+                               auction was away"
+                        );
                         probe.passes += 1;
                         slot_done = true;
                     } else if now - since > SELL_SLOT_GRACE_SECS {
@@ -990,8 +1036,8 @@ fn auction_probe(
                     let entry = auction.lists[OWNER].entries[(index - 1) as usize];
                     let (name, min_bid, buyout, count) = script
                         .eval::<(String, i64, i64, i64)>(&format!(
-                            "local n, _, c, _, _, _, b, _, o = GetAuctionItemInfo(\"owner\", {index}) \
-                             return n or \"\", b or -1, o or -1, c or -1"
+                            "local n, _, c, _, _, _, b, _, o = GetAuctionItemInfo(\"owner\", \
+                             {index}) return n or \"\", b or -1, o or -1, c or -1"
                         ))
                         .unwrap_or_default();
                     // The wire entry lands a frame before the feed pushes the snapshot, so Lua
@@ -1000,10 +1046,10 @@ fn auction_probe(
                     if !lua_ready {
                         if now - since > OWNER_TIMEOUT_SECS {
                             error!(
-                                "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} is on the wire \
-                                 at owner row {index} but the pushed snapshot never caught up within \
-                                 {OWNER_TIMEOUT_SECS}s: GetAuctionItemInfo reads {name:?} min_bid \
-                                 {min_bid} buyout {buyout} (wanted {} / {})",
+                                "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} is on the \
+                                 wire at owner row {index} but the pushed snapshot never caught up \
+                                 within {OWNER_TIMEOUT_SECS}s: GetAuctionItemInfo reads {name:?} \
+                                 min_bid {min_bid} buyout {buyout} (wanted {} / {})",
                                 probe.min_bid, probe.buyout,
                             );
                             probe.fails += 1;
@@ -1019,16 +1065,17 @@ fn auction_probe(
                     if right {
                         info!(
                             "PROBE_AUCTION: PASS (6 owner) — auction {auction_id} is owner row \
-                             {index} of {}: {name:?} x{count}, min bid {min_bid}c, buyout {buyout}c",
+                             {index} of {}: {name:?} x{count}, min bid {min_bid}c, buyout \
+                             {buyout}c",
                             auction.lists[OWNER].entries.len()
                         );
                         probe.passes += 1;
                     } else {
                         error!(
-                            "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} is listed but wrong: \
-                             wire entry item={} (wanted {ITEM_ENTRY}) start_bid={} (wanted {}) \
-                             buyout={} (wanted {}); Lua row reads {name:?} min_bid {min_bid} buyout \
-                             {buyout}",
+                            "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} is listed but \
+                             wrong: wire entry item={} (wanted {ITEM_ENTRY}) start_bid={} (wanted \
+                             {}) buyout={} (wanted {}); Lua row reads {name:?} min_bid {min_bid} \
+                             buyout {buyout}",
                             entry.item_entry,
                             entry.start_bid,
                             probe.min_bid,
@@ -1047,9 +1094,9 @@ fn auction_probe(
                 }
                 if now - since > OWNER_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} never appeared in the \
-                         \"owner\" list within {OWNER_TIMEOUT_SECS}s ({} owner result(s) landed, {} \
-                         row(s) held)",
+                        "PROBE_AUCTION: FAIL (6 owner) — auction {auction_id} never appeared in \
+                         the \"owner\" list within {OWNER_TIMEOUT_SECS}s ({} owner result(s) \
+                         landed, {} row(s) held)",
                         auction.wire.list_results[OWNER],
                         auction.lists[OWNER].entries.len()
                     );
@@ -1080,13 +1127,16 @@ fn auction_probe(
                 event_baseline,
             } => {
                 if event_count(script, "AUCTION_OWNED_LIST_UPDATE") > event_baseline {
-                    info!("PROBE_AUCTION: PASS (6b owned-event) — AUCTION_OWNED_LIST_UPDATE fired for the new listing");
+                    info!(
+                        "PROBE_AUCTION: PASS (6b owned-event) — AUCTION_OWNED_LIST_UPDATE fired \
+                           for the new listing"
+                    );
                     probe.passes += 1;
                 } else if now - since > EVENT_GRACE_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (6b owned-event) — our listing is on the owner page but \
-                         AUCTION_OWNED_LIST_UPDATE never fired within {EVENT_GRACE_SECS}s, so the \
-                         Auctions tab would never repaint"
+                        "PROBE_AUCTION: FAIL (6b owned-event) — our listing is on the owner page \
+                         but AUCTION_OWNED_LIST_UPDATE never fired within {EVENT_GRACE_SECS}s, so \
+                         the Auctions tab would never repaint"
                     );
                     probe.fails += 1;
                 } else {
@@ -1108,9 +1158,9 @@ fn auction_probe(
                     let Some(index) = owner_index_of(&auction, auction_id) else {
                         if now - since > ACTION_TIMEOUT_SECS {
                             error!(
-                                "PROBE_AUCTION: FAIL (7 cancel) — auction {auction_id} is not on the \
-                                 owner page, so there is no row to cancel; it is LEFT LISTED in the \
-                                 auction house"
+                                "PROBE_AUCTION: FAIL (7 cancel) — auction {auction_id} is not on \
+                                 the owner page, so there is no row to cancel; it is LEFT LISTED \
+                                 in the auction house"
                             );
                             probe.fails += 1;
                             probe.phase = Phase::Done;
@@ -1118,12 +1168,18 @@ fn auction_probe(
                         return;
                     };
                     if let Err(e) = script.run(&format!("CancelAuction({index})")) {
-                        error!("PROBE_AUCTION: FAIL (7 cancel) — CancelAuction({index}) errored: {e}");
+                        error!(
+                            "PROBE_AUCTION: FAIL (7 cancel) — CancelAuction({index}) errored: \
+                                {e}"
+                        );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
                         return;
                     }
-                    info!("PROBE_AUCTION: (7 cancel) CancelAuction(owner row {index}) sent for auction {auction_id}");
+                    info!(
+                        "PROBE_AUCTION: (7 cancel) CancelAuction(owner row {index}) sent for \
+                           auction {auction_id}"
+                    );
                     probe.phase = Phase::Cancel {
                         since: now,
                         sent: true,
@@ -1139,8 +1195,8 @@ fn auction_probe(
                             if error == auction_error::OK {
                                 info!(
                                     "PROBE_AUCTION: PASS (7 cancel) — SMSG_AUCTION_COMMAND_RESULT \
-                                     action=REMOVED error=OK (auction id {id}); the stack comes back \
-                                     by mail, which is vanilla's own behaviour"
+                                     action=REMOVED error=OK (auction id {id}); the stack comes \
+                                     back by mail, which is vanilla's own behaviour"
                                 );
                                 probe.passes += 1;
                                 removed = true;
@@ -1159,8 +1215,8 @@ fn auction_probe(
                         _ if now - since > ACTION_TIMEOUT_SECS => {
                             error!(
                                 "PROBE_AUCTION: FAIL (7 cancel) — no REMOVED result within \
-                                 {ACTION_TIMEOUT_SECS}s (last result seen: {:?}). The auction is LEFT \
-                                 LISTED",
+                                 {ACTION_TIMEOUT_SECS}s (last result seen: {:?}). The auction is \
+                                 LEFT LISTED",
                                 auction.wire.last_command
                             );
                             probe.fails += 1;
@@ -1172,15 +1228,19 @@ fn auction_probe(
                 }
                 // The row must also leave the page the window shows.
                 if owner_index_of(&auction, auction_id).is_none() {
-                    info!("PROBE_AUCTION: PASS (7b cancel-list) — auction {auction_id} is gone from the \"owner\" list");
+                    info!(
+                        "PROBE_AUCTION: PASS (7b cancel-list) — auction {auction_id} is gone \
+                           from the \"owner\" list"
+                    );
                     probe.passes += 1;
                     probe.phase = Phase::Done;
                     return;
                 }
                 if now - since > OWNER_TIMEOUT_SECS {
                     error!(
-                        "PROBE_AUCTION: FAIL (7b cancel-list) — the server said REMOVED but auction \
-                         {auction_id} is still on the owner page {OWNER_TIMEOUT_SECS}s later"
+                        "PROBE_AUCTION: FAIL (7b cancel-list) — the server said REMOVED but \
+                         auction {auction_id} is still on the owner page {OWNER_TIMEOUT_SECS}s \
+                         later"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -1217,5 +1277,5 @@ fn auction_probe(
                 });
             }
         }
-})
+    })
 }

@@ -339,7 +339,8 @@ fn service_probe(
                     if now - sent_at > SCAN_TIMEOUT_SECS {
                         if h + 1 < leg.at.len() {
                             info!(
-                                "PROBE_SERVICE: ({}) nothing eligible at spawn {}/{} — trying the next",
+                                "PROBE_SERVICE: ({}) nothing eligible at spawn {}/{} — trying the \
+                                 next",
                                 leg.name,
                                 h + 1,
                                 leg.at.len()
@@ -361,8 +362,8 @@ fn service_probe(
                                 // Below a handful of frames a second the leg never really looked.
                                 true =>
                                     " — THE OBSERVER WAS STARVED, so this SKIP says nothing about \
-                                         the NPC. Re-run on an idle machine (`uptime`; a leg runner's guard \
-                                         is load < 3).",
+                                     the NPC. Re-run on an idle machine (`uptime`; a leg runner's \
+                                     guard is load < 3).",
                                 false =>
                                     " — the machine was keeping up, so the `.go` was refused, the \
                                           tile never streamed, or this leg's NPC genuinely was not \
@@ -428,8 +429,8 @@ fn service_probe(
                 // send.
                 if interact.1.is_some() {
                     error!(
-                        "PROBE_SERVICE: FAIL ({}) — the npc token is armed on {:#x} BEFORE the send; \
-                         the re-click gate would eat first clicks{note}",
+                        "PROBE_SERVICE: FAIL ({}) — the npc token is armed on {:#x} BEFORE the \
+                         send; the re-click gate would eat first clicks{note}",
                         leg.name,
                         interact.1.unwrap_or(0)
                     );
@@ -513,8 +514,8 @@ fn service_probe(
                     }
                     Some(open) => {
                         error!(
-                            "PROBE_SERVICE: FAIL ({}) — {open:?} window opened on {guid:#x}, wanted \
-                             {:?}",
+                            "PROBE_SERVICE: FAIL ({}) — {open:?} window opened on {guid:#x}, \
+                             wanted {:?}",
                             leg.name, leg.want_window
                         );
                         probe.fails += 1;
@@ -531,8 +532,8 @@ fn service_probe(
                             leg.want_window,
                             match held {
                                 true => format!(
-                                    " (the gossip session latched on text_id {} but the greeting never \
-                                     resolved — the frame never opens on that path)",
+                                    " (the gossip session latched on text_id {} but the greeting \
+                                     never resolved — the frame never opens on that path)",
                                     gossip.text_id
                                 ),
                                 false => String::new(),
@@ -548,8 +549,8 @@ fn service_probe(
                 let leg = &LEGS[i];
                 if interact.1 == Some(guid) {
                     info!(
-                        "PROBE_SERVICE: PASS ({}) — re-click gate armed on {guid:#x} {:.0} ms after \
-                         the window: a second right-click sends nothing (`0x5f0251`)",
+                        "PROBE_SERVICE: PASS ({}) — re-click gate armed on {guid:#x} {:.0} ms \
+                         after the window: a second right-click sends nothing (`0x5f0251`)",
                         leg.name,
                         (now - since) * 1000.0
                     );
@@ -558,8 +559,8 @@ fn service_probe(
                 } else if now - since > GATE_TIMEOUT_SECS {
                     error!(
                         "PROBE_SERVICE: FAIL ({}) — the window has been open on {guid:#x} for \
-                         {GATE_TIMEOUT_SECS}s and the npc token still reads {:?}; the re-click gate \
-                         cannot fire and every re-click re-sends",
+                         {GATE_TIMEOUT_SECS}s and the npc token still reads {:?}; the re-click \
+                         gate cannot fire and every re-click re-sends",
                         leg.name, interact.1
                     );
                     probe.fails += 1;
@@ -580,8 +581,8 @@ fn service_probe(
                 let Some((guid, _, store, _)) = found else {
                     if now - sent_at > SCAN_TIMEOUT_SECS {
                         warn!(
-                            "PROBE_SERVICE: SKIP (vendor fork) — entry {VENDOR_ENTRY} never streamed \
-                             inside the service reach. Environmental."
+                            "PROBE_SERVICE: SKIP (vendor fork) — entry {VENDOR_ENTRY} never \
+                             streamed inside the service reach. Environmental."
                         );
                         probe.skips += 1;
                         probe.phase = Phase::Done;
@@ -600,8 +601,8 @@ fn service_probe(
                 let arm = service_arm(flags, None);
                 if arm != Some(ServiceArm::Vendor) {
                     warn!(
-                        "PROBE_SERVICE: SKIP (vendor fork) — entry {VENDOR_ENTRY} reads {} and takes \
-                         {arm:?}, not the vendor arm. Environmental (a world-DB change).",
+                        "PROBE_SERVICE: SKIP (vendor fork) — entry {VENDOR_ENTRY} reads {} and \
+                         takes {arm:?}, not the vendor arm. Environmental (a world-DB change).",
                         flag_names(flags)
                     );
                     probe.skips += 1;
@@ -611,7 +612,8 @@ fn service_probe(
                 match service_action(ServiceArm::Vendor, guid, false, None) {
                     ServiceAction::Send(cmd) => {
                         info!(
-                            "PROBE_SERVICE: (vendor fork, empty cursor) {guid:#x} flags {} → {cmd:?}",
+                            "PROBE_SERVICE: (vendor fork, empty cursor) {guid:#x} flags {} → \
+                             {cmd:?}",
                             flag_names(flags)
                         );
                         let _ = net.0.send(cmd);
@@ -619,8 +621,8 @@ fn service_probe(
                     }
                     _ => {
                         error!(
-                            "PROBE_SERVICE: FAIL (vendor fork, empty cursor) — an EMPTY cursor took \
-                             the sale leg; `0x5df5e0 je` must fall to CMSG_LIST_INVENTORY"
+                            "PROBE_SERVICE: FAIL (vendor fork, empty cursor) — an EMPTY cursor \
+                             took the sale leg; `0x5df5e0 je` must fall to CMSG_LIST_INVENTORY"
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
@@ -655,7 +657,10 @@ fn service_probe(
             }
             Phase::VendorArm { since, guid } => {
                 let Some(script) = script else {
-                    warn!("PROBE_SERVICE: SKIP (vendor fork, held cursor) — no UI VM in this build");
+                    warn!(
+                        "PROBE_SERVICE: SKIP (vendor fork, held cursor) — no UI VM in this \
+                           build"
+                    );
                     probe.skips += 1;
                     probe.phase = Phase::Done;
                     return;
@@ -663,9 +668,9 @@ fn service_probe(
                 let Some((bag, slot)) = find_item_slot(script) else {
                     if now - since > BAG_TIMEOUT_SECS {
                         warn!(
-                            "PROBE_SERVICE: SKIP (vendor fork, held cursor) — item {SELL_ITEM_ENTRY} \
-                             never reached a bag within {BAG_TIMEOUT_SECS}s of `.additem` \
-                             (a full bag, or the command was refused). Environmental."
+                            "PROBE_SERVICE: SKIP (vendor fork, held cursor) — item \
+                             {SELL_ITEM_ENTRY} never reached a bag within {BAG_TIMEOUT_SECS}s of \
+                             `.additem` (a full bag, or the command was refused). Environmental."
                         );
                         probe.skips += 1;
                         probe.phase = Phase::Done;
@@ -674,15 +679,19 @@ fn service_probe(
                 };
                 // Pick it up as a player does, through the binding, not by writing the model.
                 if let Err(e) = script.run(&format!("PickupContainerItem({bag}, {slot})")) {
-                    error!("PROBE_SERVICE: SKIP (vendor fork, held cursor) — PickupContainerItem: {e}");
+                    error!(
+                        "PROBE_SERVICE: SKIP (vendor fork, held cursor) — PickupContainerItem: \
+                            {e}"
+                    );
                     probe.skips += 1;
                     probe.phase = Phase::Done;
                     return;
                 }
                 let Some(held) = script.cursor_item() else {
                     error!(
-                        "PROBE_SERVICE: FAIL (vendor fork, held cursor) — PickupContainerItem({bag}, \
-                         {slot}) left nothing on the cursor, so the fork has no input"
+                        "PROBE_SERVICE: FAIL (vendor fork, held cursor) — \
+                         PickupContainerItem({bag}, {slot}) left nothing on the cursor, so the \
+                         fork has no input"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -706,15 +715,15 @@ fn service_probe(
                 match service_action(ServiceArm::Vendor, guid, false, Some(item_guid)) {
                     ServiceAction::SellFromCursor(cmd) => {
                         info!(
-                            "PROBE_SERVICE: (vendor fork, held cursor) bag {bag} slot {slot} = item \
-                             {item_guid:#x} → {cmd:?}"
+                            "PROBE_SERVICE: (vendor fork, held cursor) bag {bag} slot {slot} = \
+                             item {item_guid:#x} → {cmd:?}"
                         );
                         let _ = net.0.send(cmd);
                         script.take_cursor_item_for_sale();
                         if script.cursor_payload().is_some() {
                             error!(
-                                "PROBE_SERVICE: FAIL (vendor fork, held cursor) — the sell clear left \
-                                 the item on the cursor"
+                                "PROBE_SERVICE: FAIL (vendor fork, held cursor) — the sell clear \
+                                 left the item on the cursor"
                             );
                             probe.fails += 1;
                         }
@@ -730,8 +739,9 @@ fn service_probe(
                             _ => "a non-send arm".to_string(),
                         };
                         error!(
-                            "PROBE_SERVICE: FAIL (vendor fork, held cursor) — an item is on the cursor \
-                             and the vendor arm still answered {what}; `0x5df5e0` must take the sale"
+                            "PROBE_SERVICE: FAIL (vendor fork, held cursor) — an item is on the \
+                             cursor and the vendor arm still answered {what}; `0x5df5e0` must take \
+                             the sale"
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
@@ -751,17 +761,17 @@ fn service_probe(
                     .unwrap_or(false);
                 if gone {
                     info!(
-                        "PROBE_SERVICE: PASS (vendor fork, held cursor) — the server took the sale: \
-                         bag {bag} slot {slot} is empty {:.0} ms after CMSG_SELL_ITEM",
+                        "PROBE_SERVICE: PASS (vendor fork, held cursor) — the server took the \
+                         sale: bag {bag} slot {slot} is empty {:.0} ms after CMSG_SELL_ITEM",
                         (now - since) * 1000.0
                     );
                     probe.passes += 1;
                     probe.phase = Phase::Done;
                 } else if now - since > BAG_TIMEOUT_SECS {
                     error!(
-                        "PROBE_SERVICE: FAIL (vendor fork, held cursor) — bag {bag} slot {slot} still \
-                         holds the item {BAG_TIMEOUT_SECS}s after the sale went out; the server \
-                         refused it (wrong vendor guid, wrong item guid, or out of range)"
+                        "PROBE_SERVICE: FAIL (vendor fork, held cursor) — bag {bag} slot {slot} \
+                         still holds the item {BAG_TIMEOUT_SECS}s after the sale went out; the \
+                         server refused it (wrong vendor guid, wrong item guid, or out of range)"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -786,7 +796,7 @@ fn service_probe(
                 });
             }
         }
-})
+    })
 }
 
 /// The open quest panel's shape, for the PASS line.

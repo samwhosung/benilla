@@ -106,7 +106,8 @@ pub(super) fn drain_bag_autostores(
             match a.count {
                 None => {
                     debug!(
-                        "ui_items: autostore lua {}/{} → bag {} (wire {src_bag}/{src_slot} → {dst_bag})",
+                        "ui_items: autostore lua {}/{} → bag {} (wire {src_bag}/{src_slot} → \
+                         {dst_bag})",
                         a.src_bag, a.src_slot, a.dst_bag
                     );
                     let _ = commands.0.send(ClientCommand::AutoStoreBagItem {
@@ -118,7 +119,8 @@ pub(super) fn drain_bag_autostores(
                 Some(n) => {
                     let count = n.min(u32::from(u8::MAX)) as u8;
                     debug!(
-                        "ui_items: autostore split lua {}/{} → bag {} × {count} (wire {src_bag}/{src_slot} → {dst_bag})",
+                        "ui_items: autostore split lua {}/{} → bag {} × {count} (wire \
+                         {src_bag}/{src_slot} → {dst_bag})",
                         a.src_bag, a.src_slot, a.dst_bag
                     );
                     let _ = commands.0.send(ClientCommand::SplitItem {
@@ -132,7 +134,7 @@ pub(super) fn drain_bag_autostores(
                 }
             }
         }
-})
+    })
 }
 
 /// What a `UseContainerItem` or `UseInventoryItem` call reads and writes.
