@@ -28,6 +28,14 @@ fn feed_inputs(app: &mut App) {
         .init_resource::<crate::net::Reputations>();
 }
 
+/// The feed, ahead of the unit snapshots as the plugin orders it.
+fn add_action_feed(app: &mut App) {
+    app.add_systems(
+        Update,
+        feed_action_state.before(crate::ui_unit::UnitSnapshots),
+    );
+}
+
 /// A profession opener (`Effect[0]` 47) names the window `IsCurrentAction` checks it against
 /// (`0x4e54fe`): a nonzero `EffectMiscValue[0]` the craft of that type (Enchanting 3), zero
 /// the trade skill of its `SkillLineAbility` line (Tailoring 3908, line 197); any other spell
@@ -139,7 +147,7 @@ fn the_feed_pushes_a_bare_macro_as_usable() {
         .insert_resource(NetCommands(tx));
     feed_inputs(&mut app);
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.add_systems(Update, feed_action_state);
+    add_action_feed(&mut app);
     app.update();
 
     let script = app.world().non_send_resource::<UiScript>();
@@ -265,7 +273,7 @@ fn a_ranged_button_pads_its_range_by_the_selected_target_alone() {
             last: None,
         });
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_action_state);
+        add_action_feed(&mut app);
         app.update();
         let script = app.world().non_send_resource::<UiScript>();
         assert!(script
@@ -400,7 +408,7 @@ fn a_melee_button_reaches_the_moving_bonus_while_both_units_run() {
             last: None,
         });
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_action_state);
+        add_action_feed(&mut app);
         app.update();
         let script = app.world().non_send_resource::<UiScript>();
         script
@@ -521,7 +529,7 @@ fn food_on_the_bar_greys_while_the_player_is_in_combat() {
             }),
         );
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_action_state);
+        add_action_feed(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()
@@ -606,7 +614,7 @@ fn an_item_slot_is_held_by_its_stored_count_not_the_bags() {
             }),
         );
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_action_state);
+        add_action_feed(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()
@@ -694,7 +702,7 @@ fn a_broken_worn_weapon_draws_no_equipped_border() {
             }),
         );
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_action_state);
+        add_action_feed(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()
@@ -804,7 +812,7 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
         )
         .unwrap();
     app.insert_non_send_resource(script);
-    app.add_systems(Update, feed_action_state);
+    add_action_feed(&mut app);
     let events = |app: &mut App| -> i64 {
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
         s.resolve();
@@ -910,7 +918,7 @@ fn a_held_action_polls_answer_their_own_now() {
         None,
     );
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.add_systems(Update, feed_action_state);
+    add_action_feed(&mut app);
 
     let read = |app: &App| {
         let script = app.world().non_send_resource::<UiScript>();
@@ -984,7 +992,7 @@ fn feed_app(buttons: &[(u8, u32, u8)], spells: Spells, x: f32) -> App {
     index.0.insert(ME, me);
     index.0.insert(OTHER, other);
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.add_systems(Update, feed_action_state);
+    add_action_feed(&mut app);
     app
 }
 
@@ -1351,6 +1359,107 @@ fn a_refresh_that_changes_a_slot_signals_the_bar_then_the_spells() {
     );
 }
 
+/// The action feed beside the unit feed, with a recorder whose `SPELL_UPDATE_USABLE` line carries
+/// what its handler read: `HasFullControl()`, `UnitExists("target")` and `UnitHealth("player")`.
+fn usable_reader_app() -> App {
+    let mut app = feed_app(
+        &[(0, 133, ACTION_KIND_SPELL)],
+        catalog(vec![(133, SpellDisplay::default())], &[]),
+        5.0,
+    );
+    app.init_resource::<crate::names::NameCache>()
+        .init_resource::<crate::ui_party::GroupState>()
+        .init_resource::<crate::ui_chat::ChatLog>()
+        .init_resource::<crate::sound::MessageSounds>()
+        .init_resource::<crate::ui_guild::GuildState>();
+    crate::ui_unit::add_unit_feed(&mut app);
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            "HEARD = {} local f = CreateFrame('Frame') \
+             for _, e in ipairs({'PLAYER_CONTROL_LOST', 'PLAYER_CONTROL_GAINED', \
+                 'SPELL_UPDATE_USABLE', 'PLAYER_TARGET_CHANGED'}) do f:RegisterEvent(e) end \
+             f:SetScript('OnEvent', function() \
+                 if event == 'SPELL_UPDATE_USABLE' then \
+                     event = event .. ' control=' .. tostring(HasFullControl()) \
+                         .. ' target=' .. tostring(UnitExists('target')) \
+                         .. ' health=' .. tostring(UnitHealth('player')) \
+                 end \
+                 table.insert(HEARD, event) \
+             end)",
+        )
+        .unwrap();
+    frame(&mut app);
+    app
+}
+
+/// Sets whether the player has lost control, as `SMSG_CLIENT_CONTROL_UPDATE` reports it.
+fn set_control_lost(app: &mut App, lost: bool) {
+    app.world_mut()
+        .resource_mut::<crate::player::Player>()
+        .own_control_lost = lost;
+}
+
+/// `SetPlayerControl` (`0x4958e0`) stores the flag (`0x4958ea`) and signals
+/// `PLAYER_CONTROL_LOST`/`GAINED` (`0x4958f7`, `0x49590b`) before its usable refresh (`0x4958fc`,
+/// `0x495910`): the refresh's handlers hear it after the edge and read the stored flag.
+#[test]
+fn a_usable_handler_hears_the_control_edge_first_and_reads_its_flag() {
+    let mut app = usable_reader_app();
+    set_control_lost(&mut app, true);
+    assert_eq!(
+        frame(&mut app),
+        [
+            "PLAYER_CONTROL_LOST",
+            "SPELL_UPDATE_USABLE control=nil target=nil health=100",
+        ]
+    );
+    set_control_lost(&mut app, false);
+    assert_eq!(
+        frame(&mut app),
+        [
+            "PLAYER_CONTROL_GAINED",
+            "SPELL_UPDATE_USABLE control=1 target=nil health=100",
+        ]
+    );
+}
+
+/// `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`) before
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`), as a release does (`0x4939d3`, `0x493a69`,
+/// `0x493a73`), and the health watch (`0x604848`) runs after its field is written: a usable
+/// handler reads this frame's target and health, and the target's event comes after it.
+#[test]
+fn a_usable_handler_reads_this_frames_target_and_health() {
+    use benilla_protocol::messages::ObjectType;
+    let mut app = usable_reader_app();
+    let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    app.world_mut()
+        .get_mut::<ObjectStore>(me)
+        .unwrap()
+        .0
+        .merge_diff(
+            benilla_protocol::ObjectFields::from_pairs(&[(22, 80)]),
+            |_, _, _| {},
+        );
+    edge(&mut app, ME, ObjectType::Player, 22, 100, 80);
+    select(&mut app, Some(OTHER));
+    assert_eq!(
+        frame(&mut app),
+        [
+            "SPELL_UPDATE_USABLE control=1 target=1 health=80",
+            "PLAYER_TARGET_CHANGED",
+        ]
+    );
+    select(&mut app, None);
+    assert_eq!(
+        frame(&mut app),
+        [
+            "SPELL_UPDATE_USABLE control=1 target=nil health=80",
+            "PLAYER_TARGET_CHANGED",
+        ]
+    );
+}
+
 /// `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) comes from the item legs alone: `SMSG_ITEM_COOLDOWN`
 /// (`0x6e965b`), the player's start or removal of a spell's records (`0x6e3089`) and its list clear
 /// (`0x6e9721`), and the spell charges watcher (`0x5d9587`). The global cooldown's start
@@ -1502,14 +1611,18 @@ fn an_item_slots_record_landing_flushes_its_running_cooldown() {
     );
 }
 
-/// The feed signals ahead of the events its producers precede: the usable refresh comes before
-/// `PLAYER_TARGET_CHANGED` (`0x493892` ahead of `0x49389c`), `UNIT_HEALTH` and `UNIT_MANA` (the
-/// type watchers ahead of the object's bridge at one field, `0x46544a`), `PLAYER_REGEN_DISABLED`
-/// (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`) and the form's cast
-/// change (`0x5de011` ahead of `0x5de016`). Read off the declared graph; skips where bevy carries
-/// no system names.
+/// The feed's two halves sit around the unit snapshots, and its signals come ahead of the events
+/// its producers precede. The push half seats the action states before the snapshots, which
+/// `PLAYER_ENTERING_WORLD`'s handlers read. The fire half runs after the snapshots and the
+/// control flag are this frame's: the target is stored (`0x4936e2`) and the control flag stored
+/// and signalled (`0x4958ea`, `0x4958f7`) before the usable refresh (`0x493892`, `0x4958fc`).
+/// It signals before `PLAYER_TARGET_CHANGED` (`0x493892` ahead of `0x49389c`), `UNIT_HEALTH` and
+/// `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
+/// `PLAYER_REGEN_DISABLED` (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`)
+/// and the form's cast change (`0x5de011` ahead of `0x5de016`). Read off the declared graph;
+/// skips where bevy carries no system names.
 #[test]
-fn the_feed_runs_before_the_events_its_producers_precede() {
+fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_precede() {
     use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
     use std::collections::HashSet;
 
@@ -1527,7 +1640,7 @@ fn the_feed_runs_before_the_events_its_producers_precede() {
             hits[0]
         })
     };
-    let Some(feed) = named("::feed_action_state") else {
+    let Some(push) = named("::feed_action_state") else {
         eprintln!("skipped: this build carries no system names");
         return;
     };
@@ -1535,21 +1648,39 @@ fn the_feed_runs_before_the_events_its_producers_precede() {
     for (a, b) in &c.dependencies {
         after.entry(*a).or_default().push(*b);
     }
-    let (mut seen, mut stack) = (HashSet::new(), vec![feed]);
-    while let Some(n) = stack.pop() {
-        for m in after.get(&n).into_iter().flatten() {
-            if seen.insert(*m) {
-                stack.push(*m);
+    let later_than = |from| {
+        let (mut seen, mut stack) = (HashSet::new(), vec![from]);
+        while let Some(n) = stack.pop() {
+            for m in after.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
             }
         }
+        seen
+    };
+    let key = |name: &str| named(name).unwrap_or_else(|| panic!("{name} is scheduled"));
+    let fire = key("::fire_action_events");
+    assert!(
+        later_than(push).contains(&key("::ui_unit::feed_units")),
+        "the push half runs before the unit snapshots"
+    );
+    for earlier in ["::ui_unit::feed_units", "::ui_unit::feed_player_control"] {
+        assert!(
+            later_than(key(earlier)).contains(&fire),
+            "the fire half runs after {earlier}"
+        );
     }
+    let seen = later_than(fire);
     for later in [
-        "::ui_unit::feed_units",
+        "::ui_unit::fire_unit_events",
         "::field_events::fire_field_notices",
         "::ui_cast::feed_cast_reports",
     ] {
-        let key = named(later).unwrap_or_else(|| panic!("{later} is scheduled"));
-        assert!(seen.contains(&key), "the feed runs before {later}");
+        assert!(
+            seen.contains(&key(later)),
+            "the fire half runs before {later}"
+        );
     }
 }
 

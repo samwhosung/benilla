@@ -1696,7 +1696,8 @@ fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
 pub(crate) use held::feed_name_candidates;
 
 /// The bare unit feed, for a test driving the stock unit frames off engine state: the pushes,
-/// then the field notices' events.
+/// the control edge, then the field notices' events, under the plugin's sets so a test's action
+/// feed takes its place around them.
 #[cfg(test)]
 pub(crate) fn add_unit_feed(app: &mut App) {
     app.init_resource::<UnitFeedState>()
@@ -1706,7 +1707,8 @@ pub(crate) fn add_unit_feed(app: &mut App) {
             Update,
             (
                 relations::feed_unit_relations,
-                feed_units,
+                feed_units.in_set(UnitSnapshots),
+                feed_player_control,
                 fire_faction_on_forced_table,
                 field_events::fire_field_notices,
             )
