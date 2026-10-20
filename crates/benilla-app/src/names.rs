@@ -129,8 +129,13 @@ impl NameKey {
     /// 24-47 (`guid::entry`), and a `HIGHGUID_PET` guid's slot is taken as the pet number, right
     /// only for a permanent pet.
     ///
-    /// Deviation: the combat-log namer keys an unstreamed creature by guid bits 32-47
-    /// (`0x6265c4`), which on the servers in use (entry at bits 24-47) names it wrongly.
+    /// Deviation: for a guid it does not hold, the reference's combat-log namer (`0x6264e0`) asks
+    /// the creature cache under guid bits 32-47 (`0x6265c4`-`0x6265e0`) for every guid whose top
+    /// nibble is 0xf and whose bits 32-47 are nonzero, a game object's and a pet's included, and
+    /// never the pet-name cache (only a held unit reaches it, `0x6092c7`). Here an unstreamed
+    /// creature is keyed by its entry, a pet guid by its pet number in the pet-name cache and a
+    /// game object's asks nothing, because on the servers in use (entry at bits 24-47) the
+    /// reference's key names each after an unrelated creature.
     fn of(guid_val: u64, unit: Option<&ObjectFields>) -> Option<Self> {
         if guid::is_player(guid_val) {
             return Some(Self::Player(guid_val));

@@ -472,7 +472,9 @@ impl ObjectFields {
             .map(|b| ((b >> 24) & 0xff) as u8)
     }
     /// `PLAYER_BYTES_3` byte 2 (public): the city-protector title, a race id (`Player.h:354`);
-    /// `UnitPVPName` (`0x609370`) appends `PVP_MEDAL<n>` when nonzero. vmangos never writes it.
+    /// `UnitPVPName` (`0x609370`) appends `PVP_MEDAL<n>` when nonzero. vmangos sets it to the
+    /// player's race in `Player::SetCityTitle` and clears it in `RemoveCityTitle`
+    /// (`Player.cpp:1092-1101`).
     pub fn player_pvp_medal(&self) -> Option<u8> {
         self.get_u32(FIELD_PLAYER_BYTES_3)
             .map(|b| ((b >> 16) & 0xff) as u8)
