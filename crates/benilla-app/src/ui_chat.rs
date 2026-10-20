@@ -199,8 +199,9 @@ impl Plugin for UiChatPlugin {
             )
             // The zone-channel auto-join, which vmangos leaves to the client. The disconnect clear
             // runs first, so a same-frame drop cannot leave the walk diffing stale membership.
-            // After `AreaAuthoritySet`, since a stale area joins and leaves the wrong channels. The
-            // guild-recruitment cascade follows the walk: it is the tail of `ZoneChannelRefresh`.
+            // After `AreaAuthoritySet`, since a stale area joins and leaves the wrong channels, and
+            // after the settle state's release, which the walk's gate reads. The guild-recruitment
+            // cascade follows the walk: it is the tail of `ZoneChannelRefresh`.
             .add_systems(
                 Update,
                 (
@@ -210,7 +211,8 @@ impl Plugin for UiChatPlugin {
                         .in_set(crate::client_state::InWorldGated),
                 )
                     .chain()
-                    .after(benilla_world::terrain_stream::AreaAuthoritySet),
+                    .after(benilla_world::terrain_stream::AreaAuthoritySet)
+                    .after(crate::player::WorldFocusSet),
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),

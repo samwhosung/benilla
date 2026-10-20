@@ -209,6 +209,11 @@ pub(super) type TransportQuery<'w, 's> = Query<
     ),
 >;
 
+/// The stream focus's publish and the post-snap hold's release, which write the player's settle
+/// state: a reader of it this frame runs after the set.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct WorldFocusSet;
+
 /// The controller's ordering handle, for anything that writes the aim or the camera rig before
 /// `control` reads them (`capture::probe_look`, `capture::probe_cam`).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -228,20 +233,19 @@ impl Plugin for PlayerPlugin {
         // The stream focus is published after `control`'s teleport snap and before the stream
         // stage, and the post-snap hold released after it. Both edges are needed: without
         // `.after(Input)` the focus can precede the snap, the world streams around the departure,
-        // and the hold releases at once.
-        // Both after the VM pass, whose readers of the player's settle state then see one frame's.
+        // and the hold releases at once. Both run among the VM pass's hosts, which read the
+        // player's settle state, so a host after them reads this frame's.
         app.add_systems(
             Update,
-            (world_focus::publish_viewer, world_focus::publish_view_focus)
-                .after(benilla_world::schedule::WorldStage::Input)
-                .after(crate::vm_pass::VmPass::End)
-                .before(benilla_world::schedule::WorldStage::Stream),
-        )
-        .add_systems(
-            Update,
-            world_focus::release_post_snap_hold
-                .after(benilla_world::schedule::WorldStage::Stream)
-                .after(crate::vm_pass::VmPass::End),
+            (
+                (world_focus::publish_viewer, world_focus::publish_view_focus)
+                    .after(benilla_world::schedule::WorldStage::Input)
+                    .before(benilla_world::schedule::WorldStage::Stream),
+                world_focus::release_post_snap_hold
+                    .after(benilla_world::schedule::WorldStage::Stream),
+            )
+                .in_set(WorldFocusSet)
+                .in_set(crate::vm_pass::VmPass::Member),
         );
         app.add_observer(camera::on_cvar);
         app.add_observer(camera_dynamics::on_cvar);
