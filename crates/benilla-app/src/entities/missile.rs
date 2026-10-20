@@ -943,16 +943,16 @@ mod tests {
     }
 
     /// The `0x61dd50` arm: a miss plays the victim's dodge or block clip, never the impact, and
-    /// floats its word over the target. A parry reads Deflect, rewritten at launch; a Reflect
+    /// floats its word over the target. A parry reads `DEFLECT`, rewritten at launch; a Reflect
     /// floats over the target, where the inline site re-anchors it to the caster (`0x6e7e51`).
     #[test]
     fn missed_arrival_words_the_target_deflects_a_parry_and_plays_dodge_or_block() {
         for (code, expect_state, expect_word) in [
-            (3u8, Some(2u32), "Dodge"),
-            (5, Some(5), "Block"),
-            (1, None, "Miss"),
-            (4, None, "Deflect"),
-            (11, None, "Reflect"),
+            (3u8, Some(2u32), "DODGE"),
+            (5, Some(5), "BLOCK"),
+            (1, None, "MISS"),
+            (4, None, "DEFLECT"),
+            (11, None, "REFLECT"),
         ] {
             let mut app = app();
             let caster = caster(&mut app, Vec3::ZERO);

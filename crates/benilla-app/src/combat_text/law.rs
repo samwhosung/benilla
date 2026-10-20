@@ -3,6 +3,8 @@
 
 use bevy::prelude::*;
 
+use super::TextBody;
+
 /// One config-table row (`0xce8828`, stride 0x1c, filled by `0x6c79a0`): rise in world units over
 /// the whole life, fade-in end, fade-out start and duration in ms, the scale pair (equal except
 /// the crit row, whose keyframes ramp `valueHi`) and the ARGB default colour (`0x4a2c10`).
@@ -87,17 +89,19 @@ const CRIT_KEYFRAMES: [(f32, f32, f32, f32); 3] = [
     (0.2, 1.0, 1.0, 1.0),
 ];
 
-/// The outcome words by code 1-11 (`0x86582c` keys for `FrameScript_GetText`), vmangos
-/// `SpellMissInfo` (`SpellDefines.h:160`); the enUS `GlobalStrings.lua` values.
-const WORDS: [&str; 11] = [
-    "Miss", "Resist", "Dodge", "Parry", "Block", "Evade", "Immune", "Immune", "Deflect", "Absorb",
-    "Reflect",
+/// The outcome words' `GlobalStrings.lua` keys by code 1-11, vmangos `SpellMissInfo`
+/// (`SpellDefines.h:160`): the table `0x86582c` that `0x607140` reads its word through
+/// (`0x6071e7`).
+const WORD_KEYS: [&str; 11] = [
+    "MISS", "RESIST", "DODGE", "PARRY", "BLOCK", "EVADE", "IMMUNE", "IMMUNE", "DEFLECT", "ABSORB",
+    "REFLECT",
 ];
 
-/// Outcome code 1-11 to `(word, category)`: category 3, except ABSORB's 1 (`0x80c48c`).
+/// Outcome code 1-11 to `(word key, category)`: category 3, except ABSORB's 1 (`0x80c48c`). The
+/// table's entry 0, `NONE` at category 6, is past the six category rows and floats nothing here.
 pub(crate) fn miss_word(code: u8) -> Option<(&'static str, u8)> {
-    let word = *WORDS.get((code as usize).checked_sub(1)?)?;
-    Some((word, if code == 10 { 1 } else { 3 }))
+    let key = *WORD_KEYS.get((code as usize).checked_sub(1)?)?;
+    Some((key, if code == 10 { 1 } else { 3 }))
 }
 
 /// The emitter override colours (`0x5fa0b0`/`0x5fa0f0`): spell damage gold `[0xc4d8a0]`, pet melee
@@ -168,9 +172,9 @@ pub(crate) fn damage_color(
 
 /// The melee emitter split, `0x6243e0`'s branch order: victim states 2, 3, 5, 6, 7, 8 float their
 /// word whatever the damage; otherwise damage floats the bare number (category 2 on
-/// `HITINFO_CRITICALHIT 0x80`), and zero damage is "Absorb" on `0x20`, "Resist" on `0x40`, else
-/// "Miss" (`HITINFO_MISS` is never tested).
-pub(crate) fn melee_text(hit_info: u32, victim_state: u32, damage: u32) -> Option<(u8, String)> {
+/// `HITINFO_CRITICALHIT 0x80`), and zero damage is the `ABSORB` word on `0x20`, `RESIST` on
+/// `0x40`, else `MISS` (`HITINFO_MISS` is never tested).
+pub(crate) fn melee_text(hit_info: u32, victim_state: u32, damage: u32) -> Option<(u8, TextBody)> {
     let code = match victim_state {
         2 => 3, // DODGE
         3 => 4, // PARRY
@@ -182,7 +186,7 @@ pub(crate) fn melee_text(hit_info: u32, victim_state: u32, damage: u32) -> Optio
             // 0 UNAFFECTED, 1 NORMAL, 4 INTERRUPT: keyed on damage.
             if damage > 0 {
                 let category = if hit_info & 0x80 != 0 { 2 } else { 0 };
-                return Some((category, damage.to_string()));
+                return Some((category, TextBody::Literal(damage.to_string())));
             }
             if hit_info & 0x20 != 0 {
                 10 // ABSORB, full; a partial one shows only the number
@@ -193,7 +197,7 @@ pub(crate) fn melee_text(hit_info: u32, victim_state: u32, damage: u32) -> Optio
             }
         }
     };
-    miss_word(code).map(|(w, c)| (c, w.to_string()))
+    miss_word(code).map(|(key, c)| (c, TextBody::Word(key)))
 }
 
 /// The spell and periodic emitter split (`0x5e85e0`/`0x626dd0`): damage floats a number, category
@@ -206,9 +210,12 @@ pub(crate) fn spell_text(
     resist: i32,
     blocked: u32,
     crit: bool,
-) -> Option<(u8, String)> {
+) -> Option<(u8, TextBody)> {
     let code = if damage != 0 {
-        return Some((if crit { 2 } else { 0 }, damage.to_string()));
+        return Some((
+            if crit { 2 } else { 0 },
+            TextBody::Literal(damage.to_string()),
+        ));
     } else if absorb != 0 {
         10
     } else if blocked != 0 {
@@ -218,7 +225,7 @@ pub(crate) fn spell_text(
     } else {
         return None;
     };
-    miss_word(code).map(|(w, c)| (c, w.to_string()))
+    miss_word(code).map(|(key, c)| (c, TextBody::Word(key)))
 }
 
 /// The gx pixel round (`0x5c7010`/`0x5c6fa0`): add 0.5 and truncate, half away from zero.
@@ -406,29 +413,34 @@ mod tests {
         assert!((scale_value(2, 0.5) / scale_value(0, 0.5) - 1.5).abs() < 1e-3);
     }
 
+    fn n(text: &str) -> TextBody {
+        TextBody::Literal(text.into())
+    }
+
     /// The melee (`0x6243e0`) and spell splits; ABSORB is the one category-1 word.
     #[test]
     fn emitters_split_numbers_and_words() {
-        assert_eq!(melee_text(0x2, 1, 37), Some((0, "37".into())));
-        assert_eq!(melee_text(0x82, 1, 99), Some((2, "99".into()))); // crit bit 0x80
-        assert_eq!(melee_text(0x10, 0, 0), Some((3, "Miss".into())));
-        assert_eq!(melee_text(0x0, 2, 0), Some((3, "Dodge".into())));
-        assert_eq!(melee_text(0x0, 3, 0), Some((3, "Parry".into())));
-        assert_eq!(melee_text(0x0, 5, 0), Some((3, "Block".into())));
-        assert_eq!(melee_text(0x0, 6, 0), Some((3, "Evade".into())));
+        use TextBody::Word;
+        assert_eq!(melee_text(0x2, 1, 37), Some((0, n("37"))));
+        assert_eq!(melee_text(0x82, 1, 99), Some((2, n("99")))); // crit bit 0x80
+        assert_eq!(melee_text(0x10, 0, 0), Some((3, Word("MISS"))));
+        assert_eq!(melee_text(0x0, 2, 0), Some((3, Word("DODGE"))));
+        assert_eq!(melee_text(0x0, 3, 0), Some((3, Word("PARRY"))));
+        assert_eq!(melee_text(0x0, 5, 0), Some((3, Word("BLOCK"))));
+        assert_eq!(melee_text(0x0, 6, 0), Some((3, Word("EVADE"))));
         // A word state ignores damage.
-        assert_eq!(melee_text(0x2, 3, 25), Some((3, "Parry".into())));
-        assert_eq!(melee_text(0x22, 1, 0), Some((1, "Absorb".into()))); // full absorb: bit 0x20
-        assert_eq!(melee_text(0x42, 1, 0), Some((3, "Resist".into()))); // full resist: bit 0x40
-                                                                        // Zero damage: Miss.
-        assert_eq!(melee_text(0x2, 1, 0), Some((3, "Miss".into())));
-        assert_eq!(spell_text(120, 0, 0, 0, false), Some((0, "120".into())));
-        assert_eq!(spell_text(240, 0, 0, 0, true), Some((2, "240".into())));
-        assert_eq!(spell_text(0, 50, 80, 40, false), Some((1, "Absorb".into())));
-        assert_eq!(spell_text(0, 0, 80, 40, false), Some((3, "Block".into())));
-        assert_eq!(spell_text(0, 0, 80, 0, false), Some((3, "Resist".into())));
+        assert_eq!(melee_text(0x2, 3, 25), Some((3, Word("PARRY"))));
+        assert_eq!(melee_text(0x22, 1, 0), Some((1, Word("ABSORB")))); // full absorb: bit 0x20
+        assert_eq!(melee_text(0x42, 1, 0), Some((3, Word("RESIST")))); // full resist: bit 0x40
+                                                                       // Zero damage: Miss.
+        assert_eq!(melee_text(0x2, 1, 0), Some((3, Word("MISS"))));
+        assert_eq!(spell_text(120, 0, 0, 0, false), Some((0, n("120"))));
+        assert_eq!(spell_text(240, 0, 0, 0, true), Some((2, n("240"))));
+        assert_eq!(spell_text(0, 50, 80, 40, false), Some((1, Word("ABSORB"))));
+        assert_eq!(spell_text(0, 0, 80, 40, false), Some((3, Word("BLOCK"))));
+        assert_eq!(spell_text(0, 0, 80, 0, false), Some((3, Word("RESIST"))));
         assert_eq!(spell_text(0, 0, 0, 0, false), None);
-        assert_eq!(miss_word(11), Some(("Reflect", 3)));
+        assert_eq!(miss_word(11), Some(("REFLECT", 3)));
         assert_eq!(miss_word(0), None);
         assert_eq!(miss_word(12), None);
     }
