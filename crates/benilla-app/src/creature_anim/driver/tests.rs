@@ -179,9 +179,9 @@ fn stationary_cast_hold_stows_an_engaged_casters_weapon() {
     let sheath = |app: &App| {
         app.world()
             .entity(unit)
-            .get::<AnimDriver>()
+            .get::<crate::creature_anim::CommittedSheath>()
             .unwrap()
-            .sheath_state()
+            .state()
     };
 
     app.update();
@@ -230,9 +230,9 @@ fn moving_cast_hold_keeps_its_stow_between_plays() {
     let sheath = |app: &App| {
         app.world()
             .entity(unit)
-            .get::<AnimDriver>()
+            .get::<crate::creature_anim::CommittedSheath>()
             .unwrap()
-            .sheath_state()
+            .state()
     };
 
     app.update();
@@ -426,9 +426,9 @@ fn cast_hold_stows_even_when_the_model_lacks_the_spell_anims() {
     let sheath = |app: &App| {
         app.world()
             .entity(unit)
-            .get::<AnimDriver>()
+            .get::<crate::creature_anim::CommittedSheath>()
             .unwrap()
-            .sheath_state()
+            .state()
     };
 
     app.update();
@@ -2034,9 +2034,9 @@ fn a_landed_swing_snaps_its_attacker_out_of_the_ranged_stance() {
     let sheath = |app: &App| {
         app.world()
             .entity(unit)
-            .get::<AnimDriver>()
+            .get::<crate::creature_anim::CommittedSheath>()
             .unwrap()
-            .sheath_state()
+            .state()
     };
     let swing = |app: &mut App| {
         app.world_mut().write_message(SwingMessage {
@@ -2273,7 +2273,7 @@ fn the_toggle_draws_nothing_on_a_model_without_sheathe_animations_or_mid_shot() 
     let archer = spawn(&mut app, &[0, 46, 89, 90]);
     let idle = spawn(&mut app, &[0, 46, 89, 90]);
     app.update();
-    let sheath = |app: &App, unit| drv_of(app, unit).sheath_state();
+    let sheath = |app: &App, unit| sheath_of(app, unit);
     let press = |app: &mut App, entity, ceremony| {
         app.world_mut().write_message(SheathRequest {
             entity,
@@ -2338,7 +2338,7 @@ fn a_relic_class_player_refuses_the_ranged_sheath_state() {
     let warrior = spawn(&mut app, player(1, 1));
     let seeded = spawn(&mut app, player(2, 2));
     app.update();
-    let sheath = |app: &App, unit| drv_of(app, unit).sheath_state();
+    let sheath = |app: &App, unit| sheath_of(app, unit);
     assert_eq!(sheath(&app, paladin), Some(1), "seeded drawn");
     assert_eq!(
         sheath(&app, seeded),
@@ -2361,6 +2361,47 @@ fn a_relic_class_player_refuses_the_ranged_sheath_state() {
     });
     app.update();
     assert_eq!(sheath(&app, paladin), Some(1), "a request for 2 is refused");
+}
+
+/// Only the constructor seeds the state from the byte (`0x5fafa0`): a driver rebuilt for a new
+/// model, as a display swap or a rig heal does, finds the unit's state seeded, so a Paladin whose
+/// adopted 2 was refused shows no ranged state after a morph.
+#[test]
+fn a_rebuilt_driver_keeps_the_units_committed_sheath_state() {
+    let mut app = app();
+    app.insert_resource(crate::chr_classes::ChrClassTable(
+        benilla_formats::ChrClasses::from_rows([(2, "Paladin", "PALADIN")]).with_relic_slot(2),
+    ));
+    // `OBJECT_FIELD_TYPE` (2), `UNIT_FIELD_BYTES_0` (36) byte 1 the class, `UNIT_FIELD_BYTES_2`
+    // (164) byte 0 the sheath state.
+    let paladin = |sheath: u32| {
+        crate::net::ObjectStore(ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (36, 2 << 8),
+            (164, sheath),
+        ]))
+    };
+    let unit = app
+        .world_mut()
+        .spawn((
+            caster_model(),
+            AnimationPlayer::default(),
+            AnimationTransitions::new(),
+            AnimDriver::default(),
+            paladin(1),
+        ))
+        .id();
+    app.update();
+    app.world_mut().entity_mut(unit).insert(paladin(2));
+    app.update();
+    assert_eq!(sheath_of(&app, unit), Some(1), "the adopted 2 is refused");
+    // The rebuild's teardown and the attach's fresh driver.
+    app.world_mut().entity_mut(unit).remove::<AnimDriver>();
+    app.world_mut()
+        .entity_mut(unit)
+        .insert(AnimDriver::default());
+    app.update();
+    assert_eq!(sheath_of(&app, unit), Some(1), "no second seed");
 }
 
 /// A root that wipes the direction bits the frame a cast arrives: against the base's flags the edge
@@ -2669,6 +2710,15 @@ fn a_mounted_landing_runs_at_the_gaits_rate_not_at_one_times() {
 
 fn drv_of(app: &App, unit: Entity) -> &AnimDriver {
     app.world().entity(unit).get::<AnimDriver>().unwrap()
+}
+
+/// The unit's committed sheath state.
+fn sheath_of(app: &App, unit: Entity) -> Option<u8> {
+    app.world()
+        .entity(unit)
+        .get::<crate::creature_anim::CommittedSheath>()
+        .unwrap()
+        .state()
 }
 
 /// The mount arm (`0x607a00`'s tail, `0x607b44`) is an ordinary primary play of 91 `Mount` on

@@ -27,8 +27,9 @@ use super::sheath::{
 };
 use super::{
     find_resolved, move_flags, AnimData, AnimDriver, AutoRepeatArmed, BaseAnimRecompute, CastHold,
-    DefenseAnim, EmoteAnim, Engaged, MovementState, NockLatch, Overlay, OverlayFade, SheathRequest,
-    SheathSwapMessage, StateKitPins, SwingImpact, SwingMessage, SwingSlowdown, Wielded, WoundAnim,
+    CommittedSheath, DefenseAnim, EmoteAnim, Engaged, MovementState, NockLatch, Overlay,
+    OverlayFade, SheathRequest, SheathSwapMessage, StateKitPins, SwingImpact, SwingMessage,
+    SwingSlowdown, Wielded, WoundAnim,
 };
 
 mod grip;
@@ -270,6 +271,8 @@ pub(super) fn drive_animations(
             Option<&crate::aura_visual::AuraNodes>,
             // The live state kits whose anim takes a stationary unit's plays (`0x5fde80`).
             Option<&StateKitPins>,
+            // The unit's `[+0xd40]`, which outlives this driver.
+            &mut CommittedSheath,
         ),
     )>,
     // A mount child's movement view is its host's, fetched through `MountBody.host`.
@@ -457,6 +460,7 @@ pub(super) fn drive_animations(
             move_modes,
             aura_nodes,
             state_pins,
+            mut committed,
         ),
     ) in &mut units
     {
@@ -717,25 +721,26 @@ pub(super) fn drive_animations(
         // ── Sheath state: the committed cache (`[+0xd40]`), not the descriptor byte, adopting the
         // byte whenever it changes (`0x604c70`). Every SetSheatheState (`0x611cf0`) snaps except
         // the manual toggle's ceremony, which carries the draw/stow sound.
-        let sheath_frame_start = drv.sheath_cur;
+        let sheath_frame_start = committed.cur;
         let fields = store.map(|s| &s.0);
         let sheath_byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
         // The constructor seeds the state from the byte untested (`0x5fafa0`); a later change goes
         // through the setter (`0x604c70`: `0x611cf0(byte, 1, 0)`), whose class test can refuse it.
-        if drv.sheath_cur.is_none() {
-            drv.sheath_cur = Some(sheath_byte);
-            drv.sheath_byte = Some(sheath_byte);
-        } else if drv.sheath_byte != Some(sheath_byte) {
-            drv.sheath_byte = Some(sheath_byte);
+        if !drv.sheath_seeded {
+            drv.sheath_seeded = true;
+            committed.cur = Some(sheath_byte);
+            committed.byte = Some(sheath_byte);
+        } else if committed.byte != Some(sheath_byte) {
+            committed.byte = Some(sheath_byte);
             if !setter_refuses(sheath_byte, fields, classes) {
-                drv.sheath_cur = Some(sheath_byte);
+                committed.cur = Some(sheath_byte);
             }
         }
         // The setter: a no-op when unchanged (`newState == CUR`), else commit, volunteer
         // `CMSG_SETSHEATHED` for the local player, and for the manual toggle play the ceremony,
         // per-arm masked overlays (`0x60b770`) by each item's stow family (hip 90, back 89).
         if let Some(req) = pending_sheath.get(&entity) {
-            let cur = drv.sheath_cur.unwrap_or(0);
+            let cur = committed.cur.unwrap_or(0);
             // Deviation: a mounted draw is refused at the setter, because our rider track never
             // replays the reference's per-play force-stow (`0x5fdf80`); the result is the same.
             if req.state != cur
@@ -746,7 +751,7 @@ pub(super) fn drive_animations(
                     "sheath: unit {entity} {cur} -> {} (request, ceremony {})",
                     req.state, req.ceremony
                 );
-                drv.sheath_cur = Some(req.state);
+                committed.cur = Some(req.state);
                 if is_self {
                     let _ = net.0.send(ClientCommand::SetSheathed {
                         state: u32::from(req.state),
@@ -769,7 +774,7 @@ pub(super) fn drive_animations(
         }
         // Ceremony upkeep: each arm's weapon moves at its clip's `$SHL`/`$SHR` event, and a
         // finished stow runs phase 2, the on-finish draw (`0x5fc920` at `0x5fca8c`/`0x5fcaa1`).
-        let sheath_now = drv.sheath_cur.unwrap_or(0);
+        let sheath_now = committed.cur.unwrap_or(0);
         advance_sheath_ceremony(
             &mut commands,
             entity,
@@ -1199,6 +1204,7 @@ pub(super) fn drive_animations(
                 store,
                 emote_sounds: emote_sounds.as_deref(),
                 interacting: interacting || drv.interact_hold,
+                sheath: committed.cur,
                 walk,
                 model_scale,
                 traced,
@@ -1371,9 +1377,9 @@ pub(super) fn drive_animations(
         if played_oneshot.is_some()
             || hold_played.is_some()
             || base_played
-            || (mounted && drv.sheath_cur.unwrap_or(0) != 0)
+            || (mounted && committed.cur.unwrap_or(0) != 0)
         {
-            let cur = drv.sheath_cur.unwrap_or(0);
+            let cur = committed.cur.unwrap_or(0);
             let anim = played_oneshot
                 .or(hold_played)
                 .or_else(|| drv.active_anim())
@@ -1397,7 +1403,7 @@ pub(super) fn drive_animations(
                         "sheath: unit {entity} {cur} -> {forced} (anim {anim} flags {flags:#x}, \
                          engaged {engaged})"
                     );
-                    drv.sheath_cur = Some(forced);
+                    committed.cur = Some(forced);
                     if is_self {
                         let _ = net.0.send(ClientCommand::SetSheathed {
                             state: u32::from(forced),
@@ -1408,7 +1414,7 @@ pub(super) fn drive_animations(
         }
         // Leaving sheath state 2 by any path un-nocks and drops the ammo (`0x60fc72`, gated
         // `[+0xd40] != 2`) until the next `SMSG_SPELL_START`.
-        if sheath_frame_start == Some(2) && drv.sheath_cur != Some(2) {
+        if sheath_frame_start == Some(2) && committed.cur != Some(2) {
             commands
                 .entity(entity)
                 .remove::<(super::NockedAmmo, super::NockLatch)>();

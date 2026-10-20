@@ -9,6 +9,26 @@ use benilla_assets::{LockRecover, WorldAssets};
 
 use super::{find_resolved, select, AnimDriver, Wielded};
 
+/// The unit's committed sheath state, the reference's `[unit+0xd40]`, and the descriptor byte it
+/// last adopted. It is unit state, required by [`AnimDriver`] and kept when a display swap or a rig
+/// rebuild replaces the driver, as the model rebuild (`0x60abe0`) leaves `[+0xd40]`: only the
+/// constructor seeds it from the byte, untested (`0x5fafa0`); every later write is the setter's
+/// (`0x611d64`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CommittedSheath {
+    /// 0 stowed, 1 melee, 2 ranged; `None` until the driver first seeds it.
+    pub(super) cur: Option<u8>,
+    /// The last descriptor sheath byte, to detect changes (`0x604c70`).
+    pub(super) byte: Option<u8>,
+}
+
+impl CommittedSheath {
+    /// The client-side sheath state, `None` until driven.
+    pub(crate) fn state(&self) -> Option<u8> {
+        self.cur
+    }
+}
+
 /// A unit's visual sheath state per arm while a draw/stow ceremony plays: each weapon moves at its
 /// own clip's `$SHL`/`$SHR` key, not when the state changes. Absent, the committed state rules.
 #[derive(Component, Clone, Copy)]

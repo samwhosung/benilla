@@ -37,6 +37,8 @@ pub(super) struct Frame<'a> {
     pub(super) emote_sounds: Option<&'a EmoteSounds>,
     /// Whether this unit is the current interact NPC.
     pub(super) interacting: bool,
+    /// The committed sheath state ([`super::super::CommittedSheath`]).
+    pub(super) sheath: Option<u8>,
     pub(super) walk: f32,
     pub(super) model_scale: f32,
     /// Whether this body's plays go to the anim trace; `subject` labels them (rider or mount).
@@ -71,6 +73,7 @@ pub(super) fn run(
         store,
         emote_sounds,
         interacting,
+        sheath,
         walk,
         model_scale,
         traced,
@@ -304,7 +307,7 @@ pub(super) fn run(
                 // auto-repeat bit `0x200` (`select::ranged_idle_gate`): the Load plays once and its
                 // completion arms the Hold, 105/106/112 → 109/110/111.
                 let ranged_load =
-                    (!moving && select::ranged_idle_gate(auto_repeat, drv.sheath_cur)).then(|| {
+                    (!moving && select::ranged_idle_gate(auto_repeat, sheath)).then(|| {
                         let load = select::ranged_load_anim(wielded.and_then(|w| w.ranged));
                         let hold = select::ranged_hold_anim(load);
                         // The Load's completion arms the Hold unconditionally (slots 11/12/15); a

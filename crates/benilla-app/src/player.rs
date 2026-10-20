@@ -178,7 +178,11 @@ pub(super) type BodyQuery<'w, 's> = Query<
         &'static mut Transform,
         Option<&'static mut MovementState>,
         Option<&'static CameraPivot>,
-        Option<&'static crate::creature_anim::AnimDriver>,
+        // The driver and the unit's committed sheath state, which it requires.
+        Option<(
+            &'static crate::creature_anim::AnimDriver,
+            &'static crate::creature_anim::CommittedSheath,
+        )>,
         Option<&'static crate::net::ObjectStore>,
         Has<crate::creature_anim::Engaged>,
         Option<&'static crate::net::UnitSpeeds>,

@@ -591,7 +591,7 @@ pub(crate) struct SpellGoTargets {
 mod sheath;
 use sheath::{load_anim_data, SheathSwap};
 pub(crate) use sheath::{
-    toggle_sheath_next, AnimData, SheathRequest, SheathSwapMessage, VisualSheath,
+    toggle_sheath_next, AnimData, CommittedSheath, SheathRequest, SheathSwapMessage, VisualSheath,
 };
 
 /// The `SMSG_EMOTE` to `EmoteAnim` consumer.
@@ -654,9 +654,10 @@ pub(crate) use spell_visual::{
     SpellKitShake, SpellKitSound, SpellVisuals,
 };
 
-/// The per-unit animation state machine; `Transform` is required, its scale divides the rate.
+/// The per-unit animation state machine; `Transform` is required, its scale divides the rate, and
+/// so is the unit's [`CommittedSheath`], which outlives a rebuilt driver.
 #[derive(Component)]
-#[require(Transform)]
+#[require(Transform, CommittedSheath)]
 pub(crate) struct AnimDriver {
     mode: Mode,
     /// The targeted gait id, to cross-fade only on a change; `None` forces a fresh pick.
@@ -681,11 +682,8 @@ pub(crate) struct AnimDriver {
     /// The reference's `[unit+0xd58] & 0xc0000`: while Knockdown, LiftOff or Land holds it, base
     /// requests are refused, so a stun's knockdown survives the root's Stand recompute.
     base_lock: driver::play::BaseAnimLock,
-    /// The committed sheath state, the reference's `[unit+0xd40]`: seeded from the descriptor,
-    /// re-adopted when it changes (`0x604c70`), overwritten by requests and the reconcile.
-    sheath_cur: Option<u8>,
-    /// The last descriptor sheath byte, to detect changes.
-    sheath_byte: Option<u8>,
+    /// Whether this driver has seeded the sheath state.
+    sheath_seeded: bool,
     /// The pending mid-animation weapon swap while a draw/stow one-shot plays.
     sheath_swap: Option<SheathSwap>,
     /// Whether any animation started this frame, for the weapon-trail latch: the reference reads
@@ -792,8 +790,7 @@ impl Default for AnimDriver {
             interact_player: false,
             interact_hold: false,
             base_lock: driver::play::BaseAnimLock::default(),
-            sheath_cur: None,
-            sheath_byte: None,
+            sheath_seeded: false,
             sheath_swap: None,
             started_anim: false,
             overlay: None,
@@ -833,11 +830,6 @@ impl AnimDriver {
         catalog: Option<&AnimDataCatalog>,
     ) -> Option<u16> {
         self.active_anim().map(|id| resolved_id(anims, id, catalog))
-    }
-
-    /// The client-side sheath state (0 stowed, 1 melee, 2 ranged), `None` until driven.
-    pub(crate) fn sheath_state(&self) -> Option<u8> {
-        self.sheath_cur
     }
 
     /// Whether this unit started an animation this frame.

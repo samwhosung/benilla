@@ -115,7 +115,10 @@ pub(super) fn refresh_live_display(
                         bevy::animation::transition::AnimationTransitions,
                         AnimationGraphHandle,
                         benilla_assets::ModelAnimations,
-                        crate::creature_anim::AnimDriver,
+                        (
+                            crate::creature_anim::AnimDriver,
+                            crate::creature_anim::CommittedSheath,
+                        ),
                         (
                             benilla_world::rig_anim::RigPose,
                             crate::creature_anim::BodyTwist,
@@ -240,7 +243,10 @@ pub(super) fn heal_rig_starved(
                 bevy::animation::transition::AnimationTransitions,
                 AnimationGraphHandle,
                 benilla_assets::ModelAnimations,
-                crate::creature_anim::AnimDriver,
+                (
+                    crate::creature_anim::AnimDriver,
+                    crate::creature_anim::CommittedSheath,
+                ),
                 (
                     benilla_world::rig_anim::RigPose,
                     crate::creature_anim::BodyTwist,
@@ -322,6 +328,56 @@ mod tests {
             app.world().get_entity(child).is_err(),
             "the old visual's children despawned"
         );
+    }
+
+    /// The display swap's and the rig heal's teardowns drop the driver for the new model and keep
+    /// the unit's committed sheath state, as the model rebuild (`0x60abe0`) leaves `[+0xd40]`.
+    #[test]
+    fn a_rebuild_keeps_the_committed_sheath_state() {
+        let mut app = App::new();
+        app.init_resource::<benilla_world::rig_palette::RigPalettes>();
+        app.add_message::<DisplaySwapped>();
+        app.add_systems(Update, (refresh_live_display, heal_rig_starved));
+        let unit = |app: &mut App, display: u32| {
+            app.world_mut()
+                .spawn((
+                    VisualAttached,
+                    crate::net::Guid(0xB0B),
+                    NetEntity {
+                        kind: EntityKind::Unit,
+                        display_id: Some(7),
+                        scale: 1.0,
+                    },
+                    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                        benilla_protocol::field::FIELD_UNIT_DISPLAYID,
+                        display,
+                    )])),
+                    AppliedDisplay(Some(7)),
+                    crate::creature_anim::AnimDriver::default(),
+                ))
+                .id()
+        };
+        let swapped = unit(&mut app, 8);
+        let healed = unit(&mut app, 7);
+        app.world_mut()
+            .entity_mut(healed)
+            .insert(benilla_world::rig_palette::RigStarved);
+        app.update();
+        for (e, what) in [(swapped, "the swap"), (healed, "the heal")] {
+            let e = app.world().entity(e);
+            assert!(
+                !e.contains::<VisualAttached>(),
+                "{what} tore the visual down"
+            );
+            assert!(
+                !e.contains::<crate::creature_anim::AnimDriver>(),
+                "{what} dropped the driver"
+            );
+            assert!(
+                e.contains::<crate::creature_anim::CommittedSheath>(),
+                "{what} kept the committed sheath state"
+            );
+        }
     }
 
     #[test]

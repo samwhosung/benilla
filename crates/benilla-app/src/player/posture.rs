@@ -109,7 +109,9 @@ pub(super) fn update(
     // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
     if binds.fired(crate::bindings::Input::ToggleSheath) {
-        if let Ok((e, _, _, _, Some(drv), store, engaged, _, _, wielded, _)) = body.single() {
+        if let Ok((e, _, _, _, Some((drv, committed)), store, engaged, _, _, wielded, _)) =
+            body.single()
+        {
             let toggle = ToggleGates {
                 control_lost: reads.control_lost,
                 engaged,
@@ -124,7 +126,7 @@ pub(super) fn update(
                 let w = wielded.copied().unwrap_or_default();
                 let worn = toggle_worn(&w, store.map(|s| &s.0), classes);
                 let next =
-                    crate::creature_anim::toggle_sheath_next(drv.sheath_state().unwrap_or(0), worn);
+                    crate::creature_anim::toggle_sheath_next(committed.state().unwrap_or(0), worn);
                 if let Some(state) = next {
                     sheath.write(crate::creature_anim::SheathRequest {
                         entity: e,
@@ -221,7 +223,7 @@ fn apply_locally(
     let body = body.single().ok();
     let drawn = body
         .and_then(|(_, _, _, _, drv, ..)| drv)
-        .and_then(|d| d.sheath_state())
+        .and_then(|(_, committed)| committed.state())
         .unwrap_or(0)
         != 0;
     let apply = local_apply(s, stand_now, drawn);
