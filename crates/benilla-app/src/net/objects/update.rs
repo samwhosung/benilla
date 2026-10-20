@@ -801,6 +801,11 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
     for block in blocks {
         match block {
             // Live objects only (`0x464890`, `0x465371`).
+            //
+            // Deviation: a first-pass values block the clear header byte left unwritten re-fires,
+            // for a live object, its last write's edges against the watch copy (`0x465570`,
+            // `0x466686`); benilla compares against this packet's copies, which hold none for it,
+            // so a stale edge never fires twice.
             Notify::Values { guid, sent } => {
                 let moved = copies.get(&guid).unwrap_or(&none);
                 let block = Notified::new(Sent::Fields(&sent), moved);
@@ -808,6 +813,10 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
             }
             // An object not yet shown runs its type's create hook; one shown before runs every
             // field's watch instead (`0x465d79`, `0x465d8e`).
+            //
+            // Deviation: the create notify uses its lookup's result untested (`0x465c97`,
+            // `0x465d79`), so a first-pass create the clear header byte left unwritten crashes
+            // the reference; benilla skips an object no pass wrote ([`notify`] finds none).
             Notify::Create { guid, kind } => {
                 if unshown.remove(&guid) {
                     create_hook(&mut sc, guid, kind, script.as_deref());
