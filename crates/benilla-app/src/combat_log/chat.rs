@@ -88,6 +88,25 @@ impl ChatCtx<'_> {
         combat::logged_spell(self.spells, spell_id).map(|d| d.name.clone())
     }
 
+    /// The record name `LogOpenLock` writes for what a lock opened (`0x62dcb9`-`0x62ddb6`): an
+    /// item's, by its entry in the item cache, tested first (type bit 1); else a game object's, by
+    /// its entry in the game object cache (bit 5). `None` for any other object, one not held and
+    /// one with no cached record.
+    fn opened_name(&self, guid: u64, stores: &impl Stores) -> Option<String> {
+        let fields = &self.index.0.get(&guid).and_then(|&e| stores.store(e))?.0;
+        if fields.is_item() {
+            let entry = fields.object_entry()?;
+            let item = self
+                .items?
+                .template(entry, 0, crate::query_cache::Ask::Read)?;
+            return Some(item.name.clone());
+        }
+        if fields.object_type() == Some(benilla_protocol::messages::ObjectType::GameObject) {
+            return Some(self.gameobjects?.of(fields)?.name.clone());
+        }
+        None
+    }
+
     /// `0x6ea280 == 2`, "this spell targets enemies": the predicate the chat-type stubs
     /// `0x627d30`/`0x627d60` use to choose a family's `…_DAMAGE` or `…_BUFF` row. A spell the
     /// catalog does not know reads as harmful, keeping the `…_DAMAGE` row.
@@ -448,9 +467,6 @@ pub(super) fn enchantment_log(
 /// effect id through the index table `0x5e845c` and the jump table `0x5e8430`. An effect with no
 /// arm of its own takes the cast line [`spell_cast_line`] once per row, with no target
 /// (`0x5e83e3`); so does a packet whose one group is a row-less effect 3 (`0x5e8004`-`0x5e8034`).
-///
-/// Not built: effects 33 and 59 `OPEN_LOCK` (its `%s` is a gameobject name, and there is no
-/// gameobject-name cache).
 pub(super) fn spell_log_execute(
     s: &SpellLogExecute,
     ctx: &ChatCtx,
@@ -663,9 +679,20 @@ pub(super) fn spell_log_execute(
                 E::Target { target } if cast_names_target(*_effect) => {
                     cast_line(log, Some(target));
                 }
-                // Effects 33 and 59 OPEN_LOCK (`0x5e82b2`), not built.
-                E::Target { .. }
-                    if matches!(*_effect, EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM) => {}
+                // Effects 33 and 59 OPEN_LOCK (`0x5e82b2`): [`open_lock_line`].
+                E::Target { target }
+                    if matches!(*_effect, EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM) =>
+                {
+                    open_lock_line(
+                        log,
+                        ctx,
+                        stores,
+                        poses,
+                        s.spell_id,
+                        (s.caster, caster),
+                        target,
+                    );
+                }
                 // The default arm, which reads nothing of the row: heals and energizes, which are
                 // worded from their own packets, the summons and the rest.
                 E::Heal { .. } | E::Energize { .. } | E::Target { .. } => cast_line(log, None),
@@ -690,6 +717,50 @@ fn cast_names_target(effect: u32) -> bool {
         effect,
         18 | 38 | 63 | 69 | 79 | 91 | 108 | 113 | 114 | 116 | 125 | 126
     )
+}
+
+/// `LogOpenLock` (`0x62dc10`), the line for `SMSG_SPELLLOGEXECUTE`'s effects 33 and 59: "You perform
+/// Pick Lock on Copper Vein." After the spell gates, the caster must be held as a unit within its
+/// class's range (`0x628010`). The target must be a held item with a record in the item cache
+/// (`0x62dce2`) or a held game object with one in the game object cache (`0x62ddac`), read
+/// without asking; the line names its record. `OPEN_LOCK_SELF` or `OPEN_LOCK_OTHER` on the
+/// caster, typed by the caster against itself through the spell's hostility (`0x627d30`). No word
+/// follows.
+fn open_lock_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    stores: &impl Stores,
+    poses: &impl Poses,
+    spell_id: u32,
+    caster: (u64, UnitClass),
+    target: u64,
+) {
+    let Some(spell) = ctx.spell_name(spell_id) else {
+        return;
+    };
+    if !ctx.holds_unit(caster.0, stores) {
+        return;
+    }
+    let Some(opened) = ctx.opened_name(target, stores) else {
+        return;
+    };
+    let Some(kind) = combat::spell_kind(caster.1, caster.1, !ctx.spell_harmful(spell_id)) else {
+        return;
+    };
+    queue(
+        log,
+        ctx,
+        poses,
+        kind,
+        combat::OPEN_LOCK,
+        caster,
+        caster,
+        Fills {
+            spell,
+            named: opened,
+            ..Default::default()
+        },
+    );
 }
 
 /// `SPELL_ATTR_IS_ABILITY` (vmangos `SpellDefines.h:796`): the cast line says "performs" (`0x62aff0`).

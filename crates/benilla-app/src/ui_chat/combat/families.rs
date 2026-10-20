@@ -513,6 +513,15 @@ duo!(
      is the PET."
 );
 duo!(
+    OPEN_LOCK,
+    "OPEN_LOCK_",
+    "SELF",
+    "OTHER",
+    [Attacker, Spell, Named],
+    "`\"You perform %s on %s.\"` (:2823) / `\"%s performs %s on %s.\"` (:2822) — `0x62dc10`'s \
+     line; the trailing name is the opened game object's or item's record name."
+);
+duo!(
     SPELLHAPPINESSDRAIN,
     "SPELLHAPPINESSDRAIN",
     "SELF",
@@ -696,6 +705,7 @@ pub(crate) const ALL_FAMILIES: &[Family] = &[
     SPELLDURABILITYDAMAGE,
     SPELLDURABILITYDAMAGEALL,
     SPELLDISMISSPET,
+    OPEN_LOCK,
     SPELLHAPPINESSDRAIN,
     SPELLFAILCAST,
     SPELLFAILPERFORM,
