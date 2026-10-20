@@ -13,7 +13,7 @@
 //! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
 use crate::ui_items::stack_counts;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Instant;
 
 use bevy::prelude::*;
@@ -71,17 +71,25 @@ type SlotWord = (u8, u32, SlotResolve, u32);
 
 impl UsableCache {
     /// `0x4e58e0`: a slot placed, cleared or recounted stores its new pair (`0x4e590a`,
-    /// `0x4e5914`) and signals only `ACTIONBAR_SLOT_CHANGED`; `all` is our player's arrival, which
-    /// writes all 120 (`0x5deafc`).
+    /// `0x4e5914`) and signals only `ACTIONBAR_SLOT_CHANGED`. `arrival` is our player's arrival
+    /// with its book: the loop `0x5deae2`-`0x5deb12` writes each slot (`0x5deafc`) but an empty one
+    /// or a spell word the player does not know (`0x60c740`, skipped at `0x5deaf5`).
     fn notify(
         &mut self,
         words: HashMap<u32, SlotWord>,
         pairs: &HashMap<u32, (bool, bool)>,
-        all: bool,
+        arrival: Option<&BTreeSet<u32>>,
     ) {
         let slots: HashSet<u32> = words.keys().chain(self.words.keys()).copied().collect();
         for action in slots {
-            if all || words.get(&action) != self.words.get(&action) {
+            let word = words.get(&action);
+            let written = match arrival {
+                Some(book) => word.is_some_and(|&(kind, id, _, _)| {
+                    kind != ACTION_KIND_SPELL || book.contains(&id)
+                }),
+                None => word != self.words.get(&action),
+            };
+            if written {
                 match pairs.get(&action) {
                     Some(&pair) => self.pairs.insert(action, pair),
                     None => self.pairs.remove(&action),
@@ -512,7 +520,7 @@ pub(super) fn feed_action_state(
         .map(|(&action, st)| (action, (st.usable, st.not_enough_mana)))
         .filter(|&(_, pair)| pair != (false, false))
         .collect();
-    cache.notify(words, &pairs, arrived);
+    cache.notify(words, &pairs, arrived.then_some(&actions.spells));
     let usable_changed = refresh_cache && cache.refresh(pairs);
 
     let keys: Vec<u32> = fresh

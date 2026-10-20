@@ -1725,6 +1725,10 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
         ),
         5.0,
     );
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .spells
+        .extend([133, 116]);
     record(
         &mut app,
         &["ACTIONBAR_UPDATE_USABLE", "SPELL_UPDATE_USABLE"],
