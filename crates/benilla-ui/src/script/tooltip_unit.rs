@@ -23,15 +23,18 @@ pub struct UnitTooltipFacts {
     /// The owner line `0x52fd30` writes after the subtitle (`0x52a247`), `None` for a unit with no
     /// charmer or creator, or whose owner is not in sight (`0x52fd8b`).
     pub owner: Option<OwnerTitle>,
-    /// The party member record the builder finds by guid (`0x496400`, `0x52a02b`), `None` off
-    /// our party.
+    /// The member's group record, the party's (`0x4e8820`) else the raid roster's (`0x4bb0f0`),
+    /// as `0x496400` finds it by guid; `None` off both. The app fills it on the member's own party
+    /// and raid rows, and the builder reads it there by guid for whatever unit it shows
+    /// (`0x52a02b`).
     pub party: Option<PartyRecord>,
     /// The studied-creature block's facts ([`super::tooltip_studied`]), filled while the unit's
     /// `UNIT_DYNAMIC_FLAGS` bit 4 is set.
     pub studied: Option<Box<super::StudiedCreature>>,
 }
 
-/// What the builder reads of a party member's record (`0x4e8820`).
+/// What the builder reads of a member's group record, the party's or the raid's, which shares the
+/// party layout (the raid entry's record at `+0x10`, `0x4bb127`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartyRecord {
     /// `+0x8` bit 0: clear adds `PLAYER_OFFLINE` and ends the tooltip (`0x52a6e9`).
@@ -225,6 +228,15 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             .unit(token)
             .cloned()
             .filter(|u| u.exists && u.guid != 0);
+        // The group record by guid, for every unit shown (`0x52a02b`): its member row's.
+        let unit = unit.map(|mut u| {
+            u.tooltip.party = model
+                .unit_guids
+                .roster_token(u.guid)
+                .and_then(|t| model.pushed_unit(&t))
+                .and_then(|row| row.tooltip.party.clone());
+            u
+        });
         let viewer = unit.as_ref().and_then(|u| viewer(&model, u));
         let req = &model.player_req;
         (
@@ -276,8 +288,8 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     if let Some(level) = level_line(lua, &u, player_level, viewer.as_ref()) {
         append_line(lua, this, (level, WHITE), None, false)?;
     }
-    // A party member whose record is offline: `PLAYER_OFFLINE`, white, and the build ends
-    // (`0x52a6e2`-`0x52a72b`).
+    // A group member whose record is offline, in sight or not: `PLAYER_OFFLINE`, white, and the
+    // build ends (`0x52a6e2`-`0x52a72b`).
     if u.tooltip.party.as_ref().is_some_and(|r| !r.online) {
         keyed_line(lua, this, "PLAYER_OFFLINE", WHITE)?;
         show_or_hide_empty(lua, h);
@@ -319,8 +331,9 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             keyed_line(lua, this, "UNIT_SKINNABLE", color)?;
         }
     }
-    // A party member other than the active player (`0x4918e0`, `0x52a953`) with no object: the
-    // name of its record's area, white, and nothing more (`0x52a95e`-`0x52a995`).
+    // A party or raid member (`0x4918e0`: `0x4e7f70`, else `0x4baee0`) other than the active
+    // player (`0x52a953`) with no object: the name of its record's area, white, and nothing more
+    // (`0x52a95e`-`0x52a995`).
     if !u.has_object {
         let area = u
             .tooltip

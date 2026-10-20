@@ -51,7 +51,8 @@ pub(crate) fn tooltip_facts(
     UnitTooltipFacts {
         health: store.0.unit_health().unwrap_or(0),
         owner: owner_title(store, creature_type, src),
-        // The party record is the party feed's.
+        // The group record rides on the member's own party or raid row, where the builder finds
+        // it by guid ([`UnitTooltipFacts::party`]).
         party: None,
         studied: studied(store, src),
     }

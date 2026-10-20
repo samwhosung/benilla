@@ -758,14 +758,16 @@ fn member_unit_state(
     s
 }
 
-/// The party record the unit tooltip finds by guid (`0x496400`): a member of our own party slots
-/// with a record, its online bit and the name of its area (`0x67e460`, with no parent zone).
+/// The group record the unit tooltip finds by guid (`0x496400`): the party's (`0x4e8820`, our own
+/// party slots), else the raid roster's (`0x4bb0f0`, its 40 entries); its online bit and the name of
+/// its area (`0x67e460`, with no parent zone). The roster's records are one per member either way.
 fn party_record(
     group: &GroupState,
     guid: u64,
     areas: Option<&benilla_formats::AreaTableCatalog>,
 ) -> Option<benilla_ui::script::PartyRecord> {
-    if !group.party_slots().any(|m| m.guid == guid) {
+    let in_party = group.party_slots().any(|m| m.guid == guid);
+    if !in_party && !group.raid_rows().any(|g| g == guid) {
         return None;
     }
     let record = group.stats.get(&guid)?;
@@ -1485,6 +1487,41 @@ mod tests {
         );
         assert_eq!((bare.health, bare.max_health, bare.power), (0, 0, 0));
         assert!(bare.exists);
+    }
+
+    /// The tooltip's group record (`0x496400`): the party's for a member of our own slots, else the
+    /// raid roster's (`0x4bb0f0`) for one in another subgroup, and none for a guid off both.
+    #[test]
+    fn a_raid_member_off_our_party_slots_has_a_group_record() {
+        let m = |n: u64, flags: u8| GroupMemberEntry {
+            name: format!("M{n}"),
+            guid: member(n),
+            status: member_status::ONLINE,
+            flags,
+        };
+        let mut group = GroupState::default();
+        group.apply_list(
+            GROUPTYPE_RAID,
+            0,
+            vec![m(1, 0), m(2, 1)],
+            ME,
+            None,
+            Some(ME),
+        );
+        for n in [1, 2] {
+            let mut record = PartyMemberStatsInfo::default();
+            record.set_online(n == 1);
+            group.stats.insert(member(n), record);
+        }
+        assert_eq!(
+            group.party_slots().map(|e| e.guid).collect::<Vec<_>>(),
+            [member(1)],
+            "the second member sits in another subgroup"
+        );
+        let online = |guid| party_record(&group, guid, None).map(|r| r.online);
+        assert_eq!(online(member(1)), Some(true), "the party's record");
+        assert_eq!(online(member(2)), Some(false), "the raid roster's record");
+        assert_eq!(online(member(3)), None, "off the roster");
     }
 
     /// vmangos re-sends a member's status on join, login and the AFK, DND, PvP, FFA and ghost
