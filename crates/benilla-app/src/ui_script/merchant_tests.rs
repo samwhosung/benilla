@@ -276,6 +276,12 @@ fn shipped_merchant_frame_drives_end_to_end() {
         s.take_merchant_buys().is_empty(),
         "left-click does not buy (pickup pending the cursor arc)"
     );
+    // The row is on the cursor, so a right press drops it and buys nothing: the world hook
+    // (`0x492b50`) takes the press ahead of every frame.
+    s.mouse_button(cx, cy, "RightButton", true);
+    s.mouse_button(cx, cy, "RightButton", false);
+    assert!(s.take_merchant_buys().is_empty(), "a held row buys nothing");
+    assert!(s.cursor_payload().is_none(), "the press dropped the row");
     s.mouse_button(cx, cy, "RightButton", true);
     s.mouse_button(cx, cy, "RightButton", false);
     assert_eq!(s.take_merchant_buys(), vec![(1, 1)]);
