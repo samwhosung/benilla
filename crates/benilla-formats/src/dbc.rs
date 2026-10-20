@@ -140,6 +140,62 @@ pub(crate) fn load_id_name_table(
 mod tests {
     use super::*;
 
+    /// Every shipped table has `record_size = 4 × field_count` but the two the client reads by
+    /// their own byte-packed layouts, `CharBaseInfo` (2 fields in 2 bytes) and `CharStartOutfit`
+    /// (41 in 152): a schema of 4-byte slots cannot describe those, and the reader refuses it
+    /// (benilla-re `dbc#the-loader`, `dbc_schemas.tsv`).
+    #[test]
+    fn only_the_two_byte_packed_tables_are_refused_a_four_byte_schema() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let mut packed = Vec::new();
+        let mut checked = 0usize;
+        let tables: std::collections::BTreeSet<String> = chain
+            .list()
+            .expect("list the chain")
+            .into_iter()
+            .map(|entry| entry.name.to_ascii_lowercase().replace('/', "\\"))
+            .filter(|name| name.starts_with("dbfilesclient\\") && name.ends_with(".dbc"))
+            .collect();
+        for path in tables {
+            // A patch can delete a table it lists (`CharacterCreateCameras`).
+            if !chain.contains(&path) {
+                continue;
+            }
+            let bytes = chain
+                .read_file(&path)
+                .unwrap_or_else(|e| panic!("{path}: {e}"));
+            let Ok(parser) = DbcParser::parse(&mut Cursor::new(&bytes[..])) else {
+                continue;
+            };
+            let header = *parser.header();
+            if header.record_count == 0 {
+                continue;
+            }
+            let mut schema = Schema::new("Slots");
+            for i in 0..header.field_count {
+                schema.add_field(SchemaField::new(format!("c{i}"), FieldType::UInt32));
+            }
+            let read = parser.with_schema(schema).unwrap().parse_records();
+            checked += 1;
+            if header.record_size == 4 * header.field_count {
+                assert!(read.is_ok(), "{path}: {:?}", read.err());
+            } else {
+                assert!(read.is_err(), "{path} read through 4-byte slots");
+                packed.push((path, header.field_count, header.record_size));
+            }
+        }
+        packed.sort();
+        assert!(checked > 100, "only {checked} tables checked");
+        assert_eq!(
+            packed,
+            [
+                ("dbfilesclient\\charbaseinfo.dbc".to_string(), 2, 2),
+                ("dbfilesclient\\charstartoutfit.dbc".to_string(), 41, 152),
+            ]
+        );
+    }
+
     /// A one-record WDBC: the id, eight string offsets (one per locale, column 2 blank) and the
     /// flags word, the shape of a `Name_Lang` table such as `Languages.dbc`.
     fn localized_table() -> (RecordSet, [&'static str; 8]) {

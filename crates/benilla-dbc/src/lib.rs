@@ -573,6 +573,45 @@ mod tests {
         assert_eq!(csv, expected);
     }
 
+    /// `WowClientDB<T>::Load` fails a table whose record size is not the type's ("has wrong row
+    /// size", compared at `0x545e36` for `GameObjectDisplayInfo`), after it returns on a record
+    /// count of 0 (`0x545dd2`). A schema of 4-byte slots covers `4 × field_count` bytes, so a
+    /// shorter record, as `CharBaseInfo`'s two bytes (benilla-re `dbc_schemas.tsv`), cannot be
+    /// read through it: its fields would run into the next record's.
+    #[test]
+    fn a_record_size_other_than_the_schemas_is_refused() {
+        let mut two_slots = Schema::new("Packed");
+        two_slots.add_field(SchemaField::new("a", FieldType::UInt32));
+        two_slots.add_field(SchemaField::new("b", FieldType::UInt32));
+        let parse = |bytes: &[u8]| {
+            DbcParser::parse(&mut Cursor::new(bytes))
+                .unwrap()
+                .with_schema(two_slots.clone())
+                .unwrap()
+                .parse_records()
+        };
+        let refusal = |bytes: &[u8]| parse(bytes).err().map(|e| e.to_string());
+
+        // Three 2-byte records of 2 fields: 01 01 | 02 02 | 03 03.
+        let short = build_wdbc(3, 2, 2, &[1, 1, 2, 2, 3, 3], &[0]);
+        assert_eq!(
+            refusal(&short).as_deref(),
+            Some("schema covers 8 bytes per record but the file's record size is 2")
+        );
+        // A longer record is no more a table the schema describes.
+        let long = build_wdbc(1, 2, 12, &[0u8; 12], &[0]);
+        assert_eq!(
+            refusal(&long).as_deref(),
+            Some("schema covers 8 bytes per record but the file's record size is 12")
+        );
+        // The size the schema covers reads, and so does a table with no records at any size.
+        assert!(parse(&build_wdbc(1, 2, 8, &[0u8; 8], &[0])).is_ok());
+        assert!(parse(&build_wdbc(0, 2, 2, &[], &[0]))
+            .unwrap()
+            .records()
+            .is_empty());
+    }
+
     /// A 20-byte file claiming `u32::MAX` records of size 0 must not run the loop that many times.
     #[test]
     fn zero_record_size_with_records_is_refused_not_iterated() {
