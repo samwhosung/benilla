@@ -243,9 +243,10 @@ struct LocalApply {
 }
 
 fn local_apply(s: u8, stand_now: u8, drawn: bool) -> LocalApply {
+    let predict = s != stand_now;
     LocalApply {
-        predict: s != stand_now,
-        leave: false,
+        predict,
+        leave: predict && s != 0,
         stow: drawn && s != 0 && s != 2,
     }
 }
