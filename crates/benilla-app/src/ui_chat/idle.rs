@@ -165,7 +165,8 @@ pub(crate) fn idle_handler(
         let action = match gates {
             Some(g) => idle_action(idle, g),
             // No body yet: the reference resolves the local player inside the block (`0x468550`,
-            // `0x468460`), so the sit and the AFK have nothing to read; the camp leg never reads it.
+            // `0x468460`), so the sit and the AFK have nothing to read; the camp leg never reads
+            // it.
             None => IdleAction {
                 camp: idle >= AUTO_LOGOUT_AFTER,
                 ..IdleAction::default()
@@ -196,8 +197,8 @@ pub(crate) fn idle_handler(
                 language: None,
             });
         }
-        // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is skipped,
-        // the line with the request, so it runs once per logout and again after a cancel.
+        // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is
+        // skipped, the line with the request, so it runs once per logout and again after a cancel.
         if action.camp && !logout.pending() {
             if let Some(line) = strings("IDLE_MESSAGE") {
                 push_system(&chat, line);

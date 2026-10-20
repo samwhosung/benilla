@@ -178,8 +178,8 @@ pub(crate) fn feed_pet_stats(
             return;
         }
         // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`). Deviation: fired when
-        // the bucket or its two tooltip figures change, not on every change of the happiness field as
-        // in the reference, because no stock consumer reads the raw value.
+        // the bucket or its two tooltip figures change, not on every change of the happiness field
+        // as in the reference, because no stock consumer reads the raw value.
         let happiness_moved = last.as_ref().map(|(_, s)| {
             (
                 s.happiness,
@@ -197,9 +197,10 @@ pub(crate) fn feed_pet_stats(
                 fresh.1.happiness, fresh.1.damage_percentage, fresh.1.loyalty
             );
         }
-        // The family lands with the creature-query answer and fires nothing: the pet page registers no
-        // event known to fire then (not the reference's query event, `UNIT_CLASSIFICATION_CHANGED`).
-        // The page's `OnShow` covers an open; a page already open repaints on its next `UNIT_STATS`.
+        // The family lands with the creature-query answer and fires nothing: the pet page registers
+        // no event known to fire then (not the reference's query event,
+        // `UNIT_CLASSIFICATION_CHANGED`). The page's `OnShow` covers an open; a page already open
+        // repaints on its next `UNIT_STATS`.
         if last.as_ref().map(|(_, s)| &s.family) != Some(&fresh.1.family) {
             debug!(
                 "ui_pet_stats: pet family {:?}, diet {:?}",

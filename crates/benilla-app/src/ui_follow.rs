@@ -37,8 +37,8 @@ fn feed_follow(
         };
         let memo = feed.vm.get(script);
         match (follow.guid, memo.told) {
-            // Started, or switched subject: a switch fires END first, as the reference's arm routine
-            // (`0x611130`) calls the canceller (`0x61113e`) before arming.
+            // Started, or switched subject: a switch fires END first, as the reference's arm
+            // routine (`0x611130`) calls the canceller (`0x61113e`) before arming.
             (Some(guid), told) if told != Some(guid) => {
                 if told.is_some() {
                     script.fire_event("AUTOFOLLOW_END", vec![]);

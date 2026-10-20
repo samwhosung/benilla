@@ -587,8 +587,8 @@ fn feed_ui(
         if *published == Some(playing) {
             return;
         }
-        // A fresh VM is already out of a cinematic: seed the memo rather than fire a `CINEMATIC_STOP`
-        // the reference never sends unedged.
+        // A fresh VM is already out of a cinematic: seed the memo rather than fire a
+        // `CINEMATIC_STOP` the reference never sends unedged.
         if published.is_none() && !playing {
             *published = Some(false);
             return;

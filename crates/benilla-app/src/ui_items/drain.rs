@@ -1717,8 +1717,8 @@ pub(super) fn drain_bind_on_use_confirms(
         let Some(script) = script else {
             return;
         };
-        // The first accept spends the pending use, whatever the protected-action gate said; the cast
-        // inside it asks tag 2 (`0x5d92c1` → `0x6e4bc1`).
+        // The first accept spends the pending use, whatever the protected-action gate said; the
+        // cast inside it asks tag 2 (`0x5d92c1` → `0x6e4bc1`).
         let Some(may_cast) = script.take_bind_on_use_casts().first().copied() else {
             return;
         };

@@ -7,14 +7,13 @@
 //! and `SpellIsTargeting()` on the line after a cast reads the word it armed.
 //!
 //! Every system that runs Lua lends the host to the VM around it ([`HostedVm`]), whatever entry the
-//! script comes in by: the mouse and key feed, the bindings pass, an `OnUpdate`, the handlers of the
-//! events a feed fires, a chunk. A system that holds the host's own state alongside the VM runs as
-//! an engine turn ([`VmWith`]): a call its Lua makes waits, as one made while the host applies a
+//! script comes in by: the mouse and key feed, the bindings pass, an `OnUpdate`, the handlers of
+//! the events a feed fires, a chunk. A system that holds the host's own state alongside the VM runs
+//! as an engine turn ([`VmWith`]): a call its Lua makes waits, as one made while the host applies a
 //! call does, and applies before the system ends; a feed's events fire after its turn, with the
-//! host lent ([`VmWith::feed`]). Every host runs in one order, the VM pass ([`crate::vm_pass`]).
-//! An addon's or a macro's cast passes the gate's
-//! tag 2 (`0x494a92`) only inside an input event; the client's own code passes it outside any
-//! (`0x494a5a` → `0x494b11`).
+//! host lent ([`VmWith::feed`]). Every host runs in one order, the VM pass ([`crate::vm_pass`]). An
+//! addon's or a macro's cast passes the gate's tag 2 (`0x494a92`) only inside an input event; the
+//! client's own code passes it outside any (`0x494a5a` → `0x494b11`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;

@@ -154,9 +154,9 @@ pub(crate) fn drain_logout(
                     }
                 }
                 SessionRequest::CancelLogout => {
-                    // The stock dialogs' `OnHide` sends this on every early close, even after a cancel
-                    // landed, so a stray cancel is normal. `quitting` clears here, not on the ack, so a
-                    // dead socket cannot leave a quit armed.
+                    // The stock dialogs' `OnHide` sends this on every early close, even after a
+                    // cancel landed, so a stray cancel is normal. `quitting` clears here, not on
+                    // the ack, so a dead socket cannot leave a quit armed.
                     logout.quitting = false;
                     logout.pending = false;
                     let _ = commands.0.send(ClientCommand::LogoutCancel);
@@ -175,8 +175,9 @@ pub(crate) fn drain_logout(
                 }
                 // The rebuild is `ui_script::run_pending_reload`'s, at the top of the next frame.
                 SessionRequest::ReloadUi => reload.0 = true,
-                // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no native
-                // caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip path.
+                // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no
+                // native caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip
+                // path.
                 SessionRequest::StopCinematic => {
                     crate::cinematic::stop(&mut cinematic, Some(&commands));
                 }

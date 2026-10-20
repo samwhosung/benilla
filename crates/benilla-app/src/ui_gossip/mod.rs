@@ -281,17 +281,17 @@ fn feed_gossip(
             *last = None;
             *last_name = None;
         }
-        // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles with
-        // `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it. Asked
-        // before the hold, so the name query goes out beside the text query; `UnitName` looks it up
-        // with a callback (`0x5171b8`), at the show a gossip packet brings.
+        // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles
+        // with `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it.
+        // Asked before the hold, so the name query goes out beside the text query; `UnitName` looks
+        // it up with a callback (`0x5171b8`), at the show a gossip packet brings.
         let ask = Ask::at(last.is_none() || state.is_changed(), &commands);
         let npc_name = state
             .npc
             .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
-        // While the text query is out, fire nothing and keep the last snapshot: the reference returns
-        // at `0x4e2068` with no write and no event, so its frame keeps what it last showed. Reading
-        // the hold as a close would flash an open window.
+        // While the text query is out, fire nothing and keep the last snapshot: the reference
+        // returns at `0x4e2068` with no write and no event, so its frame keeps what it last showed.
+        // Reading the hold as a close would flash an open window.
         if state.text_pending() {
             return;
         }

@@ -82,8 +82,8 @@ pub(super) fn drain_pet_menu(
             debug!("ui_pet: abandoning pet {pet_guid:#x}");
             let _ = commands.0.send(ClientCommand::PetAbandon { pet_guid });
         }
-        // `0x4bd6e0` stages `0x07000003` at target 0 and enters the dispatcher, whose first act is the
-        // usability predicate (`0x4bd1f2`): a pet that fails it is not sent the word.
+        // `0x4bd6e0` stages `0x07000003` at target 0 and enters the dispatcher, whose first act is
+        // the usability predicate (`0x4bd1f2`): a pet that fails it is not sent the word.
         let dismiss_word = PET_COMMAND_DISMISS | (u32::from(PET_ACT_COMMAND) << 24);
         for _ in 0..dismisses {
             if !pet.actions_usable(&bar) {

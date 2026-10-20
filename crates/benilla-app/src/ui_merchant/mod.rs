@@ -635,8 +635,8 @@ fn feed_merchant(
             })
             .collect();
         crate::ui_action::show_messages(script, &mut sink, "ui_merchant", refusals);
-        // The purse (`PLAYER_FIELD_COINAGE`): on a change, push it and fire `PLAYER_MONEY`, which the
-        // money frames repaint on.
+        // The purse (`PLAYER_FIELD_COINAGE`): on a change, push it and fire `PLAYER_MONEY`, which
+        // the money frames repaint on.
         if let Some(store) = self_q.iter().next() {
             if let Some(copper) = store.0.player_money() {
                 let copper = u64::from(copper);
@@ -650,8 +650,8 @@ fn feed_merchant(
 
         // The vendor's service bits gate the repair pair; the player's descriptor carries buyback.
         let player = self_q.iter().next().map(|s| &s.0);
-        // The stock window calls its getters at `MERCHANT_SHOW` and at the list's `MERCHANT_UPDATE`:
-        // a window opening, or the vendor's list or stock changing.
+        // The stock window calls its getters at `MERCHANT_SHOW` and at the list's
+        // `MERCHANT_UPDATE`: a window opening, or the vendor's list or stock changing.
         let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
         let fresh = snapshot(
             &open,
@@ -663,8 +663,8 @@ fn feed_merchant(
             vendor_npc_flags(&open, &units),
         );
         // `MERCHANT_SHOW` and `MERCHANT_UPDATE` carry no argument (`SignalEvent` `0x4fad92`,
-        // `0x4facaa`) and the stock window titles with `UnitName("NPC")` (`MerchantFrame.lua:67`), so
-        // the name's landing alone re-fires `MERCHANT_UPDATE`.
+        // `0x4facaa`) and the stock window titles with `UnitName("NPC")` (`MerchantFrame.lua:67`),
+        // so the name's landing alone re-fires `MERCHANT_UPDATE`.
         let vendor_name = open
             .vendor
             .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
@@ -779,8 +779,8 @@ fn drain_merchant(
         }
         if script.take_repair_all() {
             if let (Some(vendor), Some(me)) = (open.vendor, self_store) {
-                // `RepairAllItems` (`0x4fbfe0`) prices only the equipped slots 0-18 for its purse test
-                // (`0x4fc026`–`0x4fc063`), not the bags `GetRepairAllCost` also sweeps.
+                // `RepairAllItems` (`0x4fbfe0`) prices only the equipped slots 0-18 for its purse
+                // test (`0x4fc026`–`0x4fc063`), not the bags `GetRepairAllCost` also sweeps.
                 let worn = (0..19u8).filter_map(|i| me.0.player_inv_slot(i));
                 if !purse.refuses(script, &open, me, worn) {
                     debug!("ui_merchant: repair all");
@@ -807,9 +807,9 @@ fn drain_merchant(
                 None => debug!("ui_merchant: BuyMerchantItem({index}) out of range — ignored"),
             }
         }
-        // `PickupMerchantItem`'s sell arm, a bag item dropped on the window, sold by its item guid so
-        // an emptied slot is a no-op. It runs before the close below, as `0x4fb760`'s sell arm runs
-        // before its vendor check (`0x4fb7f7`), so a drop on a closing window still sells.
+        // `PickupMerchantItem`'s sell arm, a bag item dropped on the window, sold by its item guid
+        // so an emptied slot is a no-op. It runs before the close below, as `0x4fb760`'s sell arm
+        // runs before its vendor check (`0x4fb7f7`), so a drop on a closing window still sells.
         for (bag, slot) in script.take_merchant_cursor_sells() {
             let Some(vendor) = open.vendor else { continue };
             let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);

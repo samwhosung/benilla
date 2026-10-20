@@ -147,9 +147,9 @@ fn feed_craft(
                 global: &global,
                 printf: &crate::ui_script::token_printf,
             };
-            // Admission (`0x5e9c20`): known, not hidden (`Attributes & 0x20`), and `castUI` equal to
-            // the craft type. The client walks its per-type list (`CGPlayer_C + 0x1cd0 + 0x10*type`)
-            // and never consults `SkillLineAbility` for membership.
+            // Admission (`0x5e9c20`): known, not hidden (`Attributes & 0x20`), and `castUI` equal
+            // to the craft type. The client walks its per-type list (`CGPlayer_C + 0x1cd0 +
+            // 0x10*type`) and never consults `SkillLineAbility` for membership.
             let recipes: Vec<CraftRecipe> = actions
                 .spells
                 .iter()
@@ -165,7 +165,8 @@ fn feed_craft(
                     let mut num_available = u32::MAX;
                     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
                         let have = count_of(&store.0, &objects, entry, InventoryScope::DEFAULT);
-                        // A reagent's icon is the shared item chain (`0x5d88b0`) through its display.
+                        // A reagent's icon is the shared item chain (`0x5d88b0`) through its
+                        // display.
                         let (name, icon) = match items.template(entry, 0, ask) {
                             Some(t) => (
                                 Some(t.name.clone()),

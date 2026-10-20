@@ -203,8 +203,8 @@ fn mail_probe(
                     probe.phase = Phase::Done;
                     return;
                 }
-                // The `UI_ERROR_MESSAGE` hook for steps e and f: a hidden frame logs `arg1` into a Lua
-                // table the probe polls, so the two error texts are told apart in order.
+                // The `UI_ERROR_MESSAGE` hook for steps e and f: a hidden frame logs `arg1` into a
+                // Lua table the probe polls, so the two error texts are told apart in order.
                 if let Err(e) = script.run(
                     r#"
                     if not ProbeMailHooked then
@@ -313,8 +313,8 @@ fn mail_probe(
                 let Some(idx) = index_of(&mail, letter_id) else {
                     return; // found this frame, so not expected; re-poll
                 };
-                // `CheckInbox()` twice: `0x4aeab0` throttles it to once per 60 s, so the re-call is a
-                // no-op.
+                // `CheckInbox()` twice: `0x4aeab0` throttles it to once per 60 s, so the re-call is
+                // a no-op.
                 if let Err(e) = script.run(&format!("CheckInbox() CheckInbox() GetInboxText({idx})")) {
                     error!("PROBE_MAIL: FAIL (b) — GetInboxText({idx}) errored: {e}");
                     probe.fails += 1;
@@ -468,7 +468,8 @@ fn mail_probe(
                         if painted {
                             info!("PROBE_MAIL: PASS (b3) — the reader painted the letter body (title/creator/text via ITEM_TEXT_BEGIN→READY)");
                             probe.passes += 1;
-                            // Cleanup: close the reader, destroy the copy (else bags gain one per run).
+                            // Cleanup: close the reader, destroy the copy (else bags gain one per
+                            // run).
                             crate::ui_script::run_or_warn(script, "ItemTextCloseButton:Click()");
                             crate::ui_script::run_or_warn(
                                 script,
@@ -731,8 +732,8 @@ fn mail_probe(
                     "PROBE_MAIL: DONE pass={} fail={}",
                     probe.passes, probe.fails
                 );
-                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
-                // teardown hang cannot leave a client holding the probe account.
+                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so
+                // a teardown hang cannot leave a client holding the probe account.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

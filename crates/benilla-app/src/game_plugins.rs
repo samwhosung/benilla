@@ -1804,11 +1804,11 @@ pub(crate) mod schedule_tests {
         }
     }
 
-    /// A consumer (a system taking `NonSend[Mut]<UiScript>`, a `HostedVm` or a `VmWith`, whose body has a [`CONSUMES`]
-    /// marker) passes if the schedule shows `ingame_ui_up` on it or a set above it, if it is a
-    /// `fire_event` driven by a `VmMemo` parameter, or if [`EXEMPT`] argues it. Read off the
-    /// schedule, where a gate on a set, a tuple or the member all look alike. A stale `EXEMPT`
-    /// row fails too.
+    /// A consumer (a system taking `NonSend[Mut]<UiScript>`, a `HostedVm` or a `VmWith`, whose body
+    /// has a [`CONSUMES`] marker) passes if the schedule shows `ingame_ui_up` on it or a set above
+    /// it, if it is a `fire_event` driven by a `VmMemo` parameter, or if [`EXEMPT`] argues it. Read
+    /// off the schedule, where a gate on a set, a tuple or the member all look alike. A stale
+    /// `EXEMPT` row fails too.
     #[test]
     fn every_one_shot_consumer_that_holds_the_vm_is_gated_or_argued() {
         use crate::test_support::{fn_items, rel_path, rust_files, src_dir};

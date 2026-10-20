@@ -171,8 +171,8 @@ fn feed_inspect(
             return;
         };
         // The frame's show and a new inspectee are its slots' getter calls, whose lookups pass a
-        // callback (`0x4c83ce`); the frames between only see a slot change, which the visible item's
-        // own lookup asked (`0x5ed764`).
+        // callback (`0x4c83ce`); the frames between only see a slot change, which the visible
+        // item's own lookup asked (`0x5ed764`).
         let shown = notified || memo.last.as_ref().map(|v| v.guid) != Some(guid);
         let ask = Ask::at(shown, &commands);
         let mut slots: InventorySlots = Default::default();
@@ -197,7 +197,8 @@ fn feed_inspect(
         if memo.last.as_ref() != Some(&view) {
             script.set_inspect(Some(view.clone()));
             memo.last = Some(view);
-            // `InspectPaperDollItemSlotButton_OnEvent` filters it on `arg1` being the inspected unit.
+            // `InspectPaperDollItemSlotButton_OnEvent` filters it on `arg1` being the inspected
+            // unit.
             script.fire_event(
                 "UNIT_INVENTORY_CHANGED",
                 vec![ScriptValue::Str(token.clone())],

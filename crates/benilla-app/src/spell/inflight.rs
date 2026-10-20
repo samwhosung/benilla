@@ -236,8 +236,8 @@ impl QueuedMeleeSpell {
 pub(crate) enum Inflight {
     /// An ordinary cast, with a guard, a bar and a `Casting` to reap.
     Cast(u32),
-    /// A queued on-next-swing strike: no bar and no [`Casting`](crate::creature_anim::Casting), so a cancel is the wire message
-    /// and the slot.
+    /// A queued on-next-swing strike: no bar and no [`Casting`](crate::creature_anim::Casting), so
+    /// a cancel is the wire message and the slot.
     Strike(u32),
     /// The spell awaiting its click, which the attempt pushed (`0x6e5026`) before the arm raised
     /// the cursor (`0x6e5250`). A bind sends with it still in the slot, where it stays until its

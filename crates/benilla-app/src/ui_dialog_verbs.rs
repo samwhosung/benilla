@@ -457,7 +457,8 @@ fn feed_meeting_stone(
                 }
             }
             // Every status, silent or out of range, rebuilds and fires. The globals reach the VM
-            // first: the stock handler's first call is `IsInMeetingStoneQueue()` (`Minimap.xml:222`).
+            // first: the stock handler's first call is `IsInMeetingStoneQueue()`
+            // (`Minimap.xml:222`).
             let text = build_stone_text(script, areas, new);
             stone.text = StoneText::Built(text.clone());
             stone.dirty = false;

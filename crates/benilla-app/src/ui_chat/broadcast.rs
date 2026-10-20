@@ -142,7 +142,8 @@ pub(super) fn feed_broadcasts(
                     push_channel_lines(&log, &channels, zone, player_zone, &text);
                 }
                 Broadcast::Defense { zone_id, text } => {
-                    // The wire text stands on its own, so an unresolvable zone only costs the remap.
+                    // The wire text stands on its own, so an unresolvable zone only costs the
+                    // remap.
                     let zone = areas
                         .as_ref()
                         .and_then(|a| parent_zone(a, zone_id))
@@ -151,8 +152,9 @@ pub(super) fn feed_broadcasts(
                 }
                 Broadcast::ChatRestricted => {
                     // Its row is a chat row (tested below), so it is written as a system line here.
-                    // Deviation: a missing global prints nothing, where the reference prints an empty
-                    // line (`0x703c02`), because benilla's other `DisplayError` routes do the same.
+                    // Deviation: a missing global prints nothing, where the reference prints an
+                    // empty line (`0x703c02`), because benilla's other `DisplayError` routes do the
+                    // same.
                     if let Some(text) = super::combat::global_string(script, "ERR_CHAT_RESTRICTED")
                     {
                         log.push_event(ChatEvent::text_only(ChatEventKind::System, text));

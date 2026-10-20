@@ -246,9 +246,9 @@ fn feed_stable(
 
         // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
         let has_live_pet = bar.spells.pet_guid != 0;
-        // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`): the
-        // template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot, so it
-        // fires nothing.
+        // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`):
+        // the template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot,
+        // so it fires nothing.
         let live_pet_display = has_live_pet
             .then(|| pet.store(bar.spells.pet_guid))
             .flatten()
@@ -273,12 +273,13 @@ fn feed_stable(
         // The push before the posts: the handlers run when they fire, after the turn, and read it.
         script.set_stable(fresh.clone());
         if fresh_list && fresh.is_some() {
-            // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only repaints.
+            // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only
+            // repaints.
             fires.post("PET_STABLE_SHOW", vec![]);
         } else if last.is_some() && fresh.is_some() {
-            // A change with no new list is a creature-query answer, the reference's callback edge. A
-            // close is the core's, which told the VM, and a disconnect's clear tells it nothing; a
-            // first snapshot always comes with the list latch.
+            // A change with no new list is a creature-query answer, the reference's callback edge.
+            // A close is the core's, which told the VM, and a disconnect's clear tells it nothing;
+            // a first snapshot always comes with the list latch.
             fires.post("PET_STABLE_UPDATE", vec![]);
             fires.post("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
         }

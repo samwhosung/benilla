@@ -583,7 +583,8 @@ fn feed_loot_rolls(
             items.template(r.item_id, 0, Ask::Event(&commands));
             r.asked = true;
         }
-        // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from it.
+        // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from
+        // it.
         let fresh = snapshot(&rolls, &items, icons.as_deref(), catalogs);
         if fresh != *last {
             script.set_loot_rolls(fresh.clone());
@@ -594,7 +595,8 @@ fn feed_loot_rolls(
         // takes a free slot or is deferred.
         rolls.reach_ready(|r| {
             if items.template(r.item_id, 0, Ask::Read).is_none() {
-                // The module doc's deviation: an entry the server does not know, or an expired hold.
+                // The module doc's deviation: an entry the server does not know, or an expired
+                // hold.
                 let unknown = items.template_answered_unknown(r.item_id);
                 if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {
                     return false;
@@ -611,8 +613,8 @@ fn feed_loot_rolls(
             }
             true
         });
-        // Closes first: a promoted roll's frame needs the closed one's free, or the stock four-frame
-        // `GroupLootFrame_OpenNewFrame` drops it.
+        // Closes first: a promoted roll's frame needs the closed one's free, or the stock
+        // four-frame `GroupLootFrame_OpenNewFrame` drops it.
         for roll_id in std::mem::take(&mut rolls.cancelled) {
             debug!("ui_loot_roll: roll {roll_id} cancelled");
             script.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(roll_id as i64)]);

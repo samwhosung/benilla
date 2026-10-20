@@ -363,15 +363,15 @@ fn drive_vplates(
         let basis = plate_basis(viewport);
         let gx = |v: f32| gx_px(v, basis);
         let window = world.window.single().ok();
-        // Plates stop taking the mouse in freelook (`0x60f830`, called from `0x483e80`/`0x483e70` on
-        // the transitions), written on the edge per VM.
+        // Plates stop taking the mouse in freelook (`0x60f830`, called from `0x483e80`/`0x483e70`
+        // on the transitions), written on the edge per VM.
         let looking = rig.is_looking();
         if *mouse_told.get(script) != Some(looking) {
             *mouse_told.get(script) = Some(looking);
             script.set_nameplate_mouse(!looking);
         }
-        // While a ground-targeted spell is armed (`0x6e6320`'s `flag & 0x60`), plates refuse the hit
-        // test (`0x7cba30`, the `+0x3c` override) without clearing the mouse-enabled bit, so
+        // While a ground-targeted spell is armed (`0x6e6320`'s `flag & 0x60`), plates refuse the
+        // hit test (`0x7cba30`, the `+0x3c` override) without clearing the mouse-enabled bit, so
         // `IsMouseEnabled()` is unchanged.
         script.set_nameplate_hit_test_veto(
             world
@@ -391,8 +391,8 @@ fn drive_vplates(
         let mut states: Vec<PlateState> = Vec::new();
 
         // Plates seat in squared-distance order from the gx point (0.4, 0.3), Y mirrored from the
-        // reference's Y-up space (`0x608870`, `0x6089a0`, walked by `0x608ce0`); each later plate is
-        // solved off those already claimed. The undamped diagonal: this is position, not size.
+        // reference's Y-up space (`0x608870`, `0x6089a0`, walked by `0x608ce0`); each later plate
+        // is solved off those already claimed. The undamped diagonal: this is position, not size.
         let diag = viewport.length();
         let sort_pt = Vec2::new(0.4 * diag, viewport.y - 0.3 * diag);
         let mut cands = Vec::new();
@@ -402,8 +402,8 @@ fn drive_vplates(
             }
             // `NOT_SELECTABLE` (flags bit 25) never gets a plate, re-tested every tick (`0x60f622`,
             // from CGUnit's OnUpdate `0x607ed0`). A plate hover publishes the mouseover with no
-            // selectability check (`0x7cb869`, unlike the world hover at `0x482982`), so this gate is
-            // what keeps such a unit's tooltip away.
+            // selectability check (`0x7cb869`, unlike the world hover at `0x482982`), so this gate
+            // is what keeps such a unit's tooltip away.
             if store.is_some_and(|s| s.0.unit_flags() & (1 << 25) != 0) {
                 continue;
             }
@@ -428,16 +428,16 @@ fn drive_vplates(
             }) {
                 continue;
             }
-            // The category is `CanAttack` from the player (a rep faction answers by its at-war bit);
-            // the bar colour is the unit's reaction toward us (by standing). A not-at-war neutral NPC
-            // is a friendly plate with a yellow bar.
+            // The category is `CanAttack` from the player (a rep faction answers by its at-war
+            // bit); the bar colour is the unit's reaction toward us (by standing). A not-at-war
+            // neutral NPC is a friendly plate with a yellow bar.
             let is_player = net.kind == EntityKind::Player;
             let pair = store
                 .map(|s| world.relations.unit_of(guid.0, s))
                 .zip(me.as_ref());
             let rank = pair.map_or(Reaction::Neutral as u8, |(u, me)| rel.reaction(&u, me));
-            // A unit whose descriptor has not streamed is attackable by nobody, so friendly unless a
-            // player, whom `CanCooperate` cannot pass.
+            // A unit whose descriptor has not streamed is attackable by nobody, so friendly unless
+            // a player, whom `CanCooperate` cannot pass.
             let friendly = pair.map_or(!is_player, |(u, me)| {
                 crate::target::ring::plate_is_friendly(&rel, &u, me, is_player)
             });
@@ -535,8 +535,8 @@ fn drive_vplates(
             }
             bucket.claim(plate);
             let hover = hovered_key == Some(guid.0);
-            // The mouseover or the target lights the bar; `hover` joins directly so the brighten does
-            // not lag the yellow name by the frame the mouseover takes to publish.
+            // The mouseover or the target lights the bar; `hover` joins directly so the brighten
+            // does not lag the yellow name by the frame the mouseover takes to publish.
             let lit =
                 hover || world.hovered.target == Some(entity) || world.selection.target == Some(entity);
             if trace {
@@ -621,9 +621,9 @@ fn drive_vplates(
                 raid_size: gx(RAID_ICON_SIZE) / seam,
                 name_height: text_px(NAME_H, basis) / seam,
                 level_height: text_px(LEVEL_H, basis) / seam,
-                // Deviation: a constant one-logical-pixel shadow, not the reference's 0.001 gx, which
-                // draws 2 px thick and too heavy at larger windows. Divided by the seam, which the
-                // shared text arm would otherwise scale it by.
+                // Deviation: a constant one-logical-pixel shadow, not the reference's 0.001 gx,
+                // which draws 2 px thick and too heavy at larger windows. Divided by the seam,
+                // which the shared text arm would otherwise scale it by.
                 shadow_offset: 1.0 / seam,
             },
             &states,

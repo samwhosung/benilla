@@ -941,7 +941,8 @@ fn sync_tiles(
                 )
             })
             .collect();
-        // Held slots stay put so no tile rebuilds for its layer; a pane past the pool draws nothing.
+        // Held slots stay put so no tile rebuilds for its layer; a pane past the pool draws
+        // nothing.
         let mut taken = [false; UI_MODEL_CAM_LAYERS];
         let mut cam_slots: Vec<Option<usize>> = live
             .iter()
@@ -1254,10 +1255,10 @@ fn sync_tiles(
             });
             let gseq_s = pane.clock_ms as f64 / 1000.0;
             // The bone global sequences read the pane's clock too: the kernel's cursor,
-            // `[[model+0x2c]+0xc] − [model+0x68]` (`0x714260`), is the owning scene's clock minus the
-            // attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`) that
-            // only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes where
-            // the last ping stopped; the drive anchors on its first tick, the attach.
+            // `[[model+0x2c]+0xc] − [model+0x68]` (`0x714260`), is the owning scene's clock minus
+            // the attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`)
+            // that only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes
+            // where the last ping stopped; the drive anchors on its first tick, the attach.
             if let Some(mut clock) = scene_clock.filter(|c| c.0 != gseq_s) {
                 clock.0 = gseq_s;
             }
@@ -1325,14 +1326,16 @@ fn sync_tiles(
                 );
             }
             // A particle's half-extent is in eye space: the ortho leg's is the cell's pixels at
-            // `768·√(a²+1)` FrameXML units per model unit (`0x7b2a50`); the perspective leg's is 1.0.
+            // `768·√(a²+1)` FrameXML units per model unit (`0x7b2a50`); the perspective leg's is
+            // 1.0.
             let star = if tile.cam_slot.is_some() && req.camera.is_some() {
                 1.0
             } else {
                 req.star_px_per_unit
             };
-            // The cell the cloud may draw in, or it spills into its packed neighbour; `Cell::origin`
-            // is atlas texels, top-left, the framebuffer coordinate the fragment tests.
+            // The cell the cloud may draw in, or it spills into its packed neighbour;
+            // `Cell::origin` is atlas texels, top-left, the framebuffer coordinate the fragment
+            // tests.
             let clip = Vec4::new(
                 cell.origin.x as f32,
                 cell.origin.y as f32,
@@ -1393,7 +1396,8 @@ fn sync_tiles(
                 cam.is_active = want;
             }
         }
-        // The orthographic camera clears the atlas for all, so it stays on while anything is packed.
+        // The orthographic camera clears the atlas for all, so it stays on while anything is
+        // packed.
         set_camera_active(
             &mut cams,
             !bridge.cells.is_empty() && bridge.atlas.is_some(),

@@ -98,8 +98,8 @@ pub(super) fn feed_lock_openers(
             return;
         };
         let (last, vm_reset) = last.get_reset(script);
-        // The state is a function of these inputs alone: the carried items (the object index and the
-        // descriptor slots that point at them), the book, the spell catalog, and the skills the
+        // The state is a function of these inputs alone: the carried items (the object index and
+        // the descriptor slots that point at them), the book, the spell catalog, and the skills the
         // opening spells' values scale by (the descriptor).
         let objects_moved = inv.changes.moved();
         let self_changed = !inv.self_changed.is_empty();

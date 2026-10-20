@@ -149,8 +149,8 @@ fn feed_zone_events(
                 return;
             }
             cache.wmo_id = k.wmo_id;
-            // The whole-WMO -1 row. An unnamed one with `AreaTableID` 0 takes the leaf's name, which
-            // is the terrain areaId the client's area-0 arm reads.
+            // The whole-WMO -1 row. An unnamed one with `AreaTableID` 0 takes the leaf's name,
+            // which is the terrain areaId the client's area-0 arm reads.
             let a_name = default.as_ref().map(|d| {
                 if !d.name.is_empty() {
                     d.name.clone()

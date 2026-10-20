@@ -277,7 +277,8 @@ pub(crate) fn feed_reputation(
 
         let mut entries = Vec::new();
         for (faction_id, info) in catalog.reputation_factions() {
-            // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on it.
+            // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on
+            // it.
             let (flags, wire) = usize::try_from(info.rep_index)
                 .ok()
                 .and_then(|i| reputations.slots.get(i))

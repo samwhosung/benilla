@@ -388,7 +388,8 @@ pub(super) fn auto_join_zone_channels(
         let cinematic_running = cinematic.as_deref().is_some_and(|c| c.is_playing());
         let areas = areas.as_deref();
 
-        // `None` with no session, during a cinematic, while the world arrives, or with no area answer.
+        // `None` with no session, during a cinematic, while the world arrives, or with no area
+        // answer.
         let zone_id = (walk.live && !cinematic_running && zone_is_settled(player.as_deref()))
             .then(|| {
                 let areas = areas?;

@@ -218,9 +218,9 @@ fn drive_mouseover_tooltip(
         let chr = tables.unit_names();
         let types = tables.types(&names);
 
-        // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that plate
-        // holds the hover: a plate retired after the pick was taken has run its leave (`0x7cb8b0`),
-        // which published the loss, and the hover re-picks to the WorldFrame.
+        // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that
+        // plate holds the hover: a plate retired after the pick was taken has run its leave
+        // (`0x7cb8b0`), which published the loss, and the hover re-picks to the WorldFrame.
         if hovered.plate && script.hovered_nameplate() != hovered.guid {
             if std::mem::take(published) {
                 script.set_unit("mouseover", None);
@@ -266,16 +266,17 @@ fn drive_mouseover_tooltip(
             Some((guid, s))
         });
         // The hovered GameObject, when nothing else was picked or it is nearer. Not gated on
-        // highlightability: the publisher `0x492890` sends every object to the builder by kind, so a
-        // signpost or an in-use object shows its plate with no interact cursor.
+        // highlightability: the publisher `0x492890` sends every object to the builder by kind, so
+        // a signpost or an in-use object shows its plate with no interact cursor.
         let go = hovered_go.target.zip(hovered_go.guid).filter(|_| {
             (unit.is_none() && hovered.corpse.is_none()) || go_is_nearest(&hovered, &hovered_go)
         });
 
         if let Some((guid, state)) = unit {
-            // Publish, which tears the old hover down, then push: the builder reads the token. Rebuild
-            // on a new target or a late name or creature answer, which rebuilds under the same hover
-            // with no teardown; health and power stay out of the key, since the watcher drives the bar.
+            // Publish, which tears the old hover down, then push: the builder reads the token.
+            // Rebuild on a new target or a late name or creature answer, which rebuilds under the
+            // same hover with no teardown; health and power stay out of the key, since the watcher
+            // drives the bar.
             let key = lines_view(&state);
             let changed = script.publish_world_mouseover(Some(guid));
             script.set_unit("mouseover", Some(state));
@@ -287,15 +288,16 @@ fn drive_mouseover_tooltip(
             return;
         }
         // No unit won the pick: the publisher's teardown zeroes the mouseover pair (`0x4928e8`,
-        // `0x4928f2`) and writes a null, corpse or GameObject guid, none of which resolves as a unit,
-        // so `"mouseover"` names nobody from this frame. A fading plate keeps its lines and its bar,
-        // which follows the unit's guid, not the token; the null publish fires no event (the sole
-        // `UPDATE_MOUSEOVER_UNIT` is the unit arm's, `0x4929b3`).
+        // `0x4928f2`) and writes a null, corpse or GameObject guid, none of which resolves as a
+        // unit, so `"mouseover"` names nobody from this frame. A fading plate keeps its lines and
+        // its bar, which follows the unit's guid, not the token; the null publish fires no event
+        // (the sole `UPDATE_MOUSEOVER_UNIT` is the unit arm's, `0x4929b3`).
         if std::mem::take(published) {
             script.set_unit("mouseover", None);
         }
-        // The corpse plate, "Corpse of <owner>" (`0x52aef0`): a name and nothing else, corner-seated.
-        // The publisher fires no event for a corpse, so `UnitName("mouseover")` on one stays nil.
+        // The corpse plate, "Corpse of <owner>" (`0x52aef0`): a name and nothing else,
+        // corner-seated. The publisher fires no event for a corpse, so `UnitName("mouseover")` on
+        // one stays nil.
         if let Some((entity, guid)) = hovered
             .corpse
             .zip(hovered.corpse_guid)
@@ -312,7 +314,8 @@ fn drive_mouseover_tooltip(
             if last == Some(guid) {
                 return; // already up; a corner plate never re-seats
             }
-            // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name query.
+            // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name
+            // query.
             let Some(owner) = store.0.corpse_owner() else {
                 return;
             };
@@ -344,7 +347,8 @@ fn drive_mouseover_tooltip(
             let cursor_ui = cursor_seated
                 .then(|| {
                     window.iter().next().and_then(|w| {
-                        // The hover probe's aim stands in for a missing cursor; a real pointer wins.
+                        // The hover probe's aim stands in for a missing cursor; a real pointer
+                        // wins.
                         w.cursor_position()
                             .or_else(crate::target::hover_probe_point)
                             .map(|c| {
@@ -362,8 +366,8 @@ fn drive_mouseover_tooltip(
                         *trace = line;
                     }
                 }
-                // A cursor-seated plate follows the pointer in its own update (mode 6); the corner arm
-                // has nothing to re-seat.
+                // A cursor-seated plate follows the pointer in its own update (mode 6); the corner
+                // arm has nothing to re-seat.
                 return;
             }
             if cursor_seated && cursor_ui.is_none() {

@@ -210,7 +210,8 @@ pub(super) fn seed_ui_fixture(
         };
 
         match fixture {
-            // Nothing to open: the loaded UI and `demo_unit_feed`'s player and target are the fixture.
+            // Nothing to open: the loaded UI and `demo_unit_feed`'s player and target are the
+            // fixture.
             UiFixture::Bare => {}
             // Holds the world-entry loading screen, tip and all, over the settled scene.
             UiFixture::LoadingTip => loading.hold_for_capture(scenario.map),
@@ -231,8 +232,9 @@ pub(super) fn seed_ui_fixture(
                     }),
                 );
                 // Eight rows: long names for the wrap, mixed prices for the coins. The last two
-                // columns are required level and stock: boots and gloves are gated past the level-12
-                // player so they render the unusable red, and the sold-out Small Shield the 0.5 gray.
+                // columns are required level and stock: boots and gloves are gated past the
+                // level-12 player so they render the unusable red, and the sold-out Small Shield
+                // the 0.5 gray.
                 let stock: [(&str, u32, u32, u32, u32); 8] = [
                     ("Tarnished Chain Vest", DISP_SWORD, 75, 0, u32::MAX),
                     ("Tarnished Chain Leggings", DISP_FOOD, 75, 0, u32::MAX),
@@ -275,8 +277,8 @@ pub(super) fn seed_ui_fixture(
                 }
             }
             UiFixture::Trainer(list) => {
-                // The seed's rows are the wire list: its copper costs, level gates and the states the
-                // server computed, in wire order.
+                // The seed's rows are the wire list: its copper costs, level gates and the states
+                // the server computed, in wire order.
                 use benilla_protocol::messages::TrainerSpell;
                 let seed = match list {
                     TrainerList::Warrior => &TRAINER_WARRIOR,
@@ -355,10 +357,12 @@ pub(super) fn seed_ui_fixture(
                      for his harsh taxes throughout the land.$B$BMake your choice!"
                         .into(),
                 );
-                // An available quest row above the options, for the quest-row icon and text seating.
+                // An available quest row above the options, for the quest-row icon and text
+                // seating.
                 gossip.quests = vec![(783, 0, 5, "Eagan Peltskinner".into())];
-                // One short option and four that wrap, taller than the parchment, so the capture covers
-                // the stock `GossipResize` per-row height, the scroll frame and its scrollbar.
+                // One short option and four that wrap, taller than the parchment, so the capture
+                // covers the stock `GossipResize` per-row height, the scroll frame and its
+                // scrollbar.
                 let judgement = [
                     "I slay the man on the spot as my liege would expect me to, as he has broken the \
                      law of the land and it is my sworn duty to enforce it.",
@@ -387,8 +391,8 @@ pub(super) fn seed_ui_fixture(
                     }));
             }
             UiFixture::Bank => {
-                // A pure banker and the vault, fed through the descriptor and caches that `feed_bank`
-                // and `ui_items` push into the VM as live wire data would.
+                // A pure banker and the vault, fed through the descriptor and caches that
+                // `feed_bank` and `ui_items` push into the VM as live wire data would.
                 use benilla_protocol::messages::ObjectFields;
                 names.insert_creature(
                     NPC_ENTRY,
@@ -405,8 +409,8 @@ pub(super) fn seed_ui_fixture(
                         display_id: 0,
                     }),
                 );
-                // Vault items (bank slots 0, 1, 2, 7 at fields 564+2i) and the bank bag in bag slot 0
-                // (field 612); the bag borrows the hearthstone display as a stand-in.
+                // Vault items (bank slots 0, 1, 2, 7 at fields 564+2i) and the bank bag in bag slot
+                // 0 (field 612); the bag borrows the hearthstone display as a stand-in.
                 const G_SHIELD: u64 = 0x2001;
                 const G_JERKY: u64 = 0x2002;
                 const G_SWORD: u64 = 0x2003;
@@ -431,8 +435,8 @@ pub(super) fn seed_ui_fixture(
                     }
                     items.insert_template(entry, Some(t));
                 }
-                // The bank bag is a container object (its contents stream on the bag item): 6 slots,
-                // one occupied, so its popout window (container 5) is in the shot too.
+                // The bank bag is a container object (its contents stream on the bag item): 6
+                // slots, one occupied, so its popout window (container 5) is in the shot too.
                 crate::items::spawn_item(
                     &mut commands,
                     &mut index,
@@ -445,9 +449,10 @@ pub(super) fn seed_ui_fixture(
                     ]),
                     true,
                 );
-                // The self player: 4 vault slots, the bank bag, two bought bag slots (`PLAYER_BYTES_2`
-                // byte 2: button 1 owned, 2 bought and empty, 3-6 unpurchased red) and a 12g 34s 56c
-                // purse, under which the 10g third-slot cost (`BankBagSlotPrices.dbc`) is affordable.
+                // The self player: 4 vault slots, the bank bag, two bought bag slots
+                // (`PLAYER_BYTES_2` byte 2: button 1 owned, 2 bought and empty, 3-6 unpurchased
+                // red) and a 12g 34s 56c purse, under which the 10g third-slot cost
+                // (`BankBagSlotPrices.dbc`) is affordable.
                 const PLAYER_GUID: u64 = 0x51;
                 let fields = ObjectFields::from_pairs(&[
                     (194, 2 << 16),          // PLAYER_BYTES_2: bankBagSlots (byte 2) = 2
@@ -467,7 +472,8 @@ pub(super) fn seed_ui_fixture(
                 // `feed_bank` then fires BANKFRAME_OPENED as a live SMSG_SHOW_BANK would.
                 bank.open(NPC_GUID);
                 // Opens bank bag 1 once its container feed lands (`GetContainerNumSlots(5) > 0`);
-                // `BankFrameBag1`'s `GetID()` is 5, the container id its handler passes to `ToggleBag`.
+                // `BankFrameBag1`'s `GetID()` is 5, the container id its handler passes to
+                // `ToggleBag`.
                 if let Some(s) = script.as_mut() {
                     if let Err(e) = s.run(
                         "BankFrame:SetScript(\"OnUpdate\", function()\n\
@@ -498,8 +504,8 @@ pub(super) fn seed_ui_fixture(
                         display_id: 0,
                     }),
                 );
-                // A QUEST_DETAILS view (the accept panel): description, objectives, two choice rewards,
-                // one fixed reward and money.
+                // A QUEST_DETAILS view (the accept panel): description, objectives, two choice
+                // rewards, one fixed reward and money.
                 items.insert_template(92_001, Some(template("Brackwater Cudgel", 2)));
                 items.insert_template(92_002, Some(template("Militia Warhammer", 1)));
                 items.insert_template(92_003, Some(template("Bandit Cloak", 1)));
@@ -543,7 +549,8 @@ pub(super) fn seed_ui_fixture(
                         display_id: 0,
                     }),
                 );
-                // The multi-quest greeting: two available quests, bullet rows under "Available Quests".
+                // The multi-quest greeting: two available quests, bullet rows under "Available
+                // Quests".
                 quest.open(
                     NPC_GUID,
                     crate::ui_quest::QuestView::Greeting(benilla_protocol::messages::QuestGiverList {
@@ -569,9 +576,9 @@ pub(super) fn seed_ui_fixture(
                 );
             }
             UiFixture::QuestLog => {
-                // The log reads the self player's PLAYER_QUEST_LOG slots, so a synthetic self player
-                // carries two and `feed_quest_log` runs the real chain. A slot is id, packed 6-bit
-                // counters plus a state byte, and timer, from field 198.
+                // The log reads the self player's PLAYER_QUEST_LOG slots, so a synthetic self
+                // player carries two and `feed_quest_log` runs the real chain. A slot is id, packed
+                // 6-bit counters plus a state byte, and timer, from field 198.
                 use benilla_protocol::messages::{ObjectFields, QuestObjective, QuestTemplate};
                 const KOBOLD_ENTRY: u32 = 90_002;
                 names.insert_creature(
@@ -609,8 +616,8 @@ pub(super) fn seed_ui_fixture(
                     text: String::new(),
                 };
                 // Entry 1, auto-selected: a creature objective at 3/10, an item objective at 0/5,
-                // rewards and money. `quest_type: 1` is `QuestInfo.dbc`'s "Elite", though the real 783
-                // is plain, so a row tag is in the shot.
+                // rewards and money. `quest_type: 1` is `QuestInfo.dbc`'s "Elite", though the real
+                // 783 is plain, so a row tag is in the shot.
                 quest_log.insert_template(QuestTemplate {
                     quest_id: 783,
                     method: 2,
@@ -703,7 +710,8 @@ pub(super) fn seed_ui_fixture(
                 });
 
                 // Slot 0 is quest 783 (counter 0 at 3), slot 1 quest 7 (counter 0 at 10, state
-                // COMPLETE), packed as vmangos's `SetQuestSlotCounter` and `SetQuestSlotState` write.
+                // COMPLETE), packed as vmangos's `SetQuestSlotCounter` and `SetQuestSlotState`
+                // write.
                 let fields = ObjectFields::from_pairs(&[
                     (198, 783),
                     (199, 3),
@@ -788,8 +796,8 @@ pub(super) fn seed_ui_fixture(
                 let Some(script) = script else {
                     return;
                 };
-                // At the default origin the player is off every zone rect and the arrow hides, so park
-                // it at the scenario's Northshire spot.
+                // At the default origin the player is off every zone rect and the arrow hides, so
+                // park it at the scenario's Northshire spot.
                 player.pos = benilla_assets::coords::wow_to_bevy(scenario.eye);
                 // Alternating explore bits, so about half of each zone's overlays reveal.
                 script.set_world_map_explored(vec![0x5555_5555; 64]);
@@ -812,9 +820,10 @@ pub(super) fn seed_ui_fixture(
                     return;
                 };
                 seed_bag_window(script, icons.as_deref());
-                // The hovered shield's full template and a player under its level requirement: quality
-                // name, bind, slot and type, armor and block, stats, durability, a red requirement, a
-                // long green Use: line that wraps, a charges line after it, and the flavor text.
+                // The hovered shield's full template and a player under its level requirement:
+                // quality name, bind, slot and type, armor and block, stats, durability, a red
+                // requirement, a long green Use: line that wraps, a charges line after it, and the
+                // flavor text.
                 script.set_player_req_state(benilla_ui::script::PlayerReqState {
                     level: 12,
                     class_id: 1,
@@ -881,9 +890,9 @@ pub(super) fn seed_ui_fixture(
                         ..Default::default()
                     },
                 );
-                // Opens the tooltip over the top-left button (`Item16`, game slot 1, the Small Shield)
-                // through the hover's OnEnter path. `IsBagOpen` names the backpack's window, as the
-                // twelve `ContainerFrame`s are recycled across containers.
+                // Opens the tooltip over the top-left button (`Item16`, game slot 1, the Small
+                // Shield) through the hover's OnEnter path. `IsBagOpen` names the backpack's
+                // window, as the twelve `ContainerFrame`s are recycled across containers.
                 if let Err(e) = script.run(
                     "local i = IsBagOpen(0)\n\
                      if i then\n\
@@ -926,9 +935,9 @@ pub(super) fn seed_ui_fixture(
                 let Some(script) = script else {
                     return;
                 };
-                // A ranked player under the cursor, pushed as the mouseover feed does, then the call
-                // `drive_mouseover_tooltip` makes: the title is `0x609370`'s rank leg over the name,
-                // "Sergeant Bob".
+                // A ranked player under the cursor, pushed as the mouseover feed does, then the
+                // call `drive_mouseover_tooltip` makes: the title is `0x609370`'s rank leg over the
+                // name, "Sergeant Bob".
                 script.set_unit(
                     "mouseover",
                     Some(benilla_ui::script::UnitState {
@@ -950,12 +959,13 @@ pub(super) fn seed_ui_fixture(
                 }
             }
             UiFixture::Character => {
-                // A synthetic self player carrying the full stat block, which the `ui_char` feed turns
-                // into snapshots and events as live. A level-12 warrior; positive (stamina, fire) and
-                // negative (spirit) buffs exercise the green and red stat colours.
+                // A synthetic self player carrying the full stat block, which the `ui_char` feed
+                // turns into snapshots and events as live. A level-12 warrior; positive (stamina,
+                // fire) and negative (spirit) buffs exercise the green and red stat colours.
                 use benilla_protocol::messages::ObjectFields;
                 const PLAYER_GUID: u64 = 0x51;
-                // Equipped item guids (chest, main hand, ranged) and an arrow stack in the backpack.
+                // Equipped item guids (chest, main hand, ranged) and an arrow stack in the
+                // backpack.
                 const G_CHEST: u64 = 0x1001;
                 const G_SWORD: u64 = 0x1002;
                 const G_BOW: u64 = 0x1003;
@@ -991,8 +1001,9 @@ pub(super) fn seed_ui_fixture(
                     (722, 24 | 60 << 16),
                     (724, 45),
                     (725, 55 | 60 << 16),
-                    // Stat buffs (INT on the wire): +10 stamina, -5 spirit, +10 fire resistance. The
-                    // -5 is the two's-complement word an x86 server sends; an arm64 one sends 0.
+                    // Stat buffs (INT on the wire): +10 stamina, -5 spirit, +10 fire resistance.
+                    // The -5 is the two's-complement word an x86 server sends; an arm64 one sends
+                    // 0.
                     (1179, 10),             // POSSTAT2
                     (1186, (-5i32) as u32), // NEGSTAT4
                     (1189, 10),             // RESISTANCEBUFFMODSPOSITIVE[2] (fire)
@@ -1005,8 +1016,8 @@ pub(super) fn seed_ui_fixture(
                     (1223, 93_012), // PLAYER_AMMO_ID: the arrows' entry
                 ]);
 
-                // The item objects and their templates; the bow borrows the hearthstone display as a
-                // stand-in.
+                // The item objects and their templates; the bow borrows the hearthstone display as
+                // a stand-in.
                 let obj = |entry: u32, stack: u32| {
                     ObjectFields::from_pairs(&[(3, entry), (14, stack)]) // OBJECT_ENTRY, STACK_COUNT
                 };
@@ -1065,7 +1076,8 @@ pub(super) fn seed_ui_fixture(
                         (35, 1),      // UNIT_FIELD_FACTIONTEMPLATE: human
                         (36, 0x0101), // UNIT_FIELD_BYTES_0: race human, class warrior
                         // UNIT_FIELD_FLAGS bit 3 (`PLAYER_CONTROLLED`), which every player carries;
-                        // `CanAttack` picks its arm on it, and without it no plate draws on the wolf.
+                        // `CanAttack` picks its arm on it, and without it no plate draws on the
+                        // wolf.
                         (46, 0x8),
                     ])),
                     crate::net::SelfPlayer,
@@ -1154,8 +1166,8 @@ pub(super) fn seed_ui_fixture(
                 let Some(script) = script else {
                     return;
                 };
-                // The Chat page, as the Audio fixture. Its Remove Chat Hover Delay row reads a saved
-                // variable `ChatFrame.xml` declares, so it paints unchecked, the shipped "0".
+                // The Chat page, as the Audio fixture. Its Remove Chat Hover Delay row reads a
+                // saved variable `ChatFrame.xml` declares, so it paints unchecked, the shipped "0".
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
                     "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowChat:Click()",
@@ -1197,8 +1209,8 @@ pub(super) fn seed_ui_fixture(
                     return;
                 };
                 // The Keybindings page over the commands the load registered: the real CVar set
-                // first, then the live open path, with Movement expanded to show a header row and the
-                // default bindings.
+                // first, then the live open path, with Movement expanded to show a header row and
+                // the default bindings.
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
                     "ShowUIPanel(BenillaOptionsFrame); \
@@ -1212,8 +1224,8 @@ pub(super) fn seed_ui_fixture(
                 let Some(script) = script else {
                     return;
                 };
-                // Mid-search: "volume" gathers the four volume sliders under the Audio head. The box
-                // is focused, so the caret shows at the text's end.
+                // Mid-search: "volume" gathers the four volume sliders under the Audio head. The
+                // box is focused, so the caret shows at the text's end.
                 script.register_cvars(crate::cvars::registered_pairs());
                 if let Err(e) = script.run(
                     "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameSearchBox:SetText(\"volume\"); BenillaOptionsFrameSearchBox:SetFocus()",
@@ -1225,8 +1237,8 @@ pub(super) fn seed_ui_fixture(
             UiFixture::SpellBook => {
                 // A human warrior who also knows two cross-class spells. The book resolves through
                 // the real chain: names, icons and ranks from `Spell.dbc`, tabs from
-                // `SkillLineAbility.dbc`, the General collapse from `SkillRaceClassInfo.dbc` keyed on
-                // the descriptor's race and class.
+                // `SkillLineAbility.dbc`, the General collapse from `SkillRaceClassInfo.dbc` keyed
+                // on the descriptor's race and class.
                 use benilla_protocol::messages::ObjectFields;
                 const PLAYER_GUID: u64 = 0x51;
                 const G_SWORD: u64 = 0x1002;
@@ -1255,8 +1267,8 @@ pub(super) fn seed_ui_fixture(
                     return;
                 };
                 actions.spells.extend([
-                    // The auto-attack shows the equipped sword's icon, not the placeholder of spell 6603,
-                    // in General (no skill line).
+                    // The auto-attack shows the equipped sword's icon, not the placeholder of spell
+                    // 6603, in General (no skill line).
                     6603, // Attack
                     // Warrior abilities go to their class-line tabs: Arms and Fury.
                     100,  // Charge (Arms)
@@ -1265,8 +1277,8 @@ pub(super) fn seed_ui_fixture(
                     6673, // Battle Shout (Fury)
                     // A human racial collapses to General.
                     20600, // Perception
-                    // Cross-class spells: no Fire or Shadow `SkillRaceClassInfo` row admits a warrior,
-                    // so both collapse into General and no Fire or Shadow tab appears.
+                    // Cross-class spells: no Fire or Shadow `SkillRaceClassInfo` row admits a
+                    // warrior, so both collapse into General and no Fire or Shadow tab appears.
                     133, // Fireball (Fire)
                     589, // Shadow Word: Pain (Shadow)
                     // A language and an armor proficiency, both DO_NOT_DISPLAY, so neither appears.
@@ -1282,9 +1294,10 @@ pub(super) fn seed_ui_fixture(
                 let Some(script) = script.as_mut() else {
                     return;
                 };
-                // Made through the live `CreateMacro` path, so `UPDATE_MACROS` reaches the window as a
-                // player's edit does; icons index `SpellIcon.dbc`. The bodies: a plain `/cast`, a
-                // multi-line macro, and a `/script` line the bar's bound-spell resolve must decline.
+                // Made through the live `CreateMacro` path, so `UPDATE_MACROS` reaches the window
+                // as a player's edit does; icons index `SpellIcon.dbc`. The bodies: a plain
+                // `/cast`, a multi-line macro, and a `/script` line the bar's bound-spell resolve
+                // must decline.
                 const SEED: [(&str, u32, &str); 4] = [
                     ("Charge", 1, "/cast Charge"),
                     (
@@ -1303,8 +1316,8 @@ pub(super) fn seed_ui_fixture(
                         body.replace('"', "\\\"").replace('\n', "\\n")
                     ));
                 }
-                // Slot 2, the multi-line body, selected. The popup fixture opens the chooser through
-                // `MacroEditButton`, an edit, so the name box arrives filled.
+                // Slot 2, the multi-line body, selected. The popup fixture opens the chooser
+                // through `MacroEditButton`, an edit, so the name box arrives filled.
                 seed.push_str("ShowMacroFrame()\nMacroButton2:Click()\n");
                 if fixture == UiFixture::MacroPopup {
                     seed.push_str("MacroEditButton:Click()\n");
@@ -1327,7 +1340,8 @@ pub(super) fn seed_ui_fixture(
                     return;
                 };
                 // Say and yell lines behind the open edit box, opened through the live path;
-                // `chat_edit_live` then drives the header and the `15 + headerWidth` insets as in-game.
+                // `chat_edit_live` then drives the header and the `15 + headerWidth` insets as
+                // in-game.
                 for (text, r, g, b) in [
                     ("[One] says: testing the box", 1.0, 1.0, 1.0),
                     ("[One] says: a second line to stack", 1.0, 1.0, 1.0),
@@ -1433,8 +1447,8 @@ pub(super) fn seed_ui_fixture(
                     crate::net::Guid(SELF_GUID),
                     Transform::from_translation(wow_to_bevy(scenario.eye)),
                 ));
-                // The wolf out in the river, its name over the water beyond it, which catches a name
-                // sorting before the liquid.
+                // The wolf out in the river, its name over the water beyond it, which catches a
+                // name sorting before the liquid.
                 names.insert_creature(
                     WOLF_ENTRY,
                     Some(crate::names::CreatureRecord {
@@ -1475,7 +1489,8 @@ pub(super) fn seed_ui_fixture(
             }
             UiFixture::NameRank => {
                 use benilla_protocol::messages::ObjectFields;
-                // The self player at the eye, as `name-water`; the subject is the other player's name.
+                // The self player at the eye, as `name-water`; the subject is the other player's
+                // name.
                 const SELF_GUID: u64 = 0x51;
                 names.insert_player(SELF_GUID, "Benilla".into(), None);
                 commands.spawn((

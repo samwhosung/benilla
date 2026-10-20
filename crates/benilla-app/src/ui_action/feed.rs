@@ -117,10 +117,10 @@ pub(super) fn feed_actions(
         show_messages(script, &mut sink, "ui_action", key_lines);
 
         // Already-resolved lines ([`UiErrorTexts`]); the queued kind is the `0x4945b0` flag. Held
-        // while the loading cover is up, so a login notice's hold starts at the reveal: the reference
-        // sends `CMSG_PLAYER_LOGIN` only after its world load (`0x46c272`), and its cover drops at the
-        // player's create (`0x5debbd`), which vmangos sends ahead of the notices (`Maps/Map.cpp:432`,
-        // `Handlers/CharacterHandler.cpp:675`).
+        // while the loading cover is up, so a login notice's hold starts at the reveal: the
+        // reference sends `CMSG_PLAYER_LOGIN` only after its world load (`0x46c272`), and its cover
+        // drops at the player's create (`0x5debbd`), which vmangos sends ahead of the notices
+        // (`Maps/Map.cpp:432`, `Handlers/CharacterHandler.cpp:675`).
         if !cover.is_some_and(|c| c.covering()) {
             let resolved: Vec<Shown> = ui_error_texts
                 .0
@@ -219,8 +219,8 @@ pub(super) fn feed_actions(
                     ACTION_KIND_ITEM => {
                         // Never nil: the reference's resolver `0x5d88b0` returns the question mark,
                         // and the stock `ActionButton.lua:158` hides the icon on a nil texture. The
-                        // texture getter looks it up with a callback (`0x4e6b24`) on the bar's events,
-                        // which no event here marks: an entry is asked when it first shows.
+                        // texture getter looks it up with a callback (`0x4e6b24`) on the bar's
+                        // events, which no event here marks: an entry is asked when it first shows.
                         let template = items
                             .template(button.action, 0, Ask::New(&commands))
                             .cloned();
@@ -236,8 +236,8 @@ pub(super) fn feed_actions(
                         // The Count gate (`0x4e5250`, [`ItemInfo::is_consumable`]) reads the icon's
                         // template, so it rides the same push.
                         let consumable = template.as_ref().is_some_and(|t| t.is_consumable());
-                        // The spell `0x4e5a50` resolves the slot to (`0x4e5ae0`): the first block with
-                        // a spell and trigger 0.
+                        // The spell `0x4e5a50` resolves the slot to (`0x4e5ae0`): the first block
+                        // with a spell and trigger 0.
                         let use_spell = template.as_ref().and_then(|t| {
                             t.spells
                                 .iter()
@@ -262,12 +262,12 @@ pub(super) fn feed_actions(
             }
             // A slot is pushed only when this feed's own source moved since its last push, so a
             // verb's write (`PickupAction`, `PlaceAction`, an addon's from a handler this frame) is
-            // never rolled back by a store that has not caught up; it fires `ACTIONBAR_SLOT_CHANGED`
-            // only when what it pushes differs visibly from what the VM shows, so the store catching
-            // up with a verb is no change. The item's ON_USE spell is pushed but never signalled: the
-            // place leaves it to this re-feed, and no handler paints it. A macro rename changes the
-            // name line (`GetActionText`) but not the slot value, so a macro edit re-fires every
-            // macro slot.
+            // never rolled back by a store that has not caught up; it fires
+            // `ACTIONBAR_SLOT_CHANGED` only when what it pushes differs visibly from what the VM
+            // shows, so the store catching up with a verb is no change. The item's ON_USE spell is
+            // pushed but never signalled: the place leaves it to this re-feed, and no handler
+            // paints it. A macro rename changes the name line (`GetActionText`) but not the slot
+            // value, so a macro edit re-fires every macro slot.
             let held = script.action_slots();
             let shown = |s: Option<&ActionSlot>| {
                 s.map(|s| ActionSlot {
@@ -360,8 +360,8 @@ pub(super) fn feed_actions(
                     }
                     _ => false,
                 };
-                // Only into the VM's slot when it still holds this action: a verb that moved another
-                // there since keeps its write until the identity resolve catches up.
+                // Only into the VM's slot when it still holds this action: a verb that moved
+                // another there since keeps its write until the identity resolve catches up.
                 if changed {
                     let held = script.action_slot(action);
                     if held

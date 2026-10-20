@@ -384,8 +384,9 @@ fn charter_probe(
                 };
             }
             // ── Step 0: the preconditions ───────────────────────────────────────────────────────
-            // A buy is refused silently while the buyer is in a guild (`PetitionsHandler.cpp:66`), so
-            // any guild an earlier run founded is left first; FAIL if `PLAYER_GUILDID` never clears.
+            // A buy is refused silently while the buyer is in a guild (`PetitionsHandler.cpp:66`),
+            // so any guild an earlier run founded is left first; FAIL if `PLAYER_GUILDID` never
+            // clears.
             Phase::Unguild { since, sent } => {
                 let guild_id = store.0.player_guild_id();
                 if !sent {
@@ -400,8 +401,8 @@ fn charter_probe(
                         return hop(&mut probe, &net, now);
                     }
                     // A guild master cannot leave (`ERR_GUILD_LEADER_LEAVE`), so rank 0 disbands.
-                    // The rank is read off the descriptor, not `IsGuildLeader()`, whose feed can lag
-                    // a frame behind on the first frame in-world.
+                    // The rank is read off the descriptor, not `IsGuildLeader()`, whose feed can
+                    // lag a frame behind on the first frame in-world.
                     let verb = if store.0.player_guild_rank() == 0 {
                         "GuildDisband()"
                     } else {
@@ -531,8 +532,9 @@ fn charter_probe(
                 }
             }
             // ── Step 4's second half: the window ────────────────────────────────────────────────
-            // `SMSG_PETITION_SHOWLIST` must fire `GUILD_REGISTRAR_SHOW`, and `GetGuildCharterCost()`
-            // must read the showlist's `charterCost`, which vmangos always sends as 1000.
+            // `SMSG_PETITION_SHOWLIST` must fire `GUILD_REGISTRAR_SHOW`, and
+            // `GetGuildCharterCost()` must read the showlist's `charterCost`, which vmangos always
+            // sends as 1000.
             Phase::Registrar { since } => {
                 let Some(npc) = probe.registrar else {
                     probe.phase = Phase::Done;
@@ -598,11 +600,12 @@ fn charter_probe(
                 }
             }
             // ── Step 5: the buy ─────────────────────────────────────────────────────────────────
-            // `GuildRegistrar_ShowPurchaseFrame()` then the Purchase button's `BuyGuildCharter(name)`.
-            // The stock button also hides the window (`GuildRegistrarFrame.xml:269-270`); the probe
-            // does not, and step 6's `PetitionFrame` displaces it (both left, pushable 0,
-            // `UIParent.lua:33-34`). A successful buy has no reply, only the item
-            // (`PetitionsHandler.cpp:130`); of the refusals only a taken name says anything.
+            // `GuildRegistrar_ShowPurchaseFrame()` then the Purchase button's
+            // `BuyGuildCharter(name)`. The stock button also hides the window
+            // (`GuildRegistrarFrame.xml:269-270`); the probe does not, and step 6's `PetitionFrame`
+            // displaces it (both left, pushable 0, `UIParent.lua:33-34`). A successful buy has no
+            // reply, only the item (`PetitionsHandler.cpp:130`); of the refusals only a taken name
+            // says anything.
             Phase::Buying { since, sent } => {
                 if !sent {
                     let name = probe_guild_name("Probe Charter");
@@ -639,7 +642,8 @@ fn charter_probe(
                     ItemSearch::default(),
                 );
                 // The template must have landed too: the click's charter arm tests its
-                // `ITEM_FLAG_CHARTER`. Folded into one `Option` so a missing template still times out.
+                // `ITEM_FLAG_CHARTER`. Folded into one `Option` so a missing template still times
+                // out.
                 let ready = found.and_then(|(bag_index, slot, guid)| {
                     items
                         .template(CHARTER_ITEM_ENTRY, guid, Ask::New(&net))
@@ -715,7 +719,8 @@ fn charter_probe(
             // A real bag right-click through `UseContainerItem`, so `use_container_item` reaches
             // `ItemUseRoute::ShowPetition`. A FAIL is either the fork missing the charter arm or
             // `SMSG_PETITION_SHOW_SIGNATURES` never becoming `PETITION_SHOW`. No getter exposes the
-            // open charter's item guid, so its identity rests on no window being up before the click.
+            // open charter's item guid, so its identity rests on no window being up before the
+            // click.
             Phase::Opening { since, sent } => {
                 let Some((bag_index, slot, guid)) = probe.charter else {
                     probe.phase = Phase::Done;
@@ -820,8 +825,8 @@ fn charter_probe(
             }
             // ── Step 7: the lazy record fill ────────────────────────────────────────────────────
             // `SMSG_PETITION_SHOW_SIGNATURES` carries guids and a petition id but no text; the name
-            // arrives on `SMSG_PETITION_QUERY_RESPONSE`, keyed by petition id, and the feed re-fires
-            // `PETITION_SHOW`. A FAIL leaves the window titleless.
+            // arrives on `SMSG_PETITION_QUERY_RESPONSE`, keyed by petition id, and the feed
+            // re-fires `PETITION_SHOW`. A FAIL leaves the window titleless.
             Phase::Record { since } => {
                 let title = vm_petition_str(script, 2);
                 let max = vm_petition_max(script);
@@ -948,9 +953,9 @@ fn charter_probe(
             }
             // ── Step 9: the cleanup ─────────────────────────────────────────────────────────────
             // `CMSG_DESTROYITEM` deletes the petition with the charter (`Player.cpp:10811-10817`);
-            // without it the next run's buy is refused silently (`PetitionsHandler.cpp:70`), so every
-            // exit from steps 5-8 comes here. The destroy is watched to land before `AppExit` tears
-            // the net thread down.
+            // without it the next run's buy is refused silently (`PetitionsHandler.cpp:70`), so
+            // every exit from steps 5-8 comes here. The destroy is watched to land before `AppExit`
+            // tears the net thread down.
             Phase::Destroying { since, sent } => {
                 let Some((bag_index, slot, guid)) = probe.charter else {
                     probe.phase = Phase::Done; // nothing was bought

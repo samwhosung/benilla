@@ -115,8 +115,8 @@ fn feed_battlefield_positions(
             pending_names,
             ..
         } = &mut *state;
-        // The getter's calls are its name lookups with the callback `0x4ac190` (`0x4ac118`): the map's
-        // `OnUpdate` makes them every frame it shows (`WorldMapFrame.lua:408`,
+        // The getter's calls are its name lookups with the callback `0x4ac190` (`0x4ac118`): the
+        // map's `OnUpdate` makes them every frame it shows (`WorldMapFrame.lua:408`,
         // `Blizzard_BattlefieldMinimap.lua:290`), so a row read nameless is asked, a refused name
         // again once per answer. The push itself only reads.
         let looked_up = script.take_battlefield_position_lookups();

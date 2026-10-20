@@ -202,8 +202,8 @@ pub(super) fn drain_chat_input(
             return;
         };
         let mut queue = engine_verbs(script, emotes.as_deref());
-        // The dev instruments, from their host `SlashCmdList` rows once the stock `ChatEdit_ParseText`
-        // has found no built-in (dev builds), and probe lines.
+        // The dev instruments, from their host `SlashCmdList` rows once the stock
+        // `ChatEdit_ParseText` has found no built-in (dev builds), and probe lines.
         for raw in script.take_chat_input() {
             let msg = raw.trim();
             if msg.is_empty() {
@@ -230,9 +230,10 @@ pub(super) fn drain_chat_input(
             match parsed {
                 // `/r` is the stock `ChatEdit_ParseText`'s REPLY arm; a typed one never gets here.
                 ParsedChat::Reply { .. } => {}
-                // Stock built-ins (`ChatFrame.lua:778`, `:803`), so only a probe's line gets here, and
-                // it runs the same handler: sent verbatim, `/join General` would create a custom
-                // channel of that name. The handlers queue their verbs for the `Channel` arm.
+                // Stock built-ins (`ChatFrame.lua:778`, `:803`), so only a probe's line gets here,
+                // and it runs the same handler: sent verbatim, `/join General` would create a
+                // custom channel of that name. The handlers queue their verbs for the `Channel`
+                // arm.
                 ParsedChat::Join { name, password } => {
                     let body = format!(
                         "SlashCmdList['JOIN']({:?})",
@@ -347,8 +348,8 @@ pub(super) fn drain_chat_input(
                     }
                 }
                 ParsedChat::Reaction { name } => {
-                    // In the model's order: the controlling players' rungs, the faction work, then the
-                    // predicates the cursor, the plate and the Lua verbs ask.
+                    // In the model's order: the controlling players' rungs, the faction work, then
+                    // the predicates the cursor, the plate and the Lua verbs ask.
                     let subject_guid = match &name {
                         Some(n) => crate::ui_duel::streamed_player_named(n, guids, &names),
                         None => selection.guid,
@@ -431,9 +432,9 @@ pub(super) fn drain_chat_input(
                         None => lines.push("reaction: not evaluated (a store is missing)".into()),
                     }
                     // The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): when it names the
-                    // unit's faction it answers both directions ahead of every faction rule, so a green
-                    // ogre under *King of the Gordok* is explained by this line and no other. The
-                    // leading rungs (identity, the controlling players') still run first.
+                    // unit's faction it answers both directions ahead of every faction rule, so a
+                    // green ogre under *King of the Gordok* is explained by this line and no other.
+                    // The leading rungs (identity, the controlling players') still run first.
                     if let Some(line) = (|| {
                         let catalog = factions.as_deref()?.catalog();
                         let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
@@ -447,9 +448,9 @@ pub(super) fn drain_chat_input(
                     })() {
                         lines.push(line);
                     }
-                    // The at-war bit: the whole of the player-to-unit reaction's reputation leg for a
-                    // faction with a reputation slot, which the cursor, the plate and `UnitCanAttack`
-                    // turn on.
+                    // The at-war bit: the whole of the player-to-unit reaction's reputation leg for
+                    // a faction with a reputation slot, which the cursor, the plate and
+                    // `UnitCanAttack` turn on.
                     let war = (|| {
                         let catalog = factions.as_deref()?.catalog();
                         let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
@@ -476,8 +477,9 @@ pub(super) fn drain_chat_input(
                     })()
                     .unwrap_or_else(|| "at-war not evaluated (no catalog, store or template)".into());
                     lines.push(format!("reaction: {war}"));
-                    // The world cursor's two predicates in `0x482200`'s order: `CanInteract` picks the
-                    // service ladder, then `CanAttack` the sword. Neither is a reaction threshold.
+                    // The world cursor's two predicates in `0x482200`'s order: `CanInteract` picks
+                    // the service ladder, then `CanAttack` the sword. Neither is a reaction
+                    // threshold.
                     let interactable = pair.is_some_and(|(t, o)| rel.can_interact(&o, &t));
                     let attackable = pair.is_some_and(|(t, o)| rel.can_attack(&o, &t));
                     lines.push(format!(
@@ -493,9 +495,9 @@ pub(super) fn drain_chat_input(
                         },
                     ));
                     // The V-plate category is its own predicate (`CanAttack` player-to-unit, plus
-                    // `CanCooperate` for a player), printed with the faction-group masks it compares.
-                    // A GM-mode character is mask 0 on vmangos (`.gm on` sets faction template 35),
-                    // so a friendly player can plate as an enemy.
+                    // `CanCooperate` for a player), printed with the faction-group masks it
+                    // compares. A GM-mode character is mask 0 on vmangos (`.gm on` sets faction
+                    // template 35), so a friendly player can plate as an enemy.
                     let mask = |u: Option<crate::target::RelUnit>| {
                         u.and_then(|u| {
                             crate::target::relations::faction_group_mask(factions.as_deref(), &u)
@@ -637,9 +639,9 @@ pub(super) fn drain_chat_input(
                 ParsedChat::Assist { name } => {
                     chat_out.assist.write(crate::target::AssistRequest { name });
                 }
-                // Bare is `FollowUnit("target")`, where the stock handler (`ChatFrame.lua:754`) first
-                // tries a selected player's name; named is `FollowByName(name)` with no exact flag, so
-                // prefix matching.
+                // Bare is `FollowUnit("target")`, where the stock handler (`ChatFrame.lua:754`)
+                // first tries a selected player's name; named is `FollowByName(name)` with no exact
+                // flag, so prefix matching.
                 ParsedChat::Follow { name } => {
                     chat_out.follow.write(match name {
                         Some(name) => crate::player::FollowRequest::Name { name, exact: false },
@@ -670,7 +672,8 @@ pub(super) fn drain_chat_input(
                         ));
                     }
                 }
-                // `ChatFrame_DisplayMacroHelpText` (`ChatFrame.lua:1695`), off the VM's GlobalStrings.
+                // `ChatFrame_DisplayMacroHelpText` (`ChatFrame.lua:1695`), off the VM's
+                // GlobalStrings.
                 ParsedChat::MacroHelp => {
                     for i in 1..=5 {
                         let key = format!("MACRO_HELP_TEXT_LINE{i}");
@@ -693,9 +696,9 @@ pub(super) fn drain_chat_input(
                     let swimming = flags & move_flags::SWIMMING != 0;
                     let emote_id = emotes.as_deref().and_then(|e| e.text_emote(text_id));
                     let posture = emote_id.and_then(|id| emotes.as_deref()?.posture_state(id));
-                    // `DoEmote`'s gates (`0x5ef57e`-`0x5ef5c3`): a possessed unit, then the `Emotes.dbc`
-                    // row, then `CheckEmoteEligible` (`0x47db40`); only its `0x4000` arm refuses out
-                    // loud. A chat-only text emote (`EmoteID` 0) reads row 0.
+                    // `DoEmote`'s gates (`0x5ef57e`-`0x5ef5c3`): a possessed unit, then the
+                    // `Emotes.dbc` row, then `CheckEmoteEligible` (`0x47db40`); only its `0x4000`
+                    // arm refuses out loud. A chat-only text emote (`EmoteID` 0) reads row 0.
                     let self_unit_flags = self_store.single().map_or(0, |s| s.0.unit_flags());
                     let gate = match emotes.as_deref() {
                         Some(e) => emote_gate(
@@ -722,8 +725,8 @@ pub(super) fn drain_chat_input(
                         }
                     }
                     let eligible = gate != EmoteGate::Suppressed;
-                    // Gate B (`0x5ef5f3`): asleep, only a posture emote gets through, so `/stand` ends
-                    // `/sleep` and a `/wave` in bed does nothing.
+                    // Gate B (`0x5ef5f3`): asleep, only a posture emote gets through, so `/stand`
+                    // ends `/sleep` and a `/wave` in bed does nothing.
                     let awake_or_posture = stand_state != 3 || posture.is_some();
                     if !eligible || !awake_or_posture {
                         // `DoEmote` returns before the packet: no send, no anim.
@@ -733,8 +736,8 @@ pub(super) fn drain_chat_input(
                         );
                         continue;
                     }
-                    // The stow (`0x5ef630`), unconditional here: every emote past the gates sheathes
-                    // instantly, mid-fight too.
+                    // The stow (`0x5ef630`), unconditional here: every emote past the gates
+                    // sheathes instantly, mid-fight too.
                     if let Ok((entity, _, _)) = self_player.single() {
                         chat_out.sheath.write(crate::creature_anim::SheathRequest {
                             entity,
@@ -750,9 +753,9 @@ pub(super) fn drain_chat_input(
                             .stand
                             .write(crate::player::StandStateRequest { state: state as u8 });
                     }
-                    // The play (`0x5ef660`, `0x5fe2f0` at `0x5ef66f`) is the posture branch's else: a posture emote plays no clip,
-                    // and the rest play here only while moving. Its `SMSG_EMOTE` echo then finds the
-                    // id armed and is skipped (`0x5fcd56`).
+                    // The play (`0x5ef660`, `0x5fe2f0` at `0x5ef66f`) is the posture branch's else:
+                    // a posture emote plays no clip, and the rest play here only while moving. Its
+                    // `SMSG_EMOTE` echo then finds the id armed and is skipped (`0x5fcd56`).
                     else if let (Some(anim), Ok((entity, m, _)), Ok(store)) = (
                         emote_id.and_then(|id| emotes.as_deref()?.anim(id)),
                         self_player.single(),
@@ -812,8 +815,8 @@ pub(super) fn drain_chat_input(
                                 seq: play_seq.next(),
                             });
                             // A selected caster's GO hits us, so a missile flies end to end; a
-                            // self-cast has no target. `ground` sends the pure dest shape instead, a
-                            // point 15 yd ahead at the player's height.
+                            // self-cast has no target. `ground` sends the pure dest shape instead,
+                            // a point 15 yd ahead at the player's height.
                             if kind == crate::creature_anim::CastEventKind::Go {
                                 let dest = ground.then(|| {
                                     self_player.single().ok().map(|(_, _, tf)| {
@@ -893,8 +896,8 @@ pub(super) fn drain_chat_input(
                         }
                         C::Leave { name } => {
                             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a
-                            // confirmed slot or the call does nothing. Only this path clears the zone
-                            // mask and the custom re-join list.
+                            // confirmed slot or the call does nothing. Only this path clears the
+                            // zone mask and the custom re-join list.
                             let Some(name) = channels.leave_target(&name) else {
                                 continue;
                             };
@@ -957,8 +960,9 @@ pub(super) fn drain_chat_input(
                             continue;
                         }
                     }
-                    // `HELP_TEXT_SIMPLE`, the reference's unknown-command reply (`ChatFrame.lua:2205`),
-                    // a plain chat line with no message-catalog surface or sound.
+                    // `HELP_TEXT_SIMPLE`, the reference's unknown-command reply
+                    // (`ChatFrame.lua:2205`), a plain chat line with no message-catalog surface or
+                    // sound.
                     if let Some(text) = script
                         .lua()
                         .globals()
@@ -1505,8 +1509,8 @@ pub(crate) fn drain_addon_chat_sends(
                     continue;
                 }
             }
-            // A channel target is a slot number, sent as that slot's name; with no such slot the call
-            // ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
+            // A channel target is a slot number, sent as that slot's name; with no such slot the
+            // call ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
             if kind == super::edit::SendType::Channel {
                 let name = send.target.as_deref().and_then(|t| channels.send_target(t));
                 if name.is_none() {
@@ -1534,9 +1538,10 @@ pub(crate) fn drain_addon_chat_sends(
             }
             // ── The away commands, and the AFK clear the other sends carry ───────────────────────
             //
-            // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing AFK
-            // (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm ahead of
-            // the generic send. The system lines, the default text and the mirror are `super::away`'s.
+            // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing
+            // AFK (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm
+            // ahead of the generic send. The system lines, the default text and the mirror are
+            // `super::away`'s.
             let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
             let wire = kind.wire();
             if !matches!(wire, crate::net::ChatKind::Afk) {
@@ -1586,8 +1591,8 @@ pub(crate) fn drain_addon_chat_sends(
                 kind: wire,
                 target: send.target,
                 text,
-                // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the AFK
-                // arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
+                // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the
+                // AFK arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
                 language: match wire {
                     crate::net::ChatKind::Afk => None,
                     _ => send.language,

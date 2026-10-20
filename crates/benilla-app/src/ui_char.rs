@@ -140,11 +140,12 @@ fn watch_skill_ups(
         let (Some(guid), Ok(store)) = (self_guid.0, self_store.single()) else {
             return;
         };
-        // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a stale
-        // skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when a line
-        // is added, removed or changes value; the reference fires it at the end of every skill-list
-        // rebuild (`0x4d2fec`), which its value, max, permanent-bonus and temporary-bonus watchers
-        // run (registered `0x5dda54`-`0x5ddaf0`), and from both header collapse and expand verbs.
+        // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a
+        // stale skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when
+        // a line is added, removed or changes value; the reference fires it at the end of every
+        // skill-list rebuild (`0x4d2fec`), which its value, max, permanent-bonus and
+        // temporary-bonus watchers run (registered `0x5dda54`-`0x5ddaf0`), and from both header
+        // collapse and expand verbs.
         let Some(script) = script else {
             return;
         };
@@ -801,15 +802,15 @@ pub(crate) fn feed_char(
         let (memo, vm_reset) = feed.vm.get_reset(script);
 
         let Some(store) = inv.self_store.iter().next() else {
-            // No self store is no data, not an empty inventory: it happens in the logout frames, where
-            // `PLAYER_LOGOUT` handlers still read equipment, so nothing is cleared (the next session
-            // starts a fresh VM).
+            // No self store is no data, not an empty inventory: it happens in the logout frames,
+            // where `PLAYER_LOGOUT` handlers still read equipment, so nothing is cleared (the next
+            // session starts a fresh VM).
             return;
         };
 
-        // `GetWeaponEnchantInfo`'s data, pushed every frame outside the gate: the remaining time is a
-        // live countdown, which the reference also recomputes per call (`0x5d9d00`). Pushed first, so
-        // handlers the snapshots fire read the fresh value.
+        // `GetWeaponEnchantInfo`'s data, pushed every frame outside the gate: the remaining time is
+        // a live countdown, which the reference also recomputes per call (`0x5d9d00`). Pushed
+        // first, so handlers the snapshots fire read the fresh value.
         let objects = &inv.objects;
         script.set_weapon_enchants(
             weapon_enchant(store, objects, EQUIPMENT_SLOT_MAINHAND),
@@ -894,8 +895,8 @@ pub(crate) fn feed_char(
         );
         // Both bands push under one `UNIT_INVENTORY_CHANGED`: one wire update, one event.
         // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the old memo: `false` is the
-        // descriptor watcher (`0x5ddd6e`: a bag arrived, left or was swapped), `true` the item-object
-        // path (`0x4c728d`: the same bag's own fields changed).
+        // descriptor watcher (`0x5ddd6e`: a bag arrived, left or was swapped), `true` the
+        // item-object path (`0x4c728d`: the same bag's own fields changed).
         let bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT] =
             std::array::from_fn(|i| store.0.player_bank_bag_slot(i as u8).unwrap_or(0));
         let repainted: Vec<bool> = (0..BANK_BAG_SLOT_COUNT)

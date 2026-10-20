@@ -198,8 +198,8 @@ fn clam_probe(
 
         match probe.phase {
             Phase::Wait => {
-                // The window must survive to be looked at: with auto-loot on, the single row is taken
-                // at the open edge and the last-row auto-release shuts it again immediately.
+                // The window must survive to be looked at: with auto-loot on, the single row is
+                // taken at the open edge and the last-row auto-release shuts it again immediately.
                 cfg.auto_loot = false;
                 info!(
                     "PROBE_CLAM: stocking one openable item (entry {entry}) — auto-loot forced off"
@@ -299,8 +299,8 @@ fn clam_probe(
                 }
             }
             Phase::Cleanup { since } => {
-                // Wait for the removal to land: `AppExit` tears the net thread down within a frame or
-                // two, so a `.additem -1` sent on the way out never reaches the wire.
+                // Wait for the removal to land: `AppExit` tears the net thread down within a frame
+                // or two, so a `.additem -1` sent on the way out never reaches the wire.
                 let gone = probe.clam.is_some_and(|guid| {
                     (0..16u8).all(|i| store.0.player_pack_slot(i) != Some(guid))
                 });
@@ -320,8 +320,8 @@ fn clam_probe(
                 }
                 probe.exited = true;
                 report(&probe, entry);
-                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
-                // teardown hang cannot leave a client holding the probe account.
+                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so
+                // a teardown hang cannot leave a client holding the probe account.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

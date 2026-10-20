@@ -112,8 +112,8 @@ pub(super) fn feed_chain_units(
         let Some(script) = script else {
             return;
         };
-        // The names `UnitName` read off a unit with no object and missed, asked as its lookup with a
-        // callback asks (`0x5171eb`), whatever the gate below says.
+        // The names `UnitName` read off a unit with no object and missed, asked as its lookup with
+        // a callback asks (`0x5171eb`), whatever the gate below says.
         for guid in script.take_unit_name_asks() {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
         }

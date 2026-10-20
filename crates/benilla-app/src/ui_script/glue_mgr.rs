@@ -1852,8 +1852,8 @@ pub(crate) fn drive_glue_mgr(
             // (`0x46c252`).
             shared.get_mut().state = ScreenState::Idle;
         }
-        // A refused login's state 9, on the glue the refusal comes back to, before its screen's list
-        // ask is served (`0x402075`). One that finds the glue still standing beat the world it
+        // A refused login's state 9, on the glue the refusal comes back to, before its screen's
+        // list ask is served (`0x402075`). One that finds the glue still standing beat the world it
         // revokes, which here is entered before the verdict (the pick's `Deviation:` in
         // [`crate::net::io`]), and ends the same way.
         if glue_up {

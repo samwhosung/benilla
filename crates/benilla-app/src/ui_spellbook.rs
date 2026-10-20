@@ -114,9 +114,10 @@ fn feed_spellbook(
         vm.turn(|script, cooldowns| {
             let script = script?;
             let (memory, vm_reset) = memory.get_reset(script);
-            // The book depends on these inputs alone. `UiClock` is not one: a running read's `ui_triple`
-            // is frame-stable per arm (a held read's start is the query's `anchor`, so it moves with
-            // `ui_now`, but nothing held moves an input), and expiry moves the store's `feed_epoch`.
+            // The book depends on these inputs alone. `UiClock` is not one: a running read's
+            // `ui_triple` is frame-stable per arm (a held read's start is the query's `anchor`, so
+            // it moves with `ui_now`, but nothing held moves an input), and expiry moves the
+            // store's `feed_epoch`.
             let objects_moved = inv.changes.moved();
             let templates_moved = memory.items_templates.moved(items.template_epoch());
             let cooldowns_moved = memory.cooldown_epoch.moved(cooldowns.feed_epoch());
@@ -129,7 +130,8 @@ fn feed_spellbook(
             let actions_changed = actions.is_changed();
             let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
             let lines_changed = skill_lines.as_ref().is_some_and(|r| r.is_changed());
-            // `is_added`: only the load-once icon column is read; the model cache churns every frame.
+            // `is_added`: only the load-once icon column is read; the model cache churns every
+            // frame.
             let icons_added = icons.as_ref().is_some_and(|r| r.is_added());
             gate::trace(
                 "feed_spellbook",
@@ -166,7 +168,8 @@ fn feed_spellbook(
             if gate.skip() {
                 return None;
             }
-            // Drained before a later return can strand it; an unresolved id fires nothing, as in 1.12.
+            // Drained before a later return can strand it; an unresolved id fires nothing, as in
+            // 1.12.
             let learned = std::mem::take(&mut learned.0);
             let spells = spells.as_deref()?;
             // Race and class drive the General collapse; 0/0 before the descriptor skips it.
@@ -174,7 +177,8 @@ fn feed_spellbook(
             let (race, class) = store
                 .map(|s| (s.0.unit_race().unwrap_or(0), s.0.unit_class().unwrap_or(0)))
                 .unwrap_or((0, 0));
-            // The melee auto-attack shows the main-hand weapon, or Spell-Reset unarmed, not its `Temp`.
+            // The melee auto-attack shows the main-hand weapon, or Spell-Reset unarmed, not its
+            // `Temp`.
             let attack_icon = store.map(|s| {
                 melee_auto_attack_icon(s, &spells.forms, &inv.objects, &items, icons.as_deref())
             });
@@ -190,8 +194,9 @@ fn feed_spellbook(
                 attack_icon,
                 ranged_icon,
             );
-            // The face the action bar paints for a weapon-face or `ActiveIconID` spell, where it is not
-            // the book's: a drop writes it, so the slot's in-place event reads what the bar feed would.
+            // The face the action bar paints for a weapon-face or `ActiveIconID` spell, where it is
+            // not the book's: a drop writes it, so the slot's in-place event reads what the bar
+            // feed would.
             for slot in &mut fresh.slots {
                 let Some(d) = spells.catalog.get(slot.spell_id).filter(|d| {
                     crate::ui_action::substitutes_weapon_icon(d) || d.active_icon_id != 0
@@ -211,9 +216,10 @@ fn feed_spellbook(
                     slot.bar_texture = Some(face);
                 }
             }
-            // The book's `IsCurrentCast` is `0x4b3600`, not the action bar's `0x4e53a0`, with two arms: a
-            // form spell is current while the form byte is its form, and the open trade-skill window, not
-            // built. It has no casting-now arm, so a book slot never lights during a cast.
+            // The book's `IsCurrentCast` is `0x4b3600`, not the action bar's `0x4e53a0`, with two
+            // arms: a form spell is current while the form byte is its form, and the open
+            // trade-skill window, not built. It has no casting-now arm, so a book slot never lights
+            // during a cast.
             let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
             if form_byte != 0 {
                 for slot in &mut fresh.slots {
@@ -223,9 +229,9 @@ fn feed_spellbook(
                         .is_some_and(|d| d.shapeshift_form == Some(u32::from(form_byte)));
                 }
             }
-            // Each slot's cooldown (`GetCooldownInfo` `0x6e13e0`: id, category and GCD alike) on the
-            // `GetTime` clock, frame-stable per arm while it runs, so a running cooldown never churns the
-            // diff; a held read starts at `anchor`, so it differs per push.
+            // Each slot's cooldown (`GetCooldownInfo` `0x6e13e0`: id, category and GCD alike) on
+            // the `GetTime` clock, frame-stable per arm while it runs, so a running cooldown never
+            // churns the diff; a held read starts at `anchor`, so it differs per push.
             let (anchor, ui_now) = (clock.anchor, clock.ui_now);
             for slot in &mut fresh.slots {
                 slot.cooldown = cooldowns
@@ -235,9 +241,9 @@ fn feed_spellbook(
             let mut changed = false;
             if fresh != memory.pushed {
                 gate.audit("feed_spellbook", "the spellbook snapshot");
-                // A book change fires `SPELLS_CHANGED`. The checked ring follows the form byte, whose
-                // change signals `CURRENT_SPELL_CAST_CHANGED` (`0x5de016`, [`crate::ui_cast`]) after this
-                // push.
+                // A book change fires `SPELLS_CHANGED`. The checked ring follows the form byte,
+                // whose change signals `CURRENT_SPELL_CAST_CHANGED` (`0x5de016`,
+                // [`crate::ui_cast`]) after this push.
                 let book_changed = fresh.tabs != memory.pushed.tabs
                     || fresh.slots.len() != memory.pushed.slots.len()
                     || fresh.slots.iter().zip(&memory.pushed.slots).any(|(a, b)| {

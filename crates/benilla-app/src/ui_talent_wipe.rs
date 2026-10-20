@@ -150,8 +150,9 @@ fn drain_talent_wipe(
                 .0
                 .send(ClientCommand::TalentWipeConfirm { trainer: npc });
         }
-        // Deviation: the reference never clears its latch (`0xc4d7a0`); this does once the answer is
-        // sent, because the reference's dialog is gone by then and a second Accept would reset twice.
+        // Deviation: the reference never clears its latch (`0xc4d7a0`); this does once the answer
+        // is sent, because the reference's dialog is gone by then and a second Accept would reset
+        // twice.
         wipe.clear();
     })
 }

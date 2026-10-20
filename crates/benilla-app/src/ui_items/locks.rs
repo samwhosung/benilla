@@ -323,8 +323,8 @@ pub(crate) fn apply_item_releases(
             queued.apply(script);
             return;
         };
-        // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved bag
-        // brings into view; the VM's first look owns what already exists.
+        // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved
+        // bag brings into view; the VM's first look owns what already exists.
         if watch.seen.is_some() {
             watch.arrivals.extend(created.iter().map(|g| g.0));
         }
@@ -334,8 +334,8 @@ pub(crate) fn apply_item_releases(
         let answered = watch.templates != templates;
         watch.templates = templates;
         let mut out = Vec::new();
-        // Whether an entry stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`); `None` while the
-        // template is unanswered.
+        // Whether an entry stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`); `None` while
+        // the template is unanswered.
         let stackable = |entry: u32, guid: u64| {
             items
                 .template(entry, guid, Ask::Read)

@@ -538,10 +538,11 @@ fn feed_auras(
             return;
         };
         let Ok((store, self_guid)) = self_q.single() else {
-            // No avatar does not end the aura state: a worldport re-streams the avatar mid-session, and
-            // vmangos re-sends durations only on apply, refresh and `Map::ExistingPlayerLogin`. The
-            // reference's `0xbc5f68` is zeroed once, by the startup init (`0x4e40c0` from `0x48f5a9`),
-            // and touched otherwise only by its setter `0x4e43a6` and reader `0x4e4467`.
+            // No avatar does not end the aura state: a worldport re-streams the avatar mid-session,
+            // and vmangos re-sends durations only on apply, refresh and `Map::ExistingPlayerLogin`.
+            // The reference's `0xbc5f68` is zeroed once, by the startup init (`0x4e40c0` from
+            // `0x48f5a9`), and touched otherwise only by its setter `0x4e43a6` and reader
+            // `0x4e4467`.
             return;
         };
 
@@ -669,19 +670,19 @@ fn feed_auras(
 
         let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
         let pet_guid = units.pet.spells.pet_guid;
-        // `UnitBuff`'s unit gate on a live unit, the player included, whom the gate tests as any unit
-        // (`0x5195aa`-`0x5195f7`). The pet is ungated; the reference gates a pet too, but `CanAssist`'s
-        // player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel and FFA-PvP
-        // state) passes for your own pet, leaving only the charm, selectable and reaction clauses to
-        // hide its buffs.
+        // `UnitBuff`'s unit gate on a live unit, the player included, whom the gate tests as any
+        // unit (`0x5195aa`-`0x5195f7`). The pet is ungated; the reference gates a pet too, but
+        // `CanAssist`'s player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel
+        // and FFA-PvP state) passes for your own pet, leaving only the charm, selectable and
+        // reaction clauses to hide its buffs.
         let (rel, me) = (relations.get(), relations.me());
         let buffs_visible = |guid: u64, unit: &ObjectStore| {
             guid == pet_guid || buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
         };
         let target_guid = units.selection.guid.unwrap_or(0);
-        // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the pick,
-        // and takes it only as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`): a GameObject, a corpse or
-        // nothing names nobody.
+        // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the
+        // pick, and takes it only as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`): a GameObject, a
+        // corpse or nothing names nobody.
         let mouseover = script
             .world_mouseover()
             .filter(|&guid| held(guid).is_some_and(|s| s.is_unit()))
@@ -723,9 +724,10 @@ fn feed_auras(
         if changed {
             // The cache rebuild's own event, no arguments (`0x4e437f`): the stock buff bar and
             // `MiniMapTrackingFrame` register it. The unit frames' `UNIT_AURA` is the aura fields'
-            // watches (ids 41 and 107), the flags watcher's bit 27 and the stats packet's record diff
-            // (`0x5e57d8`, the pet's `0x5e58f1`), all fired by `crate::ui_unit` after this push; a
-            // token that comes to name another unit hears it from its own event, not from here.
+            // watches (ids 41 and 107), the flags watcher's bit 27 and the stats packet's record
+            // diff (`0x5e57d8`, the pet's `0x5e58f1`), all fired by `crate::ui_unit` after this
+            // push; a token that comes to name another unit hears it from its own event, not from
+            // here.
             fires.post("PLAYER_AURAS_CHANGED", vec![]);
         }
     })

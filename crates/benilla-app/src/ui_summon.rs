@@ -85,9 +85,9 @@ fn feed_summon(
         }
 
         // The getter's calls are its lookups with the callback `0x48b710` (`0x48b6e1`): the popup's
-        // `OnUpdate` makes one a frame (`StaticPopup.lua:1746`), so a miss is asked while it shows and
-        // a refused name again, once per answer. The push itself only reads; a zero guid names nobody
-        // and is never asked about.
+        // `OnUpdate` makes one a frame (`StaticPopup.lua:1746`), so a miss is asked while it shows
+        // and a refused name again, once per answer. The push itself only reads; a zero guid names
+        // nobody and is never asked about.
         let looked_up = script.take_summon_summoner_lookups() > 0;
         let summoner_name = match summon.pending() {
             Some(guid) => names

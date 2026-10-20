@@ -69,8 +69,8 @@ pub(super) fn feed_petition(
             *fed_registrar = None;
         }
 
-        // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
-        // VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
+        // Shown before the snapshot, so a refusal lands the same frame as its state change; a key
+        // the VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
         let composed = std::mem::take(&mut petition.lines);
         let resolved: Vec<crate::ui_action::Shown> = composed
             .iter()
@@ -83,8 +83,8 @@ pub(super) fn feed_petition(
             .collect();
         crate::ui_action::show_messages(script, &mut sink, "ui_petition", resolved);
 
-        // Rebuilt every frame: reading the caches issues their queries, so a landing sets no flag and
-        // only a rebuild sees it.
+        // Rebuilt every frame: reading the caches issues their queries, so a landing sets no flag
+        // and only a rebuild sees it.
         let open = petition.open.clone();
         let me = self_guid.0.unwrap_or(0);
         // The getters only read (`0x4f45a1`, `0x4f4459`); the show looked the signers up.
@@ -119,8 +119,9 @@ pub(super) fn feed_petition(
             })
         });
 
-        // `CanSignPetition` (`0x4f45e0`). With no record the reference runs only the signer scan, over
-        // the real signers: the close path zeroes the array, then `0x4f40b0` refills it (`0x5eef29`).
+        // `CanSignPetition` (`0x4f45e0`). With no record the reference runs only the signer scan,
+        // over the real signers: the close path zeroes the array, then `0x4f40b0` refills it
+        // (`0x5eef29`).
         let in_guild = self_q
             .iter()
             .next()
@@ -144,8 +145,8 @@ pub(super) fn feed_petition(
             can_sign,
         });
 
-        // ── The registrar's open; its close is the core's ([`super::close_core`]), and a disconnect's
-        //    clear tells the VM nothing.
+        // ── The registrar's open; its close is the core's ([`super::close_core`]), and a
+        //    disconnect's clear tells the VM nothing.
         let now_registrar = registrar.npc();
         if now_registrar.is_some() && *fed_registrar != now_registrar {
             script.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
@@ -158,8 +159,8 @@ pub(super) fn feed_petition(
         let fed = &mut petition.fed;
         match (fed.shown_charter, now_charter) {
             (Some(a), Some(b)) if a != b => {
-                // Another charter while one is shown: drop the queued close intent, or the drain would
-                // close the new charter and send a `MSG_PETITION_DECLINE` for it.
+                // Another charter while one is shown: drop the queued close intent, or the drain
+                // would close the new charter and send a `MSG_PETITION_DECLINE` for it.
                 script.fire_event("PETITION_CLOSED", vec![]);
                 script.fire_event("PETITION_SHOW", vec![]);
                 let _ = script.drop_petition_close_intents();
@@ -209,7 +210,8 @@ pub(super) fn drain_petition(
         for request in requests {
             match request {
                 PetitionRequest::Buy(name) => {
-                    // The petition module's latch (`[0xbdceb0]`), not the target or `CGGameUI`'s NPC.
+                    // The petition module's latch (`[0xbdceb0]`), not the target or `CGGameUI`'s
+                    // NPC.
                     let Some(npc) = registrar.npc() else {
                         debug!("ui_petition: BuyGuildCharter with no registrar open — dropped");
                         continue;
@@ -260,14 +262,16 @@ pub(super) fn drain_petition(
                         continue;
                     };
                     let _ = commands.0.send(ClientCommand::PetitionSign { item, byte });
-                    // The in-flight latch: a close while our signature is outstanding is no decline.
+                    // The in-flight latch: a close while our signature is outstanding is no
+                    // decline.
                     petition.signing = true;
                 }
                 PetitionRequest::Offer => {
                     let Some(item) = petition.open_item() else {
                         continue; // guard 1, silent
                     };
-                    // `OfferPetition()` offers to the current target; with none it is silent (guard 2).
+                    // `OfferPetition()` offers to the current target; with none it is silent (guard
+                    // 2).
                     let Some(player) = selection.guid else {
                         debug!("ui_petition: OfferPetition with no target — dropped");
                         continue;

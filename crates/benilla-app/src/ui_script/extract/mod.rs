@@ -471,9 +471,9 @@ pub(super) fn tick_script(
             return;
         };
         let (w, h) = (window.width(), window.height());
-        // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`; the
-        // caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM lives in
-        // it: quads scale ×s out, and the mouse and the measures ÷s in.
+        // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`;
+        // the caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM
+        // lives in it: quads scale ×s out, and the mouse and the measures ÷s in.
         let s = super::seam_scale(h);
         // A moved seam scale or DPI stales every text metric the engine caches: integer-stepped
         // advances do not rescale, and the size snap moves a string's width by several percent,
@@ -521,8 +521,8 @@ pub(super) fn tick_script(
             if script.vm_kind() == benilla_ui::script::VmKind::InGame {
                 // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap
                 // follows the window; a moved dial applies once, as its CVar callback does
-                // (`0x490770`). Deviation: the reference then re-reads the aspect (`0x492f13`), and on
-                // a change of 0.001 or more calls `0x491380`, which sets the reload trigger
+                // (`0x490770`). Deviation: the reference then re-reads the aspect (`0x492f13`), and
+                // on a change of 0.001 or more calls `0x491380`, which sets the reload trigger
                 // (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a
                 // resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry`
                 // with it, because the window resizes freely and a reload on each resize would tear
@@ -544,7 +544,8 @@ pub(super) fn tick_script(
             script.tick(step.delta.as_secs_f32());
         }
         // The VM's clock anchored at the instant the paced clock stands at, which moves by the same
-        // steps; every `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
+        // steps; every `Instant` to `GetTime` conversion goes through this pair, never
+        // `Instant::now()`.
         *ui_clock = super::UiClock {
             anchor: step.at,
             ui_now: script.now(),
@@ -552,8 +553,8 @@ pub(super) fn tick_script(
         let us_tick = lap();
         // ── The FontString measure round-trip, before the resolve ────────────────────────────────
         // A request reads only region data, never a resolved rect, and `resolve` writes no region's
-        // size, so measuring first lets the resolve below see the answers. The tick drained the layout
-        // after its walk; this resolve takes the measures and what the tick's tail moved.
+        // size, so measuring first lets the resolve below see the answers. The tick drained the
+        // layout after its walk; this resolve takes the measures and what the tick's tail moved.
         let mut measured_any = false;
         if let Some(atlas) = font_atlas.as_deref_mut() {
             measured_any = measure_fontstrings(script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
@@ -741,7 +742,8 @@ pub(super) fn paint_script(
         let us_exm = lap();
         let n_extracted = extracted.len();
         // ── The extract gate ──────────────────────────────────────────────────────
-        // Equal inputs skip the conversion; the quads, minimap slot and link spans stay as they are.
+        // Equal inputs skip the conversion; the quads, minimap slot and link spans stay as they
+        // are.
         let dims = (w.to_bits(), h.to_bits(), s.to_bits(), dpi.to_bits());
         let settled = capture.is_none()
             && prev.dims == Some(dims)
@@ -863,7 +865,8 @@ pub(super) fn paint_script(
                     script.target_owner_name(eq.target).unwrap_or_default()
                 );
             }
-            // The scratch side channels are a tripwire: an entry that writes one takes the full path.
+            // The scratch side channels are a tripwire: an entry that writes one takes the full
+            // path.
             let mut scratch: Vec<UiQuad> = Vec::new();
             let mut scratch_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(changed.len());
             let mut scratch_links = Vec::new();
@@ -914,7 +917,8 @@ pub(super) fn paint_script(
                 }
             } else {
                 // Stitch a fresh list: kept runs moved out of last frame's (no `Arc` clones), the
-                // re-converted entries from the scratch, new spans; `prev.held` keeps the allocation.
+                // re-converted entries from the scratch, new spans; `prev.held` keeps the
+                // allocation.
                 let mut old = std::mem::take(&mut prev.held);
                 std::mem::swap(&mut old, &mut quads.quads);
                 quads.quads.clear();
@@ -922,7 +926,8 @@ pub(super) fn paint_script(
                 let mut new_spans: Vec<u32> = Vec::with_capacity(extracted.len());
                 {
                     let mut src = old.drain(..);
-                    // Quads the drain has yielded; kept runs strictly increase, so one pass does it.
+                    // Quads the drain has yielded; kept runs strictly increase, so one pass does
+                    // it.
                     let mut cursor = 0usize;
                     let mut ci = 0usize;
                     for s in &align.source {
@@ -1035,8 +1040,8 @@ pub(super) fn paint_script(
             spans.push(out.len() as u32);
         }
         prev.spans = spans;
-        // Capture mode only: the held payload's icon at the mouse, for the hardware cursor a capture
-        // cannot show; every payload kind, as `crate::cursor`'s `payload_icon`.
+        // Capture mode only: the held payload's icon at the mouse, for the hardware cursor a
+        // capture cannot show; every payload kind, as `crate::cursor`'s `payload_icon`.
         if capture.is_some() {
             use benilla_ui::script::CursorPayload;
             let texture = script.cursor_payload().and_then(|p| match p {
@@ -1061,7 +1066,8 @@ pub(super) fn paint_script(
             }
         }
 
-        // The link spans replace last frame's set, so `OnHyperlinkClick` hit-tests what is on screen.
+        // The link spans replace last frame's set, so `OnHyperlinkClick` hit-tests what is on
+        // screen.
         script.set_link_spans(link_spans);
 
         // Park the slot for `minimap::emit_minimap`; `None` when the minimap is hidden.

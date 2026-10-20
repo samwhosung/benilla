@@ -381,8 +381,8 @@ pub(super) fn feed_action_state(
             (bar, pet.filter(|_| held))
         });
 
-        // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0`; a new VM meets the
-        // state as it stands and hears none.
+        // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0`; a new VM meets
+        // the state as it stands and hears none.
         let mut refresh = edges.read().fold(false, |hit, e| {
             hit | refreshes_usable(e, cast_ctx.self_guid, selection.guid)
         });
@@ -406,8 +406,8 @@ pub(super) fn feed_action_state(
         // cascade at our player's arrival or a reload's), `EditMacro` (`0x4f132e`) and each
         // `BAG_UPDATE` (`0x4f9374`).
         let entered = entries.read().count() > 0;
-        // Our player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and empties
-        // the reactive list (`0x5dea86`); a reload reaches neither.
+        // Our player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
+        // empties the reactive list (`0x5dea86`); a reload reaches neither.
         let arrived = !created.is_empty();
         let macro_edits = script.macro_edits();
         let bag_updates = bag_updates.map_or(0, |b| b.0);
@@ -417,7 +417,8 @@ pub(super) fn feed_action_state(
             || macro_edits != memory.macro_edits
             || bag_updates != memory.bag_updates;
         (memory.macro_edits, memory.bag_updates) = (macro_edits, bag_updates);
-        // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`, `0x6e2f8e`).
+        // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`,
+        // `0x6e2f8e`).
         let mut record_flush = false;
 
         let mut fresh: HashMap<u32, ActionState> = HashMap::new();
@@ -427,8 +428,9 @@ pub(super) fn feed_action_state(
             let (kind, id) = match resolve_through_macro(button.kind, button.action, bound) {
                 SlotResolve::Action(kind, id) => (kind, id),
                 SlotResolve::BareMacro => {
-                    // `0x4e5050`'s spell-less leg: usable while the player-control flag `[0xb4b3e4]`
-                    // is set (`0x4e50f4`; `SMSG_CLIENT_CONTROL_UPDATE` clears it, `0x4958e0`).
+                    // `0x4e5050`'s spell-less leg: usable while the player-control flag
+                    // `[0xb4b3e4]` is set (`0x4e50f4`; `SMSG_CLIENT_CONTROL_UPDATE` clears it,
+                    // `0x4958e0`).
                     st.usable = !control_lost;
                     st.no_cooldown_query = true;
                     fresh.insert(action, st);
@@ -477,9 +479,9 @@ pub(super) fn feed_action_state(
                         continue;
                     };
                     st.is_attack = d.is_melee_auto_attack();
-                    // What `IsCurrentAction 0x4e53a0` and `IsAutoRepeatAction 0x4e55b0` hold against
-                    // the live cast state. The form arm is not the icon's aura scan: a form granted by
-                    // another spell lights the check but not the icon.
+                    // What `IsCurrentAction 0x4e53a0` and `IsAutoRepeatAction 0x4e55b0` hold
+                    // against the live cast state. The form arm is not the icon's aura scan: a form
+                    // granted by another spell lights the check but not the icon.
                     st.spell = Some(button.action);
                     st.form = d.shapeshift_form;
                     st.profession = profession(button.action, d, skill_lines.as_deref());
@@ -503,18 +505,19 @@ pub(super) fn feed_action_state(
                         st.usable = true;
                     }
                     let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
-                    // `ActionHasRange 0x4e5810` asks `GetMinMaxRange` with a null target (`0x4e5852`)
-                    // and tests `|min|` and `|max|` against `FLT_EPSILON`. The auto-attack target the
-                    // melee arm falls back to cannot move that: its max is at least the 5.0 floor.
+                    // `ActionHasRange 0x4e5810` asks `GetMinMaxRange` with a null target
+                    // (`0x4e5852`) and tests `|min|` and `|max|` against `FLT_EPSILON`. The
+                    // auto-attack target the melee arm falls back to cannot move that: its max is
+                    // at least the 5.0 floor.
                     st.has_range = spell_mods
                         .min_max_range(d, row, caster, RangeTargets::default())
                         .is_some_and(|(min, max)| {
                             min.abs() > f32::EPSILON || max.abs() > f32::EPSILON
                         });
-                    // `IsActionInRange 0x4e56f0`: nil with no player (`0x4e572b`), else the pre-check
-                    // `0x6e4440` on the selection, whose compare `0x6e47b0` hands `GetMinMaxRange` that
-                    // target (`0x6e47ca`): its reach pads a ranged row, and its motion with the caster's
-                    // earns the moving bonus.
+                    // `IsActionInRange 0x4e56f0`: nil with no player (`0x4e572b`), else the
+                    // pre-check `0x6e4440` on the selection, whose compare `0x6e47b0` hands
+                    // `GetMinMaxRange` that target (`0x6e47ca`): its reach pads a ranged row, and
+                    // its motion with the caster's earns the moving bonus.
                     st.in_range = me.and_then(|_| {
                         crate::spell::range_check::action_in_range(d, &cast_ctx, row, spell_mods)
                     });
@@ -533,8 +536,8 @@ pub(super) fn feed_action_state(
                 }
                 ACTION_KIND_ITEM => {
                     // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
-                    // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which no
-                    // event here marks: an entry is asked when it first shows.
+                    // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which
+                    // no event here marks: an entry is asked when it first shows.
                     let template = items.template(button.action, 0, Ask::New(&commands));
                     let awaited = match template {
                         None if !items.template_answered_unknown(button.action) => {
@@ -547,14 +550,15 @@ pub(super) fn feed_action_state(
                     // `IsCurrentAction`'s item arm holds the entry against the in-flight item
                     // (`0x4e53fc`-`0x4e5428`).
                     st.item = Some(button.action);
-                    // `GetItemCooldown 0x6e2ed0` queries only an item whose record is cached and has an
-                    // on-use spell (`0x6e2f14`, `0x6e2f20`-`0x6e2f34`).
+                    // `GetItemCooldown 0x6e2ed0` queries only an item whose record is cached and
+                    // has an on-use spell (`0x6e2f14`, `0x6e2f20`-`0x6e2f34`).
                     st.no_cooldown_query = use_spell.is_none();
-                    // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too: the
-                    // gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
+                    // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too:
+                    // the gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
                     let count = script.action_slot(action).map_or(0, |slot| slot.count);
-                    // `IsEquippedAction`, the green border: `0x622270` at mask 1 (`0x4e5377`-`0x4e5380`),
-                    // the walker over the worn slots, so a broken copy is not worn.
+                    // `IsEquippedAction`, the green border: `0x622270` at mask 1
+                    // (`0x4e5377`-`0x4e5380`), the walker over the worn slots, so a broken copy is
+                    // not worn.
                     st.equipped = me.is_some_and(|(s, _, _)| {
                         crate::ui_items::find_item(
                             &s.0,
@@ -604,8 +608,8 @@ pub(super) fn feed_action_state(
                 }
                 _ => {}
             }
-            // The triple holds the absolute start, so a running cooldown diffs equal every frame and
-            // a re-arm, even within one frame gap, restarts the sweep.
+            // The triple holds the absolute start, so a running cooldown diffs equal every frame
+            // and a re-arm, even within one frame gap, restarts the sweep.
             fresh.insert(action, st);
         }
 
@@ -657,8 +661,8 @@ pub(super) fn feed_action_state(
         }
         memory.pushed = fresh;
 
-        // The reactive list: emptied at an arrival, filled from the book, and re-checked inside each
-        // usable refresh after the bar (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
+        // The reactive list: emptied at an arrival, filled from the book, and re-checked inside
+        // each usable refresh after the bar (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
         let list = &mut *reactive;
         if arrived {
             list.arrive();
@@ -725,8 +729,8 @@ pub(super) fn fire_action_events(
             script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
             script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
         }
-        // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as it
-        // turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
+        // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as
+        // it turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
         if owed.usable_changed {
             script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
         }

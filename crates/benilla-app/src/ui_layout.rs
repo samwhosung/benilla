@@ -250,7 +250,8 @@ pub(crate) fn load_layout(
             return;
         }
         info!("layout: {count} frames restored from {}", path.display());
-        // Drain the dirty bit the restore set, so the first save does not rewrite what was just read.
+        // Drain the dirty bit the restore set, so the first save does not rewrite what was just
+        // read.
         script.take_user_placed_change();
         if anchor_form {
             // The anchor form is read once: the autosave rewrites it in the rect form once the

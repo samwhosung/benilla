@@ -408,8 +408,8 @@ pub(super) fn drive_blip_tooltip(
             MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
             // A live object names itself through its name method (`0x4eb31a`, vtable slot 28,
             // `GetUnitName` with a callback), which every probe runs, so a refused name is asked
-            // again about once per answer; a guid with no object only reads (`0x4eb33c`), and so does
-            // a creature's record (`0x60934b`).
+            // again about once per answer; a guid with no object only reads (`0x4eb33c`), and so
+            // does a creature's record (`0x60934b`).
             MinimapBlipHover::Npc(npc, grey) => {
                 let ask = if objects.store(*npc).is_some() {
                     Ask::Event(&commands)

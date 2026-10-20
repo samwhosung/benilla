@@ -397,9 +397,10 @@ fn bg_probe(
 
         match probe.phase {
             Phase::Wait => {
-                // No start in GM mode: `CanUseBattleGroundObject` refuses a GM every objective with no
-                // reply (`Player.cpp:20576`) while the queue and census still work. Under
-                // `WOW_GM=off`, `probe_shield` drops GM mode a moment into the world, so this waits.
+                // No start in GM mode: `CanUseBattleGroundObject` refuses a GM every objective with
+                // no reply (`Player.cpp:20576`) while the queue and census still work. Under
+                // `WOW_GM=off`, `probe_shield` drops GM mode a moment into the world, so this
+                // waits.
                 if store.0.player_flags() & PLAYER_FLAGS_GM != 0 {
                     let since = *probe.waiting_since.get_or_insert(now);
                     if now - since < GM_DROP_WAIT {
@@ -444,8 +445,8 @@ fn bg_probe(
                 if now - sent_at < 3.0 {
                     return; // post-teleport settle: let the battlemasters stream in
                 }
-                // The lever is settled before the join: vmangos evaluates a queue only when a join or
-                // a leave schedules it (`BattleGroundMgr.cpp:1005-1028`), so flipping it under a
+                // The lever is settled before the join: vmangos evaluates a queue only when a join
+                // or a leave schedules it (`BattleGroundMgr.cpp:1005-1028`), so flipping it under a
                 // waiting entry does nothing.
                 toggle_testing(&mut probe, &net);
                 probe.phase = Phase::Toggled {
@@ -457,7 +458,8 @@ fn bg_probe(
                 // Drain every frame until the reply shows; the rest is kept for the first census.
                 if let Some(s) = script.as_deref_mut() {
                     let seen = drain_events(&mut probe, s);
-                    // The last marker wins: a correcting send's reply can share a drain with the first.
+                    // The last marker wins: a correcting send's reply can share a drain with the
+                    // first.
                     let on = seen.rfind("debugging");
                     let off = seen.rfind("normal playercount");
                     match (on, off) {
@@ -493,7 +495,8 @@ fn bg_probe(
                         };
                     }
                     None if now - sent_at > TOGGLE_REPLY_WINDOW => {
-                        // Unread stays unread: `testing_confirmed` is left false for the failure text.
+                        // Unread stays unread: `testing_confirmed` is left false for the failure
+                        // text.
                         warn!(
                             "PROBE bg: TESTING unread — no `.debug bg` reply reached the tap in \
                              {TOGGLE_REPLY_WINDOW:.0}s; continuing, but if the queue never pops, this \
@@ -532,7 +535,8 @@ fn bg_probe(
                 }
             }
             Phase::Greeted { master, sent_at } => {
-                // The list's guid is the one the join quotes; its arrival proves the level gate passed.
+                // The list's guid is the one the join quotes; its arrival proves the level gate
+                // passed.
                 if battlefield.battlemaster() == Some(master) {
                     info!("PROBE bg: LISTED — queueing for map {}", arena.map);
                     let _ = net.0.send(ClientCommand::BattlemasterJoin {
@@ -551,8 +555,8 @@ fn bg_probe(
                 }
             }
             Phase::Joined { sent_at } => {
-                // Status 2 is "ready, confirm", taken through the stock verb. Matched on the map too:
-                // vmangos re-sends a stale queue's status at login.
+                // Status 2 is "ready, confirm", taken through the stock verb. Matched on the map
+                // too: vmangos re-sends a stale queue's status at login.
                 let ready = queue.slots().iter().position(|s| {
                     s.as_ref()
                         .is_some_and(|(st, _)| st.status == 2 && st.map_id == arena.map)
@@ -677,8 +681,8 @@ fn bg_probe(
                 );
                 let samples = samples + 1;
 
-                // Inside, the lever has formed the match; off again so the premature-finish countdown
-                // runs (it only decrements while testing is off, `BattleGround.cpp:337`).
+                // Inside, the lever has formed the match; off again so the premature-finish
+                // countdown runs (it only decrements while testing is off, `BattleGround.cpp:337`).
                 if samples == 1 {
                     info!(
                         "PROBE bg: TESTING — inside the instance; the lever has done its job and the \
@@ -773,9 +777,9 @@ fn bg_probe(
                     return;
                 };
                 // World state 2339 is the Alliance row's icon selector: 1, or 2 while the flag that
-                // row is about is carried (`BattleGroundWS.cpp:512`, `:714-722`), never the four-value
-                // `m_flagState`, so `2339=1` held all match is correct, not stuck. The buffs are the
-                // other half.
+                // row is about is carried (`BattleGroundWS.cpp:512`, `:714-722`), never the
+                // four-value `m_flagState`, so `2339=1` held all match is correct, not stuck. The
+                // buffs are the other half.
                 let auras = script
                     .eval::<String>(
                         r#"

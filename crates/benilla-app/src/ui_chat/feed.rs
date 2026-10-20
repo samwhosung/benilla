@@ -1041,7 +1041,8 @@ pub(super) fn feed_chat(
                             );
                             return; // the reference prints no line
                         } else if tries < NAME_MAX_TRIES {
-                            // `subject_for_guid` sent the name query: hold the raw line until it lands.
+                            // `subject_for_guid` sent the name query: hold the raw line until it
+                            // lands.
                             still.push(Pending::Wire {
                                 msg,
                                 tries: tries + 1,
@@ -1055,18 +1056,19 @@ pub(super) fn feed_chat(
                     };
                     let plain = expanded.unwrap_or_else(|| msg.text.clone());
                     // The language gate: the garble writes the one buffer the line, `arg1` and the
-                    // bubble read, as `0x49a870` fills `[ebp-0xd0c]` once (`0x49a9f0` copy, `0x49aa7c`
-                    // garble) and never reads the wire text again.
+                    // bubble read, as `0x49a870` fills `[ebp-0xd0c]` once (`0x49a9f0` copy,
+                    // `0x49aa7c` garble) and never reads the wire text again.
                     let language = langs.effective_language(msg.chat_type, msg.language);
                     let mut text = langs.garble(language, &plain);
 
-                    // The text filters, on the garbled buffer as in `0x49a870`: spam first, then the
-                    // mask, so a dropped line consumes no mask indices (the phase is global).
+                    // The text filters, on the garbled buffer as in `0x49a870`: spam first, then
+                    // the mask, so a dropped line consumes no mask indices (the phase is global).
                     if text_filter.should_drop(msg.chat_type, msg.chat_tag, langs.is_gm(), &text) {
-                        // Nothing shows in its place: the not-a-whisper leg (`0x49ab33`) jumps to the
-                        // epilogue `0x49afd7`. A whisper with a non-zero report guid also sends
-                        // `CMSG_CHAT_FILTERED` (`0x331`, the `u64` guid, `0x49ab50`) in the reference;
-                        // not sent here, as vmangos leaves the opcode unhandled (`Opcodes.cpp:932`).
+                        // Nothing shows in its place: the not-a-whisper leg (`0x49ab33`) jumps to
+                        // the epilogue `0x49afd7`. A whisper with a non-zero report guid also sends
+                        // `CMSG_CHAT_FILTERED` (`0x331`, the `u64` guid, `0x49ab50`) in the
+                        // reference; not sent here, as vmangos leaves the opcode unhandled
+                        // (`Opcodes.cpp:932`).
                         debug!(
                             "chat: spam filter dropped [{:#04x}] {:?}",
                             msg.chat_type, text
@@ -1094,16 +1096,17 @@ pub(super) fn feed_chat(
                     };
                     channels.stamp_channel(&mut event);
                     route(script, &mut windows, &event);
-                    // The bubble gets the same text: the reference spawns it in this path (`0x49acd9`).
+                    // The bubble gets the same text: the reference spawns it in this path
+                    // (`0x49acd9`).
                     if let Some(kind) = event.kind {
                         speaker
                             .bubbles
                             .push(&speaker.bubble_cfg, msg.sender_guid, kind, &text);
                     }
-                    // The gesture reads the raw type and `plain`, not the garbled text: the selector is
-                    // in the parser (`0x49d560`, `0x49d820`-`0x49d8ae`) on the buffer `0x49dbc2` hands
-                    // `0x49a870`, so a Horde `lol` laughs for every observer.
-                    // The immediate path alone refuses a speaker that cannot animate (`0x49d7f7`).
+                    // The gesture reads the raw type and `plain`, not the garbled text: the
+                    // selector is in the parser (`0x49d560`, `0x49d820`-`0x49d8ae`) on the buffer
+                    // `0x49dbc2` hands `0x49a870`, so a Horde `lol` laughs for every observer. The
+                    // immediate path alone refuses a speaker that cannot animate (`0x49d7f7`).
                     let speaker_flags = guids
                         .0
                         .get(&msg.sender_guid)
@@ -1146,12 +1149,13 @@ pub(super) fn feed_chat(
                         });
                         return;
                     }
-                    // Stamped against the channel list as it stands at delivery: the reference hands
-                    // the composer `0x49a870` the notice's channel name, directly when the names are
-                    // cached (`0x49c59f`-`0x49c5b0`), else from the queued line's node (`+0x2c`) in
-                    // the name-query callback (`0x49cfb4`-`0x49cfc1`), and the composer looks it up
-                    // among the joined channels (`0x49aa1e`-`0x49aa31`). Unstamped, arg7-arg9 are
-                    // empty and the stock filter (`ChatFrame.lua:1374-1392`) drops the line.
+                    // Stamped against the channel list as it stands at delivery: the reference
+                    // hands the composer `0x49a870` the notice's channel name, directly when the
+                    // names are cached (`0x49c59f`-`0x49c5b0`), else from the queued line's node
+                    // (`+0x2c`) in the name-query callback (`0x49cfb4`-`0x49cfc1`), and the
+                    // composer looks it up among the joined channels (`0x49aa1e`-`0x49aa31`).
+                    // Unstamped, arg7-arg9 are empty and the stock filter
+                    // (`ChatFrame.lua:1374-1392`) drops the line.
                     if let Some(mut event) = notice_event(
                         notice,
                         channel,
@@ -1239,8 +1243,8 @@ pub(super) fn feed_chat(
                     group,
                 } => {
                     // A victim's name never waits: each template names it through `GetUnitName`
-                    // (`0x609210`, from `0x637ac0`), whose miss without `UNKNOWNOBJECT` is the literal
-                    // "Unknown Being", where `GetObjectName`'s is `UKNOWNOBJECT`.
+                    // (`0x609210`, from `0x637ac0`), whose miss without `UNKNOWNOBJECT` is the
+                    // literal "Unknown Being", where `GetObjectName`'s is `UKNOWNOBJECT`.
                     let name = (victim != 0).then(|| {
                         super::combat::unit_name(
                             victim,
@@ -1286,10 +1290,10 @@ pub(super) fn feed_chat(
                     rank,
                     side,
                 } => {
-                    // `victim == 0` is the award form: no name, no rank title. A victim's name never
-                    // waits (`GetUnitName`, `0x625387`), and its title genders against the active player
-                    // (`0x612bf0`, `0x625374`), whose gender `0x5ed5b0` reads from `PLAYER_BYTES_3`
-                    // byte 0; a dishonorable kill's template names no rank.
+                    // `victim == 0` is the award form: no name, no rank title. A victim's name
+                    // never waits (`GetUnitName`, `0x625387`), and its title genders against the
+                    // active player (`0x612bf0`, `0x625374`), whose gender `0x5ed5b0` reads from
+                    // `PLAYER_BYTES_3` byte 0; a dishonorable kill's template names no rank.
                     let name = (victim != 0).then(|| {
                         super::combat::unit_name(
                             victim,
@@ -1321,8 +1325,8 @@ pub(super) fn feed_chat(
                     target,
                     tries,
                 } => {
-                    // Both names, looked up as the packet's (`0x49dc59`): the performer's, and ours for
-                    // the "is the target me?" test.
+                    // Both names, looked up as the packet's (`0x49dc59`): the performer's, and ours
+                    // for the "is the target me?" test.
                     let ask = Ask::at(tries == 0, &commands);
                     let performer_name = names.resolve_player(performer, ask).map(str::to_string);
                     let your_name = self_guid
@@ -1338,7 +1342,8 @@ pub(super) fn feed_chat(
                         return;
                     }
                     // No performer name, no line (not "Unknown"): the reference bails when its
-                    // player-only name cache misses (`0x49b28c`); the animation rode `EmoteMessage`.
+                    // player-only name cache misses (`0x49b28c`); the animation rode
+                    // `EmoteMessage`.
                     let (Some(performer_name), Some(cat)) =
                         (performer_name, emote_texts.as_deref())
                     else {

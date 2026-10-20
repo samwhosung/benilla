@@ -594,7 +594,8 @@ fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local
                 max_power: 80,
                 dead: false,
                 reaction: 0, // own avatar: no reaction to itself
-                // Race/class so the ui-char capture's level line reads "Level 12 Night Elf Warrior".
+                // Race/class so the ui-char capture's level line reads "Level 12 Night Elf
+                // Warrior".
                 race: Some("Night Elf".into()),
                 race_file: Some("NightElf".into()),
                 class: Some("Warrior".into()),
@@ -643,8 +644,9 @@ fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local
             script.fire_event("PLAYER_COMBO_POINTS", vec![]);
         }
         if !*fired {
-            // Battle-stance page slots (actions 73..); slot 80 is a consumable stack of 5, since stock
-            // `ActionButton_UpdateCount` shows only a consumable's count (`ActionButton.lua:287`).
+            // Battle-stance page slots (actions 73..); slot 80 is a consumable stack of 5, since
+            // stock `ActionButton_UpdateCount` shows only a consumable's count
+            // (`ActionButton.lua:287`).
             script.set_bonus_bar_offset(1);
             // A macro on button 4; a capture has no character for `ui_macro::load_macros` to read.
             script.set_macros(benilla_ui::script::MacroState::from_scopes(
@@ -721,7 +723,8 @@ fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local
                     }),
                 );
             }
-            // The stance bar: battle active (bonus offset 1), defensive uncastable, berserker cooling.
+            // The stance bar: battle active (bonus offset 1), defensive uncastable, berserker
+            // cooling.
             script.set_shapeshift_forms(vec![
                 benilla_ui::script::ShapeshiftFormView {
                     spell_id: 2457,

@@ -136,8 +136,8 @@ pub(crate) fn feed_party(
             return;
         };
         let (fed, vm_reset) = fed.get_reset(script);
-        // The ready-check summary lines the timeout tick composed, pushed as system chat ahead of the
-        // gate: the tick runs on the frame clock, which the gate does not watch.
+        // The ready-check summary lines the timeout tick composed, pushed as system chat ahead of
+        // the gate: the tick runs on the frame clock, which the gate does not watch.
         for line in script.take_ready_check_lines() {
             chat.push_event(crate::ui_chat::ChatEvent::text_only(
                 crate::ui_chat::ChatEventKind::System,
@@ -146,7 +146,8 @@ pub(crate) fn feed_party(
         }
         let chr = tables.unit_names();
         let types = tables.types(&names);
-        // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays shut.
+        // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays
+        // shut.
         let names_moved = fed.names_generation.moved(names.generation());
         let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
         let group_changed = group.is_changed();
@@ -222,7 +223,8 @@ pub(crate) fn feed_party(
         let slots: Vec<&GroupMemberEntry> = group.party_slots().collect();
 
         // Leader and master looter as party indices, 0 for us. They cover our own subgroup's slots
-        // only, so a raid leader elsewhere reads 0 here; `GetRaidRosterInfo` carries every subgroup.
+        // only, so a raid leader elsewhere reads 0 here; `GetRaidRosterInfo` carries every
+        // subgroup.
         let members: Vec<PartyMemberInfo> = slots
             .iter()
             .map(|m| PartyMemberInfo {
@@ -248,9 +250,9 @@ pub(crate) fn feed_party(
                     _ => "group",
                 };
                 // `GetLootMethod`'s second return (`0x4e91b0`): 0 when the looter is us, else the
-                // looter's party slot + 1 over the four slots only (`0x4e81a0`, even in a raid), else
-                // nil. A master looter in another raid subgroup reads nil, never 0, which would light
-                // the crown on our portrait (`PlayerFrame.lua:48`).
+                // looter's party slot + 1 over the four slots only (`0x4e81a0`, even in a raid),
+                // else nil. A master looter in another raid subgroup reads nil, never 0, which
+                // would light the crown on our portrait (`PlayerFrame.lua:48`).
                 let master = (loot.method == 2 && loot.master != 0)
                     .then(|| {
                         if Some(loot.master) == self_guid {
@@ -267,7 +269,8 @@ pub(crate) fn feed_party(
             }
             None => ("group".to_string(), None, 0),
         };
-        // The raid roster, the one list `GetNumRaidMembers`, `GetRaidRosterInfo` and `UnitInRaid` read.
+        // The raid roster, the one list `GetNumRaidMembers`, `GetRaidRosterInfo` and `UnitInRaid`
+        // read.
         let me = self_pair.map(|(_, g, store)| RaidSelf {
             guid: g.0,
             level: store.0.unit_level().unwrap_or(0),
@@ -277,8 +280,8 @@ pub(crate) fn feed_party(
         });
         let zone_name = |area: u32| {
             let areas = areas.as_ref()?;
-            // A member's wire zone is already a zone; our own area is the finest leaf, so walk it up.
-            // `top_zone` leaves a zone as it is, so one resolver serves both.
+            // A member's wire zone is already a zone; our own area is the finest leaf, so walk it
+            // up. `top_zone` leaves a zone as it is, so one resolver serves both.
             areas
                 .0
                 .name(areas.0.top_zone(area).unwrap_or(area))
@@ -290,8 +293,8 @@ pub(crate) fn feed_party(
         let fresh = PartyState {
             members,
             leader_index,
-            // `UnitIsPartyLeader` compares a resolved token's guid with it, which an index cannot do
-            // for an unstreamed member; zero when ungrouped (see `PartyState::leader_guid`).
+            // `UnitIsPartyLeader` compares a resolved token's guid with it, which an index cannot
+            // do for an unstreamed member; zero when ungrouped (see `PartyState::leader_guid`).
             leader_guid: group.leader,
             own_guid: self_guid.unwrap_or(0),
             raid,
@@ -328,14 +331,14 @@ pub(crate) fn feed_party(
             }
             // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE ──────────────────────
             //
-            // Fired as a slot's object enters (`0x4e86b6`) or leaves (`0x5e9b78`) the object manager,
-            // with the 1-based slot as a number (`%d`, `esi+1` at `0x4e869d`). Stock FrameXML ignores
-            // them (`PartyMemberFrame.lua:145` is commented out).
+            // Fired as a slot's object enters (`0x4e86b6`) or leaves (`0x5e9b78`) the object
+            // manager, with the 1-based slot as a number (`%d`, `esi+1` at `0x4e869d`). Stock
+            // FrameXML ignores them (`PartyMemberFrame.lua:145` is commented out).
             let presence = member.map_or((0, false), |m| (m.guid, index.0.contains_key(&m.guid)));
             if fed.presence[i] != presence {
                 gate.audit("feed_party", "a party-slot presence edge");
-                // Only the same member's object crossing is an activation, and not on the first look
-                // after a VM reset, which would announce an arrival that never happened.
+                // Only the same member's object crossing is an activation, and not on the first
+                // look after a VM reset, which would announce an arrival that never happened.
                 if !vm_reset && presence.0 != 0 && fed.presence[i].0 == presence.0 {
                     let event = if presence.1 {
                         "PARTY_MEMBER_ENABLE"
@@ -350,8 +353,9 @@ pub(crate) fn feed_party(
 
         // ── partypet1..partypet4 ────────────────────────────────────────────────
         //
-        // Each slot's pet, off its descriptor or its record, after the members' own tokens and before
-        // the roster event whose handler asks `UnitExists("partypetN")` (`PartyMemberFrame.lua:73`).
+        // Each slot's pet, off its descriptor or its record, after the members' own tokens and
+        // before the roster event whose handler asks `UnitExists("partypetN")`
+        // (`PartyMemberFrame.lua:73`).
         for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
             let owner = slots.get(i).map_or(0, |m| m.guid);
             let now = pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party);
@@ -360,8 +364,8 @@ pub(crate) fn feed_party(
 
         // ── raid1..raid40 ──────────────────────────────────────────────────────
         //
-        // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order. Our own row comes off
-        // our descriptor: the wire list never contains us.
+        // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order. Our own row comes
+        // off our descriptor: the wire list never contains us.
         let raid_guids = raid_row_guids(&group);
         fed.raid_units.resize(RAID_TOKENS.len(), None);
         for (i, token) in RAID_TOKENS.iter().enumerate() {
@@ -375,8 +379,8 @@ pub(crate) fn feed_party(
                             crate::ui_unit::snapshot(store, *guid, name, 0, chr, types)
                         }
                         // No object of ours, as across a worldport: the row's guid still names us,
-                        // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row the
-                        // list wrote online (`0x5e6e94`).
+                        // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row
+                        // the list wrote online (`0x5e6e94`).
                         None => UnitState {
                             exists: true,
                             guid: *guid,
@@ -432,12 +436,13 @@ pub(crate) fn feed_party(
         // ── The group events ────────────────────────────────────────────────────
         //
         // `PARTY_MEMBERS_CHANGED`, `PARTY_LEADER_CHANGED`, `PARTY_LOOT_METHOD_CHANGED`,
-        // `RAID_ROSTER_UPDATE` and `RAID_TARGET_UPDATE`, each as its handler signalled it, in packet
-        // order and once ([`GroupState::signals`]), after the snapshots above, which their handlers
-        // read. Nothing gates one on a difference: a list that changes nothing still signals, and a
-        // stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world entry's fill of a
-        // zero row (`0x4ba1a2`), is not built: our row holds our guid ([`GroupState::own_raid_row`]).
-        // A fresh VM heard none of them and is told [`catch_up`] instead.
+        // `RAID_ROSTER_UPDATE` and `RAID_TARGET_UPDATE`, each as its handler signalled it, in
+        // packet order and once ([`GroupState::signals`]), after the snapshots above, which their
+        // handlers read. Nothing gates one on a difference: a list that changes nothing still
+        // signals, and a stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world
+        // entry's fill of a zero row (`0x4ba1a2`), is not built: our row holds our guid
+        // ([`GroupState::own_raid_row`]). A fresh VM heard none of them and is told [`catch_up`]
+        // instead.
         let owed = if vm_reset {
             catch_up(&group)
         } else {
@@ -460,9 +465,10 @@ pub(crate) fn feed_party(
 
         // ── READY_CHECK ─────────────────────────────────────────────────────────
         //
-        // Fired by the reference's open handler `0x4ba360` (at `0x4ba53a`), which also arms the 30 s
-        // deadline (`0xb713f4`). `UIParent.lua:571` shows the popup on it, and UIParent's OnUpdate
-        // ticks the deadline through `CheckReadyCheckTime` (`UIParent.xml:24`): no clock here.
+        // Fired by the reference's open handler `0x4ba360` (at `0x4ba53a`), which also arms the 30
+        // s deadline (`0xb713f4`). `UIParent.lua:571` shows the popup on it, and UIParent's
+        // OnUpdate ticks the deadline through `CheckReadyCheckTime` (`UIParent.xml:24`): no clock
+        // here.
         if group.ready_check != fed.ready_check {
             gate.audit("feed_party", "the ready-check edge");
             fed.ready_check = group.ready_check;
@@ -520,8 +526,8 @@ pub(crate) fn feed_party(
                     "PARTY_INVITE_REQUEST",
                     vec![ScriptValue::Str(inviter.clone())],
                 ),
-                // Also fires on accept and decline: hiding a hidden popup is a no-op, and the accepted
-                // guard stops a second decline.
+                // Also fires on accept and decline: hiding a hidden popup is a no-op, and the
+                // accepted guard stops a second decline.
                 None => script.fire_event("PARTY_INVITE_CANCEL", vec![]),
             }
             fed.invite = group.pending_invite.clone();
@@ -809,8 +815,8 @@ pub(crate) fn drain_party(
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     vm.turn(|script, (mut group, selection)| {
-        // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a change
-        // the feed's gate should open on.
+        // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a
+        // change the feed's gate should open on.
         group.bypass_change_detection().signals.age();
         let Some(script) = script else {
             return;
@@ -929,14 +935,15 @@ pub(crate) fn drain_party(
                 }
                 // ── The raid-management verbs ────────────────────────────────────
                 //
-                // The RaidFrame names rows by index, UnitPopup by name. A row that is not there sends
-                // nothing, as in the reference's bindings (`UninviteFromRaid`, `0x48a5c9`).
+                // The RaidFrame names rows by index, UnitPopup by name. A row that is not there
+                // sends nothing, as in the reference's bindings (`UninviteFromRaid`, `0x48a5c9`).
                 PartyRequest::ConvertToRaid => {
                     let _ = commands.0.send(ClientCommand::GroupRaidConvert);
                 }
                 PartyRequest::SetSubgroup { index, group: sub } => {
                     // Lua subgroups 1..8 are wire 0..7, the flags' bits 0-2
-                    // (`Server/Packets/Group.cpp:158`); out-of-range ones are dropped, never wrapped.
+                    // (`Server/Packets/Group.cpp:158`); out-of-range ones are dropped, never
+                    // wrapped.
                     let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
                         continue;
                     };

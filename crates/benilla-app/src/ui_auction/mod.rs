@@ -604,7 +604,8 @@ fn feed_auction(
             props: catalogs.2.as_deref(),
             enchants: catalogs.3.as_deref(),
         };
-        // A list's result, and the window's show, are the frames the stock tabs call their getters on.
+        // A list's result, and the window's show, are the frames the stock tabs call their getters
+        // on.
         let shown = last_open.is_none() || auction.show_requested;
         let fresh = auction.auctioneer.map(|_| {
             let lists = [LIST, BIDDER, OWNER].map(|i| {
@@ -653,7 +654,8 @@ fn feed_auction(
             if show_requested {
                 script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
             }
-            // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by literal.
+            // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by
+            // literal.
             if owed[LIST] {
                 script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
             }
@@ -764,8 +766,8 @@ fn drain_auction(
             });
         }
 
-        // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included,
-        // reading the caches as the verbs do (`0x4cf879`).
+        // Bids and cancels map the clicked row through the sorted view the feed pushed, roll
+        // included, reading the caches as the verbs do (`0x4cf879`).
         let self_guid = self_q.iter().next().map(|g| g.0);
         let bids = script.take_auction_bids();
         let cancels = script.take_auction_cancels();
@@ -809,8 +811,8 @@ fn drain_auction(
             }
         }
 
-        // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the attach
-        // stored (`0x4ce8f3`), wherever the item has since gone.
+        // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the
+        // attach stored (`0x4ce8f3`), wherever the item has since gone.
         for req in script.take_auction_starts() {
             let _ = commands.0.send(ClientCommand::AuctionSellItem {
                 auctioneer,

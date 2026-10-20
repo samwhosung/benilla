@@ -138,7 +138,8 @@ fn feed_mirror_timers(
                 ),
                 MirrorTimerEdge::Stop { .. } => ("MIRROR_TIMER_STOP", vec![name]),
             };
-            // One log line per edge: the bars live inside the VM, so this is their only outside trace.
+            // One log line per edge: the bars live inside the VM, so this is their only outside
+            // trace.
             debug!("net: mirror timer {event} {edge:?}");
             script.fire_event(event, args);
         }

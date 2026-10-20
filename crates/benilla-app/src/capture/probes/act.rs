@@ -338,9 +338,9 @@ fn fire_probe_lua(
             probe.was_ready = false;
             return;
         };
-        // Ready means the in-game VM, not the boot one: `InWorld` (the entered-world message and the
-        // first object update can share a drain a frame before the VM is parked), the entry UI load
-        // done, and a self player for `UnitName("player")`.
+        // Ready means the in-game VM, not the boot one: `InWorld` (the entered-world message and
+        // the first object update can share a drain a frame before the VM is parked), the entry UI
+        // load done, and a self player for `UnitName("player")`.
         let in_world = *state.get() == crate::client_state::ClientState::InWorld;
         let ready = in_world && entry_ui_pending.is_none() && !self_player.is_empty();
         let now = time.elapsed_secs();

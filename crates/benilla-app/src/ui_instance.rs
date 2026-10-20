@@ -394,8 +394,8 @@ fn feed_instance(
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
-            // No VM (an engine-only run): drop the queue rather than let it grow; a real session seats
-            // the VM before any of these packets can arrive.
+            // No VM (an engine-only run): drop the queue rather than let it grow; a real session
+            // seats the VM before any of these packets can arrive.
             let dropped = state.take_lines().len();
             if dropped > 0 {
                 debug!("ui_instance: no VM — dropped {dropped} lockout line(s)");

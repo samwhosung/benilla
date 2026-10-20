@@ -3,8 +3,9 @@
 //! values.
 //!
 //! A file counts if it contains the identifier `UiScript` anywhere (a type, a `use`, a doc
-//! comment), or `HostedVm`, the system param that is the VM with its call host. `CEILING` is the standing count of gameplay files and `SLACK` how far under it the
-//! count may sit, as in `world_api_wall.rs`. `WOW_UISCRIPT_DUMP=1` prints the files.
+//! comment), or `HostedVm`, the system param that is the VM with its call host. `CEILING` is the
+//! standing count of gameplay files and `SLACK` how far under it the count may sit, as in
+//! `world_api_wall.rs`. `WOW_UISCRIPT_DUMP=1` prints the files.
 //!
 //! Window feeds (`ui_*`), `capture/` probes, `devtools/` instruments and test modules are reported;
 //! only gameplay files, the ones that can reach zero, are gated.

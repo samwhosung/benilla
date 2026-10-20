@@ -1,9 +1,10 @@
 //! The script calls whose effects touch the selection, the player's cast or the targeting cursor,
 //! each applied inside its verb through the lent host ([`super::UiScript::hosted`]). In the
-//! reference each such call is done when it returns: the macro runner `0x4f14e0` fires every line in
-//! one pass, `TargetUnit` (`0x4899d0`), `TargetByName` (`0x489d60`) and `ClearTarget` (`0x489ff0`)
-//! commit through `SetSelection 0x493540` before returning, and `CastSpellByName` (`0x4b4ab0`)
-//! casts at the selection as it stands then. So `/target Bob` then `/cast Flash Heal` heals Bob.
+//! reference each such call is done when it returns: the macro runner `0x4f14e0` fires every line
+//! in one pass, `TargetUnit` (`0x4899d0`), `TargetByName` (`0x489d60`) and `ClearTarget`
+//! (`0x489ff0`) commit through `SetSelection 0x493540` before returning, and `CastSpellByName`
+//! (`0x4b4ab0`) casts at the selection as it stands then. So `/target Bob` then `/cast Flash Heal`
+//! heals Bob.
 //!
 //! A verb hands its call to [`submit`], which applies it before the verb returns. A call made
 //! while the host is out (applying another call, or in an engine turn,

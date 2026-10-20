@@ -65,8 +65,8 @@ pub(super) fn drive_minimap_ping(
             *seated = true;
         }
         // The token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`, `0x4ee412`),
-        // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither leaves
-        // `player`.
+        // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither
+        // leaves `player`.
         let self_guid = self_q.iter().next().map(|g| g.0);
         for (world, sender) in std::mem::take(&mut ping.inbound) {
             let token = if Some(sender) == self_guid {

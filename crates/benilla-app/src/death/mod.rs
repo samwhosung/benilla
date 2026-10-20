@@ -253,7 +253,8 @@ fn feed_death(
         );
         if let Some(name) =
             offer_announcement(memo, &death_net, store.0.is_dead_or_ghost(), |offer| {
-                // A player caster's name is empty on the wire; hold the popup until the cache resolves it.
+                // A player caster's name is empty on the wire; hold the popup until the cache
+                // resolves it.
                 if offer.name.is_empty() {
                     names.resolve_player(offer.caster, ask).map(str::to_owned)
                 } else {
@@ -267,9 +268,9 @@ fn feed_death(
             && memo.confirm_generation != death_net.confirm_generation
         {
             memo.confirm_generation = death_net.confirm_generation;
-            // `arg1` is the XP the res costs: `PLAYER_NEXT_LEVEL_XP` × 0.05, truncated (`0x5df837`),
-            // and 0 without the field, as `0x5df806` pushes 0 for a non-local object. No stock
-            // FrameXML reads it; `UIParent.lua:399` asks `GetResSicknessDuration()`.
+            // `arg1` is the XP the res costs: `PLAYER_NEXT_LEVEL_XP` × 0.05, truncated
+            // (`0x5df837`), and 0 without the field, as `0x5df806` pushes 0 for a non-local object.
+            // No stock FrameXML reads it; `UIParent.lua:399` asks `GetResSicknessDuration()`.
             let xp_cost = store
                 .0
                 .player_next_level_xp()
@@ -510,8 +511,8 @@ pub(crate) fn drain_death(
                         Some(SelfRes::Spell { .. }) => net.0.send(ClientCommand::SelfRes),
                         // The item leg cancels the cast before the use (`0x48ae6b` into `0x6e4940`,
                         // cl=1, dl=1, reason `0x1c`), then runs an ordinary item use, `0x5d8d00`
-                        // (called at `0x48ae7d`), like every bag click: a locked stone is refused at
-                        // its first gate (`0x5d8d32`), after the cancel.
+                        // (called at `0x48ae7d`), like every bag click: a locked stone is refused
+                        // at its first gate (`0x5d8d32`), after the cancel.
                         Some(SelfRes::Item {
                             bag_index,
                             slot,

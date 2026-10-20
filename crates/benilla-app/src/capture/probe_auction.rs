@@ -555,7 +555,8 @@ fn auction_probe(
             } => {
                 if !sent {
                     // The Browse pane's call with every filter at its default: empty name and level
-                    // strings, no class/subclass/invtype, page 0, not usable-only, quality all (-1).
+                    // strings, no class/subclass/invtype, page 0, not usable-only, quality all
+                    // (-1).
                     if let Err(e) =
                         script.run(r#"QueryAuctionItems("", "", "", nil, nil, nil, 0, nil, -1)"#)
                     {
@@ -801,7 +802,8 @@ fn auction_probe(
             }
             Phase::Attach { since } => {
                 // Six values, the first nil for an empty slot. Waits for a nonzero `price` (the
-                // stack's vendor value) so the deposit is not quoted off a template still in flight.
+                // stack's vendor value) so the deposit is not quoted off a template still in
+                // flight.
                 let (name, count, price) = script
                     .eval::<(String, i64, i64)>(
                         "local n, _, c, _, _, p = GetAuctionSellItemInfo() return n or \"\", c or 0, p or 0",
@@ -992,8 +994,8 @@ fn auction_probe(
                              return n or \"\", b or -1, o or -1, c or -1"
                         ))
                         .unwrap_or_default();
-                    // The wire entry lands a frame before the feed pushes the snapshot, so Lua reads
-                    // an empty row until the VM agrees; wait for it.
+                    // The wire entry lands a frame before the feed pushes the snapshot, so Lua
+                    // reads an empty row until the VM agrees; wait for it.
                     let lua_ready = min_bid == probe.min_bid && buyout == probe.buyout;
                     if !lua_ready {
                         if now - since > OWNER_TIMEOUT_SECS {
@@ -1205,7 +1207,8 @@ fn auction_probe(
                     "PROBE_AUCTION: DONE pass={} fail={}",
                     probe.passes, probe.fails
                 );
-                // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
+                // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account
+                // held.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

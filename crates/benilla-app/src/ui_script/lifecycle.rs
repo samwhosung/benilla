@@ -570,13 +570,14 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
                 crate::run_mode::dev_affordances(),
             );
             // The new VM's zoom cells from the persisted CVars, which the reference's statics hold
-            // across the load; the world entry's minimap initializer reseeds them from the CVars again.
+            // across the load; the world entry's minimap initializer reseeds them from the CVars
+            // again.
             script.set_minimap_zoom(zoom.0, zoom.1);
             // The saved-variables file is read after the files set their defaults and before
             // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the
-            // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any chat
-            // is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*`
-            // events (`ChatFrame.lua:1261-1273`).
+            // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any
+            // chat is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its
+            // `CHAT_MSG_*` events (`ChatFrame.lua:1261-1273`).
             finish_ui_load_with(
                 script,
                 // Before `VARIABLES_LOADED`, whose `UIParent_OnEvent` arm runs the first
@@ -585,9 +586,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
                 |script| {
                     crate::ui_chat::restore_chat_looks(world, script);
                     // The UI scale lands on `UIParent` once the files, the addons and
-                    // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before the
-                    // `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e` →
-                    // `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's size.
+                    // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before
+                    // the `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e`
+                    // → `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's
+                    // size.
                     let display = {
                         let mut q =
                             world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();

@@ -387,14 +387,15 @@ pub(crate) fn feed_trainer(
         let Some(skill_lines) = skill_lines.as_deref() else {
             return;
         };
-        // The per-list reset goes in before the snapshot, so `TRAINER_SHOW` finds it; the stock window
-        // re-applies its saved filter only on its own `ADDON_LOADED`.
+        // The per-list reset goes in before the snapshot, so `TRAINER_SHOW` finds it; the stock
+        // window re-applies its saved filter only on its own `ADDON_LOADED`.
         let listed = open.fresh_list;
         if open.fresh_list {
             script.reset_trainer_list_state(open.trainer_type);
             open.fresh_list = false;
         }
-        // The player's money, level and skill triggers, read every frame so the reader never backs up.
+        // The player's money, level and skill triggers, read every frame so the reader never backs
+        // up.
         let self_player = re_eval.self_player.iter().next();
         for edge in re_eval.edges.read() {
             let Some((me, _)) = self_player else {
@@ -422,8 +423,8 @@ pub(crate) fn feed_trainer(
         }
         // `0x4d7d40` over every row, then `TRAINER_UPDATE` unconditionally, as its tail fires it.
         let forced = open.re_derive && open.trainer.is_some();
-        // The stock window calls `GetTrainerServiceIcon` and `GetTrainerServiceDescription`, which look
-        // the product up with a callback (`0x4d9096`, `0x4d9d07`), at `TRAINER_SHOW` and
+        // The stock window calls `GetTrainerServiceIcon` and `GetTrainerServiceDescription`, which
+        // look the product up with a callback (`0x4d9096`, `0x4d9d07`), at `TRAINER_SHOW` and
         // `TRAINER_UPDATE`: a list, a re-derive, or a window this VM has not shown.
         let ask = Ask::at(last.is_none() || listed || forced, &commands);
         if forced {
@@ -480,8 +481,8 @@ pub(crate) fn feed_trainer(
                 &player,
             );
         }
-        // The spell tooltip's description reads (`0x52f717`), and `0x6e3159`'s charm-else-summon for
-        // a `LEARN_PET_SPELL` row.
+        // The spell tooltip's description reads (`0x52f717`), and `0x6e3159`'s charm-else-summon
+        // for a `LEARN_PET_SPELL` row.
         let store = self_player.map(|(_, store)| store);
         let pet = store
             .and_then(|s| s.0.unit_pet_guid())
@@ -563,9 +564,10 @@ pub(crate) fn feed_trainer(
         if *tooltip_subjects != fresh_tooltip_subjects {
             *tooltip_subjects = fresh_tooltip_subjects;
         }
-        // `TRAINER_SHOW` and `TRAINER_UPDATE` carry no argument (`SignalEvent` `0x4d7b73`, `0x4d83f9`)
-        // and the stock window titles with `UnitName("npc")` (`Blizzard_TrainerUI.lua:90`), so a
-        // name-only change re-fires `TRAINER_UPDATE` to repaint it.
+        // `TRAINER_SHOW` and `TRAINER_UPDATE` carry no argument (`SignalEvent` `0x4d7b73`,
+        // `0x4d83f9`) and the stock window titles with `UnitName("npc")`
+        // (`Blizzard_TrainerUI.lua:90`), so a name-only change re-fires `TRAINER_UPDATE` to repaint
+        // it.
         let trainer_name = open.trainer.and_then(|g| {
             let store = re_eval
                 .index
@@ -671,8 +673,9 @@ fn drain_trainer(
                 .0
                 .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
         }
-        // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`), which
-        // the server answers with nothing for a player. All of it waits on the player (`0x4d8d24`).
+        // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`),
+        // which the server answers with nothing for a player. All of it waits on the player
+        // (`0x4d8d24`).
         if script.take_trainer_open_own() {
             if let Ok(&Guid(trainer)) = me.single() {
                 debug!(

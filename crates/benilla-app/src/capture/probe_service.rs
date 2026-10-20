@@ -316,8 +316,8 @@ fn service_probe(
                 let leg = &LEGS[i];
                 let me = player.pos;
                 let found = units.iter().find(|(guid, net_e, store, tf)| {
-                    // The click's own gate: `dist² > SERVICE_RANGE_SQ` is the cursor's `unable`, and
-                    // the arm never runs.
+                    // The click's own gate: `dist² > SERVICE_RANGE_SQ` is the cursor's `unable`,
+                    // and the arm never runs.
                     if net_e.kind != EntityKind::Unit
                         || tf.translation.distance_squared(me) > SCAN_RANGE_SQ
                     {
@@ -424,7 +424,8 @@ fn service_probe(
                 trainer.clear();
 
                 // The first click must get through: nothing is open, and the reference arms
-                // `[0xb4e2d0]` only from window openers, so the gate must read disarmed at the send.
+                // `[0xb4e2d0]` only from window openers, so the gate must read disarmed at the
+                // send.
                 if interact.1.is_some() {
                     error!(
                         "PROBE_SERVICE: FAIL ({}) — the npc token is armed on {:#x} BEFORE the send; \
@@ -437,7 +438,8 @@ fn service_probe(
                     return;
                 }
 
-                // `None` = an empty cursor; the vendor fork's held-cursor leg runs after the ladder.
+                // `None` = an empty cursor; the vendor fork's held-cursor leg runs after the
+                // ladder.
                 let sent = match service_action(arm, guid, false, None) {
                     ServiceAction::Send(cmd) => {
                         let named = format!("{cmd:?}");
@@ -632,8 +634,8 @@ fn service_probe(
                          {guid:#x}: the zero leg is still the plain list open"
                     );
                     probe.passes += 1;
-                    // The window would arm the re-click gate and eat the next click, so close it the
-                    // way its own close button does (no packet) before the held-cursor leg.
+                    // The window would arm the re-click gate and eat the next click, so close it
+                    // the way its own close button does (no packet) before the held-cursor leg.
                     merchant.clear();
                     let _ = net.0.send(ClientCommand::Chat {
                         kind: ChatKind::Say,
@@ -774,8 +776,8 @@ fn service_probe(
                     "PROBE_SERVICE: DONE pass={} fail={} skip={}",
                     probe.passes, probe.fails, probe.skips
                 );
-                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
-                // teardown hang cannot leave a client holding the probe account.
+                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so
+                // a teardown hang cannot leave a client holding the probe account.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

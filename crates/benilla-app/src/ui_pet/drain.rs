@@ -267,8 +267,8 @@ pub(crate) fn drain_pet_actions(
                 debug!("ui_pet: stop attack");
             }
         }
-        // The drag's `(0-based position, word)` pairs: mirrored here and sent as one batch, since the
-        // server tells one pair from two by body size.
+        // The drag's `(0-based position, word)` pairs: mirrored here and sent as one batch, since
+        // the server tells one pair from two by body size.
         for entries in writes {
             for &(position, packed) in &entries {
                 if let Some(e) = bar.spells.bar.get_mut(position as usize) {

@@ -194,10 +194,12 @@ pub(super) fn feed_pet_bar(
         let usable = pet.actions_usable(&bar);
         // `PickupPetAction`'s gate alone: the pet's object must resolve (`0x4be1f7`) and not be
         // possessed (`0x4be20a`). A possessed unit's bar cannot be rearranged but its buttons work,
-        // so possession stays out of `usable`; an unstreamed pet has no flags to test and lifts nothing.
+        // so possession stays out of `usable`; an unstreamed pet has no flags to test and lifts
+        // nothing.
         let pickup_allowed = pet_flags.is_some_and(|flags| flags & UNIT_FLAG_POSSESSED == 0);
         let pet_attacking = bar.attacking;
-        // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor sample.
+        // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor
+        // sample.
         script.set_pet_expiry(bar.expires.map(|t| match t.checked_duration_since(anchor) {
             Some(ahead) => ui_now + ahead.as_secs_f64(),
             None => ui_now - anchor.duration_since(t).as_secs_f64(),
@@ -232,8 +234,8 @@ pub(super) fn feed_pet_bar(
         };
 
         // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`, the
-        // possessed Attack latch's `0x4bd438`); the cooldown triples are keyed apart, since they carry
-        // no `PET_BAR_UPDATE`.
+        // possessed Attack latch's `0x4bd438`); the cooldown triples are keyed apart, since they
+        // carry no `PET_BAR_UPDATE`.
         let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh.iter().map(|s| s.cooldown).collect();
         let content: Vec<PetActionView> = fresh
             .iter()
@@ -243,17 +245,17 @@ pub(super) fn feed_pet_bar(
                 s
             })
             .collect();
-        // A slot is pushed only when this feed's own source moved since its last push: the drag, the
-        // autocast toggles and the reaction and Stay/Follow presses write the VM and fire
-        // `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`, `0x4bcdcb`, `0x4bc956`, `0x4bc979`), so
-        // a store that has not caught up never rolls them back, and one that has is no change. The
-        // event fires only when what is pushed differs from what the VM shows.
+        // A slot is pushed only when this feed's own source moved since its last push: the drag,
+        // the autocast toggles and the reaction and Stay/Follow presses write the VM and fire
+        // `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`, `0x4bcdcb`, `0x4bc956`, `0x4bc979`),
+        // so a store that has not caught up never rolls them back, and one that has is no change.
+        // The event fires only when what is pushed differs from what the VM shows.
         let held = script.pet_action_views();
         let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
         let key_changed = memory.pushed.as_ref() != Some(&key);
         // A signal from this side (`SMSG_PET_SPELLS` through `SetPet`, `0x4bc90c`, or the possessed
-        // Attack latch) is the whole bar's source moving, even with equal values: it overwrites the VM
-        // whole, so a latch the VM made and this side refused to send cannot outlive the packet.
+        // Attack latch) is the whole bar's source moving, even with equal values: it overwrites the
+        // VM whole, so a latch the VM made and this side refused to send cannot outlive the packet.
         let resignalled = memory.pushed.map(|k| k.0) != Some(bar.bar_signals);
         let resized =
             resignalled || memory.slots.len() != content.len() || held.len() != content.len();

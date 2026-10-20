@@ -424,8 +424,8 @@ pub(crate) struct Model {
     /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
     /// it applied ([`super::calls::submit`]).
     pub(crate) call_depth: u8,
-    /// A harness's VM keeps the calls made with no host lent here ([`super::UiScript::keep_calls`]);
-    /// `None` refuses them.
+    /// A harness's VM keeps the calls made with no host lent here
+    /// ([`super::UiScript::keep_calls`]); `None` refuses them.
     pub(crate) kept_calls: Option<Vec<super::ScriptCall>>,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,

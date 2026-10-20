@@ -125,11 +125,10 @@ pub(crate) fn commit_item_cast_on_pick(
         let Some(script) = script else {
             return;
         };
-        // Fresh clicks, then the bind popup's Yes, go through the gate; the replace popup's Yes does
-        // not.
-        // Each carries what the protected-action gate's tag 2 allowed the call that made it: the bind
-        // is `BindSpellTargetObject 0x6e5b40`, which asks it first (`0x6e5b9e`), after every
-        // validation above it has run and shown its line or popup.
+        // Fresh clicks, then the bind popup's Yes, go through the gate; the replace popup's Yes
+        // does not. Each carries what the protected-action gate's tag 2 allowed the call that made
+        // it: the bind is `BindSpellTargetObject 0x6e5b40`, which asks it first (`0x6e5b9e`), after
+        // every validation above it has run and shown its line or popup.
         let mut asks: Vec<(u64, bool, bool)> = Vec::new();
         let mut bind_outright: Vec<(u64, bool)> = Vec::new();
         for benilla_ui::script::ItemPick {
@@ -208,7 +207,8 @@ pub(crate) fn commit_item_cast_on_pick(
                 existing_enchant: [0u8, 1]
                     .map(|slot| fields.and_then(|f| crate::items::live_enchant(f, slot, cat))),
             };
-            // `EffectMiscValue` is signed; the reference rejects a negative one before the row lookup.
+            // `EffectMiscValue` is signed; the reference rejects a negative one before the row
+            // lookup.
             let new = u32::try_from(def.effect_misc_value[0])
                 .ok()
                 .filter(|&id| cat.is_some_and(|c| c.0.has_row(id)))

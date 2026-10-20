@@ -52,9 +52,9 @@ pub(super) fn feed_guild(
         let fed = fed.get(script);
 
         // Our guild id and rank come from our own descriptor, mirrored only while the avatar is
-        // streamed: the frames between logout despawn and teardown must not read as leaving the guild.
-        // Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`), fired after
-        // this push.
+        // streamed: the frames between logout despawn and teardown must not read as leaving the
+        // guild. Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`),
+        // fired after this push.
         if let Some(store) = self_q.iter().next() {
             guild.mirror_self(store.0.player_guild_id(), store.0.player_guild_rank());
         }
@@ -65,9 +65,9 @@ pub(super) fn feed_guild(
         }
         guild.dirty = false;
 
-        // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss with the
-        // callback `0x4d1480` (`0x4d1291`), and the answer fires a bare `GUILD_ROSTER_UPDATE`. This
-        // rebuild runs on a change, which stands for the stock frame's call.
+        // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss with
+        // the callback `0x4d1480` (`0x4d1291`), and the answer fires a bare `GUILD_ROSTER_UPDATE`.
+        // This rebuild runs on a change, which stands for the stock frame's call.
         let guild_id = guild.guild_id;
         let identity = guild
             .resolve_identity(guild_id, crate::query_cache::Ask::Event(&commands))
@@ -127,7 +127,8 @@ pub(super) fn feed_guild(
             }
         }
 
-        // `GUILD_MOTD` carries the text; its chat line is the FrameXML's (`ChatFrame.lua:1335-1340`).
+        // `GUILD_MOTD` carries the text; its chat line is the FrameXML's
+        // (`ChatFrame.lua:1335-1340`).
         if fed.motd != guild.motd {
             fed.motd = guild.motd.clone();
             script.fire_event("GUILD_MOTD", vec![ScriptValue::Str(guild.motd.clone())]);
@@ -292,7 +293,8 @@ pub(super) fn drain_guild(
             match request {
                 GuildRequest::Roster => {
                     // One request per 10 s, the rest swallowed silently (`0x4d10d0`, against
-                    // `0xb73130`). Real time: the virtual clock's 250 ms `max_delta` lags in a hitch.
+                    // `0xb73130`). Real time: the virtual clock's 250 ms `max_delta` lags in a
+                    // hitch.
                     let now = time.elapsed_secs_f64();
                     if now >= guild.roster_allowed_at {
                         guild.roster_allowed_at = now + ROSTER_REQUEST_THROTTLE_SECS;
@@ -363,8 +365,9 @@ pub(super) fn drain_guild(
                 }
                 GuildRequest::AddRank(name) => {
                     // Ten ranks at most, and more than five to remove one, as the reference's
-                    // `GuildControlAddRank` (`0x4d2271`) and `GuildControlDelRank` (`0x4d22e6`) check
-                    // silently; the stock buttons follow them (`FriendsFrame.lua:887`, `:908`).
+                    // `GuildControlAddRank` (`0x4d2271`) and `GuildControlDelRank` (`0x4d22e6`)
+                    // check silently; the stock buttons follow them (`FriendsFrame.lua:887`,
+                    // `:908`).
                     if guild.rank_rights.len() < GUILD_RANKS_MAX_COUNT {
                         if let Some(name) = capped_rank_name(name) {
                             let _ = commands.0.send(ClientCommand::GuildAddRank { name });

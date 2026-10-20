@@ -202,8 +202,8 @@ fn feed_tabard(
             .collect();
         crate::ui_action::show_messages(script, &mut sink, "ui_tabard", lines);
 
-        // The body wears the pane's design while the designer is open; `TabardModel:SetUnit("player")`
-        // mirrors that body.
+        // The body wears the pane's design while the designer is open;
+        // `TabardModel:SetUnit("player")` mirrors that body.
         let shown = open.vendor.is_some() && script.frame_visible("TabardFrame");
         let current = shown.then(|| script.tabard_design()).flatten();
         if design.0 != current {

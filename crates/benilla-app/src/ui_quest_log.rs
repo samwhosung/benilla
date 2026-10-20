@@ -815,8 +815,8 @@ pub(crate) fn feed_quest_log(
                     has_world_state_token(&t.details) || has_world_state_token(&t.objectives_text)
                 }))
         {
-            // The text expands against the player: a name that lands, or a world state a quest's text
-            // reads, expands the held records again, with nothing waiting on them.
+            // The text expands against the player: a name that lands, or a world state a quest's
+            // text reads, expands the held records again, with nothing waiting on them.
             if subject.is_some() {
                 memo.subject = key;
             }
@@ -849,8 +849,8 @@ pub(crate) fn feed_quest_log(
             script.land_quest_records(held_now);
         }
 
-        // Every creature name that lands goes to the engine unprompted, as the reference's leaderboard
-        // reads the one cache; a miss is asked, and its refusal only logs (`0x4e07dc`).
+        // Every creature name that lands goes to the engine unprompted, as the reference's
+        // leaderboard reads the one cache; a miss is asked, and its refusal only logs (`0x4e07dc`).
         let (landed, seen) = reads.names.creatures_landed_since(memo.creatures_seen);
         for &entry in landed {
             if let Some(name) = reads.names.resolve_creature(entry, 0, Ask::Read) {
@@ -885,8 +885,8 @@ pub(crate) fn feed_quest_log(
             }
         }
 
-        // The slot watcher's accept line, whose catalog row carries `QUESTADDED`. The seat is silent:
-        // the initial create fills the whole log.
+        // The slot watcher's accept line, whose catalog row carries `QUESTADDED`. The seat is
+        // silent: the initial create fills the whole log.
         if seat || slots_moved {
             let now: SlotStates = std::array::from_fn(|slot| {
                 store
@@ -928,8 +928,8 @@ pub(crate) fn feed_quest_log(
         if script.take_quest_giver_refreshes() > 0 {
             quest_giver.bump_reask();
         }
-        // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
-        // kill's counter `:14570` before `:14575`), so the toasts go first.
+        // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and
+        // the kill's counter `:14570` before `:14575`), so the toasts go first.
         if !quest_log.toasts.is_empty() {
             show_toasts(&mut quest_log, script, &mut sink);
         }

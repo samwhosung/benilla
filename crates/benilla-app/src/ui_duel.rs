@@ -411,7 +411,8 @@ fn drain_duel(
                     challenge(guid, self_guid, &index, &spells, &actions, &commands);
                 }
                 DuelRequest::StartByGuid(guid) => {
-                    // `/duel <name>`: the binding resolved the name through `0x493aa0` (`0x4d4c6d`).
+                    // `/duel <name>`: the binding resolved the name through `0x493aa0`
+                    // (`0x4d4c6d`).
                     challenge(Some(guid), self_guid, &index, &spells, &actions, &commands);
                 }
             }

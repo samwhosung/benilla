@@ -174,10 +174,10 @@ pub(crate) fn feed_honor(
 
         // --- the inspect reply -------------------------------------------------------------------
         // The reference's latch clears only at `0x4c6f70`, from a `NotifyInspect` naming another
-        // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected token's
-        // guid moves, because our window re-resolves its token each frame and both tabs read it, so
-        // the reference's rule would let the two tabs show different players. `ClearInspectPlayer`
-        // drops the token, which clears the slot here too.
+        // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected
+        // token's guid moves, because our window re-resolves its token each frame and both tabs
+        // read it, so the reference's rule would let the two tabs show different players.
+        // `ClearInspectPlayer` drops the token, which clears the slot here too.
         let inspected = inspect_target
             .token
             .as_deref()
@@ -217,8 +217,8 @@ pub(crate) fn feed_honor(
         }
 
         // --- the pane's request ------------------------------------------------------------------
-        // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid now,
-        // so a re-target before the Honor tab opens asks about the new player.
+        // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid
+        // now, so a re-target before the Honor tab opens asks about the new player.
         let requests = script.take_inspect_honor_requests();
         if requests > 0 {
             match inspected {

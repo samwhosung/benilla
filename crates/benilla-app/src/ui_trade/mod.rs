@@ -902,13 +902,14 @@ fn feed_trade(
         // disconnect's clear tells it nothing.
         let opened = !*last_open && trade.is_open();
         if opened {
-            // The open clears both offers and our item table before anything is placed (`0x4bf549`).
+            // The open clears both offers and our item table before anything is placed
+            // (`0x4bf549`).
             script.open_trade_window();
             *last = None;
         }
         let changed = fresh != *last;
-        // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
-        // whose source has not moved since the last push keeps the VM's value, so a click this
+        // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A
+        // slot whose source has not moved since the last push keeps the VM's value, so a click this
         // feed's store has not caught up with (or never will, when the bag item is not streamed) is
         // not rolled back.
         let held_player = script.trade_player_slots();
@@ -928,12 +929,11 @@ fn feed_trade(
             }
             script.set_trade(pushed);
         }
-        // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
-        // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change signals
-        // nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
-        // ([`run_record_callbacks`]).
-        // `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock and its own
-        // `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
+        // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based
+        // slot (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change
+        // signals nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
+        // ([`run_record_callbacks`]). `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock
+        // and its own `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
         let invalidated = trade.take_invalidated();
         for &slot in &invalidated {
             script.invalidate_trade_slot(slot);
@@ -942,9 +942,9 @@ fn feed_trade(
             let empty = TradeState::default();
             let old = last.as_ref().unwrap_or(&empty);
             if let Some(new) = fresh.as_ref() {
-                // The record compare (`0x4bf2c7`-`0x4bf378`) reads the wire's item fields, run only on a
-                // status: never the enchant slot's spell, which signals on its own below, and never
-                // what the template cache resolved (name, icon, quality, link), so a template
+                // The record compare (`0x4bf2c7`-`0x4bf378`) reads the wire's item fields, run only
+                // on a status: never the enchant slot's spell, which signals on its own below, and
+                // never what the template cache resolved (name, icon, quality, link), so a template
                 // landing repaints through `TRADE_UPDATE` and signals no slot.
                 let record =
                     |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count, s.lock_id));
@@ -1013,8 +1013,9 @@ fn feed_trade(
         }
         trade.named_lines_asked = trade.named_lines.len();
         if opened {
-            // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
-            // first and fire the two money events locally; the send goes out with the money intent.
+            // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the
+            // offer first and fire the two money events locally; the send goes out with the money
+            // intent.
             if let Some(offer) = script.fold_cursor_money_into_trade() {
                 trade.set_own_gold(offer);
                 script.fire_event("PLAYER_TRADE_MONEY", vec![]);
@@ -1040,16 +1041,17 @@ fn feed_trade(
             (false, false)
         };
 
-        // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`), never
-        // `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
+        // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`),
+        // never `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
         let player_gold = trade.our.gold;
         if trade.is_open() && player_gold != *last_player_gold {
             script.fire_event("PLAYER_TRADE_MONEY", vec![]);
         }
         *last_player_gold = if trade.is_open() { player_gold } else { 0 };
-        // The partner's gold: `TRADE_MONEY_CHANGED`, which the `TARGET_TRADE` money frame repaints on
-        // (`MoneyFrame.lua:133`). The reference fires it at `0x4bf4d6`, beside `PLAYER_TRADE_MONEY` at
-        // `0x4bf4ab`; which side each reports is inferred from `MoneyFrame.lua`, not traced.
+        // The partner's gold: `TRADE_MONEY_CHANGED`, which the `TARGET_TRADE` money frame repaints
+        // on (`MoneyFrame.lua:133`). The reference fires it at `0x4bf4d6`, beside
+        // `PLAYER_TRADE_MONEY` at `0x4bf4ab`; which side each reports is inferred from
+        // `MoneyFrame.lua`, not traced.
         let their_gold = trade.their.gold;
         if trade.is_open() && their_gold != *last_their_gold {
             script.fire_event("TRADE_MONEY_CHANGED", vec![]);

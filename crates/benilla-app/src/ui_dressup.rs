@@ -196,8 +196,8 @@ fn feed_dressup(
             room.apply(intent);
         }
         // The room empties when neither the dressing room nor the auction house's
-        // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of ours).
-        // The reference's widget keeps its state while hidden, but `DressUpItem` re-issues
+        // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of
+        // ours). The reference's widget keeps its state while hidden, but `DressUpItem` re-issues
         // `SetUnit("player")` on a hidden frame, so the kept state is never seen.
         if room.open
             && !script.frame_visible("DressUpFrame")
@@ -207,7 +207,8 @@ fn feed_dressup(
         }
         room.resolve_pending(&items, &commands);
 
-        // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
+        // The crest comes off the guild cache this system holds, not the outfit `player_look`
+        // builds.
         let look = match (room.open, self_q.single().ok()) {
             (true, Some((store, net))) => {
                 player_look(store, net, &room, &items).map(|l| DressUpLook {

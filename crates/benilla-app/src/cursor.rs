@@ -210,8 +210,8 @@ fn drive_displayed_cursor(
         use crate::target::{CursorKind, WorldCursor};
         use benilla_ui::script::UiCursorMode;
 
-        // This runs with no VM too (the character screen); `get_for` treats that as its own session,
-        // so the restore re-arms once on each side of the glue phase.
+        // This runs with no VM too (the character screen); `get_for` treats that as its own
+        // session, so the restore re-arms once on each side of the glue phase.
         let last = last.get_for(script.as_deref());
 
         // Under the loading cover the cursor is the plain arrow, ahead of every other arm: the
@@ -223,9 +223,9 @@ fn drive_displayed_cursor(
         }
 
         // The base cell (`0xbe2c4c`) is mutable and `ResetCursor` restores its value, not Point.
-        // While a spell awaits its click it is Cast(2), so the UI reads blue whatever the hovered item:
-        // 1.12 has no hover-time validity verdict. `ShowContainerSellCursor` (`0x4fa460`) bails unless
-        // the base is Point.
+        // While a spell awaits its click it is Cast(2), so the UI reads blue whatever the hovered
+        // item: 1.12 has no hover-time validity verdict. `ShowContainerSellCursor` (`0x4fa460`)
+        // bails unless the base is Point.
         let repair = script.as_ref().is_some_and(|s| s.repair_mode());
         let base = if repair {
             // `ShowRepairCursor` (`0x4fbcc0`) parks the base at Repair while it holds.
@@ -306,9 +306,9 @@ fn drive_displayed_cursor(
             *last = None;
             return;
         }
-        // Over UI with no FrameXML write: crossing in, or a base change, restores the base once. This
-        // one edge stands for the `ResetCursor()` that ends nearly every reference hover handler and
-        // the classifier's no-hover restore (`0x523d30`).
+        // Over UI with no FrameXML write: crossing in, or a base change, restores the base once.
+        // This one edge stands for the `ResetCursor()` that ends nearly every reference hover
+        // handler and the classifier's no-hover restore (`0x523d30`).
         if *last != Some(base) {
             *last = Some(base);
             displayed.0 = base;

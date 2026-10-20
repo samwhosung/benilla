@@ -511,7 +511,8 @@ fn gm_ticket_probe(
             Phase::EditGet { since, baseline } => {
                 let seen = ticket_answers(script);
                 let want = probe.edit_text.clone();
-                // Equality, never `contains`: a stray leading byte is the failure this step catches.
+                // Equality, never `contains`: a stray leading byte is the failure this step
+                // catches.
                 if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
                     let (cat, text) = &seen[i];
                     info!(
@@ -544,7 +545,8 @@ fn gm_ticket_probe(
                 }
             }
 
-            // Step 6, abandon. vmangos's `CloseTicket` keeps the row, so step 4's query still finds it.
+            // Step 6, abandon. vmangos's `CloseTicket` keeps the row, so step 4's query still finds
+            // it.
             Phase::AbandonGap { since } => {
                 if now - since < WRITE_GAP_SECS {
                     return;
@@ -590,7 +592,8 @@ fn gm_ticket_probe(
                     "PROBE_GMTICKET: DONE pass={} fail={}",
                     probe.passes, probe.fails
                 );
-                // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
+                // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account
+                // held.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

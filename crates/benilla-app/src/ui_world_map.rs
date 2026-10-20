@@ -575,7 +575,8 @@ fn feed_world_map(
         let player_sel = resolve_player_selection(&data, map.0, top_zone);
 
         // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
-        // engine's own selection, so the engine holds the projection over its own copy of the catalog.
+        // engine's own selection, so the engine holds the projection over its own copy of the
+        // catalog.
         {
             let memo = memo.get(script);
             if !memo.projector || data.is_changed() {
@@ -584,9 +585,9 @@ fn feed_world_map(
             }
         }
 
-        // First world enter: the zone updater `0x494780` (`crate::area`), finding the cached zone id
-        // 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0` before any
-        // Lua asks. Once per VM, each login being a first enter.
+        // First world enter: the zone updater `0x494780` (`crate::area`), finding the cached zone
+        // id 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0`
+        // before any Lua asks. Once per VM, each login being a first enter.
         {
             let memo = memo.get(script);
             if let Some(sel) = world_enter_selection(memo.map_synced, top_zone, player_sel) {
@@ -648,8 +649,8 @@ fn feed_world_map(
                         .collect()
                 })
                 .unwrap_or_default();
-            // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon substitution,
-            // only the near-zero skip.
+            // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon
+            // substitution, only the near-zero skip.
             if let Some(poi) = poi_marker.on_map(map.0) {
                 sources.push(WorldMapLandmarkSource {
                     name: poi.name.clone(),
@@ -688,8 +689,8 @@ fn feed_world_map(
         };
         let party_uv: Vec<Option<(f32, f32)>> = group.party_slots().map(member_uv).collect();
 
-        // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then our
-        // own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
+        // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then
+        // our own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
         let raid_uv: Vec<Option<(f32, f32)>> = group
             .raid_rows()
             .map(|guid| match group.members.iter().find(|m| m.guid == guid) {

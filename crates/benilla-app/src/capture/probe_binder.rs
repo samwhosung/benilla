@@ -205,7 +205,8 @@ fn binder_probe(
 
         match phase {
             Phase::Wait => {
-                // The `CONFIRM_BINDER` and `CHAT_MSG_SYSTEM` hook, live before the question can arrive.
+                // The `CONFIRM_BINDER` and `CHAT_MSG_SYSTEM` hook, live before the question can
+                // arrive.
                 if let Err(e) = script.run(
                     r#"
                     if not ProbeBinderHooked then
@@ -277,8 +278,8 @@ fn binder_probe(
                     return;
                 };
                 let open = gossip.npc == Some(innkeeper) && !gossip.options.is_empty();
-                // Wait for the feed's push as well as the parse: step 3 reads the icon type back out
-                // of the VM, so the snapshot must already be there.
+                // Wait for the feed's push as well as the parse: step 3 reads the icon type back
+                // out of the VM, so the snapshot must already be there.
                 let pushed = vm_gossip_values(script) as usize == gossip.options.len() * 2;
                 if open && pushed {
                     info!(
@@ -392,7 +393,8 @@ fn binder_probe(
                 }
             }
             Phase::Line { since } => {
-                // `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` as a system line (`0x5e3d3f`).
+                // `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` as a system line
+                // (`0x5e3d3f`).
                 let want = bound_line(&probe.bound_name);
                 let lines = system_lines(script);
                 if lines.iter().any(|l| l == &want) {
@@ -417,8 +419,8 @@ fn binder_probe(
                     "PROBE_BINDER: DONE pass={} fail={}",
                     probe.passes, probe.fails
                 );
-                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
-                // teardown hang cannot leave a client holding the probe account.
+                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so
+                // a teardown hang cannot leave a client holding the probe account.
                 exit.write(AppExit::Success);
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(5));

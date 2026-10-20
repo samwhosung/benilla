@@ -229,7 +229,8 @@ pub(super) fn panel_ui(
         let Some((root_id, _)) = ins.root else {
             return Ok(());
         };
-        // Drawing runs Lua: the frame helper, whose `GetName` and `GetScript` an addon may override.
+        // Drawing runs Lua: the frame helper, whose `GetName` and `GetScript` an addon may
+        // override.
         script.set_instruction_budget(crate::ui_script::addons::LOAD_INSTRUCTION_BUDGET);
         let session = script.session();
         let mut asks = Asks::default();

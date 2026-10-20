@@ -298,9 +298,9 @@ fn feed_tutorials(
             }
         }
 
-        // The item-received sites: Backpack always; Equippable Items for any non-zero inventory type
-        // (the reference's 23-bit mask `0x809200` is not decoded); Hearthstones by entry; Ranged
-        // Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
+        // The item-received sites: Backpack always; Equippable Items for any non-zero inventory
+        // type (the reference's 23-bit mask `0x809200` is not decoded); Hearthstones by entry;
+        // Ranged Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
         let pushes = std::mem::take(&mut tutorials.pushes);
         let class = self_q.single().ok().and_then(|s| s.0.unit_class());
         for (entry, bag, slot) in pushes {

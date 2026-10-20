@@ -1015,9 +1015,9 @@ pub(crate) fn sync_cvars(
             }
             return;
         };
-        // The VM's writes before the seed: an addon's `SetCVar` at load is already queued, and seeding
-        // first would overwrite the mirror with the older value. Read before taking, so a quiet frame
-        // never deref-muts the registry.
+        // The VM's writes before the seed: an addon's `SetCVar` at load is already queued, and
+        // seeding first would overwrite the mirror with the older value. Read before taking, so a
+        // quiet frame never deref-muts the registry.
         if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
             cvars.drain_vm(script);
             cvars.log_console_lines();
@@ -1046,12 +1046,12 @@ pub(crate) fn sync_cvars(
                     })
                     .unwrap_or_default(),
             );
-            // `GetVideoCaps`, the seven values `OptionsFrame_Load` destructures. Shaders, trilinear,
-            // anisotropy and the hardware cursor are always there (`crate::cursor` composites the
-            // reference's cursors into an OS cursor); `max_anisotropy` is reported raw because
-            // `OptionsFrame.lua:122` matches it against `ANISOTROPIC_VALUES`. Triple buffering is
-            // false: wgpu owns the surface's buffering, so the stock frame hides check button 13
-            // (`OptionsFrame.lua:163-165`).
+            // `GetVideoCaps`, the seven values `OptionsFrame_Load` destructures. Shaders,
+            // trilinear, anisotropy and the hardware cursor are always there (`crate::cursor`
+            // composites the reference's cursors into an OS cursor); `max_anisotropy` is reported
+            // raw because `OptionsFrame.lua:122` matches it against `ANISOTROPIC_VALUES`. Triple
+            // buffering is false: wgpu owns the surface's buffering, so the stock frame hides check
+            // button 13 (`OptionsFrame.lua:163-165`).
             script.set_video_caps(benilla_ui::script::VideoCaps {
                 anisotropic: true,
                 pixel_shaders: true,

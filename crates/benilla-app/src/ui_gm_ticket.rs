@@ -176,8 +176,8 @@ fn drain_gm_ticket(
             });
         }
 
-        // The lottery and survey verbs' sends (the lottery has no module of its own, its window being
-        // unbuilt), in call order.
+        // The lottery and survey verbs' sends (the lottery has no module of its own, its window
+        // being unbuilt), in call order.
         for send in script.take_unserved_sends() {
             let _ = commands.0.send(match send {
                 UnservedSend::SkillBuyStep { skill_id } => ClientCommand::SkillBuyStep { skill_id },
@@ -204,7 +204,8 @@ fn drain_gm_ticket(
         if intents.is_empty() {
             return;
         }
-        // Where the player stands at send time, in WoW coordinates: where `.ticket go` takes the GM.
+        // Where the player stands at send time, in WoW coordinates: where `.ticket go` takes the
+        // GM.
         let pos = player.map(|p| bevy_to_wow(p.pos)).unwrap_or([0.0; 3]);
         let map = map.map(|m| m.0).unwrap_or(0);
         // In call order: `DeleteGMTicket(); GetGMTicket()` must not become get-then-delete.

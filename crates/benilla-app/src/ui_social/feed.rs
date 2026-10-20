@@ -59,9 +59,9 @@ pub(super) fn feed_social(
         };
         let fed = fed.get(script);
         let areas = areas.as_deref().map(|a| &a.0);
-        // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames between
-        // ask only a name the cache holds nothing for; a new VM's first feed stands for every list's
-        // packet.
+        // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames
+        // between ask only a name the cache holds nothing for; a new VM's first feed stands for
+        // every list's packet.
         let first = !fed.seeded;
         // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
         // which goes to the server, not the VM.
@@ -91,8 +91,8 @@ pub(super) fn feed_social(
             (owed, friends, display_order)
         };
 
-        // The owed lines first, so a friend's offline line lands before the update that clears their
-        // zone.
+        // The owed lines first, so a friend's offline line lands before the update that clears
+        // their zone.
         crate::ui_action::show_messages(script, &mut sink, "ui_social", owed);
 
         let (ignores, ignore_order) = ignore_rows(&social, &names, &ask);
@@ -131,8 +131,8 @@ pub(super) fn feed_social(
             if answer_goes_to_the_frame(social.who_to_ui, social.who.len()) {
                 script.fire_event("WHO_LIST_UPDATE", Vec::new());
             } else {
-                // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before the
-                // `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
+                // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before
+                // the `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
                 let printed = {
                     let get = |key: &str| script.lua().globals().get::<String>(key).ok();
                     let wire_order: Vec<WhoInfo> = social

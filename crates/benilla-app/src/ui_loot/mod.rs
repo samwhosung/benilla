@@ -800,8 +800,9 @@ fn feed_loot(
         match (&*last, &fresh) {
             (None, Some(snap)) => {
                 // No window until every template has landed: the copier fires nothing while a query
-                // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED` (or
-                // the auto-loot sweep) at the last answer. Not advancing `last` retries next frame.
+                // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED`
+                // (or the auto-loot sweep) at the last answer. Not advancing `last` retries next
+                // frame.
                 if templates_outstanding(&items, snap) {
                     return;
                 }
@@ -813,8 +814,8 @@ fn feed_loot(
                     sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
                 }
                 // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
-                // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires
-                // in this pass, so the window never paints.
+                // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED`
+                // fires in this pass, so the window never paints.
                 if std::mem::take(&mut moving.move_start.0) {
                     let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
                     if closed.is_some() {
@@ -826,8 +827,8 @@ fn feed_loot(
                     }
                 }
             }
-            // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler hides
-            // that button and pages down when the page empties (`LootFrame.lua:22-50`).
+            // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler
+            // hides that button and pages down when the page empties (`LootFrame.lua:22-50`).
             (Some(before), Some(after)) => {
                 for (i, was) in before.rows.iter().enumerate() {
                     let gone = was.is_some() && after.rows.get(i).is_none_or(Option::is_none);
@@ -1086,12 +1087,14 @@ fn drain_loot(
         for index in script.take_loot_picks() {
             match loot.action_at(index) {
                 Some(LootAction::Money) => {
-                    // No sound here: the coinage watcher (`sound::money`) plays it as the purse rises.
+                    // No sound here: the coinage watcher (`sound::money`) plays it as the purse
+                    // rises.
                     debug!("ui_loot: loot coin (row {index})");
                     let _ = commands.0.send(ClientCommand::LootMoney);
                 }
-                // A master-loot row opens the candidate dropdown instead: the dispatcher branches on
-                // the slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the anchor.
+                // A master-loot row opens the candidate dropdown instead: the dispatcher branches
+                // on the slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the
+                // anchor.
                 Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
                     debug!("ui_loot: row {index} is master-loot — opening the candidate list");
                     script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
@@ -1119,15 +1122,16 @@ fn drain_loot(
                     let _ = commands
                         .0
                         .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-                    // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit 0.
+                    // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit
+                    // 0.
                     pickup.write(crate::sound::LootPickupSound { display_id });
                 }
                 None => debug!("ui_loot: row {index} clicked out of range — ignored"),
             }
         }
 
-        // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears the
-        // stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
+        // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears
+        // the stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
         for index in script.take_loot_confirms() {
             if loot.pending_bind_confirm != Some(index) {
                 debug!("ui_loot: LootSlot({index}) is not the pending bind confirm — ignored");
@@ -1139,7 +1143,8 @@ fn drain_loot(
                 ..
             }) = loot.action_at(index)
             else {
-                // The row went under the dialog: bail without clearing the stash, as `0x4c27d7` does.
+                // The row went under the dialog: bail without clearing the stash, as `0x4c27d7`
+                // does.
                 debug!("ui_loot: bind confirm for row {index} — the row is gone, nothing sent");
                 continue;
             };
@@ -1150,7 +1155,8 @@ fn drain_loot(
                 .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
             pickup.write(crate::sound::LootPickupSound { display_id });
         }
-        // `GiveMasterLoot(slot, candidateIndex)`, both 1-based; one that does not resolve is dropped.
+        // `GiveMasterLoot(slot, candidateIndex)`, both 1-based; one that does not resolve is
+        // dropped.
         for (index, candidate) in script.take_loot_master_gives() {
             let Some(guid) = loot.source else {
                 continue;
@@ -1170,7 +1176,8 @@ fn drain_loot(
                 debug!("ui_loot: GiveMasterLoot({index}, {candidate}) unresolvable — ignored");
                 continue;
             };
-            // Only a master row: the sender `0x4c2940` re-reads the slot type and bails unless it is 2.
+            // Only a master row: the sender `0x4c2940` re-reads the slot type and bails unless it
+            // is 2.
             if slot_type != slot_type::MASTER {
                 debug!("ui_loot: GiveMasterLoot({index}) is not a master row — ignored");
                 continue;

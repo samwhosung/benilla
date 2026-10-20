@@ -666,9 +666,9 @@ fn feed_mail(
         // A close is the core's, which told the VM; the leave-world sweep's and a disconnect's tell
         // it nothing.
         let opened = last_mailbox.is_none() && mail.mailbox.is_some();
-        // The frames the stock inbox calls its getters on: `MAIL_SHOW` and the `MAIL_INBOX_UPDATE` of
-        // a list or a result arm, with the list's subject parse (`0x4ad5a0`) besides, and the frame
-        // after the diff's own `MAIL_INBOX_UPDATE`.
+        // The frames the stock inbox calls its getters on: `MAIL_SHOW` and the `MAIL_INBOX_UPDATE`
+        // of a list or a result arm, with the list's subject parse (`0x4ad5a0`) besides, and the
+        // frame after the diff's own `MAIL_INBOX_UPDATE`.
         let inbox_updated = inbox_updated.get(script);
         let rows_event = opened
             || mail.show_requested
@@ -722,8 +722,8 @@ fn feed_mail(
         }
         if opened {
             // The open core (`0x4acd10`) resets the compose tab before `MAIL_SHOW`, the stationery
-            // selection with it (`0x4ace07`), which `MAIL_SHOW`'s reset re-picks as row 1; the reset's
-            // `MAIL_SEND_SUCCESS`, page-turn sound and all, is the reference's too.
+            // selection with it (`0x4ace07`), which `MAIL_SHOW`'s reset re-picks as row 1; the
+            // reset's `MAIL_SEND_SUCCESS`, page-turn sound and all, is the reference's too.
             script.reset_compose_tab();
             script.fire_event("MAIL_SHOW", vec![]);
         } else if mail.mailbox.is_some() {
@@ -743,8 +743,8 @@ fn feed_mail(
                 *inbox_updated = true;
             }
         }
-        // Every list result ends its parse in the event (`0x4ad5c6`-`0x4ad5d6`), changed or not, and
-        // whether or not the window is up.
+        // Every list result ends its parse in the event (`0x4ad5c6`-`0x4ad5d6`), changed or not,
+        // and whether or not the window is up.
         announce_lists(script, lists);
         // A result a same-frame close dropped still lifts the lock (the flag outlives the close).
         if std::mem::take(&mut mail.request_resolved) {
@@ -753,8 +753,9 @@ fn feed_mail(
         *last = fresh;
         *last_mailbox = mail.mailbox;
 
-        // `HasNewMail()` is pushed on change, but `UPDATE_PENDING_MAIL` fires only at the reference's
-        // three sites, so a query's "no mail" stamp does not move the icon until the reply lands.
+        // `HasNewMail()` is pushed on change, but `UPDATE_PENDING_MAIL` fires only at the
+        // reference's three sites, so a query's "no mail" stamp does not move the icon until the
+        // reply lands.
         pending.step(time.delta_secs());
         let has_new_mail = pending.has_new_mail();
         if has_new_mail != *last_has_new_mail {
@@ -782,9 +783,9 @@ fn drain_mail(
             return;
         };
         let Some(mailbox) = mail.mailbox else {
-            // No session: still honor a stray close (idempotent) and drop everything else. A request
-            // the VM let through took its lock; dropped unsent, it gives the lock back, so no verb
-            // waits on an answer that never comes.
+            // No session: still honor a stray close (idempotent) and drop everything else. A
+            // request the VM let through took its lock; dropped unsent, it gives the lock back, so
+            // no verb waits on an answer that never comes.
             if script.take_mail_close() {
                 crate::ui_session::queue(&mut world_commands, close_core);
             }
@@ -819,8 +820,8 @@ fn drain_mail(
             else {
                 continue;
             };
-            // Every open arms the refresh, read or not: `GetInboxText` calls the mark-as-read sender
-            // unconditionally, which sets `[0xb6efcc]` (`0x4adda6`).
+            // Every open arms the refresh, read or not: `GetInboxText` calls the mark-as-read
+            // sender unconditionally, which sets `[0xb6efcc]` (`0x4adda6`).
             pending.arm_refresh();
             if !read {
                 mail.mark_read(index);
@@ -902,9 +903,9 @@ fn drain_mail(
                 })
             });
             if req.item.is_some() && item_guid.is_none() {
-                // The item left its slot: `ERR_ITEM_NOT_FOUND`, no packet, the attachment dropped and
-                // `MAIL_SEND_INFO_UPDATE` fired (`0x4ae98d`), ahead of the lock's write (`0x4aea7b`),
-                // so the lock the verb took goes back.
+                // The item left its slot: `ERR_ITEM_NOT_FOUND`, no packet, the attachment dropped
+                // and `MAIL_SEND_INFO_UPDATE` fired (`0x4ae98d`), ahead of the lock's write
+                // (`0x4aea7b`), so the lock the verb took goes back.
                 mail.errors.push("ERR_ITEM_NOT_FOUND");
                 script.drop_send_mail_item();
                 script.mail_request_resolved();

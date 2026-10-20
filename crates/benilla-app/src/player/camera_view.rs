@@ -210,7 +210,8 @@ fn drain_view_requests(
             return; // no camera: a silent drop, as the reference's `0x4818f0` miss
         };
         let face_yaw = targets.player.facing();
-        // Written to the CVars after the batch: the slots a save or reset moved, and the live index.
+        // Written to the CVars after the batch: the slots a save or reset moved, and the live
+        // index.
         let mut write_slots: Vec<usize> = Vec::new();
         let mut write_active = false;
 
@@ -264,10 +265,10 @@ fn drain_view_requests(
                     }
                 }
                 CameraViewRequest::FlipYaw(degrees) => {
-                    // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in its
-                    // own yaw field, added outside the follow channel (`0x50f7de`), so it survives
-                    // re-centring; the rig has one yaw, so auto-follow reels the flip back in on Smart
-                    // and Always.
+                    // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in
+                    // its own yaw field, added outside the follow channel (`0x50f7de`), so it
+                    // survives re-centring; the rig has one yaw, so auto-follow reels the flip back
+                    // in on Smart and Always.
                     cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
                 }
             }

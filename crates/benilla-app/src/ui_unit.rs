@@ -1520,10 +1520,10 @@ fn feed_units(
             Some(s)
         });
 
-        // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for the
-        // stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit event
-        // carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it for one,
-        // and a lazy-cache miss sends a query.
+        // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for
+        // the stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit
+        // event carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it
+        // for one, and a lazy-cache miss sends a query.
         let tot = selection
             .target
             .and_then(|e| stores.all.get(e).ok())
@@ -1533,8 +1533,8 @@ fn feed_units(
             .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
 
         // `"player"` is pushed only while its descriptor exists: the roster seat stands in before
-        // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's do.
-        // `"target"` pushes its absence too; both diff against the event loop's memo.
+        // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's
+        // do. `"target"` pushes its absence too; both diff against the event loop's memo.
         if let Some(cur) = &player {
             if memo.last.get("player") != Some(cur) {
                 gate.audit("feed_units", "the player snapshot");
@@ -1562,8 +1562,9 @@ fn feed_units(
             script.set_unit("targettarget", tot.clone());
         }
 
-        // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that `CGGameUI::SetInteractNPC`
-        // (`0x4930d0`) writes, which `InteractNpc` models. No guild leg, as for `"targettarget"`.
+        // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that
+        // `CGGameUI::SetInteractNPC` (`0x4930d0`) writes, which `InteractNpc` models. No guild leg,
+        // as for `"targettarget"`.
         let npc = interact
             .as_deref()
             .and_then(|i| Some((i.0?, i.1?)))
@@ -1587,10 +1588,10 @@ fn feed_units(
             }
         }
 
-        // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead of
-        // the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read real
-        // values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field watches
-        // (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
+        // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead
+        // of the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read
+        // real values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field
+        // watches (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
         // (`crate::field_watch`), fired by `field_events` after this push.
         if let Some((store, _)) = self_q.iter().next() {
             let xp = xp_pair(store);
@@ -1617,7 +1618,8 @@ fn feed_units(
         }
 
         // `PLAYER_LEVEL_UP` on any level change off the descriptor, demotions included (vmangos
-        // `GiveLevel` sends `SMSG_LEVELUP_INFO` for those too); the reference's trigger is untraced.
+        // `GiveLevel` sends `SMSG_LEVELUP_INFO` for those too); the reference's trigger is
+        // untraced.
         if let Some((store, _)) = self_q.iter().next() {
             if let Some(level) = store.0.unit_level() {
                 let prev = memo.last_level.replace(level);
@@ -1648,10 +1650,10 @@ fn feed_units(
             }
         }
 
-        // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes the
-        // cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock reads
-        // it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of that fire. No
-        // player and a zero byte share the four-nil branch (`0x4e7684`).
+        // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes
+        // the cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock
+        // reads it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of
+        // that fire. No player and a zero byte share the four-nil branch (`0x4e7684`).
         if let Some((store, _)) = self_q.iter().next() {
             let toggles = store.0.player_action_bar_toggles().unwrap_or(0);
             if memo.action_bar_toggles != Some(toggles) {
@@ -1663,16 +1665,17 @@ fn feed_units(
 
         // The world-enter cascade's events once per world entry, after our descriptor lands and the
         // pushes above seat it: the reference runs the cascade from the local player's own create
-        // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player in
-        // the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a worldport's
-        // re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry and forget the
-        // player-global memos so the next character seeds them.
+        // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player
+        // in the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a
+        // worldport's re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry
+        // and forget the player-global memos so the next character seeds them.
         if let Some((_, me)) = self_pair {
             if !memo.entered_world {
                 gate.audit("feed_units", "the world-enter events");
                 // `"player"` names us when the cascade runs, from our own create: the stock windows
-                // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated ahead
-                // of the aura feed's full resolver push, which this feed is not ordered against.
+                // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated
+                // ahead of the aura feed's full resolver push, which this feed is not ordered
+                // against.
                 script.seat_player_guid(me.0);
                 script.fire_world_enter();
                 memo.entered_world = true;
@@ -1689,9 +1692,10 @@ fn feed_units(
             memo.action_bar_toggles = None;
         }
 
-        // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its own
-        // changes' (`crate::field_watch`), and a token that comes to name another unit is announced by
-        // `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that, `0x49389c`).
+        // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its
+        // own changes' (`crate::field_watch`), and a token that comes to name another unit is
+        // announced by `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that,
+        // `0x49389c`).
         for (token, snap) in [
             ("player", &player),
             ("target", &target),
@@ -1710,16 +1714,16 @@ fn feed_units(
         }
 
         // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
-        // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the target
-        // and told the dying VM (`0x490bdf`).
+        // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the
+        // target and told the dying VM (`0x490bdf`).
         if selection.guid != memo.target_guid {
             gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
             memo.target_guid = selection.guid;
             memo.pending.target_changed = true;
         }
 
-        // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips the
-        // VM's belief on the click, and a stale push before the server answers would undo it.
+        // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips
+        // the VM's belief on the click, and a stale push before the server answers would undo it.
         if let Some((store, _)) = self_pair {
             let hidden = (store.0.player_hides_helm(), store.0.player_hides_cloak());
             if memo.worn_hidden != Some(hidden) {
@@ -1729,8 +1733,8 @@ fn feed_units(
             }
         }
 
-        // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads both;
-        // only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
+        // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads
+        // both; only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
         if let Some((store, _)) = self_q.iter().next() {
             let banked = (
                 store.0.player_combo_points().unwrap_or(0),

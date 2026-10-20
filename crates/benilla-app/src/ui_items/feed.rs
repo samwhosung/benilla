@@ -564,8 +564,8 @@ pub(super) fn feed_item_stats(
         let gender = reads.1;
         let reads_changed = last_reads.get(script).as_ref() != Some(&reads);
         *last_reads.get(script) = Some(reads);
-        // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of the
-        // pending gate below: the bind point can arrive while the feed idles.
+        // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of
+        // the pending gate below: the bind point can arrive while the feed idles.
         let home_area: Option<&str> = home_bind
             .as_deref()
             .and_then(|b| b.0)
@@ -574,7 +574,8 @@ pub(super) fn feed_item_stats(
         if last_home.as_deref() != home_area {
             script.set_bind_location(home_area.unwrap_or_default());
             *last_home = home_area.map(str::to_string);
-            // Re-substitute every held view, or one pushed before the bind point carries a raw `$z`.
+            // Re-substitute every held view, or one pushed before the bind point carries a raw
+            // `$z`.
             pending.extend(items.cached_template_ids());
         }
 
@@ -604,7 +605,8 @@ pub(super) fn feed_item_stats(
             .copied()
             .filter(|&id| items.template(id, 0, Ask::Read).is_some())
             .collect();
-        // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs mutably.
+        // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs
+        // mutably.
         let views: Vec<(u32, benilla_ui::script::ItemTemplateView)> = {
             let get = |key: &str| {
                 script
@@ -761,7 +763,8 @@ pub(super) fn feed_player_req(
                 );
             }
         }
-        // The reference's `0xc4d770`: a known spell whose Effect[0] is 40 (`SPELL_EFFECT_DUAL_WIELD`).
+        // The reference's `0xc4d770`: a known spell whose Effect[0] is 40
+        // (`SPELL_EFFECT_DUAL_WIELD`).
         let can_dual_wield = spells.as_deref().is_some_and(|s| {
             actions
                 .spells
@@ -1139,8 +1142,8 @@ pub(crate) fn feed_containers(
     let Some((source, guids, opened, gate)) = vm.turn(|script, cooldowns| {
         let (mut equip_errors, mut sink) = equip;
         let Some(script) = script else {
-            // A refusal's unlocks would fire into a later VM's locks; with none up they are dropped,
-            // as the release queue's are, and the lines wait.
+            // A refusal's unlocks would fire into a later VM's locks; with none up they are
+            // dropped, as the release queue's are, and the lines wait.
             for e in &mut equip_errors.0 {
                 e.unlocks = [0; 2];
             }
@@ -1370,8 +1373,8 @@ pub(crate) fn feed_containers(
                 );
             }
 
-            // The bank, container -1 (the vault) and 5..=10 (its bags), fed whether or not the window
-            // is open: the descriptor streams at login.
+            // The bank, container -1 (the vault) and 5..=10 (its bags), fed whether or not the
+            // window is open: the descriptor streams at login.
             let mut slots = HashMap::new();
             for i in 0..BANK_SLOTS {
                 let guid = store.0.player_bank_slot(i).unwrap_or(0);
@@ -1454,8 +1457,8 @@ pub(crate) fn feed_containers(
             }
 
             // The keyring, container -2: player slots 81.., sized by the level ladder that stock
-            // `GetKeyRingSize` (`ContainerFrame.lua:773`) reads off `UnitLevel` and the server shares.
-            // Slots past the size, which the server refuses, are not fed.
+            // `GetKeyRingSize` (`ContainerFrame.lua:773`) reads off `UnitLevel` and the server
+            // shares. Slots past the size, which the server refuses, are not fed.
             let size = keyring_size(store.0.unit_level().unwrap_or(1));
             let mut slots = HashMap::new();
             for i in 0..size.min(u32::from(KEYRING_SLOTS)) as u8 {
@@ -1486,8 +1489,8 @@ pub(crate) fn feed_containers(
                 },
             );
 
-            // `HasKey()`, which decides whether the keyring shows at all, pushed with the containers
-            // so it is fresh on every `BAG_UPDATE` frame.
+            // `HasKey()`, which decides whether the keyring shows at all, pushed with the
+            // containers so it is fresh on every `BAG_UPDATE` frame.
             let key = has_key(&store.0, &inv.objects, &items);
             if key != memory.had_key {
                 gate.audit("feed_containers", "the HasKey() flip");

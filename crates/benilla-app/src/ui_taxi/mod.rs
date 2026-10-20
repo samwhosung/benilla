@@ -219,8 +219,8 @@ fn feed_taxi(
         }
 
         // The flight master's name is tracked so its landing re-fires `TAXIMAP_OPENED`, whose stock
-        // handler titles the map with `UnitName("npc")` (`TaxiFrame.lua:27`); the reference fires it
-        // only on open.
+        // handler titles the map with `UnitName("npc")` (`TaxiFrame.lua:27`); the reference fires
+        // it only on open.
         let flightmaster_name = state
             .open
             .as_ref()

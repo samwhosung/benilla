@@ -516,8 +516,9 @@ pub(crate) fn feed_quest(
             return;
         }
         script.set_quest(fresh.clone());
-        // The panel events carry no argument: the frame reads `UnitName("npc")` (`QuestFrame.lua:63`).
-        // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
+        // The panel events carry no argument: the frame reads `UnitName("npc")`
+        // (`QuestFrame.lua:63`). A close is the core's, which told the VM; a disconnect's clear
+        // tells it nothing.
         if let Some(f) = &fresh {
             let same_panel = last.as_ref().is_some_and(|l| l.panel == f.panel);
             let event = if same_panel {

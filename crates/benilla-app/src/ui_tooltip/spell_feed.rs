@@ -811,9 +811,10 @@ pub(super) fn feed_spell_tooltips(
         let caster_unit = range_units.caster();
         let attack_target = range_units.caster_attack_target();
         // What moved since the last frame, which each pushed view is checked against: the bind
-        // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
-        // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
-        // block, dodge, parry and crit percentages, and the two units the melee range cell reads.
+        // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns
+        // of each equipment slot and the disarm flag, the level, cost bases and ranged attack time,
+        // the block, dodge, parry and crit percentages, and the two units the melee range cell
+        // reads.
         let mut seen = Seen::of(
             self_store,
             home_area.as_deref(),
@@ -847,8 +848,8 @@ pub(super) fn feed_spell_tooltips(
         changes = changes.with_reagents(&memory.reagents, &reagent_state);
         memory.reagents = reagent_state;
         memory.requeue(&changes, &mut wanted, &mut wanted_pet, &mut wanted_aura);
-        // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds the
-        // pet views alone.
+        // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds
+        // the pet views alone.
         let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
         let pet = pet_guid.and_then(|g| objects.object(g));
         let pet_entity = pet_guid.and_then(|g| objects.entity(g));

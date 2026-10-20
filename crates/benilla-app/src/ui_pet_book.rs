@@ -237,7 +237,8 @@ pub(crate) fn drain_pet_book(
             let Some(on) = flip_autocast(&mut bar.spells, spell_id) else {
                 continue;
             };
-            // The VM flipped its own book and bar and fired `PET_BAR_UPDATE` in the verb (`0x4bcdcb`).
+            // The VM flipped its own book and bar and fired `PET_BAR_UPDATE` in the verb
+            // (`0x4bcdcb`).
             debug!("ui_pet_book: autocast {spell_id} -> {on}");
             let _ = commands.0.send(ClientCommand::PetSpellAutocast {
                 pet_guid,
