@@ -1358,7 +1358,6 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "SoundBufferSize",
                 "SoundReverb",
                 "frillDensity",
                 "gxApi",
@@ -3044,7 +3043,7 @@ mod tests {
         // A latched row outside the gx set is not the video restart's to commit.
         assert_eq!(cvars.set("SoundBufferSize", "200"), SetOutcome::Staged);
         assert_eq!(cvars.commit_latched(), 0);
-        assert_eq!(cvars.get("SoundBufferSize"), Some("100"));
+        assert_eq!(cvars.get("SoundBufferSize"), Some("50"));
         assert_eq!(
             cvars.row("SoundBufferSize").unwrap().pending.as_deref(),
             Some("200")

@@ -66,9 +66,9 @@ const HANDBACK_WAIT: Duration = Duration::from_millis(250);
 pub(super) const DEVICE_BUFFER_FRAMES: u32 = 512;
 
 /// How far ahead of the device the mix runs. The reference registers `SoundBufferSize`, FMOD 3's
-/// mix-ahead, at `"50"` or `"100"` by host (`0x457520`, strings at `0x835e10`/`0x835e0c`); this is
-/// the larger on every host, since the depth exists to hide a stall a whole IO cycle long.
-pub(super) const MIX_AHEAD_MS: u32 = 100;
+/// mix-ahead, at `"50"` on a host above 1500 MHz, which is every current machine, and `"100"`
+/// below (`0x457520`, strings at `0x835e10`/`0x835e0c`); this is the first.
+pub(super) const MIX_AHEAD_MS: u32 = 50;
 
 /// Whether an output stream is open, set only by the backend around the stream's life. The stall
 /// watchdog stands down while it is set: `/usr/bin/sample` suspends the IO thread too, and every
