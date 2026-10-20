@@ -111,6 +111,7 @@ pub(crate) struct Scene<'w, 's> {
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
     list: ResMut<'w, update::ObjectList>,
+    player: Option<Res<'w, crate::player::Player>>,
     item_objects: Query<'w, 's, &'static crate::items::ItemObject>,
 }
 

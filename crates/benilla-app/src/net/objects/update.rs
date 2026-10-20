@@ -420,7 +420,12 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
         return;
     };
     sc.pass.started = true;
+    // The unit this client moves drops its block before the lookup that would bring a released
+    // one back (`0x4670a5`-`0x4670bb`, ahead of `0x4670c2`); a held one is `object_move`'s test.
     if !sc.index.0.contains_key(&guid) {
+        if active_mover(&sc) == Some(guid) {
+            return;
+        }
         if let Some(Kept { fields, body }) = sc.released.take(guid) {
             let pose = pose_transform(position, wire_yaw(orientation));
             respawn(&mut sc, guid, body, fields, Some(pose));
@@ -436,6 +441,13 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
         &mut sc.transforms,
         &sc.movers,
     );
+}
+
+/// The active-mover global (`0xc4da98`) by guid, as [`crate::player`] seats it: the claimed
+/// foreign mover, else our own, and none while control is lost (`0x5fa600` zeroes it).
+fn active_mover(sc: &Scene) -> Option<u64> {
+    let player = sc.player.as_ref().filter(|p| !p.control_lost)?;
+    player.foreign_mover.or(sc.self_guid.0)
 }
 
 /// A near-objects block (`0x467230`): each listed released object but our own player comes back
