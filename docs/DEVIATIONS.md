@@ -271,7 +271,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### spell
 
 - An out-of-range byte drops the packet, because the reference's unchecked write overruns the table (`(64, 19)` lands on the class family at `0xcecaac`). ([`src/spell/mods.rs:106`](../crates/benilla-app/src/spell/mods.rs#L106))
-- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:926`](../crates/benilla-app/src/spell/net.rs#L926))
+- The fallback is the packet's target guid, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:920`](../crates/benilla-app/src/spell/net.rs#L920))
 - A range failure leaves targeting armed and working. The reference's report cancels the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a cancel. ([`src/spell/targeting/mod.rs:507`](../crates/benilla-app/src/spell/targeting/mod.rs#L507))
 
 #### target
@@ -601,7 +601,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:669`](../crates/benilla-protocol/src/events.rs#L669))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:673`](../crates/benilla-protocol/src/events.rs#L673))
 
 #### examples
 
@@ -721,9 +721,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:888`](../crates/benilla-ui/src/script/nameplate.rs#L888))
 - A wrapper that decodes to no live widget takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer. ([`src/script/object/anchor_args.rs:159`](../crates/benilla-ui/src/script/object/anchor_args.rs#L159))
 - An `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a Lua handler must not run in the middle of a level compaction. ([`src/script/object/toplevel.rs:74`](../crates/benilla-ui/src/script/object/toplevel.rs#L74))
-- A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:261`](../crates/benilla-ui/src/script/pvp/mod.rs#L261))
-- A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:509`](../crates/benilla-ui/src/script/pvp/mod.rs#L509))
-- With `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers the plain name, where the reference would format an empty string, because the decoration is install data. ([`src/script/pvp/mod.rs:513`](../crates/benilla-ui/src/script/pvp/mod.rs#L513))
+- A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:262`](../crates/benilla-ui/src/script/pvp/mod.rs#L262))
+- A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:510`](../crates/benilla-ui/src/script/pvp/mod.rs#L510))
+- With `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers the plain name, where the reference would format an empty string, because the decoration is install data. ([`src/script/pvp/mod.rs:514`](../crates/benilla-ui/src/script/pvp/mod.rs#L514))
 - An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/script/quest_log.rs:55`](../crates/benilla-ui/src/script/quest_log.rs#L55))
 - One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:961`](../crates/benilla-ui/src/script/quest_log.rs#L961))
 - A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1018`](../crates/benilla-ui/src/script/quest_log.rs#L1018))
