@@ -151,8 +151,9 @@ pub(super) fn attacker_state(
 /// the packet's `victim`, who wears the shield; `attacker` struck it and takes the damage
 /// (`DAMAGESHIELDSELFOTHER` is "You reflect %d %s damage to %s."). The chat type is a two-way on
 /// the bearer: `0x62c140` returns `0x3f` `SPELL_DAMAGESHIELDS_ON_SELF` for class 0 or 1, else
-/// `0x40` `…ON_OTHERS`. After the line (`0x5e8552`), `UNIT_COMBAT` `WOUND` on the attacker, with
-/// no flags and no gate (`0x5e858c`).
+/// `0x40` `…ON_OTHERS`. The line (`0x62ca20`, from `0x5e8552`) is worded `DAMAGE_SHIELD` with the
+/// damage when the struck unit is you (`0x62cb5d`-`0x62cb6b`), and written for no damage not at all
+/// (`0x62ca50`). Then `UNIT_COMBAT` `WOUND` on the attacker, with no flags and no gate (`0x5e858c`).
 pub(super) fn damage_shield(
     s: DamageShield,
     ctx: &ChatCtx,
@@ -160,24 +161,27 @@ pub(super) fn damage_shield(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    let bearer = ctx.classify(s.victim, stores);
-    let struck = ctx.classify(s.attacker, stores);
-    let kind = combat::damage_shield_kind(bearer);
-    let fills = Fills {
-        school: u8::try_from(s.school).ok(),
-        amount: i64::from(s.damage),
-        ..Default::default()
-    };
-    queue(
-        log,
-        ctx,
-        poses,
-        kind,
-        combat::DAMAGESHIELD,
-        (s.victim, bearer),
-        (s.attacker, struck),
-        fills,
-    );
+    if s.damage != 0 {
+        let bearer = ctx.classify(s.victim, stores);
+        let struck = ctx.classify(s.attacker, stores);
+        let kind = combat::damage_shield_kind(bearer);
+        let fills = Fills {
+            school: u8::try_from(s.school).ok(),
+            amount: i64::from(s.damage),
+            ..Default::default()
+        };
+        queue_worded(
+            log,
+            ctx,
+            poses,
+            kind,
+            combat::DAMAGESHIELD,
+            (s.victim, bearer),
+            (s.attacker, struck),
+            fills,
+            to_me(struck, LineWord::with("DAMAGE_SHIELD", s.damage)),
+        );
+    }
     super::feedback::wound(log, s.attacker, s.damage, 0, s.school);
 }
 
