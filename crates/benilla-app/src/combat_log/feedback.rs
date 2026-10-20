@@ -1,7 +1,7 @@
-//! `UNIT_COMBAT`, the portrait hit indicator, as the packet handlers raise it through `0x494600`:
-//! `0x4946b0` a wound, `0x494720` a miss, `0x494740` a heal. Each is queued in the chat drain
-//! ([`ChatLog::push_unit_combat`]) at the point its handler calls it, before or after that
-//! handler's line, so Lua sees the two in the handler's order.
+//! `UNIT_COMBAT`, the portrait hit indicator, as the handlers raise it through `0x494600`:
+//! `0x4946b0` a wound, `0x4946d0` a swing, `0x494720` a miss, `0x494740` a heal. Each is queued in
+//! the chat drain ([`ChatLog::push_unit_combat`]) at the point its handler calls it, before or after
+//! that handler's line, so Lua sees the two in the handler's order.
 
 use crate::ui_chat::ChatLog;
 use crate::ui_unit::UnitCombatFeedback;
@@ -52,6 +52,37 @@ pub(super) fn heal(log: &mut ChatLog, guid: u64, amount: u32, crit: bool) {
         action: "HEAL",
         flags: wound_descriptor(amount, if crit { 0x80 } else { 0 }),
         amount,
+        school: 0,
+    });
+}
+
+/// A swing's `UNIT_COMBAT` action by its victim state, the nine-word table `0x83de28`.
+const SWING_ACTIONS: [&str; 9] = [
+    "MISS",
+    "WOUND",
+    "DODGE",
+    "PARRY",
+    "INTERRUPT",
+    "BLOCK",
+    "EVADE",
+    "IMMUNE",
+    "DEFLECT",
+];
+
+/// `0x4946d0(record)`: a swing's `UNIT_COMBAT`, its action the victim state's word (`0x494706`), its
+/// descriptor off the damage and hit info like every wrapper's. The table index has no bound: a
+/// state past it, which no server sends (vmangos `VictimState` ends at 8,
+/// `Objects/UnitDefines.h:247`), signals nothing here.
+pub(crate) fn swing(log: &mut ChatLog, guid: u64, victim_state: u32, hit_info: u32, damage: u32) {
+    let Some(&action) = SWING_ACTIONS.get(victim_state as usize) else {
+        return;
+    };
+    log.push_unit_combat(UnitCombatFeedback {
+        guid,
+        action,
+        flags: wound_descriptor(damage, hit_info),
+        amount: damage,
+        // The reference passes sub-damage 0's school (`0x4946fc`), which the swing does not carry.
         school: 0,
     });
 }

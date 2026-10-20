@@ -388,42 +388,6 @@ fn load_exhaustion_rows(
     }
 }
 
-/// Melee swing to the `UNIT_COMBAT` action (victim-state table `0x83de28`, `0x4946d0`) and
-/// descriptor, HitInfo keyed on the amount's sign: above zero CRITICAL `0x80`, GLANCING `0x4000`,
-/// CRUSHING `0x8000`; else ABSORB `0x20`, BLOCK `0x800`, RESIST `0x40`.
-fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static str, &'static str) {
-    match victim_state {
-        2 => ("DODGE", ""),
-        3 => ("PARRY", ""),
-        5 => ("BLOCK", ""),
-        6 => ("EVADE", ""),
-        7 => ("IMMUNE", ""),
-        8 => ("DEFLECT", ""),
-        // 0 UNAFFECTED / 1 NORMAL / 4 INTERRUPT: WOUND, descriptor by the amount-sign key.
-        _ => {
-            if damage > 0 {
-                if hit_info & 0x80 != 0 {
-                    ("WOUND", "CRITICAL")
-                } else if hit_info & 0x4000 != 0 {
-                    ("WOUND", "GLANCING")
-                } else if hit_info & 0x8000 != 0 {
-                    ("WOUND", "CRUSHING")
-                } else {
-                    ("WOUND", "")
-                }
-            } else if hit_info & 0x20 != 0 {
-                ("WOUND", "ABSORB")
-            } else if hit_info & 0x800 != 0 {
-                ("WOUND", "BLOCK") // a full block `0x625e20` did not mark
-            } else if hit_info & 0x40 != 0 {
-                ("WOUND", "RESIST")
-            } else {
-                ("MISS", "")
-            }
-        }
-    }
-}
-
 /// A swing's `UNIT_COMBAT` on its victim, as `FloatSwingResult 0x6243e0` raises it (`0x4946d0`, at
 /// `0x6244bf` and `0x624518`), queued in the chat drain where its caller stands: for a displayed
 /// swing only (`0x625e40`, which returns at `0x624414` past both the number and the event), on a
@@ -442,14 +406,7 @@ pub(crate) fn melee_unit_combat(
     let Some((guid, _)) = victim.filter(|(_, store)| crate::ui_chat::combat::is_unit(store)) else {
         return;
     };
-    let (action, flags) = melee_feedback(s.hit_info, s.victim_state, s.damage);
-    log.push_unit_combat(UnitCombatFeedback {
-        guid,
-        action,
-        flags,
-        amount: s.damage,
-        school: 0, // the reference passes sub-damage 0's school (`0x4946fc`), not carried here
-    });
+    crate::combat_log::feedback::swing(log, guid, s.victim_state, s.hit_info, s.damage);
 }
 
 /// `COMBAT_TEXT_UPDATE(messageType, data, extra)` (event `0x21e`, through the five helpers

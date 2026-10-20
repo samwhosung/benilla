@@ -26,7 +26,7 @@ use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
 
 pub(crate) mod chat;
-mod feedback;
+pub(crate) mod feedback;
 pub(crate) mod text;
 
 /// `SMSG_ATTACKERSTATEUPDATE`'s swing as every consumer reads it: the record read runs
