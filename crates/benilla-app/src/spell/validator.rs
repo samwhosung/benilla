@@ -135,16 +135,31 @@ pub(crate) fn cast_cc_refusal(
 }
 
 /// The wrappers over the scan `0x6e9ca0` (`0x6e9c80`, `0x6e9e60`, `0x6e9ec0`, `0x6e9f20`,
-/// `0x6e9f40`, `0x6e9f60`): one scan per aura type in order, joined into the arm's answer.
+/// `0x6e9f40`, `0x6e9f60`): one scan per aura type in order, exempt as soon as any scan exempts
+/// (`0x6e9e84`, `0x6e9e95`, `0x6e9ea6`). The mechanic word is cleared once at entry (`0x6e9e72`)
+/// and each refusing scan writes its nonzero mechanic over it (`0x6e9d4c`, `0x6e9d5f`), so the
+/// last one names the refusal.
 pub(crate) fn cc_exemption_over(
     aura_types: &[u32],
     scan: &mut dyn FnMut(u32) -> CcExemption,
 ) -> CcExemption {
-    aura_types
-        .iter()
-        .map(|&ty| scan(ty))
-        .reduce(|a, b| if a.mechanic != 0 || a.exempt { a } else { b })
-        .unwrap_or_default()
+    let mut mechanic = 0;
+    for &aura_type in aura_types {
+        let one = scan(aura_type);
+        if one.exempt {
+            return CcExemption {
+                exempt: true,
+                mechanic,
+            };
+        }
+        if one.mechanic != 0 {
+            mechanic = one.mechanic;
+        }
+    }
+    CcExemption {
+        exempt: false,
+        mechanic,
+    }
 }
 
 /// `SPELL_FAILED_PREVENTED_BY_MECHANIC`, "Can't do that while %s" with the blocking aura's
