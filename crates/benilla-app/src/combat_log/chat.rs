@@ -60,6 +60,21 @@ impl ChatCtx<'_> {
         )
     }
 
+    /// Whether the client holds `guid` as a unit, the `0x468460` lookup with type mask 8.
+    fn holds_unit(&self, guid: u64, stores: &impl Stores) -> bool {
+        use benilla_protocol::messages::ObjectType;
+        self.index
+            .0
+            .get(&guid)
+            .and_then(|&e| stores.store(e))
+            .is_some_and(|s| {
+                matches!(
+                    s.0.object_type(),
+                    Some(ObjectType::Unit | ObjectType::Player)
+                )
+            })
+    }
+
     /// One endpoint's half of the display-range gate, [`combat::in_range`].
     fn in_range(&self, guid: u64, class: UnitClass, poses: &impl Poses) -> bool {
         combat::in_range(
@@ -404,12 +419,13 @@ pub(super) fn enchantment_log(
     );
 }
 
-/// `SMSG_SPELLLOGEXECUTE`: the lines a cast's effects produce, one formatter per effect id via
-/// the reference's jump table `0x5e8074`.
+/// `SMSG_SPELLLOGEXECUTE` (`0x5e7f90`): the lines a cast's effects produce, one formatter per
+/// effect id through the index table `0x5e845c` and the jump table `0x5e8430`. An effect with no
+/// arm of its own takes the cast line [`spell_cast_line`] once per row, with no target
+/// (`0x5e83e3`); so does a packet whose one group is a row-less effect 3 (`0x5e8004`-`0x5e8034`).
 ///
 /// Not built: effects 33 and 59 `OPEN_LOCK` (its `%s` is a gameobject name, and there is no
-/// gameobject-name cache), and the `SIMPLECAST*`/`SIMPLEPERFORM*`/`SPELLTERSE_*` fallback, whose
-/// bail reads `AttributesEx4` and `Spell.dbc` column 10, not parsed into `SpellDisplay`.
+/// gameobject-name cache).
 pub(super) fn spell_log_execute(
     s: &SpellLogExecute,
     ctx: &ChatCtx,
@@ -427,6 +443,22 @@ pub(super) fn spell_log_execute(
         spell: spell.clone(),
         ..Default::default()
     };
+    let cast_line = |log: &mut ChatLog, target: Option<u64>| {
+        spell_cast_line(
+            log,
+            ctx,
+            stores,
+            poses,
+            s.spell_id,
+            (s.caster, caster),
+            target,
+        );
+    };
+    if let [(EFFECT_DUMMY, rows)] = s.effects.as_slice() {
+        if rows.is_empty() {
+            return cast_line(log, None);
+        }
+    }
     for (_effect, rows) in &s.effects {
         for row in rows {
             match *row {
@@ -582,16 +614,137 @@ pub(super) fn spell_log_execute(
                         combat::Named::Unit(target),
                     );
                 }
-                // Heals and energizes are worded from their own packets; the rest of the guid-only
-                // tail is the unbuilt SIMPLECAST fallback.
-                E::Heal { .. } | E::Energize { .. } | E::Target { .. } => {}
+                // Effect 1 INSTAKILL: the cast line on its target, unless the caster killed
+                // itself (`0x5e81a2`-`0x5e81b1`).
+                E::Target { target } if *_effect == EFFECT_INSTAKILL => {
+                    if target != s.caster {
+                        cast_line(log, Some(target));
+                    }
+                }
+                E::Target { target } if cast_names_target(*_effect) => {
+                    cast_line(log, Some(target));
+                }
+                // Effects 33 and 59 OPEN_LOCK (`0x5e82b2`), not built.
+                E::Target { .. }
+                    if matches!(*_effect, EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM) => {}
+                // The default arm, which reads nothing of the row: heals and energizes, which are
+                // worded from their own packets, the summons and the rest.
+                E::Heal { .. } | E::Energize { .. } | E::Target { .. } => cast_line(log, None),
             }
         }
     }
 }
 
-/// vmangos `SpellEffects::SPELL_EFFECT_DISMISS_PET`.
+/// vmangos `SpellEffects` ids (`SpellDefines.h`) for the arms keyed on them.
+const EFFECT_INSTAKILL: u32 = 1;
+const EFFECT_DUMMY: u32 = 3;
+const EFFECT_OPEN_LOCK: u32 = 33;
+const EFFECT_LEARN_SPELL: u32 = 36;
+const EFFECT_OPEN_LOCK_ITEM: u32 = 59;
 const EFFECT_DISMISS_PET: u32 = 102;
+
+/// The effects whose rows go to the cast line with their target, arm 2 of the index table
+/// `0x5e845c` (`0x5e81d8`): resurrect, dispel, threat, distract, sanctuary, threat-all, dispel
+/// mechanic, resurrect-new, attack-me, skin-player-corpse, modify-threat-percent and 126.
+fn cast_names_target(effect: u32) -> bool {
+    matches!(
+        effect,
+        18 | 38 | 63 | 69 | 79 | 91 | 108 | 113 | 114 | 116 | 125 | 126
+    )
+}
+
+/// `SPELL_ATTR_IS_ABILITY` (vmangos `SpellDefines.h:796`): the cast line says "performs" (`0x62aff0`).
+const ATTR_IS_ABILITY: u32 = 0x10;
+
+/// `AttributesEx4` bit 0, which keeps a spell out of the cast line (`0x62ad2d`).
+const ATTR_EX4_NO_CAST_LOG: u32 = 0x1;
+
+/// `0x62ace0`, the cast line: "Priest casts Cleanse on you.", or with no target "You cast
+/// Vanish.". After the spell gates it skips a spell with a learn-spell effect (`0x62ad70`),
+/// `AttributesEx4 & 1` (`0x62ad2d`) or an open-lock effect (`0x62ad90`).
+///
+/// With a target, `0x62adc0`: the two-sided range gate, `SIMPLECAST` or for an ability
+/// `SIMPLEPERFORM`, typed by the spell's damage or buff matrix (`0x627d30`), worded `SPELL_CAST`
+/// with the spell's name when the target is you (`0x62aef7`). With none, `0x62b000`: only a caster
+/// the client holds as a unit, within its own class's range (`0x62b030`-`0x62b0c3`), `SPELLTERSE`
+/// or `SPELLTERSEPERFORM` keyed on the caster, typed by the matrix on the caster against itself
+/// (`0x62b190`), and worded when the caster is you (`0x62b12f`).
+fn spell_cast_line(
+    log: &mut ChatLog,
+    ctx: &ChatCtx,
+    stores: &impl Stores,
+    poses: &impl Poses,
+    spell_id: u32,
+    caster: (u64, UnitClass),
+    target: Option<u64>,
+) {
+    let Some(display) = combat::logged_spell(ctx.spells, spell_id) else {
+        return;
+    };
+    let has_effect = |ids: &[u32]| display.effects.iter().any(|e| ids.contains(e));
+    if has_effect(&[EFFECT_LEARN_SPELL])
+        || display.attributes_ex4 & ATTR_EX4_NO_CAST_LOG != 0
+        || has_effect(&[EFFECT_OPEN_LOCK, EFFECT_OPEN_LOCK_ITEM])
+    {
+        return;
+    }
+    let ability = display.attributes & ATTR_IS_ABILITY != 0;
+    let buff = !ctx.spell_harmful(spell_id);
+    let fills = Fills {
+        spell: display.name.clone(),
+        ..Default::default()
+    };
+    let word = LineWord::with("SPELL_CAST", &display.name);
+    // A zero guid is no target (`0x62ad3e`).
+    match target.filter(|&g| g != 0) {
+        Some(target) => {
+            let target = (target, ctx.classify(target, stores));
+            let Some(kind) = combat::spell_kind(caster.1, target.1, buff) else {
+                return;
+            };
+            let family = if ability {
+                combat::SIMPLEPERFORM
+            } else {
+                combat::SIMPLECAST
+            };
+            queue_worded(
+                log,
+                ctx,
+                poses,
+                kind,
+                family,
+                caster,
+                target,
+                fills,
+                to_me(target.1, word),
+            );
+        }
+        None => {
+            if !ctx.holds_unit(caster.0, stores) {
+                return;
+            }
+            let Some(kind) = combat::spell_kind(caster.1, caster.1, buff) else {
+                return;
+            };
+            let family = if ability {
+                combat::SPELLTERSEPERFORM
+            } else {
+                combat::SPELLTERSE
+            };
+            queue_worded(
+                log,
+                ctx,
+                poses,
+                kind,
+                family,
+                caster,
+                caster,
+                fills,
+                to_me(caster.1, word),
+            );
+        }
+    }
+}
 
 /// `SMSG_ENVIRONMENTALDAMAGELOG`: "You fall and lose %d health." and its five siblings.
 /// `0x62aac0` builds the key from a six-entry damage-type table and SELF/OTHER, and calls the

@@ -103,8 +103,8 @@ mod emitters {
     use std::collections::HashMap;
 
     use benilla_protocol::messages::{
-        AttackerState, PeriodicAuraLog, PeriodicTick, SpellDamageLog, SpellEnergizeLog,
-        SpellHealLog, SpellLogMiss,
+        AttackerState, ExecuteLog, PeriodicAuraLog, PeriodicTick, SpellDamageLog, SpellEnergizeLog,
+        SpellHealLog, SpellLogExecute, SpellLogMiss,
     };
     use bevy::prelude::*;
 
@@ -124,7 +124,16 @@ mod emitters {
     /// A 45 s one.
     const LONG_HOT: u32 = 8936;
 
-    /// Fireball with no duration row, and the two heals with theirs.
+    /// A spell with no effect that matters, cast by a lone `SMSG_SPELLLOGEXECUTE` row.
+    const CLEANSE: u32 = 4987;
+    /// An ability (`Attributes & 0x10`).
+    const VANISH: u32 = 1856;
+    /// Three the cast line skips: a learn-spell effect, `AttributesEx4 & 1`, an open-lock effect.
+    const LEARN: u32 = 483;
+    const UNLOGGED: u32 = 20_000;
+    const PICK_LOCK: u32 = 1804;
+
+    /// Fireball with no duration row, the two heals with theirs, and the casts.
     fn spells() -> crate::ui_action::Spells {
         use benilla_formats::{SpellDisplay, SpellDuration};
         let display = |id, name: &str, duration_index| {
@@ -134,6 +143,19 @@ mod emitters {
                     id,
                     name: name.into(),
                     duration_index,
+                    ..Default::default()
+                },
+            )
+        };
+        let cast = |id, name: &str, attributes, attributes_ex4, effect| {
+            (
+                id,
+                SpellDisplay {
+                    id,
+                    name: name.into(),
+                    attributes,
+                    attributes_ex4,
+                    effects: [effect, 0, 0],
                     ..Default::default()
                 },
             )
@@ -149,6 +171,11 @@ mod emitters {
                     display(FIREBALL, "Fireball", 0),
                     display(RENEW, "Renew", 7),
                     display(LONG_HOT, "Regrowth", 8),
+                    cast(CLEANSE, "Cleanse", 0, 0, 38),
+                    cast(VANISH, "Vanish", 0x10, 0, 3),
+                    cast(LEARN, "Learning", 0, 0, 36),
+                    cast(UNLOGGED, "Unlogged", 0, 1, 38),
+                    cast(PICK_LOCK, "Pick Lock", 0, 0, 33),
                 ]
                 .into_iter()
                 .collect(),
@@ -493,5 +520,113 @@ mod emitters {
         let ends: Vec<_> = lines.iter().map(|l| (l.subject, l.object)).collect();
         assert_eq!(ends, [(ME, MOB), (ME, ME), (ME, MOB)]);
         assert_eq!(words(&lines), [None, named("SPELL_RESISTED"), None]);
+    }
+
+    fn execute(
+        spell_id: u32,
+        caster: u64,
+        effects: Vec<(u32, Vec<ExecuteLog>)>,
+    ) -> Vec<PendingCombat> {
+        let s = SpellLogExecute {
+            caster,
+            spell_id,
+            effects,
+        };
+        Bench::new().lines(|ctx, st, po, log| super::super::spell_log_execute(&s, ctx, st, po, log))
+    }
+
+    fn row(target: u64) -> ExecuteLog {
+        ExecuteLog::Target { target }
+    }
+
+    /// `0x62ace0` words a cast with a target as `SIMPLECAST`, raising `SPELL_CAST` with the
+    /// spell's name when the target is you (`0x62aef7`), and an ability's as `SIMPLEPERFORM`.
+    #[test]
+    fn a_targeted_cast_line_words_you_as_its_target() {
+        let on_me = execute(CLEANSE, MOB, vec![(38, vec![row(ME)])]);
+        assert_eq!(stems(&on_me), ["SIMPLECAST"]);
+        assert_eq!(
+            words(&on_me),
+            [Some(LineWord::with("SPELL_CAST", "Cleanse"))]
+        );
+        let mine = execute(CLEANSE, ME, vec![(38, vec![row(MOB)])]);
+        assert_eq!(stems(&mine), ["SIMPLECAST"]);
+        assert_eq!(words(&mine), [None]);
+        let ability = execute(VANISH, ME, vec![(38, vec![row(MOB)])]);
+        assert_eq!(stems(&ability), ["SIMPLEPERFORM"]);
+    }
+
+    /// An effect with no arm takes the cast line once per row with no target (`0x5e83e3`): the
+    /// terse line on its caster, worded when that is you (`0x62b12f`); so does a lone row-less
+    /// effect 3 (`0x5e8004`), and nothing else row-less.
+    #[test]
+    fn an_effect_with_no_arm_takes_the_terse_cast_line_per_row() {
+        let summon = execute(VANISH, ME, vec![(28, vec![row(MOB), row(MOB)])]);
+        assert_eq!(stems(&summon), ["SPELLTERSEPERFORM", "SPELLTERSEPERFORM"]);
+        assert_eq!(
+            words(&summon),
+            [
+                Some(LineWord::with("SPELL_CAST", "Vanish")),
+                Some(LineWord::with("SPELL_CAST", "Vanish"))
+            ]
+        );
+        let theirs = execute(CLEANSE, MOB, vec![(28, vec![row(ME)])]);
+        assert_eq!(stems(&theirs), ["SPELLTERSE"]);
+        assert_eq!(words(&theirs), [None]);
+        assert_eq!(
+            stems(&execute(VANISH, ME, vec![(3, vec![])])),
+            ["SPELLTERSEPERFORM"]
+        );
+        assert!(execute(VANISH, ME, vec![(3, vec![]), (3, vec![])]).is_empty());
+        assert!(execute(VANISH, ME, vec![(28, vec![])]).is_empty());
+    }
+
+    /// The cast line skips a spell with a learn-spell effect, `AttributesEx4 & 1` or an open-lock
+    /// effect (`0x62ad24`-`0x62ad3c`).
+    #[test]
+    fn the_cast_line_skips_learning_unlogged_and_lock_spells() {
+        for spell in [LEARN, UNLOGGED, PICK_LOCK] {
+            assert!(
+                execute(spell, MOB, vec![(38, vec![row(ME)])]).is_empty(),
+                "{spell}"
+            );
+        }
+    }
+
+    /// An instakill row on its own caster writes nothing (`0x5e81a2`-`0x5e81b1`).
+    #[test]
+    fn a_self_inflicted_instakill_writes_no_cast_line() {
+        assert!(execute(CLEANSE, MOB, vec![(1, vec![row(MOB)])]).is_empty());
+        assert_eq!(
+            stems(&execute(CLEANSE, MOB, vec![(1, vec![row(ME)])])),
+            ["SIMPLECAST"]
+        );
+    }
+
+    /// The terse line needs a caster the client holds as a unit (`0x62b030`-`0x62b039`): your
+    /// own trap, a game object, classifies as yours and still writes none.
+    #[test]
+    fn a_terse_cast_line_needs_a_unit_caster() {
+        const TRAP: u64 = 7;
+        let mut bench = Bench::new();
+        let e = bench.world.spawn_empty().id();
+        bench.index.0.insert(TRAP, e);
+        bench.stores.insert(
+            e,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x21),
+                (6, ME as u32),
+                (7, (ME >> 32) as u32),
+            ])),
+        );
+        let s = SpellLogExecute {
+            caster: TRAP,
+            spell_id: CLEANSE,
+            effects: vec![(28, vec![row(ME)])],
+        };
+        let lines =
+            bench.lines(|ctx, st, po, log| super::super::spell_log_execute(&s, ctx, st, po, log));
+        assert!(lines.is_empty());
+        assert!(execute(CLEANSE, 99, vec![(28, vec![row(ME)])]).is_empty());
     }
 }

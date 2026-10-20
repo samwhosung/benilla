@@ -417,6 +417,36 @@ family!(
     [Attacker, Victim, Spell],
     "`\"%s interrupts %s's %s.\"` (:3863) — convention C. No `…SELFSELF`."
 );
+family!(
+    SIMPLECAST,
+    "SIMPLECAST",
+    [Attacker, Spell, Victim],
+    "`\"%s casts %s on %s.\"` (:3466) — `0x62adc0`'s line for a cast with a target."
+);
+family!(
+    SIMPLEPERFORM,
+    "SIMPLEPERFORM",
+    [Attacker, Spell, Victim],
+    "`\"%s performs %s on %s.\"` (:3470) — [`SIMPLECAST`] for an ability, `Attributes & 0x10`."
+);
+duo!(
+    SPELLTERSE,
+    "SPELLTERSE",
+    "_SELF",
+    "_OTHER",
+    [Attacker, Spell],
+    "`\"You cast %s.\"` (:3926) / `\"%s casts %s.\"` (:3925) — `0x62b000`'s line for a cast with \
+     no target, keyed on the caster."
+);
+duo!(
+    SPELLTERSEPERFORM,
+    "SPELLTERSEPERFORM",
+    "_SELF",
+    "_OTHER",
+    [Attacker, Spell],
+    "`\"You perform %s.\"` (:3924) / `\"%s performs %s.\"` (:3923) — [`SPELLTERSE`] for an \
+     ability."
+);
 duo!(
     INSTAKILL,
     "INSTAKILL",
@@ -654,6 +684,10 @@ pub(crate) const ALL_FAMILIES: &[Family] = &[
     IMMUNESPELL,
     DISPELFAILED,
     SPELLINTERRUPT,
+    SIMPLECAST,
+    SIMPLEPERFORM,
+    SPELLTERSE,
+    SPELLTERSEPERFORM,
     INSTAKILL,
     SPELLSPLITDAMAGE,
     SPELLPOWERDRAIN,
