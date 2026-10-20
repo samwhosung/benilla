@@ -93,8 +93,18 @@ impl Plugin for VmPassPlugin {
 }
 
 /// Every schedule but `Update` that holds a system able to queue a unit edit (a host's own, a
-/// sweep's) flushes the queue after them, so the edits apply at that schedule's end, as the
-/// commands its systems queue do.
+/// sweep's) flushes the queue after them and after each of its exclusive systems, so the edits
+/// apply at that schedule's end, as the commands its systems queue do. An exclusive system
+/// applies what it makes as it goes ([`crate::script_calls::with_hosted_vm`],
+/// [`crate::script_calls::run_cached`]), and the flush follows it in case it left any.
+///
+/// The queue applies in the order it was pushed, and every edit is our own player's, so two of
+/// its users must run in a declared order wherever both can push. In these schedules none run
+/// unordered: the world-leave sweep chains its legs in the reference's call order; `PreUpdate`
+/// declares its VM edges (the memory watch, the reload, the glue's, the entry load) in one
+/// order; and in `Last` and `OnExit(InWorld)` the one system that fires the shutdown's events
+/// is exclusive, beside users that fire none (the chat save reads the VM; the session's ends
+/// push state into it, and the chat's end clears the stock windows).
 fn flush_unit_edits_elsewhere(world: &mut World) {
     let Some(edits) = world
         .components()
@@ -112,23 +122,25 @@ fn flush_unit_edits_elsewhere(world: &mut World) {
         world.schedule_scope(label, |world, schedule| {
             schedule.graph_mut().systems.initialize(world);
             let graph = schedule.graph();
-            let users: Vec<InternedSystemSet> = graph
+            let (exclusive, users): (Vec<_>, Vec<_>) = graph
                 .systems
                 .iter()
                 .filter(|(key, system, _)| {
                     graph.systems.get(*key).is_some_and(|s| {
-                        !system.is_exclusive()
-                            && s.access.combined_access().has_resource_read(edits)
+                        system.is_exclusive() || s.access.combined_access().has_resource_read(edits)
                     })
                 })
-                .filter_map(|(_, system, _)| system.default_system_sets().into_iter().next())
-                .collect();
+                .filter_map(|(_, system, _)| {
+                    let set: InternedSystemSet = system.default_system_sets().into_iter().next()?;
+                    Some((system.is_exclusive(), set))
+                })
+                .partition(|(exclusive, _)| *exclusive);
             if users.is_empty() {
                 return;
             }
             // The queue is written at once, so the flush waits on no command of theirs.
             let mut flush = crate::creature_anim::flush_unit_edits.into_configs();
-            for set in users {
+            for (_, set) in users.into_iter().chain(exclusive) {
                 flush = flush.after_ignore_deferred(set);
             }
             schedule.add_systems(flush);
@@ -767,9 +779,17 @@ mod tests {
 
     /// A unit edit applies where it is made: every system that can queue one runs ahead of a
     /// flush in its own schedule, `Update`'s at the pass's end. An exclusive system applies its
-    /// own ([`crate::creature_anim::apply_unit_edits`]).
+    /// own ([`crate::creature_anim::apply_unit_edits`]); outside `Update` the flush follows it as
+    /// well, so a one-shot it ran that left an edit does not carry it into the next frame.
     #[test]
     fn every_unit_edit_is_flushed_in_the_schedule_that_makes_it() {
+        use bevy::ecs::schedule::ScheduleLabel as _;
+        #[derive(PartialEq)]
+        enum Kind {
+            User,
+            Flush,
+            Exclusive,
+        }
         let mut app = headless_client_with(crate::dev::add_every_instrument);
         let edits = app
             .world()
@@ -786,49 +806,63 @@ mod tests {
         let flush = System::type_id(&IntoSystem::into_system(
             crate::creature_anim::flush_unit_edits,
         ));
-        let mut users = 0;
+        let (mut users, mut exclusives) = (0, 0);
         let mut late = Vec::new();
         for label in labels {
-            let queues: Vec<(SystemKey, String, bool)> =
+            let in_update = label == Update.intern();
+            let queues: Vec<(SystemKey, String, Kind)> =
                 app.world_mut().schedule_scope(label, |world, schedule| {
                     schedule.graph_mut().systems.initialize(world);
                     let graph = schedule.graph();
                     graph
                         .systems
                         .iter()
-                        .filter(|(key, system, _)| {
-                            let access = &graph.systems.get(*key).expect("initialized").access;
-                            !system.is_exclusive()
-                                && access.combined_access().has_resource_read(edits)
-                        })
-                        .map(|(key, system, _)| {
-                            let is_flush = System::type_id(&**system) == flush;
-                            (key, system.name().to_string(), is_flush)
+                        .filter_map(|(key, system, _)| {
+                            let access = &graph.systems.get(key).expect("initialized").access;
+                            let kind = if system.is_exclusive() {
+                                Kind::Exclusive
+                            } else if System::type_id(&**system) == flush {
+                                Kind::Flush
+                            } else if access.combined_access().has_resource_read(edits) {
+                                Kind::User
+                            } else {
+                                return None;
+                            };
+                            Some((key, system.name().to_string(), kind))
                         })
                         .collect()
                 });
-            if queues.is_empty() {
+            if !queues.iter().any(|(_, _, kind)| *kind == Kind::User) {
                 continue;
             }
             let schedule = census(&mut app, label, SyncPoints::Declared);
             let next = successors(&schedule);
             let flushes: Vec<SystemKey> = queues
                 .iter()
-                .filter(|(_, _, is_flush)| *is_flush)
+                .filter(|(_, _, kind)| *kind == Kind::Flush)
                 .map(|(key, _, _)| *key)
                 .collect();
-            for (key, name, _) in &queues {
-                users += 1;
-                if !flushes.contains(key) && !flushes.iter().any(|f| after(&next, *key).contains(f))
-                {
+            for (key, name, kind) in &queues {
+                match kind {
+                    Kind::Flush => continue,
+                    Kind::Exclusive if in_update => continue,
+                    Kind::Exclusive => exclusives += 1,
+                    Kind::User => users += 1,
+                }
+                if !flushes.iter().any(|f| after(&next, *key).contains(f)) {
                     late.push(format!("{label:?}: {name}"));
                 }
             }
         }
         assert!(users > 20, "the census finds the queue's users: {users}");
         assert!(
+            exclusives > 10,
+            "and the exclusive systems beside them: {exclusives}"
+        );
+        assert!(
             late.is_empty(),
-            "systems that queue unit edits after their schedule's flush, or where none runs:\n  {}",
+            "systems that can queue unit edits after their schedule's flush, or where none \
+             runs:\n  {}",
             late.join("\n  ")
         );
     }
