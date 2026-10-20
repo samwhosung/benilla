@@ -29,6 +29,7 @@ use super::{item_watch, object_create, object_move, CreateBlock, Landing, Scene}
 use crate::field_watch::{Notified, Sent};
 use crate::query_cache::Ask;
 use crate::transport::TransportRider;
+use crate::ui_chat::combat::watch::XpAwarded;
 use benilla_world::vis_chain::VisChainOnly;
 
 /// Registers the update packet's block handlers, its end, and `SMSG_DESTROY_OBJECT`.
@@ -130,6 +131,9 @@ enum Body {
         speeds: Option<MoveSpeeds>,
         modes: Option<UnitMoveModes>,
         rider: Option<TransportRider>,
+        /// Bit 3 of the unit's `+0xc58`, which only the constructor clears (`0x5fae7a`): the
+        /// object a block brings back is the one that left.
+        xp_awarded: bool,
     },
     /// An item or a container, with its countdown cells.
     Item {
@@ -269,9 +273,14 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             }),
         ) => {
             let moved = write_fields(&mut store, fields.clone());
-            let (pose, modes) = match body {
-                Body::World { pose, modes, .. } => (Some(pose), modes),
-                Body::Item { .. } => (None, None),
+            let (pose, modes, xp_awarded) = match body {
+                Body::World {
+                    pose,
+                    modes,
+                    xp_awarded,
+                    ..
+                } => (Some(pose), modes, xp_awarded),
+                Body::Item { .. } => (None, None, false),
             };
             // Only a unit takes the block's movement (`0x46638c`); any other type keeps its pose.
             let unit = matches!(kind, EntityKind::Unit | EntityKind::Player);
@@ -279,6 +288,9 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             let e = object_create(&mut sc, block, &fields, Landing::New { store, kept_pose });
             if let Some(modes) = modes {
                 sc.commands.entity(e).insert(modes);
+            }
+            if xp_awarded {
+                sc.commands.entity(e).insert(XpAwarded);
             }
             sc.pass.reactivated.push(guid);
             moved
@@ -627,6 +639,7 @@ fn release(sc: &mut Scene, guid: u64) {
                         local_pos: r.local_pos,
                         local_orientation: r.local_orientation,
                     }),
+                    xp_awarded: sc.xp_awarded.contains(e),
                 }
             };
             Some(Kept { fields, body })
