@@ -112,7 +112,8 @@ const RTT_RING: usize = 15;
 /// [`Self::avg_latency_ms`].
 #[derive(Default)]
 pub(crate) struct PingClock {
-    /// Sequence of the latest ping sent, counting from 1 per connection.
+    /// Sequence of the latest ping sent, counting from 1 for the process: `+0x1a68` is zeroed only
+    /// when the one `NetClient` is built (`0x53745e`), never per link.
     pub(crate) sequence: u32,
     /// When that ping went out.
     pub(crate) sent_at: Option<Instant>,
@@ -155,10 +156,12 @@ impl PingClock {
         Some((sum / self.rtt_ring.len() as u64) as u32)
     }
 
-    /// Forgets this connection's round trips. The traffic stays: the reference resets its counts
-    /// only when a link connects (`0x537b90`), where the next one replaces it.
+    /// Forgets this connection's round trips. The ping sequence goes on, as nothing resets
+    /// `+0x1a68`; the traffic stays, as the reference resets its counts only when a link connects
+    /// (`0x537b90`), where the next one replaces it.
     pub(crate) fn clear(&mut self) {
         *self = Self {
+            sequence: self.sequence,
             traffic: self.traffic.take(),
             ..Self::default()
         };
@@ -1116,7 +1119,7 @@ fn apply_swap(
         } => {
             *writer = Some(w);
             *warned = 0;
-            // Sequence 1 is the new socket's first ping, so an old socket's pong cannot match.
+            // With no send stamp an old socket's pong cannot match; the sequence goes on.
             if fresh_link {
                 ping_clock.lock_recover().clear();
             }
@@ -1161,7 +1164,9 @@ pub(super) fn writer_loop(
                     ping_tick = crossbeam_channel::after(PING_INTERVAL);
                     let (sequence, last_rtt) = {
                         let mut c = ping_clock.lock_recover();
-                        c.sequence += 1;
+                        // Incremented before the send, so a failed one counts too, as `0x537e69`
+                        // comes before the state test at `0x537e74`; a dword that wraps.
+                        c.sequence = c.sequence.wrapping_add(1);
                         c.sent_at = Some(Instant::now());
                         // `lastRtt` is the latest sample, not the mean (`ring[write-1]`, at
                         // `0x537e87`). Deviation: the reference's guard at `0x537e85` sends 0
