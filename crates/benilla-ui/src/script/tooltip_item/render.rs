@@ -126,11 +126,14 @@ pub(super) fn render_view_flagged(
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let knows = |id: u32| model.spellbook.slots.iter().any(|s| s.spell_id == id);
         let known = v.required_spell != 0 && knows(v.required_spell);
-        // A taught spell (trigger 6, learn) the player knows: the always-red ITEM_SPELL_KNOWN.
-        let taught = v
-            .spell_triggers
-            .iter()
-            .any(|&(t, id, _)| t == 6 && id != 0 && knows(id));
+        // The first slot's taught spell, or a higher rank of it, known to the player, or to the
+        // pet for a pet-target teach (`0x52d54f`..`0x52d5bb`): the always-red ITEM_SPELL_KNOWN.
+        let taught = v.teaches.as_ref().is_some_and(|t| {
+            t.ranks.iter().any(|id| match t.pet {
+                true => model.pet_book.slots.iter().any(|s| s.spell_id == *id),
+                false => model.known_spells.contains(id),
+            })
+        });
         // The set view and the equipped ids the set block counts. A miss records the ask, and a
         // member still unnamed skips its line (`0x52df5a`); either waits for its answer.
         let set_view = (v.item_set != 0)
@@ -606,6 +609,10 @@ pub(super) fn render_view_flagged(
             keyed("ITEM_REQ_SKILL", &[Arg::S(skill)], color, false)?;
         }
     }
+    // The known-recipe line sits between the skill and the required spell (`0x52d4fd`..`0x52d5de`).
+    if taught_known {
+        keyed("ITEM_SPELL_KNOWN", &[], RED, false)?;
+    }
     if v.required_spell != 0 {
         if let Some(name) = &v.required_spell_name {
             keyed(
@@ -627,9 +634,6 @@ pub(super) fn render_view_flagged(
             rep.clone(),
             req_color(u32::from(rank) >= v.required_rep_rank),
         ))?;
-    }
-    if taught_known {
-        keyed("ITEM_SPELL_KNOWN", &[], RED, false)?;
     }
     // Green, wrapped trigger lines: triggers 0 to 2 join their prefix key and the app-resolved
     // text by the literal `"%s %s"` (`0x82ef08`, `0x52da37`..`0x52dae2`), a missing key reading as

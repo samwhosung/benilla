@@ -133,18 +133,16 @@ fn verified_families_signable_locked_resists_known() {
             start_quest: 42,
             lock_id: 7,
             resistances: [5, 5, 5, 5, 5, 5],
-            spell_triggers: vec![(6, 2020, "Recipe: Stew".into())],
+            spell_triggers: vec![(6, 2019, "Recipe: Stew".into())],
+            teaches: Some(TaughtSpell {
+                ranks: vec![2020],
+                pet: false,
+            }),
             description: "Sign here.".into(),
             ..Default::default()
         },
     );
-    s.set_spellbook(SpellBookState {
-        tabs: Vec::new(),
-        slots: vec![SpellSlotView {
-            spell_id: 2020,
-            ..Default::default()
-        }],
-    });
+    s.set_known_spells(std::collections::HashSet::from([2020]));
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot5"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
