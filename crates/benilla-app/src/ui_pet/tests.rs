@@ -933,6 +933,7 @@ fn a_held_pet_names_its_templates_creature_type() {
             pet_family: 0,
             rank: 0,
             type_flags: 0,
+            pet_spell_list: 0,
             civilian: false,
             racial_leader: false,
             display_id: 0,

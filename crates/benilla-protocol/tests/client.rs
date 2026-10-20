@@ -574,7 +574,8 @@ fn name_and_creature_query_roundtrip() {
         "01000000",               // type = 1 (Beast)
         "01000000",               // pet_family = 1 (Wolf)
         "02000000",               // rank = 2 (rare elite)
-        "0000000000000000",       // unk, pet_spell_list_id
+        "00000000",               // unk
+        "a4160000",               // pet_spell_list_id = 5796, Claw
         "15020000",               // display_id = 533, the model a stabled pet is drawn from
         "0101"                    // civilian, racial_leader
     ));
@@ -590,6 +591,7 @@ fn name_and_creature_query_roundtrip() {
                     pet_family: 1,
                     rank: 2,
                     type_flags: 0x10,
+                    pet_spell_list: 5796,
                     civilian: true,
                     racial_leader: true,
                     display_id: 533,

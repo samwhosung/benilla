@@ -445,6 +445,8 @@ pub enum SessionEvent {
         rank: u32,
         /// Bit `0x10` hides the tooltip's faction-name line.
         type_flags: u32,
+        /// `CreatureSpellData.dbc` id of a tamed one's abilities, `0` for none.
+        pet_spell_list: u32,
         /// `CreatureDisplayInfo.dbc` id, to draw a creature with no world object (a stabled pet).
         display_id: u32,
         /// The tooltip's green CIVILIAN line.

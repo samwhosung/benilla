@@ -49,6 +49,9 @@ pub struct CreatureQueryInfo {
     pub rank: u32,
     /// Bit `0x10` (HIDE_FACTION_TOOLTIP) drops the tooltip's faction line (`0x612610`).
     pub type_flags: u32,
+    /// `CreatureSpellData.dbc` id of the abilities a tamed one brings, `0` for none: the
+    /// studied-creature block's ability line (`0x529d56`).
+    pub pet_spell_list: u32,
     /// The tooltip's green CIVILIAN line and the dishonorable-kill mark.
     pub civilian: bool,
     /// The tooltip's white LEADER line (`0x6125c0`).

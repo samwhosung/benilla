@@ -1241,7 +1241,7 @@ fn parse_server_body(
                 let pet_family = read_u32_le(&mut r)?;
                 let rank = read_u32_le(&mut r)?;
                 let _unk = read_u32_le(&mut r)?;
-                let _pet_spell_list = read_u32_le(&mut r)?;
+                let pet_spell_list = read_u32_le(&mut r)?;
                 let display_id = read_u32_le(&mut r)?;
                 let civilian = read_u8(&mut r)? != 0;
                 let racial_leader = read_u8(&mut r)? != 0;
@@ -1254,6 +1254,7 @@ fn parse_server_body(
                         pet_family,
                         rank,
                         type_flags,
+                        pet_spell_list,
                         display_id,
                         civilian,
                         racial_leader,

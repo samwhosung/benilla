@@ -298,6 +298,7 @@ mod tests {
                 pet_family,
                 rank: 0,
                 type_flags: 0,
+                pet_spell_list: 0,
                 civilian: false,
                 racial_leader: false,
                 display_id: 0,
