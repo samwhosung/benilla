@@ -15,7 +15,9 @@
 //!
 //! Deviation: on Windows, NVIDIA's Vulkan driver (610.88 seen) crashes inside `vkQueuePresentKHR`
 //! on the first present after any swapchain resize while the present mode is `Fifo`, `FifoRelaxed`
-//! or `AutoVsync` (a maximize is a resize). `Mailbox`, `AutoNoVsync` and DX12 survive, so there
+//! or `AutoVsync` (a maximize is a resize). The fault is in the driver's own DXGI present
+//! (`d3d11.dll`): it stays with `VK_LAYER_NV_present` disabled, and the validation layer reports
+//! nothing before it. `Mailbox`, `AutoNoVsync` and DX12 survive, so there
 //! "vsync on" is `AutoNoVsync` paced to the monitor's refresh rate ([`present_choice`]), which
 //! keeps the synced look without the crash. `$WOW_PRESENT=fifo` restores plain `Fifo`.
 
