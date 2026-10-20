@@ -331,7 +331,9 @@ impl Plugin for TargetPlugin {
                     // the press frame already reads both modes cleared.
                     (
                         crate::spell::targeting::cancel_targeting_on_right_press,
-                        crate::ui_merchant::end_repair_mode_on_right_press,
+                        // Its cast context reads the player's outdoors answer: this frame's.
+                        crate::ui_merchant::end_repair_mode_on_right_press
+                            .after(benilla_world::wmo_portal::WmoPvsSet),
                     ),
                     // Overwrites the classifier's verdict while the targeting cursor is up, as the
                     // reference's dispatcher runs this branch before the object classifier.
@@ -339,7 +341,8 @@ impl Plugin for TargetPlugin {
                     // Reads that verdict: `WorldCursor.unable` is the frame's range state, as the
                     // reference's one `CheckGroundPointInRange` caller feeds both.
                     reticle::update_reticle,
-                    click::world_right_click_payload,
+                    // Its cast context reads the player's outdoors answer: this frame's.
+                    click::world_right_click_payload.after(benilla_world::wmo_portal::WmoPvsSet),
                     // A plate click replayed as a click, then the select that reads it.
                     (click::select_on_plate_click, click::select_on_click).chain(),
                     // After the gated select, which must read the targeting mode before a commit
