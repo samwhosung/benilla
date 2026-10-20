@@ -122,7 +122,7 @@ pub(super) fn render_view_flagged(
     inst: Option<&ItemInstance>,
 ) -> mlua::Result<bool> {
     let mut live = false;
-    let (req, known_spell, taught_known, set_view, equipped) = {
+    let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let knows = |id: u32| model.spellbook.slots.iter().any(|s| s.spell_id == id);
         let known = v.required_spell != 0 && knows(v.required_spell);
@@ -133,6 +133,14 @@ pub(super) fn render_view_flagged(
                 true => model.pet_book.slots.iter().any(|s| s.spell_id == *id),
                 false => model.known_spells.contains(id),
             })
+        });
+        // The required rank's title for the player's side and gender (`0x5efe60` on the active
+        // player): `PVP_RANK_<rank>_<side>`, its `_FEMALE` twin first (`0x612bf0`).
+        let rank_title = (v.required_honor_rank != 0).then(|| {
+            let (side, female) = model
+                .unit("player")
+                .map_or((0, false), |u| (u.pvp_team, u.sex == 3));
+            (format!("PVP_RANK_{}_{side}", v.required_honor_rank), female)
         });
         // The set view and the equipped ids the set block counts. A miss records the ask, and a
         // member still unnamed skips its line (`0x52df5a`); either waits for its answer.
@@ -161,7 +169,14 @@ pub(super) fn render_view_flagged(
             .flatten()
             .map(|s| s.item_id)
             .collect();
-        (model.player_req.clone(), known, taught, set_view, equipped)
+        (
+            model.player_req.clone(),
+            known,
+            taught,
+            set_view,
+            equipped,
+            rank_title,
+        )
     };
     let add = |l: (String, [f32; 4])| append_line(lua, this, l, None, false);
     let addw = |l: (String, [f32; 4])| append_line(lua, this, l, None, true);
@@ -622,6 +637,23 @@ pub(super) fn render_view_flagged(
                 false,
             )?;
         }
+    }
+    // The honor rank and the medal reuse ITEM_REQ_SKILL (`0x52d694`..`0x52d796`): the rank white
+    // at or above the requirement (`fields+0x102b`), the medal white when bit `n - 1` of
+    // `PLAYER_FIELD_PVP_MEDALS` is set (`fields+0x1034`). A missing name key reads as "".
+    if let Some((key, female)) = &rank_title {
+        let gendered = female
+            .then(|| get(&format!("{key}_FEMALE")))
+            .flatten()
+            .filter(|t| !t.is_empty());
+        let title = gendered.or_else(|| get(key)).unwrap_or_default();
+        let ok = u32::from(req.honor_rank) >= v.required_honor_rank;
+        keyed("ITEM_REQ_SKILL", &[Arg::S(&title)], req_color(ok), false)?;
+    }
+    if v.required_city_rank != 0 {
+        let medal = get(&format!("PVP_MEDAL{}", v.required_city_rank)).unwrap_or_default();
+        let ok = req.pvp_medals & crate::script::item_stats::medal_bit(v.required_city_rank) != 0;
+        keyed("ITEM_REQ_SKILL", &[Arg::S(&medal)], req_color(ok), false)?;
     }
     if let Some(rep) = &v.required_rep_line {
         // Red (`0xc0d390`) below the required rank (`[+0x58]`); an unfed faction reads as unmet.

@@ -74,9 +74,11 @@ pub struct ItemTemplateView {
     pub required_skill_name: Option<String>,
     pub required_spell: u32,
     pub required_spell_name: Option<String>,
-    /// No tooltip line in 1.12; only the usable gate (`0x5ea930`) reads it.
+    /// The required honor rank (`+0x4c`): an `ITEM_REQ_SKILL` line naming the rank (`0x52d694`)
+    /// and a leg of the usable gate (`0x5ea930`).
     pub required_honor_rank: u32,
-    /// Usable gate only; nonzero always fails, as the `PVP_MEDALS` bits it tests are never set.
+    /// The required medal (`+0x50`), `PVP_MEDAL<n>`: an `ITEM_REQ_SKILL` line (`0x52d6ff`) and a
+    /// leg of the usable gate, both testing bit `n - 1` of `PLAYER_FIELD_PVP_MEDALS`.
     pub required_city_rank: u32,
     /// "Requires <Faction> - <Standing>", app-resolved; the raw faction and rank drive its red.
     pub required_rep_line: Option<String>,
@@ -196,10 +198,10 @@ pub fn item_usable(
 /// `0x5ea930`'s refusal, as the key of the error line its caller shows (`0x5d8e0e`, `0x5d926d`),
 /// its legs in the reference's order: the proficiency leg is `ERR_PROFICIENCY_NEEDED` (`0x7`,
 /// `0x5ea9b3`), every other failure `ERR_CANT_USE_ITEM` (`0x9c`, `0x5eaace`). Proficiency tests the
-/// item's own subclass bit, with no alternate walk. A nonzero city rank always fails: it tests
-/// `PLAYER_FIELD_PVP_MEDALS`, which is never written. Reputation compares ranks, equivalent to the
-/// reference's standing threshold (`0x4d6370`, table `0x80928c`); an unknown faction is rank 0. An
-/// unpushed state (level 0) declines to judge, answering usable.
+/// item's own subclass bit, with no alternate walk. A required medal tests its bit of
+/// `PLAYER_FIELD_PVP_MEDALS` (`0x5eaa89`..`0x5eaaa0`). Reputation compares ranks, equivalent to
+/// the reference's standing threshold (`0x4d6370`, table `0x80928c`); an unknown faction is rank
+/// 0. An unpushed state (level 0) declines to judge, answering usable.
 pub fn item_refusal(
     v: &ItemTemplateView,
     req: &PlayerReqState,
@@ -239,7 +241,7 @@ pub fn item_refusal(
     if v.required_honor_rank != 0 && u32::from(req.honor_rank) < v.required_honor_rank {
         return CANT_USE;
     }
-    if v.required_city_rank != 0 {
+    if v.required_city_rank != 0 && req.pvp_medals & medal_bit(v.required_city_rank) == 0 {
         return CANT_USE;
     }
     if v.required_rep_faction != 0 {
@@ -253,6 +255,12 @@ pub fn item_refusal(
         }
     }
     None
+}
+
+/// Medal `n`'s bit of `PLAYER_FIELD_PVP_MEDALS`: `1 << (n - 1)` by `shl`, whose count is taken
+/// mod 32 (`0x52d70a`..`0x52d712`, `0x5eaa9e`).
+pub(in crate::script) fn medal_bit(medal: u32) -> u32 {
+    1u32.wrapping_shl(medal.wrapping_sub(1))
 }
 
 /// An item set's tooltip block (`0x854b1c`), app-resolved from `ItemSet.dbc`: member names from
