@@ -1254,6 +1254,86 @@ mod tests {
         assert!(s.eval::<bool>("return IsRaidLeader() == nil").unwrap());
     }
 
+    /// `IsRaidLeader` (`0x4bb8c0`) and `IsPartyLeader` (`0x4e9130`) compare the leader cell with
+    /// the player's own guid and read no subgroup slot. A raid leader in another subgroup holds
+    /// none of our slots (`GetPartyLeaderIndex` is `0x84c150 + 1`, so 0) and leads nobody here;
+    /// one alone in their subgroup has no slots at all and still leads.
+    #[test]
+    fn the_leader_tests_compare_guids_whatever_slots_the_subgroup_holds() {
+        let mut s = UiScript::new().unwrap();
+        s.set_party(PartyState {
+            leader_index: 0,
+            leader_guid: 0xFA2,
+            ..two_member_party()
+        });
+        assert!(s.eval::<bool>("return IsRaidLeader() == nil").unwrap());
+        assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
+        assert_eq!(s.eval::<i64>("return GetPartyLeaderIndex()").unwrap(), 0);
+
+        s.set_party(PartyState {
+            leader_guid: 0x5E1F,
+            own_guid: 0x5E1F,
+            ..PartyState::default()
+        });
+        assert_eq!(s.eval::<i64>("return IsRaidLeader()").unwrap(), 1);
+        assert_eq!(s.eval::<i64>("return IsPartyLeader()").unwrap(), 1);
+    }
+
+    /// Only `IsPartyLeader` guards a zero leader cell (`0x4e9141 or ecx,eax; je`); `IsRaidLeader`
+    /// compares the two words bare (`0x4bb8d6`-`0x4bb8dc`), so with no active player and no group,
+    /// both zero (`0x468550`), it answers 1. A player in the world, grouped or not, matches only
+    /// a cell that holds their guid.
+    #[test]
+    fn only_is_party_leader_guards_a_zero_leader_cell() {
+        let mut s = UiScript::new().unwrap();
+        assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
+        assert_eq!(s.eval::<i64>("return IsRaidLeader()").unwrap(), 1);
+
+        s.set_party(PartyState {
+            own_guid: 0x5E1F,
+            ..PartyState::default()
+        });
+        assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
+        assert!(s.eval::<bool>("return IsRaidLeader() == nil").unwrap());
+    }
+
+    /// `SetRaidSubgroup` (`0x4bb990`) truncates its second argument and takes one off
+    /// (`0x4bb9f1`-`0x4bb9fd`); unless that is below 8 (`0x4bb9fe`) it raises its usage line
+    /// (`0x8474e8`), ahead of any row lookup, so outside a raid too. A non-number raises the same
+    /// text (`0x4bbae2`).
+    #[test]
+    fn set_raid_subgroup_raises_its_usage_line_outside_one_to_eight() {
+        const USAGE: &str = "Usage: SetRaidSubgroup(index, subgroup)";
+        let mut s = UiScript::new().unwrap();
+        for call in [
+            "SetRaidSubgroup(3, 0)",
+            "SetRaidSubgroup(3, 9)",
+            "SetRaidSubgroup(3, -1)",
+            "SetRaidSubgroup(3, 0.9)",
+            "SetRaidSubgroup(3, 9.5)",
+            "SetRaidSubgroup(0, 9)",
+            "SetRaidSubgroup(3, 'x')",
+            "SetRaidSubgroup(3)",
+            "SetRaidSubgroup('x', 3)",
+        ] {
+            let e = s.run(call).unwrap_err().to_string();
+            assert!(e.contains(USAGE), "{call}: {e}");
+        }
+        assert!(s.take_party_requests().is_empty());
+        assert!(!s.eval::<bool>("return pcall(SetRaidSubgroup, 3, 9)").unwrap());
+
+        // 8.9 truncates to 8, and a numeric string is a number.
+        s.run("SetRaidSubgroup(3, 8.9) SetRaidSubgroup(4, '5')")
+            .unwrap();
+        assert_eq!(
+            s.take_party_requests(),
+            vec![
+                PartyRequest::SetSubgroup { index: 3, group: 8 },
+                PartyRequest::SetSubgroup { index: 4, group: 5 },
+            ]
+        );
+    }
+
     #[test]
     fn get_num_raid_members_bounds_the_roster_it_indexes() {
         let mut s = UiScript::new().unwrap();

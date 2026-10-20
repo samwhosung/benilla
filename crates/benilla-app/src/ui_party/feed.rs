@@ -2539,4 +2539,168 @@ mod tests {
         ));
         assert_eq!(group.members.len(), n - 1);
     }
+
+    /// Hold our own player: the feed reads our guid off the `SelfPlayer` entity, and the object
+    /// manager finds a player object by its type word (`0x468460`, mask `0x10`).
+    fn seat_self(app: &mut App) -> Entity {
+        let e = app
+            .world_mut()
+            .spawn((Guid(ME), player_object(), SelfPlayer))
+            .id();
+        app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, e);
+        e
+    }
+
+    /// `OBJECT_FIELD_TYPE` of a player: object, unit and player bits.
+    const PLAYER_TYPE: [(u16, u32); 1] = [(2, 0x19)];
+
+    fn player_object() -> ObjectStore {
+        ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(
+            &PLAYER_TYPE,
+        ))
+    }
+
+    fn listed(n: u64, subgroup: u8) -> GroupMemberEntry {
+        GroupMemberEntry {
+            name: format!("M{n}"),
+            guid: member(n),
+            status: member_status::ONLINE,
+            flags: subgroup,
+        }
+    }
+
+    /// `IsRaidLeader` (`0x4bb8c0`) and `IsPartyLeader` (`0x4e9130`) compare the leader cell with our
+    /// guid, whichever subgroup either of us sits in: a leader in another subgroup holds none of our
+    /// party slots and leads nobody here, and one alone in a subgroup of their own, with no slot
+    /// held at all, leads.
+    #[test]
+    fn the_leader_tests_follow_the_guid_through_a_raid_whatever_the_subgroups() {
+        let mut app = app();
+        seat_self(&mut app);
+        let raid = |app: &mut App, members: Vec<GroupMemberEntry>, leader: u64| {
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                GROUPTYPE_RAID,
+                0,
+                members,
+                leader,
+                None,
+                Some(ME),
+            );
+            frame(app);
+        };
+
+        // We sit in subgroup 0 with M2; M1 leads from subgroup 1.
+        raid(&mut app, vec![listed(1, 1), listed(2, 0)], member(1));
+        assert_eq!(flag(&mut app, "GetPartyMember(1)"), Some(1.0), "M2 is ours");
+        assert_eq!(flag(&mut app, "IsRaidLeader()"), None);
+        assert_eq!(flag(&mut app, "IsPartyLeader()"), None);
+        assert_eq!(flag(&mut app, "GetPartyLeaderIndex()"), Some(0.0));
+
+        // We lead, alone in subgroup 0.
+        raid(&mut app, vec![listed(1, 1), listed(2, 1)], ME);
+        assert_eq!(
+            flag(&mut app, "GetPartyMember(1)"),
+            None,
+            "nobody else is ours"
+        );
+        assert_eq!(flag(&mut app, "IsRaidLeader()"), Some(1.0));
+        assert_eq!(flag(&mut app, "IsPartyLeader()"), Some(1.0));
+    }
+
+    /// The drain over a group the feed has pushed, and the commands it sends.
+    fn drain_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let mut app = app();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.init_resource::<Selection>();
+        app.add_systems(Update, drain_party.after(feed_party));
+        (app, rx)
+    }
+
+    /// The kicks among the commands sent, `name:<name>` or `guid:<guid>`, in order.
+    fn kicks(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<String> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::GroupUninvite { name } => Some(format!("name:{name}")),
+                ClientCommand::GroupUninviteGuid { guid } => Some(format!("guid:{guid:#x}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cache_names(app: &mut App, who: &[(u64, &str)]) {
+        let mut names = app.world_mut().resource_mut::<NameCache>();
+        for (guid, name) in who {
+            names.insert_player(*guid, (*name).into(), None);
+        }
+    }
+
+    /// `UninviteFromParty` (`0x48a510`) and `UninviteFromRaid` (`0x48a580`) share one sender
+    /// (`0x5e9510`): it asks the object manager for the guid's player object (`0x5e951f`, mask
+    /// `0x10`), sends `CMSG_GROUP_UNINVITE` with the unit's name when it is held (`0x5e95a7`-
+    /// `0x5e95d0`) and `CMSG_GROUP_UNINVITE_GUID` with the guid when it is not (`0x5e953e`).
+    #[test]
+    fn a_party_kick_goes_by_name_for_a_held_member_and_by_guid_for_the_rest() {
+        let (mut app, rx) = drain_app();
+        party(&mut app, 2, true);
+        cache_names(&mut app, &[(member(1), "M1"), (member(2), "M2")]);
+        stream(&mut app, member(2), &PLAYER_TYPE);
+        frame(&mut app);
+        let _ = kicks(&rx);
+
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(r#"UninviteFromParty("party1") UninviteFromParty("party2")"#)
+            .unwrap();
+        frame(&mut app);
+        assert_eq!(kicks(&rx), ["guid:0x1001", "name:M2"]);
+    }
+
+    /// The raid row's kick takes the same sender: a row out of range goes by guid, one held by
+    /// name, our own row too (our object is held).
+    #[test]
+    fn a_raid_kick_goes_by_name_for_a_held_row_and_by_guid_for_the_rest() {
+        let (mut app, rx) = drain_app();
+        seat_self(&mut app);
+        cache_names(
+            &mut app,
+            &[(ME, "Me"), (member(1), "M1"), (member(2), "M2")],
+        );
+        stream(&mut app, member(2), &PLAYER_TYPE);
+        app.world_mut().resource_mut::<GroupState>().apply_list(
+            GROUPTYPE_RAID,
+            0,
+            vec![listed(1, 0), listed(2, 1)],
+            ME,
+            None,
+            Some(ME),
+        );
+        frame(&mut app);
+        let _ = kicks(&rx);
+
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run("UninviteFromRaid(1) UninviteFromRaid(2) UninviteFromRaid(3)")
+            .unwrap();
+        frame(&mut app);
+        assert_eq!(kicks(&rx), ["guid:0x1001", "name:M2", "name:Me"]);
+    }
+
+    /// A held member's name is `GetUnitName`'s (`0x609210`, from `0x5e95aa`): the cache's, else the
+    /// text of `UNKNOWNOBJECT` (`0x609324`-`0x60932e`).
+    #[test]
+    fn a_held_member_the_cache_has_no_name_for_is_kicked_as_unknown_object() {
+        let (mut app, rx) = drain_app();
+        party(&mut app, 1, true);
+        stream(&mut app, member(1), &PLAYER_TYPE);
+        let script = app.world_mut().non_send_resource::<UiScript>();
+        script.run(r#"UNKNOWNOBJECT = "Unknown Entity""#).unwrap();
+        frame(&mut app);
+        let _ = kicks(&rx);
+
+        let script = app.world_mut().non_send_resource::<UiScript>();
+        script.run(r#"UninviteFromParty("party1")"#).unwrap();
+        frame(&mut app);
+        assert_eq!(kicks(&rx), ["name:Unknown Entity"]);
+    }
 }

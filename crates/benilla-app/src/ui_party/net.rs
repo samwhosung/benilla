@@ -1299,4 +1299,67 @@ mod tests {
             [signal(28)]
         );
     }
+
+    /// The loot setter's lines are read where the reference reads them, as the packet lands: the
+    /// new master's name from the player cache, which a miss leaves unasked (`0x4e878f`), and the
+    /// threshold's word from the VM's `ITEM_QUALITY<n>_DESC` (`0x4e87c9`, `0x703bf0`).
+    #[test]
+    fn a_group_list_prints_the_loot_lines_with_the_names_the_cache_and_the_vm_hold() {
+        use super::super::pets::tests::{app_with, ME};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let script = benilla_ui::script::UiScript::new().unwrap();
+        script.run("ITEM_QUALITY3_DESC = 'Rare'").unwrap();
+        let mut app = app_with(script);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.init_resource::<UiErrorKeys>()
+            .init_resource::<MessageSounds>()
+            .init_resource::<QuestGiver>()
+            .insert_resource(SelfGuid(Some(ME)));
+        let aldwyn = 0x1001;
+        let brisca = 0x1002;
+        // Listed nowhere: a lookup with a callback would ask for it.
+        let stranger = 0x1003;
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(aldwyn, "Aldwyn".into(), None);
+        let mut send = |master: u64, loot_method: u8| {
+            app.world_mut()
+                .run_system_once_with(
+                    on_list,
+                    SessionEvent::GroupList {
+                        group_type: 0,
+                        own_flags: 0,
+                        members: vec![member(aldwyn, "Aldwyn"), member(brisca, "Brisca")],
+                        leader: aldwyn,
+                        loot: Some(GroupLootInfo {
+                            method: loot_method,
+                            master,
+                            threshold: 3,
+                        }),
+                    },
+                )
+                .expect("the group-list handler");
+            std::mem::take(&mut app.world_mut().resource_mut::<UiErrorKeys>().0)
+        };
+        assert_eq!(
+            send(aldwyn, 2),
+            [
+                UiError::key("ERR_SET_LOOT_MASTER"),
+                UiError::s("ERR_NEW_LOOT_MASTER_S", "Aldwyn"),
+                UiError::s("ERR_SET_LOOT_THRESHOLD_S", "Rare"),
+            ]
+        );
+        assert_eq!(send(aldwyn, 2), [], "nothing moved");
+        let _ = crate::query_cache::queries(&rx);
+
+        // A master the cache does not hold is no line, and no query from this lookup.
+        let lines = send(stranger, 2);
+        assert_eq!(lines, []);
+        assert!(
+            crate::query_cache::queries(&rx).is_empty(),
+            "the loot lookup carries no callback, so it asks nothing"
+        );
+    }
 }
