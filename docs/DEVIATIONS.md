@@ -32,7 +32,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-app](#benilla-app): 237
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
-- [benilla-formats](#benilla-formats): 19
+- [benilla-formats](#benilla-formats): 22
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 25
 - [benilla-srp](#benilla-srp): 2
@@ -559,11 +559,14 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### spells
 
-- Every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`, `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l` keys on the number before them, and Blizzard's "$s1 … every $t1 $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. ([`src/spells/tokens.rs:651`](../crates/benilla-formats/src/spells/tokens.rs#L651))
+- Every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`, `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l` keys on the number before them, and Blizzard's "$s1 … every $t1 $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. ([`src/spells/tokens.rs:671`](../crates/benilla-formats/src/spells/tokens.rs#L671))
 
 #### tga
 
 - Grayscale types 3 and 11 decode where the reference refuses them, because no shipped or addon file is one and removing working code would buy nothing. ([`src/tga.rs:6`](../crates/benilla-formats/src/tga.rs#L6))
+- Colour maps of 15, 16 and 32 bits decode at the entry width the file declares, where the reference has no defined result to copy for 15 and 16 bits and only a garble for 32. ([`src/tga.rs:9`](../crates/benilla-formats/src/tga.rs#L9))
+- A colour-mapped image whose descriptor has alpha bits decodes as its picture, where the reference has no defined result to copy. `0x5a3820` sizes each pixel as 24 plus the alpha bits (`0x5a382b`-`0x5a383d`, stored at `0x5a3973`) but copies 3-byte entries (`0x5a38f3`), then `0x5a3b80` moves `(bpp + 7) >> 3` bytes a pixel (`0x5a3c00`-`0x5a3c13`): each pixel after the first takes its bytes from its neighbours, and the last read heap that was never written. ([`src/tga.rs:16`](../crates/benilla-formats/src/tga.rs#L16))
+- A truecolour image whose depth less its alpha bits is 24, but whose depth is not 24 or 32, is refused where the reference crashes. ([`src/tga.rs:22`](../crates/benilla-formats/src/tga.rs#L22))
 ### benilla-lua
 
 #### api
