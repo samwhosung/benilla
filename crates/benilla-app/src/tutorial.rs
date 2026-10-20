@@ -785,6 +785,37 @@ mod tests {
         assert!(enabled(&mut app), "a moved bank reaches the live VM");
     }
 
+    /// The flag tutorials are field watchers' (`crate::field_watch`), which a first create skips:
+    /// the self descriptor's poll raises none, whatever its flags became since it last looked.
+    #[test]
+    fn the_self_poll_raises_no_flag_tutorial() {
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        let mut app = App::new();
+        app.init_resource::<Player>()
+            .init_resource::<WorldEnterCascade>()
+            .add_message::<TutorialEvent>()
+            .add_systems(Update, watch_self);
+        let store = |pairs: &[(u16, u32)]| {
+            ObjectStore(ObjectFields::from_pairs(pairs).into_created(ObjectType::Player))
+        };
+        let me = app.world_mut().spawn((SelfPlayer, store(&[(34, 10)]))).id();
+        app.update();
+        app.world_mut().entity_mut(me).insert(store(&[
+            (34, 10),
+            (190, 0x30),
+            (46, 0x1000),
+            (194, 1 << 24),
+        ]));
+        app.update();
+        let asked: Vec<TutorialEvent> = app
+            .world_mut()
+            .resource_mut::<Messages<TutorialEvent>>()
+            .drain()
+            .collect();
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+
     /// The login's own tutorials wait for an interface, on the real plugin's registration:
     /// The engine's ask, a passing turn-in test's Quest Completion (`0x4df792`), goes through the
     /// fire-once bank to `TUTORIAL_TRIGGER(34)`.

@@ -172,3 +172,431 @@ fn a_recreate_re_poses_units_only() {
     );
     assert_eq!(at(world, GO), first, "a GameObject stays where it stands");
 }
+
+// ── One packet's passes and the released table ──────────────────────────────────────────────────
+
+const MATE: u64 = 0x0000_0000_0000_2001;
+const XP: u16 = 716;
+const STAT0: u16 = 150;
+const ENTRY: u16 = 3;
+
+/// A create block whose fields are the type's whole descriptor, as the wire's are.
+fn created(guid: u64, kind: EntityKind, position: [f32; 3], pairs: &[(u16, u32)]) -> SessionEvent {
+    use benilla_protocol::messages::ObjectType;
+    let as_type = match kind {
+        EntityKind::Player => ObjectType::Player,
+        EntityKind::GameObject => ObjectType::GameObject,
+        _ => ObjectType::Unit,
+    };
+    let SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id,
+        position,
+        orientation,
+        scale,
+        speeds,
+        mover,
+        transport_progress,
+        transport,
+        spline,
+        ..
+    } = create(guid, kind, position)
+    else {
+        unreachable!()
+    };
+    SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id,
+        position,
+        orientation,
+        scale,
+        speeds,
+        mover,
+        transport_progress,
+        transport,
+        spline,
+        fields: ObjectFields::from_pairs(pairs).into_created(as_type),
+    }
+}
+
+fn player(guid: u64, pairs: &[(u16, u32)]) -> SessionEvent {
+    created(guid, EntityKind::Player, [0.0; 3], pairs)
+}
+
+fn unit(guid: u64, pairs: &[(u16, u32)]) -> SessionEvent {
+    created(guid, EntityKind::Unit, [1.0, 2.0, 3.0], pairs)
+}
+
+fn values(guid: u64, pairs: &[(u16, u32)]) -> SessionEvent {
+    SessionEvent::ObjectValues {
+        guid,
+        fields: ObjectFields::from_pairs(pairs),
+    }
+}
+
+fn out_of_range(guids: &[u64]) -> SessionEvent {
+    SessionEvent::ObjectsRemoved(guids.to_vec())
+}
+
+fn send(world: &mut World, blocks: impl IntoIterator<Item = SessionEvent>) {
+    super::super::handlers::dispatch(world, super::packet(blocks));
+}
+
+fn notices(world: &mut World) -> Vec<crate::field_watch::FieldNotice> {
+    world
+        .resource_mut::<Messages<crate::field_watch::FieldNotice>>()
+        .drain()
+        .collect()
+}
+
+/// The field edges written, as `(guid, index, old, new)`.
+fn edges(world: &mut World) -> Vec<(u64, u16, u32, u32)> {
+    world
+        .resource_mut::<Messages<FieldChanged>>()
+        .drain()
+        .map(|e| (e.guid, e.index, e.old, e.new))
+        .collect()
+}
+
+fn field(world: &World, guid: u64, index: u16) -> Option<u32> {
+    let e = *world.resource::<GuidIndex>().0.get(&guid)?;
+    world
+        .get::<ObjectStore>(e)?
+        .0
+        .raw_fields()
+        .find(|&(i, _)| i == index)
+        .map(|(_, v)| v)
+}
+
+fn held(world: &World, guid: u64) -> bool {
+    world.resource::<GuidIndex>().0.contains_key(&guid)
+}
+
+/// A packet's write pass runs over all its blocks before its notify pass (`0x4651a0`), and each
+/// values write re-copies every watched range of its object first (`0x46664b`-`0x4666b6`): an
+/// earlier block for the same object compares against the copy the last write left. A watch
+/// only the earlier block moved does not run; one both moved runs twice, its old value the last
+/// write's. Another object keeps its own copy.
+#[test]
+fn one_packets_blocks_for_one_object_notify_against_its_last_copy() {
+    use crate::field_watch::FieldNotice;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(
+        world,
+        [
+            player(ME, &[(STAT0, 20), (XP, 10)]),
+            unit(MOB, &[(STAT0, 5)]),
+        ],
+    );
+    notices(world);
+    edges(world);
+
+    send(
+        world,
+        [
+            values(ME, &[(XP, 30)]),
+            values(MOB, &[(STAT0, 6)]),
+            values(ME, &[(STAT0, 21)]),
+        ],
+    );
+    assert_eq!(
+        notices(world),
+        [
+            FieldNotice::Unit { guid: MOB, id: 144 },
+            FieldNotice::Unit { guid: ME, id: 144 },
+        ],
+        "the XP block compared against the copy the stat block's write took"
+    );
+    assert_eq!(edges(world), [(MOB, STAT0, 5, 6), (ME, STAT0, 20, 21)]);
+    assert_eq!(field(world, ME, XP), Some(30), "both blocks were written");
+
+    send(world, [values(ME, &[(XP, 40)]), values(ME, &[(XP, 50)])]);
+    assert_eq!(notices(world), [FieldNotice::Player { id: 189 }; 2]);
+    assert_eq!(edges(world), [(ME, XP, 40, 50); 2]);
+}
+
+/// A create for a held object writes every field, clearing those it leaves out (`0x466582`
+/// passes the clearing flag to `0x466590`), and notifies every field (`0x465d8a`, `dl = 1`): an
+/// omitted field reads 0 and its watch runs.
+#[test]
+fn a_re_create_clears_the_fields_it_omits_and_runs_their_watches() {
+    use crate::field_watch::FieldNotice;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [unit(MOB, &[(ENTRY, 299), (STAT0, 5)])]);
+    notices(world);
+    edges(world);
+    send(world, [unit(MOB, &[(ENTRY, 299)])]);
+    assert_eq!(field(world, MOB, STAT0), None, "cleared");
+    assert_eq!(notices(world), [FieldNotice::Unit { guid: MOB, id: 144 }]);
+    assert_eq!(edges(world), [(MOB, STAT0, 5, 0)]);
+}
+
+/// An out-of-range object is released (`0x464920`), not destroyed: it leaves the live table,
+/// fields and all. Its next create finds it (`0x46612d` → `0x464530`) and writes over the kept
+/// fields, and since it was shown before (`+0xe4` bit 4, set only by `0x613af0`) its notify runs
+/// every field's watch (`0x465d8e`) in place of the create hook (`0x5debe0`): no guild tag. The
+/// packet's end runs the reactivated player's `PostUpdate` (`0x5dec90`), which compares its
+/// party record (`0x5decb7`).
+#[test]
+fn a_released_player_comes_back_with_its_fields_and_no_create_hook() {
+    use crate::field_watch::FieldNotice;
+    use benilla_protocol::messages::PartyMemberStatsInfo;
+    const HEALTH: u16 = 22;
+    const MAXHEALTH: u16 = 28;
+    const LEVEL: u16 = 34;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    world
+        .resource_mut::<crate::ui_party::GroupState>()
+        .stats
+        .insert(
+            MATE,
+            PartyMemberStatsInfo {
+                status: Some(1),
+                cur_hp: Some(100),
+                max_hp: Some(100),
+                power_type: Some(0),
+                cur_power: Some(0),
+                max_power: Some(0),
+                level: Some(60),
+                auras: Some(Vec::new()),
+                auras_negative: Some(Vec::new()),
+                ..Default::default()
+            },
+        );
+    let mate = |stat: u32| {
+        player(
+            MATE,
+            &[(HEALTH, 100), (MAXHEALTH, 200), (LEVEL, 60), (STAT0, stat)],
+        )
+    };
+    let signal = |id| FieldNotice::Signal { guid: MATE, id };
+    send(world, [mate(5)]);
+    assert_eq!(
+        notices(world),
+        [FieldNotice::Global { id: 376 }, signal(345), signal(22)],
+        "control: a first create runs the hook"
+    );
+    edges(world);
+
+    send(world, [out_of_range(&[MATE])]);
+    assert!(!held(world, MATE), "released from the live table");
+
+    send(world, [mate(7)]);
+    assert!(held(world, MATE));
+    assert_eq!(
+        notices(world),
+        [
+            FieldNotice::Unit {
+                guid: MATE,
+                id: 144
+            },
+            signal(22)
+        ],
+        "the moved field's watch, then the packet end's party record; no guild tag"
+    );
+    assert_eq!(edges(world), [(MATE, STAT0, 5, 7)]);
+}
+
+/// A values block for a released guid brings the object back (`0x467160` → `0x464530`) with the
+/// fields it kept, and its watches run as for a live one; a movement block (`0x4670bf`) and a
+/// near-objects block (`0x4672c8`) bring one back the same way.
+#[test]
+fn a_values_movement_or_near_block_brings_a_released_object_back() {
+    use crate::field_watch::FieldNotice;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [unit(MOB, &[(ENTRY, 299), (STAT0, 5)])]);
+    notices(world);
+
+    send(world, [out_of_range(&[MOB])]);
+    send(world, [values(MOB, &[(STAT0, 6)])]);
+    assert!(held(world, MOB), "a values block");
+    assert_eq!(field(world, MOB, ENTRY), Some(299), "the kept fields");
+    assert_eq!(field(world, MOB, STAT0), Some(6));
+    assert_eq!(notices(world), [FieldNotice::Unit { guid: MOB, id: 144 }]);
+
+    send(world, [out_of_range(&[MOB])]);
+    send(world, [moved(MOB)]);
+    assert!(held(world, MOB), "a movement block");
+    assert_eq!(field(world, MOB, STAT0), Some(6));
+    let e = world.resource::<GuidIndex>().0[&MOB];
+    assert_eq!(
+        world.get::<Transform>(e).unwrap().translation,
+        wow_to_bevy([10.0, 20.0, 30.0])
+    );
+
+    send(world, [out_of_range(&[MOB])]);
+    send(world, [SessionEvent::ObjectsNear(vec![MOB])]);
+    assert!(held(world, MOB), "a near-objects block");
+    assert_eq!(field(world, MOB, ENTRY), Some(299));
+}
+
+/// A new object of a type first frees the oldest released one of that type (`0x466e55`, the
+/// head of the type's reuse list, which a release appends to at `0x464a83`): a create of the
+/// freed guid is a first create again, hook and all. Another type's create frees nothing.
+#[test]
+fn a_new_object_frees_the_oldest_released_one_of_its_type() {
+    use crate::field_watch::FieldNotice;
+    const P1: u64 = 0x2001;
+    const P2: u64 = 0x2002;
+    const P3: u64 = 0x2003;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    let tagged = |n: &[FieldNotice], guid: u64| {
+        n.contains(&FieldNotice::Signal {
+            guid,
+            id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
+        })
+    };
+    send(world, [player(P1, &[]), player(P2, &[])]);
+    send(world, [out_of_range(&[P1, P2])]);
+    send(world, [unit(MOB, &[(ENTRY, 299)])]);
+    notices(world);
+    send(world, [player(P3, &[])]);
+    notices(world);
+
+    send(world, [player(P1, &[])]);
+    assert!(tagged(&notices(world), P1), "freed: a first create");
+    send(world, [player(P2, &[])]);
+    assert!(!tagged(&notices(world), P2), "still released: no hook");
+}
+
+/// `SMSG_DESTROY_OBJECT` frees an object the out-of-range list released (`0x467521`), so its
+/// next create is a first one.
+#[test]
+fn a_destroy_frees_a_released_object() {
+    use crate::field_watch::FieldNotice;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [player(MATE, &[])]);
+    send(world, [out_of_range(&[MATE])]);
+    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(MATE)]);
+    notices(world);
+    send(world, [player(MATE, &[])]);
+    assert!(notices(world).contains(&FieldNotice::Global { id: 376 }));
+}
+
+/// An out-of-range list releases only as a packet's first block (`0x4651e1`); in any other place
+/// the notify pass skips it (`0x465fd0`) and nothing is released.
+#[test]
+fn an_out_of_range_list_releases_only_as_the_first_block() {
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [unit(MOB, &[(ENTRY, 299)])]);
+    send(world, [values(MOB, &[(STAT0, 1)]), out_of_range(&[MOB])]);
+    assert!(held(world, MOB), "a later block");
+    send(world, [out_of_range(&[MOB]), values(MOB, &[(STAT0, 2)])]);
+    assert!(
+        held(world, MOB),
+        "the first block released it, and the values block after it brought it back"
+    );
+    assert_eq!(field(world, MOB, STAT0), Some(2));
+    send(world, [out_of_range(&[MOB])]);
+    assert!(!held(world, MOB), "control: the first block");
+}
+
+/// A first create runs no watch (`0x465d80`), so the active player's flag tutorials wait for a
+/// change after it: a cross-map port creates the player afresh (`0x5dec7b`).
+#[test]
+fn a_first_create_raises_no_flag_tutorial() {
+    use crate::field_watch::FieldNotice;
+    const PLAYER_FLAGS: u16 = 190;
+    const BYTES_2: u16 = 194;
+    const UNIT_FLAGS: u16 = 46;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    let tutorial = |n: &[FieldNotice]| n.iter().any(|n| matches!(n, FieldNotice::Tutorial { .. }));
+    send(
+        world,
+        [player(
+            ME,
+            &[
+                (PLAYER_FLAGS, 0x30),
+                (UNIT_FLAGS, 0x1000),
+                (BYTES_2, 1 << 24),
+            ],
+        )],
+    );
+    assert!(!tutorial(&notices(world)), "the create runs the hook alone");
+    send(world, [values(ME, &[(PLAYER_FLAGS, 0x20)])]);
+    send(world, [values(ME, &[(PLAYER_FLAGS, 0x30)])]);
+    assert_eq!(
+        notices(world)
+            .into_iter()
+            .filter(|n| matches!(n, FieldNotice::Tutorial { .. }))
+            .collect::<Vec<_>>(),
+        [FieldNotice::Tutorial { id: 0x18 }],
+        "the ghost bit set again; the resting bit, already set, moved nothing"
+    );
+}
+
+/// `PLAYER_GUILD_TIMESTAMP`'s player watcher (`0x5e2890`) keeps each guild's last stamp: an
+/// unchanged one does nothing (`0x5e28fa`), a new one drops the guild's record (`0x561d20`) and
+/// asks it again with the callback `0x5e29c0`, whose answer refreshes the guild tag of every held
+/// player of that guild (`0x5e29e0`; `0x5e2a14`-`0x5e2a1d` → `0x5e08e0`).
+#[test]
+fn a_new_guild_timestamp_asks_the_guild_again_and_refreshes_its_members() {
+    const GUILDID: u16 = 191;
+    const STAMP: u16 = 197;
+    const P1: u64 = 0x2001;
+    const P2: u64 = 0x2002;
+    const P3: u64 = 0x2003;
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    let answer = || {
+        vec![SessionEvent::GuildQueryResponse(
+            benilla_protocol::messages::GuildQueryResponse {
+                guild_id: 5,
+                name: "Probe Guild".into(),
+                ..Default::default()
+            },
+        )]
+    };
+    super::super::handlers::dispatch(world, answer());
+    send(
+        world,
+        [
+            player(P1, &[(GUILDID, 5), (STAMP, 100)]),
+            player(P2, &[(GUILDID, 5), (STAMP, 100)]),
+            player(P3, &[(GUILDID, 6), (STAMP, 100)]),
+        ],
+    );
+    notices(world);
+    let guild_asks = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
+        crate::query_cache::queries(rx)
+            .into_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::GuildQuery { .. }))
+            .count()
+    };
+    guild_asks(&rx);
+
+    send(world, [values(P1, &[(STAMP, 101)])]);
+    assert_eq!(guild_asks(&rx), 1, "a new stamp asks again");
+    assert!(notices(world).is_empty(), "nothing until the answer");
+    send(world, [values(P2, &[(STAMP, 101)])]);
+    assert_eq!(guild_asks(&rx), 0, "the guild's stamp is already 101");
+
+    super::super::handlers::dispatch(world, answer());
+    let tag = |guid| crate::field_watch::guild_tag(guid);
+    assert_eq!(
+        notices(world),
+        [tag(P1), tag(P2)].concat(),
+        "every held member of the guild, none of another"
+    );
+}

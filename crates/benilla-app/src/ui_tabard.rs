@@ -413,6 +413,36 @@ mod tests {
         assert!(t.save_pending);
     }
 
+    /// `TABARD_CANSAVE_CHANGED` is `RefreshGuildTag`'s alone (`0x5e0902`), from its three callers:
+    /// a guild record landing, ours or another's, and the emblem save's drop of ours (`0x5e715f`)
+    /// signal nothing.
+    #[test]
+    fn a_landed_or_dropped_guild_record_signals_no_tabard_change() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm};
+        let mut app = App::new();
+        app.init_resource::<TabardOpen>()
+            .init_resource::<TabardDesign>()
+            .init_resource::<GuildState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_tabard)
+            .insert_non_send_resource(spied_vm(&["TABARD_CANSAVE_CHANGED"]));
+        app.update();
+        let mut guild = app.world_mut().resource_mut::<GuildState>();
+        guild.join_for_test(5);
+        guild.land_for_test(5, "Probe Guild");
+        app.update();
+        app.world_mut()
+            .resource_mut::<GuildState>()
+            .land_for_test(6, "Strangers");
+        app.update();
+        app.world_mut()
+            .resource_mut::<GuildState>()
+            .evict_own_identity();
+        app.update();
+        assert!(seen_in(&app).is_empty(), "{:?}", seen_in(&app));
+    }
+
     /// The core fires only with a vendor stored, twice while the designer holds the latch, and
     /// tells an open not yet fed first.
     #[test]

@@ -193,6 +193,22 @@ impl GuildState {
         });
     }
 
+    /// Lands `guild_id`'s record named `name`, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn land_for_test(&mut self, guild_id: u32, name: &str) {
+        self.apply_query_response(GuildQueryResponse {
+            guild_id,
+            name: name.to_string(),
+            ..Default::default()
+        });
+    }
+
+    /// Mirrors our descriptor's guild id, as the feed does, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn join_for_test(&mut self, guild_id: u32) {
+        self.mirror_self(guild_id, 0);
+    }
+
     /// Forgets the in-flight asks, as a world entry does, for a test elsewhere.
     #[cfg(test)]
     pub(crate) fn drop_pending_for_test(&mut self) {
@@ -1303,6 +1319,82 @@ mod tests {
             1,
             "the next change asks again"
         );
+    }
+
+    /// `GetGuildInfo` on a guild the cache lacks asks it with the unit's guid and the callback
+    /// `0x4c9470`, dedupe off (`0x4c93b6`-`0x4c93d2`), so each missed call keeps a waiter of its
+    /// own; the landing runs each, `PLAYER_GUILD_UPDATE` (0x159) for the guid through `0x515e50`
+    /// (`0x4c947c`-`0x4c9481`). A refusal runs them with status 0, which signals nothing
+    /// (`0x4c9476`).
+    #[test]
+    fn a_missed_get_guild_info_waits_for_the_record_and_signals_its_unit() {
+        use crate::field_watch::FieldNotice;
+        use benilla_protocol::SessionEvent;
+        use benilla_ui::script::{UiScript, UnitState};
+        const MATE: u64 = 0x2001;
+        let (commands, rx) = net_commands();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<GuildState>()
+            .add_message::<FieldNotice>()
+            .insert_resource(commands)
+            .add_systems(Update, feed::drain_guild);
+        net::register(&mut app);
+        let target = |guild_id: u32| UnitState {
+            exists: true,
+            has_object: true,
+            guid: MATE,
+            is_player: true,
+            guild_id,
+            ..Default::default()
+        };
+        let mut script = UiScript::new().unwrap();
+        script.set_unit("target", Some(target(5)));
+        app.insert_non_send_resource(script);
+        let call = |app: &mut App| {
+            let name = app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<Option<String>>("return (GetGuildInfo('target'))")
+                .unwrap();
+            assert_eq!(name, None, "the first answer of an uncached guild");
+        };
+        let drain = |app: &mut App| -> Vec<FieldNotice> {
+            app.world_mut()
+                .resource_mut::<Messages<FieldNotice>>()
+                .drain()
+                .collect()
+        };
+        let answer = |guild_id: u32, name: &str| {
+            vec![SessionEvent::GuildQueryResponse(GuildQueryResponse {
+                guild_id,
+                name: name.to_string(),
+                ..Default::default()
+            })]
+        };
+        call(&mut app);
+        call(&mut app);
+        app.update();
+        assert!(matches!(
+            crate::query_cache::queries(&rx).as_slice(),
+            [ClientCommand::GuildQuery { guild_id: 5 }]
+        ));
+        crate::net::handlers::dispatch(app.world_mut(), answer(5, "Probe Guild"));
+        let signal = FieldNotice::Signal {
+            guid: MATE,
+            id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
+        };
+        assert_eq!(drain(&mut app), [signal; 2], "one per call that missed");
+        crate::net::handlers::dispatch(app.world_mut(), answer(5, "Probe Guild"));
+        assert!(drain(&mut app).is_empty(), "the waiters are spent");
+
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_unit("target", Some(target(6)));
+        call(&mut app);
+        app.update();
+        crate::net::handlers::dispatch(app.world_mut(), answer(6, ""));
+        assert!(drain(&mut app).is_empty(), "a refusal signals nothing");
     }
 
     fn net_commands() -> (NetCommands, crossbeam_channel::Receiver<ClientCommand>) {

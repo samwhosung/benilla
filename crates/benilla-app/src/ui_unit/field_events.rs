@@ -464,6 +464,35 @@ mod tests {
         );
     }
 
+    /// A watcher's tutorial fires inside its run (`0x4b5390` with delay 0): the `TutorialPopup` cue
+    /// and `TUTORIAL_TRIGGER` with the number plus one, ahead of the next notice's event, once per
+    /// fire-once bit.
+    #[test]
+    fn a_watchers_tutorial_fires_in_its_place_once() {
+        let mut app = world(seated());
+        app.init_resource::<crate::tutorial::Tutorials>();
+        app.world_mut()
+            .resource_mut::<crate::tutorial::Tutorials>()
+            .apply_flags(&[0u8; 8]);
+        assert_eq!(
+            fired(
+                &mut app,
+                &[
+                    FieldNotice::Tutorial { id: 0x1d },
+                    FieldNotice::Global { id: 405 },
+                    FieldNotice::Tutorial { id: 0x1d },
+                ]
+            ),
+            ["TUTORIAL_TRIGGER 30", "PLAYER_UPDATE_RESTING nil"]
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::sound::MessageSounds>()
+                .queued_cues(),
+            ["TutorialPopup"]
+        );
+    }
+
     /// The two readers share one position: what the drop took, the firing never fires.
     #[test]
     fn a_dropped_notice_never_fires_later() {

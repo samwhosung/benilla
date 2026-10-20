@@ -1642,9 +1642,10 @@ mod tests {
         );
     }
 
-    /// A player's first create runs its guild tag (`0x5dec19`), a re-create does not; another
-    /// player's create, first or again, then compares its party record with its descriptor and
-    /// signals the difference, writing nothing back; our own create compares nothing.
+    /// A player's first create runs its `PostInit` (`0x5debe0`): its guild tag (`0x5dec19`), then,
+    /// for another player, its party record against its descriptor, the difference signalled and
+    /// nothing written back (`0x5dec5f`). A create of a live player is neither a first create nor
+    /// a reactivation, so it runs neither; our own create compares nothing.
     #[test]
     fn another_players_create_signals_its_record_against_its_descriptor() {
         use crate::field_watch::FieldNotice;
@@ -1701,9 +1702,12 @@ mod tests {
             [FieldNotice::Global { id: 376 }, signal(345), signal(22)],
             "the guild tag, then the maximum differs"
         );
-        // Written back nothing, so a re-create of the same descriptor signals the same again.
         super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
-        assert_eq!(drain(world), [signal(22)]);
+        assert_eq!(
+            drain(world),
+            [],
+            "a live re-create: no hook, no `PostUpdate`"
+        );
         assert_eq!(
             world.resource::<crate::ui_party::GroupState>().stats[&MATE],
             record

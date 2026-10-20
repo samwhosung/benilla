@@ -771,3 +771,22 @@ fn values_update_decodes_player_visible_item_entries() {
         "slot out of range (19 slots, 0..=18)"
     );
 }
+
+/// Every block reaches the app, an empty values block and a near-objects block included (the
+/// reference's handler acts on both: `0x46720f`, `0x467230`), and the packet's end closes them.
+#[test]
+fn an_update_packet_decodes_every_block_then_its_end() {
+    // Two blocks: values for 0xAA with no mask words, near objects [0x10].
+    let mut body = hx("0200000000");
+    body.extend_from_slice(&hx("0001aa00"));
+    body.extend_from_slice(&hx("05010000000110"));
+    let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
+    match decode(packet).as_slice() {
+        [SessionEvent::ObjectValues { guid: 0xAA, fields }, SessionEvent::ObjectsNear(near), SessionEvent::ObjectUpdateEnd] =>
+        {
+            assert!(fields.is_empty());
+            assert_eq!(near, &[0x10]);
+        }
+        other => panic!("{other:?}"),
+    }
+}

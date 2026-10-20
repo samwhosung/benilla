@@ -1185,6 +1185,63 @@ mod tests {
         );
     }
 
+    /// The flag tutorials are the active player's watchers' own calls: the ghost state's when the
+    /// ghost bit is now set (`0x5eeabc` → `0x5de9c0`, number 0x18); the rest tutorial when the
+    /// resting bit is now set (`0x5eeae6`-`0x5eeaed`, 0x1d), ahead of `PLAYER_UPDATE_RESTING`
+    /// (`0x5eeaf7`); the PvP tutorial when the PvP bit is now set, after its reaction (`0x5ff756`,
+    /// 0x1f); and the rest state's row for state 1 (`0x80af50`: 0x19) after its line (`0x5de542`).
+    /// A cleared bit, another unit and rest state 2 raise none.
+    #[test]
+    fn the_flag_tutorials_ride_their_watchers_for_the_active_player() {
+        let flags = pf(PLAYER_FLAGS.0);
+        let changed = signal(ME, 407);
+        let resting = FieldNotice::Global { id: 405 };
+        let tutorial = |id| FieldNotice::Tutorial { id };
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x20)]),
+            [changed, tutorial(0x1d), resting]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0)]),
+            [changed, resting]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x10)]),
+            [changed, tutorial(0x18)]
+        );
+        assert_eq!(block(&mut me, Some(ME), ME, &[(flags, 0)]), [changed]);
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(flags, 0x30)]),
+            [signal(OTHER, 407)]
+        );
+
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(46, 0x1000)]),
+            [signal(ME, 29), tutorial(0x1f), bridge(ME, 40)]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(46, 0)]),
+            [signal(ME, 29), bridge(ME, 40)]
+        );
+        let mut mob = unit();
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x1000)]),
+            [signal(MOB, 29), bridge(MOB, 40)]
+        );
+
+        let rest = pf(REST_STATE);
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(rest, 1 << 24)]),
+            [FieldNotice::RestState { old: 0, new: 1 }, tutorial(0x19)]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(rest, 2 << 24)]),
+            [FieldNotice::RestState { old: 1, new: 2 }]
+        );
+    }
+
     /// `PLAYER_GUILDID` runs the guild tag on any player (`0x5e2770`), `PLAYER_GUILDRANK` signals
     /// `PLAYER_GUILD_UPDATE` bare (`0x5e27b0`).
     #[test]
