@@ -102,7 +102,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### combat_text
 
-- The reference stretches a raster of at most 32 px; each whole-pixel size is rasterized here, so the crit pop stays crisp. ([`src/combat_text/mod.rs:244`](../crates/benilla-app/src/combat_text/mod.rs#L244))
+- The reference stretches a raster of at most 32 px; each whole-pixel size is rasterized here, so the crit pop stays crisp. ([`src/combat_text/mod.rs:264`](../crates/benilla-app/src/combat_text/mod.rs#L264))
 
 #### console
 
