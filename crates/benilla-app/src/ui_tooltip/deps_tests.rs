@@ -57,9 +57,41 @@ struct Inputs {
     lines: u128,
     /// The `SpellFamilyFlags` bits whose cells hold a modifier.
     bits: u64,
-    /// A run of at most 64 of the player's fields, `(first, count, skip)`, each set to [`POKE`],
-    /// whatever it holds, but those whose bit of `skip` (from `first`) is set.
-    poke: Option<(u16, u16, u64)>,
+    /// A run of the player's fields set to other values ([`Poke`]).
+    poke: Option<Poke>,
+}
+
+/// A run of at most 64 of the player's fields from `first`, each set to [`POKE`] whatever it
+/// holds, but those whose bit of `skip` is set. A field in `keep` flips instead every bit outside
+/// its mask and holds the scenario's value inside it, so a record of a byte or a bit of a field
+/// (the gender byte of 36, the form byte of 138, the disarm bit of 46) is judged at that byte or
+/// bit, its siblings moved.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+struct Poke {
+    first: u16,
+    count: u16,
+    skip: u64,
+    keep: [(u16, u32); 3],
+}
+
+impl Poke {
+    fn run(first: u16, count: u16) -> Self {
+        Self {
+            first,
+            count,
+            ..Self::default()
+        }
+    }
+
+    /// The poked fields, each with the mask it keeps (0 for none).
+    fn fields(self) -> impl Iterator<Item = (u16, u32)> {
+        (self.first..self.first + self.count)
+            .filter(move |f| self.skip >> (f - self.first) & 1 == 0)
+            .map(move |f| {
+                let kept = self.keep.iter().find(|&&(k, m)| k == f && m != 0);
+                (f, kept.map_or(0, |&(_, m)| m))
+            })
+    }
 }
 
 /// What a poked field is set to: 2.5 as a float, and a large number as an integer.
@@ -197,13 +229,21 @@ impl Inputs {
                 parts.push((format!("the player's {name}"), only));
             }
         }
-        if let Some((first, count, skip)) = self.poke {
-            for field in (first..first + count).filter(|f| skip >> (f - first) & 1 == 0) {
+        if let Some(poke) = self.poke {
+            for (field, mask) in poke.fields() {
                 let only = Inputs {
-                    poke: Some((field, 1, 0)),
+                    poke: Some(Poke {
+                        keep: [(field, mask), (0, 0), (0, 0)],
+                        ..Poke::run(field, 1)
+                    }),
                     ..alone
                 };
-                parts.push((format!("the player's field {field}"), only));
+                let bits = if mask == 0 {
+                    String::new()
+                } else {
+                    format!(" outside {mask:#010x}")
+                };
+                parts.push((format!("the player's field {field}{bits}"), only));
             }
         }
         for (i, line) in layout.lines.iter().enumerate() {
@@ -418,12 +458,20 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
         pairs.push((486 + 2 * s as u16, guid as u32));
         pairs.push((487 + 2 * s as u16, (guid >> 32) as u32));
     }
-    if let Some((first, count, skip)) = inputs.poke {
-        pairs.extend(
-            (first..first + count)
-                .filter(|f| skip >> (f - first) & 1 == 0)
-                .map(|field| (field, POKE)),
-        );
+    if let Some(poke) = inputs.poke {
+        for (field, mask) in poke.fields() {
+            let value = if mask == 0 {
+                POKE
+            } else {
+                let now = pairs
+                    .iter()
+                    .rev()
+                    .find(|&&(f, _)| f == field)
+                    .map_or(0, |&(_, v)| v);
+                (now & mask) | (!now & !mask)
+            };
+            pairs.push((field, value));
+        }
     }
     let mut mods = SpellModifiers::default();
     mods.set_class_family(p.family);
@@ -483,38 +531,42 @@ const UNIT_FIELD_INDICES: [&[u16]; 6] = [
     &[180, 181, 182, 183, 184, 185, 186],
 ];
 
-/// The player fields a view's records watch in the scenario `inputs` makes: the ones a poke is
-/// covered by. The form and gender are bytes of fields 138 and 36, the disarm flag a bit of 46, and
-/// the standings' race and class bytes of 36.
-fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
-    let mut fields: Vec<u16> = UNIT_FIELD_INDICES
+/// A whole field's mask in [`recorded_fields`].
+const WHOLE: u32 = u32::MAX;
+
+/// The player fields a view's records watch in the scenario `inputs` makes, each with the bits
+/// watched: the ones a poke is covered by. The gender and the form are byte 2 of fields 36 and
+/// 138, the disarm flag bit 21 of 46, the standings' race and class bytes 0 and 1 of 36; every
+/// other record watches its fields whole.
+fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<(u16, u32)> {
+    let mut fields: Vec<(u16, u32)> = UNIT_FIELD_INDICES
         .iter()
         .enumerate()
         .filter(|(bit, _)| deps.unit >> bit & 1 == 1)
-        .flat_map(|(_, fields)| fields.iter().copied())
+        .flat_map(|(_, fields)| fields.iter().map(|&f| (f, WHOLE)))
         .collect();
-    for (read, field) in [
-        (deps.gender, 36),
-        (deps.form, 138),
-        (deps.disarm, 46),
-        (deps.reputation, 36),
-        (deps.range_units, 130),
+    for (read, field, mask) in [
+        (deps.gender, 36, 0x00ff_0000),
+        (deps.form, 138, 0x00ff_0000),
+        (deps.disarm, 46, 0x0020_0000),
+        (deps.reputation, 36, 0x0000_ffff),
+        (deps.range_units, 130, WHOLE),
     ] {
         if read {
-            fields.push(field);
+            fields.push((field, mask));
         }
     }
     fields.extend(
         (0..4)
             .filter(|i| deps.avoidance >> i & 1 == 1)
-            .map(|i| 1106 + i),
+            .map(|i| (1106 + i, WHOLE)),
     );
     for slot in (0..u16::from(EQUIPMENT_SLOTS)).filter(|s| deps.worn >> s & 1 == 1) {
-        fields.extend([486 + 2 * slot, 487 + 2 * slot]);
+        fields.extend([(486 + 2 * slot, WHOLE), (487 + 2 * slot, WHOLE)]);
     }
     for &line in &deps.skill_lines {
         if let Some(base) = skill_fields(layout, inputs, line) {
-            fields.extend([base, base + 1, base + 2]);
+            fields.extend([base, base + 1, base + 2].map(|f| (f, WHOLE)));
         }
     }
     fields
@@ -742,15 +794,30 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
         }
         out.moved += 1;
         // A poked run is judged field by field: one the records cover can hit the change for its
-        // neighbours, so the run poked again without the recorded fields must not move the view.
+        // neighbours, so the run poked again without the recorded fields, and with only the
+        // unrecorded bits of a field recorded in part, must not move the view.
         let moved = match moved.poke {
-            Some((first, count, skip)) if hit => {
-                let recorded = recorded_fields(layout, base, &deps);
-                let skip = (first..first + count)
-                    .filter(|f| recorded.contains(f))
-                    .fold(skip, |mask, f| mask | 1 << (f - first));
+            Some(poke) if hit => {
+                let mut rest = poke;
+                for (field, mask) in recorded_fields(layout, base, &deps) {
+                    if !(poke.first..poke.first + poke.count).contains(&field) {
+                        continue;
+                    }
+                    if mask == WHOLE {
+                        rest.skip |= 1 << (field - poke.first);
+                        continue;
+                    }
+                    // A field recorded in part by two records keeps both parts.
+                    let at = rest
+                        .keep
+                        .iter()
+                        .position(|&(f, m)| f == field && m != 0)
+                        .or_else(|| rest.keep.iter().position(|&(_, m)| m == 0))
+                        .expect("at most three fields recorded in part");
+                    rest.keep[at] = (field, rest.keep[at].1 | mask);
+                }
                 let rest = Inputs {
-                    poke: Some((first, count, skip)),
+                    poke: Some(rest),
                     ..moved
                 };
                 let alone = mat(layout, base.xor(rest), p);
@@ -1364,7 +1431,7 @@ fn no_player_field_moves_a_view_unwatched() {
         },
     ] {
         for first in (0..1400u16).step_by(64) {
-            let poke = Some((first, 64.min(1400 - first), 0));
+            let poke = Some(Poke::run(first, 64.min(1400 - first)));
             let flip = move |_: &Layout, _: &Deps| Inputs {
                 poke,
                 ..Inputs::default()
