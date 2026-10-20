@@ -248,3 +248,52 @@ fn the_medal_bit_passes_the_usable_gate() {
     assert!(!item_usable(&v, &req(0x3), |_| false));
     assert!(item_usable(&v, &req(0x4), |_| false));
 }
+
+/// The required spell's line and the usable gate both ask whether the player knows the spell
+/// (`0x60c740`: every spell the player knows, not only the spellbook's) or a later rank of it
+/// (`0x60c8d0`), at `0x52d614`..`0x52d638` and `0x5eaa42`..`0x5eaa51`.
+#[test]
+fn a_required_spell_is_met_by_any_known_rank() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        9504,
+        ItemTemplateView {
+            name: "Elixir".into(),
+            quality: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            required_spell: 7,
+            required_spell_name: Some("Apprentice".into()),
+            required_spell_ranks: vec![7, 8],
+            ..Default::default()
+        },
+    );
+    s.set_player_req_state(PlayerReqState {
+        level: 60,
+        class_id: 1,
+        race_id: 1,
+        ..Default::default()
+    });
+    s.set_merchant(Some(MerchantState {
+        items: vec![MerchantItem {
+            item_id: 9504,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let usable = |s: &mut UiScript| -> bool {
+        s.eval::<bool>("local _, _, _, _, _, usable = GetMerchantItemInfo(1) return usable == 1")
+            .unwrap()
+    };
+    let line = |s: &mut UiScript| render(s, 9504)[1].clone();
+    assert_eq!(line(&mut s), ("[REQ_SKILL Apprentice]".to_string(), RED));
+    assert!(!usable(&mut s));
+    s.set_known_spells(HashSet::from([7]));
+    assert_eq!(line(&mut s).1, WHITE, "a known spell outside the spellbook");
+    assert!(usable(&mut s));
+    s.set_known_spells(HashSet::from([8]));
+    assert_eq!(line(&mut s).1, WHITE, "a later rank");
+    assert!(usable(&mut s));
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}

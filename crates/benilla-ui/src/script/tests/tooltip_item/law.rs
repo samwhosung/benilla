@@ -45,7 +45,8 @@ fn item_line_law_and_red_requirements() {
             "[MOD_STRENGTH +9]",
             "[MOD_STAMINA +12]",
             "[RESIST_SINGLE +10 [SCHOOL5]]",
-            "[DURABILITY 90/90]",
+            // A template source has neither an item object nor a block: no durability line
+            // (`0x52cca8`).
             "[CLASSES Warrior, Rogue]",
             "[MIN_LEVEL 37]",
             "[ONPROC] Ravager",
@@ -58,13 +59,13 @@ fn item_line_law_and_red_requirements() {
         crate::color::quant::drawn([0.0, 0.439, 0.867, 1.0]),
         "rare-blue name"
     );
-    let class_line = &lines[10];
+    let class_line = &lines[9];
     assert_eq!(
         class_line.1,
         [1.0, 1.0, 1.0, 1.0],
         "class list passes → white"
     );
-    let level_line = &lines[11];
+    let level_line = &lines[10];
     assert_eq!(
         level_line.1,
         [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0],
@@ -789,9 +790,9 @@ fn a_wrapped_item_names_its_giver_and_hides_the_creator_line() {
     assert!(s.take_errors().is_empty());
 }
 
-/// A wrapped gift in a trade names its giver on both sides. The player's slot is a live item
-/// object: its WRAPPED flag takes the gift arm (`0x52b789`) and the object's `ITEM_FIELD_GIFTCREATOR`
-/// names the giver, whether the slot came from a click or from the app. The partner's is a block:
+/// A wrapped gift in a trade names its giver on both sides. The player's slot is the live item
+/// object its guid names (`0x5342c8`): its WRAPPED flag takes the gift arm (`0x52b789`) and the
+/// object's `ITEM_FIELD_GIFTCREATOR` names the giver. The partner's is a block:
 /// its wrapped word (`0x534559`) takes the same arm and its gift creator (`0x534574`) names the
 /// giver. A block whose wrapped word is clear ignores the giver, and an unresolved one adds nothing.
 #[test]
@@ -815,23 +816,42 @@ fn a_wrapped_gift_in_trade_names_its_giver_on_both_sides() {
     "#,
     )
     .unwrap();
-    let row = |object_flags: Option<u32>, wrapped: bool, gift: Option<&str>| TradeSlotItem {
+    let row = |wrapped: bool, gift: Option<&str>| TradeSlotItem {
         item_id: 5042,
         name: Some("Gift".into()),
         count: 1,
         quality: Some(1),
-        object_flags,
         wrapped,
         gift_creator: gift.map(str::to_string),
         ..Default::default()
     };
+    let held = |guid, flags| ContainerSlot {
+        item_id: 5042,
+        guid,
+        count: 1,
+        quality: Some(1),
+        link: Some("|cffffffff|Hitem:5042:0:0:0|h[Gift]|h|r".into()),
+        creator: Some("Geoffrey".into()),
+        gift_creator: Some("Santa".into()),
+        flags,
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 2,
+            slots: HashMap::from([(1, held(0x5042, 0x8)), (2, held(0x5043, 0))]),
+        }),
+    );
     let mut st = TradeState::default();
-    st.player.slots[0] = Some(row(Some(0x8), true, Some("Santa")));
-    st.player.slots[1] = Some(row(Some(0), false, Some("Santa")));
-    st.target.slots[0] = Some(row(None, true, Some("Santa")));
-    st.target.slots[1] = Some(row(None, false, Some("Santa")));
-    st.target.slots[2] = Some(row(None, true, None));
+    st.target.slots[0] = Some(row(true, Some("Santa")));
+    st.target.slots[1] = Some(row(false, Some("Santa")));
+    st.target.slots[2] = Some(row(true, None));
+    s.open_trade_window();
     s.set_trade(Some(st));
+    s.run("PickupContainerItem(0, 1) ClickTradeButton(1) PickupContainerItem(0, 2) ClickTradeButton(2)")
+        .unwrap();
     let texts = |s: &mut UiScript, call: &str| -> Vec<String> {
         s.run(&format!("TT:SetOwner(SlotT, 'ANCHOR_RIGHT') {call}"))
             .unwrap();
@@ -842,8 +862,8 @@ fn a_wrapped_gift_in_trade_names_its_giver_on_both_sides() {
     assert_eq!(texts(&mut s, "TT:SetTradeTargetItem(1)"), gift, "target");
     assert_eq!(
         texts(&mut s, "TT:SetTradePlayerItem(2)"),
-        vec!["Gift"],
-        "unwrapped"
+        vec!["Gift", "[CREATED_BY Geoffrey]"],
+        "unwrapped: the maker's line"
     );
     assert_eq!(
         texts(&mut s, "TT:SetTradeTargetItem(2)"),
@@ -854,38 +874,6 @@ fn a_wrapped_gift_in_trade_names_its_giver_on_both_sides() {
         texts(&mut s, "TT:SetTradeTargetItem(3)"),
         vec!["Gift"],
         "giver unresolved"
-    );
-
-    // The player's click takes the giver from the bag record it places.
-    s.open_trade_window();
-    s.set_trade(Some(TradeState::default()));
-    s.set_container(
-        0,
-        Some(ContainerState {
-            name: None,
-            num_slots: 1,
-            slots: HashMap::from([(
-                1,
-                ContainerSlot {
-                    item_id: 5042,
-                    guid: 0x5042,
-                    count: 1,
-                    quality: Some(1),
-                    link: Some("|cffffffff|Hitem:5042:0:0:0|h[Gift]|h|r".into()),
-                    creator: Some("Geoffrey".into()),
-                    gift_creator: Some("Santa".into()),
-                    flags: 0x8,
-                    ..Default::default()
-                },
-            )]),
-        }),
-    );
-    s.run("PickupContainerItem(0, 1) ClickTradeButton(1)")
-        .unwrap();
-    assert_eq!(
-        texts(&mut s, "TT:SetTradePlayerItem(1)"),
-        gift,
-        "placed by a click"
     );
     assert!(s.take_errors().is_empty());
 }

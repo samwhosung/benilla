@@ -21,6 +21,19 @@ fn texts_after(s: &mut UiScript, call: &str) -> Vec<String> {
     lines_of(s).into_iter().map(|(t, _)| t).collect()
 }
 
+/// Opens a trade showing `state` and offers each `(bag slot, trade slot)` of the backpack by a
+/// click, which records the item's guid in our slot (`0x4bfa70`, the table at `0xb716d0`).
+fn offer(s: &mut UiScript, state: TradeState, slots: &[(u32, u32)]) {
+    s.open_trade_window();
+    s.set_trade(Some(state));
+    for (bag_slot, trade_slot) in slots {
+        s.run(&format!(
+            "PickupContainerItem(0, {bag_slot}) ClickTradeButton({trade_slot})"
+        ))
+        .unwrap();
+    }
+}
+
 /// A book: its template carries page text, so with an item object it reads.
 fn book() -> ItemTemplateView {
     ItemTemplateView {
@@ -75,20 +88,15 @@ fn only_a_source_with_an_item_object_reads() {
     );
     let bag = texts_after(&mut s, "TT:SetBagItem(0, 1)");
     assert!(bag.contains(&read), "a bag slot holds the object: {bag:?}");
-    let traded = TradeSlotItem {
+    let mut trade = TradeState::default();
+    trade.target.slots[0] = Some(TradeSlotItem {
         item_id: 9200,
         name: Some("Dusty Tome".into()),
         count: 1,
         quality: Some(1),
         ..Default::default()
-    };
-    let mut trade = TradeState::default();
-    trade.player.slots[0] = Some(TradeSlotItem {
-        object_flags: Some(0),
-        ..traded.clone()
     });
-    trade.target.slots[0] = Some(traded);
-    s.set_trade(Some(trade));
+    offer(&mut s, trade, &[(1, 1)]);
     let ours = texts_after(&mut s, "TT:SetTradePlayerItem(1)");
     assert!(
         ours.contains(&read),
@@ -263,19 +271,35 @@ fn the_trade_enchant_slot_shows_the_proposed_enchant() {
             ..Default::default()
         },
     );
-    let slot = |object_flags, enchantment: Option<&str>| TradeSlotItem {
+    let slot = |enchantment: Option<&str>| TradeSlotItem {
         item_id: 9400,
         name: Some("Plain Gloves".into()),
         count: 1,
         quality: Some(1),
-        object_flags,
         enchantment: enchantment.map(str::to_string),
         ..Default::default()
     };
+    let gloves = |guid| ContainerSlot {
+        item_id: 9400,
+        count: 1,
+        quality: Some(1),
+        guid,
+        link: Some("|cffffffff|Hitem:9400:0:0:0|h[Plain Gloves]|h|r".into()),
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(1, gloves(0x9401)), (2, gloves(0x9402))]),
+        }),
+    );
+    offer(&mut s, TradeState::default(), &[(1, 1), (2, 7)]);
+    // The header's spell, which the app pushes with the offers (`0x5d3fa0`).
     let mut trade = TradeState::default();
-    trade.player.slots[0] = Some(slot(Some(0), None));
-    trade.player.slots[6] = Some(slot(Some(0), Some("Enchant Gloves - Agility")));
-    trade.target.slots[6] = Some(slot(None, Some("Enchant Gloves - Mining")));
+    trade.player.slots[6] = Some(slot(Some("Enchant Gloves - Agility")));
+    trade.target.slots[6] = Some(slot(Some("Enchant Gloves - Mining")));
     s.set_trade(Some(trade));
     let ours = texts_after(&mut s, "TT:SetTradePlayerItem(7)");
     assert_eq!(
@@ -325,21 +349,38 @@ fn a_traded_crafted_item_names_its_maker() {
             ..Default::default()
         },
     );
-    let slot = |object_flags, creator: Option<&str>| TradeSlotItem {
+    let slot = |creator: Option<&str>| TradeSlotItem {
         item_id: 9401,
         name: Some("Runecloth Bag".into()),
         count: 1,
         quality: Some(2),
-        object_flags,
         creator: creator.map(str::to_string),
         creator_guid: 0x77,
         ..Default::default()
     };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(
+                1,
+                ContainerSlot {
+                    item_id: 9401,
+                    count: 1,
+                    quality: Some(2),
+                    guid: 0x9401,
+                    creator: Some("Tailor".into()),
+                    creator_guid: 0x76,
+                    ..Default::default()
+                },
+            )]),
+        }),
+    );
     let mut trade = TradeState::default();
-    trade.player.slots[0] = Some(slot(Some(0), Some("Tailor")));
-    trade.target.slots[0] = Some(slot(None, Some("Weaver")));
-    trade.target.slots[1] = Some(slot(None, None));
-    s.set_trade(Some(trade));
+    trade.target.slots[0] = Some(slot(Some("Weaver")));
+    trade.target.slots[1] = Some(slot(None));
+    offer(&mut s, trade, &[(1, 1)]);
     let ours = texts_after(&mut s, "TT:SetTradePlayerItem(1)");
     assert_eq!(ours, ["Runecloth Bag", "|cff00ff00[CREATED_BY Tailor]|r"]);
     let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(1)");
@@ -431,6 +472,146 @@ fn a_petitions_signature_count_follows_its_creator() {
     assert_eq!(
         texts_after(&mut s, "TT:SetBagItem(0, 4)"),
         pact(&["[SIGS 2 x]"])
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// The wrap flag `TT`'s `line` carries.
+fn wrapped(s: &UiScript, line: usize) -> bool {
+    let model = s.model_ref();
+    let h = model.arena.lookup("TT").expect("the tooltip");
+    match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(crate::widget::KindState::Tooltip(t)) => t.wrapped[line - 1],
+        _ => panic!("not a tooltip"),
+    }
+}
+
+/// A charter in the backpack's `slot`, its petition titled `title`.
+fn charter(slot: u32, title: &str) -> (u32, ContainerSlot) {
+    (
+        slot,
+        ContainerSlot {
+            item_id: 5863,
+            count: 1,
+            quality: Some(1),
+            guid: 0x4000_0000_0000_0020 + u64::from(slot),
+            petition: Some(PetitionSlotView {
+                is_charter: true,
+                title: title.into(),
+                owner: Some("Bob".into()),
+                signatures: 0,
+            }),
+            ..Default::default()
+        },
+    )
+}
+
+/// The title line wraps (`0x52b9a4` pushes 1 to the line core) where the creator's does not
+/// (`0x52ba24`), and it is formatted and added whatever the title (`0x52b99c`): an empty one
+/// still reads its key.
+#[test]
+fn a_petitions_title_wraps_and_shows_when_empty() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        5863,
+        ItemTemplateView {
+            name: "Charter".into(),
+            quality: 1,
+            flags: 0x2000,
+            ..Default::default()
+        },
+    );
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([charter(1, "Knights"), charter(2, "")]),
+        }),
+    );
+    assert_eq!(
+        texts_after(&mut s, "TT:SetBagItem(0, 1)"),
+        [
+            "Charter",
+            "[GUILD_CHARTER_TITLE Knights]",
+            "[GUILD_CHARTER_CREATOR Bob]",
+            "[ITEM_SIGNABLE]"
+        ]
+    );
+    assert!(wrapped(&s, 2), "the title wraps");
+    assert!(!wrapped(&s, 3), "the creator does not");
+    assert_eq!(
+        texts_after(&mut s, "TT:SetBagItem(0, 2)"),
+        [
+            "Charter",
+            "[GUILD_CHARTER_TITLE ]",
+            "[GUILD_CHARTER_CREATOR Bob]",
+            "[ITEM_SIGNABLE]"
+        ]
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// Our trade slot builds from the item object its guid names (`[0xb716d0 + slot*8]`, `0x5342c8`;
+/// the builder's p3, `0x5343d5`), so the object's fields reach every line: a letter's text id
+/// picks `ITEM_WRITTEN_BY` and the read hint (`0x52e21b`, `0x52e34e`), and a charter asks its
+/// petition by that guid and shows its lines (`0x52b92f`).
+#[test]
+fn our_trade_slot_reads_the_item_object() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    for (id, name, flags) in [(8383, "Letter", 0), (5863, "Charter", 0x2000)] {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: name.into(),
+                quality: 1,
+                flags,
+                ..Default::default()
+            },
+        );
+    }
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([
+                (
+                    1,
+                    ContainerSlot {
+                        item_id: 8383,
+                        count: 1,
+                        quality: Some(1),
+                        guid: 0x8383,
+                        readable: true,
+                        creator: Some("Ann".into()),
+                        creator_guid: 0x31,
+                        ..Default::default()
+                    },
+                ),
+                charter(2, "Knights"),
+            ]),
+        }),
+    );
+    offer(&mut s, TradeState::default(), &[(1, 1), (2, 2)]);
+    assert_eq!(
+        texts_after(&mut s, "TT:SetTradePlayerItem(1)"),
+        ["Letter", "[WRITTEN_BY Ann]", "[ITEM_READABLE]"]
+    );
+    assert_eq!(
+        texts_after(&mut s, "TT:SetTradePlayerItem(2)"),
+        [
+            "Charter",
+            "[GUILD_CHARTER_TITLE Knights]",
+            "[GUILD_CHARTER_CREATOR Bob]",
+            "[ITEM_SIGNABLE]"
+        ]
+    );
+    assert!(
+        texts_after(&mut s, "TT:SetTradePlayerItem(3)").is_empty(),
+        "an empty slot builds nothing"
     );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }

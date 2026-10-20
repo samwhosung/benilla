@@ -277,3 +277,238 @@ fn a_reagent_or_product_in_flight_waits_for_its_answer() {
     assert_eq!(s.take_item_stat_asks(), [9999]);
     assert!(s.take_errors().is_empty());
 }
+
+/// Render through `call` on `TT` (owned first) and answer the lines' texts.
+fn texts_after(s: &mut UiScript, call: &str) -> Vec<String> {
+    s.run(&format!(
+        r#"
+        local a = SpellSlot or CreateFrame("Button", "SpellSlot")
+        a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = TT or CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        {call}
+    "#
+    ))
+    .unwrap();
+    lines_of(s).into_iter().map(|(t, _)| t).collect()
+}
+
+/// The charges lines of what `call` renders.
+fn charges_after(s: &mut UiScript, call: &str) -> Vec<String> {
+    texts_after(s, call)
+        .into_iter()
+        .filter(|t| t.starts_with("[CHARGES"))
+        .collect()
+}
+
+/// A wand whose three blocks carry template charges 5, 0 and -3.
+fn wand() -> ItemTemplateView {
+    ItemTemplateView {
+        name: "Wand".into(),
+        quality: 1,
+        spell_lines: vec![
+            spell_line(0, "a", 5),
+            ItemSpellLine {
+                block: 1,
+                ..spell_line(0, "b", 0)
+            },
+            ItemSpellLine {
+                block: 2,
+                ..spell_line(0, "c", -3)
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// The count a block's line shows comes from the source the builder picks (`0x52d9bd`..`0x52da06`):
+/// with an instance block and no item object, the block's `+0x428`, the -1 that prints nothing
+/// unless the setter wrote its own (a link and a loot row clear it, `0x5326e0`; the trade
+/// partner's slot carries the wire's, `0x534595`, one value for every block); with an item object
+/// and no block value, the object's `ITEM_FIELD_SPELL_CHARGES` for that block (`0x52d9e9`), where
+/// 0 prints; with neither, the template's. A template 0 is -1 from any source (`0x52da06`).
+#[test]
+fn a_blocks_charges_come_from_the_source_the_builder_picks() {
+    use std::collections::HashMap;
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(9104, wand());
+    assert_eq!(
+        charges_after(&mut s, "SetItemByIdForTest(TT, 9104)"),
+        ["[CHARGES 5 x]", "[CHARGES 3 x]"],
+        "a template source counts the template's"
+    );
+    assert!(
+        charges_after(&mut s, r#"TT:SetHyperlink("item:9104:0:0:0")"#).is_empty(),
+        "a link's block holds -1"
+    );
+    s.set_loot(Some(LootState {
+        rows: vec![Some(LootRow {
+            name: Some("Wand".into()),
+            quantity: 1,
+            quality: Some(1),
+            item_id: 9104,
+            ..Default::default()
+        })],
+        ..Default::default()
+    }));
+    assert!(
+        charges_after(&mut s, "TT:SetLootItem(1)").is_empty(),
+        "so does a loot row's"
+    );
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(
+                1,
+                ContainerSlot {
+                    item_id: 9104,
+                    count: 1,
+                    quality: Some(1),
+                    guid: 0x4000_0000_0000_0104,
+                    spell_charges: [2, 7, 0, 0, 0],
+                    ..Default::default()
+                },
+            )]),
+        }),
+    );
+    assert_eq!(
+        charges_after(&mut s, "TT:SetBagItem(0, 1)"),
+        ["[CHARGES 2 x]", "[CHARGES 0 x]"],
+        "an item object counts its own, block by block, 0 included"
+    );
+    let mut trade = TradeState::default();
+    trade.target.slots[0] = Some(TradeSlotItem {
+        item_id: 9104,
+        name: Some("Wand".into()),
+        count: 1,
+        quality: Some(1),
+        charges: 4,
+        ..Default::default()
+    });
+    s.set_trade(Some(trade));
+    assert_eq!(
+        charges_after(&mut s, "TT:SetTradeTargetItem(1)"),
+        ["[CHARGES 4 x]", "[CHARGES 4 x]"],
+        "the partner's block counts the wire's for every block"
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// `SetAction`'s item leg writes into the block the summed absolute charges of every copy the
+/// player holds (`0x622180` at `0x532553`, stored at `+0x428`), and with an item object and a
+/// block value other than -1 the builder counts the block's (`0x52d9d1`): two potions of one
+/// charge each read 2.
+#[test]
+fn an_action_items_charges_count_every_copy() {
+    use std::collections::HashMap;
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        9105,
+        ItemTemplateView {
+            name: "Potion".into(),
+            quality: 1,
+            spell_lines: vec![spell_line(0, "Heals.", -1)],
+            ..Default::default()
+        },
+    );
+    let potion = |guid| ContainerSlot {
+        item_id: 9105,
+        count: 5,
+        quality: Some(1),
+        guid,
+        spell_charges: [-1, 0, 0, 0, 0],
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(1, potion(0x105)), (2, potion(0x106))]),
+        }),
+    );
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0x80,
+            action: 9105,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(charges_after(&mut s, "TT:SetAction(1)"), ["[CHARGES 2 x]"]);
+    assert!(
+        charges_after(&mut s, "TT:SetBagItem(0, 1)").is_empty(),
+        "the bag slot reads its object's -1"
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// A recipe's product is built into the same tooltip with no item object (`0x52dbce`), and an
+/// incremental build keeps the instance fields its outer build set (`0x52b6ca` skips the stores
+/// at `0x52b6cc`..`0x52b70a`): through a link, the product reads the link's block, so it shows no
+/// `ITEM_RANDOM_ENCHANT` placeholder (`0x52c9a3`), no durability (`+0x434` is 0) and no charges
+/// (`+0x428` is -1); through a template source it has no block either, so it shows the
+/// placeholder and its template's charges, and still no durability (`0x52cca8`).
+#[test]
+fn a_recipes_product_reads_the_outer_block() {
+    let mut s = recipe_fixture();
+    vial_arrives(&mut s);
+    s.set_item_template(
+        RECIPE + 3,
+        ItemTemplateView {
+            name: "Pattern: Robe".into(),
+            quality: 1,
+            spell_lines: vec![ItemSpellLine {
+                recipe: Some(ItemRecipe {
+                    product: RECIPE + 4,
+                    reagents: vec![(VIAL, 1)],
+                }),
+                ..spell_line(0, "Teaches.", -1)
+            }],
+            ..Default::default()
+        },
+    );
+    s.set_item_template(
+        RECIPE + 4,
+        ItemTemplateView {
+            name: "Robe".into(),
+            quality: 2,
+            max_durability: 60,
+            random_property: 5,
+            spell_lines: vec![spell_line(0, "Glows.", 3)],
+            ..Default::default()
+        },
+    );
+    let template = texts_after(&mut s, &format!("SetItemByIdForTest(TT, {})", RECIPE + 3));
+    assert_eq!(
+        template,
+        [
+            "Pattern: Robe",
+            "[ONUSE] Teaches.",
+            "\nRobe",
+            "[ITEM_RANDOM_ENCHANT]",
+            "[ONUSE] Glows.",
+            "[CHARGES 3 x]",
+            "\n[REQ_SKILL Empty Vial]",
+        ]
+    );
+    let link = texts_after(
+        &mut s,
+        &format!(r#"TT:SetHyperlink("item:{}:0:0:0")"#, RECIPE + 3),
+    );
+    assert_eq!(
+        link,
+        [
+            "Pattern: Robe",
+            "[ONUSE] Teaches.",
+            "\nRobe",
+            "[ONUSE] Glows.",
+            "\n[REQ_SKILL Empty Vial]",
+        ]
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}

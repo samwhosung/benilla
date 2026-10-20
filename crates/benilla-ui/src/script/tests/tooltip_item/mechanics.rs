@@ -240,6 +240,95 @@ fn a_bag_items_price_scales_by_its_charges_and_loses_its_repair_cost() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
+/// The merchant's price needs an item object (a nonzero p3, `0x52e376`) held in a bag, or by the
+/// player at slot index 23 or more (`0x52e3c6`..`0x52e40f`): `SetInventoryItem` prices a vault slot
+/// but no worn item (`0x5332a4`), and `SetAction` prices the copy it finds in a bag but not a worn
+/// one (`0x532586`).
+#[test]
+fn the_merchant_prices_an_object_held_past_the_worn_slots() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    for (id, name, sell_price) in [(4380, "Ring", 50), (4381, "Gem", 7), (4382, "Shard", 9)] {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: name.into(),
+                quality: 1,
+                sell_price,
+                ..Default::default()
+            },
+        );
+    }
+    let mut inv: InventorySlots = Default::default();
+    inv[11] = Some(InvSlotView {
+        item_id: 4380,
+        guid: 0x480,
+        count: 1,
+        name: Some("Ring".into()),
+        quality: 1,
+        ..Default::default()
+    });
+    s.set_inventory_slots(inv);
+    let held = |item_id, guid, count| ContainerSlot {
+        item_id,
+        guid,
+        count,
+        quality: Some(1),
+        ..Default::default()
+    };
+    s.set_container(
+        -1,
+        Some(ContainerState {
+            name: None,
+            num_slots: 24,
+            slots: HashMap::from([(1, held(4381, 0x481, 3))]),
+        }),
+    );
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(1, held(4382, 0x482, 2))]),
+        }),
+    );
+    for (id, item) in [(1, 4380), (2, 4382)] {
+        s.set_action(
+            id,
+            Some(ActionSlot {
+                kind: 0x80,
+                action: item,
+                ..Default::default()
+            }),
+        );
+    }
+    s.set_merchant(Some(MerchantState::default()));
+    let money = |s: &mut UiScript, call: &str| -> Option<i64> {
+        s.eval(&format!(
+            r#"
+            money_fired = nil
+            local a = PriceSlot or CreateFrame("Button", "PriceSlot")
+            a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+            local tt = TT or CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+            tt:SetScript("OnTooltipAddMoney", function() money_fired = arg1 end)
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            {call}
+            return money_fired
+            "#
+        ))
+        .unwrap()
+    };
+    assert_eq!(money(&mut s, r#"TT:SetInventoryItem("player", 11)"#), None);
+    assert_eq!(
+        money(&mut s, r#"TT:SetInventoryItem("player", 40)"#),
+        Some(21),
+        "the vault's first slot, index 39"
+    );
+    assert_eq!(money(&mut s, "TT:SetAction(1)"), None, "found worn");
+    assert_eq!(money(&mut s, "TT:SetAction(2)"), Some(18), "found in a bag");
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// The mouseover health bar is unit content: an item render on the same tooltip hides it.
 #[test]
 fn item_render_hides_the_unit_health_bar() {
@@ -293,7 +382,8 @@ fn item_render_hides_the_unit_health_bar() {
 }
 
 /// A bag hover shows the instance's live `ITEM_FIELD_DURABILITY` (a death costs 10%, the spirit
-/// healer 25%); a template or link hover shows max/max.
+/// healer 25%); a template hover of the same item has no object and no block, so no line
+/// (`0x52cca8`).
 #[test]
 fn real_instance_hover_renders_live_durability() {
     let mut s = script();
@@ -338,18 +428,125 @@ fn real_instance_hover_renders_live_durability() {
             if t and string.find(t, "DURABILITY") then found = t end
         end
         assert(found == "[DURABILITY 30/40]", "live pair on a bag hover, got " .. tostring(found))
-        -- The template/link hover of the SAME item keeps the authored full pair.
+        -- The template hover of the SAME item draws none.
         SetItemByIdForTest(tt, 2264)
         found = nil
         for i = 1, tt:NumLines() do
             local t = getglobal("TTTextLeft" .. i):GetText()
             if t and string.find(t, "DURABILITY") then found = t end
         end
-        assert(found == "[DURABILITY 40/40]", "template hover stays full, got " .. tostring(found))
+        assert(found == nil, "a template hover has no durability line, got " .. tostring(found))
     "#,
     )
     .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// The durability line (`0x52cc5b`..`0x52cdc3`) needs an item object with a max, or an instance
+/// block with one: a template source and a block that stores none (a link and a loot row, whose
+/// clear zeroes `+0x434`, `0x5326e0`) show no line, and the trade partner's block shows the wire's
+/// pair (`0x5345b4`, `0x5345c0`), the current clamped to the max (`0x52cd7c`) and red at 0. A
+/// wrapped gift shows none (`0x52cc60`).
+#[test]
+fn only_an_object_or_a_block_with_a_max_shows_durability() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        2264,
+        ItemTemplateView {
+            name: "Mantle of Doan".into(),
+            quality: 2,
+            max_durability: 40,
+            ..Default::default()
+        },
+    );
+    let durability = |s: &mut UiScript, call: &str| -> Vec<(String, [f32; 4])> {
+        s.run(&format!(
+            r#"
+            local a = DurSlot or CreateFrame("Button", "DurSlot")
+            a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+            local tt = TT or CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            {call}
+            "#
+        ))
+        .unwrap();
+        super::lines_of(s)
+            .into_iter()
+            .filter(|(t, _)| t.starts_with("[DURABILITY"))
+            .collect()
+    };
+    let texts = |lines: Vec<(String, [f32; 4])>| -> Vec<String> {
+        lines.into_iter().map(|(t, _)| t).collect()
+    };
+    assert!(durability(&mut s, "SetItemByIdForTest(TT, 2264)").is_empty());
+    assert!(durability(&mut s, r#"TT:SetHyperlink("item:2264:0:0:0")"#).is_empty());
+    s.set_loot(Some(LootState {
+        rows: vec![Some(LootRow {
+            name: Some("Mantle of Doan".into()),
+            quantity: 1,
+            quality: Some(2),
+            item_id: 2264,
+            ..Default::default()
+        })],
+        ..Default::default()
+    }));
+    assert!(durability(&mut s, "TT:SetLootItem(1)").is_empty());
+    let mantle = |durability| TradeSlotItem {
+        item_id: 2264,
+        name: Some("Mantle of Doan".into()),
+        count: 1,
+        quality: Some(2),
+        durability,
+        ..Default::default()
+    };
+    let mut trade = TradeState::default();
+    trade.target.slots[0] = Some(mantle((25, 40)));
+    trade.target.slots[1] = Some(mantle((0, 0)));
+    trade.target.slots[2] = Some(mantle((50, 40)));
+    trade.target.slots[3] = Some(mantle((0, 40)));
+    s.set_trade(Some(trade));
+    assert_eq!(
+        texts(durability(&mut s, "TT:SetTradeTargetItem(1)")),
+        ["[DURABILITY 25/40]"]
+    );
+    assert!(durability(&mut s, "TT:SetTradeTargetItem(2)").is_empty());
+    assert_eq!(
+        texts(durability(&mut s, "TT:SetTradeTargetItem(3)")),
+        ["[DURABILITY 40/40]"]
+    );
+    assert_eq!(
+        durability(&mut s, "TT:SetTradeTargetItem(4)"),
+        [(
+            "[DURABILITY 0/40]".to_string(),
+            [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0]
+        )]
+    );
+    let held = |flags| ContainerSlot {
+        count: 1,
+        quality: Some(2),
+        item_id: 2264,
+        durability: Some((30, 40)),
+        flags,
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([(1, held(0)), (2, held(0x8))]),
+        }),
+    );
+    assert_eq!(
+        texts(durability(&mut s, "TT:SetBagItem(0, 1)")),
+        ["[DURABILITY 30/40]"]
+    );
+    assert!(
+        durability(&mut s, "TT:SetBagItem(0, 2)").is_empty(),
+        "a wrapped gift"
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
 /// Broken gear shows its true `0 / max`: a create block omits a zero `DURABILITY`, which must not
