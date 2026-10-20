@@ -259,7 +259,7 @@ mod loader_tests {
             );
             let want = format!("Couldn't find frame parent: {global}");
             assert!(
-                report.warnings.iter().any(|w| *w == want),
+                report.warnings.contains(&want),
                 "{want}: {:?}",
                 report.warnings
             );
