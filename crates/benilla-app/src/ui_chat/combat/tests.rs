@@ -685,8 +685,8 @@ fn a_game_object_classifies_as_its_creator_one_class_up() {
     );
 }
 
-/// `0x6264e0` never waits: a unit no cache names prints `UNKNOWNOBJECT` at once, and only an item
-/// the item cache has not answered holds the line (`0x55ba30`).
+/// `0x6264e0` never waits: a unit no cache names prints its miss at once, and only an item the
+/// item cache has not answered holds the line (`0x55ba30`).
 #[test]
 fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
     let mut line = queue(
@@ -698,8 +698,8 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
         Named::Ready,
     )
     .unwrap();
-    let named = |guid: u64| (guid == 1).then(|| "Pat".to_string());
-    assert!(line.fill_names(named, |_| ItemName::Waiting, "Unknown"));
+    let named = |guid: u64| if guid == 1 { "Pat" } else { "Unknown" }.to_string();
+    assert!(line.fill_names(named, |_| ItemName::Waiting));
     assert_eq!(
         (line.fills.attacker.as_str(), line.fills.victim.as_str()),
         ("Unknown", "Pat")
@@ -709,16 +709,39 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
         named: Named::Unit(9),
         ..line.clone()
     };
-    assert!(pet.fill_names(|_| None, |_| ItemName::Waiting, "Unknown"));
+    assert!(pet.fill_names(|_| "Unknown".into(), |_| ItemName::Waiting));
     assert_eq!(pet.fills.named, "Unknown");
 
     let mut made = PendingCombat {
         named: Named::Item(2589),
         ..line.clone()
     };
-    assert!(!made.fill_names(named, |_| ItemName::Waiting, "Unknown"));
-    assert!(made.fill_names(named, |_| ItemName::Named("Linen Cloth".into()), "Unknown"));
+    assert!(!made.fill_names(named, |_| ItemName::Waiting));
+    assert!(made.fill_names(named, |_| ItemName::Named("Linen Cloth".into())));
     assert_eq!(made.fills.named, "Linen Cloth");
+}
+
+/// A name nothing holds prints the miss of the getter `0x6264e0` went through: a held unit's
+/// `GetUnitName` (`0x626531`) falls to "Unknown Being" (`0x60933c`), anything else to
+/// `UKNOWNOBJECT` (`0x62660c`), each only once `UNKNOWNOBJECT` is missing.
+#[test]
+fn an_unnamed_held_unit_prints_the_unit_getters_miss() {
+    let script = benilla_ui::script::UiScript::new().expect("VM");
+    let names = NameCache::default();
+    let store = |kind: u32| ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, kind)]));
+    let name = |store: Option<&ObjectStore>| logged_name(7, store, &names, Ask::Read, &script);
+    assert_eq!(name(Some(&store(0x19))), "Unknown Being", "a held player");
+    assert_eq!(name(Some(&store(0x9))), "Unknown Being", "a held creature");
+    assert_eq!(name(Some(&store(0x21))), "UKNOWNOBJECT", "a game object");
+    assert_eq!(name(None), "UKNOWNOBJECT", "nothing held");
+
+    script
+        .lua()
+        .load("UNKNOWNOBJECT = \"Unknown\"")
+        .exec()
+        .expect("set");
+    assert_eq!(name(Some(&store(0x19))), "Unknown");
+    assert_eq!(name(None), "Unknown");
 }
 
 /// A school with no name writes no line, even where the template names none: each formatter that

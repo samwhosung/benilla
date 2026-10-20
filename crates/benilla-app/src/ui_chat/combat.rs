@@ -41,17 +41,20 @@ impl Stores for Query<'_, '_, (Entity, &ObjectStore)> {
 /// handlers make before a flash anchor, a float or a full block: a player or a creature, never a
 /// game object.
 pub(crate) fn holds_unit(guid: u64, index: &GuidIndex, stores: &impl Stores) -> bool {
-    use benilla_protocol::messages::ObjectType;
     index
         .0
         .get(&guid)
         .and_then(|&e| stores.store(e))
-        .is_some_and(|s| {
-            matches!(
-                s.0.object_type(),
-                Some(ObjectType::Unit | ObjectType::Player)
-            )
-        })
+        .is_some_and(is_unit)
+}
+
+/// Whether a held object is a unit, type bit 3 of `OBJECT_FIELD_TYPE`: a player or a creature.
+fn is_unit(store: &ObjectStore) -> bool {
+    use benilla_protocol::messages::ObjectType;
+    matches!(
+        store.0.object_type(),
+        Some(ObjectType::Unit | ObjectType::Player)
+    )
 }
 
 /// A world position by entity, for the range gate.
@@ -924,8 +927,8 @@ pub(crate) fn power_word(script: &benilla_ui::script::UiScript, power: u32) -> O
 
 /// One endpoint's display name as `GetObjectName 0x6264e0` finds it: what the caches hold now, a
 /// lookup asked for what they do not (`0x6265a7`, `0x6265e0`, with an empty callback), and `None`
-/// for that, where the line prints [`unknown_object`]. A streamed unit names through its
-/// descriptor (`GetUnitName`, `0x609210`), which is how a pet is named.
+/// for that ([`logged_name`] prints the miss). A streamed unit names through its descriptor
+/// (`GetUnitName`, `0x609210`), which is how a pet is named.
 pub(crate) fn object_name(
     guid: u64,
     unit: Option<&ObjectStore>,
@@ -943,6 +946,26 @@ pub(crate) fn object_name(
 /// the literal `UKNOWNOBJECT` (`0x6265f4`-`0x62660c`).
 pub(crate) fn unknown_object(script: &benilla_ui::script::UiScript) -> String {
     global_string(script, "UNKNOWNOBJECT").unwrap_or_else(|| "UKNOWNOBJECT".into())
+}
+
+/// One endpoint's name as `GetObjectName 0x6264e0` prints it: [`object_name`], else the miss of
+/// the getter it went through. A unit the client holds (type bit 3, `0x626526`) goes through
+/// `GetUnitName` (`0x626531`), whose miss is `UNKNOWNOBJECT` else the literal "Unknown Being"
+/// (`0x609324`-`0x60933c`); anything else misses as [`unknown_object`].
+pub(crate) fn logged_name(
+    guid: u64,
+    store: Option<&ObjectStore>,
+    names: &NameCache,
+    ask: Ask<'_>,
+    script: &benilla_ui::script::UiScript,
+) -> String {
+    object_name(guid, store, names, ask).unwrap_or_else(|| {
+        if store.is_some_and(is_unit) {
+            script.unknown_object_text()
+        } else {
+            unknown_object(script)
+        }
+    })
 }
 
 // ────────────────────────── the queued line, awaiting its names ───────────────────────
@@ -1040,17 +1063,15 @@ impl PendingCombat {
 }
 
 impl PendingCombat {
-    /// Fill the names as `GetObjectName 0x6264e0` names an object: a unit by what `unit` finds
-    /// now, never waiting, and `unknown` for one it does not. Only an item the item cache has not
-    /// answered holds the line (`0x628f40`, `0x629610`, `0x629760`, `0x6298a0` waiting through
-    /// `0x55ba30`); `false` while it holds. A guid of 0 is a name the fills already carry.
+    /// Fill the names as `GetObjectName 0x6264e0` names an object: a unit by what `name` prints
+    /// now ([`logged_name`]), never waiting. Only an item the item cache has not answered holds the
+    /// line (`0x628f40`, `0x629610`, `0x629760`, `0x6298a0` waiting through `0x55ba30`); `false`
+    /// while it holds. A guid of 0 is a name the fills already carry.
     pub(crate) fn fill_names(
         &mut self,
-        unit: impl Fn(u64) -> Option<String>,
+        name: impl Fn(u64) -> String,
         item: impl FnOnce(u32) -> ItemName,
-        unknown: &str,
     ) -> bool {
-        let name = |guid: u64| unit(guid).unwrap_or_else(|| unknown.to_owned());
         if self.subject != 0 {
             self.fills.attacker = name(self.subject);
         }

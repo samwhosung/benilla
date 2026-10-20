@@ -1139,7 +1139,9 @@ pub(super) fn feed_chat(
                 total,
                 base,
             } => {
-                // A victim's name never waits (`0x609210`).
+                // A victim's name never waits: each template names it through `GetUnitName`
+                // (`0x609210`, from `0x637ac0`), whose miss without `UNKNOWNOBJECT` is the literal
+                // "Unknown Being", where `GetObjectName`'s is `UKNOWNOBJECT`.
                 let name = (victim != 0).then(|| {
                     super::combat::object_name(
                         victim,
@@ -1147,7 +1149,7 @@ pub(super) fn feed_chat(
                         &names,
                         Ask::at(true, &commands),
                     )
-                    .unwrap_or_else(|| super::combat::unknown_object(&script))
+                    .unwrap_or_else(|| script.unknown_object_text())
                 });
                 let state = self_guid
                     .0
@@ -1185,7 +1187,7 @@ pub(super) fn feed_chat(
                 side,
             } => {
                 // `victim == 0` is the award form: no name, no rank title. A victim's name never
-                // waits (`0x609210`), and its title genders against the active player
+                // waits (`GetUnitName`, `0x625387`), and its title genders against the active player
                 // (`0x612bf0`, `0x625374`), whose gender `0x5ed5b0` reads from `PLAYER_BYTES_3`
                 // byte 0; a dishonorable kill's template names no rank.
                 let name = (victim != 0).then(|| {
@@ -1195,7 +1197,7 @@ pub(super) fn feed_chat(
                         &names,
                         Ask::at(true, &commands),
                     )
-                    .unwrap_or_else(|| super::combat::unknown_object(&script))
+                    .unwrap_or_else(|| script.unknown_object_text())
                 });
                 let female = self_guid
                     .0
@@ -1264,14 +1266,14 @@ pub(super) fn feed_chat(
                 // Names looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), and
                 // asked again only on its first drain; a line waits on an item alone.
                 let ask = Ask::at(line.tries == 0, &commands);
-                let unknown = super::combat::unknown_object(&script);
                 let ready = line.fill_names(
                     |guid| {
-                        super::combat::object_name(
+                        super::combat::logged_name(
                             guid,
                             guids.0.get(&guid).and_then(|e| stores.get(*e).ok()),
                             &names,
                             ask,
+                            &script,
                         )
                     },
                     |entry| match items.template(entry, 0, ask).map(|t| t.name.clone()) {
@@ -1281,7 +1283,6 @@ pub(super) fn feed_chat(
                         }
                         None => super::combat::ItemName::Waiting,
                     },
-                    &unknown,
                 );
                 if !ready {
                     if line.tries < NAME_MAX_TRIES {

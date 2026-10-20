@@ -3380,3 +3380,52 @@ fn the_honor_title_genders_off_the_active_players_bytes() {
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains("Sergeant Madam"), "{lines:?}");
 }
+
+/// The XP and honor lines name their victim through `GetUnitName` (`0x609210`, from `0x637ac0`
+/// and `0x625387`), whose miss without `UNKNOWNOBJECT` is "Unknown Being" (`0x60933c`), never
+/// `GetObjectName`'s `UKNOWNOBJECT`.
+#[test]
+fn a_kills_unnamed_victim_is_the_unit_getters_miss() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut feed = super::notice_tests::Feed::new();
+    feed.script()
+        .run(
+            r#"
+            UNKNOWNOBJECT = nil
+            Kills = {}
+            Kill = CreateFrame("Frame", "BenillaKillNameSpy")
+            Kill:SetScript("OnEvent", function() table.insert(Kills, arg1) end)
+            Kill:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+            Kill:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+        "#,
+        )
+        .unwrap();
+    const ME: u64 = 7;
+    const VICTIM: u64 = 8;
+    let mut hold = |guid: u64| {
+        let e = feed
+            .world
+            .spawn(crate::net::ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]),
+            ))
+            .id();
+        feed.world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(guid, e);
+    };
+    hold(ME);
+    hold(VICTIM);
+    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    {
+        let mut log = feed.world.resource_mut::<super::ChatLog>();
+        log.push_xp_gain(VICTIM, 60, 60);
+        log.push_pvp_credit(30, VICTIM, 8, 0);
+    }
+    feed.drain();
+    let lines = feed.script().eval::<Vec<String>>("return Kills").unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    for line in &lines {
+        assert!(line.starts_with("Unknown Being "), "{lines:?}");
+    }
+}
