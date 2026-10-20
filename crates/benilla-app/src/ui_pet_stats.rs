@@ -208,7 +208,7 @@ pub(crate) fn feed_pet_stats(
         }
         *last = Some(fresh.clone());
         script.set_pet_stats(fresh.0, fresh.1);
-        // Push before firing: dispatch runs the Lua handlers synchronously.
+        // The push before the post: the handlers run when it fires, after the turn, and read it.
         if happiness_moved {
             // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
             fires.post("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);

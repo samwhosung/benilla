@@ -270,7 +270,7 @@ fn feed_stable(
         if fresh == *last && !fresh_list {
             return;
         }
-        // Push before firing: `fire_event` runs the Lua handlers synchronously.
+        // The push before the posts: the handlers run when they fire, after the turn, and read it.
         script.set_stable(fresh.clone());
         if fresh_list && fresh.is_some() {
             // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only repaints.

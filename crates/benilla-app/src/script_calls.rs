@@ -10,7 +10,9 @@
 //! script comes in by: the mouse and key feed, the bindings pass, an `OnUpdate`, the handlers of the
 //! events a feed fires, a chunk. A system that holds the host's own state alongside the VM runs as
 //! an engine turn ([`VmWith`]): a call its Lua makes waits, as one made while the host applies a
-//! call does, and applies before the system ends. An addon's or a macro's cast passes the gate's
+//! call does, and applies before the system ends; a feed's events fire after its turn, with the
+//! host lent ([`VmWith::feed`]). Every host runs in one order, the VM pass ([`crate::vm_pass`]).
+//! An addon's or a macro's cast passes the gate's
 //! tag 2 (`0x494a92`) only inside an input event; the client's own code passes it outside any
 //! (`0x494a5a` → `0x494b11`).
 
@@ -310,7 +312,7 @@ impl Fires {
 
 /// Run `f` on the world's VM with the host lent, for an entry that holds the whole world (a
 /// reload, a session's end, a world-leave sweep): the host is built off the world as a system's
-/// would be, and its deferred work applied after. `f` gets `None` with no VM.
+/// would be, and its commands applied after. `f` gets `None` with no VM.
 pub(crate) fn with_hosted_vm<R>(
     world: &mut World,
     f: impl FnOnce(Option<&mut UiScript>) -> R,
