@@ -352,7 +352,11 @@ impl Plugin for UiActionPlugin {
                         .in_set(UnitFeed)
                         .after(crate::ui_items::locks::apply_item_releases)
                         .before(feed::feed_actions),
-                    feed::feed_actions.in_set(UnitFeed),
+                    // Before the aura feed, whose `raidFilter` verdicts rebuild off the book
+                    // when `PlayerActions` moves, so a book this pass settles is read this frame.
+                    feed::feed_actions
+                        .in_set(UnitFeed)
+                        .before(crate::ui_aura::AuraEvents),
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .in_set(CooldownEvents)

@@ -158,6 +158,8 @@ type AuraProjection = (u32, u8, bool, Option<String>);
 struct AuraFeedMemory {
     /// What this VM was last told.
     vm: crate::ui_script::VmMemo<AuraFeedMemo>,
+    /// The `raidFilter` test's books, rebuilt when either book or the catalog moves.
+    raid: RaidFilter,
     /// When [`trace_timers`] last printed: host state, outliving any one VM.
     traced_at: f64,
 }
@@ -246,6 +248,7 @@ fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraSta
         count,
         flags,
         level,
+        raid_listed,
     } = input;
     let display = catalog.and_then(|cat| cat.get(spell_id));
     AuraState {
@@ -265,12 +268,13 @@ fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraSta
         // `untilCancelled` is the player cache record's alone (`0xbc6040` `+0xc`).
         until_cancelled: false,
         channeled: display.is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
+        raid_listed,
     }
 }
 
-/// What one aura of a unit not the player is listed from: its slot, spell, stack count,
-/// `AURAFLAGS` nibble and `AURALEVELS` byte. A list is a pure function of these and the spell
-/// catalog.
+/// What one aura of a unit's list is built from: its slot, spell, stack count, `AURAFLAGS` nibble,
+/// `AURALEVELS` byte and `raidFilter` verdict ([`RaidFilter`]). A list is a pure function of these
+/// and the spell catalog.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AuraInput {
     slot: u8,
@@ -278,6 +282,7 @@ struct AuraInput {
     count: u8,
     flags: u8,
     level: u8,
+    raid_listed: bool,
 }
 
 /// The list [`AuraInput`]s make.
@@ -288,24 +293,26 @@ fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraSt
         .collect()
 }
 
-/// Another unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
+/// A unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
 /// `SetUnitBuff 0x534ac0` read them: ascending slot within each half, no durations, through the
 /// display filter, every one whatever the unit gate says ([`buffs_visible_on`]), which the list
-/// carries beside them.
+/// carries beside them, each with its `raidFilter` verdict.
 fn other_unit_inputs<'a>(
     store: &'a ObjectStore,
     catalog: Option<&'a SpellCatalog>,
+    raid: &'a RaidFilter,
 ) -> impl Iterator<Item = AuraInput> + 'a {
     store
         .0
         .unit_auras()
         .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
-        .map(|a| AuraInput {
+        .map(move |a| AuraInput {
             slot: a.slot,
             spell_id: a.spell_id,
             count: a.stacks,
             flags: a.flags,
             level: a.level,
+            raid_listed: raid.keeps(catalog, a.slot, a.spell_id),
         })
 }
 
@@ -317,23 +324,111 @@ fn other_unit_inputs<'a>(
 fn record_inputs<'a>(
     slots: impl Iterator<Item = (u8, u16)> + 'a,
     catalog: Option<&'a SpellCatalog>,
+    raid: &'a RaidFilter,
 ) -> impl Iterator<Item = AuraInput> + 'a {
     slots
         .map(|(slot, spell)| (slot, u32::from(spell)))
         .filter(move |&(_, spell)| spell != 0 && shown_in_aura_ui(catalog, spell))
-        .map(|(slot, spell_id)| AuraInput {
+        .map(move |(slot, spell_id)| AuraInput {
             slot,
             spell_id,
             count: 1,
             flags: 0,
             level: 0,
+            raid_listed: raid.keeps(catalog, slot, spell_id),
         })
 }
 
+/// What a set `raidFilter` keeps, the same test on the live walk and the record's (`UnitBuff`
+/// `0x51967b`, `0x5197a8`; `UnitDebuff` `0x519a1a`; the tooltip's `0x534c6c`, `0x534d6b`,
+/// `0x534fec`): a buff the player could cast (`0x4b3870`), a debuff the player can dispel
+/// (`0x4b3920`). Built off the player's and the pet's books.
+#[derive(Default)]
+struct RaidFilter {
+    /// The player's known spells, the bits at `[0xb710fc]` that every learn sets (`0x4b2603`).
+    known: std::collections::HashSet<u32>,
+    /// The pet's book, `0xb6f098`, which `0x4b3870` scans when the player does not know the spell
+    /// (`0x4b38a0`).
+    pet_book: Vec<u32>,
+    /// The dispel list `0xb71118`: each learnt spell's `SPELL_EFFECT_DISPEL` (38) effects'
+    /// `EffectMiscValue`, but an effect aimed at an enemy (`EffectImplicitTargetA` 6), appended at
+    /// the learn (`0x4b26a2`-`0x4b26ee`).
+    dispels: Vec<u32>,
+}
+
+impl RaidFilter {
+    #[cfg(test)]
+    fn build<'a>(
+        known: impl Iterator<Item = &'a u32>,
+        pet_book: impl Iterator<Item = u32>,
+        catalog: Option<&SpellCatalog>,
+    ) -> Self {
+        let mut raid = Self::default();
+        raid.set_known(known, catalog);
+        raid.pet_book.extend(pet_book);
+        raid
+    }
+
+    /// The player's book and the dispel list gathered from it.
+    fn set_known<'a>(
+        &mut self,
+        known: impl Iterator<Item = &'a u32>,
+        catalog: Option<&SpellCatalog>,
+    ) {
+        self.known.clear();
+        self.known.extend(known);
+        self.dispels.clear();
+        for d in self.known.iter().filter_map(|&id| catalog?.get(id)) {
+            for i in 0..3 {
+                let kind = d.effect_misc_value[i] as u32;
+                if d.effects[i] == SPELL_EFFECT_DISPEL
+                    && d.effect_implicit_target_a[i] != TARGET_ENEMY
+                    && !self.dispels.contains(&kind)
+                {
+                    self.dispels.push(kind);
+                }
+            }
+        }
+    }
+
+    /// The verdict on the aura in `slot`: the buff test on the first 32, the debuff test after.
+    fn keeps(&self, catalog: Option<&SpellCatalog>, slot: u8, spell_id: u32) -> bool {
+        let Some(d) = catalog.and_then(|c| c.get(spell_id)) else {
+            // Both tests read the row, which the walks require first (`0x519669`, `0x4b38ca`).
+            return false;
+        };
+        if slot >= UNIT_AURA_POSITIVE_SLOTS {
+            // `0x4b3920(Dispel)`, the row's `+0x10` (`0x519a1c`).
+            return self.dispels.contains(&d.dispel);
+        }
+        // `0x4b3870`: known or in the pet's book (`0x4b3893`, `0x4b38a0`), then `AttributesEx3`
+        // bit `0x4000` clear (`0x4b38cf`), the first effect not aimed at the caster
+        // (`ImplicitTargetA` 1, `0x4b38d4`), and no effect of 35, 119, 128, 129 or 27, the party,
+        // pet and area auras and the persistent area aura (`0x4b38e5`-`0x4b3902`).
+        (self.known.contains(&spell_id) || self.pet_book.contains(&spell_id))
+            && d.attributes_ex3 & 0x4000 == 0
+            && d.effect_implicit_target_a[0] != TARGET_SELF
+            && !d
+                .effects
+                .iter()
+                .any(|e| matches!(e, 0x23 | 0x77 | 0x80 | 0x81 | 0x1b))
+    }
+}
+
+/// `SPELL_EFFECT_DISPEL`, the effect the dispel list is gathered from (`0x4b26a2`).
+const SPELL_EFFECT_DISPEL: u32 = 38;
+/// `TARGET_UNIT_CASTER` (vmangos `SpellDefines.h:26`), the first effect's target that fails the
+/// buff test (`0x4b38d4`).
+const TARGET_SELF: u32 = 1;
+/// `TARGET_UNIT_ENEMY` (`SpellDefines.h:31`): a dispel aimed there is an offensive one, left off
+/// the dispel list (`0x4b26ab`).
+const TARGET_ENEMY: u32 = 6;
+
 /// `UnitBuff 0x519500`'s unit-level gate, before any slot: a unit's buffs are listed only if it
 /// has `UNIT_FLAG_AURAS_VISIBLE` or the uncharmed player can assist it (`0x5195aa`-`0x5195f7`),
-/// else every index is nil; `UnitDebuff` and `GameTooltip:SetUnitBuff` have no gate. vmangos sets the flag for Detect Magic
-/// (`UnitDefines.h:572`) and for a GM viewer (`Object.cpp:765-766`), so it is read as received.
+/// else every index is nil; `UnitDebuff` and `GameTooltip:SetUnitBuff` have no gate. vmangos sets
+/// the flag for Detect Magic (`UnitDefines.h:572`) and for a GM viewer (`Object.cpp:765-766`), so
+/// it is read as received.
 fn buffs_visible_on(rel: &Relations, unit: &RelUnit, me: Option<&RelUnit>) -> bool {
     if unit.flags & UNIT_FLAG_AURAS_VISIBLE != 0 {
         return true;
@@ -436,6 +531,8 @@ fn feed_auras(
     // The stamps' clock where `GetTime` stands: this feed runs in `UiFeed`, before the tick, so
     // the VM's clock is still the previous tick's.
     step: Res<benilla_world::frame_pace::FrameStep>,
+    // `Option`: a UI-only harness has no action store, and so no known spell.
+    actions: Option<Res<crate::ui_action::PlayerActions>>,
     mut mem: ResMut<AuraFeedMemory>,
 ) {
     let Some(mut script) = script else {
@@ -449,6 +546,7 @@ fn feed_auras(
         return;
     };
 
+    let mem = &mut *mem;
     let bevy_now = time.elapsed_secs_f64();
     let catalog = spells.as_ref().map(|s| &s.catalog);
     let spell_durations = spells.as_ref().map(|s| &s.durations);
@@ -498,6 +596,8 @@ fn feed_auras(
                 ),
                 channeled: display
                     .is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
+                // No reader of the buff cache takes a `raidFilter`.
+                raid_listed: false,
             }
         })
         .collect();
@@ -513,6 +613,28 @@ fn feed_auras(
         }
     }
 
+    let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
+    if catalog_moved || actions.as_ref().is_some_and(|a| a.is_changed()) {
+        mem.raid
+            .set_known(actions.iter().flat_map(|a| a.spells.iter()), catalog);
+    }
+    if catalog_moved || units.pet.is_changed() {
+        // The pet's book is the bar's spells its add-gate keeps (`0x4b2f90`, `ui_pet_book`).
+        let pet = &units.pet;
+        mem.raid.pet_book.clear();
+        mem.raid.pet_book.extend(
+            pet.spells
+                .spells
+                .iter()
+                .map(|e| e.action())
+                .filter(|&id| {
+                    catalog
+                        .and_then(|c| c.get(id))
+                        .is_some_and(|d| d.in_pet_book())
+                })
+                .filter(|_| pet.has_bar()),
+        );
+    }
     // This VM's keys: a `/reload`'s new VM starts empty, so every edge re-fires.
     let memo = mem.vm.get(&script);
 
@@ -564,7 +686,6 @@ fn feed_auras(
         .world_mouseover()
         .filter(|&guid| held(guid).is_some_and(|s| s.is_unit()))
         .unwrap_or(0);
-    let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
     let unit_changed = memo.units.feed(
         &mut script,
         units::Inputs {
@@ -578,6 +699,7 @@ fn feed_auras(
             buffs_visible,
             catalog,
             catalog_moved,
+            raid: &mem.raid,
         },
     );
 
@@ -666,7 +788,8 @@ mod tests {
 
     /// [`other_unit_inputs`] as the list.
     fn other_unit_auras(store: &ObjectStore, catalog: Option<&SpellCatalog>) -> Vec<AuraState> {
-        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog).collect();
+        let raid = RaidFilter::default();
+        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, &raid).collect();
         aura_list(catalog, &inputs)
     }
 
@@ -1000,6 +1123,76 @@ mod tests {
             (95, 0x0000_0008),     // AURAFLAGS slot 0 nibble 0x8 (eff0)
             (95 + 4, 0x0000_0008), // slot 32 nibble 0x8
         ]))
+    }
+
+    /// `raidFilter`'s two tests over the books: a buff counts when the player or the pet knows it
+    /// and it is no caster-only, flagged or area spell (`0x4b3870`); a debuff when a known spell's
+    /// friendly dispel, effect 38 not aimed at an enemy, names its dispel type (`0x4b3920`).
+    #[test]
+    fn the_raid_filter_keeps_castable_buffs_and_dispellable_debuffs() {
+        use benilla_formats::SpellDisplay;
+        let row = |id: u32, f: fn(&mut SpellDisplay)| {
+            let mut d = SpellDisplay {
+                id,
+                ..Default::default()
+            };
+            f(&mut d);
+            (id, d)
+        };
+        let catalog = SpellCatalog::from_displays(
+            [
+                row(1243, |_| {}),
+                row(1126, |_| {}),
+                row(3110, |_| {}),
+                row(588, |d| d.effect_implicit_target_a[0] = 1),
+                row(19746, |d| d.effects[2] = 0x23),
+                row(20217, |d| d.attributes_ex3 = 0x4000),
+                row(527, |d| {
+                    (d.effects[1], d.effect_misc_value[1]) = (38, 1);
+                    d.effect_implicit_target_a[1] = 21;
+                }),
+                row(370, |d| {
+                    (d.effects[0], d.effect_misc_value[0]) = (38, 2);
+                    d.effect_implicit_target_a[0] = 6;
+                }),
+                row(589, |d| d.dispel = 1),
+                row(980, |d| d.dispel = 2),
+            ]
+            .into(),
+        );
+        let known = [1243, 588, 19746, 20217, 527, 370];
+        let raid = RaidFilter::build(known.iter(), [3110].into_iter(), Some(&catalog));
+        let buff = |id| raid.keeps(Some(&catalog), 0, id);
+        let debuff = |id| raid.keeps(Some(&catalog), 32, id);
+        assert!(buff(1243), "known");
+        assert!(!buff(1126), "unknown");
+        assert!(buff(3110), "the pet's book");
+        assert!(!buff(588), "on the caster alone");
+        assert!(!buff(19746), "an area aura");
+        assert!(!buff(20217), "AttributesEx3 0x4000");
+        assert!(!buff(99999), "no row");
+        assert!(
+            debuff(589),
+            "Magic, which the known friendly dispel removes"
+        );
+        assert!(
+            !debuff(980),
+            "Curse, whose only dispel is aimed at an enemy"
+        );
+        // The verdict rides on the list.
+        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (47, 1243),
+            (47 + 1, 1126),
+            (95, 0x0000_0088),
+        ]));
+        let inputs: Vec<AuraInput> = other_unit_inputs(&store, Some(&catalog), &raid).collect();
+        let list = aura_list(Some(&catalog), &inputs);
+        assert_eq!(
+            list.iter()
+                .map(|a| (a.spell_id, a.raid_listed))
+                .collect::<Vec<_>>(),
+            [(1243, true), (1126, false)]
+        );
     }
 
     /// The list holds both halves whatever the gate says: the gate rides beside it for `UnitBuff`

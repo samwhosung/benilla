@@ -450,6 +450,7 @@ fn buff_hover_hangs_below_left_of_the_button() {
         cancelable: true,
         until_cancelled: false,
         channeled: false,
+        raid_listed: false,
     }]);
     // The event the stock buff buttons register (`BuffFrame.lua:113`).
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);

@@ -251,6 +251,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // aura slots) or debuffs (the 16 after them). An index out of that range, or one that finds no
     // aura, returns before the builder, leaving the tooltip as it was (`0x534bcb`, `0x534c9c`;
     // `0x534f3e`, `0x534f47`, `0x53501d`).
+    type SetterArgs = (Table, Value, Value, Option<Value>);
     for (verb, usage, helpful, slots) in [
         (
             "SetUnitBuff",
@@ -267,7 +268,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     ] {
         m.set(
             verb,
-            lua.create_function(move |lua, (this, token, index): (Table, Value, Value)| {
+            lua.create_function(move |lua, (this, token, index, raid_filter): SetterArgs| {
                 // `is-string` on the unit and `is-number` on the index, both before either is
                 // read, else the usage line (`0x534b5c`, `0x534b70`, `0x534dd2`; `0x855528` for
                 // the debuff).
@@ -288,11 +289,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     if ordinal >= slots {
                         return Ok(());
                     }
-                    // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks.
+                    // Every aura of the half, past `UnitBuff`'s unit gate, which this walk lacks; a
+                    // set `raidFilter` (`0x534bda`) counts the kept ones alone (`0x534c6c`).
+                    let raid = crate::script::aura::raid_filter_arg(raid_filter.as_ref());
                     list.and_then(|l| {
                         l.auras
                             .iter()
-                            .filter(|a| a.helpful == helpful)
+                            .filter(|a| a.helpful == helpful && (!raid || a.raid_listed))
                             .nth(ordinal as usize)
                     })
                     .map(|a| {

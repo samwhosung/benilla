@@ -206,6 +206,7 @@ mod tests {
             cancelable,
             until_cancelled: false,
             channeled: false,
+            raid_listed: false,
         }
     }
 

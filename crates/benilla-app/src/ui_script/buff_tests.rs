@@ -68,6 +68,7 @@ fn aura(
         // The feed takes this from the spell (`ui_aura::until_cancelled`); here, from the expiry.
         until_cancelled: expiration_time == 0.0,
         channeled: false,
+        raid_listed: false,
     }
 }
 
