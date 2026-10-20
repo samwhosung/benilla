@@ -102,7 +102,7 @@ pub(super) fn feed_action_state(
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
     // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units, the
-    // control flag and the skill lines.
+    // control flag, the skill lines and the world sweeps.
     cast_state: (
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
@@ -113,6 +113,8 @@ pub(super) fn feed_action_state(
         // A profession opener's line (`0x6de040`), which the checked test reads, and the skill
         // lines the walk's cost finds its level through.
         Option<Res<crate::ui_spellbook::SkillLines>>,
+        // The leave-world sweeps, which end the reactive list's world.
+        Option<Res<crate::ui_script::SweptWorlds>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
     selection: Res<Selection>,
@@ -123,11 +125,8 @@ pub(super) fn feed_action_state(
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<StateMemory>>,
-    // The reactive list, which lives for a world, not a VM, and the sweeps that end one.
-    mut reactive: (
-        Local<super::reactive::ReactiveList>,
-        Option<Res<crate::ui_script::SweptWorlds>>,
-    ),
+    // The reactive list, which lives for a world, not a VM.
+    mut reactive: Local<super::reactive::ReactiveList>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -149,7 +148,7 @@ pub(super) fn feed_action_state(
         memory.last_cd_trace = Some(now);
     }
 
-    let (bound, spell_mods, range_units, player, skill_lines) = &cast_state;
+    let (bound, spell_mods, range_units, player, skill_lines, swept) = &cast_state;
     let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
@@ -360,7 +359,7 @@ pub(super) fn feed_action_state(
     memory.pushed = fresh;
 
     // The reactive list's re-check (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
-    let (list, swept) = &mut reactive;
+    let list = &mut *reactive;
     let arrived = list.arrive(swept.as_deref().map_or(0, |s| s.0));
     if let Some(sp) = spells.as_deref() {
         if arrived || actions.is_changed() || spells.as_ref().is_some_and(|s| s.is_changed()) {

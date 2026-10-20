@@ -216,6 +216,8 @@ mod tests {
         ("ui_script/extract/mod.rs", "last_seam"),
         // The plate driver's anti-overlap scratch, cleared at the top of every run.
         ("vplates.rs", "bucket"),
+        // The floating text's, likewise; its system reads the VM for the outcome words.
+        ("combat_text/mod.rs", "bucket"),
         // The window's scale factor, which gates the same re-seat as `last_seam`.
         ("ui_script/extract/mod.rs", "last_dpi"),
         // Pushed unconditionally every frame; there is nothing remembered to go stale.
@@ -238,6 +240,9 @@ mod tests {
         // The glue booth's stage numbers, which must outlive the VM: a scene parked under the old
         // VM keeps its number until the booth drops it, so a new VM's scenes take fresh ones.
         ("ui_script/glue_scene.rs", "top"),
+        // The reactive spells' list, engine state the reference keeps past a `/reload` and empties
+        // only at a world's arrival (`0x5dea86`), which the list keys itself on.
+        ("ui_action/state.rs", "reactive"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};
