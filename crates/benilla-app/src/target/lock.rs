@@ -52,6 +52,18 @@ pub(crate) struct GoFacts {
     pub(crate) level: u32,
 }
 
+/// The known spell the resolver last matched to a skill slot by lock type, and what it compared:
+/// the out-params `0x5f84e5`-`0x5f850d` write at each match, before the value test, so after a scan
+/// with no sufficient opener they hold the last one tried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LockMatch {
+    pub(crate) spell: u32,
+    /// The skill the spell provides ([`benilla_formats::SpellDisplay::open_lock_skill`]).
+    pub(crate) points: i32,
+    /// The slot's requirement ([`required_skill`]).
+    pub(crate) required: i32,
+}
+
 /// The resolver's verdict: the reference's return and its spell-id out-param in one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LockOutcome {
@@ -98,14 +110,15 @@ pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 
 /// The reference's lock resolver `0x5f83d0`. Walks the eight `Lock.dbc` slots in order:
 /// - SKILL (2): past the Action gate, scan the known spells for an `OPEN_LOCK` effect whose
-///   `EffectMiscValue` is the slot's `Index`; a match sets `matched_spell` before the value test
-///   (`0x5f84f8`), then its effect value is compared to the requirement (`0x5f850f`).
+///   `EffectMiscValue` is the slot's `Index`; a match writes `matched` before the value test
+///   (`0x5f84f8`-`0x5f850d`), then its effect value is compared to the requirement (`0x5f850f`).
 /// - KEY (1): past the Action gate, look for the key item in our bags and keyring.
 /// - NONE (0): skipped.
 ///
 /// A SKILL or KEY slot makes the lock real even when the Action gate rejects it (`[ebp-1] = 1`
 /// before `0x5f81d0`), so a door whose only opener is gated out refuses instead of falling through
-/// to `CMSG_GAMEOBJ_USE`. Whether `matched_spell` is set routes the toast (`0xdf` or `0xe0`).
+/// to `CMSG_GAMEOBJ_USE`. Whether `matched` is set routes the toast (`0xdf` or `0xe0`); the
+/// GameObject tooltip colours its lock lines by it (`0x52ab2b`, `0x52abd8`).
 ///
 /// The first sufficient match is cast, so the scan order picks between two sufficient openers,
 /// such as 6478 "Opening" and 22810 "Opening - No Text" on LockType 13, which every character
@@ -121,7 +134,7 @@ pub(crate) fn resolve_lock(
     me: Option<&ObjectStore>,
     objects: &crate::net::Objects,
     go: GoFacts,
-    matched_spell: &mut Option<u32>,
+    matched: &mut Option<LockMatch>,
 ) -> LockOutcome {
     let mut real = false;
     for slot in slots {
@@ -139,11 +152,15 @@ pub(crate) fn resolve_lock(
                     if spell.open_lock_type() != Some(slot.index) {
                         continue;
                     }
-                    // `0x5f84f8`: set on the LockType match, before the value test.
-                    matched_spell.get_or_insert(id);
+                    // `0x5f84f8`-`0x5f850d`: written on the LockType match, before the value test.
                     let skill = crate::spell::spell_skill_value(me, skill_lines, id);
-                    let provides = spell.open_lock_skill(skill).unwrap_or(0);
-                    if provides >= required_skill(slot, go.level) {
+                    let found = LockMatch {
+                        spell: id,
+                        points: spell.open_lock_skill(skill).unwrap_or(0),
+                        required: required_skill(slot, go.level),
+                    };
+                    *matched = Some(found);
+                    if found.points >= found.required {
                         return LockOutcome::OpenBySpell(id);
                     }
                 }
@@ -541,8 +558,12 @@ mod tests {
         );
         assert_eq!(
             matched,
-            Some(1804),
-            "a LockType match writes the out-param before the value test"
+            Some(LockMatch {
+                spell: 1804,
+                points: 5,
+                required: 280,
+            }),
+            "a LockType match writes the out-params before the value test"
         );
 
         // The Searing Gorge gate, lock 84, has no Action 0 slot.
@@ -658,7 +679,11 @@ mod tests {
             LockOutcome::OpenBySpell(6478),
             "6478 \"Opening\", never 22810 \"Opening - No Text\""
         );
-        assert_eq!(matched, Some(6478), "the toast's out-param agrees");
+        assert_eq!(
+            matched.map(|m| m.spell),
+            Some(6478),
+            "the toast's out-param agrees"
+        );
 
         // Insertion order cannot change it: the set is ordered.
         let mut matched = None;

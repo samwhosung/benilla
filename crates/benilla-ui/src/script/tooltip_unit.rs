@@ -124,6 +124,9 @@ pub enum TooltipTint {
     /// The satisfiable "Locked" line: `0xc0d420` = `0xff40c040`, the green rung of the
     /// skill-difficulty ramp `0x529fa0`, not the ordinary green `0xc0d3ac` = `0xff00ff00`.
     LockOpen,
+    /// The skill-difficulty ramp `0x529fa0` of a known opener's value against the requirement:
+    /// a skill-opened "Locked" line (`0x52ab31`) and `LOCKED_WITH_SPELL_KNOWN` (`0x52abd8`).
+    Skill { required: i32, value: i32 },
 }
 
 /// `CreatureType.dbc` id 10, "Not specified".
@@ -489,6 +492,9 @@ impl super::UiScript {
                     TooltipTint::White => WHITE,
                     TooltipTint::Red => RED,
                     TooltipTint::LockOpen => LOCK_OPEN,
+                    TooltipTint::Skill { required, value } => {
+                        super::tooltip_item::names::skill_color(required, value)
+                    }
                 };
                 append_line(lua, this, (text.clone(), colour), None, false)?;
             }

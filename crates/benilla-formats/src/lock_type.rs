@@ -42,6 +42,12 @@ impl LockTypeCatalog {
             .filter(|n| !n.is_empty())
     }
 
+    /// A row's `Name` as it is, blank included; `None` only for a missing row, which the
+    /// GameObject tooltip names `UNKNOWN` (`0x52ac37`-`0x52ac50`).
+    pub fn row_name(&self, lock_type_id: u32) -> Option<&str> {
+        self.names.get(&lock_type_id).map(String::as_str)
+    }
+
     /// Every row's `Name`, by `LockType` index, a blank one included: the item tooltip answers
     /// `UNKNOWN` only for a row that is missing (`0x52bede`..`0x52bef2`), else the name as it is,
     /// blank too (`0x52bef4`).

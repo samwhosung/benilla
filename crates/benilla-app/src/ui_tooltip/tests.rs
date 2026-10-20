@@ -831,35 +831,51 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
     );
 }
 
-/// Red only when the resolver finds no opener; a key, a known skill, no requirement and no
-/// `Lock.dbc` row all read green.
+/// Red only when the resolver finds no opener; a key, no requirement and no `Lock.dbc` row read
+/// green, and a known skill opener the margin ramp of its value against the requirement
+/// (`0x52ab2b`-`0x52ab38`).
 #[test]
 fn the_locked_line_greens_when_the_lock_can_be_opened() {
-    use crate::target::lock::LockOutcome;
+    use crate::target::lock::{LockMatch, LockOutcome};
 
-    // The Scarlet Key in hand at the Armory Door.
+    // The Scarlet Key in hand at the Armory Door, a lockpicking match tried before it.
+    let tried = Some(LockMatch {
+        spell: 1804,
+        points: 100,
+        required: 280,
+    });
     assert_eq!(
-        locked_line_tint(Some(LockOutcome::OpenByKey(7146))),
+        locked_line_tint(Some(LockOutcome::OpenByKey(7146)), tried),
         TooltipTint::LockOpen,
         "holding the key must read green"
     );
     // The same door without the key.
     assert_eq!(
-        locked_line_tint(Some(LockOutcome::Unmet)),
+        locked_line_tint(Some(LockOutcome::Unmet), tried),
         TooltipTint::Red,
         "no key still reads red"
     );
-    // A known skill opener: green, where the reference ramps by margin (`locked_line_tint`).
+    // A known skill opener: the ramp of its value against the requirement.
     assert_eq!(
-        locked_line_tint(Some(LockOutcome::OpenBySpell(2575))),
-        TooltipTint::LockOpen
+        locked_line_tint(
+            Some(LockOutcome::OpenBySpell(1804)),
+            Some(LockMatch {
+                spell: 1804,
+                points: 300,
+                required: 280,
+            })
+        ),
+        TooltipTint::Skill {
+            required: 280,
+            value: 300
+        }
     );
     // A lock row that imposes nothing, and a flag-locked object with no row at all.
     assert_eq!(
-        locked_line_tint(Some(LockOutcome::Unlocked)),
+        locked_line_tint(Some(LockOutcome::Unlocked), None),
         TooltipTint::LockOpen
     );
-    assert_eq!(locked_line_tint(None), TooltipTint::LockOpen);
+    assert_eq!(locked_line_tint(None, None), TooltipTint::LockOpen);
 }
 
 /// A trainer list that lands this frame is hoverable in this frame's tick: the trainer feed derives

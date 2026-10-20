@@ -497,3 +497,39 @@ fn a_world_objects_tooltip_tints_its_backdrop_and_a_corpses_does_not() {
     assert_eq!(text_rgb(&s), (255, 210, 0), "the object's name is gold");
     assert!(s.take_errors().is_empty());
 }
+
+/// A lock line tinted by a known opener's margin takes the skill ramp `0x529fa0`'s colour.
+#[test]
+fn a_skill_tinted_lock_line_draws_the_ramps_colour() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")
+    "#,
+    )
+    .unwrap();
+    let rgb = |s: &mut UiScript, value: i32| -> (u8, u8, u8) {
+        let lines = [(
+            "Requires Herbalism".to_string(),
+            TooltipTint::Skill {
+                required: 100,
+                value,
+            },
+        )];
+        s.publish_world_mouseover(Some(value as u64 + 1));
+        assert!(s.world_tooltip_gameobject("Peacebloom", &lines, false));
+        let (r, g, b): (f32, f32, f32) = s
+            .eval("return GameTooltipTextLeft2:GetTextColor()")
+            .unwrap();
+        let q = |c: f32| (c * 255.0).round() as u8;
+        (q(r), q(g), q(b))
+    };
+    assert_eq!(rgb(&mut s, 99), (255, 32, 32));
+    assert_eq!(rgb(&mut s, 100), (255, 128, 64));
+    assert_eq!(rgb(&mut s, 125), (255, 255, 0));
+    assert_eq!(rgb(&mut s, 150), (64, 192, 64));
+    assert_eq!(rgb(&mut s, 200), (128, 128, 128));
+    assert!(s.take_errors().is_empty());
+}
