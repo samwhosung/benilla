@@ -45,6 +45,7 @@ fn a_spell_with_no_record_writes_no_line() {
         reputations: &reputations,
         spells: Some(&spells),
         names: None,
+        skill_lines: None,
         ranges: &ranges,
         periodic: true,
     };
@@ -118,6 +119,47 @@ mod emitters {
     const ME: u64 = 1;
     const MOB: u64 = 2;
     const FIREBALL: u32 = 133;
+    /// A 15 s heal over time.
+    const RENEW: u32 = 139;
+    /// A 45 s one.
+    const LONG_HOT: u32 = 8936;
+
+    /// Fireball with no duration row, and the two heals with theirs.
+    fn spells() -> crate::ui_action::Spells {
+        use benilla_formats::{SpellDisplay, SpellDuration};
+        let display = |id, name: &str, duration_index| {
+            (
+                id,
+                SpellDisplay {
+                    id,
+                    name: name.into(),
+                    duration_index,
+                    ..Default::default()
+                },
+            )
+        };
+        let row = |ms| SpellDuration {
+            base_ms: ms,
+            per_level_ms: 0,
+            max_ms: ms,
+        };
+        crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [
+                    display(FIREBALL, "Fireball", 0),
+                    display(RENEW, "Renew", 7),
+                    display(LONG_HOT, "Regrowth", 8),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            durations: benilla_formats::SpellDurationCatalog::from_rows([
+                (7, row(15_000)),
+                (8, row(45_000)),
+            ]),
+            ..crate::ui_action::Spells::empty_for_tests()
+        }
+    }
 
     /// No pose held: every endpoint is in range.
     struct NoPoses;
@@ -144,7 +186,7 @@ mod emitters {
                 index: GuidIndex::default(),
                 stores: HashMap::new(),
                 factions: factions(),
-                spells: super::spells_with(&[(FIREBALL, "Fireball", 0)]),
+                spells: spells(),
             };
             bench.hold(&player(ME, HUMAN));
             bench.hold(&creature(MOB, ORC));
@@ -175,6 +217,7 @@ mod emitters {
                 reputations: &reputations,
                 spells: Some(&self.spells),
                 names: None,
+                skill_lines: None,
                 ranges: &ranges,
                 periodic: true,
             };
@@ -314,10 +357,14 @@ mod emitters {
     }
 
     fn periodic(ticks: Vec<PeriodicTick>) -> Vec<PendingCombat> {
+        periodic_of(FIREBALL, ticks)
+    }
+
+    fn periodic_of(spell_id: u32, ticks: Vec<PeriodicTick>) -> Vec<PendingCombat> {
         let s = PeriodicAuraLog {
             target: ME,
             caster: MOB,
-            spell_id: FIREBALL,
+            spell_id,
             ticks,
         };
         Bench::new().lines(|ctx, st, po, log| super::super::periodic_aura_log(&s, ctx, st, po, log))
@@ -387,8 +434,22 @@ mod emitters {
         let mut line = lines[0].clone();
         line.fills.attacker = "Shaman".into();
         assert_eq!(line.word_data(&word).as_deref(), Some("Shaman"));
-        let tick = periodic(vec![PeriodicTick::Heal { amount: 12 }]);
+        let tick = periodic_of(RENEW, vec![PeriodicTick::Heal { amount: 12 }]);
         assert_eq!(words(&tick), [Some(LineWord::named("PERIODIC_HEAL", 12))]);
+    }
+
+    /// `0x627240` words a heal over time of 30 s or less (`0x627406`), and one with no duration
+    /// row not at all (`0x6273d6`); the line is written either way.
+    #[test]
+    fn only_a_short_heal_over_time_raises_its_word() {
+        let heal = || vec![PeriodicTick::Heal { amount: 12 }];
+        let short = periodic_of(RENEW, heal());
+        assert_eq!(words(&short), [Some(LineWord::named("PERIODIC_HEAL", 12))]);
+        for spell in [LONG_HOT, FIREBALL] {
+            let lines = periodic_of(spell, heal());
+            assert_eq!(stems(&lines), ["PERIODICAURAHEAL"]);
+            assert_eq!(words(&lines), [None], "spell {spell}");
+        }
     }
 
     /// `0x62bab0` returns on code 0 before anything (`0x62babb`); a real code names the spell.

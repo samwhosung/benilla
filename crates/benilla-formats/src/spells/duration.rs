@@ -38,6 +38,13 @@ pub struct SpellDurationCatalog {
 }
 
 impl SpellDurationCatalog {
+    /// A catalog of the given rows, for callers' tests.
+    pub fn from_rows(rows: impl IntoIterator<Item = (u32, SpellDuration)>) -> Self {
+        Self {
+            durations: rows.into_iter().collect(),
+        }
+    }
+
     /// Test-only seeding for the token engine's tests.
     #[cfg(test)]
     pub(crate) fn insert_for_tests(&mut self, index: u32, base_ms: i32) {

@@ -520,9 +520,9 @@ pub(in crate::combat_log) fn periodic_aura_log(
                     resisted: resist,
                 },
             ),
-            PeriodicTick::Heal { amount } => {
-                periodic_heal(log, ctx, poses, &spell, caster, target, amount)
-            }
+            PeriodicTick::Heal { amount } => periodic_heal(
+                log, ctx, stores, poses, &spell, s.spell_id, caster, target, amount,
+            ),
             // The same displayed-figure divide, at `0x627087` in `0x626dd0`.
             PeriodicTick::Energize { power, amount } => {
                 power_gain_line(log, ctx, poses, &spell, caster, target, power, amount, true)
@@ -552,12 +552,15 @@ pub(in crate::combat_log) fn periodic_aura_log(
 }
 
 /// `0x627240`, a periodic heal tick: `PERIODICAURAHEAL`, typed off the target (`0x62732c`), and
-/// worded `PERIODIC_HEAL` with the caster's name and the amount (`0x627414`).
+/// worded `PERIODIC_HEAL` with the caster's name and the amount (`0x627414`), but only for a heal
+/// over time of 30 s or less ([`periodic_heal_worded`]).
 fn periodic_heal(
     log: &mut ChatLog,
     ctx: &ChatCtx,
+    stores: &impl Stores,
     poses: &impl Poses,
     spell: &str,
+    spell_id: u32,
     caster: (u64, UnitClass),
     target: (u64, UnitClass),
     amount: u32,
@@ -565,6 +568,23 @@ fn periodic_heal(
     let Some(kind) = combat::periodic_kind(target.1, true) else {
         return;
     };
+    let worded = ctx.spells.is_some_and(|spells| {
+        let Some(display) = spells.catalog.get(spell_id) else {
+            return false;
+        };
+        let me = ctx
+            .self_guid
+            .0
+            .and_then(|g| ctx.index.0.get(&g))
+            .and_then(|&e| stores.store(e));
+        let level = display.skill_level(crate::spell::spell_skill_value(
+            me,
+            ctx.skill_lines,
+            spell_id,
+        ));
+        periodic_heal_worded(spells.durations.get(display.duration_index), level)
+    });
+    let word = LineWord::named("PERIODIC_HEAL", amount);
     queue_worded(
         log,
         ctx,
@@ -578,8 +598,28 @@ fn periodic_heal(
             amount: i64::from(amount),
             ..Default::default()
         },
-        to_me(target.1, LineWord::named("PERIODIC_HEAL", amount)),
+        worded.then(|| to_me(target.1, word)).flatten(),
     );
+}
+
+/// `0x627240`'s word gate: the aura's `SpellDuration` row (`rec+0x78`; no row, no word,
+/// `0x6273d6`), its base plus its per-level term at `level`, the active player's
+/// `0x6e3130(spell, 0)`, capped at its maximum (`0x6273e7`-`0x627404`), and the word only when that
+/// is 30 000 ms or less (`0x627406`). A long heal over time ticks silently.
+fn periodic_heal_worded(row: Option<&benilla_formats::SpellDuration>, level: u32) -> bool {
+    let Some(row) = row else {
+        return false;
+    };
+    // `imul`, `add`: 32-bit and wrapping, the level read signed.
+    let scaled = (level as i32)
+        .wrapping_mul(row.per_level_ms)
+        .wrapping_add(row.base_ms);
+    let duration = if scaled >= row.max_ms {
+        row.max_ms
+    } else {
+        scaled
+    };
+    duration <= 30_000
 }
 
 /// vmangos `Powers` happiness, the one power with no `…_POINTS` GlobalString (`0x6278f0` returns

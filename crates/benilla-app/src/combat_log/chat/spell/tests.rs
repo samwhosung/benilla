@@ -1,5 +1,6 @@
 use super::{
-    combat, leech_family, leech_figures, periodic_leech_amount, power_gain, rounded_product,
+    combat, leech_family, leech_figures, periodic_heal_worded, periodic_leech_amount, power_gain,
+    rounded_product,
 };
 
 /// A rage gain words the displayed figure. `Unbridled Wrath Effect` (12964) energizes rage by
@@ -84,4 +85,23 @@ fn a_periodic_leech_is_pre_divided_before_the_formatter_divides_again() {
     );
     // The direct packet takes the same wire number through one divide only.
     assert_eq!(leech_figures(1, 100, 1.0), Some((10, 10)));
+}
+
+/// The duration `0x627240` tests: base plus per level, capped at the maximum, against 30 s
+/// inclusive (`0x6273e7`-`0x627406`); no row, no word.
+#[test]
+fn a_periodic_heal_is_worded_up_to_thirty_seconds() {
+    let row = |base_ms, per_level_ms, max_ms| benilla_formats::SpellDuration {
+        base_ms,
+        per_level_ms,
+        max_ms,
+    };
+    assert!(!periodic_heal_worded(None, 60));
+    assert!(periodic_heal_worded(Some(&row(30_000, 0, 30_000)), 60));
+    assert!(!periodic_heal_worded(Some(&row(30_001, 0, 30_001)), 60));
+    // The level term counts: 10 s + 25 × 1 s is 35 s.
+    assert!(periodic_heal_worded(Some(&row(10_000, 1_000, 60_000)), 20));
+    assert!(!periodic_heal_worded(Some(&row(10_000, 1_000, 60_000)), 25));
+    // ...capped at the maximum.
+    assert!(periodic_heal_worded(Some(&row(10_000, 1_000, 20_000)), 25));
 }
