@@ -69,7 +69,9 @@ pub struct Character {
     pub hair_color: u8,
     pub facial_hair: u8,
     pub level: u8,
-    /// The record's new-character byte (`+0x10a`, `m_newCharacter`).
+    /// The record's new-character byte (`+0x10a`, `m_newCharacter`): set when the wire level was 0,
+    /// which the parse stores as level 1 (`0x5b44e8`-`0x5b44f9`); vmangos never sends one. The
+    /// entry then opens at the race's intro eye and shows no loading tip (`0x46c203`, `0x46b671`).
     pub new_character: bool,
     /// `AreaTable.dbc` id of the character's zone.
     pub zone: u32,
@@ -100,7 +102,9 @@ impl Character {
         let hair_style = read_u8(r)?;
         let hair_color = read_u8(r)?;
         let facial_hair = read_u8(r)?;
-        let level = read_u8(r)?;
+        let wire_level = read_u8(r)?;
+        let new_character = wire_level == 0;
+        let level = wire_level.max(1);
         let zone = read_u32_le(r)?;
         let map = read_u32_le(r)?;
         let position = Vector3d::read(r)?;
@@ -129,7 +133,7 @@ impl Character {
             hair_color,
             facial_hair,
             level,
-            new_character: false,
+            new_character,
             zone,
             map,
             position,

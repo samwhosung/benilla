@@ -299,7 +299,8 @@ pub(crate) fn char_enum_body(characters: &[benilla_protocol::Character]) -> Vec<
             c.hair_style,
             c.hair_color,
             c.facial_hair,
-            c.level,
+            // The parse stores a wire level of 0 as level 1 and the new-character byte.
+            if c.new_character { 0 } else { c.level },
         ]);
         b.extend_from_slice(&c.zone.to_le_bytes());
         b.extend_from_slice(&c.map.to_le_bytes());
