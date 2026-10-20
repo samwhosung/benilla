@@ -80,7 +80,12 @@ fn already_known_tests_the_taught_spell_and_its_higher_ranks() {
             ranks: vec![2335, 2336],
             pet,
         }),
-        spell_triggers: vec![(0, 2364, "Teaches you.".into())],
+        spell_lines: vec![ItemSpellLine {
+            trigger: 0,
+            spell_id: 2364,
+            text: "Teaches you.".into(),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     s.set_item_template(9501, recipe(false));

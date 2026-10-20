@@ -253,7 +253,12 @@ fn set_inventory_item_name_only_is_the_trimmed_build() {
             armor: 100,
             max_durability: 90,
             required_level: 40,
-            spell_triggers: vec![(1, 100, "Zap".into())],
+            spell_lines: vec![ItemSpellLine {
+                trigger: 1,
+                spell_id: 100,
+                text: "Zap".into(),
+                ..Default::default()
+            }],
             description: "Sealed.".into(),
             ..Default::default()
         },

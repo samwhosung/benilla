@@ -104,7 +104,16 @@ pub(in crate::script) struct BuilderFlags {
     /// and the stat body are cut, and all after the cooldown line is skipped; the slot/type cell,
     /// durability, duration, requirements, spell triggers and set block still print.
     pub name_only: bool,
+    /// p7, how deep in a recipe's product this build runs, 0 for a build of its own: an
+    /// incremental build neither clears nor keeps its inputs and separates its name with a
+    /// newline (`0x52b874`). Only a recipe's spell line makes one (`0x52dbce`).
+    pub product_depth: u8,
 }
+
+/// The deepest product build a recipe line nests. The reference recurses without a bound; a
+/// product that teaches its own recipe would recurse until the stack runs out, which no
+/// `Spell.dbc` chain does.
+const MAX_PRODUCT_DEPTH: u8 = 4;
 
 /// Render one item into the tooltip in `0x52b650`'s order, and answer the builder's return value
 /// (`[ebp-0x38]`): whether a line that changes while the tooltip stays up was written, the
@@ -205,6 +214,11 @@ pub(super) fn render_view_flagged(
         WHITE
     } else {
         quality_color(v.quality)
+    };
+    // An incremental build's name is `"\n%s"` (`0x52b87b`..`0x52b8ab`).
+    let name = match flags.product_depth {
+        0 => name,
+        _ => format!("\n{name}"),
     };
     add((name, name_color))?;
     // The petition lines, below the name: a charter's `GUILD_CHARTER_*` pair or a petition's
@@ -679,24 +693,33 @@ pub(super) fn render_view_flagged(
             req_color(u32::from(rank) >= v.required_rep_rank),
         ))?;
     }
-    // Green, wrapped trigger lines: triggers 0 to 2 join their prefix key and the app-resolved
-    // text by the literal `"%s %s"` (`0x82ef08`, `0x52da37`..`0x52dae2`), a missing key reading as
-    // the empty string; any other trigger copies the text alone (`0x52da49`..`0x52da61`).
-    for &(trigger, _, ref text) in &v.spell_triggers {
-        let key = match trigger {
+    // Each spell block (`0x52d992`..`0x52dd4d`): a wrapped trigger line, triggers 0 to 2 joining
+    // their prefix key and the text by the literal `"%s %s"` (`0x82ef08`, `0x52da37`..`0x52dae2`),
+    // a missing key reading as the empty string, any other trigger the text alone
+    // (`0x52da49`..`0x52da61`); green, or white for a recipe (`0x52db25`..`0x52db35`). Then the
+    // block's charges, and a recipe's product and reagents.
+    for line in &v.spell_lines {
+        let key = match line.trigger {
             0 => Some("ITEM_SPELL_TRIGGER_ONUSE"),
             1 => Some("ITEM_SPELL_TRIGGER_ONEQUIP"),
             2 => Some("ITEM_SPELL_TRIGGER_ONPROC"),
             _ => None,
         };
-        let line = match key {
-            Some(key) => format!("{} {text}", get(key).unwrap_or_default()),
-            None => text.clone(),
+        let text = match key {
+            Some(key) => format!("{} {}", get(key).unwrap_or_default(), line.text),
+            None => line.text.clone(),
         };
-        addw((line, GREEN))?;
-    }
-    if let Some(charges) = charges_phrase(v.charges.max(0) as u32, &get) {
-        add((charges, WHITE))?;
+        let color = if line.recipe.is_some() { WHITE } else { GREEN };
+        addw((text, color))?;
+        // The absolute count, white (`0x52db51`..`0x52db8f`); a template 0 is -1 (`0x52da06`).
+        if line.charges != 0 && line.charges != -1 {
+            if let Some(charges) = charges_phrase(line.charges.unsigned_abs(), &get) {
+                add((charges, WHITE))?;
+            }
+        }
+        if let Some(recipe) = &line.recipe {
+            add_recipe(lua, this, recipe, flags.product_depth)?;
+        }
     }
     // The set block (`0x52d8a0..0x52e0f5`), above p4's cut at `0x52e14c`: a blank gold line, the
     // gold "name (owned/total)" header, the set's skill line, the members (cream `0xc0d368` when
@@ -942,6 +965,57 @@ fn time_bucket(ms: u64) -> (&'static str, u32) {
     };
     // The count is a dword in the reference; a timer long enough to overflow one does not exist.
     (suffix, u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+/// A recipe line's tail: the product's tooltip from an incremental build (`0x52dbce`: p1 the
+/// product, no object, no instance block, p7 = 1), its result unread, then the reagents as one
+/// white, wrapped `"\n%s"` of `ITEM_REQ_SKILL` (`0x52dcf0`..`0x52dd38`): each reagent's name,
+/// `"%s (%d)"` above a count of 1 (`0x854b30`), joined by `", "` (`0x84480c`). A reagent whose
+/// record is not cached is asked, with the tooltip as the answer's cookie, and the line waits
+/// (`0x52dc27`..`0x52dc32`); no reagent at all is no line (`0x52dcd1`).
+fn add_recipe(
+    lua: &Lua,
+    this: &Table,
+    recipe: &crate::script::ItemRecipe,
+    depth: u8,
+) -> mlua::Result<()> {
+    if depth < MAX_PRODUCT_DEPTH {
+        // A product not cached asks and adds nothing; the answer rebuilds the whole tooltip
+        // (`0x52b72e`, no hide with p7 set).
+        if let Some(product) = super::view_of(lua, recipe.product) {
+            let flags = BuilderFlags {
+                product_depth: depth + 1,
+                ..Default::default()
+            };
+            render_view_flagged(lua, this, &product, flags, None)?;
+        }
+    }
+    let mut list: Option<String> = None;
+    let mut waiting = false;
+    for &(item, count) in &recipe.reagents {
+        let Some(reagent) = super::view_of(lua, item) else {
+            waiting = true;
+            continue;
+        };
+        let part = match count {
+            c if c > 1 => format!("{} ({c})", reagent.name),
+            _ => reagent.name.clone(),
+        };
+        list = Some(match list {
+            None => part,
+            Some(head) => format!("{head}, {part}"),
+        });
+    }
+    match (list, waiting) {
+        (Some(list), false) => match crate::strings::global(lua, "ITEM_REQ_SKILL") {
+            Some(t) => {
+                let line = format!("\n{}", fill(&t, &[Arg::S(&list)]));
+                append_line(lua, this, (line, WHITE), None, true)
+            }
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
 }
 
 /// `ITEM_SPELL_CHARGES` or its `_P1` twin (`0x84e3b4`), pushed at `0x52cae8` for the enchant

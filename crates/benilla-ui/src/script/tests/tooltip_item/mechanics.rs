@@ -117,7 +117,8 @@ fn a_wrapped_description_sizes_in_the_show_and_survives_the_reenter_loop() {
         ItemTemplateView {
             name: "Storybook".into(),
             quality: 1,
-            charges: 1,
+            // ITEM_CONJURED: one row of the body font.
+            flags: 0x2,
             description:
                 "An exceedingly long tale of adventure and woe that would never fit on one line."
                     .into(),
@@ -135,7 +136,7 @@ fn a_wrapped_description_sizes_in_the_show_and_survives_the_reenter_loop() {
     .unwrap();
     // The stand-in engine's 5 per byte: the quoted description, 405 wide, splits at 230.4 into
     // rows of 230 and 170, the first piece 235 with the space its wrap skipped (`0x530884`); name
-    // 14 + gap 2 + charges 12 + gap 2 + two rows of 12 + 2·10.24.
+    // 14 + gap 2 + conjured 12 + gap 2 + two rows of 12 + 2·10.24.
     let size =
         |s: &UiScript| -> (f64, f64) { s.eval("return TT:GetWidth(), TT:GetHeight()").unwrap() };
     let want = (

@@ -611,6 +611,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let flags = BuilderFlags {
                     currently_equipped,
                     name_only,
+                    ..Default::default()
                 };
                 let duration_ms = inst.duration_ms;
                 // Template in flight: the header and the slot's own name, as `SetBagItem`'s

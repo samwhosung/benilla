@@ -127,18 +127,6 @@ fn bonuses_have_mod_tokens(
         .any(|&(_, spell)| spell_has_mod_tokens(spells, spell))
 }
 
-/// The tooltip's "N Charges" count, 0 for no line. The builder (`0x52d8a0`) reads a template 0 as
-/// `-1` (`0x52da01`), prints nothing for `-1` (`0x52db51`) and otherwise the absolute value
-/// (`0x52db56`): food's `-1` shows no line, a `-5` pool "5 Charges". It prints per spell slot; one
-/// line here, as no vmangos `item_template` row has two pools.
-fn charges_count(spells: &[benilla_protocol::messages::ItemSpellEntry]) -> i32 {
-    spells
-        .iter()
-        .find(|s| s.spell_id != 0 && s.charges != 0 && s.charges != -1)
-        .map(|s| s.charges.abs())
-        .unwrap_or(0)
-}
-
 /// The static tables a template view names its ids through, all loaded at startup.
 #[derive(Clone, Copy, Default)]
 struct ViewTables<'a> {
@@ -269,13 +257,21 @@ fn template_view(
         required_rep_faction: t.required_rep_faction,
         required_rep_rank: t.required_rep_rank,
         lock_id: t.lock_id,
-        spell_triggers: t
+        // A block with no description has no lines (`0x52da29`..`0x52da31`).
+        spell_lines: t
             .spells
             .iter()
             .filter(|s| s.spell_id != 0)
-            .filter_map(|s| spell_text(s.spell_id).map(|n| (s.trigger, s.spell_id, n)))
+            .filter_map(|s| {
+                Some(benilla_ui::script::ItemSpellLine {
+                    trigger: s.trigger,
+                    spell_id: s.spell_id,
+                    text: spell_text(s.spell_id)?,
+                    charges: s.charges,
+                    recipe: recipe_of(spells, s.spell_id),
+                })
+            })
             .collect(),
-        charges: charges_count(&t.spells),
         description: t.description.clone(),
         page_text: t.page_text,
         sell_price: t.sell_price,
@@ -294,6 +290,30 @@ fn template_view(
             .map(str::to_string),
         teaches: taught_spell(t, spells, skill_lines),
     }
+}
+
+/// A block's recipe (`0x52daf5`..`0x52db25`): its spell's Effect[0] is 36, and the spell that
+/// teaches (EffectTriggerSpell[0], `+0x1b4`) has Effect[0] 24, `SPELL_EFFECT_CREATE_ITEM`. The
+/// product is its EffectItemType[0] (`+0x19c`), the reagents its `Reagent` ids above 0 with their
+/// counts (`+0xa8`, `+0xc8`, `0x52dbf8`).
+fn recipe_of(
+    spells: Option<&crate::ui_action::Spells>,
+    spell_id: u32,
+) -> Option<benilla_ui::script::ItemRecipe> {
+    let catalog = &spells?.catalog;
+    let d = catalog.get(spell_id).filter(|d| d.effects[0] == 36)?;
+    let taught = catalog
+        .get(d.effect_trigger_spell[0])
+        .filter(|t| t.effects[0] == 24)?;
+    Some(benilla_ui::script::ItemRecipe {
+        product: taught.effect_item_type[0],
+        reagents: taught
+            .reagents
+            .iter()
+            .filter(|&&(id, _)| id as i32 > 0)
+            .map(|&(id, count)| (id, count as i32))
+            .collect(),
+    })
 }
 
 /// The spell block 0 teaches (`0x52d4fd`..`0x52d54d`): its spell's Effect[0] is 36
@@ -1617,8 +1637,8 @@ fn diff_and_push(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_container_source, ask_build_lookups, charges_count, resolve_slot, ContainerSlot,
-        FeedMemory, SlotGuids, BANK_CONTAINER, BANK_SLOTS,
+        apply_container_source, ask_build_lookups, resolve_slot, ContainerSlot, FeedMemory,
+        SlotGuids, BANK_CONTAINER, BANK_SLOTS,
     };
 
     /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
@@ -1771,6 +1791,68 @@ mod tests {
             ..slot(9000, -1)
         }];
         assert_eq!(teaches(&t), None, "block 1 is not read");
+    }
+
+    /// A block teaching a spell that creates an item is a recipe: the product is the taught
+    /// spell's EffectItemType[0] and the reagents its ids above 0 with their counts
+    /// (`0x52daf5`..`0x52dbf8`); a teach of anything else, or no teach, is none.
+    #[test]
+    fn a_block_teaching_a_create_item_spell_is_a_recipe() {
+        use benilla_formats::SpellDisplay;
+        use std::collections::HashMap;
+
+        let mut reagents = [(0, 0); 8];
+        reagents[0] = (2452, 1);
+        reagents[1] = (2450, 2);
+        reagents[3] = (3371, 1);
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+            (
+                2364,
+                SpellDisplay {
+                    effects: [36, 0, 0],
+                    effect_trigger_spell: [2335, 0, 0],
+                    ..Default::default()
+                },
+            ),
+            (
+                2335,
+                SpellDisplay {
+                    effects: [24, 0, 0],
+                    effect_item_type: [2459, 0, 0],
+                    reagents,
+                    ..Default::default()
+                },
+            ),
+            (
+                2366,
+                SpellDisplay {
+                    effects: [36, 0, 0],
+                    effect_trigger_spell: [2367, 0, 0],
+                    ..Default::default()
+                },
+            ),
+            (
+                2367,
+                SpellDisplay {
+                    effects: [6, 0, 0],
+                    ..Default::default()
+                },
+            ),
+        ]));
+        assert_eq!(
+            super::recipe_of(Some(&spells), 2364),
+            Some(benilla_ui::script::ItemRecipe {
+                product: 2459,
+                reagents: vec![(2452, 1), (2450, 2), (3371, 1)],
+            })
+        );
+        assert_eq!(
+            super::recipe_of(Some(&spells), 2366),
+            None,
+            "teaches an aura"
+        );
+        assert_eq!(super::recipe_of(Some(&spells), 2335), None, "no teach");
     }
 
     /// The requirement line's faction with no `Faction.dbc` row reads the literal `UNKNOWN`
@@ -2482,21 +2564,6 @@ mod tests {
             &[(2, 1), (4, 2)],
             Some(&spells)
         ));
-    }
-
-    /// The builder's charge gate (`0x52da01`, `0x52db51`).
-    #[test]
-    fn charge_gate_matches_the_real_builder() {
-        // Food and water carry `-1` in vmangos `item_template` (bread 4540, water 159 and 5350).
-        assert_eq!(charges_count(&[slot(433, -1)]), 0, "food's -1 = no line");
-        // A pool that uses the item up: Flame Deflector 4376 (`4057, -5`).
-        assert_eq!(charges_count(&[slot(4057, -5)]), 5, "wand-style pool");
-        assert_eq!(charges_count(&[slot(4057, 3)]), 3);
-        assert_eq!(charges_count(&[slot(433, 0)]), 0, "template 0 = sentinel");
-        assert_eq!(charges_count(&[slot(0, -5)]), 0, "no spell = no slot");
-        assert_eq!(charges_count(&[]), 0);
-        // A leading sentinel slot does not mask a later pool.
-        assert_eq!(charges_count(&[slot(433, -1), slot(4057, -10)]), 10);
     }
 
     /// On the real Spell.dbc, an undescribed spell such as a key's `Opening` builds no trigger

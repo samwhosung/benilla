@@ -145,7 +145,12 @@ fn axe() -> ItemTemplateView {
         max_durability: 90,
         required_level: 37,
         allowable_class: (1 << 0) | (1 << 3), // Warrior, Rogue
-        spell_triggers: vec![(2, 9633, "Ravager".into())],
+        spell_lines: vec![ItemSpellLine {
+            trigger: 2,
+            spell_id: 9633,
+            text: "Ravager".into(),
+            ..Default::default()
+        }],
         description: "A wicked axe of the Scarlet Crusade.".into(),
         sell_price: 15230,
         ..Default::default()

@@ -1,5 +1,5 @@
-//! The builder's spell loop (`0x52d975`..`0x52dd4d`): the trigger prefixes and the lines a slot's
-//! spell adds.
+//! The builder's spell loop (`0x52d975`..`0x52dd4d`): the trigger prefixes, each block's charges,
+//! and a recipe's product and reagents.
 
 use super::{lines_of, script};
 use crate::script::*;
@@ -9,10 +9,15 @@ fn triggered(triggers: &[u32]) -> ItemTemplateView {
     ItemTemplateView {
         name: "Charm".into(),
         quality: 1,
-        spell_triggers: triggers
+        spell_lines: triggers
             .iter()
             .enumerate()
-            .map(|(i, &t)| (t, 100 + i as u32, format!("text{t}")))
+            .map(|(i, &t)| ItemSpellLine {
+                trigger: t,
+                spell_id: 100 + i as u32,
+                text: format!("text{t}"),
+                ..Default::default()
+            })
             .collect(),
         ..Default::default()
     }
@@ -65,5 +70,209 @@ fn a_missing_prefix_key_keeps_the_line() {
     s.run("ITEM_SPELL_TRIGGER_ONEQUIP = nil").unwrap();
     s.set_item_template(9102, triggered(&[1]));
     assert_eq!(texts_of(&mut s, 9102), ["Charm", " text1"]);
+    assert!(s.take_errors().is_empty());
+}
+
+const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+/// Render `id` into `TT` and answer its lines with their colours.
+fn lines_after(s: &mut UiScript, id: u32) -> Vec<(String, [f32; 4])> {
+    texts_of(s, id);
+    lines_of(s)
+}
+
+fn spell_line(trigger: u32, text: &str, charges: i32) -> ItemSpellLine {
+    ItemSpellLine {
+        trigger,
+        spell_id: 100,
+        text: text.into(),
+        charges,
+        recipe: None,
+    }
+}
+
+/// Each block's charges follow its own line, white (`0x52db51`..`0x52db8f`): the absolute count,
+/// none for -1 or for a template 0, which reads as -1 (`0x52da06`).
+#[test]
+fn each_blocks_charges_follow_its_own_line() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        9103,
+        ItemTemplateView {
+            name: "Charm".into(),
+            quality: 1,
+            spell_lines: vec![
+                spell_line(0, "a", -5),
+                spell_line(1, "b", 0),
+                spell_line(0, "c", -1),
+                spell_line(2, "d", 1),
+            ],
+            ..Default::default()
+        },
+    );
+    let lines = lines_after(&mut s, 9103);
+    assert_eq!(
+        lines,
+        [
+            ("Charm".to_string(), WHITE),
+            ("[ONUSE] a".to_string(), GREEN),
+            ("[CHARGES 5 x]".to_string(), WHITE),
+            ("[ONEQUIP] b".to_string(), GREEN),
+            ("[ONUSE] c".to_string(), GREEN),
+            ("[ONPROC] d".to_string(), GREEN),
+            ("[CHARGES 1]".to_string(), WHITE),
+        ]
+    );
+    assert!(s.take_errors().is_empty());
+}
+
+const RECIPE: u32 = 9200;
+const POTION: u32 = 9201;
+const THISTLE: u32 = 2452;
+const BRIAR: u32 = 2450;
+const VIAL: u32 = 3371;
+
+/// A recipe for the potion, whose reagents are the thistle, two briarthorns and a vial.
+fn recipe_fixture() -> UiScript {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_template(
+        RECIPE,
+        ItemTemplateView {
+            name: "Recipe: Swiftness Potion".into(),
+            quality: 1,
+            spell_lines: vec![ItemSpellLine {
+                recipe: Some(ItemRecipe {
+                    product: POTION,
+                    reagents: vec![(THISTLE, 1), (BRIAR, 2), (VIAL, 1)],
+                }),
+                ..spell_line(0, "Teaches you how to make a Swiftness Potion.", -1)
+            }],
+            ..Default::default()
+        },
+    );
+    s.set_item_template(
+        POTION,
+        ItemTemplateView {
+            name: "Swiftness Potion".into(),
+            quality: 1,
+            spell_lines: vec![spell_line(0, "Increases run speed.", -1)],
+            ..Default::default()
+        },
+    );
+    for (id, name) in [(THISTLE, "Swiftthistle"), (BRIAR, "Briarthorn")] {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: name.into(),
+                quality: 1,
+                ..Default::default()
+            },
+        );
+    }
+    s
+}
+
+fn vial_arrives(s: &mut UiScript) {
+    s.set_item_template(
+        VIAL,
+        ItemTemplateView {
+            name: "Empty Vial".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    s.tick(0.1);
+}
+
+/// A block whose spell teaches a spell that creates an item is a recipe: its line is white
+/// (`0x52db25`), the product's tooltip follows from an incremental build, its name behind a
+/// newline (`0x52dbce`, `0x52b874`), then the reagents as one white `"\n%s"` of `ITEM_REQ_SKILL`,
+/// a count above 1 in `"%s (%d)"`, joined by `", "` (`0x52dbee`..`0x52dd38`).
+#[test]
+fn a_recipe_line_is_white_and_shows_its_product_and_reagents() {
+    let mut s = recipe_fixture();
+    vial_arrives(&mut s);
+    let lines = lines_after(&mut s, RECIPE);
+    assert_eq!(
+        lines,
+        [
+            ("Recipe: Swiftness Potion".to_string(), WHITE),
+            (
+                "[ONUSE] Teaches you how to make a Swiftness Potion.".to_string(),
+                WHITE
+            ),
+            ("\nSwiftness Potion".to_string(), WHITE),
+            ("[ONUSE] Increases run speed.".to_string(), GREEN),
+            (
+                "\n[REQ_SKILL Swiftthistle, Briarthorn (2), Empty Vial]".to_string(),
+                WHITE
+            ),
+        ]
+    );
+    assert!(s.take_errors().is_empty());
+}
+
+/// A reagent whose record is not cached asks for it and leaves the reagent line out
+/// (`0x52dc27`..`0x52dc32`, `0x52dcd8`); its answer rebuilds the tooltip with the line. A product
+/// in flight asks too and adds nothing, the rest of the build going on (`0x52b72e`).
+#[test]
+fn a_reagent_or_product_in_flight_waits_for_its_answer() {
+    let mut s = recipe_fixture();
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "RecipeSlot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        SetItemByIdForTest(TT, 9200)
+    "#,
+    )
+    .unwrap();
+    let texts =
+        |s: &mut UiScript| -> Vec<String> { lines_of(s).into_iter().map(|(t, _)| t).collect() };
+    assert_eq!(
+        texts(&mut s).len(),
+        4,
+        "no reagent line: {:?}",
+        texts(&mut s)
+    );
+    assert_eq!(s.take_item_stat_asks(), [VIAL]);
+    vial_arrives(&mut s);
+    assert_eq!(
+        texts(&mut s).last().map(String::as_str),
+        Some("\n[REQ_SKILL Swiftthistle, Briarthorn (2), Empty Vial]"),
+        "the answer rebuilds the reagent line"
+    );
+
+    let mut s = recipe_fixture();
+    vial_arrives(&mut s);
+    s.set_item_template(
+        RECIPE + 2,
+        ItemTemplateView {
+            name: "Recipe: Lost".into(),
+            quality: 1,
+            spell_lines: vec![ItemSpellLine {
+                recipe: Some(ItemRecipe {
+                    product: 9999,
+                    reagents: vec![(VIAL, 1)],
+                }),
+                ..spell_line(0, "Teaches.", -1)
+            }],
+            ..Default::default()
+        },
+    );
+    let lines = lines_after(&mut s, RECIPE + 2);
+    let texts: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "Recipe: Lost",
+            "[ONUSE] Teaches.",
+            "\n[REQ_SKILL Empty Vial]"
+        ]
+    );
+    assert_eq!(s.take_item_stat_asks(), [9999]);
     assert!(s.take_errors().is_empty());
 }

@@ -133,7 +133,12 @@ fn verified_families_signable_locked_resists_known() {
             start_quest: 42,
             lock_id: 7,
             resistances: [5, 5, 5, 5, 5, 5],
-            spell_triggers: vec![(6, 2019, "Recipe: Stew".into())],
+            spell_lines: vec![ItemSpellLine {
+                trigger: 6,
+                spell_id: 2019,
+                text: "Recipe: Stew".into(),
+                ..Default::default()
+            }],
             teaches: Some(TaughtSpell {
                 ranks: vec![2020],
                 pet: false,

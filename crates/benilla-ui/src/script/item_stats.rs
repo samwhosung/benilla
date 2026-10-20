@@ -84,13 +84,10 @@ pub struct ItemTemplateView {
     pub required_rep_line: Option<String>,
     pub required_rep_faction: u32,
     pub required_rep_rank: u32,
-    /// Green trigger-spell lines `(trigger, spell id, text)` in wire order: 0 "Use:", 1 "Equip:",
-    /// 2 "Chance on hit:", any other trigger the text alone (`0x52da37`..`0x52da61`).
-    pub spell_triggers: Vec<(u32, u32, String)>,
+    /// The spell blocks' lines in block order, each block whose spell has a non-empty
+    /// description (`0x52d992`..`0x52dd4d`).
+    pub spell_lines: Vec<ItemSpellLine>,
     pub lock_id: u32,
-    /// "N Charge(s)" for the first spell slot past the builder's gate (`0x52db51`: 0 and -1
-    /// print nothing, else the absolute value); 0 prints no line.
-    pub charges: i32,
     pub description: String,
     pub page_text: u32,
     /// Copper: the merchant money row, or `ITEM_UNSELLABLE` when 0 in a sell context.
@@ -111,6 +108,34 @@ pub struct ItemTemplateView {
     /// What the first spell slot (`+0x11c`, any trigger) teaches when that spell's first effect is
     /// 36, learn spell (`0x52d500`..`0x52d532`): the "Already known" line's subject.
     pub teaches: Option<TaughtSpell>,
+}
+
+/// One spell block's tooltip lines (`0x52d992`..`0x52dd4d`), app-resolved from the template and
+/// `Spell.dbc`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemSpellLine {
+    /// `ItemSpelltriggerType`: 0 "Use:", 1 "Equip:", 2 "Chance on hit:", any other the text
+    /// alone (`0x52da37`..`0x52da61`).
+    pub trigger: u32,
+    pub spell_id: u32,
+    /// The spell's `$`-expanded description, never empty (`0x52da29`).
+    pub text: String,
+    /// The block's template charges (`+0x144`): 0 reads as -1 (`0x52da06`), and -1 prints no
+    /// charges line (`0x52db51`).
+    pub charges: i32,
+    /// The block's spell teaches a spell that creates an item: its line goes white, and the
+    /// product's tooltip and the reagents follow (`0x52daf5`..`0x52dd38`).
+    pub recipe: Option<ItemRecipe>,
+}
+
+/// A recipe's product and reagents, from the taught spell (`0x52dba7`, `0x52dbee`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemRecipe {
+    /// The created item, the taught spell's EffectItemType[0] (`+0x19c`).
+    pub product: u32,
+    /// The taught spell's reagents with an id above 0, `(item, count)` in slot order (`+0xa8`,
+    /// `+0xc8`).
+    pub reagents: Vec<(u32, i32)>,
 }
 
 /// A learn spell's subject, app-resolved from `Spell.dbc` and `SkillLineAbility.dbc`.
