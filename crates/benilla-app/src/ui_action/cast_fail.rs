@@ -1,17 +1,19 @@
 //! Cast-failure text, resolved in the three layers of the reference's handler `0x6e1a00`:
 //!
-//! 1. The wire reason names a `SPELL_FAILED_*` GlobalStrings key ([`CAST_FAIL_KEYS`]).
-//! 2. A per-reason errorId goes to `CGGameUI::DisplayError` (`0x496720`): the default `0x2c` is
-//!    a bare `"%s"`, an override replaces the text. The pet's handler `0x6e8eb0` has its own
-//!    overrides ([`Caster`]); layers 1 and 3 are shared.
-//! 3. An argument arm (`0x6e1d8e`) fills the template's `%s`: the DBC arms in [`FailArgs::fill`],
+//! 1. The wire reason names a `SPELL_FAILED_*` GlobalStrings key ([`CAST_FAIL_KEYS`]); a spell
+//!    that teaches the pet reads the key's `_PET` variant first ([`trains_pet`]).
+//! 2. An argument arm (`0x6e1d8e`) fills the text's `%s`: the DBC arms in [`FailArgs::fill`],
 //!    the item and subclass arms (`0x78`, `0x5c`, `0x19`-`0x1b`, `0x31`) in the drain.
+//! 3. A per-reason errorId goes to `CGGameUI::DisplayError` (`0x496720`), which formats the id's
+//!    string with the text (`0x4967e9`): the default `0x2c` and most overrides are a bare `"%s"`,
+//!    the rest their own line. The player's chain ([`player_error_key`]) needs the spell's record;
+//!    the pet's handler `0x6e8eb0` has its own ids ([`Caster`]).
 //!
-//! The combat log (`0x62c360`) reads a second buffer the overrides never touch
-//! ([`CastFailLine::arg_text`]). `0x30`'s arm (`0x6e1e3d`) fills nothing in the reference.
+//! The combat log (`0x62c360`) reads the text before the errorId formats it
+//! ([`CastFailLine::arg_text`]). The `0x2f` and `0x30` arm (`0x6e1e3d`) fills nothing.
 //! `0x84` and `0x90` are unreachable in 1.12: the server never sends them, and their only client
 //! raise sites (`0x49614e`, `0x496128`) need the prospecting effect `0x7f`, which no shipped
-//! spell has. `0x0a`'s item-target line (`ERR_INVALID_ITEM_TARGET`) is not built.
+//! spell has.
 
 use std::collections::HashMap;
 
@@ -186,11 +188,80 @@ fn power_keys(power_type: u32) -> (&'static str, &'static str) {
 }
 
 /// The spell categories (`SpellRec+0x8`) the `0x28` and `0x3c` cooldown picks test.
-fn is_potion(spell: Option<&SpellDisplay>) -> bool {
-    spell.is_some_and(|d| matches!(d.category, 4 | 9))
+fn is_potion(d: &SpellDisplay) -> bool {
+    matches!(d.category, 4 | 9)
 }
-fn is_food(spell: Option<&SpellDisplay>) -> bool {
-    spell.is_some_and(|d| matches!(d.category, 0xA | 0xB))
+fn is_food(d: &SpellDisplay) -> bool {
+    matches!(d.category, 0xA | 0xB)
+}
+
+/// `((SpellRec+0x18 & 0x10) | 0x300) >> 4`: 0x31 for an ability (`Attributes & 0x10`), else 0x30.
+fn cooldown_key(spell: Option<&SpellDisplay>) -> &'static str {
+    if spell.is_some_and(|d| d.attributes & 0x10 != 0) {
+        "ERR_ABILITY_COOLDOWN"
+    } else {
+        "ERR_SPELL_COOLDOWN"
+    }
+}
+
+/// The `_PET` flag `[ebp-0x10]` (`0x6e1b1b`-`0x6e1b3c`): the first effect (`+0xf4`) teaches the
+/// pet, `LEARN_PET_SPELL` 0x39, or `LEARN_SPELL` 0x24 at implicit target 5 (`+0x148`), the pet.
+fn trains_pet(d: &SpellDisplay) -> bool {
+    match d.effects[0] {
+        0x39 => true,
+        0x24 => d.effect_implicit_target_a[0] == 5,
+        _ => false,
+    }
+}
+
+/// The player's errorId chain `0x6e1aab`-`0x6e1c5f`, in its order, by the key of the id each arm
+/// stores; `None` keeps the default `0x2c`. `0x4d` picks its id in its argument arm.
+fn player_error_key(reason: u8, d: &SpellDisplay) -> Option<&'static str> {
+    Some(match reason {
+        // `0x6e1ab7`: food 0x2f, potion 0x2e, else ability or spell.
+        0x3C if is_food(d) => "ERR_FOOD_COOLDOWN",
+        0x3C if is_potion(d) => "ERR_POTION_COOLDOWN",
+        0x3C => cooldown_key(Some(d)),
+        // `0x6e1b4d`: potion 0x2e, else 0x2d.
+        0x28 if is_potion(d) => "ERR_POTION_COOLDOWN",
+        0x28 => "ERR_ITEM_COOLDOWN",
+        0x78 => "ERR_SPELL_FAILED_TOTEMS",        // 0xd1 @0x6e1b71
+        0x5C => "ERR_SPELL_FAILED_REAGENTS",      // 0xd2 @0x6e1b7f
+        0x18 => "ERR_SPELL_FAILED_EQUIPPED_ITEM", // 0xd4 @0x6e1b8d
+        0x19..=0x1B => "ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S", // 0xd5 @0x6e1c58
+        0x09 => "ERR_GENERIC_NO_TARGET",          // 0xb8 @0x6e1bb6
+        0x59 => "ERR_SPELL_OUT_OF_RANGE",         // 0x131 @0x6e1bc7
+        0x2F => "ERR_NOAMMO_S",                   // 0x133 @0x6e1bd8
+        0x56 => "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S", // 0xd6 @0x6e1be9
+        // `0x6e1bfa`: a spell that targets items (`Targets & 0x10`, `+0x34`), else `0x2c`.
+        0x0A if d.targets & 0x10 != 0 => "ERR_INVALID_ITEM_TARGET", // 0x13c @0x6e1c04
+        0x41 => "ERR_SPELL_FAILED_NOTUNSHEATHED",                   // 0x140 @0x6e1c15
+        0x01 => "ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH",          // 0x18e @0x6e1c26
+        0x02 => "ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S",         // 0x18f @0x6e1c37
+        0x8E => "ERR_PLAY_TIME_EXCEEDED",                           // 0x1bf @0x6e1c4c
+        _ => return None,
+    })
+}
+
+/// The pet's errorIds (`0x6e8eb0`): reasons above `0x8d` take the default arm, the rest the index
+/// table `0x6e93d0`. Six are the `ERR_PET_SPELL_*` rows only this handler raises; `0x4d` picks its
+/// id in its argument arm. The pet sends `0x01`, `0x02`, `0x09`, `0x18`, `0x28`, `0x41` and `0x8e`
+/// to its generic arm, so it never says those lines; `0x17` goes there too and shows nothing only
+/// because 1.12 ships no `SPELL_FAILED_DONT_REPORT`.
+fn pet_error_key(reason: u8, spell: Option<&SpellDisplay>) -> Option<&'static str> {
+    Some(match reason {
+        0x00 => "ERR_PET_SPELL_AFFECTING_COMBAT", // 0x14c @0x6e8fab
+        0x13 => "ERR_PET_SPELL_DEAD",             // 0x150 @0x6e9017
+        0x32 => "ERR_PET_SPELL_NOPATH",           // 0x151 @0x6e9032
+        0x33 => "ERR_PET_SPELL_NOT_BEHIND",       // 0x14e @0x6e8fe1
+        0x59 => "ERR_PET_SPELL_OUT_OF_RANGE",     // 0x14d @0x6e8fc6
+        0x5F => "ERR_PET_SPELL_ROOTED",           // 0x14b @0x6e8f4f
+        0x65 => "ERR_PET_SPELL_TARGETS_DEAD",     // 0x14f @0x6e8ffc
+        // `0x6e8f2a`: ability or spell only; unlike the player's `0x6e1ab7`, no food or potion leg.
+        0x3C => cooldown_key(spell),
+        0x56 => "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S", // 0xd6 @0x6e92be
+        _ => return None,
+    })
 }
 
 /// The argument arms' inputs: the wire's argument word ([`super::CastFail::arg`]) and the DBC
@@ -253,6 +324,9 @@ impl FailArgs<'_> {
                 named(id.and_then(|id| self.focus?.name(id)))
             }
             0x56 => self.shapeshift_forms(caster, spell),
+            // The world arms; the pet's table has the subclass arm alone (`0x6e904d`).
+            0x19..=0x1B => named(self.found),
+            0x31 | 0x5C | 0x78 if caster == Caster::Player => named(self.found),
             _ => Fill::Template,
         }
     }
@@ -285,21 +359,20 @@ impl FailArgs<'_> {
     }
 }
 
-/// The default errorId `0x2c`, a bare `"%s"`: the line is the first layer's string, and this
+/// The default errorId `0x2c`, a bare `"%s"`: the line is the text as the arms left it, and this
 /// id's record decides the surface.
 pub(super) const PASSTHROUGH: &str = "ERR_SPELL_FAILED_S";
 
 /// One resolved cast-failure line: the text, and the errorId's key, whose catalog record picks
-/// the surface (`DisplayError` reads its kind); `ERR_SPELL_FAILED_NOTUNSHEATHED` is the one yellow
-/// override.
+/// the surface (`DisplayError` reads its kind) and the voice; `ERR_SPELL_FAILED_NOTUNSHEATHED` is
+/// the one yellow override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CastFailLine {
     pub key: &'static str,
     pub text: String,
-    /// The argText buffer the combat log (`0x62c360`) reads (`edi` at `0x6e21e2`): the
-    /// first-layer string (`0x6e1d77`), since an override changes only the displayed text. Only a
-    /// filled arm, `0x02` and `0x4d` rewrite it (`0x6e21d2`); empty means the log reads the
-    /// displayed text ([`Self::logged`]).
+    /// The text the errorId formats, which the combat log (`0x62c360`) reads too (`edi` at
+    /// `0x6e21e2`): the first-layer string (`0x6e1d77`), or what an arm wrote over it
+    /// (`0x6e21d2`); empty means the log reads the displayed text ([`Self::logged`]).
     pub arg_text: String,
 }
 
@@ -322,27 +395,11 @@ impl CastFailLine {
             &self.arg_text
         }
     }
-
-    /// The `0x4d` arm empties the argText buffer (`0x6e20fd`), so the log reads the displayed
-    /// text. The pet's line is never logged; it is blanked only to keep one shape.
-    fn arm_blanked(self) -> Self {
-        Self {
-            arg_text: String::new(),
-            ..self
-        }
-    }
-
-    fn fill(self, name: &str) -> Self {
-        Self {
-            text: self.text.replace("%s", name),
-            ..self
-        }
-    }
 }
 
 /// The line for a failed cast, `None` where the reference shows nothing; `get` is the VM's
-/// GlobalStrings lookup, and an absent or empty key shows nothing. Deviation: a reason past the
-/// table prints its hex code, so an unknown reason is visible.
+/// GlobalStrings lookup, and an absent or empty string or line shows nothing. Deviation: a reason
+/// past the table prints its hex code, so an unknown reason is visible.
 pub(super) fn cast_fail_text(
     caster: Caster,
     reason: u8,
@@ -351,115 +408,64 @@ pub(super) fn cast_fail_text(
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<CastFailLine> {
     let get_text = |key: &str| get(key).filter(|s| !s.is_empty());
-    // `[ebp-0x488]`, the first-layer string (`edi` from `0x6e1d9a`): what the log reads for
-    // every reason no arm claims, overrides included. Empty when 1.12 ships no such key.
-    let first_layer = CAST_FAIL_KEYS
-        .get(usize::from(reason))
-        .and_then(|k| get_text(k))
-        .map(|t| strip_tokens(&t))
-        .unwrap_or_default();
-    let get_display = |key: &'static str| {
-        get_text(key).map(|text| CastFailLine {
-            key,
-            text,
-            arg_text: first_layer.clone(),
-        })
-    };
-    // The errorId overrides, from the caster's own handler; everything after this is shared.
-    match caster {
-        // `0x6e8eb0`: reasons above `0x8d` take the default arm, the rest the index table
-        // `0x6e93d0`. Six overrides are the `ERR_PET_SPELL_*` rows only this handler raises.
-        Caster::Pet => match reason {
-            0x00 => return get_display("ERR_PET_SPELL_AFFECTING_COMBAT"), // 0x14c @0x6e8fab
-            0x13 => return get_display("ERR_PET_SPELL_DEAD"),             // 0x150 @0x6e9017
-            0x32 => return get_display("ERR_PET_SPELL_NOPATH"),           // 0x151 @0x6e9032
-            0x33 => return get_display("ERR_PET_SPELL_NOT_BEHIND"),       // 0x14e @0x6e8fe1
-            0x59 => return get_display("ERR_PET_SPELL_OUT_OF_RANGE"),     // 0x14d @0x6e8fc6
-            0x5F => return get_display("ERR_PET_SPELL_ROOTED"),           // 0x14b @0x6e8f4f
-            0x65 => return get_display("ERR_PET_SPELL_TARGETS_DEAD"),     // 0x14f @0x6e8ffc
-            // `0x6e8f2a`: `((SpellRec+0x18 & 0x10) | 0x300) >> 4`, ability or spell only; unlike
-            // the player's `0x6e1aab`, no food or potion leg.
-            0x3C => {
-                return get_display(if spell.is_some_and(|d| d.attributes & 0x10 != 0) {
-                    "ERR_ABILITY_COOLDOWN"
-                } else {
-                    "ERR_SPELL_COOLDOWN"
-                });
-            }
-            // `0x6e8f6a`: health takes `0x123`, the rest `[0x8118f0 + 4*power]`, the same five
-            // ids as the player's `0x8118dc`, so [`power_keys`] serves both.
-            0x4D => {
-                let power = spell.map_or(0, |d| d.power_type);
-                return get_display(power_keys(power).0).map(CastFailLine::arm_blanked);
-            }
-            // The pet sends `0x01`, `0x02`, `0x09`, `0x18`, `0x28`, `0x41` and `0x8e` to its
-            // generic arm, so it never says those lines. `0x17` goes there too and shows nothing
-            // only because 1.12 ships no `SPELL_FAILED_DONT_REPORT`. `0x56`'s pet arm
-            // (`0x6e921a`, errorId `0xd6`, a bare `"%s"` like `0x2c`) is in [`FailArgs::fill`].
-            _ => {}
-        },
-        // `0x6e1a00`, overrides at `0x6e1aab`-`0x6e1c5f`.
-        Caster::Player => match reason {
-            0x01 => return get_display("ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH"),
-            0x02 => {
-                let t = get_display("ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S")?;
-                let power = spell.map_or(0, |d| d.power_type);
-                let name = get_text(power_keys(power).1).unwrap_or_default();
-                // `0x6e211f` puts only the power noun in the argText buffer: the log reads the
-                // bare word.
-                return Some(CastFailLine {
-                    arg_text: name.clone(),
-                    ..t.fill(&name)
-                });
-            }
-            0x09 => return get_display("ERR_GENERIC_NO_TARGET"),
-            0x17 => return None, // DONT_REPORT jumps past DisplayError
-            0x18 => return get_display("ERR_SPELL_FAILED_EQUIPPED_ITEM"),
-            0x28 => {
-                return get_display(if is_potion(spell) {
-                    "ERR_POTION_COOLDOWN"
-                } else {
-                    "ERR_ITEM_COOLDOWN"
-                });
-            }
-            0x3C => {
-                let key = if is_food(spell) {
-                    "ERR_FOOD_COOLDOWN"
-                } else if is_potion(spell) {
-                    "ERR_POTION_COOLDOWN"
-                } else if spell.is_some_and(|d| d.attributes & 0x10 != 0) {
-                    "ERR_ABILITY_COOLDOWN"
-                } else {
-                    "ERR_SPELL_COOLDOWN"
-                };
-                return get_display(key);
-            }
-            0x41 => return get_display("ERR_SPELL_FAILED_NOTUNSHEATHED"),
-            0x4D => {
-                let power = spell.map_or(0, |d| d.power_type);
-                return get_display(power_keys(power).0).map(CastFailLine::arm_blanked);
-            }
-            0x59 => return get_display("ERR_SPELL_OUT_OF_RANGE"),
-            0x8E => return get_display("ERR_PLAY_TIME_EXCEEDED"),
-            _ => {}
-        },
+    let player = caster == Caster::Player;
+    // DONT_REPORT jumps past DisplayError (`0x6e1cfa`).
+    if player && reason == 0x17 {
+        return None;
     }
-    // The passthrough: errorId `0x2c` displays the key's string as is.
-    let Some(key) = CAST_FAIL_KEYS.get(usize::from(reason)) else {
+    let Some(&key) = CAST_FAIL_KEYS.get(usize::from(reason)) else {
         return Some(CastFailLine::passthrough(format!(
             "Spell failed ({reason:#04x})"
         )));
     };
-    let text = get_text(key)?;
-    let line = CastFailLine::passthrough;
+    // The errorId `[ebp-0x8]`, `0x2c` until an arm stores one (`0x6e1a45`). With no record the
+    // player's chain and its `_PET` flag are skipped (`0x6e1a7c`).
+    let (mut error, pet_text) = match (caster, spell) {
+        (Caster::Player, Some(d)) => (
+            player_error_key(reason, d),
+            !args.redisplay && trains_pet(d),
+        ),
+        (Caster::Player, None) => (None, false),
+        (Caster::Pet, _) => (pet_error_key(reason, spell), false),
+    };
+    // The first layer `[ebp-0x488]`: `<key>_PET` when flagged and not empty (`0x6e1d54`), else the
+    // key's own string; empty when 1.12 ships no such key.
+    let first = pet_text
+        .then(|| get_text(&format!("{key}_PET")))
+        .flatten()
+        .or_else(|| get_text(key))
+        .unwrap_or_default();
     // The argument arms (`0x6e1d8e`).
-    match args.fill(caster, reason, spell) {
-        Fill::Filled(name) => return Some(line(text.replace("%s", &name))),
-        // The epilogue `0x6e224f` skips the log too.
-        Fill::Nothing => return None,
-        Fill::Template => {}
-    }
-    Some(line(strip_tokens(&text)))
+    let text = match reason {
+        // `0x6e211f`: the power noun alone; a missing one leaves past the display (`0x6e2176`).
+        0x02 if player => {
+            let power = spell.map_or(0, |d| d.power_type);
+            get_text(power_keys(power).1)?
+        }
+        // `0x6e20eb`, and the pet's `0x6e8f6a`: health takes `0x123`, the rest the five ids of
+        // `0x8118dc` (the pet's `0x8118f0` holds the same), with an empty text (`0x6e20fd`).
+        0x4D => {
+            error = Some(power_keys(spell.map_or(0, |d| d.power_type)).0);
+            String::new()
+        }
+        _ => match args.fill(caster, reason, spell) {
+            Fill::Filled(name) => first.replace("%s", &name),
+            Fill::Template => strip_tokens(&first),
+            // The epilogue `0x6e224f` skips the log too.
+            Fill::Nothing => return None,
+        },
+    };
+    // `DisplayError` formats the id's string with the text (`0x4967e9`); the default's is 1.12's
+    // bare `"%s"`, so its line is the text.
+    let shown = match error {
+        Some(key) => get_text(key)?.replace("%s", &text),
+        None => text.clone(),
+    };
+    (!shown.is_empty()).then_some(CastFailLine {
+        key: error.unwrap_or(PASSTHROUGH),
+        text: shown,
+        arg_text: text,
+    })
 }
 
 /// Whether the reporter `0x6e1a00` reaches its slot pop `0x6e2201`/`0x6e2218` for a player

@@ -318,13 +318,14 @@ fn an_attack_toggled_off_cancels_its_queued_strike_with_a_pair_then_stop() {
 
 /// A refusal whose report leaves before its line and its tail (`report_reaches_pop`): a form the
 /// spell needs with no name to show, "Must be in %s" (0x56, `0x6e20c6`), refused by the attempt
-/// itself, shows nothing and fires nothing; with its form named the line shows, and the tail,
-/// nothing in flight, fires `SPELLCAST_FAILED`.
+/// itself, shows nothing and fires nothing; with its form named the line shows under errorId
+/// `0xd6` (`0x6e1be9`), whose string the recorder defines as its own key, and the tail, nothing
+/// in flight, fires `SPELLCAST_FAILED`.
 #[test]
 fn a_local_refusal_that_skips_its_text_skips_its_tail() {
     for (named, expected) in [
         (false, ""),
-        (true, "SPELL_FAILED_ONLY_SHAPESHIFT,SPELLCAST_FAILED"),
+        (true, "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S,SPELLCAST_FAILED"),
     ] {
         let mut f = frame(true);
         with_book_spell(
