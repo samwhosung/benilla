@@ -392,11 +392,24 @@ pub(super) fn feed_random_properties(
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
-    _names_pushed: Local<crate::ui_script::VmMemo<bool>>,
+    mut names_pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
+    // The enchant names a link's bare id reads (`0x52c9f2`): every named row, as the builder's
+    // loop tests no flag before it prints the name (`0x52ca23`..`0x52ca8b`).
+    if let Some(enchants) = enchants.as_deref() {
+        if !*names_pushed.get(&script) {
+            let names: std::collections::HashMap<u32, String> = enchants
+                .0
+                .iter_names()
+                .map(|(id, name)| (id, name.to_string()))
+                .collect();
+            script.set_enchant_names(names);
+            *names_pushed.get(&script) = true;
+        }
+    }
     if *pushed.get(&script) {
         return;
     }
