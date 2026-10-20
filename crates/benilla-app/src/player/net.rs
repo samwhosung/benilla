@@ -4,7 +4,7 @@
 //! signals `PLAYER_SKINNED`.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
 use super::ServerStandState;
@@ -46,18 +46,21 @@ fn on_player_skinned(In(ev): In<SessionEvent>, mut feed: ResMut<SkinnedFeed>) {
 
 /// `PLAYER_SKINNED` with the byte's truth as `arg1` (`0x48f400`, `%d`); the stock `UIParent.lua`
 /// handler hides the resurrect offers and prints `DEATH_CORPSE_SKINNED`.
-fn feed_player_skinned(script: Option<NonSendMut<UiScript>>, mut feed: ResMut<SkinnedFeed>) {
-    let Some(mut script) = script else {
+fn feed_player_skinned(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut feed: ResMut<SkinnedFeed>,
+) {
+    hosted_vm.run(|script| {
         // No VM (a capture or headless run): drop them so the queue stays bounded.
-        feed.0.clear();
-        return;
-    };
-    for free_repop in feed.0.drain(..) {
-        script.fire_event(
-            "PLAYER_SKINNED",
-            vec![ScriptValue::Int(i64::from(free_repop))],
-        );
-    }
+        let drained = feed.0.drain(..);
+        let Some(script) = script else { return };
+        for free_repop in drained {
+            script.fire_event(
+                "PLAYER_SKINNED",
+                vec![ScriptValue::Int(i64::from(free_repop))],
+            );
+        }
+    })
 }
 
 /// `OnExit(InWorld)`: a signal still waiting dies with the world's interface, which the reference
@@ -69,6 +72,7 @@ fn drop_unsignalled_skins(mut feed: ResMut<SkinnedFeed>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// Each packet signals once, in order, with its byte's truth as `arg1` (`0x5e7d54`,
     /// `0x48f407`), once the interface is up to hear it.
