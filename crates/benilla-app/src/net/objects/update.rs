@@ -499,6 +499,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             speeds,
             modes,
             rider,
+            xp_awarded,
         } => {
             let mut entity = sc.commands.spawn((
                 Guid(guid),
@@ -521,6 +522,9 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             }
             if let Some(r) = rider {
                 entity.insert(r);
+            }
+            if xp_awarded {
+                entity.insert(XpAwarded);
             }
             let e = entity.id();
             sc.index.0.insert(guid, e);
