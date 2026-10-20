@@ -1,7 +1,8 @@
 //! What the game tells the world, and what it does with what the world publishes back:
-//! [`publish_view_focus`] says where to stream from, ahead of the stream stage, and
-//! [`release_post_snap_hold`] ends the mover's settle hold on the residency the world publishes.
-//! The hold ends on residency, never on ground contact, the same way for every mover mode.
+//! [`publish_view_focus`] says where to stream from, ahead of the stream stage,
+//! [`release_post_snap_hold`] ends the mover's settle hold on the residency the world publishes,
+//! and [`publish_player_outdoors`] asks the world whether the body stands outdoors. The hold ends
+//! on residency, never on ground contact, the same way for every mover mode.
 
 use bevy::prelude::*;
 
@@ -154,6 +155,30 @@ pub(super) fn release_post_snap_hold(
             let _ = net.0.send(crate::net::ClientCommand::WorldportAck);
             info!("worldport: ack sent at settle release");
         }
+    }
+}
+
+/// The active player's answer to `CWorld::IsEntityOutdoors 0x6706f0`, which the spell validator
+/// asks through `0x612cc0` for its place rungs; true with no body, as for a null entity
+/// (`0x6706fa`).
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct PlayerOutdoors(pub(crate) bool);
+
+impl Default for PlayerOutdoors {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Asks [`PlayerOutdoors`] of the world where the body stands, after this frame's re-place.
+pub(crate) fn publish_player_outdoors(
+    test: benilla_world::wmo_portal::EntityOutdoors,
+    viewer: Res<Viewer>,
+    mut outdoors: ResMut<PlayerOutdoors>,
+) {
+    let now = viewer.at.is_none_or(|feet| test.at(feet));
+    if outdoors.0 != now {
+        outdoors.0 = now;
     }
 }
 

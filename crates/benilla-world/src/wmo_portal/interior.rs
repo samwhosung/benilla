@@ -96,18 +96,6 @@ pub(crate) const POSITION_PROBE_LIFT: f32 = 0.1;
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentAreaInterior(pub Option<WmoInteriorKeys>);
 
-/// The active player's answer to `CWorld::IsEntityOutdoors 0x6706f0`, which the spell validator
-/// asks through `0x612cc0` for its place rungs; true with no body, as for a null entity
-/// (`0x6706fa`).
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct PlayerOutdoors(pub bool);
-
-impl Default for PlayerOutdoors {
-    fn default() -> Self {
-        Self(true)
-    }
-}
-
 /// The group flag `0x6706f0` answers by once the entity's indoors bit is set (`0x670735`).
 const GROUP_OUTDOORS_FOR_SPELLS: u32 = 0x8000;
 
@@ -119,29 +107,35 @@ fn entity_outdoors(group_flags: Option<u32>) -> bool {
     group_flags.is_none_or(|f| f & EXTERIOR != 0 || f & GROUP_OUTDOORS_FOR_SPELLS != 0)
 }
 
-/// [`entity_outdoors`] for a unit node at `feet_world`, placed as the down-ray attach places it
-/// (`0x6a8a20`): the group of its one global nearest hit ([`nearest_claim`]).
-fn entity_outdoors_at<'a>(
-    wmos: &Assets<WmoModel>,
-    instances: impl IntoIterator<Item = &'a WmoPortalInstance>,
-    streamer: &TerrainStreamer,
-    adt_tiles: &Assets<AdtTile>,
-    feet_world: Vec3,
-) -> bool {
-    let instances: Vec<((), &WmoPortalInstance)> =
-        instances.into_iter().map(|inst| ((), inst)).collect();
-    let probe_world = feet_world + Vec3::Y * POSITION_PROBE_LIFT;
-    let group_flags = nearest_claim(
-        wmos,
-        &instances,
-        streamer,
-        adt_tiles,
-        probe_world,
-        LightAttach::DownRay,
-        EXTERIOR,
-    )
-    .map(|(claim, model, ..)| model.group_nav.get(claim.group).map_or(0, |g| g.flags));
-    entity_outdoors(group_flags)
+/// The placements and terrain `CWorld::IsEntityOutdoors 0x6706f0` is asked against, which the
+/// spell validator asks of the caster through `0x612cc0` for its place rungs. Read-only.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct EntityOutdoors<'w, 's> {
+    wmos: Res<'w, Assets<WmoModel>>,
+    instances: Query<'w, 's, &'static WmoPortalInstance>,
+    streamer: Res<'w, TerrainStreamer>,
+    adt_tiles: Res<'w, Assets<AdtTile>>,
+}
+
+impl EntityOutdoors<'_, '_> {
+    /// [`entity_outdoors`] for a unit node whose feet stand at `feet_world`, placed as the down-ray
+    /// attach places it (`0x6a8a20`): the group of its one global nearest hit ([`nearest_claim`]).
+    pub fn at(&self, feet_world: Vec3) -> bool {
+        let instances: Vec<((), &WmoPortalInstance)> =
+            self.instances.iter().map(|inst| ((), inst)).collect();
+        let probe_world = feet_world + Vec3::Y * POSITION_PROBE_LIFT;
+        let group_flags = nearest_claim(
+            &self.wmos,
+            &instances,
+            &self.streamer,
+            &self.adt_tiles,
+            probe_world,
+            LightAttach::DownRay,
+            EXTERIOR,
+        )
+        .map(|(claim, model, ..)| model.group_nav.get(claim.group).map_or(0, |g| g.flags));
+        entity_outdoors(group_flags)
+    }
 }
 
 /// Track [`CurrentAreaInterior`]: per placed building, the faces-only down-ray from the player's
@@ -154,15 +148,7 @@ pub(super) fn track_area_interior(
     streamer: Res<TerrainStreamer>,
     adt_tiles: Res<Assets<AdtTile>>,
     mut current: ResMut<CurrentAreaInterior>,
-    mut outdoors: ResMut<PlayerOutdoors>,
 ) {
-    // The player node's outdoors answer; with no body there is no entity (`0x6706fa`).
-    let now_outdoors = viewer.at.is_none_or(|feet| {
-        entity_outdoors_at(&wmos, instances.iter(), &streamer, &adt_tiles, feet)
-    });
-    if outdoors.0 != now_outdoors {
-        outdoors.0 = now_outdoors;
-    }
     // Cast from the position, lifted only for float safety, as the client does (`0x6a8a20`).
     let eye_world = if let Some(body) = viewer.at {
         body + Vec3::Y * POSITION_PROBE_LIFT

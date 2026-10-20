@@ -170,7 +170,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("vis_chain::VisChainOnly", "record"),
     ("weather::WeatherMessage", "record"),
     ("weather::WeatherState", "record"),
-    ("wmo_portal::PlayerOutdoors", "record"),
+    ("wmo_portal::EntityOutdoors", "record"),
     ("wmo_portal::room_pvs_visible", "record"),
     ("world_census::CensusReport", "record"),
     ("world_census::WorldCensus", "record"),

@@ -326,7 +326,7 @@ pub(crate) struct CastTargeting<'w, 's> {
     clock: Option<Res<'w, crate::net::ServerTime>>,
     /// The player's answer to the entity outdoors test, which the place rungs read; absent
     /// outside the world.
-    outdoors: Option<Res<'w, benilla_world::wmo_portal::PlayerOutdoors>>,
+    outdoors: Option<Res<'w, crate::player::PlayerOutdoors>>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -1013,9 +1013,9 @@ mod tests {
         assert_eq!(read(8, 1, None), (8, 1, false), "no clock reads night");
     }
 
-    /// The place rungs' input is the player's answer to `0x6706f0` the world keeps
-    /// ([`benilla_world::wmo_portal::PlayerOutdoors`]); a world without it reads outdoors, as a
-    /// null entity does (`0x6706fa`).
+    /// The place rungs' input is the player's answer to `0x6706f0`
+    /// ([`crate::player::PlayerOutdoors`]); a world without it reads outdoors, as a null entity
+    /// does (`0x6706fa`).
     #[test]
     fn the_context_reads_the_players_outdoors_answer() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1026,7 +1026,7 @@ mod tests {
             world.insert_resource(SelfGuid(Some(7)));
             world.insert_resource(Selection::default());
             if let Some(o) = outdoors {
-                world.insert_resource(benilla_world::wmo_portal::PlayerOutdoors(o));
+                world.insert_resource(crate::player::PlayerOutdoors(o));
             }
             world.spawn((SelfPlayer, ObjectStore(Default::default())));
             world
