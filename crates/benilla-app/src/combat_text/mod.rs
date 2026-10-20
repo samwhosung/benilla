@@ -604,6 +604,71 @@ mod tests {
         );
     }
 
+    /// `0x607140` reads the outcome's word through `FrameScript_GetText`, by its key in `0x86582c`
+    /// (`0x6071e7`-`0x6071f3`), as it floats it, and floats nothing for a missing or empty string
+    /// (`0x6071f8`-`0x6071ff`): an addon's or a locale's word is what shows.
+    #[test]
+    fn a_miss_word_is_its_global_string_and_an_empty_one_floats_nothing() {
+        use crate::entities::MissileMiss;
+        use crate::net::{ObjectStore, SelfGuid, SelfPlayer};
+        use benilla_ui::script::UiScript;
+
+        const FIREBALL: u32 = 133;
+        let float = |assign: &str| -> Vec<String> {
+            let mut app = App::new();
+            app.add_plugins(bevy::time::TimePlugin)
+                .init_resource::<UiQuads>()
+                .init_resource::<WorldTexts>()
+                .add_message::<MissileMiss>()
+                .add_message::<CombatTextSpawn>()
+                .init_resource::<SelfGuid>()
+                .init_resource::<DamageTextGates>()
+                .insert_resource(crate::ui_action::Spells {
+                    catalog: benilla_formats::SpellCatalog::from_displays(
+                        [(
+                            FIREBALL,
+                            benilla_formats::SpellDisplay {
+                                name: "Fireball".into(),
+                                speed: 24.0,
+                                ..Default::default()
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                    ..crate::ui_action::Spells::empty_for_tests()
+                })
+                .add_systems(Update, (missile_miss_text, float_combat_text).chain());
+            let script = UiScript::new().expect("VM");
+            script.run(assign).expect("assign RESIST");
+            app.insert_non_send_resource(script);
+            let me = app
+                .world_mut()
+                .spawn((SelfPlayer, ObjectStore::default(), Transform::default()))
+                .id();
+            let victim = app
+                .world_mut()
+                .spawn((ObjectStore::default(), Transform::default()))
+                .id();
+            app.world_mut().write_message(MissileMiss {
+                caster: me,
+                anchor: victim,
+                spell_id: FIREBALL,
+                code: 2, // RESIST
+            });
+            app.update();
+            app.world()
+                .resource::<WorldTexts>()
+                .0
+                .iter()
+                .map(|t| t.text.clone())
+                .collect()
+        };
+        assert_eq!(float("RESIST = 'Résiste'"), ["Résiste"]);
+        assert!(float("RESIST = ''").is_empty(), "an empty string");
+        assert!(float("RESIST = nil").is_empty(), "no string");
+    }
+
     /// The cull's walk collects indices unsorted, against the list before removal.
     #[test]
     fn drop_indices_takes_exactly_those() {

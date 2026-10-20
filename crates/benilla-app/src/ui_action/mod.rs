@@ -33,6 +33,8 @@ pub(crate) use feed::{spell_action_icon, MISSING_ITEM_ICON};
 mod feed_tests;
 mod net;
 mod ranks;
+#[cfg(test)]
+mod reactive_tests;
 mod recount;
 pub(crate) use recount::recount_item_actions;
 mod state;

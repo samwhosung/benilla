@@ -117,6 +117,8 @@ mod emitters {
 
     use super::super::ChatCtx;
 
+    mod words;
+
     const ME: u64 = 1;
     const MOB: u64 = 2;
     const FIREBALL: u32 = 133;

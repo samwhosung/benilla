@@ -87,3 +87,51 @@ pub(super) fn miss(log: &mut ChatLog, guid: u64, code: u8) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ui_chat::ChatLog;
+
+    /// A displayed swing on a held player, as `(action, descriptor)` of its `UNIT_COMBAT`.
+    fn swing(victim_state: u32, hit_info: u32, damage: u32) -> Vec<(&'static str, &'static str)> {
+        let mut log = ChatLog::default();
+        let s = crate::creature_anim::SwingMessage {
+            attacker: bevy::prelude::Entity::PLACEHOLDER,
+            victim: None,
+            hit_info,
+            victim_state,
+            damage,
+            displayed: true,
+            seq: 0,
+        };
+        let player =
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]));
+        crate::ui_unit::melee_unit_combat(&mut log, &s, Some((1, &player)));
+        log.pending_unit_combat()
+            .into_iter()
+            .map(|f| (f.action, f.flags))
+            .collect()
+    }
+
+    /// `0x4946d0` takes its action from the victim state through the nine-word table `0x83de28`
+    /// (`0x494706`) and its descriptor from the amount and hit info alone (`0x494600`): an interrupt
+    /// is `INTERRUPT`, state 0 `MISS` whatever the damage, state 1 `WOUND` with none, and a dodge
+    /// keeps an absorb mark.
+    #[test]
+    fn a_swings_action_is_its_victim_states_word() {
+        assert_eq!(swing(4, 0, 30), [("INTERRUPT", "")]);
+        assert_eq!(swing(0, 0x80, 30), [("MISS", "CRITICAL")]);
+        assert_eq!(swing(0, 0x10, 0), [("MISS", "")]);
+        assert_eq!(swing(1, 0, 0), [("WOUND", "")]);
+        assert_eq!(swing(1, 0x4000, 30), [("WOUND", "GLANCING")]);
+        assert_eq!(swing(1, 0x40, 0), [("WOUND", "RESIST")]);
+        assert_eq!(swing(2, 0x20, 0), [("DODGE", "ABSORB")]);
+        assert_eq!(swing(3, 0, 0), [("PARRY", "")]);
+        assert_eq!(swing(5, 0x800, 0), [("BLOCK", "BLOCK")]);
+        assert_eq!(swing(6, 0, 0), [("EVADE", "")]);
+        assert_eq!(swing(7, 0, 0), [("IMMUNE", "")]);
+        assert_eq!(swing(8, 0, 0), [("DEFLECT", "")]);
+        // Past the table, which `0x494706` indexes unbounded and no server sends.
+        assert!(swing(9, 0, 0).is_empty());
+    }
+}
