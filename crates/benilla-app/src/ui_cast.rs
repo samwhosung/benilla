@@ -244,8 +244,8 @@ fn edge_event(
     }
 }
 
-/// A report made ready for the VM: everything outside it (a line's sound, a chat or combat-log
-/// line) is done, and what runs Lua is left, so it can run with the call host back in place.
+/// A report made ready for the VM: everything outside it (a line's sound, a chat line, a log
+/// file's tee) is done, and what runs Lua is left, so it can run with the call host back in place.
 pub(crate) enum Ready {
     /// `0x6e1a3c`: a refusal of the armed tradeskill repeat's spell ends the repeat.
     TradeSkillCastFailed(u32),
@@ -290,10 +290,13 @@ impl CastReporter<'_, '_> {
                         out.push(Ready::TradeSkillCastFailed(fail.spell_id));
                     }
                     if let Some(resolved) = self.lines.resolve(script, fail) {
-                        if let Some(log) = resolved.log {
-                            self.sink.chat.push_combat(log);
-                        }
                         out.extend(self.line(resolved.shown));
+                        // After the line (`0x6e21dd`), `0x6e21fc` → `LogCastFailure 0x62c360`,
+                        // whose line fires its chat event inside the report.
+                        if let Some(log) = resolved.log {
+                            let written = self.sink.chat.write_combat_now(script, &log);
+                            out.extend(written.into_iter().map(|(e, args)| Ready::Event(e, args)));
+                        }
                     }
                 }
                 CastReport::Bar(edge) => out.extend(

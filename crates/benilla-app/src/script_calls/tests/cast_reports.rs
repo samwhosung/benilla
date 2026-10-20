@@ -124,7 +124,7 @@ fn a_refused_cast_shows_its_line_and_fails_inside_the_call() {
 /// (`0x6e21dd`), `0x6e21fc` calls `LogCastFailure 0x62c360`, whose `AddCombatLogLine 0x626850`
 /// fires `CHAT_MSG_SPELL_FAILED_LOCALPLAYER` at once (`0x49b1b0` → `0x49b0b0`), ahead of the
 /// report's `SPELLCAST_FAILED` (`0x6e224a`). So the script's next line reads all three, and the
-/// chat feed is left nothing to fire after the call.
+/// chat feed is left only the line's tee to the log files.
 #[test]
 fn a_refused_casts_log_line_fires_inside_the_call_between_its_line_and_its_failure() {
     let mut f = frame(true);
@@ -158,8 +158,8 @@ fn a_refused_casts_log_line_fires_inside_the_call_between_its_line_and_its_failu
             .world()
             .resource::<crate::ui_chat::ChatLog>()
             .pending_kinds(),
-        Vec::<&str>::new(),
-        "nothing waits for the chat feed"
+        ["tee"],
+        "no event waits for the chat feed"
     );
 }
 

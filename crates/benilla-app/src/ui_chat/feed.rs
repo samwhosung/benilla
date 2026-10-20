@@ -117,6 +117,9 @@ enum Pending {
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),
+    /// A line whose event fired where it was written ([`ChatLog::write_combat_now`]): its tee to
+    /// the log files alone, in order with the lines around it.
+    Tee { combat: bool, line: String },
 }
 
 /// Fire `CHAT_MSG_ADDON(prefix, message, distribution, sender)` (`0x49a95f`), not through
@@ -343,6 +346,39 @@ impl ChatLog {
         self.q().pending.push(Pending::Signal(event));
     }
 
+    /// Write a combat-log line no name waits on where its formatter runs: `AddCombatLogLine
+    /// 0x626850` fires its `CHAT_MSG_*` at once (`0x49b1b0` → `0x49b0b0`), so the line's event and
+    /// then its `COMBAT_TEXT_UPDATE` word come back for the caller to signal in place, and only
+    /// the log-file tee waits for the drain. Nothing for a missing template, which writes neither.
+    pub(crate) fn write_combat_now(
+        &self,
+        script: &benilla_ui::script::UiScript,
+        line: &super::combat::PendingCombat,
+    ) -> Vec<(&'static str, Vec<benilla_ui::script::ScriptValue>)> {
+        let Some(text) =
+            super::combat::compose_line(script, line.family, line.variant, &line.fills)
+        else {
+            return Vec::new();
+        };
+        self.q().pending.push(Pending::Tee {
+            combat: line.kind.is_combat_log(),
+            line: text.clone(),
+        });
+        let event = ChatEvent::text_only(line.kind, text);
+        let mut out = vec![(super::event::event_name(line.kind), event.script_args())];
+        if let Some(word) = &line.word {
+            out.push((
+                "COMBAT_TEXT_UPDATE",
+                crate::ui_unit::combat_text_args(
+                    word.message_type,
+                    line.word_data(word),
+                    word.extra.clone(),
+                ),
+            ));
+        }
+        out
+    }
+
     /// Queue an honor award's line (`SMSG_PVP_CREDIT`); victim 0 is a bonus or objective award.
     pub(crate) fn push_pvp_credit(&self, honor: i32, victim: u64, rank: u8, side: u8) {
         // Both forks park: the template resolves at the drain.
@@ -408,6 +444,7 @@ impl ChatLog {
                 Pending::Standing { .. } => "standing",
                 Pending::Combat(_) => "combat",
                 Pending::Event(_) => "event",
+                Pending::Tee { .. } => "tee",
             })
             .collect()
     }
@@ -984,6 +1021,7 @@ pub(super) fn feed_chat(
                     );
                 }
                 Pending::Signal(event) => script.fire_event(event, vec![]),
+                Pending::Tee { combat, line } => windows.logs.record(combat, &line),
                 Pending::Event(mut event) => {
                     deliver(script, &mut windows, &mut channels, &mut event);
                 }
