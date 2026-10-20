@@ -961,6 +961,47 @@ mod tests {
         }
     }
 
+    /// The validator's caster reads: the stand state through `GetStandState 0x5ed570`, which with no
+    /// local state is the descriptor's byte; the sheathe state `[unit+0xd40]` (`0x609ba9`), the
+    /// descriptor's until the driver holds one; and `IsDaytime 0x60a050`, night with no clock.
+    #[test]
+    fn the_context_reads_the_posture_the_sheathe_and_the_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+        let read = |stand: u32, sheathe: u32, hour: Option<i32>| {
+            let mut world = World::new();
+            world.init_resource::<crate::spell::AutoSelfCast>();
+            world.insert_resource(Reputations::default());
+            world.insert_resource(SelfGuid(Some(7)));
+            world.insert_resource(Selection::default());
+            if let Some(hour) = hour {
+                let mut clock = crate::net::GameTime::new(0);
+                let time = benilla_protocol::WowTime {
+                    minute: 0,
+                    hour,
+                    weekday: 0,
+                    day: 17,
+                    month: 9,
+                    year: 26,
+                    spare: 0,
+                };
+                clock.set(time, 0);
+                world.insert_resource(crate::net::ServerTime(clock));
+            }
+            // `UNIT_FIELD_BYTES_1` (138) byte 0 and `UNIT_FIELD_BYTES_2` (164) byte 0.
+            let fields = benilla_protocol::ObjectFields::from_pairs(&[(138, stand), (164, sheathe)]);
+            world.spawn((SelfPlayer, ObjectStore(fields)));
+            world
+                .run_system_once(|targeting: CastTargeting| {
+                    let c = targeting.context();
+                    (c.self_stand_state, c.self_sheathe_state, c.daytime)
+                })
+                .expect("the context builds")
+        };
+        assert_eq!(read(1, 0, Some(12)), (1, 0, true));
+        assert_eq!(read(0, 2, Some(3)), (0, 2, false));
+        assert_eq!(read(8, 1, None), (8, 1, false), "no clock reads night");
+    }
+
     /// `BindTarget`'s unit branch is one else-if chain (`0x6e5cad`-`0x6e5ee7`): the first arm whose
     /// test holds clears its own bit, and on a dead unit `0x400`, or `0x8600` for the `0x2` arm;
     /// with none holding the unit binds nothing (`0x6e60dc`).
