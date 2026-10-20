@@ -139,8 +139,9 @@ pub enum PartyRequest {
     // ── The raid-management verbs ───────────────────────────────────────────────────────────
     /// `ConvertToRaid()`, leader only (`CMSG_GROUP_RAID_CONVERT`).
     ConvertToRaid,
-    /// `SetRaidSubgroup(index, group)`, both 1-based. The wire (`CMSG_GROUP_CHANGE_SUB_GROUP`)
-    /// takes a name and a 0-based subgroup, which the app resolves.
+    /// `SetRaidSubgroup(index, group)`, both 1-based; the binding raises for a `group` outside 1
+    /// to 8. The wire (`CMSG_GROUP_CHANGE_SUB_GROUP`) takes a name and a 0-based subgroup, which
+    /// the app resolves.
     SetSubgroup { index: u32, group: u32 },
     /// `SwapRaidSubgroup(index, other)`: trade two raid rows' subgroups
     /// (`CMSG_GROUP_SWAP_SUB_GROUP`, two names on the wire).
@@ -713,17 +714,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // SetRaidSubgroup(index, group) / SwapRaidSubgroup(index, other), the drag's two drops: a
-    // non-number raises the usage error rather than queueing a zero.
+    // SetRaidSubgroup(index, subgroup) / SwapRaidSubgroup(index, other), the drag's two drops. A
+    // non-number raises the usage line (`0x4bbae2`), and so does a subgroup whose truncation minus
+    // one is not below 8 (`0x4bb9f1`-`0x4bba0c`, string `0x8474e8`), before any row is looked up.
     g.set(
         "SetRaidSubgroup",
         lua.create_function(|lua, (index, group): (Value, Value)| {
-            let index = number_arg(lua, index, "Usage: SetRaidSubgroup(index, group)")?;
-            let group = number_arg(lua, group, "Usage: SetRaidSubgroup(index, group)")?;
+            const USAGE: &str = "Usage: SetRaidSubgroup(index, subgroup)";
+            let index = number_arg(lua, index, USAGE)?;
+            let group = number_arg(lua, group, USAGE)?;
+            if (group.wrapping_sub(1) as u32) >= 8 {
+                return Err(mlua::Error::runtime(USAGE));
+            }
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.party_requests.push(PartyRequest::SetSubgroup {
                 index: index.max(0) as u32,
-                group: group.max(0) as u32,
+                group: group as u32,
             });
             Ok(())
         })?,
