@@ -198,14 +198,15 @@ fn level_line(
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
-    let (unit, viewer, player_level) = {
+    let (unit, viewer, player_level, skinning) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
         let unit = model
             .unit(token)
             .cloned()
             .filter(|u| u.exists && u.guid != 0);
         let viewer = unit.as_ref().and_then(|u| viewer(&model, u));
-        (unit, viewer, model.player_req.level)
+        let req = &model.player_req;
+        (unit, viewer, req.level, req.skinning)
     };
     clear(lua, h);
     let Some(u) = unit else {
@@ -260,10 +261,13 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
         if (u.tooltip.health as i32) <= 0 && u.is_player && viewer.as_ref().is_some_and(|v| v.can_assist) {
             keyed_line(lua, this, "RESURRECTABLE", GREEN)?;
         }
-        // `UNIT_SKINNABLE` (`0x529ed0`), red: unit flags bit 26 off a creature (`0x52a914`,
-        // `0x52a924`).
+        // `UNIT_SKINNABLE` (`0x529ed0`): unit flags bit 26 off a creature (`0x52a914`,
+        // `0x52a924`), red but for a player with the skinning spell (`0x529eed`-`0x529f86`).
         if u.skinnable && !u.is_player {
-            keyed_line(lua, this, "UNIT_SKINNABLE", RED)?;
+            let color = skinning.map_or(RED, |value| {
+                super::tooltip_item::names::skill_color(skinning_required(u.level), value)
+            });
+            keyed_line(lua, this, "UNIT_SKINNABLE", color)?;
         }
         // `PVP_RANK_CIVILIAN` (`0x52a9b2`), green: `0x612550`'s civilian kill.
         if is_civilian_kill(&u, player_level) {
@@ -276,6 +280,19 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     }
     show_or_hide_empty(lua, h);
     Ok(true)
+}
+
+/// The skinning value a creature of `level` requires (`0x529f60`-`0x529f7c`): 1 to level 10, then
+/// `(5 · level − 50) · 2` below 20, else `5 · level`.
+fn skinning_required(level: u32) -> i32 {
+    let level = level as i32;
+    if level <= 10 {
+        1
+    } else if level < 20 {
+        (5 * level - 50) * 2
+    } else {
+        5 * level
+    }
 }
 
 /// `PLAYER_FLAGS` bit 8, the contested flag (vmangos `PLAYER_FLAGS_CONTESTED_PVP`).

@@ -191,6 +191,10 @@ pub struct PlayerReqState {
     pub honor_rank: u8,
     /// `PLAYER_FIELD_PVP_MEDALS` (player block `+0x1034`): medal `n` is bit `n - 1`.
     pub pvp_medals: u32,
+    /// The learned skinning spell's (`[0xb700e4]`) `SKINNING` effect points, `0x6e3760` at the
+    /// player's skill (`0x529f4e`), which the unit tooltip's skinnable line colours by; `None`
+    /// without the spell, or at 0 or below (`0x529f58`).
+    pub skinning: Option<i32>,
 }
 
 /// The icon an item-texture getter answers while the item's template is unknown or its display

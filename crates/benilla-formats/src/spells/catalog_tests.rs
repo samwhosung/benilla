@@ -287,6 +287,22 @@ fn real_spell_catalog_pins_the_skin_latch_effects() {
     );
 }
 
+/// The value the unit tooltip's skinnable line colours by (`0x529f4e`): Skinning's `SKINNING`
+/// effect, `0 + 1 + 5.0×(skill/5)`, the skill down to a multiple of 5, plus one.
+#[test]
+fn real_spell_catalog_computes_the_skinning_value() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_spell_catalog(&mut chain).expect("load Spell/SpellIcon");
+    for id in [8613, 8617, 8618, 10768] {
+        let d = cat.get(id).unwrap();
+        assert_eq!(d.effects[0], crate::SPELL_EFFECT_SKINNING, "spell {id}");
+        assert_eq!(d.effect_points_int(0, 300), 301, "spell {id}");
+        assert_eq!(d.effect_points_int(0, 149), 146, "spell {id}");
+        assert_eq!(d.effect_points_int(0, 0), 1, "spell {id}");
+    }
+}
+
 /// The left side of the client's lock test (`0x5f850f`), with the player's skill as the level
 /// term (`0x5ea690`). Its columns (27, 28, 64, 67, 70, 73, 76) are pinned by result, against
 /// values known from the game; the below-cap rows are the ones a caster-level term would miss.

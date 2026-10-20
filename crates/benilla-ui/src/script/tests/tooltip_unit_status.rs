@@ -335,3 +335,51 @@ fn the_owner_line_names_the_owner_in_its_kinds_template() {
     }
     assert!(s.take_errors().is_empty());
 }
+
+/// `UNIT_SKINNABLE` is red (`0xc0d3a8`) unless the player has a skinning spell; then the skill
+/// ramp `0x529fa0` of its value against the creature's requirement, 1 to level 10, `10 · level −
+/// 100` below 20, else `5 · level` (`0x529f60`-`0x529f7f`).
+#[test]
+fn the_skinnable_line_takes_the_skill_colour_of_the_players_skinning() {
+    let rgb = |s: &mut UiScript, level: u32, skinning: Option<i32>| -> (u8, u8, u8) {
+        s.set_player_req_state(PlayerReqState {
+            level: 30,
+            skinning,
+            ..Default::default()
+        });
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                level,
+                skinnable: true,
+                flags: 0x0400_0000,
+                ..creature()
+            }),
+        );
+        assert_eq!(lines(s)[1], "[SKINNABLE]");
+        let (r, g, b): (f32, f32, f32) = s.eval("return STTextLeft3:GetTextColor()").unwrap();
+        let q = |c: f32| (c * 255.0).round() as u8;
+        (q(r), q(g), q(b))
+    };
+    const RED: (u8, u8, u8) = (255, 32, 32);
+    const ORANGE: (u8, u8, u8) = (255, 128, 64);
+    const YELLOW: (u8, u8, u8) = (255, 255, 0);
+    const GREEN: (u8, u8, u8) = (64, 192, 64);
+    const GRAY: (u8, u8, u8) = (128, 128, 128);
+    let mut s = viewer_script(30, 0, Relations::default());
+    assert_eq!(rgb(&mut s, 30, None), RED, "no skinning spell");
+    // Level 30 requires 150.
+    assert_eq!(rgb(&mut s, 30, Some(149)), RED);
+    assert_eq!(rgb(&mut s, 30, Some(150)), ORANGE);
+    assert_eq!(rgb(&mut s, 30, Some(175)), YELLOW);
+    assert_eq!(rgb(&mut s, 30, Some(200)), GREEN);
+    assert_eq!(rgb(&mut s, 30, Some(250)), GRAY);
+    // Level 15 requires 50, level 10 and below 1, level 20 100.
+    assert_eq!(rgb(&mut s, 15, Some(49)), RED);
+    assert_eq!(rgb(&mut s, 15, Some(50)), ORANGE);
+    assert_eq!(rgb(&mut s, 10, Some(1)), ORANGE);
+    assert_eq!(rgb(&mut s, 10, Some(101)), GRAY);
+    assert_eq!(rgb(&mut s, 20, Some(99)), RED);
+    assert_eq!(rgb(&mut s, 20, Some(100)), ORANGE);
+    assert!(s.take_errors().is_empty());
+}

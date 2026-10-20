@@ -318,11 +318,19 @@ impl SpellDisplay {
     }
 
     /// The lock skill this spell provides (`0x5f850f`), from the player's skill in its line:
-    /// the effect value (`0x6e3800`) with its caller's rounding (`0x6e3760`). Its level term is
-    /// that skill with its bonuses (`0x5ea690`), not the caster's level; a skill of 0 leaves only
-    /// the flat terms.
+    /// [`Self::effect_points_int`] of its open-lock effect.
     pub fn open_lock_skill(&self, skill_value: u32) -> Option<i32> {
-        let e = self.open_lock?.effect;
+        Some(self.effect_points_int(self.open_lock?.effect, skill_value))
+    }
+
+    /// Effect `e`'s minimum points as an integer, `0x6e3760` at level 0 for the player: the effect
+    /// value (`0x6e3800`) with its rounding. Its level term is `skill_value`, the player's skill in
+    /// the spell's line with its bonuses (`0x5ea690`), not the caster's level; a skill of 0 leaves
+    /// only the flat terms. `e` past the three effects reads 0.
+    pub fn effect_points_int(&self, e: usize, skill_value: u32) -> i32 {
+        if e >= self.effects.len() {
+            return 0;
+        }
         // Less baseLevel floored at 0 (read at `0x6e3854`, subtracted at `0x6e385b`-`0x6e385f`).
         let delta = self
             .skill_level(skill_value)
@@ -338,7 +346,7 @@ impl SpellDisplay {
         } else {
             v * 2.0 + 0.5
         };
-        Some((doubled.round_ties_even() as i32) >> 1)
+        (doubled.round_ties_even() as i32) >> 1
     }
 
     /// The hostility classifier `0x6ea280` reduced to "targets enemies", the gate on the victim's
