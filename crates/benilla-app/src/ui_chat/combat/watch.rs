@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use super::{
     aura_gone_kind, classify, death_kind, in_range, periodic_kind, CombatLogRanges, Family, Fills,
-    Named, PendingCombat, UnitClass, Variant,
+    LineWord, Named, PendingCombat, UnitClass, Variant,
 };
 use crate::net::{FieldChanged, GuidIndex, ObjectStore, Reputations, SelfGuid};
 use crate::target::ring::Factions;
@@ -57,7 +57,8 @@ impl WatchCtx<'_> {
     }
 }
 
-/// Queue one single-endpoint line, gated the way its formatter gates.
+/// Queue one single-endpoint line, gated the way its formatter gates, with the word it raises once
+/// written.
 fn queue_one(
     log: &mut ChatLog,
     ctx: &WatchCtx,
@@ -67,7 +68,7 @@ fn queue_one(
     subject: (u64, UnitClass),
     range: f32,
     fills: Fills,
-    named: Named,
+    word: Option<LineWord>,
 ) {
     if !ctx.in_range(subject.0, range, poses) {
         return;
@@ -79,9 +80,9 @@ fn queue_one(
         subject: subject.0,
         object: 0,
         fills,
-        named,
+        named: Named::Ready,
         tries: 0,
-        word: None,
+        word,
     });
 }
 
@@ -133,7 +134,7 @@ pub(crate) fn death_lines(
             (guid, class),
             ctx.ranges.death(),
             Fills::default(),
-            Named::Ready,
+            None,
         );
     }
 }
@@ -148,7 +149,10 @@ pub(crate) fn death_lines(
 ///   `AURAAPPLICATIONADDED*` (`0x604ea0`). The reference gates it on `StackAmount > 1`, which
 ///   holds for any count that rises; a first application moves the spell, so it is skipped.
 ///
-/// Harmful is the slot index, `0x20`-`0x2f` (`0x61238e`), not `UNIT_FIELD_AURAFLAGS`.
+/// Harmful is the slot index, `0x20`-`0x2f` (`0x61238e`), not `UNIT_FIELD_AURAFLAGS`. A line on
+/// you raises `AURA_START` or `AURA_START_HARMFUL` for an arrival and `AURA_END` or
+/// `AURA_END_HARMFUL` for a loss, with the spell's name (`0x62b74f`-`0x62b7ac`); a stack line
+/// raises none.
 pub(crate) fn aura_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
@@ -178,33 +182,44 @@ pub(crate) fn aura_lines(
     for e in &slot_edges {
         let slot = e.index - FIELD_UNIT_AURA;
         let class = ctx.classify(e.guid, &stores);
+        let word = |message_type: &'static str, spell: &str| {
+            (class == UnitClass::Me).then(|| LineWord::with(message_type, spell))
+        };
         // Arrival first, so a replace words the new aura before the old one's removal.
         if e.new != 0 {
             if let (Some(spell), Some(kind)) =
                 (ctx.spell_name(e.new), periodic_kind(class, !harmful(slot)))
             {
+                let (family, message_type) = if harmful(slot) {
+                    (super::AURAADDED_HARMFUL, "AURA_START_HARMFUL")
+                } else {
+                    (super::AURAADDED_HELPFUL, "AURA_START")
+                };
+                let word = word(message_type, &spell);
                 queue_one(
                     &mut log,
                     &ctx,
                     &poses,
                     kind,
-                    if harmful(slot) {
-                        super::AURAADDED_HARMFUL
-                    } else {
-                        super::AURAADDED_HELPFUL
-                    },
+                    family,
                     (e.guid, class),
                     ctx.ranges.class(class),
                     Fills {
                         spell,
                         ..Default::default()
                     },
-                    Named::Ready,
+                    word,
                 );
             }
         }
         if e.old != 0 {
             if let Some(spell) = ctx.spell_name(e.old) {
+                let message_type = if harmful(slot) {
+                    "AURA_END_HARMFUL"
+                } else {
+                    "AURA_END"
+                };
+                let word = word(message_type, &spell);
                 queue_one(
                     &mut log,
                     &ctx,
@@ -217,7 +232,7 @@ pub(crate) fn aura_lines(
                         spell,
                         ..Default::default()
                     },
-                    Named::Ready,
+                    word,
                 );
             }
         }
@@ -266,7 +281,7 @@ pub(crate) fn aura_lines(
                     amount: i64::from(now + 1),
                     ..Default::default()
                 },
-                Named::Ready,
+                None,
             );
         }
     }
