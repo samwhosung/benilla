@@ -382,13 +382,17 @@ pub(crate) fn feed_party(
                         // No object of ours, as across a worldport: the row's guid still names us,
                         // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row
                         // the list wrote online (`0x5e6e94`).
-                        None => UnitState {
-                            exists: true,
-                            guid: *guid,
-                            name,
-                            is_connected: true,
-                            ..Default::default()
-                        },
+                        None => {
+                            let mut s = UnitState {
+                                exists: true,
+                                guid: *guid,
+                                name,
+                                is_connected: true,
+                                ..Default::default()
+                            };
+                            crate::ui_unit::traits_from_name_cache(&mut s, &names, *guid, chr);
+                            s
+                        }
                     };
                     s.is_player = true;
                     s.raid_target = group.raid_target_index(*guid);
@@ -719,7 +723,7 @@ fn member_unit_state(
     group: &GroupState,
     own_group: Option<String>,
     // The name cache, whose record answers race, class and sex for a member with no object.
-    _names: &NameCache,
+    names: &NameCache,
     // `ChrRaces.dbc` and `ChrClasses.dbc`: the names and the relic slot, which only the live leg
     // has a class byte to key by, so an unstreamed paladin reads no relic slot.
     classes: crate::ui_unit::UnitNames<'_>,
@@ -764,6 +768,9 @@ fn member_unit_state(
             ..Default::default()
         },
     };
+    if store.is_none() {
+        crate::ui_unit::traits_from_name_cache(&mut s, names, m.guid, classes);
+    }
     s.is_player = true;
     s.raid_target = group.raid_target_index(m.guid);
     s.faction_group = own_group;

@@ -176,7 +176,8 @@ pub(super) fn feed_chain_units(
             .iter()
             .filter_map(|&guid| {
                 let Some(&entity) = index.as_ref().and_then(|i| i.0.get(&guid)) else {
-                    return Some((guid, unheld_state(&names, &group, guid)));
+                    let tables = tables.unit_names();
+                    return Some((guid, unheld_state(&names, &group, guid, tables)));
                 };
                 let store = stores.get(entity).ok().filter(|s| s.is_unit())?;
                 Some((guid, held.state(store, guid)))
@@ -209,13 +210,43 @@ pub(super) fn feed_chain_units(
 /// nothing else. Off the roster it does not exist (`0x491900`); on it, the VM reads the row's push.
 /// The name is read without asking: the lookup asks when `UnitName` reads it, and the VM hands
 /// the miss back ([`UiScript::take_unit_name_asks`]).
-fn unheld_state(names: &NameCache, group: &crate::ui_party::GroupState, guid: u64) -> UnitState {
-    UnitState {
+fn unheld_state(
+    names: &NameCache,
+    group: &crate::ui_party::GroupState,
+    guid: u64,
+    tables: super::UnitNames<'_>,
+) -> UnitState {
+    let mut s = UnitState {
         guid,
         name: names.resolve_player(guid, Ask::Read).map(str::to_string),
         raid_target: group.raid_target_index(guid),
         ..Default::default()
-    }
+    };
+    traits_from_name_cache(&mut s, names, guid, tables);
+    s
+}
+
+/// What `UnitRace`, `UnitClass` and `UnitSex` read of a unit with no object: the name cache record
+/// of its guid, looked up with no callback, so nothing is asked (`0x5182bc`): the race at `+0x138`
+/// (`0x5182d9`), the class at `+0x140` (`0x518429`) and the sex at `+0x13c` (`0x517f80`) through
+/// `{2, 3, 1, 6}` (`0x808be4`). A miss leaves them unset: `nil, nil`, and `UnitSex` 2 (`0x517f95`).
+pub(crate) fn traits_from_name_cache(
+    s: &mut UnitState,
+    names: &NameCache,
+    guid: u64,
+    tables: super::UnitNames<'_>,
+) {
+    let Some((race, class, gender)) = names.player_traits(guid) else {
+        return;
+    };
+    let race = tables.race(race);
+    let class = tables.class(class);
+    s.race = race.map(|(n, _)| n.to_string());
+    s.race_file = race.map(|(_, f)| f.to_string());
+    s.class = class.map(|(n, _)| n.to_string());
+    s.class_file = class.map(|(_, f)| f.to_string());
+    // The table has no bound; past its four entries there is nothing to read, so it stays unset.
+    s.sex = [2, 3, 1, 6].get(usize::from(gender)).copied().unwrap_or(0);
 }
 
 /// [`feed_name_candidates`]' per-VM memory.
