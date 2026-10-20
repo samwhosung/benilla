@@ -66,8 +66,8 @@ impl ChrRaces {
 
     /// The race row's `CinematicSequenceID` (`+0x40`), the intro cinematic the first-login camera
     /// looks up (`0x46c2f8`); a race with no row has none.
-    pub fn intro_sequence(&self, _race: u32) -> Option<u32> {
-        None
+    pub fn intro_sequence(&self, race: u32) -> Option<u32> {
+        self.0.get(&race).map(|r| r.intro)
     }
 
     /// A table for tests of what reads the intro column: `race` holds `sequence`.
