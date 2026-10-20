@@ -72,3 +72,50 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
     s.run(r#"assert(UnitOnTaxi("player") == 1)"#).unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+/// Slot 0, a slot past the count and any slot with no map open: `TaxiNodePosition` and
+/// `TaxiNodeCost` raise `Invalid taxi node slot` (`0x84b008`) on the unsigned compare of the slot
+/// less 1 with the count (`0x4dcbc5`, `0x4dcc63`), and `TaxiNodeName` answers `INVALID`
+/// (`0x4dc388`, `0x84afc8`).
+#[test]
+fn out_of_range_taxi_slots_raise_or_answer_invalid() {
+    let mut s = script();
+    let node = TaxiUiNode {
+        name: "Crossroads, The Barrens".into(),
+        node_type: TaxiNodeType::Current,
+        pos: (0.5, 0.6),
+        ..Default::default()
+    };
+    for (map, slots) in [(true, [0, -1, 3]), (false, [0, 1, 3])] {
+        s.set_taxi(map.then(|| TaxiUiState {
+            art: String::new(),
+            nodes: vec![node.clone(), node.clone()],
+        }));
+        for slot in slots {
+            for verb in ["TaxiNodePosition", "TaxiNodeCost"] {
+                let e = s
+                    .run(&format!("{verb}({slot})"))
+                    .expect_err("raises")
+                    .to_string();
+                assert!(
+                    e.contains("Invalid taxi node slot"),
+                    "map {map}, {verb}({slot}): {e}"
+                );
+            }
+            assert_eq!(
+                s.eval::<String>(&format!("return TaxiNodeName({slot})"))
+                    .unwrap(),
+                "INVALID",
+                "map {map}, slot {slot}"
+            );
+        }
+    }
+    s.set_taxi(Some(TaxiUiState {
+        art: String::new(),
+        nodes: vec![node],
+    }));
+    assert_eq!(
+        s.eval::<String>("return TaxiNodeName(1)").unwrap(),
+        "Crossroads, The Barrens"
+    );
+}
