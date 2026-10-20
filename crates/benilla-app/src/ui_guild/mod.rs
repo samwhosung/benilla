@@ -3,6 +3,8 @@
 //! windows read. The roster carries no guild or rank names: those come only from
 //! `SMSG_GUILD_QUERY_RESPONSE`, cached by guild id and filled lazily, as in the reference.
 
+use std::collections::HashMap;
+
 use benilla_formats::GuildEmblem;
 use benilla_protocol::messages::{
     guild_event, GuildCommandResult, GuildEventNotice, GuildInfo, GuildQueryResponse, GuildRoster,
@@ -79,6 +81,16 @@ impl RosterUpdate {
 #[derive(Resource, Default)]
 pub(crate) struct GuildMemberNotify(pub(crate) bool);
 
+/// A callback a guild lookup leaves on a record not yet held, added at the list's tail
+/// (`0x56100b`): the landing runs each with status 1 (`0x556f91`); a refusal, or a drop of the
+/// pending record, runs them with status 0, which it ignores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waiter {
+    /// `GetGuildInfo`'s `0x4c9470` for the unit `guid` (`0x4c93b6`-`0x4c93d2`):
+    /// `PLAYER_GUILD_UPDATE` through `0x515e50` (`0x4c947c`-`0x4c9481`).
+    Info(u64),
+}
+
 /// The guild session mirror: filled by the packet handlers, read by the feed, reset on disconnect.
 #[derive(Resource, Default)]
 pub(crate) struct GuildState {
@@ -92,6 +104,8 @@ pub(crate) struct GuildState {
     identities: QueryCache<u32, Identity>,
     /// Bumped when an identity lands or is evicted, never by an ask; the unit feeds watch it.
     identity_generation: u64,
+    /// The callbacks waiting on each guild's record, in the order they were left.
+    waiters: HashMap<u32, Vec<Waiter>>,
     /// Apart from the roster: `GE_MOTD` sets it alone, and at login vmangos sends that event before
     /// any roster (`CharacterHandler.cpp:558`).
     motd: String,
@@ -243,17 +257,42 @@ impl GuildState {
     /// Drop our guild's cached record after a saved emblem (`0x5e715f`), so the next read
     /// re-fetches it and every member in sight re-dresses, as in the reference.
     pub(crate) fn evict_own_identity(&mut self) {
-        if self.identities.evict(self.guild_id) {
+        self.drop_record(self.guild_id);
+    }
+
+    /// `0x561d20`: the record goes, and a pending one's callbacks run with status 0, which
+    /// signals nothing.
+    fn drop_record(&mut self, guild_id: u32) {
+        self.waiters.remove(&guild_id);
+        if self.identities.evict(guild_id) {
             self.identity_generation = self.identity_generation.wrapping_add(1);
             self.dirty = true;
         }
     }
 
+    /// `GetGuildInfo` missed `guild_id` for the unit `guid`: the lookup with its callback
+    /// (`0x4c93d2`), asking a key not in flight, a refused one again, and leaving a waiter, with
+    /// no dedupe (`push 0`, `0x4c93b6`). A record already held takes no waiter.
+    pub(crate) fn wait_for_info(&mut self, guild_id: u32, guid: u64, commands: &NetCommands) {
+        if guild_id != 0
+            && self
+                .resolve_identity(guild_id, Ask::Event(commands))
+                .is_none()
+        {
+            self.waiters
+                .entry(guild_id)
+                .or_default()
+                .push(Waiter::Info(guid));
+        }
+    }
+
     /// `SMSG_GUILD_QUERY_RESPONSE`: fill the identity cache. An empty name is a refusal: the
     /// reference frees the node and runs the callbacks with status 0 (`0x5552e1`, `0x561390`).
-    fn apply_query_response(&mut self, response: GuildQueryResponse) {
+    /// Returns the callbacks a found record runs, in order.
+    fn apply_query_response(&mut self, response: GuildQueryResponse) -> Vec<Waiter> {
         let ours = response.guild_id == self.guild_id;
         let found = !response.name.is_empty();
+        let waiters = self.waiters.remove(&response.guild_id).unwrap_or_default();
         // A refusal redisplays only an identity it took away: every guild callback ignores
         // status 0 (`0x4d1486`, `0x4c9476`, `0x5dd866`, `0x5e29c6`, the crest's `0x5e0650` at
         // `0x5e0679`, the glue's `0x472420` at `0x472435`), and the corpse's `0x5d6f90` only
@@ -285,6 +324,11 @@ impl GuildState {
             // Our rank names landed: repaint, never re-request, as the reference's cache callback
             // `0x4d1480` does for a found record only (`0x4d1486`, `0x4d148c`).
             self.note_roster_update(RosterUpdate::Applied);
+        }
+        if found {
+            waiters
+        } else {
+            Vec::new()
         }
     }
 
@@ -513,6 +557,7 @@ fn guild_emblem(guild_id: u32, guild: &GuildState, ask: Ask<'_>) -> Option<Guild
 /// whose catalog rows pick the surface and the sound; the guild events fire from the feed.
 pub(crate) mod net {
     use super::*;
+    use crate::field_watch::FieldNotice;
     use crate::ui_action::{UiError, UiErrorKeys};
     use crate::ui_social::SocialState;
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -532,10 +577,28 @@ pub(crate) mod net {
             .net_handler(K::Disconnected, on_session_end);
     }
 
-    fn on_query_response(In(ev): In<SessionEvent>, mut guild: ResMut<GuildState>) {
+    /// Runs the callbacks a found record wakes ([`query_response`]).
+    fn on_query_response(
+        In(ev): In<SessionEvent>,
+        mut guild: ResMut<GuildState>,
+        mut notices: MessageWriter<FieldNotice>,
+    ) {
         if let SessionEvent::GuildQueryResponse(response) = ev {
-            query_response(&mut guild, response);
+            let waiters = query_response(&mut guild, response);
+            notices.write_batch(waiter_notices(&waiters));
         }
+    }
+
+    /// The notices a found record's callbacks raise, in their order: a `GetGuildInfo` waiter's
+    /// `PLAYER_GUILD_UPDATE` for its unit (`0x4c947c`-`0x4c9481`).
+    fn waiter_notices(waiters: &[Waiter]) -> Vec<FieldNotice> {
+        waiters
+            .iter()
+            .map(|&Waiter::Info(guid)| FieldNotice::Signal {
+                guid,
+                id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
+            })
+            .collect()
     }
 
     fn on_roster(In(ev): In<SessionEvent>, mut guild: ResMut<GuildState>) {
@@ -609,9 +672,12 @@ pub(crate) mod net {
         errors.0.extend(lines);
     }
 
-    /// `SMSG_GUILD_QUERY_RESPONSE`.
-    pub(crate) fn query_response(guild: &mut GuildState, response: GuildQueryResponse) {
-        guild.apply_query_response(response);
+    /// `SMSG_GUILD_QUERY_RESPONSE`: the callbacks a found record runs.
+    pub(crate) fn query_response(
+        guild: &mut GuildState,
+        response: GuildQueryResponse,
+    ) -> Vec<Waiter> {
+        guild.apply_query_response(response)
     }
 
     /// `SMSG_GUILD_ROSTER`.

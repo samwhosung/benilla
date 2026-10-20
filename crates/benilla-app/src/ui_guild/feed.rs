@@ -299,6 +299,9 @@ pub(super) fn drain_guild(
             GuildRequest::Info => {
                 let _ = commands.0.send(ClientCommand::GuildInfoRequest);
             }
+            GuildRequest::InfoMiss { guild_id, guid } => {
+                guild.wait_for_info(guild_id, guid, &commands);
+            }
             GuildRequest::Invite(name) => {
                 let _ = commands.0.send(ClientCommand::GuildInvite { name });
             }

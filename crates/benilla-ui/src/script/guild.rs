@@ -218,6 +218,9 @@ pub enum GuildRequest {
     /// `"online"`, the headers' `sortType`s (`FriendsFrame.xml:1895-1940`, `:2086-2131`). Sorting
     /// is client-side: the app re-orders its roster and pushes it back.
     Sort(String),
+    /// `GetGuildInfo(unit)` found no record for the unit's guild: the lookup with its callback
+    /// (`0x4c93d2`), which asks and leaves a waiter for the unit `guid`.
+    InfoMiss { guild_id: u32, guid: u64 },
 }
 
 impl super::UiScript {
@@ -302,16 +305,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x515940`) raises on an unrecognised token (`0x515c1a`); a recognised but unresolvable
     // token, a non-player, a guildless player and an unarrived guild record all answer
     // `nil, nil, 0`, the third the number 0 (`mov eax,3` on both legs). Stock
-    // `PaperDollFrame_SetGuild` calls it for `"player"` unguarded (`PaperDollFrame.lua:117`).
+    // `PaperDollFrame_SetGuild` calls it for `"player"` unguarded (`PaperDollFrame.lua:117`). A
+    // player's guild the cache lacks is asked with a waiter of the call's own ([`GuildRequest::InfoMiss`]);
+    // the zero key never is (`0x560e3d`).
     g.set(
         "GetGuildInfo",
         lua.create_function(|lua, unit: Option<String>| {
             crate::script::unit::check_unit_token(&unit)?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(state) = unit.as_deref().and_then(|u| model.unit(u)) else {
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             let Some(guild) = state.guild.as_ref() else {
+                let miss = (state.has_object && state.is_player && state.guild_id != 0).then_some(
+                    GuildRequest::InfoMiss {
+                        guild_id: state.guild_id,
+                        guid: state.guid,
+                    },
+                );
+                model.guild_requests.extend(miss);
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             Ok((
