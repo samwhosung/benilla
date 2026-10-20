@@ -120,9 +120,10 @@ pub(crate) fn spell_hit_word(damage: u32, absorbed: u32, resisted: i32, blocked:
     }
 }
 
-/// A periodic damage tick's word, once damage got through (`0x628100`), in the melee types: the
-/// first of resisted (`0x628354`) and absorbed (`0x62836c`), else the damage (`0x62837f`).
-pub(crate) fn periodic_hit_word(damage: u32, absorbed: u32, resisted: i32) -> LineWord {
+/// The word of a hit taken in the melee types, a periodic damage tick once damage got through
+/// (`0x628100`) and an environmental hit (`0x62aac0`): the first of resisted above 0 (`0x628354`,
+/// `0x62ac78`) and absorbed (`0x62836c`, `0x62ac95`), else the damage (`0x62837f`, `0x62acad`).
+pub(crate) fn damage_word(damage: u32, absorbed: u32, resisted: i32) -> LineWord {
     if resisted > 0 {
         LineWord::pair("RESIST", damage, resisted)
     } else if absorbed != 0 {
@@ -132,10 +133,11 @@ pub(crate) fn periodic_hit_word(damage: u32, absorbed: u32, resisted: i32) -> Li
     }
 }
 
-/// A power gain's word (`0x627520`): the power's noun key (table `0x85645c`) compared against
-/// `MANA_POINTS`, `RAGE_POINTS`, `FOCUS_POINTS` and `ENERGY_POINTS` (`0x6276f0`-`0x62779d`), each
-/// its own type; `HAPPINESS_POINTS` matches none and has no word.
-pub(crate) fn power_gain_word(power: u32, amount: i64) -> Option<LineWord> {
+/// A power gain's word with the amount gained (`0x627520`), and a drain's or leech's with minus
+/// the amount drained (`0x627930`): the power's noun key (table `0x85645c`) compared against
+/// `MANA_POINTS`, `RAGE_POINTS`, `FOCUS_POINTS` and `ENERGY_POINTS` (`0x6276f0`-`0x62779d`,
+/// `0x627b9f`-`0x627c5c`), each its own type; `HAPPINESS_POINTS` matches none and has no word.
+pub(crate) fn power_amount_word(power: u32, amount: i64) -> Option<LineWord> {
     let message_type = match power {
         0 => "MANA",
         1 => "RAGE",

@@ -183,7 +183,7 @@ pub(in crate::combat_log) struct PeriodicHit {
 /// `SMSG_SPELLNONMELEEDAMAGELOG` alike. Nothing through is worded absorbed, then resisted, on the
 /// periodic types (`0x6281e5`, `0x62820e`), or not at all; damage through takes
 /// `PERIODICAURADAMAGE`, typed off the target (`0x628235`), with absorb and resist trailers
-/// (`0x628341` passes zero for blocked and HitInfo) and [`combat::periodic_hit_word`].
+/// (`0x628341` passes zero for blocked and HitInfo) and [`combat::damage_word`].
 fn periodic_damage(
     log: &mut ChatLog,
     ctx: &ChatCtx,
@@ -217,7 +217,7 @@ fn periodic_damage(
         }),
         ..Default::default()
     };
-    let word = combat::periodic_hit_word(hit.damage, hit.absorbed, hit.resisted);
+    let word = combat::damage_word(hit.damage, hit.absorbed, hit.resisted);
     queue_worded(
         log,
         ctx,
@@ -563,7 +563,7 @@ fn power_gain_line(
         return;
     };
     let amount = power_gain(power, amount);
-    let word = combat::power_gain_word(power, amount).filter(|_| !periodic);
+    let word = combat::power_amount_word(power, amount).filter(|_| !periodic);
     queue_worded(
         log,
         ctx,

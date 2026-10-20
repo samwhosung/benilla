@@ -139,14 +139,11 @@ fn a_direct_spell_hit_words_its_first_partial() {
 #[test]
 fn a_periodic_tick_words_resist_absorb_damage() {
     assert_eq!(
-        periodic_hit_word(300, 50, 100),
+        damage_word(300, 50, 100),
         LineWord::pair("RESIST", 300, 100)
     );
-    assert_eq!(
-        periodic_hit_word(300, 50, 0),
-        LineWord::pair("ABSORB", 300, 50)
-    );
-    assert_eq!(periodic_hit_word(300, 0, 0), LineWord::with("DAMAGE", 300));
+    assert_eq!(damage_word(300, 50, 0), LineWord::pair("ABSORB", 300, 50));
+    assert_eq!(damage_word(300, 0, 0), LineWord::with("DAMAGE", 300));
 }
 
 /// The spell-miss word per code, as the jump table `0x62be10`, carrying the spell's name: absorb
@@ -184,7 +181,7 @@ fn a_spell_miss_words_its_code_with_the_spell_name() {
 /// `HAPPINESS_POINTS` is no type of `0x862920`: a happiness gain has a line and no word.
 #[test]
 fn a_happiness_gain_has_no_word() {
-    assert_eq!(power_gain_word(0, 300), Some(LineWord::with("MANA", 300)));
-    assert_eq!(power_gain_word(3, 20), Some(LineWord::with("ENERGY", 20)));
-    assert_eq!(power_gain_word(4, 1), None);
+    assert_eq!(power_amount_word(0, 300), Some(LineWord::with("MANA", 300)));
+    assert_eq!(power_amount_word(3, 20), Some(LineWord::with("ENERGY", 20)));
+    assert_eq!(power_amount_word(4, 1), None);
 }

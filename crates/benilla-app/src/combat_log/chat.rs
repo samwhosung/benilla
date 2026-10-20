@@ -776,11 +776,14 @@ fn spell_cast_line(
     }
 }
 
-/// `SMSG_ENVIRONMENTALDAMAGELOG`: "You fall and lose %d health." and its five siblings.
-/// `0x62aac0` builds the key from a six-entry damage-type table and SELF/OTHER, and calls the
-/// melee HITS selector with the victim's class in both positions, so a party member's fall types
-/// as `HOSTILEPLAYER_HITS` through the selector's tgt<=3 override, as in the reference. It takes
-/// absorb and resist trailers.
+/// `SMSG_ENVIRONMENTALDAMAGELOG`'s handler `0x624f30`, which writes and signals nothing for a hit
+/// of all zeros (`0x624f4c`-`0x624f60`). The line, "You fall and lose %d health." and its five
+/// siblings: `0x62aac0` builds the key from a six-entry damage-type table and SELF/OTHER, and calls
+/// the melee HITS selector with the victim's class in both positions, so a party member's fall
+/// types as `HOSTILEPLAYER_HITS` through the selector's tgt<=3 override, as in the reference. It
+/// takes absorb and resist trailers, and on you raises [`combat::damage_word`] (`0x62ac74`). Then,
+/// for the active player (`0x624f83`), `UNIT_COMBAT` `WOUND` in the type's school, marked `0x20`
+/// for an absorb and `0x40` for a resist (`0x624f8c`-`0x624fc4`).
 pub(super) fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     ctx: &ChatCtx,
@@ -788,34 +791,47 @@ pub(super) fn environmental_damage_log(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
+    if e.damage == 0 && e.absorb == 0 && e.resist == 0 {
+        return;
+    }
     let victim = ctx.classify(e.victim, stores);
-    let Some(family) = combat::env_family(e.damage_type) else {
-        return;
-    };
-    let Some(kind) = combat::combat_kind(victim, victim, false) else {
-        return;
-    };
-    queue(
-        log,
-        ctx,
-        poses,
-        kind,
-        family,
-        (e.victim, victim),
-        (e.victim, victim),
-        Fills {
-            amount: i64::from(e.damage),
-            trailers: Some(combat::Trailers {
-                absorbed: e.absorb,
-                resisted: e.resist,
-                // The environmental call site passes zero for both.
-                blocked: 0,
-                hit_info: 0,
-            }),
-            ..Default::default()
-        },
-    );
+    let kind = combat::combat_kind(victim, victim, false);
+    if let (Some(family), Some(kind)) = (combat::env_family(e.damage_type), kind) {
+        queue_worded(
+            log,
+            ctx,
+            poses,
+            kind,
+            family,
+            (e.victim, victim),
+            (e.victim, victim),
+            Fills {
+                amount: i64::from(e.damage),
+                trailers: Some(combat::Trailers {
+                    absorbed: e.absorb,
+                    resisted: e.resist,
+                    // The environmental call site passes zero for both.
+                    blocked: 0,
+                    hit_info: 0,
+                }),
+                ..Default::default()
+            },
+            to_me(victim, combat::damage_word(e.damage, e.absorb, e.resist)),
+        );
+    }
+    let school = ENV_DAMAGE_SCHOOLS.get(usize::from(e.damage_type));
+    if let (Some(&school), true) = (school, ctx.self_guid.0 == Some(e.victim)) {
+        let bit = |set: bool, bit: u32| if set { bit } else { 0 };
+        let marks = bit(e.absorb != 0, 0x20) | bit(e.resist != 0, 0x40);
+        super::feedback::wound(log, e.victim, e.damage, marks, school);
+    }
 }
+
+/// The school of each environmental damage type 0 to 5, the table `0x809274` that `0x624fb3`
+/// indexes: fatigue, drowning and falling physical, lava and fire fire, slime nature. The index has
+/// no bound; a type past it, which no server sends (vmangos maps its void fall to 2,
+/// `Objects/Unit.cpp:5396`), signals nothing here.
+const ENV_DAMAGE_SCHOOLS: [u32; 6] = [0, 0, 0, 2, 3, 2];
 
 /// `SMSG_SET_FACTION_STANDING`: "Your %s reputation has increased by %d.". The wire carries the
 /// new total and the sentence the delta, so this runs before the store is overwritten, and an
