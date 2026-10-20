@@ -554,7 +554,7 @@ pub(super) fn feed_action_state(
             list.sync(&actions.spells, &sp.catalog);
         }
     }
-    let reactive = match (me, spells.as_deref()) {
+    let activated = match (me, spells.as_deref()) {
         (Some((store, _, _)), Some(sp)) if refresh => {
             let ctx = usable::UsableCtx {
                 store,
@@ -572,13 +572,13 @@ pub(super) fn feed_action_state(
                     .is_some_and(|d| usable::spell_usable(id, d, sp, &ctx, &objects, &items).0)
             })
         }
-        _ => super::reactive::Refresh::default(),
+        _ => Vec::new(),
     };
 
     owed.cooldowns |= gen_changed || record_flush;
     owed.usable_changed |= usable_changed;
     owed.refresh |= refresh;
-    owed.activated.extend(reactive.activated);
+    owed.activated.extend(activated);
     owed.bags |= bags || record_flush;
     if engaged != memory.engaged {
         memory.engaged = engaged;

@@ -26,15 +26,6 @@ pub(super) struct ReactiveList {
     entries: Vec<Entry>,
 }
 
-/// One refresh's outcome.
-#[derive(Default)]
-pub(super) struct Refresh {
-    /// Some entry's answer moved, either way: the refresh's `SPELL_UPDATE_USABLE` is due.
-    pub(super) changed: bool,
-    /// The names that turned usable, in list order, each a `SPELL_ACTIVE`.
-    pub(super) activated: Vec<String>,
-}
-
 impl ReactiveList {
     /// Empty the list: `0x4b23a0` at the active player's arrival.
     pub(super) fn arrive(&mut self) {
@@ -71,21 +62,21 @@ impl ReactiveList {
     }
 
     /// `0x4b31c0`'s loop: each entry's answer from `usable`, stored when it moved (`0x4b320b`,
-    /// `0x4b3231`), and the names that turned usable.
-    pub(super) fn refresh(&mut self, mut usable: impl FnMut(u32) -> bool) -> Refresh {
-        let mut out = Refresh::default();
+    /// `0x4b3231`), and the names that turned usable, in list order, each a `SPELL_ACTIVE`. The
+    /// refresh's `SPELL_UPDATE_USABLE` follows whatever moved (`0x4b3241`).
+    pub(super) fn refresh(&mut self, mut usable: impl FnMut(u32) -> bool) -> Vec<String> {
+        let mut activated = Vec::new();
         for e in &mut self.entries {
             let now = usable(e.spell_id);
             if now == e.usable {
                 continue;
             }
-            out.changed = true;
             if now {
-                out.activated.push(e.name.clone());
+                activated.push(e.name.clone());
             }
             e.usable = now;
         }
-        out
+        activated
     }
 }
 
