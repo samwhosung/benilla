@@ -225,6 +225,11 @@ pub(super) fn render_view_flagged(
     // p4's first cut (`0x52babe`, skipping `[0x52bac9, 0x52bfad)` at `0x52bac3`): the bind/lock
     // region. ITEM_SIGNABLE above survives it.
     if !flags.name_only {
+        // The area and map the record binds the item to, each white by its DBC name
+        // (`0x52bac9`..`0x52bb3e`).
+        for name in [&v.area_name, &v.map_name].into_iter().flatten() {
+            add((name.clone(), WHITE))?;
+        }
         if v.flags & 0x2 != 0 {
             keyed("ITEM_CONJURED", &[], WHITE, false)?;
         }
