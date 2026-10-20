@@ -70,10 +70,14 @@ pub(super) fn no_charter_line() -> Line {
 pub(super) fn name_refused_line(key: &str) -> Line {
     UiError::key(match key {
         "ERR_GUILD_ENTER_NAME" => "ERR_GUILD_ENTER_NAME",
+        "ERR_GUILD_NAME_TOO_SHORT" => "ERR_GUILD_NAME_TOO_SHORT",
+        "ERR_GUILD_NAME_MIXED_LANGUAGES" => "ERR_GUILD_NAME_MIXED_LANGUAGES",
+        "ERR_GUILD_NAME_PROFANE" => "ERR_GUILD_NAME_PROFANE",
+        "ERR_GUILD_NAME_RESERVED" => "ERR_GUILD_NAME_RESERVED",
         "ERR_GUILD_NAME_INVALID_SPACE" => "ERR_GUILD_NAME_INVALID_SPACE",
         "ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES" => "ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES",
-        "ERR_GUILD_NAME_TOO_SHORT" => "ERR_GUILD_NAME_TOO_SHORT",
-        // A key `0x6c9b70` is not known to produce becomes the generic row, never a raw key.
+        // Every other code of `0x4f51ec`'s table, and any key it does not hold, is the generic
+        // row, never a raw key.
         _ => "ERR_GUILD_NAME_INVALID",
     })
 }
@@ -180,6 +184,9 @@ mod tests {
                 "ERR_GUILD_NAME_INVALID_SPACE",
                 "ERR_GUILD_NAME_NAME_CONSECUTIVE_SPACES",
                 "ERR_GUILD_NAME_TOO_SHORT",
+                "ERR_GUILD_NAME_MIXED_LANGUAGES",
+                "ERR_GUILD_NAME_PROFANE",
+                "ERR_GUILD_NAME_RESERVED",
             ]
             .map(name_refused_line),
         );
@@ -214,6 +221,11 @@ mod tests {
         assert_eq!(
             shown(name_refused_line("ERR_GUILD_NAME_INVALID_SPACE")),
             ("ERR_GUILD_NAME_INVALID_SPACE", MsgKind::Error)
+        );
+        assert_eq!(
+            shown(name_refused_line("ERR_GUILD_NAME_RESERVED")),
+            ("ERR_GUILD_NAME_RESERVED", MsgKind::Error),
+            "a list's match keeps its own row (`0x4f51b8`)"
         );
         assert_eq!(
             shown(name_refused_line("ERR_SOMETHING_UNCARVED")),

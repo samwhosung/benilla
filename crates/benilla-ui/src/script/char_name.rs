@@ -1,10 +1,14 @@
-//! The client's character name check, `0x5abd50`: the validator `0x6c96c0` over the name, then the
-//! length cap of `0x6c9ae0`, read as a `CHAR_NAME_*` status (`+0x45`). The rename's send
-//! (`0x46b36f`) and the create screen (`0x4711e2`, `0x4719ab`) call it, so it is one function.
+//! The client's name validator `0x6c96c0` and its two wrappers: the character name check
+//! `0x5abd50` (`0x6c9ae0` read as a `CHAR_NAME_*` status, `+0x45`), which the rename's send
+//! (`0x46b36f`) and the create screen (`0x4711e2`, `0x4719ab`) call, and the guild name check
+//! `0x6c9b70`, which the two charter verbs call through `0x4f5160`.
 //!
-//! `0x6c9ae0` runs the validator with no extra characters (`0x6c9af5 xor edx,edx`) and all three
-//! list flags set (`0x6c9ae6`-`0x6c9aea`). The validator takes two charsets from `0x6c9a70`
-//! ([`NameCharsets`]) and the first unit decides which one the whole name is held to.
+//! The validator takes the client's locale, a list of extra characters (`edx`) and a flag per word
+//! list; it answers a code with the name's unit count and the charset it chose, which each wrapper
+//! caps. `0x6c9ae0` passes no extra characters (`0x6c9af5 xor edx,edx`) and all three lists
+//! (`0x6c9ae6`-`0x6c9aea`); `0x6c9b70` passes a space alone (`0x6c9b88`) and the two profanity
+//! lists (`0x6c9b76`-`0x6c9b7a`). The validator takes two charsets from `0x6c9a70`
+//! ([`NameCharsets`]), and the first unit in either decides which one the whole name is held to.
 //!
 //! The checks, in the order the bytes make them, which decides the code of a name failing two:
 //!
@@ -13,18 +17,23 @@
 //!    is `FAILURE` (`0x65b350` → `0x6c96fe` → `0x6c9a5f`).
 //! 3. An empty name is `NO_NAME` (`0x6c9750` → `0x6c98a4`, the count still 0).
 //! 4. Then one walk over the units, left to right (`0x6c9756`-`0x6c9897`), so the first offending
-//!    unit decides: the first unit is tried against the primary charset, then the secondary
-//!    (`0x6c9764`-`0x6c97e3`) and the one that takes it is the name's (`0x6c9778`, `0x6c97eb`);
-//!    a unit outside the name's charset, or a first unit outside both, is `INVALID_CHARACTER`
-//!    (`0x6c97ef` → `0x6c9803`; the extra list is empty, so space and apostrophe are outside too,
-//!    `0x6c9827`); from the third unit on, the last three equal are `THREE_CONSECUTIVE`
-//!    (`0x6c977a`-`0x6c97d2` → `0x6c98d4`): under the C library's `tolower` (`0x40f92b`, ASCII
-//!    only) for charset 1 (`0x6c9788`), exactly for any other (`0x6c9874`-`0x6c9886`).
-//! 5. One unit is `TOO_SHORT` (`0x6c989f` → `0x6c98ac`).
-//! 6. The lists, NamesProfanity, ChatProfanity, NamesReserved (`0x6c9909`, `0x6c9977`, `0x6c99e1`):
-//!    any match is `RESERVED` (`0x6c9a51`). `MIXED_LANGUAGES` and `PROFANE` are never produced.
-//! 7. Over the cap of the name's charset is `TOO_LONG`, checked last (`0x6c9b04`-`0x6c9b27`): 12
-//!    units for charset 1, else 8, and charset 3 at most 6.
+//!    unit decides. Until a unit has picked the name's charset, each is tried against the primary,
+//!    then the secondary (`0x6c9764`-`0x6c97e3`), and the one that takes it is the name's
+//!    (`0x6c9778`, `0x6c97eb`). A unit in the name's charset, from the third unit on, ends
+//!    `THREE_CONSECUTIVE` when the last three are equal (`0x6c977a`-`0x6c97d2` → `0x6c98d4`):
+//!    under the C library's `tolower` (`0x40f92b`, ASCII only) for charset 1 (`0x6c9788`), exactly
+//!    for any other (`0x6c9874`-`0x6c9886`). Any other unit must be an extra character, else it is
+//!    `INVALID_CHARACTER` (`0x6c9803` → `0x6c9827`). An apostrophe first is `INVALID_APOSTROPHE`
+//!    and a second one `MULTIPLE_APOSTROPHES` (`0x6c9833`-`0x6c984f`); a space first is
+//!    `INVALID_SPACE` and one right after a space `CONSECUTIVE_SPACES` (`0x6c9851`-`0x6c9872`).
+//! 5. One unit is `TOO_SHORT` (`0x6c989f` → `0x6c98ac`); from two on, an apostrophe last is
+//!    `INVALID_APOSTROPHE` and a space last `INVALID_SPACE` (`0x6c98e0`-`0x6c98f9`).
+//! 6. The lists the flags turn on, NamesProfanity, ChatProfanity, NamesReserved (`0x6c9909`,
+//!    `0x6c9977`, `0x6c99e1`): any match is `RESERVED` (`0x6c9a51`). `MIXED_LANGUAGES` and
+//!    `PROFANE` are never produced.
+//! 7. The wrapper's cap, checked last: `0x6c9ae0` refuses over the cap of the name's charset as
+//!    `TOO_LONG` (`0x6c9b04`-`0x6c9b27`), 12 units for charset 1, else 8, and charset 3 at most 6;
+//!    `0x6c9b70` over 24 units whatever the charset (`0x6c9b9e`).
 
 mod hangul;
 
@@ -61,15 +70,23 @@ impl NameLists for NoNameLists {
 /// `CHAR_NAME_SUCCESS`, `0x45 + 0xd`, the one status the callers act on (`0x46b374`).
 pub const CHAR_NAME_SUCCESS: u8 = 0x52;
 
-/// The validator's codes (`0x6c96c0`'s returns), before the `+0x45`.
-const NO_NAME: u8 = 0;
-const TOO_SHORT: u8 = 1;
+/// The validator's codes (`0x6c96c0`'s returns, `ret 0x18`), before the `+0x45`.
+pub(crate) const NO_NAME: u8 = 0;
+pub(crate) const TOO_SHORT: u8 = 1;
 const TOO_LONG: u8 = 2;
 const INVALID_CHARACTER: u8 = 3;
-const RESERVED: u8 = 6;
+/// `MIXED_LANGUAGES` (4) and `PROFANE` (5) are codes the callers map, which the validator never
+/// returns.
+pub(crate) const MIXED_LANGUAGES: u8 = 4;
+pub(crate) const PROFANE: u8 = 5;
+pub(crate) const RESERVED: u8 = 6;
+const INVALID_APOSTROPHE: u8 = 7;
+const MULTIPLE_APOSTROPHES: u8 = 8;
 const THREE_CONSECUTIVE: u8 = 9;
+pub(crate) const INVALID_SPACE: u8 = 0xa;
+pub(crate) const CONSECUTIVE_SPACES: u8 = 0xb;
 const FAILURE: u8 = 0xc;
-const SUCCESS: u8 = 0xd;
+pub(crate) const SUCCESS: u8 = 0xd;
 
 /// The conversion buffer, in UTF-16 units with the NUL (`0x6c96eb push 0x400`).
 const UNITS: usize = 0x400;
@@ -80,6 +97,28 @@ const LATIN_MAX_UNITS: usize = 12;
 const OTHER_MAX_UNITS: usize = 8;
 /// Charset 3's, CJK ideographs, is cut to this (`0x6c9b13`-`0x6c9b1d`).
 const CJK_MAX_UNITS: usize = 6;
+/// A guild name's longest, whatever its charset (`0x6c9b9e cmp [ebp-0x8],0x18`).
+const GUILD_MAX_UNITS: usize = 24;
+
+/// The apostrophe and the space, the two extra characters the validator rules on.
+const APOSTROPHE: u16 = 0x27;
+const SPACE: u16 = 0x20;
+
+/// Which lists a wrapper turns on, the validator's last three arguments in its order.
+#[derive(Clone, Copy)]
+struct Searched {
+    names_profanity: bool,
+    chat_profanity: bool,
+    names_reserved: bool,
+}
+
+/// What `0x6c96c0` answers: its code, and through its two pointers the units it walked and the
+/// charset it chose, which the wrappers' caps read (`[ebp-0x8]` and `[ebp-0x4]` of `0x6c9ae0`).
+struct Verdict {
+    code: u8,
+    units: usize,
+    charset: u8,
+}
 
 /// The charsets a name is checked against: the ids the validator's dispatch (`0x6c9dd0`) takes.
 const LATIN_1: u8 = 1;
@@ -135,19 +174,61 @@ impl Default for NameCharsets {
 /// `0x5abd50`: the status of `name` (`CHAR_NAME_NO_NAME` 0x45 to `CHAR_NAME_SUCCESS` 0x52). `None`
 /// is a null name.
 pub fn check_char_name(name: Option<&str>, lists: &dyn NameLists, charsets: NameCharsets) -> u8 {
-    0x45 + validate(name, lists, charsets)
+    // `0x6c9ae0`: no extra characters, every list, the charset's cap.
+    let all = Searched {
+        names_profanity: true,
+        chat_profanity: true,
+        names_reserved: true,
+    };
+    let v = validate(name, &[], lists, all, charsets);
+    let cap = match v.charset {
+        LATIN_1 => LATIN_MAX_UNITS,
+        CJK => CJK_MAX_UNITS,
+        _ => OTHER_MAX_UNITS,
+    };
+    0x45 + if v.code == SUCCESS && v.units > cap {
+        TOO_LONG
+    } else {
+        v.code
+    }
 }
 
-fn validate(name: Option<&str>, lists: &dyn NameLists, charsets: NameCharsets) -> u8 {
+/// `0x6c9b70`: the validator's code for guild name `name`, [`SUCCESS`] for one it accepts.
+pub(crate) fn check_guild_name(name: &str, lists: &dyn NameLists, charsets: NameCharsets) -> u8 {
+    let profanity = Searched {
+        names_profanity: true,
+        chat_profanity: true,
+        names_reserved: false,
+    };
+    let v = validate(Some(name), &[SPACE], lists, profanity, charsets);
+    if v.code == SUCCESS && v.units > GUILD_MAX_UNITS {
+        TOO_LONG
+    } else {
+        v.code
+    }
+}
+
+/// `0x6c96c0` over `name`, taking the units of `extras` outside the charset and searching the
+/// lists `searched` turns on.
+fn validate(
+    name: Option<&str>,
+    extras: &[u16],
+    lists: &dyn NameLists,
+    searched: Searched,
+    charsets: NameCharsets,
+) -> Verdict {
+    let mut v = Verdict {
+        code: NO_NAME,
+        units: 0,
+        charset: 0,
+    };
     let Some(name) = name else {
-        return NO_NAME;
+        return v;
     };
     let units: Vec<u16> = name.encode_utf16().collect();
     if units.len() >= UNITS {
-        return FAILURE;
-    }
-    if units.is_empty() {
-        return NO_NAME;
+        v.code = FAILURE;
+        return v;
     }
     let fold = |u: u16| -> u16 {
         if (0x41..=0x5a).contains(&u) {
@@ -156,45 +237,77 @@ fn validate(name: Option<&str>, lists: &dyn NameLists, charsets: NameCharsets) -
             u
         }
     };
-    // The charset the first unit picks (0 until it has), `[ebp-0x4]` of `0x6c9ae0`.
-    let mut chosen = 0;
+    // The last apostrophe's and the last space's index (`[ebp+0xc]`, `[ebp-0xc]`, -1 before).
+    let mut apostrophe: Option<usize> = None;
+    let mut space: Option<usize> = None;
     for (i, &unit) in units.iter().enumerate() {
-        if chosen == 0 {
-            chosen = [charsets.primary, charsets.secondary]
+        v.units = i + 1;
+        if v.charset == 0 {
+            v.charset = [charsets.primary, charsets.secondary]
                 .into_iter()
                 .find(|&set| in_charset(set, unit))
                 .unwrap_or(0);
         }
-        if chosen == 0 || !in_charset(chosen, unit) {
-            return INVALID_CHARACTER;
-        }
-        if i >= 2 {
-            let (a, b) = (units[i - 2], units[i - 1]);
-            let same = if chosen == LATIN_1 {
-                fold(a) == fold(b) && fold(a) == fold(unit)
-            } else {
-                a == b && a == unit
-            };
-            if same {
-                return THREE_CONSECUTIVE;
+        if v.charset != 0 && in_charset(v.charset, unit) {
+            if i >= 2 {
+                let (a, b) = (units[i - 2], units[i - 1]);
+                let same = if v.charset == LATIN_1 {
+                    fold(a) == fold(b) && fold(a) == fold(unit)
+                } else {
+                    a == b && a == unit
+                };
+                if same {
+                    v.code = THREE_CONSECUTIVE;
+                    return v;
+                }
             }
+            continue;
+        }
+        if !extras.contains(&unit) {
+            v.code = INVALID_CHARACTER;
+            return v;
+        }
+        let refused = match unit {
+            APOSTROPHE if i == 0 => Some(INVALID_APOSTROPHE),
+            APOSTROPHE if apostrophe.is_some() => Some(MULTIPLE_APOSTROPHES),
+            APOSTROPHE => {
+                apostrophe = Some(i);
+                None
+            }
+            SPACE if i == 0 => Some(INVALID_SPACE),
+            SPACE if space == Some(i - 1) => Some(CONSECUTIVE_SPACES),
+            SPACE => {
+                space = Some(i);
+                None
+            }
+            _ => None,
+        };
+        if let Some(code) = refused {
+            v.code = code;
+            return v;
         }
     }
-    if units.len() == 1 {
-        return TOO_SHORT;
-    }
-    if lists.names_profanity(name) || lists.chat_profanity(name) || lists.names_reserved(name) {
-        return RESERVED;
-    }
-    let cap = match chosen {
-        LATIN_1 => LATIN_MAX_UNITS,
-        CJK => CJK_MAX_UNITS,
-        _ => OTHER_MAX_UNITS,
+    let last = units.len().checked_sub(1);
+    v.code = if units.len() < 2 {
+        // 0 or 1 by the count (`0x6c98ac setne`).
+        if units.is_empty() {
+            NO_NAME
+        } else {
+            TOO_SHORT
+        }
+    } else if apostrophe == last {
+        INVALID_APOSTROPHE
+    } else if space == last {
+        INVALID_SPACE
+    } else if (searched.names_profanity && lists.names_profanity(name))
+        || (searched.chat_profanity && lists.chat_profanity(name))
+        || (searched.names_reserved && lists.names_reserved(name))
+    {
+        RESERVED
+    } else {
+        SUCCESS
     };
-    if units.len() > cap {
-        return TOO_LONG;
-    }
-    SUCCESS
+    v
 }
 
 /// Whether `unit` is in charset `set` (`0x6c9dd0`); an id it does not know, 0 included, takes none.
@@ -511,5 +624,64 @@ mod tests {
         assert_eq!(check_on(0, 1, "가"), 0x46, "one syllable is TOO_SHORT");
         assert_eq!(check_on(0, 1, "1"), 0x48);
         assert_eq!(check_on(0, 1, "가나다라마바사아자1"), 0x48);
+    }
+
+    /// The extra characters' own rules (`0x6c9833`-`0x6c9872`, `0x6c98e0`-`0x6c98f9`), with both
+    /// the apostrophe and the space passed: neither may open or close the name, an apostrophe
+    /// comes once, a space never twice in a row, and any other unit outside the charset is
+    /// invalid. The walk decides by position, before the short test and the lists.
+    #[test]
+    fn the_extra_characters_rules() {
+        let code = |name: &str| {
+            let all = Searched {
+                names_profanity: true,
+                chat_profanity: true,
+                names_reserved: true,
+            };
+            validate(
+                Some(name),
+                &[APOSTROPHE, SPACE],
+                &Words(&["blizz"]),
+                all,
+                NameCharsets::default(),
+            )
+            .code
+        };
+        for (name, want) in [
+            ("'Ab", INVALID_APOSTROPHE),
+            ("Ab'", INVALID_APOSTROPHE),
+            ("A'b'c", MULTIPLE_APOSTROPHES),
+            ("A''b", MULTIPLE_APOSTROPHES),
+            ("A'b", SUCCESS),
+            (" Ab", INVALID_SPACE),
+            ("Ab ", INVALID_SPACE),
+            ("A  b", CONSECUTIVE_SPACES),
+            ("A b c", SUCCESS),
+            ("A-b", INVALID_CHARACTER),
+            ("'", INVALID_APOSTROPHE),
+            (" ", INVALID_SPACE),
+            ("Blizz b", RESERVED),
+            ("A1  b", INVALID_CHARACTER),
+            ("Aaa b", THREE_CONSECUTIVE),
+        ] {
+            assert_eq!(code(name), want, "{name:?}");
+        }
+    }
+
+    /// `0x6c9b70`: a space allowed, the two profanity lists searched and the reserved one not,
+    /// and 24 units whatever the charset.
+    #[test]
+    fn the_guild_check_caps_at_24_and_skips_the_reserved_list() {
+        let guild =
+            |name: &str| check_guild_name(name, &Words(&["blizz"]), NameCharsets::default());
+        assert_eq!(
+            guild("Blizzard Fans"),
+            SUCCESS,
+            "Words fills NamesReserved alone"
+        );
+        assert_eq!(guild("Abcdefghij Abcdefghij Ab"), SUCCESS, "24 units");
+        assert_eq!(guild("Abcdefghij Abcdefghij Abc"), TOO_LONG, "25 units");
+        assert_eq!(guild("Ab cd"), SUCCESS);
+        assert_eq!(check("Ab cd"), 0x48, "the character check takes no space");
     }
 }
