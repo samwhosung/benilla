@@ -55,6 +55,12 @@ impl ObjectFields {
             .map(|id| id as i32)
             .filter(|&id| id != 0)
     }
+    /// `ITEM_FIELD_ENCHANTMENT + 1` (field 23): a charter's signature count, in slot 0's duration
+    /// dword beside the petition id; the tooltip reads it at `flds+0x44` (`0x52ba51`). vmangos
+    /// leaves the write out (`PetitionsHandler.cpp:307`), so it reads 0 there.
+    pub fn item_petition_signatures(&self) -> u32 {
+        self.get_u32(FIELD_ITEM_ENCHANTMENT + 1).unwrap_or(0)
+    }
     /// `ITEM_FIELD_ENCHANTMENT + 3*slot + 2`: charges left, shown as `" (N Charges)"` if nonzero.
     /// The tooltip skips the duration; a countdown comes from `SMSG_ITEM_ENCHANT_TIME_UPDATE`.
     pub fn item_enchant_charges(&self, slot: u8) -> u32 {

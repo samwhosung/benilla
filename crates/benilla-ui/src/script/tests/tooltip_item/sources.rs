@@ -357,3 +357,80 @@ fn a_traded_crafted_item_names_its_maker() {
     );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
+
+/// A petition's signature count follows its creator line, white, with the count as the plural
+/// ordinal (`0x52ba51`..`0x52ba8d`), and none at 0 (`0x52ba57`); an owner still in flight leaves
+/// the count in place (`0x52b9d9` skips only the creator).
+#[test]
+fn a_petitions_signature_count_follows_its_creator() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"PETITION_NUM_SIGNATURES = "[SIGS %d]"
+        PETITION_NUM_SIGNATURES_P1 = "[SIGS %d x]""#,
+    )
+    .unwrap();
+    s.set_item_template(
+        5863,
+        ItemTemplateView {
+            name: "Charter".into(),
+            quality: 1,
+            flags: 0x2000,
+            ..Default::default()
+        },
+    );
+    let signed = |slot: u32, owner: Option<&str>, signatures| {
+        (
+            slot,
+            ContainerSlot {
+                item_id: 5863,
+                count: 1,
+                quality: Some(1),
+                guid: 0x4000_0000_0000_0010 + u64::from(slot),
+                petition: Some(PetitionSlotView {
+                    is_charter: false,
+                    title: "Pact".into(),
+                    owner: owner.map(str::to_string),
+                    signatures,
+                }),
+                ..Default::default()
+            },
+        )
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([
+                signed(1, Some("Bob"), 3),
+                signed(2, Some("Bob"), 1),
+                signed(3, Some("Bob"), 0),
+                signed(4, None, 2),
+            ]),
+        }),
+    );
+    let pact = |rest: &[&str]| {
+        let mut v = vec!["Charter", "[PETITION_TITLE Pact]"];
+        v.extend_from_slice(rest);
+        v.push("[ITEM_SIGNABLE]");
+        v.into_iter().map(str::to_string).collect::<Vec<_>>()
+    };
+    let bob = "[PETITION_CREATOR Bob]";
+    assert_eq!(
+        texts_after(&mut s, "TT:SetBagItem(0, 1)"),
+        pact(&[bob, "[SIGS 3 x]"])
+    );
+    let lines = lines_of(&mut s);
+    assert_eq!(lines[3].1, [1.0, 1.0, 1.0, 1.0], "the count is white");
+    assert_eq!(
+        texts_after(&mut s, "TT:SetBagItem(0, 2)"),
+        pact(&[bob, "[SIGS 1]"])
+    );
+    assert_eq!(texts_after(&mut s, "TT:SetBagItem(0, 3)"), pact(&[bob]));
+    assert_eq!(
+        texts_after(&mut s, "TT:SetBagItem(0, 4)"),
+        pact(&["[SIGS 2 x]"])
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}

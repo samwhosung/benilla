@@ -458,39 +458,53 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
             ..Default::default()
         },
     );
-    let charter = |p: Option<PetitionSlotView>| ContainerSlot {
+    // Each slot holds its own charter object.
+    let charter = |slot: u64, p: Option<PetitionSlotView>| ContainerSlot {
         item_id: 5863,
         count: 1,
         quality: Some(1),
         already_bound: true,
+        guid: 0x4000_0000_0000_0100 + slot,
         petition: p,
         ..Default::default()
     };
     let mut slots = HashMap::new();
     slots.insert(
         1,
-        charter(Some(PetitionSlotView {
-            is_charter: true,
-            title: "BTC".into(),
-            owner: Some("Twowarrior".into()),
-        })),
+        charter(
+            1,
+            Some(PetitionSlotView {
+                is_charter: true,
+                title: "BTC".into(),
+                owner: Some("Twowarrior".into()),
+                signatures: 0,
+            }),
+        ),
     );
     slots.insert(
         2,
-        charter(Some(PetitionSlotView {
-            is_charter: true,
-            title: "BTC".into(),
-            owner: None,
-        })),
+        charter(
+            2,
+            Some(PetitionSlotView {
+                is_charter: true,
+                title: "BTC".into(),
+                owner: None,
+                signatures: 0,
+            }),
+        ),
     );
-    slots.insert(3, charter(None));
+    slots.insert(3, charter(3, None));
     slots.insert(
         4,
-        charter(Some(PetitionSlotView {
-            is_charter: false,
-            title: "Something".into(),
-            owner: Some("Someone".into()),
-        })),
+        charter(
+            4,
+            Some(PetitionSlotView {
+                is_charter: false,
+                title: "Something".into(),
+                owner: Some("Someone".into()),
+                signatures: 0,
+            }),
+        ),
     );
     s.set_container(
         0,
@@ -549,13 +563,8 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
     );
     assert_eq!(
         hover(&mut s, 3),
-        vec![
-            "Guild Charter",
-            "[ITEM_SIGNABLE]",
-            "[ITEM_SOULBOUND]",
-            "[ITEM_UNIQUE]"
-        ],
-        "no record yet: exactly the plate we shipped before, not a blank one"
+        vec!["Guild Charter"],
+        "no record yet: the build ends at the name (`0x52b94e`)"
     );
     assert_eq!(
         hover(&mut s, 4),

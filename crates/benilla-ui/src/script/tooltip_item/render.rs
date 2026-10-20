@@ -112,7 +112,8 @@ pub(in crate::script) struct BuilderFlags {
 /// (`0x52ce0d`). The
 /// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. The LOCKED line
 /// sets it on every lock path (`0x52bfa6`, after `0x52be58`, whether or not a `LOCKED_WITH_*`
-/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`).
+/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`). `None` is a build that ended at a
+/// petition miss, which returns 0 before the sell price and the show (`0x52b94e`).
 pub(super) fn render_view_flagged(
     lua: &Lua,
     this: &Table,
@@ -120,7 +121,7 @@ pub(super) fn render_view_flagged(
     flags: BuilderFlags,
     // `None`: a template source, with no item object and no instance block.
     inst: Option<&ItemInstance>,
-) -> mlua::Result<bool> {
+) -> mlua::Result<Option<bool>> {
     let mut live = false;
     let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -211,6 +212,7 @@ pub(super) fn render_view_flagged(
     // source is unresolved waits for its answer's rebuild, as the creator line does.
     // A charter's live object asks the petition cache (`0x52b92f`) and its owner the name cache
     // (`0x52b9c5`), each with the tooltip as the answer's cookie.
+    // A petition miss ends the build at the name, unshown (`0x52b944`..`0x52b94e`).
     if let Some(i) = inst.filter(|i| v.flags & 0x2000 != 0 && i.object && i.guid != 0) {
         let wait = match &i.petition {
             None => Some(CacheWait::Petition(i.guid)),
@@ -218,9 +220,13 @@ pub(super) fn render_view_flagged(
             Some(_) => None,
         };
         if let Some(wait) = wait {
+            let ends = matches!(wait, CacheWait::Petition(_));
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.petition_asks.insert(i.guid);
             note_miss(&mut model, wait);
+            if ends {
+                return Ok(None);
+            }
         }
     }
     if let Some(p) = inst.and_then(|i| i.petition.as_ref()) {
@@ -234,6 +240,12 @@ pub(super) fn render_view_flagged(
         }
         if let Some(owner) = p.owner.as_deref().filter(|o| !o.is_empty()) {
             keyed(creator_key, &[Arg::S(owner)], WHITE, false)?;
+        }
+        // The count, white, with itself as the plural ordinal; none at 0 (`0x52ba51`..`0x52ba8d`).
+        if p.signatures != 0 {
+            if let Some(t) = plural_template("PETITION_NUM_SIGNATURES", p.signatures, &get) {
+                add((fill(&t, &[Arg::D(i64::from(p.signatures))]), WHITE))?;
+            }
         }
     }
     // ITEM_SIGNABLE: template flag `0x2000`, a petition.
@@ -753,14 +765,16 @@ pub(super) fn render_view_flagged(
     // p4's early return (`0x52e147..0x52e14c`): compact falls through to `0x52e14e`, lays out and
     // returns, so nothing from `0x52e170` on runs: flavor text, creator, open or read line, money.
     if flags.name_only {
-        return Ok(live);
+        return Ok(Some(live));
     }
     if !v.description.is_empty() {
         addw((format!("\"{}\"", v.description), GOLD))?;
     }
     // The creator line needs an item object or a block (`0x52e1c1`, `0x52e1c7`), so a template
     // source (`None`) stops here; the open and read hints need the object itself (`0x52e2e0`).
-    let Some(inst) = inst else { return Ok(live) };
+    let Some(inst) = inst else {
+        return Ok(Some(live));
+    };
     // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`. The arm is picked once, at
     // `0x52b78f`..`0x52b7b0`: an item object with WRAPPED `0x8` (`0x52b789`) takes the gift arm,
     // and so does a block whose `+0x42c` is set (the trade target's). The gift arm adds
@@ -797,7 +811,7 @@ pub(super) fn render_view_flagged(
     // WRAPPED `0x8`). Readable: PageText (`0x5d9e10`) or the letter text. The lock gate is the
     // line's only: the click tests the bare flag (`ItemInfo::opens_loot`), and READABLE wins there.
     if !inst.object {
-        return Ok(live);
+        return Ok(Some(live));
     }
     let openable = inst.openable_source
         && ((v.flags & 0x4 != 0 && (v.lock_id == 0 || inst.flags & 0x4 != 0))
@@ -807,7 +821,7 @@ pub(super) fn render_view_flagged(
     } else if v.page_text != 0 || inst.has_text {
         keyed("ITEM_READABLE", &[], GREEN, false)?;
     }
-    Ok(live)
+    Ok(Some(live))
 }
 
 /// What the lock block draws: `LOCKED`'s colour and the line under it.
@@ -1005,7 +1019,9 @@ mod tests {
             ..Default::default()
         };
         let flagged = |inst: Option<&ItemInstance>| {
-            render_view_flagged(s.lua(), &tt, &v, BuilderFlags::default(), inst).unwrap()
+            render_view_flagged(s.lua(), &tt, &v, BuilderFlags::default(), inst)
+                .unwrap()
+                .unwrap()
         };
         let enchant = |slot, remaining_ms| crate::script::EnchantView {
             slot,

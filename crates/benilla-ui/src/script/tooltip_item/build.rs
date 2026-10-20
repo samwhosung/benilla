@@ -225,7 +225,19 @@ pub(in crate::script) fn build_item(
         .clear();
     let view = view_of(lua, build.item_id);
     let live = match &view {
-        Some(v) => render::render_view_flagged(lua, this, v, build.flags, build.inst.as_ref())?,
+        Some(v) => {
+            match render::render_view_flagged(lua, this, v, build.flags, build.inst.as_ref())? {
+                Some(live) => live,
+                // A petition miss returns before the sell price and the show (`0x52b94e`); the
+                // build is kept for the answer's rebuild.
+                None => {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    keep_misses(&mut model, h, true);
+                    model.item_builds.insert(h, build);
+                    return Ok(false);
+                }
+            }
+        }
         None => {
             match &build.in_flight {
                 InFlight::Nothing => {}

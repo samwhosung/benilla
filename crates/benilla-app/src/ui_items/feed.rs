@@ -844,13 +844,15 @@ fn resolve_slot(
         // A charter's guild name and master, keyed by the petition id the server puts in
         // enchantment slot 0 (`PetitionsHandler.cpp:126`), where the reference reads it
         // (`0x5ef337`) and its enchant lines skip it (`0x52c9e0`). The tooltip build asks it.
+        // The signature count rides beside the id (`0x52ba51`).
         petition: (t.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0)
             .then(|| {
-                let id = objects
-                    .object(guid)
-                    .and_then(|f| f.item_enchant(0))
-                    .unwrap_or(0);
-                petitions.tooltip_view(id as u32, guid, names, Ask::Read)
+                let id = fields.item_enchant(0).unwrap_or(0);
+                let view = petitions.tooltip_view(id as u32, guid, names, Ask::Read)?;
+                Some(benilla_ui::script::PetitionSlotView {
+                    signatures: fields.item_petition_signatures(),
+                    ..view
+                })
             })
             .flatten(),
         texture: icons

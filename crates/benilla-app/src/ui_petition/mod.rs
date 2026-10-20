@@ -266,6 +266,8 @@ impl PetitionState {
             is_charter,
             title,
             owner: names.resolve_player(owner_guid, ask).map(str::to_string),
+            // The item object's, which the slot resolve fills.
+            signatures: 0,
         })
     }
 
