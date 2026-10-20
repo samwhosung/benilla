@@ -25,17 +25,19 @@ pub struct TaxiPath {
 /// `TaxiPath.dbc` rows by id, plus a `(from, to)` lookup.
 pub struct TaxiPaths {
     rows: HashMap<u32, TaxiPath>,
-    by_pair: HashMap<(u32, u32), u32>,
+    by_pair: HashMap<(u32, u32), TaxiPath>,
 }
 
 impl TaxiPaths {
-    /// A catalog of these hops, a later row replacing an earlier one with its id or its pair.
+    /// A catalog of these hops in file order, a later row replacing an earlier one with its id. A
+    /// pair keeps its first row: the reference's pair table walks the rows from the last, each
+    /// overwriting its pair's cell (`0x4db387`-`0x4db3e2`).
     pub fn from_rows(hops: impl IntoIterator<Item = TaxiPath>) -> Self {
         let mut rows = HashMap::new();
         let mut by_pair = HashMap::new();
         for hop in hops {
             rows.insert(hop.id, hop);
-            by_pair.insert((hop.from, hop.to), hop.id);
+            by_pair.entry((hop.from, hop.to)).or_insert(hop);
         }
         Self { rows, by_pair }
     }
@@ -46,9 +48,7 @@ impl TaxiPaths {
 
     /// The direct hop from `from` to `to`; the table is directed, one row per direction.
     pub fn between(&self, from: u32, to: u32) -> Option<&TaxiPath> {
-        self.by_pair
-            .get(&(from, to))
-            .and_then(|id| self.rows.get(id))
+        self.by_pair.get(&(from, to))
     }
 
     /// Every direct hop leaving `node`, in no order.
