@@ -170,13 +170,21 @@ impl Default for PlayerOutdoors {
     }
 }
 
-/// Asks [`PlayerOutdoors`] of the world where the body stands, after this frame's re-place.
+/// Asks [`PlayerOutdoors`] of the world where our own body stands, after this frame's re-place:
+/// free-fly freezes it in place, so it still answers.
 pub(crate) fn publish_player_outdoors(
     test: benilla_world::wmo_portal::EntityOutdoors,
-    viewer: Res<Viewer>,
+    player: Option<Res<Player>>,
     mut outdoors: ResMut<PlayerOutdoors>,
 ) {
-    let now = viewer.at.is_none_or(|feet| test.at(feet));
+    let now = match player.as_deref() {
+        // `pos` is another unit's while we drive it, and still the last mover's until the new
+        // one's pose is adopted (`reseat`): our own body's answer holds.
+        Some(p) if p.active && (p.foreign_mover.is_some() || p.reseat) => return,
+        Some(p) if p.active => test.at(p.pos),
+        // No body: a null entity reads outdoors (`0x6706fa`).
+        _ => true,
+    };
     if outdoors.0 != now {
         outdoors.0 = now;
     }
