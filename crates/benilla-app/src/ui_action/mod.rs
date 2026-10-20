@@ -120,21 +120,53 @@ pub(crate) struct Spells {
 
 impl Spells {
     /// The cast time in ms as `GetCastTime 0x6e3340` returns it for argument 1, the tooltip's
-    /// (`52eb4b`): the level-scaled `CastingTimeIndex` row, then spell-mod op 10 (`0x6e33b7`),
-    /// with no clamp, so row 18's negative time survives. A missing row returns 0 before the
-    /// modifier (`0x6e338a`). The cast-speed multiply (`0x6e3422`) is not applied.
+    /// (`52eb4b`): the level-scaled `CastingTimeIndex` row, then spell-mod op 10 (`0x6e33b7`), then
+    /// the caster's cast speed, with no clamp, so row 18's negative time survives. A missing row
+    /// returns 0 before the modifier (`0x6e338a`). `caster` is the unit the speed is read off, the
+    /// player or, for a pet spell, its charm else its summon (`0x6e33e8`-`0x6e3416`), `None` when
+    /// it is not streamed, which skips the multiply (`0x6e341d`). `reads` hears the level when the
+    /// row scales by it and the speed when it is read.
     pub(crate) fn cast_time_unclamped_ms(
         &self,
         def: &benilla_formats::SpellDisplay,
+        caster: Option<&benilla_protocol::ObjectFields>,
         caster_level: u32,
         mods: &crate::spell::SpellModifiers,
+        reads: &mut dyn crate::spell::SpellReads,
     ) -> i32 {
-        self.cast_times
-            .get(def.casting_time_index)
-            .map_or(0, |row| {
-                let resolved = row.resolved_ms(caster_level, def.base_level);
-                mods.apply(def, crate::spell::OP_CAST_TIME, resolved)
-            })
+        let Some(row) = self.cast_times.get(def.casting_time_index) else {
+            return 0;
+        };
+        if row.reads_caster_level() {
+            reads.unit(crate::spell::UnitField::Level);
+        }
+        let resolved = row.resolved_ms(caster_level, def.base_level);
+        let time = mods.apply(def, crate::spell::OP_CAST_TIME, resolved);
+        // An ability or a trade skill keeps its time (`Attributes & 0x30`, `0x6e33c3`), and so does
+        // a time at or below zero (`0x6e3424`).
+        let Some(caster) = caster.filter(|_| def.attributes & ATTR_NO_CAST_SPEED == 0 && time > 0)
+        else {
+            return time;
+        };
+        reads.unit(crate::spell::UnitField::CastSpeed);
+        // A field never sent is the descriptor's 0, which casts in no time; vmangos sends 1.0 for
+        // that reason (`Player.cpp:464-466`).
+        let speed = caster.unit_mod_cast_speed().unwrap_or(0.0);
+        // `|speed - 1|` below the epsilon at `0x8029d4` keeps the time; equal to it, or a NaN, an
+        // unordered compare, multiplies (`0x6e3432`-`0x6e3445`: `test ah, 5` then `jnp`).
+        if (speed - 1.0).abs() < CAST_SPEED_EPSILON {
+            return time;
+        }
+        // `fimul` on the x87 stack, stored as an `f32`, then `fistp`, which rounds to nearest
+        // even and stores the integer indefinite for a NaN or a value out of range
+        // (`0x6e3447`-`0x6e3456`). The product is exact in `f64` for any `f32` times an `i32`
+        // below 2^29 ms.
+        let product = f64::from((f64::from(speed) * f64::from(time)) as f32).round_ties_even();
+        if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&product) {
+            product as i32
+        } else {
+            i32::MIN
+        }
     }
 
     /// [`Self::cast_time_unclamped_ms`] for argument 0, the cast validator's (`0x609e16`): a
@@ -142,12 +174,27 @@ impl Spells {
     pub(crate) fn cast_time_ms(
         &self,
         def: &benilla_formats::SpellDisplay,
+        caster: Option<&benilla_protocol::ObjectFields>,
         caster_level: u32,
         mods: &crate::spell::SpellModifiers,
     ) -> u32 {
-        self.cast_time_unclamped_ms(def, caster_level, mods).max(0) as u32
+        let time = self.cast_time_unclamped_ms(
+            def,
+            caster,
+            caster_level,
+            mods,
+            &mut crate::spell::Unrecorded,
+        );
+        time.max(0) as u32
     }
 }
+
+/// `Attributes` bits 4 and 5, vmangos `SPELL_ATTR_IS_ABILITY` and `SPELL_ATTR_IS_TRADESKILL`
+/// (`SpellDefines.h:796-797`): a cast time the caster's speed does not scale (`0x6e33c3`).
+const ATTR_NO_CAST_SPEED: u32 = 0x30;
+
+/// The `f32` at `0x8029d4`, 2^-22: a cast speed this close to 1 leaves the time as it is.
+const CAST_SPEED_EPSILON: f32 = f32::from_bits(0x3480_0000);
 
 #[cfg(test)]
 impl Spells {

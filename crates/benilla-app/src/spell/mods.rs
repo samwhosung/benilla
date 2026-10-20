@@ -506,10 +506,80 @@ mod tests {
             benilla_formats::load_spell_cast_times(&mut chain).expect("load SpellCastTimes.dbc");
         let frostbolt = catalog.get(116).expect("Frostbolt");
         let mut mods = mage_tables();
-        let base = spells.cast_time_ms(frostbolt, 60, &mods);
+        let base = spells.cast_time_ms(frostbolt, None, 60, &mods);
         assert!(base > 0);
         mods.set(false, 5, OP_CAST_TIME, -100);
-        assert_eq!(spells.cast_time_ms(frostbolt, 60, &mods), 0);
+        assert_eq!(spells.cast_time_ms(frostbolt, None, 60, &mods), 0);
+    }
+
+    /// `GetCastTime` scales a positive time by the caster's `UNIT_MOD_CAST_SPEED` after op 10
+    /// (`0x6e3422`-`0x6e3456`): a 3 s cast reads 4.5 s at Curse of Tongues' 1.5, `fistp` rounds a
+    /// half to even, a factor within 2^-22 of 1 keeps the time, and an ability, a trade skill, a
+    /// time at or below zero and a caster not streamed are not scaled. A field never sent is the
+    /// descriptor's 0. The level and the speed are reported where they are read.
+    #[test]
+    fn the_cast_time_takes_the_casters_cast_speed() {
+        use crate::spell::{SpellReads, UnitField};
+        #[derive(Default)]
+        struct Log(Vec<UnitField>);
+        impl SpellReads for Log {
+            fn unit(&mut self, field: UnitField) {
+                self.0.push(field);
+            }
+            fn item_search(&mut self, _: u32) {}
+        }
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        let row = |base_ms, per_level_ms| benilla_formats::SpellCastTime {
+            base_ms,
+            per_level_ms,
+            minimum_ms: i32::MIN,
+        };
+        spells.cast_times = benilla_formats::SpellCastTimeCatalog::from_rows([
+            (1, row(3000, 0)),
+            (2, row(1001, 0)),
+            (3, row(-1_000_000, 0)),
+            (4, row(1000, 100)),
+        ]);
+        let mods = SpellModifiers::default();
+        let spell = |index, attributes| SpellDisplay {
+            casting_time_index: index,
+            attributes,
+            ..Default::default()
+        };
+        let unit = |speed: Option<f32>| {
+            let mut pairs = vec![(34u16, 60u32)];
+            pairs.extend(speed.map(|v| (145u16, v.to_bits())));
+            benilla_protocol::ObjectFields::from_pairs(&pairs)
+        };
+        let time = |d: &SpellDisplay, speed: Option<f32>| {
+            let caster = unit(speed);
+            let mut log = Log::default();
+            let t = spells.cast_time_unclamped_ms(d, Some(&caster), 1, &mods, &mut log);
+            (t, log.0)
+        };
+        let three = spell(1, 0);
+        assert_eq!(time(&three, Some(1.5)), (4500, vec![UnitField::CastSpeed]));
+        assert_eq!(time(&three, Some(1.0)).0, 3000);
+        assert_eq!(
+            time(&three, Some(1.0 + 1.0e-7)).0,
+            3000,
+            "within the epsilon"
+        );
+        assert_eq!(time(&three, None).0, 0, "the descriptor's 0");
+        // 1001 × 0.5 = 500.5, to even.
+        assert_eq!(time(&spell(2, 0), Some(0.5)).0, 500);
+        assert_eq!(time(&spell(2, 0), Some(1.5)).0, 1502);
+        for attributes in [0x10, 0x20] {
+            assert_eq!(time(&spell(1, attributes), Some(1.5)), (3000, vec![]));
+        }
+        assert_eq!(time(&spell(3, 0), Some(1.5)), (-1_000_000, vec![]));
+        assert_eq!(
+            time(&spell(4, 0), Some(1.0)),
+            (1100, vec![UnitField::Level, UnitField::CastSpeed])
+        );
+        let mut log = Log::default();
+        let unseen = spells.cast_time_unclamped_ms(&three, None, 60, &mods, &mut log);
+        assert_eq!((unseen, log.0), (3000, vec![]), "no caster to read");
     }
 
     #[test]

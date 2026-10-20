@@ -543,7 +543,8 @@ fn send_spell_cast(
     // about the weapon.
     if let Some(d) = def {
         if let Some(store) = ctx.rel.self_store {
-            if !super::usable::equipped_item_fits(d, store, objects, items) {
+            if !super::usable::equipped_item_fits(d, store, objects, items, &mut super::Unrecorded)
+            {
                 let reason = super::usable::equipped_item_reason(d);
                 debug!("ui_action: cast {spell_id} refused locally — equipped item ({reason:#x})");
                 refuse!(CastFail::local(spell_id, reason));
@@ -764,7 +765,9 @@ fn send_spell_cast(
             .self_store
             .and_then(|s| s.0.unit_level())
             .unwrap_or(0);
-        let cast_time_ms = spells.map_or(0, |s| s.cast_time_ms(d, caster_level, spell_mods));
+        let player = ctx.rel.self_store.map(|s| &s.0);
+        let cast_time_ms =
+            spells.map_or(0, |s| s.cast_time_ms(d, player, caster_level, spell_mods));
         if validator::cast_moving_refusal(ctx.self_move_flags, cast_time_ms, def) {
             debug!("ui_action: cast {spell_id} refused locally — moving (0x2e)");
             refuse!(CastFail::local(spell_id, 0x2e));

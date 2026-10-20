@@ -100,6 +100,8 @@ const FIELD_UNIT_TRAINING_POINTS: u16 = 149;
 pub const FIELD_UNIT_DYNAMIC_FLAGS: u16 = 143;
 /// The spell being channeled, 0 for none (`UpdateFields_1_12_1.h:89`).
 pub const FIELD_UNIT_CHANNEL_SPELL: u16 = 144;
+/// The cast-time factor, a float (`UpdateFields_1_12_1.h:90`).
+const FIELD_UNIT_MOD_CAST_SPEED: u16 = 145;
 /// The summoning spell, 0 for none; the first gate of the client's feed-pet path `0x6ea1e0`.
 const FIELD_UNIT_CREATED_BY_SPELL: u16 = 146;
 pub const FIELD_UNIT_NPC_FLAGS: u16 = 147;

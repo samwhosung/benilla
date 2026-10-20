@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{AuraKey, AuraTooltipView, SpellTooltipView};
 
-use super::spell_deps::{Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
+use super::spell_deps::{Changes, Deps, RangeSeen, Reagents, Seen};
 use super::spell_feed::{
     build_aura_view, build_view, reagent_state, PetInputs, ViewCaster, ViewCtx,
 };
@@ -22,7 +22,7 @@ use crate::net::{NetCommands, ObjectStore, Objects};
 use crate::spell::usable::{
     slot_item_cached, worn_slots_read, SlotItem, EQUIPMENT_MASK, EQUIPMENT_SLOTS,
 };
-use crate::spell::{ModsDiff, SpellModifiers};
+use crate::spell::{ModsDiff, SpellModifiers, UnitField};
 use crate::ui_action::{real_spells, Spells};
 use crate::ui_items::TestObjects;
 use benilla_formats::{RangeUnit, UnitMotion};
@@ -48,7 +48,7 @@ struct Inputs {
     worn: u32,
     /// The disarm flag.
     disarm: bool,
-    /// A [`UnitField`] bit each: level, base mana, base health, ranged attack time.
+    /// A [`UnitField`] bit each: level, base mana, base health, ranged attack time, cast speed.
     unit: u16,
     /// Bit `i`: the skill line `lines[i]` at 300.
     lines: u128,
@@ -72,7 +72,7 @@ impl Inputs {
         pace: true,
         worn: EQUIPMENT_MASK,
         disarm: true,
-        unit: 0xf,
+        unit: UNIT_MASK,
         lines: u128::MAX,
         bits: u64::MAX,
         poke: None,
@@ -230,7 +230,7 @@ impl Inputs {
             pace: !deps.range_units,
             worn: EQUIPMENT_MASK & !deps.worn,
             disarm: !deps.disarm,
-            unit: !deps.unit & 0xf,
+            unit: !deps.unit & UNIT_MASK,
             lines: layout
                 .lines
                 .iter()
@@ -244,7 +244,16 @@ impl Inputs {
 }
 
 /// The [`UnitField`] names, by bit.
-const UNIT_NAMES: [&str; 4] = ["level", "base mana", "base health", "ranged attack time"];
+const UNIT_NAMES: [&str; 5] = [
+    "level",
+    "base mana",
+    "base health",
+    "ranged attack time",
+    "cast speed",
+];
+
+/// Every [`UnitField`] bit.
+const UNIT_MASK: u16 = (1 << UNIT_NAMES.len()) - 1;
 
 /// What a sweep holds fixed for a view: the form the form input puts on, the item kind worn
 /// items are of, and the class family the tables gate on.
@@ -335,6 +344,16 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
             } else {
                 2000
             },
+        ),
+        // `UNIT_MOD_CAST_SPEED`: a player's 1.0, and Curse of Tongues' 1.5.
+        (
+            145,
+            if unit(UnitField::CastSpeed) {
+                1.5f32
+            } else {
+                1.0
+            }
+            .to_bits(),
         ),
     ];
     if inputs.disarm {
@@ -1522,9 +1541,19 @@ fn the_seen_diff_names_each_input_it_saw_move() {
         &items,
     );
     assert!(bound.changes_since(&seen(&base)).home);
+    // A player going or coming moves every view, which read nothing of one that was not there.
     let gone = Seen::of(None, None, RangeSeen::default(), &objects, &items);
     assert_eq!(gone.changes_since(&seen(&base)).worn, EQUIPMENT_MASK);
+    assert!(gone.changes_since(&seen(&base)).everything);
+    assert!(seen(&base).changes_since(&gone).everything);
+    assert!(!gone.changes_since(&gone).everything);
     assert!(seen(&base).changes_since(&seen(&base)).is_empty());
+    // The cast speed, which only the cast cell reads.
+    let now = player(&[(22, 100), (145, 1.5f32.to_bits())]);
+    assert_eq!(
+        seen(&now).changes_since(&seen(&base)).unit,
+        UnitField::CastSpeed.bit()
+    );
     // The disarm flag, and no other flag.
     let now = player(&[(22, 100), (46, 0x0020_0000)]);
     let c = seen(&now).changes_since(&seen(&base));

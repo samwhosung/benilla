@@ -400,6 +400,50 @@ fn battle_shout_description_scales_by_the_skill_level() {
     }
 }
 
+/// The cast cell is `GetCastTime(1)`, which scales by the caster's `UNIT_MOD_CAST_SPEED`
+/// (`0x6e3426`-`0x6e3456`): Fireball rank 1 (133), 1.5 s, reads 2.25 s at Curse of Tongues rank
+/// 1's 1.5 (vmangos `Unit.cpp:9926-9945`). A pet view reads the pet's factor (`0x6e33e8`-
+/// `0x6e3416`), and a player with none sent reads the descriptor's 0, an instant cast.
+#[test]
+fn the_cast_cell_takes_the_casters_cast_speed() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let unit = |speed: Option<f32>| {
+        let mut pairs = vec![(22u16, 100u32), (34, 60)];
+        pairs.extend(speed.map(|v| (145u16, v.to_bits())));
+        benilla_protocol::ObjectFields::from_pairs(&pairs)
+    };
+    let player = |speed| ObjectStore(unit(speed));
+    let at = |t: &mut TestCtx, speed| {
+        let store = player(speed);
+        spell_tooltip_view(
+            133,
+            &spells,
+            &mut t.ctx_for(&objects, 0, None, Some(&store)),
+        )
+        .expect("Fireball view")
+        .cast_time
+    };
+    assert_eq!(at(&mut t, Some(1.0)).as_deref(), Some("1.5 sec cast"));
+    assert_eq!(at(&mut t, Some(1.5)).as_deref(), Some("2.25 sec cast"));
+    assert_eq!(at(&mut t, None).as_deref(), Some("Instant cast"));
+    let me = player(Some(1.0));
+    let pet = unit(Some(2.0));
+    let v = spell_tooltip_view(
+        133,
+        &spells,
+        &mut t.pet_ctx(&objects, Some(&me), Some(&pet)),
+    )
+    .expect("Fireball view");
+    assert_eq!(
+        v.cast_time.as_deref(),
+        Some("3 sec cast"),
+        "the pet's factor"
+    );
+}
+
 /// Fireball rank 1 (133) end to end, through the `Spell.dbc` columns the catalog reads: the
 /// description (column 138), `CastingTimeIndex` (column 18), whose row 16 is 1500 ms, and
 /// `DurationIndex` (column 30).

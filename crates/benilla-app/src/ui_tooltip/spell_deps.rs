@@ -13,7 +13,7 @@ use benilla_protocol::ObjectFields;
 use crate::items::Items;
 use crate::net::{ObjectStore, Objects};
 use crate::spell::usable::{slot_item_cached, SlotItem, EQUIPMENT_MASK, EQUIPMENT_SLOTS};
-use crate::spell::{ModsDiff, SkillSnapshot};
+use crate::spell::{ModsDiff, SkillSnapshot, SpellReads, UnitField};
 
 /// The four percentages a chance-to-X line reads (`0x52f5b1`), in the order [`Seen`] keeps them.
 #[derive(Clone, Copy)]
@@ -43,34 +43,16 @@ impl Chance {
     }
 }
 
-/// One of the player's unit fields a cost, cast or cooldown cell reads, a bit of [`Deps::unit`].
-#[derive(Clone, Copy)]
-pub(super) enum UnitField {
-    Level,
-    BaseMana,
-    BaseHealth,
-    RangedTime,
-}
-
-impl UnitField {
-    pub(super) fn bit(self) -> u16 {
-        match self {
-            UnitField::Level => 1,
-            UnitField::BaseMana => 1 << 1,
-            UnitField::BaseHealth => 1 << 2,
-            UnitField::RangedTime => 1 << 3,
-        }
-    }
-}
-
-/// The player's unit fields those cells read, as the values they read them at (an absent field
-/// reads 0).
+/// The player's unit fields the cost, cast and cooldown cells read ([`UnitField`]), as the values
+/// they read them at (an absent field reads 0, the cast speed `None`).
 #[derive(Clone, Copy, Default, PartialEq)]
 struct UnitFields {
     level: u32,
     base_mana: u32,
     base_health: u32,
     ranged_time: u32,
+    /// As bits, so a NaN compares equal to itself.
+    cast_speed: Option<u32>,
 }
 
 impl UnitFields {
@@ -83,6 +65,7 @@ impl UnitFields {
             base_mana: p.unit_base_mana().unwrap_or(0),
             base_health: p.unit_base_health().unwrap_or(0),
             ranged_time: p.unit_ranged_attack_time().unwrap_or(0),
+            cast_speed: p.unit_mod_cast_speed().map(f32::to_bits),
         }
     }
 
@@ -99,12 +82,21 @@ impl UnitFields {
             | moved(UnitField::BaseMana, self.base_mana, prev.base_mana)
             | moved(UnitField::BaseHealth, self.base_health, prev.base_health)
             | moved(UnitField::RangedTime, self.ranged_time, prev.ranged_time)
+            | if self.cast_speed != prev.cast_speed {
+                UnitField::CastSpeed.bit()
+            } else {
+                0
+            }
     }
 }
 
 /// What one built view read of the player-side inputs the feed watches; the pet's own inputs
 /// ([`super::spell_feed::PetInputs`]) rebuild every pet view and are not recorded. Written where
-/// the builder reads, so a read cannot be added without saying what it depends on.
+/// the read is made: in the builder, and inside the cost, cast-time and equipped-item computations
+/// it shares with the cast path, which report through [`SpellReads`]. The range cell's record is
+/// the one predicate, `benilla_formats::min_max_range_reads_units`, kept beside the
+/// `min_max_range` it describes and held to it by the reach, auto-attack target and run sweeps
+/// (`deps_tests`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Deps {
     /// A `$z` expanded: the bind point.
@@ -139,16 +131,6 @@ pub(super) struct Deps {
 impl Deps {
     pub(super) fn chance(&mut self, which: Chance) {
         self.avoidance |= which.bit();
-    }
-
-    pub(super) fn unit(&mut self, field: UnitField) {
-        self.unit |= field.bit();
-    }
-
-    /// The equipped-item search ran over the equipment slots in `slots`.
-    pub(super) fn item_search(&mut self, slots: u32) {
-        self.worn |= slots;
-        self.disarm |= slots != 0;
     }
 
     pub(super) fn skill_line(&mut self, line: u32) {
@@ -188,6 +170,17 @@ impl Deps {
                 .reagents
                 .iter()
                 .any(|entry| changes.reagents.contains(entry))
+    }
+}
+
+impl SpellReads for Deps {
+    fn unit(&mut self, field: UnitField) {
+        self.unit |= field.bit();
+    }
+
+    fn item_search(&mut self, slots: u32) {
+        self.worn |= slots;
+        self.disarm |= slots != 0;
     }
 }
 
@@ -322,9 +315,11 @@ impl Seen {
         }
     }
 
-    /// What differs from the frame `prev` saw, the modifiers and reagents apart.
+    /// What differs from the frame `prev` saw, the modifiers and reagents apart. A player
+    /// appearing or going moves every view: one built without a player read none of its state.
     pub(super) fn changes_since(&self, prev: &Seen) -> Changes {
         let mut changes = Changes {
+            everything: self.worn.is_some() != prev.worn.is_some(),
             home: self.home != prev.home,
             gender: self.gender != prev.gender,
             form: self.form != prev.form,

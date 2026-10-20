@@ -63,6 +63,12 @@ impl ObjectFields {
     pub fn unit_channel_spell(&self) -> u32 {
         self.get_u32(FIELD_UNIT_CHANNEL_SPELL).unwrap_or(0)
     }
+    /// `UNIT_MOD_CAST_SPEED`, the factor `GetCastTime 0x6e3340` scales a cast time by, unit
+    /// block `+0x22c` (`0x6e342c`); vmangos keeps it at 1.0 and multiplies in each cast-speed
+    /// aura (`Unit.cpp:9926-9945`). `None` when never sent, where the descriptor holds 0.
+    pub fn unit_mod_cast_speed(&self) -> Option<f32> {
+        self.get_f32(FIELD_UNIT_MOD_CAST_SPEED)
+    }
     /// `UNIT_FIELD_SUMMON`: the unit this one summoned; on our own descriptor, the `"pet"` unit.
     pub fn unit_summon(&self) -> Option<u64> {
         self.get_guid(FIELD_UNIT_SUMMON).filter(|&g| g != 0)

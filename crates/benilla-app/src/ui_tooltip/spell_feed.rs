@@ -10,11 +10,12 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{AuraKey, AuraTooltipView, KeyedArg, TextPart, TooltipText, UiScript};
 
-use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
+use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::spell::usable::{self, CostBasis};
+use crate::spell::usable;
+use crate::spell::{SpellReads, UnitField, Unrecorded};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, find_item, InventoryScope, ItemSearch};
 use crate::ui_trainer::TrainerTooltipSubjects;
@@ -81,27 +82,16 @@ pub(super) fn build_view(
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second column adds `_PER_TIME`, and no cost at all
     // leaves the cell empty. A pet with no unit costs -1 (`0x6e3233`), which shows as none.
+    // The player's reads are the view's record; the pet's level, basis and cast speed are the
+    // pet's own inputs ([`PetInputs`]), which rebuild every pet view.
     let resolved_cost = match caster {
-        ViewCaster::Player => vctx
-            .store
-            .map_or(d.mana_cost, |s| usable::power_cost(d, s, vctx.spell_mods)),
+        ViewCaster::Player => vctx.store.map_or(d.mana_cost, |s| {
+            usable::power_cost(d, s, vctx.spell_mods, &mut *deps.borrow_mut())
+        }),
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
-            usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods)
+            usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods, &mut Unrecorded)
         }),
     };
-    // The player's cost reads its level, and the field a percentage scales by; the pet's reads the
-    // pet's own, which are pet inputs.
-    if matches!(caster, ViewCaster::Player) {
-        let mut deps = deps.borrow_mut();
-        if usable::cost_reads_level(d) {
-            deps.unit(UnitField::Level);
-        }
-        match usable::cost_basis(d) {
-            CostBasis::None | CostBasis::Fixed(_) => {}
-            CostBasis::BaseMana => deps.unit(UnitField::BaseMana),
-            CostBasis::BaseHealth => deps.unit(UnitField::BaseHealth),
-        }
-    }
     let cost = {
         // The shared per-type divisor (`0x6e7130`), never a local `power_type == 1` test.
         let div = benilla_protocol::messages::power_display_scale(d.power_type);
@@ -169,21 +159,20 @@ pub(super) fn build_view(
     let cast_time = if d.tooltip_omits_cast_line() {
         None
     } else {
-        // `GetCastTime` takes the selector too (`52eb45`), and its level term is `0x6e3130`'s. The
-        // player's is its level only where the row scales by one.
-        if matches!(caster, ViewCaster::Player)
-            && spells
-                .cast_times
-                .get(d.casting_time_index)
-                .is_some_and(|row| row.reads_caster_level())
-        {
-            deps.borrow_mut().unit(UnitField::Level);
-        }
-        let level = match caster {
-            ViewCaster::Player => vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0),
-            ViewCaster::Pet(pet) => pet_level(pet),
+        // `GetCastTime` takes the selector too (`52eb45`): it picks the unit whose cast speed is
+        // read and the level the row's per-level term reads (`0x6e3130`).
+        let base = match caster {
+            ViewCaster::Player => {
+                let player = vctx.store.map(|s| &s.0);
+                let level = player.and_then(|p| p.unit_level()).unwrap_or(0);
+                let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
+                spells.cast_time_unclamped_ms(d, player, level, vctx.spell_mods, reads)
+            }
+            ViewCaster::Pet(pet) => {
+                let level = pet_level(pet);
+                spells.cast_time_unclamped_ms(d, pet, level, vctx.spell_mods, &mut Unrecorded)
+            }
         };
-        let base = spells.cast_time_unclamped_ms(d, level, vctx.spell_mods);
         // `%.3g` templates: the seconds go over as a real.
         if base > 0 {
             let (key, v) = if base >= 60_000 {
@@ -261,13 +250,11 @@ pub(super) fn build_view(
         .flatten();
     let chance = chance_line(d, vctx.store, &mut deps.borrow_mut());
     // The unit selector passes the item test outright (`0x52f07f`).
-    if matches!(caster, ViewCaster::Player) {
-        deps.borrow_mut().item_search(usable::worn_slots_read(d));
-    }
     let item_met = matches!(caster, ViewCaster::Pet(_))
-        || vctx
-            .store
-            .is_none_or(|s| usable::equipped_item_fits(d, s, vctx.objects, vctx.items));
+        || vctx.store.is_none_or(|s| {
+            let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
+            usable::equipped_item_fits(d, s, vctx.objects, vctx.items, reads)
+        });
     // The tools (`SPELL_TOTEMS`, `0x854ec4`) and the reagents (`SPELL_REAGENTS`, `0x854e54`),
     // each the player does not carry red. One whose template has not streamed is absent until
     // `feed_spell_tooltips` re-pushes on its arrival, as the reference looks each up with a
@@ -588,13 +575,16 @@ pub(super) fn reagent_state(
 }
 
 /// The pet unit's fields a pet view reads (`0x52e610` with the unit selector set): its level, the
-/// cost bases `0x612c50` reads, its form, and its and its melee target's reach and motion.
+/// cost bases `0x612c50` reads, its cast speed (`0x6e342c`), its form, and its and its melee
+/// target's reach and motion.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub(super) struct PetInputs {
     guid: Option<u64>,
     level: u32,
     base_mana: u32,
     base_health: u32,
+    /// As bits, so a NaN compares equal to itself.
+    cast_speed: Option<u32>,
     form: u8,
     range_units: RangeSeen,
 }
@@ -616,6 +606,7 @@ impl PetInputs {
             level: p.unit_level().unwrap_or(0),
             base_mana: p.unit_base_mana().unwrap_or(0),
             base_health: p.unit_base_health().unwrap_or(0),
+            cast_speed: p.unit_mod_cast_speed().map(f32::to_bits),
             form: p.unit_shapeshift_form(),
             range_units,
         }
