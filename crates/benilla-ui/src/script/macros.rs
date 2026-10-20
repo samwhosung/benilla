@@ -7,6 +7,9 @@
 //! its base (`MacroFrame.macroBase`). A macro's bound spell (`0x4e5a50`'s macro arm returns
 //! `[rec+0x564]`) is the app's to derive: it needs the spell catalog and the player's book.
 
+#[cfg(test)]
+mod lua_tests;
+
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;

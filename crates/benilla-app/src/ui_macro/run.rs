@@ -185,9 +185,50 @@ mod tests {
             cast_name(&t, r#"/script CastSpellByName( "Healing Touch", 1 )"#),
             Some((CastArm::ByName, "Healing Touch".into()))
         );
-        // A computed argument has no name to bind.
+        // A computed argument with no quote has no name to bind.
         assert_eq!(cast_name(&t, "/script CastSpellByName(spell)"), None);
-        assert_eq!(cast_name(&t, r#"/script CastSpellByName("")"#), None);
+    }
+
+    /// `0x4efef0`-`0x4efefb` scan for the first quote anywhere after the match, whatever the
+    /// parenthesis holds, and `0x4eff58`-`0x4eff6d` read to the next quote or the line's end.
+    #[test]
+    fn the_first_quote_after_the_call_is_the_name_wherever_it_stands() {
+        let t = table();
+        assert_eq!(
+            cast_name(
+                &t,
+                r#"/script CastSpellByName(IsShiftKeyDown() and "Frostbolt(Rank 1)" or "Frostbolt")"#
+            ),
+            Some((CastArm::ByName, "Frostbolt(Rank 1)".into()))
+        );
+        assert_eq!(
+            cast_name(&t, r#"/script CastSpellByName(GetSpell("Fire"))"#),
+            Some((CastArm::ByName, "Fire".into())),
+            "up to the next quote, the call's own closing parenthesis not a stop"
+        );
+        assert_eq!(
+            cast_name(&t, r#"/script CastSpellByName("Fire"#),
+            Some((CastArm::ByName, "Fire".into())),
+            "an unterminated name runs to the line's end"
+        );
+        // The scan starts at the match: a quote ahead of it is not the name, and a line with none
+        // after it goes on to the next line (`0x4efefd`).
+        assert_eq!(
+            cast_name(
+                &t,
+                "/script local a = \"x\"; CastSpellByName(spell)\n/cast Frostbolt"
+            ),
+            Some((CastArm::Slash, "Frostbolt".into()))
+        );
+    }
+
+    /// An empty name is a name: `0x4eff7b` resolves it to 0 and `0x4eff81` stores that, ending the
+    /// walk on its line, where a later `/cast` is never read.
+    #[test]
+    fn an_empty_name_ends_the_walk() {
+        let t = table();
+        let body = "/script CastSpellByName(\"\")\n/cast Fireball";
+        assert_eq!(cast_name(&t, body), Some((CastArm::ByName, String::new())));
     }
 
     #[test]
