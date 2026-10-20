@@ -398,29 +398,34 @@ fn a_blocks_charges_come_from_the_source_the_builder_picks() {
 }
 
 /// `SetAction`'s item leg writes into the block the summed absolute charges of every copy the
-/// player holds (`0x622180` at `0x532553`, stored at `+0x428`), and with an item object and a
-/// block value other than -1 the builder counts the block's (`0x52d9d1`): two potions of one
-/// charge each read 2.
+/// player holds (`0x622180` at `0x532553`, stored at `+0x428`), but only when the cached
+/// template's block-0 charges (`+0x144`) are neither -1 nor 0 (`0x532520`, `0x532525`). With an
+/// item object and a block value other than -1 the builder counts the block's (`0x52d9d1`), else
+/// the object's own: two wands of 3 and 2 charges read 5, and two potion stacks (template -1)
+/// read their object's -1, no line.
 #[test]
-fn an_action_items_charges_count_every_copy() {
+fn an_action_items_charges_sum_every_copy_of_a_charged_item() {
     use std::collections::HashMap;
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_item_template(
-        9105,
-        ItemTemplateView {
-            name: "Potion".into(),
-            quality: 1,
-            spell_lines: vec![spell_line(0, "Heals.", -1)],
-            ..Default::default()
-        },
-    );
-    let potion = |guid| ContainerSlot {
-        item_id: 9105,
+    for (id, name, charges) in [(9105, "Potion", -1), (9106, "Wand", 5)] {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: name.into(),
+                quality: 1,
+                spell_lines: vec![spell_line(0, "Use.", charges)],
+                spell_charges_0: charges,
+                ..Default::default()
+            },
+        );
+    }
+    let held = |item_id, guid, charges_0| ContainerSlot {
+        item_id,
         count: 5,
         quality: Some(1),
         guid,
-        spell_charges: [-1, 0, 0, 0, 0],
+        spell_charges: [charges_0, 0, 0, 0, 0],
         ..Default::default()
     };
     s.set_container(
@@ -428,21 +433,33 @@ fn an_action_items_charges_count_every_copy() {
         Some(ContainerState {
             name: None,
             num_slots: 16,
-            slots: HashMap::from([(1, potion(0x105)), (2, potion(0x106))]),
+            slots: HashMap::from([
+                (1, held(9105, 0x105, -1)),
+                (2, held(9105, 0x106, -1)),
+                (3, held(9106, 0x107, 3)),
+                (4, held(9106, 0x108, 2)),
+            ]),
         }),
     );
-    s.set_action(
-        1,
-        Some(ActionSlot {
-            kind: 0x80,
-            action: 9105,
-            ..Default::default()
-        }),
-    );
-    assert_eq!(charges_after(&mut s, "TT:SetAction(1)"), ["[CHARGES 2 x]"]);
+    for (id, item) in [(1, 9105), (2, 9106)] {
+        s.set_action(
+            id,
+            Some(ActionSlot {
+                kind: 0x80,
+                action: item,
+                ..Default::default()
+            }),
+        );
+    }
     assert!(
-        charges_after(&mut s, "TT:SetBagItem(0, 1)").is_empty(),
-        "the bag slot reads its object's -1"
+        charges_after(&mut s, "TT:SetAction(1)").is_empty(),
+        "a potion stack reads its object's -1"
+    );
+    assert_eq!(charges_after(&mut s, "TT:SetAction(2)"), ["[CHARGES 5 x]"]);
+    assert_eq!(
+        charges_after(&mut s, "TT:SetBagItem(0, 3)"),
+        ["[CHARGES 3 x]"],
+        "the bag slot reads its object's own"
     );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
