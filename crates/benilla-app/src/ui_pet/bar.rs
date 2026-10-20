@@ -307,25 +307,37 @@ pub(super) fn feed_pet_bar(
 /// `SMSG_SPELL_COOLDOWN` for the pet's guid (`0x6e95b0`, `0x6e95b9`), `SMSG_COOLDOWN_EVENT` and
 /// `SMSG_CLEAR_COOLDOWN` (`0x6e3071`, `0x6e3080`) and `SMSG_COOLDOWN_CHEAT` (`0x6e9712`,
 /// `0x6e971c`); each is a change of [`Cooldowns::generation`](crate::spell::Cooldowns), and one
-/// frame's changes fire it once. `SMSG_PET_SPELLS` seeds without it, so the events never fire for
-/// a rebuild. Runs after [`CooldownEvents`](crate::ui_action::CooldownEvents): every feed that
-/// pushes a pet cooldown, the bar's and the book's, has pushed by then, so the handlers read the
-/// new list.
+/// frame's changes fire it once. Between the two, the list's own usable refresh `0x4b31c0`
+/// (`0x6e2e85`, `0x6e3076`) signals `SPELL_UPDATE_USABLE` on a change of
+/// [`Cooldowns::usable_refreshes`](crate::spell::Cooldowns). `SMSG_PET_SPELLS` seeds without it,
+/// so the events never fire for a rebuild. Runs after
+/// [`CooldownEvents`](crate::ui_action::CooldownEvents): every feed that pushes a pet cooldown,
+/// the bar's and the book's, has pushed by then, so the handlers read the new list.
 pub(super) fn fire_pet_cooldown_events(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
-    mut memory: Local<crate::ui_script::VmMemo<crate::ui_script::gate::Watch>>,
+    mut memory: Local<
+        crate::ui_script::VmMemo<(crate::ui_script::gate::Watch, crate::ui_script::gate::Watch)>,
+    >,
 ) {
     let Some(mut script) = script else {
         return;
     };
     // A new VM starts from the list as it stands: the reference flushes on a mutation, not at load.
-    let (watch, fresh) = memory.get_reset(&script);
-    let moved = watch.moved(bar.cooldowns.generation);
-    if !moved || fresh {
+    let ((flushes, refreshes), fresh) = memory.get_reset(&script);
+    let flushed = flushes.moved(bar.cooldowns.generation);
+    let refreshed = refreshes.moved(bar.cooldowns.usable_refreshes);
+    if fresh || !(flushed || refreshed) {
         return;
     }
-    script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
-    script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
-    script.fire_event("PET_BAR_UPDATE_COOLDOWN", vec![]);
+    if flushed {
+        script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
+        script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
+    }
+    if refreshed {
+        script.fire_event("SPELL_UPDATE_USABLE", vec![]);
+    }
+    if flushed {
+        script.fire_event("PET_BAR_UPDATE_COOLDOWN", vec![]);
+    }
 }

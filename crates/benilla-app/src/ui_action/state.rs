@@ -1,11 +1,12 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM, and the events their
 //! producers raise, each once a frame in the reference's order: the cooldown pair (`0x4b31b0`) on
-//! a cooldown change, the usable pair (`0x4b31c0`, on a cache change only, `0x4e5c00`) with each
-//! reactive spell's `SPELL_ACTIVE` between them ([`super::reactive`]), `BAG_UPDATE_COOLDOWN`
-//! (`0x4f93d0`) from the item legs, then combat enter and leave (`0x6256ff`, `0x625778`) and
-//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
-//! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
+//! a cooldown change, the usable refresh (`0x4b31c0`: `ACTIONBAR_UPDATE_USABLE` on a slot's change,
+//! `0x4e5c00`, each reactive spell's `SPELL_ACTIVE` ([`super::reactive`]), then
+//! `SPELL_UPDATE_USABLE`) from its callers, `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs,
+//! then combat enter and leave (`0x6256ff`, `0x625778`) and autorepeat start and stop (`0x6e5952`,
+//! `0x6ea170`). `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is
+//! signalled where the cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
 //! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
@@ -22,7 +23,7 @@ use benilla_ui::script::{ActionState, UiScript};
 use crate::creature_anim::Engaged;
 use crate::item_watch::ItemNotice;
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{FieldChanged, NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
 
 use super::{PlayerActions, Spells};
@@ -35,14 +36,49 @@ use crate::spell::AutoRepeatActive;
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
     last_generation: Option<u64>,
-    /// The cooldown list's bag flushes ([`Cooldowns`]) as last read.
+    /// The cooldown list's usable refreshes and bag flushes ([`Cooldowns`]) as last read.
+    usable_refreshes: u64,
     bag_flushes: u64,
+    /// The selection's guid and the control flag, whose changes call the usable refresh.
+    selection: Option<u64>,
+    control_lost: bool,
     /// Item slots whose record was missing at the cooldown query, which `0x6e2ed0` asks with the
     /// callback `0x6e2f70` (`0x6e2efb`).
     awaiting_records: HashSet<u32>,
     engaged: bool,
     auto_repeat: Option<u32>,
     last_cd_trace: Option<Instant>,
+}
+
+/// `UNIT_FIELD_POWER1` to `POWER5`, one watch (`0x604876`).
+const UNIT_FIELD_POWERS: std::ops::RangeInclusive<u16> = 23..=27;
+/// `UNIT_FIELD_AURASTATE`.
+const UNIT_FIELD_AURASTATE: u16 = 125;
+/// `PLAYER_FIELD_BYTES`, whose byte 1 is the combo points.
+const PLAYER_FIELD_BYTES: u16 = 1222;
+
+/// Whether a descriptor edge is one the usable refresh `0x4b31c0`'s field-watch callers watch,
+/// each comparing its own bytes: the active player's health (`0x604848`), powers (`0x604876`) and
+/// aura state (`0x6048b6`, the target's as well), its unit flags' bits 0x1c20000 and combat bit
+/// 0x80000 (`0x5ff50e`, `0x5ff51b`), `UNIT_FIELD_BYTES_1`'s form byte (`0x5de011`) and byte 3's
+/// bit 0x2 (`0x5ff83a`), and its combo points, `PLAYER_FIELD_BYTES` byte 1 (`0x5ddff0`).
+fn refreshes_usable(e: &FieldChanged, me: Option<u64>, target: Option<u64>) -> bool {
+    use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH};
+    let flipped = e.old ^ e.new;
+    let mine = me == Some(e.guid);
+    if !e.is_unit() {
+        return false;
+    }
+    match e.index {
+        UNIT_FIELD_AURASTATE => mine || target == Some(e.guid),
+        _ if !mine => false,
+        FIELD_UNIT_HEALTH => true,
+        i if UNIT_FIELD_POWERS.contains(&i) => true,
+        FIELD_UNIT_FLAGS => flipped & (0x01c2_0000 | 0x0008_0000) != 0,
+        FIELD_UNIT_BYTES_1 => flipped & (0x00ff_0000 | 0x0200_0000) != 0,
+        PLAYER_FIELD_BYTES => flipped & 0xff00 != 0,
+        _ => false,
+    }
 }
 
 /// A slot after the macro indirection (`0x4e5a50`), as the usable compute `0x4e5050` reads it.
@@ -134,8 +170,10 @@ pub(super) fn feed_action_state(
     relations: crate::target::RelationWorld,
     items: Res<Items>,
     commands: Res<NetCommands>,
-    // The spell charges watcher, and the memory about the VM.
-    (mut item_notices, mut memory): (
+    // The usable refresh's field-watch callers, the spell charges watcher and the memory about
+    // the VM.
+    (mut edges, mut item_notices, mut memory): (
+        MessageReader<FieldChanged>,
         MessageReader<ItemNotice>,
         Local<crate::ui_script::VmMemo<StateMemory>>,
     ),
@@ -179,7 +217,18 @@ pub(super) fn feed_action_state(
         .and_then(|e| units.get(e).ok());
     let cast_ctx = targeting.context();
 
-    // The frame's callers of `0x4f93d0`; a new VM meets the state as it stands and hears none.
+    // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0`; a new VM meets the
+    // state as it stands and hears none.
+    let mut refresh = edges.read().fold(false, |hit, e| {
+        hit | refreshes_usable(e, cast_ctx.self_guid, selection.guid)
+    });
+    // The target's select and release (`0x493892`, `0x493a69`) and `SetPlayerControl`
+    // (`0x4958fc`, `0x495910`), each on a change.
+    refresh |= selection.guid != memory.selection || control_lost != memory.control_lost;
+    (memory.selection, memory.control_lost) = (selection.guid, control_lost);
+    // The cooldown list's own (`0x6e2e85`, `0x6e3076`).
+    refresh |= cooldowns.usable_refreshes != memory.usable_refreshes;
+    memory.usable_refreshes = cooldowns.usable_refreshes;
     let mut bags = cooldowns.bag_flushes != memory.bag_flushes;
     memory.bag_flushes = cooldowns.bag_flushes;
     // The spell charges watcher on an item of the player's (`0x5d9587`).
@@ -187,7 +236,7 @@ pub(super) fn feed_action_state(
         hit | matches!(n, ItemNotice::SpellCharges { .. })
     });
     if new_vm {
-        bags = false;
+        (refresh, bags) = (false, false);
     }
     // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`, `0x6e2f8e`).
     let mut record_flush = false;
@@ -390,7 +439,9 @@ pub(super) fn feed_action_state(
     }
     memory.pushed = fresh;
 
-    // The reactive list's re-check (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
+    // The reactive list: emptied at an arrival, filled from the book, and re-checked inside each
+    // refresh after the bar (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
+    let refreshed = refresh || usable_changed;
     let list = &mut *reactive;
     let arrived = !created.is_empty();
     if arrived {
@@ -402,7 +453,7 @@ pub(super) fn feed_action_state(
         }
     }
     let reactive = match (me, spells.as_deref()) {
-        (Some((store, _, _)), Some(sp)) => {
+        (Some((store, _, _)), Some(sp)) if refreshed => {
             let ctx = usable::UsableCtx {
                 store,
                 target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -422,8 +473,10 @@ pub(super) fn feed_action_state(
         _ => super::reactive::Refresh::default(),
     };
 
-    // The events in the reference's order: each flush's `ACTIONBAR_*` event first, and the
-    // cooldown pair ahead of the bags (`0x6e8500`, `0x6e3071`).
+    // The events in the reference's order: each flush's `ACTIONBAR_*` event first; the cooldown
+    // pair ahead of the usable refresh a held cooldown or `0x6e3050` runs (`0x6e2e77`,
+    // `0x6e3071`), and both ahead of the bags (`0x6e3089`). A slot's change outside any caller
+    // stands for one refresh, so `ACTIONBAR_UPDATE_USABLE` never comes alone.
     if gen_changed || record_flush {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
@@ -436,7 +489,7 @@ pub(super) fn feed_action_state(
     for name in reactive.activated {
         crate::ui_unit::fire_combat_text(&mut script, "SPELL_ACTIVE", Some(name), None);
     }
-    if usable_changed || reactive.changed {
+    if refreshed {
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
     }
     if bags || record_flush {

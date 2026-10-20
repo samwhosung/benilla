@@ -7,10 +7,11 @@
 //!
 //! Only a change of membership or order fires `UPDATE_SHAPESHIFT_FORMS`, the reference's
 //! learn/unlearn edge (`0x4b28ff`, `0x4b2e43`), because the stock `ShapeshiftBar_Update` rebuilds
-//! the shelf on every fire. A castability change fires `SPELL_UPDATE_USABLE`, as `0x4b31c0` does.
-//! Active form, texture and cooldown push silently and repaint on `PLAYER_AURAS_CHANGED` (a form's
-//! aura holds a slot, warrior stances included) and `SPELL_UPDATE_COOLDOWN`, so the feed runs
-//! before both; a cooldown's expiry fires nothing.
+//! the shelf on every fire. Castability, active form, texture and cooldown push silently: the
+//! castable flags refresh inside the usable refresh `0x4b31c0`, whose callers signal
+//! `SPELL_UPDATE_USABLE` (`crate::ui_action`), and the rest repaint on `PLAYER_AURAS_CHANGED` (a
+//! form's aura holds a slot, warrior stances included) and `SPELL_UPDATE_COOLDOWN`, so the feed
+//! runs before all three; a cooldown's expiry fires nothing.
 
 use std::time::Instant;
 
@@ -74,9 +75,7 @@ pub(crate) enum FormsEdge {
     Unchanged,
     /// Membership or order: `UPDATE_SHAPESHIFT_FORMS`.
     List,
-    /// Castability: `SPELL_UPDATE_USABLE`.
-    Usable,
-    /// Active form, texture or cooldown: pushed, announced by other feeds' events.
+    /// Castability, active form, texture or cooldown: pushed, announced by other feeds' events.
     Silent,
 }
 
@@ -96,12 +95,6 @@ pub(crate) fn push_forms(
             .any(|(o, n)| o.spell_id != n.spell_id)
     {
         FormsEdge::List
-    } else if old
-        .iter()
-        .zip(&fresh)
-        .any(|(o, n)| o.castable != n.castable)
-    {
-        FormsEdge::Usable
     } else {
         FormsEdge::Silent
     };
@@ -112,7 +105,6 @@ pub(crate) fn push_forms(
     script.set_shapeshift_forms(fresh);
     match edge {
         FormsEdge::List => script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]),
-        FormsEdge::Usable => script.fire_event("SPELL_UPDATE_USABLE", vec![]),
         FormsEdge::Silent | FormsEdge::Unchanged => {}
     }
     edge

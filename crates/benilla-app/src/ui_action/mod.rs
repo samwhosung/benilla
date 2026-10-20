@@ -327,6 +327,7 @@ impl Plugin for UiActionPlugin {
         net::register(app);
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::item_watch::ItemNotice>()
+            .add_message::<crate::net::FieldChanged>()
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
             .init_resource::<LearnedAbilities>()
@@ -359,11 +360,18 @@ impl Plugin for UiActionPlugin {
                     feed::feed_actions
                         .in_set(UnitFeed)
                         .before(crate::ui_aura::AuraEvents),
+                    // Ahead of the events its producers precede: the select's
+                    // `PLAYER_TARGET_CHANGED` and the combo points' event (the unit snapshots),
+                    // the watched fields' own events (the field notices) and the form's cast
+                    // change (the cast reports).
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .in_set(CooldownEvents)
                         .after(crate::player::ControlRestore)
-                        .after(feed::feed_actions),
+                        .after(feed::feed_actions)
+                        .before(crate::ui_unit::UnitSnapshots)
+                        .before(crate::ui_unit::field_events::fire_field_notices)
+                        .before(crate::ui_cast::feed_cast_reports),
                     drain::drain_action_sets.after(UiInput),
                     // The target chain queues the right-click casts earlier in the frame.
                     drain::drain_click_casts
