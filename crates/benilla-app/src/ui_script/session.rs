@@ -243,6 +243,9 @@ mod tests {
         // The reactive spells' list, engine state the reference keeps past a `/reload` and empties
         // at the active player's arrival (`0x5dea86`), on whose creation the system clears it.
         ("ui_action/state.rs", "reactive"),
+        // The action bar's usable cache, engine state the reference keeps past a `/reload`: its
+        // zeroing `0x4e4f50` runs only from `InitializeGame 0x48f480`.
+        ("ui_action/state.rs", "cache"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};

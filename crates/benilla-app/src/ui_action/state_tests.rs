@@ -1624,7 +1624,8 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
 /// reload's world entry against the cache the last VM left (`0x4e4f90`; the cache is zeroed only
 /// by `InitializeGame`, `0x4e4f50`), each `BAG_UPDATE` (`0x4f9374`) and `EditMacro` (`0x4f132e`).
 /// A pair that changed with no refresh signals nothing. Our player's arrival writes every slot
-/// before its enter cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing.
+/// before its enter cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing; a reload
+/// writes none (`0x495664` reaches no `0x5dea50`).
 #[test]
 fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
     const FROSTBOLT: u32 = 116;
@@ -1644,6 +1645,8 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
     set_mana_quietly(&mut app, 100);
     assert!(frame(&mut app).is_empty(), "no caller, no event");
     app.insert_non_send_resource(UiScript::new().unwrap());
+    app.world_mut()
+        .write_message(crate::net::WorldEnterCascadeMessage);
     record(&mut app, &USABLE);
     assert_eq!(
         frame(&mut app),
@@ -1668,6 +1671,21 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
 
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
+    let old = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    app.world_mut().despawn(old);
+    let me = app
+        .world_mut()
+        .spawn((
+            SelfPlayer,
+            crate::net::Guid(ME),
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(PLAYER)),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ME, me);
     app.world_mut()
         .write_message(crate::net::WorldEnterCascadeMessage);
     assert!(

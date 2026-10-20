@@ -1,12 +1,12 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM, and the events their
 //! producers raise, each once a frame in the reference's order: the cooldown pair (`0x4b31b0`) on
-//! a cooldown change, the usable refresh (`0x4b31c0`: `ACTIONBAR_UPDATE_USABLE` on a slot's change,
-//! `0x4e5c00`, each reactive spell's `SPELL_ACTIVE` ([`super::reactive`]), then
-//! `SPELL_UPDATE_USABLE`) from its callers, `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs,
-//! then combat enter and leave (`0x6256ff`, `0x625778`) and autorepeat start and stop (`0x6e5952`,
-//! `0x6ea170`). `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is
-//! signalled where the cast changes ([`crate::ui_cast`]).
+//! a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a refresh of the usable cache (`0x4e5c00`)
+//! finds a pair changed, each reactive spell's `SPELL_ACTIVE` ([`super::reactive`]) and
+//! `SPELL_UPDATE_USABLE` from the usable refresh `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN`
+//! (`0x4f93d0`) from the item legs; then combat enter and leave (`0x6256ff`, `0x625778`) and
+//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
+//! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
 //! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
@@ -42,12 +42,58 @@ pub(super) struct StateMemory {
     /// The selection's guid and the control flag, whose changes call the usable refresh.
     selection: Option<u64>,
     control_lost: bool,
+    /// The VM's macro edits and the bag feed's `BAG_UPDATE`s as last read.
+    macro_edits: u64,
+    bag_updates: u64,
     /// Item slots whose record was missing at the cooldown query, which `0x6e2ed0` asks with the
     /// callback `0x6e2f70` (`0x6e2efb`).
     awaiting_records: HashSet<u32>,
     engaged: bool,
     auto_repeat: Option<u32>,
     last_cd_trace: Option<Instant>,
+}
+
+/// What the action bar's usable cache (`0xbc6b60`, `0xbc67a0`) last stored, which outlives a VM as
+/// the reference's does: its zeroing `0x4e4f50` runs only from `InitializeGame 0x48f480`.
+#[derive(Default)]
+pub(super) struct UsableCache {
+    /// Each slot's `(usable, notEnoughMana)` pair, `(false, false)` left out.
+    pairs: HashMap<u32, (bool, bool)>,
+    /// Each slot's word and count as last seen, whose change is a notify `0x4e58e0`.
+    words: HashMap<u32, SlotWord>,
+}
+
+/// A slot as `0x4e58e0`'s callers write it: the word `SetActionSlot 0x4e5d60` stores, what it
+/// resolves to through a macro's bound spell, and the count a recount stores (`0x4e5caa`).
+type SlotWord = (u8, u32, SlotResolve, u32);
+
+impl UsableCache {
+    /// `0x4e58e0`: a slot placed, cleared or recounted stores its new pair (`0x4e590a`,
+    /// `0x4e5914`) and signals only `ACTIONBAR_SLOT_CHANGED`; `all` is our player's arrival, which
+    /// writes all 120 (`0x5deafc`).
+    fn notify(
+        &mut self,
+        words: HashMap<u32, SlotWord>,
+        pairs: &HashMap<u32, (bool, bool)>,
+        all: bool,
+    ) {
+        let slots: HashSet<u32> = words.keys().chain(self.words.keys()).copied().collect();
+        for action in slots {
+            if all || words.get(&action) != self.words.get(&action) {
+                match pairs.get(&action) {
+                    Some(&pair) => self.pairs.insert(action, pair),
+                    None => self.pairs.remove(&action),
+                };
+            }
+        }
+        self.words = words;
+    }
+
+    /// `0x4e5c00`: every pair recomputed and stored; whether any changed, its
+    /// `ACTIONBAR_UPDATE_USABLE` (`0x4e5c4e`).
+    fn refresh(&mut self, pairs: HashMap<u32, (bool, bool)>) -> bool {
+        std::mem::replace(&mut self.pairs, pairs) != self.pairs
+    }
 }
 
 /// `UNIT_FIELD_POWER1` to `POWER5`, one watch (`0x604876`).
@@ -168,15 +214,19 @@ pub(super) fn feed_action_state(
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
     relations: crate::target::RelationWorld,
-    items: Res<Items>,
-    commands: Res<NetCommands>,
-    // The usable refresh's field-watch callers, the spell charges watcher and the memory about
-    // the VM.
-    (mut edges, mut item_notices, mut memory): (
+    // The item cache and the channel its misses query on, one param for the same ceiling.
+    (items, commands): (Res<Items>, Res<NetCommands>),
+    // The usable refresh's field-watch callers, the spell charges watcher, the enter cascade,
+    // the bag feed's `BAG_UPDATE`s and the memory about the VM.
+    (mut edges, mut item_notices, mut entries, bag_updates, mut memory): (
         MessageReader<FieldChanged>,
         MessageReader<ItemNotice>,
+        MessageReader<crate::net::WorldEnterCascadeMessage>,
+        Option<Res<crate::ui_items::feed::BagUpdates>>,
         Local<crate::ui_script::VmMemo<StateMemory>>,
     ),
+    // The bar's usable cache, which lives for the session, not for a VM.
+    mut cache: Local<UsableCache>,
     // The reactive list, which lives from one arrival to the next, not for a VM.
     mut reactive: Local<super::reactive::ReactiveList>,
 ) {
@@ -238,6 +288,21 @@ pub(super) fn feed_action_state(
     if new_vm {
         (refresh, bags) = (false, false);
     }
+    // The usable cache's other refreshes (`0x4e5c00`): world entry (`0x4e4f90`, from the enter
+    // cascade at our player's arrival or a reload's), `EditMacro` (`0x4f132e`) and each
+    // `BAG_UPDATE` (`0x4f9374`).
+    let entered = entries.read().count() > 0;
+    // Our player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and empties
+    // the reactive list (`0x5dea86`); a reload reaches neither.
+    let arrived = !created.is_empty();
+    let macro_edits = script.macro_edits();
+    let bag_updates = bag_updates.map_or(0, |b| b.0);
+    let refresh_cache = refresh
+        || entered
+        || new_vm
+        || macro_edits != memory.macro_edits
+        || bag_updates != memory.bag_updates;
+    (memory.macro_edits, memory.bag_updates) = (macro_edits, bag_updates);
     // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`, `0x6e2f8e`).
     let mut record_flush = false;
 
@@ -407,7 +472,26 @@ pub(super) fn feed_action_state(
         fresh.insert(action, st);
     }
 
-    let mut usable_changed = false;
+    // The usable cache: the slots this frame wrote store their pairs silently, then a refresh
+    // compares them all.
+    let words: HashMap<u32, SlotWord> = actions
+        .buttons
+        .iter()
+        .map(|(&slot, b)| {
+            let action = u32::from(slot) + 1;
+            let count = script.action_slot(action).map_or(0, |s| s.count);
+            let resolved = resolve_through_macro(b.kind, b.action, bound);
+            (action, (b.kind, b.action, resolved, count))
+        })
+        .collect();
+    let pairs: HashMap<u32, (bool, bool)> = fresh
+        .iter()
+        .map(|(&action, st)| (action, (st.usable, st.not_enough_mana)))
+        .filter(|&(_, pair)| pair != (false, false))
+        .collect();
+    cache.notify(words, &pairs, arrived);
+    let usable_changed = refresh_cache && cache.refresh(pairs);
+
     let keys: Vec<u32> = fresh
         .keys()
         .chain(memory.pushed.keys())
@@ -421,9 +505,6 @@ pub(super) fn feed_action_state(
         let (n, o) = (new.unwrap_or(&d), old.unwrap_or(&d));
         if new == old {
             continue;
-        }
-        if (n.usable, n.not_enough_mana) != (o.usable, o.not_enough_mana) {
-            usable_changed = true;
         }
         if n.cooldown != o.cooldown && benilla_assets::trace::enabled() {
             benilla_assets::trace::line(
@@ -440,10 +521,8 @@ pub(super) fn feed_action_state(
     memory.pushed = fresh;
 
     // The reactive list: emptied at an arrival, filled from the book, and re-checked inside each
-    // refresh after the bar (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
-    let refreshed = refresh || usable_changed;
+    // usable refresh after the bar (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
     let list = &mut *reactive;
-    let arrived = !created.is_empty();
     if arrived {
         list.arrive();
     }
@@ -453,7 +532,7 @@ pub(super) fn feed_action_state(
         }
     }
     let reactive = match (me, spells.as_deref()) {
-        (Some((store, _, _)), Some(sp)) if refreshed => {
+        (Some((store, _, _)), Some(sp)) if refresh => {
             let ctx = usable::UsableCtx {
                 store,
                 target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -475,8 +554,9 @@ pub(super) fn feed_action_state(
 
     // The events in the reference's order: each flush's `ACTIONBAR_*` event first; the cooldown
     // pair ahead of the usable refresh a held cooldown or `0x6e3050` runs (`0x6e2e77`,
-    // `0x6e3071`), and both ahead of the bags (`0x6e3089`). A slot's change outside any caller
-    // stands for one refresh, so `ACTIONBAR_UPDATE_USABLE` never comes alone.
+    // `0x6e3071`), and both ahead of the bags (`0x6e3089`). `ACTIONBAR_UPDATE_USABLE` comes from
+    // the cache's refresh alone, `SPELL_UPDATE_USABLE` from `0x4b31c0` alone (`0x4b3246`), so the
+    // cache's other callers signal the first without the second.
     if gen_changed || record_flush {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
@@ -489,7 +569,7 @@ pub(super) fn feed_action_state(
     for name in reactive.activated {
         crate::ui_unit::fire_combat_text(&mut script, "SPELL_ACTIVE", Some(name), None);
     }
-    if refreshed {
+    if refresh {
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
     }
     if bags || record_flush {
