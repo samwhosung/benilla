@@ -264,7 +264,9 @@ pub(super) fn render_by_id(
 
 /// The player's own item of entry `item_id` through the builder, `inst` the object
 /// [`owned_instance`] found, if any; answers the builder's return value (see
-/// [`render::render_view_flagged`]), false while the template is in flight.
+/// [`render::render_view_flagged`]), false while the template is in flight. The merchant prices
+/// a copy found in a bag (`0x52e3bc`), never a worn one, which the player holds below slot index
+/// 23 (`0x52e40f`).
 pub(super) fn render_owned(
     lua: &Lua,
     this: &Table,
@@ -272,12 +274,17 @@ pub(super) fn render_owned(
     inst: Option<render::ItemInstance>,
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
+    let sell_count = inst.as_ref().filter(|i| i.object).and_then(|i| {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        build::container_object(&model, i.guid).map(|s| s.count.max(1))
+    });
     build_item(
         lua,
         this,
         h,
         ItemBuild {
             inst,
+            sell_count,
             ..ItemBuild::new(item_id)
         },
     )
@@ -465,7 +472,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // (`0x533027..0x53304c`); anything else builds the ordinary tooltip, without an
                 // error. Three of the binding's four builder legs pass it on, not `0x533106`.
                 let name_only = super::binding_abi::positive_number_flag(lua, name_only)?;
-                let (item_id, name, quality, inst, repair_cost, currently_equipped) = {
+                let (item_id, name, quality, inst, count, repair_cost, currently_equipped) = {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                     let armed = match super::tooltip::tip_mut(&mut model, h) {
                         Ok(t) => std::mem::take(&mut t.equipped_header_armed),
@@ -475,7 +482,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         .inv_slot(&unit, slot)
                         .filter(|s| s.item_id != 0)
                         .map(|s| {
-                            (s.item_id, s.name.clone(), s.quality, {
+                            (s.item_id, s.name.clone(), s.quality, s.count.max(1), {
                                 // Only the player's own slots hold item objects; an inspected
                                 // unit's item is a block (`0x533354`).
                                 let player = unit.eq_ignore_ascii_case("player");
@@ -514,7 +521,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         0
                     };
                     match view {
-                        Some((id, name, q, inst)) => (id, name, q, inst, cost, armed),
+                        Some((id, name, q, count, inst)) => (id, name, q, inst, count, cost, armed),
                         // An empty slot answers nil and still pushes the other two: callers
                         // destructure all three first, and an addon may add up repairCost.
                         None => {
@@ -538,6 +545,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Some(name) => InFlight::Name(name, quality_color(quality.max(0) as u32)),
                     None => InFlight::Nothing,
                 };
+                // The merchant prices an object the player holds at slot index 23 or more
+                // (`0x52e40f`): the vault, the bank bags and the keyring, never a worn item.
+                let sold = (inst.object && inst.guid != 0 && slot0 >= 23).then_some(count);
                 let live = build_item(
                     lua,
                     &this,
@@ -546,6 +556,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         flags,
                         inst: Some(inst),
                         in_flight,
+                        sell_count: sold,
                         ..ItemBuild::new(item_id)
                     },
                 )?;

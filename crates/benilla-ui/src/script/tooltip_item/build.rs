@@ -37,7 +37,8 @@ pub(crate) struct ItemBuild {
     pub(in crate::script) inst: Option<ItemInstance>,
     /// What shows while the template is in flight.
     pub(in crate::script) in_flight: InFlight,
-    /// `SetBagItem`'s stack, priced at an open merchant out of repair mode.
+    /// The stack of an item object the merchant may price, at an open merchant out of repair
+    /// mode: one held in a bag, or by the player at slot index 23 or more (`0x52e376`..`0x52e40f`).
     pub(in crate::script) sell_count: Option<u32>,
 }
 
