@@ -313,6 +313,11 @@ impl ObjectFields {
         self.get_u32(FIELD_PLAYER_SELF_RES_SPELL)
             .filter(|&s| s != 0)
     }
+    /// `PLAYER_FIELD_PVP_MEDALS` (player block `+0x1034`): medal `n` is bit `n - 1`, which the item
+    /// tooltip (`0x52d70a`) and the usable gate (`0x5eaa89`) test.
+    pub fn player_pvp_medals(&self) -> Option<u32> {
+        self.get_u32(FIELD_PLAYER_PVP_MEDALS)
+    }
     /// `PLAYER_BYTES`: skinColor, faceType, hairStyle and hairColor, bytes 0 to 3.
     pub fn player_bytes(&self) -> Option<u32> {
         self.get_u32(FIELD_PLAYER_BYTES)

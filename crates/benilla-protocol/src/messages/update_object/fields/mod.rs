@@ -281,6 +281,8 @@ const FIELD_PLAYER_TRACK_CREATURES: u16 = 1104;
 const FIELD_PLAYER_TRACK_RESOURCES: u16 = 1105;
 const FIELD_PLAYER_AMMO_ID: u16 = 1223; // UNIT_END+0x40B, INT: the equipped ammo item id
 const FIELD_PLAYER_SELF_RES_SPELL: u16 = 1224;
+// The medal bits an item's required medal tests: bit `n - 1` for medal `n`.
+const FIELD_PLAYER_PVP_MEDALS: u16 = 1225;
 // Bit 0x10 is PLAYER_FLAGS_GHOST (`Player.h:319`), held by the ghost aura 8326 until resurrection.
 pub const FIELD_PLAYER_FLAGS: u16 = 190;
 // The client's player block base `[player+0xe68]` is field 188: the arbiter at +0x0, PLAYER_FLAGS
