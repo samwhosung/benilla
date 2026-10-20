@@ -123,9 +123,10 @@ pub(in crate::script) struct BuilderFlags {
     pub product_depth: u8,
 }
 
-/// The deepest product build a recipe line nests. The reference recurses without a bound; a
-/// product that teaches its own recipe would recurse until the stack runs out, which no
-/// `Spell.dbc` chain does.
+/// The deepest product build a recipe line nests. Deviation: the reference recurses without a
+/// bound (`0x52dbce` builds the product whatever the depth), so a product that teaches a recipe
+/// for itself would recurse until the stack overflows; benilla stops here, so a cyclic
+/// `Spell.dbc` chain cannot crash the client.
 const MAX_PRODUCT_DEPTH: u8 = 4;
 
 /// Render one item into the tooltip in `0x52b650`'s order, and answer the builder's return value
