@@ -342,8 +342,8 @@ impl Shown {
 /// because the feeds that raise messages are at Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct MessageSink<'w> {
-    pub(crate) chat: ResMut<'w, ChatLog>,
-    pub(crate) sounds: ResMut<'w, MessageSounds>,
+    pub(crate) chat: Res<'w, ChatLog>,
+    pub(crate) sounds: Res<'w, MessageSounds>,
 }
 
 /// The `UNIT_FIELD_FLAGS` crowd-control bits the attack-start validator refuses on, in its test

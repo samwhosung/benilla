@@ -19,7 +19,7 @@ pub(in crate::combat_log) fn spell_damage_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     spell_damage_line(&s, ctx, stores, poses, log);
     if combat::feedback_spell(ctx.spells, s.spell_id).is_some() {
@@ -42,7 +42,7 @@ fn spell_damage_line(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let attacker = ctx.classify(s.attacker, stores);
     let victim = ctx.classify(s.target, stores);
@@ -114,7 +114,7 @@ fn spell_damage_line(
 /// (`0x628720`); nothing at all writes no line. Damage through takes `SPELLLOG` and its crit and
 /// school forms, with trailers, and [`combat::spell_hit_word`].
 fn direct_damage(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -188,7 +188,7 @@ pub(in crate::combat_log) struct PeriodicHit {
 /// `PERIODICAURADAMAGE`, typed off the target (`0x628235`), with absorb and resist trailers
 /// (`0x628341` passes zero for blocked and HitInfo) and [`combat::damage_word`].
 fn periodic_damage(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -238,7 +238,7 @@ fn periodic_damage(
 /// periodic selector on the target when `periodic` (`0x628603`), and worded `SPELL_ABSORBED` with
 /// the spell's name (`0x628696`). `school` is the caller's school-name gate.
 fn absorbed_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -264,7 +264,7 @@ fn absorbed_line(
 /// `0x628720`, a hit resisted whole: [`absorbed_line`]'s shape, `SPELLRESIST` worded
 /// `SPELL_RESISTED` (`0x628806`).
 fn resisted_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -289,7 +289,7 @@ fn resisted_line(
 
 /// The body `0x6285b0` and `0x628720` share.
 fn reason_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     family: Family,
@@ -331,7 +331,7 @@ fn reason_line(
 /// matrix (`0x627d30`). The word carries the spell's name ([`combat::miss_word`]). `school` is a
 /// caller's school-name gate, `0x62cd80`'s.
 pub(in crate::combat_log) fn spell_miss(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -380,7 +380,7 @@ pub(in crate::combat_log) fn spell_log_miss(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     if combat::feedback_spell(ctx.spells, s.spell_id).is_none() {
         return;
@@ -420,12 +420,12 @@ pub(in crate::combat_log) fn spell_go_misses(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let spell = ctx.spell_name(spell_id);
     let flashes = combat::feedback_spell(ctx.spells, spell_id).is_some();
     let caster = (caster, ctx.classify(caster, stores));
-    let line = |log: &mut ChatLog, target, code| {
+    let line = |log: &ChatLog, target, code| {
         if let Some(spell) = &spell {
             spell_miss(
                 log, ctx, poses, spell, spell_id, caster, target, code, false, None,
@@ -459,7 +459,7 @@ pub(in crate::combat_log) fn missile_miss(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     if combat::feedback_spell(ctx.spells, spell_id).is_some() {
         feedback::miss(log, target, code);
@@ -482,7 +482,7 @@ pub(in crate::combat_log) fn spell_heal_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     feedback::heal(log, s.target, s.amount, s.critical);
     let healer = ctx.classify(s.healer, stores);
@@ -523,7 +523,7 @@ pub(in crate::combat_log) fn spell_energize_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let caster = ctx.classify(s.caster, stores);
     let target = ctx.classify(s.target, stores);
@@ -547,7 +547,7 @@ pub(in crate::combat_log) fn spell_energize_log(
 /// periodic energize tick with it set. The flag picks the chat type, the periodic selector on the
 /// caster (`0x6275fb`) or the buff matrix, and only a direct gain raises the word (`0x6276e2`).
 fn power_gain_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     spell: &str,
@@ -594,7 +594,7 @@ pub(in crate::combat_log) fn periodic_aura_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let caster = (s.caster, ctx.classify(s.caster, stores));
     let target = (s.target, ctx.classify(s.target, stores));
@@ -676,7 +676,7 @@ pub(in crate::combat_log) fn periodic_aura_log(
 /// worded `PERIODIC_HEAL` with the caster's name and the amount (`0x627414`), but only for a heal
 /// over time of 30 s or less ([`periodic_heal_worded`]).
 fn periodic_heal(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
@@ -821,7 +821,7 @@ fn periodic_leech_amount(power: u32, amount: u32) -> u32 {
 /// The line raises the power's word with minus the amount drained when its target is you
 /// (`0x627b94`-`0x627c5c`), [`combat::power_amount_word`], periodic or not.
 pub(super) fn power_drain_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
@@ -884,7 +884,7 @@ pub(super) fn power_drain_line(
 /// the chat type the literal `0x19` misc-info. Returns whether it emitted, since `0x627930` falls
 /// through to the generic path when it did not. The divisor is happiness's 1000 (`0x627f45`).
 fn happiness_drain_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,

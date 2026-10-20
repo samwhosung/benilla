@@ -49,7 +49,7 @@ pub(crate) fn fire_field_notices(
         if let FieldNotice::Tutorial { id } = notice {
             // `0x4b5390` with no delay, inside the watcher's run.
             if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
-                crate::tutorial::fire_published(&mut script, &mut sink.sounds, published);
+                crate::tutorial::fire_published(&mut script, &sink.sounds, published);
             }
             continue;
         }

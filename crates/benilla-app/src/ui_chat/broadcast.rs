@@ -104,7 +104,7 @@ fn parent_zone(areas: &AreaTableRes, id: u32) -> Option<u32> {
 /// Resolve the parked broadcasts into chat events, before [`super::feed::feed_chat`] so each
 /// lands the frame it decodes.
 pub(super) fn feed_broadcasts(
-    mut log: ResMut<ChatLog>,
+    log: Res<ChatLog>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     channels: Res<ChannelState>,
     areas: Option<Res<AreaTableRes>>,
@@ -137,7 +137,7 @@ pub(super) fn feed_broadcasts(
                     continue;
                 };
                 let text = zone_under_attack_line(&fmt, name);
-                push_channel_lines(&mut log, &channels, zone, player_zone, &text);
+                push_channel_lines(&log, &channels, zone, player_zone, &text);
             }
             Broadcast::Defense { zone_id, text } => {
                 // The wire text stands on its own, so an unresolvable zone only costs the remap.
@@ -145,7 +145,7 @@ pub(super) fn feed_broadcasts(
                     .as_ref()
                     .and_then(|a| parent_zone(a, zone_id))
                     .unwrap_or(zone_id);
-                push_channel_lines(&mut log, &channels, zone, player_zone, &text);
+                push_channel_lines(&log, &channels, zone, player_zone, &text);
             }
             Broadcast::ChatRestricted => {
                 // Its row is a chat row (tested below), so it is written as a system line here.
@@ -204,7 +204,7 @@ pub(crate) fn transfer_abort_line(
 /// handlers push NULL for both (`0x49ddf5`/`0x49ddf7`), hence the bare colon of
 /// `[LocalDefense] : text`.
 fn push_channel_lines(
-    log: &mut ChatLog,
+    log: &ChatLog,
     channels: &ChannelState,
     zone: u32,
     player_zone: Option<u32>,

@@ -263,7 +263,7 @@ mod emitters {
         /// ([`ChatLog::pending_combat_order`]).
         fn order(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
         ) -> Vec<String> {
             self.run(emit).pending_combat_order()
         }
@@ -271,7 +271,7 @@ mod emitters {
         /// The `UNIT_COMBAT`s `emit` parks, as `(guid, action, descriptor, amount)`.
         fn flashes(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
         ) -> Vec<(u64, &'static str, &'static str, u32)> {
             self.run(emit)
                 .pending_unit_combat()
@@ -283,19 +283,15 @@ mod emitters {
         /// The lines `emit` parks, with their words.
         fn lines(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
         ) -> Vec<PendingCombat> {
-            self.run(emit)
-                .pending_combat()
-                .into_iter()
-                .cloned()
-                .collect()
+            self.run(emit).pending_combat()
         }
 
         /// The log `emit` leaves.
         fn run(
             &self,
-            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
         ) -> ChatLog {
             let (self_guid, reputations, ranges) = (
                 SelfGuid(Some(ME)),

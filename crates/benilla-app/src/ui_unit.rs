@@ -413,7 +413,7 @@ fn load_exhaustion_rows(
 /// (`0x625a6d` → `0x624530`), and the flushes of a superseded (`0x625893`) or stopped (`0x624ea7`)
 /// record. The swing's `COMBAT_TEXT_UPDATE` rides its combat-log line instead.
 pub(crate) fn melee_unit_combat(
-    log: &mut crate::ui_chat::ChatLog,
+    log: &crate::ui_chat::ChatLog,
     s: &crate::creature_anim::SwingMessage,
     victim: Option<(u64, &crate::net::ObjectStore)>,
 ) {
@@ -1360,7 +1360,7 @@ fn feed_units(
     world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     // Chat and the message-sound queue, for the rest and PvP lines.
-    mut sink: crate::ui_action::MessageSink,
+    sink: crate::ui_action::MessageSink,
     // `ResMut` because the guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY`.
     mut guild: ResMut<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,

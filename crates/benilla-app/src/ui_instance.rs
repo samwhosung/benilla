@@ -388,7 +388,7 @@ fn track_instance_state(
 fn feed_instance(
     script: Option<NonSendMut<UiScript>>,
     mut state: ResMut<InstanceState>,
-    mut chat: ResMut<ChatLog>,
+    chat: Res<ChatLog>,
     maps: Option<Res<benilla_assets::MapCatalogRes>>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     time: Res<Time<Real>>,

@@ -313,7 +313,7 @@ pub(super) fn xp_gain(
     self_guid: &SelfGuid,
     stores: &Query<&mut ObjectStore>,
     text: &mut MessageWriter<CombatTextSpawn>,
-    chat_log: &mut ChatLog,
+    chat_log: &ChatLog,
     commands: &mut Commands,
 ) {
     // `0x468550`: the active player's guid, 0 with none.
@@ -370,7 +370,7 @@ pub(super) fn exploration_xp(
     self_guid: &SelfGuid,
     stores: &Query<&mut ObjectStore>,
     sound_out: &mut MessageWriter<crate::net::ServerSoundMessage>,
-    chat_log: &mut ChatLog,
+    chat_log: &ChatLog,
 ) {
     let race = self_guid
         .0
@@ -406,7 +406,7 @@ pub(super) fn exploration_xp(
 /// `SMSG_LEVELUP_INFO`: the ding's chat lines. The talent-point arg is not on the wire; the client
 /// computes `(newLevel >= 10) ? 1 : 0` (`0x5e407c`). The ding's visual rides the
 /// `UNIT_FIELD_LEVEL` change watcher, not this packet.
-pub(super) fn level_up(l: LevelUpInfo, chat_log: &mut ChatLog) {
+pub(super) fn level_up(l: LevelUpInfo, chat_log: &ChatLog) {
     let talent_points = u32::from(l.level >= 10);
     // Parked for `ui_unit`'s `PLAYER_LEVEL_UP`, whose args the stock `ChatFrame_OnEvent` prints;
     // nothing here prints the block itself, or it shows twice.

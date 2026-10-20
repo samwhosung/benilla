@@ -25,8 +25,15 @@ use super::{AudioListener, SoundConfig, SoundOutput};
 
 /// Catalog rows displayed this frame, awaiting their sound. Pushed by
 /// `crate::ui_action::show_messages`, the sink every displayed message passes through.
+///
+/// Shared through `&self`, as [`crate::ui_chat::ChatLog`] is: a call the host applies inside a
+/// system's Lua sounds its refusal while that system sounds its own lines, in one order.
 #[derive(Resource, Default)]
-pub(crate) struct MessageSounds {
+pub(crate) struct MessageSounds(std::sync::Mutex<SoundQueue>);
+
+/// What [`MessageSounds`] holds.
+#[derive(Default)]
+struct SoundQueue {
     records: Vec<&'static MessageRecord>,
     /// `PlaySoundByName` cues with no catalog row, such as the tutorial popup's
     /// `"TutorialPopup"` (`0x4b5390`), played on the same 2D SFX path.
@@ -34,37 +41,44 @@ pub(crate) struct MessageSounds {
 }
 
 impl MessageSounds {
+    /// The queue, held for one step; a poisoned lock still holds whole items.
+    fn q(&self) -> std::sync::MutexGuard<'_, SoundQueue> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Queue one displayed message's sound.
     ///
     /// The reference sounds a message before deciding to draw it (`0x49673d`, ahead of the key
     /// guard at `0x4967bd`/`0x4967c5` and the empty-text guard at `0x4945b4`), while benilla drops
     /// an empty line before it gets here. No sounding row in the shipped `GlobalStrings.lua` has
     /// empty text, so the two agree on 1.12.1's data.
-    pub(crate) fn push(&mut self, record: &'static MessageRecord) {
-        self.records.push(record);
+    pub(crate) fn push(&self, record: &'static MessageRecord) {
+        self.q().records.push(record);
     }
 
     /// Queue a named cue with no message behind it.
-    pub(crate) fn push_cue(&mut self, name: &'static str) {
-        self.cues.push(name);
+    pub(crate) fn push_cue(&self, name: &'static str) {
+        self.q().cues.push(name);
     }
 
     /// What is queued, for the producer's tests.
     #[cfg(test)]
-    pub(crate) fn queued(&self) -> &[&'static MessageRecord] {
-        &self.records
+    pub(crate) fn queued(&self) -> Vec<&'static MessageRecord> {
+        self.q().records.clone()
     }
 
     /// The named cues queued, for the producer's tests.
     #[cfg(test)]
-    pub(crate) fn queued_cues(&self) -> &[&'static str] {
-        &self.cues
+    pub(crate) fn queued_cues(&self) -> Vec<&'static str> {
+        self.q().cues.clone()
     }
 }
 
 /// Drain [`MessageSounds`]: a cue by name, or speech by line.
 fn play_message_sounds(
-    mut queue: ResMut<MessageSounds>,
+    queue: Res<MessageSounds>,
     mut speech: ResMut<VocalSpeech>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     kits: Option<ResMut<SoundKits>>,
@@ -73,11 +87,13 @@ fn play_message_sounds(
     config: Res<SoundConfig>,
     listener: Res<AudioListener>,
 ) {
-    if queue.records.is_empty() && queue.cues.is_empty() {
+    let (records, cues) = {
+        let mut q = queue.q();
+        (std::mem::take(&mut q.records), std::mem::take(&mut q.cues))
+    };
+    if records.is_empty() && cues.is_empty() {
         return;
     }
-    let records = std::mem::take(&mut queue.records);
-    let cues = std::mem::take(&mut queue.cues);
     // Drained even with nothing to play it on, so the queue cannot grow unbounded.
     let (Some(mut kits), Some(assets)) = (kits, assets) else {
         return;

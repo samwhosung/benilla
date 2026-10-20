@@ -124,7 +124,7 @@ pub(super) fn attacker_state(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let s = super::read_swing(s, ctx.index, stores);
     // `0x625e40`, checked before the dispatcher (`0x629b3e`, `0x629b45`): a swing from a spell
@@ -182,7 +182,7 @@ pub(super) fn damage_shield(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     if s.damage != 0 {
         let bearer = ctx.classify(s.victim, stores);
@@ -216,7 +216,7 @@ pub(super) fn party_kill_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let killer = ctx.classify(s.killer, stores);
     let victim = ctx.classify(s.victim, stores);
@@ -244,7 +244,7 @@ pub(super) fn spell_insta_kill_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let victim = ctx.classify(s.victim, stores);
     let Some(spell) = ctx.spell_name(s.spell_id) else {
@@ -281,7 +281,7 @@ pub(super) fn spell_outcome_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     // The periodic gate, on `IMMUNESPELL` alone.
     if immune && s.log_format != 0 && !ctx.periodic {
@@ -329,7 +329,7 @@ pub(super) fn spell_dispel_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let bearer = ctx.classify(s.victim, stores);
     let caster = ctx.classify(s.caster, stores);
@@ -364,7 +364,7 @@ pub(super) fn dispel_failed(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let caster = ctx.classify(s.caster, stores);
     let victim = ctx.classify(s.victim, stores);
@@ -410,7 +410,7 @@ pub(super) fn enchantment_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let owner = ctx.classify(s.owner, stores);
     let caster = ctx.classify(s.caster, stores);
@@ -472,7 +472,7 @@ pub(super) fn spell_log_execute(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     use benilla_protocol::messages::ExecuteLog as E;
 
@@ -481,7 +481,7 @@ pub(super) fn spell_log_execute(
     // drain, extra attacks, open lock, durability damage and the cast line. Create item, feed pet
     // and dismiss pet name no spell, and interrupt names the row's.
     let spell = || ctx.spell_name(s.spell_id);
-    let cast_line = |log: &mut ChatLog, target: Option<u64>| {
+    let cast_line = |log: &ChatLog, target: Option<u64>| {
         spell_cast_line(
             log,
             ctx,
@@ -780,7 +780,7 @@ const ATTR_EX4_NO_CAST_LOG: u32 = 0x1;
 /// or `SPELLTERSEPERFORM` keyed on the caster, typed by the matrix on the caster against itself
 /// (`0x62b190`), and worded when the caster is you (`0x62b12f`).
 fn spell_cast_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
@@ -869,7 +869,7 @@ pub(super) fn environmental_damage_log(
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     if e.damage == 0 && e.absorb == 0 && e.resist == 0 {
         return;
@@ -925,7 +925,7 @@ pub(crate) fn faction_standing(
     deltas: &[(u32, i32)],
     reputations: &Reputations,
     factions: Option<&crate::target::ring::Factions>,
-    log: &mut ChatLog,
+    log: &ChatLog,
 ) {
     let Some(catalog) = factions.map(|f| f.catalog()) else {
         return;
@@ -979,7 +979,7 @@ pub(crate) fn faction_standing(
 /// The tail every arm ends in: build the queued line (dropping a class-9 endpoint) and park it
 /// for its names.
 fn queue(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
@@ -1005,7 +1005,7 @@ fn queue(
 /// [`queue`] for a family whose `Named` slot (an item entry or unit guid) the drain resolves,
 /// holding the line until it lands (`0x6294b0`).
 fn queue_named(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
@@ -1023,7 +1023,7 @@ fn queue_named(
 /// [`queue`] for a formatter that raises a `COMBAT_TEXT_UPDATE` after its line: the word rides
 /// the line and fires only once the line is written.
 fn queue_worded(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,
@@ -1057,7 +1057,7 @@ fn to_me(class: UnitClass, word: LineWord) -> Option<LineWord> {
 /// `al` (set at `0x627fb0`/`0x627fe2`/`0x627ff4`, cleared at `0x628006`), and a failed range gate
 /// or empty template is a fall-through there.
 fn queue_reported(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     poses: &impl Poses,
     kind: crate::ui_chat::ChatEventKind,

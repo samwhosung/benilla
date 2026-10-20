@@ -468,7 +468,7 @@ fn drain_lines(
     items: &Items,
     names: &NameCache,
     commands: &NetCommands,
-    chat: &mut ChatLog,
+    chat: &ChatLog,
     catalogs: crate::items::RollCatalogs,
     detailed: bool,
 ) {
@@ -548,7 +548,7 @@ fn feed_loot_rolls(
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
     self_guid: Res<SelfGuid>,
-    mut chat: ResMut<ChatLog>,
+    chat: Res<ChatLog>,
     time: Res<Time>,
     mut last: Local<crate::ui_script::VmMemo<LootRollsState>>,
     props: Option<Res<crate::items::RandomProperties>>,
@@ -573,7 +573,7 @@ fn feed_loot_rolls(
         &items,
         &names,
         &commands,
-        &mut chat,
+        &chat,
         catalogs,
         loot.show_loot_spam,
     );

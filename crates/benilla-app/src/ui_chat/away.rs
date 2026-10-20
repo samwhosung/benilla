@@ -143,7 +143,7 @@ fn fill_one(template: &str, arg: &str) -> String {
 }
 
 /// Push one of the four lines into the chat log as `CHAT_MSG_SYSTEM`.
-pub(crate) fn push_system(chat: &mut ChatLog, line: String) {
+pub(crate) fn push_system(chat: &ChatLog, line: String) {
     chat.push_event(ChatEvent::text_only(ChatEventKind::System, line));
 }
 
@@ -184,7 +184,7 @@ pub(crate) fn movement_clears_afk(
     cvars: Res<crate::cvars::Cvars>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     commands: Res<crate::net::NetCommands>,
-    mut chat: ResMut<ChatLog>,
+    chat: Res<ChatLog>,
     mut mirror: ResMut<AfkMirror>,
 ) {
     use crate::bindings::Input;
@@ -208,7 +208,7 @@ pub(crate) fn movement_clears_afk(
     let line = script
         .and_then(|s| super::combat::global_string(&s, "CLEARED_AFK"))
         .unwrap_or_default();
-    push_system(&mut chat, line);
+    push_system(&chat, line);
     mirror.0 = 0;
     // `ClearAFK`'s own packet: the empty `0x14` the command path sends.
     let _ = commands.0.send(crate::net::ClientCommand::Chat {

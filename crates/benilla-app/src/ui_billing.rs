@@ -144,7 +144,7 @@ fn poll_play_time(
     script: Option<NonSendMut<UiScript>>,
     mut warning: ResMut<PlayTimeWarning>,
     billing: Res<SessionBilling>,
-    mut chat: ResMut<ChatLog>,
+    chat: Res<ChatLog>,
     time: Res<Time<Real>>,
 ) {
     let Some(mut script) = script else {

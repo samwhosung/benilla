@@ -151,8 +151,16 @@ pub(super) fn text_emote_event(
 /// The chat items the feeds queue and [`feed_chat`] drains. World broadcasts wait apart, as their
 /// resolve needs more than [`feed_chat`] can hold at Bevy's `SystemParam` limit;
 /// `feed_broadcasts` resolves them onto `pending` earlier in the same frame.
+///
+/// An append-only sink shared through `&self`: a system that lends the call host appends here
+/// while a call the host applies inside its Lua appends a refusal's line too, as the reference's
+/// verb writes the chat frame in the call. One lock keeps every append in the order it was made.
 #[derive(Resource, Default)]
-pub(crate) struct ChatLog {
+pub(crate) struct ChatLog(std::sync::Mutex<ChatQueue>);
+
+/// What [`ChatLog`] holds.
+#[derive(Default)]
+struct ChatQueue {
     pending: Vec<Pending>,
     broadcasts: Vec<super::broadcast::Broadcast>,
     /// A level-up's gains for `ui_unit`'s `PLAYER_LEVEL_UP` fire, matched by level: the fire
@@ -161,55 +169,83 @@ pub(crate) struct ChatLog {
 }
 
 impl ChatLog {
+    /// The queue, held for one step; a poisoned lock still holds whole items.
+    fn q(&self) -> std::sync::MutexGuard<'_, ChatQueue> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Drop everything queued: the session's end.
+    pub(crate) fn reset(&self) {
+        *self.q() = ChatQueue::default();
+    }
+
+    /// Take what is parked, for the drain.
+    fn take_pending(&self) -> Vec<Pending> {
+        std::mem::take(&mut self.q().pending)
+    }
+
+    /// Park `still` again ahead of what was queued while the drain ran: the lines a call its
+    /// handlers made appended meanwhile.
+    fn park_again(&self, mut still: Vec<Pending>) {
+        let mut q = self.q();
+        still.append(&mut q.pending);
+        q.pending = still;
+    }
+}
+
+impl ChatLog {
     /// Queue one world broadcast for [`super::broadcast::feed_broadcasts`]'s resolve pass.
-    pub(crate) fn push_broadcast(&mut self, b: super::broadcast::Broadcast) {
-        self.broadcasts.push(b);
+    pub(crate) fn push_broadcast(&self, b: super::broadcast::Broadcast) {
+        self.q().broadcasts.push(b);
     }
 
     /// How many broadcasts are waiting, the drain's early-out.
     pub(crate) fn broadcasts_pending(&self) -> usize {
-        self.broadcasts.len()
+        self.q().broadcasts.len()
     }
 
     /// Take the parked broadcasts, leaving the queue empty.
-    pub(crate) fn take_broadcasts(&mut self) -> Vec<super::broadcast::Broadcast> {
-        std::mem::take(&mut self.broadcasts)
+    pub(crate) fn take_broadcasts(&self) -> Vec<super::broadcast::Broadcast> {
+        std::mem::take(&mut self.q().broadcasts)
     }
 
     /// Park a level-up's gains for the `PLAYER_LEVEL_UP` fire.
-    pub(crate) fn push_level_up_gains(&mut self, info: &LevelUpInfo, talent_points: u32) {
-        self.level_up_gains.push((*info, talent_points));
+    pub(crate) fn push_level_up_gains(&self, info: &LevelUpInfo, talent_points: u32) {
+        self.q().level_up_gains.push((*info, talent_points));
     }
 
     /// Take the parked gains for `level`; with none (a GM's level write), the caller fires zeros.
-    pub(crate) fn take_level_up_gains(&mut self, level: u32) -> Option<(LevelUpInfo, u32)> {
-        let i = self
+    pub(crate) fn take_level_up_gains(&self, level: u32) -> Option<(LevelUpInfo, u32)> {
+        let mut q = self.q();
+        let i = q
             .level_up_gains
             .iter()
             .position(|(l, _)| l.level == level)?;
-        Some(self.level_up_gains.remove(i))
+        Some(q.level_up_gains.remove(i))
     }
 }
 
 impl ChatLog {
     /// Queue a decoded wire line (`SMSG_MESSAGECHAT`).
-    pub(crate) fn push_wire(&mut self, msg: ChatMessage) {
-        self.pending.push(Pending::Wire { msg, tries: 0 });
+    pub(crate) fn push_wire(&self, msg: ChatMessage) {
+        self.q().pending.push(Pending::Wire { msg, tries: 0 });
     }
 
     /// Queue a client-composed event: loot, quest and system lines, the `/played` answer.
-    pub(crate) fn push_event(&mut self, event: ChatEvent) {
-        self.pending.push(Pending::Event(event));
+    pub(crate) fn push_event(&self, event: ChatEvent) {
+        self.q().pending.push(Pending::Event(event));
     }
 
     /// Queue one combat-log line, classified at the packet by [`super::combat`], for its names.
-    pub(crate) fn push_combat(&mut self, line: super::combat::PendingCombat) {
-        self.pending.push(Pending::Combat(Box::new(line)));
+    pub(crate) fn push_combat(&self, line: super::combat::PendingCombat) {
+        self.q().pending.push(Pending::Combat(Box::new(line)));
     }
 
     /// Queue a decoded `SMSG_CHANNEL_NOTIFY`; a guid tail waits for its names.
     pub(crate) fn push_channel_notice(
-        &mut self,
+        &self,
         notice_byte: u8,
         channel: String,
         tail: &ChannelNoticeTail,
@@ -222,7 +258,7 @@ impl ChatLog {
             ChannelNoticeTail::ModeChange { .. } => return, // silent in the 1.12 UI (no string)
         };
         if a_guid != 0 {
-            self.pending.push(Pending::Notice {
+            self.q().pending.push(Pending::Notice {
                 notice: notice_byte,
                 channel,
                 a_guid,
@@ -231,7 +267,7 @@ impl ChatLog {
             });
         } else {
             if let Some(event) = notice_event(notice_byte, channel, name, None) {
-                self.pending.push(Pending::Event(event));
+                self.q().pending.push(Pending::Event(event));
             }
         }
     }
@@ -239,7 +275,7 @@ impl ChatLog {
     /// Queue an inbound addon line for its sender's name. The text splits on its first tab, and
     /// with none it is all prefix (`0x49a8d0`); `distribution` names PARTY, RAID, GUILD and
     /// BATTLEGROUND, any other type `"UNKNOWN"` (`0x49aff4`).
-    pub(crate) fn push_addon(&mut self, text: &str, chat_type: u8, guid: u64) {
+    pub(crate) fn push_addon(&self, text: &str, chat_type: u8, guid: u64) {
         let (prefix, message) = match text.find('\t') {
             Some(i) => (text[..i].to_string(), text[i + 1..].to_string()),
             None => (text.to_string(), String::new()),
@@ -256,7 +292,7 @@ impl ChatLog {
             }
         }
         .to_string();
-        self.pending.push(Pending::Addon {
+        self.q().pending.push(Pending::Addon {
             prefix,
             message,
             distribution,
@@ -266,8 +302,8 @@ impl ChatLog {
     }
 
     /// Queue a `/random` broadcast (`MSG_RANDOM_ROLL`) for the roller-name resolve.
-    pub(crate) fn push_roll(&mut self, min: u32, max: u32, roll: u32, guid: u64) {
-        self.pending.push(Pending::Roll {
+    pub(crate) fn push_roll(&self, min: u32, max: u32, roll: u32, guid: u64) {
+        self.q().pending.push(Pending::Roll {
             min,
             max,
             roll,
@@ -277,8 +313,8 @@ impl ChatLog {
     }
 
     /// Queue an XP gain's line (`SMSG_LOG_XPGAIN`); `victim` 0 is the unnamed form.
-    pub(crate) fn push_xp_gain(&mut self, victim: u64, total: u32, base: u32, group: f32) {
-        self.pending.push(Pending::XpGain {
+    pub(crate) fn push_xp_gain(&self, victim: u64, total: u32, base: u32, group: f32) {
+        self.q().pending.push(Pending::XpGain {
             victim,
             total,
             base,
@@ -287,20 +323,20 @@ impl ChatLog {
     }
 
     /// Queue an XP loss's line, an `SMSG_LOG_XPGAIN` naming you as the victim (`0x637f70`).
-    pub(crate) fn push_xp_loss(&mut self, total: u32) {
-        self.pending.push(Pending::XpLoss { total });
+    pub(crate) fn push_xp_loss(&self, total: u32) {
+        self.q().pending.push(Pending::XpLoss { total });
     }
 
     /// Queue a `UNIT_COMBAT` behind what is already queued, so it fires in the order its handler
     /// raised it against its lines.
-    pub(crate) fn push_unit_combat(&mut self, ev: crate::ui_unit::UnitCombatFeedback) {
-        self.pending.push(Pending::UnitCombat(ev));
+    pub(crate) fn push_unit_combat(&self, ev: crate::ui_unit::UnitCombatFeedback) {
+        self.q().pending.push(Pending::UnitCombat(ev));
     }
 
     /// Queue an honor award's line (`SMSG_PVP_CREDIT`); victim 0 is a bonus or objective award.
-    pub(crate) fn push_pvp_credit(&mut self, honor: i32, victim: u64, rank: u8, side: u8) {
+    pub(crate) fn push_pvp_credit(&self, honor: i32, victim: u64, rank: u8, side: u8) {
         // Both forks park: the template resolves at the drain.
-        self.pending.push(Pending::HonorGain {
+        self.q().pending.push(Pending::HonorGain {
             victim,
             honor,
             rank,
@@ -309,8 +345,8 @@ impl ChatLog {
     }
 
     /// Queue a text emote (`SMSG_TEXT_EMOTE`) for its performer's name, then its sentence.
-    pub(crate) fn push_text_emote(&mut self, performer: u64, text_id: u32, target: String) {
-        self.pending.push(Pending::TextEmote {
+    pub(crate) fn push_text_emote(&self, performer: u64, text_id: u32, target: String) {
+        self.q().pending.push(Pending::TextEmote {
             performer,
             text_id,
             target,
@@ -320,16 +356,16 @@ impl ChatLog {
 
     /// Queue an area discovery: the `ERR_ZONE_EXPLORED` toast on every packet, never chat, and the
     /// `ERR_ZONE_EXPLORED_XP` system line when `xp > 0`.
-    pub(crate) fn push_exploration(&mut self, area_name: &str, xp: u32) {
-        self.pending.push(Pending::Discovery {
+    pub(crate) fn push_exploration(&self, area_name: &str, xp: u32) {
+        self.q().pending.push(Pending::Discovery {
             area: area_name.to_string(),
             xp,
         });
     }
 
     /// Queue a reputation rank line (`FACTION_STANDING_CHANGED`) for the drain to fill.
-    pub(crate) fn push_standing(&mut self, faction: &str, rank: u8, female: bool) {
-        self.pending.push(Pending::Standing {
+    pub(crate) fn push_standing(&self, faction: &str, rank: u8, female: bool) {
+        self.q().pending.push(Pending::Standing {
             faction: faction.to_string(),
             rank,
             female,
@@ -337,14 +373,15 @@ impl ChatLog {
     }
 
     /// Drop every pending item on disconnect.
-    pub(crate) fn clear_session(&mut self) {
-        self.pending.clear();
+    pub(crate) fn clear_session(&self) {
+        self.q().pending.clear();
     }
 
     /// What is parked, in order, by kind: the order a packet batch left the lines in.
     #[cfg(test)]
     pub(crate) fn pending_kinds(&self) -> Vec<&'static str> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .map(|p| match p {
                 Pending::Wire { .. } => "wire",
@@ -368,7 +405,8 @@ impl ChatLog {
     /// `UNIT_COMBAT` as `"UNIT_COMBAT <action>"`.
     #[cfg(test)]
     pub(crate) fn pending_combat_order(&self) -> Vec<String> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
                 Pending::Combat(line) => Some(line.family.stem.to_string()),
@@ -381,7 +419,8 @@ impl ChatLog {
     /// The parked `UNIT_COMBAT`s, in order.
     #[cfg(test)]
     pub(crate) fn pending_unit_combat(&self) -> Vec<crate::ui_unit::UnitCombatFeedback> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
                 Pending::UnitCombat(ev) => Some(*ev),
@@ -394,7 +433,8 @@ impl ChatLog {
     /// form.
     #[cfg(test)]
     pub(crate) fn pending_xp(&self) -> Vec<(u64, u32, u32, f32)> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match *p {
                 Pending::XpGain {
@@ -411,7 +451,8 @@ impl ChatLog {
     /// The parked honor credits as `(victim, honor, rank, side)`, in order.
     #[cfg(test)]
     pub(crate) fn pending_honor(&self) -> Vec<(u64, i32, u8, u8)> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match *p {
                 Pending::HonorGain {
@@ -427,11 +468,12 @@ impl ChatLog {
 
     /// The parked combat lines, in order.
     #[cfg(test)]
-    pub(crate) fn pending_combat(&self) -> Vec<&super::combat::PendingCombat> {
-        self.pending
+    pub(crate) fn pending_combat(&self) -> Vec<super::combat::PendingCombat> {
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
-                Pending::Combat(line) => Some(&**line),
+                Pending::Combat(line) => Some((**line).clone()),
                 _ => None,
             })
             .collect()
@@ -440,7 +482,8 @@ impl ChatLog {
     /// The parked rank lines as `(faction, rank, female)`, in order.
     #[cfg(test)]
     pub(crate) fn pending_standing(&self) -> Vec<(String, u8, bool)> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
                 Pending::Standing {
@@ -456,7 +499,8 @@ impl ChatLog {
     /// The parked addon lines as `(prefix, message, distribution)`.
     #[cfg(test)]
     pub(crate) fn pending_addons(&self) -> Vec<(String, String, String)> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
                 Pending::Addon {
@@ -473,7 +517,8 @@ impl ChatLog {
     /// How many parked items will render in a chat window; addon lines never do.
     #[cfg(test)]
     pub(crate) fn pending_len(&self) -> usize {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter(|p| !matches!(p, Pending::Addon { .. }))
             .count()
@@ -482,7 +527,8 @@ impl ChatLog {
     /// The text of every composed line waiting to render, in order.
     #[cfg(test)]
     pub(crate) fn pending_lines(&self) -> Vec<String> {
-        self.pending
+        self.q()
+            .pending
             .iter()
             .filter_map(|p| match p {
                 Pending::Event(e) => Some(e.text.clone()),
@@ -869,7 +915,7 @@ pub(super) fn gesture_prevented(tries: u16, speaker_flags: Option<u32>) -> bool 
 /// Drain [`ChatLog`]: resolve names (ask-once, bounded), build the events and [`route`] them.
 pub(super) fn feed_chat(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mut log: ResMut<ChatLog>,
+    log: Res<ChatLog>,
     mut windows: ResMut<ChatWindows>,
     mut channels: ResMut<ChannelState>,
     names: Res<NameCache>,
@@ -898,10 +944,10 @@ pub(super) fn feed_chat(
     let Some(mut script) = script else {
         return;
     };
-    if log.pending.is_empty() {
+    let pending = log.take_pending();
+    if pending.is_empty() {
         return;
     }
-    let pending = std::mem::take(&mut log.pending);
     let mut still = Vec::new();
     for item in pending {
         match item {
@@ -1387,7 +1433,7 @@ pub(super) fn feed_chat(
             }
         }
     }
-    log.pending = still;
+    log.park_again(still);
 }
 
 /// Whether a wire chat type carries a player guid to name (not a monster's inline name).

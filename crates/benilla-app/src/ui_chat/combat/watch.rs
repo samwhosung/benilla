@@ -71,7 +71,7 @@ const ATTR_PASSIVE: u32 = 0x40;
 /// Queue one single-endpoint line, gated the way its formatter gates, with the word it raises once
 /// written.
 fn queue_one(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &WatchCtx,
     poses: &Query<&Transform>,
     kind: ChatEventKind,
@@ -117,7 +117,7 @@ pub(crate) fn death_lines(
     awarded: Query<(), With<XpAwarded>>,
     mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
-    mut log: ResMut<ChatLog>,
+    log: Res<ChatLog>,
 ) {
     for e in edges.read() {
         if !(e.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH) && e.old > 0 && e.new == 0) {
@@ -144,7 +144,7 @@ pub(crate) fn death_lines(
             (_, false) => super::UNITDIES,
         };
         queue_one(
-            &mut log,
+            &log,
             &ctx,
             &poses,
             death_kind(class),
@@ -177,7 +177,7 @@ pub(crate) fn aura_lines(
     stores: Query<(Entity, &ObjectStore)>,
     mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
-    mut log: ResMut<ChatLog>,
+    log: Res<ChatLog>,
 ) {
     use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS};
     /// Slots below it are helpful (`0x61238e`).
@@ -217,7 +217,7 @@ pub(crate) fn aura_lines(
                 };
                 let word = word(message_type, &spell);
                 queue_one(
-                    &mut log,
+                    &log,
                     &ctx,
                     &poses,
                     kind,
@@ -245,7 +245,7 @@ pub(crate) fn aura_lines(
                 };
                 let word = word(message_type, &spell);
                 queue_one(
-                    &mut log,
+                    &log,
                     &ctx,
                     &poses,
                     aura_gone_kind(class),
@@ -289,7 +289,7 @@ pub(crate) fn aura_lines(
                 continue;
             };
             queue_one(
-                &mut log,
+                &log,
                 &ctx,
                 &poses,
                 kind,
@@ -318,7 +318,7 @@ pub(crate) fn pet_loyalty_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
     mut edges: MessageReader<FieldChanged>,
-    mut log: ResMut<ChatLog>,
+    log: Res<ChatLog>,
 ) {
     for e in edges.read() {
         if !e.unit_field(benilla_protocol::field::FIELD_UNIT_BYTES_1) {

@@ -48,7 +48,7 @@ pub(crate) struct SwingImpact {
 #[derive(SystemParam)]
 pub(crate) struct ImpactSinks<'w, 's> {
     out: MessageWriter<'w, SwingImpact>,
-    log: ResMut<'w, ChatLog>,
+    log: Res<'w, ChatLog>,
     guids: Query<'w, 's, &'static Guid>,
     pub(crate) stores: Query<'w, 's, &'static ObjectStore>,
 }

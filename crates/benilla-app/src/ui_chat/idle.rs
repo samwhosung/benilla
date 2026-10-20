@@ -136,7 +136,7 @@ pub(crate) fn idle_handler(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut mirror: ResMut<AfkMirror>,
-    mut chat: ResMut<ChatLog>,
+    chat: Res<ChatLog>,
     commands: Res<crate::net::NetCommands>,
     mut stand: MessageWriter<crate::player::StandStateRequest>,
     follow: Res<crate::player::FollowState>,
@@ -183,7 +183,7 @@ pub(crate) fn idle_handler(
         // path: the `DEFAULT_AFK_MESSAGE` echo and body, and the optimistic mirror.
         let out = afk_line("", *mirror, &strings);
         if let Some(line) = out.line {
-            push_system(&mut chat, line);
+            push_system(&chat, line);
         }
         if let Some(v) = out.mirror {
             mirror.0 = v;
@@ -199,7 +199,7 @@ pub(crate) fn idle_handler(
     // the line with the request, so it runs once per logout and again after a cancel.
     if action.camp && !logout.pending() {
         if let Some(line) = strings("IDLE_MESSAGE") {
-            push_system(&mut chat, line);
+            push_system(&chat, line);
         }
         // `0x5ab000` with the game menu's arguments; `crate::ui_logout` owns the rest.
         script.queue_session_request(benilla_ui::script::SessionRequest::Logout);

@@ -666,7 +666,7 @@ fn drain_receives(
     items: &Items,
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
-    chat: &mut crate::ui_chat::ChatLog,
+    chat: &crate::ui_chat::ChatLog,
     script: &mut UiScript,
     rolls: RollCatalogs,
 ) {
@@ -742,7 +742,7 @@ fn feed_loot(
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
-    mut chat: ResMut<crate::ui_chat::ChatLog>,
+    chat: Res<crate::ui_chat::ChatLog>,
     mut last: crate::ui_script::WindowMemo<Option<LootSnapshot>>,
     cfg: Res<LootConfig>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -768,7 +768,7 @@ fn feed_loot(
         &items,
         icons.as_deref(),
         &commands,
-        &mut chat,
+        &chat,
         &mut script,
         rolls,
     );

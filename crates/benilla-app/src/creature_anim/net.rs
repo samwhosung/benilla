@@ -98,7 +98,7 @@ fn on_text_emote(
     In(ev): In<SessionEvent>,
     index: Res<GuidIndex>,
     mut out: MessageWriter<EmoteMessage>,
-    mut chat_log: ResMut<crate::ui_chat::ChatLog>,
+    chat_log: Res<crate::ui_chat::ChatLog>,
 ) {
     if let SessionEvent::TextEmote {
         guid,
@@ -106,14 +106,7 @@ fn on_text_emote(
         target_name,
     } = ev
     {
-        self::text_emote(
-            guid,
-            text_emote,
-            target_name,
-            &index,
-            &mut out,
-            &mut chat_log,
-        );
+        self::text_emote(guid, text_emote, target_name, &index, &mut out, &chat_log);
     }
 }
 
@@ -319,7 +312,7 @@ fn text_emote(
     target_name: String,
     index: &GuidIndex,
     out: &mut MessageWriter<EmoteMessage>,
-    chat_log: &mut crate::ui_chat::ChatLog,
+    chat_log: &crate::ui_chat::ChatLog,
 ) {
     out.write(EmoteMessage {
         guid,

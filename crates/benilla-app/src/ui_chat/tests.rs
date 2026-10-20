@@ -666,7 +666,7 @@ fn a_mode_change_notice_never_becomes_an_event() {
     let _data = benilla_formats::wow_data_or_skip!();
     use benilla_protocol::messages::{channel_notice, ChannelNoticeTail};
 
-    let mut log = super::feed::ChatLog::default();
+    let log = super::feed::ChatLog::default();
     log.push_channel_notice(
         channel_notice::MODE_CHANGE,
         "World".into(),
@@ -1799,7 +1799,7 @@ fn an_inbound_addon_line_splits_on_the_first_tab_only() {
     #[allow(non_snake_case)]
     let (PARTY, RAID, GUILD, BATTLEGROUND, SAY) = (party, raid, guild, battleground, say);
 
-    let mut log = super::feed::ChatLog::default();
+    let log = super::feed::ChatLog::default();
     log.push_addon("oRA\tSYNC:1", PARTY, 7);
     // Tabs in the message: only the first divides.
     log.push_addon("CTRA\tA\tB\tC", RAID, 7);
@@ -1890,7 +1890,7 @@ fn an_addon_message_survives_its_own_send_and_receive() {
     assert_eq!(sent.distribution.token(), "PARTY");
 
     // The same text arrives as a PARTY line in LANG_ADDON.
-    let mut log = super::feed::ChatLog::default();
+    let log = super::feed::ChatLog::default();
     log.push_addon(&sent.text, 0x01, 7);
 
     assert_eq!(
@@ -2339,7 +2339,7 @@ fn the_posture_emotes_carry_no_swim_suppression_flag() {
 fn level_up_gains_are_matched_by_level_and_a_miss_is_not_an_absence() {
     use benilla_protocol::messages::LevelUpInfo;
 
-    let mut log = super::feed::ChatLog::default();
+    let log = super::feed::ChatLog::default();
     let ding = LevelUpInfo {
         level: 10,
         health: 22,
@@ -3317,7 +3317,7 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
         school: 0,
     };
     {
-        let mut log = feed.world.resource_mut::<super::ChatLog>();
+        let log = feed.world.resource_mut::<super::ChatLog>();
         log.push_unit_combat(flash(7, "DODGE"));
         log.push_xp_gain(0, 10, 10, 1.0);
         log.push_unit_combat(flash(7, "PARRY"));
@@ -3423,7 +3423,7 @@ fn a_kills_unnamed_victim_is_the_unit_getters_miss() {
     hold(VICTIM);
     feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     {
-        let mut log = feed.world.resource_mut::<super::ChatLog>();
+        let log = feed.world.resource_mut::<super::ChatLog>();
         log.push_xp_gain(VICTIM, 60, 60, 1.0);
         log.push_pvp_credit(30, VICTIM, 8, 0);
     }

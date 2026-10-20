@@ -25,7 +25,7 @@ pub(crate) struct ChatWindows {
 pub(crate) fn tee_shown_lines(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     mut windows: ResMut<ChatWindows>,
-    mut sounds: ResMut<crate::sound::MessageSounds>,
+    sounds: Res<crate::sound::MessageSounds>,
 ) {
     let Some(mut script) = script else {
         return;

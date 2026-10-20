@@ -280,7 +280,7 @@ fn feed_tutorials(
     mut asks: MessageReader<TutorialEvent>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     items: Res<crate::items::Items>,
-    mut sounds: ResMut<crate::sound::MessageSounds>,
+    sounds: Res<crate::sound::MessageSounds>,
     mut told: Local<crate::ui_script::VmMemo<Option<Vec<u8>>>>,
 ) {
     let now = Instant::now();
@@ -326,7 +326,7 @@ fn feed_tutorials(
         return;
     };
     for published in std::mem::take(&mut tutorials.fired) {
-        fire_published(&mut script, &mut sounds, published);
+        fire_published(&mut script, &sounds, published);
     }
     // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
     // is told again.
@@ -340,7 +340,7 @@ fn feed_tutorials(
 /// `0x4b5390`'s firing of a published id: the `TutorialPopup` cue, then `TUTORIAL_TRIGGER`.
 pub(crate) fn fire_published(
     script: &mut UiScript,
-    sounds: &mut crate::sound::MessageSounds,
+    sounds: &crate::sound::MessageSounds,
     published: u32,
 ) {
     sounds.push_cue(TUTORIAL_POPUP_SOUND);

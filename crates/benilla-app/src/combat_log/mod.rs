@@ -98,7 +98,7 @@ pub(crate) struct Sinks<'w, 's> {
     damage_text: Res<'w, DamageTextGates>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     poses: Query<'w, 's, &'static mut Transform>,
-    log: ResMut<'w, ChatLog>,
+    log: Res<'w, ChatLog>,
     text: MessageWriter<'w, CombatTextSpawn>,
 }
 
@@ -149,17 +149,17 @@ impl Plugin for CombatLogPlugin {
     }
 }
 
-fn on_attacker_state(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_attacker_state(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::AttackerState(s) = ev {
         let ctx = c.ctx();
-        chat::attacker_state(s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::attacker_state(s, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
 fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::SpellDamageLog(s) = ev {
         let ctx = c.ctx();
-        chat::spell_damage_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_damage_log(s, &ctx, &l.stores, &l.poses, &l.log);
         text::spell_damage_log(
             s,
             &c.index,
@@ -181,7 +181,7 @@ fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             return;
         }
         let ctx = c.ctx();
-        chat::periodic_aura_log(&s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::periodic_aura_log(&s, &ctx, &l.stores, &l.poses, &l.log);
         text::periodic_aura_log(
             s,
             &c.index,
@@ -194,25 +194,25 @@ fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::SpellHealLog(s) = ev {
         let ctx = c.ctx();
-        chat::spell_heal_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_heal_log(s, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_spell_energize_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_energize_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::SpellEnergizeLog(s) = ev {
         let ctx = c.ctx();
         // `0x494770`, the energize `UNIT_COMBAT`, is an empty stub: no flash, only the line.
-        chat::spell_energize_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_energize_log(s, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
 fn on_damage_shield(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::DamageShield(s) = ev {
         let ctx = c.ctx();
-        chat::damage_shield(s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::damage_shield(s, &ctx, &l.stores, &l.poses, &l.log);
         text::damage_shield(
             s,
             &c.index,
@@ -231,7 +231,7 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             return;
         }
         let ctx = c.ctx();
-        chat::spell_log_miss(&s, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_log_miss(&s, &ctx, &l.stores, &l.poses, &l.log);
         text::spell_log_miss(
             s,
             &c.index,
@@ -283,7 +283,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
         &ctx,
         &l.stores,
         &l.poses,
-        &mut l.log,
+        &l.log,
     );
     text::spell_go_misses(
         caster,
@@ -324,7 +324,7 @@ fn on_missile_miss(
     c: Ctx,
     stores: Query<&ObjectStore>,
     poses: Query<&Transform>,
-    mut log: ResMut<ChatLog>,
+    mut log: Res<ChatLog>,
 ) {
     for arrival in arrivals.read() {
         let Ok(&Guid(target)) = guids.get(arrival.anchor) else {
@@ -347,66 +347,66 @@ fn on_missile_miss(
 
 // ── Chat-only packets: no damage number, so no floating-text leg ──
 
-fn on_party_kill_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_party_kill_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::PartyKillLog(k) = ev {
         let ctx = c.ctx();
-        chat::party_kill_log(k, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::party_kill_log(k, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_spell_insta_kill_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_insta_kill_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::SpellInstaKillLog(k) = ev {
         let ctx = c.ctx();
-        chat::spell_insta_kill_log(k, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_insta_kill_log(k, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_spell_outcome_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_outcome_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     let (o, immune): (SpellOutcomeLog, bool) = match ev {
         SessionEvent::ProcResist(o) => (o, false),
         SessionEvent::SpellOrDamageImmune(o) => (o, true),
         _ => return,
     };
     let ctx = c.ctx();
-    chat::spell_outcome_log(o, immune, &ctx, &l.stores, &l.poses, &mut l.log);
+    chat::spell_outcome_log(o, immune, &ctx, &l.stores, &l.poses, &l.log);
 }
 
-fn on_spell_dispel_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_dispel_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::SpellDispelLog(d) = ev {
         let ctx = c.ctx();
-        chat::spell_dispel_log(&d, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_dispel_log(&d, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_dispel_failed(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_dispel_failed(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::DispelFailed(d) = ev {
         let ctx = c.ctx();
-        chat::dispel_failed(&d, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::dispel_failed(&d, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::EnchantmentLog(e) = ev {
         let ctx = c.ctx();
-        chat::enchantment_log(e, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::enchantment_log(e, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_spell_log_execute(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, mut l: Sinks) {
+fn on_spell_log_execute(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, l: Sinks) {
     if let SessionEvent::SpellLogExecute(x) = ev {
         let ctx = chat::ChatCtx {
             items: caches.items.as_deref(),
             gameobjects: caches.gameobjects.as_deref(),
             ..c.ctx()
         };
-        chat::spell_log_execute(&x, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::spell_log_execute(&x, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
-fn on_environmental_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_environmental_damage_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     if let SessionEvent::EnvironmentalDamageLog(e) = ev {
         let ctx = c.ctx();
-        chat::environmental_damage_log(e, &ctx, &l.stores, &l.poses, &mut l.log);
+        chat::environmental_damage_log(e, &ctx, &l.stores, &l.poses, &l.log);
     }
 }
 
@@ -418,7 +418,7 @@ fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks, mut commands: Comm
             &c.self_guid,
             &l.stores,
             &mut l.text,
-            &mut l.log,
+            &l.log,
             &mut commands,
         );
     }
@@ -427,7 +427,7 @@ fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks, mut commands: Comm
 fn on_exploration_xp(
     In(ev): In<SessionEvent>,
     c: Ctx,
-    mut l: Sinks,
+    l: Sinks,
     area_table: Option<Res<crate::area::AreaTableRes>>,
     exploration_sounds: Option<Res<crate::sound::ExplorationSounds>>,
     mut server_sounds: MessageWriter<ServerSoundMessage>,
@@ -441,14 +441,14 @@ fn on_exploration_xp(
             &c.self_guid,
             &l.stores,
             &mut server_sounds,
-            &mut l.log,
+            &l.log,
         );
     }
 }
 
-fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
+fn on_level_up(In(ev): In<SessionEvent>, l: Sinks) {
     if let SessionEvent::LevelUp(lv) = ev {
-        text::level_up(lv, &mut l.log);
+        text::level_up(lv, &l.log);
     }
 }
 
@@ -456,7 +456,7 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
 /// written. The packet's handler writes nothing unless the client holds the active player
 /// (`0x48f703`, type mask `0x10`; `0x48f708`). A kill needs its victim held as a unit (`0x62529f`,
 /// `0x6252ab`), and an honorable one a victim on a side ([`honor_side`]); otherwise nothing at all.
-fn on_pvp_credit(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_pvp_credit(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     let SessionEvent::PvpCredit(credit) = ev else {
         return;
     };

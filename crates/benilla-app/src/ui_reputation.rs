@@ -159,7 +159,7 @@ pub(crate) fn queue_standing_lines(
     lines: impl IntoIterator<Item = StandingLine>,
     catalog: &benilla_formats::FactionCatalog,
     female: bool,
-    chat: &mut ChatLog,
+    chat: &ChatLog,
 ) {
     for StandingLine { faction_id, rank } in lines {
         if let Some(name) = catalog.faction_name(faction_id) {

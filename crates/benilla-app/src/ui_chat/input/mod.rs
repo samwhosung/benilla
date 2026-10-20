@@ -163,7 +163,7 @@ fn manual_join_or_leave(
 
 pub(super) fn drain_chat_input(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mut chat_log: ResMut<super::feed::ChatLog>,
+    chat_log: Res<super::feed::ChatLog>,
     // Mutable because an explicit leave clears the channel's `ZONECHANNELS` bit (`0x49f10a` in
     // leave-by-name `0x49ee70`); the zone walk's own leave does not.
     mut channels: ResMut<super::edit::ChannelState>,
@@ -846,7 +846,7 @@ pub(super) fn drain_chat_input(
                     None => warn!("castvis: no selection and no self avatar — dropped"),
                 }
             }
-            ParsedChat::ChatTest => chattest_battery(&mut chat_log, &|key: &str| {
+            ParsedChat::ChatTest => chattest_battery(&chat_log, &|key: &str| {
                 script
                     .lua()
                     .globals()
@@ -976,7 +976,7 @@ pub(super) fn drain_chat_input(
 
 /// `/chattest`: one synthetic line of every renderable form (kinds, flags, the language header,
 /// channel prefixes, notices, item and player links) through the real event pipeline.
-fn chattest_battery(log: &mut super::feed::ChatLog, get: &dyn Fn(&str) -> Option<String>) {
+fn chattest_battery(log: &super::feed::ChatLog, get: &dyn Fn(&str) -> Option<String>) {
     use super::event::{ChatEvent, ChatEventKind as K};
     let player = |kind: K, text: &str, sender: &str| {
         let mut e = ChatEvent::text_only(kind, text.into());
@@ -1039,7 +1039,7 @@ fn chattest_battery(log: &mut super::feed::ChatLog, get: &dyn Fn(&str) -> Option
 /// The combat-log half of `/chattest`: one line of every family through the real
 /// [`super::combat`] composer and drain. Guid 0 on both ends and literal names in the fills make
 /// the name resolve a no-op; everything after it is the production path.
-fn combat_log_battery(log: &mut super::feed::ChatLog, get: &dyn Fn(&str) -> Option<String>) {
+fn combat_log_battery(log: &super::feed::ChatLog, get: &dyn Fn(&str) -> Option<String>) {
     use super::combat::{self, Family, Fills, PendingCombat, Variant};
     use super::event::ChatEventKind as K;
 
@@ -1468,7 +1468,7 @@ fn dead_may_send(kind: super::edit::SendType) -> bool {
 pub(crate) fn drain_addon_chat_sends(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     commands: Res<NetCommands>,
-    mut chat_log: ResMut<super::feed::ChatLog>,
+    chat_log: Res<super::feed::ChatLog>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
     // The optimistic AFK mirror (`[0xb6e5cc]`) the `/afk` toggle reads and writes.
     mut mirror: ResMut<super::away::AfkMirror>,
@@ -1537,7 +1537,7 @@ pub(crate) fn drain_addon_chat_sends(
             if let Some(line) =
                 super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
             {
-                super::away::push_system(&mut chat_log, line);
+                super::away::push_system(&chat_log, line);
                 mirror.0 = 0;
                 // The empty `0x14` that tells the server, ahead of the message's own packet.
                 let _ = commands.0.send(ClientCommand::Chat {
@@ -1560,7 +1560,7 @@ pub(crate) fn drain_addon_chat_sends(
             crate::net::ChatKind::Afk => {
                 let out = super::away::afk_line(&send.text, *mirror, &strings);
                 if let Some(line) = out.line {
-                    super::away::push_system(&mut chat_log, line);
+                    super::away::push_system(&chat_log, line);
                 }
                 if let Some(v) = out.mirror {
                     mirror.0 = v;
@@ -1571,7 +1571,7 @@ pub(crate) fn drain_addon_chat_sends(
                 // DND has no mirror (`0x49f3f0`): the live descriptor bit.
                 let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
                 if let Some(line) = out.line {
-                    super::away::push_system(&mut chat_log, line);
+                    super::away::push_system(&chat_log, line);
                 }
                 out.body
             }

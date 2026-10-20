@@ -129,7 +129,7 @@ pub(crate) fn feed_party(
     here: benilla_world::world_point::WorldPoint,
     map_catalog: Option<Res<benilla_assets::MapCatalogRes>>,
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,
-    mut chat: ResMut<crate::ui_chat::ChatLog>,
+    chat: Res<crate::ui_chat::ChatLog>,
 ) {
     let Some(mut script) = script else {
         return;

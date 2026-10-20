@@ -354,7 +354,7 @@ fn on_reputations(
     In(ev): In<SessionEvent>,
     mut b: Bridge,
     factions: Option<Res<crate::target::ring::Factions>>,
-    mut chat: ResMut<crate::ui_chat::ChatLog>,
+    chat: Res<crate::ui_chat::ChatLog>,
 ) {
     match ev {
         SessionEvent::Reputations { standings } => reputations(standings, &mut b.reputations),
@@ -371,7 +371,7 @@ fn on_reputations(
                     me.race,
                     me.class,
                 );
-                crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &mut chat);
+                crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &chat);
             }
             reputation_visible(list_id, &mut b.reputations)
         }
@@ -407,7 +407,7 @@ fn on_reputation_delta(
     In(ev): In<SessionEvent>,
     mut b: Bridge,
     factions: Option<Res<crate::target::ring::Factions>>,
-    mut chat_log: ResMut<crate::ui_chat::ChatLog>,
+    chat_log: Res<crate::ui_chat::ChatLog>,
     mut quest: ResMut<QuestGiver>,
     quest_log: Option<ResMut<crate::ui_quest_log::QuestLog>>,
 ) {
@@ -416,7 +416,7 @@ fn on_reputation_delta(
             &standings,
             &b.reputations,
             factions.as_deref(),
-            &mut chat_log,
+            &chat_log,
         );
         if let (Some(f), Some(me)) = (factions.as_deref(), self_facts(&b)) {
             let moved = crate::ui_reputation::rank_moved(
@@ -436,12 +436,7 @@ fn on_reputation_delta(
                 me.race,
                 me.class,
             );
-            crate::ui_reputation::queue_standing_lines(
-                lines,
-                f.catalog(),
-                me.female,
-                &mut chat_log,
-            );
+            crate::ui_reputation::queue_standing_lines(lines, f.catalog(), me.female, &chat_log);
         }
         reputation_delta(standings, &mut b.reputations, &mut quest);
     }

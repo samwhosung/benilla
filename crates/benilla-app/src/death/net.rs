@@ -59,9 +59,9 @@ fn on_spirit_healer_confirm(In(ev): In<SessionEvent>, mut death_net: ResMut<Deat
     }
 }
 
-fn on_durability_damage_death(In(ev): In<SessionEvent>, mut log: ResMut<crate::ui_chat::ChatLog>) {
+fn on_durability_damage_death(In(ev): In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
     if let SessionEvent::DurabilityDamageDeath = ev {
-        durability_damage_death(&mut log);
+        durability_damage_death(&log);
     }
 }
 
@@ -199,7 +199,7 @@ fn spirit_healer_confirm(npc: u64, death_net: &mut DeathNet) {
 
 /// `SMSG_DURABILITY_DAMAGE_DEATH`, the 10% death durability loss: a combat-log line at chat type
 /// `0x19` `COMBAT_MISC_INFO` with no arguments (`0x628e60`), not an error; the body is ignored.
-fn durability_damage_death(log: &mut crate::ui_chat::ChatLog) {
+fn durability_damage_death(log: &crate::ui_chat::ChatLog) {
     log.push_combat(crate::ui_chat::combat::PendingCombat {
         kind: crate::ui_chat::ChatEventKind::CombatMiscInfo,
         family: crate::ui_chat::combat::DURABILITYDAMAGE_DEATH,

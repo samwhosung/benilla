@@ -36,7 +36,7 @@ pub(super) fn hit_flags(crit: bool, absorb: u32, resist: i32, blocked: u32) -> u
 }
 
 /// `0x4946b0(guid, amount, school, flags)`: `WOUND`, its descriptor off the flags.
-pub(super) fn wound(log: &mut ChatLog, guid: u64, amount: u32, flags: u32, school: u32) {
+pub(super) fn wound(log: &ChatLog, guid: u64, amount: u32, flags: u32, school: u32) {
     log.push_unit_combat(UnitCombatFeedback {
         guid,
         action: "WOUND",
@@ -47,7 +47,7 @@ pub(super) fn wound(log: &mut ChatLog, guid: u64, amount: u32, flags: u32, schoo
 }
 
 /// `0x494740(guid, amount, crit)`: `HEAL`, `CRITICAL` for a crit (mark `0x80`).
-pub(super) fn heal(log: &mut ChatLog, guid: u64, amount: u32, crit: bool) {
+pub(super) fn heal(log: &ChatLog, guid: u64, amount: u32, crit: bool) {
     log.push_unit_combat(UnitCombatFeedback {
         guid,
         action: "HEAL",
@@ -108,7 +108,7 @@ fn miss_action(code: u8) -> Option<&'static str> {
 }
 
 /// `0x494720(guid, code)`: a miss's `UNIT_COMBAT`, amount, school and flags all 0.
-pub(super) fn miss(log: &mut ChatLog, guid: u64, code: u8) {
+pub(super) fn miss(log: &ChatLog, guid: u64, code: u8) {
     if let Some(action) = miss_action(code) {
         log.push_unit_combat(UnitCombatFeedback {
             guid,
