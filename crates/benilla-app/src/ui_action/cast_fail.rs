@@ -362,8 +362,8 @@ impl FailArgs<'_> {
     }
 }
 
-/// The default errorId `0x2c`, a bare `"%s"`: the line is the text as the arms left it, and this
-/// id's record decides the surface.
+/// The default errorId `0x2c`, whose string is 1.12's bare `"%s"`, formatted through its key as
+/// every id is; this id's record decides the surface.
 pub(super) const PASSTHROUGH: &str = "ERR_SPELL_FAILED_S";
 
 /// One resolved cast-failure line: the text, and the errorId's key, whose catalog record picks
@@ -400,9 +400,10 @@ impl CastFailLine {
     }
 }
 
-/// The line for a failed cast, `None` where the reference shows nothing; `get` is the VM's
-/// GlobalStrings lookup, and an absent or empty string or line shows nothing. Deviation: a reason
-/// past the table prints its hex code, so an unknown reason is visible.
+/// The line for a failed cast, `None` where the reference leaves before `DisplayError` and the
+/// log; `get` is the VM's GlobalStrings lookup. An empty [`CastFailLine::text`] shows nothing and
+/// still logs. Deviation: a reason past the table prints its hex code, so an unknown reason is
+/// visible.
 pub(super) fn cast_fail_text(
     caster: Caster,
     reason: u8,
@@ -458,14 +459,15 @@ pub(super) fn cast_fail_text(
             Fill::Nothing => return None,
         },
     };
-    // `DisplayError` formats the id's string with the text (`0x4967e9`); the default's is 1.12's
-    // bare `"%s"`, so its line is the text.
-    let shown = match error {
-        Some(key) => get_text(key)?.replace("%s", &text),
-        None => text.clone(),
-    };
-    (!shown.is_empty()).then_some(CastFailLine {
-        key: error.unwrap_or(PASSTHROUGH),
+    // `DisplayError` formats the id's string, its key's live global (`0x4967d7`), with the text
+    // (`0x4967e9`); an absent or empty one shows nothing (`0x4945b0`), and the log still reads the
+    // text (`0x6e21e2`).
+    let key = error.unwrap_or(PASSTHROUGH);
+    let shown = get_text(key)
+        .map(|format| format.replace("%s", &text))
+        .unwrap_or_default();
+    Some(CastFailLine {
+        key,
         text: shown,
         arg_text: text,
     })

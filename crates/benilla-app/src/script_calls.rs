@@ -506,9 +506,10 @@ mod tests {
         Frame { app, rx }
     }
 
-    /// Every catalog line and cast-failure string defined as its own key, and a recorder of the
-    /// lines shown (`UI_ERROR_MESSAGE`) in `LINES`, and of those lines and the cast's events in
-    /// `REPORTS`, in the order they fire.
+    /// Every catalog line and cast-failure string defined as its own key, but the default
+    /// cast-failure format, 1.12's bare `"%s"`, which shows the reason's own; and a recorder of
+    /// the lines shown (`UI_ERROR_MESSAGE`) in `LINES`, and of those lines and the cast's events
+    /// in `REPORTS`, in the order they fire.
     fn record_reports(script: &UiScript) {
         let mut lua = String::new();
         for key in benilla_ui::messages::CATALOG
@@ -519,6 +520,7 @@ mod tests {
         {
             lua.push_str(&format!("{key} = \"{key}\"\n"));
         }
+        lua.push_str("ERR_SPELL_FAILED_S = \"%s\"\n");
         lua.push_str(
             r#"LINES, REPORTS = {}, {}
             local r = CreateFrame("Frame")

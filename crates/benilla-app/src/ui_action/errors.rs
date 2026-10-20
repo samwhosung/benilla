@@ -384,6 +384,8 @@ impl Shown {
                     .push_event(ChatEvent::text_only(ChatEventKind::System, text));
                 None
             }
+            // `0x4945b0` drops an empty text (`0x4945b4`): no event.
+            MsgKind::Info | MsgKind::Error if text.is_empty() => None,
             MsgKind::Info => Some(("UI_INFO_MESSAGE", vec![ScriptValue::Str(text)])),
             MsgKind::Error => Some(("UI_ERROR_MESSAGE", vec![ScriptValue::Str(text)])),
         }

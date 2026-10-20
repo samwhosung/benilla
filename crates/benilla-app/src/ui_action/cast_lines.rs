@@ -77,8 +77,9 @@ impl CastFailLines<'_, '_> {
         self.spells.as_deref()
     }
 
-    /// `fail`'s line and its log line, `None` where the reference shows nothing now; a line whose
-    /// item record is not cached waits in [`CastFailRedisplays`].
+    /// `fail`'s line and its log line, `None` where the reference leaves before both now; an empty
+    /// line shows nothing and still logs. A line whose item record is not cached waits in
+    /// [`CastFailRedisplays`].
     pub(crate) fn resolve(&mut self, script: &UiScript, fail: CastFail) -> Option<ResolvedFail> {
         let line = self.line(script, fail)?;
         // The reason, its wire word and both resolved buffers, so a declined arm is readable
