@@ -60,6 +60,10 @@ pub(crate) enum FieldNotice {
     /// `PVP_TOGGLE_OFF_VERBOSE` (`0x8606e0`, `0x8606c8`) as a chat line of type `0xa`
     /// (`0x5eeb5d`).
     PvpPreference { on: bool },
+    /// `FireTutorial(id, 0)` (`0x4b5390`) from a watcher on the active player: the number's
+    /// fire-once bit tested and set, then its `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once,
+    /// in the watcher's order.
+    Tutorial { id: u32 },
 }
 
 /// The event ids the producers pass to `0x515e50`, by their event-table names.

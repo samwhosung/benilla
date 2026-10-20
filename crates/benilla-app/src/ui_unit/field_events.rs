@@ -116,6 +116,7 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
         }
         // Fired by [`fire_field_notices`], which holds the slots.
         FieldNotice::QuestLog => {}
+        FieldNotice::Tutorial { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
