@@ -598,6 +598,9 @@ pub(crate) struct GlueMgr {
     park_out: Vec<ParkRequest>,
     /// Asks of the login engine the per-frame arms made, sent with the verbs' own.
     login_out: Vec<GlueLogin>,
+    /// The agreements' flag cells (`[0xb41df8]`-`[0xb41e14]`), read off their CVars once, when the
+    /// first glue VM comes up (`0x46a400`), and seated in each VM after it.
+    pub(super) notices: Option<benilla_ui::script::GlueNotices>,
     /// The server alert's fetch while it runs (`alertPending`, `[0xb41e28]`), started once per
     /// process at the glue init.
     alert_fetch: Option<crossbeam_channel::Receiver<Option<Vec<u8>>>>,

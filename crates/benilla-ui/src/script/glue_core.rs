@@ -67,6 +67,32 @@ impl NoticeState {
     }
 }
 
+/// The four agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): C globals, which outlive the Lua
+/// state. The glue manager seeds them once (`0x46a400`) and seats the same cells in every glue VM
+/// it builds, so a rebuild (`0x46a7b0`) reads what the last one left and the accepts' stores
+/// (`0x46aef0` and its siblings) are the only writes after the seed.
+#[derive(Clone, Default)]
+pub struct GlueNotices(std::rc::Rc<std::cell::Cell<[NoticeState; 4]>>);
+
+impl GlueNotices {
+    /// The cells seeded with `states`, in [`GlueNotice::ALL`] order.
+    pub fn new(states: [NoticeState; 4]) -> Self {
+        Self(std::rc::Rc::new(std::cell::Cell::new(states)))
+    }
+
+    /// One agreement's flags.
+    pub fn get(&self, notice: GlueNotice) -> NoticeState {
+        self.0.get()[notice.index()]
+    }
+
+    /// Store one agreement's flags.
+    pub fn set(&self, notice: GlueNotice, state: NoticeState) {
+        let mut all = self.0.get();
+        all[notice.index()] = state;
+        self.0.set(all);
+    }
+}
+
 /// The first `%d` of the CRT's `sscanf` (`0x73fb5d`): leading whitespace skipped, an optional sign
 /// and the leading digits; `None` when no digit follows, which leaves the out-slot untouched; 0
 /// for a number past `i64`.
@@ -511,9 +537,9 @@ pub(crate) struct GlueCore {
     host: Option<std::rc::Rc<dyn GlueHost>>,
     /// Calls made before any host was seated, for the one that seats this VM to run.
     calls: Vec<GlueCall>,
-    /// The agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): read off their CVars when the glue
-    /// starts, set by their accepts, and read by the getters and the login's first two tests.
-    notices: [NoticeState; 4],
+    /// The agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): read by the getters and the login's
+    /// first two tests, set by the accepts, and the host's to seed ([`GlueNotices`]).
+    notices: GlueNotices,
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
     pub(super) screen: String,
@@ -572,14 +598,24 @@ impl super::UiScript {
         self.model_mut().glue.name_lists = Some(lists);
     }
 
-    /// Seed one agreement's flags.
+    /// Store one agreement's flags in the cells this VM is seated with.
     pub fn set_glue_notice(&mut self, notice: GlueNotice, state: NoticeState) {
-        self.model_mut().glue.notices[notice.index()] = state;
+        self.model_ref().glue.notices.set(notice, state);
     }
 
-    /// One agreement's flags as the VM holds them.
+    /// One agreement's flags as the cells hold them.
     pub fn glue_notice(&self, notice: GlueNotice) -> NoticeState {
-        self.model_ref().glue.notices[notice.index()]
+        self.model_ref().glue.notices.get(notice)
+    }
+
+    /// The agreement cells this VM reads and writes.
+    pub fn glue_notices(&self) -> GlueNotices {
+        self.model_ref().glue.notices.clone()
+    }
+
+    /// Seat the host's agreement cells, which outlive this VM.
+    pub fn set_glue_notices(&mut self, notices: GlueNotices) {
+        self.model_mut().glue.notices = notices;
     }
 
     /// Whether the glue has hidden the pointer (`HideCursor`) and not shown it again.
@@ -745,7 +781,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let agreed = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let n = &model.glue.notices;
-                n[GlueNotice::Tos.index()].accepted && n[GlueNotice::Eula.index()].accepted
+                n.get(GlueNotice::Tos).accepted && n.get(GlueNotice::Eula).accepted
             };
             if agreed {
                 call(lua, GlueCall::Login(GlueCredentials { account, password }));
@@ -814,29 +850,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             "AcceptContest",
         ),
     ] {
-        let i = notice.index();
         g.set(
             show,
             lua.create_function(move |lua, _: MultiValue| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                Ok(flag(model.glue.notices[i].show_notice))
+                Ok(flag(model.glue.notices.get(notice).show_notice))
             })?,
         )?;
         g.set(
             accepted,
             lua.create_function(move |lua, _: MultiValue| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                Ok(flag(model.glue.notices[i].accepted))
+                Ok(flag(model.glue.notices.get(notice).accepted))
             })?,
         )?;
         g.set(
             accept,
             lua.create_function(move |lua, _: MultiValue| {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.glue.notices[i] = NoticeState {
-                    accepted: true,
-                    show_notice: false,
-                };
+                model.glue.notices.set(
+                    notice,
+                    NoticeState {
+                        accepted: true,
+                        show_notice: false,
+                    },
+                );
                 super::cvars::set_from_engine(&mut model, notice.cvar(), "1".to_string());
                 Ok(())
             })?,

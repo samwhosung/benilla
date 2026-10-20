@@ -85,8 +85,8 @@ pub use glue::{glue_events, VmKind};
 pub use glue_core::scanf_d;
 pub use glue_core::{
     glue_status_key, launch_addon_url, launch_addon_url_allowed, launch_url_allowed, GlueCall,
-    GlueCredentials, GlueHost, GlueNotice, GlueRequest, GlueSignal, GlueText, NoticeState,
-    GLUE_STATUS_KEYS,
+    GlueCredentials, GlueHost, GlueNotice, GlueNotices, GlueRequest, GlueSignal, GlueText,
+    NoticeState, GLUE_STATUS_KEYS,
 };
 pub use glue_create::{
     GlueCreateCatalog, GlueCreateClass, GlueCreateCounts, GlueCreateLook, GlueCreateRace,

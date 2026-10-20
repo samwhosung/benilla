@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 
 use benilla_assets::{LockRecover, LooseOpen};
-use benilla_ui::script::{GlueNotice, UiScript};
+use benilla_ui::script::UiScript;
 use benilla_world::frame_pace::FrameStep;
 
 use super::manifest::silenced_ui_load;
@@ -103,17 +103,28 @@ fn start_server_alert(world: &mut World, script: &UiScript) {
     }
 }
 
-/// Read the four agreement CVars into the glue VM, which holds their flags, before any screen is
-/// set, as the reference does (`0x46a400` at `0x402b36`, then `SET_GLUE_SCREEN` at `0x402b65`):
-/// the login screen's `OnShow` asks them at once, and nothing asks again.
+/// Seat the glue VM with the four agreements' flag cells, which `0x46a400` reads off the `read*`
+/// CVars once, at the first glue build (`0x402b36`, then `SET_GLUE_SCREEN` at `0x402b65`): the
+/// login screen's `OnShow` asks them at once. Every glue build after it (`0x402090`, a size
+/// change) seats the same cells unread, and only the accepts write them.
 fn seed_agreements(world: &mut World, script: &mut UiScript) {
+    let Some(shared) = world
+        .get_non_send_resource::<super::glue_mgr::SharedGlueMgr>()
+        .cloned()
+    else {
+        return;
+    };
     let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() else {
         return;
     };
-    let notices = super::glue_mgr::read_agreements(cvars);
-    for notice in GlueNotice::ALL {
-        script.set_glue_notice(notice, notices[notice as usize]);
-    }
+    let notices = shared
+        .get_mut()
+        .notices
+        .get_or_insert_with(|| {
+            benilla_ui::script::GlueNotices::new(super::glue_mgr::read_agreements(cvars))
+        })
+        .clone();
+    script.set_glue_notices(notices);
 }
 
 /// A fresh VM from `make` on the process clock with the addon asset probes wired, or `None` (the
