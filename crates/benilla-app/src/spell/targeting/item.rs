@@ -398,6 +398,30 @@ mod tests {
         }
     }
 
+    /// The pick commits inside the click's call: `PickupContainerItem` (`0x4f9c54`) and
+    /// `PickupInventoryItem` (`0x4c76df`) call `ValidateSpellItemTarget 0x495d60`, whose bind
+    /// sends the cast before the verb returns, so the script's next line reads targeting over.
+    #[test]
+    fn an_item_pick_commits_inside_the_call() {
+        for template in [false, true] {
+            let (mut app, rx) = item_targeting(template);
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .set_spell_targeting(true);
+            let after = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+                s.expect("a VM")
+                    .eval::<Option<i64>>("PickupContainerItem(0, 1) return SpellIsTargeting()")
+            })
+            .unwrap();
+            assert_eq!(after, None, "template {template}: targeting is over");
+            let sent = rx
+                .try_iter()
+                .filter(|c| matches!(c, ClientCommand::CastSpellItem { .. }))
+                .count();
+            assert_eq!(sent, 1, "template {template}: sent inside the call");
+        }
+    }
+
     /// `ReplaceEnchant` binds the parked item through `BindSpellTargetObject` directly (`0x48d300`
     /// → `0x6e5b40`), behind the same gate.
     #[test]

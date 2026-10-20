@@ -1341,6 +1341,32 @@ mod tests {
         );
     }
 
+    /// `0x5ee990`'s ghost arm runs the ghost state `0x5de9c0` on either edge of bit 0x10
+    /// (`0x5eeab4` → `0x5eeabc`), after `PLAYER_FLAGS_CHANGED` (`0x5eea35`): set, its tutorial
+    /// (`0x5de9eb`-`0x5de9f0`); clear, `PLAYER_UNGHOST` (`0x5dea25`-`0x5dea2a`), with no gate
+    /// before it, so the health plays no part. Another player's ghost bit reaches neither.
+    #[test]
+    fn the_ghost_bit_runs_the_ghost_state_on_either_edge() {
+        let flags = pf(PLAYER_FLAGS.0);
+        let changed = signal(ME, 407);
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0x10)]),
+            [changed, FieldNotice::Tutorial { id: 0x18 }]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0)]),
+            [changed, FieldNotice::Global { id: 401 }],
+            "with no health in the store"
+        );
+        let mut other = player();
+        block(&mut other, Some(ME), OTHER, &[(flags, 0x10)]);
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(flags, 0)]),
+            [signal(OTHER, 407)]
+        );
+    }
+
     /// `0x5ff580` on `UNIT_FIELD_FLAGS`: the active player's combat bit first (`0x5ff4e0`), the
     /// reactions, then the combat bit of a unit whose charmer, else summoner, is the player.
     #[test]
@@ -1436,7 +1462,11 @@ mod tests {
             block(&mut me, Some(ME), ME, &[(flags, 0x10)]),
             [changed, tutorial(0x18)]
         );
-        assert_eq!(block(&mut me, Some(ME), ME, &[(flags, 0)]), [changed]);
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(flags, 0)]),
+            [changed, FieldNotice::Global { id: 401 }],
+            "the ghost bit's clear runs the ghost state too, its event and no tutorial"
+        );
         let mut other = player();
         assert_eq!(
             block(&mut other, Some(ME), OTHER, &[(flags, 0x30)]),

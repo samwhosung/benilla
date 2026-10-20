@@ -899,4 +899,54 @@ mod tests {
             "…and once there is an interface, it is published exactly once"
         );
     }
+
+    /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)
+    /// before the world-enter cascade (`0x5deb60` → `0x4908c0`): arriving with `PLAYER_FLAGS`
+    /// bit 0x10 set fires Death (0x18, `0x5de9eb`-`0x5de9f0`) ahead of Welcome and Questgivers,
+    /// published as their number plus one; arriving alive fires no Death.
+    #[test]
+    fn a_ghost_arrival_fires_death_ahead_of_the_cascades_tutorials() {
+        const PLAYER_FLAGS: u16 = 190;
+        for (flags, published) in [(0x10, vec![0x19, 0x2a, 0x01]), (0, vec![0x2a, 0x01])] {
+            let mut app = App::new();
+            app.add_plugins(TutorialPlugin)
+                .init_resource::<crate::items::Items>()
+                .init_resource::<crate::sound::MessageSounds>()
+                .init_resource::<crate::ui_trainer::TrainerOpen>()
+                .init_resource::<crate::ui_merchant::MerchantOpen>()
+                .init_resource::<crate::ui_taxi::TaxiState>()
+                .init_resource::<Player>()
+                .add_message::<EnteredWorldMessage>();
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            app.insert_resource(crate::net::NetCommands(tx));
+            app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+            let script = UiScript::new().expect("a VM");
+            script
+                .run(
+                    "SEEN = {} local f = CreateFrame('Frame') \
+                     f:RegisterEvent('TUTORIAL_TRIGGER') \
+                     f:SetScript('OnEvent', function() table.insert(SEEN, arg1) end)",
+                )
+                .unwrap();
+            app.insert_non_send_resource(script);
+            app.world_mut().write_message(EnteredWorldMessage {
+                tutorial_flags: Some(vec![0u8; 32]),
+            });
+            app.world_mut().spawn((
+                SelfPlayer,
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                    PLAYER_FLAGS,
+                    flags,
+                )])),
+            ));
+            app.update();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            assert_eq!(
+                s.eval::<Vec<i64>>("return SEEN").unwrap(),
+                published,
+                "flags {flags:#x}"
+            );
+        }
+    }
 }

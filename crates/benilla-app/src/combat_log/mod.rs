@@ -985,4 +985,65 @@ mod tests {
             ["combat", "unit combat", "combat", "unit combat"]
         );
     }
+
+    /// `HandleUnitCombatMessage` signals `PLAYER_ENTER_COMBAT` inside our `SMSG_ATTACKSTART`
+    /// (`0x6256ff`) and `PLAYER_LEAVE_COMBAT` inside our `SMSG_ATTACKSTOP`, after its swing flush
+    /// (`0x625763` → `0x624e40`, then `0x625778`), each gated on the attacker being the active
+    /// player (`0x5fa6d0`): a start and a stop in one drain both signal, at their place among the
+    /// swing's line and its flushed feedback, and another unit's attack signals neither.
+    #[test]
+    fn our_attack_start_and_stop_signal_combat_at_their_packets() {
+        let me_hits_mob = SessionEvent::AttackerState(benilla_protocol::messages::AttackerState {
+            attacker: ME,
+            victim: MOB,
+            hit_info: 0x2,
+            damage: 30,
+            victim_state: 1,
+            absorb: 0,
+            resist: 0,
+            blocked: 0,
+            melee_spell_id: 0,
+            school: 0,
+        });
+        let mut app = swing_world(&[ME, MOB]);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![
+                SessionEvent::AttackStart {
+                    attacker: ME,
+                    victim: MOB,
+                },
+                me_hits_mob,
+                SessionEvent::AttackStop {
+                    attacker: ME,
+                    victim: MOB,
+                },
+            ],
+        );
+        assert_eq!(
+            kinds(&app),
+            [
+                "PLAYER_ENTER_COMBAT",
+                "combat",
+                "unit combat",
+                "PLAYER_LEAVE_COMBAT"
+            ]
+        );
+
+        let mut app = swing_world(&[ME, MOB]);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![
+                SessionEvent::AttackStart {
+                    attacker: MOB,
+                    victim: ME,
+                },
+                SessionEvent::AttackStop {
+                    attacker: MOB,
+                    victim: ME,
+                },
+            ],
+        );
+        assert!(kinds(&app).is_empty(), "{:?}", kinds(&app));
+    }
 }

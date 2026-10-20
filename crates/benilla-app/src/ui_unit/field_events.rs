@@ -574,6 +574,7 @@ mod tests {
                     FieldNotice::Global { id: 335 },
                     FieldNotice::PvpPreference { on: false },
                     FieldNotice::Global { id: 300 },
+                    FieldNotice::Global { id: 401 },
                 ]
             ),
             [
@@ -581,6 +582,7 @@ mod tests {
                 "UI_INFO_MESSAGE on",
                 "PET_ATTACK_STOP nil",
                 "UI_INFO_MESSAGE off",
+                "PLAYER_UNGHOST nil",
             ]
         );
         assert_eq!(
@@ -1101,6 +1103,43 @@ mod tests {
             .unwrap();
         app.world_mut().run_system_once(fire_field_notices).unwrap();
         assert_eq!(seen(&mut app), ["PLAYER_XP_UPDATE 30"]);
+    }
+
+    /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)
+    /// ahead of the world-enter cascade (`0x5deb60`): alive, it signals `PLAYER_UNGHOST`
+    /// (`0x5dea2a`) before `PLAYER_ENTERING_WORLD`; as a ghost its leg is the Death tutorial and no
+    /// event. A `/reload`'s cascade (`0x490168`) runs no arrival, so its fresh VM hears
+    /// `PLAYER_ENTERING_WORLD` alone.
+    #[test]
+    fn an_alive_arrival_signals_player_unghost_ahead_of_the_cascade() {
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_UNGHOST")
+            f:RegisterEvent("PLAYER_ENTERING_WORLD")
+            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)"#;
+        const PLAYER_FLAGS: u16 = 190;
+        for (flags, heard) in [
+            (0, &["PLAYER_UNGHOST", "PLAYER_ENTERING_WORLD"][..]),
+            (0x10, &["PLAYER_ENTERING_WORLD"][..]),
+        ] {
+            let (mut app, _) = feed_world(&[(PLAYER_FLAGS, flags)], spy);
+            app.add_systems(Update, super::super::feed_units);
+            app.update();
+            assert_eq!(seen(&mut app), heard, "flags {flags:#x}: the arrival");
+            let mut reloaded = UiScript::new().unwrap();
+            reloaded.run(spy).unwrap();
+            reloaded.set_unit_guids(&benilla_ui::script::UnitGuids {
+                player: ME,
+                ..Default::default()
+            });
+            app.insert_non_send_resource(reloaded);
+            app.update();
+            assert_eq!(
+                seen(&mut app),
+                ["PLAYER_ENTERING_WORLD"],
+                "flags {flags:#x}: the reload"
+            );
+        }
     }
 
     /// `PLAYER_ENTERING_WORLD`'s handler reads the honor block, since the schedule pushes it ahead

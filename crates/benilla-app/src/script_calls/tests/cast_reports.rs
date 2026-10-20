@@ -120,6 +120,49 @@ fn a_refused_cast_shows_its_line_and_fails_inside_the_call() {
     );
 }
 
+/// The refusal's combat-log line is written inside the report as well: after `DisplayError`
+/// (`0x6e21dd`), `0x6e21fc` calls `LogCastFailure 0x62c360`, whose `AddCombatLogLine 0x626850`
+/// fires `CHAT_MSG_SPELL_FAILED_LOCALPLAYER` at once (`0x49b1b0` → `0x49b0b0`), ahead of the
+/// report's `SPELLCAST_FAILED` (`0x6e224a`). So the script's next line reads all three, and the
+/// chat feed is left nothing to fire after the call.
+#[test]
+fn a_refused_casts_log_line_fires_inside_the_call_between_its_line_and_its_failure() {
+    let mut f = frame(true);
+    with_book_spell(
+        &mut f,
+        HEAL,
+        "Heal",
+        benilla_formats::SpellDisplay {
+            id: HEAL,
+            name: "Heal".into(),
+            ..Default::default()
+        },
+    );
+    dead(&mut f);
+    run(
+        &mut f,
+        r#"SPELLFAILCASTSELF = "You fail to cast %s: %s."
+        local c = CreateFrame("Frame")
+        c:RegisterEvent("CHAT_MSG_SPELL_FAILED_LOCALPLAYER")
+        c:SetScript("OnEvent", function() table.insert(REPORTS, event .. ":" .. arg1) end)"#,
+    );
+    run_hosted(&mut f, &format!(r#"CastSpellByName("Heal") {SNAPSHOT}"#));
+    assert_eq!(
+        seen(&mut f),
+        "SPELL_FAILED_CASTER_DEAD,\
+         CHAT_MSG_SPELL_FAILED_LOCALPLAYER:You fail to cast Heal: SPELL_FAILED_CASTER_DEAD.,\
+         SPELLCAST_FAILED"
+    );
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<crate::ui_chat::ChatLog>()
+            .pending_kinds(),
+        Vec::<&str>::new(),
+        "nothing waits for the chat feed"
+    );
+}
+
 /// Heal and Mark of the Wild in the book, neither in the catalog.
 fn with_heal_and_motw(f: &mut Frame) {
     let slot = |spell_id: u32, name: &str| SpellSlotView {

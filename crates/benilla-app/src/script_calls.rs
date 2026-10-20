@@ -2474,6 +2474,33 @@ mod tests {
         world.resource_mut::<Selection>().last = Some(NEW);
     }
 
+    /// Every selecting verb commits through `SetSelection 0x493540` before it returns: the TAB
+    /// cycle's pick (`0x4941e6`), and `TargetLastTarget`, `TargetLastEnemy` and `AssistUnit`
+    /// through `0x489a40` (`0x489a74`). So `UnitName("target")` on the next line of the same chunk
+    /// names the unit the call selected, from the frame's candidates.
+    #[test]
+    fn the_next_line_reads_the_target_each_selecting_verb_committed() {
+        for (lua, name) in [
+            ("TargetNearestEnemy()", "Red Affinity"),
+            ("TargetLastEnemy()", "Red Affinity"),
+            (r#"AssistUnit("party1")"#, "Red Affinity"),
+            ("TargetLastTarget()", "Bob"),
+        ] {
+            let mut f = frame(true);
+            with_things_to_select(&mut f);
+            f.app
+                .world_mut()
+                .run_system_once(crate::ui_unit::feed_name_candidates)
+                .unwrap();
+            let seen = with_hosted_vm(f.app.world_mut(), |s| {
+                s.expect("a VM")
+                    .eval::<Option<String>>(&format!(r#"{lua} return UnitName("target")"#))
+            })
+            .unwrap();
+            assert_eq!(seen.as_deref(), Some(name), "{lua}");
+        }
+    }
+
     /// `SelectTarget` (`0x493540`) with the targeting cursor up binds the unit to the pending cast
     /// and returns without selecting (`0x4935ca`-`0x4935d5`), from every verb that calls it:
     /// `TargetUnit`, `AssistUnit` and `TargetLastEnemy` (`0x489a40`), `AssistByName`,
