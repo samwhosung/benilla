@@ -1,5 +1,6 @@
 //! A WDBC reader for WoW 1.12.1: a 20-byte header, `record_count × record_size` bytes of 4-byte
-//! fields, then a string block. The file has no column types; the caller supplies a [`Schema`].
+//! fields, then a string block. The file has no column types; the caller supplies a [`Schema`],
+//! whose slots must cover the record size exactly, as the client's own loader checks.
 
 use std::io::{Cursor, Write};
 
@@ -117,6 +118,11 @@ pub enum Error {
         schema: usize,
         file: u32,
     },
+    /// The file's `record_size` is not the bytes the schema's 4-byte slots cover.
+    RecordSizeMismatch {
+        schema: usize,
+        file: u32,
+    },
     BadStringRef(u32),
     /// `record_count × record_size + string_block_size` overflows `usize`: a corrupt header.
     SizeOverflow,
@@ -129,6 +135,12 @@ impl std::fmt::Display for Error {
             Error::Truncated(what) => write!(f, "truncated DBC: {what}"),
             Error::SchemaFieldMismatch { schema, file } => {
                 write!(f, "schema has {schema} fields but file has {file}")
+            }
+            Error::RecordSizeMismatch { schema, file } => {
+                write!(
+                    f,
+                    "schema covers {schema} bytes per record but the file's record size is {file}"
+                )
             }
             Error::BadStringRef(off) => write!(f, "string ref {off} out of bounds"),
             Error::SizeOverflow => {
@@ -144,17 +156,6 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
-
-/// A little-endian u32 whose bytes past the end of `b` read as zero, unlike [`ByteExt::u32_at`].
-fn rd_u32_at(b: &[u8], o: usize) -> u32 {
-    let mut bytes = [0u8; 4];
-    for (k, slot) in bytes.iter_mut().enumerate() {
-        if let Some(v) = o.checked_add(k).and_then(|idx| b.u8_at(idx)) {
-            *slot = v;
-        }
-    }
-    u32::from_le_bytes(bytes)
-}
 
 /// `(record bytes, record bytes + string block)`, checked: the header's counts are unvalidated.
 fn checked_body_layout(
@@ -260,13 +261,24 @@ impl<'a> DbcParser<'a> {
         if rs == 0 && rc > 0 {
             return Err(Error::Truncated("records claimed at record_size 0"));
         }
+        // `WowClientDB<T>::Load` returns on a count of 0 (`0x545dd2`), then fails a record size
+        // other than the type's (`0x545e36`). A schema covers 4 bytes a slot, so a table packed
+        // in smaller fields, as `CharBaseInfo`'s two bytes a record, cannot be read through it.
+        if rc > 0 && rs != types.len() * 4 {
+            return Err(Error::RecordSizeMismatch {
+                schema: types.len() * 4,
+                file: self.header.record_size,
+            });
+        }
         let rc = capped(rc, rs, records_bytes.len());
         let mut records = Vec::with_capacity(rc);
         for r in 0..rc {
             let base = r * rs;
             let mut values = Vec::with_capacity(fc);
             for (i, ty) in types.iter().enumerate() {
-                let raw = rd_u32_at(records_bytes, base + i * 4);
+                let raw = records_bytes
+                    .u32_at(base + i * 4)
+                    .ok_or(Error::Truncated("records"))?;
                 values.push(match ty {
                     FieldType::UInt32 => Value::UInt32(raw),
                     FieldType::Int32 => Value::Int32(raw as i32),
@@ -403,15 +415,6 @@ mod tests {
             panic!("expected a string ref");
         };
         assert_eq!(rs.get_string(name1).unwrap(), "Bob");
-    }
-
-    #[test]
-    fn rd_u32_at_zero_extends_short_tail() {
-        let b = [0xAA, 0xBB];
-        assert_eq!(rd_u32_at(&b, 0), 0x0000_BBAA);
-        assert_eq!(rd_u32_at(&b, 1), 0x0000_00BB);
-        assert_eq!(rd_u32_at(&b, 2), 0); // fully past the end
-        assert_eq!(rd_u32_at(&b, 5), 0); // offset itself already past the end
     }
 
     #[test]
