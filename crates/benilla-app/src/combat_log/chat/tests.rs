@@ -582,7 +582,7 @@ mod emitters {
         };
         let misses = [entry(2), entry(0)];
         let lines = Bench::new().lines(|ctx, st, po, log| {
-            super::super::spell_go_misses(ME, FIREBALL, &misses, ctx, st, po, log)
+            super::super::spell_go_misses(ME, ME, FIREBALL, &misses, ctx, st, po, log)
         });
         assert_eq!(
             stems(&lines),
@@ -955,7 +955,7 @@ mod emitters {
         let misses = [entry(ME, 3, 0), entry(ME, 11, 2)];
         let bench = Bench::new();
         let order = bench.order(|ctx, st, po, log| {
-            super::super::spell_go_misses(MOB, FIREBALL, &misses, ctx, st, po, log)
+            super::super::spell_go_misses(MOB, MOB, FIREBALL, &misses, ctx, st, po, log)
         });
         assert_eq!(
             order,
@@ -969,13 +969,13 @@ mod emitters {
             ]
         );
         let flashes = bench.flashes(|ctx, st, po, log| {
-            super::super::spell_go_misses(MOB, FIREBALL, &misses, ctx, st, po, log)
+            super::super::spell_go_misses(MOB, MOB, FIREBALL, &misses, ctx, st, po, log)
         });
         let on: Vec<_> = flashes.iter().map(|f| (f.0, f.1)).collect();
         assert_eq!(on, [(ME, "DODGE"), (ME, "REFLECT"), (MOB, "RESIST")]);
         assert!(bench
             .flashes(|ctx, st, po, log| {
-                super::super::spell_go_misses(MOB, HIDDEN, &misses, ctx, st, po, log)
+                super::super::spell_go_misses(MOB, MOB, HIDDEN, &misses, ctx, st, po, log)
             })
             .is_empty());
     }

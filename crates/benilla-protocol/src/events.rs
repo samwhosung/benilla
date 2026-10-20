@@ -633,6 +633,10 @@ pub enum SessionEvent {
         ammo_display_id: Option<u32>,
         /// The cast item when the first guid is not the caster; the item cooldown keys on it.
         item_caster: Option<u64>,
+        /// The packet's second guid as written, the caster unit (`m_casterUnit`): 0 for a
+        /// GameObject's cast (vmangos `Spell.cpp:4491`), where `caster` falls back to the first.
+        /// The miss list's reflect leg names it (`0x6e7dfd`).
+        unit_caster: u64,
     },
     /// A channeled beam's hops (`SMSG_SPELL_UPDATE_CHAIN_TARGETS`), consumed once by the next chain
     /// `CharProc`; the reference fills that `unit+0xd44` array from spell-go hits too (`0x6e800d`).

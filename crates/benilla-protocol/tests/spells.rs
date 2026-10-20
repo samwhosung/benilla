@@ -486,8 +486,10 @@ fn spell_visual_wire_golden() {
             dest,
             ammo_display_id,
             item_caster,
+            unit_caster,
         } => {
             assert_eq!(caster, creature);
+            assert_eq!(unit_caster, creature, "the second guid as written");
             assert_eq!(spell_id, 75);
             assert_eq!(cast_flags, 0x120);
             assert_eq!(hits, vec![0xAA, 0xBB]);
@@ -571,8 +573,10 @@ fn spell_visual_wire_golden() {
             hits,
             target,
             item_caster,
+            unit_caster,
             ..
         } => {
+            assert_eq!(unit_caster, 0, "the empty caster slot, kept as written");
             assert_eq!(
                 caster, LIGHTWELL,
                 "an empty caster slot falls back to slot 1 — the GameObject IS the caster"

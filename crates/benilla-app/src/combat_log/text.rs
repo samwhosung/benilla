@@ -251,9 +251,11 @@ pub(super) fn spell_log_miss(
 
 /// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`), for a spell with a record and no
 /// `Attributes & 0x100` (`0x6e7d9a`): per entry the word over the target (`0x6e7dd4`), and for a
-/// reflect with an outcome that outcome's word over the caster (`0x6e7e51`).
+/// reflect with an outcome that outcome's word over `reflected_to`, the packet's second guid
+/// (`0x6e7e51`); `caster`, the list's, colours both.
 pub(super) fn spell_go_misses(
     caster: u64,
+    reflected_to: u64,
     spell_id: u32,
     misses: &[benilla_protocol::messages::SpellGoMiss],
     index: &GuidIndex,
@@ -270,7 +272,14 @@ pub(super) fn spell_go_misses(
     for m in misses {
         miss_float(m.target, m.info, color, index, self_guid, text);
         if m.info == SPELL_MISS_REFLECT && m.reflect_result != 0 {
-            miss_float(caster, m.reflect_result, color, index, self_guid, text);
+            miss_float(
+                reflected_to,
+                m.reflect_result,
+                color,
+                index,
+                self_guid,
+                text,
+            );
         }
     }
 }
@@ -713,6 +722,7 @@ mod tests {
             text: &mut MessageWriter<CombatTextSpawn>,
         ) {
             spell_go_misses(
+                self.0,
                 self.0,
                 self.1,
                 &self.2,

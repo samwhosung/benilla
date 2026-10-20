@@ -249,6 +249,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
         dest,
         ammo_display_id,
         item_caster,
+        ..
     } = ev
     {
         let engaged = !sc.engaged_self.is_empty();

@@ -406,12 +406,12 @@ pub(in crate::combat_log) fn spell_log_miss(
 /// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`): per entry its miss line, with the
 /// ordinary spell chat types (flag 0, `0x6e7d83`), then for a spell without `Attributes & 0x100`
 /// (`0x6e7d9a`) its `UNIT_COMBAT` on the target (`0x6e7de5`). A reflect with an outcome
-/// (`0x6e7ded`-`0x6e7dfb`) then takes the reflected spell's line, its outcome on the caster
-/// (`0x6e7dfd`-`0x6e7e14`), and that outcome's `UNIT_COMBAT` on the caster (`0x6e7e5f`). The line's
-/// caster is the packet's first guid for a unit or object caster, else the caster unit
-/// (`0x6e7d1c`-`0x6e7d4b`), which is the event's resolved caster.
+/// (`0x6e7ded`-`0x6e7dfb`) then takes the reflected spell's line, its outcome from `caster` on
+/// `reflected_to`, the packet's second guid (`0x6e7dfd`-`0x6e7e14`), and that outcome's
+/// `UNIT_COMBAT` on the same guid (`0x6e7e5f`).
 pub(in crate::combat_log) fn spell_go_misses(
     caster: u64,
+    reflected_to: u64,
     spell_id: u32,
     misses: &[benilla_protocol::messages::SpellGoMiss],
     ctx: &ChatCtx,
@@ -435,9 +435,10 @@ pub(in crate::combat_log) fn spell_go_misses(
             feedback::miss(log, m.target, m.info);
         }
         if m.info == super::super::text::SPELL_MISS_REFLECT && m.reflect_result != 0 {
-            line(log, caster, m.reflect_result);
+            let reflected = (reflected_to, ctx.classify(reflected_to, stores));
+            line(log, reflected, m.reflect_result);
             if flashes {
-                feedback::miss(log, caster.0, m.reflect_result);
+                feedback::miss(log, reflected_to, m.reflect_result);
             }
         }
     }

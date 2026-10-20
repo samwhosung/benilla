@@ -230,6 +230,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
                 ammo_display_id: s.ammo_display_id,
                 // Against the resolved caster: a GameObject's own guid in slot 1 is not an item.
                 item_caster: (s.item_or_caster != caster).then_some(s.item_or_caster),
+                unit_caster: s.caster,
             }]
         }
         ServerPacket::SpellChainTargets(c) => vec![SessionEvent::SpellChainTargets {

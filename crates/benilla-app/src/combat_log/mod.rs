@@ -232,16 +232,26 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
 
 /// `SMSG_SPELL_GO`'s miss list, for a spell with a record (`0x6e7cf7`) whose Speed is 0
 /// (`0x6e7d4e`-`0x6e7d5f`): a travelling spell's misses wait for its missile
-/// ([`on_missile_miss`]).
+/// ([`on_missile_miss`]). The list's caster is the packet's first guid when the client holds it
+/// as a unit or a game object (`0x6e7d13`, type bits `0x6e7d24` and `0x6e7d2c`), else the second
+/// (`0x6e7d40`); a reflect's outcome lands on the second (`0x6e7dfd`, `0x6e7e5c`).
 fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     let SessionEvent::SpellGo {
         caster,
         spell_id,
         misses,
+        item_caster,
+        unit_caster,
         ..
     } = ev
     else {
         return;
+    };
+    let first = item_caster.unwrap_or(caster);
+    let caster = if holds_unit_or_object(first, &c.index, &l.stores) {
+        first
+    } else {
+        unit_caster
     };
     let spells = c.spells.as_deref();
     let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
@@ -252,10 +262,18 @@ fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
     let ctx = c.ctx();
     chat::spell_go_misses(
-        caster, spell_id, &misses, &ctx, &l.stores, &l.poses, &mut l.log,
+        caster,
+        unit_caster,
+        spell_id,
+        &misses,
+        &ctx,
+        &l.stores,
+        &l.poses,
+        &mut l.log,
     );
     text::spell_go_misses(
         caster,
+        unit_caster,
         spell_id,
         &misses,
         &c.index,
@@ -265,6 +283,22 @@ fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
         *l.damage_text,
         &mut l.text,
     );
+}
+
+/// Whether the client holds `guid` as a unit or a game object: the `0x468460` lookup with type
+/// mask 1, then the type bits `0x8` and `0x20` of the object's `OBJECT_FIELD_TYPE`.
+fn holds_unit_or_object(guid: u64, index: &GuidIndex, stores: &Query<&mut ObjectStore>) -> bool {
+    use benilla_protocol::messages::ObjectType;
+    index
+        .0
+        .get(&guid)
+        .and_then(|&e| stores.get(e).ok())
+        .is_some_and(|s| {
+            matches!(
+                s.0.object_type(),
+                Some(ObjectType::Unit | ObjectType::Player | ObjectType::GameObject)
+            )
+        })
 }
 
 /// A travelling spell's missed arrival on a live target (`0x61dd50`): its `UNIT_COMBAT`, then its
@@ -578,11 +612,81 @@ mod tests {
             dest: None,
             ammo_display_id: None,
             item_caster: None,
+            unit_caster: MOB,
         };
         app.world_mut()
             .run_system_once_with(on_spell_go, packet)
             .unwrap();
         left(&mut app)
+    }
+
+    /// A reflected Strike's lines and flashes off a `SMSG_SPELL_GO` whose guids are `first` and
+    /// `second`, with the trap `TRAP` held as a game object: each line as `(subject, object)`,
+    /// each flash by its guid.
+    fn go_reflect(first: u64, second: u64, item: bool) -> (Vec<(u64, u64)>, Vec<u64>) {
+        const TRAP: u64 = 7;
+        let mut app = world(&[ME, MOB]);
+        let e = app
+            .world_mut()
+            .spawn((
+                Guid(TRAP),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21)])),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(TRAP, e);
+        let packet = SessionEvent::SpellGo {
+            // As the session decodes it (`events::decode::spell_caster`).
+            caster: if second == 0 { first } else { second },
+            spell_id: STRIKE,
+            cast_flags: 0,
+            hits: vec![],
+            misses: vec![benilla_protocol::messages::SpellGoMiss {
+                target: ME,
+                info: 11,
+                reflect_result: 2,
+            }],
+            target: Some(ME),
+            go_target: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: (item || (second != 0 && first != second)).then_some(first),
+            unit_caster: second,
+        };
+        app.world_mut()
+            .run_system_once_with(on_spell_go, packet)
+            .unwrap();
+        let log = app.world().resource::<ChatLog>();
+        (
+            log.pending_combat()
+                .iter()
+                .map(|l| (l.subject, l.object))
+                .collect(),
+            log.pending_unit_combat().iter().map(|f| f.guid).collect(),
+        )
+    }
+
+    /// The miss list's caster is the first guid when it names a unit or game object the client
+    /// holds (`0x6e7d13`-`0x6e7d31`), else the second (`0x6e7d40`), and the reflect's outcome
+    /// lands on the second (`0x6e7dfd`, `0x6e7e5c`). A held trap logs as itself and its reflect
+    /// names guid 0, which the range gate refuses as an object that does not resolve
+    /// (`0x626698`); an unheld trap logs as guid 0; an item cast logs as its unit.
+    #[test]
+    fn a_go_miss_list_takes_its_caster_and_reflect_target_from_the_two_guids() {
+        const TRAP: u64 = 7;
+        const ITEM: u64 = 0x4000_0000_0000_0042;
+        assert_eq!(
+            go_reflect(MOB, MOB, false),
+            (vec![(MOB, ME), (MOB, MOB)], vec![ME, MOB])
+        );
+        assert_eq!(go_reflect(TRAP, 0, false), (vec![(TRAP, ME)], vec![ME, 0]));
+        assert_eq!(go_reflect(99, 0, false), (vec![(0, ME)], vec![ME, 0]));
+        assert_eq!(
+            go_reflect(ITEM, MOB, true),
+            (vec![(MOB, ME), (MOB, MOB)], vec![ME, MOB])
+        );
     }
 
     /// `0x6e7a70` runs its miss list only for a spell with a record (`0x6e7cf7`) and Speed 0
