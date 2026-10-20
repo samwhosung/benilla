@@ -798,7 +798,7 @@ pub(crate) mod schedule_tests {
     ///   feed reads the mailbox's guid, and the release clears only the pending queries;
     /// - `script_calls::apply_script_calls`, in the target chain, against the `.after(UiInput)`
     ///   drains of gestures that are not such script calls (the ATTACKTARGET binding, the
-    ///   item-pick commit, the GameObject openers, the chat, party, duel, trade and death drains)
+    ///   item-pick commit, the chat, party, duel, trade and death drains)
     ///   over the `CastLadder`, the selection and the unit-token resolver: the class
     ///   `drop_item_on_unit` and the world click's legs already carry, as none of those drains
     ///   orders against the target chain. Such a gesture and a script call in one frame take
@@ -844,7 +844,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_112;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_083;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1518,8 +1518,8 @@ pub(crate) mod schedule_tests {
          "the outcome chain starts with the VM's own `Screenshot()` call"),
         ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
          "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
-        ("ui_action/drain.rs", "drain_go_openers", Because::FilledByVm,
-         "filled only by a world right-click on a GameObject; the drain sends casts to the wire"),
+        ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
+         "filled only by a world right-click on a GameObject or a body; the drain sends casts to the wire"),
         ("ui_auction/mod.rs", "drain_auction", Because::FilledByVm,
          "VM verbs; the refresh flags act only under an open window and become wire re-asks"),
         ("ui_bank/mod.rs", "feed_bank", Because::PlayerRoundTrip,

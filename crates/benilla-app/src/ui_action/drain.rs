@@ -143,11 +143,12 @@ impl AttackPress<'_, '_> {
     }
 }
 
-/// Sends the queued GameObject openers through the cast ladder. The reference reaches `TryCast`
-/// from a right-click as from a button (`0x5f35c0`, `0x6e5a90`, `0x6e4b60`), so every rung
-/// applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell bail.
-pub(super) fn drain_go_openers(
-    mut queue: ResMut<crate::ui_action::GoOpenerCasts>,
+/// Sends the queued right-click casts through the cast ladder. The reference reaches `TryCast`
+/// from a right-click as from a button (`0x5f35c0` and `0x5f06dc`, then `0x6e5a90`, `0x6e4b60`),
+/// so every rung applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell
+/// bail, and a skin while another spell is in flight `0x6e4d97`'s 0x61.
+pub(crate) fn drain_click_casts(
+    mut queue: ResMut<crate::ui_action::ClickCasts>,
     script: Option<NonSendMut<UiScript>>,
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
@@ -160,14 +161,26 @@ pub(super) fn drain_go_openers(
     }
     let ctx = targeting.context();
     let mut script = script;
-    for opener in std::mem::take(&mut queue.0) {
-        match opener {
-            super::GoOpener::Spell { spell_id, go_guid } => {
+    for cast in std::mem::take(&mut queue.0) {
+        match cast {
+            super::ClickCast::AtObject { spell_id, go_guid } => {
                 debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
                 ladder.send_at_object(spell_id, &ctx, go_guid);
             }
+            super::ClickCast::AtUnit {
+                spell_id,
+                entity,
+                guid,
+            } => {
+                debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
+                ladder.send(
+                    spell_id,
+                    &targeting.context_at(entity, guid),
+                    crate::spell::CastCommit::Spell,
+                );
+            }
             // The key goes through the shared `CGItem::Use` fork, as a bag click does.
-            super::GoOpener::Key(it) => {
+            super::ClickCast::Key(it) => {
                 let Some(script) = script.as_deref_mut() else {
                     continue;
                 };

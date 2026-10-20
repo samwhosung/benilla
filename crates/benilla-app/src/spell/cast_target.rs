@@ -309,11 +309,25 @@ pub(crate) struct CastTargeting<'w, 's> {
 impl CastTargeting<'_, '_> {
     /// This frame's [`CastContext`].
     pub(crate) fn context(&self) -> CastContext<'_> {
-        let target_store = self.selection.target.and_then(|e| self.stores.get(e).ok());
+        self.context_on(self.selection.target, self.selection.guid)
+    }
+
+    /// The context for an attempt passed a unit's guid (`0x6e4b60`'s last argument, as
+    /// `InteractWithSpell 0x5f05e0` passes the body's): the range test (`0x6e4f26` → `0x6e4440`)
+    /// and the arm's candidate (`0x6e5393`) take it in the selection's place. The arm's refusal of
+    /// an enemy word with nothing bound picks its line off the selection itself (`0x6e50a3`), which
+    /// this context no longer holds; Skinning's word (`Targets` 0x402, implicit target 25) has no
+    /// enemy bit.
+    pub(crate) fn context_at(&self, entity: Entity, guid: u64) -> CastContext<'_> {
+        self.context_on(Some(entity), Some(guid))
+    }
+
+    fn context_on(&self, target: Option<Entity>, guid: Option<u64>) -> CastContext<'_> {
+        let target_store = target.and_then(|e| self.stores.get(e).ok());
         let owner_store = |store| owner_store(store, self.index.as_deref(), &self.stores);
         let self_store = self.self_store.iter().next();
         CastContext {
-            selection_guid: self.selection.guid,
+            selection_guid: guid,
             self_guid: self.self_guid.0,
             auto_self_cast: self.auto_self_cast.0,
             rel: TargetRelations {
@@ -329,20 +343,18 @@ impl CastTargeting<'_, '_> {
                 },
                 group: GroupInputs {
                     self_guid: self.self_guid.0,
-                    target_guid: self.selection.guid,
+                    target_guid: guid,
                     self_owner_store: owner_store(self_store),
                     roster: self.roster.as_deref(),
                 },
             },
             range: RangeInputs {
                 self_pos: self.self_transform.iter().next().map(|t| t.translation),
-                target_pos: self
-                    .selection
-                    .target
+                target_pos: target
                     .and_then(|e| self.transforms.get(e).ok())
                     .map(|t| t.translation),
                 caster: self.range_units.caster(),
-                target: self.selection.target.and_then(|e| self.range_units.unit(e)),
+                target: target.and_then(|e| self.range_units.unit(e)),
             },
             main_hand_item: self
                 .self_store

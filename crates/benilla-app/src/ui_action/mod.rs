@@ -20,6 +20,9 @@ pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::{attack_nearest_probe, use_action, ActionPress, AttackPress, UseOutcome};
+// The right-click casts' drain, which the click's tests run after the click.
+#[cfg(test)]
+pub(crate) use drain::drain_click_casts;
 #[cfg(test)]
 mod drain_tests;
 pub(crate) mod drop_item;
@@ -74,20 +77,28 @@ pub(crate) struct PlayerActions {
     pub dirty: bool,
 }
 
-/// The world right-click's GameObject openers, queued one frame for the cast ladder: the click
-/// system cannot also hold the ladder's resources, and only the ladder sends a cast, so a chest
-/// right-clicked mid-cast takes the reference's silent same-spell bail (`0x6e4d43`).
+/// The world right-click's casts, queued for the cast ladder later in the frame: the click system
+/// cannot also hold the ladder's resources, and only the ladder sends a cast, so a chest or a body
+/// right-clicked mid-cast meets the attempt's rungs as a button press does (`0x6e4d43`, `0x6e4d97`).
 #[derive(Resource, Default)]
-pub(crate) struct GoOpenerCasts(pub(crate) Vec<GoOpener>);
+pub(crate) struct ClickCasts(pub(crate) Vec<ClickCast>);
 
-/// A right-click's resolved opener ([`crate::target::click::resolve_go_action`]).
+/// A right-click's cast: a GameObject's opener ([`crate::target::click::resolve_go_action`]) or
+/// the spell a body is interacted with through (`0x5f05e0`).
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum GoOpener {
+pub(crate) enum ClickCast {
     /// A known `OPEN_LOCK` spell, cast with a GameObject target block.
-    Spell { spell_id: u32, go_guid: u64 },
+    AtObject { spell_id: u32, go_guid: u64 },
     /// A carried key: `CMSG_USE_ITEM` with `TARGET_FLAG_GAMEOBJECT`, the object's guid in
     /// [`crate::ui_items::ItemUse::on_object`].
     Key(crate::ui_items::ItemUse),
+    /// `InteractWithSpell 0x5f05e0`'s cast (`0x5f06dc` → `0x6e5a90`): the attempt with the body's
+    /// guid passed in, which its range test and its arm take in the selection's place.
+    AtUnit {
+        spell_id: u32,
+        entity: Entity,
+        guid: u64,
+    },
 }
 
 /// The spell DBC catalogs, absent without client data; the cast-visual router shares the catalog.
@@ -275,7 +286,7 @@ impl Plugin for UiActionPlugin {
             .init_resource::<PetTameFailures>()
             .init_resource::<UiErrorKeys>()
             .init_resource::<UiErrorTexts>()
-            .init_resource::<GoOpenerCasts>()
+            .init_resource::<ClickCasts>()
             .add_systems(Startup, load_spells.after(AssetSet::Open))
             .add_systems(Startup, load_spell_mechanics.after(AssetSet::Open))
             .add_systems(
@@ -301,8 +312,10 @@ impl Plugin for UiActionPlugin {
                         .after(crate::player::ControlRestore)
                         .after(feed::feed_actions),
                     drain::drain_action_sets.after(UiInput),
-                    // The target chain queues the openers earlier in the frame.
-                    drain::drain_go_openers.after(UiInput),
+                    // The target chain queues the right-click casts earlier in the frame.
+                    drain::drain_click_casts
+                        .after(UiInput)
+                        .after(crate::target::TargetUpdate),
                     // The latches must be current before the target chain's cursor reads them.
                     track_learned_abilities
                         .in_set(UnitFeed)
