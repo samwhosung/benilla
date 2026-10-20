@@ -45,6 +45,8 @@ impl FailNameTables<'_> {
             areas: self.areas.as_deref().map(|a| &a.0),
             mechanics: self.mechanics.as_deref().map(|m| &m.catalog),
             forms: spells.map(|s| &s.forms),
+            found: None,
+            redisplay: false,
         }
     }
 }

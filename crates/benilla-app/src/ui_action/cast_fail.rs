@@ -206,6 +206,12 @@ pub(super) struct FailArgs<'a> {
     pub(super) mechanics: Option<&'a SpellMechanicCatalog>,
     /// `SpellShapeshiftForm.dbc` (`0xc0d76c`), for `0x56`, keyed by form id.
     pub(super) forms: Option<&'a HashMap<u32, ShapeshiftForm>>,
+    /// The name a world arm found ([`super::cast_lines`]): the subclass for `0x19`-`0x1b`
+    /// (`0x6e1db7`), the projectile for `0x31` (`0x6e1e54`), the item for `0x5c` and `0x78`
+    /// (`0x6e1e7f`).
+    pub(super) found: Option<&'a str>,
+    /// The item-cache callback `0x6e29b0`, which formats the plain key, never the `_PET` one.
+    pub(super) redisplay: bool,
 }
 
 /// What an argument arm produced, and when nothing, which exit the reference takes: every arm
@@ -527,7 +533,10 @@ mod tests {
             ("ERR_GENERIC_NO_TARGET", "You have no target."),
             ("ERR_SPELL_COOLDOWN", "Spell is not ready yet."),
             ("ERR_ABILITY_COOLDOWN", "Ability is not ready yet."),
-            ("ERR_POTION_COOLDOWN", "Item is not ready yet."),
+            ("ERR_POTION_COOLDOWN", "You cannot drink any more yet."),
+            ("ERR_FOOD_COOLDOWN", "You are too full to eat more now."),
+            ("ERR_ITEM_COOLDOWN", "Item is not ready yet."),
+            ("SPELL_FAILED_ITEM_NOT_READY", "Item is not ready yet"),
             ("ERR_OUT_OF_MANA", "Not enough mana"),
             ("ERR_OUT_OF_RAGE", "Not enough rage"),
             (
@@ -554,7 +563,356 @@ mod tests {
             ("SPELL_FAILED_BAD_IMPLICIT_TARGETS", "No target"),
             ("SPELL_FAILED_NOT_UNSHEATHED", "You must be unsheathed"),
             ("ERR_OUT_OF_FOCUS", "Not enough focus"),
+            // The default errorId and the chain's other messages.
+            ("ERR_SPELL_FAILED_S", "%s"),
+            ("ERR_SPELL_FAILED_TOTEMS", "%s"),
+            ("ERR_SPELL_FAILED_REAGENTS", "%s"),
+            (
+                "ERR_SPELL_FAILED_EQUIPPED_ITEM",
+                "Must have the proper item equipped",
+            ),
+            ("ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S", "%s"),
+            ("ERR_SPELL_FAILED_SHAPESHIFT_FORM_S", "%s"),
+            ("ERR_NOAMMO_S", "%s"),
+            (
+                "ERR_INVALID_ITEM_TARGET",
+                "That item is not a valid target.",
+            ),
+            (
+                "ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH",
+                "You are already at full Health.",
+            ),
+            ("ERR_PLAY_TIME_EXCEEDED", "Maximum play time exceeded"),
+            ("SPELL_FAILED_TOTEMS", "Requires %s"),
+            (
+                "SPELL_FAILED_EQUIPPED_ITEM",
+                "Must have the proper item equipped",
+            ),
+            (
+                "SPELL_FAILED_EQUIPPED_ITEM_CLASS",
+                "Must have a %s equipped",
+            ),
+            (
+                "SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND",
+                "Must have a %s equipped in the main hand",
+            ),
+            (
+                "SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND",
+                "Must have a %s equipped in the offhand",
+            ),
+            (
+                "SPELL_FAILED_NEED_AMMO",
+                "Ammo needs to be in the paper doll ammo slot before it can be fired",
+            ),
+            ("SPELL_FAILED_NEED_EXOTIC_AMMO", "Requires exotic ammo: %s"),
+            ("SPELL_FAILED_BAD_TARGETS", "Invalid target"),
+            (
+                "SPELL_FAILED_LEVEL_REQUIREMENT",
+                "You are not high enough level",
+            ),
+            (
+                "SPELL_FAILED_LEVEL_REQUIREMENT_PET",
+                "Your pet is not high enough level",
+            ),
+            (
+                "SPELL_FAILED_SPELL_UNAVAILABLE",
+                "The spell is not available to you",
+            ),
+            (
+                "SPELL_FAILED_SPELL_UNAVAILABLE_PET",
+                "That ability is not available to your pet",
+            ),
         ])
+    }
+
+    /// Any record, so the player's chain runs (`0x6e1a7c`).
+    fn record() -> SpellDisplay {
+        SpellDisplay::default()
+    }
+
+    /// The player's chain `0x6e1aab`-`0x6e1c5f` arm by arm, in its order: each reason's message
+    /// key, pinned to the errorId immediate the arm stores, through the catalog.
+    #[test]
+    fn the_players_chain_stores_each_arms_error_id() {
+        let mut m = gs();
+        m.insert(
+            "ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S",
+            "You are already at full %s.",
+        );
+        m.insert("MANA", "Mana");
+        let g = getter(&m);
+        let forms = forms([(1, "Cat Form")]);
+        let cat_only = SpellDisplay {
+            stances: 0x1,
+            ..record()
+        };
+        let item_target = SpellDisplay {
+            targets: 0x10,
+            ..record()
+        };
+        let line = |reason: u8, d: &SpellDisplay| {
+            let args = FailArgs {
+                forms: Some(&forms),
+                found: Some("Name"),
+                ..FailArgs::default()
+            };
+            cast_fail_text(Caster::Player, reason, Some(d), args, &g)
+                .unwrap_or_else(|| panic!("{reason:#04x} shows a line"))
+                .key
+        };
+        for (reason, d, id, at) in [
+            (0x3C, spell(0, 0xA, 0), 0x2f, "0x6e1aea"),
+            (0x3C, spell(0, 4, 0), 0x2e, "0x6e1ae1"),
+            (0x3C, spell(0, 0, 0x10), 0x31, "0x6e1ace"),
+            (0x3C, record(), 0x30, "0x6e1ace"),
+            (0x28, spell(0, 9, 0), 0x2e, "0x6e1b63"),
+            (0x28, record(), 0x2d, "0x6e1b5a"),
+            (0x78, record(), 0xd1, "0x6e1b71"),
+            (0x5C, record(), 0xd2, "0x6e1b7f"),
+            (0x18, record(), 0xd4, "0x6e1b8d"),
+            (0x19, record(), 0xd5, "0x6e1c58"),
+            (0x1A, record(), 0xd5, "0x6e1c58"),
+            (0x1B, record(), 0xd5, "0x6e1c58"),
+            (0x09, record(), 0xb8, "0x6e1bb6"),
+            (0x59, record(), 0x131, "0x6e1bc7"),
+            (0x2F, record(), 0x133, "0x6e1bd8"),
+            (0x56, cat_only, 0xd6, "0x6e1be9"),
+            (0x0A, item_target, 0x13c, "0x6e1c04"),
+            (0x0A, record(), 0x2c, "0x6e1bfe"),
+            (0x41, record(), 0x140, "0x6e1c15"),
+            (0x01, record(), 0x18e, "0x6e1c26"),
+            (0x02, record(), 0x18f, "0x6e1c37"),
+            (0x8E, record(), 0x1bf, "0x6e1c4c"),
+            // Every other reason keeps the default (`0x6e1a45`).
+            (0x43, record(), 0x2c, "0x6e1a45"),
+        ] {
+            let key = line(reason, &d);
+            assert_eq!(
+                benilla_ui::messages::by_key(key).map(|r| r.id),
+                Some(id),
+                "{reason:#04x} stores {id:#x} at {at}, the catalog's {key}"
+            );
+        }
+    }
+
+    /// `0x2f` is errorId `0x133`, `ERR_NOAMMO_S`, a bare `"%s"` of the reason's own text: its
+    /// argument arm (`0x6e1e3d`) fills nothing, so the line is `SPELL_FAILED_NEED_AMMO`'s, and
+    /// the record's error-speech id 1 voices it.
+    #[test]
+    fn need_ammo_shows_its_own_text_under_err_noammo_s() {
+        let m = gs();
+        let g = getter(&m);
+        let line = cast_fail_text(
+            Caster::Player,
+            0x2F,
+            Some(&record()),
+            FailArgs::default(),
+            &g,
+        )
+        .expect("a line");
+        assert_eq!(line.key, "ERR_NOAMMO_S");
+        assert_eq!(
+            line.text,
+            "Ammo needs to be in the paper doll ammo slot before it can be fired"
+        );
+        assert_eq!(line.logged(), line.text);
+        assert_eq!(
+            benilla_ui::messages::by_key(line.key).map(|r| r.type_tag),
+            Some(0x01)
+        );
+    }
+
+    /// `0x0a` tests `Targets & 0x10` (`0x6e1bfa`): an item-targeted spell says
+    /// `ERR_INVALID_ITEM_TARGET`, logging the reason's own text; any other keeps "Invalid target".
+    #[test]
+    fn a_bad_item_target_reads_err_invalid_item_target() {
+        let m = gs();
+        let g = getter(&m);
+        let line = |d: &SpellDisplay| {
+            cast_fail_text(Caster::Player, 0x0A, Some(d), FailArgs::default(), &g).expect("a line")
+        };
+        let enchant = SpellDisplay {
+            targets: 0x10,
+            ..record()
+        };
+        let on_item = line(&enchant);
+        assert_eq!(on_item.key, "ERR_INVALID_ITEM_TARGET");
+        assert_eq!(on_item.text, "That item is not a valid target.");
+        assert_eq!(on_item.logged(), "Invalid target");
+        let on_unit = line(&SpellDisplay {
+            targets: 0x2,
+            ..record()
+        });
+        assert_eq!(on_unit.key, PASSTHROUGH);
+        assert_eq!(on_unit.text, "Invalid target");
+    }
+
+    /// A refusal with no `Spell.dbc` record skips the chain (`0x6e1a7c`): the default errorId shows
+    /// the reason's own text.
+    #[test]
+    fn with_no_record_the_player_keeps_the_default_error_id() {
+        let m = gs();
+        let g = getter(&m);
+        for (reason, text) in [
+            (0x59, "Out of range"),
+            (0x09, "No target"),
+            (0x41, "You must be unsheathed"),
+            (0x3C, "Not yet recovered"),
+        ] {
+            let line = cast_fail_text(Caster::Player, reason, None, FailArgs::default(), &g)
+                .expect("a line");
+            assert_eq!(line.key, PASSTHROUGH, "{reason:#04x}");
+            assert_eq!(line.text, text, "{reason:#04x}");
+        }
+    }
+
+    /// The `_PET` flag (`0x6e1b1b`-`0x6e1b3c`): a first effect of `LEARN_PET_SPELL` (0x39), or
+    /// `LEARN_SPELL` (0x24) at target 5, reads `<key>_PET` first and keeps it when not empty
+    /// (`0x6e1d22`-`0x6e1d54`), for the screen and the log alike.
+    #[test]
+    fn pet_training_spells_read_the_pet_variant_first() {
+        let m = gs();
+        let g = getter(&m);
+        let line = |reason: u8, d: &SpellDisplay| {
+            cast_fail_text(Caster::Player, reason, Some(d), FailArgs::default(), &g)
+                .expect("a line")
+        };
+        let teach = SpellDisplay {
+            effects: [0x39, 0, 0],
+            ..record()
+        };
+        let mut train = SpellDisplay {
+            effects: [0x24, 0, 0],
+            ..record()
+        };
+        train.effect_implicit_target_a[0] = 5;
+        let mut learn = SpellDisplay {
+            effects: [0x24, 0, 0],
+            ..record()
+        };
+        learn.effect_implicit_target_a[0] = 1;
+
+        let unavailable = line(0x63, &teach);
+        assert_eq!(
+            unavailable.text,
+            "That ability is not available to your pet"
+        );
+        assert_eq!(unavailable.logged(), unavailable.text);
+        assert_eq!(line(0x29, &train).text, "Your pet is not high enough level");
+        // A learn spell aimed elsewhere, and a reason with no `_PET` key, read the plain key.
+        assert_eq!(line(0x29, &learn).text, "You are not high enough level");
+        assert_eq!(line(0x43, &teach).text, "Out of ammo");
+        // The pet's handler `0x6e8eb0` has no `_PET` lookup.
+        assert_eq!(
+            cast_fail_text(Caster::Pet, 0x63, Some(&teach), FailArgs::default(), &g)
+                .unwrap()
+                .text,
+            "The spell is not available to you"
+        );
+    }
+
+    /// The item-cache callback `0x6e29b0` formats the plain key (`0x6e29da`), so a `_PET`
+    /// string an addon defines reaches the first pass only.
+    #[test]
+    fn the_item_redisplay_reads_the_plain_key() {
+        let mut m = gs();
+        m.insert("SPELL_FAILED_REAGENTS_PET", "Your pet lacks %s");
+        let g = getter(&m);
+        let teach = SpellDisplay {
+            effects: [0x39, 0, 0],
+            ..record()
+        };
+        let text = |redisplay| {
+            let args = FailArgs {
+                found: Some("Soul Shard"),
+                redisplay,
+                ..FailArgs::default()
+            };
+            cast_fail_text(Caster::Player, 0x5C, Some(&teach), args, &g)
+                .unwrap()
+                .text
+        };
+        assert_eq!(text(false), "Your pet lacks Soul Shard");
+        assert_eq!(text(true), "Missing reagent: Soul Shard");
+    }
+
+    /// The world arms' names fill the reason's text, shown under the chain's errorId: `0x78`
+    /// `0xd1`, `0x5c` `0xd2`, `0x19`-`0x1b` `0xd5`; `0x31` has no arm in the chain. The pet's
+    /// `0x19`-`0x1b` show under `0x2c` (`0x6e9102`).
+    #[test]
+    fn the_world_arms_fill_the_chains_messages() {
+        let m = gs();
+        let g = getter(&m);
+        let line = |caster, reason: u8, name: &str| {
+            let args = FailArgs {
+                found: Some(name),
+                ..FailArgs::default()
+            };
+            let l = cast_fail_text(caster, reason, Some(&record()), args, &g).expect("a line");
+            (l.key, l.text)
+        };
+        for (reason, name, key, text) in [
+            (
+                0x78,
+                "Mining Pick",
+                "ERR_SPELL_FAILED_TOTEMS",
+                "Requires Mining Pick",
+            ),
+            (
+                0x5C,
+                "Soul Shard",
+                "ERR_SPELL_FAILED_REAGENTS",
+                "Missing reagent: Soul Shard",
+            ),
+            (
+                0x19,
+                "Wand",
+                "ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S",
+                "Must have a Wand equipped",
+            ),
+            (
+                0x1A,
+                "Dagger",
+                "ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S",
+                "Must have a Dagger equipped in the main hand",
+            ),
+            (
+                0x1B,
+                "Shield",
+                "ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S",
+                "Must have a Shield equipped in the offhand",
+            ),
+            (0x31, "Arrow", PASSTHROUGH, "Requires exotic ammo: Arrow"),
+        ] {
+            assert_eq!(
+                line(Caster::Player, reason, name),
+                (key, text.to_string()),
+                "{reason:#04x}"
+            );
+        }
+        assert_eq!(
+            line(Caster::Pet, 0x19, "Wand"),
+            (PASSTHROUGH, "Must have a Wand equipped".to_string())
+        );
+    }
+
+    /// The pet's `0x56` shows its first form under errorId `0xd6` (`0x6e92be`).
+    #[test]
+    fn the_pets_only_shapeshift_line_is_error_id_0xd6() {
+        let m = gs();
+        let g = getter(&m);
+        let forms = forms([(1, "Cat Form")]);
+        let d = SpellDisplay {
+            stances: 0x1,
+            ..record()
+        };
+        let args = FailArgs {
+            forms: Some(&forms),
+            ..FailArgs::default()
+        };
+        let line = cast_fail_text(Caster::Pet, 0x56, Some(&d), args, &g).expect("a line");
+        assert_eq!(line.key, "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S");
+        assert_eq!(line.text, "Must be in Cat Form");
     }
 
     #[test]
@@ -562,7 +920,7 @@ mod tests {
         let m = gs();
         let g = getter(&m);
         let say = |caster, reason| {
-            cast_fail_text(caster, reason, None, FailArgs::default(), &g).map(|l| l.text)
+            cast_fail_text(caster, reason, Some(&record()), FailArgs::default(), &g).map(|l| l.text)
         };
         for (reason, pet, player) in [
             (0x00, "Your pet is in combat.", "You are in combat"),
@@ -621,7 +979,10 @@ mod tests {
                 .unwrap()
                 .text
         };
-        assert_eq!(text(Caster::Player, &potion), "Item is not ready yet.");
+        assert_eq!(
+            text(Caster::Player, &potion),
+            "You cannot drink any more yet."
+        );
         assert_eq!(text(Caster::Pet, &potion), "Spell is not ready yet.");
         // The ability leg is shared.
         assert_eq!(text(Caster::Player, &ability), "Ability is not ready yet.");
@@ -635,7 +996,8 @@ mod tests {
         let m = gs();
         let g = getter(&m);
         let line = |caster, reason| {
-            cast_fail_text(caster, reason, None, FailArgs::default(), &g).expect("a line")
+            cast_fail_text(caster, reason, Some(&record()), FailArgs::default(), &g)
+                .expect("a line")
         };
 
         assert_eq!(line(Caster::Player, 0x09).text, "You have no target.");
@@ -688,14 +1050,26 @@ mod tests {
         let m = gs();
         let g = getter(&m);
 
-        let line =
-            cast_fail_text(Caster::Player, 0x41, None, FailArgs::default(), &g).expect("a line");
+        let line = cast_fail_text(
+            Caster::Player,
+            0x41,
+            Some(&record()),
+            FailArgs::default(),
+            &g,
+        )
+        .expect("a line");
         assert_eq!(line.key, "ERR_SPELL_FAILED_NOTUNSHEATHED");
         assert_eq!(kind_of(line.key), MsgKind::Info);
 
         // A red override, and a passthrough on errorId `0x2c`.
-        let red =
-            cast_fail_text(Caster::Player, 0x59, None, FailArgs::default(), &g).expect("a line");
+        let red = cast_fail_text(
+            Caster::Player,
+            0x59,
+            Some(&record()),
+            FailArgs::default(),
+            &g,
+        )
+        .expect("a line");
         assert_eq!(red.key, "ERR_SPELL_OUT_OF_RANGE");
         assert_eq!(kind_of(red.key), MsgKind::Error);
 
@@ -839,11 +1213,11 @@ mod tests {
         assert_eq!(cooldown.text, "Spell is not ready yet.");
         assert_eq!(cooldown.logged(), "Not yet recovered");
 
-        let no_target = line(0x09, None);
+        let no_target = line(0x09, Some(&plain));
         assert_eq!(no_target.text, "You have no target.");
         assert_eq!(no_target.logged(), "No target");
 
-        let unsheathed = line(0x41, None);
+        let unsheathed = line(0x41, Some(&plain));
         assert_eq!(unsheathed.text, "You have to be unsheathed to do that!");
         assert_eq!(unsheathed.logged(), "You must be unsheathed");
 
@@ -930,9 +1304,15 @@ mod tests {
             "Out of ammo"
         );
         assert_eq!(
-            cast_fail_text(Caster::Player, 0x59, None, FailArgs::default(), &g)
-                .unwrap()
-                .text,
+            cast_fail_text(
+                Caster::Player,
+                0x59,
+                Some(&record()),
+                FailArgs::default(),
+                &g
+            )
+            .unwrap()
+            .text,
             "Out of range."
         );
         assert_eq!(
@@ -942,9 +1322,15 @@ mod tests {
             "Target too close"
         );
         assert_eq!(
-            cast_fail_text(Caster::Player, 0x09, None, FailArgs::default(), &g)
-                .unwrap()
-                .text,
+            cast_fail_text(
+                Caster::Player,
+                0x09,
+                Some(&record()),
+                FailArgs::default(),
+                &g
+            )
+            .unwrap()
+            .text,
             "You have no target."
         );
         // 0x3c: a plain spell, an ability (`Attributes & 0x10`), a potion (category 4).
@@ -973,7 +1359,7 @@ mod tests {
             cast_fail_text(Caster::Player, 0x3C, Some(&potion), FailArgs::default(), &g)
                 .unwrap()
                 .text,
-            "Item is not ready yet."
+            "You cannot drink any more yet."
         );
     }
 
@@ -1043,15 +1429,27 @@ mod tests {
             "Out of ammo"
         );
         assert_eq!(
-            cast_fail_text(Caster::Player, 0x59, None, FailArgs::default(), &g)
-                .unwrap()
-                .text,
+            cast_fail_text(
+                Caster::Player,
+                0x59,
+                Some(&record()),
+                FailArgs::default(),
+                &g
+            )
+            .unwrap()
+            .text,
             "Out of range."
         );
         assert_eq!(
-            cast_fail_text(Caster::Player, 0x3C, None, FailArgs::default(), &g)
-                .unwrap()
-                .text,
+            cast_fail_text(
+                Caster::Player,
+                0x3C,
+                Some(&record()),
+                FailArgs::default(),
+                &g
+            )
+            .unwrap()
+            .text,
             "Spell is not ready yet."
         );
         let rage = spell(1, 0, 0);
@@ -1108,9 +1506,15 @@ mod tests {
                 "pet {reason:#04x}"
             );
             assert_eq!(
-                cast_fail_text(Caster::Player, reason, None, FailArgs::default(), &g)
-                    .map(|l| l.text)
-                    .as_deref(),
+                cast_fail_text(
+                    Caster::Player,
+                    reason,
+                    Some(&record()),
+                    FailArgs::default(),
+                    &g
+                )
+                .map(|l| l.text)
+                .as_deref(),
                 Some(player),
                 "player {reason:#04x}"
             );
@@ -1140,6 +1544,7 @@ mod tests {
             areas: Some(&areas),
             mechanics: Some(&mechanics),
             forms: Some(&forms),
+            ..FailArgs::default()
         };
         assert_eq!(
             cast_fail_text(Caster::Player, 0x8D, None, args(12), &g)
@@ -1251,6 +1656,44 @@ mod tests {
             .unwrap()
             .text,
             "Requires Shadowglen Moonwell"
+        );
+
+        // The chain and the `_PET` flag on shipped rows and strings.
+        let said = |reason: u8, spell_id: u32| {
+            let d = catalog.get(spell_id).expect("a shipped spell");
+            cast_fail_text(Caster::Player, reason, Some(d), FailArgs::default(), &g)
+                .map(|l| (l.key, l.text))
+                .expect("a line")
+        };
+        // Cower 1747 is `LEARN_SPELL` at the pet, Fire Shield 2949 `LEARN_PET_SPELL`.
+        assert_eq!(
+            said(0x63, 1747).1,
+            "That ability is not available to your pet"
+        );
+        assert_eq!(said(0x29, 2949).1, "Your pet is not high enough level");
+        // Enchant Bracer - Minor Health 7418 and Disenchant 13262 target items (`Targets` 0x10);
+        // Pick Lock 1804 has `Targets` 0 and keeps the plain line.
+        for item_spell in [7418, 13262] {
+            assert_eq!(
+                said(0x0A, item_spell),
+                (
+                    "ERR_INVALID_ITEM_TARGET",
+                    "That item is not a valid target.".to_string()
+                ),
+                "spell {item_spell}"
+            );
+        }
+        assert_eq!(
+            said(0x0A, 1804),
+            (PASSTHROUGH, "Invalid target".to_string())
+        );
+        // Auto Shot 75 out of arrows.
+        assert_eq!(
+            said(0x2F, 75),
+            (
+                "ERR_NOAMMO_S",
+                "Ammo needs to be in the paper doll ammo slot before it can be fired".to_string()
+            )
         );
     }
 }
