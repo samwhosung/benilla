@@ -1240,7 +1240,9 @@ fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32,
 }
 
 /// A list for a sandbox, whose cache is not behind it: the loot lines name the master by the
-/// roster's own name.
+/// roster's own name. The stored loot cells are the real session's (`0xbc7600`...), so the
+/// sandbox compares against them and leaves them as it found them, and a real group after
+/// `/partytest off` is compared against what the real lists last carried.
 fn apply_sandbox_list(
     group: &mut GroupState,
     (group_type, own_flags): (u8, u8),
@@ -1256,7 +1258,8 @@ fn apply_sandbox_list(
             .find(|(g, _)| *g == guid)
             .map(|(_, name)| name.clone())
     };
-    group
+    let stored = group.loot_stored;
+    let lines = group
         .apply_list_awaiting(
             group_type,
             own_flags,
@@ -1267,7 +1270,9 @@ fn apply_sandbox_list(
             &|_| Some(String::new()),
             &cached_name,
         )
-        .lines
+        .lines;
+    group.loot_stored = stored;
+    lines
 }
 
 /// The `/partytest` roster: four unstreamed synthetic members with mixed statuses and records,
@@ -2789,5 +2794,34 @@ mod tests {
                 .as_deref(),
             Some("M1")
         );
+    }
+
+    /// The stored loot cells (`0xbc7600`...) are the real session's: `/partytest` compares against
+    /// them and leaves them as found, so `/partytest off` and a real group after it are measured
+    /// against what the real lists last carried, never the sandbox's tail.
+    #[test]
+    fn the_sandbox_rosters_leave_the_stored_loot_cells_as_they_found_them() {
+        let real = GroupLootInfo {
+            method: 4,
+            master: 0,
+            threshold: 2,
+        };
+        let mut group = GroupState {
+            loot_stored: real,
+            ..GroupState::default()
+        };
+        let lines = synthetic_roster(&mut group, None);
+        assert!(
+            lines.iter().any(|l| l.key == "ERR_SET_LOOT_MASTER"),
+            "the sandbox still says what its tail changes"
+        );
+        assert_eq!(group.loot_stored, real);
+
+        let mut names = NameCache::default();
+        synthetic_raid(&mut group, &mut names, Some(ME));
+        assert_eq!(group.loot_stored, real);
+
+        group.clear_session();
+        assert_eq!(group.loot_stored, real, "`/partytest off`");
     }
 }
