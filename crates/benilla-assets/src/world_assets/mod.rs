@@ -1127,4 +1127,63 @@ mod tests {
             Some("mine")
         );
     }
+    /// A TGA header of `w` by `h` at 32 bits with no alpha bits and `data` after it. `0x5a37e0`
+    /// refuses the pixels, and `0x44a140` still makes the texture.
+    fn refused_tga(w: u16, h: u16, data: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; 18];
+        out[2] = 2;
+        out[12..14].copy_from_slice(&w.to_le_bytes());
+        out[14..16].copy_from_slice(&h.to_le_bytes());
+        out[16] = 32;
+        out[17] = 0x20;
+        out.extend_from_slice(data);
+        out
+    }
+
+    /// The addon corpus' three `BigWigs` ready-check icons are 32-bit TGAs with no alpha bits:
+    /// `0x44a140` returns each as a texture of its header's size once the header opens, and the
+    /// refused decode leaves it white (`0x44a2eb`).
+    #[test]
+    fn the_corpus_ready_check_icons_are_textures_of_their_size() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let corpus = benilla_formats::addon_corpus_or_skip!();
+        let chain = Mutex::new(Chain::open(&data).expect("open the chain"));
+        let loose = LooseFiles {
+            addons: Some(corpus),
+            install: None,
+        };
+        for name in ["Ready", "Waiting", "NotReady"] {
+            let path = format!("Interface\\AddOns\\BigWigs\\Icons\\ReadyCheck-{name}");
+            assert!(sprite_found(&chain, &loose, &path), "{name}");
+            assert_eq!(
+                sprite_dimensions(&chain, &loose, &path),
+                Some((64, 64)),
+                "{name}"
+            );
+        }
+    }
+
+    /// Through the store: a refused `.tga` in the AddOns folder is a texture of its header's size
+    /// for `SetTexture`'s loads, but a header that makes no texture (`0x448450` takes powers of
+    /// two below 1024) is a miss.
+    #[test]
+    fn a_refused_tga_in_the_addons_folder_is_a_texture_of_its_size() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = Mutex::new(Chain::open(&data).expect("open the chain"));
+        let addons = Tree::new("white");
+        let dir = addons.0.join("Foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Icon.tga"), refused_tga(8, 4, &[0; 128])).unwrap();
+        std::fs::write(dir.join("Odd.tga"), refused_tga(6, 4, &[0; 96])).unwrap();
+        let loose = LooseFiles {
+            addons: Some(addons.0.clone()),
+            install: None,
+        };
+        let icon = "Interface\\AddOns\\Foo\\Icon";
+        let odd = "Interface\\AddOns\\Foo\\Odd";
+        assert!(sprite_found(&chain, &loose, icon));
+        assert_eq!(sprite_dimensions(&chain, &loose, icon), Some((8, 4)));
+        assert!(sprite_found(&chain, &loose, odd));
+        assert_eq!(sprite_dimensions(&chain, &loose, odd), None);
+    }
 }
