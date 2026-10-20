@@ -83,6 +83,7 @@ fn row(name: &str, min_bid: u32, buyout: u32, bid: u32, owner: &str) -> AuctionI
         time_left: 4,
         link: Some("|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r".into()),
         random_property_id: 0,
+        charges: 0,
     }
 }
 

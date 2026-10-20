@@ -58,6 +58,11 @@ pub struct MailInboxRow {
     /// The enclosed item's random-suffix id (the wire `randomPropId`), 0 for none, which the
     /// reference's `SetInboxItem` hands the tooltip (`+0x424`); `item_name` carries its suffix.
     pub item_random_property_id: u32,
+    /// The enclosed item's charges and `(current, max)` durability off the wire, which
+    /// `SetInboxItem` writes into the tooltip's `+0x428` and `+0x438`/`+0x434` (`0x53566f`,
+    /// `0x535699`, `0x53568d`).
+    pub item_charges: i32,
+    pub item_durability: (u32, u32),
     /// The enclosed item's name; `None` while its template is in flight.
     pub item_name: Option<String>,
     pub item_texture: Option<String>,
@@ -1138,6 +1143,8 @@ mod tests {
             item_quality: (item_id != 0).then_some(1),
             can_delete: false, // a player's unreturned mail is returned, not deleted
             item_random_property_id: 0,
+            item_charges: 0,
+            item_durability: (0, 0),
             cod_payment: false,
             message_type: 0,
             mail_template_id: 0,

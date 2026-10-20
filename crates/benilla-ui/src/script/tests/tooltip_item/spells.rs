@@ -88,6 +88,7 @@ fn spell_line(trigger: u32, text: &str, charges: i32) -> ItemSpellLine {
         spell_id: 100,
         text: text.into(),
         charges,
+        block: 0,
         recipe: None,
     }
 }

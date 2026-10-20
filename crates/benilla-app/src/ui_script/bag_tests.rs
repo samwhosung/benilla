@@ -413,7 +413,7 @@ fn bag_tooltip_hangs_left_when_the_slot_sits_in_the_right_half() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -502,7 +502,7 @@ fn hovered_bag_tooltip_fills_itself_when_the_stats_land() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -621,7 +621,7 @@ fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     slots.insert(
@@ -655,7 +655,7 @@ fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -854,7 +854,7 @@ fn drag_across_two_slots_queues_the_same_move_a_click_pickup_would() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -952,7 +952,7 @@ fn a_second_bag_window_feeds_and_paints_via_the_bag_bar() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -1100,7 +1100,7 @@ pub(super) fn open_backpack_with_a_five_stack(s: &mut UiScript) -> (f32, f32) {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -1498,6 +1498,7 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
         use_fork: Default::default(),
         bar_placeable: true,
         consumable: false,
+        spell_charges: [0; 5],
         durability: None,
         flags: 0,
         item_id: 4496,

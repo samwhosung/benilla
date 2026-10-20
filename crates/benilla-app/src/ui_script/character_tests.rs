@@ -61,6 +61,7 @@ fn inventory_with_head_item() -> InventorySlots {
         use_fork: Default::default(),
         bar_placeable: true,
         consumable: false,
+        spell_charges: [0; 5],
         durability: None,
         flags: 0,
         item_id: 1234,
@@ -116,7 +117,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     benilla_ui::script::ContainerState {

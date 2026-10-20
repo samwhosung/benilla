@@ -77,6 +77,8 @@ pub(crate) struct AuctionRow {
     pub(crate) item_entry: u32,
     /// The random-suffix roll behind the name's suffix, the hover's enchant lines and the link.
     pub(crate) random_property_id: u32,
+    /// The wire's spell charges, the hover's `+0x428` (`0x535a4a`).
+    pub(crate) charges: i32,
     pub(crate) count: u32,
     pub(crate) name: Option<String>,
     pub(crate) texture: Option<String>,
@@ -413,6 +415,7 @@ fn resolve_row(
         auction_id: entry.auction_id,
         item_entry: entry.item_entry,
         random_property_id: roll,
+        charges: entry.spell_charges,
         count: entry.count,
         name,
         texture,
@@ -496,6 +499,7 @@ fn to_script_row(r: &AuctionRow) -> AuctionItemRow {
         auction_id: r.auction_id,
         item_id: r.item_entry,
         random_property_id: r.random_property_id,
+        charges: r.charges,
         name: r.name.clone(),
         texture: r.texture.clone(),
         count: r.count,

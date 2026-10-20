@@ -78,9 +78,19 @@ pub(in crate::script) struct ItemInstance {
     /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so
     /// with p6 = 1; every other source stores 0 there (`0x5326e0`).
     pub cooldown_ms: u32,
-    /// The object's `ITEM_FIELD_SPELL_CHARGES[0]` (`flds+0x28`), which scales the merchant price
-    /// (`0x52e43d`); 0 for a source with no object.
-    pub spell_charges_0: i32,
+    /// The object's `ITEM_FIELD_SPELL_CHARGES`, one per spell block (`flds+0x28`): the charges
+    /// lines (`0x52d9e9`) and the merchant price's scale (`0x52e43d`) read them, only with
+    /// [`Self::object`].
+    pub object_charges: [i32; 5],
+    /// The block's charges (`+0x428`). `None` is the -1 every setter's clear stores (`0x5326e0`,
+    /// `0x5321bf`); a record source stores its own (the trade partner's slot `0x534595`, a mail
+    /// item `0x53566f`, an auction `0x535a4a`), and `SetAction` the summed charges of every copy
+    /// (`0x532558`).
+    pub block_charges: Option<i32>,
+    /// The block's `(current, max)` durability (`+0x438`, `+0x434`): the trade partner's slot
+    /// (`0x5345b4`, `0x5345c0`) and a mail item (`0x53568d`, `0x535699`) carry one, every other
+    /// setter stores zeros (`0x5321cc`).
+    pub block_durability: (u32, u32),
 }
 
 impl ItemInstance {

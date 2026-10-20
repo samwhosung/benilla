@@ -74,6 +74,9 @@ pub struct ItemTemplateView {
     pub required_skill_name: Option<String>,
     pub required_spell: u32,
     pub required_spell_name: Option<String>,
+    /// The required spell and every later rank of it: knowing any meets the requirement
+    /// (`0x60c740`, `0x60c8d0` at `0x52d618`, `0x5eaa42`). Empty reads as the spell alone.
+    pub required_spell_ranks: Vec<u32>,
     /// The required honor rank (`+0x4c`): an `ITEM_REQ_SKILL` line naming the rank (`0x52d694`)
     /// and a leg of the usable gate (`0x5ea930`).
     pub required_honor_rank: u32,
@@ -117,6 +120,9 @@ pub struct ItemTemplateView {
 /// `Spell.dbc`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ItemSpellLine {
+    /// The block's ordinal, 0..=4: which of an item object's charges its line reads
+    /// (`0x52d9f4`).
+    pub block: u8,
     /// `ItemSpelltriggerType`: 0 "Use:", 1 "Equip:", 2 "Chance on hit:", any other the text
     /// alone (`0x52da37`..`0x52da61`).
     pub trigger: u32,

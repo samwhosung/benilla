@@ -363,6 +363,10 @@ fn resolve_row(
         }
         None => (0, 0, 0, None, None, None),
     };
+    // The block's charges and `(current, max)` durability (`0x53566f`, `0x535699`, `0x53568d`).
+    let (item_charges, item_durability) = entry.item.as_ref().map_or((0, (0, 0)), |att| {
+        (att.charges as i32, (att.durability, att.durability_max))
+    });
 
     let sender = entry
         .sender_guid
@@ -448,6 +452,8 @@ fn resolve_row(
         has_body: entry.item_text_id != 0,
         item_id,
         item_random_property_id: item_roll,
+        item_charges,
+        item_durability,
         item_name,
         item_texture,
         item_quality,

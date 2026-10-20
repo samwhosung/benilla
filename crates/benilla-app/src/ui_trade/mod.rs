@@ -648,6 +648,9 @@ fn resolve_slot(
         creator,
         creator_guid: item.creator,
         enchantment: None,
+        // The partner's block (`0x534595`, `0x5345c0`, `0x5345b4`).
+        charges: item.charges,
+        durability: (item.durability, item.max_durability),
         link,
     }
 }

@@ -601,6 +601,7 @@ fn slot_view(
             .then(|| content_guids.iter().filter(|&&g| g != 0).count() as u32),
         use_spell: t.and_then(|t| t.use_spell).map_or(0, |u| u.spell_id),
         spell_0: t.is_some_and(benilla_protocol::ItemInfo::has_spell_0),
+        spell_charges: std::array::from_fn(|i| obj.item_spell_charges(i as u8).unwrap_or(0)),
         use_fork: t.map_or(Default::default(), |t| {
             crate::ui_items::dispatch_fork(t, flags, obj.item_text_id().unwrap_or(0))
         }),
@@ -721,6 +722,7 @@ fn inventory_slots(
             enchants: Vec::new(),
             duration_ms: None,
             spell_0: false,
+            spell_charges: [0; 5],
         });
     }
     // Equipment 1..=19, then `Bag0Slot`..`Bag3Slot` (20..=23 in `PaperDollItemFrame.dbc`), the

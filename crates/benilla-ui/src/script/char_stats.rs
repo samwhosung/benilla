@@ -200,6 +200,9 @@ pub struct InvSlotView {
     /// The template's block 0 names a spell (`+0x11c`, any trigger): `GetInventoryItemCooldown`
     /// runs no query without one (`0x4c8b47`).
     pub spell_0: bool,
+    /// The worn object's `ITEM_FIELD_SPELL_CHARGES`, per spell block (`flds+0x28`), which its
+    /// tooltip's charges lines read (`0x52d9e9`); zeros for a visible-item record.
+    pub spell_charges: [i32; 5],
     /// The arm `UseInventoryItem` takes in the dispatcher, with no equip fork; `link` is set once
     /// the template is cached, which the dispatcher needs (`0x5d8d5c`).
     pub use_fork: super::container::UseFork,
@@ -559,6 +562,7 @@ impl InvSlotView {
             occupied_seats: slot.occupied_seats,
             use_spell: slot.use_spell,
             spell_0: slot.spell_0,
+            spell_charges: slot.spell_charges,
             link: slot.link.clone(),
             guid: slot.guid,
             creator: slot.creator.clone(),

@@ -171,12 +171,12 @@ fn a_wrapped_description_sizes_in_the_show_and_survives_the_reenter_loop() {
 fn a_bag_items_price_scales_by_its_charges_and_loses_its_repair_cost() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    let held = |guid: u64, count, spell_charges_0| ContainerSlot {
+    let held = |guid: u64, count, charges_0| ContainerSlot {
         count,
         quality: Some(1),
         item_id: 4376,
         guid,
-        spell_charges_0,
+        spell_charges: [charges_0, 0, 0, 0, 0],
         ..Default::default()
     };
     s.set_container(

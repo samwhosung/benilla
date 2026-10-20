@@ -59,6 +59,10 @@ pub struct TradeSlotItem {
     /// (`TradeFrame.lua:62`) and the slot's tooltip proposes (`0x534397`, `0x53459a`); `None` on
     /// every other slot and while nothing is cast.
     pub enchantment: Option<String>,
+    /// The partner's side only: the wire's charges and `(current, max)` durability, the block's
+    /// `+0x428` (`0x534595`) and `+0x438`/`+0x434` (`0x5345c0`, `0x5345b4`).
+    pub charges: i32,
+    pub durability: (u32, u32),
     /// The escaped item link the link verbs answer; `None` while the template is in flight, since
     /// it embeds the name and the quality.
     pub link: Option<String>,
@@ -501,6 +505,8 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             creator: s.creator.clone(),
             creator_guid: s.creator_guid,
             enchantment: None,
+            charges: 0,
+            durability: (0, 0),
             link: s.link.clone(),
         })
         .unwrap_or_else(|| TradeSlotItem {
@@ -807,6 +813,8 @@ mod tests {
             creator: None,
             creator_guid: 0,
             enchantment: None,
+            charges: 0,
+            durability: (0, 0),
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
             )),
@@ -856,6 +864,8 @@ mod tests {
             creator: None,
             creator_guid: 0,
             enchantment: None,
+            charges: 0,
+            durability: (0, 0),
             link: None,
         });
         s.set_trade(Some(st));

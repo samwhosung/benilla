@@ -834,6 +834,7 @@ pub(super) fn seed_ui_fixture(
                         text: "Restores 243 health over 21 sec.  Must remain seated while eating."
                             .into(),
                         charges: 1,
+                        block: 0,
                         recipe: None,
                     }],
                     description: "A stout little shield of Northshire pine.".into(),
@@ -1611,7 +1612,7 @@ fn seed_cooldown_filmstrip(
                 occupied_seats: None,
                 enchants: Vec::new(),
                 spell_0: false,
-                spell_charges_0: 0,
+                spell_charges: [0; 5],
             },
         );
     }
@@ -1675,7 +1676,7 @@ fn seed_bag_window(
             occupied_seats: None,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         }
     };
     // Five items under their real template ids. Game slot 1, the Small Shield the Tooltip
@@ -1773,7 +1774,7 @@ fn seed_equipped_bags(
             occupied_seats: None,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         };
 
     // The equipped-bag slots (inv ids 20-23, `Bag0Slot`-`Bag3Slot`) get an icon each, so each

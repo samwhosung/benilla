@@ -69,9 +69,10 @@ pub struct ContainerSlot {
     /// The template's block 0 names a spell (`+0x11c`, any trigger): `GetInventoryItemCooldown`
     /// runs no query without one (`0x4c8b47`).
     pub spell_0: bool,
-    /// `ITEM_FIELD_SPELL_CHARGES[0]`, the charges left on block 0: the merchant price scales by it
-    /// (`flds+0x28`, `0x52e43d`).
-    pub spell_charges_0: i32,
+    /// `ITEM_FIELD_SPELL_CHARGES`, the charges left on each spell block (`flds+0x28`): the
+    /// tooltip's charges lines read them (`0x52d9e9`), and the merchant price scales by block 0's
+    /// (`0x52e43d`).
+    pub spell_charges: [i32; 5],
     /// The instance carries `ITEM_FIELD_ITEM_TEXT_ID` (a mail copy): `GetContainerItemInfo`'s
     /// `readable`, which shows the Inspect cursor (`ContainerFrame.lua:638`).
     pub readable: bool,
@@ -1292,7 +1293,7 @@ mod tests {
                 equip_slots: Vec::new(),
                 cooldown: None,
                 spell_0: false,
-                spell_charges_0: 0,
+                spell_charges: [0; 5],
                 readable: false,
                 creator: None,
                 gift_creator: None,
@@ -2035,7 +2036,7 @@ mod tests {
                 equip_slots: Vec::new(),
                 cooldown: None,
                 spell_0: false,
-                spell_charges_0: 0,
+                spell_charges: [0; 5],
                 readable: false,
                 creator: None,
                 gift_creator: None,

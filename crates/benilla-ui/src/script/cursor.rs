@@ -1059,7 +1059,7 @@ mod tests {
                 flags: 0,
                 enchants: Vec::new(),
                 spell_0: false,
-                spell_charges_0: 0,
+                spell_charges: [0; 5],
             },
         );
         crate::script::container::ContainerState {

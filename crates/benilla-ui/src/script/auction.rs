@@ -44,6 +44,9 @@ pub struct AuctionItemRow {
     /// The wire's `randomPropertyId`, 0 when unrolled; [`Self::name`] already carries its suffix,
     /// and the reference's `SetAuctionItem` writes it into the tooltip's `+0x424`.
     pub random_property_id: u32,
+    /// The wire's spell charges, which `SetAuctionItem` writes into the tooltip's `+0x428`
+    /// (`0x535a4a`).
+    pub charges: i32,
     /// `None` while the item template query is in flight.
     pub name: Option<String>,
     pub texture: Option<String>,

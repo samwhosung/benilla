@@ -261,7 +261,7 @@ pub(in crate::script) fn build_item(
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         // An item object's charges and repair cost (`0x52e426` tests the object).
         let object = build.inst.as_ref().filter(|i| i.object);
-        let charges = object.map(|i| i.spell_charges_0);
+        let charges = object.map(|i| i.object_charges[0]);
         let cost = object
             .and_then(|i| model.repair_costs.own.get(&i.guid))
             .copied()

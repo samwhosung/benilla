@@ -1240,7 +1240,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(

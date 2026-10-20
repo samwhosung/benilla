@@ -92,7 +92,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(

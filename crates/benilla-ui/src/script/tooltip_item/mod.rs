@@ -131,7 +131,9 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         block_wrapped: false,
         proposed_enchant: None,
         cooldown_ms: 0,
-        spell_charges_0: s.spell_charges_0,
+        object_charges: s.spell_charges,
+        block_charges: None,
+        block_durability: (0, 0),
     }
 }
 
@@ -205,6 +207,7 @@ pub(super) fn worn_instance(s: &crate::script::InvSlotView, object: bool) -> ren
         enchants: s.enchants.clone(),
         duration_ms: s.duration_ms,
         object,
+        object_charges: s.spell_charges,
         ..Default::default()
     }
 }

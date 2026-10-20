@@ -232,6 +232,13 @@ fn template_view(
         required_spell_name: (t.required_spell != 0)
             .then(|| spell_name(t.required_spell))
             .flatten(),
+        // Knowing the spell or a later rank of it meets the requirement (`0x60c740`,
+        // `0x60c8d0`).
+        required_spell_ranks: match (t.required_spell, skill_lines) {
+            (0, _) => Vec::new(),
+            (id, Some(c)) => c.rank_and_later(id),
+            (id, None) => vec![id],
+        },
         required_honor_rank: t.required_honor_rank,
         required_city_rank: t.required_city_rank,
         // `ITEM_REQ_REPUTATION`, the reference's key for this line (`0x854b8c`): faction, then
@@ -268,6 +275,7 @@ fn template_view(
                     spell_id: s.spell_id,
                     text: spell_text(s.spell_id)?,
                     charges: s.charges,
+                    block: s.index,
                     recipe: recipe_of(spells, s.spell_id),
                 })
             })
@@ -910,8 +918,9 @@ fn resolve_slot(
         bar_placeable: t.placeable_on_action_bar(),
         consumable: t.is_consumable(),
         spell_0: t.has_spell_0(),
-        // The sell price's charge scale reads it (`flds+0x28`, `0x52e43d`).
-        spell_charges_0: fields.item_spell_charges(0).unwrap_or(0),
+        // The tooltip's charges lines (`0x52d9e9`) and the sell price's charge scale
+        // (`0x52e43d`) read them (`flds+0x28`).
+        spell_charges: std::array::from_fn(|i| fields.item_spell_charges(i as u8).unwrap_or(0)),
         cooldown: use_cooldown(
             &t,
             entry,
@@ -1978,7 +1987,7 @@ mod tests {
         let potion = slot(0xA2).expect("an occupied slot");
         assert_eq!((potion.quality, potion.inventory_type), (Some(1), 0));
         // The merchant price's charge scale reads the object's own (`flds+0x28`, `0x52e43d`).
-        assert_eq!((potion.spell_charges_0, sword.spell_charges_0), (-3, 0));
+        assert_eq!((potion.spell_charges[0], sword.spell_charges[0]), (-3, 0));
         let pending = slot(0xA3).expect("an occupied slot");
         assert_eq!((pending.quality, pending.inventory_type), (None, 0));
         // The guid and the class: the lock reads the one from the first push, and the

@@ -72,6 +72,7 @@ fn seed_items(s: &mut UiScript) {
         use_fork: Default::default(),
         bar_placeable: true,
         consumable: false,
+        spell_charges: [0; 5],
         durability: None,
         flags: 0,
         item_id: 1234,
@@ -148,7 +149,7 @@ fn seed_items(s: &mut UiScript) {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
-            spell_charges_0: 0,
+            spell_charges: [0; 5],
         },
     );
     s.set_container(
@@ -209,6 +210,7 @@ fn doll_hover_renders_the_live_instance() {
         use_fork: Default::default(),
         bar_placeable: true,
         consumable: false,
+        spell_charges: [0; 5],
         durability: Some((0, 40)),
         flags: 0,
         item_id: 1234,
