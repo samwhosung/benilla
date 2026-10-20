@@ -10,10 +10,7 @@ use super::table::{all_rows, Reference};
 
 /// `same` rows whose shipped default is not yet the registered string, each with the issue that
 /// fixes it. The test fails on any other, and on a listed row that has come right.
-const KNOWN: &[(&str, &str)] = &[
-    ("Sound_EnableSoundWhenGameIsInBG", "#545"),
-    ("SoundBufferSize", "#1270"),
-];
+const KNOWN: &[(&str, &str)] = &[("Sound_EnableSoundWhenGameIsInBG", "#545")];
 
 /// A default the client computes at registration (`?` in the table), and the string it computes on
 /// a current machine. `SoundBufferSize` (`0x457520`) picks "50" (`0x835e10`) when the detection

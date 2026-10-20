@@ -777,6 +777,17 @@ impl StreamWatch {
 pub(super) mod tests {
     use super::*;
 
+    /// `SoundBufferSize` ships the depth the ring runs at when the config holds none
+    /// (`output::MIX_AHEAD_MS`), so `GetCVar` never answers a depth the mixer is not at.
+    #[test]
+    fn the_cvars_default_is_the_depth_the_mixer_falls_back_to() {
+        let row = crate::cvars::REGISTERED
+            .iter()
+            .find(|r| r.name == "SoundBufferSize")
+            .expect("the row");
+        assert_eq!(row.default, output::MIX_AHEAD_MS.to_string());
+    }
+
     fn preset(decay: f32, hf_ratio: f32, room: i32, room_hf: i32, reverb: i32) -> SoundProvider {
         SoundProvider {
             id: 0,

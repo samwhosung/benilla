@@ -1358,6 +1358,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "SoundBufferSize",
                 "SoundReverb",
                 "frillDensity",
                 "gxApi",

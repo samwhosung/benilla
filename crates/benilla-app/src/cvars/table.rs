@@ -232,9 +232,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `0x457520`'s: "50" (`0x835e10`) when the detection record has processor class 1 at `+0x18`
     // (`0x639a00`), else "100" (`0x835e0c`). Class 1 is a host above 1500 MHz (`0x6414c0`), and the
     // record is filled (`0x63a26b`, called at `0x4027e7`) before the sound registration, so every
-    // current machine registers "50". Ours is the larger, since the depth has to hide a whole
-    // stalled IO cycle (`sound::output::MIX_AHEAD_MS`); `reference_table::KNOWN` holds the gap.
-    same("SoundBufferSize", "100").latched(),
+    // current machine registers "50". benilla ships the other string it picks between, "100"
+    // (`sound::output::MIX_AHEAD_MS` is the same number, and a test holds the two together).
+    deviates(
+        "SoundBufferSize",
+        "100",
+        "50",
+        "the reference registers 50 on a host above 1500 MHz, which is every current machine \
+         (`0x457520`, `0x6414c0`); benilla ships the other string it picks between, 100, because \
+         the ring this number sizes is filled by the audio-render thread, and its depth is the \
+         margin that keeps a late render thread or a skipped IO cycle out of the speaker",
+    )
+    .latched(),
     // benilla's own, not a 1.12 CVar. Deviation: the reference clips at full scale and has no
     // headroom mechanism (its SFX-bus duck `0x457960` is a sidechain armed only by server-pushed
     // voice lines); benilla limits because every SFX is mastered to full scale and overlapping
