@@ -1279,7 +1279,7 @@ mod tests {
                 // Two blocks on one watch: two runs.
                 values(ME, &[(XP, 40)]),
                 values(ME, &[(STAT0, 21), (XP, 40)]),
-                // A re-create compares like a values block.
+                // A create of the shown player runs each watch it moved, over every field.
                 create(ME, EntityKind::Player, &[(STAT0, 21), (XP, 50)]),
             ]),
         );

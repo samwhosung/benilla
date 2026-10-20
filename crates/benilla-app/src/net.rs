@@ -2474,7 +2474,8 @@ pub(crate) struct PetDismissSoundMessage {
 mod tests {
     use super::*;
 
-    /// A re-create of a live object notifies like a delta.
+    /// The write's edges: one per moved dword, none for a first create; a re-create replaces the
+    /// store, clearing what it omits (`0x466582`).
     #[test]
     fn the_merge_emits_one_edge_per_moved_dword_and_none_for_a_first_create() {
         use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_LEVEL};
