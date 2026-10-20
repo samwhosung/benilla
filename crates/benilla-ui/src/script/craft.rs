@@ -684,10 +684,6 @@ mod tests {
                 3
             )
         );
-        assert_eq!(
-            s.eval::<String>("return GetCraftButtonToken()").unwrap(),
-            "CREATE"
-        );
 
         assert!(s
             .eval::<bool>("local _,_,t = GetCraftInfo(1) return t ~= 'header'")
@@ -696,6 +692,37 @@ mod tests {
         s.run("ExpandCraftSkillLine(1) CollapseCraftSkillLine(1)")
             .unwrap();
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 2);
+    }
+
+    /// `GetCraftButtonToken` (`0x4f6c90`) pushes the word at the open craft type (`0xbdcfb8`) in
+    /// the table at `0x84d0f4`: `USE`, `TRAIN`, `DISGUISE`, `ENSCRIBE`, then a zero word, which
+    /// pushes nil. A close zeroes the type (`0x4f5fe0`), so a closed window answers `USE`.
+    #[test]
+    fn the_button_token_is_the_open_craft_types_word() {
+        let mut s = UiScript::new().unwrap();
+        let token = |s: &UiScript| {
+            s.eval::<Option<String>>("return GetCraftButtonToken()")
+                .unwrap()
+        };
+        assert_eq!(token(&s).as_deref(), Some("USE"), "no window");
+        for (craft_type, word) in [
+            (1, Some("TRAIN")),
+            (2, Some("DISGUISE")),
+            (3, Some("ENSCRIBE")),
+            (4, None),
+        ] {
+            let mut st = state();
+            st.craft_type = craft_type;
+            s.set_craft(Some(st));
+            assert_eq!(token(&s).as_deref(), word, "type {craft_type}");
+            assert_eq!(s.arity("GetCraftButtonToken()").unwrap(), 1);
+        }
+        s.set_craft(Some(state()));
+        s.run("CloseCraft()").unwrap();
+        assert_eq!(token(&s).as_deref(), Some("USE"), "closed in the verb");
+        s.set_craft(Some(state()));
+        s.set_craft(None);
+        assert_eq!(token(&s).as_deref(), Some("USE"), "closed by the app");
     }
 
     #[test]
