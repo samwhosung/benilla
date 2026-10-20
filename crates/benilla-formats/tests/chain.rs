@@ -361,6 +361,72 @@ fn terrain_chunks_carry_unit_upward_mcnr_normals() {
     );
 }
 
+/// `CMapChunk::LoadNormals` (`0x6aff10`) keeps the MCNR bytes in file order, so they are X, Y, Z.
+/// Against the normal the chunk's own heights describe (central differences over the outer 9x9
+/// grid, X stepping south and Y west as `adt_to_tile_mesh` lays them), the reader's
+/// `to_normalized()` agrees on the chunks with relief and the Y/Z swap does not.
+#[test]
+fn mcnr_bytes_are_x_y_z_against_the_normal_the_heights_describe() {
+    let data = benilla_formats::wow_data_or_skip!();
+
+    let mut chain = open_chain(&data).expect("open vanilla patch chain");
+    let (tx, ty) = benilla_formats::find_tile_near(&mut chain, "Azeroth", -8840.56, 489.7)
+        .expect("find an Elwynn tile");
+    let bytes = chain
+        .read_file(&format!("World\\Maps\\Azeroth\\Azeroth_{tx}_{ty}.adt"))
+        .expect("read the tile");
+    let benilla_adt::ParsedAdt::Root(root) =
+        benilla_adt::parse_adt(&mut std::io::Cursor::new(&bytes[..])).expect("parse the tile");
+
+    let unit = benilla_formats::TILE_SIZE / 16.0 / 8.0;
+    let (mut vertices, mut as_xyz, mut as_xzy) = (0usize, 0.0f64, 0.0f64);
+    for chunk in &root.mcnk_chunks {
+        let (Some(mcvt), Some(mcnr)) = (&chunk.heights, &chunk.normals) else {
+            continue;
+        };
+        if mcvt.heights.len() < 145 || mcnr.normals.len() < 145 {
+            continue;
+        }
+        let outer = |row: usize, col: usize| f64::from(mcvt.heights[row * 17 + col]);
+        let (lo, hi) = (0..9)
+            .flat_map(|row| (0..9).map(move |col| (row, col)))
+            .map(|(row, col)| outer(row, col))
+            .fold((f64::MAX, f64::MIN), |(lo, hi), h| (lo.min(h), hi.max(h)));
+        if hi - lo < 20.0 {
+            continue;
+        }
+        for row in 1..8 {
+            for col in 1..8 {
+                // The normal is (-dh/dX, -dh/dY, 1); rows step south and columns west, so each
+                // slope is the next row's (column's) height less the last's.
+                let slope_x = (outer(row + 1, col) - outer(row - 1, col)) / (2.0 * f64::from(unit));
+                let slope_y = (outer(row, col + 1) - outer(row, col - 1)) / (2.0 * f64::from(unit));
+                let len = (slope_x * slope_x + slope_y * slope_y + 1.0).sqrt();
+                let geometric = [slope_x / len, slope_y / len, 1.0 / len];
+                let n = mcnr.normals[row * 17 + col].to_normalized().map(f64::from);
+                let norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                let cos = |v: [f64; 3]| {
+                    (v[0] * geometric[0] + v[1] * geometric[1] + v[2] * geometric[2]) / norm
+                };
+                as_xyz += cos(n);
+                as_xzy += cos([n[0], n[2], n[1]]);
+                vertices += 1;
+            }
+        }
+    }
+    assert!(
+        vertices > 500,
+        "only {vertices} vertices over 20 yd of relief"
+    );
+    let (as_xyz, as_xzy) = (as_xyz / vertices as f64, as_xzy / vertices as f64);
+    eprintln!("{vertices} vertices: mean cosine {as_xyz:.4} as X, Y, Z; {as_xzy:.4} swapped");
+    assert!(as_xyz > 0.9, "X, Y, Z reads at mean cosine {as_xyz:.4}");
+    assert!(
+        as_xzy < 0.5,
+        "the Y/Z swap reads at mean cosine {as_xzy:.4}"
+    );
+}
+
 /// Terrain winds CCW seen from above, so it draws backface-culled as the reference does: its chunk
 /// pass never sets `EGxRs 0x14` and inherits `CULL_FACE = 1`. Exact on the XY lattice (`0x6b0e50`
 /// takes X and Y from the grid, only Z from MCVT); against the authored MCNR normals it holds bar

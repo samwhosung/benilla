@@ -657,6 +657,35 @@ mod tests {
         assert!(root.mcnk_chunks[0].liquids.is_empty());
     }
 
+    /// `CMapChunk::LoadNormals` (`0x6aff10`) stores each MCNR triple's three signed bytes as the
+    /// vector's components in file order, each times 1/127 (`0x810c08`): the bytes are X, Y, Z.
+    #[test]
+    fn mcnr_normals_are_x_y_z_in_file_order() {
+        let triple = |i: usize| [i as u8, (200 + i) as u8, 127];
+        let mcnr: Vec<u8> = (0..145).flat_map(triple).collect();
+        let mut data = vec![0u8; 128];
+        // The MCNR offset counts from the MCNK's magic, so the 8-byte chunk header is in it.
+        data[0x18..0x1c].copy_from_slice(&(8u32 + 128).to_le_bytes());
+        data.extend(chunk(b"RNCM", &mcnr));
+        let b = chunk(b"KNCM", &data);
+        let ParsedAdt::Root(root) = parse(&b).expect("parses");
+
+        let normals = &root.mcnk_chunks[0].normals.as_ref().expect("MCNR").normals;
+        assert_eq!(normals.len(), 145);
+        for (i, n) in normals.iter().enumerate() {
+            let [x, y, z] = triple(i).map(|b| b as i8);
+            assert_eq!((n.x, n.y, n.z), (x, y, z), "normal {i}");
+            assert_eq!(
+                n.to_normalized(),
+                [x, y, z].map(|c| f32::from(c) / 127.0),
+                "normal {i}"
+            );
+        }
+        // Flat ground: the bytes 0, 0, 127 are straight up in WoW's Z.
+        let up = VertexNormal { x: 0, y: 0, z: 127 };
+        assert_eq!(up.to_normalized(), [0.0, 0.0, 1.0]);
+    }
+
     /// Each block keeps its own cell flags, so the river and the ocean tell apart by nibble.
     #[test]
     fn a_two_bit_mcnk_yields_two_mclq_blocks_in_disk_order() {

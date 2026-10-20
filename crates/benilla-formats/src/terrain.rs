@@ -676,6 +676,32 @@ mod tests {
         }
     }
 
+    /// One tile of a single flat MCNK (heights 0 over a base of 50) whose every MCNR normal is the
+    /// bytes `n`.
+    fn flat_tile(n: [u8; 3]) -> Vec<u8> {
+        let chunk = |magic: &[u8; 4], payload: &[u8]| {
+            [&magic[..], &(payload.len() as u32).to_le_bytes(), payload].concat()
+        };
+        let mcvt = chunk(b"TVCM", &[0u8; 145 * 4]);
+        let mcnr = chunk(b"RNCM", &[n.repeat(145), vec![0; 13]].concat());
+        let mut h = vec![0u8; 128];
+        h[0x14..0x18].copy_from_slice(&(8u32 + 128).to_le_bytes()); // MCVT, from the MCNK's magic
+        h[0x18..0x1c].copy_from_slice(&(8 + 128 + mcvt.len() as u32).to_le_bytes()); // MCNR
+        h[0x70..0x74].copy_from_slice(&50f32.to_le_bytes()); // base height
+        chunk(b"KNCM", &[h, mcvt, mcnr].concat())
+    }
+
+    /// `CMapChunk::LoadNormals` (`0x6aff10`) keeps the MCNR bytes in file order, X, Y, Z, so the
+    /// mesh's normal is the bytes over 127 with no swap.
+    #[test]
+    fn the_mesh_normals_are_the_mcnr_bytes_in_file_order() {
+        let mesh = adt_to_tile_mesh(&flat_tile([0, 0, 127])).unwrap();
+        assert_eq!(mesh.chunks[0].normals[0], [0.0, 0.0, 1.0]);
+        let mesh = adt_to_tile_mesh(&flat_tile([127, 64, 0])).unwrap();
+        assert_eq!(mesh.chunks[0].normals[0], [1.0, 64.0 / 127.0, 0.0]);
+        assert_eq!(mesh.chunks[0].normals.len(), 145);
+    }
+
     #[test]
     fn height_at_interpolates_inside_and_misses_holes_and_off_footprint() {
         // The north half is one quad rising to z=10 at the middle; the south half is a hole.
