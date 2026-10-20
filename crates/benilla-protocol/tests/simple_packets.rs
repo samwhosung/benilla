@@ -417,7 +417,7 @@ fn durability_damage_death_is_an_empty_body_cue() {
 
 /// `SMSG_PLAYER_SKINNED` (0x2BC): one byte, which the handler reads (`0x5e7d4a`) and hands on as
 /// its truth (`0x5e7d52` `setne`) to `PLAYER_SKINNED` (`0x48f400`). vmangos sends `freeRepop` 0
-/// (`Packets/Misc.h:815`).
+/// (`Packets/Misc.h:816`).
 #[test]
 fn player_skinned_decodes_its_byte_as_a_truth() {
     for (body, free_repop) in [(hx("00"), false), (hx("01"), true), (hx("80"), true)] {

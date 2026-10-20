@@ -1084,6 +1084,10 @@ fn parse_server_body(
         opcode::MSG_CORPSE_QUERY => {
             ServerPacket::CorpseQuery(death::read_corpse_query_response(&mut r)?)
         }
+        // `0x5e7d40`: the byte (`0x418cb0`), then its truth (`0x5e7d52` `setne`).
+        opcode::SMSG_PLAYER_SKINNED => ServerPacket::PlayerSkinned {
+            free_repop: read_u8(&mut r)? != 0,
+        },
         opcode::SMSG_DURABILITY_DAMAGE_DEATH => ServerPacket::DurabilityDamageDeath,
         opcode::SMSG_CORPSE_RECLAIM_DELAY => ServerPacket::CorpseReclaimDelay {
             delay_ms: death::read_corpse_reclaim_delay(&mut r)?,

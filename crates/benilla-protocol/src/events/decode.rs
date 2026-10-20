@@ -492,6 +492,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::CorpseReclaimDelay { delay_ms } => {
             vec![SessionEvent::CorpseReclaimDelay { delay_ms }]
         }
+        ServerPacket::PlayerSkinned { free_repop } => {
+            vec![SessionEvent::PlayerSkinned { free_repop }]
+        }
         ServerPacket::DurabilityDamageDeath => vec![SessionEvent::DurabilityDamageDeath],
         ServerPacket::ResurrectRequest(r) => vec![SessionEvent::ResurrectRequest {
             caster: r.caster,

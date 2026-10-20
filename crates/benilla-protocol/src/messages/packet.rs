@@ -891,6 +891,11 @@ pub enum ServerPacket {
     CorpseReclaimDelay {
         delay_ms: u32,
     },
+    /// `SMSG_PLAYER_SKINNED`: whether its one byte is nonzero, which the handler hands on as is
+    /// (`0x5e7d52`); vmangos sends `freeRepop` 0 (`Packets/Misc.h:816`).
+    PlayerSkinned {
+        free_repop: bool,
+    },
     /// `SMSG_DURABILITY_DAMAGE_DEATH` (empty): the 10% death durability loss, a red error line.
     DurabilityDamageDeath,
     /// `SMSG_RESURRECT_REQUEST`: a resurrection offer.
@@ -1509,6 +1514,7 @@ impl ServerPacket {
             ServerPacket::ItemPushResult(_) => "SMSG_ITEM_PUSH_RESULT".into(),
             ServerPacket::CorpseQuery(_) => "MSG_CORPSE_QUERY".into(),
             ServerPacket::CorpseReclaimDelay { .. } => "SMSG_CORPSE_RECLAIM_DELAY".into(),
+            ServerPacket::PlayerSkinned { .. } => "SMSG_PLAYER_SKINNED".into(),
             ServerPacket::DurabilityDamageDeath => "SMSG_DURABILITY_DAMAGE_DEATH".into(),
             ServerPacket::ResurrectRequest(_) => "SMSG_RESURRECT_REQUEST".into(),
             ServerPacket::SpiritHealerConfirm { .. } => "SMSG_SPIRIT_HEALER_CONFIRM".into(),

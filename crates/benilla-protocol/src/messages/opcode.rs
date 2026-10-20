@@ -800,6 +800,9 @@ pub const SMSG_CORPSE_RECLAIM_DELAY: u16 = 0x0269; // 617
 /// `UseSoulstone()`: empty body; the server casts our `PLAYER_SELF_RES_SPELL` and zeroes it
 /// (`SpellHandler.cpp:461`). No answer packet, only descriptor deltas.
 pub const CMSG_SELF_RES: u16 = 0x02B3; // 691
+/// An enemy took our insignia in a battleground: one byte, `freeRepop`, which vmangos sends as 0
+/// (`Player.cpp:7653-7654`).
+pub const SMSG_PLAYER_SKINNED: u16 = 0x02BC; // 700
 /// A non-PvP death's 10% durability loss: empty body, a red error line (`Unit.cpp:1170-1182`).
 pub const SMSG_DURABILITY_DAMAGE_DEATH: u16 = 0x02BD; // 701
 

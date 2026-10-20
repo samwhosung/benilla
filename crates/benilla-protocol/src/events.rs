@@ -921,6 +921,9 @@ pub enum SessionEvent {
     },
     /// Corpse reclaim delay (`SMSG_CORPSE_RECLAIM_DELAY`): 30 s, 60 or 120 s on repeated deaths.
     CorpseReclaimDelay { delay_ms: u32 },
+    /// An enemy took our insignia (`SMSG_PLAYER_SKINNED`): `PLAYER_SKINNED` with the byte's truth
+    /// (`0x5e7d40` → `0x48f400`).
+    PlayerSkinned { free_repop: bool },
     /// The 10% death durability loss (`SMSG_DURABILITY_DAMAGE_DEATH`, empty body): the red line.
     DurabilityDamageDeath,
     /// A resurrect offer (`SMSG_RESURRECT_REQUEST`), answered by `CMSG_RESURRECT_RESPONSE`.
