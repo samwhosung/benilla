@@ -1406,7 +1406,11 @@ fn feed_units(
     // `ResMut` because the guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY`.
     mut guild: ResMut<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,
+    // Our player's create since this feed last ran: an arrival (`0x5dea50`), which a `/reload`'s
+    // cascade lacks. The feed runs only with an interface up, so an arrival before one waits.
+    arrivals: Query<(), Added<SelfPlayer>>,
 ) {
+    let arrived = !arrivals.is_empty();
     let p = hosted.p0();
     let selection_changed = p.is_changed();
     let selection = *p;
@@ -1666,7 +1670,7 @@ fn feed_units(
         // in the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a
         // worldport's re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry
         // and forget the player-global memos so the next character seeds them.
-        if let Some((_, me)) = self_pair {
+        if let Some((store, me)) = self_pair {
             if !memo.entered_world {
                 gate.audit("feed_units", "the world-enter events");
                 // `"player"` names us when the cascade runs, from our own create: the stock windows
@@ -1674,6 +1678,12 @@ fn feed_units(
                 // ahead of the aura feed's full resolver push, which this feed is not ordered
                 // against.
                 script.seat_player_guid(me.0);
+                // The arrival's ghost state (`0x5deb2a` → `0x5de9c0`) runs ahead of its cascade
+                // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
+                // ghost's leg is its tutorial (`crate::tutorial`).
+                if arrived && store.0.player_flags() & 0x10 == 0 {
+                    script.fire_event("PLAYER_UNGHOST", vec![]);
+                }
                 script.fire_world_enter();
                 memo.entered_world = true;
             }

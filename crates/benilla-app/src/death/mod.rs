@@ -1,7 +1,8 @@
 //! Death and resurrection: the wire-fed stores, the events into the Lua UI and the intents back
 //! to the wire. Dead is health 0 and ghost is `PLAYER_FLAGS` bit 0x10, read off the self
-//! descriptor each frame; `PLAYER_ALIVE` fires on release and on a pre-release res,
-//! `PLAYER_UNGHOST` on ghost to alive.
+//! descriptor each frame; `PLAYER_ALIVE` fires on release and on a pre-release res.
+//! `PLAYER_UNGHOST` is the ghost state's (`0x5de9c0`), signalled where it runs: the ghost bit's
+//! clear ([`crate::field_watch`]) and an alive arrival (`crate::ui_unit`).
 
 use bevy::prelude::*;
 
@@ -1206,9 +1207,6 @@ fn fire_vm_edges(script: &mut UiScript, prev: Option<(bool, bool)>, dead: bool, 
             script.unlock_all_items();
             script.fire_event("PLAYER_ALIVE", vec![]);
         }
-        (Some((_, true)), false, false) => {
-            script.fire_event("PLAYER_UNGHOST", vec![]);
-        }
         _ => {}
     }
 }
@@ -1247,7 +1245,10 @@ mod edge_tests {
         s.lock_item(ITEM);
         let _ = seen(&s);
         super::fire_vm_edges(&mut s, Some((true, true)), false, false);
-        assert_eq!(seen(&s), ["PLAYER_UNGHOST"], "the corpse run's end");
+        assert!(
+            seen(&s).is_empty(),
+            "the corpse run's end: its event is the ghost bit's (`0x5de9c0`)"
+        );
         assert!(s.item_locked(ITEM));
     }
 }

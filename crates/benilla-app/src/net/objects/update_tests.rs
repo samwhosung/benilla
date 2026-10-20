@@ -634,7 +634,8 @@ fn a_first_pass_guids_values_block_applies_behind_the_header_byte() {
 }
 
 /// A first create runs no watch (`0x465d80`), so the active player's flag tutorials wait for a
-/// change after it: a cross-map port creates the player afresh (`0x5dec7b`).
+/// change after it: a cross-map port creates the player afresh (`0x5dec7b`). The ghost tutorial's
+/// arrival leg is the arrival's own (`0x5deb2a`, `crate::tutorial`), no notice.
 #[test]
 fn a_first_create_raises_no_flag_tutorial() {
     use crate::field_watch::FieldNotice;

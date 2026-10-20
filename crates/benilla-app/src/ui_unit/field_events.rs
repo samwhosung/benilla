@@ -325,6 +325,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PET_ATTACK_STOP => "PET_ATTACK_STOP",
         id::PLAYER_GUILD_UPDATE => "PLAYER_GUILD_UPDATE",
         id::TABARD_CANSAVE_CHANGED => "TABARD_CANSAVE_CHANGED",
+        id::PLAYER_UNGHOST => "PLAYER_UNGHOST",
         id::PLAYER_UPDATE_RESTING => "PLAYER_UPDATE_RESTING",
         id::PET_UI_UPDATE => "PET_UI_UPDATE",
         id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",
@@ -1214,6 +1215,8 @@ mod tests {
                 for file in [
                     r"Interface\FrameXML\GlobalStrings.lua",
                     r"Interface\FrameXML\Fonts.xml",
+                    // `TEXT` (`BasicControls.xml:24`), which the popups' file reads.
+                    r"Interface\FrameXML\BasicControls.xml",
                     r"Interface\FrameXML\UIParent.xml",
                     r"Interface\FrameXML\MoneyFrame.lua",
                     r"Interface\FrameXML\MoneyFrame.xml",
@@ -1221,6 +1224,9 @@ mod tests {
                     r"Interface\FrameXML\UIPanelTemplates.lua",
                     r"Interface\FrameXML\UIPanelTemplates.xml",
                     r"Interface\FrameXML\OptionsFrameTemplates.xml",
+                    // `UIParent`'s `PLAYER_UNGHOST` arm, which an alive arrival signals ahead of
+                    // the cascade, hides the resurrect popups (`UIParent.lua:251-257`).
+                    r"Interface\FrameXML\StaticPopup.xml",
                     r"Interface\FrameXML\TextStatusBar.lua",
                     r"Interface\FrameXML\TextStatusBar.xml",
                     r"Interface\FrameXML\MainMenuBar.xml",
