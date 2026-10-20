@@ -86,8 +86,9 @@ pub struct CraftState {
     pub name: String,
     pub rank: u32,
     pub max_rank: u32,
-    /// The opener spell's `EffectMiscValue[0]`, stored at `ds:0xbdcfb8`: 1 Beast Training, 3
-    /// Enchanting. It picks the row comparator (`0x4f6765`).
+    /// The opener spell's `EffectMiscValue[0]`, stored at `ds:0xbdcfb8`: 1 Beast Training, 2
+    /// Disguise, 3 Enchanting. It picks the row comparator (`0x4f6765`) and the button token
+    /// (`0x4f6c90`).
     pub craft_type: u32,
     /// In any order; [`UiScript::set_craft`] sorts them.
     pub recipes: Vec<CraftRecipe>,
@@ -420,11 +421,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftButtonToken() → "CREATE", the global naming the button's label
-    // (`Blizzard_CraftUI.lua:106`); Beast Training's "TRAIN" is not built.
+    // GetCraftButtonToken() (`0x4f6c90`): the word at the open craft type (`0xbdcfb8`) in the
+    // table at `0x84d0f4`, the global the stock window labels its button with
+    // (`Blizzard_CraftUI.lua:106`). A close zeroes the type, so a closed window answers `USE`.
+    // The read has no bound check: the word after the table is 0, which pushes nil, as every type
+    // past 3 does here.
     g.set(
         "GetCraftButtonToken",
-        lua.create_function(|lua, ()| Ok(Value::String(lua.create_string("CREATE")?)))?,
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let token = match model.open_professions().craft.unwrap_or(0) {
+                0 => "USE",
+                1 => "TRAIN",
+                2 => "DISGUISE",
+                3 => "ENSCRIBE",
+                _ => return Ok(Value::Nil),
+            };
+            Ok(Value::String(lua.create_string(token)?))
+        })?,
     )?;
 
     // SelectCraft(index) / GetCraftSelectionIndex(): the selection, 1-based with 0 for none; an
