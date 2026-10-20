@@ -228,9 +228,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
          machine a player runs today",
     ),
     // FMOD 3's mix-ahead buffer in ms (`0x4571ca`, flags 2: read once at sound init); here it sizes
-    // the render thread's ring ahead of the IO callback (`sound::output`). `0x457520` registers
-    // "50" or "100" by a host probe (`0x835e10`/`0x835e0c`), which one on a current machine
-    // untraced; ours is the larger, since the depth has to hide a whole stalled IO cycle.
+    // the render thread's ring ahead of the IO callback (`sound::output`). The default string is
+    // `0x457520`'s: "50" (`0x835e10`) when the detection record has processor class 1 at `+0x18`
+    // (`0x639a00`), else "100" (`0x835e0c`). Class 1 is a host above 1500 MHz (`0x6414c0`), and the
+    // record is filled (`0x63a26b`, called at `0x4027e7`) before the sound registration, so every
+    // current machine registers "50". Ours is the larger, since the depth has to hide a whole
+    // stalled IO cycle (`sound::output::MIX_AHEAD_MS`); `reference_table::KNOWN` holds the gap.
     same("SoundBufferSize", "100").latched(),
     // benilla's own, not a 1.12 CVar. Deviation: the reference clips at full scale and has no
     // headroom mechanism (its SFX-bus duck `0x457960` is a sidechain armed only by server-pushed
