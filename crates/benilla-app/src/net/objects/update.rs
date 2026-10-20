@@ -601,9 +601,13 @@ fn found_live(sc: &mut Scene, e: Entity) {
 }
 
 /// Whether a live object is held (`0x614f00`): its state player plays a holding substate, or
-/// arms one in this frame's drive, which the reference arms at the packet.
+/// will once this frame's drive arms what the packets asked ([`GoAnim::will_hold`]).
+///
+/// [`GoAnim::will_hold`]: crate::go_anim::GoAnim::will_hold
 fn held_by_play(sc: &Scene, e: Entity) -> bool {
-    sc.go_anims.get(e).is_ok_and(|go| go.holds() || go.arming())
+    sc.go_anims
+        .get(e)
+        .is_ok_and(|go| go.will_hold(sc.go_models.get(e).ok()))
 }
 
 /// `0x464920`: a held object only takes its release-pending bit and stays live

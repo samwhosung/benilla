@@ -830,3 +830,68 @@ fn a_block_that_finds_a_pending_object_cancels_its_release() {
     assert!(held(world, DOOR), "a near-objects block");
     assert!(world.get::<DespawnFade>(e).is_none());
 }
+
+/// A door resting on Closed whose model owns `anims`, with a second field only its first create
+/// carries.
+fn animated_door(world: &mut World, guid: u64, anims: &[u16]) -> Entity {
+    send(
+        world,
+        [created(
+            guid,
+            EntityKind::GameObject,
+            [1.0, 2.0, 3.0],
+            &[(ENTRY, 0x12), (STALE, 0x55)],
+        )],
+    );
+    let e = world.resource::<GuidIndex>().0[&guid];
+    world.entity_mut(e).insert((
+        crate::go_anim::GoAnim::resting(),
+        crate::go_anim::owned_anims(anims),
+    ));
+    e
+}
+
+/// A field the re-create below does not send.
+const STALE: u16 = 8;
+
+/// vmangos sends `SMSG_GAMEOBJECT_DESPAWN_ANIM` and then the destroy (`GameObject.cpp:860`,
+/// `:2472`). The despawn holds only when the model has 157 (`0x5f424a`): without it nothing
+/// plays, the destroy frees the object at once (`0x467521`), and a create of the guid makes a
+/// fresh one that runs its create hook, keeping nothing of the old.
+#[test]
+fn a_despawn_the_model_cannot_play_holds_nothing_from_its_destroy() {
+    const OWNED: u64 = 0xF110_0000_0000_0E67;
+    let mut app = client();
+    let world = app.world_mut();
+    animated_door(world, DOOR, &[146, 147, 148, 149]);
+    animated_door(world, OWNED, &[146, 147, 148, 149, 157]);
+
+    super::super::handlers::dispatch(
+        world,
+        vec![
+            SessionEvent::GameObjectDespawnAnim { guid: DOOR },
+            SessionEvent::ObjectDestroyed(DOOR),
+            SessionEvent::GameObjectDespawnAnim { guid: OWNED },
+            SessionEvent::ObjectDestroyed(OWNED),
+        ],
+    );
+    assert!(held(world, OWNED), "control: a play of 157 holds it");
+    assert!(!held(world, DOOR), "no 157: the destroy frees it");
+
+    send(world, [values(DOOR, &[])]);
+    assert!(
+        !held(world, DOOR),
+        "freed, not released: nothing brings it back"
+    );
+    send(
+        world,
+        [created(
+            DOOR,
+            EntityKind::GameObject,
+            [1.0, 2.0, 3.0],
+            &[(ENTRY, 0x13)],
+        )],
+    );
+    assert_eq!(field(world, DOOR, ENTRY), Some(0x13));
+    assert_eq!(field(world, DOOR, STALE), None, "a fresh object");
+}

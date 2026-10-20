@@ -95,10 +95,37 @@ impl GoAnim {
         self.transient.is_some()
     }
 
-    /// Whether a play the reference arms at once waits for this frame's drive: a queued one-shot,
-    /// or a state not yet played. Whether it holds is the drive's to settle.
-    pub(crate) fn arming(&self) -> bool {
-        self.one_shot.is_some() || (self.state.is_some() && self.state != self.shown)
+    /// Whether the machine holds its object once this frame's drive has armed what the packets
+    /// asked, which the reference arms at the packet: a hold comes only with a play that happens
+    /// (`0x5f3b27`). A new state replaces the live play and holds when it plays a motion, a
+    /// substate but 1, 3 and 6 (`0x5f3b0b`-`0x5f3b18`), unless the already-playing skip refuses it
+    /// (`0x5f3a05`); a one-shot holds only when the model has its animation (`0x5f424a`). With no
+    /// model loaded nothing new plays (`0x5f38f0`; the event waits at `+0x280`).
+    pub(crate) fn will_hold(&self, anims: Option<&ModelAnimations>) -> bool {
+        let Some(anims) = anims else {
+            return self.holds();
+        };
+        let mut holds = self.holds();
+        if let Some(state) = self.state.filter(|&s| self.shown != Some(s)) {
+            holds = match resolve(self.shown, state) {
+                None => false,
+                Some(play) => {
+                    let (want, frozen) = remap_missing(anims, play.anim_id());
+                    let skip =
+                        want != 0 && !anims.owns(play.anim_id()) && self.armed_id == Some(want);
+                    // The skip keeps the live play and its hold (`0x5f3a05` → `0x5f3b32`).
+                    if skip {
+                        holds
+                    } else {
+                        matches!(play, Play::Motion(_)) && !frozen && anims.find(want).is_some()
+                    }
+                }
+            };
+        }
+        holds
+            || self
+                .one_shot
+                .is_some_and(|id| anims.owns(id) && anims.find(id).is_some())
     }
 
     /// The `GAMEOBJECT_STATE` watcher's store (`0x5f89e0` → `0x5f8bd0`, `+0x27c`), in the
@@ -140,6 +167,55 @@ impl GoAnim {
     /// The played window ends, as [`retire_transient_anim`] retires it.
     pub(crate) fn end_hold(&mut self) {
         self.transient = None;
+    }
+
+    /// A machine settled on Closed with nothing playing.
+    pub(crate) fn resting() -> Self {
+        Self {
+            transient: None,
+            ..Self::holding()
+        }
+    }
+}
+
+/// A model's animation set for a test that only asks what it owns: `ids`, one clip each.
+#[cfg(test)]
+pub(crate) fn owned_anims(ids: &[u16]) -> ModelAnimations {
+    let mut lookup = vec![0xffffu16; 160];
+    for (slot, &id) in ids.iter().enumerate() {
+        lookup[id as usize] = slot as u16;
+    }
+    ModelAnimations {
+        graph: Handle::default(),
+        clips: ids
+            .iter()
+            .map(|&id| benilla_assets::AnimClip {
+                anim_id: id,
+                seq_index: 0,
+                node: AnimationNodeIndex::new(0),
+                blend_node: None,
+                looping: false,
+                duration: 1.0,
+                move_speed: 0.0,
+                blend_time: 0.0,
+                bounds_center: Vec3::ZERO,
+                bounds_radius: 0.0,
+                bounds_min: Vec3::ZERO,
+                bounds_max: Vec3::ZERO,
+                events: Vec::new().into(),
+                arm_nodes: None,
+                upper_node: None,
+                frequency: 0,
+                replay: (0, 0),
+                poses_bones: false,
+            })
+            .collect(),
+        hand_close: [None, None],
+        playable_animation_lookup: Vec::new(),
+        animation_lookup: lookup,
+        global_bones: Vec::new(),
+        first_seq: None,
+        pose: Default::default(),
     }
 }
 
@@ -444,7 +520,10 @@ fn drive_go_anim(
 ) {
     for (entity, mut go, mut player, mut tr, anims) in &mut gos {
         // ── The state arm ──────────────────────────────────────────────────────────────────────
-        if let Some(state) = go.state {
+        'state: {
+            let Some(state) = go.state else {
+                break 'state;
+            };
             if go.shown != Some(state) {
                 let prev = go.shown;
                 go.shown = Some(state);
@@ -454,58 +533,61 @@ fn drive_go_anim(
                     go.dispatched = Some(state);
                     dispatch.write(GoStateDispatch(entity));
                 }
+                go.rest_window = None;
+                let Some(play) = resolve(prev, state) else {
+                    go.transient = None;
+                    break 'state;
+                };
+                // Remap an unowned id, so a lidless model holds a real pose, not bind.
+                let (want, frozen) = remap_missing(anims, play.anim_id());
+                // The already-playing skip (`0x5f39fa: cmp esi,eax; je 0x5f3b32`) holds only on
+                // the remap legs: an owned id (`0x5f396c jne`) and the collapse to Stand
+                // (`0x5f3a54 jmp 0x5f3a0b`) jump past it. So the remapped fishing bobber settles,
+                // and a lava trap that owns its id re-rolls every window. The skip returns before
+                // the arm and the hold (`0x5f3b32`): the live play and the hold it took go on,
+                // and the one-shot channel below still runs.
+                let skip = want != 0 && !anims.owns(play.anim_id()) && go.armed_id == Some(want);
+                if skip {
+                    break 'state;
+                }
                 // A fresh substate replaces the live transient (the reference keeps one,
                 // `[handler+0x10]`), so an old motion's completion never fires over it.
                 go.transient = None;
-                go.rest_window = None;
-                if let Some(play) = resolve(prev, state) {
-                    // Remap an unowned id, so a lidless model holds a real pose, not bind.
-                    let (want, frozen) = remap_missing(anims, play.anim_id());
-                    // The already-playing skip (`0x5f39fa: cmp esi,eax; je 0x5f3b32`) holds only
-                    // on the remap legs: an owned id (`0x5f396c jne`) and the collapse to Stand
-                    // (`0x5f3a54 jmp 0x5f3a0b`) jump past it. So the remapped fishing bobber
-                    // settles, and a lava trap that owns its id re-rolls every window.
-                    let skip =
-                        want != 0 && !anims.owns(play.anim_id()) && go.armed_id == Some(want);
-                    if skip {
-                        continue;
-                    }
-                    // The arm rolls a variation (`0x5f3aee: push -1`); the loader seed takes 0
-                    // (`0x710189`).
-                    let roll = rng.draw();
-                    if let Some(clip) = anims.pick_variation(want, roll) {
-                        trace_arm(entity, "state", play.anim_id(), want, frozen, roll, clip);
-                        go.armed_id = Some(want);
-                        // Snap a rest pose; ease a motion over its authored blend.
-                        let blend = match play {
-                            Play::Rest(_) => 0.0,
-                            Play::Motion(_) => clip.blend_time.max(0.0),
-                        };
-                        let node = clip.node;
-                        let active = tr.play(&mut player, node, Duration::from_secs_f32(blend));
-                        if frozen {
-                            // The reference arms a stand-in motion at rate 0, holding frame 0.
-                            active.seek_to(0.0);
-                            active.set_speed(0.0);
-                            active.set_repeat(RepeatAnimation::Never);
-                        } else {
-                            // Explicit: `AnimationTransitions::play` keeps a node's speed, so one
-                            // a frozen leg parked at rate 0 would stay stuck.
-                            active.set_speed(1.0);
-                            // One window, rest poses included: the period is `0x7126d8`'s, with
-                            // `R = 1` from a `(0,0)` replay pair (`0x7126c3`). Which per-frame
-                            // advance list a GameObject's model rides is untraced.
-                            active.set_repeat(RepeatAnimation::Never);
-                            match play {
-                                Play::Motion(_) => {
-                                    go.transient = Some(Transient { id: want, node });
-                                }
-                                Play::Rest(_) => go.rest_window = Some(node),
+                // The arm rolls a variation (`0x5f3aee: push -1`); the loader seed takes 0
+                // (`0x710189`).
+                let roll = rng.draw();
+                if let Some(clip) = anims.pick_variation(want, roll) {
+                    trace_arm(entity, "state", play.anim_id(), want, frozen, roll, clip);
+                    go.armed_id = Some(want);
+                    // Snap a rest pose; ease a motion over its authored blend.
+                    let blend = match play {
+                        Play::Rest(_) => 0.0,
+                        Play::Motion(_) => clip.blend_time.max(0.0),
+                    };
+                    let node = clip.node;
+                    let active = tr.play(&mut player, node, Duration::from_secs_f32(blend));
+                    if frozen {
+                        // The reference arms a stand-in motion at rate 0, holding frame 0.
+                        active.seek_to(0.0);
+                        active.set_speed(0.0);
+                        active.set_repeat(RepeatAnimation::Never);
+                    } else {
+                        // Explicit: `AnimationTransitions::play` keeps a node's speed, so one
+                        // a frozen leg parked at rate 0 would stay stuck.
+                        active.set_speed(1.0);
+                        // One window, rest poses included: the period is `0x7126d8`'s, with
+                        // `R = 1` from a `(0,0)` replay pair (`0x7126c3`). Which per-frame
+                        // advance list a GameObject's model rides is untraced.
+                        active.set_repeat(RepeatAnimation::Never);
+                        match play {
+                            Play::Motion(_) => {
+                                go.transient = Some(Transient { id: want, node });
                             }
+                            Play::Rest(_) => go.rest_window = Some(node),
                         }
                     }
-                    // Else nothing is playable after the remap, and the loader seed's arm holds.
                 }
+                // Else nothing is playable after the remap, and the loader seed's arm holds.
             }
         }
         // ── The one-shot Custom channel (`0x5f8c50`) ────────────────────────────────────────
@@ -778,6 +860,13 @@ mod tests {
     /// One GameObject with a crate's animation set, real `AnimationClip`s and graph, so Bevy's
     /// `advance_animations` ticks the completions [`retire_transient_anim`] watches.
     fn crate_app(extra_ids: &[(u16, f32, u16)]) -> (App, Entity) {
+        let authored: Vec<(u16, f32, u16)> =
+            CRATE_FAMILY.iter().chain(extra_ids).copied().collect();
+        model_app(&authored)
+    }
+
+    /// [`crate_app`] for a model that authors only `authored`.
+    fn model_app(authored: &[(u16, f32, u16)]) -> (App, Entity) {
         use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
         use bevy::animation::AnimationClip;
 
@@ -799,8 +888,6 @@ mod tests {
             (retire_transient_anim, drive_go_anim, record_dispatches).chain(),
         );
 
-        let authored: Vec<(u16, f32, u16)> =
-            CRATE_FAMILY.iter().chain(extra_ids).copied().collect();
         let handles: Vec<_> = authored
             .iter()
             .map(|&(_, dur, _)| {
@@ -1153,9 +1240,11 @@ mod tests {
         app.update();
         assert_eq!(armed(&app, go), Some((0x93, RepeatAnimation::Never)));
 
-        let mut anim = app.world_mut().get_mut::<GoAnim>(go).unwrap();
-        anim.despawn();
-        assert!(anim.arming(), "armed at the packet, played at the drive");
+        app.world_mut().get_mut::<GoAnim>(go).unwrap().despawn();
+        assert!(
+            will_hold(&app, go),
+            "held from the packet, played at the drive"
+        );
         app.update();
         assert_eq!(
             armed(&app, go),
@@ -1166,24 +1255,101 @@ mod tests {
 
         advance(&mut app, 2700);
         app.update();
-        let anim = app.world().get::<GoAnim>(go).unwrap();
-        assert!(
-            !anim.holds() && !anim.arming(),
-            "the window ended: the hold drops"
-        );
+        assert!(!will_hold(&app, go), "the window ended: the hold drops");
     }
 
-    /// A model without 157 plays nothing, so nothing holds the object: a looted chest such as
-    /// the static `DeadmineCargoBoxes.m2` goes as its release comes.
+    /// A model without 157 plays nothing, so nothing holds the object (`0x5f424a`), from the
+    /// packet on: a looted chest such as the static `DeadmineCargoBoxes.m2` goes as its release
+    /// comes.
     #[test]
     fn an_unownable_despawn_holds_nothing() {
         let (mut app, go) = crate_app(&[]); // the crate family only, no 157
         app.update();
 
         app.world_mut().get_mut::<GoAnim>(go).unwrap().despawn();
+        assert!(!will_hold(&app, go), "not at the packet");
         app.update();
-        let anim = app.world().get::<GoAnim>(go).unwrap();
-        assert!(!anim.holds() && !anim.arming());
+        assert!(!will_hold(&app, go), "nor after the drive");
+    }
+
+    /// What the release reads at the packet ([`GoAnim::will_hold`]) is what the drive then
+    /// plays: a hold for a motion and an owned one-shot (`0x5f3b27`, `0x5f424a`), none for an
+    /// animation the model lacks.
+    #[test]
+    fn the_packets_hold_is_the_drives() {
+        let cases: [(&str, &[(u16, f32, u16)], fn(&mut GoAnim)); 6] = [
+            ("an owned despawn", &[(157, 2.667, 0)], |go| go.despawn()),
+            ("an unowned despawn", &[], |go| go.despawn()),
+            ("an owned custom", &[(153, 0.667, 0)], |go| go.custom(0)),
+            ("an unowned custom", &[(153, 0.667, 0)], |go| go.custom(1)),
+            ("the open motion", &[], |go| {
+                go.set_wire_state(GO_STATE_ACTIVE)
+            }),
+            ("a motion the model lacks", &[], |go| go.set_wire_state(2)),
+        ];
+        for (what, extra, arm) in cases {
+            let (mut app, go) = crate_app(extra);
+            app.update();
+            arm(&mut app.world_mut().get_mut::<GoAnim>(go).unwrap());
+            let at_packet = will_hold(&app, go);
+            app.update();
+            assert_eq!(
+                at_packet,
+                app.world().get::<GoAnim>(go).unwrap().holds(),
+                "{what}"
+            );
+        }
+    }
+
+    /// The already-playing skip returns before the arm and the hold (`0x5f3a05` → `0x5f3b32`):
+    /// a held object whose new state's arm is the animation already playing stays held, and a
+    /// one-shot queued in the same frame still plays. The model lacks Open and Close, so Close
+    /// remaps to the Closed (147) it is playing (`0x5f3b40`'s table).
+    #[test]
+    fn the_already_playing_skip_keeps_the_hold_and_the_one_shot() {
+        let (mut app, go) = model_app(&[(0x93, 2.0, 0), (153, 0.667, 0)]);
+        app.update();
+        assert_eq!(armed(&app, go), Some((0x93, RepeatAnimation::Never)));
+        // Holding on its play of 147, as a motion's stand-in leaves it.
+        let node = {
+            let w = app.world();
+            let anims = w.get::<ModelAnimations>(go).unwrap();
+            anims.find(0x93).unwrap().node
+        };
+        {
+            let mut anim = app.world_mut().get_mut::<GoAnim>(go).unwrap();
+            anim.shown = Some(GO_STATE_ACTIVE);
+            anim.transient = Some(Transient { id: 0x93, node });
+            anim.set_wire_state(GO_STATE_READY);
+        }
+        assert!(will_hold(&app, go), "the packet's read");
+        app.update();
+        assert!(
+            app.world().get::<GoAnim>(go).unwrap().holds(),
+            "the skip leaves the play and its hold"
+        );
+
+        {
+            let mut anim = app.world_mut().get_mut::<GoAnim>(go).unwrap();
+            anim.shown = Some(GO_STATE_ACTIVE);
+            anim.set_wire_state(GO_STATE_READY);
+            anim.custom(0);
+        }
+        app.update();
+        assert_eq!(
+            armed(&app, go),
+            Some((153, RepeatAnimation::Never)),
+            "the one-shot plays in the skip's frame"
+        );
+        assert_eq!(app.world().get::<GoAnim>(go).unwrap().one_shot, None);
+    }
+
+    fn will_hold(app: &App, go: Entity) -> bool {
+        let world = app.world();
+        world
+            .get::<GoAnim>(go)
+            .unwrap()
+            .will_hold(world.get::<ModelAnimations>(go))
     }
 
     /// `SendObjectDeSpawnAnim` is on `WorldObject`, and two vmangos boss scripts send it for

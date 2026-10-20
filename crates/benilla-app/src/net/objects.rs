@@ -103,6 +103,8 @@ pub(crate) struct Scene<'w, 's> {
     player: Option<Res<'w, crate::player::Player>>,
     item_objects: Query<'w, 's, &'static crate::items::ItemObject>,
     go_anims: Query<'w, 's, &'static mut crate::go_anim::GoAnim>,
+    go_models:
+        Query<'w, 's, &'static benilla_assets::ModelAnimations, With<crate::go_anim::GoAnim>>,
     pending: Query<'w, 's, (Entity, &'static Guid), With<update::ReleasePending>>,
 }
 
