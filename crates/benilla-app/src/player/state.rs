@@ -673,7 +673,7 @@ pub(super) struct StandGates {
 pub(super) fn stand_state_refused(unit: StandGates, move_flags: u32, new_state: u8) -> bool {
     use crate::creature_anim::move_flags as f;
     // The unit's tests refuse in both directions, so they come before the stand-up exit.
-    if unit.reads_dead {
+    if unit.mounted || unit.on_taxi || unit.reads_dead || unit.channelling || unit.precast {
         return true;
     }
     // Standing up skips the movement word (`0x5ed4f0`).
