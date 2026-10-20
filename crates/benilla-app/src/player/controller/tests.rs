@@ -213,3 +213,44 @@ fn a_server_ride_clears_the_latch_so_every_toggle_cancels() {
     }
     assert!(!client.player().autorun);
 }
+
+/// The water-walk and hover acks go out through `0x60e0a0` (`0x6163c0` push 0x2d0, `0x616316` and
+/// `0x616364` push 0xf6, into `0x6163cf`), whose table sends neither at once, so each ends the
+/// mover's precast (`0x60e15d`); the root, unroot and feather-fall acks (0xe9, 0xeb, 0x2cf) are
+/// exempt (`0x60e0f1`-`0x60e137`).
+#[test]
+fn a_water_walk_or_hover_ack_ends_the_precast_and_a_root_or_feather_fall_ack_does_not() {
+    use benilla_protocol::MoveMode;
+    for (mode, apply, ends) in [
+        (MoveMode::WaterWalk, true, true),
+        (MoveMode::WaterWalk, false, true),
+        (MoveMode::Hover, true, true),
+        (MoveMode::Hover, false, true),
+        (MoveMode::Root, true, false),
+        (MoveMode::Root, false, false),
+        (MoveMode::FeatherFall, true, false),
+    ] {
+        let mut client = Client::new(Body::Own, |_| {});
+        let world = client.app.world_mut();
+        let me = world.resource::<GuidIndex>().0[&ME];
+        world.entity_mut(me).insert(crate::creature_anim::Precast {
+            spell_id: 133,
+            busy: true,
+        });
+        world.write_message(crate::net::MoveModeMessage {
+            guid: ME,
+            counter: 1,
+            mode,
+            apply,
+        });
+        client.frame(vec![], vec![]);
+        let world = client.app.world_mut();
+        world.flush();
+        assert_eq!(
+            world.get::<crate::creature_anim::Precast>(me).is_none(),
+            ends,
+            "{mode:?} {}",
+            if apply { "on" } else { "off" }
+        );
+    }
+}
