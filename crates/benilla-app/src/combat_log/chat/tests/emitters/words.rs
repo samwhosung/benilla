@@ -33,7 +33,7 @@ fn a_damage_shields_hit_on_you_raises_damage_shield() {
 
 /// `0x626a10` raises `INTERRUPT` with the interrupted spell's name when the interrupted unit is you
 /// (`0x626b53`-`0x626b69`); `0x62d9f0` raises `EXTRA_ATTACKS` with the count when the unit that gains
-/// them is you (`0x62db7d`-`0x62dba9`).
+/// them is you (`0x62db7d`-`0x62dba9`), and writes neither for a count of 0 (`0x62da2a`).
 #[test]
 fn an_interrupt_and_extra_attacks_on_you_raise_their_words() {
     let interrupt = |target| {
@@ -68,6 +68,7 @@ fn an_interrupt_and_extra_attacks_on_you_raise_their_words() {
     assert_eq!(stems(&mine), ["SPELLEXTRAATTACKS"]);
     assert_eq!(words(&mine), [Some(LineWord::with("EXTRA_ATTACKS", 2))]);
     assert_eq!(words(&extra(MOB, 2)), [None]);
+    assert!(extra(ME, 0).is_empty(), "no attacks: no line, no word");
 }
 
 fn outcome(immune: bool, caster: u64, target: u64, log_format: u8) -> Vec<PendingCombat> {

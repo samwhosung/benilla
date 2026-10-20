@@ -72,12 +72,30 @@ fn app() -> App {
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::net::Reputations>()
         .init_resource::<crate::items::Items>()
+        // The leave-world sweep's latch and count, as the app holds them.
+        .init_resource::<crate::ui_script::LeavingWorldArmed>()
+        .init_resource::<crate::ui_script::SweptWorlds>()
         .insert_resource(NetCommands(tx));
+    seat(&mut app);
+    app.insert_non_send_resource(listener());
+    app.add_systems(Update, super::state::feed_action_state);
+    app
+}
+
+/// Create the active player, as its arrival does, its world latch armed.
+fn seat(app: &mut App) {
     app.world_mut().spawn((
         SelfPlayer,
         Transform::default(),
         ObjectStore(ObjectFields::from_pairs(&[(22, 100), (23, 500)])),
     ));
+    app.world_mut()
+        .resource_mut::<crate::ui_script::LeavingWorldArmed>()
+        .arm();
+}
+
+/// A VM that records the reactive word and the spells' usable event.
+fn listener() -> UiScript {
     let script = UiScript::new().unwrap();
     script
         .run(
@@ -96,9 +114,7 @@ fn app() -> App {
         "#,
         )
         .unwrap();
-    app.insert_non_send_resource(script);
-    app.add_systems(Update, super::state::feed_action_state);
-    app
+    script
 }
 
 /// Set the player's aura state and run the feed once: what the VM heard.
@@ -141,5 +157,59 @@ fn a_reactive_spell_turning_usable_raises_spell_active() {
     assert_eq!(
         step(&mut app, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
+    );
+}
+
+/// A `/reload` (`0x495664` → `0x490bd0`, `0x48fbf0`) reaches neither of `0x4b23a0`'s callers, the
+/// game's start (`0x48f59f` → `0x4b21c0`) and the active player's arrival (`0x5dea86`), so the new
+/// VM hears no `SPELL_ACTIVE` for a spell already usable; a new arrival empties the list.
+#[test]
+fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
+    let mut app = app();
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
+    );
+    // The seated `/reload`: the leave-world sweep, then a new VM.
+    assert!(crate::ui_script::run_leave_world_sweep(app.world_mut()));
+    app.insert_non_send_resource(listener());
+    assert!(step(&mut app, 0x1).is_empty(), "the list kept its answer");
+
+    let mut me = app.world_mut().query_filtered::<Entity, With<SelfPlayer>>();
+    let me = me.single(app.world()).unwrap();
+    app.world_mut().despawn(me);
+    seat(&mut app);
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
+        "a new arrival starts the list over"
+    );
+}
+
+/// The list's only writers are its clear, its add (`0x4b27b3`-`0x4b27c7`), its rank move
+/// (`0x4b2844`) and the refresh (`0x4b3231`); unlearning (`0x4b2c50`) never touches it, so an
+/// entry and its answer outlive the spell leaving the book, and relearning a rank no higher moves
+/// nothing (`0x4b2838`).
+#[test]
+fn the_reactive_list_keeps_a_spell_the_book_lost() {
+    let mut app = app();
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
+    );
+    fn spells(app: &mut App) -> Mut<'_, PlayerActions> {
+        app.world_mut().resource_mut::<PlayerActions>()
+    }
+    spells(&mut app).spells.retain(|id| *id == FIREBALL);
+    assert!(step(&mut app, 0x1).is_empty(), "both ranks unlearned");
+    spells(&mut app).spells.insert(REVENGE);
+    assert!(
+        step(&mut app, 0x1).is_empty(),
+        "rank 1 relearned: the entry kept its answer, no second word"
+    );
+    assert_eq!(
+        step(&mut app, 0),
+        ["SPELL_UPDATE_USABLE"],
+        "the kept entry still checks"
     );
 }
