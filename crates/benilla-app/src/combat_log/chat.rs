@@ -493,14 +493,15 @@ pub(super) fn spell_log_execute(
                     );
                 }
                 // Effect 19 ADD_EXTRA_ATTACKS: no caster in the sentence (`0x62d9f0`), only the
-                // unit that gained the attacks.
+                // unit that gained the attacks, worded `EXTRA_ATTACKS` with the count when that is
+                // you (`0x62db7d`-`0x62dba9`).
                 E::ExtraAttacks { target, count } => {
                     let Some(spell) = spell() else { continue };
                     let victim = ctx.classify(target, stores);
                     let Some(kind) = combat::spell_kind(victim, victim, false) else {
                         continue;
                     };
-                    queue(
+                    queue_worded(
                         log,
                         ctx,
                         poses,
@@ -517,6 +518,7 @@ pub(super) fn spell_log_execute(
                             amount: i64::from(count),
                             ..Default::default()
                         },
+                        to_me(victim, LineWord::with("EXTRA_ATTACKS", count)),
                     );
                 }
                 // Effect 24 CREATE_ITEM: the tradeskill line, literal type `0x3e`, split on the
@@ -545,7 +547,8 @@ pub(super) fn spell_log_execute(
                     combat::Named::Item(item_entry),
                 ),
                 // Effect 68 INTERRUPT_CAST: the sentence names the interrupted spell, off the row,
-                // not the packet's own.
+                // not the packet's own, and so does the `INTERRUPT` word when the interrupted unit
+                // is you (`0x626b53`-`0x626b69`).
                 E::InterruptCast { target, spell_id } => {
                     let victim = ctx.classify(target, stores);
                     let Some(interrupted) = ctx.spell_name(spell_id) else {
@@ -554,7 +557,8 @@ pub(super) fn spell_log_execute(
                     let Some(kind) = combat::spell_kind(caster, victim, false) else {
                         continue;
                     };
-                    queue(
+                    let word = to_me(victim, LineWord::with("INTERRUPT", &interrupted));
+                    queue_worded(
                         log,
                         ctx,
                         poses,
@@ -566,6 +570,7 @@ pub(super) fn spell_log_execute(
                             spell: interrupted,
                             ..Default::default()
                         },
+                        word,
                     );
                 }
                 // Effect 111 DURABILITY_DAMAGE: both fields `-1` is the "all items" form.
