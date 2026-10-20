@@ -164,7 +164,7 @@ pub(crate) fn drive_nock_latch(
 pub(crate) fn cancel_auto_repeat_local(
     entity: Option<Entity>,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
-    commands: &mut Commands,
+    edits: &UnitEdits,
     net: &crate::net::NetCommands,
 ) {
     if auto_repeat.0.is_none() {
@@ -173,9 +173,7 @@ pub(crate) fn cancel_auto_repeat_local(
     }
     auto_repeat.0 = None;
     if let Some(e) = entity {
-        commands
-            .entity(e)
-            .remove::<(AutoRepeatArmed, RangedHold, NockedAmmo, NockLatch)>();
+        edits.push(UnitEdit::ClearAutoRepeat(e));
     }
     let _ = net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
 }
@@ -244,7 +242,8 @@ pub(crate) fn start_attack_local(
     gate: StartGate,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     sheath: &mut MessageWriter<SheathRequest>,
-    commands: &mut Commands,
+    stand: &mut MessageWriter<crate::player::StandStateRequest>,
+    edits: &UnitEdits,
     net: &crate::net::NetCommands,
 ) {
     if gate.refuses() {
@@ -253,7 +252,7 @@ pub(crate) fn start_attack_local(
     // Starting an attack stands you up (`0x5ecc9b`), after the attackability check but before
     // the range logic and the already-attacking skip, so a re-issued or out-of-reach attack
     // stands you too.
-    commands.write_message(crate::player::StandStateRequest { state: 0 });
+    stand.write(crate::player::StandStateRequest { state: 0 });
     if !engaged || stop_in_flight {
         let _ = net
             .0
@@ -265,7 +264,7 @@ pub(crate) fn start_attack_local(
         state: 1,
         ceremony: false,
     });
-    cancel_auto_repeat_local(Some(entity), auto_repeat, commands, net);
+    cancel_auto_repeat_local(Some(entity), auto_repeat, edits, net);
 }
 
 /// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when
@@ -279,7 +278,8 @@ pub(crate) fn toggle_attack_local(
     slots: &mut crate::spell::CastSlots,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     sheath: &mut MessageWriter<SheathRequest>,
-    commands: &mut Commands,
+    stand: &mut MessageWriter<crate::player::StandStateRequest>,
+    edits: &UnitEdits,
     net: &crate::net::NetCommands,
 ) {
     if engaged && gate.has_control() {
@@ -293,7 +293,8 @@ pub(crate) fn toggle_attack_local(
             gate,
             auto_repeat,
             sheath,
-            commands,
+            stand,
+            edits,
             net,
         );
     }
@@ -309,7 +310,10 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) slots: crate::spell::CastSlots<'w>,
     pub(crate) auto_repeat: ResMut<'w, crate::spell::AutoRepeatActive>,
     pub(crate) sheath: MessageWriter<'w, SheathRequest>,
-    pub(crate) ecs: Commands<'w, 's>,
+    /// The stand-up a swing start asks (`0x5ecc9b`).
+    pub(crate) stand: MessageWriter<'w, crate::player::StandStateRequest>,
+    /// The auto-repeat clear a swing start queues.
+    pub(crate) edits: Res<'w, UnitEdits>,
     /// Our own entity.
     pub(crate) me: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
     /// Our own descriptor, for [`Self::player_is_charmed`] and [`Self::start_gate`].
@@ -379,7 +383,8 @@ impl AttackSeam<'_, '_> {
             gate,
             &mut self.auto_repeat,
             &mut self.sheath,
-            &mut self.ecs,
+            &mut self.stand,
+            &self.edits,
             &self.net,
         );
     }
@@ -627,6 +632,10 @@ mod impact;
 use impact::route_swing_impacts;
 pub(crate) use impact::{DefenseAnim, PendingImpacts, SwingImpact, SwingSlowdown};
 
+/// The cast and auto-repeat state the seams queue for after the pass.
+mod edits;
+pub(crate) use edits::{apply_unit_edits, flush_unit_edits, UnitEdit, UnitEdits};
+
 /// The melee blood spurt.
 mod blood;
 mod env_damage;
@@ -871,6 +880,7 @@ impl Plugin for CreatureAnimPlugin {
             .add_message::<SwingSlowdown>()
             .init_resource::<PendingImpacts>()
             .init_resource::<PlaySeq>()
+            .init_resource::<UnitEdits>()
             .init_resource::<gesture::GestureQueue>()
             .add_message::<EmoteAnim>()
             .add_message::<BaseAnimRecompute>()
@@ -993,13 +1003,15 @@ mod attack_stand_tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(crate::net::NetCommands(tx));
         app.insert_resource(crate::spell::AutoRepeatActive(None));
+        app.init_resource::<UnitEdits>();
 
         let me = app.world_mut().spawn_empty().id();
         app.add_systems(
             Update,
-            move |mut commands: Commands,
-                  mut auto_repeat: ResMut<crate::spell::AutoRepeatActive>,
+            move |mut auto_repeat: ResMut<crate::spell::AutoRepeatActive>,
                   mut sheath: MessageWriter<SheathRequest>,
+                  mut stand: MessageWriter<crate::player::StandStateRequest>,
+                  edits: Res<UnitEdits>,
                   net: Res<crate::net::NetCommands>| {
                 start_attack_local(
                     me,
@@ -1009,7 +1021,8 @@ mod attack_stand_tests {
                     StartGate::default(),
                     &mut auto_repeat,
                     &mut sheath,
-                    &mut commands,
+                    &mut stand,
+                    &edits,
                     &net,
                 );
             },

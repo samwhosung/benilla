@@ -605,6 +605,8 @@ fn report_feed(spells: crate::ui_action::Spells, reports: crate::ui_cast::CastRe
         .init_resource::<crate::spell::targeting::SpellTargeting>()
         .init_resource::<crate::spell::ActiveChannel>()
         .init_resource::<crate::spell::AutoRepeatActive>()
+        .init_resource::<crate::creature_anim::UnitEdits>()
+        .add_message::<crate::player::StandStateRequest>()
         .insert_resource(NetCommands(tx));
     app.insert_non_send_resource(UiScript::new().unwrap());
     app.add_systems(Update, crate::ui_cast::feed_cast_reports);

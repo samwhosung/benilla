@@ -32,8 +32,9 @@ use bevy::prelude::*;
 /// system whose declared access covers the call host's ([`crate::script_calls::ScriptCallHost`]),
 /// every one that writes the VM, and every other system [`order_the_pass`] takes in. A world
 /// system that moves what a script call reads runs before [`VmPass::Start`]; one that reads what
-/// a call writes runs after [`VmPass::End`]. Both are empty sets [`order_the_pass`] links to the
-/// chain's first and last.
+/// a call writes runs after [`VmPass::End`]. [`order_the_pass`] links them to the chain's first
+/// and last; the end holds the flush of the unit edits the chain queued
+/// ([`crate::creature_anim::flush_unit_edits`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum VmPass {
     Start,
@@ -67,10 +68,18 @@ impl Plugin for VmPassPlugin {
             Update,
             benilla_world::schedule::WorldStage::Present.after(VmPass::End),
         );
+        // The unit edits the pass's seams queued, flushed at its end: every system after the pass
+        // reads them.
+        app.init_resource::<crate::creature_anim::UnitEdits>()
+            .add_systems(
+                Update,
+                crate::creature_anim::flush_unit_edits.in_set(VmPass::End),
+            );
     }
 
     fn cleanup(&self, app: &mut App) {
         let order = order_the_pass(app.world_mut(), Update);
+        flush_unit_edits_elsewhere(app.world_mut());
         #[cfg(test)]
         app.insert_resource(PassOrder(order));
         #[cfg(not(test))]
@@ -78,15 +87,61 @@ impl Plugin for VmPassPlugin {
     }
 }
 
+/// Every schedule but `Update` that holds a system able to queue a unit edit (a host's own, a
+/// sweep's) flushes the queue after them, so the edits apply at that schedule's end, as the
+/// commands its systems queue do.
+fn flush_unit_edits_elsewhere(world: &mut World) {
+    let Some(edits) = world
+        .components()
+        .get_resource_id(std::any::TypeId::of::<crate::creature_anim::UnitEdits>())
+    else {
+        return;
+    };
+    let labels: Vec<_> = world
+        .resource::<Schedules>()
+        .iter()
+        .map(|(_, schedule)| schedule.label())
+        .filter(|label| *label != Update.intern())
+        .collect();
+    for label in labels {
+        world.schedule_scope(label, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let graph = schedule.graph();
+            let users: Vec<InternedSystemSet> = graph
+                .systems
+                .iter()
+                .filter(|(key, system, _)| {
+                    graph.systems.get(*key).is_some_and(|s| {
+                        !system.is_exclusive()
+                            && s.access.combined_access().has_resource_read(edits)
+                    })
+                })
+                .filter_map(|(_, system, _)| system.default_system_sets().into_iter().next())
+                .collect();
+            if users.is_empty() {
+                return;
+            }
+            // The queue is written at once, so the flush waits on no command of theirs.
+            let mut flush = crate::creature_anim::flush_unit_edits.into_configs();
+            for set in users {
+                flush = flush.after_ignore_deferred(set);
+            }
+            schedule.add_systems(flush);
+        });
+    }
+}
+
 /// The host's append-only sinks, which it and their other users share by `&self`: the chat log,
-/// the refusal keys and the message sounds. Each user's declared access reads them only, so
-/// [`order_the_pass`] takes every user in as though it wrote them: one runs at a time, and a
-/// call's refusals ([`crate::ui_cast::CallReports`]) are the call's alone.
+/// the refusal keys, the message sounds and the unit edits. Each user's declared access reads
+/// them only, so [`order_the_pass`] takes every user in as though it wrote them: one runs at a
+/// time, a call's refusals ([`crate::ui_cast::CallReports`]) are the call's alone, and the edits
+/// apply in the order they were made.
 pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
     [
         std::any::TypeId::of::<crate::ui_chat::ChatLog>(),
         std::any::TypeId::of::<crate::ui_action::UiErrorKeys>(),
         std::any::TypeId::of::<crate::sound::MessageSounds>(),
+        std::any::TypeId::of::<crate::creature_anim::UnitEdits>(),
     ]
     .into_iter()
     .filter_map(|t| world.components().get_resource_id(t))
@@ -102,10 +157,10 @@ pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
 /// meets the host's; and every user of a [`shared_sinks`] sink not already wholly before
 /// [`VmPass::Start`] or after [`VmPass::End`]. One that shares its function's set with another
 /// system of the schedule cannot be ordered alone and is left out. A link joins two neighbours
-/// the declared order leaves unordered and ignores the deferred buffers between them: a host's
-/// commands (a cast's `Casting` removed, the auto-repeat markers set or cleared, a stand request)
-/// apply at the first sync point past the chain, and no later link reads what they change
-/// (`what_the_hosts_commands_change_no_later_host_reads`). Two neighbours the declared order
+/// the declared order leaves unordered and ignores the deferred buffers between them, which apply
+/// at the first sync point past the chain. The call host holds none: what its seams change on a
+/// unit waits in [`crate::creature_anim::UnitEdits`] for the pass's end, and no link reads it
+/// (`the_host_defers_nothing_and_no_link_reads_a_unit_edit`). Two neighbours the declared order
 /// already orders keep that order and its sync point. Panics on a cycle in the declared order,
 /// the pass's ends included.
 pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Vec<String> {
@@ -251,8 +306,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
         for i in (keys.len()..nodes).step_by(2) {
             edges.push((i, i + 1));
         }
-        // What the declared order already puts wholly before the pass's start or after its end:
-        // a sink's user there is ordered against every link and stays out of the chain.
+        // What the declared order already puts wholly before the pass's start or after its end,
+        // the ends' own members included: a sink's user there is ordered against every link and
+        // stays out of the chain.
         let reach = |from: usize, forward: bool| -> Vec<bool> {
             let mut next: Vec<Vec<usize>> = vec![Vec::new(); nodes];
             for &(x, y) in &edges {
@@ -274,8 +330,8 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
             }
             seen
         };
-        let before_start = start.map_or(vec![false; nodes], |(at, _)| reach(at, false));
-        let after_end = end.map_or(vec![false; nodes], |(_, at)| reach(at, true));
+        let before_start = start.map_or(vec![false; nodes], |(_, at)| reach(at, false));
+        let after_end = end.map_or(vec![false; nodes], |(at, _)| reach(at, true));
         let links: Vec<Option<InternedSystemSet>> = (0..keys.len())
             .map(|i| match joins[i] {
                 Joins::Always => own_set[i],
@@ -467,7 +523,9 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
             );
         }
         schedule.configure_sets(VmPass::Start.before(first));
-        schedule.configure_sets(VmPass::End.after(last));
+        // The end holds the unit edits' flush, which reads only their queue, written at once: the
+        // chain's commands apply at the sync point past it, with the flush's own.
+        schedule.configure_sets(VmPass::End.after_ignore_deferred(last));
         for (i, pair) in chain.windows(2).enumerate() {
             if linked[i] {
                 schedule.configure_sets(
@@ -483,7 +541,6 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
     use std::collections::{HashMap, HashSet};
 
     use crate::game_plugins::schedule_tests::{
@@ -613,56 +670,36 @@ mod tests {
         );
     }
 
-    /// The pass's links ignore the deferred buffers between them, so a host's commands apply at
-    /// the first sync point past the chain, and no link reads what they change: the auto-repeat
-    /// markers a cast sets and a cancel clears (`AutoRepeatArmed`, `RangedHold`, `NockedAmmo`,
-    /// `NockLatch`), read by the animation and equipment systems after the pass; the stand request
-    /// an attack sends, read by `control` outside it; and the cast's `Casting`, which a cancel
-    /// removes, read in the pass only by the cancel's own guard (`SelfCancel`): that guard runs for
-    /// a cast the slot still holds, and the slot is cleared at once, so a stale `Casting` there at
-    /// most queues a removal already queued.
+    /// The call host carries no deferred buffer: what its seams change on a unit (a cast's reap,
+    /// the auto-repeat arm and clear, [`crate::creature_anim::UnitEdit`]) waits in a queue the
+    /// pass's end flushes, and no link of the pass reads what any kind of edit writes, so none
+    /// reads it stale. A deferred param new to the host, or a link that reads an edit's component,
+    /// fails here.
     #[test]
-    fn what_the_hosts_commands_change_no_later_host_reads() {
+    fn the_host_defers_nothing_and_no_link_reads_a_unit_edit() {
         let mut app = headless_client();
         let Some(order) = pass_order(&app) else {
             return;
         };
         let order: HashSet<String> = order.into_iter().collect();
         let world = app.world_mut();
-        let host = System::initialize(
-            &mut IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {}),
-            world,
+        let mut probe = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+        System::initialize(&mut probe, world);
+        assert!(
+            !probe.has_deferred(),
+            "the call host holds a deferred param: queue its changes as unit edits instead"
         );
-        let component = |t: TypeId| world.components().get_id(t);
-        let markers: Vec<(&str, ComponentId)> = [
-            (
-                "AutoRepeatArmed",
-                component(TypeId::of::<crate::creature_anim::AutoRepeatArmed>()),
-            ),
-            (
-                "RangedHold",
-                component(TypeId::of::<crate::creature_anim::RangedHold>()),
-            ),
-            (
-                "NockedAmmo",
-                component(TypeId::of::<crate::creature_anim::NockedAmmo>()),
-            ),
-            (
-                "NockLatch",
-                component(TypeId::of::<crate::creature_anim::NockLatch>()),
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(what, id)| Some((what, id?)))
-        .collect();
-        let casting = component(TypeId::of::<crate::creature_anim::Casting>())
-            .expect("the cast's state is registered");
-        let stand = world
-            .components()
-            .get_resource_id(TypeId::of::<
-                bevy::ecs::message::Messages<crate::player::StandStateRequest>,
-            >())
-            .expect("the stand request is registered");
+        let mut writes: Vec<(String, ComponentId)> = Vec::new();
+        for edit in crate::creature_anim::UnitEdit::every(Entity::PLACEHOLDER) {
+            // A component no system names is unregistered, and no link reads it.
+            for id in edit
+                .writes()
+                .into_iter()
+                .filter_map(|t| world.components().get_id(t))
+            {
+                writes.push((format!("{edit:?}"), id));
+            }
+        }
         let mut found = Vec::new();
         world.schedule_scope(Update, |world, schedule| {
             schedule.graph_mut().systems.initialize(world);
@@ -674,37 +711,86 @@ mod tests {
                 }
                 let declared = &graph.systems.get(key).expect("initialized").access;
                 let combined = declared.combined_access();
-                let names = |id: ComponentId| {
-                    combined.has_component_read(id)
+                for (edit, id) in &writes {
+                    if combined.has_component_read(*id)
                         || declared
                             .filtered_accesses()
                             .iter()
-                            .any(|fa| fa.contains(id))
-                };
-                for (what, id) in &markers {
-                    if names(*id) {
-                        found.push(format!("{name} reads {what}"));
+                            .any(|fa| fa.contains(*id))
+                    {
+                        found.push(format!("{name} reads what {edit} writes"));
                     }
-                }
-                if combined.has_resource_read(stand) && !combined.has_resource_write(stand) {
-                    found.push(format!("{name} reads the stand request"));
-                }
-                let mut with_host = declared.clone();
-                with_host.extend(host.clone());
-                let hosted = with_host.combined_access() == combined;
-                if names(casting) && !hosted && !name.ends_with("::local_self_cancel") {
-                    found.push(format!("{name} reads Casting"));
                 }
             }
         });
-        assert!(
-            markers.len() >= 3,
-            "the markers are registered: {markers:?}"
-        );
+        assert!(writes.len() >= 3, "the edits write components: {writes:?}");
+        found.sort();
+        found.dedup();
         assert!(
             found.is_empty(),
-            "a link of the pass reads what a host's deferred commands change:\n  {}",
+            "a link of the pass reads what a unit edit changes after the pass:\n  {}",
             found.join("\n  ")
+        );
+    }
+
+    /// A unit edit applies where it is made: every system that can queue one runs ahead of a
+    /// flush in its own schedule, `Update`'s at the pass's end. An exclusive system applies its
+    /// own ([`crate::creature_anim::apply_unit_edits`]).
+    #[test]
+    fn every_unit_edit_is_flushed_in_the_schedule_that_makes_it() {
+        let mut app = headless_client_with(crate::dev::add_every_instrument);
+        let edits = app
+            .world()
+            .components()
+            .get_resource_id(std::any::TypeId::of::<crate::creature_anim::UnitEdits>())
+            .expect("the queue is registered");
+        let labels: Vec<_> = app
+            .world()
+            .resource::<Schedules>()
+            .iter()
+            .map(|(_, schedule)| schedule.label())
+            .collect();
+        let mut users = 0;
+        let mut late = Vec::new();
+        for label in labels {
+            let queues: Vec<(SystemKey, String)> =
+                app.world_mut().schedule_scope(label, |world, schedule| {
+                    schedule.graph_mut().systems.initialize(world);
+                    let graph = schedule.graph();
+                    graph
+                        .systems
+                        .iter()
+                        .filter(|(key, system, _)| {
+                            let access = &graph.systems.get(*key).expect("initialized").access;
+                            !system.is_exclusive()
+                                && access.combined_access().has_resource_read(edits)
+                        })
+                        .map(|(key, system, _)| (key, system.name().to_string()))
+                        .collect()
+                });
+            if queues.is_empty() {
+                continue;
+            }
+            let schedule = census(&mut app, label, SyncPoints::Declared);
+            let next = successors(&schedule);
+            let flushes: Vec<SystemKey> = queues
+                .iter()
+                .filter(|(_, name)| name.ends_with("flush_unit_edits"))
+                .map(|(key, _)| *key)
+                .collect();
+            for (key, name) in &queues {
+                users += 1;
+                if !flushes.contains(key) && !flushes.iter().any(|f| after(&next, *key).contains(f))
+                {
+                    late.push(format!("{label:?}: {name}"));
+                }
+            }
+        }
+        assert!(users > 20, "the census finds the queue's users: {users}");
+        assert!(
+            late.is_empty(),
+            "systems that queue unit edits after their schedule's flush, or where none runs:\n  {}",
+            late.join("\n  ")
         );
     }
 
@@ -716,7 +802,7 @@ mod tests {
     fn every_user_of_a_shared_sink_runs_in_one_order() {
         let mut app = headless_client_with(crate::dev::add_every_instrument);
         let sinks = super::shared_sinks(app.world());
-        assert_eq!(sinks.len(), 3, "the sinks are registered");
+        assert_eq!(sinks.len(), 4, "the sinks are registered");
         let users: Vec<SystemKey> = app.world_mut().schedule_scope(Update, |world, schedule| {
             schedule.graph_mut().systems.initialize(world);
             let graph = schedule.graph();

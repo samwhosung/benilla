@@ -189,7 +189,6 @@ pub(crate) struct AutoMove<'w, 's> {
     follow: ResMut<'w, FollowState>,
     player: Res<'w, Player>,
     me: Query<'w, 's, (&'static Guid, &'static ObjectStore), With<SelfPlayer>>,
-    stand: MessageWriter<'w, super::StandStateRequest>,
     transports: Query<'w, 's, &'static Transform>,
 }
 
@@ -210,6 +209,7 @@ impl AutoMove<'_, '_> {
         subject: Subject,
         at: Vec3,
         stop: f32,
+        stand: &mut MessageWriter<super::StandStateRequest>,
     ) -> Result<(), Refused> {
         let Ok((me, store)) = self.me.single() else {
             return Err(Refused::Silent);
@@ -229,27 +229,36 @@ impl AutoMove<'_, '_> {
         {
             return Err(Refused::Silent);
         }
-        self.arm(Toward::Object { verb, guid }, at, stop)
+        self.arm(Toward::Object { verb, guid }, at, stop, stand)
     }
 
     /// `0x6102b0`, the right-click on the ground (`0x5e0378`).
-    pub(crate) fn walk_to_ground(&mut self, at: Vec3) -> bool {
+    pub(crate) fn walk_to_ground(
+        &mut self,
+        at: Vec3,
+        stand: &mut MessageWriter<super::StandStateRequest>,
+    ) -> bool {
         if !self.can_auto_interact() {
             return false;
         }
         let anchor = self.anchor(at);
-        self.arm(Toward::Ground(anchor), at, GROUND_STOP).is_ok()
+        self.arm(Toward::Ground(anchor), at, GROUND_STOP, stand)
+            .is_ok()
     }
 
     /// `0x610100`, the right-click on the sky (`0x492dca`), along the press's ray.
-    pub(crate) fn walk_toward_sky(&mut self, ray: Vec3) -> bool {
+    pub(crate) fn walk_toward_sky(
+        &mut self,
+        ray: Vec3,
+        stand: &mut MessageWriter<super::StandStateRequest>,
+    ) -> bool {
         let dir = ray.normalize_or_zero();
         if dir == Vec3::ZERO || !self.can_auto_interact() {
             return false;
         }
         let facing = follow::bearing_to(Vec3::new(dir.x, 0.0, dir.z));
         let at = self.player.pos;
-        if self.arm(Toward::Sky(facing), at, 0.0).is_err() {
+        if self.arm(Toward::Sky(facing), at, 0.0, stand).is_err() {
             return false;
         }
         if let Some(goal) = self.approach.goal.as_mut() {
@@ -265,22 +274,31 @@ impl AutoMove<'_, '_> {
     /// height. The snap radius is the stop, so the two differ only while swimming or on a steep facet.
     /// Deviation: the reference stores the world point unconverted and reads it back as deck-local
     /// (`0x60fe6c`, `0x610e95`), so on a transport it walks astray; here it rides the deck.
-    pub(crate) fn walk_into_melee(&mut self, at: Vec3, stop: f32) -> Result<(), Refused> {
+    pub(crate) fn walk_into_melee(
+        &mut self,
+        at: Vec3,
+        stop: f32,
+        stand: &mut MessageWriter<super::StandStateRequest>,
+    ) -> Result<(), Refused> {
         if !self.can_auto_interact() {
             return Err(Refused::Silent);
         }
         let anchor = self.anchor(at);
-        self.arm(Toward::Melee(anchor), at, stop)
+        self.arm(Toward::Melee(anchor), at, stop, stand)
     }
 
     /// `0x6100a0`, for an attack on an enemy in melee: turn to face `at`.
-    pub(crate) fn face(&mut self, at: Vec3) -> bool {
+    pub(crate) fn face(
+        &mut self,
+        at: Vec3,
+        stand: &mut MessageWriter<super::StandStateRequest>,
+    ) -> bool {
         if !self.can_auto_interact() {
             return false;
         }
         let delta = at - self.player.pos;
         let facing = follow::bearing_to(Vec3::new(delta.x, 0.0, delta.z));
-        self.arm(Toward::Face(facing), at, 0.0).is_ok()
+        self.arm(Toward::Face(facing), at, 0.0, stand).is_ok()
     }
 
     /// Deviation: the reference converts back through the transport the player stands on each
@@ -298,7 +316,13 @@ impl AutoMove<'_, '_> {
     }
 
     /// `0x611130`: the canceller, then the leash on the world point `at`, then the goal.
-    fn arm(&mut self, toward: Toward, at: Vec3, stop: f32) -> Result<(), Refused> {
+    fn arm(
+        &mut self,
+        toward: Toward,
+        at: Vec3,
+        stop: f32,
+        stand: &mut MessageWriter<super::StandStateRequest>,
+    ) -> Result<(), Refused> {
         let standing = self
             .me
             .single()
@@ -319,7 +343,7 @@ impl AutoMove<'_, '_> {
             pitch: None,
         });
         if !standing {
-            self.stand.write(super::StandStateRequest { state: 0 });
+            stand.write(super::StandStateRequest { state: 0 });
         }
         Ok(())
     }
@@ -529,6 +553,7 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::super::state::{MoveSpeed, PlayerRide};
+    use super::super::StandStateRequest;
     use super::*;
     use benilla_protocol::messages::ObjectFields;
     use bevy::ecs::system::RunSystemOnce;
@@ -644,9 +669,11 @@ mod tests {
 
     fn start(app: &mut App, verb: ApproachVerb, subject: Subject, at: Vec3) -> Result<(), Refused> {
         app.world_mut()
-            .run_system_once(move |mut auto: AutoMove| {
-                auto.start(verb, VENDOR, subject, at, TALK_STOP)
-            })
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| {
+                    auto.start(verb, VENDOR, subject, at, TALK_STOP, &mut stand)
+                },
+            )
             .unwrap()
     }
 
@@ -850,7 +877,10 @@ mod tests {
         let mut app = world(Vec3::new(40.0, 0.0, 0.0), 0);
         assert!(app
             .world_mut()
-            .run_system_once(move |mut auto: AutoMove| auto.walk_to_ground(point))
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_to_ground(point, &mut stand)
+            )
             .unwrap());
         assert!(run_until_idle(&mut app, 300) < 300, "never arrived");
         let left = app.world().resource::<Player>().pos.distance(point);
@@ -865,7 +895,10 @@ mod tests {
         let far = Vec3::new(0.0, 0.0, -120.0);
         assert!(app
             .world_mut()
-            .run_system_once(move |mut auto: AutoMove| auto.walk_to_ground(far))
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_to_ground(far, &mut stand)
+            )
             .unwrap());
         for _ in 0..30 {
             frame(&mut app, true);
@@ -880,10 +913,12 @@ mod tests {
         app.world_mut().resource_mut::<Approach>().enabled = false;
         let armed = app
             .world_mut()
-            .run_system_once(|mut auto: AutoMove| {
-                auto.walk_to_ground(Vec3::new(0.0, 0.0, -10.0))
-                    || auto.walk_toward_sky(Vec3::new(1.0, 0.5, 0.0))
-            })
+            .run_system_once(
+                |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| {
+                    auto.walk_to_ground(Vec3::new(0.0, 0.0, -10.0), &mut stand)
+                        || auto.walk_toward_sky(Vec3::new(1.0, 0.5, 0.0), &mut stand)
+                },
+            )
             .unwrap();
         assert!(!armed);
     }
@@ -895,7 +930,10 @@ mod tests {
         let mut app = world(Vec3::new(14.0, 0.0, 0.0), 0);
         assert!(app
             .world_mut()
-            .run_system_once(|mut auto: AutoMove| auto.walk_toward_sky(Vec3::new(1.0, 0.4, 0.0)))
+            .run_system_once(
+                |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_toward_sky(Vec3::new(1.0, 0.4, 0.0), &mut stand)
+            )
             .unwrap());
         for _ in 0..600 {
             frame(&mut app, true);
@@ -922,7 +960,10 @@ mod tests {
         let point = Vec3::new(0.0, 0.0, -10.0);
         assert!(app
             .world_mut()
-            .run_system_once(move |mut auto: AutoMove| auto.walk_to_ground(point))
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_to_ground(point, &mut stand)
+            )
             .unwrap());
         app.world_mut()
             .entity_mut(boat)
@@ -945,7 +986,10 @@ mod tests {
         let mut app = world(Vec3::new(40.0, 0.0, 0.0), 0);
         assert_eq!(
             app.world_mut()
-                .run_system_once(move |mut auto: AutoMove| auto.walk_into_melee(at, stop))
+                .run_system_once(
+                    move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                        .walk_into_melee(at, stop, &mut stand)
+                )
                 .unwrap(),
             Ok(())
         );
@@ -965,7 +1009,10 @@ mod tests {
         let enemy = Vec3::new(3.0, 0.0, 0.0);
         assert!(app
             .world_mut()
-            .run_system_once(move |mut auto: AutoMove| auto.face(enemy))
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .face(enemy, &mut stand)
+            )
             .unwrap());
         assert!(app.world().resource::<FollowState>().guid.is_none());
         let mut walked = false;
@@ -997,7 +1044,10 @@ mod tests {
         let point = Vec3::new(0.0, 0.0, -10.0);
         assert!(app
             .world_mut()
-            .run_system_once(move |mut auto: AutoMove| auto.walk_to_ground(point))
+            .run_system_once(
+                move |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_to_ground(point, &mut stand)
+            )
             .unwrap());
         app.world_mut()
             .entity_mut(boat)
@@ -1018,7 +1068,10 @@ mod tests {
         app.world_mut().resource_mut::<Player>().swimming = true;
         assert!(app
             .world_mut()
-            .run_system_once(|mut auto: AutoMove| auto.walk_toward_sky(Vec3::new(1.0, 1.0, 0.0)))
+            .run_system_once(
+                |mut auto: AutoMove, mut stand: MessageWriter<StandStateRequest>| auto
+                    .walk_toward_sky(Vec3::new(1.0, 1.0, 0.0), &mut stand)
+            )
             .unwrap());
         frame(&mut app, false);
         let pitch = app.world().resource::<Player>().mover_pitch;

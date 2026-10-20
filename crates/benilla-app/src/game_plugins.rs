@@ -836,7 +836,7 @@ pub(crate) mod schedule_tests {
     /// one chain ([`crate::vm_pass`]), so no two of them pair, and the world's movers and readers
     /// of what a script call reaches order against its ends. The host's shared sinks
     /// ([`crate::vm_pass::shared_sinks`]) are written through `&self`, so their users declare
-    /// reads and pair here only over something else: without the pass's order on them, 588 pairs
+    /// reads and pair here only over something else: without the pass's order on them, 764 pairs
     /// of users would share a sink in no order, none of which this count would show. The pass
     /// orders every user (`every_user_of_a_shared_sink_runs_in_one_order`), so the count hides
     /// none. Known pairs accepted with a reason:
@@ -966,12 +966,13 @@ pub(crate) mod schedule_tests {
     }
 
     /// `Update`'s sync points, the barriers the build inserts after a system with commands on
-    /// the way to one ordered after it. The VM pass's links ignore the deferred buffers between
-    /// them ([`crate::vm_pass::order_the_pass`]), so a host's commands wait for the first barrier
-    /// past the chain; a declared edge out of the chain still takes one, as every host carries the
-    /// call host's commands. The count may not rise past the ceiling, and the ceiling follows it
-    /// down. Read on the dev build, whose schedule holds every system the player build does.
-    const UPDATE_SYNC_POINT_CEILING: usize = 85;
+    /// the way to one ordered after it. The call host holds no commands, its seams queueing what
+    /// they change on a unit for the pass's end ([`crate::creature_anim::UnitEdits`]), and the
+    /// VM pass's links ignore the deferred buffers between them
+    /// ([`crate::vm_pass::order_the_pass`]), so a link's commands wait for the first barrier past
+    /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
+    /// on the dev build, whose schedule holds every system the player build does.
+    const UPDATE_SYNC_POINT_CEILING: usize = 49;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]

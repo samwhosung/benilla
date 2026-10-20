@@ -133,17 +133,17 @@ pub(crate) fn idle_action(idle: Duration, gates: IdleGates) -> IdleAction {
 pub(crate) fn idle_handler(
     time: Res<Time<Real>>,
     last: Res<LastInput>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The sit's writer shares the host's param set, whose seams write the stand request too.
+    mut vm: crate::script_calls::VmWith<MessageWriter<'static, crate::player::StandStateRequest>>,
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut mirror: ResMut<AfkMirror>,
     chat: Res<ChatLog>,
     commands: Res<crate::net::NetCommands>,
-    mut stand: MessageWriter<crate::player::StandStateRequest>,
     follow: Res<crate::player::FollowState>,
     approach: Res<crate::player::Approach>,
     logout: Res<crate::ui_logout::LogoutState>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut stand| {
         let idle = time.elapsed().saturating_sub(last.0);
         if idle < AUTO_AFK_AFTER {
             return;

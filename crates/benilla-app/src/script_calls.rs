@@ -62,7 +62,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                 'w,
                 's,
                 (
-                    crate::spell::SelfCancel<'w, 's>,
+                    crate::spell::SelfCancel<'w>,
                     crate::spell::CastState<'w, 's>,
                     crate::ui_cast::CallReports<'w, 's>,
                 ),
@@ -325,7 +325,7 @@ impl Fires {
 
 /// Run `f` on the world's VM with the host lent, for an entry that holds the whole world (a
 /// reload, a session's end, a world-leave sweep): the host is built off the world as a system's
-/// would be, and its commands applied after. `f` gets `None` with no VM.
+/// would be, and what its calls queued applied after. `f` gets `None` with no VM.
 pub(crate) fn with_hosted_vm<R>(
     world: &mut World,
     f: impl FnOnce(Option<&mut UiScript>) -> R,
@@ -333,6 +333,7 @@ pub(crate) fn with_hosted_vm<R>(
     let mut state = bevy::ecs::system::SystemState::<HostedVm>::new(world);
     let r = state.get_mut(world).run(f);
     state.apply(world);
+    crate::creature_anim::apply_unit_edits(world);
     r
 }
 
@@ -350,6 +351,7 @@ pub(crate) fn apply_waiting(world: &mut World, script: &mut UiScript) {
         }
     }
     state.apply(world);
+    crate::creature_anim::apply_unit_edits(world);
 }
 
 /// Bind the units a selection writer outside the calls (a loot window's select, the chat layer's

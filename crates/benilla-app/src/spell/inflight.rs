@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 
 use super::SpellTargeting;
-use crate::creature_anim::{CastEvent, CastEventKind, Casting, PlaySeq};
+use crate::creature_anim::{CastEvent, CastEventKind, PlaySeq};
 use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
 use crate::ui_cast::CastReports;
@@ -236,7 +236,7 @@ impl QueuedMeleeSpell {
 pub(crate) enum Inflight {
     /// An ordinary cast, with a guard, a bar and a `Casting` to reap.
     Cast(u32),
-    /// A queued on-next-swing strike: no bar and no [`Casting`], so a cancel is the wire message
+    /// A queued on-next-swing strike: no bar and no [`Casting`](crate::creature_anim::Casting), so a cancel is the wire message
     /// and the slot.
     Strike(u32),
     /// The spell awaiting its click, which the attempt pushed (`0x6e5026`) before the arm raised
@@ -418,7 +418,7 @@ pub(super) fn reap_lapsed_cast(mut slots: super::CastSlots, net: Res<NetCommands
 /// What [`local_self_cancel`] reads and writes, shared with the Esc cancel, which is a script call
 /// (`SpellStopCasting`) and lands in call order ([`crate::script_calls`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct SelfCancel<'w, 's> {
+pub(crate) struct SelfCancel<'w> {
     pending: ResMut<'w, PendingCast>,
     queued_melee: ResMut<'w, QueuedMeleeSpell>,
     channel: Res<'w, ActiveChannel>,
@@ -428,14 +428,14 @@ pub(crate) struct SelfCancel<'w, 's> {
     net: Res<'w, NetCommands>,
     self_guid: Res<'w, SelfGuid>,
     index: Res<'w, GuidIndex>,
-    casting: Query<'w, 's, &'static Casting>,
     cast_events: MessageWriter<'w, CastEvent>,
     play_seq: ResMut<'w, PlaySeq>,
-    ecs: Commands<'w, 's>,
+    /// The reap and the auto-repeat clear, applied after the pass.
+    edits: Res<'w, crate::creature_anim::UnitEdits>,
     ground: ResMut<'w, super::targeting::SpellTargeting>,
 }
 
-impl SelfCancel<'_, '_> {
+impl SelfCancel<'_> {
     /// `SpellStopCasting()` (`0x6e6e80`), the ESC chain's cast rung.
     pub(crate) fn stop_casting(&mut self) {
         self.cancel(true, false);
@@ -471,10 +471,9 @@ impl SelfCancel<'_, '_> {
             queued_melee,
             reports,
             net,
-            casting,
             cast_events,
             play_seq,
-            ecs,
+            edits,
             ground,
             ..
         } = self;
@@ -490,9 +489,10 @@ impl SelfCancel<'_, '_> {
             info!("cast-trace: LOCAL self-cancel — {popped:?} ({why})");
         }
         if let (Some(Inflight::Cast(spell_id)), Some(e)) = (popped, self_e) {
-            if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
-                ecs.entity(e).remove::<Casting>();
-            }
+            edits.push(crate::creature_anim::UnitEdit::ReapCasting {
+                entity: e,
+                spell_id,
+            });
             cast_events.write(CastEvent {
                 entity: e,
                 spell_id,
@@ -515,7 +515,7 @@ impl SelfCancel<'_, '_> {
             crate::creature_anim::cancel_auto_repeat_local(
                 self_e,
                 &mut self.auto_repeat,
-                &mut self.ecs,
+                &self.edits,
                 &self.net,
             );
             false // the press is spent
@@ -576,6 +576,7 @@ impl SelfCancel<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creature_anim::Casting;
 
     const FIREBALL: u32 = 133;
 
@@ -610,6 +611,8 @@ mod tests {
             .init_resource::<SpellTargeting>()
             .init_resource::<ActiveChannel>()
             .init_resource::<AutoRepeatActive>()
+            .init_resource::<crate::creature_anim::UnitEdits>()
+            .add_message::<crate::player::StandStateRequest>()
             .init_resource::<CastReports>()
             .insert_resource(NetCommands(tx));
         let current = |app: &mut App, spell: u32| {
@@ -689,6 +692,8 @@ mod tests {
             .init_resource::<SpellTargeting>()
             .init_resource::<ActiveChannel>()
             .init_resource::<AutoRepeatActive>()
+            .init_resource::<crate::creature_anim::UnitEdits>()
+            .add_message::<crate::player::StandStateRequest>()
             .init_resource::<CastReports>()
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(NetCommands(tx));
@@ -910,6 +915,8 @@ mod tests {
                 .init_resource::<QueuedMeleeSpell>()
                 .init_resource::<ActiveChannel>()
                 .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::creature_anim::UnitEdits>()
+                .add_message::<crate::player::StandStateRequest>()
                 .init_resource::<crate::spell::targeting::SpellTargeting>()
                 .init_resource::<LocalMoveStart>()
                 .init_resource::<GuidIndex>()
@@ -958,6 +965,8 @@ mod tests {
         fn run(app: &mut App, moved: bool) {
             app.world_mut().resource_mut::<LocalMoveStart>().0 = moved;
             app.world_mut().run_system_once(local_self_cancel).unwrap();
+            // The pass's end.
+            crate::creature_anim::apply_unit_edits(app.world_mut());
         }
 
         /// `SpellStopCasting()`, its answer, with the cast's cancel lent as the host, which applies

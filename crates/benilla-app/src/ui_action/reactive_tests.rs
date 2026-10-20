@@ -67,6 +67,8 @@ fn app() -> App {
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<crate::ui_script::UiClock>()
         .init_resource::<crate::spell::AutoRepeatActive>()
+        .init_resource::<crate::creature_anim::UnitEdits>()
+        .add_message::<crate::player::StandStateRequest>()
         .init_resource::<crate::spell::PendingCast>()
         .init_resource::<crate::spell::QueuedMeleeSpell>()
         .init_resource::<crate::spell::ActiveChannel>()

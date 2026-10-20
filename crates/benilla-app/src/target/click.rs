@@ -300,6 +300,7 @@ pub(crate) struct Dispatch<'w, 's> {
     places: Query<'w, 's, &'static Transform>,
     service: ServiceArms<'w>,
     feedback: Feedback<'w, 's>,
+    /// The walks, whose stand-up goes through the seam's writer: a system holds one.
     auto: crate::player::AutoMove<'w, 's>,
     player: Res<'w, crate::player::Player>,
 }
@@ -382,7 +383,9 @@ impl Dispatch<'_, '_> {
         let Ok(at) = self.places.get(target).map(|t| t.translation) else {
             return false;
         };
-        let started = self.auto.start(verb, guid, subject, at, stop);
+        let started = self
+            .auto
+            .start(verb, guid, subject, at, stop, &mut self.seam.stand);
         self.feedback.walked(started)
     }
 
@@ -802,10 +805,12 @@ pub(super) fn act_on_right_click(
         if !press.over_object() {
             match (press.occlusion.point, press.occlusion.ray) {
                 (Some(at), _) => {
-                    dispatch.auto.walk_to_ground(at);
+                    dispatch.auto.walk_to_ground(at, &mut dispatch.seam.stand);
                 }
                 (None, Some(ray)) if !payload_held.0 => {
-                    dispatch.auto.walk_toward_sky(*ray);
+                    dispatch
+                        .auto
+                        .walk_toward_sky(*ray, &mut dispatch.seam.stand);
                 }
                 _ => {}
             }
@@ -1032,10 +1037,12 @@ fn interact(
                 .is_some_and(|s| s.0.is_dead_or_ghost() || s.0.unit_mount_display_id() > 0);
             match dispatch.melee_approach(entity).filter(|_| !refused) {
                 Some(MeleeApproach::Face(at)) => {
-                    dispatch.auto.face(at);
+                    dispatch.auto.face(at, &mut dispatch.seam.stand);
                 }
                 Some(MeleeApproach::Walk { at, stop }) => {
-                    let started = dispatch.auto.walk_into_melee(at, stop);
+                    let started = dispatch
+                        .auto
+                        .walk_into_melee(at, stop, &mut dispatch.seam.stand);
                     dispatch.feedback.walked(started);
                 }
                 None => {}
@@ -2219,6 +2226,7 @@ mod tests {
             world.init_resource::<crate::spell::PendingCast>();
             world.init_resource::<crate::ui_cast::CastReports>();
             world.init_resource::<crate::spell::AutoRepeatActive>();
+            world.init_resource::<crate::creature_anim::UnitEdits>();
             world.init_resource::<crate::ui_loot::LootState>();
             world.init_resource::<crate::ui_loot::LootLatch>();
             world.init_resource::<crate::ui_script::CursorPayloadHeld>();
@@ -2300,6 +2308,7 @@ mod tests {
         world.init_resource::<crate::spell::CursorPicks>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::creature_anim::GestureQueue>();

@@ -114,7 +114,8 @@ impl AttackPress<'_, '_> {
             &mut seam.slots,
             &mut seam.auto_repeat,
             &mut seam.sheath,
-            &mut seam.ecs,
+            &mut seam.stand,
+            &seam.edits,
             &seam.net,
         );
     }

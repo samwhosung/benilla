@@ -89,6 +89,10 @@ pub(crate) struct Scene<'w, 's> {
     sheaths: MessageWriter<'w, crate::creature_anim::SheathRequest>,
     /// `[0xb4b3e4]`, for the GO-deferred swing's gate.
     own_control: Option<Res<'w, crate::player::OwnControlLost>>,
+    /// The stand-up the GO-deferred attack start asks (`0x5ecc9b`).
+    stand: MessageWriter<'w, crate::player::StandStateRequest>,
+    /// The auto-repeat clear, applied after this handler.
+    edits: Res<'w, crate::creature_anim::UnitEdits>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -186,7 +190,7 @@ fn on_cast_result(
             success,
             reason,
             arg,
-            &mut ladder.ecs,
+            &ladder.edits,
             &r.self_guid,
             &r.index,
             &r.casting,
@@ -288,7 +292,14 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &mut l.pet_bar,
                 &l.spell_mods,
             ),
-            (&mut l.auto_repeat, &mut sc.sheaths, engaged, start_gate),
+            (
+                &mut l.auto_repeat,
+                &mut sc.sheaths,
+                &mut sc.stand,
+                &sc.edits,
+                engaged,
+                start_gate,
+            ),
             l.play_seq.next(),
         );
     }
@@ -332,13 +343,13 @@ fn on_spell_delayed(In(ev): In<SessionEvent>, mut l: Lifecycle) {
     }
 }
 
-fn on_cancel_auto_repeat(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
+fn on_cancel_auto_repeat(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
     if let SessionEvent::CancelAutoRepeat = ev {
         cancel_auto_repeat(
             &mut l.auto_repeat,
             &l.self_guid,
             &l.index,
-            &mut sc.commands,
+            &sc.edits,
             &l.net,
         );
     }
@@ -582,7 +593,7 @@ fn cast_result(
     success: bool,
     reason: Option<u8>,
     arg: Option<u32>,
-    commands: &mut Commands,
+    edits: &crate::creature_anim::UnitEdits,
     self_guid: &SelfGuid,
     index: &GuidIndex,
     casting: &Query<&Casting>,
@@ -611,7 +622,7 @@ fn cast_result(
         let dont_report = reason == Some(0x17);
         let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
         if auto_repeat.0 == Some(spell_id) && !dont_report {
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, commands, net);
+            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
         }
         if !dont_report {
             cooldowns.clear_gcd(spell_id, now);
@@ -645,7 +656,10 @@ fn cast_result(
         // state and precast hold, keyed by spell id.
         if let Some(e) = self_e {
             if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
-                commands.entity(e).remove::<Casting>();
+                edits.push(crate::creature_anim::UnitEdit::ReapCasting {
+                    entity: e,
+                    spell_id,
+                });
             }
             cast_events.write(CastEvent {
                 entity: e,
@@ -853,6 +867,8 @@ fn spell_go(
     attack_ctx: (
         &mut crate::spell::AutoRepeatActive,
         &mut MessageWriter<crate::creature_anim::SheathRequest>,
+        &mut MessageWriter<crate::player::StandStateRequest>,
+        &crate::creature_anim::UnitEdits,
         bool,
         crate::creature_anim::StartGate,
     ),
@@ -885,7 +901,7 @@ fn spell_go(
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
     let (cooldowns, spells, items, net_commands, pet_bar, spell_mods) = cooldown_ctx;
-    let (auto_repeat, sheath, engaged, start_gate) = attack_ctx;
+    let (auto_repeat, sheath, stand, edits, engaged, start_gate) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
@@ -940,7 +956,8 @@ fn spell_go(
                     start_gate,
                     auto_repeat,
                     sheath,
-                    commands,
+                    stand,
+                    edits,
                     net_commands,
                 );
             }
@@ -1139,13 +1156,13 @@ fn cancel_auto_repeat(
     auto_repeat: &mut AutoRepeatActive,
     self_guid: &SelfGuid,
     index: &GuidIndex,
-    commands: &mut Commands,
+    edits: &crate::creature_anim::UnitEdits,
     net: &crate::net::NetCommands,
 ) {
     debug!("net: cancel auto-repeat");
     // The same cancel `0x6ea080` as every local trigger, its unconditional CMSG ack included.
     let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
-    crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, commands, net);
+    crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
 }
 
 /// Whether this `SMSG_SPELL_GO` arms the pet's cooldown bank (`0x6e857a`–`0x6e85ad`). The GO
@@ -1638,6 +1655,7 @@ mod tests {
                 .init_resource::<super::super::SpellTargeting>()
                 .init_resource::<ActiveChannel>()
                 .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::creature_anim::UnitEdits>()
                 .init_resource::<Cooldowns>()
                 .init_resource::<crate::spell::SpellModifiers>()
                 .init_resource::<crate::ui_pet::PetBar>()
@@ -1736,7 +1754,7 @@ mod tests {
             self.app
                 .world_mut()
                 .run_system_once(
-                    move |mut commands: Commands,
+                    move |edits: Res<crate::creature_anim::UnitEdits>,
                           self_guid: Res<SelfGuid>,
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
@@ -1751,7 +1769,7 @@ mod tests {
                             fail.is_none(),
                             fail,
                             None,
-                            &mut commands,
+                            &edits,
                             &self_guid,
                             &index,
                             &casting,
@@ -1767,6 +1785,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+            crate::creature_anim::apply_unit_edits(self.app.world_mut());
         }
 
         /// `SMSG_SPELL_FAILED_OTHER` for our own spell.
@@ -1811,7 +1830,9 @@ mod tests {
                           mut cooldowns: ResMut<Cooldowns>,
                           mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                           mut items: ResMut<crate::items::Items>,
-                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>| {
+                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                          mut stand: MessageWriter<crate::player::StandStateRequest>,
+                          edits: Res<crate::creature_anim::UnitEdits>| {
                         let net_commands = crate::net::NetCommands(tx.clone());
                         spell_go(
                             Self::SELF,
@@ -1844,6 +1865,8 @@ mod tests {
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),
                                 &mut sheath,
+                                &mut stand,
+                                &edits,
                                 false,
                                 crate::creature_anim::StartGate::default(),
                             ),
@@ -1852,6 +1875,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+            crate::creature_anim::apply_unit_edits(self.app.world_mut());
         }
 
         /// `MSG_CHANNEL_START`, or `MSG_CHANNEL_UPDATE` with `start` false.
@@ -2431,6 +2455,7 @@ mod tests {
             .add_message::<GoLidOpen>()
             .add_message::<crate::creature_anim::SheathRequest>()
             .add_message::<crate::player::StandStateRequest>()
+            .init_resource::<crate::creature_anim::UnitEdits>()
             .init_resource::<GuidIndex>()
             .init_resource::<SelfGuid>()
             .init_resource::<CastReports>()
@@ -2479,7 +2504,9 @@ mod tests {
                       mut cooldowns: ResMut<Cooldowns>,
                       mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                       mut items: ResMut<crate::items::Items>,
-                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>| {
+                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+                      edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
                     spell_go(
                         caster,
@@ -2512,6 +2539,8 @@ mod tests {
                         (
                             &mut crate::spell::AutoRepeatActive::default(),
                             &mut sheath,
+                            &mut stand,
+                            &edits,
                             false,
                             crate::creature_anim::StartGate::default(),
                         ),
@@ -2520,6 +2549,7 @@ mod tests {
                 },
             )
             .unwrap();
+        crate::creature_anim::apply_unit_edits(app.world_mut());
         let now = Instant::now();
         let armed = |c: &Cooldowns| c.info(SPELL, 0, Some(&display()), now).duration_ms;
         let world = app.world();
@@ -2632,6 +2662,7 @@ mod tests {
             .add_message::<GoLidOpen>()
             .add_message::<crate::creature_anim::SheathRequest>()
             .add_message::<crate::player::StandStateRequest>()
+            .init_resource::<crate::creature_anim::UnitEdits>()
             .init_resource::<GuidIndex>()
             .init_resource::<SelfGuid>()
             .init_resource::<CastReports>()
@@ -2679,7 +2710,9 @@ mod tests {
                       mut cooldowns: ResMut<Cooldowns>,
                       mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                       mut items: ResMut<crate::items::Items>,
-                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>| {
+                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+                      edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
                     spell_go(
                         10,
@@ -2712,6 +2745,8 @@ mod tests {
                         (
                             &mut crate::spell::AutoRepeatActive::default(),
                             &mut sheath,
+                            &mut stand,
+                            &edits,
                             false,
                             crate::creature_anim::StartGate::default(),
                         ),
@@ -2720,6 +2755,7 @@ mod tests {
                 },
             )
             .unwrap();
+        crate::creature_anim::apply_unit_edits(app.world_mut());
         assert_eq!(
             hops(&app),
             Some(vec![t1, t2]),
@@ -2759,7 +2795,9 @@ mod tests {
             .init_resource::<QueuedMeleeSpell>()
             .init_resource::<Cooldowns>()
             .init_resource::<crate::spell::SpellModifiers>()
-            .init_resource::<AutoRepeatActive>();
+            .init_resource::<AutoRepeatActive>()
+            .add_message::<crate::player::StandStateRequest>()
+            .init_resource::<crate::creature_anim::UnitEdits>();
 
         let self_e = app
             .world_mut()
@@ -2782,7 +2820,7 @@ mod tests {
             let tx = tx.clone();
             app.world_mut()
                 .run_system_once(
-                    move |mut commands: Commands,
+                    move |edits: Res<crate::creature_anim::UnitEdits>,
                           self_guid: Res<SelfGuid>,
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
@@ -2796,7 +2834,7 @@ mod tests {
                             false,
                             Some(reason),
                             None,
-                            &mut commands,
+                            &edits,
                             &self_guid,
                             &index,
                             &casting,
@@ -2812,6 +2850,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+            crate::creature_anim::apply_unit_edits(app.world_mut());
         };
 
         // Reason 0x17 is the one skip (`6e1ce1 cmp cl,0x17; je`): armed stays armed.
@@ -3009,6 +3048,7 @@ mod tests {
                 .add_message::<GoLidOpen>()
                 .add_message::<crate::creature_anim::SheathRequest>()
                 .add_message::<crate::player::StandStateRequest>()
+                .init_resource::<crate::creature_anim::UnitEdits>()
                 .init_resource::<GuidIndex>()
                 .init_resource::<SelfGuid>()
                 .init_resource::<CastReports>()
@@ -3051,7 +3091,9 @@ mod tests {
                           mut cooldowns: ResMut<Cooldowns>,
                           mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                           mut items: ResMut<crate::items::Items>,
-                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>| {
+                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                          mut stand: MessageWriter<crate::player::StandStateRequest>,
+                          edits: Res<crate::creature_anim::UnitEdits>| {
                         let net_commands = crate::net::NetCommands(tx.clone());
                         spell_go(
                             caster,
@@ -3085,6 +3127,8 @@ mod tests {
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),
                                 &mut sheath,
+                                &mut stand,
+                                &edits,
                                 engaged,
                                 gate,
                             ),
@@ -3093,6 +3137,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+            crate::creature_anim::apply_unit_edits(app.world_mut());
             rx.try_iter().collect()
         };
 
@@ -3251,7 +3296,9 @@ mod tests {
                 .init_resource::<QueuedMeleeSpell>()
                 .init_resource::<Cooldowns>()
                 .init_resource::<crate::spell::SpellModifiers>()
-                .init_resource::<AutoRepeatActive>();
+                .init_resource::<AutoRepeatActive>()
+                .add_message::<crate::player::StandStateRequest>()
+                .init_resource::<crate::creature_anim::UnitEdits>();
             let self_e = app.world_mut().spawn((Guid(10), SelfPlayer)).id();
             app.world_mut()
                 .resource_mut::<GuidIndex>()
@@ -3279,7 +3326,7 @@ mod tests {
             let chained = app
                 .world_mut()
                 .run_system_once(
-                    move |mut commands: Commands,
+                    move |edits: Res<crate::creature_anim::UnitEdits>,
                           self_guid: Res<SelfGuid>,
                           index: Res<GuidIndex>,
                           casting: Query<&Casting>,
@@ -3293,7 +3340,7 @@ mod tests {
                             r.fail.is_none(),
                             r.fail,
                             r.arg,
-                            &mut commands,
+                            &edits,
                             &self_guid,
                             &index,
                             &casting,
@@ -3309,6 +3356,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+            crate::creature_anim::apply_unit_edits(app.world_mut());
             let armed = app.world().resource::<PendingCast>().in_flight();
             let queued = app.world().resource::<QueuedMeleeSpell>().current();
             (chained, armed, queued)

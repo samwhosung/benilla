@@ -458,7 +458,7 @@ pub(crate) fn drain_death(
             'static,
             (
                 crate::spell::CastLadder<'static, 'static>,
-                crate::spell::SelfCancel<'static, 'static>,
+                crate::spell::SelfCancel<'static>,
             ),
         >,
         crate::ui_bind_confirm::BindGate<'static>,

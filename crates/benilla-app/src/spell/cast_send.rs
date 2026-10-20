@@ -128,7 +128,10 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The reagent check walks the bags through it; the item arms resolve an instance guid here.
     pub(crate) objects: Objects<'w, 's>,
     pub(crate) sheath: MessageWriter<'w, crate::creature_anim::SheathRequest>,
-    pub(crate) ecs: Commands<'w, 's>,
+    /// The stand-up an attack-initiating cast asks (`0x5ecc9b`).
+    pub(crate) stand: MessageWriter<'w, crate::player::StandStateRequest>,
+    /// The auto-repeat arm and clear, applied after the pass.
+    pub(crate) edits: Res<'w, crate::creature_anim::UnitEdits>,
     pub(crate) pending: ResMut<'w, crate::spell::PendingCast>,
     pub(crate) queued_melee: ResMut<'w, crate::spell::QueuedMeleeSpell>,
     pub(crate) cooldowns: ResMut<'w, crate::spell::Cooldowns>,
@@ -402,7 +405,8 @@ impl CastLadder<'_, '_> {
             &self.objects,
             &self.items,
             &mut self.sheath,
-            &mut self.ecs,
+            &mut self.stand,
+            &self.edits,
             &mut core,
             &mut self.cooldowns,
             &self.spell_mods,
@@ -495,7 +499,8 @@ fn send_spell_cast(
     objects: &Objects,
     items: &Items,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
-    ecs: &mut Commands,
+    stand: &mut MessageWriter<crate::player::StandStateRequest>,
+    edits: &crate::creature_anim::UnitEdits,
     core: &mut CastCore,
     cooldowns: &mut crate::spell::Cooldowns,
     spell_mods: &crate::spell::SpellModifiers,
@@ -525,7 +530,7 @@ fn send_spell_cast(
     if def.is_some_and(|d| d.auto_repeat()) && auto_repeat.0 == Some(spell_id) {
         debug!("ui_action: cast {spell_id} re-pressed — auto-repeat toggles off");
         let self_e = self_player.single().ok().map(|(e, _)| e);
-        crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, commands);
+        crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, commands);
         return;
     }
     if caster_dead(spell_id, def, ctx.rel.self_store) {
@@ -700,7 +705,7 @@ fn send_spell_cast(
                     crate::creature_anim::cancel_auto_repeat_local(
                         self_e,
                         auto_repeat,
-                        ecs,
+                        edits,
                         commands,
                     );
                 }
@@ -865,7 +870,7 @@ fn send_spell_cast(
                 .0
                 .send(ClientCommand::CancelCast { spell_id: cached });
             let self_e = self_player.single().ok().map(|(e, _)| e);
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, commands);
+            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, commands);
         }
     }
     // `SendCast 0x6e54f0`: one targets block, two opcodes, sent first (`0x6e5872`); everything the
@@ -923,7 +928,7 @@ fn send_spell_cast(
             if d.auto_repeat() {
                 // The sticky armed state (`0x6e593b`, `|= 0x200`) and the autorepeat key
                 // (`0xceac30`, written at `0x6e594c`) the button's checked state reads.
-                ecs.entity(e).insert(crate::creature_anim::AutoRepeatArmed);
+                edits.push(crate::creature_anim::UnitEdit::ArmAutoRepeat(e));
                 auto_repeat.0 = Some(spell_id);
                 // StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster being the active
                 // player (`0x6e5957`–`0x6e5972`): starting a repeat ends the melee swing and its
@@ -965,7 +970,8 @@ fn send_spell_cast(
                         ),
                         auto_repeat,
                         sheath,
-                        ecs,
+                        stand,
+                        edits,
                         commands,
                     );
                 }
@@ -1034,6 +1040,7 @@ mod tests {
         world.init_resource::<crate::spell::SpellModifiers>();
         world.init_resource::<CastReports>();
         world.init_resource::<AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
         world.init_resource::<crate::spell::SpellTargeting>();
         world.init_resource::<crate::spell::HeldForPick>();

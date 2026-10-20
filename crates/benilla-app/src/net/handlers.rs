@@ -74,6 +74,8 @@ fn call(world: &mut World, id: SystemId<In<SessionEvent>>, name: &str, ev: Sessi
         // A plugin bug (most likely a missing resource), logged loud so the smoke gate sees it.
         error!("net: handler `{name}` did not run: {e}");
     }
+    // The unit edits a handler's seams queued, applied with its commands, before the next event.
+    crate::creature_anim::apply_unit_edits(world);
 }
 
 /// `app.net_handler(SessionEventKind::X, on_x)` registers a system taking `In<SessionEvent>`;
