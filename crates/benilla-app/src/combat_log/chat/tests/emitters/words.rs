@@ -280,12 +280,12 @@ fn a_standing_change_raises_faction() {
     let name = catalog.faction_name(21).unwrap().to_string();
     let factions = Factions::from_catalog(catalog);
     let word = |standing| {
-        let mut log = ChatLog::default();
+        let log = ChatLog::default();
         crate::combat_log::chat::faction_standing(
             &[(booty, standing)],
             &Reputations::default(),
             Some(&factions),
-            &mut log,
+            &log,
         );
         words(&log.pending_combat())
     };

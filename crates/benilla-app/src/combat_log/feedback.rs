@@ -126,7 +126,7 @@ mod tests {
 
     /// A displayed swing on a held player, as `(action, descriptor)` of its `UNIT_COMBAT`.
     fn swing(victim_state: u32, hit_info: u32, damage: u32) -> Vec<(&'static str, &'static str)> {
-        let mut log = ChatLog::default();
+        let log = ChatLog::default();
         let s = crate::creature_anim::SwingMessage {
             attacker: bevy::prelude::Entity::PLACEHOLDER,
             victim: None,
@@ -138,7 +138,7 @@ mod tests {
         };
         let player =
             crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]));
-        crate::ui_unit::melee_unit_combat(&mut log, &s, Some((1, &player)));
+        crate::ui_unit::melee_unit_combat(&log, &s, Some((1, &player)));
         log.pending_unit_combat()
             .into_iter()
             .map(|f| (f.action, f.flags))
