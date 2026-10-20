@@ -1672,6 +1672,102 @@ mod tests {
         );
     }
 
+    /// A unit of `entry` and a game object of `go_entry`, created as their blocks bring them.
+    fn record_creates(unit: u64, entry: u32, go: u64, go_entry: u32) -> Vec<SessionEvent> {
+        use benilla_protocol::messages::ObjectType;
+        let create = |guid, kind, fields: ObjectFields| SessionEvent::ObjectCreate {
+            guid,
+            kind,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: None,
+            transport: None,
+            spline: None,
+            fields,
+        };
+        vec![
+            create(
+                unit,
+                EntityKind::Unit,
+                ObjectFields::from_pairs(&[(3, entry)]).into_created(ObjectType::Unit),
+            ),
+            create(
+                go,
+                EntityKind::GameObject,
+                ObjectFields::from_pairs(&[(3, go_entry)]).into_created(ObjectType::GameObject),
+            ),
+        ]
+    }
+
+    /// The creature and template asks the wire saw, as `(creature, game object)` counts.
+    fn record_asks(rx: &crossbeam_channel::Receiver<ClientCommand>) -> (usize, usize) {
+        rx.try_iter().fold((0, 0), |(c, g), cmd| match cmd {
+            ClientCommand::CreatureQuery { .. } => (c + 1, g),
+            ClientCommand::GameObjectQuery { .. } => (c, g + 1),
+            _ => (c, g),
+        })
+    }
+
+    /// The record asks belong to the create hooks (`0x5fb880` → `0x60afb0`, the ask at
+    /// `0x60b15b`; `0x5f7c40`, `0x5f7d81`), which a create of an object already shown skips for
+    /// the all-fields watch (`0x465d79`, `0x465d8e`): a refused entry is not asked again by it.
+    #[test]
+    fn a_re_create_of_a_shown_object_asks_no_record() {
+        const ENTRY: u32 = 1234;
+        const GO_ENTRY: u32 = 1000;
+        const GO: u64 = 0xF110_0000_0000_0009;
+        let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+
+        let creates = record_creates(mob, ENTRY, GO, GO_ENTRY);
+        super::super::handlers::dispatch(app.world_mut(), super::wire(creates.clone()));
+        assert_eq!(record_asks(&rx), (1, 1), "the first creates' hooks ask");
+        let world = app.world_mut();
+        world
+            .resource_mut::<NameCache>()
+            .insert_creature(ENTRY, None);
+        world.resource_mut::<GameObjectTemplates>().refuse(GO_ENTRY);
+
+        super::super::handlers::dispatch(app.world_mut(), super::wire(creates));
+        assert_eq!(record_asks(&rx), (0, 0), "shown: no hook, no ask");
+    }
+
+    /// A game object brought back asks its record when it has none (`0x5f7ed0`: `+0x214` clear,
+    /// `0x558560` at `0x5f7f31`); a unit brought back asks nothing, its slot 3 never reaching
+    /// `0x60afb0`.
+    #[test]
+    fn a_released_game_object_brought_back_asks_its_missing_record() {
+        const ENTRY: u32 = 1234;
+        const GO_ENTRY: u32 = 1000;
+        const GO: u64 = 0xF110_0000_0000_0009;
+        let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+
+        let creates = record_creates(mob, ENTRY, GO, GO_ENTRY);
+        super::super::handlers::dispatch(app.world_mut(), super::wire(creates.clone()));
+        let world = app.world_mut();
+        world
+            .resource_mut::<NameCache>()
+            .insert_creature(ENTRY, None);
+        world.resource_mut::<GameObjectTemplates>().refuse(GO_ENTRY);
+        super::super::handlers::dispatch(
+            app.world_mut(),
+            super::wire(vec![SessionEvent::ObjectsRemoved(vec![mob, GO])]),
+        );
+        let _ = record_asks(&rx);
+
+        super::super::handlers::dispatch(app.world_mut(), super::wire(creates));
+        assert_eq!(record_asks(&rx), (0, 1), "the game object's slot 3 asks");
+    }
+
     /// A create block for a live item runs the watchers over what it moved, never the create's
     /// record set-up (`0x465d79`, the object already shown).
     #[test]
