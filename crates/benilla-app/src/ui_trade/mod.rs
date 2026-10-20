@@ -511,7 +511,7 @@ fn answer_trade_request(
     mut errors: ResMut<crate::ui_action::UiErrorKeys>,
     social: Res<crate::ui_social::SocialState>,
     cinematic: Res<crate::cinematic::Cinematic>,
-    player: Res<crate::player::Player>,
+    own_control: Res<crate::player::OwnControlLost>,
     auction: Res<crate::ui_auction::AuctionOpen>,
     block_trades: Res<BlockTrades>,
     index: Res<GuidIndex>,
@@ -551,11 +551,7 @@ fn answer_trade_request(
     // player control (`[0xb4b3e4]`, which `0x4958e0` writes, not an in-world flag) or an open
     // auction house (`[0xb725f8]`, its auctioneer, not a pending trade).
     let dead_or_ghost = initiator_store.is_some_and(|s| s.0.is_dead_or_ghost());
-    if dead_or_ghost
-        || cinematic.is_playing()
-        || player.own_control_lost
-        || auction.auctioneer.is_some()
-    {
+    if dead_or_ghost || cinematic.is_playing() || own_control.0 || auction.auctioneer.is_some() {
         info!(target: "trade", "BEGIN_TRADE from {initiator:#x} refused silently; sending CMSG_BUSY_TRADE");
         let _ = commands.0.send(ClientCommand::BusyTrade);
         trade.refuse_request();
@@ -2174,6 +2170,7 @@ mod tests {
             .init_resource::<crate::ui_auction::AuctionOpen>()
             .init_resource::<GuidIndex>()
             .init_resource::<crate::player::Player>()
+            .init_resource::<crate::player::OwnControlLost>()
             .insert_resource(names)
             .insert_resource(NetCommands(tx))
             .insert_resource(BlockTrades(block_trades))
@@ -2183,8 +2180,8 @@ mod tests {
                 crate::cinematic::Cinematic::default()
             });
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = !controlled;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = !controlled;
         // Streamed, since leg 3 drops a request from a guid that resolves to nothing.
         for guid in [0x7u64, 0x8] {
             let e = app.world_mut().spawn(ObjectStore::default()).id();

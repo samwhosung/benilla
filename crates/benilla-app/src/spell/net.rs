@@ -87,8 +87,8 @@ pub(crate) struct Scene<'w, 's> {
     go_targets: MessageWriter<'w, SpellGoTargets>,
     go_lid: MessageWriter<'w, crate::go_anim::GoLidOpen>,
     sheaths: MessageWriter<'w, crate::creature_anim::SheathRequest>,
-    /// `[0xb4b3e4]`, for the GO-deferred swing's gate; the body exists only in world.
-    player: Option<Res<'w, crate::player::Player>>,
+    /// `[0xb4b3e4]`, for the GO-deferred swing's gate.
+    own_control: Option<Res<'w, crate::player::OwnControlLost>>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -262,7 +262,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
             .and_then(|&entity| sc.stores.get(entity).ok());
         let start_gate = crate::creature_anim::StartGate::of(
             own,
-            sc.player.as_deref().is_some_and(|p| p.own_control_lost),
+            sc.own_control.as_deref().is_some_and(|c| c.0),
         );
         spell_go(
             caster,

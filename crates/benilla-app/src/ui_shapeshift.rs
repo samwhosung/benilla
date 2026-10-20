@@ -143,7 +143,7 @@ fn feed_shapeshift_bar(
     items: Res<Items>,
     clock: Res<crate::ui_script::UiClock>,
     spell_mods: Res<crate::spell::SpellModifiers>,
-    player: Option<Res<crate::player::Player>>,
+    own_control: Option<Res<crate::player::OwnControlLost>>,
     // The skill lines the walk's cost finds its level through.
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     mut memory: Local<crate::ui_script::VmMemo<StanceMemory>>,
@@ -206,7 +206,7 @@ fn feed_shapeshift_bar(
                         cooldowns: &cooldowns,
                         stacks: &stacks,
                         spell_mods: &spell_mods,
-                        control_lost: player.as_ref().is_some_and(|p| p.own_control_lost),
+                        control_lost: own_control.as_ref().is_some_and(|c| c.0),
                         skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
                     };
                     usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
@@ -445,6 +445,7 @@ mod tests {
                 ..Spells::empty_for_tests()
             })
             .init_resource::<crate::player::Player>()
+            .init_resource::<crate::player::OwnControlLost>()
             .init_resource::<Cooldowns>()
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::ui_script::UiClock>()
@@ -485,15 +486,15 @@ mod tests {
         assert!(castable(&app, 1) && castable(&app, 2), "in control");
 
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = true;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = true;
         app.update();
         assert!(!castable(&app, 1), "the plain form greys");
         assert!(castable(&app, 2), "the fear immunity passes the scan");
 
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = false;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = false;
         app.update();
         assert!(castable(&app, 1) && castable(&app, 2), "control back");
     }

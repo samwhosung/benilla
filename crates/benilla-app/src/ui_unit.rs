@@ -818,18 +818,18 @@ fn fire_faction_on_forced_table(
 /// (`0x4958e0`), for our own character only (`0x5fa6d0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
 fn feed_player_control(
     script: Option<NonSendMut<UiScript>>,
-    player: Option<Res<crate::player::Player>>,
+    own_control: Option<Res<crate::player::OwnControlLost>>,
     mut lost: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    let (Some(mut script), Some(player)) = (script, player) else {
+    let (Some(mut script), Some(own_control)) = (script, own_control) else {
         return;
     };
     let lost = lost.get(&script);
-    if *lost != player.own_control_lost {
-        *lost = player.own_control_lost;
+    if *lost != own_control.0 {
+        *lost = own_control.0;
         // `HasFullControl`'s flag rides the same edge.
-        script.set_player_control(!player.own_control_lost);
-        let event = if player.own_control_lost {
+        script.set_player_control(!own_control.0);
+        let event = if own_control.0 {
             "PLAYER_CONTROL_LOST"
         } else {
             "PLAYER_CONTROL_GAINED"
@@ -2776,6 +2776,7 @@ mod tests {
         const FIELD_PLAYER_FARSIGHT: u16 = 712;
         let mut app = App::new();
         app.init_resource::<crate::player::Player>()
+            .init_resource::<crate::player::OwnControlLost>()
             .add_systems(Update, (feed_player_control, feed_farsight_focus));
         let script = UiScript::new().unwrap();
         script
@@ -2813,13 +2814,13 @@ mod tests {
             "in control, no far sight: quiet"
         );
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = true;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = true;
         assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_LOST".to_string()]);
         assert_eq!(seen(&mut app), Vec::<String>::new(), "held, not repeated");
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = false;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = false;
         assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_GAINED".to_string()]);
 
         // A possessed creature stuck under fear or confusion is not our character losing control:

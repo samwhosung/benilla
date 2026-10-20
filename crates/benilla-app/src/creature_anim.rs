@@ -209,7 +209,7 @@ pub(crate) struct StartGate {
 }
 
 impl StartGate {
-    /// The gate from the player's descriptor and `Player::own_control_lost`.
+    /// The gate from the player's descriptor and `OwnControlLost`.
     pub(crate) fn of(own: Option<&crate::net::ObjectStore>, control_lost: bool) -> Self {
         Self {
             pacified: own.is_some_and(|me| {
@@ -314,8 +314,8 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) me: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
     /// Our own descriptor, for [`Self::player_is_charmed`] and [`Self::start_gate`].
     self_store: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    /// `[0xb4b3e4]`, for [`Self::start_gate`]; the body exists only in world.
-    player: Option<Res<'w, crate::player::Player>>,
+    /// `[0xb4b3e4]`, for [`Self::start_gate`].
+    own_control: Option<Res<'w, crate::player::OwnControlLost>>,
     /// The open loot, which the selection teardown closes when it loots the outgoing target.
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
@@ -337,7 +337,7 @@ impl AttackSeam<'_, '_> {
     pub(crate) fn start_gate(&self) -> StartGate {
         StartGate::of(
             self.self_store.iter().next(),
-            self.player.as_deref().is_some_and(|p| p.own_control_lost),
+            self.own_control.as_deref().is_some_and(|c| c.0),
         )
     }
 

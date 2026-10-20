@@ -165,8 +165,8 @@ impl Fix {
     fn lose_control(&mut self) {
         self.app
             .world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = true;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = true;
     }
 
     /// A VM holding `held` on its cursor.

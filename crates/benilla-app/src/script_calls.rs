@@ -1138,9 +1138,7 @@ mod tests {
             with_factions(&mut f, FOE, &[(HEALTH, 100)]);
             let world = f.app.world_mut();
             world.init_resource::<crate::player::Player>();
-            world
-                .resource_mut::<crate::player::Player>()
-                .own_control_lost = true;
+            world.resource_mut::<crate::player::OwnControlLost>().0 = true;
             if engaged {
                 let me = world.resource::<GuidIndex>().0[&ME];
                 world
@@ -1173,9 +1171,7 @@ mod tests {
             );
             let world = f.app.world_mut();
             world.init_resource::<crate::player::Player>();
-            world
-                .resource_mut::<crate::player::Player>()
-                .own_control_lost = lost;
+            world.resource_mut::<crate::player::OwnControlLost>().0 = lost;
             run(&mut f, r#"CastSpellByName("Strike")"#);
             let sent: Vec<_> = f.rx.try_iter().collect();
             assert!(

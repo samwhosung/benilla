@@ -781,6 +781,7 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
             ..Spells::empty_for_tests()
         })
         .init_resource::<crate::player::Player>()
+        .init_resource::<crate::player::OwnControlLost>()
         .init_resource::<Cooldowns>()
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<crate::ui_script::UiClock>()
@@ -846,8 +847,8 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
     events(&mut app); // the first push's own signal
 
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = true;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = true;
     app.update();
     assert_eq!(
         lit(&app),
@@ -857,8 +858,8 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
     assert_eq!(events(&mut app), 1, "the cache change signals the bar once");
 
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = false;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = false;
     app.update();
     assert_eq!(lit(&app), [true, true, true], "control back, all lit again");
     assert_eq!(events(&mut app), 1);
@@ -975,6 +976,7 @@ fn feed_app(buttons: &[(u8, u32, u8)], spells: Spells, x: f32) -> App {
         .init_resource::<crate::spell::SpellTargeting>()
         .init_resource::<crate::spell::HeldForPick>()
         .init_resource::<crate::player::Player>()
+        .init_resource::<crate::player::OwnControlLost>()
         .init_resource::<Items>()
         .insert_resource(NetCommands(tx));
     feed_inputs(&mut app);
@@ -1299,8 +1301,8 @@ fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
     assert_eq!(frame(&mut app), USABLE, "the clear");
 
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = true;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = true;
     assert_eq!(frame(&mut app), USABLE, "control lost");
 
     let now = Instant::now();
@@ -1333,8 +1335,8 @@ fn spell_update_usable_fires_from_every_usable_refresh_and_once_a_frame() {
     edge(&mut app, ME, Player, 23, 480, 470);
     select(&mut app, Some(OTHER));
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = false;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = false;
     assert_eq!(
         frame(&mut app),
         USABLE,
@@ -1357,8 +1359,8 @@ fn a_refresh_that_changes_a_slot_signals_the_bar_then_the_spells() {
     );
     frame(&mut app);
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = true;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = true;
     assert_eq!(
         frame(&mut app),
         ["ACTIONBAR_UPDATE_USABLE", "SPELL_UPDATE_USABLE"]
@@ -1402,8 +1404,8 @@ fn usable_reader_app() -> App {
 /// Sets whether the player has lost control, as `SMSG_CLIENT_CONTROL_UPDATE` reports it.
 fn set_control_lost(app: &mut App, lost: bool) {
     app.world_mut()
-        .resource_mut::<crate::player::Player>()
-        .own_control_lost = lost;
+        .resource_mut::<crate::player::OwnControlLost>()
+        .0 = lost;
 }
 
 /// `SetPlayerControl` (`0x4958e0`) stores the flag (`0x4958ea`) and signals

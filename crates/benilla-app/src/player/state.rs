@@ -285,6 +285,14 @@ pub(crate) fn incapacitated_flags(flags: u32, translate_gated: bool, turn_gated:
     out
 }
 
+/// The local player's own control, the reference's `[0xb4b3e4]` cleared (`0x4958e0`): written by
+/// `0x5fa600` only when the named unit is our own character (`0x5fa6d0`), so a possessed
+/// creature's loss ([`Player::control_lost`] on a released guid) never reaches it. The item and
+/// cursor gates, StartAttack, `HasFullControl` and `PLAYER_CONTROL_LOST` read this one. A resource
+/// of its own, so its many readers do not order against every other writer of [`Player`].
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnControlLost(pub(crate) bool);
+
 /// Our avatar: until `active` the camera free-flies, then we drive the body the server placed.
 /// `PartialEq` serves the test that the session end resets the whole of it to `Player::default()`.
 #[derive(Resource, Default, PartialEq)]
@@ -312,11 +320,6 @@ pub(crate) struct Player {
     /// standing. The reference zeroes its mover; vmangos neither roots a charmed player nor refuses
     /// its movement, so nothing else holds the body. Unlike a root, it stops turning too.
     pub(crate) control_lost: bool,
-    /// The local player's own control, the reference's `[0xb4b3e4]` cleared (`0x4958e0`): written
-    /// by `0x5fa600` only when the named unit is our own character (`0x5fa6d0`), so a possessed
-    /// creature's loss ([`Self::control_lost`] on a released guid) never reaches it. The item and
-    /// cursor gates, `HasFullControl` and `PLAYER_CONTROL_LOST` read this one.
-    pub(crate) own_control_lost: bool,
     /// The unit we drive in place of our body (a mind-controlled creature, Eye of Kilrogg), `None`
     /// for our own. Our body must then send nothing: outbound `MSG_MOVE_*` carry no guid, so the
     /// server applies them to whatever we last claimed.

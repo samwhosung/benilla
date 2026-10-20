@@ -71,19 +71,19 @@ pub(crate) fn bypass_candidates(catalog: &SpellCatalog) -> Vec<u32> {
 /// back; only a change is pushed, and a fresh VM gets it again.
 pub(super) fn feed_control_bypass(
     script: Option<NonSendMut<UiScript>>,
-    player: Option<Res<crate::player::Player>>,
+    own_control: Option<Res<crate::player::OwnControlLost>>,
     spells: Option<Res<crate::ui_action::Spells>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut pushed: Local<VmMemo<HashSet<u32>>>,
     mut candidates: Local<Option<Vec<u32>>>,
 ) {
-    let (Some(mut script), Some(player)) = (script, player) else {
+    let (Some(mut script), Some(own_control)) = (script, own_control) else {
         return;
     };
     if spells.as_ref().is_some_and(|s| s.is_changed()) {
         *candidates = None;
     }
-    let want = match (player.own_control_lost, spells.as_deref(), self_q.single()) {
+    let want = match (own_control.0, spells.as_deref(), self_q.single()) {
         (true, Some(spells), Ok(store)) => {
             let list = candidates.get_or_insert_with(|| bypass_candidates(&spells.catalog));
             control_bypass_spells(&spells.catalog, list, &store.0)
@@ -225,6 +225,7 @@ mod tests {
         use benilla_ui::script::{ContainerSlot, ContainerState};
         let mut app = App::new();
         app.init_resource::<crate::player::Player>()
+            .init_resource::<crate::player::OwnControlLost>()
             .insert_resource(crate::ui_action::Spells {
                 catalog: catalog(),
                 ..crate::ui_action::Spells::empty_for_tests()
@@ -260,8 +261,8 @@ mod tests {
             ))
             .id();
         app.world_mut()
-            .resource_mut::<crate::player::Player>()
-            .own_control_lost = true;
+            .resource_mut::<crate::player::OwnControlLost>()
+            .0 = true;
         app.update();
 
         let calls = |app: &mut App| {
