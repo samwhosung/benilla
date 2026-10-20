@@ -426,9 +426,9 @@ pub(crate) fn spell_usable(
 /// The resolved power cost, `GetPowerCost 0x6e31b0`: `manaCost`, plus the signed
 /// `(level - baseLevel) * manaCostPerlevel` (only creature spells carry it), plus
 /// `ManaCostPercentage` of the reference's per-type basis (`0x612c50`): base health for health,
-/// base mana for mana, 1000 for rage, 100 for focus and energy, and 0 otherwise. Then
-/// `SPELLMOD_COST` through `0x6e6af0` (`6e32e3`), clamped at 0.
-/// The reference's per-school unit modifiers are not applied.
+/// base mana for mana, 1000 for rage, 100 for focus and energy, and 0 otherwise. Then the caster's
+/// `POWER_COST_MODIFIER` and `POWER_COST_MULTIPLIER` for the spell's school, the clamp at 0, and
+/// `SPELLMOD_COST` through `0x6e6af0` last (`0x6e32f0`), whose result is not clamped.
 ///
 /// One cost for leg 12, the press-path gate and the tooltip, as `0x6e31b0` serves all six of its
 /// callers. The press-path gate refuses an unaffordable cast without sending anything
@@ -438,7 +438,7 @@ pub(crate) fn power_cost(
     store: &ObjectStore,
     mods: &SpellModifiers,
     reads: &mut dyn SpellReads,
-) -> u32 {
+) -> i32 {
     // The level term reads `baseLevel` (`+0x70`), as `0x6e31b0` does, but the reference scales a
     // caster value / 5 there (vmangos: the level / 5); only creature spells have a per-level cost.
     power_cost_at(d, &store.0, store.0.unit_level().unwrap_or(0), mods, reads)
@@ -455,7 +455,7 @@ pub(crate) fn power_cost_at(
     level: u32,
     mods: &SpellModifiers,
     reads: &mut dyn SpellReads,
-) -> u32 {
+) -> i32 {
     let base = match cost_basis(d) {
         CostBasis::None => 0,
         CostBasis::BaseMana => {
@@ -468,18 +468,36 @@ pub(crate) fn power_cost_at(
         }
         CostBasis::Fixed(value) => value,
     };
-    // Only a spell with a per-level cost, a creature's, reads the level.
+    // Only a spell with a per-level cost, a creature's, reads the level. The sums are the
+    // reference's 32-bit ones (`0x6e325f`-`0x6e32a1`).
     let level_term = if d.mana_cost_per_level != 0 {
         reads.unit(UnitField::Level);
-        (i64::from(level) - i64::from(d.base_level)) * i64::from(d.mana_cost_per_level)
+        level
+            .wrapping_sub(d.base_level)
+            .wrapping_mul(d.mana_cost_per_level) as i32
     } else {
         0
     };
-    let cost =
-        i64::from(d.mana_cost) + level_term + i64::from(base) * i64::from(d.mana_cost_pct) / 100;
-    // The talent cut applies before the clamp at 0.
-    let cost = cost.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-    u32::try_from(mods.apply(d, OP_COST, cost)).unwrap_or(0)
+    let pct = (base as i32).wrapping_mul(d.mana_cost_pct as i32) / 100;
+    let cost = (d.mana_cost as i32)
+        .wrapping_add(level_term)
+        .wrapping_add(pct);
+    // The school's flat term (`0x6e32ad`), then its factor: `(1 + multiplier) × cost` on the x87
+    // stack, stored as an `f32`, then `fistp`, which rounds to nearest even and stores the
+    // integer indefinite for a NaN or a value out of range (`0x6e32c0`-`0x6e32d6`).
+    reads.unit(UnitField::PowerCostModifier);
+    reads.unit(UnitField::PowerCostMultiplier);
+    let cost = cost.wrapping_add(unit.unit_power_cost_modifier(d.school).unwrap_or(0));
+    let factor = f64::from(unit.unit_power_cost_multiplier(d.school).unwrap_or(0.0)) + 1.0;
+    let scaled = f64::from((factor * f64::from(cost)) as f32).round_ties_even();
+    let cost = if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&scaled) {
+        scaled as i32
+    } else {
+        i32::MIN
+    };
+    // The clamp at 0 (`0x6e32de`-`0x6e32ea`), then the talent modifier, which can take the cost
+    // below 0 again (`0x6e32f0`).
+    mods.apply(d, OP_COST, cost.max(0))
 }
 
 /// The per-second cost the tooltip's `_PER_TIME` cell shows, `0x6e3300`: `manaPerSecond` plus
@@ -526,7 +544,8 @@ fn cost_basis(d: &SpellDisplay) -> CostBasis {
 
 /// Whether the caster can afford `d`, for leg 12 (`0x6e3fba`) and the press-path gate
 /// (`0x60962c`): `UNIT_FIELD_POWER[type]`, or `UNIT_FIELD_HEALTH` for any negative PowerType
-/// (`0x609631`; Bloodrage's -2), against [`power_cost`].
+/// (`0x609631`; Bloodrage's -2), against [`power_cost`], both compares signed (`0x6e3fe2`,
+/// `0x60965f`), so a cost a talent took below 0 is always affordable.
 pub(crate) fn can_afford(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModifiers) -> bool {
     let power_type = d.power_type as i32;
     let avail = if power_type < 0 {
@@ -534,7 +553,7 @@ pub(crate) fn can_afford(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModi
     } else {
         store.0.unit_power(power_type as u8).unwrap_or(0)
     };
-    avail >= power_cost(d, store, mods, &mut Unrecorded)
+    avail as i32 >= power_cost(d, store, mods, &mut Unrecorded)
 }
 
 #[cfg(test)]
@@ -887,6 +906,53 @@ mod tests {
         assert_eq!(
             power_cost(&other_class, &store, &mods, &mut Unrecorded),
             100
+        );
+    }
+
+    /// The school's flat term and factor (`0x6e32ad`, `0x6e32c0`-`0x6e32d6`), then the clamp at
+    /// 0, then the talent modifier, which no clamp follows (`0x6e32de`-`0x6e32f0`).
+    #[test]
+    fn the_school_cost_terms_come_before_the_clamp_and_the_talent_after() {
+        // A 100-mana Fire spell (school 2) of family 3, bit 5.
+        let d = SpellDisplay {
+            school: 2,
+            spell_family: 3,
+            spell_family_flags: 1 << 5,
+            mana_cost: 100,
+            ..Default::default()
+        };
+        let cost = |fields: &[(u16, u32)], flat: i32| {
+            let mut mods = SpellModifiers::default();
+            mods.set_class_family(3);
+            mods.set(true, 5, OP_COST, flat);
+            let store = player(fields);
+            (
+                power_cost(&d, &store, &mods, &mut Unrecorded),
+                can_afford(&d, &store, &mods),
+            )
+        };
+        let f = |v: f32| v.to_bits();
+        assert_eq!(cost(&[], 0).0, 100);
+        assert_eq!(cost(&[(175, 20)], 0).0, 120, "Fire's modifier");
+        assert_eq!(cost(&[(174, 20), (181, f(1.0))], 0).0, 100, "Holy's");
+        assert_eq!(cost(&[(182, f(-0.25))], 0).0, 75, "Fire's factor");
+        assert_eq!(
+            cost(&[(175, 20), (182, f(0.5))], 0).0,
+            180,
+            "the modifier, then the factor"
+        );
+        assert_eq!(cost(&[(175, 1), (182, f(-0.5))], 0).0, 50, "50.5 to even");
+        assert_eq!(
+            cost(&[(182, f(f32::NAN))], 0).0,
+            0,
+            "indefinite, then clamped"
+        );
+        let below = (-150i32) as u32;
+        assert_eq!(cost(&[(175, below)], 0), (0, true), "clamped at 0");
+        assert_eq!(
+            cost(&[(175, below)], -10),
+            (-10, true),
+            "the talent after the clamp"
         );
     }
 

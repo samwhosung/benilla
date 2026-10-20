@@ -53,6 +53,9 @@ struct UnitFields {
     ranged_time: u32,
     /// As bits, so a NaN compares equal to itself.
     cast_speed: Option<u32>,
+    /// `POWER_COST_MODIFIER` and `POWER_COST_MULTIPLIER` (as bits), by school.
+    cost_modifier: [i32; 7],
+    cost_multiplier: [u32; 7],
 }
 
 impl UnitFields {
@@ -66,6 +69,13 @@ impl UnitFields {
             base_health: p.unit_base_health().unwrap_or(0),
             ranged_time: p.unit_ranged_attack_time().unwrap_or(0),
             cast_speed: p.unit_mod_cast_speed().map(f32::to_bits),
+            cost_modifier: std::array::from_fn(|s| {
+                p.unit_power_cost_modifier(s as u32).unwrap_or(0)
+            }),
+            cost_multiplier: std::array::from_fn(|s| {
+                p.unit_power_cost_multiplier(s as u32)
+                    .map_or(0, f32::to_bits)
+            }),
         }
     }
 
@@ -84,6 +94,16 @@ impl UnitFields {
             | moved(UnitField::RangedTime, self.ranged_time, prev.ranged_time)
             | if self.cast_speed != prev.cast_speed {
                 UnitField::CastSpeed.bit()
+            } else {
+                0
+            }
+            | if self.cost_modifier != prev.cost_modifier {
+                UnitField::PowerCostModifier.bit()
+            } else {
+                0
+            }
+            | if self.cost_multiplier != prev.cost_multiplier {
+                UnitField::PowerCostMultiplier.bit()
             } else {
                 0
             }

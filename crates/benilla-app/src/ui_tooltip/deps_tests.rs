@@ -48,7 +48,8 @@ struct Inputs {
     worn: u32,
     /// The disarm flag.
     disarm: bool,
-    /// A [`UnitField`] bit each: level, base mana, base health, ranged attack time, cast speed.
+    /// A [`UnitField`] bit each: level, base mana, base health, ranged attack time, cast speed,
+    /// the cost modifiers and the cost multipliers.
     unit: u16,
     /// Bit `i`: the skill line `lines[i]` at 300.
     lines: u128,
@@ -245,12 +246,14 @@ impl Inputs {
 }
 
 /// The [`UnitField`] names, by bit.
-const UNIT_NAMES: [&str; 5] = [
+const UNIT_NAMES: [&str; 7] = [
     "level",
     "base mana",
     "base health",
     "ranged attack time",
     "cast speed",
+    "power cost modifiers",
+    "power cost multipliers",
 ];
 
 /// Every [`UnitField`] bit.
@@ -357,6 +360,15 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
             .to_bits(),
         ),
     ];
+    // Every school's cost term: 25 more, and a third off.
+    for school in 0..7 {
+        if unit(UnitField::PowerCostModifier) {
+            pairs.push((173 + school, 25));
+        }
+        if unit(UnitField::PowerCostMultiplier) {
+            pairs.push((180 + school, (-1.0f32 / 3.0).to_bits()));
+        }
+    }
     if inputs.disarm {
         pairs.push((46, 0x0020_0000));
     }
@@ -445,8 +457,16 @@ fn skill_fields(layout: &Layout, inputs: Inputs, line: u32) -> Option<u16> {
 }
 
 /// The player's unit fields each [`UnitField`] bit is, by bit: level, base mana, base health,
-/// ranged attack time, cast speed.
-const UNIT_FIELD_INDICES: [u16; 5] = [34, 162, 163, 128, 145];
+/// ranged attack time, cast speed, and the seven schools' cost modifiers and multipliers.
+const UNIT_FIELD_INDICES: [&[u16]; 7] = [
+    &[34],
+    &[162],
+    &[163],
+    &[128],
+    &[145],
+    &[173, 174, 175, 176, 177, 178, 179],
+    &[180, 181, 182, 183, 184, 185, 186],
+];
 
 /// The player fields a view's records watch in the scenario `inputs` makes: the ones a poke is
 /// covered by. The form and gender are bytes of fields 138 and 36, the disarm flag a bit of 46.
@@ -455,7 +475,7 @@ fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
         .iter()
         .enumerate()
         .filter(|(bit, _)| deps.unit >> bit & 1 == 1)
-        .map(|(_, &field)| field)
+        .flat_map(|(_, fields)| fields.iter().copied())
         .collect();
     for (read, field) in [
         (deps.gender, 36),
@@ -1235,8 +1255,12 @@ fn no_pet_field_moves_a_pet_view_unwatched() {
         pairs.extend(poke.map(|field| (field, POKE)));
         ObjectFields::from_pairs(&pairs)
     };
-    // The fields `PetInputs` reads: level, reach, cast speed, form, base mana, base health.
-    const PET_INPUT_FIELDS: [u16; 6] = [34, 130, 145, 138, 162, 163];
+    // The fields `PetInputs` reads: level, reach, cast speed, form, base mana, base health, and
+    // the seven schools' cost modifiers and multipliers.
+    const PET_INPUT_FIELDS: [u16; 20] = [
+        34, 130, 145, 138, 162, 163, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184,
+        185, 186,
+    ];
     let build_one = |t: &mut TestCtx, id: u32, pet: &ObjectFields| {
         t.spell_mods = player.mods.clone();
         let mut ctx = t.ctx_for(

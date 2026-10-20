@@ -82,11 +82,13 @@ pub(super) fn build_view(
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second cost adds `_PER_TIME`, and a cell whose two
-    // quotients are both 0 or less is empty. A pet with no unit costs -1 (`0x6e3233`).
+    // quotients are both 0 or less is empty. A pet with no unit costs -1 (`0x6e3233`), read here
+    // as 0: the same empty cell for every type but rage, whose unsigned quotient of -1 is
+    // 429496729 (`0x52e8dd`).
     // The player's reads are the view's record; the pet's level, basis and cast speed are the
     // pet's own inputs ([`PetInputs`]), which rebuild every pet view.
     let resolved_cost = match caster {
-        ViewCaster::Player => vctx.store.map_or(d.mana_cost, |s| {
+        ViewCaster::Player => vctx.store.map_or(d.mana_cost as i32, |s| {
             usable::power_cost(d, s, vctx.spell_mods, &mut *deps.borrow_mut())
         }),
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
@@ -104,7 +106,7 @@ pub(super) fn build_view(
     // Both divided by the shared per-type divisor (`0x6e7130`), never a local `power_type == 1`
     // test, unsigned (`0x52e8dd`, `0x52e8f2`); the gates test the quotients, signed.
     let div = benilla_protocol::messages::power_display_scale(d.power_type);
-    let cost_shown = (resolved_cost / div) as i32;
+    let cost_shown = ((resolved_cost as u32) / div) as i32;
     let per_second_shown = ((per_second as u32) / div) as i32;
     let cost = {
         // The key table `0x85416c` for types 0 to 4, `HEALTH_COST` (`0x854fc8`) past them.
@@ -588,14 +590,17 @@ pub(super) fn reagent_state(
 }
 
 /// The pet unit's fields a pet view reads (`0x52e610` with the unit selector set): its level, the
-/// cost bases `0x612c50` reads, its cast speed (`0x6e342c`), its form, and its and its melee
-/// target's reach and motion.
+/// cost bases `0x612c50` reads, its schools' cost terms (`0x6e32ad`, `0x6e32c0`), its cast speed
+/// (`0x6e342c`), its form, and its and its melee target's reach and motion.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub(super) struct PetInputs {
     guid: Option<u64>,
     level: u32,
     base_mana: u32,
     base_health: u32,
+    /// `POWER_COST_MODIFIER` and `POWER_COST_MULTIPLIER` (as bits), by school.
+    cost_modifier: [i32; 7],
+    cost_multiplier: [u32; 7],
     /// As bits, so a NaN compares equal to itself.
     cast_speed: Option<u32>,
     form: u8,
@@ -619,6 +624,13 @@ impl PetInputs {
             level: p.unit_level().unwrap_or(0),
             base_mana: p.unit_base_mana().unwrap_or(0),
             base_health: p.unit_base_health().unwrap_or(0),
+            cost_modifier: std::array::from_fn(|s| {
+                p.unit_power_cost_modifier(s as u32).unwrap_or(0)
+            }),
+            cost_multiplier: std::array::from_fn(|s| {
+                p.unit_power_cost_multiplier(s as u32)
+                    .map_or(0, f32::to_bits)
+            }),
             cast_speed: p.unit_mod_cast_speed().map(f32::to_bits),
             form: p.unit_shapeshift_form(),
             range_units,

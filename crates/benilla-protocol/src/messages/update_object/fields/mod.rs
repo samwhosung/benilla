@@ -136,6 +136,8 @@ const FIELD_UNIT_RANGED_ATTACK_POWER_MODS: u16 = 169; // +0xA3, TWO_SHORT as abo
 const FIELD_UNIT_RANGED_ATTACK_POWER_MULTIPLIER: u16 = 170; // +0xA4, FLOAT
 const FIELD_UNIT_MINRANGEDDAMAGE: u16 = 171; // +0xA5, FLOAT
 const FIELD_UNIT_MAXRANGEDDAMAGE: u16 = 172; // +0xA6, FLOAT
+const FIELD_UNIT_POWER_COST_MODIFIER: u16 = 173; // +0xA7 ×7, INT, by school
+const FIELD_UNIT_POWER_COST_MULTIPLIER: u16 = 180; // +0xAE ×7, FLOAT, by school
 
 /// Aura slots per unit (vmangos `MAX_AURAS`, `SpellAuraDefines.h:25`).
 pub const UNIT_AURA_SLOTS: u8 = 48;

@@ -11,6 +11,10 @@ pub(crate) enum UnitField {
     RangedTime,
     /// `UNIT_MOD_CAST_SPEED`, the cast-time factor (`0x6e342c`).
     CastSpeed,
+    /// `UNIT_FIELD_POWER_COST_MODIFIER`, the seven schools' flat cost terms (`0x6e32ad`).
+    PowerCostModifier,
+    /// `UNIT_FIELD_POWER_COST_MULTIPLIER`, the seven schools' cost factors less 1 (`0x6e32c0`).
+    PowerCostMultiplier,
 }
 
 impl UnitField {
