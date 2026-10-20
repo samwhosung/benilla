@@ -203,4 +203,5 @@ mod lock;
 mod mechanics;
 mod rebuild;
 mod set;
+mod sources;
 mod spells;
