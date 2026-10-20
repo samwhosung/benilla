@@ -45,8 +45,13 @@ impl NetHandlers {
         failed
     }
 
-    fn push(&mut self, kind: SessionEventKind, handler: Handler) {
-        self.by_kind.entry(kind).or_default().push(handler);
+    fn push(&mut self, kind: SessionEventKind, handler: Handler, ahead: bool) {
+        let list = self.by_kind.entry(kind).or_default();
+        if ahead {
+            list.insert(0, handler);
+        } else {
+            list.push(handler);
+        }
     }
 
     /// Runs the event's handlers in registration order.
@@ -79,6 +84,14 @@ pub(crate) trait NetHandlerApp {
         kind: SessionEventKind,
         handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
     ) -> &mut Self;
+
+    /// [`Self::net_handler`], run ahead of the kind's handlers registered before it: the half of
+    /// a reference handler that comes before another subsystem's half, whatever the plugin order.
+    fn net_handler_ahead<M>(
+        &mut self,
+        kind: SessionEventKind,
+        handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
+    ) -> &mut Self;
 }
 
 impl NetHandlerApp for App {
@@ -87,13 +100,30 @@ impl NetHandlerApp for App {
         kind: SessionEventKind,
         handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
     ) -> &mut Self {
-        let name = std::any::type_name_of_val(&handler);
-        let id = self.world_mut().register_system(handler);
-        self.world_mut()
-            .get_resource_or_init::<NetHandlers>()
-            .push(kind, (id, name));
-        self
+        register(self, kind, handler, false)
     }
+
+    fn net_handler_ahead<M>(
+        &mut self,
+        kind: SessionEventKind,
+        handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
+    ) -> &mut Self {
+        register(self, kind, handler, true)
+    }
+}
+
+fn register<M>(
+    app: &mut App,
+    kind: SessionEventKind,
+    handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
+    ahead: bool,
+) -> &mut App {
+    let name = std::any::type_name_of_val(&handler);
+    let id = app.world_mut().register_system(handler);
+    app.world_mut()
+        .get_resource_or_init::<NetHandlers>()
+        .push(kind, (id, name), ahead);
+    app
 }
 
 /// One drain's dispatch in wire order, each handler's commands applied before the next event.
@@ -181,6 +211,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_handler_registered_ahead_runs_before_the_kinds_earlier_ones() {
+        let mut app = app();
+        app.net_handler(SessionEventKind::LoggedOut, on_logged_out)
+            .net_handler_ahead(SessionEventKind::LoggedOut, on_logged_out_too);
+        let log = run(&mut app, vec![SessionEvent::LoggedOut]);
+        assert_eq!(log, vec!["logged_out_too", "logged_out"]);
+    }
+
     /// A kind with no handler is a decoded packet dropped in silence, as the reference does.
     #[test]
     fn every_session_event_kind_has_one_owner() {
@@ -239,7 +278,8 @@ mod tests {
             if path.ends_with("net/handlers.rs") {
                 continue; // this file's own fixtures and prose
             }
-            let text = regex_lite_strip_comments(&std::fs::read_to_string(&path).expect("source"));
+            let text = regex_lite_strip_comments(&std::fs::read_to_string(&path).expect("source"))
+                .replace("net_handler_ahead(", "net_handler(");
             for call in text.split("net_handler(").skip(1) {
                 let Some((args, _)) = call.split_once(')') else {
                     continue;
