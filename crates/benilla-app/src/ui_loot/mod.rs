@@ -428,9 +428,11 @@ impl LootLatch {
     }
 }
 
-/// A movement start that closes the loot: the reference's guard `0x60e990`, called by every
-/// movement-start emitter, turning included, but not by mouse-look facing. No loot target reaches
-/// the range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
+/// The loot window's close owed this frame, `0x48f200(1, 1, 0)` while a loot target is latched
+/// (`0x6126b0`). Two writers call it: the movement-start guard `0x60e990` (`0x60e9dd`), called by
+/// every movement-start emitter, turning included, but not by mouse-look facing; and the local
+/// stand-state apply for a change to any state but 0 (`0x5f07d5`). No loot target reaches the
+/// range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
 /// (`MovementHandler.cpp:1104`), but the close is the client's. A loot response that lands while
 /// we move sets it too (`0x5ebc3a`).
 #[derive(Resource, Default)]
