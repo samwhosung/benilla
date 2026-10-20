@@ -12,7 +12,11 @@ use super::reader::WorldReader;
 use super::writer::WorldWriter;
 use super::{recv_packet, send_packet, LinkTraffic};
 
-/// Read timeout through `player_login`, where each step awaits one reply.
+/// Read timeout through `player_login`, where each step awaits one reply. Deviation: 10 s of
+/// silence ends the wait, where the reference has no timer and waits for the reply, a disconnect
+/// or the player's Cancel (`0x46b720`; its connect reports only success or a socket error,
+/// `0x5b60c6`-`0x5b61ac`), because each wait here is a blocking read on the net thread, which a
+/// server that stays connected and never answers would hold for good.
 const HANDSHAKE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Read timeout in the login queue, where updates can be minutes apart. Deviation: the reference
