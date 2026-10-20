@@ -564,24 +564,73 @@ fn a_released_unit_keeps_its_xp_mark() {
     assert!(!marked(world, MOB), "a destroyed unit's next create is new");
 }
 
-/// An out-of-range list releases only as a packet's first block (`0x4651e1`); in any other place
-/// the notify pass skips it (`0x465fd0`) and nothing is released.
+/// The out-of-range list's second round releases the first pass's guids, top nibble 6 or 8,
+/// without the active-player test of the first round (`0x465f8f`-`0x465fa6`).
 #[test]
-fn an_out_of_range_list_releases_only_as_the_first_block() {
+fn the_out_of_range_lists_second_round_spares_no_active_player() {
+    const FIRST_ME: u64 = 0x6000_0000_0000_0007;
     let mut app = client();
     let world = app.world_mut();
-    world.resource_mut::<SelfGuid>().0 = Some(ME);
-    send(world, [unit(MOB, &[(ENTRY, 299)])]);
-    send(world, [values(MOB, &[(STAT0, 1)]), out_of_range(&[MOB])]);
-    assert!(held(world, MOB), "a later block");
-    send(world, [out_of_range(&[MOB]), values(MOB, &[(STAT0, 2)])]);
-    assert!(
-        held(world, MOB),
-        "the first block released it, and the values block after it brought it back"
+    world.resource_mut::<SelfGuid>().0 = Some(FIRST_ME);
+    indexed(world, FIRST_ME);
+    indexed(world, MOB);
+
+    send(world, [out_of_range(&[FIRST_ME, MOB])]);
+    assert!(!held(world, FIRST_ME), "the second round");
+    assert!(!held(world, MOB), "the first round");
+}
+
+/// A first-pass guid's values block applies only behind a set header byte (`0x46520e`), as the
+/// packet's bytes carry it; its watch runs in the notify pass either way, against what moved.
+#[test]
+fn a_first_pass_guids_values_block_applies_behind_the_header_byte() {
+    use benilla_protocol::messages::{self, ObjectType};
+    const FIRST: u64 = 0x6000_0000_0000_0042;
+    // Values for FIRST, `OBJECT_FIELD_ENTRY` 0x13; then values for 0xAA, entry 0x12.
+    let packet = |header: &str| {
+        let body: Vec<u8> = [
+            "02000000",
+            header,
+            "00814260010800000013000000",
+            "0001aa010800000012000000",
+        ]
+        .concat()
+        .as_bytes()
+        .chunks(2)
+        .map(|h| u8::from_str_radix(std::str::from_utf8(h).unwrap(), 16).unwrap())
+        .collect();
+        benilla_protocol::decode(
+            messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap(),
+        )
+    };
+    let mut app = client();
+    let world = app.world_mut();
+    for guid in [FIRST, 0xAA] {
+        let e = world
+            .spawn((
+                Guid(guid),
+                ObjectStore(ObjectFields::default().into_created(ObjectType::GameObject)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(guid, e);
+    }
+
+    super::super::handlers::dispatch(world, packet("00"));
+    assert_eq!(field(world, FIRST, ENTRY), None, "no pass wrote it");
+    assert_eq!(field(world, 0xAA, ENTRY), Some(0x12));
+    assert_eq!(edges(world), [(0xAA, ENTRY, 0, 0x12)]);
+
+    super::super::handlers::dispatch(world, packet("01"));
+    assert_eq!(
+        field(world, FIRST, ENTRY),
+        Some(0x13),
+        "the first pass wrote it"
     );
-    assert_eq!(field(world, MOB, STAT0), Some(2));
-    send(world, [out_of_range(&[MOB])]);
-    assert!(!held(world, MOB), "control: the first block");
+    assert_eq!(
+        edges(world),
+        [(FIRST, ENTRY, 0, 0x13)],
+        "its watch ran in the notify pass"
+    );
 }
 
 /// A first create runs no watch (`0x465d80`), so the active player's flag tutorials wait for a

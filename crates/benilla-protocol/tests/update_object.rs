@@ -790,3 +790,109 @@ fn an_update_packet_decodes_every_block_then_its_end() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A first-pass guid: its top four bits are 6 (`0x4660e6`).
+const FIRST_SIX: u64 = 0x6000_0000_0000_0042;
+
+/// One event as the pass tests compare it: the block's kind and guid, any other event whole.
+fn shape(ev: &SessionEvent) -> String {
+    match ev {
+        SessionEvent::ObjectCreate { guid, .. } => format!("create {guid:#x}"),
+        SessionEvent::ItemCreate { guid, .. } => format!("item {guid:#x}"),
+        SessionEvent::ObjectValues { guid, .. } => format!("values {guid:#x}"),
+        SessionEvent::ObjectMove { guid, .. } => format!("move {guid:#x}"),
+        SessionEvent::ObjectsNear(guids) => format!("near {guids:x?}"),
+        SessionEvent::ObjectsRemoved(guids) => format!("out of range {guids:x?}"),
+        SessionEvent::ObjectUpdateEnd => "end".into(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn update_shapes(body: &[u8]) -> Vec<String> {
+    let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, body).unwrap();
+    decode(packet).iter().map(shape).collect()
+}
+
+/// Five blocks behind the header byte: values for 0xAA (entry 0x12); for the first-pass guid
+/// [`FIRST_SIX`], a gameobject create at (100, 200, 300) with display 3015, a movement block and
+/// values (entry 0x13); near objects [0x10, 0x8000_0000_0000_0011].
+fn mixed_passes(header: &str) -> Vec<u8> {
+    hx(&[
+        "05000000",
+        header,
+        "0001aa010800000012000000",
+        "0281426005400000c84200004843000096430000803f0100010000c70b0000",
+        "01814260400000ca4200004843000096430000803f",
+        "00814260010800000013000000",
+        "05020000000110811180",
+    ]
+    .concat())
+}
+
+/// The header byte runs a first pass over the blocks of top-nibble 6 and 8 guids, then a second
+/// over the rest and every movement block (`0x46520e`, `0x465222`; the guid test `0x4660d8`-
+/// `0x466105`, none in the movement handler `0x467050`). The notify pass reads every block in
+/// packet order (`0x46522d`), so a first-pass block keeps its place there.
+#[test]
+fn the_header_byte_writes_top_nibble_six_and_eight_guids_first() {
+    let notify_create = format!("ObjectNotify {{ guid: {FIRST_SIX}, block: Create(GameObject) }}");
+    let notify_values = format!("ObjectNotify {{ guid: {FIRST_SIX}, block: Values([3]) }}");
+    assert_eq!(
+        update_shapes(&mixed_passes("01")),
+        [
+            "create 0x6000000000000042",
+            "values 0x6000000000000042",
+            "near [8000000000000011]",
+            "values 0xaa",
+            &notify_create,
+            "move 0x6000000000000042",
+            &notify_values,
+            "near [10]",
+            "end",
+        ]
+    );
+}
+
+/// With the header byte clear only the second pass runs, so no pass writes a first-pass guid's
+/// create, values or near entry; the notify pass still reads them (`0x465c50`, `0x465330`).
+#[test]
+fn a_clear_header_byte_writes_no_first_pass_block() {
+    let notify_create = format!("ObjectNotify {{ guid: {FIRST_SIX}, block: Create(GameObject) }}");
+    let notify_values = format!("ObjectNotify {{ guid: {FIRST_SIX}, block: Values([3]) }}");
+    assert_eq!(
+        update_shapes(&mixed_passes("00")),
+        [
+            "values 0xaa",
+            &notify_create,
+            "move 0x6000000000000042",
+            &notify_values,
+            "near [10]",
+            "end",
+        ]
+    );
+}
+
+/// An out-of-range list releases only as the packet's first block, ahead of both passes
+/// (`0x4651e1`); in any other place the notify pass reads past it (`0x465fd0`).
+#[test]
+fn an_out_of_range_list_decodes_only_as_the_first_block() {
+    // Values for 0xAA with no mask words, then out of range [0xAA].
+    assert_eq!(
+        update_shapes(&hx("02000000000001aa00040100000001aa")),
+        ["values 0xaa", "end"]
+    );
+    assert_eq!(
+        update_shapes(&hx("0200000000040100000001aa0001aa00")),
+        ["out of range [aa]", "values 0xaa", "end"]
+    );
+    // First, it goes ahead of the first pass too.
+    assert_eq!(
+        update_shapes(&hx("020000000104010000008142600081426000")),
+        [
+            "out of range [6000000000000042]".to_string(),
+            "values 0x6000000000000042".to_string(),
+            format!("ObjectNotify {{ guid: {FIRST_SIX}, block: Values([]) }}"),
+            "end".to_string(),
+        ]
+    );
+}
