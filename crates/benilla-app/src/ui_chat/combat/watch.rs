@@ -49,6 +49,14 @@ impl WatchCtx<'_> {
         super::logged_spell(self.spells.as_deref(), spell_id).map(|d| d.name.clone())
     }
 
+    /// [`Self::spell_name`] for the aura formatter `0x62b480`, which also writes nothing for a
+    /// passive spell (`Attributes & 0x40`, `0x62b4fb`).
+    fn aura_spell_name(&self, spell_id: u32) -> Option<String> {
+        super::logged_spell(self.spells.as_deref(), spell_id)
+            .filter(|d| d.attributes & ATTR_PASSIVE == 0)
+            .map(|d| d.name.clone())
+    }
+
     /// The one-sided range test 15 reference formatters run in place of the two-ended `0x626630`.
     /// The death line passes `CombatDeathLogRange`, which `0x62c160` reads at `0x62c19c`; the aura
     /// lines pass their class's range.
@@ -56,6 +64,9 @@ impl WatchCtx<'_> {
         in_range(guid, range, &self.self_guid, &self.index, poses)
     }
 }
+
+/// `SPELL_ATTR_PASSIVE`, `Attributes` bit 6 (vmangos `SpellDefines.h:798`).
+const ATTR_PASSIVE: u32 = 0x40;
 
 /// Queue one single-endpoint line, gated the way its formatter gates, with the word it raises once
 /// written.
@@ -152,7 +163,8 @@ pub(crate) fn death_lines(
 /// Harmful is the slot index, `0x20`-`0x2f` (`0x61238e`), not `UNIT_FIELD_AURAFLAGS`. A line on
 /// you raises `AURA_START` or `AURA_START_HARMFUL` for an arrival and `AURA_END` or
 /// `AURA_END_HARMFUL` for a loss, with the spell's name (`0x62b74f`-`0x62b7ac`); a stack line
-/// raises none.
+/// raises none. An arrival or a loss writes nothing for a passive spell, and a loss nothing on a
+/// unit with no health (`0x62b503`-`0x62b515`), so the auras death strips leave silently.
 pub(crate) fn aura_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
@@ -187,9 +199,10 @@ pub(crate) fn aura_lines(
         };
         // Arrival first, so a replace words the new aura before the old one's removal.
         if e.new != 0 {
-            if let (Some(spell), Some(kind)) =
-                (ctx.spell_name(e.new), periodic_kind(class, !harmful(slot)))
-            {
+            if let (Some(spell), Some(kind)) = (
+                ctx.aura_spell_name(e.new),
+                periodic_kind(class, !harmful(slot)),
+            ) {
                 let (family, message_type) = if harmful(slot) {
                     (super::AURAADDED_HARMFUL, "AURA_START_HARMFUL")
                 } else {
@@ -212,8 +225,12 @@ pub(crate) fn aura_lines(
                 );
             }
         }
-        if e.old != 0 {
-            if let Some(spell) = ctx.spell_name(e.old) {
+        // The health is read signed (`0x62b50e`, `jg`).
+        let alive = stores
+            .get(e.entity)
+            .is_ok_and(|(_, st)| st.0.unit_health().unwrap_or(0) as i32 > 0);
+        if e.old != 0 && alive {
+            if let Some(spell) = ctx.aura_spell_name(e.old) {
                 let message_type = if harmful(slot) {
                     "AURA_END_HARMFUL"
                 } else {
