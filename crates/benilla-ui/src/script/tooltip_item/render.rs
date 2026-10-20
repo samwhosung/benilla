@@ -504,6 +504,16 @@ pub(super) fn render_view_flagged(
             }
             add((text, color))?;
         }
+        // The proposed enchantment ends the slot arm (`0x52cb72`..`0x52cc2c`), never the
+        // placeholder's: `ITEM_PROPOSED_ENCHANT` with the spell's name in green, then
+        // `ITEM_ENCHANT_DISCLAIMER` in pure red.
+        if let Some(spell) = inst
+            .filter(|_| !no_id_source)
+            .and_then(|i| i.proposed_enchant.as_deref())
+        {
+            keyed("ITEM_PROPOSED_ENCHANT", &[Arg::S(spell)], GREEN, false)?;
+            keyed("ITEM_ENCHANT_DISCLAIMER", &[], ENCHANT_RED, false)?;
+        }
     }
     if let Some((cur, max)) = inst.and_then(|i| i.durability).filter(|&(_, max)| max > 0) {
         // Red (`0xc0d390`) only when broken.

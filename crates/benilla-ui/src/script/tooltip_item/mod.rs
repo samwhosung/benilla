@@ -725,9 +725,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GameTooltip:SetTradePlayerItem(slot) / SetTradeTargetItem(slot) (`0x5341e0`, `0x534410`;
-    // `TradeFrame.xml:150`, `TradeFrame.xml:106`), no returns: the slot's item, the target side
-    // off the partner's slot guids (`[0xb715a0 + slot*4]`). An empty or out-of-range slot leaves
-    // the tooltip untouched. The enchant line is not rendered: the trade view has no enchant id.
+    // `TradeFrame.xml:150`, `TradeFrame.xml:106`), no returns: the player's side the item object
+    // at its slot guid (`[0xb716d0 + slot*8]`, `0x5342c8`), the target side a block off the
+    // partner's slot arrays (the entry `[0xb714f4 + slot*4]`, `0x5344ff`). An empty or
+    // out-of-range slot leaves the tooltip untouched. The partner's permanent enchant
+    // (`[0xb715c0 + slot*4]`, `0x534521`) is not rendered: the trade view has no enchant id.
     for (name, player_side) in [("SetTradePlayerItem", true), ("SetTradeTargetItem", false)] {
         m.set(
             name,
@@ -757,6 +759,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     gift_creator_guid: item.gift_creator_guid,
                     object: item.object_flags.is_some(),
                     flags: item.object_flags.unwrap_or(0),
+                    // The seventh slot alone proposes the spell cast on it (`0x534391`,
+                    // `0x534598`, the block's `+0x40c`).
+                    proposed_enchant: (slot == 7).then(|| item.enchantment.clone()).flatten(),
                     ..Default::default()
                 };
                 let in_flight = match item.name {
