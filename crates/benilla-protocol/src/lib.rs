@@ -93,9 +93,14 @@ fn dial(host: &str, port: u16) -> Result<TcpStream> {
             unresolved: true,
         }));
     };
+    connect(target, &address)
+}
+
+/// Open a socket to `target`; a refusal is a [`DialFailure`] naming `address`.
+fn connect(target: SocketAddr, address: &str) -> Result<TcpStream> {
     TcpStream::connect(target).map_err(|e| {
         anyhow::Error::new(DialFailure {
-            address,
+            address: address.to_string(),
             unresolved: false,
         })
         .context(format!("connecting: {e}"))
@@ -154,16 +159,59 @@ fn atoi(text: &str) -> i32 {
     }
 }
 
-/// The logon hosts of a realmlist, each with its port.
-#[allow(dead_code)]
+/// The hosts of a realmlist the logon resolves, in order: the text cut at each `;` (`SStrChr2` at
+/// `0x43b8f6`) up to the first empty piece, which ends the list (`0x43b941`), each with port 3724
+/// (`0xe8c`, `0x5bc400`) unless it names one.
 fn logon_pieces(realmlist: &str) -> Vec<(&str, u16)> {
-    vec![host_port(realmlist, AUTH_PORT)]
+    realmlist
+        .split(';')
+        .take_while(|piece| !piece.is_empty())
+        .map(|piece| host_port(piece, AUTH_PORT))
+        .collect()
 }
 
-/// The logon address dialled out of the resolved list.
-#[allow(dead_code)]
-fn pick(addrs: &[SocketAddr], _draw: u32) -> Option<SocketAddr> {
-    addrs.first().copied()
+/// `ConnectToRandomAddress` (`0x5bc2b0`): entry `draw mod count` (`0x5bc392`) of the list, or none
+/// of an empty one, which the reference reports as a failed dial (`0x5bc3cb`).
+fn pick(addrs: &[SocketAddr], draw: u32) -> Option<SocketAddr> {
+    let count = u32::try_from(addrs.len()).ok().filter(|&n| n > 0)?;
+    Some(addrs[(draw % count) as usize])
+}
+
+/// The address a logon dials, and the realmlist's hosts for a failure to name. The list is every
+/// IPv4 address of each piece in order: one for a dotted piece, every `AF_INET` address
+/// `gethostbyname` gives for a name (`0x43b890`, `0x43ba07`-`0x43baf6`), none for a piece that
+/// resolves to none. One is drawn at random ([`pick`]), as `ClientLink::Connect` (`0x5bc3e0`)
+/// hands the list to `ConnectToRandomAddress`.
+fn logon_target(realmlist: &str) -> Result<(SocketAddr, String)> {
+    use std::net::ToSocketAddrs;
+    let pieces = logon_pieces(realmlist);
+    let address = pieces
+        .iter()
+        .map(|(host, port)| format!("{host}:{port}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let mut addrs = Vec::new();
+    let mut unresolved = Vec::new();
+    for &(host, port) in &pieces {
+        match (host, port).to_socket_addrs() {
+            Ok(found) => addrs.extend(found.filter(SocketAddr::is_ipv4)),
+            Err(e) => unresolved.push(format!("resolving {host}: {e}")),
+        }
+    }
+    match pick(&addrs, rand::random()) {
+        Some(target) => Ok((target, address)),
+        None => {
+            let failure = anyhow::Error::new(DialFailure {
+                address,
+                unresolved: true,
+            });
+            Err(if unresolved.is_empty() {
+                failure
+            } else {
+                failure.context(unresolved.join("; "))
+            })
+        }
+    }
 }
 
 /// A realm from realmd's realm list, with every field the wire carries.
@@ -235,15 +283,16 @@ impl Logon {
     }
 }
 
-/// The full SRP6 logon against a vanilla `realmd`, then the realm list. `locale` is the client's
-/// locale tag the challenge carries ([`auth::write_logon_challenge`]).
-pub fn logon(host: &str, username: &str, password: &str, locale: u32) -> Result<Logon> {
-    let (host, port) = host_port(host, AUTH_PORT);
-
+/// The full SRP6 logon against a vanilla `realmd`, then the realm list. `realmlist` is one or more
+/// `host[:port]` separated by `;`, the server dialled one of their addresses ([`logon_target`]).
+/// `locale` is the client's locale tag the challenge carries ([`auth::write_logon_challenge`]).
+pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Result<Logon> {
     let username_n =
         NormalizedString::new(username).map_err(|e| anyhow!("invalid username: {e}"))?;
     let password_n =
         NormalizedString::new(password).map_err(|e| anyhow!("invalid password: {e}"))?;
+    // One draw per login, as the reference dials once: the redials below go to the same address.
+    let (target, address) = logon_target(realmlist)?;
 
     // The account name goes uppercased, as SRP6 hashes it. About one `B` in 137 serializes
     // differently in the client and mangos (a right password gets 0x04), so redial for a fresh
@@ -251,7 +300,7 @@ pub fn logon(host: &str, username: &str, password: &str, locale: u32) -> Result<
     let (mut stream, reply, server_public_key) = {
         let mut dialed = None;
         for _ in 0..MAX_CHALLENGE_DIALS {
-            let mut stream = dial(host, port)?;
+            let mut stream = connect(target, &address)?;
             auth::write_logon_challenge(
                 &mut stream,
                 &username.to_uppercase(),

@@ -13,6 +13,8 @@ anyhow.workspace = true
 clap.workspace = true
 benilla-srp = { path = "../benilla-srp" }
 flate2 = "1.0"
+# The logon's draw among a realmlist's addresses.
+rand = "0.8.6"
 sha1.workspace = true
 # Derives `SessionEventKind`, `SessionEvent`'s fieldless twin that the handler table keys on.
 strum = { version = "0.26", features = ["derive"] }
@@ -20,4 +22,3 @@ strum = { version = "0.26", features = ["derive"] }
 [dev-dependencies]
 # The SRP probe example re-derives the handshake by hand, to vary what `benilla-srp` fixes.
 num-bigint = "0.4.6"
-rand = "0.8.6"
