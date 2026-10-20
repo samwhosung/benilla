@@ -101,4 +101,17 @@ impl BindingsState {
             }
         }
     }
+
+    /// The state after `earlier` frames' calls and this frame's `now`: the earlier edges are
+    /// spent, as the frame start clears them, and the earlier holds stay.
+    #[cfg(test)]
+    pub(crate) fn after_calls(earlier: Vec<BindingInput>, now: Vec<BindingInput>) -> Self {
+        let mut state = Self::default();
+        state.apply_script_input(earlier);
+        state.just.clear();
+        state.fired.clear();
+        state.amounts.clear();
+        state.apply_script_input(now);
+        state
+    }
 }

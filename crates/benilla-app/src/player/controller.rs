@@ -379,7 +379,6 @@ pub(super) fn control(
             mouselook,
             turning,
             translating,
-            autorun_armed,
             turn_left,
             turn_right,
             ..
@@ -753,9 +752,15 @@ pub(super) fn control(
         // (`Spell::update`), so a possessed creature's steps must not end Mind Control.
         let steering_ourselves = player.foreign_mover.is_none();
         if steering_ourselves
-            && (move_flags_now & move_flags::ANY_MOVE & !player.move_flags != 0
-                || jumped
-                || autorun_armed)
+            && input::cancels_cast(
+                binds,
+                &axes,
+                input::WireStart {
+                    now: move_flags_now,
+                    before: player.move_flags,
+                    jumped,
+                },
+            )
         {
             net.7 .0 = true;
         }

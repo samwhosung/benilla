@@ -197,3 +197,196 @@ pub(super) fn move_axes(
         turn_right,
     }
 }
+
+/// The streamed movement word this frame and last, and whether the mover jumped.
+#[derive(Clone, Copy)]
+pub(super) struct WireStart {
+    pub now: u32,
+    pub before: u32,
+    pub jumped: bool,
+}
+
+/// Whether this frame's input cancels the cast in flight: a new direction in the streamed word,
+/// a jump, or autorun's on edge.
+pub(super) fn cancels_cast(
+    _binds: &crate::bindings::BindingsState,
+    axes: &MoveAxes,
+    wire: WireStart,
+) -> bool {
+    use crate::creature_anim::move_flags;
+    wire.now & move_flags::ANY_MOVE & !wire.before != 0 || wire.jumped || axes.autorun_armed
+}
+
+#[cfg(test)]
+mod tests {
+    use benilla_ui::script::{BindingInput, FiredInput, HeldInput};
+
+    use super::*;
+    use crate::bindings::BindingsState;
+    use crate::creature_anim::move_flags::{FORWARD, STRAFE_LEFT};
+
+    use BindingInput::{Fire, Start};
+
+    /// One frame's verdict after `earlier`'s calls: the axes as the controller builds them,
+    /// under a root or not, and the streamed word the old edge read.
+    fn cancels(
+        earlier: Vec<BindingInput>,
+        now: Vec<BindingInput>,
+        player: &mut Player,
+        rooted: bool,
+        wire: WireStart,
+    ) -> bool {
+        let binds = BindingsState::after_calls(earlier, now);
+        let axes = move_axes(
+            &binds,
+            &ButtonInput::default(),
+            player,
+            &CameraControl::default(),
+            binds.steering(),
+            !rooted,
+            true,
+        );
+        cancels_cast(&binds, &axes, wire)
+    }
+
+    const STILL: WireStart = WireStart {
+        now: 0,
+        before: 0,
+        jumped: false,
+    };
+
+    /// `0x515090` cancels on the command press (`0x5150ce`), and nothing between the press and
+    /// the cancel tests root or stun: the tick `0x514640` that applies them runs after
+    /// (`0x5151a0`). Under a root the streamed word gains no direction bit.
+    #[test]
+    fn a_movement_press_while_rooted_cancels_the_cast() {
+        for start in [
+            HeldInput::MoveForward,
+            HeldInput::MoveBackward,
+            HeldInput::StrafeLeft,
+            HeldInput::StrafeRight,
+        ] {
+            assert!(
+                cancels(
+                    vec![],
+                    vec![Start(start)],
+                    &mut Player::default(),
+                    true,
+                    STILL
+                ),
+                "{start:?}"
+            );
+        }
+    }
+
+    /// `Script::Jump` cancels before its own checks (`0x513c43`, ahead of `0x513cb1`), so a
+    /// rooted or refused jump still cancels.
+    #[test]
+    fn the_jump_command_cancels_even_when_it_cannot_jump() {
+        assert!(cancels(
+            vec![],
+            vec![Fire(FiredInput::Jump)],
+            &mut Player::default(),
+            true,
+            STILL
+        ));
+    }
+
+    /// The press tests the command bit, not the net direction: W pressed with S held sets 0x10
+    /// anew (`0x514840` returns 1), though the axes cancel to no movement.
+    #[test]
+    fn a_press_that_nets_to_no_movement_still_cancels() {
+        assert!(cancels(
+            vec![Start(HeldInput::MoveBackward)],
+            vec![Start(HeldInput::MoveForward)],
+            &mut Player::default(),
+            false,
+            STILL
+        ));
+    }
+
+    /// Turn keys are bits 0x100 and 0x200, outside the mask `0x10f0`, even while the right
+    /// button makes them strafe (`0x7c5360`).
+    #[test]
+    fn a_turn_key_that_strafes_does_not_cancel() {
+        let mouse = vec![
+            Start(HeldInput::TurnOrAction),
+            Start(HeldInput::CameraOrSelectOrMove),
+        ];
+        let strafe = WireStart {
+            now: FORWARD | STRAFE_LEFT,
+            before: FORWARD,
+            jumped: false,
+        };
+        assert!(!cancels(
+            mouse,
+            vec![Start(HeldInput::TurnLeft)],
+            &mut Player::default(),
+            false,
+            strafe
+        ));
+    }
+
+    /// Follow's forward is set through `0x60e790`, not `0x515090`, so its start cancels nothing.
+    #[test]
+    fn the_follow_forward_does_not_cancel() {
+        let mut player = Player {
+            auto_forward: true,
+            ..Default::default()
+        };
+        let walks = WireStart {
+            now: FORWARD,
+            before: 0,
+            jumped: false,
+        };
+        assert!(!cancels(vec![], vec![], &mut player, false, walks));
+    }
+
+    /// A Start on a bit already held is no edge (`0x51484c`), and neither is a release.
+    #[test]
+    fn a_held_or_released_bit_does_not_cancel() {
+        let held = WireStart {
+            now: FORWARD,
+            before: FORWARD,
+            jumped: false,
+        };
+        assert!(!cancels(
+            vec![Start(HeldInput::MoveForward)],
+            vec![Start(HeldInput::MoveForward)],
+            &mut Player::default(),
+            false,
+            held
+        ));
+        assert!(!cancels(
+            vec![Start(HeldInput::MoveForward)],
+            vec![BindingInput::Stop(HeldInput::MoveForward)],
+            &mut Player::default(),
+            false,
+            STILL
+        ));
+    }
+
+    /// Autorun's on edge pushes 0x1000 (`ToggleAutoRun` `0x513de0`) and cancels, rooted too;
+    /// its off edge is a release. Both buttons coming together cancel (`0x5150e2`).
+    #[test]
+    fn autorun_on_and_both_buttons_cancel() {
+        let toggle = || vec![Fire(FiredInput::ToggleAutoRun)];
+        let mut player = Player::default();
+        assert!(cancels(vec![], toggle(), &mut player, false, STILL));
+        assert!(!cancels(vec![], toggle(), &mut player, false, STILL));
+        assert!(cancels(
+            vec![],
+            toggle(),
+            &mut Player::default(),
+            true,
+            STILL
+        ));
+        assert!(cancels(
+            vec![Start(HeldInput::TurnOrAction)],
+            vec![Start(HeldInput::CameraOrSelectOrMove)],
+            &mut Player::default(),
+            true,
+            STILL
+        ));
+    }
+}
