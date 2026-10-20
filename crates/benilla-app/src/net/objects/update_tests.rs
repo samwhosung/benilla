@@ -552,7 +552,8 @@ fn a_first_create_raises_no_flag_tutorial() {
 /// `PLAYER_GUILD_TIMESTAMP`'s player watcher (`0x5e2890`) keeps each guild's last stamp: an
 /// unchanged one does nothing (`0x5e28fa`), a new one drops the guild's record (`0x561d20`) and
 /// asks it again with the callback `0x5e29c0`, whose answer refreshes the guild tag of every held
-/// player of that guild (`0x5e29e0`; `0x5e2a14`-`0x5e2a1d` → `0x5e08e0`).
+/// player of that guild (`0x5e29e0`; `0x5e2a14`-`0x5e2a1d` → `0x5e08e0`), walking the object list
+/// from its head (`0x468380`): a player brought back joined at the tail (`0x4646c3`-`0x4646d4`).
 #[test]
 fn a_new_guild_timestamp_asks_the_guild_again_and_refreshes_its_members() {
     const GUILDID: u16 = 191;
@@ -583,6 +584,10 @@ fn a_new_guild_timestamp_asks_the_guild_again_and_refreshes_its_members() {
             player(P3, &[(GUILDID, 6), (STAMP, 100)]),
         ],
     );
+    // P1 leaves and comes back: the list is now P2, P3, P1, against guid order P1, P2, P3.
+    send(world, [out_of_range(&[P1])]);
+    send(world, [values(P1, &[])]);
+    assert!(held(world, P1));
     notices(world);
     let guild_asks = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
         crate::query_cache::queries(rx)
@@ -602,7 +607,7 @@ fn a_new_guild_timestamp_asks_the_guild_again_and_refreshes_its_members() {
     let tag = |guid| crate::field_watch::guild_tag(guid);
     assert_eq!(
         notices(world),
-        [tag(P1), tag(P2)].concat(),
-        "every held member of the guild, none of another"
+        [tag(P2), tag(P1)].concat(),
+        "every held member of the guild in list order, none of another"
     );
 }
