@@ -37,7 +37,10 @@ pub use ranges::{
     MOVING_BONUS_FLAGS, MOVING_RANGE_BONUS, ON_NEXT_SWING_RANGE,
 };
 pub use soft_float::modify as soft_modify;
-pub use tokens::{substitute, SpellMods, TokenContext, TokenNumber};
+pub use tokens::{
+    resolve_parts, substitute, substitute_parts, ExpandAt, SpellMods, TokenContext, TokenNumber,
+    TokenPart,
+};
 
 use std::collections::HashMap;
 
