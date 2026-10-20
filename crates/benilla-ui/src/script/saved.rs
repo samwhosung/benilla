@@ -580,6 +580,20 @@ mod tests {
             .unwrap());
     }
 
+    /// A Font object writes as its name, as a frame does: the writer's `lua_touserdata` on `[0]`
+    /// (`0x704623`) finds its handle and prints its vtable `+4` name (`0x70463b`).
+    #[test]
+    fn a_font_object_writes_its_name() {
+        let s = UiScript::new().unwrap();
+        s.run(r#"SAVED_FONTS = { CreateFont("SavedTestFont") }"#)
+            .unwrap();
+        let text = s.saved_variables_bytes_for(&["SAVED_FONTS".to_string()]);
+        assert_eq!(
+            String::from_utf8_lossy(&text),
+            "SAVED_FONTS = {\n\t[1] = SavedTestFont,\n}\n"
+        );
+    }
+
     /// The name is the object's own (vtable `+4`), so a Lua `GetName` an addon replaced changes
     /// nothing, and a plain table whose `[0]` is a number is no object and writes its fields.
     #[test]

@@ -890,6 +890,15 @@ fn set_font_string_adopts_the_label_and_raises_on_anything_else() {
         err.contains("Wrong object type, expected fontstring"),
         "{err}"
     );
+    // A Font object holds an object at `[0]` too (`0x780b27`), so it fails the type gate.
+    let err = s
+        .run("b:SetFontString(CreateFont(\"NotAFontString\"))")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("Btn:SetFontString(): Wrong object type, expected fontstring"),
+        "{err}"
+    );
     assert!(s.eval::<bool>("return b:GetFontString() == fs2").unwrap());
 }
 

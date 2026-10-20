@@ -227,6 +227,43 @@ mod loader_tests {
         );
     }
 
+    /// `parent=` looks the name up with the Frame id (`0x6ee3c9` → `0x76c760`), so a global holding
+    /// another object, a Texture or a Font, is a miss: the frame is built parentless and the miss
+    /// logged (`0x8710f0`), never a `CreateFrame` raise.
+    #[test]
+    fn a_parent_attribute_naming_a_region_or_a_font_is_a_miss() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            r#"
+            ParentOwner = CreateFrame("Frame", "ParentOwner")
+            ParentTexture = ParentOwner:CreateTexture("ParentTexture")
+            CreateFont("ParentFont")
+        "#,
+        )
+        .unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="OnTexture" parent="ParentTexture"/>
+                <Frame name="OnFont" parent="ParentFont"/>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        for (frame, global) in [("OnTexture", "ParentTexture"), ("OnFont", "ParentFont")] {
+            assert!(
+                s.eval::<bool>(&format!("return {frame} ~= nil and {frame}:GetParent() == nil"))
+                    .unwrap(),
+                "{frame} is built parentless"
+            );
+            let want = format!("Couldn't find frame parent: {global}");
+            assert!(
+                report.warnings.iter().any(|w| *w == want),
+                "{want}: {:?}",
+                report.warnings
+            );
+        }
+    }
+
     /// A miss stores 0 over the default parent (`0x6ee3ef`), so the frame is built parentless; an
     /// empty `parent=""` keeps the default silently (`0x6ee3c7`).
     #[test]

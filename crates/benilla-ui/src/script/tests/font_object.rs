@@ -1234,3 +1234,32 @@ fn a_fonts_unset_shadow_is_transparent() {
     );
     assert_eq!(alpha("eb"), vec![0.0, 0.0, 0.0, 0.0]);
 }
+
+/// A Font object's table holds its handle at `[0]` as a light userdata, like every object's
+/// (`0x701bd0`): `CopyFontObject` reads it with `lua_touserdata` (`0x79f10e`) and refuses a null
+/// one (`0x79f12f`), so a plain table whose `[0]` is a number is no font.
+#[test]
+fn a_font_objects_handle_is_a_light_userdata() {
+    let s = script();
+    s.register_font_object("HandleFont", FontObject::default());
+    assert_eq!(
+        s.eval::<String>("return type(HandleFont[0])").unwrap(),
+        "userdata"
+    );
+    assert_eq!(
+        s.eval::<String>("return type(CreateFont('HandleMade')[0])")
+            .unwrap(),
+        "userdata"
+    );
+    assert!(s
+        .eval::<bool>("return HandleFont[0] ~= HandleMade[0] and HandleFont[0] ~= UIParent[0]")
+        .unwrap());
+    for code in [
+        "HandleMade:CopyFontObject({ [0] = 0 })",
+        "HandleMade:CopyFontObject({ [0] = 1 })",
+        "CreateFrame('Frame'):CreateFontString():SetFontObject({ [0] = 0 })",
+    ] {
+        let e = s.run(code).unwrap_err().to_string();
+        assert!(e.contains("Couldn't find 'this' in font object"), "{code}: {e}");
+    }
+}
