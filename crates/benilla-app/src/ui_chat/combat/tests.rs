@@ -766,8 +766,14 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
 fn an_unnamed_held_unit_prints_the_unit_getters_miss() {
     let script = benilla_ui::script::UiScript::new().expect("VM");
     let names = NameCache::default();
+    let (gameobjects, items) = (GameObjectTemplates::default(), Items::default());
+    let sources = NameSources {
+        names: &names,
+        gameobjects: &gameobjects,
+        items: &items,
+    };
     let store = |kind: u32| ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, kind)]));
-    let name = |store: Option<&ObjectStore>| logged_name(7, store, &names, Ask::Read, &script);
+    let name = |store: Option<&ObjectStore>| logged_name(7, store, &sources, Ask::Read, &script);
     assert_eq!(name(Some(&store(0x19))), "Unknown Being", "a held player");
     assert_eq!(name(Some(&store(0x9))), "Unknown Being", "a held creature");
     assert_eq!(name(Some(&store(0x21))), "UKNOWNOBJECT", "a game object");
@@ -780,6 +786,43 @@ fn an_unnamed_held_unit_prints_the_unit_getters_miss() {
         .expect("set");
     assert_eq!(name(Some(&store(0x19))), "Unknown");
     assert_eq!(name(None), "Unknown");
+}
+
+/// `GetObjectName` (`0x6264e0`) names a held object by its type mask: a game object by the record
+/// it holds (`0x5f8100`), an item, a bag included, from the item cache without asking
+/// (`0x55ba30` with no callback). No record, or an empty name (`0x6265ef`), is the miss.
+#[test]
+fn a_held_game_object_or_item_is_named_from_its_record() {
+    let script = benilla_ui::script::UiScript::new().expect("VM");
+    let names = NameCache::default();
+    let mut gameobjects = GameObjectTemplates::default();
+    gameobjects.insert(1731, 3, "Copper Vein".into(), &[0; 24]);
+    gameobjects.insert(1732, 3, String::new(), &[0; 24]);
+    let mut items = Items::default();
+    items.insert_template(2589, Some(crate::items::test_template("Junkbox")));
+    let sources = NameSources {
+        names: &names,
+        gameobjects: &gameobjects,
+        items: &items,
+    };
+    let held = |mask: u32, entry: u32| {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, mask),
+            (benilla_protocol::field::FIELD_OBJECT_ENTRY, entry),
+        ]))
+    };
+    let name = |store: &ObjectStore| logged_name(7, Some(store), &sources, Ask::Read, &script);
+    assert_eq!(name(&held(0x21, 1731)), "Copper Vein");
+    assert_eq!(name(&held(0x3, 2589)), "Junkbox", "an item");
+    assert_eq!(name(&held(0x7, 2589)), "Junkbox", "a bag");
+    assert_eq!(name(&held(0x21, 9)), "UKNOWNOBJECT", "no record");
+    assert_eq!(name(&held(0x3, 9)), "UKNOWNOBJECT", "no record");
+    assert_eq!(name(&held(0x21, 1732)), "UKNOWNOBJECT", "an empty name");
+    assert_eq!(
+        name(&held(0x21, 2589)),
+        "UKNOWNOBJECT",
+        "an object's entry names no item"
+    );
 }
 
 /// A school with no name writes no line, even where the template names none: each formatter that

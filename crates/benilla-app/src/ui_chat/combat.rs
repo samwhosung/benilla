@@ -7,6 +7,8 @@ use bevy::prelude::*;
 
 use benilla_ui::strings::{fill_exact, Arg};
 
+use crate::go_templates::GameObjectTemplates;
+use crate::items::Items;
 use crate::names::NameCache;
 use crate::ui_chat::event::ChatEventKind;
 
@@ -883,11 +885,11 @@ pub(crate) fn power_word(script: &benilla_ui::script::UiScript, power: u32) -> O
     global_string(script, power_key(power)?)
 }
 
-/// One endpoint's display name as `GetObjectName 0x6264e0` finds it: what the caches hold now, a
-/// lookup asked for what they do not (`0x6265a7`, `0x6265e0`, with an empty callback), and `None`
-/// for that ([`logged_name`] prints the miss). A streamed unit names through its descriptor
-/// (`GetUnitName`, `0x609210`), which is how a pet is named.
-pub(crate) fn object_name(
+/// A unit's name as `GetUnitName 0x609210` finds it: what the caches hold now, a lookup asked for
+/// what they do not (`0x6265a7`, `0x6265e0`, with an empty callback), and `None` for that. A
+/// streamed unit names through its descriptor, which is how a pet is named. The XP and honor lines
+/// name their victim here (`0x637ac0`, `0x625387`).
+pub(crate) fn unit_name(
     guid: u64,
     unit: Option<&ObjectStore>,
     names: &NameCache,
@@ -898,6 +900,49 @@ pub(crate) fn object_name(
         return None;
     }
     names.resolve_unit(guid, unit, ask).map(str::to_owned)
+}
+
+/// The caches `GetObjectName` (`0x6264e0`) reads: the name caches, the game object cache
+/// (`0xc0e318`) and the item cache (`0xc0e2a0`).
+#[derive(Clone, Copy)]
+pub(crate) struct NameSources<'a> {
+    pub names: &'a NameCache,
+    pub gameobjects: &'a GameObjectTemplates,
+    pub items: &'a Items,
+}
+
+/// One endpoint's display name as `GetObjectName 0x6264e0` finds it. A guid the client holds goes
+/// by its object's type mask (`0x626513`-`0x626557`): a unit (bit 3) through `GetUnitName`
+/// ([`unit_name`]), a game object (bit 5) by the record name it holds (`0x5f8100`, the cache by
+/// the descriptor's entry), an item (bit 1) from the item cache by its entry, read without asking
+/// (`0x55ba30` with no callback); any other object has no name. A guid not held goes to the name
+/// caches (`0x6265a7`, `0x6265e0`, with an empty callback). `None` for a miss or an empty name
+/// (`0x6265ef`), which [`logged_name`] prints.
+pub(crate) fn object_name(
+    guid: u64,
+    held: Option<&ObjectStore>,
+    sources: &NameSources<'_>,
+    ask: Ask<'_>,
+) -> Option<String> {
+    use benilla_protocol::messages::ObjectType;
+    if guid == 0 {
+        return None;
+    }
+    let name = match held {
+        None => return unit_name(guid, None, sources.names, ask),
+        Some(store) if is_unit(store) => return unit_name(guid, Some(store), sources.names, ask),
+        Some(store) if store.0.object_type() == Some(ObjectType::GameObject) => sources
+            .gameobjects
+            .of(&store.0)
+            .map(|template| template.name.as_str()),
+        Some(store) if store.0.is_item() => store
+            .0
+            .object_entry()
+            .and_then(|entry| sources.items.template(entry, 0, Ask::Read))
+            .map(|item| item.name.as_str()),
+        Some(_) => None,
+    };
+    name.filter(|name| !name.is_empty()).map(str::to_owned)
 }
 
 /// The name `GetObjectName` prints for an object nothing names: the `UNKNOWNOBJECT` string, else
@@ -913,11 +958,11 @@ pub(crate) fn unknown_object(script: &benilla_ui::script::UiScript) -> String {
 pub(crate) fn logged_name(
     guid: u64,
     store: Option<&ObjectStore>,
-    names: &NameCache,
+    sources: &NameSources<'_>,
     ask: Ask<'_>,
     script: &benilla_ui::script::UiScript,
 ) -> String {
-    object_name(guid, store, names, ask).unwrap_or_else(|| {
+    object_name(guid, store, sources, ask).unwrap_or_else(|| {
         if store.is_some_and(is_unit) {
             script.unknown_object_text()
         } else {

@@ -66,6 +66,7 @@ impl Feed {
         world.insert_resource(crate::world_state::WorldStates::default());
         world.insert_resource(super::language::ChatLanguages::default());
         world.insert_resource(crate::items::Items::default());
+        world.insert_resource(crate::go_templates::GameObjectTemplates::default());
         world.insert_resource(crate::text_filter::TextFilter::default());
         world.insert_resource(crate::text_filter::TextFilterSwitches::default());
         Feed { world, sent }

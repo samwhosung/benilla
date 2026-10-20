@@ -885,8 +885,12 @@ pub(super) fn feed_chat(
     states: Res<crate::world_state::WorldStates>,
     // The language gate: the word pool, this character's fluency and the GM bit.
     langs: Res<super::language::ChatLanguages>,
-    // Item names for `TRADESKILL_LOG`, `FEEDPET_LOG`, `ITEMENCHANTMENT*`, `SPELLDURABILITYDAMAGE`.
-    items: Res<crate::items::Items>,
+    // Item names for `TRADESKILL_LOG`, `FEEDPET_LOG`, `ITEMENCHANTMENT*`, `SPELLDURABILITYDAMAGE`,
+    // and with the game object records the names of a combat line's held objects.
+    (items, gameobjects): (
+        Res<crate::items::Items>,
+        Res<crate::go_templates::GameObjectTemplates>,
+    ),
     unit_names: crate::ui_unit::NameTables,
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
     mut text_filter: crate::text_filter::ChatTextFilter,
@@ -1184,7 +1188,7 @@ pub(super) fn feed_chat(
                 // (`0x609210`, from `0x637ac0`), whose miss without `UNKNOWNOBJECT` is the literal
                 // "Unknown Being", where `GetObjectName`'s is `UKNOWNOBJECT`.
                 let name = (victim != 0).then(|| {
-                    super::combat::object_name(
+                    super::combat::unit_name(
                         victim,
                         guids.0.get(&victim).and_then(|e| stores.get(*e).ok()),
                         &names,
@@ -1233,7 +1237,7 @@ pub(super) fn feed_chat(
                 // (`0x612bf0`, `0x625374`), whose gender `0x5ed5b0` reads from `PLAYER_BYTES_3`
                 // byte 0; a dishonorable kill's template names no rank.
                 let name = (victim != 0).then(|| {
-                    super::combat::object_name(
+                    super::combat::unit_name(
                         victim,
                         guids.0.get(&victim).and_then(|e| stores.get(*e).ok()),
                         &names,
@@ -1308,12 +1312,17 @@ pub(super) fn feed_chat(
                 // Names looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), and
                 // asked again only on its first drain; a line waits on an item alone.
                 let ask = Ask::at(line.tries == 0, &commands);
+                let sources = super::combat::NameSources {
+                    names: &names,
+                    gameobjects: &gameobjects,
+                    items: &items,
+                };
                 let ready = line.fill_names(
                     |guid| {
                         super::combat::logged_name(
                             guid,
                             guids.0.get(&guid).and_then(|e| stores.get(*e).ok()),
-                            &names,
+                            &sources,
                             ask,
                             &script,
                         )
