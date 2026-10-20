@@ -5,16 +5,17 @@ use std::io::Cursor;
 
 use benilla_bytes::{chunks, ByteExt};
 
-/// A terrain vertex normal: three signed bytes, named `x, z, y` in disk order.
+/// A terrain vertex normal: three signed bytes in WoW's X, Y, Z, the order of the file
+/// (`CMapChunk::LoadNormals`, `0x6aff10`).
 #[derive(Debug, Clone, Copy)]
 pub struct VertexNormal {
     pub x: i8,
-    pub z: i8,
     pub y: i8,
+    pub z: i8,
 }
 
 impl VertexNormal {
-    /// `[x, y, z] / 127`, which is disk bytes `[b0, b2, b1]`; the terrain mesher swaps them back.
+    /// `[x, y, z] / 127`, the bytes in file order (`0x810c08` is the 1/127).
     pub fn to_normalized(&self) -> [f32; 3] {
         [
             f32::from(self.x) / 127.0,
@@ -436,8 +437,8 @@ fn read_mcnk(data: &[u8]) -> Result<McnkChunk> {
         for i in 0..145.min(sub.len() / 3) {
             normals.push(VertexNormal {
                 x: sub.u8_at(i * 3).ok_or(Error::Truncated("MCNR"))? as i8,
-                z: sub.u8_at(i * 3 + 1).ok_or(Error::Truncated("MCNR"))? as i8,
-                y: sub.u8_at(i * 3 + 2).ok_or(Error::Truncated("MCNR"))? as i8,
+                y: sub.u8_at(i * 3 + 1).ok_or(Error::Truncated("MCNR"))? as i8,
+                z: sub.u8_at(i * 3 + 2).ok_or(Error::Truncated("MCNR"))? as i8,
             });
         }
         chunk.normals = Some(McnrChunk { normals });

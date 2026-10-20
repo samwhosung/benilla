@@ -310,8 +310,7 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh> {
         // The header's `position` is already WoW `[X north, Y west, Z up]`.
         let [wx, wy, wz] = mcnk.header.position;
 
-        // MCNR is one normal per MCVT vertex, disk bytes already WoW `[X, Y, Z]`; `to_normalized`
-        // returns `[b0, b2, b1]`, which the destructure below undoes.
+        // MCNR is one normal per MCVT vertex, its bytes WoW's `[X, Y, Z]` (`0x6aff10`).
         let mcnr = mcnk.normals.as_ref().filter(|n| n.normals.len() >= 145);
 
         // Each row's 9 outer verts, then its 8 inner ones half a cell in, horizontally only; the
@@ -330,8 +329,7 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh> {
                     wz + h,                                       // WoW Z (up): height over base
                 ]);
                 if let Some(mcnr) = mcnr {
-                    let [x, z, y] = mcnr.normals[idx].to_normalized();
-                    normals.push([x, y, z]);
+                    normals.push(mcnr.normals[idx].to_normalized());
                 }
                 uvs.push([col as f32 / 8.0, row as f32 / 8.0]);
             }
@@ -346,8 +344,7 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh> {
                         wz + h,
                     ]);
                     if let Some(mcnr) = mcnr {
-                        let [x, z, y] = mcnr.normals[idx].to_normalized();
-                        normals.push([x, y, z]);
+                        normals.push(mcnr.normals[idx].to_normalized());
                     }
                     uvs.push([(col as f32 + 0.5) / 8.0, (row as f32 + 0.5) / 8.0]);
                 }
