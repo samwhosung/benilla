@@ -65,8 +65,9 @@ fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedPar
 /// world entry (`0x4908c0`) signals the roster only through the raid leg's fill of a zero row
 /// (`0x4ba140`, signalling at `0x4ba1a2`), and stock `RaidFrame.lua:32` reads the raid on
 /// `PLAYER_LOGIN` instead. It is benilla's seam: the in-world VM is built once the loading cover
-/// is up (`ui_script::lifecycle`), so a list can land before any VM hears it; a reload's VM is
-/// told the same.
+/// is up (`ui_script::lifecycle`), so a list can land before any VM hears it. A reload's VM is
+/// told the same, since it loads the stock frames before the feed pushes the roster and its party
+/// frames show a member only on the event.
 fn catch_up(group: &GroupState) -> Vec<GroupSignal> {
     [
         (GroupSignal::MembersChanged, group.listed),
@@ -2772,5 +2773,40 @@ mod tests {
         script.run(r#"UninviteFromParty("party1")"#).unwrap();
         frame(&mut app);
         assert_eq!(kicks(&rx), ["name:Unknown Entity"]);
+    }
+
+    /// A `/reload` loads the stock frames into a new VM that holds no group, and the roster is
+    /// pushed by the feed's first look after the load (`ui_script::lifecycle` seeds the player
+    /// alone): `PartyMemberFrame_OnLoad` reads `GetPartyMember` at the load (`PartyMemberFrame.lua:
+    /// 20-24`) and finds nobody, and only a `PARTY_MEMBERS_CHANGED` shows the row. The reference's
+    /// load reads the engine's group, so its reload fires none; benilla's fires the catch-up, and a
+    /// reload told nothing would leave the party frames hidden.
+    #[test]
+    fn a_reloaded_vm_has_its_party_frames_filled_by_the_catch_up() {
+        benilla_formats::wow_data_or_skip!();
+        let load = || {
+            let mut script = UiScript::new().unwrap();
+            script.set_screen_size(1024.0, 768.0);
+            let failures = crate::ui_script::load_default_ui(&script);
+            assert!(failures.is_empty(), "load failures: {failures:?}");
+            script.run("SEEN = {}").unwrap();
+            script
+        };
+        let mut app = app_with(load());
+        party(&mut app, 1, true);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "PartyMemberFrame1:IsShown()"), Some(1.0));
+
+        app.insert_non_send_resource(load());
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "PartyMemberFrame1:IsShown()"), Some(1.0));
+        assert_eq!(
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval::<Option<String>>("return PartyMemberFrame1Name:GetText()")
+                .unwrap()
+                .as_deref(),
+            Some("M1")
+        );
     }
 }
