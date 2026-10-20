@@ -518,25 +518,26 @@ pub(super) struct RestState<'a> {
 const XP_FACTOR_EPSILON: f64 = 1.0 / 4_194_304.0;
 
 /// The XP line, `0x637ac0` (a named kill) and `0x637cd0` (the plain forms). No victim is
-/// `COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED`. A named kill needs the active player (`0x637b06`;
-/// `rest` `None` writes nothing), and is plain `COMBATLOG_XPGAIN_FIRSTPERSON` unless its rest
-/// state has a row whose factor is neither 0 nor 1 (`0x637b3e`-`0x637b6a`). Then it is that
-/// state's key in the table `0x864330`, `COMBATLOG_XPGAIN_EXHAUSTION<state>`, with the signed
-/// bonus, `total - base` prefixed `+` unless negative (`0x637c07`-`0x637c25`), and the row's name
-/// as the state word (`0x637c31`). The table has no entry 0 and ends at 5: a row there writes
-/// nothing. State 3's entry names the global `NULL`, which 1.12 does not define: `GetText` answers
+/// `COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED`, which no float reaches: its callers pass 1.0
+/// (`0x637f90`) or find the victim they stored the gain on. A named kill needs the active player
+/// (`0x637b06`; `rest` `None` writes nothing), and is plain `COMBATLOG_XPGAIN_FIRSTPERSON` unless
+/// its rest state has a row whose factor is neither 0 nor 1 (`0x637b3e`-`0x637b6a`). Then it is
+/// that state's key in the table `0x864330`, `COMBATLOG_XPGAIN_EXHAUSTION<state>`, with the
+/// signed bonus, `total - base` prefixed `+` unless negative (`0x637c07`-`0x637c25`), and the
+/// row's name as the state word (`0x637c31`). The table has no entry 0 and ends at 5: a row there
+/// writes nothing. State 3's entry names the global `NULL`, which 1.12 does not define: `GetText` answers
 /// the empty string for it (`0x703c02`) and `0x637bef` tests only for null, so the reference
 /// formats that line from an empty template, which `keyed` drops. No shipped row reaches it:
 /// `Exhaustion.dbc` gives state 3 a factor of 1, the plain form.
 ///
-/// The group float the packet carries (vmangos always 1.0, `Player.cpp:3039`) picks the `_GROUP`
-/// and `_RAID` forms (`0x637b70`-`0x637bd5`, `0x637cd0`); the parser drops it, so they are not
-/// built.
+/// The packet's group float ([`group_split`]) appends `_GROUP` or `_RAID` to the named key and
+/// adds the difference as the last number (`0x637b70`-`0x637bd5`, `0x637d33`-`0x637d67`); a
+/// rested kill compares on its base XP.
 pub(super) fn xp_gain_line(
     victim: Option<&str>,
     total: u32,
     base: u32,
-    _group: f32,
+    group: f32,
     rest: Option<RestState>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -550,11 +551,16 @@ pub(super) fn xp_gain_line(
     };
     let rest = rest?;
     let plain = || {
-        keyed(
-            get,
-            "COMBATLOG_XPGAIN_FIRSTPERSON",
-            &[Arg::S(name), Arg::D(i64::from(total))],
-        )
+        let (suffix, diff) = group_split(total, group);
+        let named = [Arg::S(name), Arg::D(i64::from(total))];
+        match suffix {
+            None => keyed(get, "COMBATLOG_XPGAIN_FIRSTPERSON", &named),
+            Some(suffix) => keyed(
+                get,
+                &format!("COMBATLOG_XPGAIN_FIRSTPERSON{suffix}"),
+                &[named[0], named[1], Arg::D(i64::from(diff))],
+            ),
+        }
     };
     let Some((state_word, factor)) = rest.row else {
         return plain();
@@ -573,16 +579,37 @@ pub(super) fn xp_gain_line(
     // `sub`, `jns`: the 32-bit difference's sign.
     let bonus = total.wrapping_sub(base) as i32;
     let sign = if bonus >= 0 { "+" } else { "" };
-    keyed(
-        get,
-        key,
-        &[
-            Arg::S(name),
-            Arg::D(i64::from(total)),
-            Arg::S(&format!("{sign}{bonus}")),
-            Arg::S(state_word),
-        ],
-    )
+    let bonus = format!("{sign}{bonus}");
+    let (suffix, diff) = group_split(base, group);
+    let args = [
+        Arg::S(name),
+        Arg::D(i64::from(total)),
+        Arg::S(&bonus),
+        Arg::S(state_word),
+    ];
+    match suffix {
+        None => keyed(get, key, &args),
+        Some(suffix) => keyed(
+            get,
+            &format!("{key}{suffix}"),
+            &[args[0], args[1], args[2], args[3], Arg::D(i64::from(diff))],
+        ),
+    }
+}
+
+/// How the packet's group float moves a kill's XP (`0x637cdb`-`0x637d3a`, `0x637b70`-`0x637bbc`):
+/// `__ftol(xp / group)` against `xp`, both as signed 32-bit values. Equal is no suffix; below is
+/// `_GROUP`, the bonus; above is `_RAID`, the penalty. The second number is the absolute
+/// difference (`cdq`, `xor`, `sub`), which wraps like the reference's.
+fn group_split(xp: u32, group: f32) -> (Option<&'static str>, i32) {
+    let xp = xp as i32;
+    let scaled = benilla_ui::script::ftol(f64::from(xp) / f64::from(group));
+    let diff = xp.wrapping_sub(scaled).wrapping_abs();
+    match scaled.cmp(&xp) {
+        std::cmp::Ordering::Equal => (None, 0),
+        std::cmp::Ordering::Less => (Some("_GROUP"), diff),
+        std::cmp::Ordering::Greater => (Some("_RAID"), diff),
+    }
 }
 
 /// The XP loss line, `COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED` with the packet's XP negated as a
