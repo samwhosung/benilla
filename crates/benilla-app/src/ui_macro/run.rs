@@ -6,10 +6,11 @@
 //! `CastSpellByName(`, through the resolver the `CastSpellByName` binding (`0x4b4ab0`) uses
 //! (`0x4b3950` → `0x4b3a10`), so a bare name binds the highest known rank.
 //!
-//! `[rec+0x568]` is the book the spell resolved from, 0 the player's and 1 the pet's. benilla
-//! resolves against the player's book only, so a macro that casts a pet spell binds nothing.
+//! `[rec+0x568]` is the book the spell resolved from, 0 the player's and 1 the pet's: the name is
+//! looked up in the player's book, then the pet's (`0x4b3a10`), and a pet match binds the pet's
+//! spell, which the action bar then reads through the pet's legs (`ui_action::state`).
 
-use benilla_ui::script::{resolve_spell_by_name, SpellBookState};
+use benilla_ui::script::{resolve_spell_in_books, PetBookState, SpellBookState};
 
 use crate::ui_chat::commands::{Command, SlashCommands, SlashIndex};
 
@@ -36,6 +37,37 @@ pub(crate) enum BoundSpell {
     Unresolved,
     /// A spell id: the slot shows that spell's state.
     Spell(u32),
+}
+
+/// A macro record's cached cast: [`BoundSpell`] and the book selector `[rec+0x568]` beside it, 0
+/// the player's book and 1 the pet's (`0x4b3b3d`, `0x4b3b51`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Bound {
+    pub(crate) spell: BoundSpell,
+    /// Written on a match alone, so a derivation that finds nothing leaves it: a macro that was
+    /// bound to the pet's spell and lost it keeps the pet's book (`0x4eff14`, `0x4eff48`,
+    /// `0x4eff81` store `+0x564` only).
+    pub(crate) pet_book: bool,
+}
+
+impl From<BoundSpell> for Bound {
+    /// A binding from the player's book.
+    fn from(spell: BoundSpell) -> Self {
+        Self {
+            spell,
+            pet_book: false,
+        }
+    }
+}
+
+impl Bound {
+    /// Whether `0x4f0ce0` derives this record again when the pet's spell list arrives
+    /// (`0x4f0cfb`-`0x4f0d11`): a `/cast` that did not resolve (`[rec+0x564] < 0`), or any record
+    /// whose book selector is the pet's (`[rec+0x568] != 0`), whatever it is bound to now. Any
+    /// other record keeps its cast.
+    pub(crate) fn follows_the_pet_book(self) -> bool {
+        self.spell == BoundSpell::Unresolved || self.pet_book
+    }
 }
 
 /// A macro body's runnable lines: the reference's tokenizer (`0x64ae50`) splits on either `\r` or
@@ -89,16 +121,35 @@ fn quoted_call_argument(line: &str) -> Option<String> {
     Some(rest.split('"').next().unwrap_or_default().to_string())
 }
 
-/// The macro's bound spell: [`cast_name`] resolved as `CastSpellByName` resolves
-/// ([`resolve_spell_by_name`]), so the cooldown swirl and the press agree on the rank.
-pub(crate) fn bound_spell(table: &SlashCommands, body: &str, book: &SpellBookState) -> BoundSpell {
+/// The macro's cast, derived again (`0x4efe00`) from `was`: [`cast_name`] resolved as
+/// `CastSpellByName` resolves a name ([`resolve_spell_in_books`]), so the cooldown swirl and the
+/// press agree on the rank. A match writes the book it came from; a miss leaves the selector.
+pub(crate) fn bound_spell(
+    table: &SlashCommands,
+    body: &str,
+    player: &SpellBookState,
+    pet: &PetBookState,
+    was: Bound,
+) -> Bound {
     let Some((arm, name)) = cast_name(table, body) else {
-        return BoundSpell::None;
+        return Bound {
+            spell: BoundSpell::None,
+            ..was
+        };
     };
-    match (resolve_spell_by_name(book, &name), arm) {
-        (Some(s), _) => BoundSpell::Spell(s.spell_id),
-        (None, CastArm::Slash) => BoundSpell::Unresolved,
-        (None, CastArm::ByName) => BoundSpell::None,
+    match (resolve_spell_in_books(player, pet, &name), arm) {
+        (Some(s), _) => Bound {
+            spell: BoundSpell::Spell(s.spell_id),
+            pet_book: s.pet,
+        },
+        (None, CastArm::Slash) => Bound {
+            spell: BoundSpell::Unresolved,
+            ..was
+        },
+        (None, CastArm::ByName) => Bound {
+            spell: BoundSpell::None,
+            ..was
+        },
     }
 }
 
@@ -106,6 +157,7 @@ pub(crate) fn bound_spell(table: &SlashCommands, body: &str, book: &SpellBookSta
 mod tests {
     use super::*;
     use crate::ui_chat::commands::SlashCommands;
+    use benilla_ui::script::SpellSlotView;
 
     /// The aliases these tests need, built through the global-string reader as boot builds it.
     fn table() -> SlashCommands {
@@ -225,19 +277,43 @@ mod tests {
         );
     }
 
+    /// The bound spell of `body` for a macro that was bound to nothing, against the player's book.
+    fn bound(t: &SlashCommands, body: &str, book: &SpellBookState) -> BoundSpell {
+        bound_spell(t, body, book, &PetBookState::default(), Bound::default()).spell
+    }
+
+    fn fireball_book() -> SpellBookState {
+        SpellBookState {
+            tabs: Vec::new(),
+            slots: vec![SpellSlotView {
+                spell_id: 133,
+                name: "Fireball".into(),
+                ..Default::default()
+            }],
+        }
+    }
+
     /// An empty name is a name: `0x4eff7b` resolves it to 0 and `0x4eff81` stores that, ending the
     /// walk on its line, where a later `/cast` is never read.
     #[test]
-    fn an_empty_name_ends_the_walk() {
+    fn an_empty_name_binds_nothing_and_ends_the_walk() {
         let t = table();
         let body = "/script CastSpellByName(\"\")\n/cast Fireball";
         assert_eq!(cast_name(&t, body), Some((CastArm::ByName, String::new())));
+        assert_eq!(bound(&t, body, &fireball_book()), BoundSpell::None);
+        // A computed first argument binds the quoted fallback after it, not the later line.
+        assert_eq!(
+            bound(
+                &t,
+                "/script CastSpellByName(x and \"Fireball\" or \"Frostbolt\")\n/cast Frostbolt",
+                &fireball_book()
+            ),
+            BoundSpell::Spell(133)
+        );
     }
 
     #[test]
     fn bound_spell_resolves_through_the_book() {
-        use benilla_ui::script::SpellSlotView;
-
         let book = SpellBookState {
             tabs: Vec::new(),
             slots: vec![
@@ -257,17 +333,14 @@ mod tests {
         };
         let t = table();
         // No subtext -> the highest known rank.
-        assert_eq!(
-            bound_spell(&t, "/cast Fireball", &book),
-            BoundSpell::Spell(145)
-        );
+        assert_eq!(bound(&t, "/cast Fireball", &book), BoundSpell::Spell(145));
         // A pinned subtext -> that rank, both spacings.
         assert_eq!(
-            bound_spell(&t, "/cast Fireball(Rank 1)", &book),
+            bound(&t, "/cast Fireball(Rank 1)", &book),
             BoundSpell::Spell(133)
         );
         assert_eq!(
-            bound_spell(&t, "/cast Fireball (Rank 1)", &book),
+            bound(&t, "/cast Fireball (Rank 1)", &book),
             BoundSpell::Spell(133)
         );
     }
@@ -278,19 +351,100 @@ mod tests {
     fn an_unresolved_cast_is_arm_dependent() {
         let book = SpellBookState::default();
         let t = table();
+        assert_eq!(bound(&t, "/cast Pyroblast", &book), BoundSpell::Unresolved);
         assert_eq!(
-            bound_spell(&t, "/cast Pyroblast", &book),
+            bound(&t, "/spell Pyroblast\n/say pew", &book),
             BoundSpell::Unresolved
         );
+        assert_eq!(bound(&t, "/say hi", &book), BoundSpell::None);
+        assert_eq!(bound(&t, ".spawn 16032", &book), BoundSpell::None);
         assert_eq!(
-            bound_spell(&t, "/spell Pyroblast\n/say pew", &book),
-            BoundSpell::Unresolved
-        );
-        assert_eq!(bound_spell(&t, "/say hi", &book), BoundSpell::None);
-        assert_eq!(bound_spell(&t, ".spawn 16032", &book), BoundSpell::None);
-        assert_eq!(
-            bound_spell(&t, r#"/script CastSpellByName("Pyroblast")"#, &book),
+            bound(&t, r#"/script CastSpellByName("Pyroblast")"#, &book),
             BoundSpell::None
         );
+    }
+
+    fn named(spell_id: u32, name: &str) -> SpellSlotView {
+        SpellSlotView {
+            spell_id,
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    /// `0x4b3a10` searches the player's book, then the pet's, and `0x4b3b51` writes which one
+    /// matched; `0x4efe00` hands that book to the record (`0x4eff2b`, `0x4eff72`).
+    #[test]
+    fn a_name_only_the_pets_book_holds_binds_its_spell_with_the_pets_book() {
+        let t = table();
+        let player = SpellBookState {
+            tabs: Vec::new(),
+            slots: vec![named(133, "Fireball"), named(1, "Seduction")],
+        };
+        let pet = PetBookState {
+            token: None,
+            slots: vec![named(6358, "Seduction"), named(19647, "Spell Lock")],
+        };
+        let derive = |body: &str| bound_spell(&t, body, &player, &pet, Bound::default());
+        let from_pet = |id| Bound {
+            spell: BoundSpell::Spell(id),
+            pet_book: true,
+        };
+        assert_eq!(derive("/cast Spell Lock"), from_pet(19647));
+        assert_eq!(
+            derive(r#"/script CastSpellByName("Spell Lock")"#),
+            from_pet(19647),
+            "the quoted form binds it too"
+        );
+        // The player's book is searched first.
+        assert_eq!(derive("/cast Seduction"), Bound::from(BoundSpell::Spell(1)));
+        assert_eq!(
+            derive("/cast Fireball"),
+            Bound::from(BoundSpell::Spell(133))
+        );
+        // A name in neither book is what it was: -1 for a `/cast`, 0 for the quoted form.
+        assert_eq!(derive("/cast Claw"), Bound::from(BoundSpell::Unresolved));
+        assert_eq!(
+            derive(r#"/script CastSpellByName("Claw")"#),
+            Bound::from(BoundSpell::None)
+        );
+        // With the pet gone, a pet spell is a name in neither.
+        let gone = |was| {
+            bound_spell(
+                &t,
+                "/cast Spell Lock",
+                &player,
+                &PetBookState::default(),
+                was,
+            )
+        };
+        assert_eq!(gone(Bound::default()).spell, BoundSpell::Unresolved);
+        // A miss leaves the book selector (`0x4b3a10` writes it on a match alone), so a record
+        // that was the pet's stays the pet's through it, and a cast line that is gone keeps it too.
+        assert!(gone(from_pet(19647)).pet_book);
+        assert!(!gone(Bound::default()).pet_book);
+        let gone_line = bound_spell(&t, "/say hi", &player, &pet, from_pet(19647));
+        assert_eq!(
+            gone_line,
+            Bound {
+                spell: BoundSpell::None,
+                pet_book: true
+            }
+        );
+    }
+
+    /// `0x4f0ce0` derives a record again at a pet spell message only when `[rec+0x564] < 0` or
+    /// `[rec+0x568] != 0` (`0x4f0cfb`-`0x4f0d11`), whatever it is bound to now.
+    #[test]
+    fn only_an_unresolved_or_pet_selected_record_follows_the_pets_list() {
+        let record = |spell, pet_book| Bound { spell, pet_book };
+        assert!(record(BoundSpell::Unresolved, false).follows_the_pet_book());
+        assert!(record(BoundSpell::Spell(6358), true).follows_the_pet_book());
+        assert!(
+            record(BoundSpell::None, true).follows_the_pet_book(),
+            "a quoted call that lost the pet's spell keeps the pet's book"
+        );
+        assert!(!record(BoundSpell::None, false).follows_the_pet_book());
+        assert!(!record(BoundSpell::Spell(133), false).follows_the_pet_book());
     }
 }

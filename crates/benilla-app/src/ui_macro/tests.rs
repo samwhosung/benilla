@@ -311,3 +311,152 @@ fn the_entry_vms_icon_chooser_is_listed_on_first_use() {
         .unwrap()
         .starts_with("Interface\\Icons\\"));
 }
+
+/// A mini app around [`super::rebind_macro_spells`]: the VM, an empty bar and the `/cast` alias.
+fn rebind_app(script: UiScript) -> bevy::prelude::App {
+    use bevy::prelude::*;
+    let mut app = App::new();
+    app.init_resource::<crate::ui_action::PlayerActions>()
+        .init_resource::<super::MacroBoundSpells>()
+        .insert_resource(crate::ui_chat::commands::SlashCommands::build(
+            |name| (name == "SLASH_CAST1").then(|| "/cast".to_string()),
+            |_| None,
+        ))
+        .insert_non_send_resource(script)
+        .add_systems(Update, super::rebind_macro_spells);
+    app
+}
+
+fn book_slot(spell_id: u32, name: &str) -> benilla_ui::script::SpellSlotView {
+    benilla_ui::script::SpellSlotView {
+        spell_id,
+        name: name.into(),
+        ..Default::default()
+    }
+}
+
+/// `0x4f0ce0`, from the pet spell message (`0x4bdae0`), derives only the records whose cached
+/// spell is below 0 or whose book selector is the pet's (`0x4f0cfb`-`0x4f0d11`), and a miss leaves
+/// the selector (`0x4eff81` stores the spell alone). So a `/cast` that missed binds when the pet's
+/// spell arrives; a `CastSpellByName` that was bound to it and lost it binds again when the pet
+/// returns; and one made while the pet was away keeps its 0 until the macro is edited. The
+/// engine's copy carries the book, which `GetActionAutocast` reads.
+#[test]
+fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
+    use super::run::{Bound, BoundSpell};
+    use benilla_ui::script::{ActionSlot, PetBookState};
+
+    let mut script = UiScript::new().unwrap();
+    script.set_macros(MacroState::from_scopes(
+        vec![
+            macro_view("Seduce", "/cast Seduction"),
+            macro_view("Quoted", r#"/script CastSpellByName("Seduction")"#),
+            macro_view("Bolt", "/cast Shadow Bolt"),
+        ],
+        Vec::new(),
+    ));
+    script.set_spellbook(benilla_ui::script::SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![book_slot(686, "Shadow Bolt")],
+    });
+    let seduction = PetBookState {
+        token: None,
+        slots: vec![benilla_ui::script::SpellSlotView {
+            autocast: Some((true, false)),
+            ..book_slot(6358, "Seduction")
+        }],
+    };
+    script.set_pet_book(seduction.clone());
+    script.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0x40,
+            action: 1,
+            ..Default::default()
+        }),
+    );
+    let mut app = rebind_app(script);
+    app.update();
+    let bound = |app: &bevy::prelude::App, id: u32| {
+        app.world().resource::<super::MacroBoundSpells>().0[&id]
+    };
+    let pet_spell = Bound {
+        spell: BoundSpell::Spell(6358),
+        pet_book: true,
+    };
+    let shadow_bolt = Bound::from(BoundSpell::Spell(686));
+    assert_eq!(
+        (bound(&app, 1), bound(&app, 2), bound(&app, 3)),
+        (pet_spell, pet_spell, shadow_bolt),
+        "the pet is out: both forms bind its spell, with its book"
+    );
+    let script = app.world().non_send_resource::<UiScript>();
+    assert_eq!(
+        script
+            .eval::<(Option<i64>, Option<i64>)>("return GetActionAutocast(1)")
+            .unwrap(),
+        (Some(1), None),
+        "the binding's book reaches GetActionAutocast"
+    );
+
+    // A cooldown or autocast change is not a spell message: nothing is derived again.
+    let before = script.pet_book_generation();
+    let mut ticking = seduction.clone();
+    ticking.slots[0].cooldown = Some((1_000, 5_000, true));
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_pet_book(ticking);
+    assert_eq!(
+        app.world()
+            .non_send_resource::<UiScript>()
+            .pet_book_generation(),
+        before
+    );
+
+    // The pet is dismissed. The `/cast` is a miss (-1) and the quoted call stores 0; both keep the
+    // pet's book. A quoted call made now never found the spell.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_pet_book(PetBookState::default());
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(r#"CreateMacro("Later", 1, 'CastSpellByName("Seduction")')"#)
+        .unwrap();
+    app.update();
+    assert_eq!(
+        (
+            bound(&app, 1),
+            bound(&app, 2),
+            bound(&app, 3),
+            bound(&app, 4)
+        ),
+        (
+            Bound {
+                spell: BoundSpell::Unresolved,
+                pet_book: true
+            },
+            Bound {
+                spell: BoundSpell::None,
+                pet_book: true
+            },
+            shadow_bolt,
+            Bound::default()
+        )
+    );
+
+    // It returns: the two that kept the pet's book bind again, the one made without it does not.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_pet_book(seduction);
+    app.update();
+    assert_eq!(
+        (
+            bound(&app, 1),
+            bound(&app, 2),
+            bound(&app, 3),
+            bound(&app, 4)
+        ),
+        (pet_spell, pet_spell, shadow_bolt, Bound::default()),
+        "a CastSpellByName that missed keeps its 0 until the macro is edited"
+    );
+}

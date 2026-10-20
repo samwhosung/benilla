@@ -29,9 +29,9 @@ pub(crate) struct MacroFiles {
 /// action-bar macro slot's state reads through. A missing entry names no macro, which `0x4e5030`
 /// greys, unlike a macro that casts nothing.
 #[derive(Resource, Default)]
-pub(crate) struct MacroBoundSpells(pub(crate) std::collections::HashMap<u32, BoundSpell>);
+pub(crate) struct MacroBoundSpells(pub(crate) std::collections::HashMap<u32, Bound>);
 
-pub(crate) use run::BoundSpell;
+pub(crate) use run::{Bound, BoundSpell};
 
 pub(crate) struct UiMacroPlugin;
 
@@ -162,38 +162,65 @@ fn save_dirty_macros(script: Option<NonSendMut<UiScript>>, files: Res<MacroFiles
     }
 }
 
-/// Recompute every macro's bound spell when the macro table or the spell book changes: gated on
-/// the engine's macro generation and on change detection over the action store.
+/// What [`rebind_macro_spells`] last saw, per VM: a fresh VM restarts both counters at 0, which a
+/// bare memo would gate off for good.
+#[derive(Default)]
+struct BindingsSeen {
+    macros: Option<u64>,
+    pet_book: Option<u64>,
+}
+
+/// Derive every macro's bound spell when the macro table or the player's book changes (gated on
+/// the engine's macro generation and on change detection over the action store), and again for
+/// the bindings that follow the pet's book when its spell list changes: `0x4f0ce0` derives only a
+/// `/cast` that did not resolve and a spell bound out of the pet's book (`0x4f0cfb`-`0x4f0d11`),
+/// so a `CastSpellByName` that missed keeps its 0 until the macro is edited.
 fn rebind_macro_spells(
     script: Option<NonSendMut<UiScript>>,
     actions: Res<crate::ui_action::PlayerActions>,
     table: Option<Res<crate::ui_chat::commands::SlashCommands>>,
     mut bound: ResMut<MacroBoundSpells>,
-    mut last_generation: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
 ) {
     let (Some(mut script), Some(table)) = (script, table) else {
         return;
     };
-    // Per VM: a fresh VM restarts its generation at 0, which a bare memo would gate off for good.
-    let last_generation = last_generation.get(&script);
+    let seen = seen.get(&script);
+    let first = seen.macros.is_none();
     let generation = script.macros_generation();
-    if *last_generation == Some(generation) && !actions.is_changed() {
+    let pet_generation = script.pet_book_generation();
+    let table_moved = seen.macros != Some(generation) || actions.is_changed();
+    let pet_moved = seen.pet_book != Some(pet_generation);
+    if !table_moved && !pet_moved {
         return;
     }
-    *last_generation = Some(generation);
+    seen.macros = Some(generation);
+    seen.pet_book = Some(pet_generation);
 
-    let (macros, book) = (script.macros(), script.spellbook());
+    let (macros, book, pet_book) = (script.macros(), script.spellbook(), script.pet_spellbook());
     let mut fresh = std::collections::HashMap::new();
     for m in macros.views() {
-        fresh.insert(m.id, run::bound_spell(&table, &m.body, &book));
+        // The records are new on a VM's first pass, with no book selector to keep.
+        let was = bound
+            .0
+            .get(&m.id)
+            .copied()
+            .filter(|_| !first)
+            .unwrap_or_default();
+        let next = if table_moved || was.follows_the_pet_book() {
+            run::bound_spell(&table, &m.body, &book, &pet_book, was)
+        } else {
+            was
+        };
+        fresh.insert(m.id, next);
     }
     // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
-    // it. The book flag stays the player's: `run::bound_spell` resolves the player's book only.
+    // it.
     script.set_macro_bindings(
         fresh
             .iter()
             .map(|(&id, b)| {
-                let spell = match *b {
+                let spell = match b.spell {
                     BoundSpell::None => 0,
                     BoundSpell::Unresolved => -1,
                     BoundSpell::Spell(id) => id as i32,
@@ -202,7 +229,7 @@ fn rebind_macro_spells(
                     id,
                     benilla_ui::script::MacroBinding {
                         spell,
-                        pet_book: false,
+                        pet_book: b.pet_book,
                     },
                 )
             })
@@ -211,7 +238,7 @@ fn rebind_macro_spells(
     if fresh != bound.0 {
         let spells = fresh
             .values()
-            .filter(|b| matches!(b, BoundSpell::Spell(_)))
+            .filter(|b| matches!(b.spell, BoundSpell::Spell(_)))
             .count();
         debug!(
             "ui_macro: {} macro(s), {spells} bound to a spell",

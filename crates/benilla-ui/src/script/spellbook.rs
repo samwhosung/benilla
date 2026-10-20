@@ -109,6 +109,14 @@ pub struct PetBookState {
     pub slots: Vec<SpellSlotView>,
 }
 
+/// Whether two pet books list the same spells, which is all a name lookup reads.
+fn same_spells(a: &PetBookState, b: &PetBookState) -> bool {
+    a.slots.len() == b.slots.len()
+        && a.slots.iter().zip(&b.slots).all(|(x, y)| {
+            (x.spell_id, &x.name, &x.rank, x.passive) == (y.spell_id, &y.name, &y.rank, y.passive)
+        })
+}
+
 /// The player's book: the skill-line tabs and the flat slot list they index into.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellBookState {
@@ -125,7 +133,23 @@ impl super::UiScript {
     /// Replace the pet's book; the app fires `SPELLS_CHANGED`, which the reference fires for both
     /// books off one re-sort (`0x4b2fd0`).
     pub fn set_pet_book(&mut self, state: PetBookState) {
-        self.model_mut().pet_book = state;
+        let mut model = self.model_mut();
+        if !same_spells(&model.pet_book, &state) {
+            model.pet_book_generation += 1;
+        }
+        model.pet_book = state;
+    }
+
+    /// The pet's book as it stands, for the app's name lookups (a macro's bound spell).
+    pub fn pet_spellbook(&self) -> PetBookState {
+        self.model_mut().pet_book.clone()
+    }
+
+    /// Bumped each time [`Self::set_pet_book`] changes which spells the pet's book lists, by id,
+    /// name, rank or passivity, not a cooldown or an autocast flag: the pet spell message
+    /// (`0x4bdae0`) that re-derives the macros bound to the pet's book (`0x4f0ce0`).
+    pub fn pet_book_generation(&self) -> u64 {
+        self.model_mut().pet_book_generation
     }
 
     /// Take the `CastSpell(id, "pet")` calls out of the call stream as `(spell id, onSelf)`: each
@@ -270,11 +294,46 @@ pub fn resolve_spell_by_name<'a>(
     book: &'a SpellBookState,
     query: &str,
 ) -> Option<&'a SpellSlotView> {
+    best_named(&book.slots, query)
+}
+
+/// A name resolved against both books: the spell and the book it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NamedSpell {
+    pub spell_id: u32,
+    /// The pet's book, not the player's (`0x4b3b51` writes 1, `0x4b3b3d` writes 0).
+    pub pet: bool,
+}
+
+/// [`resolve_spell_by_name`]'s match over the player's book, then over the pet's when the player's
+/// holds none: the order `0x4b3a10` searches (`0x4b3a2d`-`0x4b3aa9`, then `0x4b3aad`-`0x4b3b2a`),
+/// which a macro's bound spell reads through `0x4b3bc0`. The name rules are the player book's
+/// for both, as `CastSpellByName`'s are.
+pub fn resolve_spell_in_books(
+    player: &SpellBookState,
+    pet: &PetBookState,
+    query: &str,
+) -> Option<NamedSpell> {
+    best_named(&player.slots, query)
+        .map(|s| NamedSpell {
+            spell_id: s.spell_id,
+            pet: false,
+        })
+        .or_else(|| {
+            best_named(&pet.slots, query).map(|s| NamedSpell {
+                spell_id: s.spell_id,
+                pet: true,
+            })
+        })
+}
+
+/// The slot of `slots` that `query` names, by [`resolve_spell_by_name`]'s rules.
+fn best_named<'a>(slots: &'a [SpellSlotView], query: &str) -> Option<&'a SpellSlotView> {
     let (name, subtext) = split_subtext(query);
     if name.is_empty() {
         return None;
     }
-    book.slots
+    slots
         .iter()
         .filter(|s| !s.passive && s.name.eq_ignore_ascii_case(name))
         .filter(|s| match subtext {

@@ -142,6 +142,10 @@ fn refreshes_usable(e: &FieldChanged, me: Option<u64>, target: Option<u64>) -> b
 enum SlotResolve {
     /// A spell or item slot, or a macro whose bound spell is live (`[rec+0x564] > 0`).
     Action(u8, u32),
+    /// A macro whose bound spell came from the pet's book (`[rec+0x568] != 0`): `0x4e5050` asks
+    /// the pet gate and the pet's power instead of the usable walk, `GetActionCooldown` the pet's
+    /// history, and the range, checked and autorepeat tests, which need book 0, answer nothing.
+    PetSpell(u32),
     /// A macro that casts nothing (`[rec+0x564] == 0`): usable while it exists (`0x4e5030`),
     /// with no cooldown, range or check (`0x4e50f4`-`0x4e516f`).
     BareMacro,
@@ -162,10 +166,12 @@ fn resolve_through_macro(
 ) -> SlotResolve {
     use crate::ui_macro::BoundSpell;
     match macro_slot_id(kind, action) {
-        Some(id) => match bound.0.get(&id) {
-            Some(BoundSpell::Spell(s)) => SlotResolve::Action(ACTION_KIND_SPELL, *s),
-            Some(BoundSpell::None) => SlotResolve::BareMacro,
-            Some(BoundSpell::Unresolved) => SlotResolve::Unresolved,
+        // The book selector forks only a live spell (`0x4e50ee` sends 0 and -1 elsewhere).
+        Some(id) => match bound.0.get(&id).map(|b| (b.spell, b.pet_book)) {
+            Some((BoundSpell::Spell(s), false)) => SlotResolve::Action(ACTION_KIND_SPELL, s),
+            Some((BoundSpell::Spell(s), true)) => SlotResolve::PetSpell(s),
+            Some((BoundSpell::None, _)) => SlotResolve::BareMacro,
+            Some((BoundSpell::Unresolved, _)) => SlotResolve::Unresolved,
             None => SlotResolve::Missing,
         },
         None => SlotResolve::Action(kind, action),
@@ -191,6 +197,65 @@ fn profession(
             .map(Profession::TradeSkill),
         craft => Some(Profession::Craft(craft)),
     }
+}
+
+/// What a macro slot bound to a pet-book spell reads.
+struct PetBookLeg<'a> {
+    spell: u32,
+    d: &'a benilla_formats::SpellDisplay,
+    /// The active player's object, whose fields the cost is read from.
+    player: Option<&'a ObjectStore>,
+    /// The pet's object when the pet gate holds, else `None`.
+    pet: Option<&'a ObjectStore>,
+    skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
+    mods: &'a crate::spell::SpellModifiers,
+    /// The pet's own history, the list at `0xcecb04`.
+    cooldowns: &'a Cooldowns,
+    now: Instant,
+    anchor: Instant,
+    ui_now: f64,
+}
+
+/// A slot whose macro is bound to a spell out of the pet's book (`[rec+0x568] != 0`, `0x4e5a50`):
+/// - usable (`0x4e51b2`-`0x4e5216`): not before the pet gate (`0x4bcf70`), then the spell's cost
+///   from the player's fields (`0x6e31b0` with no pet selector, `0x4e5201`) against the pet's
+///   power, its health for a negative type; affordable is usable, else only `notEnoughMana`;
+/// - cooldown (`0x4e6cf4`-`0x4e6d0b`, `0x6e2ea0`): the pet's history, not the player's;
+/// - no range (`0x4e5759` returns nil, `0x4e584d` false), no checked or auto-repeat state, which
+///   all need book 0; `IsAttackAction` reads the record alone (`0x4e59b0`).
+fn pet_book_state(leg: PetBookLeg) -> ActionState {
+    let mut st = ActionState {
+        is_attack: leg.d.is_melee_auto_attack(),
+        ..Default::default()
+    };
+    if let (Some(player), Some(pet)) = (leg.player, leg.pet) {
+        let cost = usable::power_cost(
+            leg.d,
+            player,
+            leg.skill_lines,
+            leg.mods,
+            &mut crate::spell::Unrecorded,
+        );
+        let power_type = leg.d.power_type as i32;
+        let power = if power_type < 0 {
+            pet.0.unit_health()
+        } else {
+            u8::try_from(power_type)
+                .ok()
+                .and_then(|ty| pet.0.unit_power(ty))
+        };
+        // `0x4e5206 cmp eax,edi; jle`: equal passes, both read signed.
+        if cost <= power.unwrap_or(0) as i32 {
+            st.usable = true;
+        } else {
+            st.not_enough_mana = true;
+        }
+    }
+    st.cooldown = leg
+        .cooldowns
+        .info(leg.spell, 0, Some(leg.d), leg.now)
+        .ui_triple(leg.anchor, leg.ui_now);
+    st
 }
 
 /// The events one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
@@ -223,7 +288,7 @@ pub(super) fn feed_action_state(
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
     // One tuple for Bevy's 16-param ceiling: macro bindings, spell mods, the range units, the
-    // control flag, the skill lines and the active player's creation.
+    // control flag, the skill lines, the active player's creation and the pet's bar.
     cast_state: (
         Res<crate::ui_macro::MacroBoundSpells>,
         Res<crate::spell::SpellModifiers>,
@@ -236,6 +301,8 @@ pub(super) fn feed_action_state(
         Option<Res<crate::ui_spellbook::SkillLines>>,
         // The active player's creation, whose arrival (`0x5dea86`) empties the reactive list.
         Query<(), Added<SelfPlayer>>,
+        // The pet's bar: the gate and the history a macro bound to a pet spell reads.
+        Option<Res<crate::ui_pet::PetBar>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
     // The selection and the relations and positions `IsActionInRange`'s pre-check reads.
@@ -281,7 +348,7 @@ pub(super) fn feed_action_state(
         memory.last_cd_trace = Some(now);
     }
 
-    let (bound, spell_mods, range_units, own_control, skill_lines, created) = &cast_state;
+    let (bound, spell_mods, range_units, own_control, skill_lines, created, pet_bar) = &cast_state;
     let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
     let me = self_q.iter().next();
     let control_lost = own_control.as_ref().is_some_and(|c| c.0);
@@ -297,6 +364,14 @@ pub(super) fn feed_action_state(
         .and_then(|g| objects.entity(g))
         .and_then(|e| units.get(e).ok());
     let cast_ctx = targeting.context();
+    // The pet gate `0x4bcf70`, asked once for every slot bound to a pet spell: the bar those
+    // slots read the history of, and the pet's object when the gate holds.
+    let pet_leg = pet_bar.as_deref().map(|bar| {
+        let pet = objects.store(bar.spells.pet_guid);
+        let held =
+            crate::ui_pet::pet_actions_usable(bar, cast_ctx.self_guid, me.map(|(s, _, _)| s), pet);
+        (bar, pet.filter(|_| held))
+    });
 
     // The frame's callers of the usable refresh `0x4b31c0` and of `0x4f93d0`; a new VM meets the
     // state as it stands and hears none.
@@ -352,6 +427,26 @@ pub(super) fn feed_action_state(
                 continue;
             }
             SlotResolve::Unresolved => {
+                fresh.insert(action, st);
+                continue;
+            }
+            SlotResolve::PetSpell(spell) => {
+                // A missing record answers 0 before the book is asked (`0x4e518b`-`0x4e51a0`).
+                let record = spells.as_ref().and_then(|s| s.catalog.get(spell));
+                if let (Some(d), Some((bar, pet))) = (record, pet_leg) {
+                    st = pet_book_state(PetBookLeg {
+                        d,
+                        spell,
+                        player: me.map(|(s, _, _)| s),
+                        pet,
+                        skill_lines: skill_catalog,
+                        mods: spell_mods,
+                        cooldowns: &bar.cooldowns,
+                        now,
+                        anchor,
+                        ui_now,
+                    });
+                }
                 fresh.insert(action, st);
                 continue;
             }

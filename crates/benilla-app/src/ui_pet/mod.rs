@@ -22,6 +22,8 @@ mod menu;
 mod net;
 mod unit;
 mod usable;
+// The predicate `0x4bcf70` over what the caller already holds, for the action bar's pet legs.
+pub(crate) use usable::actions_usable as pet_actions_usable;
 
 use bar::{feed_pet_bar, fire_pet_cooldown_events};
 pub(crate) use drain::drain_pet_actions;
