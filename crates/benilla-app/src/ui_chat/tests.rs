@@ -323,7 +323,7 @@ fn xp_gain_lines_pick_the_reference_form() {
 /// `0x637ac0`: a named kill's form is its rest state's, read off that state's `Exhaustion.dbc`
 /// row, never off the bonus. A factor of 0 or 1, or no row, is the plain line (`0x637b3e`,
 /// `0x637b54`, `0x637b38`); any other takes the state's key in `0x864330`, whose entry 3 names
-/// the global `NULL` and so writes nothing. No active player, no line (`0x637b06`).
+/// the global `NULL`, an empty template (`0x703c02`). No active player, no line (`0x637b06`).
 #[test]
 fn the_xp_line_follows_the_rest_states_exhaustion_row() {
     use super::feed::{xp_gain_line, RestState};
@@ -377,7 +377,7 @@ fn the_xp_line_follows_the_rest_states_exhaustion_row() {
         line(20, 40, 4, Some(("Tired", 0.5))).as_deref(),
         Some("Defias Thug dies, you gain 20 experience. (-20 exp Tired penalty)")
     );
-    // State 3's key is `NULL`, no global: no line.
+    // State 3's key is `NULL`, no global: an empty template, and no empty line.
     assert_eq!(line(60, 40, 3, Some(("Tired", 0.75))), None);
     // A named kill with no active player writes nothing; the unnamed form needs none.
     assert_eq!(xp_gain_line(Some("Defias Thug"), 60, 40, None, &get), None);

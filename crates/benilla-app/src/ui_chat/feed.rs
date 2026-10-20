@@ -512,10 +512,13 @@ const XP_FACTOR_EPSILON: f64 = 1.0 / 4_194_304.0;
 /// `COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED`. A named kill needs the active player (`0x637b06`;
 /// `rest` `None` writes nothing), and is plain `COMBATLOG_XPGAIN_FIRSTPERSON` unless its rest
 /// state has a row whose factor is neither 0 nor 1 (`0x637b3e`-`0x637b6a`). Then it is that
-/// state's key in the table `0x864330`, `COMBATLOG_XPGAIN_EXHAUSTION<state>` (state 3's entry
-/// names the global `NULL`, which 1.12 does not define, so no line), with the signed bonus,
-/// `total - base` prefixed `+` unless negative (`0x637c07`-`0x637c25`), and the row's name as the
-/// state word (`0x637c31`). The table has no entry 0 and ends at 5: a row there writes nothing.
+/// state's key in the table `0x864330`, `COMBATLOG_XPGAIN_EXHAUSTION<state>`, with the signed
+/// bonus, `total - base` prefixed `+` unless negative (`0x637c07`-`0x637c25`), and the row's name
+/// as the state word (`0x637c31`). The table has no entry 0 and ends at 5: a row there writes
+/// nothing. State 3's entry names the global `NULL`, which 1.12 does not define: `GetText` answers
+/// the empty string for it (`0x703c02`) and `0x637bef` tests only for null, so the reference
+/// formats that line from an empty template, which `keyed` drops. No shipped row reaches it:
+/// `Exhaustion.dbc` gives state 3 a factor of 1, the plain form.
 ///
 /// The group float the packet carries (vmangos always 1.0, `Player.cpp:3039`) picks the `_GROUP`
 /// and `_RAID` forms (`0x637b70`-`0x637bd5`, `0x637cd0`); the parser drops it, so they are not
