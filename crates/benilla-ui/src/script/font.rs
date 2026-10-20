@@ -50,8 +50,6 @@ pub(crate) struct FontId(u32);
 pub(crate) struct FontNode {
     /// The name it was declared under, as typed; `None` for a widget's own font.
     pub(crate) name: Option<String>,
-    /// The object id its Lua handle holds at `[0]`, minted with the handle ([`wrapper`]).
-    handle: Option<u32>,
     /// The block's values (`+0x3c`..`+0x68`): its own groups merged over what it follows.
     pub(crate) block: FontObject,
     /// The groups the block holds, its word's set bits (`+0x38`): never one whose value is unset.
@@ -74,7 +72,6 @@ impl Default for FontNode {
     fn default() -> Self {
         FontNode {
             name: None,
-            handle: None,
             block: FontObject::default(),
             held: FontMask::NONE,
             parent: None,
@@ -92,7 +89,8 @@ impl Default for FontNode {
 pub(crate) struct Fonts {
     nodes: Vec<FontNode>,
     by_lower: HashMap<String, FontId>,
-    /// Handle object id → font, the reverse of [`FontNode::handle`].
+    /// The font each Lua handle stands for, by the object id the handle holds at `[0]`, minted
+    /// with it ([`wrapper`]).
     by_handle: HashMap<u32, FontId>,
 }
 
@@ -182,7 +180,6 @@ pub(crate) fn wrapper(lua: &Lua, id: FontId) -> mlua::Result<Table> {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         let handle = model.next_id;
         model.next_id += 1;
-        model.fonts.get_mut(id).handle = Some(handle);
         model.fonts.by_handle.insert(handle, id);
         handle
     };
@@ -548,8 +545,9 @@ pub(crate) fn link_font(model: &mut Model, id: FontId, to: Option<FontId>) {
 /// `CSimpleFont::SetFontObject 0x7841d0`, under `CopyFontObject`: font `id` takes `src`'s values,
 /// follow mask and followed font, and holds nothing.
 ///
-/// In its order: `FontBlockMerge 0x770ad0` copies every group `src` holds into `id`'s block
-/// (`0x7841ea`); the word is then ANDed with `+0x6c` (`0x7841f4`), which is 0 in every font (the
+/// In its order: `FontBlockMerge 0x770ad0` copies each group `src` holds into `id`'s block where
+/// the merge would store it (`0x7841ea`, [`stored`]), so an equal face keeps `id`'s spelling; the
+/// word is then ANDed with `+0x6c` (`0x7841f4`), which is 0 in every font (the
 /// constructor `0x783aca` and `0x7841e7`, a copy of another font's, are its only stores), so `id`
 /// keeps the values and holds no group; it takes `src`'s mask (`0x7841fb`) and follows the font
 /// `src` follows, or none when that chain reaches `id` (`0x784207`-`0x784214`), moving lists
@@ -559,7 +557,8 @@ fn copy_font(model: &mut Model, id: FontId, src: FontId) {
     let s = model.fonts.get(src);
     let (block, held, mask, parent) = (s.block.clone(), s.held, s.mask, s.parent);
     let node = model.fonts.get_mut(id);
-    copy_groups(&mut node.block, &block, held);
+    let took = stored(&node.block, node.held, &block, held);
+    copy_groups(&mut node.block, &block, took);
     node.held = FontMask::NONE;
     node.mask = mask;
     let to = parent.filter(|&p| !would_loop(model, id, p));
