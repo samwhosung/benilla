@@ -241,7 +241,7 @@ mod tests {
         // VM keeps its number until the booth drops it, so a new VM's scenes take fresh ones.
         ("ui_script/glue_scene.rs", "top"),
         // The reactive spells' list, engine state the reference keeps past a `/reload` and empties
-        // only at a world's arrival (`0x5dea86`), which the list keys itself on.
+        // at the active player's arrival (`0x5dea86`), on whose creation the system clears it.
         ("ui_action/state.rs", "reactive"),
     ];
 

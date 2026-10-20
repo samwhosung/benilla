@@ -19,13 +19,11 @@ struct Entry {
 }
 
 /// The list, one entry per spell name, the highest rank (`0x4b2720`-`0x4b2844`), each answer 0 when
-/// it enters (`0x4b27c7`). `0x4b23a0` empties it at the active player's arrival (`0x5dea86`), so it
-/// lives for one world and outlasts a `/reload`.
+/// it enters (`0x4b27c7`). `0x4b23a0` empties it at the game's start (`0x48f59f` → `0x4b21c0`) and
+/// at the active player's arrival (`0x5dea86`); a `/reload` (`0x495664`) reaches neither.
 #[derive(Default)]
 pub(super) struct ReactiveList {
     entries: Vec<Entry>,
-    /// The leave-world sweeps counted when it was last emptied.
-    world: Option<u64>,
 }
 
 /// One refresh's outcome.
@@ -38,29 +36,23 @@ pub(super) struct Refresh {
 }
 
 impl ReactiveList {
-    /// Empty the list on a new world; `true` when it did, so the caller rebuilds it.
-    pub(super) fn arrive(&mut self, world: u64) -> bool {
-        if self.world == Some(world) {
-            return false;
-        }
-        self.world = Some(world);
+    /// Empty the list: `0x4b23a0` at the active player's arrival.
+    pub(super) fn arrive(&mut self) {
         self.entries.clear();
-        true
     }
 
-    /// Bring the list in line with the book: each reactive spell's name once, at its highest rank by
-    /// `ParseSpellRank` (`0x4b3c30`; a strictly higher rank replaces, `0x4b2838`), keeping each
-    /// name's stored answer. A name the book no longer holds leaves the list here; the reference's
-    /// list never drops one before the next arrival.
+    /// Take in the book's reactive spells: a name the list lacks enters (`0x4b27b3`-`0x4b27c7`),
+    /// and a held name moves to a strictly higher rank by `ParseSpellRank` (`0x4b3c30`, `0x4b2838`),
+    /// keeping its answer (`0x4b2844`). Nothing leaves before the next arrival: unlearning
+    /// (`0x4b2c50`) never touches the list.
     pub(super) fn sync(&mut self, book: &BTreeSet<u32>, catalog: &SpellCatalog) {
-        let mut fresh: Vec<Entry> = Vec::new();
         for (id, d) in book
             .iter()
             .filter_map(|&id| catalog.get(id).map(|d| (id, d)))
             .filter(|(_, d)| d.attributes_ex4 & ATTR_EX4_REACTIVE != 0)
         {
             // `SStrCmp` (`0x64a480`) of the two names: case counts.
-            match fresh.iter_mut().find(|e| e.name == d.name) {
+            match self.entries.iter_mut().find(|e| e.name == d.name) {
                 Some(e) => {
                     if catalog
                         .get(e.spell_id)
@@ -69,14 +61,13 @@ impl ReactiveList {
                         e.spell_id = id;
                     }
                 }
-                None => fresh.push(Entry {
+                None => self.entries.push(Entry {
                     spell_id: id,
                     name: d.name.clone(),
-                    usable: self.entries.iter().any(|e| e.name == d.name && e.usable),
+                    usable: false,
                 }),
             }
         }
-        self.entries = fresh;
     }
 
     /// `0x4b31c0`'s loop: each entry's answer from `usable`, stored when it moved (`0x4b320b`,
