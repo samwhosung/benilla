@@ -167,9 +167,11 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
         "|||nil|nil|nil",
         "before the first push: empty strings, never nil, and no PvP info"
     );
+    // The clock's fields are -1 until the server sets it (`0x642300`, called at `0x643308`), and
+    // `GetGameTime` returns them unguarded (`0x515ee0`).
     assert_eq!(
         s.eval::<(f64, f64)>("return GetGameTime()").unwrap(),
-        (0.0, 0.0)
+        (-1.0, -1.0)
     );
 
     s.set_zone_texts(crate::script::ZoneTexts {
@@ -271,5 +273,23 @@ fn the_engine_reads_the_handler_slot_not_the_geterrorhandler_global() {
         s.eval::<(i64, i64)>("return table.getn(Heard), table.getn(Decoy)")
             .unwrap(),
         (1, 0)
+    );
+}
+
+/// `GetNetStats` (`0x48b8b0`) returns the received and sent rates `0x537f20` stores through its
+/// first two out parameters (`0x537f80`, `0x537f96`), each an `f32` widened to a number, then the
+/// latency.
+#[test]
+fn get_net_stats_returns_the_pushed_rates_before_the_latency() {
+    let mut s = script();
+    assert_eq!(
+        s.eval::<(f64, f64, f64)>("return GetNetStats()").unwrap(),
+        (0.0, 0.0, 0.0)
+    );
+    s.set_bandwidth_kbps(1.5, 0.1);
+    s.set_latency_ms(Some(42));
+    assert_eq!(
+        s.eval::<(f64, f64, f64)>("return GetNetStats()").unwrap(),
+        (1.5, f64::from(0.1_f32), 42.0)
     );
 }

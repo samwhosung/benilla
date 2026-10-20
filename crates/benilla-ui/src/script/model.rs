@@ -1134,6 +1134,8 @@ pub(crate) struct Model {
 
     /// `GetNetStats`'s third return, the average round trip in ms; 0 before any sample.
     pub(crate) net_latency_ms: u32,
+    /// `GetNetStats`'s first two returns, the KB/s received and sent since the link connected.
+    pub(crate) net_bandwidth_kbps: (f32, f32),
 
     /// `UnitXP("player")` and `UnitXPMax("player")`, from the private `PLAYER_XP` fields.
     pub(crate) player_xp: u32,
@@ -1897,6 +1899,7 @@ impl Model {
             modifiers: (false, false, false),
             money: 0,
             net_latency_ms: 0,
+            net_bandwidth_kbps: (0.0, 0.0),
             player_xp: 0,
             player_next_level_xp: 0,
             combo_points: 0,

@@ -20,8 +20,8 @@ pub use messages::{
     CHARACTER_FLAG_HIDE_CLOAK, CHARACTER_FLAG_HIDE_HELM, CHARACTER_FLAG_RENAME,
 };
 pub use world::{
-    observe_sends, SendObserver, Unparsed, WorldAuthReject, WorldConnectEvent, WorldReader,
-    WorldSession, WorldWriter, WORLD_PORT,
+    observe_sends, LinkTraffic, SendObserver, Unparsed, WorldAuthReject, WorldConnectEvent,
+    WorldReader, WorldSession, WorldWriter, WORLD_PORT,
 };
 
 use std::net::{SocketAddr, TcpStream};
@@ -104,6 +104,24 @@ fn dial(host: &str, port: u16) -> Result<TcpStream> {
 /// first, which a realmd bound to IPv4 refuses only after about 2 s on Windows.
 fn first_ipv4(addrs: &[SocketAddr]) -> Option<SocketAddr> {
     addrs.iter().copied().find(SocketAddr::is_ipv4)
+}
+
+/// A realm's world address split into the host and port the world dial takes.
+#[allow(dead_code)]
+fn world_host_port(address: &str) -> (&str, u16) {
+    host_port(address, 0)
+}
+
+/// The logon hosts of a realmlist, each with its port.
+#[allow(dead_code)]
+fn logon_pieces(realmlist: &str) -> Vec<(&str, u16)> {
+    vec![host_port(realmlist, AUTH_PORT)]
+}
+
+/// The logon address dialled out of the resolved list.
+#[allow(dead_code)]
+fn pick(addrs: &[SocketAddr], _draw: u32) -> Option<SocketAddr> {
+    addrs.first().copied()
 }
 
 /// A realm from realmd's realm list, with every field the wire carries.
@@ -293,7 +311,7 @@ mod host_port_tests {
 
 #[cfg(test)]
 mod dial_tests {
-    use super::first_ipv4;
+    use super::{first_ipv4, logon_pieces, pick, world_host_port, AUTH_PORT};
     use std::net::SocketAddr;
 
     fn addrs(list: &[&str]) -> Vec<SocketAddr> {
@@ -311,5 +329,65 @@ mod dial_tests {
         let got = first_ipv4(&addrs(&["[2001:db8::2]:1", "10.0.0.2:1", "10.0.0.1:1"]));
         assert_eq!(got, Some("10.0.0.2:1".parse().unwrap()));
         assert_eq!(first_ipv4(&addrs(&["[2001:db8::1]:1"])), None);
+    }
+
+    /// `NetClient::Connect` (`0x537820`): the port is 9090 (`0x2382`, `0x53785a`) unless the text
+    /// has a `:`, where the host is cut at the first one (`SStrChr2` `0x64a3f0`, `0x53786c`) and
+    /// the port is `_atoi` of the rest (`0x53787a`).
+    #[test]
+    fn a_world_address_without_a_port_dials_9090() {
+        assert_eq!(
+            world_host_port("realm.example.org"),
+            ("realm.example.org", 9090)
+        );
+        assert_eq!(world_host_port("10.0.0.1"), ("10.0.0.1", 9090));
+        assert_eq!(world_host_port("10.0.0.1:8085"), ("10.0.0.1", 8085));
+    }
+
+    /// The cut is at the first `:`, and `_atoi` (`0x414411`) skips C-locale spaces, takes one
+    /// sign and reads digits up to the first other character, 0 with none; the dial keeps the
+    /// low 16 bits (`0x5b6e94`).
+    #[test]
+    fn a_world_port_is_atoi_of_the_text_after_the_first_colon() {
+        assert_eq!(world_host_port("a:8085:9"), ("a", 8085));
+        assert_eq!(world_host_port("a: 8085x"), ("a", 8085));
+        assert_eq!(world_host_port("a:+8085"), ("a", 8085));
+        assert_eq!(world_host_port("a:"), ("a", 0));
+        assert_eq!(world_host_port("a:port"), ("a", 0));
+        assert_eq!(world_host_port("a:-1"), ("a", 0xffff));
+        assert_eq!(world_host_port("a:73621"), ("a", 8085));
+        assert_eq!(world_host_port(":8085"), ("", 8085));
+    }
+
+    /// The logon resolver splits the text at each `;` (`0x43b8f6`) and resolves the pieces in
+    /// order (`0x43b890`); the first empty piece ends the list (`0x43b941`).
+    #[test]
+    fn a_realmlist_is_split_at_each_semicolon_until_an_empty_piece() {
+        assert_eq!(
+            logon_pieces("logon.example.org"),
+            [("logon.example.org", AUTH_PORT)]
+        );
+        assert_eq!(
+            logon_pieces("10.0.0.1;10.0.0.2:3725;b.example.org"),
+            [
+                ("10.0.0.1", AUTH_PORT),
+                ("10.0.0.2", 3725),
+                ("b.example.org", AUTH_PORT)
+            ]
+        );
+        assert_eq!(logon_pieces("a;b;"), [("a", AUTH_PORT), ("b", AUTH_PORT)]);
+        assert_eq!(logon_pieces("a;;b"), [("a", AUTH_PORT)]);
+        assert!(logon_pieces(";a").is_empty());
+    }
+
+    /// `ConnectToRandomAddress` (`0x5bc2b0`) dials entry `draw mod count` (`0x5bc392`) of every
+    /// address the pieces resolved to.
+    #[test]
+    fn the_logon_dials_the_entry_its_draw_picks() {
+        let list = addrs(&["10.0.0.1:3724", "10.0.0.2:3724", "10.0.0.3:3724"]);
+        assert_eq!(pick(&list, 0), Some(list[0]));
+        assert_eq!(pick(&list, 5), Some(list[2]));
+        assert_eq!(pick(&list, u32::MAX), Some(list[0]));
+        assert_eq!(pick(&[], 1), None);
     }
 }

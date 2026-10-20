@@ -1198,6 +1198,36 @@ mod tests {
         }
     }
 
+    /// The game clock is one object built at start-up with every field -1 (`0x643300`, `0x642300`)
+    /// that no logout or `ReloadUI` resets, and `GetGameTime` reads it unguarded (`0x515ee0`), so a
+    /// VM answers -1, -1 before any server time and the last known time after it, from the first
+    /// line its addons run.
+    #[test]
+    fn a_new_vm_answers_the_game_clock_as_it_stands() {
+        let mut world = World::new();
+        let answer = |world: &mut World| {
+            new_vm(world, UiScript::new)
+                .expect("a VM")
+                .eval::<(f64, f64)>("return GetGameTime()")
+                .unwrap()
+        };
+        assert_eq!(answer(&mut world), (-1.0, -1.0), "no clock resource");
+        world.init_resource::<crate::net::ServerTime>();
+        assert_eq!(answer(&mut world), (-1.0, -1.0), "no server time yet");
+        world.insert_resource(crate::net::ServerTime(Some(crate::net::GameTime::new(
+            13,
+            45,
+            0,
+            1.0 / 60.0,
+        ))));
+        assert_eq!(answer(&mut world), (13.0, 45.0));
+        let glue = new_vm(&mut world, UiScript::new_glue).expect("a glue VM");
+        assert_eq!(
+            glue.eval::<(f64, f64)>("return GetGameTime()").unwrap(),
+            (13.0, 45.0)
+        );
+    }
+
     /// `[0xcf4d24]` has one writer, `SetEuropeanNumbers` (`0x771c40`), and nothing resets it, so
     /// the VM that replaces a dying one (a `ReloadUI`, a logout, a login) opens with its value.
     #[test]

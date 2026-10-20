@@ -120,6 +120,8 @@ pub(crate) struct PingClock {
     pub(crate) last_rtt_ms: Option<u32>,
     /// The latest [`RTT_RING`] round trips (ms), oldest first.
     rtt_ring: std::collections::VecDeque<u32>,
+    /// The world link's byte counts, `GetNetStats`' rates.
+    pub(crate) traffic: Option<Arc<benilla_protocol::LinkTraffic>>,
 }
 
 impl PingClock {
@@ -1922,5 +1924,22 @@ mod rtt_tests {
             "the dead socket's echo is dropped"
         );
         assert_eq!(clock.avg_latency_ms(), None);
+    }
+
+    /// The byte counts belong to the link: only the next connect replaces them (`0x537b90`), so the
+    /// world entry's reset of the round trips keeps them, and `GetNetStats` reads the link's rates
+    /// from its connect.
+    #[test]
+    fn clearing_the_round_trips_keeps_the_links_traffic() {
+        let mut clock = PingClock::default();
+        let traffic = std::sync::Arc::new(benilla_protocol::LinkTraffic::new());
+        clock.traffic = Some(std::sync::Arc::clone(&traffic));
+        clock.file_rtt(40);
+        clock.clear();
+        assert_eq!(clock.avg_latency_ms(), None);
+        assert!(clock
+            .traffic
+            .as_ref()
+            .is_some_and(|t| std::sync::Arc::ptr_eq(t, &traffic)));
     }
 }

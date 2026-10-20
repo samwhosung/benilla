@@ -220,6 +220,19 @@ mod tests {
         );
     }
 
+    /// The logon resolves each `;`-separated host in turn (`0x43b890`), so each one's port is
+    /// checked on its own.
+    #[test]
+    fn each_host_of_a_semicolon_list_is_checked_on_its_own() {
+        assert_eq!(
+            normalize("10.0.0.1:3725;logon.example.org").as_deref(),
+            Some("10.0.0.1:3725;logon.example.org"),
+        );
+        assert_eq!(normalize("a.example.org;b.example.org:notaport"), None);
+        assert_eq!(normalize("a.example.org:notaport;b.example.org"), None);
+        assert_eq!(normalize(";a.example.org"), None, "no first host");
+    }
+
     #[test]
     fn an_ipv6_literal_is_left_intact() {
         assert_eq!(normalize("::1").as_deref(), Some("::1"));

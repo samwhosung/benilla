@@ -65,11 +65,18 @@ pub struct WorldWriter {
     /// language carries. vmangos drops the whole message, dot-commands included, when the
     /// character does not know the language.
     pub(super) chat_language: u32,
+    pub(super) traffic: std::sync::Arc<super::LinkTraffic>,
 }
 
 impl WorldWriter {
     /// Frame, encrypt and write one packet: the sole write path every verb goes through.
     fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
-        send_packet(&mut self.stream, Some(&mut self.encrypter), opcode, body)
+        send_packet(
+            &mut self.stream,
+            Some(&mut self.encrypter),
+            &self.traffic,
+            opcode,
+            body,
+        )
     }
 }

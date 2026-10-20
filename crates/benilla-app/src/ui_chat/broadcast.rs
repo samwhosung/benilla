@@ -165,6 +165,15 @@ pub(super) fn feed_broadcasts(
     }
 }
 
+/// `SMSG_TRANSFER_ABORTED`'s system line for `reason`, through `get`, the VM's `GlobalStrings`.
+#[allow(dead_code)]
+pub(crate) fn transfer_abort_line(
+    _reason: u8,
+    _get: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    None
+}
+
 /// One `CHAT_MSG_CHANNEL` line per defense channel reached, with no sender or language: the
 /// handlers push NULL for both (`0x49ddf5`/`0x49ddf7`), hence the bare colon of
 /// `[LocalDefense] : text`.
@@ -187,6 +196,52 @@ fn push_channel_lines(
 
 #[cfg(test)]
 mod tests {
+    /// `0x4019a0` shows reasons 1, 2, 3 and 5 by their jump table (`0x401a20`), 4 lands on the
+    /// console line with no text (`0x401a04`), and so does any reason past 5 or 0
+    /// (`0x4019b3` `dec eax; cmp eax,4; ja`).
+    #[test]
+    fn a_transfer_abort_shows_its_reasons_string() {
+        let stock = |key: &str| {
+            Some(
+                match key {
+                    "TRANSFER_ABORT_MAX_PLAYERS" => "Transfer Aborted: Instance is full",
+                    "TRANSFER_ABORT_NOT_FOUND" => "Transfer Aborted: instance not found",
+                    "TRANSFER_ABORT_TOO_MANY_INSTANCES" => {
+                        "You have entered too many instances recently."
+                    }
+                    "TRANSFER_ABORT_ZONE_IN_COMBAT" => {
+                        "Unable to zone in while an encounter is in progress."
+                    }
+                    _ => return None,
+                }
+                .to_string(),
+            )
+        };
+        let line = |reason| super::transfer_abort_line(reason, stock);
+        assert_eq!(
+            line(1).as_deref(),
+            Some("Transfer Aborted: Instance is full")
+        );
+        assert_eq!(
+            line(2).as_deref(),
+            Some("Transfer Aborted: instance not found")
+        );
+        assert_eq!(
+            line(3).as_deref(),
+            Some("You have entered too many instances recently.")
+        );
+        assert_eq!(
+            line(5).as_deref(),
+            Some("Unable to zone in while an encounter is in progress.")
+        );
+        for silent in [0, 4, 6, 255] {
+            assert_eq!(line(silent), None, "reason {silent}");
+        }
+        // `GetText` (`0x703bf0`) gives the empty string for a key the strings lack, and the line
+        // is added all the same (`0x4019ff`).
+        assert_eq!(super::transfer_abort_line(1, |_| None).as_deref(), Some(""));
+    }
+
     /// `ERR_CHAT_RESTRICTED` (451) is a chat row, so the arm above writes a system line.
     #[test]
     fn chat_restricted_is_a_chat_row() {

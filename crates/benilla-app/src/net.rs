@@ -2475,6 +2475,23 @@ pub(crate) struct PetDismissSoundMessage {
 mod tests {
     use super::*;
 
+    /// `0x643820` stores the speed clamped to `[1/60, 60]`, the bounds the `f32`s `0x80e45c`
+    /// (`0x3c888889`) and `0x80e448` (60.0); a NaN passes both compares and is stored as it is.
+    #[test]
+    fn the_game_time_speed_is_held_to_a_sixtieth_to_sixty() {
+        let speed = |s: f32| GameTime::new(12, 0, 0, s).timescale;
+        let sixtieth = f32::from_bits(0x3c88_8889);
+        assert_eq!(speed(0.0), sixtieth);
+        assert_eq!(speed(-5.0), sixtieth);
+        assert_eq!(speed(f32::NEG_INFINITY), sixtieth);
+        assert_eq!(speed(1.0 / 60.0), sixtieth);
+        assert_eq!(speed(0.5), 0.5);
+        assert_eq!(speed(60.0), 60.0);
+        assert_eq!(speed(60.5), 60.0);
+        assert_eq!(speed(f32::INFINITY), 60.0);
+        assert!(speed(f32::NAN).is_nan());
+    }
+
     /// The write's edges: one per moved dword, none for a first create; a re-create replaces the
     /// store, clearing what it omits (`0x466582`).
     #[test]

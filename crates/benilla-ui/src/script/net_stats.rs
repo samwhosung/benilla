@@ -13,6 +13,11 @@ impl super::UiScript {
     pub fn set_latency_ms(&mut self, ms: Option<u32>) {
         self.model_mut().net_latency_ms = ms.unwrap_or(0);
     }
+
+    /// Push the KB/s received and sent since the link connected.
+    pub fn set_bandwidth_kbps(&mut self, received: f32, sent: f32) {
+        self.model_mut().net_bandwidth_kbps = (received, sent);
+    }
 }
 
 /// Register the net-stats globals.
