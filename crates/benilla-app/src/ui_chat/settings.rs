@@ -637,13 +637,13 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             // After the tick: every write it watches is Lua's.
             watch_chat_looks
-                .after(crate::ui_script::UiInput)
+                .in_set(crate::ui_script::UiDrain)
                 .in_set(crate::client_state::InWorldGated),
         )
         .add_systems(
             Update,
             save_chat_looks
-                .after(crate::ui_script::UiInput)
+                .in_set(crate::ui_script::UiDrain)
                 .in_set(crate::client_state::InWorldGated),
         );
     // The session-end flush is `fold_dying_vm_chat_cache`; the quit flush rides the exit edge,

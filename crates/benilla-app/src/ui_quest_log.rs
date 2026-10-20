@@ -30,7 +30,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::{Ask, QueryCache};
 use crate::ui_action::Spells;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 use crate::ui_unit::UnitFeed;
 
 /// Marks a GameObject objective's entry on the wire (vmangos `Quest.cpp:512-516`).
@@ -510,8 +510,8 @@ impl Plugin for UiQuestLogPlugin {
                         .in_set(crate::ui_unit::WorldEnterSeats),
                     // Before the script tick, so `QuestTimerFrame` reads this frame's clock.
                     feed_server_clock.in_set(UiFeed),
-                    drain_quest_log_abandons.after(UiInput),
-                    drain_quest_log_pushes.after(UiInput),
+                    drain_quest_log_abandons.in_set(crate::ui_script::UiDrain),
+                    drain_quest_log_pushes.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

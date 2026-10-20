@@ -13,7 +13,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_quest::{row_is_active, row_is_one_click};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 /// The open gossip menu, plus the NPC-text records by id, which outlive it. The cache holds whole
@@ -154,7 +154,10 @@ impl Plugin for UiGossipPlugin {
             .add_sweep_leg(SweepLeg::Gossip, close_core)
             .add_systems(
                 Update,
-                (feed_gossip.in_set(UiFeed), drain_gossip.after(UiInput)),
+                (
+                    feed_gossip.in_set(UiFeed),
+                    drain_gossip.in_set(crate::ui_script::UiDrain),
+                ),
             );
     }
 }

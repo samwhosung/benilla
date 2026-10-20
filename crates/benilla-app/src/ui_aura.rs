@@ -19,7 +19,6 @@ use crate::client_state::ClientState;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::target::{RelUnit, Relations, Selection};
 use crate::ui_action::Spells;
-use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 /// The player's aura durations by raw slot, each `SMSG_UPDATE_AURA_DURATION` stamped with its
@@ -113,7 +112,7 @@ impl Plugin for UiAuraPlugin {
                     .in_set(AuraEvents)
                     .after(crate::ui_tooltip::MouseoverPublish),
             )
-            .add_systems(Update, drain_aura_cancels.after(UiInput))
+            .add_systems(Update, drain_aura_cancels.in_set(crate::ui_script::UiDrain))
             // Torn down only at the session's end, not with the avatar, which a worldport drops.
             .add_systems(OnExit(ClientState::InWorld), end_session_aura_state);
     }

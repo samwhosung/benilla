@@ -394,7 +394,10 @@ impl Plugin for ProbeGlueLuaPlugin {
             ran_at: None,
             shot_done: false,
         })
-        .add_systems(Update, fire_probe_glue_lua.after(crate::ui_script::UiInput));
+        .add_systems(
+            Update,
+            fire_probe_glue_lua.in_set(crate::ui_script::UiDrain),
+        );
     }
 }
 

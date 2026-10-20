@@ -16,7 +16,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
@@ -33,7 +33,10 @@ impl Plugin for UiStablePlugin {
             .add_sweep_leg(SweepLeg::Stable, close_core)
             .add_systems(
                 Update,
-                (feed_stable.in_set(UiFeed), drain_stable.after(UiInput)),
+                (
+                    feed_stable.in_set(UiFeed),
+                    drain_stable.in_set(crate::ui_script::UiDrain),
+                ),
             );
     }
 }

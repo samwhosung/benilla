@@ -21,7 +21,7 @@ use crate::player::Player;
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_party::GroupState;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// The leash radius, the `.rdata` f32 at `0x806574`, which the reference squares at startup.
 const LEASH_RADIUS_YD: f32 = 5.555_555_3;
@@ -390,7 +390,7 @@ impl Plugin for BattlefieldPlugin {
                     .before(crate::ui_battlefield_score::feed_battlefield_score)
                     .before(crate::ui_dialog_verbs::feed_dialog_verbs)
                     .in_set(UiFeed),
-                drain_battlefield.after(UiInput),
+                drain_battlefield.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

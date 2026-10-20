@@ -16,7 +16,6 @@ use bevy::prelude::*;
 use crate::items::Items;
 use crate::net::{ObjectStore, Objects};
 use crate::query_cache::Ask;
-use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 mod drain;
@@ -1041,20 +1040,20 @@ impl Plugin for UiItemsPlugin {
                     lock_openers::feed_lock_openers.in_set(UnitFeed),
                     // After the input pass, so a repair-mode click goes out the same frame; a
                     // plain `UseContainerItem` is a script call.
-                    drain_container_repairs.after(UiInput),
+                    drain_container_repairs.in_set(crate::ui_script::UiDrain),
                     // Pick, place and split: `CMSG_SWAP_INV_ITEM`, `CMSG_SWAP_ITEM` or
                     // `CMSG_SPLIT_ITEM`.
-                    drain_container_moves.after(UiInput),
+                    drain_container_moves.in_set(crate::ui_script::UiDrain),
                     // The delete-confirm popup's accept: `CMSG_DESTROYITEM`.
-                    drain_container_destroys.after(UiInput),
+                    drain_container_destroys.in_set(crate::ui_script::UiDrain),
                     // `AutoEquipCursorItem`: `CMSG_AUTOEQUIP_ITEM`.
-                    drain_container_autoequips.after(UiInput),
-                    drain_bag_autostores.after(UiInput),
+                    drain_container_autoequips.in_set(crate::ui_script::UiDrain),
+                    drain_bag_autostores.in_set(crate::ui_script::UiDrain),
                     // The soulbind confirmations' answers (`EquipPendingItem`,
                     // `CancelPendingEquip`, `ConfirmBindOnUse`). A dialog is answered in a later
                     // frame than it was raised, so no order against the other drains is needed.
-                    drain::drain_bind_confirm_answers.after(UiInput),
-                    drain::drain_bind_on_use_confirms.after(UiInput),
+                    drain::drain_bind_confirm_answers.in_set(crate::ui_script::UiDrain),
+                    drain::drain_bind_on_use_confirms.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

@@ -18,7 +18,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_dialog_verbs::BattlefieldQueue;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 use crate::world_state_ui::WorldStateUiRes;
 
 /// `RequestBattlefieldScoreData`'s throttle (`0x4aa170`).
@@ -207,7 +207,7 @@ impl Plugin for BattlefieldScorePlugin {
                 feed_battlefield_score
                     .before(crate::ui_dialog_verbs::feed_dialog_verbs)
                     .in_set(UiFeed),
-                drain_battlefield_score.after(UiInput),
+                drain_battlefield_score.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

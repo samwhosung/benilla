@@ -205,17 +205,14 @@ impl Plugin for BindingsPlugin {
                     // The key sets are seeded at the VM's birth, not here: `seed_bindings_for_vm`
                     // runs in `load_ingame_ui_on_world_entry`, before FrameXML and every addon;
                     // the commands come with the load.
-                    (
-                        sync_dispatch,
-                        latch_and_dispatch.in_set(crate::script_calls::CallHosts),
-                    )
+                    (sync_dispatch, latch_and_dispatch)
                         .chain()
                         .in_set(crate::ui_script::UiInput)
                         .in_set(BindingSet)
                         .in_set(InWorldGated),
                     // After the tick: the requests are Lua's own (`SaveBindings`), queued by
                     // handlers the tick dispatched, and a save must not wait a frame.
-                    drain_binding_requests.after(crate::ui_script::UiInput),
+                    drain_binding_requests.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

@@ -17,7 +17,7 @@ use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{Factions, RelUnit, Relations, Selection};
-use crate::ui_script::{gate, SweepApp, UiInput};
+use crate::ui_script::{gate, SweepApp};
 
 pub(crate) mod control_gate;
 pub(crate) mod field_events;
@@ -181,9 +181,15 @@ impl Plugin for UiUnitPlugin {
                 .before(UnitSnapshots)
                 .before(crate::ui_aura::AuraEvents),
         )
-        .add_systems(Update, drain_pvp_toggles.after(UiInput))
-        .add_systems(Update, drain_worn_display_toggles.after(UiInput))
-        .add_systems(Update, drain_action_bar_toggles.after(UiInput))
+        .add_systems(Update, drain_pvp_toggles.in_set(crate::ui_script::UiDrain))
+        .add_systems(
+            Update,
+            drain_worn_display_toggles.in_set(crate::ui_script::UiDrain),
+        )
+        .add_systems(
+            Update,
+            drain_action_bar_toggles.in_set(crate::ui_script::UiDrain),
+        )
         .add_systems(Update, feed_default_language.in_set(UnitFeed))
         .add_systems(Update, feed_known_languages.in_set(UnitFeed))
         // `load_exhaustion_rows` pushes into the VM, so it runs per VM; the rest are one-shots.

@@ -24,7 +24,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, Objects};
 use crate::query_cache::{Ask, QueryCache};
 use crate::ui_mail::MailOpen;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// One page of a book as the wire gave it (`SMSG_PAGE_TEXT_QUERY_RESPONSE`).
@@ -342,7 +342,7 @@ impl Plugin for UiItemTextPlugin {
                     (apply_reads, begin_item_text, feed_item_text)
                         .chain()
                         .in_set(UiFeed),
-                    drain_item_text.after(UiInput),
+                    drain_item_text.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

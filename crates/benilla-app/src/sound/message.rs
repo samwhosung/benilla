@@ -153,7 +153,7 @@ pub(super) fn plugin(app: &mut App) {
     app.init_resource::<MessageSounds>().add_systems(
         Update,
         // After the UI input pass, so a refusal raised this frame sounds this frame.
-        play_message_sounds.after(crate::ui_script::UiInput),
+        play_message_sounds.in_set(crate::ui_script::UiDrain),
     );
 }
 

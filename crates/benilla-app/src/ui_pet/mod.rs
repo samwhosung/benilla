@@ -12,7 +12,6 @@ use benilla_protocol::messages::PetSpells;
 use crate::net::{GuidIndex, ObjectStore};
 use crate::spell::Cooldowns;
 use crate::ui_action::CooldownEvents;
-use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
@@ -118,10 +117,8 @@ impl Plugin for UiPetPlugin {
                 feed_pet_menu.in_set(UnitFeed),
                 // After this frame's presses, as the one drain before it ran them ahead of the
                 // toggles, stops and writes.
-                drain_pet_actions
-                    .after(UiInput)
-                    .after(crate::script_calls::bind_parked_picks),
-                drain_pet_menu.after(UiInput),
+                drain_pet_actions.in_set(crate::ui_script::UiDrain),
+                drain_pet_menu.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

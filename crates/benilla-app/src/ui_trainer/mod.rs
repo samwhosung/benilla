@@ -30,7 +30,7 @@ use crate::net::{
 };
 use crate::query_cache::Ask;
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 use crate::ui_spellbook::SkillLines;
 
@@ -139,7 +139,7 @@ impl Plugin for UiTrainerPlugin {
                         .in_set(UiFeed)
                         .in_set(TrainerFeed)
                         .after(crate::ui_unit::UnitFeed),
-                    drain_trainer.after(UiInput),
+                    drain_trainer.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

@@ -248,6 +248,8 @@ impl PluginGroup for GamePlugins {
             .add(UiChatPlugin)
             .add(UiLayoutPlugin)
             .add(crate::screenshot::ScreenshotPlugin)
+            // Last: it orders every system the plugins added, the probes' too.
+            .add(crate::vm_pass::VmPassPlugin)
     }
 }
 
@@ -329,6 +331,9 @@ pub(crate) mod schedule_tests {
         /// The systems whose declared access includes the Lua VM, read off each system's own
         /// access set: a holder whose every VM pair is declared shows in no conflict.
         pub holds_vm: HashSet<SystemKey>,
+        /// The systems whose declared access covers the call host's
+        /// ([`crate::script_calls::ScriptCallHost`]): every one that writes the VM.
+        pub hosted: HashSet<SystemKey>,
         /// The systems whose own access names [`crate::net::SelfPlayer`]: a read of the
         /// component, or a `With`, `Without`, `Added` or `Has` on it. Read off each system's
         /// access set; a system that reads every component (`EntityRef`, `&World`) names none.
@@ -377,6 +382,11 @@ pub(crate) mod schedule_tests {
             let vm = world
                 .components()
                 .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
+            let host = {
+                use bevy::ecs::system::{IntoSystem, System};
+                let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+                System::initialize(&mut host, world)
+            };
             // Pass 1, before the build: the graph still holds the systems.
             let graph = schedule.graph();
             let set_conditions: HashMap<_, Vec<String>> = graph
@@ -397,6 +407,7 @@ pub(crate) mod schedule_tests {
                 .get_id(TypeId::of::<crate::net::SelfPlayer>());
             let mut systems = HashMap::new();
             let mut holds_vm = HashSet::new();
+            let mut hosted = HashSet::new();
             let mut uses_self = HashSet::new();
             for (key, system, conds) in graph.systems.iter() {
                 if let (Some(id), Some(with_access)) = (self_player, graph.systems.get(key)) {
@@ -413,6 +424,11 @@ pub(crate) mod schedule_tests {
                     let access = with_access.access.combined_access();
                     if access.has_resource_read(vm) || access.has_resource_write(vm) {
                         holds_vm.insert(key);
+                    }
+                    let mut with_host = with_access.access.clone();
+                    with_host.extend(host.clone());
+                    if with_host.combined_access() == access {
+                        hosted.insert(key);
                     }
                 }
                 let mut sets = Vec::new();
@@ -519,6 +535,7 @@ pub(crate) mod schedule_tests {
                 dependencies,
                 non_send,
                 holds_vm,
+                hosted,
                 uses_self,
             }
         })
@@ -788,59 +805,19 @@ pub(crate) mod schedule_tests {
     /// graph ([`SyncPoints::Declared`]). `WOW_AMBIGUITY_DUMP=1` prints every pair.
     ///
     /// The largest part is `Transform` on disjoint lanes, populations that never intersect,
-    /// which no class can express. Known pairs accepted with a reason:
+    /// which no class can express. Every system that lends the call host runs in the VM pass's
+    /// one chain ([`crate::vm_pass`]), so no two of them pair, and the world's movers and readers
+    /// of what a script call reaches order against its ends. Known pairs accepted with a reason:
     /// - the ranged prop's two `AnimationPlayer` writers against the booth's and the quest
     ///   markers';
     /// - the fx attaches and `entities::update_display_models`/`attach_entity_visuals` against
     ///   the mat-anim tick over `MatAnimTable`/`UvAnimMaterials`: attach writes the rows a tick
     ///   would, off the same clock;
-    /// - the area-spirit-healer poll over `Transform` and `NetEntity`: it is level-triggered, so a
-    ///   unit seen a frame early or late is decided again next frame;
-    /// - the cursor classifier against `world_focus`'s focus publish and settle release over
-    ///   `Player`: it reads `control_lost` and `foreign_mover`, and they write only `settling` and
-    ///   `world_stale`;
-    /// - `ui_quest::lines::feed_quest_lines` and the reader's begin and feed
-    ///   (`ui_item_text::begin_item_text`, `feed_item_text`) against `ui_items::feed_item_stats`
-    ///   and `ui_tooltip::feed_spell_tooltips` over `Items` and the VM: they only read templates,
-    ///   which those two do not write, and a chat line or the reader's text commutes with their
-    ///   pushes;
     /// - `ui_session::feed_interact_npc` against `query_cache::release_on_enter::<MailOpen>`: the
     ///   feed reads the mailbox's guid, and the release clears only the pending queries;
-    /// - `script_calls::apply_script_calls`, in the target chain, against the `.after(UiInput)`
-    ///   drains of gestures that are not such script calls (the ATTACKTARGET binding, the
-    ///   item-pick commit, the chat, party, duel, trade and death drains)
-    ///   over the `CastLadder`, the selection and the unit-token resolver: the class
-    ///   `drop_item_on_unit` and the world click's legs already carry, as none of those drains
-    ///   orders against the target chain. Such a gesture and a script call in one frame take
-    ///   either order;
-    /// - the range compare's readers (`ui_action::state::feed_action_state`,
-    ///   `ui_tooltip::spell_feed::feed_spell_tooltips`, `spell::targeting::feed_targeting_to_vm`,
-    ///   the targeting cursor and the object-click commit) against the writers of `Player` and
-    ///   `RemoteMotion` (`camera_saved::load_camera_pose`, `world_focus`'s focus publish and settle
-    ///   release, `transport::compose_riders` and `ground_deck_riders`): the readers take the
-    ///   movement flags of the caster (`Player::move_flags`) and its target
-    ///   (`RemoteMotion::flags`), and those writers touch `login_pitch`, the settle fields and a
-    ///   rider's pose, never the flags;
-    /// - Click to Move's steer and arrival (`player::approach::steer_approach`,
-    ///   `target::click::act_on_arrival`) against what `steer_follow` and `act_on_right_click`
-    ///   already pair with: the steer is chained after follow's and writes the same `Player`
-    ///   fields, the arrival runs the click's dispatchers, and their `Transform` reads are the
-    ///   disjoint-lane kind. The dispatchers also carry the walk's start (`Player`,
-    ///   `FollowState`, `Approach`, the stand request), which only a click, an arrival or a
-    ///   crate's interaction writes;
-    /// - a crate's interaction (`target::click::act_on_interact`) against what
-    ///   `act_on_right_click` and the cursor classifier already pair with: it runs the click's
-    ///   dispatchers over the classifier's reading of its object, and its attack leg
-    ///   selects as the click does, so it writes `Selection` where the click's drain does;
-    /// - the soulstone's cast cancel (`death::drain_death`, through `spell::SelfCancel`) against
-    ///   `cursor::drive_displayed_cursor` over `SpellTargeting` and
-    ///   `creature_anim::spell_visual::route_cast_visuals` over the `CastEvent` messages: both are
-    ///   level-triggered readers, so a cancel seen a frame early or late is decided again next
-    ///   frame;
-    /// - `ui_items::lock_openers::feed_lock_openers` against `ui_action::feed::feed_actions` and
-    ///   `normalize_action_ranks` over `PlayerActions` and the VM: it reads only the book's spell
-    ///   ids, which those two never rewrite, and writes the lock state alone; its gate watches
-    ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
+    /// - Click to Move's steer (`player::approach::steer_approach`) against what `steer_follow`
+    ///   already pairs with: the steer is chained after follow's and writes the same `Player`
+    ///   fields;
     /// - the terrain stream's spawn half (`terrain_stream::spawn_streamed_tiles`) against the
     ///   readers of `TerrainStreamer`, `Placements` and the asset stores its request half
     ///   (`stream_terrain`) already pairs with: the inner-window wait sits between the two, so a
@@ -859,7 +836,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_079;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_814;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1514,7 +1491,7 @@ pub(crate) mod schedule_tests {
                 ));
             } else {
                 offenders.push(format!(
-                    "{}: no declared side of the tick — `.in_set(UiFeed)` for a push the tick must see this frame, `.after(UiInput)` for a drain of what the tick produced",
+                    "{}: no declared side of the tick — `.in_set(UiFeed)` for a push the tick must see this frame, `.in_set(crate::ui_script::UiDrain)` for a drain of what the tick produced",
                     s.name
                 ));
             }
@@ -1544,7 +1521,7 @@ pub(crate) mod schedule_tests {
         assert!(
             offenders.is_empty(),
             "these systems hold the VM in `Update` without declaring their side of the tick \
-             (`UiFeed` before it, or `.after(UiInput)`):\n  {}",
+             (`UiFeed` before it, or `.in_set(crate::ui_script::UiDrain)`):\n  {}",
             offenders.join("\n  ")
         );
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));

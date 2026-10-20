@@ -19,7 +19,7 @@ use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_items::{find_equip_slot, item_link};
-use crate::ui_script::{gate, UiFeed, UiInput};
+use crate::ui_script::{gate, UiFeed};
 
 /// Equipment slots, 0-based (`EQUIPMENT_SLOT_*`): main hand, off hand, ranged.
 const SLOT_MAIN_HAND: u8 = 15;
@@ -77,7 +77,7 @@ impl Plugin for UiCharPlugin {
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     watch_skill_ups.in_set(UiFeed),
                     feed_skills.in_set(UiFeed),
-                    drain_skill_abandons.after(UiInput),
+                    drain_skill_abandons.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

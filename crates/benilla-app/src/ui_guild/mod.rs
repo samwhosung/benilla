@@ -16,7 +16,7 @@ use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::{Ask, QueryCache, Refused};
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 mod feed;
 mod lines;
@@ -837,7 +837,7 @@ impl Plugin for UiGuildPlugin {
                         .in_set(UiFeed)
                         .in_set(GuildFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    feed::drain_guild.after(UiInput),
+                    feed::drain_guild.in_set(crate::ui_script::UiDrain),
                 )
                     // Never against the glue VM: the feed's edge memo survives the entry load, so
                     // an edge spent on a VM with no frames, such as the login MOTD, is lost.

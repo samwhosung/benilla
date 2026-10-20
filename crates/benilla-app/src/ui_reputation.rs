@@ -27,7 +27,7 @@ use benilla_ui::script::{FactionEntry, ReputationSend, ReputationState};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::target::Factions;
 use crate::ui_chat::ChatLog;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// Rank `r` spans `RANK_BOUNDS[r]..RANK_BOUNDS[r + 1]`, the client's table at `0x80928c`: vmangos's
 /// `PointsInRank` walked up from -42000 (`ReputationMgr.cpp:30`), the edges
@@ -47,7 +47,7 @@ impl Plugin for UiReputationPlugin {
                     .in_set(UiFeed)
                     .in_set(crate::ui_unit::field_events::FieldEventPushes)
                     .in_set(crate::ui_unit::WorldEnterSeats),
-                drain_reputation_sends.after(UiInput),
+                drain_reputation_sends.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

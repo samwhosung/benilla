@@ -28,7 +28,7 @@ use crate::client_state::ClientState;
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::Player;
 use crate::query_cache::Ask;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// The popup cue `0x4b5390` plays on both legs (`0x846b68`).
 const TUTORIAL_POPUP_SOUND: &str = "TutorialPopup";
@@ -563,7 +563,7 @@ impl Plugin for TutorialPlugin {
                         .in_set(UiFeed)
                         .in_set(TutorialFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    drain_tutorials.after(UiInput),
+                    drain_tutorials.in_set(crate::ui_script::UiDrain),
                 ),
             )
             .add_systems(OnExit(ClientState::InWorld), on_world_leave);

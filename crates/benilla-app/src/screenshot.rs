@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::tasks::IoTaskPool;
 
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// The reference's file stem.
 const STEM: &str = "WoWScrnShot";
@@ -188,7 +188,7 @@ impl Plugin for ScreenshotPlugin {
             (
                 report_captures.in_set(UiFeed),
                 ask_for_captures
-                    .after(UiInput)
+                    .in_set(crate::ui_script::UiDrain)
                     .after(crate::bindings::BindingSet),
             ),
         );

@@ -15,7 +15,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_items::{item_link, slot_guid, wire_pos};
-use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 
@@ -123,7 +123,7 @@ impl Plugin for UiMerchantPlugin {
                         .in_set(UiFeed)
                         .after(crate::spell::group_relation::publish_group_roster)
                         .before(crate::ui_char::feed_char),
-                    drain_merchant.after(UiInput),
+                    drain_merchant.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

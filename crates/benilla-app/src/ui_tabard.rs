@@ -13,7 +13,7 @@ use benilla_ui::script::{TabardHost, TabardIntent, UiScript, TABARD_COUNTS, TABA
 
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_guild::GuildState;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// The open designer: its vendor (`[0xbdcee8]`), the save-in-flight latch (`[0xc4d780]`), and
@@ -334,7 +334,7 @@ impl Plugin for TabardUiPlugin {
                 (
                     reset_on_world_enter.before(feed_tabard),
                     feed_tabard.in_set(UiFeed),
-                    drain_tabard.after(UiInput),
+                    drain_tabard.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

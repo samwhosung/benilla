@@ -11,7 +11,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::UNIT_FLAG_TAXI_FLIGHT;
 use crate::query_cache::Ask;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod routing;
@@ -356,7 +356,7 @@ impl Plugin for UiTaxiPlugin {
                         .in_set(UiFeed)
                         .after(crate::spell::group_relation::publish_group_roster),
                     feed_on_taxi.in_set(UiFeed),
-                    drain_taxi.after(UiInput),
+                    drain_taxi.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

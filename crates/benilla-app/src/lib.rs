@@ -185,6 +185,7 @@ mod ui_trainer;
 mod ui_unit;
 mod ui_world_map;
 mod video;
+mod vm_pass;
 mod vplates;
 mod weapon_trail;
 mod world_backdrop;

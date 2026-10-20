@@ -604,7 +604,7 @@ impl Plugin for UiModelsPlugin {
             .add_systems(
                 Update,
                 sync_tiles
-                    .after(crate::ui_script::UiInput)
+                    .in_set(crate::ui_script::UiDrain)
                     .after(forget_dead_vm_tiles),
             )
             // The composite, in the minimap fill's lane: after packing, before the mesh rebuild.

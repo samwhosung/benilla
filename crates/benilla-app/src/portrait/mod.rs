@@ -675,7 +675,10 @@ impl Plugin for PortraitPlugin {
                     gate_booth_cameras,
                 )
                     .chain()
-                    .after(GluePreviewFeed),
+                    .after(GluePreviewFeed)
+                    // After the VM pass, whose script calls may change the unit a portrait shows;
+                    // the booths' transforms and cameras are none a call reads.
+                    .after(crate::vm_pass::VmPass::End),
             )
             // The character panes: the VM's paint list, after its paint pass armed the turns and
             // the extract published the panes' geometry; before the camera gate reads the marks.

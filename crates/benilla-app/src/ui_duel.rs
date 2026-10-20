@@ -16,7 +16,7 @@ use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::Selection;
 use crate::ui_action::Spells;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 
 /// The `Effect[0]` that marks the duel spell (7266 on 1.12 data): the reference's spell-learned
 /// walk stores any learned spell with `SpellRec+0xf4 == 0x53` in `[0xb71130]` (`0x4b2605`), which
@@ -493,7 +493,7 @@ impl Plugin for UiDuelPlugin {
                     // each "Duel starting: N" lands a frame late.
                     tick_countdown.before(feed_duel),
                     feed_duel.in_set(UiFeed),
-                    drain_duel.after(UiInput),
+                    drain_duel.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

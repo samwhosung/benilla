@@ -28,7 +28,6 @@ use crate::query_cache::Ask;
 use crate::spell::{cast_target, CastCommit, CastLadder};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
-use crate::ui_script::UiInput;
 use crate::ui_spellbook::SkillLines;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
@@ -107,9 +106,11 @@ impl Plugin for UiTradeSkillPlugin {
                 (
                     // Opens before the feed, so an opener shows the window this frame; the
                     // drain after the input pass, so a Create click casts this frame.
-                    open_trade_skill.before(feed_trade_skill),
+                    open_trade_skill
+                        .before(feed_trade_skill)
+                        .in_set(crate::ui_script::UiFeed),
                     feed_trade_skill.in_set(UnitFeed),
-                    drain_trade_skill.after(UiInput),
+                    drain_trade_skill.in_set(crate::ui_script::UiDrain),
                     // In the feed phase, ahead of every feed that pushes the lists.
                     reset_crafts_on_world_enter.in_set(crate::ui_script::UiFeed),
                 ),

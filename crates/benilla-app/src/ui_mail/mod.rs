@@ -23,7 +23,7 @@ use crate::net::{
 };
 use crate::query_cache::Ask;
 use crate::query_cache::QueryCache;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
@@ -254,7 +254,7 @@ impl Plugin for UiMailPlugin {
                     // Feed, then drain after input, so each edge lands the same frame; the feed
                     // runs after `UnitFeed` so `SetInboxItem` reads the template.
                     feed_mail.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
-                    drain_mail.after(UiInput),
+                    drain_mail.in_set(crate::ui_script::UiDrain),
                     // The cascade's order: the time query, this, then the battlefield status.
                     send_query_next_mail_time_on_enter
                         .after(crate::net::send_query_time)

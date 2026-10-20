@@ -15,7 +15,7 @@ use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUP_MEMBER_SUBGROUP};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 
 mod net;
 
@@ -465,13 +465,14 @@ impl Plugin for UiLootPlugin {
                     // writers read it, and their teardown's close finds this frame's window.
                     feed_loot.in_set(UiFeed),
                     drain_loot
-                        .after(UiInput)
+                        .in_set(crate::ui_script::UiDrain)
                         .before(crate::target::TargetUpdate),
                     // After the net drain and the selection writers, which arm and drop the
                     // latch; the anim driver orders after this.
                     resolve_loot_kneel
                         .after(benilla_world::schedule::WorldStage::Net)
-                        .after(crate::target::TargetUpdate),
+                        .after(crate::target::TargetUpdate)
+                        .after(crate::vm_pass::VmPass::End),
                 ),
             );
     }

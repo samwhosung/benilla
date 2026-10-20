@@ -12,7 +12,7 @@ use benilla_protocol::messages::{
 };
 use bevy::prelude::*;
 
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 mod feed;
 pub(crate) mod net;
@@ -48,7 +48,7 @@ impl Plugin for UiPartyPlugin {
                         .after(crate::ui_unit::UnitSnapshots)
                         .in_set(UiFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    feed::drain_party.after(UiInput),
+                    feed::drain_party.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

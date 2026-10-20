@@ -18,7 +18,7 @@ use benilla_ui::strings::{fill, Arg};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_script::{gate, UiInput};
+use crate::ui_script::gate;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -39,7 +39,7 @@ impl Plugin for UiTalentPlugin {
                     // Feed before the input pass, so an open this frame sees a populated
                     // window; drain after it, so a click sends the same frame.
                     feed_talents.in_set(UnitFeed),
-                    drain_talent_learns.after(UiInput),
+                    drain_talent_learns.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

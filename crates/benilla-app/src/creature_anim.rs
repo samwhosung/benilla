@@ -946,6 +946,9 @@ impl Plugin for CreatureAnimPlugin {
                     .after(crate::ui_chat::ChatDrain)
                     // After Input so a sheath request (the Z toggle) executes the same frame.
                     .after(WorldStage::Input)
+                    // After the VM pass, whose script calls (a cast, a sheath, a stand) arm what
+                    // the driver plays this frame.
+                    .after(crate::vm_pass::VmPass::End)
                     // `VisualSheath` must land before `resolve_equipment` reads it, or a sheath
                     // change double-swaps the weapon placement for a frame.
                     .before(crate::entities::EntityVisualsSet),

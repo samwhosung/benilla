@@ -80,7 +80,7 @@ impl Plugin for UiHonorPlugin {
             .add_systems(
                 Update,
                 feed_pvp_name_strings
-                    .after(crate::ui_script::UiInput)
+                    .in_set(crate::ui_script::UiDrain)
                     .before(crate::nameplates::drive_nameplates),
             );
     }

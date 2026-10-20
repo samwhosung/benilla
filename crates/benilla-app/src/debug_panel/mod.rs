@@ -147,7 +147,7 @@ impl Plugin for DebugPanelPlugin {
                 Update,
                 (inspect::toggle_inspect, inspect::update_mouseover)
                     .chain()
-                    .after(crate::ui_script::UiInput),
+                    .in_set(crate::ui_script::UiDrain),
             )
             // Always recording; messages persist two frames, so no ordering is needed.
             .add_systems(Update, journal::record_casts)

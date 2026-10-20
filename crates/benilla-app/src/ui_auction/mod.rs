@@ -22,7 +22,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod sort;
@@ -327,7 +327,7 @@ impl Plugin for UiAuctionPlugin {
                         .after(crate::ui_unit::UnitFeed)
                         .in_set(UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
-                    drain_auction.after(UiInput),
+                    drain_auction.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

@@ -528,9 +528,9 @@ impl Plugin for QuestMarkersPlugin {
             )
                 .chain()
                 .after(benilla_world::schedule::WorldStage::Net)
-                // The markers' poses are settled before the input pass's script calls read the
-                // world's transforms; neither reads what the other writes.
-                .before(crate::script_calls::CallHosts),
+                // After the VM pass: the markers read the group roster its feeds publish, and a
+                // script call reads no marker's transform.
+                .after(crate::vm_pass::VmPass::End),
         )
         .add_systems(
             PostUpdate,

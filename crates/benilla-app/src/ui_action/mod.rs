@@ -390,7 +390,7 @@ impl Plugin for UiActionPlugin {
                         .after(crate::ui_unit::UnitSnapshots)
                         .before(crate::ui_unit::field_events::fire_field_notices)
                         .before(crate::ui_cast::feed_cast_reports),
-                    drain::drain_action_sets.after(UiInput),
+                    drain::drain_action_sets.in_set(crate::ui_script::UiDrain),
                     // The target chain queues the right-click casts earlier in the frame.
                     drain::drain_click_casts
                         .after(UiInput)

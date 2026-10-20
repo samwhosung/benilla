@@ -57,7 +57,7 @@ impl Plugin for UiMacroPlugin {
                         .before(crate::ui_action::normalize_action_ranks),
                     // Every frame, in or out of world, so a `/logout` never strands an edit; after
                     // the script tick that dirtied the table.
-                    save_dirty_macros.after(crate::ui_script::UiInput),
+                    save_dirty_macros.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

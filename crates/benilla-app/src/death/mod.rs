@@ -11,7 +11,7 @@ use benilla_ui::script::{DeathAction, DeathUiState, ScriptValue, UiScript};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::Spells;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 pub(crate) mod net;
 
@@ -591,7 +591,7 @@ impl Plugin for DeathPlugin {
                 Update,
                 (
                     feed_death.in_set(UiFeed),
-                    drain_death.after(UiInput),
+                    drain_death.in_set(crate::ui_script::UiDrain),
                     drive_death_look,
                     // Before the feed, so the frame a session ends carries no memory of it.
                     end_session_death_feed.before(feed_death),

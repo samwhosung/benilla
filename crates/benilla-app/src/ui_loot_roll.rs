@@ -41,7 +41,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfGuid};
 use crate::query_cache::Ask;
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// Frames a pending line retries its names before dropping: a refused name never resolves.
 const LINE_MAX_TRIES: u16 = 120;
@@ -324,7 +324,7 @@ impl Plugin for UiLootRollPlugin {
                 // The feed before the input pass shows a new roll the same frame; the drain after
                 // it sends a vote the same frame.
                 feed_loot_rolls.in_set(UiFeed),
-                drain_loot_rolls.after(UiInput),
+                drain_loot_rolls.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

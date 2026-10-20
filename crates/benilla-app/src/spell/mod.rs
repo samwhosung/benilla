@@ -8,9 +8,8 @@
 use bevy::prelude::*;
 
 use crate::client_state::ClientState;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 use crate::ui_unit::UnitFeed;
-use benilla_world::schedule::WorldStage;
 
 mod bind_gates;
 mod cast_send;
@@ -94,10 +93,10 @@ impl Plugin for SpellPlugin {
                         .in_set(UnitFeed)
                         .in_set(LocalCancel),
                     mods::track_class_family
-                        .after(WorldStage::Net)
+                        .in_set(crate::ui_script::UiFeed)
                         .before(UnitFeed),
                     // The state push runs before the input pass's `ToggleGameMenu`, whose
-                    // `SpellStopTargeting` lands with the script calls after it. After the
+                    // `SpellStopTargeting` applies inside its call. After the
                     // old-target clear, the pet bar's writer in the feed: `"pet"` resolves off
                     // the bar. After the aura feed, whose resolver inputs list the units the
                     // hover verdict is asked for.
@@ -122,7 +121,7 @@ impl Plugin for SpellPlugin {
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach
                     // the world.
-                    targeting::commit_item_cast_on_pick.after(UiInput),
+                    targeting::commit_item_cast_on_pick.in_set(crate::ui_script::UiDrain),
                 ),
             )
             .add_systems(OnEnter(ClientState::InWorld), mods::clear_on_world_enter);

@@ -20,7 +20,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::query_cache::QueryCache;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 mod feed;
@@ -360,7 +360,7 @@ impl Plugin for UiPetitionPlugin {
                 Update,
                 (
                     feed::feed_petition.in_set(UiFeed),
-                    feed::drain_petition.after(UiInput),
+                    feed::drain_petition.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

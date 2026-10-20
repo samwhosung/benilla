@@ -24,7 +24,7 @@ use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::UiFeed;
 
 /// The latched question, the reference's four globals: written by [`net::request`], read by
 /// [`feed_summon`] and [`drain_summon`].
@@ -263,7 +263,7 @@ impl Plugin for UiSummonPlugin {
                 // Before the feed, so the frame a session ends feeds nothing from it.
                 end_session_summon.before(feed_summon),
                 feed_summon.in_set(UiFeed),
-                drain_summon.after(UiInput),
+                drain_summon.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

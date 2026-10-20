@@ -754,13 +754,15 @@ impl Plugin for NameplatesPlugin {
         .init_resource::<Nameplates>()
         .init_resource::<NameConfig>()
         .init_resource::<PvpNameStrings>()
-        // After targeting, V-key plates and chat bubbles: the gate reads their verdicts.
+        // After targeting, V-key plates and chat bubbles: the gate reads their verdicts. After the
+        // VM pass too, whose script calls change the selection a plate marks.
         .add_systems(
             Update,
             drive_nameplates
                 .after(crate::target::TargetUpdate)
                 .after(crate::vplates::VPlateSet)
-                .after(crate::chat_bubble::BubbleSet),
+                .after(crate::chat_bubble::BubbleSet)
+                .after(crate::vm_pass::VmPass::End),
         )
         .add_systems(Update, evict_name_meshes)
         .add_systems(

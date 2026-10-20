@@ -19,7 +19,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, Spells, UiError};
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 /// The wire packet that opened the current panel.
@@ -212,7 +212,7 @@ impl Plugin for UiQuestPlugin {
                     // The feed before the input pass and the drain after it, so a click goes out
                     // the same frame.
                     feed_quest.in_set(UiFeed),
-                    drain_quest.after(UiInput),
+                    drain_quest.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

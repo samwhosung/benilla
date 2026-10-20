@@ -18,7 +18,7 @@ use benilla_assets::coords::bevy_to_wow;
 
 use crate::net::{ClientCommand, NetCommands};
 use crate::player::Player;
-use crate::ui_script::{UiFeed, UiInput, VmMemo};
+use crate::ui_script::{UiFeed, VmMemo};
 
 /// Spell 7355 "Stuck", what `Stuck()` casts: the only spell with `SPELL_EFFECT_STUCK` (84), which
 /// moves the player to their last safe position (vmangos `SpellEffects.cpp:4697`).
@@ -430,7 +430,7 @@ impl Plugin for UiGmTicketPlugin {
                 Update,
                 (
                     feed_gm_ticket.in_set(UiFeed),
-                    drain_gm_ticket.after(UiInput),
+                    drain_gm_ticket.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

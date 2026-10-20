@@ -648,7 +648,7 @@ impl Plugin for VPlatesPlugin {
                 Update,
                 (
                     // A drain of the verbs the tick ran (a binding body, `UpdateNameplates`).
-                    apply_plate_verbs.after(crate::ui_script::UiInput),
+                    apply_plate_verbs.in_set(crate::ui_script::UiDrain),
                     // After the targeting chain, itself after `WorldStage::Input`, so this projects
                     // through this frame's camera; `ui_script::extract::paint_script` runs after
                     // it, so the plates paint the same frame.

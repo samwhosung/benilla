@@ -979,7 +979,7 @@ impl Plugin for MinimapPlugin {
                         .before(crate::ui_script::UiPaint),
                     // After the tick that can set the art, before the emit that draws with it.
                     feed_minimap_art
-                        .after(crate::ui_script::UiInput)
+                        .in_set(crate::ui_script::UiDrain)
                         .before(UiQuadAppend),
                     // Before the script tick, after the indoor push the radius reads. Gated on the
                     // in-game UI: a member's ping in the login burst has no player to land on

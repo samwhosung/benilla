@@ -15,7 +15,7 @@ use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects, Se
 use crate::query_cache::Ask;
 use crate::target::Selection;
 use crate::ui_party::GroupState;
-use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
@@ -474,7 +474,7 @@ impl Plugin for UiTradePlugin {
                     trim_offer_to_purse
                         .after(crate::ui_unit::UnitFeed)
                         .before(feed_trade),
-                    drain_trade.after(UiInput),
+                    drain_trade.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

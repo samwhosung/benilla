@@ -229,15 +229,19 @@ impl Plugin for PlayerPlugin {
         // stage, and the post-snap hold released after it. Both edges are needed: without
         // `.after(Input)` the focus can precede the snap, the world streams around the departure,
         // and the hold releases at once.
+        // Both after the VM pass, whose readers of the player's settle state then see one frame's.
         app.add_systems(
             Update,
             (world_focus::publish_viewer, world_focus::publish_view_focus)
                 .after(benilla_world::schedule::WorldStage::Input)
+                .after(crate::vm_pass::VmPass::End)
                 .before(benilla_world::schedule::WorldStage::Stream),
         )
         .add_systems(
             Update,
-            world_focus::release_post_snap_hold.after(benilla_world::schedule::WorldStage::Stream),
+            world_focus::release_post_snap_hold
+                .after(benilla_world::schedule::WorldStage::Stream)
+                .after(crate::vm_pass::VmPass::End),
         );
         app.add_observer(camera::on_cvar);
         app.add_observer(camera_dynamics::on_cvar);
@@ -271,10 +275,10 @@ impl Plugin for PlayerPlugin {
         )
         // The world camera renders only in world or under the loading screen, whose covered
         // render compiles the world's pipelines before the first visible frame.
-        // Before the input pass, whose script calls read the cameras: the gate is settled first.
+        // Before the VM pass, whose script calls read the cameras: the gate is settled first.
         .add_systems(
             Update,
-            setup::gate_world_camera.before(crate::script_calls::CallHosts),
+            setup::gate_world_camera.before(crate::vm_pass::VmPass::Start),
         )
         // Off in capture mode, where the harness pins the camera, and in world only, so the glue
         // screens keep the cursor and send no movement.

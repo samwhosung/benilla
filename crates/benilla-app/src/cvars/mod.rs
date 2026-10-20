@@ -809,7 +809,7 @@ impl Plugin for CvarPlugin {
             // After the tick, so a `SetCVar` from this frame reaches the registry and its observers
             // before the frame's drains; `video::drain_restart_gx` orders after this so the commit
             // finds the stage.
-            .add_systems(Update, sync_cvars.after(crate::ui_script::UiInput))
+            .add_systems(Update, sync_cvars.in_set(crate::ui_script::UiDrain))
             // In `Last`, after every `Update` writer of the registry, so the save reads the frame's
             // settled state; before the exit flush, which finds it clean on a quiet exit frame.
             .add_systems(

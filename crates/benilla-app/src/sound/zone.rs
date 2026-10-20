@@ -1108,10 +1108,9 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             lua_music
                 .before(server_sounds)
-                .after(crate::ui_script::UiInput)
+                .in_set(crate::ui_script::UiDrain)
                 // After the dev mute chord, so the gain feed hears it the same frame.
-                .after(super::toggle_mute)
-                .in_set(WorldStage::Present),
+                .after(super::toggle_mute),
         )
         // Unconditional, so the count falls to zero when the soundscape stops.
         .add_systems(Update, report_stream_voices)

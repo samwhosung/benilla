@@ -178,6 +178,12 @@ pub(crate) struct UiPassState {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiFeed;
 
+/// The drains of what the pass's Lua asked for (a send, a window's verb, a save), after the tick
+/// and the input pass and before the world reads them: the reference applies each inside its
+/// call, so the frame's world sees it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct UiDrain;
+
 /// The player-UI paint pass, after the camera so world-anchored widgets use this frame's view.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiPaint;
@@ -382,12 +388,14 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain(),
             )
-            // The three UI phases in order: feeds after the net drain, the tick, then the paint.
+            // The UI phases in order: feeds after the net drain, the tick and the input pass, the
+            // drains of what their Lua asked, then the paint.
             .configure_sets(
                 Update,
                 (
                     UiFeed.after(WorldStage::Net),
                     UiInput.before(WorldStage::Input),
+                    UiDrain.before(WorldStage::Input),
                     UiPaint,
                 )
                     .chain(),
@@ -412,12 +420,9 @@ impl Plugin for UiScriptPlugin {
                 Update,
                 (
                     extract::tick_script,
-                    input::feed_ui_input
-                        .run_if(
-                            in_state(crate::client_state::ClientState::InWorld)
-                                .or(glue::glue_ui_up),
-                        )
-                        .in_set(crate::script_calls::CallHosts),
+                    input::feed_ui_input.run_if(
+                        in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
+                    ),
                     input::feed_ui_wheel.run_if(
                         in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
                     ),
@@ -442,7 +447,7 @@ impl Plugin for UiScriptPlugin {
             .add_systems(
                 Update,
                 arbitrate_pointer_over_ui
-                    .after(UiInput)
+                    .in_set(crate::ui_script::UiDrain)
                     .before(WorldStage::Input),
             )
             .add_message::<server_alert::LaunchUrl>()
@@ -453,7 +458,7 @@ impl Plugin for UiScriptPlugin {
                 Update,
                 (
                     // After the tick whose Lua called its verbs.
-                    glue_mgr::drive_glue_mgr.after(UiInput),
+                    glue_mgr::drive_glue_mgr.in_set(crate::ui_script::UiDrain),
                     // Off the roster and the screen the manager and the tick just moved.
                     glue_scene::feed_stock_glue_preview.in_set(crate::portrait::GluePreviewFeed),
                     // Each reads only its message, so no state orders it but the sets.
@@ -551,18 +556,13 @@ fn feed_framerate(mut hosted_vm: crate::script_calls::HostedVm, times: Res<World
     })
 }
 
-/// One world frame's step into the ring (`0x672700`), the elapsed every `OnUpdate` was handed.
+/// One world frame's step into the ring (`0x672700`), the elapsed every `OnUpdate` was handed;
+/// [`feed_framerate`] hands the VM the rate before the next tick reads it.
 fn record_world_frame_time(
-    mut hosted_vm: crate::script_calls::HostedVm,
     step: Res<benilla_world::frame_pace::FrameStep>,
     mut times: ResMut<WorldFrameTimes>,
 ) {
-    hosted_vm.run(|script| {
-        times.0.push(step.delta.as_secs_f32());
-        if let Some(script) = script {
-            script.set_framerate(times.0.rate());
-        }
-    })
+    times.0.push(step.delta.as_secs_f32());
 }
 
 /// Synthetic player and target snapshots for a server-less UI capture, and its first events once.

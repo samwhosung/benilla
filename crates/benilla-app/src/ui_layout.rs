@@ -334,7 +334,7 @@ impl Plugin for UiLayoutPlugin {
                 // watcher never reads the restore's own move.
                 (watch_layout, save_layout)
                     .chain()
-                    .after(crate::ui_script::UiInput),
+                    .in_set(crate::ui_script::UiDrain),
             )
                 .in_set(crate::client_state::InWorldGated),
         );

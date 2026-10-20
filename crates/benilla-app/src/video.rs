@@ -478,7 +478,7 @@ impl Plugin for VideoPlugin {
                     // row, then `RestartGx()`, so the staged rows are registered before the commit.
                     (drain_restart_gx, (apply_present_mode, apply_window_mode))
                         .chain()
-                        .after(crate::ui_script::UiInput)
+                        .in_set(crate::ui_script::UiDrain)
                         .after(crate::cvars::sync_cvars),
                     // A push the tick may read (`GetScreenResolutions`): the feed phase.
                     publish_display_modes.in_set(crate::ui_script::UiFeed),

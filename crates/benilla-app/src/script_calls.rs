@@ -44,13 +44,6 @@ macro_rules! pet_in_order {
     }};
 }
 
-/// The input pass and the bindings pass, the entries that lend [`ScriptCallHost`] with an input
-/// event up: after what moves the world ahead of the input pass, so the calls read it. benilla runs
-/// the frame's UI records, then its bindings, then its world clicks, where the reference dispatches
-/// each input record whole in the order it arrived (`0x423920` → `0x4239a0`, `0x4245b0`) (#1988).
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct CallHosts;
-
 /// The engine half of every script call: one applier per owner of the state a call touches.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // the appliers, one per owner of the state a call touches
@@ -3065,80 +3058,48 @@ mod tests {
         assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 
-    /// A client that knows `MOB` as "Red Affinity", with a frame whose `script` handler (an
-    /// `OnUpdate` or an `OnEvent` for `event`) runs once: it targets the name, and records in
-    /// `SAME` whether its next line reads the new target (`TargetByName` `0x489d60` commits through
-    /// `SetSelection` `0x493540` before it returns).
-    fn targets_by_name_on(script: &str, event: &str) -> Frame {
-        let mut f = frame(true);
-        spawn_mob(&mut f, &[]);
-        let world = f.app.world_mut();
-        world
-            .resource_mut::<crate::names::NameCache>()
-            .insert_player(MOB, "Red Affinity".into(), None);
-        world
-            .run_system_once(crate::ui_unit::feed_name_candidates)
-            .expect("the candidate feed runs as a one-shot system");
-        world
+    /// A cork client whose frame runs [`CORK`] once, from its handler for `event`.
+    fn cork_on(event: &str) -> Frame {
+        let mut f = cork_frame();
+        f.app
+            .world_mut()
             .non_send_resource_mut::<UiScript>()
             .run(&format!(
                 r#"local e = CreateFrame("Frame")
-                if "{event}" ~= "" then e:RegisterEvent("{event}") end
-                e:SetScript("{script}", function()
-                    this:SetScript("{script}", nil)
-                    TargetByName("Red Affinity", true)
-                    if UnitName("target") == "Red Affinity" then SAME = 1 end
+                e:RegisterEvent("{event}")
+                e:SetScript("OnEvent", function()
+                    this:UnregisterEvent("{event}")
+                    {CORK}
                 end)"#
             ))
             .expect("the frame builds");
         f
     }
 
-    /// The issue's case: an `OnUpdate` that targets by name reads the new target on its next line,
-    /// as the update walk of the pump (`0x765650`) runs the script (`0x704f10`) with nothing
-    /// between a verb and its effect.
-    #[test]
-    fn an_on_update_scripts_target_by_name_reads_the_new_target() {
-        let mut f = targets_by_name_on("OnUpdate", "");
-        let world = f.app.world_mut();
-        world.spawn((Window::default(), bevy::window::PrimaryWindow));
-        crate::ui_script::tick_once(world);
-        assert_eq!(
-            global(&mut f, "SAME"),
-            Some(1),
-            "the next line reads the new target"
-        );
-        assert_eq!(selected(&f), Some(MOB));
-    }
-
-    /// A feed's event handler targets inside its call: the feed pushes as an engine turn, then
+    /// A feed's event handler casts inside its call: the feed pushes as an engine turn, then
     /// signals its events with the host lent, each handler run in place (`SignalEvent`
     /// `0x703e50`). Here the action feed's first `ACTIONBAR_UPDATE_COOLDOWN`.
     #[test]
-    fn a_feeds_event_handler_reads_the_target_it_set() {
-        let mut f = targets_by_name_on("OnEvent", "ACTIONBAR_UPDATE_COOLDOWN");
+    fn a_feeds_event_handler_casts_and_binds_inside_its_call() {
+        let mut f = cork_on("ACTIONBAR_UPDATE_COOLDOWN");
         crate::ui_action::run_feed_action_state_once(f.app.world_mut());
-        assert_eq!(
-            global(&mut f, "SAME"),
-            Some(1),
-            "the next line reads the new target"
-        );
-        assert_eq!(selected(&f), Some(MOB));
+        assert_eq!(global(&mut f, "RAN"), Some(1), "the handler ran");
+        assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
+        assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 
-    /// A latch core's event handler targets inside its call: the bank's close core (`0x4f84d0`)
+    /// A latch core's event handler casts inside its call: the bank's close core (`0x4f84d0`)
     /// signals `BANKFRAME_CLOSED` (`0x4f84df`), with no test of the cell, from an exclusive entry
     /// that lends the host around the fire.
     #[test]
-    fn a_latch_cores_event_handler_reads_the_target_it_set() {
-        let mut f = targets_by_name_on("OnEvent", "BANKFRAME_CLOSED");
+    fn a_latch_cores_event_handler_casts_and_binds_inside_its_call() {
+        let mut f = cork_on("BANKFRAME_CLOSED");
         crate::ui_bank::close_core(f.app.world_mut());
-        assert_eq!(
-            global(&mut f, "SAME"),
-            Some(1),
-            "the next line reads the new target"
-        );
-        assert_eq!(selected(&f), Some(MOB));
+        assert_eq!(global(&mut f, "RAN"), Some(1), "the handler ran");
+        assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
+        assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 
     /// The systems of `app` that write the VM, and those of them whose declared access does not

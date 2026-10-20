@@ -22,7 +22,6 @@ use benilla_ui::script::{
 
 use crate::net::{ObjectStore, SelfPlayer};
 use crate::player::Player;
-use crate::ui_script::UiInput;
 use benilla_assets::MapCatalogRes;
 use benilla_assets::{LockRecover, WorldAssets};
 use benilla_world::map_proj::{self, WorldProj, ZoneRect};
@@ -798,9 +797,9 @@ impl Plugin for WorldMapUiPlugin {
             Update,
             (
                 // After the script tick: a selection changed this tick projects on the next.
-                feed_world_map.after(UiInput),
+                feed_world_map.in_set(crate::ui_script::UiDrain),
                 // After the script tick, so the jump hit-tests this tick's frame rects.
-                dev_map_jump.after(UiInput),
+                dev_map_jump.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

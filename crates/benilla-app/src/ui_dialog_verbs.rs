@@ -1027,9 +1027,9 @@ impl Plugin for UiDialogVerbsPlugin {
                     // healer: the reference resolves an Accept press in the UI dispatch, before
                     // its pick and poll run later in the frame.
                     drain_latch_verbs
-                        .after(UiInput)
+                        .in_set(crate::ui_script::UiDrain)
                         .before(crate::target::TargetUpdate),
-                    drain_queue_verbs.after(UiInput),
+                    drain_queue_verbs.in_set(crate::ui_script::UiDrain),
                     // After the target chain, which writes `MeetingStoneUse`, so the join leaves
                     // on the click's own frame.
                     drain_meeting_stone_joins
