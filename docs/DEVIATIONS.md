@@ -294,10 +294,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_action
 
-- `0x5e` with no word falls back to the spell's own `RequiresSpellFocus`, which the reference never reads here, because it is the id vmangos sends (`Spell.cpp:4426`). `0x5d` has no such stand-in: vmangos takes its area from its own `spell_area` table (`Spell.cpp:4429`), which `Spell.dbc` does not carry. ([`src/ui_action/cast_fail.rs:228`](../crates/benilla-app/src/ui_action/cast_fail.rs#L228))
-- A reason past the table prints its hex code, so an unknown reason is visible. ([`src/ui_action/cast_fail.rs:338`](../crates/benilla-app/src/ui_action/cast_fail.rs#L338))
-- A declined arm's template loses its tokens ("Missing reagent: %s" reads "Missing reagent") where the reference shows the literal `%s`, because a raw token reads as broken. ([`src/ui_action/cast_fail.rs:496`](../crates/benilla-app/src/ui_action/cast_fail.rs#L496))
-- An absent or empty result shows nothing, where the reference shows an empty line (no test of the string between `0x4967d7` and `0x496842`), because a blank line is worse than none; only a chain missing a stock key reaches it. ([`src/ui_action/errors.rs:248`](../crates/benilla-app/src/ui_action/errors.rs#L248))
+- The player's `0x5e` with no word falls back to the spell's own `RequiresSpellFocus`, which the reference never reads here, because it is the id vmangos sends (`Spell.cpp:4426`). `0x5d` has no such stand-in: vmangos takes its area from its own `spell_area` table (`Spell.cpp:4429`), which `Spell.dbc` does not carry. ([`src/ui_action/cast_fail.rs:311`](../crates/benilla-app/src/ui_action/cast_fail.rs#L311))
+- A reason past the table prints its hex code, so an unknown reason is visible. ([`src/ui_action/cast_fail.rs:415`](../crates/benilla-app/src/ui_action/cast_fail.rs#L415))
+- A declined arm's template loses its tokens ("Missing reagent: %s" reads "Missing reagent") where the reference shows the literal `%s`, because a raw token reads as broken. ([`src/ui_action/cast_fail.rs:524`](../crates/benilla-app/src/ui_action/cast_fail.rs#L524))
+- An empty chat line is dropped, where the reference adds a blank one (`0x49a870` refuses only a null text, `0x49a881`), because a blank line is worse than none; only a string an addon emptied, or a chain missing a stock key, reaches it. ([`src/ui_action/errors.rs:394`](../crates/benilla-app/src/ui_action/errors.rs#L394))
 - This runs on every book or bar change, where the reference re-points slots in memory only on `SMSG_SUPERCEDED_SPELL` (`0x4e5e60`), because vmangos never rewrites stored slots on a rank-up (`Player::AddSpell`), drops superseded ranks from the book (`Player.cpp:3463`) and sends no supersede while loading (`Player.cpp:3704`), so a stored slot can name a spell the character no longer knows. ([`src/ui_action/ranks.rs:3`](../crates/benilla-app/src/ui_action/ranks.rs#L3))
 
 #### ui_aura
