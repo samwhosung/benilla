@@ -111,6 +111,21 @@ pub(crate) fn guild_tag(guid: u64) -> [FieldNotice; 2] {
     ]
 }
 
+/// The player type watcher `0x5e2890` on `PLAYER_GUILD_TIMESTAMP` (player section `+0x24`,
+/// registered at `0x5e25ef`): when it runs, the player's guild id and its new stamp (`0x5e28c1`,
+/// `0x5e28c4`), for the guild cache to weigh.
+pub(crate) fn guild_timestamp(
+    block: &Notified,
+    kind: ObjectType,
+    fields: &ObjectFields,
+) -> Option<(u32, u32)> {
+    (kind == ObjectType::Player
+        && block
+            .fired(PLAYER_SECTION, GUILD_TIMESTAMP.0, GUILD_TIMESTAMP.1)
+            .is_some())
+    .then(|| (fields.player_guild_id(), fields.player_guild_timestamp()))
+}
+
 /// The first field of the object, unit and player sections: their byte offsets in the field
 /// array, 0, 0x18 and 0x2f0 (`0x465690`), over 4.
 const OBJECT_SECTION: u16 = 0;
@@ -205,13 +220,15 @@ const ENTRY: (u16, u16) = (0xc, 4);
 /// The player type watchers of `0x5e2510` whose callbacks signal, as (byte offset, length) in the
 /// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_GUILDID` (`0x5e258f` →
 /// `0x5e2770`), `PLAYER_GUILDRANK` (`0x5e25a7` → `0x5e27b0`), `PLAYER_BYTES_3` bytes 2 and 3
-/// (`0x5e2a30`, `0x5e2a50`) and the duel team (`0x5e27d0`).
+/// (`0x5e2a30`, `0x5e2a50`) and the duel team (`0x5e27d0`); and `PLAYER_GUILD_TIMESTAMP`
+/// (`0x5e25ef` → `0x5e2890`), which acts on the guild cache ([`guild_timestamp`]).
 const PLAYER_FLAGS: (u16, u16) = (0x08, 4);
 const GUILD_ID: (u16, u16) = (0x0c, 4);
 const GUILD_RANK: (u16, u16) = (0x10, 4);
 const BYTES_3_BYTE_2: (u16, u16) = (0x1e, 1);
 const BYTES_3_BYTE_3: (u16, u16) = (0x1f, 1);
 const DUEL_TEAM: (u16, u16) = (0x20, 4);
+const GUILD_TIMESTAMP: (u16, u16) = (0x24, 4);
 
 /// The active player's own `CHARMEDBY` watch, `0x5de090` (`0x5dd9f4`): 8 bytes at the unit
 /// section's `+0x10`, refreshing its reaction (`0x5de0b5`).

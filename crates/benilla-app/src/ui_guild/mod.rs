@@ -83,12 +83,15 @@ pub(crate) struct GuildMemberNotify(pub(crate) bool);
 
 /// A callback a guild lookup leaves on a record not yet held, added at the list's tail
 /// (`0x56100b`): the landing runs each with status 1 (`0x556f91`); a refusal, or a drop of the
-/// pending record, runs them with status 0, which it ignores.
+/// pending record, runs them with status 0, which both of these ignore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Waiter {
     /// `GetGuildInfo`'s `0x4c9470` for the unit `guid` (`0x4c93b6`-`0x4c93d2`):
     /// `PLAYER_GUILD_UPDATE` through `0x515e50` (`0x4c947c`-`0x4c9481`).
     Info(u64),
+    /// The `PLAYER_GUILD_TIMESTAMP` watcher's `0x5e29c0` (`0x5e299d`): `RefreshGuildTag` on every
+    /// held player of the guild (`0x5e29e0`).
+    Members,
 }
 
 /// The guild session mirror: filled by the packet handlers, read by the feed, reset on disconnect.
@@ -106,6 +109,9 @@ pub(crate) struct GuildState {
     identity_generation: u64,
     /// The callbacks waiting on each guild's record, in the order they were left.
     waiters: HashMap<u32, Vec<Waiter>>,
+    /// `0x5e2890`'s table of each guild's last `PLAYER_GUILD_TIMESTAMP` (`0xc4d668`, guild and
+    /// stamp), freed when the world goes (`0x5e2e60`).
+    stamps: Vec<(u32, u32)>,
     /// Apart from the roster: `GE_MOTD` sets it alone, and at login vmangos sends that event before
     /// any roster (`CharacterHandler.cpp:558`).
     motd: String,
@@ -283,6 +289,26 @@ impl GuildState {
                 .entry(guild_id)
                 .or_default()
                 .push(Waiter::Info(guid));
+        }
+    }
+
+    /// The player watcher on `PLAYER_GUILD_TIMESTAMP` (`0x5e2890`) past its lookup: a stamp equal
+    /// to the guild's last does nothing (`0x5e28fa`); any other is kept (`0x5e297e`, `0x5e298a`),
+    /// the guild's record dropped (`0x5e2994`) and asked again with `0x5e29c0` (`0x5e29ac`).
+    pub(crate) fn stamp_changed(&mut self, guild_id: u32, stamp: u32, commands: &NetCommands) {
+        match self.stamps.iter_mut().find(|(g, _)| *g == guild_id) {
+            Some((_, last)) if *last == stamp => return,
+            Some((_, last)) => *last = stamp,
+            None => self.stamps.push((guild_id, stamp)),
+        }
+        self.drop_record(guild_id);
+        // The zero key asks nothing and keeps no callback (`0x560e3d`).
+        if guild_id != 0 {
+            self.resolve_identity(guild_id, Ask::Event(commands));
+            self.waiters
+                .entry(guild_id)
+                .or_default()
+                .push(Waiter::Members);
         }
     }
 
@@ -560,6 +586,7 @@ pub(crate) mod net {
     use crate::field_watch::FieldNotice;
     use crate::ui_action::{UiError, UiErrorKeys};
     use crate::ui_social::SocialState;
+    use benilla_protocol::messages::ObjectType;
     use benilla_protocol::{SessionEvent, SessionEventKind};
 
     use crate::net::NetHandlerApp;
@@ -577,28 +604,56 @@ pub(crate) mod net {
             .net_handler(K::Disconnected, on_session_end);
     }
 
-    /// Runs the callbacks a found record wakes ([`query_response`]).
+    /// Reads the held players for the timestamp's refresh ([`query_response`]).
     fn on_query_response(
         In(ev): In<SessionEvent>,
         mut guild: ResMut<GuildState>,
+        index: Res<crate::net::GuidIndex>,
+        stores: Query<&crate::net::ObjectStore>,
         mut notices: MessageWriter<FieldNotice>,
     ) {
         if let SessionEvent::GuildQueryResponse(response) = ev {
+            let guild_id = response.guild_id;
             let waiters = query_response(&mut guild, response);
-            notices.write_batch(waiter_notices(&waiters));
+            let mut players: Vec<(u64, u32)> = index
+                .0
+                .iter()
+                .filter_map(|(&g, &e)| {
+                    let fields = &stores.get(e).ok()?.0;
+                    (fields.created_as() == Some(ObjectType::Player))
+                        .then(|| (g, fields.player_guild_id()))
+                })
+                .collect();
+            players.sort_unstable();
+            notices.write_batch(waiter_notices(guild_id, &waiters, &players));
         }
     }
 
     /// The notices a found record's callbacks raise, in their order: a `GetGuildInfo` waiter's
-    /// `PLAYER_GUILD_UPDATE` for its unit (`0x4c947c`-`0x4c9481`).
-    fn waiter_notices(waiters: &[Waiter]) -> Vec<FieldNotice> {
-        waiters
-            .iter()
-            .map(|&Waiter::Info(guid)| FieldNotice::Signal {
-                guid,
-                id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
-            })
-            .collect()
+    /// `PLAYER_GUILD_UPDATE` for its unit (`0x4c947c`-`0x4c9481`); the timestamp's refresh walk
+    /// (`0x5e29c0` → `0x468380`), `RefreshGuildTag` for each held player, `(guid, guild)`, whose
+    /// `PLAYER_GUILDID` is the guild (`0x5e2a14`-`0x5e2a1d` → `0x5e08e0`).
+    fn waiter_notices(
+        guild_id: u32,
+        waiters: &[Waiter],
+        players: &[(u64, u32)],
+    ) -> Vec<FieldNotice> {
+        let mut out = Vec::new();
+        for waiter in waiters {
+            match *waiter {
+                Waiter::Info(guid) => out.push(FieldNotice::Signal {
+                    guid,
+                    id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
+                }),
+                Waiter::Members => out.extend(
+                    players
+                        .iter()
+                        .filter(|&&(_, g)| g == guild_id)
+                        .flat_map(|&(guid, _)| crate::field_watch::guild_tag(guid)),
+                ),
+            }
+        }
+        out
     }
 
     fn on_roster(In(ev): In<SessionEvent>, mut guild: ResMut<GuildState>) {
@@ -1402,6 +1457,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<GuildState>()
+            .init_resource::<crate::net::GuidIndex>()
             .add_message::<FieldNotice>()
             .insert_resource(commands)
             .add_systems(Update, feed::drain_guild);

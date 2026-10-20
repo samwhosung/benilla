@@ -106,6 +106,7 @@ pub(crate) struct Scene<'w, 's> {
     death_net: ResMut<'w, crate::death::DeathNet>,
     group: ResMut<'w, crate::ui_party::GroupState>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
+    guilds: Option<ResMut<'w, crate::ui_guild::GuildState>>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,

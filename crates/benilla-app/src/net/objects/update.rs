@@ -648,7 +648,8 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
 }
 
 /// One block's notify on a live object: its field edges, the field watches whose callbacks
-/// signal interface events ([`crate::field_watch`]) and the item watchers.
+/// signal interface events ([`crate::field_watch`]), the item watchers, and the guild timestamp's
+/// watcher.
 fn notify(sc: &mut Scene, guid: u64, block: Notified) {
     let Some(e) = sc.index.0.get(&guid).copied() else {
         return;
@@ -692,6 +693,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified) {
     let fired = crate::field_watch::values(&around, guid, kind, fields, &block);
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
         .values(guid, kind, fields, &block);
+    let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
     // An entry change that missed the cache asks and waits on the answer (`0x5d9652` asks with
     // `0x5d96b0`).
     for n in &notices {
@@ -708,6 +710,9 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified) {
     }
     sc.item_notices.write_batch(notices);
     sc.field_notices.write_batch(fired);
+    if let Some(((guild_id, stamp), guilds)) = stamp.zip(sc.guilds.as_mut()) {
+        guilds.stamp_changed(guild_id, stamp, &sc.net);
+    }
 }
 
 /// The create hook of an object not yet shown (the table `0x465e78`): an item's record set-up
