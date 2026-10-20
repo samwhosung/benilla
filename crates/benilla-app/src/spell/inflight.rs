@@ -400,9 +400,10 @@ pub(crate) struct LocalMoveStart {
 /// - The cast: `CMSG_CANCEL_CAST`, the self `Casting` reaped with a `Fail` cast event, and the
 ///   `Stop` bar edge the cancel's own event fires ([`super::CastCore::cancel`]). Movement tests
 ///   the spell's `InterruptFlags`; Esc does not.
-/// - The channel, on movement only: `CMSG_CANCEL_CHANNELLING` (`0x6e9b70`) and nothing local;
-///   the bar and [`ActiveChannel`] close on `MSG_CHANNEL_UPDATE(0)` (`0x6e75f0`). Esc cannot
-///   stop a channel: `0x6e6e80` never calls `0x6e9b70`, and the inflight id is 0 mid-channel.
+/// - The channel, on movement only and only while the player is the mover (`0x515180`):
+///   `CMSG_CANCEL_CHANNELLING` (`0x6e9b70`) and nothing local; the bar and [`ActiveChannel`] close
+///   on `MSG_CHANNEL_UPDATE(0)` (`0x6e75f0`). Esc cannot stop a channel: `0x6e6e80` never calls
+///   `0x6e9b70`, and the inflight id is 0 mid-channel.
 ///
 /// vmangos answers the cancel with `SMSG_SPELL_FAILED_OTHER` and a failing `SMSG_CAST_RESULT`
 /// 0x23, whose report finds nothing in flight and fires `SPELLCAST_INTERRUPTED` itself
@@ -412,7 +413,7 @@ pub(crate) struct LocalMoveStart {
 /// by the fade.
 pub(super) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
     if std::mem::take(&mut moved.pressed) {
-        cancel.cancel(false, true);
+        cancel.cancel(false, true, moved.mover_is_player);
     }
 }
 
@@ -445,7 +446,7 @@ pub(crate) struct SelfCancel<'w> {
 impl SelfCancel<'_> {
     /// `SpellStopCasting()` (`0x6e6e80`), the ESC chain's cast rung.
     pub(crate) fn stop_casting(&mut self) {
-        self.cancel(true, false);
+        self.cancel(true, false, false);
     }
 
     /// `CancelCast(1, 1, 0x1c)` (`0x6e4940`) as `UseSoulstone`'s item leg calls it (`0x48ae6b`),
@@ -511,7 +512,7 @@ impl SelfCancel<'_> {
         }
     }
 
-    fn cancel(&mut self, esc: bool, moved: bool) {
+    fn cancel(&mut self, esc: bool, moved: bool, mover_is_player: bool) {
         let now = Instant::now();
         let self_e = self.self_entity();
         // Esc stops one thing, auto-repeat first (`0x6e6e80`).
@@ -559,8 +560,9 @@ impl SelfCancel<'_> {
                 self.cancel_inflight(false, if esc { "esc" } else { "moved" });
             }
         }
-        // The channel: movement only, and the send only (`0x6e9b70`).
-        if moved {
+        // The channel: movement only, with the player as the mover, and the send only
+        // (`0x6e9b70`).
+        if moved && mover_is_player {
             if let Some(spell_id) = self.channel.current(now) {
                 if flags_open(
                     &self.spells,

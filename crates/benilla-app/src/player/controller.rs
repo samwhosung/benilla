@@ -749,15 +749,13 @@ pub(super) fn control(
         );
 
         // The cast bar's self-cancel, on the command press ([`input::cancels_cast`]), never the
-        // streamed word, which a root empties of direction bits. Only our own character's moves
-        // count: vmangos breaks a channel on the caster's own movement (`Spell::update`), so a
-        // possessed creature's steps must not end Mind Control.
+        // streamed word, which a root empties of direction bits. The cast cancel tests no mover
+        // (`0x5150f2`); the channel's needs the player to be it (`0x515180`), so steering a
+        // possessed creature ends a cast but not the Mind Control that holds it.
         let steering_ourselves = player.foreign_mover.is_none();
-        if steering_ourselves
-            && input::cancels_cast(binds, axes.autorun_armed, axes.both_engaged, true)
-        {
+        if input::cancels_cast(binds, axes.autorun_armed, axes.both_engaged, true) {
             net.7.pressed = true;
-            net.7.mover_is_player = true;
+            net.7.mover_is_player = steering_ourselves;
         }
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,
         // keyboard turn, pitch and jump close it, mouse-look facing does not, and only for our
