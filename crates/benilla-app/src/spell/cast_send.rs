@@ -306,7 +306,7 @@ impl CastLadder<'_, '_> {
         self.ground.clear();
         self.reports.changed();
         let _ = self.commands.0.send(cmd);
-        // The send's own signal (`0x6e589d`), ungated as the attempt's send is (#1583).
+        // The send's precast and own signal (`0x6e5898`, `0x6e589d`), as the attempt's send.
         self.reports.changed();
         let auto_repeat = self
             .spells
@@ -856,8 +856,8 @@ fn send_spell_cast(
             None => CastFail::local(spell_id, refusal.reason),
         });
     }
-    // Every rung passed: the attempt fills the pending record with the player as its caster
-    // (`0x6e4fb1`), ahead of the arm and whatever it decides.
+    // Every rung passed: the attempt fills the pending record with the spell (`0x6e4f88`) and the
+    // player as its caster (`0x6e4fb1`), ahead of the arm and whatever it decides.
     core.pending.fill_record();
     // The push (`0x6e5026` → `0x6e4ad0`), which signals: the same spell bailed above, so the slot
     // never holds it here. The arm signals whatever it then decides (`0x6e5333`).
@@ -945,10 +945,11 @@ fn send_spell_cast(
             },
         },
     });
-    // The send's own signal (`0x6e589d`), for the active player's send. The reference signals
-    // only beside the precast visual it starts there (`0x6e5898`), so not for a spell whose
-    // precast already plays (`0x6e588f`, the unit's `[+0xc8c]`, which `0x6ec220` sets through
-    // `0x60d020`); benilla starts no precast at the send (#1583), so it signals every send.
+    // The send's precast (`0x6e5898`) and own signal (`0x6e589d`), for the active player's send.
+    // The reference signals only beside the precast it starts, so not for a spell the unit
+    // already precasts (`0x6e588f`, its `[+0xc8c]`); that test reads the unit, which the edit
+    // applies after the pass, so benilla signals every send. The visual starts at the
+    // `SMSG_SPELL_START` (#1583).
     core.reports.changed();
     // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a failed cast
     // result clears it (`0x6e1630`).
@@ -1184,6 +1185,36 @@ mod tests {
             !take(&mut world),
             "the empty weapon hand's report popped the spell and spent the word"
         );
+    }
+
+    /// The attempt records its spell (`0x6e4f88`); the send, the attempt's or a bind's, starts
+    /// the player's precast of a spell with a visual (`0x6e5898`).
+    #[test]
+    fn the_attempt_records_its_spell_and_the_send_starts_its_precast() {
+        const FIREBALL: u32 = 133;
+        const BLIZZARD: u32 = 10;
+        let (mut world, _rx) = world();
+        crate::creature_anim::install_visuals_for_tests(&mut world, &[FIREBALL, BLIZZARD], &[]);
+        let me = world.spawn(crate::net::SelfPlayer).id();
+        let precast = |world: &World| {
+            world
+                .get::<crate::creature_anim::Precast>(me)
+                .map(|p| p.spell_id)
+        };
+        send(&mut world, FIREBALL, CastCommit::Spell);
+        assert_eq!(
+            world.resource::<crate::spell::PendingCast>().record_spell(),
+            FIREBALL
+        );
+        crate::creature_anim::apply_unit_edits(&mut world);
+        assert_eq!(precast(&world), Some(FIREBALL), "the attempt's send");
+        world
+            .run_system_once(|mut ladder: CastLadder| {
+                ladder.commit_targeted(BLIZZARD, CastCommit::Spell, TargetedBind::Dest([0.0; 3]));
+            })
+            .expect("the ladder runs as a one-shot system");
+        crate::creature_anim::apply_unit_edits(&mut world);
+        assert_eq!(precast(&world), Some(BLIZZARD), "a bind's send");
     }
 
     /// The arm's refusal (`0x6e5045`-`0x6e50a9`) comes after the attempt's push (`0x6e5026`), so

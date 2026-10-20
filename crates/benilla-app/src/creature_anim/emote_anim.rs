@@ -13,10 +13,11 @@ use bevy::prelude::*;
 use crate::net::{EmoteKind, EmoteMessage, ObjectStore, RemoteMotion};
 use crate::sound::EmoteSounds;
 
-use super::{move_flags, select, EmoteAnim, Engaged, MovementState};
+use super::{move_flags, select, EmoteAnim, Engaged, MovementState, Precast};
 
 /// The performer's gate inputs: stand state, move flags (`MovementState` for us, `RemoteMotion`
-/// for a remote player; a creature's spline carries no swim bit) and the [`Engaged`] marker.
+/// for a remote player; a creature's spline carries no swim bit), the [`Engaged`] marker and the
+/// [`Precast`].
 pub(super) type PerformerQuery<'w, 's> = Query<
     'w,
     's,
@@ -25,6 +26,7 @@ pub(super) type PerformerQuery<'w, 's> = Query<
         Option<&'static MovementState>,
         Option<&'static RemoteMotion>,
         Has<Engaged>,
+        Option<&'static Precast>,
     ),
 >;
 
@@ -43,9 +45,10 @@ pub(super) fn emote_to_anim(
         else {
             continue;
         };
-        let (store, movement, remote, engaged) =
-            units.get(entity).unwrap_or((None, None, None, false));
-        if !play_eligible(store, movement, remote, engaged, anim_id) {
+        let (store, movement, remote, engaged, precast) =
+            units.get(entity).unwrap_or((None, None, None, false, None));
+        let precast = precast.is_some_and(|p| p.busy);
+        if !play_eligible(store, movement, remote, engaged, precast, anim_id) {
             debug!("emote_anim: suppressed anim {anim_id} for {entity:?}");
             continue;
         }
@@ -65,23 +68,25 @@ pub(super) fn receive_eligible(stand_state: u8, swimming: bool) -> bool {
     stand_state != 3 && !swimming
 }
 
-/// The shared player's half, `0x5fcd20`: no play while channeling (`0x5fcd83`) or in combat
-/// (`0x5fcd9d`), and LiftOff (192) and Land (200) skip the combat test alone (`0x5fcd5f`/`0x5fcd67`
-/// set the flag that `0x5fcd90` branches past `0x60ecd0` on; the channel test at `0x5fcd83` runs
-/// first). Its already-armed test (`0x5fcd5d`) is the driver's `armed_id`, and its
-/// `[+0xd58] & 0x400` test (`0x5fcd8e`, the weapon-visual hold) is [`super::RangedHold`].
-fn player_eligible(anim_id: u32, channeling: bool, in_combat: bool) -> bool {
+/// The shared player's half, `0x5fcd20`: no play while channeling (`0x5fcd83`), precasting
+/// (`0x5fcd8e`, the bit `[+0xd58] & 0x400`) or in combat (`0x5fcd9d`), and LiftOff (192) and Land
+/// (200) skip the combat test alone (`0x5fcd5f`/`0x5fcd67` set the flag that `0x5fcd90` branches
+/// past `0x60ecd0` on, after the channel and precast tests). Its already-armed test (`0x5fcd5d`) is
+/// the driver's `armed_id`.
+fn player_eligible(anim_id: u32, channeling: bool, precast: bool, in_combat: bool) -> bool {
     let exempt = anim_id == u32::from(select::LIFT_OFF) || anim_id == u32::from(select::LAND);
+    let _ = precast;
     !channeling && (exempt || !in_combat)
 }
 
 /// The whole gate for one unit, as both producers call it; `engaged` stands for the client's
-/// auto-attack target `[unit+0xc48]`.
+/// auto-attack target `[unit+0xc48]`, `precast` for the precast's busy bit.
 pub(super) fn play_eligible(
     store: Option<&ObjectStore>,
     movement: Option<&MovementState>,
     remote: Option<&RemoteMotion>,
     engaged: bool,
+    precast: bool,
     anim_id: u32,
 ) -> bool {
     let fields = store.map(|s| &s.0);
@@ -94,7 +99,8 @@ pub(super) fn play_eligible(
         != 0;
     let channeling = fields.is_some_and(|f| f.unit_channel_spell() != 0);
     let in_combat = engaged || fields.is_some_and(|f| f.unit_flags() & UNIT_FLAGS_COMBAT_BIT != 0);
-    receive_eligible(stand_state, swimming) && player_eligible(anim_id, channeling, in_combat)
+    receive_eligible(stand_state, swimming)
+        && player_eligible(anim_id, channeling, precast, in_combat)
 }
 
 /// Our own unit's inputs to `DoEmote`'s local-play gate `0x5fd680`.
@@ -123,7 +129,7 @@ const SHUFFLE_VOID: u32 = move_flags::HOVER | move_flags::SWIMMING | 0x800;
 /// speed (`0x5fd6c5`), a kneeling looter (`0x5fd6e7`), a channel (`0x5fd701`), an auto-attack
 /// target (`0x5fd721`), a turn shuffle (`0x5fd72c`, approximated) and any stand state but 0 (`0x5fd74d`, and
 /// the cached `[+0xc1c]` at `0x5fd757`, which tracks it). The `[+0xd58]` test at `0x5fd711` refuses
-/// only when both 0x400 ([`super::RangedHold`]) and 0x10000 (unmodelled) are set, and so is not
+/// only when both 0x400 ([`super::Precast`]) and 0x10000 (unmodelled) are set, and so is not
 /// tested here; the turn-shuffle test approximates `0x5fce30`, which also exempts on the armed id,
 /// exempts on `d58 & 0xc` and fires on the mouse-turn latch `d58 & 0x1800`. The ranged auto-repeat
 /// test (`0x5fd735`)
@@ -183,23 +189,52 @@ mod tests {
     #[test]
     fn channeling_or_combat_suppresses_the_play() {
         assert!(
-            player_eligible(66, false, false),
+            player_eligible(66, false, false, false),
             "idle and out of combat plays"
         );
-        assert!(!player_eligible(66, true, false), "channeling suppresses");
-        assert!(!player_eligible(66, false, true), "in combat suppresses");
+        assert!(
+            !player_eligible(66, true, false, false),
+            "channeling suppresses"
+        );
+        assert!(
+            !player_eligible(66, false, false, true),
+            "in combat suppresses"
+        );
     }
 
     /// `0x5fcd5f`/`0x5fcd67`: LiftOff (192) and Land (200) skip the combat test, not the channel.
     #[test]
     fn lift_off_and_land_play_in_combat_but_not_while_channeling() {
-        assert!(player_eligible(192, false, true), "LiftOff in combat");
-        assert!(player_eligible(200, false, true), "Land in combat");
-        assert!(!player_eligible(66, false, true), "any other id refuses");
-        assert!(!player_eligible(193, false, true), "the neighbours refuse");
         assert!(
-            !player_eligible(192, true, true),
+            player_eligible(192, false, false, true),
+            "LiftOff in combat"
+        );
+        assert!(player_eligible(200, false, false, true), "Land in combat");
+        assert!(
+            !player_eligible(66, false, false, true),
+            "any other id refuses"
+        );
+        assert!(
+            !player_eligible(193, false, false, true),
+            "the neighbours refuse"
+        );
+        assert!(
+            !player_eligible(192, true, false, true),
             "channeling still refuses"
+        );
+    }
+
+    /// `0x5fcd8b`-`0x5fcd8e`: the precast bit refuses as the channel does, ahead of the combat
+    /// test LiftOff and Land skip.
+    #[test]
+    fn a_precast_refuses_the_play_and_lift_off_with_it() {
+        assert!(
+            !play_eligible(None, None, None, false, true, 66),
+            "precasting, out of combat: refused"
+        );
+        assert!(
+            !play_eligible(None, None, None, true, true, 192),
+            "LiftOff skips the combat test, not the precast"
         );
     }
 
@@ -208,18 +243,21 @@ mod tests {
     #[test]
     fn an_engaged_unit_refuses_the_play_without_the_flag_bit() {
         assert!(
-            play_eligible(None, None, None, false, 66),
+            play_eligible(None, None, None, false, false, 66),
             "idle, no store: plays"
         );
         assert!(
-            !play_eligible(None, None, None, true, 66),
+            !play_eligible(None, None, None, true, false, 66),
             "engaged: refused"
         );
         assert!(
-            play_eligible(None, None, None, true, 192),
+            play_eligible(None, None, None, true, false, 192),
             "engaged LiftOff"
         );
-        assert!(play_eligible(None, None, None, true, 200), "engaged Land");
+        assert!(
+            play_eligible(None, None, None, true, false, 200),
+            "engaged Land"
+        );
     }
 
     fn moving() -> LocalPlay {

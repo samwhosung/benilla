@@ -7,9 +7,7 @@ use bevy::prelude::*;
 
 use benilla_formats::{SpellCatalog, SpellDisplay, SpellVisualCatalog, VisualKit, VisualStages};
 
-use super::super::{
-    CastEvent, CastEventKind, CastHold, EmoteAnim, RangedHold, SheathRequest, WoundAnim,
-};
+use super::super::{CastEvent, CastEventKind, CastHold, EmoteAnim, SheathRequest, WoundAnim};
 use super::{
     route_cast_visuals, KitPush, MissileSpawn, SpellKitFx, SpellKitShake, SpellKitSound,
     SpellVisuals,
@@ -93,7 +91,7 @@ fn app() -> App {
                 RANGED_SPELL,
                 SpellDisplay {
                     visual: RANGED_VISUAL,
-                    attributes: 0x2, // USES_RANGED_SLOT, the `0x400` hold's gate
+                    attributes: 0x2, // USES_RANGED_SLOT
                     ..Default::default()
                 },
             ),
@@ -995,39 +993,6 @@ fn a_despawned_subject_never_panics_the_router() {
     }
 }
 
-/// The `0x400` weapon-visual hold (`0x60d020`): a ranged spell's visual play inserts [`RangedHold`]
-/// on any caster, and a non-ranged play clears it (the stale-visual cleanup `0x6ec39e`).
-#[test]
-fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it() {
-    let mut app = app();
-    let unit = app.world_mut().spawn_empty().id();
-
-    app.world_mut()
-        .write_message(cast_event(unit, RANGED_SPELL, CastEventKind::Go));
-    app.update();
-    assert!(
-        app.world().entity(unit).get::<RangedHold>().is_some(),
-        "a ranged GO's visual play sets the hold"
-    );
-
-    app.world_mut()
-        .write_message(cast_event(unit, SPELL, CastEventKind::Start));
-    app.update();
-    assert!(
-        app.world().entity(unit).get::<RangedHold>().is_none(),
-        "a non-ranged visual play clears the hold"
-    );
-
-    // A ranged START re-arms it too, but this chain's precast stage is empty, so the GO re-arms it.
-    app.world_mut()
-        .write_message(cast_event(unit, RANGED_SPELL, CastEventKind::Go));
-    app.update();
-    assert!(
-        app.world().entity(unit).get::<RangedHold>().is_some(),
-        "the next ranged play re-arms"
-    );
-}
-
 /// The mount poof, as `0x5ffa50` gives it: only the build leg allocates it, behind
 /// `0x5ffa87 je 0x5ffade` on the new value, so a dismount is silent; any changed value puffs; and
 /// a unit streaming in already mounted does not.
@@ -1617,7 +1582,7 @@ fn a_real_gun_or_crossbow_shooters_auto_shot_go_plays_attackrifle() {
 }
 
 /// Auto Shot's START, once per auto-repeat activation, arms the LoadBow (105) pull as the cast
-/// hold, with [`RangedHold`] and the ranged sheath snap; the GO releases it and fires.
+/// hold, with the ranged sheath snap; the GO releases it and fires.
 #[test]
 fn a_real_bow_shooters_auto_shot_start_arms_the_loadbow_hold() {
     let Some((mut app, unit)) = real_shooter(&WORN_SHORTBOW) else {
@@ -1631,10 +1596,6 @@ fn a_real_bow_shooters_auto_shot_start_arms_the_loadbow_hold() {
         held.map(|h| (h.anim_id, h.spell_id, h.ranged)),
         Some((WORN_SHORTBOW.load_anim, AUTO_SHOT, true)),
         "START arms the bow's pull as the cast hold"
-    );
-    assert!(
-        app.world().entity(unit).get::<RangedHold>().is_some(),
-        "…and the any-caster `0x400` weapon-visual hold"
     );
     let sheaths: Vec<_> = app
         .world_mut()

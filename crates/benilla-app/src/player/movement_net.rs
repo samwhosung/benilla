@@ -80,11 +80,28 @@ pub(super) struct ArcEdges {
     pub(super) fall_time: u32,
 }
 
+/// Whether a move message ends the mover's precast: the send `0x60e0a0` clears it (`0x60e15d`)
+/// ahead of every opcode but those it sends at once, which for our moves are the stops
+/// (0xb7, 0xba), the turns (0xbc to 0xbe) and the facing (0xda), class 0 of its table
+/// `0x60e408`.
+fn ends_precast(kind: MoveKind) -> bool {
+    !matches!(
+        kind,
+        MoveKind::Stop
+            | MoveKind::StopStrafe
+            | MoveKind::StartTurnLeft
+            | MoveKind::StartTurnRight
+            | MoveKind::StopTurn
+            | MoveKind::SetFacing
+    )
+}
+
 /// Streams this frame's movement as the reference does: a `MSG_MOVE_*` per axis transition (its
 /// broadcaster `0x61a820` picks the opcode from the flag delta, `0x619f00`), a `SET_FACING` each
 /// frame the facing changes off the turn axis, and a heartbeat every 500 ms while moving. Airborne,
 /// the forward, back and strafe transitions go silent and their live bits ride the packets that do
 /// go out. Sends are fire-and-forget; updates `player`'s last-sent flags, facing and heartbeat.
+/// Returns whether a message sent ended the mover's precast ([`ends_precast`]).
 pub(super) fn stream_self_movement(
     sender: &Sender<ClientCommand>,
     player: &mut Player,
@@ -96,7 +113,7 @@ pub(super) fn stream_self_movement(
     knock_ack: Option<super::state::PendingKnockback>,
     transport: Option<TransportPose>,
     skip: SkipClock,
-) {
+) -> bool {
     let ArcEdges {
         jumped,
         wire_launch,
@@ -152,7 +169,8 @@ pub(super) fn stream_self_movement(
     // applies the launch and then sends (`0x61624d` call `0x6179c0`, then `0x616261` push `0xf0`).
     // `launch` is echoed bit for bit, as the reference copies its live fields: vmangos matches the
     // four floats within 0.01 (`Unit.cpp:7097-7100`), and a re-derived quad has no direction at
-    // `xy_speed == 0`.
+    // `xy_speed == 0`. Its send ends the precast: 0xf0 is no opcode `0x60e0a0` exempts.
+    let mut precast_ended = knock_ack.is_some();
     if let Some(k) = knock_ack {
         let _ = sender.send(ClientCommand::KnockBackAck {
             guid: k.guid,
@@ -171,7 +189,7 @@ pub(super) fn stream_self_movement(
     let removed = prev & !wire_flags;
     let mut sent = false;
     macro_rules! send_move {
-        ($kind:expr) => {{
+        ($kind:expr, keeps_precast) => {{
             if *crate::net::CAST_TRACE {
                 bevy::log::info!(
                     "cast-trace: SEND move {:?} flags={:#x} pos=[{:.3},{:.3},{:.3}] o={:.3}",
@@ -199,6 +217,10 @@ pub(super) fn stream_self_movement(
             sent = true;
             // vmangos relocates the mover to every one of these (`HandleMoverRelocation`).
             player.last_pos = wow_pos;
+        }};
+        ($kind:expr) => {{
+            precast_ended |= ends_precast($kind);
+            send_move!($kind, keeps_precast)
         }};
     }
     const FB: u32 = move_flags::FORWARD | move_flags::BACKWARD;
@@ -282,9 +304,10 @@ pub(super) fn stream_self_movement(
     // At rest, a position change goes out the frame it happens: the resolver settles a resting
     // body by fractions of a millimetre after the packet that reported it, and vmangos compares
     // positions exactly (`Player.cpp:6092`), so a stale copy arrives with the next packet as
-    // movement and interrupts the cast in flight (`Unit.cpp:10387`).
+    // movement and interrupts the cast in flight (`Unit.cpp:10387`). It ends no precast: the
+    // reference sends no heartbeat at rest (`0x616725`, flags `& 0x200f`).
     if !sent && wire_flags & IN_MOTION == 0 && wow_pos != player.last_pos {
-        send_move!(MoveKind::Heartbeat);
+        send_move!(MoveKind::Heartbeat, keeps_precast);
     }
     if sent {
         player.last_heartbeat = now;
@@ -293,6 +316,8 @@ pub(super) fn stream_self_movement(
     // leaves no catch-up `SET_FACING` behind.
     player.last_facing = facing;
     player.move_flags = wire_flags;
+    let _ = precast_ended;
+    false
 }
 
 /// `CMSG_MOVE_TIME_SKIPPED`: the milliseconds the mover advanced through without integrating. The
@@ -1442,5 +1467,73 @@ mod tests {
             rx.try_recv().is_err(),
             "no Stop is sent when we were already reported stopped"
         );
+    }
+
+    /// `0x60e0a0` ends the mover's precast (`0x60e15d`) ahead of each move it does not send at
+    /// once (`0x60e408` class 0): a start, a heartbeat and the knockback ack do; a stop, a turn and
+    /// a facing change do not, nor the at-rest position report, which the reference never sends.
+    #[test]
+    fn the_moves_the_send_does_not_exempt_end_the_precast() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let frame = |player: &mut Player, flags: u32, now: f32, knock: bool| {
+            let ended = stream_self_movement(
+                &tx,
+                player,
+                flags,
+                0.0,
+                ArcEdges {
+                    jumped: false,
+                    wire_launch: knock,
+                    air_nudged: false,
+                    landed: false,
+                    fall_time: 0,
+                },
+                now,
+                &[],
+                knock.then_some(super::super::state::PendingKnockback {
+                    guid: 0x1234,
+                    counter: 1,
+                    launch: benilla_protocol::JumpInfo {
+                        zspeed: -12.0,
+                        cos_angle: 1.0,
+                        sin_angle: 0.0,
+                        xy_speed: 25.0,
+                    },
+                }),
+                None,
+                no_skip(),
+            );
+            let sent: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
+            assert!(!sent.is_empty(), "the frame at {now} sends something");
+            ended
+        };
+        assert!(
+            frame(&mut player, move_flags::FORWARD, 0.0, false),
+            "start forward"
+        );
+        assert!(!frame(&mut player, 0, 0.1, false), "the stop");
+        assert!(
+            !frame(&mut player, move_flags::TURN_LEFT, 0.2, false),
+            "a turn"
+        );
+        assert!(!frame(&mut player, 0, 0.3, false), "the turn's stop");
+        assert!(
+            frame(&mut player, move_flags::FORWARD, 1.0, false),
+            "start again"
+        );
+        assert!(
+            frame(&mut player, move_flags::FORWARD, 1.6, false),
+            "the heartbeat"
+        );
+        assert!(!frame(&mut player, 0, 2.0, false), "the stop");
+        player.face_yaw += 0.5;
+        assert!(!frame(&mut player, 0, 2.1, false), "a facing change");
+        player.pos.x += 0.01;
+        assert!(
+            !frame(&mut player, 0, 2.2, false),
+            "the at-rest position report"
+        );
+        assert!(frame(&mut player, 0, 2.3, true), "the knockback ack (0xf0)");
     }
 }

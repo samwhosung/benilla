@@ -69,7 +69,7 @@ pub(super) fn control(
         Res<crate::loading_screen::LoadingScreen>,
         // Our own `[0xb4b3e4]`, which a control verdict on our character writes.
         ResMut<super::OwnControlLost>,
-        // The body mid-cast, which the posture verbs refuse on.
+        // The body's precast spell, which the posture verbs refuse on.
         Query<Has<crate::creature_anim::Casting>, (With<Embodied>, Without<FlyCam>)>,
         // `ChrClasses.dbc`, whose relic flag the sheath toggle's ranged candidate reads.
         Option<Res<crate::chr_classes::ChrClassTable>>,
@@ -812,7 +812,7 @@ pub(super) fn control(
             gated,
             mover: player.foreign_mover.or(self_guid),
         };
-        movement_net::stream_self_movement(
+        let precast_ended = movement_net::stream_self_movement(
             &net.0 .0,
             &mut player,
             move_flags_now,
@@ -833,6 +833,11 @@ pub(super) fn control(
             wire_transport,
             skip,
         );
+        if let (true, Ok((e, ..))) = (precast_ended, body.single()) {
+            commands
+                .entity(e)
+                .try_remove::<crate::creature_anim::Precast>();
+        }
     } else {
         // Free fly. Park the mover first, so a detach mid-move leaves no stale flags for observers
         // to extrapolate; a no-op once stopped.

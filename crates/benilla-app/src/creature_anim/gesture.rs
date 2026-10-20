@@ -112,9 +112,10 @@ pub(super) fn drive_gestures(
         let Some(anim_id) = emotes.anim(emote_id) else {
             continue;
         };
-        let (store, movement, remote, engaged) =
-            units.get(entity).unwrap_or((None, None, None, false));
-        if !super::emote_anim::play_eligible(store, movement, remote, engaged, anim_id) {
+        let (store, movement, remote, engaged, precast) =
+            units.get(entity).unwrap_or((None, None, None, false, None));
+        let precast = precast.is_some_and(|p| p.busy);
+        if !super::emote_anim::play_eligible(store, movement, remote, engaged, precast, anim_id) {
             debug!("gesture: {gesture:?} suppressed for {entity:?}");
             continue;
         }

@@ -1,5 +1,5 @@
 //! The cast and auto-repeat state a press, a script call or a cast result changes on a unit: the
-//! cast's [`Casting`] and the auto-repeat markers. They are components, which a system adds or
+//! cast's [`Casting`], its [`Precast`] and the auto-repeat markers. They are components, which a system adds or
 //! removes only through a sync point, so the seams that change them (`SelfCancel`, `CastLadder`,
 //! `AttackSeam`) queue the change here and hold no `Commands`: the call host they sit in carries
 //! no deferred buffer, and the VM pass's hosts need no sync point between them.
@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use bevy::prelude::*;
 
-use super::{AutoRepeatArmed, Casting, NockLatch, NockedAmmo, RangedHold};
+use super::{precast, AutoRepeatArmed, Casting, NockLatch, NockedAmmo};
 
 /// One queued change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,8 +23,21 @@ pub(crate) enum UnitEdit {
     ReapCasting { entity: Entity, spell_id: u32 },
     /// The sticky auto-repeat arm (`0x6e593b`, `|= 0x200`).
     ArmAutoRepeat(Entity),
-    /// The local auto-repeat cancel's clear (`0x6ea080`): the arm, both idle bits and the nock.
-    ClearAutoRepeat(Entity),
+    /// The local auto-repeat cancel's clear (`0x6ea080`): the arm (`0x6ea113`), the precast of
+    /// the repeat spell `spell_id` (`0x6ea12b`) and the nock (`0x6ea140`).
+    ClearAutoRepeat { entity: Entity, spell_id: u32 },
+    /// `0x6ec220`'s precast at `SMSG_SPELL_START` (`0x6e7908`, `0x6e79be`).
+    StartPrecast { entity: Entity, spell_id: u32 },
+    /// The same at the active player's send, unless the unit already precasts the spell
+    /// (`0x6e588f`).
+    SendPrecast { entity: Entity, spell_id: u32 },
+    /// `0x60d040`: the precast ends when it is `spell_id`'s, or whatever it is for `None`.
+    EndPrecast {
+        entity: Entity,
+        spell_id: Option<u32>,
+    },
+    /// `0x60fc50`: the precast's busy bit alone.
+    EndPrecastBusy(Entity),
 }
 
 impl UnitEdit {
@@ -34,12 +47,16 @@ impl UnitEdit {
         match self {
             Self::ReapCasting { .. } => vec![std::any::TypeId::of::<Casting>()],
             Self::ArmAutoRepeat(_) => vec![std::any::TypeId::of::<AutoRepeatArmed>()],
-            Self::ClearAutoRepeat(_) => vec![
+            Self::ClearAutoRepeat { .. } => vec![
                 std::any::TypeId::of::<AutoRepeatArmed>(),
-                std::any::TypeId::of::<RangedHold>(),
+                std::any::TypeId::of::<super::Precast>(),
                 std::any::TypeId::of::<NockedAmmo>(),
                 std::any::TypeId::of::<NockLatch>(),
             ],
+            Self::StartPrecast { .. }
+            | Self::SendPrecast { .. }
+            | Self::EndPrecast { .. }
+            | Self::EndPrecastBusy(_) => vec![std::any::TypeId::of::<super::Precast>()],
         }
     }
 
@@ -52,12 +69,34 @@ impl UnitEdit {
                 spell_id: 0,
             },
             Self::ArmAutoRepeat(entity),
-            Self::ClearAutoRepeat(entity),
+            Self::ClearAutoRepeat {
+                entity,
+                spell_id: 0,
+            },
+            Self::StartPrecast {
+                entity,
+                spell_id: 0,
+            },
+            Self::SendPrecast {
+                entity,
+                spell_id: 0,
+            },
+            Self::EndPrecast {
+                entity,
+                spell_id: None,
+            },
+            Self::EndPrecastBusy(entity),
         ];
         // A new kind stops this match compiling until it is listed above as well.
         for edit in &every {
             match edit {
-                Self::ReapCasting { .. } | Self::ArmAutoRepeat(_) | Self::ClearAutoRepeat(_) => {}
+                Self::ReapCasting { .. }
+                | Self::ArmAutoRepeat(_)
+                | Self::ClearAutoRepeat { .. }
+                | Self::StartPrecast { .. }
+                | Self::SendPrecast { .. }
+                | Self::EndPrecast { .. }
+                | Self::EndPrecastBusy(_) => {}
             }
         }
         every
@@ -116,11 +155,16 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
                     unit.insert(AutoRepeatArmed);
                 }
             }
-            UnitEdit::ClearAutoRepeat(entity) => {
+            UnitEdit::ClearAutoRepeat { entity, spell_id } => {
+                let _ = spell_id;
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
-                    unit.remove::<(AutoRepeatArmed, RangedHold, NockedAmmo, NockLatch)>();
+                    unit.remove::<(AutoRepeatArmed, super::Precast, NockedAmmo, NockLatch)>();
                 }
             }
+            UnitEdit::StartPrecast { .. }
+            | UnitEdit::SendPrecast { .. }
+            | UnitEdit::EndPrecast { .. }
+            | UnitEdit::EndPrecastBusy(_) => {}
         }
     }
 }

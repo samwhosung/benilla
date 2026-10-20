@@ -15,7 +15,7 @@ pub(super) struct PlayerReads {
     /// Our own control lost ([`super::OwnControlLost`]): `IsClientControlled` (`0x5fa5f0`) reads
     /// the unit's `[+0xc58] & 0x400`, which `0x5fa600` writes beside that flag for our character.
     pub(super) control_lost: bool,
-    /// The body is mid-cast ([`crate::creature_anim::Casting`]), the reference's precast spell.
+    /// The body holds a precast spell ([`crate::creature_anim::Precast`], `+0xc8c`).
     pub(super) precast: bool,
 }
 

@@ -2901,9 +2901,10 @@ fn a_running_shooter_drops_the_nocked_arrow_and_keeps_its_ammo_cache() {
     );
 }
 
-/// The drawn idle enters on the local auto-repeat bit `0x200` alone (`0x5fd460`), never `0x400`.
+/// The drawn idle enters on the local auto-repeat bit `0x200` alone (`0x5fd460`), never the
+/// precast bit `0x400`.
 #[test]
-fn the_weapon_visual_hold_alone_never_puts_a_shooter_in_the_drawn_idle() {
+fn the_precast_bit_alone_never_puts_a_shooter_in_the_drawn_idle() {
     let spawn = |app: &mut App, auto_repeat: bool| {
         let mut e = app.world_mut().spawn((
             archer_model(),
@@ -2915,8 +2916,11 @@ fn the_weapon_visual_hold_alone_never_puts_a_shooter_in_the_drawn_idle() {
                 ranged: Some((2, 0x2)),
                 ..Default::default()
             },
-            // Set by any ranged spell's visual, and not cleared at volley end.
-            crate::creature_anim::RangedHold,
+            // A precast, bit set: the drawn idle never reads it.
+            crate::creature_anim::Precast {
+                spell_id: 75,
+                busy: true,
+            },
         ));
         if auto_repeat {
             e.insert(crate::creature_anim::AutoRepeatArmed);

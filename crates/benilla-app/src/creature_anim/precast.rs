@@ -1,0 +1,264 @@
+//! A unit's precast: the spell at `+0xc8c` and the unit-word bit `[+0xd58] & 0x400`, which
+//! `0x6ec220` sets together through `0x60d020` (`0x6ec2cf`) once the spell resolves a visual
+//! (`0x60d450`, else `0x6ec2a9` returns), instants included.
+//!
+//! It is started by the active player's send (`0x6e5898`, [`precast_at_send`]) and by
+//! `SMSG_SPELL_START` (`0x6e7908` for another unit, `0x6e79be` for ours unless the pending record
+//! holds the spell), through [`super::UnitEdit`]s, which apply here.
+//!
+//! Ended by `0x60d040`, which clears both when its spell is the unit's `+0xc8c` (`0x60d049`):
+//!
+//! - keyed by the spell, at its GO (`0x6e7fc5`), its `SMSG_SPELL_FAILED_OTHER` (`0x6e8e8c`), the
+//!   player's failed cast result (`0x6e1c8e`) and the auto-repeat cancel (`0x6ea12b`), as edits;
+//! - with the unit's own spell, so always, by a spline move (`0x6020e8`) and by the mover's
+//!   own move messages (`0x60e15d`), which remove the component.
+//!
+//! The bit alone is cleared by the local StartAttack (`0x5ecd87` → `0x60fc50`); `0x5fbd60`,
+//! which clears it when a unit is re-shown, has no counterpart, as a unit that leaves is
+//! despawned.
+
+use bevy::prelude::*;
+
+use super::UnitEdit;
+
+/// The unit's precast, present while `+0xc8c` holds a spell. The stand and sheathe gates read
+/// the spell (`0x5ed4cc`, `0x5eb52b`), the emote gate the bit (`0x5fcd8b`).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Precast {
+    /// `+0xc8c`, never 0.
+    pub(crate) spell_id: u32,
+    /// `[+0xd58] & 0x400`, cleared alone by `0x60fc50`, which leaves the spell.
+    pub(crate) busy: bool,
+}
+
+/// `SendCast`'s precast for the active player's send (`0x6e5877`-`0x6e5898`): a spell other
+/// than the unit's `+0xc8c` (`0x6e588f`) starts it. The flag `0x6e5885` tests is set only by the
+/// trade slot's bind (`0x6e694f`), which benilla does not build, so every send reaches it.
+pub(crate) fn precast_at_send(player: Option<Entity>, spell_id: u32, edits: &super::UnitEdits) {
+    if let Some(entity) = player {
+        edits.push(UnitEdit::SendPrecast { entity, spell_id });
+    }
+}
+
+/// `0x6ec220`'s state half: `0x60d020` for a spell with a visual.
+pub(super) fn start(world: &mut World, entity: Entity, spell_id: u32) {
+    if !super::spell_visual::resolves_visual(world, entity, spell_id) {
+        return;
+    }
+    if let Ok(mut unit) = world.get_entity_mut(entity) {
+        unit.insert(Precast {
+            spell_id,
+            busy: true,
+        });
+    }
+}
+
+/// The send's start: a spell the unit already precasts starts nothing (`0x6e588f`), even once
+/// `0x60fc50` has cleared its bit.
+pub(super) fn start_at_send(world: &mut World, entity: Entity, spell_id: u32) {
+    if world.get::<Precast>(entity).map(|p| p.spell_id) != Some(spell_id) {
+        start(world, entity, spell_id);
+    }
+}
+
+/// `0x60d040`'s clear: keyed by `spell`, or with the unit's own spell for `None`.
+pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>) {
+    let Ok(mut unit) = world.get_entity_mut(entity) else {
+        return;
+    };
+    let ends = unit
+        .get::<Precast>()
+        .is_some_and(|p| spell.is_none_or(|s| s == p.spell_id));
+    if ends {
+        unit.remove::<Precast>();
+    }
+}
+
+/// `0x60fc50`'s clear of the bit alone.
+pub(super) fn end_busy(world: &mut World, entity: Entity) {
+    if let Some(mut p) = world.get_mut::<Precast>(entity) {
+        p.busy = false;
+    }
+}
+
+/// Installs a spell catalog whose `with_visual` spells resolve a `SpellVisual` row and whose
+/// `without` spells name none, for the tests that start a precast.
+#[cfg(test)]
+pub(crate) fn install_visuals_for_tests(world: &mut World, with_visual: &[u32], without: &[u32]) {
+    use std::collections::HashMap;
+
+    use benilla_formats::{SpellCatalog, SpellDisplay, SpellVisualCatalog, VisualStages};
+
+    const VISUAL: u32 = 130;
+    let display = |visual| SpellDisplay {
+        visual,
+        ..Default::default()
+    };
+    let displays = with_visual
+        .iter()
+        .map(|&id| (id, display(VISUAL)))
+        .chain(without.iter().map(|&id| (id, display(0))))
+        .collect();
+    world.insert_resource(super::SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([(VISUAL, VisualStages::default())]),
+        HashMap::new(),
+    )));
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(displays),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::creature_anim::{apply_unit_edits, UnitEdits};
+
+    /// Fireball: an own `SpellVisual` row.
+    const VISUAL_SPELL: u32 = 133;
+    /// Frostbolt, given a row as well.
+    const OTHER_VISUAL_SPELL: u32 = 116;
+    /// A spell whose row names no visual.
+    const BARE_SPELL: u32 = 7;
+
+    fn world() -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<UnitEdits>();
+        install_visuals_for_tests(
+            &mut world,
+            &[VISUAL_SPELL, OTHER_VISUAL_SPELL],
+            &[BARE_SPELL],
+        );
+        let unit = world.spawn_empty().id();
+        (world, unit)
+    }
+
+    fn apply(world: &mut World, edit: UnitEdit) {
+        world.resource::<UnitEdits>().push(edit);
+        apply_unit_edits(world);
+    }
+
+    fn precast(world: &World, unit: Entity) -> Option<Precast> {
+        world.get::<Precast>(unit).copied()
+    }
+
+    /// `0x6ec220` starts the precast only for a spell that resolves a visual (`0x6ec2a9`, else
+    /// `0x60d020` at `0x6ec2cf`), whether the send or the start asks.
+    #[test]
+    fn a_spell_with_a_visual_precasts_and_one_without_does_not() {
+        let (mut world, unit) = world();
+        apply(
+            &mut world,
+            UnitEdit::SendPrecast {
+                entity: unit,
+                spell_id: BARE_SPELL,
+            },
+        );
+        assert_eq!(precast(&world, unit), None, "no visual, no precast");
+        apply(
+            &mut world,
+            UnitEdit::SendPrecast {
+                entity: unit,
+                spell_id: VISUAL_SPELL,
+            },
+        );
+        assert_eq!(
+            precast(&world, unit),
+            Some(Precast {
+                spell_id: VISUAL_SPELL,
+                busy: true
+            })
+        );
+        apply(
+            &mut world,
+            UnitEdit::StartPrecast {
+                entity: unit,
+                spell_id: OTHER_VISUAL_SPELL,
+            },
+        );
+        assert_eq!(
+            precast(&world, unit).map(|p| p.spell_id),
+            Some(OTHER_VISUAL_SPELL),
+            "a start replaces the spell"
+        );
+    }
+
+    /// The send starts nothing for the spell the unit already precasts (`0x6e588f`), so a bit
+    /// StartAttack cleared (`0x60fc50`, the spell kept) stays clear; another spell sets it.
+    #[test]
+    fn a_resend_of_the_precast_spell_leaves_its_cleared_bit_clear() {
+        let (mut world, unit) = world();
+        let send = |spell_id| UnitEdit::SendPrecast {
+            entity: unit,
+            spell_id,
+        };
+        apply(&mut world, send(VISUAL_SPELL));
+        apply(&mut world, UnitEdit::EndPrecastBusy(unit));
+        assert_eq!(
+            precast(&world, unit),
+            Some(Precast {
+                spell_id: VISUAL_SPELL,
+                busy: false
+            }),
+            "the bit alone clears"
+        );
+        apply(&mut world, send(VISUAL_SPELL));
+        assert_eq!(precast(&world, unit).map(|p| p.busy), Some(false));
+        apply(&mut world, send(OTHER_VISUAL_SPELL));
+        assert_eq!(
+            precast(&world, unit),
+            Some(Precast {
+                spell_id: OTHER_VISUAL_SPELL,
+                busy: true
+            })
+        );
+    }
+
+    /// `0x60d040` clears only when its spell is the unit's (`0x60d049`): a keyed end of another
+    /// spell spares it, the unit's own spell ends it, and so does the auto-repeat cancel's for the
+    /// repeat spell (`0x6ea12b`).
+    #[test]
+    fn the_keyed_end_spares_another_spells_precast() {
+        let (mut world, unit) = world();
+        let start = UnitEdit::StartPrecast {
+            entity: unit,
+            spell_id: VISUAL_SPELL,
+        };
+        let end = |spell_id| UnitEdit::EndPrecast {
+            entity: unit,
+            spell_id,
+        };
+        apply(&mut world, start);
+        apply(&mut world, end(Some(OTHER_VISUAL_SPELL)));
+        assert!(precast(&world, unit).is_some(), "another spell's end");
+        apply(&mut world, end(Some(VISUAL_SPELL)));
+        assert_eq!(precast(&world, unit), None, "its own spell's end");
+        apply(&mut world, start);
+        apply(&mut world, end(None));
+        assert_eq!(
+            precast(&world, unit),
+            None,
+            "an end with the unit's own spell"
+        );
+        apply(&mut world, start);
+        apply(
+            &mut world,
+            UnitEdit::ClearAutoRepeat {
+                entity: unit,
+                spell_id: OTHER_VISUAL_SPELL,
+            },
+        );
+        assert!(
+            precast(&world, unit).is_some(),
+            "another repeat spell's cancel"
+        );
+        apply(
+            &mut world,
+            UnitEdit::ClearAutoRepeat {
+                entity: unit,
+                spell_id: VISUAL_SPELL,
+            },
+        );
+        assert_eq!(precast(&world, unit), None, "the repeat spell's cancel");
+    }
+}

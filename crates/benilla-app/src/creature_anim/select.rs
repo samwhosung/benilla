@@ -469,8 +469,8 @@ pub(super) fn ranged_hold_anim(load: u16) -> u16 {
 
 /// Whether the drawn ranged idle owns the standing pose: `0x5fd460` claims on sheath CUR == 2
 /// (`0x5fd463`) and the auto-repeat bit `[+0xd58] & 0x200` (`0x5fd476`) alone, a bit only the
-/// local cast-send sets (`0x6e593b`). `0x400` ([`super::RangedHold`]) is not tested here, only by
-/// `0x5fc3f0`'s Hold sustain.
+/// local cast-send sets (`0x6e593b`). The precast bit `0x400` ([`super::Precast`]) is not tested
+/// here, only by `0x5fc3f0`'s Hold sustain (`0x5fc61f`, `0x5fc664`).
 pub(super) fn ranged_idle_gate(auto_repeat: bool, sheath_cur: Option<u8>) -> bool {
     sheath_cur == Some(2) && auto_repeat
 }

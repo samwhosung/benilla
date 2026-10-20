@@ -279,6 +279,31 @@ fn resolve_stages(
     Some(own.unwrap_or_default().merged_over_weapon(weapon))
 }
 
+/// Whether `spell_id` resolves a visual for `caster` (`0x60d450` returns a row), which `0x6ec220`
+/// asks of a unit only (`0x6ec245`, type mask bit 3) before it starts the precast.
+pub(super) fn resolves_visual(world: &mut World, caster: Entity, spell_id: u32) -> bool {
+    world
+        .run_system_cached_with(visual_resolves, (caster, spell_id))
+        .unwrap_or(false)
+}
+
+fn visual_resolves(
+    In((caster, spell_id)): In<(Entity, u32)>,
+    spells: Option<Res<crate::ui_action::Spells>>,
+    visuals: Option<Res<SpellVisuals>>,
+    kinds: Query<&NetEntity>,
+    mut weapon_src: WeaponVisualSrc,
+) -> bool {
+    let (Some(spells), Some(visuals)) = (spells.as_deref(), visuals.as_deref()) else {
+        return false; // no client data
+    };
+    let unit = kinds
+        .get(caster)
+        .ok()
+        .is_none_or(|n| matches!(n.kind, EntityKind::Unit | EntityKind::Player));
+    unit && resolve_stages(spells, &visuals.0, spell_id, || weapon_src.caster(caster)).is_some()
+}
+
 /// One stage's kit from `spell_id`'s visual chain.
 fn resolve_kit(
     spells: &crate::ui_action::Spells,
@@ -656,20 +681,21 @@ pub(super) fn route_cast_visuals(
                     |s| s.precast,
                     || weapon_src.caster(ev.entity),
                 ) {
-                    // The `0x400` weapon-visual hold: a ranged visual play sets it (`0x60d020`),
-                    // any other clears it (`0x6ec39e`); it keeps a remote shooter drawn.
                     let ranged = spells
                         .catalog
                         .get(ev.spell_id)
                         .is_some_and(|d| d.ranged_slot());
-                    // Fallible: `model_fade::apply_despawn_fade` is unordered against this chain
-                    // and can despawn the unit before these commands apply.
                     if ranged {
-                        commands.entity(ev.entity).try_insert(super::RangedHold);
+                        commands.entity(ev.entity).try_insert(super::Precast {
+                            spell_id: ev.spell_id,
+                            busy: true,
+                        });
                     } else {
-                        commands.entity(ev.entity).try_remove::<super::RangedHold>();
+                        commands.entity(ev.entity).try_remove::<super::Precast>();
                     }
-                    // The hold resolver takes only an id above 0 (`0x612a0a jle`).
+                    // The hold resolver takes only an id above 0 (`0x612a0a jle`). Fallible:
+                    // `model_fade::apply_despawn_fade` is unordered against this chain and can
+                    // despawn the unit before these commands apply.
                     if let Some(anim_id) = kit.positive_anim() {
                         commands.entity(ev.entity).try_insert(CastHold {
                             anim_id,
@@ -735,15 +761,17 @@ pub(super) fn route_cast_visuals(
                     |s| s.cast,
                     || weapon_src.caster(ev.entity),
                 ) {
-                    // The `0x400` hold re-asserted per shot, or cleared for a non-ranged play.
                     if spells
                         .catalog
                         .get(ev.spell_id)
                         .is_some_and(|d| d.ranged_slot())
                     {
-                        commands.entity(ev.entity).try_insert(super::RangedHold);
+                        commands.entity(ev.entity).try_insert(super::Precast {
+                            spell_id: ev.spell_id,
+                            busy: true,
+                        });
                     } else {
-                        commands.entity(ev.entity).try_remove::<super::RangedHold>();
+                        commands.entity(ev.entity).try_remove::<super::Precast>();
                     }
                     play_kit(
                         ev.entity,

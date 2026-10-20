@@ -111,15 +111,6 @@ pub(crate) struct Engaged(pub(crate) u64);
 #[derive(Component)]
 pub(crate) struct AutoRepeatArmed;
 
-/// The ranged weapon-visual hold, `[+0xd58] & 0x400`, set for any caster whose ranged visual
-/// plays (`0x60d020`); cleared by a non-ranged visual (`0x6ec39e`), the local cancel, melee
-/// attack-start or a spline move (`0x6020e8`), never by a sheath change or volley end. It gates
-/// nothing here: the reference re-arms the Hold at each completion while it holds (`0x5fc3f0`,
-/// via `0x7075af`), ours loops the Hold once armed. It is no entry into the drawn idle: read as
-/// one, it leaves a shooter aiming after a single Serpent Sting.
-#[derive(Component)]
-pub(crate) struct RangedHold;
-
 /// The displayed nocked ammo, the reference's `[+0xd28]`/`[+0xd2c]` (`UpdateAmmoDisplay`
 /// `0x60ba30`): an `ItemDisplayInfo` model at HandArrow (35), bow only (`0x60bb19`), set per shot
 /// from the `SMSG_SPELL_START` ammo tail. Removed by the un-nock `0x60f530`: the local cancel,
@@ -158,22 +149,21 @@ pub(crate) fn drive_nock_latch(
     }
 }
 
-/// The one local auto-repeat cancel, reference `0x6ea080`: clears the key (`[0xceac30]`), both
-/// idle bits and the nock (`0x60f530`) and sends `CMSG_CANCEL_AUTO_REPEAT_SPELL` (`0x6ea0c6`);
-/// the sheath stays drawn.
+/// The one local auto-repeat cancel, reference `0x6ea080`: sends `CMSG_CANCEL_AUTO_REPEAT_SPELL`
+/// (`0x6ea0c6`), clears the arm, the repeat spell's precast and the nock
+/// ([`UnitEdit::ClearAutoRepeat`]) and the key (`[0xceac30]`); the sheath stays drawn.
 pub(crate) fn cancel_auto_repeat_local(
     entity: Option<Entity>,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     edits: &UnitEdits,
     net: &crate::net::NetCommands,
 ) {
-    if auto_repeat.0.is_none() {
+    let Some(spell_id) = auto_repeat.0.take() else {
         // The reference's `[0xceac30] == 0` early-out: nothing running, nothing sent.
         return;
-    }
-    auto_repeat.0 = None;
-    if let Some(e) = entity {
-        edits.push(UnitEdit::ClearAutoRepeat(e));
+    };
+    if let Some(entity) = entity {
+        edits.push(UnitEdit::ClearAutoRepeat { entity, spell_id });
     }
     let _ = net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
 }
@@ -230,8 +220,8 @@ impl StartGate {
 
 /// The local StartAttack, reference `0x5ecb70`: it returns first when [`StartGate::refuses`];
 /// the swing send (`0x5eccfd`) is skipped while attacking unless a stop is in flight (`[+0xc54]`,
-/// which the target switch passes as `stop_in_flight`); the tail, melee sheath snap then
-/// auto-repeat cancel (`0x5ecd78`), always runs, so melee and auto-shot are exclusive. Callers own
+/// which the target switch passes as `stop_in_flight`); the tail, melee sheath snap, precast bit
+/// and auto-repeat cancel (`0x5ecd78`), always runs, so melee and auto-shot are exclusive. Callers own
 /// the other entry checks: no call from a cast press while engaged (`0x6e51cb`) and the
 /// attackability walk (`0x606980`).
 pub(crate) fn start_attack_local(
@@ -636,6 +626,12 @@ pub(crate) use impact::{DefenseAnim, PendingImpacts, SwingImpact, SwingSlowdown}
 mod edits;
 pub(crate) use edits::{apply_unit_edits, flush_unit_edits, UnitEdit, UnitEdits};
 
+/// The unit's precast spell and its busy bit.
+mod precast;
+#[cfg(test)]
+pub(crate) use precast::install_visuals_for_tests;
+pub(crate) use precast::{precast_at_send, Precast};
+
 /// The melee blood spurt.
 mod blood;
 mod env_damage;
@@ -1039,6 +1035,57 @@ mod attack_stand_tests {
             stands,
             vec![0],
             "StartAttack asks for stand state 0 exactly once, even on the leg that sends no swing"
+        );
+    }
+
+    /// StartAttack's tail clears the precast's bit alone (`0x5ecd87` → `0x60fc50`), on the
+    /// already-engaged leg too; the spell stays.
+    #[test]
+    fn starting_an_attack_clears_the_precast_bit_and_keeps_its_spell() {
+        use bevy::ecs::message::Messages;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Messages<SheathRequest>>();
+        world.init_resource::<Messages<crate::player::StandStateRequest>>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(crate::net::NetCommands(tx));
+        world.insert_resource(crate::spell::AutoRepeatActive(None));
+        world.init_resource::<UnitEdits>();
+        let me = world
+            .spawn(Precast {
+                spell_id: 133,
+                busy: true,
+            })
+            .id();
+        world
+            .run_system_once(
+                move |mut auto_repeat: ResMut<crate::spell::AutoRepeatActive>,
+                      mut sheath: MessageWriter<SheathRequest>,
+                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+                      edits: Res<UnitEdits>,
+                      net: Res<crate::net::NetCommands>| {
+                    start_attack_local(
+                        me,
+                        0xdead_beef,
+                        true,
+                        false,
+                        StartGate::default(),
+                        &mut auto_repeat,
+                        &mut sheath,
+                        &mut stand,
+                        &edits,
+                        &net,
+                    );
+                },
+            )
+            .unwrap();
+        apply_unit_edits(&mut world);
+        assert_eq!(
+            world.get::<Precast>(me),
+            Some(&Precast {
+                spell_id: 133,
+                busy: false
+            })
         );
     }
 }

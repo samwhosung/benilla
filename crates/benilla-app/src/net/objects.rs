@@ -857,12 +857,13 @@ fn monster_move(
                 }
             }
         }
-        // Every spline move un-nocks and drops the weapon hold here. The handler `0x6018f0`
-        // (opcodes 0xDD, 0x2AE) ends through `0x60d040` (clear `0x400`) and `0x60f530` (un-nock) on
-        // every path but one: a stop within 3 yd of the stop point jumps past both (`0x6019e4`).
+        // Every spline move un-nocks and ends the precast here. The handler `0x6018f0` (opcodes
+        // 0xDD, 0x2AE) ends through `0x60d040` with the unit's own `+0xc8c` (`0x6020e8`) and
+        // `0x60f530` (un-nock) on every path but one: a stop within 3 yd of the stop point jumps
+        // past both (`0x6019e4`).
         commands.entity(e).remove::<(
             crate::creature_anim::NockLatch,
-            crate::creature_anim::RangedHold,
+            crate::creature_anim::Precast,
         )>();
         // A rooted unit takes no path: `0x6187a0`, the only route into the spline installer
         // `0x7c6a50`, returns on ROOT (`0x6187c2`). Only the path is refused: the un-nock tail runs
@@ -2404,6 +2405,56 @@ mod tests {
                     w.entity(e).get::<Spline>().is_some(),
                     expect_spline,
                     "rooted={rooted}: a pinned body takes no path, an unpinned one does"
+                );
+            }
+        }
+
+        /// `0x6020e8`: a spline move ends the unit's precast whatever it is, a rooted unit's too
+        /// (the tail `0x6020db`-`0x6020ef` runs on every path).
+        #[test]
+        fn a_spline_move_ends_the_precast() {
+            for rooted in [false, true] {
+                let mut w = World::new();
+                let e = w
+                    .spawn((
+                        Transform::default(),
+                        crate::creature_anim::Precast {
+                            spell_id: 133,
+                            busy: true,
+                        },
+                    ))
+                    .id();
+                let mut index = GuidIndex::default();
+                index.0.insert(MOB, e);
+                w.insert_resource(index);
+                w.run_system_once(
+                    move |mut commands: Commands,
+                          index: Res<GuidIndex>,
+                          mut transforms: Query<&mut Transform>,
+                          mut riders: Query<&mut crate::transport::TransportRider>| {
+                        monster_move(
+                            MOB,
+                            None,
+                            [0.0, 0.0, 0.0],
+                            7,
+                            vec![[0.0, 0.0, 0.0], [30.0, 0.0, 0.0]],
+                            MonsterMoveFacing::None,
+                            false,
+                            3000,
+                            false,
+                            true,
+                            rooted,
+                            &mut commands,
+                            &index,
+                            &mut transforms,
+                            &mut riders,
+                        );
+                    },
+                )
+                .unwrap();
+                assert!(
+                    w.entity(e).get::<crate::creature_anim::Precast>().is_none(),
+                    "rooted={rooted}: the precast ends"
                 );
             }
         }

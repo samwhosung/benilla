@@ -45,11 +45,13 @@ const CAST_SLACK: Duration = Duration::from_secs(2);
 /// once a frame, so every reader in between sees the slot the same.
 ///
 /// It also carries the pending record's caster word (`0xceac48 + 0x08`, `0xceac50`), the one gate
-/// on the cancel's events: see [`Self::fill_record`] and [`Self::take_caster_event`].
+/// on the cancel's events: see [`Self::fill_record`] and [`Self::take_caster_event`]; and its
+/// spell ([`Self::record_spell`]).
 #[derive(Resource, Default)]
 pub(crate) struct PendingCast {
     slot: Option<PendingCastState>,
     caster_is_player: bool,
+    record_spell: u32,
 }
 
 struct PendingCastState {
@@ -155,6 +157,18 @@ impl PendingCast {
     /// clears it (`0x6e4a5a`), so one record fires at most once whatever pops after it.
     pub(crate) fn take_caster_event(&mut self) -> bool {
         std::mem::take(&mut self.caster_is_player)
+    }
+
+    /// The record's spell (`0xceac48 + 0x10`), written by the attempt (`0x6e4f88`) and the
+    /// auto-repeat re-arm (`0x6e7472`) and zeroed only by the system start (`0x6e1228`).
+    pub(crate) fn fill_record_spell(&mut self, spell_id: u32) {
+        self.record_spell = spell_id;
+    }
+
+    /// The record's spell, 0 before any attempt: our own `SMSG_SPELL_START` for it starts no
+    /// precast (`0x6e79af`), its send having done so.
+    pub(crate) fn record_spell(&self) -> u32 {
+        self.record_spell
     }
 }
 
