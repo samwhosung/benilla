@@ -15,6 +15,7 @@ use benilla_protocol::messages::{
 use crate::combat_text::{
     damage_color, miss_word, spell_text, CombatTextSpawn, DamageSource, DamageTextGates, TextBody,
 };
+use crate::ui_chat::combat::watch::XpAwarded;
 use crate::ui_chat::{combat, ChatLog};
 
 use crate::net::{GuidIndex, ObjectStore, SelfGuid};
@@ -302,10 +303,10 @@ pub(super) const SPELL_MISS_REFLECT: u8 = 11;
 
 /// `SMSG_LOG_XPGAIN`, as `0x637ec0` dispatches it. Your own guid as the victim is an XP loss,
 /// written with no float (`0x637f70`). A kill of a unit the client holds (type mask 8) is named:
-/// `CGUnit_C::SetPendingXP` (`0x60a0c0`) stores it and flushes it at once through `0x6251e0`,
-/// which writes and floats nothing for a zero gain (`0x625202`). Anything else is the unnamed
-/// line (`0x637f90`, victim NULL). Both gains float `"XP: %d"` over self, category 4, the one
-/// emitter that skips Gate A (`0x607260`).
+/// `CGUnit_C::SetPendingXP` (`0x60a0c0`) marks the unit ([`XpAwarded`], `0x60a0e6`), stores the
+/// gain and flushes it at once through `0x6251e0`, which writes and floats nothing for a zero
+/// gain (`0x625202`). Anything else is the unnamed line (`0x637f90`, victim NULL). Both gains
+/// float `"XP: %d"` over self, category 4, the one emitter that skips Gate A (`0x607260`).
 pub(super) fn xp_gain(
     x: XpGain,
     index: &GuidIndex,
@@ -313,6 +314,7 @@ pub(super) fn xp_gain(
     stores: &Query<&mut ObjectStore>,
     text: &mut MessageWriter<CombatTextSpawn>,
     chat_log: &mut ChatLog,
+    commands: &mut Commands,
 ) {
     // `0x468550`: the active player's guid, 0 with none.
     if x.victim == self_guid.0.unwrap_or(0) {
@@ -331,6 +333,10 @@ pub(super) fn xp_gain(
             )
         });
     if x.kill && victim_held {
+        // The mark goes on before the amount is looked at (`0x60a0e6` precedes `0x625202`).
+        if let Some(&victim) = index.0.get(&x.victim) {
+            commands.entity(victim).insert(XpAwarded);
+        }
         if x.total == 0 {
             return;
         }

@@ -101,22 +101,29 @@ fn queue_one(
 /// as "destroyed", `0x62c320`'s byte table: totems, summoned objects, guardians.
 const DESTROYED_EFFECTS: [u32; 10] = [50, 74, 87, 88, 89, 90, 104, 105, 106, 107];
 
+/// Bit 3 of a unit's `+0xc58`: an XP award named it (`0x60a0e6`, from `0x637f1d`). Only the unit's
+/// constructor clears the word (`0x5fae7a`), so the mark lives as long as the unit does,
+/// released and brought back included. The death line stands down for a marked unit
+/// (`0x62c232`-`0x62c23e`): the XP line ("X dies, you gain N experience.") is its sentence.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct XpAwarded;
+
 /// The unit-death line (`0x625190` → `0x62c160`), off the `UNIT_FIELD_HEALTH` edge as the
 /// reference's watcher `0x6046f0` takes it (alive to dead at `0x6047a3`); a unit that streams in
-/// dead prints nothing.
-///
-/// Not modelled: the reference prints the XP-award line in place of the death line while
-/// `[CGUnit+0xc58]` bit 3, set in the `SMSG_LOG_XPGAIN` chain, is set (`0x62c23e`); the bit's
-/// clearing site is untraced, so a kill that awards experience prints both lines here.
+/// dead prints nothing, and neither does one an XP award named ([`XpAwarded`]).
 pub(crate) fn death_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
+    awarded: Query<(), With<XpAwarded>>,
     mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
     mut log: ResMut<ChatLog>,
 ) {
     for e in edges.read() {
         if !(e.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH) && e.old > 0 && e.new == 0) {
+            continue;
+        }
+        if awarded.contains(e.entity) {
             continue;
         }
         let Ok((_, store)) = stores.get(e.entity) else {

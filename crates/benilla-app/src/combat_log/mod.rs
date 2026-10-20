@@ -399,7 +399,7 @@ fn on_environmental_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks, mut commands: Commands) {
     if let SessionEvent::XpGain(x) = ev {
         text::xp_gain(
             x,
@@ -408,6 +408,7 @@ fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             &l.stores,
             &mut l.text,
             &mut l.log,
+            &mut commands,
         );
     }
 }
