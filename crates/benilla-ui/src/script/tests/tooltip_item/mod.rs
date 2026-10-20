@@ -202,6 +202,7 @@ mod law;
 mod lock;
 mod mechanics;
 mod rebuild;
+mod req;
 mod set;
 mod sources;
 mod spells;

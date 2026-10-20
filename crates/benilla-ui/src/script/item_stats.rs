@@ -5,7 +5,7 @@
 //! turns into `CMSG_ITEM_QUERY`, the reference's uncached-item early-out. The app resolves every
 //! DBC string, as the engine reads no DBCs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -100,6 +100,26 @@ pub struct ItemTemplateView {
     /// `RandomProperty` (template `+0x1b8`): the item can roll a suffix, so a template tooltip
     /// prints `<Random enchantment>` (`0x52cc33`).
     pub random_property: u32,
+    /// The record's area (`+0x1c8`) by its `AreaTable.dbc` name, app-resolved; `None` for an id
+    /// of 0 or below, one with no row, or an empty name (`0x52bac9`..`0x52bb01`).
+    pub area_name: Option<String>,
+    /// The record's map (`+0x1cc`) by its `Map.dbc` name, as [`Self::area_name`]
+    /// (`0x52bb06`..`0x52bb3e`).
+    pub map_name: Option<String>,
+    /// What the first spell slot (`+0x11c`, any trigger) teaches when that spell's first effect is
+    /// 36, learn spell (`0x52d500`..`0x52d532`): the "Already known" line's subject.
+    pub teaches: Option<TaughtSpell>,
+}
+
+/// A learn spell's subject, app-resolved from `Spell.dbc` and `SkillLineAbility.dbc`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TaughtSpell {
+    /// The taught spell, the first effect's trigger spell (`+0x1b4`), then each higher rank in its
+    /// chain: knowing any is "known" (`0x60c740`, `0x60c8d0`).
+    pub ranks: Vec<u32>,
+    /// The first effect targets the pet (implicit target A or B 5, `0x52d538`..`0x52d547`): the
+    /// pet's book is asked, not the player's (`0x52d56d`).
+    pub pet: bool,
 }
 
 /// The player state the tooltip's red lines and the usable gate compare against.
@@ -122,6 +142,8 @@ pub struct PlayerReqState {
     pub can_dual_wield: bool,
     /// The highest lifetime honor rank (`PLAYER_FIELD_BYTES` byte 3).
     pub honor_rank: u8,
+    /// `PLAYER_FIELD_PVP_MEDALS` (player block `+0x1034`): medal `n` is bit `n - 1`.
+    pub pvp_medals: u32,
 }
 
 /// The icon an item-texture getter answers while the item's template is unknown or its display
@@ -316,6 +338,12 @@ impl super::UiScript {
     /// bare enchant id, and a clicked tooltip cannot repaint on a late answer.
     pub fn set_enchant_names(&mut self, names: HashMap<u32, String>) {
         self.model_mut().enchant_names = names;
+    }
+
+    /// Pushes every spell the player knows (`SMSG_INITIAL_SPELLS` and its updates), the set the
+    /// known-recipe line asks (`0x60c740`'s bits at `0xb710fc`), passives and recipes included.
+    pub fn set_known_spells(&mut self, spells: HashSet<u32>) {
+        self.model_mut().known_spells = spells;
     }
 
     /// Pushes the player state the red lines compare against.

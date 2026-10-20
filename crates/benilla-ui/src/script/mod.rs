@@ -293,7 +293,7 @@ pub use worldmap_arrow::ARROW_MODEL;
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, own_font_lua, SAME_FONT_HEIGHT};
 pub use inspect::{InspectView, UnitReach};
-pub use item_stats::{item_usable, ItemSetView, ItemTemplateView, PlayerReqState};
+pub use item_stats::{item_usable, ItemSetView, ItemTemplateView, PlayerReqState, TaughtSpell};
 pub use item_text::ItemTextState;
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};
 pub use lock_check::{check_lock, LockCheck, LockOpener, LockOpeners, LockSlotView};
