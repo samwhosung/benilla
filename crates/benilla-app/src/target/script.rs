@@ -21,6 +21,8 @@ pub(crate) struct ScriptSelect<'w, 's> {
     /// included.
     commit: SelectCommit<'w, 's>,
     by_name: ByNameScan<'w, 's>,
+    /// Where a name that finds nobody shows its line.
+    errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
     /// The TAB cycler's inputs, for the `TargetNearest*` calls.
     scan: scan::TargetScan<'w, 's>,
     history: ResMut<'w, scan::TabHistory>,
@@ -76,7 +78,13 @@ impl ScriptSelect<'_, '_> {
 
     /// `TargetByName(name, exactMatch)` (`0x489d60`), the stock `/target`.
     pub(crate) fn target_by_name(&mut self, name: &str, exact: bool) {
-        by_name::target_named(&self.by_name, &mut self.commit, name, exact);
+        by_name::target_named(
+            &self.by_name,
+            &mut self.commit,
+            &mut self.errors,
+            name,
+            exact,
+        );
     }
 
     /// `TargetNearest*([reverse])` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0` →
@@ -131,6 +139,7 @@ mod tests {
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::PendingCast>();
         world.init_resource::<crate::ui_cast::CastReports>();
+        world.init_resource::<crate::ui_action::UiErrorKeys>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<crate::ui_loot::LootState>();
         world.init_resource::<crate::ui_loot::LootLatch>();

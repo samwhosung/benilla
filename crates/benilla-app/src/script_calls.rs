@@ -794,6 +794,25 @@ mod tests {
         );
     }
 
+    /// `TargetByName` (`0x489d60`) on a miss leaves the target alone and shows message `0x127`
+    /// (`ERR_UNIT_NOT_FOUND`) for a name given (`0x489dbd`, tested on the raw string's first byte,
+    /// so blanks count) or `0xb8` (`ERR_GENERIC_NO_TARGET`) for an empty one (`0x489dcf`), inside
+    /// the call.
+    #[test]
+    fn target_by_name_that_finds_nobody_shows_the_references_line() {
+        for (name, line) in [
+            ("Nobody", "ERR_UNIT_NOT_FOUND"),
+            ("   ", "ERR_UNIT_NOT_FOUND"),
+            ("", "ERR_GENERIC_NO_TARGET"),
+        ] {
+            let mut f = frame(true);
+            run(&mut f, &format!("TargetByName(\"{name}\")"));
+            assert_eq!(errors(&f), vec![line], "{name:?}");
+            assert_eq!(selected(&f), Some(OLD), "{name:?}: the target stays");
+            assert_eq!(f.rx.try_iter().count(), 0, "{name:?}: nothing is sent");
+        }
+    }
+
     /// Two namesakes: the ranking decides, and the chunk shows the one the commit then selects --
     /// the nearer, and of two at one distance the lower guid, whatever order either side walks.
     #[test]

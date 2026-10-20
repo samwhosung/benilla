@@ -977,11 +977,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // so "Rag" selects Ragnaros. Any unit (typemask 8), no dead, reaction, range or self gate. A
     // missing name, or one neither string nor number, raises `Usage:` (`0x489d69`, `0x6f4940`); a
     // number is taken as its string. Deviation: among whole-name matches ours picks the nearest,
-    // because the reference's first-walked pick is order-dependent and reads as a bug. A miss is
-    // silent here, where the reference shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8`
-    // ERR_GENERIC_NO_TARGET for an empty name. The pick is shown as `"target"` at once, from the
-    // app's candidates (`by_name`), so `UnitName("target")` on the next line names it, unless it
-    // is not selectable and `SetSelection` returns (`0x4935ee`); the queued call still commits it.
+    // because the reference's first-walked pick is order-dependent and reads as a bug. A miss
+    // shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8` ERR_GENERIC_NO_TARGET for an empty name
+    // (`0x489dbd`, `0x489dcf`), from the app's commit. The pick is shown as `"target"` at once,
+    // from the app's candidates (`by_name`), so `UnitName("target")` on the next line names it,
+    // unless it is not selectable and `SetSelection` returns (`0x4935ee`); the queued call still
+    // commits it.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {

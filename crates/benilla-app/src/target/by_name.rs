@@ -423,12 +423,13 @@ impl PlayerLookup<'_, '_> {
 /// `/target <name>` and the Lua `TargetByName(name, exactMatch)` through [`scan::commit`], the
 /// stop, select, re-swing path a click takes. `exact` is the Lua second argument, which `0x489d8e`
 /// reads with default 0 as the resolver's exact-only flag (consumed at `0x493cab`). A miss leaves
-/// the target alone, as neither failure edge in `0x489db4` calls `SetSelection`, and prints
-/// nothing; the reference prints message `0x127` `ERR_UNIT_NOT_FOUND` there, or `0xb8`
-/// `ERR_GENERIC_NO_TARGET` for an empty name.
+/// the target alone, as neither failure edge in `0x489db4` calls `SetSelection`, and shows
+/// message `0x127` `ERR_UNIT_NOT_FOUND` for a name given (`0x489dbd`, tested on the raw string's
+/// first byte, so blanks count) or `0xb8` `ERR_GENERIC_NO_TARGET` for an empty one (`0x489dcf`).
 pub(super) fn target_named(
     scan_params: &ByNameScan,
     commit: &mut SelectCommit,
+    errors: &mut crate::ui_action::UiErrorKeys,
     name: &str,
     exact: bool,
 ) {
@@ -442,6 +443,12 @@ pub(super) fn target_named(
             Match::PrefixOk
         },
     ) else {
+        let key = if name.is_empty() {
+            "ERR_GENERIC_NO_TARGET"
+        } else {
+            "ERR_UNIT_NOT_FOUND"
+        };
+        errors.0.push(crate::ui_action::UiError::key(key));
         return;
     };
     commit.commit(entity, guid);
@@ -480,9 +487,10 @@ pub(super) fn target_by_name_requests(
     mut requests: MessageReader<TargetByNameRequest>,
     scan_params: ByNameScan,
     mut commit: SelectCommit,
+    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
 ) {
     for request in requests.read() {
-        target_named(&scan_params, &mut commit, &request.name, false);
+        target_named(&scan_params, &mut commit, &mut errors, &request.name, false);
     }
 }
 
