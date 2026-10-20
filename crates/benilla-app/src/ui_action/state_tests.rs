@@ -1625,8 +1625,9 @@ fn an_item_slots_record_landing_flushes_its_running_cooldown() {
 /// It signals before `PLAYER_TARGET_CHANGED` (`0x493892` ahead of `0x49389c`), `UNIT_HEALTH` and
 /// `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
 /// `PLAYER_REGEN_DISABLED` (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`)
-/// and the form's cast change (`0x5de011` ahead of `0x5de016`). Read off the declared graph;
-/// skips where bevy carries no system names.
+/// and the form's cast change (`0x5de011` ahead of `0x5de016`). The bag feed runs ahead of the
+/// push half, whose usable cache each `BAG_UPDATE` refreshes (`0x4f9374`), so the refresh lands in
+/// the update's own frame. Read off the declared graph; skips where bevy carries no system names.
 #[test]
 fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_precede() {
     use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
@@ -1667,6 +1668,10 @@ fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_preced
     };
     let key = |name: &str| named(name).unwrap_or_else(|| panic!("{name} is scheduled"));
     let fire = key("::fire_action_events");
+    assert!(
+        later_than(key("::ui_items::feed::feed_containers")).contains(&push),
+        "the bag feed runs before the push half"
+    );
     assert!(
         later_than(push).contains(&key("::ui_unit::feed_units")),
         "the push half runs before the unit snapshots"
@@ -1775,6 +1780,10 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
         catalog(vec![(FROSTBOLT, costly)], &[]),
         5.0,
     );
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .spells
+        .insert(FROSTBOLT);
     const USABLE: [&str; 2] = ["ACTIONBAR_UPDATE_USABLE", "SPELL_UPDATE_USABLE"];
     record(&mut app, &USABLE);
     assert!(frame(&mut app).is_empty());
@@ -1808,15 +1817,27 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
 
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
+    arrive(&mut app, 500);
+    assert!(
+        frame(&mut app).is_empty(),
+        "our player's arrival stores every slot ahead of its refresh"
+    );
+}
+
+/// Our player created anew with `mana`, and the enter cascade its arrival runs.
+fn arrive(app: &mut App, mana: u32) {
     let old = app.world().resource::<crate::net::GuidIndex>().0[&ME];
     app.world_mut().despawn(old);
+    let mut fields: Vec<(u16, u32)> = PLAYER.to_vec();
+    fields.retain(|&(i, _)| i != 23);
+    fields.push((23, mana));
     let me = app
         .world_mut()
         .spawn((
             SelfPlayer,
             crate::net::Guid(ME),
             Transform::default(),
-            ObjectStore(benilla_protocol::ObjectFields::from_pairs(PLAYER)),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&fields)),
         ))
         .id();
     app.world_mut()
@@ -1825,8 +1846,48 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
         .insert(ME, me);
     app.world_mut()
         .write_message(crate::net::WorldEnterCascadeMessage);
-    assert!(
-        frame(&mut app).is_empty(),
-        "our player's arrival stores every slot ahead of its refresh"
+}
+
+/// The arrival's loop (`0x5deae2`-`0x5deb12`) writes each slot but a spell word the player does
+/// not know (`0x60c740`, skipped at `0x5deaf5`), so that slot keeps the pair the cache held and the
+/// cascade's refresh (`0x4e4f90`) finds it changed; the known spell beside it signals nothing.
+#[test]
+fn an_arrival_skips_a_spell_the_player_does_not_know() {
+    const FROSTBOLT: u32 = 116;
+    const BLIZZARD: u32 = 10;
+    let costly = || SpellDisplay {
+        mana_cost: 400,
+        ..Default::default()
+    };
+    let mut app = feed_app(
+        &[
+            (0, FROSTBOLT, ACTION_KIND_SPELL),
+            (1, BLIZZARD, ACTION_KIND_SPELL),
+        ],
+        catalog(vec![(FROSTBOLT, costly()), (BLIZZARD, costly())], &[]),
+        5.0,
     );
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .spells
+        .insert(FROSTBOLT);
+    record(&mut app, &["ACTIONBAR_UPDATE_USABLE"]);
+    frame(&mut app);
+    set_mana_quietly(&mut app, 100);
+    assert!(frame(&mut app).is_empty(), "no caller, no event");
+    arrive(&mut app, 100);
+    assert_eq!(
+        frame(&mut app),
+        ["ACTIONBAR_UPDATE_USABLE"],
+        "the unknown spell's slot kept its pair"
+    );
+
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .spells
+        .insert(BLIZZARD);
+    set_mana_quietly(&mut app, 500);
+    assert!(frame(&mut app).is_empty());
+    arrive(&mut app, 500);
+    assert!(frame(&mut app).is_empty(), "both known: both stored");
 }
