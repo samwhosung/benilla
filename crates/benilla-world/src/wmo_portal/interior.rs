@@ -108,10 +108,40 @@ impl Default for PlayerOutdoors {
     }
 }
 
-/// `CWorld::IsEntityOutdoors 0x6706f0` on the flags of the group the entity's placement linked.
-pub(crate) fn entity_outdoors(group_flags: Option<u32>) -> bool {
-    let _ = group_flags;
-    true
+/// The group flag `0x6706f0` answers by once the entity's indoors bit is set (`0x670735`).
+const GROUP_OUTDOORS_FOR_SPELLS: u32 = 0x8000;
+
+/// `CWorld::IsEntityOutdoors 0x6706f0` on the flags of the group the entity's placement linked,
+/// `None` for open terrain or a miss. The placement sets the indoors bit `[node+0x90]` bit 0 for
+/// a group without [`EXTERIOR`] (`0x6a880d`); with it clear the answer is outdoors (`0x670709`),
+/// with it set the group's flag `0x8000`. Flag `0x2000` plays no part.
+fn entity_outdoors(group_flags: Option<u32>) -> bool {
+    group_flags.is_none_or(|f| f & EXTERIOR != 0 || f & GROUP_OUTDOORS_FOR_SPELLS != 0)
+}
+
+/// [`entity_outdoors`] for a unit node at `feet_world`, placed as the down-ray attach places it
+/// (`0x6a8a20`): the group of its one global nearest hit ([`nearest_claim`]).
+fn entity_outdoors_at<'a>(
+    wmos: &Assets<WmoModel>,
+    instances: impl IntoIterator<Item = &'a WmoPortalInstance>,
+    streamer: &TerrainStreamer,
+    adt_tiles: &Assets<AdtTile>,
+    feet_world: Vec3,
+) -> bool {
+    let instances: Vec<((), &WmoPortalInstance)> =
+        instances.into_iter().map(|inst| ((), inst)).collect();
+    let probe_world = feet_world + Vec3::Y * POSITION_PROBE_LIFT;
+    let group_flags = nearest_claim(
+        wmos,
+        &instances,
+        streamer,
+        adt_tiles,
+        probe_world,
+        LightAttach::DownRay,
+        EXTERIOR,
+    )
+    .map(|(claim, model, ..)| model.group_nav.get(claim.group).map_or(0, |g| g.flags));
+    entity_outdoors(group_flags)
 }
 
 /// Track [`CurrentAreaInterior`]: per placed building, the faces-only down-ray from the player's
@@ -124,7 +154,15 @@ pub(super) fn track_area_interior(
     streamer: Res<TerrainStreamer>,
     adt_tiles: Res<Assets<AdtTile>>,
     mut current: ResMut<CurrentAreaInterior>,
+    mut outdoors: ResMut<PlayerOutdoors>,
 ) {
+    // The player node's outdoors answer; with no body there is no entity (`0x6706fa`).
+    let now_outdoors = viewer.at.is_none_or(|feet| {
+        entity_outdoors_at(&wmos, &instances, &streamer, &adt_tiles, feet)
+    });
+    if outdoors.0 != now_outdoors {
+        outdoors.0 = now_outdoors;
+    }
     // Cast from the position, lifted only for float safety, as the client does (`0x6a8a20`).
     let eye_world = if let Some(body) = viewer.at {
         body + Vec3::Y * POSITION_PROBE_LIFT
@@ -425,54 +463,16 @@ pub fn indoor_verdict_at<'a, K: Copy>(
     attach: LightAttach,
 ) -> (IndoorVerdict, Option<(K, usize)>) {
     let probe_world = anchor_world + Vec3::Y * POSITION_PROBE_LIFT;
-    let terrain = terrain_height_under(streamer, adt_tiles, probe_world);
-    let mut best: Option<(DownRayClaim, &WmoModel, &WmoPortalInstance, [f32; 3], K)> = None;
-    // The containment lane's upward retry (`0x6a9093`, +1000 yd) runs only when the whole downward
-    // pass found nothing, so no claim is arbitrated against one cast the other way.
     let instances: Vec<(K, &WmoPortalInstance)> = instances.into_iter().collect();
-    for retry_up in [false, true] {
-        if retry_up && (best.is_some() || !matches!(attach, LightAttach::Containment)) {
-            break;
-        }
-        for (key, inst) in instances.iter().copied() {
-            let Some(model) = wmos.get(&inst.handle) else {
-                continue;
-            };
-            let local_from_world = inst.world_from_local.inverse();
-            let probe_local = bevy_to_wow(local_from_world.transform_point3(probe_world));
-            if !column_in_collision_bounds(model.collision_bounds, probe_local, retry_up) {
-                continue; // no face of this building can own the probe column
-            }
-            let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe_world, z));
-            let claim = if retry_up {
-                up_ray_claim(
-                    &model.group_collision_tris,
-                    &model.group_collision_bounds,
-                    &model.group_collision_grids,
-                    &model.group_nav,
-                    probe_local,
-                    EXTERIOR | EXTERIOR_LIT,
-                )
-            } else {
-                down_ray_claim(
-                    &model.group_collision_tris,
-                    &model.group_collision_bounds,
-                    &model.group_collision_grids,
-                    &model.group_nav,
-                    probe_local,
-                    terrain_local,
-                    EXTERIOR | EXTERIOR_LIT,
-                )
-            };
-            let Some(claim) = claim else {
-                continue;
-            };
-            if best.as_ref().is_none_or(|(b, ..)| claim.depth < b.depth) {
-                best = Some((claim, model, inst, probe_local, key));
-            }
-        }
-    }
-    let Some((claim, model, inst, probe_local, key)) = best else {
+    let Some((claim, model, inst, probe_local, key)) = nearest_claim(
+        wmos,
+        &instances,
+        streamer,
+        adt_tiles,
+        probe_world,
+        attach,
+        EXTERIOR | EXTERIOR_LIT,
+    ) else {
         return (IndoorVerdict::Outdoors, None);
     };
     if claim.outdoor {
@@ -511,6 +511,70 @@ pub fn indoor_verdict_at<'a, K: Copy>(
         })
         .collect();
     (IndoorVerdict::Baked { mocv, lobes }, room)
+}
+
+/// The winning claim of [`nearest_claim`], with its model, its placement and the probe in the
+/// model's space.
+type NearestClaim<'m, 'a, K> = (DownRayClaim, &'m WmoModel, &'a WmoPortalInstance, [f32; 3], K);
+
+/// An attach ray's one global nearest hit (`0x6a8a20`, `0x6a8840`): each placement's claim from
+/// `probe_world`, classified under `mask`, the nearest across placements winning.
+fn nearest_claim<'m, 'a, K: Copy>(
+    wmos: &'m Assets<WmoModel>,
+    instances: &[(K, &'a WmoPortalInstance)],
+    streamer: &TerrainStreamer,
+    adt_tiles: &Assets<AdtTile>,
+    probe_world: Vec3,
+    attach: LightAttach,
+    mask: u32,
+) -> Option<NearestClaim<'m, 'a, K>> {
+    let terrain = terrain_height_under(streamer, adt_tiles, probe_world);
+    let mut best: Option<NearestClaim<'m, 'a, K>> = None;
+    // The containment lane's upward retry (`0x6a9093`, +1000 yd) runs only when the whole downward
+    // pass found nothing, so no claim is arbitrated against one cast the other way.
+    for retry_up in [false, true] {
+        if retry_up && (best.is_some() || !matches!(attach, LightAttach::Containment)) {
+            break;
+        }
+        for (key, inst) in instances.iter().copied() {
+            let Some(model) = wmos.get(&inst.handle) else {
+                continue;
+            };
+            let local_from_world = inst.world_from_local.inverse();
+            let probe_local = bevy_to_wow(local_from_world.transform_point3(probe_world));
+            if !column_in_collision_bounds(model.collision_bounds, probe_local, retry_up) {
+                continue; // no face of this building can own the probe column
+            }
+            let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe_world, z));
+            let claim = if retry_up {
+                up_ray_claim(
+                    &model.group_collision_tris,
+                    &model.group_collision_bounds,
+                    &model.group_collision_grids,
+                    &model.group_nav,
+                    probe_local,
+                    mask,
+                )
+            } else {
+                down_ray_claim(
+                    &model.group_collision_tris,
+                    &model.group_collision_bounds,
+                    &model.group_collision_grids,
+                    &model.group_nav,
+                    probe_local,
+                    terrain_local,
+                    mask,
+                )
+            };
+            let Some(claim) = claim else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(b, ..)| claim.depth < b.depth) {
+                best = Some((claim, model, inst, probe_local, key));
+            }
+        }
+    }
+    best
 }
 
 /// The footprint down-ray: the nearest render face below the probe in the interior groups (faces

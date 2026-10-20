@@ -311,6 +311,8 @@ const INTERRUPT_SHEATHING: u32 = 0x200;
 /// The `Attributes` bits the rungs read (vmangos `SpellDefines.h:804-820`).
 const ATTR_DAYTIME_ONLY: u32 = 0x0000_1000;
 const ATTR_NIGHT_ONLY: u32 = 0x0000_2000;
+const ATTR_ONLY_INDOORS: u32 = 0x0000_4000;
+const ATTR_ONLY_OUTDOORS: u32 = 0x0000_8000;
 const ATTR_ONLY_STEALTHED: u32 = 0x0002_0000;
 const ATTR_ALLOW_WHILE_SITTING: u32 = 0x0800_0000;
 const ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
@@ -350,11 +352,12 @@ const TARGET_PET: u32 = 5;
 /// | `0x609eae` | `0` | [`ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL`] in combat |
 /// | `0x609ee4` | `0x12` | `CasterAuraState` n without `UNIT_FIELD_AURASTATE` bit n - 1 |
 /// | `0x609f1f` | `0x8f` | `MinFactionId` standing below `MinReputation`'s floor (`0x80928c`) |
+/// | `0x609f59` | `0x52` | [`ATTR_ONLY_INDOORS`] outdoors (`0x612cc0`) |
+/// | | `0x4b`/`0x55` | [`ATTR_ONLY_OUTDOORS`] indoors: `0x4b` when an effect applies the mount aura |
 ///
 /// Not built: the learn rungs, which show a line of their own through `0x496720` (`0x6098a2`,
-/// `0x609920`) or ask a pet's knowledge (`0x609904`); indoors and outdoors (`0x609f59`), which
-/// read the world node `0x6706f0`; and the tame rung `0x17` (`0x609fd7`), which shows its pet tame
-/// failure through `0x6e6a20` first.
+/// `0x609920`) or ask a pet's knowledge (`0x609904`); and the tame rung `0x17` (`0x609fd7`), which
+/// shows its pet tame failure through `0x6e6a20` first.
 pub(crate) fn caster_refusal(
     spell: Option<&SpellDisplay>,
     caster: &CasterState,
@@ -455,6 +458,19 @@ pub(crate) fn caster_refusal(
             .unwrap_or(i32::MAX);
         if (inputs.standing)(d.min_faction_id) < floor {
             return Some(Refusal::of(0x8f));
+        }
+    }
+    // One question for either bit (`0x609f5c`, `0x609f63`).
+    if attributes & (ATTR_ONLY_INDOORS | ATTR_ONLY_OUTDOORS) != 0 {
+        if caster.outdoors {
+            if attributes & ATTR_ONLY_INDOORS != 0 {
+                return Some(Refusal::of(0x52));
+            }
+        } else if attributes & ATTR_ONLY_OUTDOORS != 0 {
+            // `SPELL_FAILED_NO_MOUNTS_ALLOWED` for an effect applying `SPELL_AURA_MOUNTED` (6 and
+            // 78 in the same effect, `0x609fa1`, `0x609fa6`), else `ONLY_OUTDOORS`.
+            let mounts = (0..3).any(|i| d.effects[i] == 6 && d.effect_apply_aura[i] == 78);
+            return Some(Refusal::of(if mounts { 0x4b } else { 0x55 }));
         }
     }
     None

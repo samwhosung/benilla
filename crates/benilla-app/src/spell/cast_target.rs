@@ -324,6 +324,9 @@ pub(crate) struct CastTargeting<'w, 's> {
     self_driver: Query<'w, 's, &'static crate::creature_anim::AnimDriver, With<SelfPlayer>>,
     /// The game clock the day and night rungs read; absent in a harness without one.
     clock: Option<Res<'w, crate::net::ServerTime>>,
+    /// The player's answer to the entity outdoors test, which the place rungs read; absent
+    /// outside the world.
+    outdoors: Option<Res<'w, benilla_world::wmo_portal::PlayerOutdoors>>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -397,7 +400,7 @@ impl CastTargeting<'_, '_> {
                 .or_else(|| self_store.and_then(|s| s.0.unit_sheath_state()))
                 .unwrap_or(0),
             daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
-            self_outdoors: true,
+            self_outdoors: self.outdoors.as_deref().is_none_or(|o| o.0),
             self_control_lost: self.own_control.as_deref().is_some_and(|c| c.0),
         }
     }
