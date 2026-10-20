@@ -509,15 +509,17 @@ pub(super) fn spell_log_execute(
                     );
                 }
                 // Effect 19 ADD_EXTRA_ATTACKS: no caster in the sentence (`0x62d9f0`), only the
-                // unit that gained the attacks, worded `EXTRA_ATTACKS` with the count when that is
-                // you (`0x62db7d`-`0x62dba9`); a count of 0 writes neither (`0x62da2a`).
+                // unit that gained the attacks, typed by the spell's hostility (`0x62b190`, from
+                // `0x62db78`) and worded `EXTRA_ATTACKS` with the count when that is you
+                // (`0x62db7d`-`0x62dba9`); a count of 0 writes neither (`0x62da2a`).
                 E::ExtraAttacks { target, count } => {
                     if count == 0 {
                         continue;
                     }
                     let Some(spell) = spell() else { continue };
                     let victim = ctx.classify(target, stores);
-                    let Some(kind) = combat::spell_kind(victim, victim, false) else {
+                    let buff = !ctx.spell_harmful(s.spell_id);
+                    let Some(kind) = combat::spell_kind(victim, victim, buff) else {
                         continue;
                     };
                     queue_worded(

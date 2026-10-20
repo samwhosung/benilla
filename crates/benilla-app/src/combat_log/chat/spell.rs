@@ -52,9 +52,12 @@ fn spell_damage_line(
 
     // Split damage (`hit_info & 8`, to `0x62de60`) is tested first, before the periodic split: it
     // reads "%s's %s causes %s %d damage.", has no `…SELFSELF` key and no trailers, and words the
-    // split amount to its target (`0x62dfd9`).
+    // split amount to its target (`0x62dfd9`). The form with you as the source of another unit's
+    // damage is typed by the buff table (`0x627820`, from `0x62df92`); the other two by the damage
+    // table (`0x626be0`, from `0x62df69` and `0x62dfc4`).
     if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
-        let Some(kind) = combat::spell_kind(attacker, victim, false) else {
+        let buff = attacker == UnitClass::Me && victim != UnitClass::Me;
+        let Some(kind) = combat::spell_kind(attacker, victim, buff) else {
             return;
         };
         return queue_worded(
