@@ -578,7 +578,7 @@ fn release(sc: &mut Scene, guid: u64) {
             let body = if let Ok(item) = sc.item_objects.get(e) {
                 Body::Item {
                     container: item.container,
-                    countdowns: sc.countdowns.get(e).map(|c| c.clone()).unwrap_or_default(),
+                    countdowns: sc.countdowns.get(e).cloned().unwrap_or_default(),
                 }
             } else {
                 let net = sc.nets.get(e).ok()?;
@@ -586,7 +586,7 @@ fn release(sc: &mut Scene, guid: u64) {
                     kind: net.kind,
                     display_id: net.display_id,
                     scale: net.scale,
-                    pose: sc.transforms.get(e).map(|t| *t).unwrap_or_default(),
+                    pose: sc.transforms.get(e).copied().unwrap_or_default(),
                     speeds: sc.speeds.get(e).ok().map(|s| s.0),
                     modes: sc.modes.get(e).ok().copied(),
                     rider: sc.riders.get(e).ok().map(|r| TransportRider {
