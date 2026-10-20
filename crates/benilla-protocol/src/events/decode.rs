@@ -1117,9 +1117,10 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
     let mut second = Vec::new();
     for (at, object) in objects.into_iter().enumerate() {
         match object {
-            // Deviation: an out-of-range list past the first block reads no body in the passes
-            // (`0x466076`), so the reference misreads every block behind it; benilla reads the
-            // list and drops it, keeping the blocks behind it whole.
+            // Deviation: an out-of-range list past the first block reads no body in the write
+            // passes (`0x466076`), which misread every block behind it, while the notify pass
+            // reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it,
+            // keeping the blocks behind it whole.
             Object::OutOfRange { guids } => {
                 if at == 0 {
                     first.push(SessionEvent::ObjectsRemoved(guids));
@@ -1134,8 +1135,9 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
                 second.push(SessionEvent::ObjectsNear(rest));
             }
             // Deviation: the flagged pass reads a movement block's guid as 8 raw bytes
-            // (`0x467140`, `0x46714d`) where the wire packs it, so the reference misreads the rest
-            // of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`).
+            // (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens
+            // to be 8 bytes the reference misreads the rest of that pass; benilla reads the block
+            // once, packed, as pass 0 does (`0x467080`).
             Object::Movement { guid, movement } => {
                 if let Some((position, orientation)) = movement.position {
                     second.push(SessionEvent::ObjectMove {
