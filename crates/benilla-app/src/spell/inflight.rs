@@ -388,8 +388,9 @@ const CHANNEL_INTERRUPT_MOVING: u32 = 0x8; // SpellRec+0x5c ChannelInterruptFlag
 #[derive(Resource, Default)]
 pub(crate) struct LocalMoveStart {
     pub(crate) pressed: bool,
-    /// The player is the mover the press drove, the channel cancel's one extra test
-    /// (`0x515180`, `0x513c99`); the cast cancel tests no mover.
+    /// The player is the active mover `0xc4da98`, which possession hands to the creature and lost
+    /// control zeroes: the channel cancel's one extra test (`0x515180`, `0x513c99`); the cast
+    /// cancel tests no mover.
     pub(crate) mover_is_player: bool,
 }
 

@@ -84,11 +84,13 @@ pub(super) fn control(
         Local<Option<camera::PressGesture>>,
         Local<Option<camera::PressGesture>>,
     ),
-    // The liquid query, the transports, and the parent chain from a deck collider to its transport.
+    // The liquid query, the transports, the parent chain from a deck collider to its transport,
+    // and the active mover `0xc4da98`, as whether it is our own character.
     world_q: (
         benilla_world::world_point::WorldPoint,
         TransportQuery,
         Query<&ChildOf>,
+        Query<Has<crate::net::SelfPlayer>, With<crate::net::ActiveMover>>,
     ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
@@ -313,8 +315,11 @@ pub(super) fn control(
         // the mover: between the press `0x5150a7` and the cancel `0x51512a` stands only the taint
         // test `0x494a50`, so it runs whoever drives the body. It reads the commands, never the
         // streamed word, which a root empties of direction bits. The cast cancel tests no mover
-        // (`0x5150f2`); the channel's needs the player to be it (`0x515180`), so steering a
-        // possessed creature ends a cast but not the Mind Control that holds it.
+        // (`0x5150f2`); the channel's compares the player with the active mover
+        // (`0x51517b`-`0x515191`), which possession sets to the creature and lost control zeroes
+        // (`0x5fa600`), so steering a possessed creature, or pressing while feared, ends a cast but
+        // not a channel.
+        let active_mover = world_q.3.iter().next();
         let autorun_on = binds.fired(crate::bindings::Input::ToggleAutoRun) && !player.autorun;
         if input::cancels_cast(
             binds,
@@ -323,7 +328,7 @@ pub(super) fn control(
             body.single().is_ok(),
         ) {
             net.7.pressed = true;
-            net.7.mover_is_player = player.foreign_mover.is_none();
+            net.7.mover_is_player = active_mover == Some(true);
         }
         // Not driving, while the camera stays on the body and input, physics and the stream yield:
         // - `server_riding`: a server spline (Charge, knockback, taxi, a flee path) owns the body;
