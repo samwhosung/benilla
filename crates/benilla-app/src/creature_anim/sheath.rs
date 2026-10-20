@@ -100,6 +100,19 @@ pub(crate) fn toggle_sheath_next(cur: u8, (melee, ranged): (bool, bool)) -> Opti
     }
 }
 
+/// `0x5eb6d0`: an animation the manual toggle waits out, a ranged attack's fire, load or hold (46,
+/// 49, 105 to 107 and 109 to 112, the byte table at `0x5eb6f8`).
+pub(super) fn holds_the_toggle(_anim: u16) -> bool {
+    false
+}
+
+/// The manual toggle's model tests, which the setter's executor applies to its request: the armed
+/// animation [`holds_the_toggle`] (`0x5eb542`), and a model without both sheathe animations, 90
+/// and 89 (`0x5eb580`, `0x5eb58b`). A unit with no model skips them, and the setter refuses it.
+pub(super) fn model_refuses_toggle(_anims: &ModelAnimations, _armed: Option<u16>) -> bool {
+    false
+}
+
 /// One arm's planned leg: the clip, and whether the arm ends with its weapon in hand (the
 /// client's `+0xd58` phase bit, set by the drawers and cleared by the stows in `0x611b60`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -373,6 +386,62 @@ mod tests {
         assert_eq!(toggle_sheath_next(0, EMPTY), None);
         assert_eq!(toggle_sheath_next(1, EMPTY), Some(0));
         assert_eq!(toggle_sheath_next(2, EMPTY), Some(0));
+    }
+
+    /// `0x5eb6d0`: `lea eax,[ecx-0x2e]; cmp eax,0x42; ja` past the 67 bytes at `0x5eb6f8`, whose
+    /// entry 0 (to `0x5eb6e6`, return 1) is at exactly these nine offsets.
+    #[test]
+    fn the_toggle_waits_out_a_ranged_attacks_fire_load_and_hold() {
+        let held: Vec<u16> = (0..=u16::MAX).filter(|&id| holds_the_toggle(id)).collect();
+        assert_eq!(
+            held,
+            [46, 49, 105, 106, 107, 109, 110, 111, 112],
+            "AttackBow, AttackRifle, LoadBow, LoadRifle, AttackThrown, HoldBow, HoldRifle, \
+             HoldThrown, LoadThrown"
+        );
+    }
+
+    /// A model the toggle may run on: its AnimationLookup (`0x711960`) authors `ids`.
+    fn model_with(ids: &[u16]) -> ModelAnimations {
+        let mut animation_lookup = vec![0xffff; 256];
+        for (slot, &id) in ids.iter().enumerate() {
+            animation_lookup[id as usize] = slot as u16;
+        }
+        ModelAnimations {
+            graph: Handle::default(),
+            clips: Vec::new(),
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup,
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        }
+    }
+
+    /// The model tests: both sheathe animations authored (`0x5eb580`, `0x5eb58b`), and no armed
+    /// animation `0x5eb6d0` holds (`0x5eb542`).
+    #[test]
+    fn the_toggle_needs_both_sheathe_animations_and_no_ranged_attack_under_way() {
+        let body = model_with(&[0, 89, 90, 108, 109]);
+        assert!(!model_refuses_toggle(&body, Some(0)), "standing");
+        assert!(!model_refuses_toggle(&body, None), "nothing armed");
+        assert!(
+            !model_refuses_toggle(&body, Some(108)),
+            "108 is outside the table"
+        );
+        assert!(
+            model_refuses_toggle(&body, Some(109)),
+            "holding a drawn bow"
+        );
+        assert!(
+            model_refuses_toggle(&model_with(&[0, 90]), Some(0)),
+            "no Sheath (89): a form's model"
+        );
+        assert!(
+            model_refuses_toggle(&model_with(&[0, 89]), Some(0)),
+            "no HipSheath (90)"
+        );
     }
 
     /// Sword, shield and bow: sheath types 3 (hip, 90), 4 (back, 89) and 1 (back, 89).

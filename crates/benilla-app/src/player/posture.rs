@@ -4,9 +4,20 @@
 //! the toggle refuses on the stand state this frame committed. Both refuse silently, with no
 //! packet, so the `sit` trace tag ([`super::move_trace::posture`]) records each commit and refusal.
 
+use benilla_protocol::ObjectFields;
 use bevy::prelude::*;
 
 use super::{move_trace, state, BodyQuery, ClientCommand, NetCommands, Player, StandStateRequest};
+
+/// What the posture verbs read of the player beyond its body's components.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PlayerReads {
+    /// Our own control lost ([`super::OwnControlLost`]): `IsClientControlled` (`0x5fa5f0`) reads
+    /// the unit's `[+0xc58] & 0x400`, which `0x5fa600` writes beside that flag for our character.
+    pub(super) control_lost: bool,
+    /// The body is mid-cast ([`crate::creature_anim::Casting`]), the reference's precast spell.
+    pub(super) precast: bool,
+}
 
 /// Runs this frame's stand-state decision and sheath toggle, and returns the committed stand
 /// state: the local commit over the server's echoed byte, which the pose and sheath guard read.
@@ -15,28 +26,30 @@ pub(super) fn update(
     body: &BodyQuery,
     binds: &crate::bindings::BindingsState,
     net: &NetCommands,
+    commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
+    loot_close: &mut crate::ui_loot::LootMoveStart,
     asks: &mut MessageReader<StandStateRequest>,
     server: &mut MessageReader<super::ServerStandState>,
+    reads: PlayerReads,
     moving: bool,
     turned: bool,
 ) -> u8 {
     // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `stand_pending`, the local
     // commit ([`apply_locally`]), overlays it until it lands.
-    let (stand_byte, reads_dead) = body
+    let (stand_byte, gates) = body
         .single()
         .ok()
         .and_then(|(.., store, _, _, _, _, _)| {
-            // `SetStandState`'s first guards, health ≤ 0 or `UNIT_DYNAMIC_FLAGS & 0x20` (feigning),
-            // without `unit_reads_dead`'s stand state 7 (`0x5ed4a9`–`0x5ed4bd`).
-            store.map(|s| {
-                (
-                    s.0.unit_stand_state(),
-                    s.0.unit_is_dead() || s.0.unit_dynflag_dead(),
-                )
-            })
+            store.map(|s| (s.0.unit_stand_state(), stand_gates(&s.0, reads.precast)))
         })
-        .unwrap_or((0, false));
+        .unwrap_or((
+            0,
+            state::StandGates {
+                precast: reads.precast,
+                ..default()
+            },
+        ));
     if player.stand_pending == Some(stand_byte) {
         player.stand_pending = None; // the echo landed
     }
@@ -45,7 +58,7 @@ pub(super) fn update(
     if let Some(s) = server.read().last().map(|m| m.state) {
         let stand_now = player.stand_pending.unwrap_or(stand_byte);
         move_trace::posture("server", s, stand_now, player.move_flags());
-        apply_locally(player, s, stand_now, body, sheath);
+        apply_locally(player, s, stand_now, body, commands, sheath, loot_close);
     }
     let stand_state = player.stand_pending.unwrap_or(stand_byte);
     // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
@@ -68,15 +81,15 @@ pub(super) fn update(
         request_stand = Some(0);
     }
     // `SetStandState` `0x5ed430`'s gate ([`state::stand_state_refused`]), silent and before the
-    // packet: no sitting while translating or swimming, no change at all while dead. It covers
-    // the posture emotes too, whose `Emotes.dbc` gate has no swim bit. The flags word is the live
-    // outbound one, a frame old, the `[[this+0x118]+0x40]` the cast gates read.
+    // packet: no change at all while mounted, on a taxi, dead, channelling or casting, and no
+    // sitting while translating or swimming. It covers the posture emotes too, whose `Emotes.dbc`
+    // gate has no swim bit. The flags word is the live outbound one, a frame old, the
+    // `[[this+0x118]+0x40]` the cast gates read.
     if let Some(s) =
-        request_stand.filter(|&s| state::stand_state_refused(reads_dead, player.move_flags(), s))
+        request_stand.filter(|&s| state::stand_state_refused(gates, player.move_flags(), s))
     {
         debug!(
-            "stand state {s} refused (dead {reads_dead}, move flags {:#x} — the client's \
-             `0x5ed430` gate)",
+            "stand state {s} refused ({gates:?}, move flags {:#x} — the client's `0x5ed430` gate)",
             player.move_flags()
         );
         move_trace::posture("REFUSED", s, stand_state, player.move_flags());
@@ -88,7 +101,7 @@ pub(super) fn update(
         let _ = net.0.send(ClientCommand::StandStateChange {
             state: u32::from(s),
         });
-        apply_locally(player, s, stand_state, body, sheath);
+        apply_locally(player, s, stand_state, body, commands, sheath, loot_close);
     }
     let stand_now = player.stand_pending.unwrap_or(stand_byte);
     // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
@@ -96,19 +109,15 @@ pub(super) fn update(
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
     if binds.fired(crate::bindings::Input::ToggleSheath) {
         if let Ok((e, _, _, _, Some(drv), store, engaged, _, _, wielded, _)) = body.single() {
-            // Of `ToggleSheath`'s 12 silent guards: dead, in combat, any nonzero stand state,
-            // mid-ceremony (clip 89/90) and mounted; its stunned and channeling guards are not
-            // tested here.
-            let dead = store.is_some_and(|s| s.0.unit_is_dead());
-            let mounted = store.is_some_and(|s| s.0.unit_mount_display_id() != 0);
-            let refused =
-                dead || mounted || engaged || stand_now != 0 || drv.sheath_ceremony_active();
-            if refused {
-                debug!(
-                    "sheath toggle refused (dead {dead}, mounted {mounted}, engaged {engaged}, \
-                     stand {stand_now}, mid-ceremony {})",
-                    drv.sheath_ceremony_active()
-                );
+            let toggle = ToggleGates {
+                control_lost: reads.control_lost,
+                engaged,
+                precast: reads.precast,
+                seated: stand_now != 0,
+                mid_ceremony: drv.sheath_ceremony_active(),
+            };
+            if toggle_refused(store.map(|s| &s.0), toggle) {
+                debug!("sheath toggle refused ({toggle:?})");
             } else {
                 // Melee, ranged, stowed, skipping what is not worn; `None` makes no call at all.
                 let w = wielded.copied().unwrap_or_default();
@@ -134,59 +143,113 @@ pub(super) fn update(
     stand_now
 }
 
+/// [`state::StandGates`] off the body's descriptor and cast state.
+fn stand_gates(fields: &ObjectFields, precast: bool) -> state::StandGates {
+    state::StandGates {
+        mounted: fields.unit_mount_display_id() != 0,
+        on_taxi: fields.unit_flags() & super::UNIT_FLAG_TAXI_FLIGHT != 0,
+        // Health 0 or the feign flag, without `unit_reads_dead`'s stand state 7 (`0x5ed4a9`–
+        // `0x5ed4bd`).
+        reads_dead: fields.unit_is_dead() || fields.unit_dynflag_dead(),
+        channelling: fields.unit_channel_spell() != 0,
+        precast,
+    }
+}
+
+/// What `ToggleSheath` (`0x5eb480`) reads of the player ahead of its cycle, past the active-player
+/// test, besides the descriptor [`toggle_refused`] reads; each refuses silently, with no call and
+/// no packet. Its model tests (`0x5eb542`, `0x5eb580`) are the setter's executor's, which holds
+/// the model ([`crate::creature_anim::SheathRequest`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct ToggleGates {
+    /// `IsClientControlled` (`0x5eb4d1`) is clear.
+    control_lost: bool,
+    /// An attack target, `[+0xc48]` (`0x5eb513`).
+    engaged: bool,
+    /// A precast spell, `[+0xd58] & 0x400` (`0x5eb49f`) or `[+0xc8c]` (`0x5eb52b`).
+    precast: bool,
+    /// A stand state above 0 (`0x5eb553`).
+    seated: bool,
+    /// An arm still plays a sheathe animation (`0x5eb5a0`–`0x5eb5e2`).
+    mid_ceremony: bool,
+}
+
+/// Whether the toggle refuses: on `gates`, and off the descriptor on a mount (`0x5eb4e4`), the
+/// stun flag (`0x5eb4f2`), health at or below 0 (`0x5eb502`) and a channel (`0x5eb48e`).
+fn toggle_refused(fields: Option<&ObjectFields>, gates: ToggleGates) -> bool {
+    let mounted = fields.is_some_and(|f| f.unit_mount_display_id() != 0);
+    let dead = fields.is_some_and(ObjectFields::unit_is_dead);
+    mounted || dead || gates.engaged || gates.seated || gates.mid_ceremony
+}
+
 /// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after
-/// its send and from `SMSG_STANDSTATE_UPDATE` (`0x603e50`); it sends nothing. A change writes the
-/// prediction (`[player+0x1d68]`); any call stows a drawn weapon for a state but 0 or 2
-/// (`0x6127cc`). Not built: its loot release and attack stop on a sit (`0x5f0790` → `0x48f200`,
-/// `0x5ecac0`), movement re-run on a stand, and follow-camera re-acquire each call (`0x48ec90`).
+/// its send and from `SMSG_STANDSTATE_UPDATE` (`0x603e50`); it sends nothing itself
+/// ([`local_apply`]). Not built: movement re-run on a stand (`0x5f07ba`) and follow-camera
+/// re-acquire each call (`0x48ec90`).
 fn apply_locally(
     player: &mut Player,
     s: u8,
     stand_now: u8,
     body: &BodyQuery,
+    commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
+    loot_close: &mut crate::ui_loot::LootMoveStart,
 ) {
-    predict(&mut player.stand_pending, s, stand_now);
-    if s != 0 && s != 2 {
-        if let Ok((e, _, _, _, drv, _, _, _, _, _, _)) = body.single() {
-            if drv.and_then(|d| d.sheath_state()).unwrap_or(0) != 0 {
-                sheath.write(crate::creature_anim::SheathRequest {
-                    entity: e,
-                    state: 0,
-                    ceremony: false,
-                });
-            }
-        }
+    let body = body.single().ok();
+    let drawn = body
+        .and_then(|(_, _, _, _, drv, ..)| drv)
+        .and_then(|d| d.sheath_state())
+        .unwrap_or(0)
+        != 0;
+    let apply = local_apply(s, stand_now, drawn);
+    if apply.predict {
+        player.stand_pending = Some(s);
+    }
+    if apply.leave {
+        // The same close as the movement start's (`0x60e9dd`), under the same `0x6126b0`.
+        loot_close.0 = true;
+        commands.run_system_cached(stop_attack_for_stand_state);
+    }
+    if let (true, Some((e, ..))) = (apply.stow, body) {
+        sheath.write(crate::creature_anim::SheathRequest {
+            entity: e,
+            state: 0,
+            ceremony: false,
+        });
     }
 }
 
-/// `0x5f0790`'s early-out (`0x5f0799`): the predicted stand state is written only on a change.
-/// Returns whether it was.
-fn predict(pending: &mut Option<u8>, s: u8, stand_now: u8) -> bool {
-    if s == stand_now {
-        return false;
+/// What the local apply (`0x6127b0`) does for state `s` over the committed `stand_now`, with the
+/// body's weapons `drawn` or not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LocalApply {
+    /// `0x5f0790` writes the prediction `[player+0x1d68]`, only on a change (`0x5f0799`).
+    predict: bool,
+    /// That change, to any state but 0, ends the loot window (`0x48f200(1, 1, 0)` at `0x5f07d5`,
+    /// while `0x6126b0` holds) and the attack (`0x5ecac0` at `0x5f07e7`, while `0x60ecb0` holds).
+    leave: bool,
+    /// Any call stows a drawn weapon for a state but 0 or 2 (`0x6127cc`, `0x611cf0(0, 1, 1)`).
+    stow: bool,
+}
+
+fn local_apply(s: u8, stand_now: u8, drawn: bool) -> LocalApply {
+    LocalApply {
+        predict: s != stand_now,
+        leave: false,
+        stow: drawn && s != 0 && s != 2,
     }
-    *pending = Some(s);
-    true
+}
+
+/// StopAttack (`0x5ecac0`) as the stand state's local apply calls it, on our own attack target
+/// (`0x60ecb0`): `CMSG_ATTACKSTOP` and the queued strike's cancel.
+fn stop_attack_for_stand_state(
+    mut slots: crate::spell::CastSlots,
+    net: Res<NetCommands>,
+    me: Query<Has<crate::creature_anim::Engaged>, With<crate::net::SelfPlayer>>,
+) {
+    let engaged = me.iter().next().unwrap_or(false);
+    crate::creature_anim::stop_attack_local(engaged, &mut slots.core(&net));
 }
 
 #[cfg(test)]
-mod setter_tests {
-    use super::predict;
-
-    #[test]
-    fn the_local_half_writes_the_prediction_only_on_a_change() {
-        // Seated by the server (a drink) while the echo still says standing: predicted.
-        let mut pending = None;
-        assert!(predict(&mut pending, 1, 0));
-        assert_eq!(pending, Some(1));
-        // vmangos's same-state re-send (its camera re-acquire): nothing written.
-        let mut pending = None;
-        assert!(!predict(&mut pending, 0, 0));
-        assert_eq!(pending, None);
-        // A stand from the server while we predicted a sit: the newer state wins.
-        let mut pending = Some(1);
-        assert!(predict(&mut pending, 0, 1));
-        assert_eq!(pending, Some(0));
-    }
-}
+mod tests;

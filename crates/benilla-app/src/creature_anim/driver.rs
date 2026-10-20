@@ -22,7 +22,7 @@ use super::select::{
     self, current_special, defense_anim, is_swing_id, route_mounted, route_oneshot,
     swing_anim_main, swing_anim_off, unify, Mode, OneShotRoute, DEATH, DEFAULT_WALK_SPEED, STAND,
 };
-use super::sheath::{advance_sheath_ceremony, start_sheath_ceremony};
+use super::sheath::{advance_sheath_ceremony, model_refuses_toggle, start_sheath_ceremony};
 use super::{
     find_resolved, move_flags, AnimData, AnimDriver, AutoRepeatArmed, BaseAnimRecompute, CastHold,
     DefenseAnim, EmoteAnim, Engaged, MovementState, NockLatch, Overlay, OverlayFade, SheathRequest,
@@ -405,9 +405,19 @@ pub(super) fn drive_animations(
     for r in recomputes.read() {
         pending_recompute.insert(r.entity, r.anim_id);
     }
-    // Sheath requests by unit; the last SetSheatheState call wins.
+    // Sheath requests by unit; the last SetSheatheState call wins. The manual toggle's request
+    // meets the toggle's model tests first, on the animation armed now (`0x5fdb50`): one they
+    // refuse is no call, and an earlier request this frame stands.
     let mut pending_sheath: bevy::ecs::entity::EntityHashMap<SheathRequest> = default();
     for r in sheath_requests.read() {
+        let refused = r.ceremony
+            && units
+                .get(r.entity)
+                .is_ok_and(|u| model_refuses_toggle(u.1, armed_id(u.4, u.2, u.3, u.1)));
+        if refused {
+            debug!("sheath: unit {} toggle refused by its model", r.entity);
+            continue;
+        }
         pending_sheath.insert(r.entity, *r);
     }
     // `None` until `AnimationData.dbc` loads; every lookup then resolves to itself.

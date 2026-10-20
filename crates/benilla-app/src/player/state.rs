@@ -647,16 +647,33 @@ pub(super) fn autorun_cancelled(
     fwd_down || back_down || both_engaged || lost_mover
 }
 
+/// What `SetStandState` (`0x5ed430`) reads of the unit ahead of the movement word: each refuses
+/// any change, standing up included, with no packet, no apply and no message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct StandGates {
+    /// `UNIT_FIELD_MOUNTDISPLAYID` above 0 (`0x5ed487`).
+    pub(super) mounted: bool,
+    /// [`super::UNIT_FLAG_TAXI_FLIGHT`] (`0x5ed497`).
+    pub(super) on_taxi: bool,
+    /// Health at or below 0 (`0x5ed4a9`) or `UNIT_DYNAMIC_FLAGS & 0x20`, a feigner (`0x5ed4b2`).
+    pub(super) reads_dead: bool,
+    /// `UNIT_CHANNEL_SPELL` set (`0x5ed440`).
+    pub(super) channelling: bool,
+    /// A precast spell: `[+0xd58] & 0x400` (`0x5ed44b`) and `[+0xc8c]` (`0x5ed4cc`), which
+    /// `0x60d020` sets together.
+    pub(super) precast: bool,
+}
+
 /// Whether the reference's `SetStandState` (`0x5ed430`) refuses this change, returning before the
-/// packet is built. A body that reads dead is refused either way; otherwise standing up never is,
-/// and any other state is refused while translating or swimming (`0x20000f`, `0x5ed4f8`), SLEEP
-/// also while turning (`0x5ed4e6`, which falls through into that test). FALLING is in neither
-/// mask. It is the one setter, so the X key, the posture emotes and the AFK sit all go through it.
-pub(super) fn stand_state_refused(reads_dead: bool, move_flags: u32, new_state: u8) -> bool {
+/// packet is built. A unit [`StandGates`] names is refused either way; otherwise standing up never
+/// is, and any other state is refused while translating or swimming (`0x20000f`, `0x5ed4f8`),
+/// SLEEP also while turning (`0x5ed4e6`, which falls through into that test). FALLING is in
+/// neither mask. It is the one setter, so the X key, the posture emotes and the AFK sit all go
+/// through it.
+pub(super) fn stand_state_refused(unit: StandGates, move_flags: u32, new_state: u8) -> bool {
     use crate::creature_anim::move_flags as f;
-    // Health <= 0 (`0x5ed4ac`) or `UNIT_DYNAMIC_FLAGS & 0x20`, a feigner (`0x5ed4b2`), refuses in
-    // both directions, so it comes before the stand-up exit.
-    if reads_dead {
+    // The unit's tests refuse in both directions, so they come before the stand-up exit.
+    if unit.reads_dead {
         return true;
     }
     // Standing up skips the movement word (`0x5ed4f0`).
@@ -672,71 +689,127 @@ pub(super) fn stand_state_refused(reads_dead: bool, move_flags: u32, new_state: 
 
 #[cfg(test)]
 mod stand_state_tests {
-    use super::stand_state_refused;
+    use super::{stand_state_refused, StandGates};
     use crate::creature_anim::move_flags as f;
+
+    const ALIVE: StandGates = StandGates {
+        mounted: false,
+        on_taxi: false,
+        reads_dead: false,
+        channelling: false,
+        precast: false,
+    };
+    const DEAD: StandGates = StandGates {
+        reads_dead: true,
+        ..ALIVE
+    };
 
     #[test]
     fn a_body_that_reads_dead_can_neither_sit_nor_stand() {
         for state in [0u8, 1, 2, 3, 8] {
             assert!(
-                stand_state_refused(true, 0, state),
+                stand_state_refused(DEAD, 0, state),
                 "stand state {state} refused on a body that reads dead — standing up included, \
                  which is the one case the movement-word gate below would have let through"
             );
         }
         assert!(
-            !stand_state_refused(false, 0, 1),
+            !stand_state_refused(ALIVE, 0, 1),
             "and the same still body, alive, is granted its sit — the guard is the death, not the \
              standing still"
         );
+    }
+
+    /// `0x5ed430`'s other unit tests ahead of the movement word: mounted (`0x5ed487`), on a taxi
+    /// (`0x5ed497`), channelling (`0x5ed440`) and a precast spell (`0x5ed44b`, `0x5ed4cc`) each
+    /// refuse a sit and a stand alike, on a still body.
+    #[test]
+    fn a_mounted_flying_or_casting_body_can_neither_sit_nor_stand() {
+        for (what, unit) in [
+            (
+                "mounted",
+                StandGates {
+                    mounted: true,
+                    ..ALIVE
+                },
+            ),
+            (
+                "on a taxi",
+                StandGates {
+                    on_taxi: true,
+                    ..ALIVE
+                },
+            ),
+            (
+                "channelling",
+                StandGates {
+                    channelling: true,
+                    ..ALIVE
+                },
+            ),
+            (
+                "holding a precast spell",
+                StandGates {
+                    precast: true,
+                    ..ALIVE
+                },
+            ),
+        ] {
+            for state in [0u8, 1, 3, 8] {
+                assert!(
+                    stand_state_refused(unit, 0, state),
+                    "stand state {state} refused while {what}"
+                );
+            }
+        }
     }
 
     #[test]
     fn a_swimmer_cannot_sit_but_can_always_stand() {
         // Floating still: SWIMMING alone refuses.
         assert!(
-            stand_state_refused(false, f::SWIMMING, 1),
+            stand_state_refused(ALIVE, f::SWIMMING, 1),
             "sit refused mid-swim"
         );
         assert!(
-            stand_state_refused(false, f::SWIMMING | f::FORWARD, 1),
+            stand_state_refused(ALIVE, f::SWIMMING | f::FORWARD, 1),
             "swimming forward too"
         );
         // SIT, SIT_CHAIR and KNEEL.
         for state in [1u8, 2, 8] {
             assert!(
-                stand_state_refused(false, f::SWIMMING, state),
+                stand_state_refused(ALIVE, f::SWIMMING, state),
                 "state {state} refused mid-swim"
             );
         }
         // Standing up (0) skips the word.
-        assert!(!stand_state_refused(false, f::SWIMMING | f::FORWARD, 0));
-        assert!(!stand_state_refused(false, f::ANY_MOVE | f::SWIMMING, 0));
+        assert!(!stand_state_refused(ALIVE, f::SWIMMING | f::FORWARD, 0));
+        assert!(!stand_state_refused(ALIVE, f::ANY_MOVE | f::SWIMMING, 0));
     }
 
     /// The turn bits are outside `0x20000f`.
     #[test]
     fn sitting_is_refused_while_translating_and_allowed_while_merely_turning() {
         assert!(
-            !stand_state_refused(false, 0, 1),
+            !stand_state_refused(ALIVE, 0, 1),
             "standing still: sit granted"
         );
         for bit in [f::FORWARD, f::BACKWARD, f::STRAFE_LEFT, f::STRAFE_RIGHT] {
             assert!(
-                stand_state_refused(false, bit, 1),
+                stand_state_refused(ALIVE, bit, 1),
                 "translating: sit refused"
             );
         }
         for bit in [f::TURN_LEFT, f::TURN_RIGHT] {
             assert!(
-                !stand_state_refused(false, bit, 1),
+                !stand_state_refused(ALIVE, bit, 1),
                 "turning in place: sit granted"
             );
         }
         // Mode bits are not movement.
         for bit in [f::ROOT, f::WATER_WALKING, f::FALLING, f::WALK_MODE] {
             assert!(
-                !stand_state_refused(false, bit, 1),
+                !stand_state_refused(ALIVE, bit, 1),
                 "mode bit {bit:#x} is not a move"
             );
         }
@@ -747,21 +820,21 @@ mod stand_state_tests {
     fn sleep_takes_both_tests_so_it_is_the_strictest_posture() {
         // The turn test is SLEEP's alone.
         assert!(
-            stand_state_refused(false, f::TURN_LEFT, 3),
+            stand_state_refused(ALIVE, f::TURN_LEFT, 3),
             "turning: /sleep refused"
         );
-        assert!(stand_state_refused(false, f::TURN_RIGHT, 3));
+        assert!(stand_state_refused(ALIVE, f::TURN_RIGHT, 3));
         assert!(
-            !stand_state_refused(false, f::TURN_LEFT, 1),
+            !stand_state_refused(ALIVE, f::TURN_LEFT, 1),
             "turning blocks ONLY the sleep — a sit is granted"
         );
         // The shared test it falls into.
         assert!(
-            stand_state_refused(false, f::SWIMMING, 3),
+            stand_state_refused(ALIVE, f::SWIMMING, 3),
             "swimming: /sleep refused"
         );
         assert!(
-            stand_state_refused(false, f::FORWARD, 3),
+            stand_state_refused(ALIVE, f::FORWARD, 3),
             "walking: /sleep refused"
         );
         // SLEEP's effective mask is the one-shot route's `0x20003f`.
@@ -771,10 +844,10 @@ mod stand_state_tests {
             "`0x20003f`, byte-verified at 0x5fe6dc as well as 0x5ed4e6+0x5ed4f8"
         );
         // Standing up from SLEEP is still ungated.
-        assert!(!stand_state_refused(false, f::ROUTE_COMMITTED_MOVE, 0));
+        assert!(!stand_state_refused(ALIVE, f::ROUTE_COMMITTED_MOVE, 0));
         // FALLING is in neither mask.
         assert!(
-            !stand_state_refused(false, f::FALLING, 3),
+            !stand_state_refused(ALIVE, f::FALLING, 3),
             "falling: /sleep granted"
         );
     }

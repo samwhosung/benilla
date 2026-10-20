@@ -69,6 +69,8 @@ pub(super) fn control(
         Res<crate::loading_screen::LoadingScreen>,
         // Our own `[0xb4b3e4]`, which a control verdict on our character writes.
         ResMut<super::OwnControlLost>,
+        // The body mid-cast, which the posture verbs refuse on.
+        Query<Has<crate::creature_anim::Casting>, (With<Embodied>, Without<FlyCam>)>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -484,14 +486,21 @@ pub(super) fn control(
         // mover reads `CMovement+0x40` after the input phase.
         walk::update(&mut player, &body, binds);
         // The stand state and the sheath toggle, which interlock; returns the committed stand.
+        let reads = posture::PlayerReads {
+            control_lost: speed_capsule.10 .0,
+            precast: speed_capsule.11.single().unwrap_or(false),
+        };
         let stand_now = posture::update(
             &mut player,
             &body,
             binds,
             &net.0,
+            &mut commands,
             &mut net.3,
+            &mut net.14,
             &mut net.10,
             &mut net.15,
+            reads,
             moving,
             turned,
         );
