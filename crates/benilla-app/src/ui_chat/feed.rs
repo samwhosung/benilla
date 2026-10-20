@@ -525,10 +525,10 @@ const XP_FACTOR_EPSILON: f64 = 1.0 / 4_194_304.0;
 /// that state's key in the table `0x864330`, `COMBATLOG_XPGAIN_EXHAUSTION<state>`, with the
 /// signed bonus, `total - base` prefixed `+` unless negative (`0x637c07`-`0x637c25`), and the
 /// row's name as the state word (`0x637c31`). The table has no entry 0 and ends at 5: a row there
-/// writes nothing. State 3's entry names the global `NULL`, which 1.12 does not define: `GetText` answers
-/// the empty string for it (`0x703c02`) and `0x637bef` tests only for null, so the reference
-/// formats that line from an empty template, which `keyed` drops. No shipped row reaches it:
-/// `Exhaustion.dbc` gives state 3 a factor of 1, the plain form.
+/// writes nothing. State 3's entry names the global `NULL`, which 1.12 does not define: `GetText`
+/// answers the empty string for it (`0x703c02`) and `0x637bef` tests only for null, so the
+/// reference formats that line from an empty template, which `keyed` drops. No shipped row
+/// reaches it: `Exhaustion.dbc` gives state 3 a factor of 1, the plain form.
 ///
 /// The packet's group float ([`group_split`]) appends `_GROUP` or `_RAID` to the named key and
 /// adds the difference as the last number (`0x637b70`-`0x637bd5`, `0x637d33`-`0x637d67`); a

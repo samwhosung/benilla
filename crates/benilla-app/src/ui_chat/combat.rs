@@ -916,8 +916,8 @@ pub(crate) struct NameSources<'a> {
 /// ([`unit_name`]), a game object (bit 5) by the record name it holds (`0x5f8100`, the cache by
 /// the descriptor's entry), an item (bit 1) from the item cache by its entry, read without asking
 /// (`0x55ba30` with no callback); any other object has no name. A guid not held goes to the name
-/// caches (`0x6265a7`, `0x6265e0`, with an empty callback). `None` for a miss or an empty name
-/// (`0x6265ef`), which [`logged_name`] prints.
+/// caches (`0x6265a7`, `0x6265e0`, with an empty callback). `None` for a miss, and for a record
+/// with an empty name (`0x6265ef`), which [`logged_name`] prints.
 pub(crate) fn object_name(
     guid: u64,
     held: Option<&ObjectStore>,
