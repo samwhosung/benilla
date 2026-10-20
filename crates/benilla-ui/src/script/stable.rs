@@ -921,7 +921,7 @@ mod tests {
         crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], Some("CursorKind()"));
         s.set_cursor_for_test(crate::script::cursor::CursorPayload::Macro(
             crate::script::cursor::CursorMacro {
-                index: 1,
+                id: 1,
                 texture: None,
             },
         ));

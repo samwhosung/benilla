@@ -1930,7 +1930,7 @@ mod tests {
         // Nothing held and nothing attached: a plain clear, here of a held macro.
         s.run("ClearCursor()").unwrap();
         s.set_cursor_for_test(CursorPayload::Macro(CursorMacro {
-            index: 1,
+            id: 1,
             texture: None,
         }));
         heard::take(&s);

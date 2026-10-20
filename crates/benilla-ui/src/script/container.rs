@@ -2227,7 +2227,7 @@ mod tests {
         s.run("ClearCursor()").unwrap();
         let macro_payload =
             crate::script::cursor::CursorPayload::Macro(crate::script::cursor::CursorMacro {
-                index: 1,
+                id: 1,
                 texture: None,
             });
         s.set_cursor_for_test(macro_payload.clone());

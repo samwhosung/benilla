@@ -682,7 +682,7 @@ mod tests {
     fn a_pickup_clears_twice_then_shows_the_pet_grid() {
         let mut s = bar_script();
         s.set_cursor_for_test(CursorPayload::Macro(crate::script::cursor::CursorMacro {
-            index: 1,
+            id: 1,
             texture: None,
         }));
         crate::script::cursor::install_kind_probe(&s);

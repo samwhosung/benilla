@@ -10,7 +10,7 @@ fn macro_view(name: &str, body: &str) -> MacroView {
         name: name.into(),
         texture: Some("Interface\\Icons\\Ability_Ambush".into()),
         body: body.into(),
-        local_only: false,
+        ..Default::default()
     }
 }
 
@@ -28,23 +28,28 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
     let account = crate::local_state::macros_account_path().unwrap();
     let character = crate::local_state::macros_character_path("Test Realm", "Probeone").unwrap();
 
-    let state = MacroState {
-        account: vec![macro_view("Ambush", "/cast Ambush\n/say pew")],
-        character: vec![macro_view("Charge", "/cast Charge")],
-    };
-    crate::local_state::write_atomic(&account, &super::store::write(&state.account)).unwrap();
-    crate::local_state::write_atomic(&character, &super::store::write(&state.character)).unwrap();
+    let state = MacroState::from_scopes(
+        vec![macro_view("Ambush", "/cast Ambush\n/say pew")],
+        vec![macro_view("Charge", "/cast Charge")],
+    );
+    crate::local_state::write_atomic(&account, &super::store::write(state.scope(false))).unwrap();
+    crate::local_state::write_atomic(&character, &super::store::write(state.scope(true))).unwrap();
 
     // The reference's format, with `\n` line ends.
     assert_eq!(
         std::fs::read_to_string(&account).unwrap(),
         "MACRO 1 \"Ambush\" Ability_Ambush\n/cast Ambush\n/say pew\nEND\n"
     );
+    // A character macro keeps its full id, the scope's base and one (`0x4eff90`).
+    assert_eq!(
+        std::fs::read_to_string(&character).unwrap(),
+        "MACRO 16777217 \"Charge\" Ability_Ambush\n/cast Charge\nEND\n"
+    );
 
-    let back = MacroState {
-        account: super::store::parse(&std::fs::read_to_string(&account).unwrap()),
-        character: super::store::parse(&std::fs::read_to_string(&character).unwrap()),
-    };
+    let back = MacroState::from_scopes(
+        super::store::parse(&std::fs::read_to_string(&account).unwrap()),
+        super::store::parse(&std::fs::read_to_string(&character).unwrap()),
+    );
     assert_eq!(back, state);
     std::fs::remove_dir_all(&tmp).ok();
 }
@@ -89,10 +94,10 @@ fn ui() -> UiScript {
 fn running_a_macro_runs_its_lines_through_the_references_edit_box() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui();
-    s.set_macros(MacroState {
-        account: vec![macro_view("Greet", "/wave\n\n  /say pew  \n/roll 1 100")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Greet", "/wave\n\n  /say pew  \n/roll 1 100")],
+        Vec::new(),
+    ));
 
     assert!(super::run_macro(&mut s, 1));
     let sends = s.take_chat_sends();
@@ -116,25 +121,27 @@ fn running_a_macro_runs_its_lines_through_the_references_edit_box() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     // An empty macro and an empty slot both run nothing and queue nothing.
-    s.set_macros(MacroState {
-        account: vec![macro_view("Blank", "   \n\n")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Blank", "   \n\n")],
+        Vec::new(),
+    ));
     assert!(!super::run_macro(&mut s, 1));
     assert!(!super::run_macro(&mut s, 7));
     assert!(s.take_chat_sends().is_empty());
 }
 
-/// Index 19 is the first per-character macro (18 per tab).
+/// A macro slot holds the id, and the first per-character macro's is `0x1000001` (`0x4eff90`):
+/// its position, 19, names nothing to the runner (`0x4f1460` looks the record up by id).
 #[test]
-fn a_character_macro_runs_by_its_own_index() {
+fn a_character_macro_runs_by_its_own_id() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui();
-    s.set_macros(MacroState {
-        account: Vec::new(),
-        character: vec![macro_view("Charge", "/say Charge")],
-    });
-    assert!(super::run_macro(&mut s, 19));
+    s.set_macros(MacroState::from_scopes(
+        Vec::new(),
+        vec![macro_view("Charge", "/say Charge")],
+    ));
+    assert!(!super::run_macro(&mut s, 19));
+    assert!(super::run_macro(&mut s, 0x100_0001));
     assert_eq!(
         s.take_chat_sends()
             .iter()
@@ -148,10 +155,10 @@ fn a_character_macro_runs_by_its_own_index() {
 #[test]
 fn the_dirty_edge_distinguishes_a_load_from_an_edit() {
     let mut s = UiScript::new().unwrap();
-    s.set_macros(MacroState {
-        account: vec![macro_view("Ambush", "/cast Ambush")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Ambush", "/cast Ambush")],
+        Vec::new(),
+    ));
     assert!(
         !s.take_macros_dirty(),
         "loading from disk is not an edit — a save here would be a write-back loop"
@@ -160,7 +167,7 @@ fn the_dirty_edge_distinguishes_a_load_from_an_edit() {
     s.run(r#"EditMacro(1, nil, nil, "/cast Backstab")"#)
         .unwrap();
     assert!(s.take_macros_dirty());
-    assert_eq!(s.macros().account[0].body, "/cast Backstab");
+    assert_eq!(s.macros().by_id(1).unwrap().body, "/cast Backstab");
 }
 
 #[test]
@@ -169,10 +176,10 @@ fn the_generation_moves_on_every_write_and_is_not_drained() {
     let at_start = s.macros_generation();
     assert_eq!(s.macros_generation(), at_start, "reading never drains it");
 
-    s.set_macros(MacroState {
-        account: vec![macro_view("Ambush", "/cast Ambush")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Ambush", "/cast Ambush")],
+        Vec::new(),
+    ));
     let after_seed = s.macros_generation();
     assert_ne!(after_seed, at_start, "a seed changes the bar's icons too");
 
@@ -195,10 +202,10 @@ fn a_registered_frame_sees_every_macro_line_as_an_event() {
            end)"#,
     )
     .unwrap();
-    s.set_macros(MacroState {
-        account: vec![macro_view("Pull", "/wave\n/say Incoming!")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Pull", "/wave\n/say Incoming!")],
+        Vec::new(),
+    ));
 
     assert!(super::run_macro(&mut s, 1));
     assert_eq!(
@@ -226,10 +233,10 @@ fn a_registered_frame_sees_every_macro_line_as_an_event() {
 fn either_line_ending_splits_a_body() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui();
-    s.set_macros(MacroState {
-        account: vec![macro_view("Mixed", "/say Charge\r/say a\r\n/say b")],
-        character: Vec::new(),
-    });
+    s.set_macros(MacroState::from_scopes(
+        vec![macro_view("Mixed", "/say Charge\r/say a\r\n/say b")],
+        Vec::new(),
+    ));
     assert!(super::run_macro(&mut s, 1));
     assert_eq!(
         s.take_chat_sends()

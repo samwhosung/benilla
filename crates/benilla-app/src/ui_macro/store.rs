@@ -1,25 +1,27 @@
 //! The macro file format, the reference's own: a `MACRO %d "%s" %s` header (`0x84cb60`), the body
 //! lines and a bare `END`, in `macros-cache.txt` and `macros-local.txt` (`0x85de74`, `0x85de88`).
 //! benilla ends lines with `\n` where the reference writes `\r\n`, and reads either, so a 1.12
-//! `macros-cache.txt` drops into `benilla-config/macros/`. The index only orders the records, and
-//! a name holding a `"` runs from the first quote to the last, since the reference's `"%s"` is
-//! unescaped.
+//! `macros-cache.txt` drops into `benilla-config/macros/`. The number is the macro's id, which an
+//! action slot holds; the records keep the file's order, the list order the reference's sort and
+//! name lookups start from (`MacroState`). A name holding a `"` runs from the first quote to the
+//! last, since the reference's `"%s"` is unescaped.
 
-use benilla_ui::script::{MacroView, MAX_MACROS};
+use benilla_ui::script::MacroView;
 
 /// The path prefix the client prepends to a stored icon basename (`0x84ca64`).
 pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 
-/// Parse one scope's file into a dense macro list: a malformed record is skipped, and records past
-/// [`MAX_MACROS`] are dropped.
+/// Parse one scope's file into its records in file order, each with its id. A header with no id, or
+/// a zero one, is no record (`0x4f072a`); the table that takes them skips what the scope cannot
+/// hold and any id it has, and gives an id below its base the base (`MacroState::from_scopes`).
 pub(super) fn parse(text: &str) -> Vec<MacroView> {
-    let mut out: Vec<(u32, MacroView)> = Vec::new();
+    let mut out: Vec<MacroView> = Vec::new();
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let Some(rest) = line.trim_start().strip_prefix("MACRO ") else {
             continue; // stray text between records
         };
-        let Some((index, name, icon)) = parse_header(rest) else {
+        let Some((id, name, icon)) = parse_header(rest) else {
             continue;
         };
         // The body runs to a bare END, or to the next MACRO or EOF, so a truncated file keeps its
@@ -36,37 +38,34 @@ pub(super) fn parse(text: &str) -> Vec<MacroView> {
                 Some(_) => body.push(lines.next().unwrap_or_default()),
             }
         }
-        out.push((
-            index,
-            MacroView {
-                name,
-                texture: icon.map(icon_path),
-                body: body.join("\n"),
-                local_only: false,
-            },
-        ));
+        out.push(MacroView {
+            id,
+            name,
+            texture: icon.map(icon_path),
+            body: body.join("\n"),
+            local_only: false,
+        });
     }
-    out.sort_by_key(|(i, _)| *i);
-    out.into_iter().map(|(_, m)| m).take(MAX_MACROS).collect()
+    out
 }
 
-/// The tail of a `MACRO ` header line: `<index> "<name>" <icon>`.
+/// The tail of a `MACRO ` header line: `<id> "<name>" <icon>`.
 fn parse_header(rest: &str) -> Option<(u32, String, Option<String>)> {
-    let (index, rest) = rest.split_once('"')?;
-    let index: u32 = index.trim().parse().ok()?;
+    let (id, rest) = rest.split_once('"')?;
+    let id: u32 = id.trim().parse().ok().filter(|&id| id != 0)?;
     // To the last quote on the line: the reference's `"%s"` is unescaped.
     let close = rest.rfind('"')?;
     let name = rest[..close].to_string();
     let icon = rest[close + 1..].trim();
-    Some((index, name, (!icon.is_empty()).then(|| icon.to_string())))
+    Some((id, name, (!icon.is_empty()).then(|| icon.to_string())))
 }
 
-/// Serialize a dense macro list back into the reference's format.
-pub(super) fn write(macros: &[MacroView]) -> String {
+/// Serialize a scope's macros back into the reference's format, in the order given.
+pub(super) fn write<'a>(macros: impl Iterator<Item = &'a MacroView>) -> String {
     let mut out = String::new();
-    for (i, m) in macros.iter().enumerate() {
+    for m in macros {
         let icon = m.texture.as_deref().map(icon_token).unwrap_or_default();
-        out.push_str(&format!("MACRO {} \"{}\" {}\n", i + 1, m.name, icon));
+        out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id, m.name, icon));
         if !m.body.is_empty() {
             out.push_str(&m.body);
             out.push('\n');
@@ -93,9 +92,9 @@ fn icon_token(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::{MacroState, MAX_MACROS};
 
-    /// A real 1.12 `macros-cache.txt`, transcribed with `\n` line ends; its indices are out of
-    /// order.
+    /// A real 1.12 `macros-cache.txt`, transcribed with `\n` line ends; its ids are out of order.
     const REAL_112_FILE: &str = "MACRO 1 \"f\" Ability_Ambush\n\
          .cheat fly on\n\
          .modify aspeed 10\n\
@@ -109,27 +108,28 @@ mod tests {
          END\n";
 
     #[test]
-    fn a_real_1_12_macros_cache_file_parses_in_index_order() {
+    fn a_real_1_12_macros_cache_file_parses_in_file_order_with_its_ids() {
         let macros = parse(REAL_112_FILE);
         assert_eq!(macros.len(), 3);
-        // Sorted by the index column, not by file position (the file is 1, 3, 2).
-        let names: Vec<&str> = macros.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["f", "w", "ns"]);
+        // The file's order is the list order; the ids are the file's own.
+        let seen: Vec<(u32, &str)> = macros.iter().map(|m| (m.id, m.name.as_str())).collect();
+        assert_eq!(seen, [(1, "f"), (3, "ns"), (2, "w")]);
         assert_eq!(
             macros[0].texture.as_deref(),
             Some("Interface\\Icons\\Ability_Ambush"),
             "the stored token is a basename; the client's own prefix completes it"
         );
         assert_eq!(macros[0].body, ".cheat fly on\n.modify aspeed 10");
-        assert_eq!(macros[1].body, ".wchange 0 0");
+        assert_eq!(macros[2].body, ".wchange 0 0");
     }
 
     #[test]
     fn write_then_parse_round_trips_and_matches_the_reference_shape() {
         let macros = parse(REAL_112_FILE);
-        let text = write(&macros);
-        // The reference's line shape, the list renumbered 1..n.
+        let text = write(macros.iter());
+        // The reference's line shape, each record under its own id.
         assert!(text.starts_with("MACRO 1 \"f\" Ability_Ambush\n"));
+        assert!(text.contains("\nMACRO 3 \"ns\" Ability_BackStab\n"));
         assert!(text.contains("\nMACRO 2 \"w\" Ability_Creature_Cursed_05\n"));
         assert!(text.ends_with("END\n"));
         assert_eq!(parse(&text), macros, "round trip");
@@ -138,21 +138,25 @@ mod tests {
     #[test]
     fn an_empty_body_and_a_missing_icon_survive_the_round_trip() {
         let m = vec![MacroView {
+            id: 1,
             name: "bare".into(),
             texture: None,
             body: String::new(),
             local_only: false,
         }];
-        let text = write(&m);
+        let text = write(m.iter());
         assert_eq!(text, "MACRO 1 \"bare\" \nEND\n");
         assert_eq!(parse(&text), m);
     }
 
-    /// A file truncated before its last `END` still yields that macro.
+    /// A file truncated before its last `END` still yields that macro. A header with a zero or
+    /// no id is no record (`0x4f0728`).
     #[test]
     fn malformed_records_lose_only_themselves() {
         let text = "garbage line\n\
              MACRO notanumber \"x\" Icon\n\
+             END\n\
+             MACRO 0 \"zero\" Icon\n\
              END\n\
              MACRO 2 \"good\" Ability_Ambush\n\
              /say hi\n\
@@ -161,20 +165,21 @@ mod tests {
              /say bye\n";
         let macros = parse(text);
         assert_eq!(macros.len(), 2);
-        assert_eq!(macros[0].name, "good");
-        assert_eq!(macros[1].name, "truncated");
+        assert_eq!((macros[0].id, macros[0].name.as_str()), (2, "good"));
+        assert_eq!((macros[1].id, macros[1].name.as_str()), (3, "truncated"));
         assert_eq!(macros[1].body, "/say bye", "no END is still a macro");
     }
 
     #[test]
     fn a_quoted_name_round_trips_the_way_the_reference_would_write_it() {
         let m = vec![MacroView {
+            id: 4,
             name: "say \"hi\"".into(),
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
             body: "/say hi".into(),
             local_only: false,
         }];
-        assert_eq!(parse(&write(&m)), m);
+        assert_eq!(parse(&write(m.iter())), m);
     }
 
     #[test]
@@ -185,15 +190,33 @@ mod tests {
             macros[0].texture.as_deref(),
             Some("Interface\\Buttons\\UI-Panel-Button")
         );
-        assert_eq!(write(&macros), text, "and writes back unchanged");
+        assert_eq!(write(macros.iter()), text, "and writes back unchanged");
     }
 
-    /// Never wrapped into the other tab: the two scopes are separate files.
+    /// The table keeps 18 per scope (`0x4f06ee`), never wrapping into the other tab: the two scopes
+    /// are separate files.
     #[test]
-    fn a_file_longer_than_the_tab_is_truncated() {
+    fn a_file_longer_than_the_tab_is_truncated_by_the_table() {
         let text: String = (1..=25)
             .map(|i| format!("MACRO {i} \"m{i}\" Ability_Ambush\nEND\n"))
             .collect();
-        assert_eq!(parse(&text).len(), MAX_MACROS);
+        let state = MacroState::from_scopes(parse(&text), Vec::new());
+        assert_eq!(state.count(false), MAX_MACROS);
+        assert_eq!(state.count(true), 0);
+    }
+
+    /// A character file written by an older build counts its ids from 1; the table adds the scope's
+    /// base to them (`0x4f0737`), and the file then keeps the full id, as the reference's does.
+    #[test]
+    fn a_character_file_with_small_ids_is_rebased_and_saved_with_the_full_id() {
+        let text = "MACRO 1 \"mine\" Ability_Ambush\n/say hi\nEND\n";
+        let state = MacroState::from_scopes(Vec::new(), parse(text));
+        let saved = write(state.scope(true));
+        assert!(
+            saved.starts_with("MACRO 16777217 \"mine\" Ability_Ambush\n"),
+            "{saved}"
+        );
+        let again = MacroState::from_scopes(Vec::new(), parse(&saved));
+        assert_eq!(again, state, "the full id loads as itself");
     }
 }

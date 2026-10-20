@@ -907,6 +907,24 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(a) = action else {
                 return Ok(Value::Nil);
             };
+            // A macro is a word whose top nibble is 4 (`0x5322a0`), so a character macro's slot
+            // (kind 0x41) is one too.
+            if let Some(id) = super::action::macro_slot_id(a.kind, a.action) {
+                let h = frame_handle_of(lua, &this)?;
+                clear(lua, h);
+                // The same lookup as `GetActionText` and the bar icon, so the three agree on a
+                // slot's macro.
+                let name = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    model.macros.by_id(id).map(|m| m.name.clone())
+                };
+                if let Some(name) = name {
+                    append_line(lua, &this, (name, WHITE), None, false)?;
+                }
+                super::tooltip::show_or_hide_empty(lua, h);
+                // The macro leg's builder return is dropped (`0x5326be`).
+                return Ok(Value::Nil);
+            }
             match a.kind {
                 // The builder's value counts only with a cooldown running (`0x532597`); the other
                 // leg builds with a zero remainder and pushes nil (`0x53267c`, `0x532690`), so
@@ -938,22 +956,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     let found = owned.is_some();
                     let live = super::tooltip_item::render_owned(lua, &this, a.action, owned)?;
                     Ok(flag(found && live))
-                }
-                0x40 => {
-                    let h = frame_handle_of(lua, &this)?;
-                    clear(lua, h);
-                    // The same 1..36 lookup as `GetActionText` and the bar icon, so the three
-                    // agree on a slot's macro.
-                    let name = {
-                        let model = lua.app_data_ref::<Model>().expect("model app_data");
-                        model.macros.get(a.action as usize).map(|m| m.name.clone())
-                    };
-                    if let Some(name) = name {
-                        append_line(lua, &this, (name, WHITE), None, false)?;
-                    }
-                    super::tooltip::show_or_hide_empty(lua, h);
-                    // The macro leg's builder return is dropped (`0x5326be`).
-                    Ok(Value::Nil)
                 }
                 _ => Ok(Value::Nil),
             }

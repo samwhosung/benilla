@@ -25,7 +25,7 @@ pub(crate) struct MacroFiles {
     identity: crate::ui_script::VmMemo<Option<(String, String)>>,
 }
 
-/// Macro index to its bound spell, the reference's `[rec+0x564]` (read by `0x4e5ba0`), which an
+/// Macro id to its bound spell, the reference's `[rec+0x564]` (read by `0x4e5ba0`), which an
 /// action-bar macro slot's state reads through. A missing entry names no macro, which `0x4e5030`
 /// greys, unlike a macro that casts nothing.
 #[derive(Resource, Default)]
@@ -133,14 +133,11 @@ fn load_macros(
             }
         }
     };
-    let state = MacroState {
-        account: read(&files.account),
-        character: read(&files.character),
-    };
+    let state = MacroState::from_scopes(read(&files.account), read(&files.character));
     info!(
         "ui_macro: {} account + {} character macros for {character} on {realm}",
-        state.account.len(),
-        state.character.len()
+        state.count(false),
+        state.count(true)
     );
     script.set_macros(state);
     // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
@@ -156,12 +153,10 @@ fn save_dirty_macros(script: Option<NonSendMut<UiScript>>, files: Res<MacroFiles
     let state = script.macros();
     // Fire first: the redraw must not depend on the write landing.
     script.fire_event("UPDATE_MACROS", vec![]);
-    for (path, macros) in [
-        (&files.account, &state.account),
-        (&files.character, &state.character),
-    ] {
+    for (path, per_character) in [(&files.account, false), (&files.character, true)] {
         let Some(path) = path else { continue };
-        if let Err(e) = crate::local_state::write_atomic(path, &store::write(macros)) {
+        let text = store::write(state.scope(per_character));
+        if let Err(e) = crate::local_state::write_atomic(path, &text) {
             warn!("ui_macro: saving {}: {e}", path.display());
         }
     }
@@ -189,25 +184,22 @@ fn rebind_macro_spells(
 
     let (macros, book) = (script.macros(), script.spellbook());
     let mut fresh = std::collections::HashMap::new();
-    for index in 1..=(benilla_ui::script::MAX_MACROS as u32 * 2) {
-        let Some(m) = macros.get(index as usize) else {
-            continue;
-        };
-        fresh.insert(index, run::bound_spell(&table, &m.body, &book));
+    for m in macros.views() {
+        fresh.insert(m.id, run::bound_spell(&table, &m.body, &book));
     }
     // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
     // it. The book flag stays the player's: `run::bound_spell` resolves the player's book only.
     script.set_macro_bindings(
         fresh
             .iter()
-            .map(|(&index, b)| {
+            .map(|(&id, b)| {
                 let spell = match *b {
                     BoundSpell::None => 0,
                     BoundSpell::Unresolved => -1,
                     BoundSpell::Spell(id) => id as i32,
                 };
                 (
-                    index,
+                    id,
                     benilla_ui::script::MacroBinding {
                         spell,
                         pet_book: false,
@@ -233,19 +225,19 @@ fn rebind_macro_spells(
 /// once, at `0x51b4ff`, with the string at `0x852470`.
 const EXECUTE_CHAT_LINE: &str = "EXECUTE_CHAT_LINE";
 
-/// Run a macro by its 1-based index; returns whether anything ran. Like the reference's runner
-/// (`0x4f14e0`, reached only from `UseAction` at `0x4e6098`), it fires `EXECUTE_CHAT_LINE` per
+/// Run a macro by its id; returns whether anything ran. Like the reference's runner
+/// (`0x4f1460`, reached only from `UseAction` at `0x4e6098`), it fires `EXECUTE_CHAT_LINE` per
 /// non-empty line and nothing else: the stock `ChatFrame1` sends each through its edit box
 /// (`ChatFrame.lua:1343`), and an addon registered for the event sees every macro line.
-pub(crate) fn run_macro(script: &mut UiScript, index: u32) -> bool {
-    let Some(body) = script.macros().get(index as usize).map(|m| m.body.clone()) else {
+pub(crate) fn run_macro(script: &mut UiScript, id: u32) -> bool {
+    let Some(body) = script.macros().by_id(id).map(|m| m.body.clone()) else {
         return false;
     };
     let lines: Vec<String> = run::macro_lines(&body).map(str::to_string).collect();
     if lines.is_empty() {
         return false;
     }
-    debug!("ui_macro: running macro {index} ({} line(s))", lines.len());
+    debug!("ui_macro: running macro {id} ({} line(s))", lines.len());
     for line in lines {
         script.fire_event(EXECUTE_CHAT_LINE, vec![ScriptValue::Str(line)]);
     }

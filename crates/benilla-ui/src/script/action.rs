@@ -17,6 +17,21 @@ pub(crate) const ACTION_KIND_SPELL: u8 = 0x00;
 pub(crate) const ACTION_KIND_MACRO: u8 = 0x40;
 pub(crate) const ACTION_KIND_ITEM: u8 = 0x80;
 
+/// The macro id a slot word holds, if it is a macro's: the word with bit 30 cleared when its top
+/// nibble is 4 (`0x4e5030`, `0x4e5ba0`, `0x4e7086`; `0x4e7090 and ecx,0xbfffffff`). A character
+/// macro's id has bit 24 set, so its slot's kind byte is 0x41 (vmangos `ACTION_BUTTON_CMACRO`).
+pub fn macro_slot_id(kind: u8, action: u32) -> Option<u32> {
+    const TAG: u32 = (ACTION_KIND_MACRO as u32) << 24;
+    let word = (u32::from(kind) << 24) | (action & 0x00ff_ffff);
+    (word & 0xf000_0000 == TAG).then_some(word & !TAG)
+}
+
+/// The slot `(kind, action)` that holds macro `id` (`macroId | 0x40000000`, `0x4e62e0`).
+pub fn macro_slot_word(id: u32) -> (u8, u32) {
+    let word = id | (u32::from(ACTION_KIND_MACRO) << 24);
+    ((word >> 24) as u8, word & 0x00ff_ffff)
+}
+
 /// What one action slot shows; the app resolves the icon before pushing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionSlot {
@@ -313,16 +328,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .ok()
                 .filter(|s| (1..=120).contains(s))
                 .and_then(|s| model.actions.get(&s))
-                .and_then(|a| match a.kind & 0xf0 {
-                    ACTION_KIND_MACRO => model.macros.get(a.action as usize).map(|_| {
-                        let b = model
-                            .macro_bindings
-                            .get(&a.action)
-                            .copied()
-                            .unwrap_or_default();
+                .and_then(|a| match macro_slot_id(a.kind, a.action) {
+                    Some(id) => model.macros.by_id(id).map(|_| {
+                        let b = model.macro_bindings.get(&id).copied().unwrap_or_default();
                         (b.spell as u32, b.pet_book)
                     }),
-                    _ => Some((a.action, false)),
+                    None => Some((a.action, false)),
                 })
                 .unwrap_or((0, true));
             let autocast = match resolved {
@@ -360,8 +371,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // non-number slot raises `Usage: GetActionText(slot)` (`0x84bff4`); the slot is 1-based
     // (`0x4e7072` `dec eax`). An empty name answers "": it is an inline buffer at `+0x24`, so
     // `0x6f3890`'s null guard never fires.
-    // The reference's macro payload (`raw & 0x3fffffff`) is a hash key into `[0xbdcc54]`; ours is
-    // the 1..36 index, the lookup the app's macro icon makes too, so text and icon agree.
+    // The macro payload (`raw & 0xbfffffff`) is the id, the key of the hash table `[0xbdcc54]`
+    // (`0x4f0f40`), as here.
     // Deviation: an out-of-range slot answers nil, because the reference indexes `0xbc6980` with
     // no bounds check and reads the memory beside its 120 slots.
     g.set(
@@ -373,8 +384,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 u32::try_from(slot)
                     .ok()
                     .and_then(|s| model.actions.get(&s))
-                    .filter(|s| s.kind & 0xf0 == ACTION_KIND_MACRO)
-                    .and_then(|s| model.macros.get(s.action as usize))
+                    .and_then(|s| macro_slot_id(s.kind, s.action))
+                    .and_then(|id| model.macros.by_id(id))
                     .map(|m| m.name.clone())
             };
             match name {
@@ -611,6 +622,47 @@ mod tests {
     use super::ActionSlot;
     use crate::script::UiScript;
 
+    /// A slot word whose top nibble is 4 holds a macro, its id the word without bit 30
+    /// (`0x4e5030`, `0x4e7090`): the account scope's ids fit the 24-bit action field, and a
+    /// character macro's, which carry bit 24, make the kind byte 0x41.
+    #[test]
+    fn a_slot_word_holds_the_macro_id_with_bit_30_cleared() {
+        use super::{macro_slot_id, macro_slot_word};
+        assert_eq!(macro_slot_id(0x40, 5), Some(5));
+        assert_eq!(macro_slot_id(0x41, 7), Some(0x100_0007));
+        assert_eq!(macro_slot_word(5), (0x40, 5));
+        assert_eq!(macro_slot_word(0x100_0007), (0x41, 7));
+        for (kind, action) in [(0x00, 5), (0x80, 5), (0x01, 5), (0xC0, 5)] {
+            assert_eq!(macro_slot_id(kind, action), None, "kind {kind:#04x}");
+        }
+    }
+
+    /// `GetActionText` finds a character macro by its slot's kind 0x41 too.
+    #[test]
+    fn get_action_text_reads_a_character_macros_slot() {
+        use crate::script::{MacroState, MacroView};
+        let mut s = UiScript::new().unwrap();
+        s.set_macros(MacroState::from_scopes(
+            Vec::new(),
+            vec![MacroView {
+                name: "Charge".into(),
+                ..Default::default()
+            }],
+        ));
+        s.set_action(
+            1,
+            Some(ActionSlot {
+                kind: 0x41,
+                action: 1,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            s.eval::<String>("return GetActionText(1)").unwrap(),
+            "Charge"
+        );
+    }
+
     /// `GetActionAutocast` answers a pet spell's two bits only for a macro bound out of the pet's
     /// book (`0x4e6fcb`), never for a spell slot of the same id, and always two values.
     #[test]
@@ -625,8 +677,8 @@ mod tests {
                 ..Default::default()
             }],
         });
-        s.set_macros(MacroState {
-            account: vec![
+        s.set_macros(MacroState::from_scopes(
+            vec![
                 MacroView {
                     name: "claw".into(),
                     body: "/cast Claw".into(),
@@ -638,8 +690,8 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            character: Vec::new(),
-        });
+            Vec::new(),
+        ));
         s.set_macro_bindings(std::collections::HashMap::from([
             (
                 1,
@@ -822,8 +874,8 @@ mod tests {
         use crate::script::{MacroState, MacroView};
 
         let mut s = UiScript::new().unwrap();
-        s.set_macros(MacroState {
-            account: vec![
+        s.set_macros(MacroState::from_scopes(
+            vec![
                 MacroView {
                     name: "Pull".into(),
                     ..Default::default()
@@ -833,8 +885,8 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            character: Vec::new(),
-        });
+            Vec::new(),
+        ));
         let slot = |kind: u8, action: u32| {
             Some(ActionSlot {
                 texture: Some("Interface\\Icons\\Spell_A".into()),

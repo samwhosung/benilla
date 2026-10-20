@@ -1111,21 +1111,21 @@ fn macro_name_line_follows_get_action_text_through_the_xml() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
-    s.set_macros(MacroState {
-        account: vec![MacroView {
+    s.set_macros(MacroState::from_scopes(
+        vec![MacroView {
             name: "spawn".into(),
             texture: Some("Interface\\Icons\\Ability_Racial_Cannibalize".into()),
             body: ".spawn 16032".into(),
-            local_only: false,
+            ..Default::default()
         }],
-        character: Vec::new(),
-    });
+        Vec::new(),
+    ));
     s.set_action(
         1,
         Some(ActionSlot {
             texture: Some("Interface\\Icons\\Ability_Racial_Cannibalize".into()),
             kind: 0x40, // MACRO
-            action: 1,  // macro index 1
+            action: 1,  // macro id 1
             count: 0,
             consumable: false,
             use_spell: None,

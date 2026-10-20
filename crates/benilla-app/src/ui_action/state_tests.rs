@@ -82,7 +82,13 @@ fn a_macro_slot_resolves_through_its_bound_spell() {
     bound.0.insert(3, BoundSpell::Spell(133)); // macro 3 casts Fireball
     bound.0.insert(4, BoundSpell::None); // macro 4 is `.spawn 16032`
     bound.0.insert(5, BoundSpell::Unresolved); // macro 5 is `/cast Pyroblast`, unknown
+    bound.0.insert(0x100_0001, BoundSpell::Spell(133)); // the first character macro
 
+    assert_eq!(
+        resolve_through_macro(0x41, 1, &bound),
+        SlotResolve::Action(ACTION_KIND_SPELL, 133),
+        "a character macro's id carries bit 24, so its slot's kind byte is 0x41"
+    );
     assert_eq!(
         resolve_through_macro(ACTION_KIND_MACRO, 3, &bound),
         SlotResolve::Action(ACTION_KIND_SPELL, 133),

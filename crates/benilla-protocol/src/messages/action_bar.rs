@@ -17,7 +17,8 @@ pub const ACTION_KIND_ITEM: u8 = 0x80;
 pub struct ActionButton {
     /// The bar slot index (0..119). Slots 0–11 are the main bar's buttons 1–12.
     pub slot: u8,
-    /// The spell/macro/item id (bits 0–23).
+    /// The spell/macro/item id (bits 0–23). A character macro's id, which has bit 24 set
+    /// (`benilla_ui::script::macro_slot_id`), keeps it in `kind`: 0x41, vmangos `ACTION_BUTTON_CMACRO`.
     pub action: u32,
     /// The kind byte (bits 24-31), an `ACTION_KIND_*`; the enum's 0x01 ("click?") is carried raw.
     pub kind: u8,

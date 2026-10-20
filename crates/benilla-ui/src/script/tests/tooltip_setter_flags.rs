@@ -191,13 +191,13 @@ fn set_action_answers_the_builders_flag_by_kind() {
             ..Default::default()
         },
     );
-    s.set_macros(MacroState {
-        account: vec![MacroView {
+    s.set_macros(MacroState::from_scopes(
+        vec![MacroView {
             name: "spawn".into(),
             ..Default::default()
         }],
-        character: Vec::new(),
-    });
+        Vec::new(),
+    ));
     let put = |s: &mut UiScript, id: u32, kind: u8, action: u32, cooldown| {
         s.set_action(
             id,

@@ -19,7 +19,7 @@ pub(crate) mod equip;
 pub(crate) mod money;
 pub(super) mod pet;
 
-pub(crate) use bar::place_action;
+pub(crate) use bar::{clear_macro_slots, place_action};
 pub(crate) use drag::{
     abandon_drag, maybe_start_drag, press_drag, take_drag, DragGesture, DragRelease,
 };
@@ -86,7 +86,7 @@ impl CursorPayload {
                 state: None,
             }),
             CursorPayload::Macro(_) => CursorPayload::Macro(CursorMacro {
-                index: 0,
+                id: 0,
                 texture: None,
             }),
             CursorPayload::PetAction(_) => CursorPayload::PetAction(CursorPetAction {
@@ -256,8 +256,8 @@ pub struct CursorPetAction {
 /// `PlaceAction` accepts (`0x4e62e0`). It has no source slot, so a refused place leaves it held.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CursorMacro {
-    /// The 1-based macro index: 1..=18 account, 19..=36 character.
-    pub index: u32,
+    /// The macro's id (`[0xb4e2fc]`), not its position: the table re-sorts under a held macro.
+    pub id: u32,
     pub texture: Option<String>,
 }
 
@@ -1583,7 +1583,7 @@ mod tests {
         s.set_container(0, Some(one_item_backpack()));
         super::install_kind_probe(&s);
         s.set_cursor_for_test(CursorPayload::Macro(super::CursorMacro {
-            index: 1,
+            id: 1,
             texture: None,
         }));
         heard::listen(

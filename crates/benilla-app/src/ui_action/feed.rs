@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPELL};
+use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
+use benilla_ui::script::macro_slot_id;
 use benilla_ui::script::{ActionSlot, ScriptValue, UiScript};
 
 use crate::entities::ItemDisplays;
@@ -174,6 +175,16 @@ pub(super) fn feed_actions(
         let mut fresh: HashMap<u32, ActionSlot> = HashMap::new();
         for (slot, button) in &actions.buttons {
             let (texture, count, consumable, use_spell) = match button.kind {
+                // A macro slot shows the macro's own icon (`0x4e6bf9` calls `0x4f0fd0`), never its
+                // bound spell's, though its state follows the bound spell.
+                kind if macro_slot_id(kind, button.action).is_some() => (
+                    macro_slot_id(kind, button.action)
+                        .and_then(|id| macros.by_id(id))
+                        .and_then(|m| m.texture.clone()),
+                    0,
+                    false,
+                    None,
+                ),
                 ACTION_KIND_SPELL => {
                     let icon = spells.as_ref().and_then(|sp| {
                         let d = sp.catalog.get(button.action)?;
@@ -217,16 +228,6 @@ pub(super) fn feed_actions(
                     });
                     (Some(texture), count, consumable, use_spell)
                 }
-                // A macro slot shows the macro's own icon (`0x4e6bf9` calls `0x4f0fd0`), never its
-                // bound spell's, though its state follows the bound spell.
-                ACTION_KIND_MACRO => (
-                    macros
-                        .get(button.action as usize)
-                        .and_then(|m| m.texture.clone()),
-                    0,
-                    false,
-                    None,
-                ),
                 _ => (None, 0, false, None),
             };
             fresh.insert(
@@ -263,8 +264,10 @@ pub(super) fn feed_actions(
             .collect::<HashSet<_>>()
             .into_iter()
             .filter_map(|a| {
-                let macro_moved =
-                    macros_moved && fresh.get(&a).is_some_and(|s| s.kind == ACTION_KIND_MACRO);
+                let macro_moved = macros_moved
+                    && fresh
+                        .get(&a)
+                        .is_some_and(|s| macro_slot_id(s.kind, s.action).is_some());
                 let moved = fresh.get(&a) != memory.pushed.get(&a);
                 let signal = macro_moved || (moved && shown(fresh.get(&a)) != shown(held.get(&a)));
                 (moved || macro_moved).then_some((a, signal))

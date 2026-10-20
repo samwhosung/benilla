@@ -117,10 +117,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only
                     // after tag 2 passed, and so passes as well.
                     crate::ui_action::UseOutcome::Attack => attack_in_order!(appliers, true),
-                    crate::ui_action::UseOutcome::Macro(index) => {
+                    crate::ui_action::UseOutcome::Macro(id) => {
                         tail = Some(Box::new(move |script: &mut UiScript| {
-                            if !crate::ui_macro::run_macro(script, index) {
-                                debug!("script_calls: macro {index} is empty");
+                            if !crate::ui_macro::run_macro(script, id) {
+                                debug!("script_calls: macro {id} is empty");
                             }
                         }));
                     }
@@ -1205,10 +1205,9 @@ mod tests {
                     r#"local f = CreateFrame("Frame")
                     f:RegisterEvent("EXECUTE_CHAT_LINE")
                     f:SetScript("OnEvent", function() RunScript(arg1) end)
-                    MACRO_INDEX = CreateMacro("heal", 1, 'CastSpellByName("Heal")', 1, nil)"#,
+                    CreateMacro("heal", 1, 'CastSpellByName("Heal")', 1, nil)"#,
                 )
                 .expect("the macro is made");
-            let index: u32 = script.eval("return MACRO_INDEX").expect("an index");
             world
                 .resource_mut::<crate::ui_action::PlayerActions>()
                 .buttons
@@ -1216,7 +1215,8 @@ mod tests {
                     0,
                     ActionButton {
                         slot: 0,
-                        action: index,
+                        // The first account macro's id, one past the counter's start (`0x4eff90`).
+                        action: 1,
                         kind: ACTION_KIND_MACRO,
                     },
                 );
@@ -1244,10 +1244,9 @@ mod tests {
                         r#"local f = CreateFrame("Frame")
                         f:RegisterEvent("EXECUTE_CHAT_LINE")
                         f:SetScript("OnEvent", function() RunScript(arg1) end)
-                        MACRO_INDEX = CreateMacro("heal", 1, 'CastSpellByName("Heal")', 1, nil)"#,
+                        CreateMacro("heal", 1, 'CastSpellByName("Heal")', 1, nil)"#,
                     )
                     .expect("the macro is made");
-                let index: u32 = script.eval("return MACRO_INDEX").expect("an index");
                 world
                     .resource_mut::<crate::ui_action::PlayerActions>()
                     .buttons
@@ -1255,7 +1254,8 @@ mod tests {
                         0,
                         ActionButton {
                             slot: 0,
-                            action: index,
+                            // The first account macro's id (`0x4eff90`).
+                            action: 1,
                             kind: ACTION_KIND_MACRO,
                         },
                     );

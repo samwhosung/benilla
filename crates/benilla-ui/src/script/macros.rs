@@ -3,31 +3,53 @@
 //! ([`UiScript::set_macros`]), saves it when [`UiScript::take_macros_dirty`] says, and installs
 //! what lists the icon chooser ([`UiScript::set_macro_icon_source`]), run on first use.
 //!
-//! Indices 1..=18 are the account macros and 19..=36 the character macros, each list dense from
-//! its base (`MacroFrame.macroBase`). A macro's bound spell (`0x4e5a50`'s macro arm returns
-//! `[rec+0x564]`) is the app's to derive: it needs the spell catalog and the player's book.
+//! A macro is a record with an id, kept in one list in the order it was made or loaded
+//! (`0xbdcc44`). Lua addresses it by position in a table of 36 ids (`0xbdcc60`): positions 1..=18
+//! the account macros and 19..=36 the character macros, each scope sorted by name
+//! ([`order`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first character
+//! macro is index 19 however few account macros there are. An action slot holds the id
+//! (`macroId | 0x40000000`, `0x4e62e0`), never the position. A macro's bound spell
+//! (`0x4e5a50`'s macro arm returns `[rec+0x564]`) is the app's to derive: it needs the spell catalog
+//! and the player's book.
+
+mod order;
 
 #[cfg(test)]
 mod lua_tests;
 
 use mlua::{Lua, MultiValue, Value};
 
+use self::order::{crt_qsort, name_cmp};
 use super::binding_abi;
 use super::cursor::{set_cursor, CursorMacro, CursorPayload};
 use super::Model;
 
-/// Macros per tab (`Blizzard_MacroUI.lua:1`), and so the character tab's base.
+/// Macros per scope (`0x4f1010` refuses the 19th, `cmp edx,0x12`), and so the character tab's base.
 pub const MAX_MACROS: usize = 18;
 
-/// The name cap, `MacroPopupEditBox`'s `letters="16"`.
-pub const MAX_MACRO_NAME: usize = 16;
+/// The bytes a name keeps: `SStrCopy` into the record's 0x40-byte name (`0x4f11fc`, `0x4f12e1`)
+/// leaves one for the terminator. The stock edit box stops at 16 characters on its own
+/// (`MacroPopupEditBox`, `letters="16"`); the verbs do not.
+pub const MAX_MACRO_NAME: usize = 0x3f;
 
-/// The body cap, `MacroFrameText`'s `letters="255"`.
-pub const MAX_MACRO_BODY: usize = 255;
+/// The characters a body keeps: `0x4f1550` cuts after 256 (`cmp edi,0x100`, `0x4f1580`). The stock
+/// edit box stops at 255 on its own (`MacroFrameText`, `letters="255"`).
+pub const MAX_MACRO_BODY: usize = 0x100;
+
+/// The bytes a body passes through first: `0x4f1550` copies it with `SStrCopy` size 0x400
+/// (`0x4f1556`) before it counts characters.
+const BODY_COPY_BYTES: usize = 0x3ff;
+
+/// Where each scope's ids start, the counters' initial values (`0x807b8c`, `0x4eff90`): the first
+/// id a scope hands out is one more.
+const SCOPE_BASE: [u32; 2] = [0, 0x100_0000];
 
 /// One macro, as `GetMacroInfo` reports it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MacroView {
+    /// The record's id (`rec+0`), which an action slot holds and the file stores. 0 on a view the
+    /// state has not taken: [`MacroState::from_scopes`] gives it the scope's next.
+    pub id: u32,
     pub name: String,
     /// The icon's texture path, kept by name because the reference saves the icon by name
     /// (`MACRO %d "%s" %s`, `0x44cb60`).
@@ -50,88 +72,180 @@ pub struct MacroBinding {
     pub pet_book: bool,
 }
 
-/// The macro table: the account and character lists.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct MacroState {
-    /// Indices 1..=18.
-    pub account: Vec<MacroView>,
-    /// Indices 19..=36.
-    pub character: Vec<MacroView>,
-}
-
-/// A 1-based Lua macro index split into its list and 0-based position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MacroIndex {
-    /// True for 19..=36.
+/// A record and the scope it belongs to (`rec+0x1c`).
+#[derive(Clone, Debug, PartialEq)]
+struct Record {
     per_character: bool,
-    pos: usize,
+    view: MacroView,
 }
 
-impl MacroIndex {
-    /// `None` outside 1..=36; not checked against the lists, which [`MacroState::get`] does.
-    fn split(index: usize) -> Option<Self> {
-        let zero = index.checked_sub(1)?;
-        match zero {
-            0..MAX_MACROS => Some(Self {
-                per_character: false,
-                pos: zero,
-            }),
-            _ if zero < MAX_MACROS * 2 => Some(Self {
-                per_character: true,
-                pos: zero - MAX_MACROS,
-            }),
-            _ => None,
+/// The macro table: every record in list order, and each scope's id counter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MacroState {
+    /// The reference's list (`0xbdcc44`), oldest first. A new record is linked at its tail
+    /// (`0x4f11f3`), and `GetMacroIndexByName` and the sort walk it from the head.
+    list: Vec<Record>,
+    /// The last id each scope handed out (`0xbdcbec`), the largest seen when macros load.
+    last_id: [u32; 2],
+}
+
+impl Default for MacroState {
+    fn default() -> Self {
+        Self {
+            list: Vec::new(),
+            last_id: SCOPE_BASE,
         }
     }
+}
 
-    fn lua_index(self) -> usize {
-        self.pos + 1 + if self.per_character { MAX_MACROS } else { 0 }
+/// `SStrCopy`'s cut of `s` to at most `max` bytes. Deviation: it stops at a character boundary
+/// where the reference's byte copy can end inside one, because a `String` must stay UTF-8.
+fn cut_bytes(s: &str, max: usize) -> &str {
+    let mut end = max.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
     }
+    &s[..end]
+}
+
+/// A name as `SStrCopy` keeps it (`0x4f11fc`): its first [`MAX_MACRO_NAME`] bytes, not trimmed.
+fn cut_name(name: &str) -> String {
+    cut_bytes(name, MAX_MACRO_NAME).to_string()
+}
+
+/// A body as `0x4f1550` keeps it: the first 0x3ff bytes, cut again after [`MAX_MACRO_BODY`]
+/// characters.
+fn cut_body(body: &str) -> String {
+    cut_bytes(body, BODY_COPY_BYTES)
+        .chars()
+        .take(MAX_MACRO_BODY)
+        .collect()
 }
 
 impl MacroState {
-    /// The macro at a 1-based Lua index.
-    pub fn get(&self, index: usize) -> Option<&MacroView> {
-        let at = MacroIndex::split(index)?;
-        self.list(at.per_character).get(at.pos)
-    }
-
-    fn list(&self, per_character: bool) -> &Vec<MacroView> {
-        if per_character {
-            &self.character
-        } else {
-            &self.account
-        }
-    }
-
-    fn list_mut(&mut self, per_character: bool) -> &mut Vec<MacroView> {
-        if per_character {
-            &mut self.character
-        } else {
-            &mut self.account
-        }
-    }
-
-    /// `GetMacroIndexByName`: case-insensitive, account list first; 0 on a miss, as in 1.12.
-    pub fn index_by_name(&self, name: &str) -> usize {
-        for per_character in [false, true] {
-            for (i, m) in self.list(per_character).iter().enumerate() {
-                if m.name.eq_ignore_ascii_case(name) {
-                    return MacroIndex {
-                        per_character,
-                        pos: i,
-                    }
-                    .lua_index();
+    /// The table the file reader builds (`0x4f0600`), the account scope read first: per scope, in
+    /// order, a record past the 18th is skipped (`0x4f06ee`); an id below the scope's base gets the
+    /// base added (`0x4f0737`); the largest id seen becomes the scope's last (`0x4f0744`); an id
+    /// that exists is skipped (`0x4f0789`); the local flag is cleared (`0x4f095c`). A view with no
+    /// id, the seed form, takes the scope's next. The name and body keep their verbs' caps.
+    pub fn from_scopes(account: Vec<MacroView>, character: Vec<MacroView>) -> Self {
+        let mut state = Self::default();
+        for (per_character, views) in [(false, account), (true, character)] {
+            let scope = usize::from(per_character);
+            for mut view in views {
+                if state.count(per_character) >= MAX_MACROS {
+                    break;
                 }
+                if view.id == 0 {
+                    view.id = state.last_id[scope] + 1;
+                } else if view.id < SCOPE_BASE[scope] {
+                    view.id += SCOPE_BASE[scope];
+                }
+                state.last_id[scope] = state.last_id[scope].max(view.id);
+                if state.by_id(view.id).is_some() {
+                    continue;
+                }
+                view.name = cut_name(&view.name);
+                view.body = cut_body(&view.body);
+                view.local_only = false;
+                state.list.push(Record {
+                    per_character,
+                    view,
+                });
             }
         }
-        0
+        state
     }
-}
 
-/// Clamp to a count of characters, not bytes, as the edit boxes do, so a script cannot store more.
-fn clamp_chars(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
+    /// A scope's macros in list order, which is how the reference's save walks them.
+    pub fn scope(&self, per_character: bool) -> impl Iterator<Item = &MacroView> {
+        self.list
+            .iter()
+            .filter(move |r| r.per_character == per_character)
+            .map(|r| &r.view)
+    }
+
+    /// How many macros a scope holds (`0xbdcc00`).
+    pub fn count(&self, per_character: bool) -> usize {
+        self.scope(per_character).count()
+    }
+
+    /// Every macro in list order.
+    pub fn views(&self) -> impl Iterator<Item = &MacroView> {
+        self.list.iter().map(|r| &r.view)
+    }
+
+    /// The macro with `id` (`0x4f0f40`); id 0 is none.
+    pub fn by_id(&self, id: u32) -> Option<&MacroView> {
+        if id == 0 {
+            return None;
+        }
+        self.views().find(|v| v.id == id)
+    }
+
+    /// A scope's ids by name: the table's half (`0x4f0d30`), `qsort` over the scope's records in
+    /// list order.
+    fn table(&self, per_character: bool) -> Vec<u32> {
+        let mut records: Vec<&MacroView> = self.scope(per_character).collect();
+        crt_qsort(&mut records, |a, b| name_cmp(&a.name, &b.name));
+        records.into_iter().map(|v| v.id).collect()
+    }
+
+    /// The id at a 1-based Lua index (`0x4f0eb0`): 0 for an empty entry, an index outside 1..=36
+    /// (the unsigned compare `0x4f0eb0` makes) or 0 itself.
+    fn id_at(&self, index: usize) -> u32 {
+        let pos = (index as u32).wrapping_sub(1) as usize;
+        if pos >= MAX_MACROS * 2 {
+            return 0;
+        }
+        self.table(pos >= MAX_MACROS)
+            .get(pos % MAX_MACROS)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The macro at a 1-based Lua index (`0x4f0e40`).
+    pub fn get(&self, index: usize) -> Option<&MacroView> {
+        self.by_id(self.id_at(index))
+    }
+
+    /// The 1-based Lua index of the macro with `id` (`0x4f0ec0` plus one); id 0 matches the first
+    /// empty entry, so it answers where the next macro of the account scope would sit, else of the
+    /// character scope, and `None` when both are full.
+    pub fn index_of_id(&self, id: u32) -> Option<usize> {
+        let (account, character) = (self.table(false), self.table(true));
+        if id == 0 {
+            return if account.len() < MAX_MACROS {
+                Some(account.len() + 1)
+            } else if character.len() < MAX_MACROS {
+                Some(MAX_MACROS + character.len() + 1)
+            } else {
+                None
+            };
+        }
+        account
+            .iter()
+            .position(|&i| i == id)
+            .map(|p| p + 1)
+            .or_else(|| {
+                character
+                    .iter()
+                    .position(|&i| i == id)
+                    .map(|p| MAX_MACROS + p + 1)
+            })
+    }
+
+    /// `GetMacroIndexByName` (`0x4f0fa0`): the first macro in list order whose name matches without
+    /// case (`0x4f0ee0`), by its index; 0 on a miss, and for an empty name (`0x4f0ee8`).
+    pub fn index_by_name(&self, name: &str) -> usize {
+        if name.is_empty() {
+            return 0;
+        }
+        self.views()
+            .find(|v| name_cmp(name, &v.name).is_eq())
+            .and_then(|v| self.index_of_id(v.id))
+            .unwrap_or(0)
+    }
 }
 
 impl super::UiScript {
@@ -149,7 +263,7 @@ impl super::UiScript {
         self.model_mut().macros.clone()
     }
 
-    /// Push every macro's cached cast by 1-based index, replacing the last push.
+    /// Push every macro's cached cast by id, replacing the last push.
     pub fn set_macro_bindings(&mut self, bindings: std::collections::HashMap<u32, MacroBinding>) {
         self.model_mut().macro_bindings = bindings;
     }
@@ -193,8 +307,8 @@ impl super::UiScript {
     }
 }
 
-/// `CreateMacro`'s worker (`0x4f1010`): the new 1-based index, or the full-tab error
-/// (`0x84cbdc`). The verb has refused an empty name already.
+/// `CreateMacro`'s worker (`0x4f1010`): the new macro's 1-based index in the rebuilt table
+/// (`0x4f16ba`), or the full-scope error (`0x84cbdc`). The verb has refused an empty name already.
 fn create_macro(
     model: &mut Model,
     name: &str,
@@ -203,30 +317,37 @@ fn create_macro(
     local_only: bool,
     per_character: bool,
 ) -> mlua::Result<usize> {
-    let name = clamp_chars(name, MAX_MACRO_NAME);
-    let list = model.macros.list_mut(per_character);
-    if list.len() >= MAX_MACROS {
+    let state = &mut model.macros;
+    if state.count(per_character) >= MAX_MACROS {
         return Err(mlua::Error::RuntimeError(format!(
             "CreateMacro() failed, already have {MAX_MACROS} macros"
         )));
     }
-    list.push(MacroView {
-        name,
-        texture,
-        body: clamp_chars(body, MAX_MACRO_BODY),
-        local_only,
+    let scope = usize::from(per_character);
+    state.last_id[scope] += 1;
+    let id = state.last_id[scope];
+    state.list.push(Record {
+        per_character,
+        view: MacroView {
+            id,
+            name: cut_name(name),
+            texture,
+            body: cut_body(body),
+            local_only,
+        },
     });
-    let pos = list.len() - 1;
     model.macros_dirty = true;
     model.macros_generation += 1;
-    Ok(MacroIndex { per_character, pos }.lua_index())
+    Ok(model.macros.index_of_id(id).unwrap_or(0))
 }
 
-/// `EditMacro(index, name, icon, body, local)`: an omitted name, icon or body leaves its field
-/// alone, since the stock UI calls it with disjoint halves, `(sel, name, icon)` from the rename
-/// popup and `(sel, nil, nil, text)` from `MacroFrame_SaveMacro`; the worker copies the icon only
-/// when it has one (`0x4f12f0`-`0x4f12fe`). The `local` flag is always written (`0x4f12dc`,
-/// `[macro+0x20]`), so an omitted one clears it.
+/// `EditMacro(index, name, icon, body, local)` (`0x4f18b0`): an omitted name, icon or body leaves
+/// its field alone, since the stock UI calls it with disjoint halves, `(sel, name, icon)` from the
+/// rename popup and `(sel, nil, nil, text)` from `MacroFrame_SaveMacro`; the worker copies the name
+/// and the body when they are given, the icon when it has one (`0x4f12e1`-`0x4f12fe`, `0x4f130c`).
+/// The `local` flag is always written (`0x4f12dc`, `[macro+0x20]`), so an omitted one clears it.
+/// The answer is the macro's index in the rebuilt table; an index naming no macro, whose id is 0,
+/// answers where the first empty entry sits (`0x4f19c4` into `0x4f0ec0`), or 0 with none.
 fn edit_macro(
     model: &mut Model,
     index: usize,
@@ -234,47 +355,54 @@ fn edit_macro(
     texture: Option<String>,
     body: Option<String>,
     local_only: bool,
-) -> Option<usize> {
-    let at = MacroIndex::split(index)?;
-    let entry = model.macros.list_mut(at.per_character).get_mut(at.pos)?;
-    if let Some(name) = name {
-        let name = clamp_chars(name.trim(), MAX_MACRO_NAME);
-        // A blank name is ignored; the stock popup cannot send one (`MacroPopupOkayButton_Update`).
-        if !name.is_empty() {
-            entry.name = name;
+) -> usize {
+    let id = model.macros.id_at(index);
+    if let Some(record) = model
+        .macros
+        .list
+        .iter_mut()
+        .find(|r| id != 0 && r.view.id == id)
+    {
+        let view = &mut record.view;
+        if let Some(name) = name {
+            view.name = cut_name(&name);
         }
+        if let Some(texture) = texture {
+            view.texture = Some(texture);
+        }
+        if let Some(body) = body {
+            view.body = cut_body(&body);
+        }
+        view.local_only = local_only;
+        model.macros_dirty = true;
+        model.macros_generation += 1;
+        model.macro_edits += 1;
     }
-    if let Some(texture) = texture {
-        entry.texture = Some(texture);
-    }
-    if let Some(body) = body {
-        entry.body = clamp_chars(&body, MAX_MACRO_BODY);
-    }
-    entry.local_only = local_only;
-    model.macros_dirty = true;
-    model.macros_generation += 1;
-    model.macro_edits += 1;
-    Some(index)
+    model.macros.index_of_id(id).unwrap_or(0)
 }
 
-/// `DeleteMacro(index)` closes the gap, as the reference's dense list does, so an action-bar
-/// button holding a higher index then shows the next macro.
+/// `DeleteMacro(index)` (`0x4f1850` into `0x4f1340`): the record goes, and every action slot that
+/// holds its id is cleared and sent as 0 (`0x4e5d10`), so the slots of the macros after it keep
+/// theirs. Returns whether a macro went.
 fn delete_macro(model: &mut Model, index: usize) -> bool {
-    let Some(at) = MacroIndex::split(index) else {
+    let id = model.macros.id_at(index);
+    let Some(at) = model
+        .macros
+        .list
+        .iter()
+        .position(|r| id != 0 && r.view.id == id)
+    else {
         return false;
     };
-    let list = model.macros.list_mut(at.per_character);
-    if at.pos >= list.len() {
-        return false;
-    }
-    list.remove(at.pos);
+    model.macros.list.remove(at);
+    super::cursor::clear_macro_slots(model, id);
     model.macros_dirty = true;
     model.macros_generation += 1;
     true
 }
 
-/// `PickupMacro(index)` (`0x4f1ae0`): the macro payload (cursor mode 8, `[0xb4e2fc]`), which
-/// `PlaceAction` (`0x4e62e0`) packs as `macroId | 0x40000000`. A missing macro does nothing
+/// `PickupMacro(index)` (`0x4f1ae0`): the macro payload (cursor mode 8, `[0xb4e2fc]`, the id),
+/// which `PlaceAction` (`0x4e62e0`) packs as `macroId | 0x40000000`. A missing macro does nothing
 /// (`0x4f1b1e`); otherwise the setter (`0x494f80`) clears whatever is held with its inner
 /// `ClearCursor(1,1)`, then sets the macro and shows the action bar's grid. Returns whether a
 /// macro went on.
@@ -285,7 +413,7 @@ fn pickup_macro(lua: &Lua, index: usize) -> bool {
             return false;
         };
         CursorMacro {
-            index: index as u32,
+            id: entry.id,
             texture: entry.texture.clone(),
         }
     };
@@ -312,13 +440,6 @@ fn ensure_macro_icons(lua: &Lua) {
     }
 }
 
-fn opt_string(v: Option<&Value>) -> Option<String> {
-    match v {
-        Some(Value::String(s)) => Some(s.to_string_lossy()),
-        _ => None,
-    }
-}
-
 /// The `local` and `perCharacter` flags: `GetBoolOrDefault` (`0x6f1c10`) with default 0
 /// (`CreateMacro` `0x4f167b`, `0x4f168a`; `EditMacro` `0x4f19ad`), so `"0"` and `0.5` are false and
 /// `"yes"` true. The stock popup passes a Lua boolean and never `local`.
@@ -335,8 +456,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok((
-                model.macros.account.len() as i64,
-                model.macros.character.len() as i64,
+                model.macros.count(false) as i64,
+                model.macros.count(true) as i64,
             ))
         })?,
     )?;
@@ -368,9 +489,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `GetMacroIndexByName(name)` (`0x4f1b30`): a string or a number, else
+    // `Usage: GetMacroIndexByName(name)` (`0x84ccb4`, `0x4f1b3c`).
     g.set(
         "GetMacroIndexByName",
-        lua.create_function(|lua, name: String| {
+        lua.create_function(|lua, name: Value| {
+            let name = binding_abi::string_arg(lua, name, "Usage: GetMacroIndexByName(name)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model.macros.index_by_name(&name) as i64)
         })?,
@@ -449,13 +573,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `EditMacro(index, name, icon, body, local)` (`0x4f18b0`): a first argument that is no number
+    // or numeric string raises the usage text (`0x84cc44`, `0x4f18be`-`0x4f18c7`); the rest
+    // read as the worker takes them, a name and a body when `lua_isstring` (a number counts), the
+    // icon when `lua_isnumber`. It answers one number, the macro's index after the rebuild, or for
+    // an index naming no macro where the first empty entry sits (`0x4f19c2`-`0x4f19d8`).
     g.set(
         "EditMacro",
         lua.create_function(|lua, args: MultiValue| {
             let a: Vec<Value> = args.into_iter().collect();
-            let Some(index) = a.first().and_then(|v| v.as_integer()).map(|i| i as usize) else {
-                return Ok(Value::Nil);
-            };
+            let index = binding_abi::index_arg(
+                lua,
+                a.first().cloned().unwrap_or(Value::Nil),
+                "Usage: EditMacro(index, name, icon, body, local)",
+            )?;
             // The icon counts only as `lua_isnumber` reads it (`0x4f1945`): a numeric string is
             // its number, and any other value, nil among them, leaves the icon alone. The list is
             // built only for an index that names a macro and such an icon (`0x4f1913`,
@@ -473,15 +604,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // `0x4f1966`-`0x4f1983`: a miss leaves the pointer null, and the macro its old icon.
             let texture = icon.and_then(|n| icon_at(&model, n));
-            let name = opt_string(a.get(1));
-            let body = opt_string(a.get(3));
+            let name = a.get(1).and_then(|v| binding_abi::optional_string(lua, v));
+            let body = a.get(3).and_then(|v| binding_abi::optional_string(lua, v));
             let local_only = flag(a.get(4));
-            Ok(
-                match edit_macro(&mut model, index, name, texture, body, local_only) {
-                    Some(i) => Value::Integer(i as i64),
-                    None => Value::Nil,
-                },
-            )
+            let at = edit_macro(&mut model, index, name, texture, body, local_only);
+            Ok(Value::Integer(at as i64))
         })?,
     )?;
 
@@ -490,8 +617,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: DeleteMacro(index)` (`0x84cc28`, `0x4f1861`).
             let index = binding_abi::index_arg(lua, index, "Usage: DeleteMacro(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            delete_macro(&mut model, index);
+            super::tick::verb(lua, |model| delete_macro(model, index));
             Ok(())
         })?,
     )?;
@@ -592,6 +718,76 @@ mod tests {
         assert_eq!(s.eval::<String>("return GetMacroInfo(19)").unwrap(), "Bolt");
     }
 
+    /// The id a slot would hold for the macro at `index`, by placing it on a bar slot.
+    fn slot_word(s: &mut UiScript, index: i64, slot: i64) -> u32 {
+        s.take_action_sets();
+        s.run(&format!("PickupMacro({index}) PlaceAction({slot})"))
+            .unwrap();
+        let sets = s.take_action_sets();
+        assert_eq!(sets.len(), 1, "one write: {sets:?}");
+        assert_eq!(sets[0].0, slot as u32);
+        sets[0].1
+    }
+
+    /// `0x4f0600`: an id below the scope's base gets the base added, the largest id seen becomes
+    /// the scope's last, an id that exists is skipped, and a scope holds 18. Each new macro then
+    /// takes the next id (`0x4f1072`-`0x4f1081`), and a slot holds it as `macroId | 0x40000000`
+    /// (`0x4e62e0`): a character macro's id carries bit 24, so its kind byte is 0x41.
+    #[test]
+    fn loaded_ids_are_rebased_and_the_counters_continue_from_the_largest() {
+        let view = |id: u32, name: &str| MacroView {
+            id,
+            name: name.into(),
+            texture: Some("Interface\\Icons\\Ability_Ambush".into()),
+            ..Default::default()
+        };
+        let state = MacroState::from_scopes(
+            vec![view(5, "a"), view(5, "dup"), view(9, "b")],
+            vec![view(1, "c"), view(0x100_0007, "d"), view(1, "dup")],
+        );
+        let ids = |per_character| state.scope(per_character).map(|v| v.id).collect::<Vec<_>>();
+        assert_eq!(ids(false), [5, 9]);
+        assert_eq!(ids(true), [0x100_0001, 0x100_0007]);
+
+        let mut s = seeded();
+        s.set_macros(state);
+        assert_eq!(slot_word(&mut s, 1, 1), 0x4000_0005, "a, the first by name");
+        let account = s.eval::<i64>(r#"return CreateMacro("zz", 1, "")"#).unwrap();
+        assert_eq!(
+            slot_word(&mut s, account, 2),
+            0x4000_000A,
+            "one past the largest, 9"
+        );
+        let character = s
+            .eval::<i64>(r#"return CreateMacro("zz", 1, "", nil, 1)"#)
+            .unwrap();
+        assert_eq!(
+            slot_word(&mut s, character, 3),
+            0x4100_0008,
+            "one past 0x1000007, in the character kind"
+        );
+    }
+
+    #[test]
+    fn a_scope_loads_no_more_than_eighteen() {
+        let many = |n: u32| {
+            (1..=n)
+                .map(|id| MacroView {
+                    id,
+                    name: format!("m{id:02}"),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>()
+        };
+        let state = MacroState::from_scopes(many(25), many(3));
+        assert_eq!((state.count(false), state.count(true)), (18, 3));
+        assert!(state.by_id(19).is_none());
+        assert_eq!(
+            state.by_id(0x100_0003).map(|v| v.name.as_str()),
+            Some("m03")
+        );
+    }
+
     #[test]
     fn edit_macro_leaves_omitted_fields_alone() {
         let s = seeded();
@@ -659,7 +855,7 @@ mod tests {
 
         for i in 1..=MAX_MACROS {
             let made = s
-                .eval::<i64>(&format!(r#"return CreateMacro("m{i}", 1, "")"#))
+                .eval::<i64>(&format!(r#"return CreateMacro("m{i:02}", 1, "")"#))
                 .unwrap();
             assert_eq!(made as usize, i);
         }
@@ -678,14 +874,14 @@ mod tests {
         let s = seeded();
         s.run(&format!(
             r#"CreateMacro("{}", 1, "{}")"#,
-            "N".repeat(40),
+            "N".repeat(100),
             "b".repeat(400)
         ))
         .unwrap();
         let (name, body) = s
             .eval::<(String, String)>("local n, _, b = GetMacroInfo(1) return n, b")
             .unwrap();
-        assert_eq!(name.chars().count(), MAX_MACRO_NAME);
+        assert_eq!(name.len(), MAX_MACRO_NAME);
         assert_eq!(body.chars().count(), MAX_MACRO_BODY);
     }
 
@@ -707,15 +903,15 @@ mod tests {
         s.run("DeleteMacro(7)").unwrap();
         assert!(!s.take_macros_dirty());
 
-        s.set_macros(MacroState {
-            account: vec![MacroView {
+        s.set_macros(MacroState::from_scopes(
+            vec![MacroView {
                 name: "loaded".into(),
                 ..Default::default()
             }],
-            character: Vec::new(),
-        });
+            Vec::new(),
+        ));
         assert!(!s.take_macros_dirty());
-        assert_eq!(s.macros().account.len(), 1);
+        assert_eq!(s.macros().count(false), 1);
     }
 
     #[test]
@@ -730,7 +926,7 @@ mod tests {
         assert!(s.cursor_payload().is_none());
         assert!(pickup_macro(&s.lua, 1));
         let ambush = Some(CursorPayload::Macro(CursorMacro {
-            index: 1,
+            id: 1,
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
         }));
         assert_eq!(s.cursor_payload(), ambush);
@@ -897,13 +1093,13 @@ mod tests {
     #[test]
     fn edit_macro_builds_the_list_only_for_a_macro_and_a_numeric_icon() {
         let (mut s, runs) = lazily_listed(TWO_ICONS);
-        s.set_macros(MacroState {
-            account: vec![MacroView {
+        s.set_macros(MacroState::from_scopes(
+            vec![MacroView {
                 name: "m".into(),
                 ..Default::default()
             }],
-            character: Vec::new(),
-        });
+            Vec::new(),
+        ));
         for call in [
             "EditMacro(2, nil, 1)",
             "EditMacro(1, 'n')",

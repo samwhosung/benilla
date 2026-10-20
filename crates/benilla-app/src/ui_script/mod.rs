@@ -631,15 +631,15 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
         // `ActionButton_UpdateCount` shows only a consumable's count (`ActionButton.lua:287`).
         script.set_bonus_bar_offset(1);
         // A macro on button 4; a capture has no character for `ui_macro::load_macros` to read.
-        script.set_macros(benilla_ui::script::MacroState {
-            account: vec![benilla_ui::script::MacroView {
+        script.set_macros(benilla_ui::script::MacroState::from_scopes(
+            vec![benilla_ui::script::MacroView {
                 name: "spawn".into(),
                 texture: Some("Interface\\Icons\\Ability_Racial_Cannibalize".into()),
                 body: ".spawn 16032".into(),
-                local_only: false,
+                ..Default::default()
             }],
-            character: Vec::new(),
-        });
+            Vec::new(),
+        ));
         for (action, icon, kind, id, count) in [
             (
                 73,

@@ -643,7 +643,7 @@ pub(crate) struct Model {
     /// Bumped by every `EditMacro` that names a macro, whose worker `0x4f1280` ends in the action
     /// bar's usable refresh (`0x4f132e`).
     pub(crate) macro_edits: u64,
-    /// Each macro's cached cast by 1-based index, from the app; an absent macro reads unbound.
+    /// Each macro's cached cast by id, from the app; an absent macro reads unbound.
     pub(crate) macro_bindings: HashMap<u32, macros::MacroBinding>,
     /// The macro icon chooser's paths, behind `GetMacroIconInfo`: `0x4f0090`'s listing of
     /// `Interface\Icons\`, not `SpellIcon.dbc`.

@@ -1171,7 +1171,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
         let macro_payload = CursorPayload::Macro(CursorMacro {
-            index: 1,
+            id: 1,
             texture: None,
         });
         s.set_cursor_for_test(macro_payload.clone());

@@ -373,7 +373,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         SLOT,
         ActionButton {
             slot: SLOT,
-            action: 1, // macro index 1
+            action: 1, // macro id 1
             kind: ACTION_KIND_MACRO,
         },
     );
@@ -391,16 +391,16 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         .insert_resource(NetCommands(tx));
     let mut script = UiScript::new().unwrap();
     script.set_macro_icons(vec!["Interface\\Icons\\Spell_Fire_FlameBolt".into()]);
-    script.set_macros(MacroState {
-        account: vec![MacroView {
+    script.set_macros(MacroState::from_scopes(
+        vec![MacroView {
             name: "Ambush".into(),
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
             // The bound spell is not what the icon shows.
             body: "/cast Ambush".into(),
-            local_only: false,
+            ..Default::default()
         }],
-        character: Vec::new(),
-    });
+        Vec::new(),
+    ));
     app.insert_non_send_resource(script);
     app.add_systems(Update, feed_actions);
 

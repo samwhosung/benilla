@@ -5,7 +5,7 @@
 
 use mlua::{Lua, Value};
 
-use crate::script::action::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPELL};
+use crate::script::action::{macro_slot_id, macro_slot_word, ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use crate::script::binding_abi;
 use crate::script::tick::verb;
 use crate::script::{ActionSlot, Model};
@@ -29,6 +29,14 @@ fn pack(kind: u8, action: u32) -> u32 {
 /// pickup then sets nothing, and a place clears the cursor as for an empty slot.
 fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
     let slot = model.actions.get(&id)?;
+    if let Some(macro_id) = macro_slot_id(slot.kind, slot.action) {
+        return Some(model.macros.by_id(macro_id).map(|m| {
+            CursorPayload::Macro(CursorMacro {
+                id: macro_id,
+                texture: m.texture.clone(),
+            })
+        }));
+    }
     Some(match slot.kind {
         ACTION_KIND_ITEM => Some(CursorPayload::Action(CursorAction {
             src_slot: id,
@@ -49,12 +57,6 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
                 .iter()
                 .any(|s| s.spell_id == slot.action && s.passive),
         })),
-        ACTION_KIND_MACRO => model.macros.get(slot.action as usize).map(|m| {
-            CursorPayload::Macro(CursorMacro {
-                index: slot.action,
-                texture: m.texture.clone(),
-            })
-        }),
         _ => None,
     })
 }
@@ -104,6 +106,25 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
         raise_slot_changed(model, id);
     });
     true
+}
+
+/// `0x4e5d10`, which `DeleteMacro` runs once its record is gone (`0x4f1449`): every action slot
+/// that holds macro `macro_id` is cleared, lowest first (`0x4e5db0`), each sent as 0 and signalling
+/// `ACTIONBAR_SLOT_CHANGED` (`0x4e58e0`).
+pub(crate) fn clear_macro_slots(model: &mut Model, macro_id: u32) {
+    let mut held: Vec<u32> = model
+        .actions
+        .iter()
+        .filter(|(_, slot)| macro_slot_id(slot.kind, slot.action) == Some(macro_id))
+        .map(|(&id, _)| id)
+        .collect();
+    held.sort_unstable();
+    for id in held {
+        model.actions.remove(&id);
+        model.action_states.remove(&id);
+        model.action_sets.push((id, 0));
+        raise_slot_changed(model, id);
+    }
 }
 
 /// The slot write's tail (`0x4e58e0`): `ACTIONBAR_SLOT_CHANGED` with the 1-based slot, signalled
@@ -231,7 +252,10 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
         // `PlaceAction` accepts modes 1, 3, 7 and 8 (`0x4e62e0`): a macro, mode 8, packs its id
         // under the macro tag. Pet actions (4), coins (2), stabled pets (10) and vendor rows (5)
         // are refused and stay held.
-        CursorPayload::Macro(m) => slot(ACTION_KIND_MACRO, m.index, &m.texture),
+        CursorPayload::Macro(m) => {
+            let (kind, action) = macro_slot_word(m.id);
+            slot(kind, action, &m.texture)
+        }
         CursorPayload::PetAction(_)
         | CursorPayload::StablePet(_)
         | CursorPayload::Money(_)
@@ -258,15 +282,16 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
 /// spell (`0x4e5ae0`). `None` for none, an empty slot or an unbound macro.
 fn resolved_spell(model: &Model, id: u32) -> Option<u32> {
     let slot = model.actions.get(&id)?;
-    let spell = match slot.kind {
-        ACTION_KIND_SPELL => slot.action,
-        ACTION_KIND_MACRO => {
-            model.macros.get(slot.action as usize)?;
-            let bound = model.macro_bindings.get(&slot.action)?.spell;
-            u32::try_from(bound).ok()?
+    let spell = if let Some(macro_id) = macro_slot_id(slot.kind, slot.action) {
+        model.macros.by_id(macro_id)?;
+        let bound = model.macro_bindings.get(&macro_id)?.spell;
+        u32::try_from(bound).ok()?
+    } else {
+        match slot.kind {
+            ACTION_KIND_SPELL => slot.action,
+            ACTION_KIND_ITEM => slot.use_spell?,
+            _ => return None,
         }
-        ACTION_KIND_ITEM => slot.use_spell?,
-        _ => return None,
     };
     (spell != 0).then_some(spell)
 }
@@ -762,7 +787,7 @@ mod tests {
         s.run("ClearCursor() PickupAction(2)").unwrap();
         assert!(matches!(
             s.cursor_payload(),
-            Some(CursorPayload::Macro(m)) if m.index == 1
+            Some(CursorPayload::Macro(m)) if m.id == 1
         ));
         s.run("ClearCursor()").unwrap();
         crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], None);
@@ -828,7 +853,7 @@ mod tests {
                 equip_slots: Vec::new(),
             }),
             CursorPayload::Macro(crate::script::cursor::CursorMacro {
-                index: 1,
+                id: 1,
                 texture: None,
             }),
         ];
