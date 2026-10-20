@@ -376,6 +376,7 @@ pub(super) fn feed_action_state(
                 stacks: &stacks,
                 spell_mods,
                 control_lost,
+                skill_lines: skill_catalog,
             };
             list.refresh(|id| {
                 sp.catalog
