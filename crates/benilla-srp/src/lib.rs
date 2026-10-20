@@ -746,14 +746,13 @@ mod tests {
             0xDEAD_BEEF,
         );
         let (mut enc, mut dec) = crypto.split();
-        assert_eq!(
-            enc.encrypt_client_header(12, 0x37F).to_vec(),
-            hx("03097792b1d7")
-        );
-        assert_eq!(
-            enc.encrypt_client_header(0x1FF, 0xC7).to_vec(),
-            hx("03ceca0c55a5")
-        );
+        // Two client headers: size 12 with opcode 0x37f, then size 0x1ff with opcode 0xc7.
+        let mut first = [0x00, 0x0c, 0x7f, 0x03, 0x00, 0x00];
+        enc.encrypt(&mut first);
+        assert_eq!(first.to_vec(), hx("03097792b1d7"));
+        let mut second = [0x01, 0xff, 0xc7, 0x00, 0x00, 0x00];
+        enc.encrypt(&mut second);
+        assert_eq!(second.to_vec(), hx("03ceca0c55a5"));
         let mut buf: Vec<u8> = (0..32u16).map(|i| (i as u8).wrapping_mul(13)).collect();
         dec.decrypt(&mut buf);
         assert_eq!(

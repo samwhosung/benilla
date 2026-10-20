@@ -1,13 +1,14 @@
 //! The world server (`mangosd`) connection, opened with the realm logon's SRP6 session key.
 //!
 //! `SMSG_AUTH_CHALLENGE` (server seed) and `CMSG_AUTH_SESSION` (build, uppercased account, client
-//! seed, SHA1 over key and seeds) travel plain; every header after them is encrypted (4-byte
-//! server, 6-byte client), bodies never, starting with `SMSG_AUTH_RESPONSE`.
+//! seed, SHA1 over key and seeds) travel plain; every header after them is encrypted, bodies
+//! never, starting with `SMSG_AUTH_RESPONSE`. A header is the size, two bytes or three, then the
+//! opcode, two bytes from the server and four from the client.
 
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use benilla_srp::vanilla_header::{DecrypterHalf, EncrypterHalf};
 
 use crate::messages::{self, ServerPacket};
@@ -27,24 +28,49 @@ pub use writer::WorldWriter;
 /// The stock `mangosd` port, for probes that dial the world server without a realm list.
 pub const WORLD_PORT: u16 = 8085;
 
+/// The largest size the two-byte size header holds; a larger one takes three bytes, the first
+/// with `0x80` set (`0x5b56da` `cmp eax,0x7fff; jg` on send, `0x5b674d` `test al,al; jns` on
+/// receive).
+const SHORT_SIZE_MAX: usize = 0x7fff;
+/// The largest size the three-byte form holds: the first byte's low seven bits and two more.
+const LONG_SIZE_MAX: usize = 0x7f_ffff;
+
 /// One frame off the world socket: its opcode and body, the header decrypted when `decrypter` is
-/// set (`None` only for `SMSG_AUTH_CHALLENGE`). The size header counts the 2-byte opcode and the
-/// body, big-endian; the opcode is little-endian.
+/// set (`None` only for `SMSG_AUTH_CHALLENGE`). The size counts the 2-byte opcode and the body.
 pub(super) fn read_frame(
     r: &mut impl Read,
     mut decrypter: Option<&mut DecrypterHalf>,
     _traffic: &LinkTraffic,
 ) -> Result<(u16, Vec<u8>)> {
-    let mut header = [0u8; 4];
-    read_header_bytes(r, &mut decrypter, &mut header)
-        .map_err(|e| anyhow!("reading world header: {e}"))?;
-    let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
-    let opcode = u16::from_le_bytes([header[2], header[3]]);
+    let (size, opcode) =
+        read_header(r, &mut decrypter).map_err(|e| anyhow!("reading world header: {e}"))?;
     let body_len = size.saturating_sub(2);
     let mut body = vec![0u8; body_len];
     r.read_exact(&mut body)
         .map_err(|e| anyhow!("reading world body (opcode {opcode:#x}, {body_len} bytes): {e}"))?;
     Ok((opcode, body))
+}
+
+/// A server header's size and opcode. The size is big-endian, `(b0 << 8 | b1)` while the first
+/// byte's top bit is clear (`0x5b677b`), else `((b0 & 0x7f) << 16 | b1 << 8 | b2)`
+/// (`0x5b6765`-`0x5b6772`); the opcode after it is little-endian. The cipher runs a byte at a
+/// time over both (`0x5b6848`), so the first size byte is deciphered before the size's length is
+/// known, as the receive loop `0x5b65f0` reads it.
+fn read_header(
+    r: &mut impl Read,
+    decrypter: &mut Option<&mut DecrypterHalf>,
+) -> std::io::Result<(usize, u16)> {
+    let mut size = [0u8; 3];
+    read_header_bytes(r, decrypter, &mut size[..2])?;
+    let size = if size[0] & 0x80 == 0 {
+        usize::from(size[0]) << 8 | usize::from(size[1])
+    } else {
+        read_header_bytes(r, decrypter, &mut size[2..])?;
+        usize::from(size[0] & 0x7f) << 16 | usize::from(size[1]) << 8 | usize::from(size[2])
+    };
+    let mut opcode = [0u8; 2];
+    read_header_bytes(r, decrypter, &mut opcode)?;
+    Ok((size, u16::from_le_bytes(opcode)))
 }
 
 /// Read `buf.len()` header bytes and decrypt them in place, the cipher running byte by byte.
@@ -93,7 +119,7 @@ impl std::fmt::Display for Unparsed {
 impl std::error::Error for Unparsed {}
 
 /// What [`observe_sends`] takes: called with a sent packet's opcode and its body, the bytes after
-/// the 6-byte header and as plain as the caller built them (encryption covers the header alone).
+/// the header and as plain as the caller built them (encryption covers the header alone).
 pub type SendObserver = fn(opcode: u16, body: &[u8]);
 
 static SEND_OBSERVER: OnceLock<SendObserver> = OnceLock::new();
@@ -106,19 +132,29 @@ pub fn observe_sends(observer: SendObserver) {
     let _ = SEND_OBSERVER.set(observer);
 }
 
-/// A client header: the size, counting the 4-byte opcode and the body, big-endian, then the
-/// opcode widened to four bytes little-endian. Returns the header and its length.
-fn client_header(opcode: u16, body_len: usize) -> ([u8; 7], usize) {
-    let size = (body_len + 4) as u16;
+/// A client header and its length: the size, counting the 4-byte opcode and the body, big-endian
+/// in two bytes up to [`SHORT_SIZE_MAX`], else in three, `(N >> 16) | 0x80, N >> 8, N`
+/// (`0x5b5712`-`0x5b572b`); then the opcode widened to four bytes little-endian. `None` past
+/// [`LONG_SIZE_MAX`], which no size header holds.
+fn client_header(opcode: u16, body_len: usize) -> Option<([u8; 7], usize)> {
+    let size = body_len + 4;
     let mut header = [0u8; 7];
-    header[..2].copy_from_slice(&size.to_be_bytes());
-    header[2..6].copy_from_slice(&u32::from(opcode).to_le_bytes());
-    (header, 6)
+    let size_len = if size <= SHORT_SIZE_MAX {
+        header[..2].copy_from_slice(&(size as u16).to_be_bytes());
+        2
+    } else if size <= LONG_SIZE_MAX {
+        header[..3].copy_from_slice(&(size as u32 | 0x80_0000).to_be_bytes()[1..]);
+        3
+    } else {
+        return None;
+    };
+    header[size_len..size_len + 4].copy_from_slice(&u32::from(opcode).to_le_bytes());
+    Some((header, size_len + 4))
 }
 
-/// Write one client packet: its header ([`client_header`]), encrypted when `encrypter` is set,
-/// then the body. The sole write path of the world socket, so the one place [`observe_sends`]
-/// reports from.
+/// Write one client packet: its header ([`client_header`]), encrypted when `encrypter` is set, as
+/// the cipher covers the size and the opcode (`0x5b5842`), then the body. The sole write path of
+/// the world socket, so the one place [`observe_sends`] reports from.
 pub(super) fn send_packet(
     stream: &mut impl Write,
     encrypter: Option<&mut EncrypterHalf>,
@@ -126,7 +162,12 @@ pub(super) fn send_packet(
     opcode: u16,
     body: &[u8],
 ) -> Result<()> {
-    let (mut header, header_len) = client_header(opcode, body.len());
+    let Some((mut header, header_len)) = client_header(opcode, body.len()) else {
+        bail!(
+            "sending opcode {opcode:#x}: {} body bytes is past the largest size header",
+            body.len()
+        );
+    };
     let header = &mut header[..header_len];
     if let Some(e) = encrypter {
         e.encrypt(header);

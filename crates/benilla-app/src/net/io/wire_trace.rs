@@ -1,7 +1,7 @@
 //! The packet trace's lines: every world packet by opcode name with its length and its body as
 //! hex, under the `in` and `out` tags of `WOW_MOVE_TRACE` (`benilla_assets::trace`).
 //!
-//! The body is the bytes after the 6-byte header, as they cross the socket (the header alone is
+//! The body is the bytes after the header, as they cross the socket (the header alone is
 //! encrypted), so a line is a packet sniffer's row: paste the hex into a decoder. A field is
 //! appended to each line and no earlier one moves, so a reader that matches the opcode, the name,
 //! `ev=` or `len=` keeps working.
