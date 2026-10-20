@@ -102,15 +102,15 @@ pub(crate) fn toggle_sheath_next(cur: u8, (melee, ranged): (bool, bool)) -> Opti
 
 /// `0x5eb6d0`: an animation the manual toggle waits out, a ranged attack's fire, load or hold (46,
 /// 49, 105 to 107 and 109 to 112, the byte table at `0x5eb6f8`).
-pub(super) fn holds_the_toggle(_anim: u16) -> bool {
-    false
+pub(super) fn holds_the_toggle(anim: u16) -> bool {
+    matches!(anim, 46 | 49 | 105..=107 | 109..=112)
 }
 
 /// The manual toggle's model tests, which the setter's executor applies to its request: the armed
 /// animation [`holds_the_toggle`] (`0x5eb542`), and a model without both sheathe animations, 90
 /// and 89 (`0x5eb580`, `0x5eb58b`). A unit with no model skips them, and the setter refuses it.
-pub(super) fn model_refuses_toggle(_anims: &ModelAnimations, _armed: Option<u16>) -> bool {
-    false
+pub(super) fn model_refuses_toggle(anims: &ModelAnimations, armed: Option<u16>) -> bool {
+    armed.is_some_and(holds_the_toggle) || !anims.owns(90) || !anims.owns(89)
 }
 
 /// One arm's planned leg: the clip, and whether the arm ends with its weapon in hand (the
