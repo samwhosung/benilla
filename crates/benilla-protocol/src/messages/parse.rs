@@ -9,11 +9,12 @@ use crate::wire::{
 
 use super::{
     action_bar, area_trigger, attack, auction, bank, battlefield, binder, broadcast, channel, chat,
-    combat_log, death, duel, gameobject, gm_ticket, gossip, group, guild, instance, items, loot,
-    mail, meeting_stone, mirror_timer, monster_move, movement, opcode, page_text, pet, petition,
-    pose, progression, pvp, quest, social, spellbook, spells, stable, summon, tabard, taxi, trade,
-    trainer, tutorial, update_object, vendor, world_state, AddonRecord, AttackSwingError,
-    Character, CreatureQueryInfo, JumpInfo, MoveMode, ServerPacket, SpeedKind, SplineMode,
+    combat_log, death, duel, game_time, gameobject, gm_ticket, gossip, group, guild, instance,
+    items, loot, mail, meeting_stone, mirror_timer, monster_move, movement, opcode, page_text, pet,
+    petition, pose, progression, pvp, quest, social, spellbook, spells, stable, summon, tabard,
+    taxi, trade, trainer, tutorial, update_object, vendor, world_state, AddonRecord,
+    AttackSwingError, Character, CreatureQueryInfo, JumpInfo, MoveMode, ServerPacket, SpeedKind,
+    SplineMode, WowTime,
 };
 
 /// Read a `SMSG_FORCE_*_SPEED_CHANGE` body: `[packed guid][u32 counter][f32 speed]` for all six
@@ -409,21 +410,32 @@ fn parse_server_body(
         opcode::SMSG_TRANSFER_ABORTED => ServerPacket::TransferAborted {
             reason: read_u8(&mut r)?,
         },
+        // The handlers (`0x6c5e80`, `0x6c6010`, `0x6c6120`, `0x6c5de0`) read their fields and
+        // refuse a body that is not read to its end, so a longer one fails too.
         opcode::SMSG_LOGIN_SETTIMESPEED => {
-            // Packed DateTime, LSB up: minute:6, hour:5, weekday:3, day:6, month:4, year:5. The
-            // day serial assumes 31-day months and 372-day years, monotonic but not calendar-true.
-            let datetime = read_u32_le(&mut r)?;
-            let timescale = read_f32_le(&mut r)?;
-            let (day, month, year) = (
-                (datetime >> 14) & 0x3F,
-                (datetime >> 20) & 0x0F,
-                (datetime >> 24) & 0x1F,
-            );
+            game_time::exact_body(opcode, r, 8)?;
+            let time = WowTime::decode(read_u32_le(&mut r)?);
             ServerPacket::TimeSpeed {
-                hours: ((datetime >> 6) & 0x1F) as u8,
-                minutes: (datetime & 0x3F) as u8,
-                day_serial: year * 372 + month * 31 + day,
-                timescale,
+                time,
+                speed: read_f32_le(&mut r)?,
+            }
+        }
+        opcode::SMSG_GAMETIME_UPDATE => {
+            game_time::exact_body(opcode, r, 4)?;
+            ServerPacket::GameTimeUpdate {
+                time: WowTime::decode(read_u32_le(&mut r)?),
+            }
+        }
+        opcode::SMSG_GAMETIME_SET => {
+            game_time::exact_body(opcode, r, 4)?;
+            ServerPacket::GameTimeSet {
+                time: WowTime::decode(read_u32_le(&mut r)?),
+            }
+        }
+        opcode::SMSG_GAMESPEED_SET => {
+            game_time::exact_body(opcode, r, 4)?;
+            ServerPacket::GameSpeedSet {
+                speed: read_f32_le(&mut r)?,
             }
         }
         // Wall-clock unix seconds (`QueryHandler.cpp:418-423`), not the game clock above.

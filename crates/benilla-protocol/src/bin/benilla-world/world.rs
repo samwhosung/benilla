@@ -257,14 +257,10 @@ impl World {
             SessionEvent::ObjectDestroyed(guid) => {
                 self.tracked.remove(guid);
             }
-            SessionEvent::TimeSpeed {
-                hours,
-                minutes,
-                timescale,
-                ..
-            } => {
+            SessionEvent::TimeSpeed { time, speed } => {
                 println!(
-                    "server game-time {hours:02}:{minutes:02}  (timescale {timescale} game-min/sec)"
+                    "server game-time {:02}:{:02}  (timescale {speed} game-min/sec)",
+                    time.hour, time.minute
                 );
             }
             SessionEvent::PlayerName { guid, name, .. } => {

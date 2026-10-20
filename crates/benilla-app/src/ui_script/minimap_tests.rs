@@ -114,7 +114,7 @@ fn tracking_frame_follows_get_tracking_texture_across_player_auras_changed() {
 }
 
 /// The cluster and the stock `GameTime.xml`, the clock at `hour:minute` as the app pushes it.
-fn game_time_session(hour: u32, minute: u32) -> UiScript {
+fn game_time_session(hour: i32, minute: i32) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.run("function GetMinimapZoneText() return '' end")

@@ -13,15 +13,17 @@ use crate::ui_quest::QuestGiver;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::ecs::system::SystemParam;
 
+use super::{clock_tick, ServerTime};
 use super::{
     AddonInfoMessage, CharActionResultMessage, CharListMessage, CharacterLoginFailedMessage,
     CinematicTriggeredMessage, ClientControlMessage, DisconnectedMessage, DroppedOpcodes,
-    EnteredWorldMessage, GameTime, GuidIndex, HomeBind, KnockBackMessage, LoggedOutMessage,
+    EnteredWorldMessage, GuidIndex, HomeBind, KnockBackMessage, LoggedOutMessage,
     LoginFailedMessage, LoginQueuedMessage, LoginStageMessage, NetCommands, NetHandlerApp,
     NetStatus, ObjectStore, PendingTransfer, Proficiencies, RealmListMessage, Reputations,
-    RosterFailedMessage, SelfGuid, ServerTime, ServerWallClock, TeleportMessage, WorldAuthMessage,
+    RosterFailedMessage, SelfGuid, ServerWallClock, TeleportMessage, WorldAuthMessage,
     WorldportMessage,
 };
+use benilla_world::frame_pace::FrameStep;
 
 /// Registers the session handlers.
 pub(super) fn register(app: &mut App) {
@@ -48,6 +50,9 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::TransferPending, on_transfer)
         .net_handler(K::TransferAborted, on_transfer)
         .net_handler(K::TimeSpeed, on_clock)
+        .net_handler(K::GameSpeedSet, on_clock)
+        .net_handler(K::GameTimeUpdate, on_clock)
+        .net_handler(K::GameTimeSet, on_clock)
         .net_handler(K::ServerUnixTime, on_clock)
         .net_handler(K::Reputations, on_reputations)
         .net_handler(K::ReputationDelta, on_reputation_delta)
@@ -325,14 +330,19 @@ fn on_transfer(In(ev): In<SessionEvent>, mut e: Edges) {
     }
 }
 
-fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge) {
+/// The game clock's four messages (`SMSG_LOGIN_SETTIMESPEED`, `SMSG_GAMESPEED_SET`,
+/// `SMSG_GAMETIME_UPDATE`, `SMSG_GAMETIME_SET`) and the server's wall clock.
+fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge, step: Res<FrameStep>) {
     match ev {
-        SessionEvent::TimeSpeed {
-            hours,
-            minutes,
-            day_serial,
-            timescale,
-        } => time_speed(hours, minutes, day_serial, timescale, &mut b.server_time),
+        SessionEvent::TimeSpeed { .. }
+        | SessionEvent::GameSpeedSet { .. }
+        | SessionEvent::GameTimeUpdate { .. }
+        | SessionEvent::GameTimeSet { .. } => {
+            let lines = b.server_time.0.on_message(&ev, clock_tick(&step));
+            for line in lines.into_iter().flatten() {
+                info!("console: {line}");
+            }
+        }
         SessionEvent::ServerUnixTime { unix_time } => {
             server_unix_time(unix_time, &mut b.wall_clock)
         }
@@ -734,20 +744,6 @@ fn worldport(
     });
 }
 
-/// `SMSG_LOGIN_SETTIMESPEED`: the game clock that drives day/night lighting.
-fn time_speed(
-    hours: u8,
-    minutes: u8,
-    day_serial: u32,
-    timescale: f32,
-    server_time: &mut ServerTime,
-) {
-    if server_time.0.is_none() {
-        info!("net: server game-time {hours:02}:{minutes:02} (drives lighting)");
-    }
-    server_time.0 = Some(GameTime::new(hours, minutes, day_serial, timescale));
-}
-
 /// `SMSG_QUERY_TIME_RESPONSE`: the server wall clock that absolute descriptor stamps (the
 /// timed-quest timer) are dated in; its skew against ours is logged once per session.
 fn server_unix_time(unix_time: u32, clock: &mut ServerWallClock) {
@@ -850,6 +846,8 @@ fn packet_dropped(opcode: u16, unparseable: bool, dropped: &mut DroppedOpcodes) 
     }
 }
 
+#[cfg(test)]
+mod clock_tests;
 #[cfg(test)]
 mod reputation_tests;
 

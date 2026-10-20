@@ -205,6 +205,16 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
         s.eval::<(f64, f64)>("return GetGameTime()").unwrap(),
         (21.0, 7.0)
     );
+    // The clock holds the server's fields as sent (`0x6436c0` takes a synced time whole): an hour
+    // past a day's end, a minute to 62, or one unset.
+    for (hour, minute) in [(25, 62), (-1, 3), (30, -1)] {
+        s.set_game_time(hour, minute);
+        assert_eq!(
+            s.eval::<(f64, f64)>("return GetGameTime()").unwrap(),
+            (f64::from(hour), f64::from(minute))
+        );
+    }
+    s.set_game_time(21, 7);
 
     // An ownerless zone: the type is answered and the faction name is the empty string
     // (`0x48d633`, pushed at `0x48d68f`), not nil.

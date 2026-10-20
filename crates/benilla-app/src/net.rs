@@ -20,6 +20,7 @@ use crossbeam_channel::{Receiver, Sender};
 use benilla_world::schedule::WorldStage;
 
 mod apply;
+mod game_time;
 pub(crate) mod handlers;
 pub(crate) mod io;
 pub(crate) mod motion;
@@ -34,6 +35,9 @@ mod world;
 pub(crate) use apply::apply_net_updates;
 pub(crate) use apply::enter_world_on_self_create;
 use apply::tag_self_player;
+#[cfg(test)]
+pub(crate) use game_time::GameTime;
+pub(crate) use game_time::{clock_tick, ServerTime};
 pub(crate) use handlers::NetHandlerApp;
 
 pub(crate) use io::LoginRequest;
@@ -70,10 +74,14 @@ impl Plugin for NetPlugin {
         if !self.connect {
             app.insert_resource(NetOffline);
         }
-        // In the net stage: the lighting resolve runs after it and reads this frame's clock.
+        // In the net stage, after the drain that may have set the clock: the lighting resolve runs
+        // after it and reads this frame's clock.
         app.add_systems(
             Update,
-            publish_world_time.in_set(benilla_world::schedule::WorldStage::Net),
+            (game_time::tick_game_time, game_time::publish_world_time)
+                .chain()
+                .after(apply_net_updates)
+                .in_set(benilla_world::schedule::WorldStage::Net),
         );
         world::register(app);
         session::register(app);
@@ -604,27 +612,6 @@ pub(crate) struct DropTally {
     pub(crate) unparseable: u64,
 }
 
-/// The in-game clock (`SMSG_LOGIN_SETTIMESPEED`), advanced by its timescale.
-#[derive(Resource, Default)]
-pub(crate) struct ServerTime(pub(crate) Option<GameTime>);
-
-/// Publish the session clock into [`benilla_world::lighting::WorldTime`] each frame; with no
-/// server, its default (noon).
-pub(crate) fn publish_world_time(
-    server: Res<ServerTime>,
-    mut world_time: ResMut<benilla_world::lighting::WorldTime>,
-) {
-    *world_time = match server.0 {
-        Some(gt) => benilla_world::lighting::WorldTime {
-            minute: gt.minute_of_day(),
-            minute_f: gt.minute_of_day_f32(),
-            day: gt.day_continuous(),
-            live: true,
-        },
-        None => benilla_world::lighting::WorldTime::default(),
-    };
-}
-
 /// The server's unix wall clock (`SMSG_QUERY_TIME_RESPONSE`), advanced monotonically. Descriptor
 /// deadlines are absolute server stamps (a timed quest's is `time(nullptr) + limitTime`, vmangos
 /// `Player::AddQuest`), so a countdown reads this, never the local clock.
@@ -764,55 +751,6 @@ pub(crate) struct PlayedTimeAnswer(pub(crate) Option<(u32, u32)>);
 /// bitmask, the client's `0xc4d4a0[class]` store.
 #[derive(Resource, Default)]
 pub(crate) struct Proficiencies(pub(crate) std::collections::HashMap<u32, u32>);
-
-/// The in-game clock from `SMSG_LOGIN_SETTIMESPEED`: the server's `localtime()`, advancing at
-/// `timescale` game-minutes per real second (vmangos about `0.01667`, real time).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct GameTime {
-    /// Minute of the game day (`0..1440`) at `received`.
-    base_minute: u32,
-    /// Day serial of the packed date, `year*372 + month*31 + day`; only differences matter.
-    base_day: u32,
-    timescale: f32,
-    received: Instant,
-}
-
-/// The slowest game-time speed the clock takes, the `f32` 1/60 at `0x80e45c`.
-const MIN_TIMESCALE: f32 = 1.0 / 60.0;
-/// The fastest, 60.0 at `0x80e448`.
-const MAX_TIMESCALE: f32 = 60.0;
-
-impl GameTime {
-    /// The clock at `hours:minutes`, its speed held to [`MIN_TIMESCALE`]..[`MAX_TIMESCALE`] as
-    /// `0x643820` stores it, a NaN passing both compares unchanged.
-    pub(crate) fn new(hours: u8, minutes: u8, day_serial: u32, timescale: f32) -> Self {
-        Self {
-            base_minute: hours as u32 * 60 + minutes as u32,
-            base_day: day_serial,
-            // `clamp` passes a NaN through, as the two compares do.
-            timescale: timescale.clamp(MIN_TIMESCALE, MAX_TIMESCALE),
-            received: Instant::now(),
-        }
-    }
-
-    /// Current minute of the game day (`0..1440`).
-    pub(crate) fn minute_of_day(&self) -> u32 {
-        self.minute_of_day_f32() as u32
-    }
-
-    /// Current fractional minute of the game day, so the sky bodies move without steps.
-    pub(crate) fn minute_of_day_f32(&self) -> f32 {
-        let elapsed = self.received.elapsed().as_secs_f32() * self.timescale;
-        (self.base_minute as f32 + elapsed).rem_euclid(1440.0)
-    }
-
-    /// Days and day fraction since the serial epoch, unwrapped, for the moon phase
-    /// `(dayCounter + todPhase) mod 1.7` (`0x6d41b9`); `f64` for sub-minute grain at ~12k days.
-    pub(crate) fn day_continuous(&self) -> f64 {
-        let elapsed = self.received.elapsed().as_secs_f64() * self.timescale as f64;
-        self.base_day as f64 + (self.base_minute as f64 + elapsed) / 1440.0
-    }
-}
 
 // ── Outbound commands + one-shot inbound events ──────────────────────────────────────────────────
 
@@ -2486,23 +2424,6 @@ pub(crate) struct PetDismissSoundMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `0x643820` stores the speed clamped to `[1/60, 60]`, the bounds the `f32`s `0x80e45c`
-    /// (`0x3c888889`) and `0x80e448` (60.0); a NaN passes both compares and is stored as it is.
-    #[test]
-    fn the_game_time_speed_is_held_to_a_sixtieth_to_sixty() {
-        let speed = |s: f32| GameTime::new(12, 0, 0, s).timescale;
-        let sixtieth = f32::from_bits(0x3c88_8889);
-        assert_eq!(speed(0.0), sixtieth);
-        assert_eq!(speed(-5.0), sixtieth);
-        assert_eq!(speed(f32::NEG_INFINITY), sixtieth);
-        assert_eq!(speed(1.0 / 60.0), sixtieth);
-        assert_eq!(speed(0.5), 0.5);
-        assert_eq!(speed(60.0), 60.0);
-        assert_eq!(speed(60.5), 60.0);
-        assert_eq!(speed(f32::INFINITY), 60.0);
-        assert!(speed(f32::NAN).is_nan());
-    }
 
     /// The write's edges: one per moved dword, none for a first create; a re-create replaces the
     /// store, clearing what it omits (`0x466582`).

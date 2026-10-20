@@ -33,6 +33,11 @@ pub const SMSG_NEW_WORLD: u16 = 0x003E;
 pub const SMSG_TRANSFER_PENDING: u16 = 0x003F;
 pub const SMSG_TRANSFER_ABORTED: u16 = 0x0040;
 pub const SMSG_LOGIN_SETTIMESPEED: u16 = 0x0042;
+// The game-clock messages (`gametime/messages` in benilla-re): a date to sync to, a date to set,
+// and a rate.
+pub const SMSG_GAMETIME_UPDATE: u16 = 0x0043;
+pub const SMSG_GAMETIME_SET: u16 = 0x0045;
+pub const SMSG_GAMESPEED_SET: u16 = 0x0047;
 pub const SMSG_BINDPOINTUPDATE: u16 = 0x0155;
 /// The proficiency mask for one item class (vmangos `Skill.h`).
 pub const SMSG_SET_PROFICIENCY: u16 = 0x0127;

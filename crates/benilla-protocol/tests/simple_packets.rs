@@ -28,20 +28,15 @@ fn simple_server_bodies_parse() {
         _ => panic!("new world"),
     }
     // SMSG_LOGIN_SETTIMESPEED: packed date (LSB up: minute:6, hour:5, weekday:3, day:6, month:4,
-    // year:5) then f32 timescale. The day serial counts 31-day months: year·372 + month·31 + day.
+    // year:5) then f32 timescale.
     let datetime: u32 = (26 << 24) | (6 << 20) | (17 << 14) | (14 << 6) | 30;
     let mut ts = datetime.to_le_bytes().to_vec();
     ts.extend_from_slice(&0.0166_6667f32.to_le_bytes());
     match messages::parse_server(messages::opcode::SMSG_LOGIN_SETTIMESPEED, &ts).unwrap() {
-        ServerPacket::TimeSpeed {
-            hours,
-            minutes,
-            day_serial,
-            timescale,
-        } => {
-            assert_eq!((hours, minutes), (14, 30));
-            assert_eq!(day_serial, 26 * 372 + 6 * 31 + 17);
-            assert_eq!(timescale, 0.0166_6667);
+        ServerPacket::TimeSpeed { time, speed } => {
+            assert_eq!((time.hour, time.minute), (14, 30));
+            assert_eq!((time.year, time.month, time.day), (26, 6, 17));
+            assert_eq!(speed, 0.0166_6667);
         }
         _ => panic!("settimespeed"),
     }

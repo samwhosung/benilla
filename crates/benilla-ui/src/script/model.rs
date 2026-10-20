@@ -452,7 +452,7 @@ pub(crate) struct Model {
     pub(crate) now: f64,
     /// `GetGameTime()`'s `(hour, minute)`, pushed by the host as the game clock ticks; `None`
     /// until the server sets it.
-    pub(crate) game_time: Option<(u32, u32)>,
+    pub(crate) game_time: Option<(i32, i32)>,
     /// The zone caches the four zone-text getters and `GetZonePVPInfo` read.
     pub(crate) zone: super::ZoneTexts,
     /// The current map's `Map.dbc` `InstanceType`, all `IsInInstance()` reads; `None` for no row.

@@ -738,17 +738,10 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::TransferAborted { reason } => {
             vec![SessionEvent::TransferAborted { reason }]
         }
-        ServerPacket::TimeSpeed {
-            hours,
-            minutes,
-            day_serial,
-            timescale,
-        } => vec![SessionEvent::TimeSpeed {
-            hours,
-            minutes,
-            day_serial,
-            timescale,
-        }],
+        ServerPacket::TimeSpeed { time, speed } => vec![SessionEvent::TimeSpeed { time, speed }],
+        ServerPacket::GameSpeedSet { speed } => vec![SessionEvent::GameSpeedSet { speed }],
+        ServerPacket::GameTimeUpdate { time } => vec![SessionEvent::GameTimeUpdate { time }],
+        ServerPacket::GameTimeSet { time } => vec![SessionEvent::GameTimeSet { time }],
         ServerPacket::QueryTimeResponse { unix_time } => {
             vec![SessionEvent::ServerUnixTime { unix_time }]
         }

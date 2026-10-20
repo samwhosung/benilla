@@ -18,7 +18,7 @@ use super::{
     SpellCooldown, SpellDamageLog, SpellDispelLog, SpellEnergizeLog, SpellGo, SpellHealLog,
     SpellInstaKillLog, SpellLogExecute, SpellLogMiss, SpellOutcomeLog, SpellStart, SplineMode,
     StabledPet, TaxiMask, TradeStatus, TradeStatusExtended, TrainerSpell, TransportPose,
-    VendorItem, WhoResults, XpGain,
+    VendorItem, WhoResults, WowTime, XpGain,
 };
 
 /// The final facing a `SMSG_MONSTER_MOVE` dictates (`moveType`), applied as a hard snap, not a
@@ -179,12 +179,22 @@ pub enum ServerPacket {
         position: Vector3d,
         orientation: f32,
     },
+    /// `SMSG_LOGIN_SETTIMESPEED`: the date to set the clock to and the rate, as sent.
     TimeSpeed {
-        hours: u8,
-        minutes: u8,
-        /// Day count from the packed date, `year·372 + month·31 + day`; drives the moon phase.
-        day_serial: u32,
-        timescale: f32,
+        time: WowTime,
+        speed: f32,
+    },
+    /// `SMSG_GAMESPEED_SET`: the rate, as sent.
+    GameSpeedSet {
+        speed: f32,
+    },
+    /// `SMSG_GAMETIME_UPDATE`: the date to sync the clock to.
+    GameTimeUpdate {
+        time: WowTime,
+    },
+    /// `SMSG_GAMETIME_SET`: the date to set the clock to.
+    GameTimeSet {
+        time: WowTime,
     },
     /// `SMSG_QUERY_TIME_RESPONSE`: wall-clock unix seconds, the base of absolute descriptor stamps.
     QueryTimeResponse {
@@ -1299,6 +1309,9 @@ impl ServerPacket {
             ServerPacket::TransferAborted { .. } => "SMSG_TRANSFER_ABORTED".into(),
             ServerPacket::LoginVerifyWorld { .. } => "SMSG_LOGIN_VERIFY_WORLD".into(),
             ServerPacket::TimeSpeed { .. } => "SMSG_LOGIN_SETTIMESPEED".into(),
+            ServerPacket::GameSpeedSet { .. } => "SMSG_GAMESPEED_SET".into(),
+            ServerPacket::GameTimeUpdate { .. } => "SMSG_GAMETIME_UPDATE".into(),
+            ServerPacket::GameTimeSet { .. } => "SMSG_GAMETIME_SET".into(),
             ServerPacket::QueryTimeResponse { .. } => "SMSG_QUERY_TIME_RESPONSE".into(),
             ServerPacket::BindPoint { .. } => "SMSG_BINDPOINTUPDATE".into(),
             ServerPacket::GmTicketAnswer { .. } => "SMSG_GMTICKET_GETTICKET".into(),

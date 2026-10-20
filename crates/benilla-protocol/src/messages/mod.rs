@@ -16,6 +16,7 @@ mod client;
 mod combat_log;
 mod death;
 mod duel;
+mod game_time;
 mod gameobject;
 mod gm_ticket;
 mod gossip;
@@ -114,6 +115,7 @@ pub use duel::{
     duel_accepted, duel_cancelled, read_duel_complete, read_duel_countdown, read_duel_requested,
     read_duel_winner, DuelRequested, DuelWinner,
 };
+pub use game_time::WowTime;
 pub use gameobject::{gameobj_use, gameobject_query, GameObjectQueryInfo};
 pub use gm_ticket::{
     gm_ticket_create, gm_ticket_updatetext, GmTicket, GMTICKET_QUEUE_ENABLED,

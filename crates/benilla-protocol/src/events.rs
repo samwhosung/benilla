@@ -14,7 +14,7 @@ use crate::messages::{
     QuestGiverList, QuestOfferReward, QuestRequestItems, QuestShareMsg, QuestTemplate,
     SpellDamageLog, SpellDispelLog, SpellEnergizeLog, SpellHealLog, SpellInstaKillLog,
     SpellLogExecute, SpellLogMiss, SpellOutcomeLog, StabledPet, TaxiMask, TradeStatus,
-    TradeStatusExtended, TrainerSpell, TransportPose, VendorItem, WhoResults, XpGain,
+    TradeStatusExtended, TrainerSpell, TransportPose, VendorItem, WhoResults, WowTime, XpGain,
 };
 
 /// Coarse entity classification, free of wire types, carried on [`SessionEvent::ObjectCreate`].
@@ -336,14 +336,15 @@ pub enum SessionEvent {
     },
     /// `SMSG_TRANSFER_ABORTED`: the announced transfer is off (map full, no instance).
     TransferAborted { reason: u8 },
-    /// The server in-game clock (`SMSG_LOGIN_SETTIMESPEED`): drives time-of-day lighting.
-    TimeSpeed {
-        hours: u8,
-        minutes: u8,
-        /// `year·372 + month·31 + day` of the packed server date; the moon phase's input.
-        day_serial: u32,
-        timescale: f32,
-    },
+    /// The login clock (`SMSG_LOGIN_SETTIMESPEED`): the date the clock is set to and its rate,
+    /// as sent.
+    TimeSpeed { time: WowTime, speed: f32 },
+    /// `SMSG_GAMESPEED_SET`: the clock's rate, as sent.
+    GameSpeedSet { speed: f32 },
+    /// `SMSG_GAMETIME_UPDATE`: the date the clock syncs to.
+    GameTimeUpdate { time: WowTime },
+    /// `SMSG_GAMETIME_SET`: the date the clock is set to.
+    GameTimeSet { time: WowTime },
     /// The server's wall clock in unix seconds (`SMSG_QUERY_TIME_RESPONSE`), the base of absolute
     /// descriptor stamps: a timed quest's deadline is `time(nullptr) + limitTime`.
     ServerUnixTime { unix_time: u32 },

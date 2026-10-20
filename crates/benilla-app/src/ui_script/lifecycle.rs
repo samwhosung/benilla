@@ -189,12 +189,8 @@ fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
 /// by no logout or `ReloadUI`, so a VM answers -1, -1 before any server time and the last known
 /// time after it, from the first line its addons run.
 fn seed_game_time(world: &World, script: &mut UiScript) {
-    let clock = world
-        .get_resource::<crate::net::ServerTime>()
-        .and_then(|time| time.0);
-    if let Some(clock) = clock {
-        let minute = clock.minute_of_day();
-        script.set_game_time(minute / 60, minute % 60);
+    if let Some(time) = world.get_resource::<crate::net::ServerTime>() {
+        script.set_game_time(time.0.hour(), time.0.minute());
     }
 }
 
@@ -1240,12 +1236,16 @@ mod tests {
         assert_eq!(answer(&mut world), (-1.0, -1.0), "no clock resource");
         world.init_resource::<crate::net::ServerTime>();
         assert_eq!(answer(&mut world), (-1.0, -1.0), "no server time yet");
-        world.insert_resource(crate::net::ServerTime(Some(crate::net::GameTime::new(
-            13,
-            45,
+        let mut clock = crate::net::GameTime::new(0);
+        clock.set(
+            benilla_protocol::WowTime {
+                minute: 45,
+                hour: 13,
+                ..benilla_protocol::WowTime::UNSET
+            },
             0,
-            1.0 / 60.0,
-        ))));
+        );
+        world.insert_resource(crate::net::ServerTime(clock));
         assert_eq!(answer(&mut world), (13.0, 45.0));
         let glue = new_vm(&mut world, UiScript::new_glue).expect("a glue VM");
         assert_eq!(
