@@ -398,6 +398,24 @@ fn a_copy_keeps_a_value_the_source_does_not_hold() {
     assert_eq!(font_of(&s, "B"), ("Fonts\\ARIALN.TTF".to_string(), 9.0));
 }
 
+/// The copy's merge skips a face equal ignoring case, with an equal height and flags
+/// (`0x770b20`-`0x770b44`), so the copy keeps its own spelling of it.
+#[test]
+fn a_copy_keeps_its_spelling_of_an_equal_face() {
+    let s = script();
+    s.run(
+        r#"
+        F = CreateFont("SpellingSource")
+        F:SetFont("fonts\\arialn.ttf", 9)
+        B = CreateFont("SpellingCopy")
+        B:SetFont("Fonts\\ARIALN.TTF", 9)
+        B:CopyFontObject(F)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(font_of(&s, "B"), ("Fonts\\ARIALN.TTF".to_string(), 9.0));
+}
+
 /// The copy follows the font the source follows (`0x7841fe`-`0x78426d`), so a later change on that
 /// font reaches it through the follow mask it took from the source (`0x7841fb`).
 #[test]
