@@ -285,8 +285,9 @@ fn feed_on_taxi(
 /// `ERR_TAXIPLAYERALREADYMOUNTED` (`0x4dc909`-`0x4dc918`), and the current node with `0xaa`,
 /// `ERR_TAXISAMENODE` (`0x4dc939`-`0x4dc942`); a `TaxiPath` from the current node to the slot's
 /// sends `CMSG_ACTIVATETAXI`, routed or not (`0x4dc952`, `0x4dc9be`); else the slot's route sends
-/// `CMSG_ACTIVATETAXIEXPRESS` with its raw fare sum (`0x4dc965`-`0x4dc98e`). `CloseTaxiMap()` runs
-/// the core, with no packet.
+/// `CMSG_ACTIVATETAXIEXPRESS` with its raw fare sum (`0x4dc965`-`0x4dc98e`); and a slot with
+/// neither shows `0xab`, `ERR_TAXINOSUCHPATH` (`0x4dc999`). `CloseTaxiMap()` runs the core, with
+/// no packet.
 fn drain_taxi(
     mut hosted_vm: crate::script_calls::HostedVm,
     state: Res<TaxiState>,
@@ -311,10 +312,16 @@ fn drain_taxi(
                 .iter()
                 .next()
                 .is_some_and(|s| s.0.unit_mount_display_id() as i32 > 0);
+            let (src, dest) = (cache.current, slot.node);
+            let direct = catalogs
+                .as_ref()
+                .is_some_and(|c| c.paths.between(src, dest).is_some());
             let refusal = if mounted {
                 Some("ERR_TAXIPLAYERALREADYMOUNTED")
-            } else if slot.node == cache.current {
+            } else if dest == src {
                 Some("ERR_TAXISAMENODE")
+            } else if !direct && slot.chain.is_empty() {
+                Some("ERR_TAXINOSUCHPATH")
             } else {
                 None
             };
@@ -324,10 +331,6 @@ fn drain_taxi(
                 crate::ui_action::show_messages(script, &mut sink, "ui_taxi", line);
                 continue;
             }
-            let (src, dest) = (cache.current, slot.node);
-            let direct = catalogs
-                .as_ref()
-                .is_some_and(|c| c.paths.between(src, dest).is_some());
             if direct {
                 debug!(
                     "ui_taxi: activate {src} -> {dest} (direct path, {} copper)",
@@ -338,7 +341,7 @@ fn drain_taxi(
                     source_node: src,
                     dest_node: dest,
                 });
-            } else if !slot.chain.is_empty() {
+            } else {
                 debug!(
                     "ui_taxi: activate express {:?} ({} copper)",
                     slot.chain, slot.cost
