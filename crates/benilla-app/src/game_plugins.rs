@@ -481,8 +481,35 @@ pub(crate) mod schedule_tests {
                 }
                 out
             };
+            // An edge through a set that holds no system still orders its neighbours, as the
+            // build flattens it (the VM pass's links are such sets).
+            let mut edges: Vec<(NodeId, NodeId)> = graph.dependency().graph().all_edges().collect();
+            let empty: Vec<NodeId> = graph
+                .system_sets
+                .iter()
+                .map(|(key, _, _)| NodeId::Set(key))
+                .filter(|n| members(*n).is_empty())
+                .collect();
+            for set in empty {
+                let into: Vec<NodeId> = edges
+                    .iter()
+                    .filter(|(_, b)| *b == set)
+                    .map(|(a, _)| *a)
+                    .collect();
+                let out: Vec<NodeId> = edges
+                    .iter()
+                    .filter(|(a, _)| *a == set)
+                    .map(|(_, b)| *b)
+                    .collect();
+                edges.retain(|(a, b)| *a != set && *b != set);
+                for a in &into {
+                    for b in &out {
+                        edges.push((*a, *b));
+                    }
+                }
+            }
             let mut dependencies = Vec::new();
-            for (a, b) in graph.dependency().graph().all_edges() {
+            for (a, b) in edges {
                 for x in members(a) {
                     for y in members(b) {
                         if x != y {
@@ -807,7 +834,12 @@ pub(crate) mod schedule_tests {
     /// The largest part is `Transform` on disjoint lanes, populations that never intersect,
     /// which no class can express. Every system that lends the call host runs in the VM pass's
     /// one chain ([`crate::vm_pass`]), so no two of them pair, and the world's movers and readers
-    /// of what a script call reaches order against its ends. Known pairs accepted with a reason:
+    /// of what a script call reaches order against its ends. The host's shared sinks
+    /// ([`crate::vm_pass::shared_sinks`]) are written through `&self`, so their users declare
+    /// reads and pair here only over something else: without the pass's order on them, 580 pairs
+    /// of users would share a sink in no order, none of which this count would show. The pass
+    /// orders every user (`every_user_of_a_shared_sink_runs_in_one_order`), so the count hides
+    /// none. Known pairs accepted with a reason:
     /// - the ranged prop's two `AnimationPlayer` writers against the booth's and the quest
     ///   markers';
     /// - the fx attaches and `entities::update_display_models`/`attach_entity_visuals` against
@@ -836,7 +868,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_823;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_750;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -931,6 +963,48 @@ pub(crate) mod schedule_tests {
     /// The `ApplyDeferred` the build inserts between a system with commands and its dependents.
     fn is_sync_point(name: &str) -> bool {
         name == "bevy_ecs::apply_deferred"
+    }
+
+    /// `Update`'s sync points, the barriers the build inserts after a system with commands on
+    /// the way to one ordered after it. The VM pass's links ignore the deferred buffers between
+    /// them ([`crate::vm_pass::order_the_pass`]), so a host's commands wait for the first barrier
+    /// past the chain; a declared edge out of the chain still takes one, as every host carries the
+    /// call host's commands. The count may not rise past the ceiling, and the ceiling follows it
+    /// down. Read on the dev build, whose schedule holds every system the player build does.
+    const UPDATE_SYNC_POINT_CEILING: usize = 81;
+    const UPDATE_SYNC_POINT_SLACK: usize = 4;
+
+    #[test]
+    fn the_update_schedule_has_no_more_sync_points_than_its_ceiling() {
+        let mut app = headless_client();
+        let update = census(&mut app, Update, SyncPoints::Built);
+        if !type_names_available(&update) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let n = update
+            .systems
+            .values()
+            .filter(|s| is_sync_point(&s.name))
+            .count();
+        eprintln!(
+            "Update: {n} sync points (ceiling {UPDATE_SYNC_POINT_CEILING}, slack \
+             {UPDATE_SYNC_POINT_SLACK})"
+        );
+        assert!(
+            n <= UPDATE_SYNC_POINT_CEILING,
+            "{n} sync points in Update; the ceiling is {UPDATE_SYNC_POINT_CEILING}. A system with \
+             commands is ordered before one that need not wait for them, or the VM pass links a \
+             pair the declared order already holds: drop the edge, or raise the ceiling here with \
+             the reason. `concurrency_census` prints the count."
+        );
+        assert!(
+            n + UPDATE_SYNC_POINT_SLACK >= UPDATE_SYNC_POINT_CEILING,
+            "only {n} sync points in Update and the ceiling still says \
+             {UPDATE_SYNC_POINT_CEILING}. Lower the ceiling to {n} so it keeps ratcheting."
+        );
     }
 
     /// How parallel could `Update` be? A greedy list schedule with unlimited threads: each wave
