@@ -660,8 +660,9 @@ pub(crate) struct PreviewPart {
     pub(crate) twins: BoothTwins,
 }
 
-/// One equipment rider (helm, shoulder, sheathed weapon), seated under the body's `bone` joint at
-/// `offset`; the booth twin of [`crate::portrait::PortraitRider`].
+/// One equipment rider (helm, shoulder, weapon in hand), seated under the body's `bone` joint at
+/// `offset`; the booth twin of [`crate::portrait::PortraitRider`]. The select build attaches each
+/// weapon unsheathed (`0x472c8a` and `0x472c8c` push 0 to `0x47a0c0`, `0x472c91`), at the hand.
 #[derive(Clone)]
 pub(crate) struct PreviewRider {
     pub(crate) mesh: Handle<Mesh>,
