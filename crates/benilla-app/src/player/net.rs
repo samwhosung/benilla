@@ -21,6 +21,10 @@ pub(super) fn register(app: &mut App) {
                 .in_set(crate::ui_script::UiFeed)
                 // A signal fired into a VM with no frames yet is lost: it waits for the UI.
                 .run_if(crate::ui_script::ingame_ui_up),
+        )
+        .add_systems(
+            OnExit(crate::client_state::ClientState::InWorld),
+            drop_unsignalled_skins,
         );
 }
 
@@ -54,6 +58,12 @@ fn feed_player_skinned(script: Option<NonSendMut<UiScript>>, mut feed: ResMut<Sk
             vec![ScriptValue::Int(i64::from(free_repop))],
         );
     }
+}
+
+/// `OnExit(InWorld)`: a signal still waiting dies with the world's interface, which the reference
+/// would have fired it into.
+fn drop_unsignalled_skins(mut feed: ResMut<SkinnedFeed>) {
+    feed.0.clear();
 }
 
 #[cfg(test)]
@@ -100,5 +110,38 @@ mod tests {
         app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         app.update();
         assert_eq!(skinned(&app), [0, 1]);
+    }
+
+    /// One still waiting when the world is left is not fired into the next world's interface.
+    #[test]
+    fn a_waiting_player_skinned_dies_with_the_world() {
+        let mut app = App::new();
+        register(&mut app);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "SKINNED = 0\n\
+                 local f = CreateFrame(\"Frame\")\n\
+                 f:RegisterEvent(\"PLAYER_SKINNED\")\n\
+                 f:SetScript(\"OnEvent\", function() SKINNED = SKINNED + 1 end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::PlayerSkinned { free_repop: false }],
+        );
+        app.update();
+        app.world_mut()
+            .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        app.update();
+        let fired: i64 = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return SKINNED")
+            .unwrap();
+        assert_eq!(fired, 0);
     }
 }
