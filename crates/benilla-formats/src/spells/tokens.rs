@@ -908,6 +908,102 @@ mod tests {
         );
     }
 
+    /// Three effects whose `$s` values are 10, 20 and 30.
+    fn three_effects() -> SpellDisplay {
+        SpellDisplay {
+            effect_base_points: [9, 19, 29],
+            effect_base_dice: [1, 1, 1],
+            effect_die_sides: [1, 1, 1],
+            ..Default::default()
+        }
+    }
+
+    /// `0x507827`-`0x50784c`: only `'1'`-`'9'` is a slot digit, and an index of 3 or more reads
+    /// slot 0. The digit is consumed only in that range (`0x507843`, `0x5080ae`-`0x5080c1`), so
+    /// a `0` prints after the value.
+    #[test]
+    fn a_slot_digit_is_one_to_nine_and_four_or_more_reads_slot_zero() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let d = three_effects();
+        for (text, want) in [
+            ("$s1", "10"),
+            ("$s2", "20"),
+            ("$s3", "30"),
+            // Slot index 3 and up becomes slot 0 (`0x50784c`).
+            ("$s4", "10"),
+            ("$s7", "10"),
+            ("$s9", "10"),
+            // Not a digit of the token: it stays text.
+            ("$s0", "100"),
+            ("$s00", "1000"),
+            ("$s20", "200"),
+            ("$m4", "10"),
+            ("$m0", "100"),
+            // No digit reads effect 0.
+            ("$s", "10"),
+        ] {
+            assert_eq!(substitute(text, &d, &c), want, "{text}");
+        }
+    }
+
+    /// `0x508180` and `0x5082a0` share one parse: the `:` is searched to the end of the text, not
+    /// to the next `;` (`0x5081eb`-`0x5081f6`, `0x5082e5`-`0x508306`), and the chosen form is
+    /// trimmed of spaces at both ends (`0x5081c8`-`0x5081d7`, `0x50822a`-`0x508239`,
+    /// `0x508267`-`0x508280`; `$l`: `0x5082c0`-`0x5082cf`, `0x508327`-`0x508339`,
+    /// `0x508367`-`0x508380`).
+    #[test]
+    fn the_selectors_search_the_colon_to_the_end_and_trim_their_form() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let gender = std::cell::Cell::new(0u8);
+        let c = TokenContext {
+            gender: &|| gender.get(),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let one = points(1);
+        let two = points(2);
+
+        // The first `;` before the `:` does not end the search: the first form runs to the `:`
+        // and the second to the next `;` after it.
+        gender.set(0);
+        assert_eq!(substitute("$gA;B:C;", &one, &c), "A;B");
+        gender.set(1);
+        assert_eq!(substitute("$gA;B:C;", &one, &c), "C");
+        assert_eq!(substitute("$s1 $lA;B:C;", &one, &c), "1 A;B");
+        assert_eq!(substitute("$s1 $lA;B:C;", &two, &c), "2 C");
+
+        // `$l` trims its form like `$g`: leading spaces first, trailing ones after the copy.
+        assert_eq!(substitute("$s1 $l  a b : c d  ;!", &one, &c), "1 a b!");
+        assert_eq!(substitute("$s1 $l  a b : c d  ;!", &two, &c), "2 c d!");
+        // Interior spaces stay, and a form of spaces alone is empty.
+        assert_eq!(substitute("$s1 $l   :   ;!", &two, &c), "2 !");
+    }
+
+    /// A selector that finds no `:` or no `;` after it is consumed, its leading spaces with it,
+    /// and prints nothing; the text after the letter is copied as it stands (`0x5081f6 je
+    /// 0x50828c`, `0x50820c`, `0x5082f0`, `0x508306`), and an ending text is no failure.
+    #[test]
+    fn a_selector_without_its_colon_or_semicolon_prints_nothing() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let d = points(1);
+        for (text, want) in [
+            ("$ghis;", "his;"),
+            ("$g  his;", "his;"),
+            ("a$gb:c", "ab:c"),
+            ("a$g", "a"),
+            ("a$g   ", "a"),
+            ("$lfoo", "foo"),
+            ("$s1 $l  foo;", "1 foo;"),
+            ("$s1 $lfoo:bar", "1 foo:bar"),
+        ] {
+            assert_eq!(substitute(text, &d, &c), want, "{text}");
+        }
+    }
+
     #[test]
     fn duration_modifier_updates_description_and_overtime_total() {
         let mut durations = SpellDurationCatalog::default();
@@ -1724,6 +1820,68 @@ mod tests {
         );
     }
 
+    /// The shipped `Spell.dbc` text never reaches a place where the reference's parse differs
+    /// from a plain one: every slot digit is 1 to 3, and every `$g`/`$l` selector has its `:`
+    /// before its `;` and arms with no space at either end.
+    #[test]
+    fn shipped_spell_text_uses_slots_one_to_three_and_whole_selectors() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let (mut slots, mut selectors) = (0usize, 0usize);
+        for (id, spell) in spells.iter() {
+            for text in [
+                spell.description.as_deref(),
+                spell.aura_description.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let bytes = text.as_bytes();
+                for dollar in (0..bytes.len()).filter(|&i| bytes[i] == b'$') {
+                    let mut at = dollar + 1;
+                    if matches!(bytes.get(at), Some(b'*' | b'/')) {
+                        let Some(semi) = text[at..].find(';') else {
+                            continue;
+                        };
+                        at += semi + 1;
+                    }
+                    while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                        at += 1;
+                    }
+                    let Some(&letter) = bytes.get(at) else {
+                        continue;
+                    };
+                    let after = &text[at + 1..];
+                    if matches!(letter, b'g' | b'G' | b'l' | b'L') {
+                        let colon = after.find(':');
+                        let semi = after.find(';');
+                        let (Some(colon), Some(semi)) = (colon, semi) else {
+                            panic!("spell {id}: selector without both marks in {text:?}");
+                        };
+                        assert!(colon < semi, "spell {id}: {text:?}");
+                        let (first, second) = (&after[..colon], &after[colon + 1..semi]);
+                        for arm in [first, second] {
+                            assert_eq!(arm, arm.trim_matches(' '), "spell {id}: {text:?}");
+                        }
+                        selectors += 1;
+                    } else if letter.is_ascii_alphabetic() {
+                        if let Some(&digit) =
+                            after.as_bytes().first().filter(|d| d.is_ascii_digit())
+                        {
+                            assert!((b'1'..=b'3').contains(&digit), "spell {id}: {text:?}");
+                            slots += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            slots > 1000 && selectors > 50,
+            "{slots} slots, {selectors} selectors"
+        );
+    }
+
     /// Isolate spell-data tokens, including a scale prefix, cross-spell id and one slot digit,
     /// bounded as `substitute` bounds them. `$l`, `$g` and `$z` need other context.
     fn spell_data_tokens_in(text: &str) -> Vec<(usize, &str)> {
@@ -1750,7 +1908,7 @@ mod tests {
                 continue;
             }
             end += 1;
-            if bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            if bytes.get(end).is_some_and(|d| (b'1'..=b'9').contains(d)) {
                 end += 1;
             }
             found.push((usize::from(letter - b'a'), &text[start..end]));
@@ -1832,7 +1990,8 @@ mod tests {
         let c = ctx(&durations, &radii, &none_lookup);
         assert_eq!(substitute("coûte $é or $…!", &d, &c), "coûte $é or $…!");
         assert_eq!(substitute("$é", &d, &c), "$é");
-        assert_eq!(substitute("$s0", &d, &c), "<14..22>");
+        // `0` is no slot digit (`0x50782f`), so it stays text after the value.
+        assert_eq!(substitute("$s0", &d, &c), "<14..22>0");
     }
 
     /// A template a token names is left to the read (`0x703bf0` at the call): the parts hold the
