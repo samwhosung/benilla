@@ -28,6 +28,11 @@ fn reference_map_entry_bytes(bits: u8) -> usize {
     (usize::from(bits) / 3).min(8) * 3 / 8
 }
 
+/// How much of a file [`tga_texture_size`] needs: it answers the same for this many leading bytes
+/// as for the whole, since it asks only that the 18-byte header, an id of at most 255 bytes and one
+/// byte after it are there.
+pub const TGA_GATE_PREFIX: usize = 18 + 255 + 1;
+
 /// The size `TextureCreate`'s TGA loader (`0x44a140`) makes a texture at, or `None` when that load
 /// fails and the next candidate is tried. The loader returns the texture once the header opens
 /// (`0x5a3660`: the 18 bytes, then the id and the colour map the header declares, each read
@@ -552,6 +557,35 @@ mod tests {
         }
         assert_eq!(tga_texture_size(&[0; 17]), None);
         assert_eq!(tga_texture_size(b"BLP2"), None);
+    }
+
+    /// The gate's prefix: nothing past `TGA_GATE_PREFIX` bytes changes the answer.
+    #[test]
+    fn the_gate_answers_the_same_for_its_prefix_as_for_the_file() {
+        for id_length in [0usize, 1, 17, 254, 255] {
+            for map_len in [0u16, 3] {
+                for tail in [0usize, 1, 2, 300, 2000] {
+                    for map_type in [0u8, 1] {
+                        let mut file = tga(1, 8, 4, 8, 0x20, &[]);
+                        file[0] = id_length as u8;
+                        file[1] = map_type;
+                        file[5..7].copy_from_slice(&map_len.to_le_bytes());
+                        file[7] = 24;
+                        file.extend(vec![0; id_length + usize::from(map_len) * 3 + tail]);
+                        for cut in [0, 1, id_length, id_length + 1, 300, file.len()] {
+                            let file = &file[..file.len().saturating_sub(cut)];
+                            let prefix = &file[..file.len().min(TGA_GATE_PREFIX)];
+                            assert_eq!(
+                                tga_texture_size(prefix),
+                                tga_texture_size(file),
+                                "id {id_length}, map {map_type}/{map_len}, {} bytes",
+                                file.len()
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The id and the colour map are read after the header, and a read that gets any byte
