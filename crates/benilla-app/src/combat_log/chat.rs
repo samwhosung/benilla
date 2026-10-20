@@ -821,8 +821,7 @@ pub(super) fn environmental_damage_log(
     }
     let school = ENV_DAMAGE_SCHOOLS.get(usize::from(e.damage_type));
     if let (Some(&school), true) = (school, ctx.self_guid.0 == Some(e.victim)) {
-        let bit = |set: bool, bit: u32| if set { bit } else { 0 };
-        let marks = bit(e.absorb != 0, 0x20) | bit(e.resist != 0, 0x40);
+        let marks = super::feedback::hit_flags(false, e.absorb, e.resist, 0);
         super::feedback::wound(log, e.victim, e.damage, marks, school);
     }
 }

@@ -28,7 +28,8 @@ pub(crate) fn wound_descriptor(amount: u32, flags: u32) -> &'static str {
 }
 
 /// The flags a spell hit hands `0x494600`: crit `0x80`, and each partial nonzero, absorbed `0x20`,
-/// blocked `0x800`, resisted `0x40` (`0x5e87fa`-`0x5e8825`).
+/// blocked `0x800`, resisted `0x40` (`0x5e87fa`-`0x5e8825`); an environmental hit marks the two it
+/// has the same way (`0x624f8c`-`0x624fa1`).
 pub(super) fn hit_flags(crit: bool, absorb: u32, resist: i32, blocked: u32) -> u32 {
     let bit = |set: bool, bit: u32| if set { bit } else { 0 };
     bit(crit, 0x80) | bit(absorb != 0, 0x20) | bit(blocked != 0, 0x800) | bit(resist != 0, 0x40)
