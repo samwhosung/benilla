@@ -490,10 +490,17 @@ pub fn use_item(bag_index: u8, slot: u8, spell_slot: u8, target: UseItemTarget) 
     body.push(bag_index);
     body.push(slot);
     body.push(spell_slot);
+    write_cast_targets(&mut body, target);
+    body
+}
+
+/// The targets block every cast request ends in (`0x7e4e10`, called from `SendCast 0x6e54f0`):
+/// the `u16` mask, then the packed guid or the three coords its bit asks for.
+pub(super) fn write_cast_targets(body: &mut Vec<u8>, target: UseItemTarget) {
     let guid = match target {
         UseItemTarget::SelfImplicit => {
             body.extend_from_slice(&0u16.to_le_bytes());
-            return body;
+            return;
         }
         UseItemTarget::Unit(guid) => {
             body.extend_from_slice(&TARGET_FLAG_UNIT.to_le_bytes());
@@ -516,18 +523,17 @@ pub fn use_item(bag_index: u8, slot: u8, spell_slot: u8, target: UseItemTarget) 
             for c in dest {
                 body.extend_from_slice(&c.to_le_bytes());
             }
-            return body;
+            return;
         }
         UseItemTarget::Source(src) => {
             body.extend_from_slice(&TARGET_FLAG_SOURCE_LOCATION.to_le_bytes());
             for c in src {
                 body.extend_from_slice(&c.to_le_bytes());
             }
-            return body;
+            return;
         }
     };
-    crate::wire::write_packed_guid(guid, &mut body).expect("write to Vec cannot fail");
-    body
+    crate::wire::write_packed_guid(guid, body).expect("write to Vec cannot fail");
 }
 
 /// Body of `CMSG_OPEN_ITEM` (opcode 172, `Server/Packets/Spell.h:36-45`): bag index and slot, as

@@ -182,7 +182,7 @@ pub use packet::{CreatureQueryInfo, MonsterMoveFacing, ServerPacket};
 pub use page_text::page_text_query;
 pub use parse::{parse_server, parse_server_with_tail};
 pub use pet::{
-    pet_abandon, pet_action, pet_cancel_aura, pet_rename, pet_set_action, pet_spell_autocast,
+    pet_abandon, pet_action, pet_cancel_aura, pet_cast_spell, pet_rename, pet_set_action, pet_spell_autocast,
     pet_stop_attack, pet_tame_failure_key, pet_unlearn, PetActionEntry, PetMode, PetSpellCooldown,
     PetSpells, PetUnlearnConfirm, PET_ACTION_SLOTS, PET_ACT_COMMAND, PET_ACT_DISABLED,
     PET_ACT_ENABLED, PET_ACT_PASSIVE, PET_ACT_REACTION, PET_AUTOCAST_ALLOWED, PET_AUTOCAST_ON,

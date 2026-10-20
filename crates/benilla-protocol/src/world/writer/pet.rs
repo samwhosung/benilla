@@ -18,6 +18,20 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_PET_CAST_SPELL`: a cast through the ladder whose caster is the pet or a possessed
+    /// unit, not the active player (`0x6e5808`); answered by `SMSG_PET_CAST_FAILED` on a refusal.
+    pub fn pet_cast_spell(
+        &mut self,
+        caster_guid: u64,
+        spell_id: u32,
+        target: messages::UseItemTarget,
+    ) -> Result<()> {
+        self.send(
+            opcode::CMSG_PET_CAST_SPELL,
+            &messages::pet_cast_spell(caster_guid, spell_id, target),
+        )
+    }
+
     /// `CMSG_PET_STOP_ATTACK`: the Attack button's second press.
     pub fn pet_stop_attack(&mut self, pet_guid: u64) -> Result<()> {
         self.send(

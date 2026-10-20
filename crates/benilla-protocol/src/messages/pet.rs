@@ -312,6 +312,18 @@ pub fn pet_action(pet_guid: u64, packed: u32, target_guid: u64) -> Vec<u8> {
     body
 }
 
+/// Body of `CMSG_PET_CAST_SPELL` (opcode 0x1f0), which `SendCast` (`0x6e54f0`) writes for a cast
+/// whose caster is not the active player (`0x6e5808`): the caster's `u64` guid (`0x6e582d`), the
+/// `u32` spell, then the targets block every cast request ends in (`0x7e4e10`). vmangos reads it
+/// in that order (`Packets/Pet.cpp:65-70`) and casts only for its pet or its charm.
+pub fn pet_cast_spell(caster_guid: u64, spell_id: u32, target: super::UseItemTarget) -> Vec<u8> {
+    let mut body = Vec::with_capacity(14);
+    body.extend_from_slice(&caster_guid.to_le_bytes());
+    body.extend_from_slice(&spell_id.to_le_bytes());
+    super::items::write_cast_targets(&mut body, target);
+    body
+}
+
 /// Body of `CMSG_PET_STOP_ATTACK` (opcode 746, vmangos `Packets/Pet.cpp:33-36`): the pet guid,
 /// sent by the Attack button's second press (`PetActionBarFrame.lua:258-262`).
 pub fn pet_stop_attack(pet_guid: u64) -> Vec<u8> {
@@ -373,6 +385,13 @@ pub fn pet_rename(pet_guid: u64, name: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hx(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
 
     /// A hunter pet's `SMSG_PET_SPELLS` as vmangos builds it, with one spell and one cooldown.
     fn pet_spells_body() -> Vec<u8> {
@@ -533,6 +552,30 @@ mod tests {
         );
 
         assert_eq!(pet_stop_attack(0x2A), 0x2Au64.to_le_bytes());
+
+        // CMSG_PET_CAST_SPELL: the caster's whole guid, the spell, then the block CMSG_CAST_SPELL
+        // and CMSG_USE_ITEM end in. A unit packs to its mask byte and the nonzero bytes; a ground
+        // cast carries the 0x0040 bit and three f32 coords; mask 0 ends the body.
+        assert_eq!(
+            pet_cast_spell(
+                0xF140_0000_0000_0077,
+                6358,
+                crate::messages::UseItemTarget::Unit(0xF130_0000_0000_0001)
+            ),
+            hx("77000000000040f1d61800000200c10130f1")
+        );
+        assert_eq!(
+            pet_cast_spell(
+                0x2A,
+                11829,
+                crate::messages::UseItemTarget::Dest([1.0, 2.0, 3.0])
+            ),
+            hx("2a00000000000000352e000040000000803f0000004000004040")
+        );
+        assert_eq!(
+            pet_cast_spell(0x2A, 19474, crate::messages::UseItemTarget::SelfImplicit),
+            hx("2a00000000000000124c00000000")
+        );
 
         assert_eq!(
             pet_cancel_aura(0x2A, 2645),
