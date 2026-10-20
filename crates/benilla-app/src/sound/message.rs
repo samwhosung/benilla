@@ -51,9 +51,8 @@ impl MessageSounds {
     /// Queue one displayed message's sound.
     ///
     /// The reference sounds a message before deciding to draw it (`0x49673d`, ahead of the key
-    /// guard at `0x4967bd`/`0x4967c5` and the empty-text guard at `0x4945b4`), while benilla drops
-    /// an empty line before it gets here. No sounding row in the shipped `GlobalStrings.lua` has
-    /// empty text, so the two agree on 1.12.1's data.
+    /// guard at `0x4967bd`/`0x4967c5` and the empty-text guard at `0x4945b4`), and so does the
+    /// sink: a line whose string is empty or missing sounds here and draws nothing.
     pub(crate) fn push(&self, record: &'static MessageRecord) {
         self.q().records.push(record);
     }

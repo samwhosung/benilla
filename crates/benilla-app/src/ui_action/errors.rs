@@ -245,10 +245,10 @@ impl UiErrorTexts {
     }
 }
 
-/// Resolve a [`UiError`] to its text, the template filled in push order. Deviation: an absent or
-/// empty result shows nothing, where the reference shows an empty line (no test of the string
-/// between `0x4967d7` and `0x496842`), because a blank line is worse than none; only a chain
-/// missing a stock key reaches it.
+/// Resolve a [`UiError`] to its text, the template filled in push order: `Some` for every key, a
+/// missing one reading as `""`, as `FrameScript_GetText` (`0x703bf0`) returns it. An empty text is
+/// still a line: `DisplayError` sounds its record before it reads the text
+/// (`0x49673d`-`0x4967ab`), and [`Shown::sink`] drops only the text.
 pub(crate) fn ui_error_text(e: &UiError, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let words: Vec<String> = e
         .args
@@ -268,8 +268,10 @@ pub(crate) fn ui_error_text(e: &UiError, get: &dyn Fn(&str) -> Option<String>) -
             FillArg::Global(_) => benilla_ui::strings::Arg::S(word),
         })
         .collect();
-    let text = benilla_ui::strings::fill(&get(e.key)?, &args);
-    (!text.is_empty()).then_some(text)
+    Some(benilla_ui::strings::fill(
+        &get(e.key).unwrap_or_default(),
+        &args,
+    ))
 }
 
 /// One resolved line: its text, its surface, and its catalog record, whose sound fields
@@ -324,23 +326,33 @@ impl Shown {
     }
 }
 
-/// Resolve a message key against the VM's `GlobalStrings.lua` into a [`Shown`]; an absent or empty
-/// string is `None`, [`ui_error_text`]'s deviation.
+/// Resolve a message key against the VM's `GlobalStrings.lua` into a [`Shown`], `Some` for every
+/// key as [`ui_error_text`] is: a missing string reads as `""` and still sounds.
 pub(crate) fn keyed_line(script: &UiScript, key: &'static str) -> Option<Shown> {
-    let text = script.lua().globals().get::<String>(key).ok()?;
-    (!text.is_empty()).then(|| Shown::keyed(key, text))
+    let text = script
+        .lua()
+        .globals()
+        .get::<String>(key)
+        .unwrap_or_default();
+    Some(Shown::keyed(key, text))
 }
 
 /// [`keyed_line`] for a `%s` template, each argument filling the next `%s`.
 pub(crate) fn keyed_line_s(script: &UiScript, key: &'static str, args: &[&str]) -> Option<Shown> {
-    let template = script.lua().globals().get::<String>(key).ok()?;
+    let template = script
+        .lua()
+        .globals()
+        .get::<String>(key)
+        .unwrap_or_default();
     let args: Vec<benilla_ui::strings::Arg<'_>> = args
         .iter()
         .copied()
         .map(benilla_ui::strings::Arg::S)
         .collect();
-    let text = benilla_ui::strings::fill(&template, &args);
-    (!text.is_empty()).then(|| Shown::keyed(key, text))
+    Some(Shown::keyed(
+        key,
+        benilla_ui::strings::fill(&template, &args),
+    ))
 }
 
 /// The one sink for a resolved line: show it on its [`MsgKind`]'s surface and queue its catalog
@@ -379,6 +391,11 @@ impl Shown {
             sink.sounds.push(record);
         }
         match kind {
+            // Deviation: an empty chat line is dropped, where the reference adds a blank one
+            // (`0x49a870` refuses only a null text, `0x49a881`), because a blank line is worse
+            // than none; only a string an addon emptied, or a chain missing a stock key, reaches
+            // it. Its sound has played.
+            MsgKind::Chat if text.is_empty() => None,
             MsgKind::Chat => {
                 sink.chat
                     .push_event(ChatEvent::text_only(ChatEventKind::System, text));
