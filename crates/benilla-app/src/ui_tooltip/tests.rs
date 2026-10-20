@@ -400,7 +400,9 @@ fn battle_shout_description_scales_by_the_skill_level() {
     }
 }
 
-/// Fireball rank 1 (133) end to end: description 138, cast index 18 (1500 ms), duration 30.
+/// Fireball rank 1 (133) end to end, through the `Spell.dbc` columns the catalog reads: the
+/// description (column 138), `CastingTimeIndex` (column 18), whose row 16 is 1500 ms, and
+/// `DurationIndex` (column 30).
 #[test]
 fn fireball_view_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
