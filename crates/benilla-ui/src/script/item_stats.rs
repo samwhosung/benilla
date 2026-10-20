@@ -116,6 +116,17 @@ pub struct ItemTemplateView {
     pub teaches: Option<TaughtSpell>,
 }
 
+impl ItemTemplateView {
+    /// Whether the player knows the required spell or a later rank of it, `knows` asking of each
+    /// (`0x60c740`, then `0x60c8d0` along the chain, at `0x52d614` and `0x5eaa42`).
+    pub(crate) fn knows_required_spell(&self, knows: impl Fn(u32) -> bool) -> bool {
+        match self.required_spell_ranks.as_slice() {
+            [] => knows(self.required_spell),
+            ranks => ranks.iter().any(|&id| knows(id)),
+        }
+    }
+}
+
 /// One spell block's tooltip lines (`0x52d992`..`0x52dd4d`), app-resolved from the template and
 /// `Spell.dbc`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -213,9 +224,7 @@ pub(super) fn item_refusal_by_id(model: &super::Model, item_id: u32) -> Option<&
         return None;
     }
     model.item_templates.get(&item_id).and_then(|v| {
-        item_refusal(v, &model.player_req, |id| {
-            model.spellbook.slots.iter().any(|s| s.spell_id == id)
-        })
+        item_refusal(v, &model.player_req, |id| model.known_spells.contains(&id))
     })
 }
 
@@ -235,7 +244,8 @@ pub fn item_usable(
 /// item's own subclass bit, with no alternate walk. A required medal tests its bit of
 /// `PLAYER_FIELD_PVP_MEDALS` (`0x5eaa89`..`0x5eaaa0`). Reputation compares ranks, equivalent to
 /// the reference's standing threshold (`0x4d6370`, table `0x80928c`); an unknown faction is rank
-/// 0. An unpushed state (level 0) declines to judge, answering usable.
+/// 0. The required spell is met by the spell or a later rank, `knows_spell` asked of each. An
+/// unpushed state (level 0) declines to judge, answering usable.
 pub fn item_refusal(
     v: &ItemTemplateView,
     req: &PlayerReqState,
@@ -269,7 +279,7 @@ pub fn item_refusal(
             }
         }
     }
-    if v.required_spell != 0 && !knows_spell(v.required_spell) {
+    if v.required_spell != 0 && !v.knows_required_spell(knows_spell) {
         return CANT_USE;
     }
     if v.required_honor_rank != 0 && u32::from(req.honor_rank) < v.required_honor_rank {

@@ -147,8 +147,8 @@ pub(super) fn render_view_flagged(
     let mut live = false;
     let (req, known_spell, taught_known, set_view, equipped, rank_title) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let knows = |id: u32| model.spellbook.slots.iter().any(|s| s.spell_id == id);
-        let known = v.required_spell != 0 && knows(v.required_spell);
+        let known = v.required_spell != 0
+            && v.knows_required_spell(|id| model.known_spells.contains(&id));
         // The first slot's taught spell, or a higher rank of it, known to the player, or to the
         // pet for a pet-target teach (`0x52d54f`..`0x52d5bb`): the always-red ITEM_SPELL_KNOWN.
         let taught = v.teaches.as_ref().is_some_and(|t| {
