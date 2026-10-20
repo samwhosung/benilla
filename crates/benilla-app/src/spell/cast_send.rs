@@ -148,6 +148,10 @@ pub(crate) struct CastLadder<'w, 's> {
     pub(crate) trade_skill_opens: ResMut<'w, crate::ui_tradeskill::TradeSkillOpens>,
     pub(crate) ground: ResMut<'w, super::targeting::SpellTargeting>,
     pub(crate) held_for_pick: ResMut<'w, HeldForPick>,
+    /// The loot guid `[player+0x1d28]`, which the loot rungs read (`GetLootGuid 0x6126f0`) and an
+    /// item open arms; one owner, so a caster surface that sets it holds no second copy. Absent
+    /// in a world that never loots.
+    pub(crate) loot_latch: Option<ResMut<'w, crate::ui_loot::LootLatch>>,
 }
 
 /// Whether `ReportCastFailure 0x6e1a00` reaches its tail for `fail`
@@ -408,6 +412,7 @@ impl CastLadder<'_, '_> {
             &self.objects,
             &self.items,
             self.sub_classes.as_deref().map(|s| &s.0),
+            self.loot_latch.as_deref().and_then(|l| l.0),
             &mut self.sheath,
             &mut self.stand,
             &self.edits,
@@ -424,6 +429,19 @@ impl CastLadder<'_, '_> {
 
 /// "You are dead", TryCast's dead rung's refusal (`0x6e4c66`).
 const REASON_DEAD: u8 = 0x13;
+
+/// TryCast's refusal while a loot window is latched, by `Effect[0]` (vmangos `SpellDefines.h`):
+/// `SPELL_EFFECT_DISENCHANT` 99 is `0x82` `DISENCHANT_WHILE_LOOTING` (`0x6e4ca2`), effect 127
+/// `0x83` `PROSPECT_WHILE_LOOTING` (`0x6e4cd4`), and `ENCHANT_ITEM` 53, `_TEMPORARY` 54 and
+/// `ENCHANT_HELD_ITEM` 92 `0x61` `SPELL_IN_PROGRESS` (`0x6e4d0d`-`0x6e4d17`).
+fn looting_refusal(effect0: u32) -> Option<u8> {
+    match effect0 {
+        99 => Some(0x82),
+        127 => Some(0x83),
+        53 | 54 | 92 => Some(0x61),
+        _ => None,
+    }
+}
 
 /// TryCast's dead rung (`0x6e4c49`), after the profession intercept and ahead of the Attack
 /// short-circuit (`0x6e4c7a`): a dead or ghost caster (`0x605f30`) is refused with 0x13, "You are
@@ -503,6 +521,7 @@ fn send_spell_cast(
     objects: &Objects,
     items: &Items,
     sub_classes: Option<&benilla_formats::ItemSubClassCatalog>,
+    loot_guid: Option<u64>,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &crate::creature_anim::UnitEdits,
@@ -540,6 +559,14 @@ fn send_spell_cast(
     }
     if caster_dead(spell_id, def, ctx.rel.self_store) {
         refuse!(CastFail::local(spell_id, REASON_DEAD));
+    }
+    // The loot rungs, after the Attack short-circuit (`0x6e4ca2`-`0x6e4d31`): with a loot window
+    // latched, the first effect refuses.
+    if loot_guid.is_some_and(|g| g != 0) {
+        if let Some(reason) = def.and_then(|d| looting_refusal(d.effects[0])) {
+            debug!("ui_action: cast {spell_id} refused locally — looting ({reason:#x})");
+            refuse!(CastFail::local(spell_id, reason));
+        }
     }
     // TryCast's same-spell test (`6e4d43`): the spell in the in-flight slot bails with no red
     // line, whether it is cast, queued on the next swing (1.12 has no re-press-to-unqueue) or

@@ -145,8 +145,8 @@ pub(crate) struct ScriptItemUse<'w, 's> {
     equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
-    // The loot latch the open arm sets, so `SMSG_LOOT_RESPONSE` admits an item loot.
-    loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
+    // The loot latch the open arm sets, so `SMSG_LOOT_RESPONSE` admits an item loot, is the
+    // ladder's (`CastLadder::loot_latch`).
     ladder: crate::spell::CastLadder<'w, 's>,
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
@@ -220,7 +220,6 @@ impl ScriptItemUse<'_, '_> {
             equip_sound,
             item_text,
             targeting,
-            loot_latch,
             ladder,
             ui_errors,
             gate,
@@ -412,7 +411,9 @@ impl ScriptItemUse<'_, '_> {
                     "ui_items: open item {:#x} (lua bag {bag} → wire {bag_index}/{wire_slot})",
                     c.guid
                 );
-                loot_latch.0 = Some(c.guid);
+                if let Some(latch) = ladder.loot_latch.as_deref_mut() {
+                    latch.0 = Some(c.guid);
+                }
                 let _ = ladder.commands.0.send(ClientCommand::OpenItem {
                     bag_index,
                     slot: wire_slot,
