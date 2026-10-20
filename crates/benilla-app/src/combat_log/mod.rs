@@ -163,7 +163,7 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
 /// a target the client does not hold as a unit (`0x626e8a`-`0x626ea9`).
 fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::PeriodicAuraLog(s) = ev {
-        if !c.periodic.0 || !c.index.0.contains_key(&s.target) {
+        if !c.periodic.0 || !crate::ui_chat::combat::holds_unit(s.target, &c.index, &l.stores) {
             return;
         }
         let ctx = c.ctx();
@@ -586,6 +586,31 @@ mod tests {
     fn a_periodic_tick_on_a_target_not_held_leaves_nothing() {
         assert_eq!(tick(&[ME, MOB]), (1, 1));
         assert_eq!(tick(&[ME]), (0, 0));
+        // The lookup's type mask 8: a game object under the target's guid is no unit.
+        let mut app = world(&[ME]);
+        let e = app
+            .world_mut()
+            .spawn((
+                Guid(MOB),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21)])),
+            ))
+            .id();
+        app.world_mut().resource_mut::<GuidIndex>().0.insert(MOB, e);
+        let packet = SessionEvent::PeriodicAuraLog(PeriodicAuraLog {
+            target: MOB,
+            caster: ME,
+            spell_id: CORRUPTION,
+            ticks: vec![PeriodicTick::Damage {
+                amount: 40,
+                school: 5,
+                absorb: 0,
+                resist: 0,
+            }],
+        });
+        app.world_mut()
+            .run_system_once_with(on_periodic_aura_log, packet)
+            .unwrap();
+        assert_eq!(left(&mut app), (0, 0), "a game object");
     }
 
     /// What a world left after one packet: the parked lines and the flashes.

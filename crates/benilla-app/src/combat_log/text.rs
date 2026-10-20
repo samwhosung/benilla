@@ -19,10 +19,18 @@ use crate::ui_chat::{combat, ChatLog};
 
 use crate::net::{GuidIndex, ObjectStore, SelfGuid};
 
-/// Gate A: the recipient's entity, unless the recipient is us (`0x607140` and `0x6128b0` compare
-/// the anchor guid to the active player and return before submitting).
-fn gated_anchor(guid: u64, index: &GuidIndex, self_guid: &SelfGuid) -> Option<Entity> {
-    if self_guid.0 == Some(guid) {
+/// The float's anchor: the recipient as a unit the client holds, the handlers' `0x468460`
+/// lookup with type mask 8 (`0x5e885b`, `0x5e856e`, `0x5e7f5a`, `0x6e7dbd`, `0x6e7e3a`; the
+/// periodic handler's target, `0x626e8a`), and then Gate A, unless the recipient is us
+/// (`0x607140` and `0x6128b0` compare the anchor guid to the active player and return before
+/// submitting).
+fn gated_anchor(
+    guid: u64,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
+) -> Option<Entity> {
+    if self_guid.0 == Some(guid) || !combat::holds_unit(guid, index, stores) {
         return None;
     }
     index.0.get(&guid).copied()
@@ -88,7 +96,7 @@ pub(super) fn spell_damage_log(
         return; // the CombatDamage / PetSpellDamage gates
     };
     if let (Some(anchor), Some((category, body))) = (
-        gated_anchor(s.target, index, self_guid),
+        gated_anchor(s.target, index, self_guid, stores),
         spell_text(s.damage, s.absorb, s.resist, s.blocked, crit),
     ) {
         text.write(CombatTextSpawn {
@@ -134,7 +142,7 @@ pub(super) fn periodic_aura_log(
     let Some(color) = damage_color(gates, source, melee) else {
         return;
     };
-    let Some(anchor) = gated_anchor(s.target, index, self_guid) else {
+    let Some(anchor) = gated_anchor(s.target, index, self_guid, stores) else {
         return;
     };
     for tick in &s.ticks {
@@ -178,7 +186,7 @@ pub(super) fn damage_shield(
     let Some(color) = damage_color(gates, source, true) else {
         return;
     };
-    if let Some(anchor) = gated_anchor(s.attacker, index, self_guid) {
+    if let Some(anchor) = gated_anchor(s.attacker, index, self_guid, stores) {
         text.write(CombatTextSpawn {
             anchor,
             text: s.damage.to_string(),
@@ -215,11 +223,14 @@ fn miss_float(
     color: Option<Option<u32>>,
     index: &GuidIndex,
     self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
     text: &mut MessageWriter<CombatTextSpawn>,
 ) {
-    if let (Some(color), Some(anchor), Some((word, category))) =
-        (color, gated_anchor(guid, index, self_guid), miss_word(code))
-    {
+    if let (Some(color), Some(anchor), Some((word, category))) = (
+        color,
+        gated_anchor(guid, index, self_guid, stores),
+        miss_word(code),
+    ) {
         text.write(CombatTextSpawn {
             anchor,
             text: word.to_string(),
@@ -245,7 +256,7 @@ pub(super) fn spell_log_miss(
     };
     let color = miss_color(s.caster, display, index, self_guid, stores, gates);
     for &(target, code) in &s.misses {
-        miss_float(target, code, color, index, self_guid, text);
+        miss_float(target, code, color, index, self_guid, stores, text);
     }
 }
 
@@ -270,7 +281,7 @@ pub(super) fn spell_go_misses(
     };
     let color = miss_color(caster, display, index, self_guid, stores, gates);
     for m in misses {
-        miss_float(m.target, m.info, color, index, self_guid, text);
+        miss_float(m.target, m.info, color, index, self_guid, stores, text);
         if m.info == SPELL_MISS_REFLECT && m.reflect_result != 0 {
             miss_float(
                 reflected_to,
@@ -278,6 +289,7 @@ pub(super) fn spell_go_misses(
                 color,
                 index,
                 self_guid,
+                stores,
                 text,
             );
         }
@@ -401,6 +413,11 @@ mod tests {
     use crate::net::{Guid, SelfPlayer};
     use bevy::ecs::system::RunSystemOnce;
 
+    /// A store the handlers' type-mask-8 lookup takes for a unit (`OBJECT_FIELD_TYPE` 0x9).
+    fn unit() -> ObjectStore {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]))
+    }
+
     /// `SMSG_SPELLLOGMISS`'s word is spell gold: `0x5e7f66` pushes the resolved spell record, not
     /// the melee site's NULL, and unlike the GO's inline emit there is no speed test here.
     #[test]
@@ -431,14 +448,8 @@ mod tests {
         app.add_message::<CombatTextSpawn>()
             .init_resource::<GuidIndex>()
             .init_resource::<SelfGuid>();
-        let self_e = app
-            .world_mut()
-            .spawn((Guid(10), SelfPlayer, ObjectStore::default()))
-            .id();
-        let victim_e = app
-            .world_mut()
-            .spawn((Guid(20), ObjectStore::default()))
-            .id();
+        let self_e = app.world_mut().spawn((Guid(10), SelfPlayer, unit())).id();
+        let victim_e = app.world_mut().spawn((Guid(20), unit())).id();
         {
             let mut index = app.world_mut().resource_mut::<GuidIndex>();
             index.0.insert(10, self_e);
@@ -523,10 +534,7 @@ mod tests {
                 .init_resource::<GuidIndex>()
                 .init_resource::<SelfGuid>();
             for guid in [ME, MOB] {
-                let e = app
-                    .world_mut()
-                    .spawn((Guid(guid), ObjectStore::default()))
-                    .id();
+                let e = app.world_mut().spawn((Guid(guid), unit())).id();
                 app.world_mut()
                     .resource_mut::<GuidIndex>()
                     .0
@@ -772,5 +780,32 @@ mod tests {
         };
         assert_eq!(leg.run(miss(FIREBALL, 7)), ["Immune"]);
         assert!(leg.run(miss(HIDDEN, 7)).is_empty());
+    }
+
+    /// A float needs its recipient held as a unit (`0x5e885b`, mask 8): a hit on a game object the
+    /// client holds floats nothing.
+    #[test]
+    fn a_float_needs_its_recipient_held_as_a_unit() {
+        const TRAP: u64 = 30;
+        let mut leg = Leg::new();
+        let e = leg
+            .app
+            .world_mut()
+            .spawn((
+                Guid(TRAP),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21)])),
+            ))
+            .id();
+        leg.app
+            .world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(TRAP, e);
+        assert_eq!(leg.run(hit(FIREBALL, 300, 0, 0, 0)), ["300"]);
+        let on_trap = SpellDamageLog {
+            target: TRAP,
+            ..hit(FIREBALL, 300, 0, 0, 0)
+        };
+        assert!(leg.run(on_trap).is_empty());
     }
 }
