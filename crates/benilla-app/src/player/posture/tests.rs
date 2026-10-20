@@ -183,6 +183,60 @@ fn the_stand_state_stop_sends_the_attack_stop_only_while_attacking() {
     assert_eq!(sent(&rx), ["AttackStop"], "the attack ends");
 }
 
+/// The local apply's leave, wired (`0x5f07c4`-`0x5f07e7`): a change to a state but 0 closes the
+/// loot (`0x48f200` at `0x5f07d5`) and stops the attack (`0x5ecac0` at `0x5f07e7`); a stand does
+/// neither.
+#[test]
+fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
+    use bevy::ecs::message::Messages;
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = World::new();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<crate::spell::PendingCast>();
+    world.init_resource::<crate::spell::QueuedMeleeSpell>();
+    world.init_resource::<crate::spell::SpellTargeting>();
+    world.init_resource::<crate::ui_cast::CastReports>();
+    world.init_resource::<super::Player>();
+    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
+    world.spawn((
+        crate::net::SelfPlayer,
+        crate::creature_anim::Engaged(0xf130_0000_0000_0001),
+    ));
+    let mut apply = |s: u8, stand_now: u8| {
+        world
+            .run_system_once(
+                move |mut player: ResMut<super::Player>,
+                      body: super::BodyQuery,
+                      mut commands: Commands,
+                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                      mut loot: ResMut<crate::ui_loot::LootMoveStart>| {
+                    super::apply_locally(
+                        &mut player,
+                        s,
+                        stand_now,
+                        &body,
+                        &mut commands,
+                        &mut sheath,
+                        &mut loot,
+                    );
+                },
+            )
+            .unwrap();
+        let closed = std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootMoveStart>().0);
+        let sent: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
+        (closed, sent)
+    };
+    assert_eq!(
+        apply(1, 0),
+        (true, vec!["AttackStop".to_string()]),
+        "the sit closes the loot and ends the attack"
+    );
+    assert_eq!(apply(0, 1), (false, vec![]), "the stand does neither");
+}
+
 /// The toggle's class test (`0x5eb616`-`0x5eb640`): a Paladin's libram, worn in slot 17 as vmangos
 /// shows it, is no ranged candidate, so Z from drawn stows; a Warrior's bow is, so Z reaches for it.
 #[test]
