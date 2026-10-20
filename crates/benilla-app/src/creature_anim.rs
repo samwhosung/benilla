@@ -682,8 +682,6 @@ pub(crate) struct AnimDriver {
     /// The reference's `[unit+0xd58] & 0xc0000`: while Knockdown, LiftOff or Land holds it, base
     /// requests are refused, so a stun's knockdown survives the root's Stand recompute.
     base_lock: driver::play::BaseAnimLock,
-    /// Whether this driver has seeded the sheath state.
-    sheath_seeded: bool,
     /// The pending mid-animation weapon swap while a draw/stow one-shot plays.
     sheath_swap: Option<SheathSwap>,
     /// Whether any animation started this frame, for the weapon-trail latch: the reference reads
@@ -790,7 +788,6 @@ impl Default for AnimDriver {
             interact_player: false,
             interact_hold: false,
             base_lock: driver::play::BaseAnimLock::default(),
-            sheath_seeded: false,
             sheath_swap: None,
             started_anim: false,
             overlay: None,

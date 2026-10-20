@@ -724,10 +724,10 @@ pub(super) fn drive_animations(
         let sheath_frame_start = committed.cur;
         let fields = store.map(|s| &s.0);
         let sheath_byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
-        // The constructor seeds the state from the byte untested (`0x5fafa0`); a later change goes
-        // through the setter (`0x604c70`: `0x611cf0(byte, 1, 0)`), whose class test can refuse it.
-        if !drv.sheath_seeded {
-            drv.sheath_seeded = true;
+        // The constructor seeds the state from the byte untested (`0x5fafa0`), once per unit: a
+        // driver rebuilt for a new model finds it seeded. A later change goes through the setter
+        // (`0x604c70`: `0x611cf0(byte, 1, 0)`), whose class test can refuse it.
+        if committed.cur.is_none() {
             committed.cur = Some(sheath_byte);
             committed.byte = Some(sheath_byte);
         } else if committed.byte != Some(sheath_byte) {

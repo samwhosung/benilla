@@ -115,10 +115,7 @@ pub(super) fn refresh_live_display(
                         bevy::animation::transition::AnimationTransitions,
                         AnimationGraphHandle,
                         benilla_assets::ModelAnimations,
-                        (
-                            crate::creature_anim::AnimDriver,
-                            crate::creature_anim::CommittedSheath,
-                        ),
+                        crate::creature_anim::AnimDriver,
                         (
                             benilla_world::rig_anim::RigPose,
                             crate::creature_anim::BodyTwist,
@@ -243,10 +240,7 @@ pub(super) fn heal_rig_starved(
                 bevy::animation::transition::AnimationTransitions,
                 AnimationGraphHandle,
                 benilla_assets::ModelAnimations,
-                (
-                    crate::creature_anim::AnimDriver,
-                    crate::creature_anim::CommittedSheath,
-                ),
+                crate::creature_anim::AnimDriver,
                 (
                     benilla_world::rig_anim::RigPose,
                     crate::creature_anim::BodyTwist,
