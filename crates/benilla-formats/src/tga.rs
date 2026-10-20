@@ -34,7 +34,24 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     };
     let paletted = matches!(image_type, 1 | 9);
     let grayscale = matches!(image_type, 3 | 11);
-    // A colour-mapped pixel is an index, its palette entry a width of its own (`0x5a3b40`).
+    // The descriptor's low nibble is the alpha bit count. A 24-bit image declaring 8 has them
+    // cleared on open (`0x5a37c5`), and a truecolour image (types 2 and 10) is read only when its
+    // depth less its alpha bits is 24 (`0x5a37e0`, called at `0x5a3ace` and `0x5a3ae9`): a 32-bit
+    // image with none fails there (`0x5a3809`), and its texture draws opaque white.
+    let alpha_bits = match descriptor & 0xf {
+        8 if bpp == 24 => 0,
+        bits => bits,
+    };
+    if matches!(image_type, 2 | 10) && u32::from(bpp) != 24 + u32::from(alpha_bits) {
+        bail!(
+            "TGA: {bpp}-bit truecolour image with {alpha_bits} alpha bits \
+             (depth less alpha bits must be 24)"
+        );
+    }
+    // A colour-mapped pixel is an index, its palette entry a width of its own (`0x5a3b40`). The
+    // other pairs `0x5a37e0` admits (25 to 31 bits with 1 to 7 alpha bits, 33 to 39 with 9 to 15)
+    // reach `0x5a41f0`, which wants 32 and returns null to the copy at `0x4492c4`: no image is
+    // decoded there, so they are refused.
     let bytes_per_pixel = match (bpp, paletted, grayscale) {
         (8, true, _) => 1,
         (24, false, false) => 3,
@@ -111,20 +128,15 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         pixels.extend_from_slice(px);
     }
 
-    // BGR(A) or gray → RGBA. Descriptor bit 5 is a top origin, bit 4 a right one; TGA's default
-    // is bottom-left.
+    // BGR(A) or gray → RGBA. Descriptor bit 5 is a top origin, which `0x5a4070` (called with 1
+    // from `0x4491f0`) honours by reversing the rows when it is clear; no read-path routine
+    // tests bit 4, so the pixels keep their stored order left to right.
     let top_down = descriptor & 0x20 != 0;
-    let right_first = descriptor & 0x10 != 0;
     let mut rgba = vec![0u8; pixel_count * 4];
     for y in 0..height as usize {
         let src_y = if top_down { y } else { height as usize - 1 - y };
         for x in 0..width as usize {
-            let src_x = if right_first {
-                width as usize - 1 - x
-            } else {
-                x
-            };
-            let s = (src_y * width as usize + src_x) * bytes_per_pixel;
+            let s = (src_y * width as usize + x) * bytes_per_pixel;
             let d = (y * width as usize + x) * 4;
             if paletted {
                 // `0x5a3820`: `palette + (index - firstIndex) * entryBytes`, `firstIndex` being
