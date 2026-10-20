@@ -620,10 +620,25 @@ fn release_or_hold(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
 }
 
 /// `ClntObjMgrUnholdObject` (`0x468410`) past its decrement: an object no longer held whose
-/// release is pending is released then (`0x46844a` → `0x464920`), its deactivate first, into the
-/// released table. It runs after the state players' drive ([`crate::go_anim`]), which ends and
-/// replaces their plays.
-pub(crate) fn release_unheld(mut sc: Scene, script: Option<NonSend<UiScript>>) {
+/// release is pending is released then (`0x46844a` → `0x464920`). It runs after the state
+/// players' drive ([`crate::go_anim`]), which ends and replaces their plays, and hands the release
+/// to [`unhold_releases`] at the chain's next sync point, so the schedule carries only this test.
+pub(crate) fn release_unheld(
+    pending: Query<Entity, With<ReleasePending>>,
+    plays: Query<&crate::go_anim::GoAnim>,
+    mut commands: Commands,
+) {
+    if pending
+        .iter()
+        .any(|e| !plays.get(e).is_ok_and(|go| go.holds()))
+    {
+        commands.run_system_cached(unhold_releases);
+    }
+}
+
+/// The unhold's release ([`release_unheld`]): each pending object nothing holds runs its
+/// deactivate, then leaves for the released table.
+fn unhold_releases(mut sc: Scene, script: Option<NonSend<UiScript>>) {
     let due: Vec<(Entity, u64)> = sc
         .pending
         .iter()
