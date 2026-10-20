@@ -298,18 +298,11 @@ pub(super) struct TaxiRouteCache(pub(super) Vec<ResolvedTaxiNode>);
 /// ([`shown_fare`]), and is 0 with none, when the flight master or the player does not resolve
 /// (`0x4dc3fa`, `0x4dc423`); the route's fare stays the raw sum, which
 /// `CMSG_ACTIVATETAXIEXPRESS` carries (`0x4dc96f`).
-pub(super) fn build_nodes(
-    open: &TaxiOpen,
-    cat: &TaxiCatalogs,
-    discount: Option<f64>,
-) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
-    build_nodes_for(open, cat, discount, None)
-}
-
-/// [`build_nodes`] for the active player, its race and the faction tables: the search skips the
-/// other side's nodes by the group mask (`+0xc`) of the `FactionTemplate` row whose id is the race
-/// (`0x4dbd2d`-`0x4dbd56`), not the race's own template, so races 7 and 8 skip nothing. No player
-/// or no such row skips nothing (`0x4dbd21`, `0x4dbd50`).
+///
+/// For the active player, its race and the faction tables, the search skips the other side's
+/// nodes by the group mask (`+0xc`) of the `FactionTemplate` row whose id is the race
+/// (`0x4dbd2d`-`0x4dbd56`), not the template `ChrRaces` gives the race, so races 7 and 8 skip
+/// nothing. No player or no such row skips nothing (`0x4dbd21`, `0x4dbd50`).
 pub(super) fn build_nodes_for(
     open: &TaxiOpen,
     cat: &TaxiCatalogs,
@@ -391,6 +384,16 @@ pub(super) fn build_nodes_for(
         resolved.push(ResolvedTaxiNode { chain, cost: fare });
     }
     Some((current.map_id, ui, resolved))
+}
+
+/// [`build_nodes_for`] with no player, which skips nothing.
+#[cfg(test)]
+pub(super) fn build_nodes(
+    open: &TaxiOpen,
+    cat: &TaxiCatalogs,
+    discount: Option<f64>,
+) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
+    build_nodes_for(open, cat, discount, None)
 }
 
 /// The message an `SMSG_ACTIVATETAXIREPLY` code shows: the reference's handler (`0x5ed1e0`)

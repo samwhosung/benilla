@@ -15,7 +15,7 @@ use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod routing;
-use routing::{build_nodes, load_taxi_catalogs, taxi_error_key, TaxiCatalogs, TaxiRouteCache};
+use routing::{build_nodes_for, load_taxi_catalogs, taxi_error_key, TaxiCatalogs, TaxiRouteCache};
 
 /// The open map, `SMSG_SHOWTAXINODES` as the wire gave it.
 pub(crate) struct TaxiOpen {
@@ -190,8 +190,9 @@ fn feed_taxi(
             return;
         };
 
-        // The continent is the current node's own, as the packet left it (`build_nodes`). The fares
-        // take the flight master's price discount for the player (`0x4dc45d`, `0x4dc4a2`).
+        // The continent is the current node's own, as the packet left it (`build_nodes_for`). The
+        // fares take the flight master's price discount for the player (`0x4dc45d`, `0x4dc4a2`),
+        // and the route search skips the other side's nodes by the player's race (`0x4dbd2d`).
         let fresh = state.open.as_ref().and_then(|open| {
             let flightmaster = index
                 .0
@@ -207,7 +208,11 @@ fn feed_taxi(
                     player,
                 ))
             })();
-            let (map_id, nodes, resolved) = build_nodes(open, &catalogs, discount)?;
+            let player = relations
+                .me()
+                .zip(relations.factions())
+                .map(|(me, factions)| (me.race, factions.catalog()));
+            let (map_id, nodes, resolved) = build_nodes_for(open, &catalogs, discount, player)?;
             cache.0 = resolved;
             Some(TaxiUiState {
                 art: format!("Interface\\TaxiFrame\\TAXIMAP{map_id}"),
@@ -275,7 +280,7 @@ fn feed_on_taxi(
 }
 
 /// Drain the Lua intents. `TakeTaxiNode(i)` sends `CMSG_ACTIVATETAXI` when a direct `TaxiPath`
-/// edge joins the current node and the target, even if the drawn route detours, and otherwise
+/// edge joins the current node and the target, whatever route the search found, and otherwise
 /// `CMSG_ACTIVATETAXIEXPRESS` with the chain and its fare, as the reference's `0x4dbad0` test
 /// decides; the `Current` node sends nothing. `CloseTaxiMap()` runs the core, with no packet.
 fn drain_taxi(
