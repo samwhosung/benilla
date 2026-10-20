@@ -97,8 +97,24 @@ fn control_verdict(mover: u64, allow_move: bool, self_guid: Option<u64>) -> Cont
     }
 }
 
-/// Apply this frame's server-authored movement and send each ack. Returns the forced-speed changes
-/// for the movement stream to ack, except pre-control or detached, where they are acked here.
+/// What [`apply_server_moves`] leaves the controller.
+pub(super) struct ServerMoves {
+    /// The forced-speed changes for the movement stream to ack, except pre-control or detached,
+    /// where they are acked here.
+    pub(super) speed_acks: Vec<SpeedChangeMessage>,
+    /// An ack went out that ends the mover's precast ([`ack_ends_precast`]).
+    pub(super) precast_ended: bool,
+}
+
+/// Whether a mode's ack ends the mover's precast: the water-walk and hover acks go out through
+/// `0x60e0a0` (`0x6163c0` push 0x2d0, `0x616316` and `0x616364` push 0xf6, into `0x6163cf`),
+/// which ends it ahead of each opcode it does not send at once (`0x60e15d`); the root, unroot and
+/// feather-fall acks (0xe9, 0xeb, 0x2cf) are among those (`0x60e0f1`-`0x60e137`).
+fn ack_ends_precast(mode: MoveMode) -> bool {
+    matches!(mode, MoveMode::WaterWalk | MoveMode::Hover)
+}
+
+/// Apply this frame's server-authored movement and send each ack ([`ServerMoves`]).
 /// `self_pose` is the streamed self entity's translation and yaw, the take-control target.
 // `control`'s own transports query, passed through.
 #[allow(clippy::type_complexity)]
@@ -122,7 +138,7 @@ pub(super) fn apply_server_moves(
         (With<Transport>, Without<Embodied>, Without<FlyCam>),
     >,
     self_pose: Option<(Vec3, f32)>,
-) -> Vec<SpeedChangeMessage> {
+) -> ServerMoves {
     // A grant must be claimed: vmangos drops every `MSG_MOVE_*` for an unconfirmed mover
     // (`MovementHandler.cpp:291-293`, `Player.cpp:20257-20272`).
     for c in control_msgs.read() {
@@ -255,6 +271,7 @@ pub(super) fn apply_server_moves(
     // Root also parks the walk stream and ends the arc, as the reference's `SetRoot` (`0x7c7340`)
     // clears the direction bits and stops the fall (`0x7c6290`); moving bits beside ROOT freeze
     // the reference and raise vmangos's `CHEAT_TYPE_ROOT_MOVE`. Turn bits are not moving bits.
+    let mut precast_ended = false;
     for m in mode_msgs.read() {
         player.modes.set(m.mode, m.apply);
         if m.mode == MoveMode::Root && m.apply {
@@ -280,6 +297,7 @@ pub(super) fn apply_server_moves(
             pos: bevy_to_wow(player.pos),
             orientation: facing,
         });
+        precast_ended |= ack_ends_precast(m.mode);
         info!(
             "mover mode {:?} {} (acked)",
             m.mode,
@@ -376,7 +394,10 @@ pub(super) fn apply_server_moves(
             });
         }
     }
-    speed_acks
+    ServerMoves {
+        speed_acks,
+        precast_ended,
+    }
 }
 
 /// Apply one same-map teleport's snap (`MSG_MOVE_TELEPORT_ACK` inbound); the caller echoes it.

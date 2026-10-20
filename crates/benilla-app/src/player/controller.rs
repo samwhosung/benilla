@@ -288,7 +288,7 @@ pub(super) fn control(
 
     // The server's movement edges and their acks. Speed changes come back unacked while we drive,
     // for the movement stream to ack with the live pose.
-    let speed_acks = wire_in::apply_server_moves(
+    let server_moves = wire_in::apply_server_moves(
         &time,
         &mut commands,
         &mut player,
@@ -308,6 +308,12 @@ pub(super) fn control(
             .ok()
             .map(|(_, t, ..)| (t.translation, server_ride::yaw_of(t.rotation))),
     );
+    let speed_acks = server_moves.speed_acks;
+    if let (true, Ok((e, ..))) = (server_moves.precast_ended, body.single()) {
+        commands
+            .entity(e)
+            .try_remove::<crate::creature_anim::Precast>();
+    }
 
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
 
