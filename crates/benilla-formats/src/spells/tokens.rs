@@ -495,10 +495,38 @@ fn scale_prefix(text: &str, at: usize) -> Option<(f32, usize)> {
     Some((scale, semi + 1))
 }
 
-/// `0x5081c8`-`0x5081d7` and `0x50822a`-`0x50823b`: a `$g`/`$G` branch arm's leading spaces are
-/// skipped, and `0x508267`-`0x508280` trims its trailing spaces — both forms alike.
-fn trim_spaces(arm: &str) -> &str {
-    arm.trim_matches(' ')
+/// The form a `$g`/`$G` (`0x508180`) or `$l`/`$L` (`0x5082a0`) selector takes, and the index past
+/// the token; `at` is just past its letter and `second` says whether the second form is wanted,
+/// asked only once a form is to be taken. The helpers share one parse: the leading spaces go
+/// (`0x5081c8`-`0x5081d7`), the `:` is the first one to the end of the text and the `;` the first
+/// after it (`0x5081eb`-`0x508200`, `$l`: `0x5082e5`-`0x5082f6`), the second form's leading
+/// spaces go (`0x50822a`-`0x50823b`) and the chosen form's trailing spaces are trimmed
+/// (`0x508267`-`0x508280`). A token with no `:` or no `;` after it, or none of the text left,
+/// takes nothing and leaves the index past the spaces (`0x5081f6 je 0x50828c`).
+fn selector_form(text: &str, at: usize, second: impl FnOnce() -> bool) -> (&str, usize) {
+    let bytes = text.as_bytes();
+    let mut first = at;
+    while bytes.get(first) == Some(&b' ') {
+        first += 1;
+    }
+    let Some(colon) = text.get(first..).and_then(|rest| rest.find(':')) else {
+        return ("", first);
+    };
+    let colon = first + colon;
+    let Some(semi) = text[colon..].find(';') else {
+        return ("", first);
+    };
+    let semi = colon + semi;
+    let form = if second() {
+        let mut start = colon + 1;
+        while bytes.get(start) == Some(&b' ') {
+            start += 1;
+        }
+        &text[start..semi]
+    } else {
+        &text[first..colon]
+    };
+    (form.trim_end_matches(' '), semi + 1)
 }
 
 /// The CRT's `atoi`: leading whitespace, an optional sign, then decimal digits up to the first
@@ -584,31 +612,17 @@ pub fn substitute_parts(
             None
         };
         // The plural / gender selectors.
-        if i < bytes.len()
-            && (bytes[i] == b'l' || bytes[i] == b'L' || bytes[i] == b'g' || bytes[i] == b'G')
-        {
-            let selector = bytes[i].to_ascii_lowercase();
-            if let Some(end) = text[i + 1..].find(';') {
-                let body = &text[i + 1..i + 1 + end];
-                if let Some((a, b)) = body.split_once(':') {
-                    let pick = match selector {
-                        b'l' => {
-                            if (last_value - 1.0).abs() < 1e-9 {
-                                a
-                            } else {
-                                b
-                            }
-                        }
-                        // `$g`/`$G` (`0x508180`): the first form on gender 0, else the second.
-                        _ => trim_spaces(if (ctx.gender)() == 0 { a } else { b }),
-                    };
-                    out.push_str(pick);
-                    i = i + 1 + end + 1;
-                    continue;
-                }
-            }
+        if let Some(&letter @ (b'l' | b'L' | b'g' | b'G')) = bytes.get(i) {
+            let (form, next) = selector_form(text, i + 1, || match letter {
+                b'l' | b'L' => (last_value - 1.0).abs() >= 1e-9,
+                // `$g`/`$G`: the first form on gender 0, else the second (`0x508214`).
+                _ => (ctx.gender)() != 0,
+            });
+            out.push_str(form);
+            i = next;
+            continue;
         }
-        // The token letter and its optional 1-based slot digit.
+        // The token letter and its optional effect digit.
         let Some(&letter_b) = bytes.get(i) else {
             out.push('$');
             continue;
@@ -622,13 +636,19 @@ pub fn substitute_parts(
             continue;
         }
         i += 1;
-        let slot = if i < bytes.len() && bytes[i].is_ascii_digit() {
-            // `$s0` is a 1-based slot below 1: saturate to slot 0 rather than wrap.
-            let s = bytes[i].saturating_sub(b'1') as usize;
-            i += 1;
-            s.min(2)
-        } else {
-            0
+        // Only `1`-`9` is an effect digit, taken with the letter, and an index of 3 or more reads
+        // effect 0 (`0x50782f`-`0x50784c`, `0x5080ae`-`0x5080c1`); a `0` stays text.
+        let slot = match bytes.get(i) {
+            Some(&digit @ b'1'..=b'9') => {
+                i += 1;
+                let index = usize::from(digit - b'1');
+                if index < 3 {
+                    index
+                } else {
+                    0
+                }
+            }
+            _ => 0,
         };
         // A cross-spell token caps the level at its row's positive `maxLevel` (`507805`-`507817`).
         let (target, level): (&SpellDisplay, u32) = match ref_spell {
