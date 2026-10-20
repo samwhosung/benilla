@@ -83,7 +83,8 @@ pub(super) struct ArcEdges {
 /// Whether a move message ends the mover's precast: the send `0x60e0a0` clears it (`0x60e15d`)
 /// ahead of every opcode but those it sends at once, which for our moves are the stops
 /// (0xb7, 0xba), the turns (0xbc to 0xbe) and the facing (0xda), class 0 of its table
-/// `0x60e408`.
+/// `0x60e408`. The heartbeat (0xee) and the landing (0xc9) never pass it: their sends call
+/// `0x600a30` directly (`0x616755`, `0x615e47`, `0x617162`, `0x5e221e`; `0x602e13`).
 fn ends_precast(kind: MoveKind) -> bool {
     !matches!(
         kind,
@@ -93,6 +94,8 @@ fn ends_precast(kind: MoveKind) -> bool {
             | MoveKind::StartTurnRight
             | MoveKind::StopTurn
             | MoveKind::SetFacing
+            | MoveKind::Heartbeat
+            | MoveKind::FallLand
     )
 }
 
@@ -189,7 +192,8 @@ pub(super) fn stream_self_movement(
     let removed = prev & !wire_flags;
     let mut sent = false;
     macro_rules! send_move {
-        ($kind:expr, keeps_precast) => {{
+        ($kind:expr) => {{
+            precast_ended |= ends_precast($kind);
             if *crate::net::CAST_TRACE {
                 bevy::log::info!(
                     "cast-trace: SEND move {:?} flags={:#x} pos=[{:.3},{:.3},{:.3}] o={:.3}",
@@ -217,10 +221,6 @@ pub(super) fn stream_self_movement(
             sent = true;
             // vmangos relocates the mover to every one of these (`HandleMoverRelocation`).
             player.last_pos = wow_pos;
-        }};
-        ($kind:expr) => {{
-            precast_ended |= ends_precast($kind);
-            send_move!($kind, keeps_precast)
         }};
     }
     const FB: u32 = move_flags::FORWARD | move_flags::BACKWARD;
@@ -304,10 +304,9 @@ pub(super) fn stream_self_movement(
     // At rest, a position change goes out the frame it happens: the resolver settles a resting
     // body by fractions of a millimetre after the packet that reported it, and vmangos compares
     // positions exactly (`Player.cpp:6092`), so a stale copy arrives with the next packet as
-    // movement and interrupts the cast in flight (`Unit.cpp:10387`). It ends no precast: the
-    // reference sends no heartbeat at rest (`0x616725`, flags `& 0x200f`).
+    // movement and interrupts the cast in flight (`Unit.cpp:10387`).
     if !sent && wire_flags & IN_MOTION == 0 && wow_pos != player.last_pos {
-        send_move!(MoveKind::Heartbeat, keeps_precast);
+        send_move!(MoveKind::Heartbeat);
     }
     if sent {
         player.last_heartbeat = now;
