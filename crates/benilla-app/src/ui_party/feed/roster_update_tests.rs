@@ -4,6 +4,7 @@
 //! `PARTY_MEMBERS_CHANGED` after it (`0x4badb0`).
 
 use super::super::pets::tests::{app, app_with, flag, frame, member, ME};
+use super::super::ListText;
 use super::*;
 
 const ON: u8 = member_status::ONLINE;
@@ -61,9 +62,16 @@ fn send_rows(app: &mut App, group_type: u8, rows: &[(u8, u8)], missing: &[u64]) 
         master: 0,
         threshold: 2,
     });
-    group.apply_list_awaiting(group_type, 0, list, ME, loot, Some(ME), &|guid| {
-        (!missing.contains(&guid)).then(String::new)
-    });
+    group.apply_list_awaiting(
+        group_type,
+        0,
+        list,
+        ME,
+        loot,
+        Some(ME),
+        &|guid| (!missing.contains(&guid)).then(String::new),
+        &ListText::default(),
+    );
     // The handler's record leg (`net::seat_new_records`): a member new to the roster is seated at
     // 1/1 with the row's online bit.
     for (guid, online) in seats {

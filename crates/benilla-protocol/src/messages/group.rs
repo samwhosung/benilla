@@ -69,7 +69,7 @@ impl GroupMemberEntry {
 
 /// The loot tail `SMSG_GROUP_LIST` carries only when it lists members (`Group.cpp:170-179`);
 /// `threshold` is an item quality, 2 to 4 in practice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupLootInfo {
     /// 0 free-for-all, 1 round-robin, 2 master, 3 group, 4 need before greed (`LootMethod`).
     pub method: u8,

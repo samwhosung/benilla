@@ -104,6 +104,10 @@ pub struct GroupState {
     pub raid_leader: u64,
     /// The loot tail, present whenever the list has members.
     pub loot: Option<GroupLootInfo>,
+    /// The loot setter's stored method, master and threshold (`0xbc7600`, `0xbc7608`,
+    /// `0xbc7610`): the last tail a list carried, which the next one is compared against. Nothing
+    /// in the reference clears them, neither the end of a group nor a new login.
+    pub loot_stored: GroupLootInfo,
     /// The inviter's name while the invite popup is up.
     pub pending_invite: Option<String>,
     /// Each member's record by guid, seated at 1/1, patched by `SMSG_PARTY_MEMBER_STATS`, and given
@@ -217,6 +221,27 @@ impl SignalLog {
     }
 }
 
+/// What the list handler reads from the rest of the client at the moment the packet lands, beyond
+/// the roster's name lookups ([`GroupState::apply_list_awaiting`]'s `lookup`).
+pub struct ListText<'a> {
+    /// The loot master's name from the player-name cache, looked up with no callback
+    /// (`0x4e878f`): the record if held, never asking, `None` while it is not.
+    pub cached_name: &'a dyn Fn(u64) -> Option<String>,
+    /// The text of the VM global `ITEM_QUALITY<n>_DESC` (`0x4e87c9`, read by `0x703bf0`), empty
+    /// when the global is missing.
+    pub quality: &'a dyn Fn(u8) -> String,
+}
+
+impl Default for ListText<'_> {
+    /// Every name held, as the empty string, and the quality named by its global's key.
+    fn default() -> Self {
+        Self {
+            cached_name: &|_| Some(String::new()),
+            quality: &|n| format!("ITEM_QUALITY{n}_DESC"),
+        }
+    }
+}
+
 impl GroupState {
     /// Apply one `SMSG_GROUP_LIST` and return what it shows, in the reference's order: the party
     /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
@@ -239,6 +264,7 @@ impl GroupState {
             loot,
             self_guid,
             &|_| Some(String::new()),
+            &ListText::default(),
         )
     }
 
@@ -256,6 +282,7 @@ impl GroupState {
         loot: Option<GroupLootInfo>,
         self_guid: Option<u64>,
         lookup: &dyn Fn(u64) -> Option<String>,
+        _text: &ListText<'_>,
     ) -> ListOutcome {
         let missed = |guid: u64| lookup(guid).is_none();
         // Every path of the handler reaches the event (`0x5e6c66`), the leave list and a party's
@@ -670,6 +697,8 @@ impl GroupState {
             // Cleared with the group. The reference's side is untraced; vmangos tells an invitee
             // nothing on a disband (`Group::RemoveAllInvites`).
             pending_invite,
+            // The reference's stored loot cells, which no ending clears.
+            loot_stored: _,
             // Session state the feed fires events off: kept until `clear_session`.
             listed: _,
             signals: _,
@@ -1004,9 +1033,16 @@ mod tests {
         let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1)];
         let list = |g: &mut GroupState, group_type: u8, missing: &[u64]| {
             let missing = missing.to_vec();
-            g.apply_list_awaiting(group_type, 0, raid.clone(), 1, None, Some(ME), &|guid| {
-                (!missing.contains(&guid)).then(String::new)
-            });
+            g.apply_list_awaiting(
+                group_type,
+                0,
+                raid.clone(),
+                1,
+                None,
+                Some(ME),
+                &|guid| (!missing.contains(&guid)).then(String::new),
+                &ListText::default(),
+            );
             g.signals.take()
         };
         let answer = |g: &mut GroupState, guid: u64| {
@@ -1064,7 +1100,16 @@ mod tests {
         let mut g = GroupState::default();
         let party = vec![member("Alice", 1), sub("Bob", 2, 1)];
         let list = |g: &mut GroupState| {
-            g.apply_list_awaiting(0, 0, party.clone(), 1, None, Some(ME), &|_| None);
+            g.apply_list_awaiting(
+                0,
+                0,
+                party.clone(),
+                1,
+                None,
+                Some(ME),
+                &|_| None,
+                &ListText::default(),
+            );
         };
         list(&mut g);
         list(&mut g);
@@ -1383,8 +1428,17 @@ mod tests {
         let removed = |name: &str| UiError::s("ERR_RAID_MEMBER_REMOVED_S", name);
         let named = |guid: u64| Some(if guid == ME { "Me" } else { "Alice" }.to_string());
         let raid = |g: &mut GroupState, members, names: &dyn Fn(u64) -> Option<String>| {
-            g.apply_list_awaiting(1, 0, members, ME, None, Some(ME), names)
-                .lines
+            g.apply_list_awaiting(
+                1,
+                0,
+                members,
+                ME,
+                None,
+                Some(ME),
+                names,
+                &ListText::default(),
+            )
+            .lines
         };
         let mut g = GroupState::default();
         raid(&mut g, vec![sub("Alice", 1, 0)], &named);

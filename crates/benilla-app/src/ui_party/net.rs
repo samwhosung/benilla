@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 
-use super::{GroupState, GROUPTYPE_RAID};
+use super::{GroupState, ListText, GROUPTYPE_RAID};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
@@ -297,6 +297,7 @@ fn list(
         loot,
         self_guid.0,
         &lookup,
+        &ListText::default(),
     );
     push_group_lines(errors, shown.lines);
     if shown.invite_accept {
