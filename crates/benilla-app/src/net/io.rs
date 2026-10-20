@@ -1747,6 +1747,7 @@ pub(super) fn writer_loop(
                     ClientCommand::GroupAccept => w.group_accept(),
                     ClientCommand::GroupDecline => w.group_decline(),
                     ClientCommand::GroupUninvite { name } => w.group_uninvite(&name),
+                    ClientCommand::GroupUninviteGuid { guid } => w.group_uninvite_guid(guid),
                     ClientCommand::GroupSetLeader { guid } => w.group_set_leader(guid),
                     ClientCommand::GroupLeave => w.group_disband(),
                     ClientCommand::GroupRaidConvert => w.group_raid_convert(),

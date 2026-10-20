@@ -1913,6 +1913,10 @@ pub(crate) enum ClientCommand {
     GroupUninvite {
         name: String,
     },
+    /// `CMSG_GROUP_UNINVITE_GUID`, leader only: the kick for a player whose object is not held.
+    GroupUninviteGuid {
+        guid: u64,
+    },
     /// `CMSG_GROUP_SET_LEADER`, leader only.
     GroupSetLeader {
         guid: u64,
