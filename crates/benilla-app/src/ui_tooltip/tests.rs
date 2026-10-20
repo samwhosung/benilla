@@ -745,6 +745,7 @@ fn cost_and_cast_cells_on_real_data() {
 #[test]
 fn the_cost_cell_tests_the_divided_values() {
     use benilla_formats::SpellDisplay;
+    use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
     let mut spells = Spells::empty_for_tests();
     let rage = |id: u32, mana_cost| {
         (
@@ -771,8 +772,16 @@ fn the_cost_cell_tests_the_divided_values() {
     );
     let mut objs = no_objects();
     let objects = objs.get();
-    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(34, 20)]));
+    // Skill 100 in the drain's line: level 20.
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (34, 60),
+        (FIELD_PLAYER_SKILL_INFO_1_1, 7),
+        (FIELD_PLAYER_SKILL_INFO_1_1 + 1, 100 | 300 << 16),
+    ]));
     let mut t = TestCtx::new();
+    t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([(
+        900_012, 7,
+    )]));
     let mut cost = |id| {
         spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
             .unwrap()
@@ -785,6 +794,69 @@ fn the_cost_cell_tests_the_divided_values() {
         Some("0 Mana, plus 23 per sec"),
         "3 + (20 - 10) × 2"
     );
+}
+
+/// The per-level terms read `0x6e3130`, for the player `0x5ea690`: the skill in the spell's own
+/// line over 5, never the character level, and 0 with no line (`0x5ea6f0`). The cost, the
+/// per-second cost and the cast time alike, each a read of that line.
+#[test]
+fn the_per_level_terms_read_the_skill_not_the_level() {
+    use benilla_formats::SpellDisplay;
+    use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
+    let mut spells = Spells::empty_for_tests();
+    let spell = |id: u32| SpellDisplay {
+        id,
+        name: "Scaled".into(),
+        mana_cost: 10,
+        mana_cost_per_level: 3,
+        mana_per_second: 1,
+        mana_per_second_per_level: 1,
+        base_level: 5,
+        casting_time_index: 9,
+        ..Default::default()
+    };
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [(900_020, spell(900_020)), (900_021, spell(900_021))].into(),
+    );
+    spells.cast_times = benilla_formats::SpellCastTimeCatalog::from_rows([(
+        9,
+        benilla_formats::SpellCastTime {
+            base_ms: 1000,
+            per_level_ms: 100,
+            minimum_ms: 0,
+        },
+    )]);
+    let mut objs = no_objects();
+    let objects = objs.get();
+    // Level 60, skill 75 in line 7: level 15 for the spell in line 7, 0 for the one in none.
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (34, 60),
+        (FIELD_PLAYER_SKILL_INFO_1_1, 7),
+        (FIELD_PLAYER_SKILL_INFO_1_1 + 1, 75 | 300 << 16),
+        (145, 1.0f32.to_bits()),
+    ]));
+    let mut t = TestCtx::new();
+    t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([(
+        900_020, 7,
+    )]));
+    let (_, deps) = build_view(
+        900_020,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&store)),
+    )
+    .unwrap();
+    assert_eq!(deps.skill_lines, [7], "the line, the one read");
+    let mut lines = |id| {
+        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store))).unwrap()
+    };
+    let scaled = lines(900_020);
+    // 10 + (15 - 5) × 3, plus 1 + (15 - 5) per second; 1000 + (15 - 5) × 100 ms.
+    assert_eq!(scaled.cost.as_deref(), Some("40 Mana, plus 11 per sec"));
+    assert_eq!(scaled.cast_time.as_deref(), Some("2 sec cast"));
+    // No line: 10 + (0 - 5) × 3 = -5, no cell; the cast time 1000 - 500.
+    let unlined = lines(900_021);
+    assert_eq!(unlined.cost, None);
+    assert_eq!(unlined.cast_time.as_deref(), Some("0.5 sec cast"));
 }
 
 /// The range cell (`0x52e9a2`-`0x52ea8c`): the melee row prints a number off the reaches, an

@@ -120,7 +120,8 @@ pub(crate) struct Spells {
 
 impl Spells {
     /// The cast time in ms as `GetCastTime 0x6e3340` returns it for argument 1, the tooltip's
-    /// (`52eb4b`): the level-scaled `CastingTimeIndex` row, then spell-mod op 10 (`0x6e33b7`), then
+    /// (`52eb4b`): the `CastingTimeIndex` row scaled at `level` (`0x6e3130`, the player's skill
+    /// in the spell's line over 5), then spell-mod op 10 (`0x6e33b7`), then
     /// the caster's cast speed, with no clamp, so row 18's negative time survives. A missing row
     /// returns 0 before the modifier (`0x6e338a`). `caster` is the unit the speed is read off, the
     /// player or, for a pet spell, its charm else its summon (`0x6e33e8`-`0x6e3416`), `None` when
@@ -130,16 +131,19 @@ impl Spells {
         &self,
         def: &benilla_formats::SpellDisplay,
         caster: Option<&benilla_protocol::ObjectFields>,
-        caster_level: u32,
+        level: crate::spell::SpellLevel,
         mods: &crate::spell::SpellModifiers,
         reads: &mut dyn crate::spell::SpellReads,
     ) -> i32 {
         let Some(row) = self.cast_times.get(def.casting_time_index) else {
             return 0;
         };
-        if row.reads_caster_level() {
-            reads.unit(crate::spell::UnitField::Level);
-        }
+        // The row's level, `0x6e3130`, read only by a row that scales by it.
+        let caster_level = if row.reads_caster_level() {
+            level.read(def, reads)
+        } else {
+            0
+        };
         let resolved = row.resolved_ms(caster_level, def.base_level);
         let time = mods.apply(def, crate::spell::OP_CAST_TIME, resolved);
         // An ability or a trade skill keeps its time (`Attributes & 0x30`, `0x6e33c3`), and so does
@@ -175,16 +179,11 @@ impl Spells {
         &self,
         def: &benilla_formats::SpellDisplay,
         caster: Option<&benilla_protocol::ObjectFields>,
-        caster_level: u32,
+        level: crate::spell::SpellLevel,
         mods: &crate::spell::SpellModifiers,
     ) -> u32 {
-        let time = self.cast_time_unclamped_ms(
-            def,
-            caster,
-            caster_level,
-            mods,
-            &mut crate::spell::Unrecorded,
-        );
+        let time =
+            self.cast_time_unclamped_ms(def, caster, level, mods, &mut crate::spell::Unrecorded);
         time.max(0) as u32
     }
 }

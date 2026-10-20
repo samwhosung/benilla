@@ -109,7 +109,8 @@ pub(super) fn feed_action_state(
         crate::spell::RangeUnits,
         // `[0xb4b3e4]`, which the usable walk reads.
         Option<Res<crate::player::Player>>,
-        // A profession opener's line (`0x6de040`), which the checked test reads.
+        // A profession opener's line (`0x6de040`), which the checked test reads, and the skill
+        // lines the walk's cost finds its level through.
         Option<Res<crate::ui_spellbook::SkillLines>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
@@ -143,6 +144,7 @@ pub(super) fn feed_action_state(
     }
 
     let (bound, spell_mods, range_units, player, skill_lines) = &cast_state;
+    let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
     // The bags, walked once per frame for every reagent and totem count below.
@@ -211,6 +213,7 @@ pub(super) fn feed_action_state(
                         stacks: &stacks,
                         spell_mods,
                         control_lost,
+                        skill_lines: skill_catalog,
                     };
                     let (u, oom) =
                         usable::spell_usable(button.action, d, sp, &ctx, &objects, &items);
@@ -291,6 +294,7 @@ pub(super) fn feed_action_state(
                         stacks: &stacks,
                         spell_mods,
                         control_lost,
+                        skill_lines: skill_catalog,
                     };
                     let (u, oom) = usable::item_usable(
                         button.action,

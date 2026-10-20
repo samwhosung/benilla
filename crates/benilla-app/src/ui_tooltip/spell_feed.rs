@@ -15,7 +15,7 @@ use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::spell::usable;
-use crate::spell::{SpellReads, UnitField, Unrecorded};
+use crate::spell::{SpellLevel, SpellReads, UnitField, Unrecorded};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, find_item, InventoryScope, ItemSearch};
 use crate::ui_trainer::TrainerTooltipSubjects;
@@ -77,8 +77,12 @@ pub(super) fn build_view(
     let form = vctx.form;
     let caster = vctx.caster;
     // `0x6e3130` for this spell: the level the cost's, the per-second cost's and the cast time's
-    // per-level terms read.
-    let pet_level = |pet| d.skill_level(crate::spell::pet_skill_value(pet));
+    // per-level terms read, the player's skill in the spell's line or the pet's level.
+    let pet_level = |pet| SpellLevel::Known(d.skill_level(crate::spell::pet_skill_value(pet)));
+    let player_level = SpellLevel::Player {
+        me: vctx.store,
+        skill_lines: vctx.skill_lines,
+    };
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second cost adds `_PER_TIME`, and a cell whose two
@@ -89,7 +93,8 @@ pub(super) fn build_view(
     // pet's own inputs ([`PetInputs`]), which rebuild every pet view.
     let resolved_cost = match caster {
         ViewCaster::Player => vctx.store.map_or(d.mana_cost as i32, |s| {
-            usable::power_cost(d, s, vctx.spell_mods, &mut *deps.borrow_mut())
+            let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
+            usable::power_cost(d, s, vctx.skill_lines, vctx.spell_mods, reads)
         }),
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
             usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods, &mut Unrecorded)
@@ -97,10 +102,7 @@ pub(super) fn build_view(
     };
     // The per-second term (`0x6e3300`, `0x52e8c5`), at the same selector's level.
     let per_second = match caster {
-        ViewCaster::Player => {
-            let level = vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0);
-            usable::per_second_cost(d, level, &mut *deps.borrow_mut())
-        }
+        ViewCaster::Player => usable::per_second_cost(d, player_level, &mut *deps.borrow_mut()),
         ViewCaster::Pet(pet) => usable::per_second_cost(d, pet_level(pet), &mut Unrecorded),
     };
     // Both divided by the shared per-type divisor (`0x6e7130`), never a local `power_type == 1`
@@ -179,9 +181,8 @@ pub(super) fn build_view(
         let base = match caster {
             ViewCaster::Player => {
                 let player = vctx.store.map(|s| &s.0);
-                let level = player.and_then(|p| p.unit_level()).unwrap_or(0);
                 let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
-                spells.cast_time_unclamped_ms(d, player, level, vctx.spell_mods, reads)
+                spells.cast_time_unclamped_ms(d, player, player_level, vctx.spell_mods, reads)
             }
             ViewCaster::Pet(pet) => {
                 let level = pet_level(pet);

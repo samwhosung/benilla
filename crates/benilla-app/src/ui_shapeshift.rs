@@ -152,6 +152,8 @@ fn feed_shapeshift_bar(
     clock: Res<crate::ui_script::UiClock>,
     spell_mods: Res<crate::spell::SpellModifiers>,
     player: Option<Res<crate::player::Player>>,
+    // The skill lines the walk's cost finds its level through.
+    skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     mut memory: Local<crate::ui_script::VmMemo<StanceMemory>>,
 ) {
     let Some(mut script) = script else {
@@ -213,6 +215,7 @@ fn feed_shapeshift_bar(
                         stacks: &stacks,
                         spell_mods: &spell_mods,
                         control_lost: player.as_ref().is_some_and(|p| p.own_control_lost),
+                        skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
                     };
                     usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
                 });

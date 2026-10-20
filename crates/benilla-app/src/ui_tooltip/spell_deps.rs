@@ -47,7 +47,6 @@ impl Chance {
 /// they read them at (an absent field reads 0, the cast speed `None`).
 #[derive(Clone, Copy, Default, PartialEq)]
 struct UnitFields {
-    level: u32,
     base_mana: u32,
     base_health: u32,
     ranged_time: u32,
@@ -64,7 +63,6 @@ impl UnitFields {
             return Self::default();
         };
         Self {
-            level: p.unit_level().unwrap_or(0),
             base_mana: p.unit_base_mana().unwrap_or(0),
             base_health: p.unit_base_health().unwrap_or(0),
             ranged_time: p.unit_ranged_attack_time().unwrap_or(0),
@@ -88,8 +86,7 @@ impl UnitFields {
                 0
             }
         };
-        moved(UnitField::Level, self.level, prev.level)
-            | moved(UnitField::BaseMana, self.base_mana, prev.base_mana)
+        moved(UnitField::BaseMana, self.base_mana, prev.base_mana)
             | moved(UnitField::BaseHealth, self.base_health, prev.base_health)
             | moved(UnitField::RangedTime, self.ranged_time, prev.ranged_time)
             | if self.cast_speed != prev.cast_speed {
@@ -201,6 +198,10 @@ impl SpellReads for Deps {
     fn item_search(&mut self, slots: u32) {
         self.worn |= slots;
         self.disarm |= slots != 0;
+    }
+
+    fn skill_line(&mut self, line: u32) {
+        Deps::skill_line(self, line);
     }
 }
 

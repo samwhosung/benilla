@@ -506,10 +506,11 @@ mod tests {
             benilla_formats::load_spell_cast_times(&mut chain).expect("load SpellCastTimes.dbc");
         let frostbolt = catalog.get(116).expect("Frostbolt");
         let mut mods = mage_tables();
-        let base = spells.cast_time_ms(frostbolt, None, 60, &mods);
+        let level = crate::spell::SpellLevel::Known(60);
+        let base = spells.cast_time_ms(frostbolt, None, level, &mods);
         assert!(base > 0);
         mods.set(false, 5, OP_CAST_TIME, -100);
-        assert_eq!(spells.cast_time_ms(frostbolt, None, 60, &mods), 0);
+        assert_eq!(spells.cast_time_ms(frostbolt, None, level, &mods), 0);
     }
 
     /// `GetCastTime` scales a positive time by the caster's `UNIT_MOD_CAST_SPEED` after op 10
@@ -527,6 +528,7 @@ mod tests {
                 self.0.push(field);
             }
             fn item_search(&mut self, _: u32) {}
+            fn skill_line(&mut self, _: u32) {}
         }
         let mut spells = crate::ui_action::Spells::empty_for_tests();
         let row = |base_ms, per_level_ms| benilla_formats::SpellCastTime {
@@ -554,7 +556,8 @@ mod tests {
         let time = |d: &SpellDisplay, speed: Option<f32>| {
             let caster = unit(speed);
             let mut log = Log::default();
-            let t = spells.cast_time_unclamped_ms(d, Some(&caster), 1, &mods, &mut log);
+            let level = crate::spell::SpellLevel::Known(1);
+            let t = spells.cast_time_unclamped_ms(d, Some(&caster), level, &mods, &mut log);
             (t, log.0)
         };
         let three = spell(1, 0);
@@ -575,10 +578,11 @@ mod tests {
         assert_eq!(time(&spell(3, 0), Some(1.5)), (-1_000_000, vec![]));
         assert_eq!(
             time(&spell(4, 0), Some(1.0)),
-            (1100, vec![UnitField::Level, UnitField::CastSpeed])
+            (1100, vec![UnitField::CastSpeed])
         );
         let mut log = Log::default();
-        let unseen = spells.cast_time_unclamped_ms(&three, None, 60, &mods, &mut log);
+        let level = crate::spell::SpellLevel::Known(60);
+        let unseen = spells.cast_time_unclamped_ms(&three, None, level, &mods, &mut log);
         assert_eq!((unseen, log.0), (3000, vec![]), "no caster to read");
     }
 

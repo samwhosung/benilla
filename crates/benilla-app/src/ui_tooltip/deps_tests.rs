@@ -48,8 +48,8 @@ struct Inputs {
     worn: u32,
     /// The disarm flag.
     disarm: bool,
-    /// A [`UnitField`] bit each: level, base mana, base health, ranged attack time, cast speed,
-    /// the cost modifiers and the cost multipliers.
+    /// A [`UnitField`] bit each: base mana, base health, ranged attack time, cast speed, the cost
+    /// modifiers and the cost multipliers.
     unit: u16,
     /// Bit `i`: the skill line `lines[i]` at 300.
     lines: u128,
@@ -246,8 +246,7 @@ impl Inputs {
 }
 
 /// The [`UnitField`] names, by bit.
-const UNIT_NAMES: [&str; 7] = [
-    "level",
+const UNIT_NAMES: [&str; 6] = [
     "base mana",
     "base health",
     "ranged attack time",
@@ -321,10 +320,11 @@ struct Mat {
 
 fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
     let unit = |field: UnitField| inputs.unit & field.bit() != 0;
-    // Health, and the unit fields at one value on the empty side and another on the populated one.
+    // Health and the level, fixed, and the unit fields at one value on the empty side and another on
+    // the populated one.
     let mut pairs: Vec<(u16, u32)> = vec![
         (22, 3500),
-        (34, if unit(UnitField::Level) { 60 } else { 20 }),
+        (34, 60),
         (
             162,
             if unit(UnitField::BaseMana) {
@@ -456,10 +456,9 @@ fn skill_fields(layout: &Layout, inputs: Inputs, line: u32) -> Option<u16> {
     Some(718 + 3 * slot)
 }
 
-/// The player's unit fields each [`UnitField`] bit is, by bit: level, base mana, base health,
-/// ranged attack time, cast speed, and the seven schools' cost modifiers and multipliers.
-const UNIT_FIELD_INDICES: [&[u16]; 7] = [
-    &[34],
+/// The player's unit fields each [`UnitField`] bit is, by bit: base mana, base health, ranged
+/// attack time, cast speed, and the seven schools' cost modifiers and multipliers.
+const UNIT_FIELD_INDICES: [&[u16]; 6] = [
     &[162],
     &[163],
     &[128],
@@ -1685,13 +1684,17 @@ fn the_seen_diff_names_each_input_it_saw_move() {
     assert!(seen(&race_class_power)
         .changes_since(&seen(&base))
         .is_empty());
-    // Each unit field on its own bit: level 34, base mana 162, base health 163, ranged attack
-    // time 128; max health 28 and the max pools 29-33 on none, which no cost reads.
+    // Each unit field on its own bit: base mana 162, base health 163, ranged attack time 128, a
+    // school's cost modifier 173-179 and multiplier 180-186; the level 34, which the per-level
+    // terms read through the skill instead (`0x5ea690`), max health 28 and the max pools 29-33
+    // on none.
     let unit = [
-        (34u16, UnitField::Level.bit()),
-        (162, UnitField::BaseMana.bit()),
+        (162u16, UnitField::BaseMana.bit()),
         (163, UnitField::BaseHealth.bit()),
         (128, UnitField::RangedTime.bit()),
+        (176, UnitField::PowerCostModifier.bit()),
+        (186, UnitField::PowerCostMultiplier.bit()),
+        (34, 0),
         (28, 0),
         (29, 0),
         (33, 0),
