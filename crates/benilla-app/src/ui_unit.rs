@@ -411,7 +411,8 @@ pub(crate) fn melee_unit_combat(
 
 /// `COMBAT_TEXT_UPDATE(messageType, data, extra)` (event `0x21e`, through the five helpers
 /// `0x626890`-`0x6269d0`): `data` and `extra` are `arg2` and `arg3`, nil when absent. Each combat-log
-/// formatter raises it right after its line, so the line's drain fires it.
+/// formatter raises it right after its line, so the line's drain fires it; the usable refresh
+/// raises `SPELL_ACTIVE` (`0x4b3226`).
 pub(crate) fn fire_combat_text(
     script: &mut UiScript,
     message_type: &str,
