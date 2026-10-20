@@ -994,6 +994,7 @@ impl Plugin for UiItemsPlugin {
         net::register(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<EquipErrors>()
+            .init_resource::<feed::BagUpdates>()
             .init_resource::<crate::ui_items::locks::ItemReleases>()
             .init_resource::<crate::ui_items::locks::HeldItemLocks>()
             .init_resource::<crate::ui_items::locks::LockWatch>()

@@ -182,6 +182,12 @@ impl super::UiScript {
     pub fn macros_generation(&self) -> u64 {
         self.model_mut().macros_generation
     }
+
+    /// How many `EditMacro` calls have edited a macro: each one's worker `EditMacroRecord 0x4f1280`
+    /// ends in the action bar's usable refresh `0x4e5c00` (`0x4f132e`), which the app runs.
+    pub fn macro_edits(&self) -> u64 {
+        self.model_mut().macro_edits
+    }
 }
 
 /// `CreateMacro`'s worker (`0x4f1010`): the new 1-based index, or the full-tab error
@@ -244,6 +250,7 @@ fn edit_macro(
     entry.local_only = local_only;
     model.macros_dirty = true;
     model.macros_generation += 1;
+    model.macro_edits += 1;
     Some(index)
 }
 

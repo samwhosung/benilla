@@ -42,7 +42,15 @@ pub(crate) struct FeedMemory {
     bag_guids: [u64; 10],
     /// The last [`SlotGuids::vault`], diffed for `PLAYERBANKSLOTS_CHANGED`.
     vault_guids: [u64; BANK_SLOTS as usize],
+    /// The `BAG_UPDATE`s fired since the feed last counted them into [`BagUpdates`].
+    bag_updates: u64,
 }
+
+/// How many `BAG_UPDATE`s the bag feed has signalled. Each is a `RaiseBagUpdate 0x4f9370`, which
+/// first runs the action bar's usable refresh `0x4e5c00` (`0x4f9374`), so the action feed refreshes
+/// on its edge.
+#[derive(Resource, Default)]
+pub(crate) struct BagUpdates(pub(crate) u64);
 
 /// The item guids in the player's bag and vault slots, as the reference's watchers read them
 /// (`0x5dd8a0` installs `0x5ddcf0` over the guid fields): which item, where a pushed slot view only
@@ -1115,6 +1123,7 @@ pub(crate) fn feed_containers(
         Res<crate::ui_script::UiClock>,
         Res<crate::ui_petition::PetitionState>,
     ),
+    mut bag_updates: ResMut<BagUpdates>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
 ) {
     let (mut equip_errors, mut sink) = equip;
@@ -1523,6 +1532,9 @@ pub(crate) fn feed_containers(
     ) {
         gate.audit("feed_containers", "a bag diff or a server-opened bag");
     }
+    bag_updates.0 = bag_updates
+        .0
+        .wrapping_add(std::mem::take(&mut memory.bag_updates));
 }
 
 /// Diffs `source` against the last push, pushes each changed bag and fires the reference's events:
@@ -1655,6 +1667,7 @@ fn diff_and_push(
             // listener over the vault's fields, which fire only `PLAYERBANKSLOTS_CHANGED`.
             if bag != BANK_CONTAINER && !emptied.contains(&bag) {
                 script.fire_event("BAG_UPDATE", vec![ScriptValue::Int(bag)]);
+                memory.bag_updates += 1;
             }
         }
         memory.pushed = fresh;
