@@ -3,10 +3,10 @@
 //!
 //! The rungs: the auto-repeat toggle-off (the reference's action-button handler, ahead of TryCast;
 //! its order against the profession intercept is unobservable), the profession intercept, dead or a
-//! ghost, the targeting abort, in-flight, reagents and totems, the equipped item, combo points, the
-//! attack pick, target binding and range, then the validator `0x6094f0` (not-ready and GCD, power,
-//! crowd control, mounted, water, moving, form), the deferred cast-arm refusal and the targeting
-//! cursor. The commit tail follows: ranged stance, auto-repeat arm, the send, the auto-attack start,
+//! ghost, the targeting abort, in-flight, reagents and totems, the equipped item and its ammo, combo
+//! points, the attack pick, target binding and range, then the validator `0x6094f0` (not-ready and
+//! GCD, power, then [`validator::caster_refusal`]'s rungs), the deferred cast-arm refusal and the
+//! targeting cursor. The commit tail follows: ranged stance, auto-repeat arm, the send, the auto-attack start,
 //! the GCD. A refusal is local and pre-commit: no packet, no GCD, no pending arm, only the red line.
 //!
 //! An item use takes the same ladder: `CGItem::Use 0x5d8d00` calls `0x6e5a90`, whose body is
@@ -737,9 +737,9 @@ fn send_spell_cast(
         }
     }
     // The rungs after power (`0x6096b3`-`0x60a02d`), in the validator's order
-    // ([`validator::caster_refusal`]). Each is local because vmangos accepts the cast or answers
-    // otherwise: it dismounts instead of refusing, grants Aquatic Form on land, and interrupts a
-    // moving cast mid-bar.
+    // ([`validator::caster_refusal`]), each refused before any packet as the reference does:
+    // vmangos accepts some (it dismounts, grants Aquatic Form on land, interrupts a moving cast
+    // mid-bar) and answers the rest a round trip later.
     let no_fields = benilla_protocol::ObjectFields::default();
     let self_fields = ctx.rel.self_store.map_or(&no_fields, |s| &s.0);
     let caster = validator::CasterState {

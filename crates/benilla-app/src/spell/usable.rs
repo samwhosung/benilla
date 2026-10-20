@@ -126,14 +126,25 @@ pub(crate) fn equipped_item_fits(
     if !needs_equipped_item(d) {
         return true;
     }
-    let mut mask = hand_mask(d);
     // The disarm ladder reads both hands whatever the restriction (`0x5f0c69`, `0x5f0c91`), then
     // the search the slots the restriction leaves.
-    reads.item_search((mask | HANDS) & EQUIPMENT_MASK);
+    reads.item_search((hand_mask(d) | HANDS) & EQUIPMENT_MASK);
+    first_fitting_item(d, store, objects, items).is_some()
+}
+
+/// `FindEquippedItemForSpell 0x5f0c50`: the first worn item, in slot order, that fits `d`'s
+/// requirement once the disarm ladder has hidden its hand.
+fn first_fitting_item(
+    d: &SpellDisplay,
+    store: &ObjectStore,
+    objects: &Objects,
+    items: &Items,
+) -> Option<u64> {
+    let mut mask = hand_mask(d);
     if let Some(hidden) = crate::items::disarmed_equipment_slot(store, objects, items) {
         mask &= !(1u32 << hidden);
     }
-    equipped_slots_match(
+    first_fitting_slot(
         store,
         mask,
         d.equipped_item_class as u32,
@@ -154,8 +165,37 @@ pub(crate) fn ammo_refusal(
     items: &Items,
     subclass_flags: &dyn Fn(u32, u32) -> u32,
 ) -> Option<u32> {
-    let _ = (d, store, objects, items, subclass_flags);
-    None
+    /// `ItemSubClass.dbc` `Flags & 0x10` (`0x6e4264`): a weapon that fires no ammo, the wand.
+    const SUBCLASS_NO_AMMO: u32 = 0x10;
+    /// `ITEM_CLASS_PROJECTILE`, the class the carried walk's callback takes (`0x6e43ab`).
+    const CLASS_PROJECTILE: u32 = 6;
+    if !needs_equipped_item(d) {
+        return None;
+    }
+    let weapon = first_fitting_item(d, store, objects, items)?;
+    // No record yet passes (`0x6e4296`), as no ammo type does (`0x6e42a7`).
+    let template = items.template(objects.object(weapon)?.object_entry()?, 0, Ask::Read)?;
+    if subclass_flags(template.class, template.subclass) & SUBCLASS_NO_AMMO != 0 {
+        return None;
+    }
+    let ammo_type = template.ammo_type;
+    if ammo_type == 0 {
+        return None;
+    }
+    // `PLAYER_AMMO_ID` (`[+0xe68]+0x102c`), then a carried projectile of that entry and the
+    // weapon's ammo type (`0x6e4331`, `0x6e43a0`).
+    let ammo_id = store.0.player_ammo_id().unwrap_or(0);
+    let carried = ammo_id != 0
+        && items
+            .template(ammo_id, 0, Ask::Read)
+            .is_some_and(|t| t.class == CLASS_PROJECTILE && t.subclass == ammo_type)
+        && crate::ui_items::count_of(
+            &store.0,
+            objects,
+            ammo_id,
+            crate::ui_items::InventoryScope::DEFAULT,
+        ) > 0;
+    (!carried).then_some(ammo_type)
 }
 
 /// The worn item `guid` names from the cached records alone: `None` while its object or its
@@ -263,21 +303,19 @@ pub(crate) struct WornItem {
     pub(crate) max_durability: Option<u32>,
 }
 
-/// The search body over a caller-supplied resolver; `None` from it (template not landed) counts
-/// as a match.
-fn equipped_slots_match(
+/// The search body over a caller-supplied resolver, the guid of the first slot that fits; `None`
+/// from the resolver (template not landed) counts as a match.
+fn first_fitting_slot(
     store: &ObjectStore,
     mask: u32,
     class: u32,
     subclass_mask: u32,
     mut worn: impl FnMut(u64) -> Option<WornItem>,
-) -> bool {
+) -> Option<u64> {
     (0..EQUIPMENT_SLOTS)
         .filter(|slot| mask & (1u32 << slot) != 0)
-        .any(|slot| {
-            let guid = store.0.player_inv_slot(slot).unwrap_or(0);
-            SlotItem::of(guid, &mut worn).fits(class, subclass_mask)
-        })
+        .map(|slot| store.0.player_inv_slot(slot).unwrap_or(0))
+        .find(|&guid| SlotItem::of(guid, &mut worn).fits(class, subclass_mask))
 }
 
 /// The item arm of the usable compute (`0x4e5050`), gate by gate:
