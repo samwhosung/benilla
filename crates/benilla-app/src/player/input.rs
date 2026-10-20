@@ -93,8 +93,10 @@ pub(super) struct MoveAxes {
     pub turning: bool,
     /// The reference's `flags & 0xf`, off the net axes: W+S neither streams nor moves.
     pub translating: bool,
-    /// Autorun was toggled on this frame, a cast-interrupt term the flag delta cannot see.
+    /// Autorun was toggled on this frame: `ToggleAutoRun` pushes `0x1000` (`0x513de0`).
     pub autorun_armed: bool,
+    /// Both mouse bits came together this frame (`0x514a73`, `0x5150e2`).
+    pub both_engaged: bool,
     /// The raw strafe and turn keys, for the swim amounts and the wire's turn bits.
     pub strafe_left: bool,
     pub strafe_right: bool,
@@ -191,6 +193,7 @@ pub(super) fn move_axes(
         turning,
         translating,
         autorun_armed,
+        both_engaged: both_buttons_engaged,
         strafe_left,
         strafe_right,
         turn_left,
@@ -198,23 +201,27 @@ pub(super) fn move_axes(
     }
 }
 
-/// The streamed movement word this frame and last, and whether the mover jumped.
-#[derive(Clone, Copy)]
-pub(super) struct WireStart {
-    pub now: u32,
-    pub before: u32,
-    pub jumped: bool,
-}
-
-/// Whether this frame's input cancels the cast in flight: a new direction in the streamed word,
-/// a jump, or autorun's on edge.
-pub(super) fn cancels_cast(
-    _binds: &crate::bindings::BindingsState,
-    axes: &MoveAxes,
-    wire: WireStart,
-) -> bool {
-    use crate::creature_anim::move_flags;
-    wire.now & move_flags::ANY_MOVE & !wire.before != 0 || wire.jumped || axes.autorun_armed
+/// Whether this frame's input cancels the cast in flight, as the press handler `0x515090` and
+/// `Script::Jump` (`0x513c43`) decide it: a press that newly set forward, back, strafe or autorun
+/// (the mask `0x10f0` at `0x5150ce`; a Start on a held bit is no edge, `0x51484c`), the press that
+/// completed both mouse bits (`0x5150e2`), or the Jump command, which cancels ahead of its own
+/// checks. It reads the commands alone: nothing between the press and the cancel tests root or
+/// stun, as the tick `0x514640` that applies them runs after (`0x5151a0`). The turn and pitch bits
+/// (`0x100`-`0x800`) never cancel, even while the right button makes a turn key strafe, and
+/// follow's forward is set past the handler (`0x60e790`).
+pub(super) fn cancels_cast(binds: &crate::bindings::BindingsState, axes: &MoveAxes) -> bool {
+    use crate::bindings::Input;
+    [
+        Input::MoveForward,
+        Input::MoveBackward,
+        Input::StrafeLeft,
+        Input::StrafeRight,
+    ]
+    .into_iter()
+    .any(|i| binds.just_pressed(i))
+        || axes.autorun_armed
+        || axes.both_engaged
+        || binds.fired(Input::Jump)
 }
 
 #[cfg(test)]
@@ -223,18 +230,16 @@ mod tests {
 
     use super::*;
     use crate::bindings::BindingsState;
-    use crate::creature_anim::move_flags::{FORWARD, STRAFE_LEFT};
 
     use BindingInput::{Fire, Start};
 
-    /// One frame's verdict after `earlier`'s calls: the axes as the controller builds them,
-    /// under a root or not, and the streamed word the old edge read.
+    /// One frame's verdict after `earlier`'s calls, on the axes as the controller builds them,
+    /// under a root or not.
     fn cancels(
         earlier: Vec<BindingInput>,
         now: Vec<BindingInput>,
         player: &mut Player,
         rooted: bool,
-        wire: WireStart,
     ) -> bool {
         let binds = BindingsState::after_calls(earlier, now);
         let axes = move_axes(
@@ -246,14 +251,8 @@ mod tests {
             !rooted,
             true,
         );
-        cancels_cast(&binds, &axes, wire)
+        cancels_cast(&binds, &axes)
     }
-
-    const STILL: WireStart = WireStart {
-        now: 0,
-        before: 0,
-        jumped: false,
-    };
 
     /// `0x515090` cancels on the command press (`0x5150ce`), and nothing between the press and
     /// the cancel tests root or stun: the tick `0x514640` that applies them runs after
@@ -267,13 +266,7 @@ mod tests {
             HeldInput::StrafeRight,
         ] {
             assert!(
-                cancels(
-                    vec![],
-                    vec![Start(start)],
-                    &mut Player::default(),
-                    true,
-                    STILL
-                ),
+                cancels(vec![], vec![Start(start)], &mut Player::default(), true),
                 "{start:?}"
             );
         }
@@ -287,8 +280,7 @@ mod tests {
             vec![],
             vec![Fire(FiredInput::Jump)],
             &mut Player::default(),
-            true,
-            STILL
+            true
         ));
     }
 
@@ -300,8 +292,7 @@ mod tests {
             vec![Start(HeldInput::MoveBackward)],
             vec![Start(HeldInput::MoveForward)],
             &mut Player::default(),
-            false,
-            STILL
+            false
         ));
     }
 
@@ -313,17 +304,11 @@ mod tests {
             Start(HeldInput::TurnOrAction),
             Start(HeldInput::CameraOrSelectOrMove),
         ];
-        let strafe = WireStart {
-            now: FORWARD | STRAFE_LEFT,
-            before: FORWARD,
-            jumped: false,
-        };
         assert!(!cancels(
             mouse,
             vec![Start(HeldInput::TurnLeft)],
             &mut Player::default(),
-            false,
-            strafe
+            false
         ));
     }
 
@@ -334,35 +319,23 @@ mod tests {
             auto_forward: true,
             ..Default::default()
         };
-        let walks = WireStart {
-            now: FORWARD,
-            before: 0,
-            jumped: false,
-        };
-        assert!(!cancels(vec![], vec![], &mut player, false, walks));
+        assert!(!cancels(vec![], vec![], &mut player, false));
     }
 
     /// A Start on a bit already held is no edge (`0x51484c`), and neither is a release.
     #[test]
     fn a_held_or_released_bit_does_not_cancel() {
-        let held = WireStart {
-            now: FORWARD,
-            before: FORWARD,
-            jumped: false,
-        };
         assert!(!cancels(
             vec![Start(HeldInput::MoveForward)],
             vec![Start(HeldInput::MoveForward)],
             &mut Player::default(),
-            false,
-            held
+            false
         ));
         assert!(!cancels(
             vec![Start(HeldInput::MoveForward)],
             vec![BindingInput::Stop(HeldInput::MoveForward)],
             &mut Player::default(),
-            false,
-            STILL
+            false
         ));
     }
 
@@ -372,21 +345,14 @@ mod tests {
     fn autorun_on_and_both_buttons_cancel() {
         let toggle = || vec![Fire(FiredInput::ToggleAutoRun)];
         let mut player = Player::default();
-        assert!(cancels(vec![], toggle(), &mut player, false, STILL));
-        assert!(!cancels(vec![], toggle(), &mut player, false, STILL));
-        assert!(cancels(
-            vec![],
-            toggle(),
-            &mut Player::default(),
-            true,
-            STILL
-        ));
+        assert!(cancels(vec![], toggle(), &mut player, false));
+        assert!(!cancels(vec![], toggle(), &mut player, false));
+        assert!(cancels(vec![], toggle(), &mut Player::default(), true));
         assert!(cancels(
             vec![Start(HeldInput::TurnOrAction)],
             vec![Start(HeldInput::CameraOrSelectOrMove)],
             &mut Player::default(),
-            true,
-            STILL
+            true
         ));
     }
 }

@@ -745,23 +745,12 @@ pub(super) fn control(
             &dynamics,
         );
 
-        // The cast bar's self-cancel: a new directional start, a jump, or autorun's on edge (the
-        // interrupt mask `0x10f0` at `0x5150ce` is forward, back, strafe and autorun, and a clear
-        // edge returns early at `0x5150c8`); turning and pitch never cancel. Only our own
-        // character's moves count: vmangos breaks a channel on the caster's own movement
-        // (`Spell::update`), so a possessed creature's steps must not end Mind Control.
+        // The cast bar's self-cancel, on the command press ([`input::cancels_cast`]), never the
+        // streamed word, which a root empties of direction bits. Only our own character's moves
+        // count: vmangos breaks a channel on the caster's own movement (`Spell::update`), so a
+        // possessed creature's steps must not end Mind Control.
         let steering_ourselves = player.foreign_mover.is_none();
-        if steering_ourselves
-            && input::cancels_cast(
-                binds,
-                &axes,
-                input::WireStart {
-                    now: move_flags_now,
-                    before: player.move_flags,
-                    jumped,
-                },
-            )
-        {
+        if steering_ourselves && input::cancels_cast(binds, &axes) {
             net.7 .0 = true;
         }
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,

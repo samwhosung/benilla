@@ -1,6 +1,6 @@
 //! This frame's move-flag word, the reference's `CMovement+0x40`, rebuilt from state every frame
 //! so the animation selector, the outbound `MSG_MOVE_*` stream and the local gates (the sit
-//! refusal, the cast self-cancel) read one answer. The wire word keeps the direction bits live in
+//! refusal, the loot window's walk-away) read one answer. The wire word keeps the direction bits live in
 //! mid-air, as a 1.12.1 capture shows the reference's do; the pose word freezes them at takeoff.
 
 use crate::creature_anim::move_flags;
@@ -168,6 +168,7 @@ mod tests {
             turning: false,
             translating: false,
             autorun_armed: false,
+            both_engaged: false,
             strafe_left: false,
             strafe_right: false,
             turn_left: false,
