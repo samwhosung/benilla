@@ -359,6 +359,38 @@ mod tests {
         roster.resolve_entry_eye(|_| panic!("a miss is not retried"));
     }
 
+    /// The pick the roster policy re-answers after a reconnect begins the entry, so a new
+    /// character's intro eye is asked for there as it is for a pick from the screen
+    /// ([`send_pick`]); with no tables to answer, the lookup is a miss and the position stands.
+    #[test]
+    fn a_re_answered_pick_of_a_new_character_looks_up_its_eye() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut new = test_character(7, "Seven");
+        new.race = 3;
+        new.new_character = true;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Roster::with_pending_pick(Vec::new(), 7).env_settled())
+            .insert_resource(CharPick(tx.into()))
+            .init_resource::<RunPick>()
+            .add_message::<CharListMessage>()
+            .add_systems(Update, apply_roster_policy);
+        app.world_mut().write_message(CharListMessage {
+            characters: vec![new],
+            realm: None,
+            cause: benilla_protocol::RosterCause::Asked,
+            epoch: 1,
+        });
+        app.update();
+
+        assert!(rx.try_recv().is_ok(), "the kept pick is sent again");
+        assert_eq!(
+            app.world().resource::<Roster>().entry_eye,
+            Some((3, None)),
+            "the race was looked up once, and found nothing without its tables"
+        );
+    }
+
     /// The eye is the race's, found once: another new character of another race looks up its own.
     #[test]
     fn each_race_is_looked_up_for_its_own_eye() {
