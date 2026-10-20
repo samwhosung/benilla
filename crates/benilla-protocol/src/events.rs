@@ -121,6 +121,17 @@ impl LoginRefusal {
     }
 }
 
+/// The block an [`SessionEvent::ObjectNotify`] stands for in the notify pass.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NotifyBlock {
+    /// A values block: the fields its mask sent, ascending (`0x465330`).
+    Values(Vec<u16>),
+    /// An item's or a container's create block (`0x465c50`).
+    ItemCreate,
+    /// A placed object's create block (`0x465c50`).
+    Create(EntityKind),
+}
+
 /// One decoded world-stream event; its fieldless twin [`SessionEventKind`] keys the handler table.
 #[derive(Debug, Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(
@@ -276,15 +287,22 @@ pub enum SessionEvent {
     },
     /// A descriptor `Values` block: the fields it sends, possibly none.
     ObjectValues { guid: u64, fields: ObjectFields },
-    /// Left view range (`OutOfRange`); the reference keeps them in a released table, fields and
-    /// all, for a later block to bring back (`0x464920`).
+    /// Left view range (`OutOfRange`), only as a packet's first block (`0x4651e1`); the reference
+    /// keeps them in a released table, fields and all, for a later block to bring back
+    /// (`0x464920`).
     ObjectsRemoved(Vec<u64>),
-    /// A near-objects block: guids the server names as near, which brings a released one back
-    /// (`0x467230`).
+    /// A near-objects block's guids of one pass: names the server sends as near, which brings a
+    /// released one back (`0x467230`).
     ObjectsNear(Vec<u64>),
+    /// A first-pass block's place in the notify pass, which reads every block in packet order
+    /// (`0x46522d`): the values or create block of a top-nibble 6 or 8 guid
+    /// ([`crate::guid::first_pass`]), which the first pass wrote ahead of the packet's other
+    /// blocks, or no pass wrote, with the header byte clear.
+    ObjectNotify { guid: u64, block: NotifyBlock },
     /// The end of one `SMSG_UPDATE_OBJECT`, plain or compressed: the object events since the last
-    /// one are its blocks, in packet order. The reference writes every block of a packet before
-    /// it notifies any (`0x4651a0`).
+    /// one are its blocks, in the order its passes write them (`0x4651a0`): an out-of-range list
+    /// that comes first, the first pass's blocks, then the rest. The reference writes every block
+    /// of a packet before it notifies any.
     ObjectUpdateEnd,
     /// `SMSG_DESTROY_OBJECT`: the reference frees it at once, no fade; a respawn is a fresh create.
     ObjectDestroyed(u64),

@@ -3,7 +3,7 @@
 use crate::messages::{CastOutcome, Object, ObjectFields, ObjectType, ServerPacket};
 use crate::wire::Vector3d;
 
-use super::{EntityKind, MoveSpeeds, SessionEvent};
+use super::{EntityKind, MoveSpeeds, NotifyBlock, SessionEvent};
 
 fn v3(v: Vector3d) -> [f32; 3] {
     [v.x, v.y, v.z]
@@ -25,7 +25,10 @@ fn spell_caster(item_or_caster: u64, caster_slot: u64) -> u64 {
 /// `ServerPacket` variant must be a compile error here, never a silent no-op.
 pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
     match packet {
-        ServerPacket::UpdateObject { objects } => decode_objects(objects),
+        ServerPacket::UpdateObject {
+            first_pass,
+            objects,
+        } => decode_objects(first_pass, objects),
         // In order, each move as if alone: the app rebuilds a mover's arc from packet order.
         ServerPacket::CompressedMoves { packets } => packets.into_iter().flat_map(decode).collect(),
         ServerPacket::CharEnum { characters } => vec![SessionEvent::CharacterList {
@@ -1101,72 +1104,120 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
     }
 }
 
-/// Fan an object-update list out into create/move/remove/values events, moving each mask, closed
-/// by [`SessionEvent::ObjectUpdateEnd`].
-fn decode_objects(objects: Vec<Object>) -> Vec<SessionEvent> {
-    let mut out = Vec::new();
-    for object in objects {
+/// Fan an object-update list out as its handler runs it (`0x4651a0`). An out-of-range list as
+/// the first block releases ahead of the passes (`0x4651e1`); one anywhere else releases nothing,
+/// the notify pass reading past it (`0x465fd0`). With the header byte set, a first pass writes
+/// the blocks of top-nibble 6 and 8 guids ([`guid::first_pass`], `0x46520e`); a second writes
+/// the rest and every movement block (`0x465222`; the movement handler `0x467050` has no guid
+/// test). A first-pass block keeps its place in the notify pass as an
+/// [`SessionEvent::ObjectNotify`] in the second; [`SessionEvent::ObjectUpdateEnd`] closes them.
+fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
+    use crate::guid;
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    for (at, object) in objects.into_iter().enumerate() {
         match object {
+            Object::OutOfRange { guids } => {
+                if at == 0 {
+                    first.push(SessionEvent::ObjectsRemoved(guids));
+                }
+            }
+            Object::Near { guids } => {
+                let (ahead, rest): (Vec<u64>, Vec<u64>) =
+                    guids.into_iter().partition(|&g| guid::first_pass(g));
+                if first_pass && !ahead.is_empty() {
+                    first.push(SessionEvent::ObjectsNear(ahead));
+                }
+                second.push(SessionEvent::ObjectsNear(rest));
+            }
+            Object::Movement { guid, movement } => {
+                if let Some((position, orientation)) = movement.position {
+                    second.push(SessionEvent::ObjectMove {
+                        guid,
+                        position: v3(position),
+                        orientation,
+                    });
+                }
+            }
+            // `Values`: a descriptor delta with no position. An empty one still writes: it brings
+            // a released object back and copies every watched range (`0x46720f`).
+            Object::Values { guid, mask } => {
+                if guid::first_pass(guid) {
+                    let sent = mask.raw_fields().map(|(index, _)| index).collect();
+                    if first_pass {
+                        first.push(SessionEvent::ObjectValues { guid, fields: mask });
+                    }
+                    second.push(SessionEvent::ObjectNotify {
+                        guid,
+                        block: NotifyBlock::Values(sent),
+                    });
+                } else {
+                    second.push(SessionEvent::ObjectValues { guid, fields: mask });
+                }
+            }
             Object::Create {
                 guid,
                 object_type,
                 movement,
                 mask,
             } => {
-                // Items have no pose: route them before the placement gate, which would drop them.
-                if matches!(object_type, ObjectType::Item | ObjectType::Container) {
-                    out.push(SessionEvent::ItemCreate {
-                        guid,
-                        container: object_type == ObjectType::Container,
-                        fields: mask,
-                    });
+                let Some(create) = create_event(guid, object_type, movement, mask) else {
                     continue;
-                }
-                // The block's own position, for every type: the GameObject constructor copies it
-                // over `GAMEOBJECT_POS_X`..`FACING` (`0x5f7046`..`0x5f706b`), so the descriptor's
-                // copy never places anything.
-                if let Some((position, orientation)) = movement.position {
-                    let display = display_id(object_type, &mask);
-                    let scale = object_scale(object_type, &mask);
-                    let speeds = movement.speeds.map(MoveSpeeds::from_wire);
-                    out.push(SessionEvent::ObjectCreate {
-                        guid,
-                        kind: entity_kind(object_type),
-                        display_id: display,
-                        position: v3(position),
-                        orientation,
-                        scale,
-                        speeds,
-                        mover: movement.mover,
-                        transport_progress: movement.transport_progress,
-                        transport: movement.transport,
-                        spline: movement.spline,
-                        fields: mask,
-                    });
+                };
+                if guid::first_pass(guid) {
+                    let block = match &create {
+                        SessionEvent::ObjectCreate { kind, .. } => NotifyBlock::Create(*kind),
+                        _ => NotifyBlock::ItemCreate,
+                    };
+                    if first_pass {
+                        first.push(create);
+                    }
+                    second.push(SessionEvent::ObjectNotify { guid, block });
+                } else {
+                    second.push(create);
                 }
             }
-            Object::Movement { guid, movement } => {
-                if let Some((position, orientation)) = movement.position {
-                    out.push(SessionEvent::ObjectMove {
-                        guid,
-                        position: v3(position),
-                        orientation,
-                    });
-                }
-            }
-            Object::OutOfRange { guids } => {
-                out.push(SessionEvent::ObjectsRemoved(guids));
-            }
-            // `Values`: a descriptor delta with no position. An empty one still writes: it brings
-            // a released object back and copies every watched range (`0x46720f`).
-            Object::Values { guid, mask } => {
-                out.push(SessionEvent::ObjectValues { guid, fields: mask });
-            }
-            Object::Near { guids } => out.push(SessionEvent::ObjectsNear(guids)),
         }
     }
-    out.push(SessionEvent::ObjectUpdateEnd);
-    out
+    first.extend(second);
+    first.push(SessionEvent::ObjectUpdateEnd);
+    first
+}
+
+/// A create block's event: an item's or a container's, else a placed object's, which needs the
+/// block's position.
+fn create_event(
+    guid: u64,
+    object_type: ObjectType,
+    movement: crate::messages::MovementBlock,
+    mask: ObjectFields,
+) -> Option<SessionEvent> {
+    // Items have no pose: route them before the placement gate, which would drop them.
+    if matches!(object_type, ObjectType::Item | ObjectType::Container) {
+        return Some(SessionEvent::ItemCreate {
+            guid,
+            container: object_type == ObjectType::Container,
+            fields: mask,
+        });
+    }
+    // The block's own position, for every type: the GameObject constructor copies it over
+    // `GAMEOBJECT_POS_X`..`FACING` (`0x5f7046`..`0x5f706b`), so the descriptor's copy never
+    // places anything.
+    let (position, orientation) = movement.position?;
+    Some(SessionEvent::ObjectCreate {
+        guid,
+        kind: entity_kind(object_type),
+        display_id: display_id(object_type, &mask),
+        position: v3(position),
+        orientation,
+        scale: object_scale(object_type, &mask),
+        speeds: movement.speeds.map(MoveSpeeds::from_wire),
+        mover: movement.mover,
+        transport_progress: movement.transport_progress,
+        transport: movement.transport,
+        spline: movement.spline,
+        fields: mask,
+    })
 }
 
 fn entity_kind(t: ObjectType) -> EntityKind {

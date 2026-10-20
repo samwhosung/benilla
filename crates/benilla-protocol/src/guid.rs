@@ -56,6 +56,14 @@ pub fn is_gameobject(guid: u64) -> bool {
     high(guid) == HIGH_GAMEOBJECT
 }
 
+/// Whether an update packet's first pass handles this guid: its top four bits are 6 or 8
+/// (`0x4660d8`-`0x4660f1`, the out-of-range list's `0x465f10`-`0x465f28`). The header byte runs
+/// that pass ahead of every other block (`0x46520e`); vmangos's high words (`ObjectGuid.h:68-77`)
+/// never carry either nibble.
+pub fn first_pass(guid: u64) -> bool {
+    matches!(guid >> 60, 6 | 8)
+}
+
 /// The template entry: bits 24-47 for creatures, gameobjects and elevators (`HasEntry`,
 /// `ObjectGuid.h:223-240`; `GameObject.cpp:207`), the full low 32 bits for boats and zeppelins,
 /// whose template entry is passed as the counter (`Transport.cpp:65`, `ObjectGuid.h:123`). `None`

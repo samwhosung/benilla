@@ -93,7 +93,10 @@ pub enum ServerPacket {
     CharacterLoginFailed {
         result: u8,
     },
+    /// `SMSG_UPDATE_OBJECT`, or `SMSG_COMPRESSED_UPDATE_OBJECT` inflated: the header byte, which
+    /// runs the first pass ([`crate::guid::first_pass`]), and the blocks in packet order.
     UpdateObject {
+        first_pass: bool,
         objects: Vec<Object>,
     },
     /// `SMSG_COMPRESSED_MOVES`: a `u32` size, then deflated records `[u8 size][u16 opcode][body]`,

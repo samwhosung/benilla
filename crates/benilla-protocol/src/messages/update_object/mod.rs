@@ -93,15 +93,17 @@ fn read_guid_list(r: &mut impl Read) -> io::Result<Vec<u64>> {
     Ok(guids)
 }
 
-/// Parse an `SMSG_UPDATE_OBJECT` body: the count, the has-transport byte, then each `Object`.
-pub(super) fn read_update_object(r: &mut impl Read) -> io::Result<Vec<Object>> {
+/// Parse an `SMSG_UPDATE_OBJECT` body: the count, the header byte, then each `Object`. The byte
+/// (`0x4651c1`), nonzero, runs the first pass over top-nibble 6 and 8 guids
+/// ([`crate::guid::first_pass`], `0x46520e`); vmangos names it `hasTransport` (`Map.cpp:1695`).
+pub(super) fn read_update_object(r: &mut impl Read) -> io::Result<(bool, Vec<Object>)> {
     let amount_of_objects = read_u32_le(r)?;
-    let _has_transport = read_u8(r)?;
+    let first_pass = read_u8(r)? != 0;
     let mut objects = Vec::with_capacity(capacity_hint(amount_of_objects, 0xFFFF));
     for _ in 0..amount_of_objects {
         objects.push(Object::read(r)?);
     }
-    Ok(objects)
+    Ok((first_pass, objects))
 }
 
 #[cfg(test)]

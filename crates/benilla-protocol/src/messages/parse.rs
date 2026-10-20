@@ -330,9 +330,13 @@ fn parse_server_body(
         opcode::SMSG_CHARACTER_LOGIN_FAILED => ServerPacket::CharacterLoginFailed {
             result: read_u8(&mut r)?,
         },
-        opcode::SMSG_UPDATE_OBJECT => ServerPacket::UpdateObject {
-            objects: update_object::read_update_object(&mut r)?,
-        },
+        opcode::SMSG_UPDATE_OBJECT => {
+            let (first_pass, objects) = update_object::read_update_object(&mut r)?;
+            ServerPacket::UpdateObject {
+                first_pass,
+                objects,
+            }
+        }
         opcode::SMSG_DESTROY_OBJECT => ServerPacket::DestroyObject {
             guid: read_u64_le(&mut r)?,
         },
@@ -348,9 +352,12 @@ fn parse_server_body(
             decoder.read_to_end(&mut decompressed)?;
             drop(decoder);
             let mut dr = decompressed.as_slice();
-            let objects = update_object::read_update_object(&mut dr)?;
+            let (first_pass, objects) = update_object::read_update_object(&mut dr)?;
             *inner_tail = dr.len();
-            ServerPacket::UpdateObject { objects }
+            ServerPacket::UpdateObject {
+                first_pass,
+                objects,
+            }
         }
         opcode::SMSG_COMPRESSED_MOVES => ServerPacket::CompressedMoves {
             packets: read_compressed_moves(&mut r)?,
@@ -1770,12 +1777,14 @@ mod tests {
             out.extend(z.finish().unwrap());
             out
         }
-        // `u32 count = 0, u8 has_transport = 0`: a well-formed, empty object list.
+        // `u32 count = 0`, a clear header byte: a well-formed, empty object list.
         let empty = [0u8, 0, 0, 0, 0];
         let (packet, tail) =
             parse_server_with_tail(opcode::SMSG_COMPRESSED_UPDATE_OBJECT, &body(&empty))
                 .expect("an empty update object decodes");
-        assert!(matches!(packet, ServerPacket::UpdateObject { ref objects } if objects.is_empty()));
+        assert!(
+            matches!(packet, ServerPacket::UpdateObject { ref objects, .. } if objects.is_empty())
+        );
         assert_eq!(tail, 0, "the zlib bytes are consumed, not reported");
 
         let mut longer = empty.to_vec();

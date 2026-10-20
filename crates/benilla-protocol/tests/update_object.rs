@@ -9,9 +9,10 @@ use common::hx;
 
 #[test]
 fn update_object_fixture_decodes() {
-    // A unit create (0xAA), a gameobject create (0xBB, a HAS_POSITION block at (100, 200, 300), as
-    // vmangos sends one) and an out-of-range block [0x10, 0x20].
-    let body = hx("03000000000301aa03200000000000000000cdd70bc6357e04c3f90fa74200000040000000000000803f0000e040000090400000000000000000db0f4940051700000000000000000000000000000008000000aa00000000000000090000000000c03f320000000301bb05400000c84200004843000096430000803f0117810700bb000000000000002100000000000040630000000000c84200004843000096430000803f040200000001100120");
+    // An out-of-range block [0x10, 0x20], first as vmangos sends it (`UpdateData.cpp:143-155`),
+    // a unit create (0xAA) and a gameobject create (0xBB, a HAS_POSITION block at (100, 200,
+    // 300), as vmangos sends one).
+    let body = hx("03000000000402000000011001200301aa03200000000000000000cdd70bc6357e04c3f90fa74200000040000000000000803f0000e040000090400000000000000000db0f4940051700000000000000000000000000000008000000aa00000000000000090000000000c03f320000000301bb05400000c84200004843000096430000803f0117810700bb000000000000002100000000000040630000000000c84200004843000096430000803f");
     let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
     let events = decode(packet);
 
@@ -281,7 +282,7 @@ fn gameobject_create_surfaces_transport_progress_and_position_fallback() {
     let guid: u64 = 176_495 | (0x1FC0u64 << 48);
 
     let mut body = 1u32.to_le_bytes().to_vec(); // amount_of_objects
-    body.push(0); // has_transport (unused by the parser)
+    body.push(0); // the header byte: no first pass
     body.push(2); // update_type: CREATE_OBJECT
     write_packed_guid(guid, &mut body).unwrap();
     body.push(5); // TypeId::GameObject

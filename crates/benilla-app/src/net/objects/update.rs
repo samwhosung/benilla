@@ -1,10 +1,12 @@
 //! One `SMSG_UPDATE_OBJECT` as the reference's handler runs it (`0x4651a0`): an out-of-range list
-//! as the first block releases first; the write pass then handles every block in order, creating,
-//! writing and bringing back objects; the notify pass reads every block again and runs the watches
-//! and the create hooks; and each object the packet brought back gets its vtable slot 3 last
-//! (`0x465290`-`0x4652ff`). The protocol hands each block over as its own event and closes the
-//! packet with [`SessionEvent::ObjectUpdateEnd`], so the write pass runs block by block, each
-//! block's commands applied before the next, and the notify pass runs at the end.
+//! as the first block releases first; the write passes then create, write and bring back objects,
+//! the first, behind the header byte, for top-nibble 6 and 8 guids, the second for the rest; the
+//! notify pass reads every block again, in packet order, and runs the watches and the create
+//! hooks; and each object the packet brought back gets its vtable slot 3 last
+//! (`0x465290`-`0x4652ff`). The protocol hands each block over as its own event in the order the
+//! passes write them, a first-pass block's notify place as [`SessionEvent::ObjectNotify`], and
+//! closes the packet with [`SessionEvent::ObjectUpdateEnd`], so the write passes run block by
+//! block, each block's commands applied before the next, and the notify pass runs at the end.
 //!
 //! The object manager keeps two tables (`0x464ff0`): the live one, here the [`GuidIndex`], and the
 //! released one, [`Released`]. A release (`0x464920`) runs the object's deactivate, its vtable slot
@@ -16,7 +18,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use benilla_protocol::messages::ObjectType;
-use benilla_protocol::{EntityKind, MoveSpeeds, ObjectFields, SessionEvent};
+use benilla_protocol::{guid, EntityKind, MoveSpeeds, NotifyBlock, ObjectFields, SessionEvent};
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
@@ -44,6 +46,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ObjectMove, on_object_move)
         .net_handler(K::ObjectsRemoved, on_objects_removed)
         .net_handler(K::ObjectsNear, on_objects_near)
+        .net_handler(K::ObjectNotify, on_object_notify)
         .net_handler(K::ObjectUpdateEnd, on_update_end)
         .net_handler(K::ObjectDestroyed, on_object_destroyed);
 }
@@ -51,9 +54,6 @@ pub(super) fn register(app: &mut App) {
 /// What one packet's write pass leaves for its notify pass; empty between packets.
 #[derive(Resource, Default)]
 pub(crate) struct UpdatePass {
-    /// A block of this packet has been handled: an out-of-range list releases only as the
-    /// first (`0x4651e1`).
-    started: bool,
     /// The blocks the notify pass reads again, in packet order.
     blocks: Vec<Notify>,
     /// Each object's last write in this packet: the dwords it moved, `(index, copy, now)`. A
@@ -236,7 +236,6 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
     else {
         return;
     };
-    sc.pass.started = true;
     crate::death::net::note_corpse(guid, kind, &fields, &sc.self_guid, &mut sc.death_net);
     let block = CreateBlock {
         guid,
@@ -312,10 +311,13 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
-    sc.pass.blocks.push(Notify::Create {
-        guid,
-        kind: Created::World(kind),
-    });
+    notify_in_place(
+        &mut sc,
+        Notify::Create {
+            guid,
+            kind: Created::World(kind),
+        },
+    );
 }
 
 /// A new object of `ty` frees the oldest released one of its type (`0x466e55`); our own player is
@@ -336,7 +338,6 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
     else {
         return;
     };
-    sc.pass.started = true;
     debug!("net: item create {guid:#x} (container: {container})");
     let live = sc.index.0.get(&guid).copied();
     let kept = live.is_none().then(|| sc.released.take(guid)).flatten();
@@ -381,10 +382,13 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
-    sc.pass.blocks.push(Notify::Create {
-        guid,
-        kind: Created::Item,
-    });
+    notify_in_place(
+        &mut sc,
+        Notify::Create {
+            guid,
+            kind: Created::Item,
+        },
+    );
 }
 
 /// A values block (`0x467160`): written into a held object, or one it brings back; a guid the
@@ -393,7 +397,6 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     let SessionEvent::ObjectValues { guid, fields } = ev else {
         return;
     };
-    sc.pass.started = true;
     // Our corpse's `CORPSE_FIELD_FLAGS` can flip to BONES under a live guid; the reclaim latch is
     // re-asked on that edge, as the reference's `FLAGS` handler does (`0x5d6d60`).
     crate::death::net::recheck_corpse(guid, &fields, &sc.self_guid, &mut sc.death_net);
@@ -418,7 +421,37 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let Some(moved) = moved {
         sc.pass.copies.insert(guid, moved);
     }
-    sc.pass.blocks.push(Notify::Values { guid, sent });
+    notify_in_place(&mut sc, Notify::Values { guid, sent });
+}
+
+/// A written block's place in the notify pass, which reads every block in packet order
+/// (`0x46522d`): a second-pass block's is where it was written; a first-pass block's comes as its
+/// own [`SessionEvent::ObjectNotify`] at its place among the second pass's.
+fn notify_in_place(sc: &mut Scene, block: Notify) {
+    let guid = match block {
+        Notify::Values { guid, .. } | Notify::Create { guid, .. } => guid,
+    };
+    if !guid::first_pass(guid) {
+        sc.pass.blocks.push(block);
+    }
+}
+
+/// A first-pass block's place in the notify pass ([`notify_in_place`]).
+fn on_object_notify(In(ev): In<SessionEvent>, mut pass: ResMut<UpdatePass>) {
+    let SessionEvent::ObjectNotify { guid, block } = ev else {
+        return;
+    };
+    pass.blocks.push(match block {
+        NotifyBlock::Values(sent) => Notify::Values { guid, sent },
+        NotifyBlock::ItemCreate => Notify::Create {
+            guid,
+            kind: Created::Item,
+        },
+        NotifyBlock::Create(kind) => Notify::Create {
+            guid,
+            kind: Created::World(kind),
+        },
+    });
 }
 
 /// A movement block (`0x467050`): a held object's new pose, or one it brings back placed there.
@@ -431,7 +464,6 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     else {
         return;
     };
-    sc.pass.started = true;
     // The unit this client moves drops its block before the lookup that would bring a released
     // one back (`0x4670a5`-`0x4670bb`, ahead of `0x4670c2`); a held one is `object_move`'s test.
     if !sc.index.0.contains_key(&guid) {
@@ -468,7 +500,6 @@ fn on_objects_near(In(ev): In<SessionEvent>, mut sc: Scene) {
     let SessionEvent::ObjectsNear(guids) = ev else {
         return;
     };
-    sc.pass.started = true;
     for guid in guids {
         if sc.self_guid.0 == Some(guid) || sc.index.0.contains_key(&guid) {
             continue;
@@ -533,22 +564,23 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
     sc.pass.reactivated.push(guid);
 }
 
-/// The out-of-range block. As a packet's first block it releases each listed object, our own
-/// player excepted (`0x465f39`-`0x465f45`, the player's guid outside the second round's types at
-/// `0x465f19`, `0x465f28`); anywhere else the notify pass skips it (`0x465fd0`) and nothing is
-/// released.
+/// The out-of-range list, which the protocol hands over only as a packet's first block
+/// (`0x4651e1`). It releases in two rounds: every guid outside the first pass's, our own player
+/// excepted (`0x465f10`-`0x465f4f`), then the first pass's, with no such exception
+/// (`0x465f75`-`0x465fae`).
 fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
     let SessionEvent::ObjectsRemoved(guids) = ev else {
         return;
     };
-    let first = !std::mem::replace(&mut sc.pass.started, true);
-    if !first {
-        return;
-    }
-    for guid in guids {
+    let (ahead, rest): (Vec<u64>, Vec<u64>) = guids.into_iter().partition(|&g| guid::first_pass(g));
+    for guid in rest {
         if sc.self_guid.0 == Some(guid) {
             continue;
         }
+        deactivate(&mut sc, guid, script.as_deref());
+        release(&mut sc, guid);
+    }
+    for guid in ahead {
         deactivate(&mut sc, guid, script.as_deref());
         release(&mut sc, guid);
     }

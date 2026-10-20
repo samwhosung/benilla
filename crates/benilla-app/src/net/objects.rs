@@ -1042,6 +1042,7 @@ pub(crate) fn wire(events: impl IntoIterator<Item = SessionEvent>) -> Vec<Sessio
                     | SessionEvent::ObjectMove { .. }
                     | SessionEvent::ObjectsRemoved(_)
                     | SessionEvent::ObjectsNear(_)
+                    | SessionEvent::ObjectNotify { .. }
             );
             std::iter::once(ev).chain(block.then_some(SessionEvent::ObjectUpdateEnd))
         })
