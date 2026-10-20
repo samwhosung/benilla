@@ -3,8 +3,8 @@
 use std::io::{self, Read};
 
 use crate::wire::{
-    capacity_hint, read_cstring, read_f32_le, read_packed_guid, read_u16_le, read_u32_le,
-    read_u64_le, read_u8, Vector3d,
+    capacity_hint, read_cstring, read_cstring_capped, read_f32_le, read_packed_guid, read_u16_le,
+    read_u32_le, read_u64_le, read_u8, Vector3d,
 };
 
 use super::{
@@ -238,18 +238,7 @@ fn read_char_rename(r: &mut &[u8]) -> io::Result<ServerPacket> {
         }
         let guid = u64::from_le_bytes(r[..8].try_into().expect("eight bytes"));
         *r = &r[8..];
-        let window = &r[..r.len().min(0x30)];
-        match window.iter().position(|&b| b == 0) {
-            Some(nul) => {
-                let name = String::from_utf8_lossy(&window[..nul]).into_owned();
-                *r = &r[nul + 1..];
-                (guid, name)
-            }
-            None => {
-                *r = &r[window.len()..];
-                (guid, String::new())
-            }
-        }
+        (guid, read_cstring_capped(r, 0x30).unwrap_or_default())
     });
     Ok(ServerPacket::CharRename { result, renamed })
 }
@@ -318,7 +307,16 @@ fn parse_server_body(
             // vmangos clamps `CharactersPerRealm` to 10 (`World.cpp:629`).
             let mut characters = Vec::with_capacity(capacity_hint(count, 10));
             for _ in 0..count {
-                characters.push(Character::read(&mut r)?);
+                match Character::read(&mut r)? {
+                    Some(character) => characters.push(character),
+                    // A name past its cap poisons the store: every read after it fails, and the
+                    // end check (`0x5b4523`) empties the list (`0x5b4539`-`0x5b455d`).
+                    None => {
+                        characters.clear();
+                        r = &[];
+                        break;
+                    }
+                }
             }
             ServerPacket::CharEnum { characters }
         }

@@ -89,6 +89,24 @@ pub fn read_cstring(r: &mut impl Read) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// `CDataStore::GetCString` (`0x4191b0`) at `capacity`: the string up to its NUL, which is
+/// consumed. With no NUL in the first `capacity` bytes, or none before the end, it reads `None`,
+/// the reference's `""` on a poisoned store (`0x4192a1`-`0x4192bb`), past the bytes it scanned.
+pub fn read_cstring_capped(r: &mut &[u8], capacity: usize) -> Option<String> {
+    let window = &r[..r.len().min(capacity)];
+    match window.iter().position(|&b| b == 0) {
+        Some(nul) => {
+            let s = String::from_utf8_lossy(&window[..nul]).into_owned();
+            *r = &r[nul + 1..];
+            Some(s)
+        }
+        None => {
+            *r = &r[window.len()..];
+            None
+        }
+    }
+}
+
 /// Bound a wire-derived count before it becomes a `Vec::with_capacity` hint: a failed allocation
 /// aborts rather than erroring. `cap` is the protocol's own bound where one exists.
 pub fn capacity_hint(count: impl TryInto<u64>, cap: usize) -> usize {

@@ -1,9 +1,9 @@
 //! Character select: the `SMSG_CHAR_ENUM` [`Character`] entry (vmangos `Player::BuildEnumData`
 //! order), the create/delete result codes and the create request.
 
-use std::io::{self, Read};
+use std::io;
 
-use crate::wire::{read_cstring, read_u32_le, read_u64_le, read_u8, Vector3d};
+use crate::wire::{read_cstring_capped, read_u32_le, read_u64_le, read_u8, Vector3d};
 
 /// `WorldResult::CharCreateSuccess` / `CharCreateNameInUse` (`SMSG_CHAR_CREATE`).
 pub const CHAR_CREATE_SUCCESS: u8 = 0x2E;
@@ -91,9 +91,14 @@ pub struct Character {
 }
 
 impl Character {
-    pub(super) fn read(r: &mut impl Read) -> io::Result<Self> {
+    /// One record as `0x5b42a0` reads it; `None` for a name of 0x30 bytes or more, which the
+    /// reference reads empty (`GetCString` at a cap of 0x30, `0x5b439f`-`0x5b43a7`) and which
+    /// poisons the store.
+    pub(super) fn read(r: &mut &[u8]) -> io::Result<Option<Self>> {
         let guid = read_u64_le(r)?;
-        let name = read_cstring(r)?;
+        let Some(name) = read_cstring_capped(r, 0x30) else {
+            return Ok(None);
+        };
         let race = read_u8(r)?;
         let class = read_u8(r)?;
         let gender = read_u8(r)?;
@@ -121,7 +126,7 @@ impl Character {
         }
         let _first_bag_display_id = read_u32_le(r)?;
         let _first_bag_inventory_id = read_u8(r)?;
-        Ok(Self {
+        Ok(Some(Self {
             guid,
             name,
             race,
@@ -142,6 +147,6 @@ impl Character {
             pet_display_id,
             pet_level,
             pet_family,
-        })
+        }))
     }
 }
