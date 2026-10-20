@@ -23,6 +23,19 @@ pub struct UnitTooltipFacts {
     /// The owner line `0x52fd30` writes after the subtitle (`0x52a247`), `None` for a unit with no
     /// charmer or creator, or whose owner is not in sight (`0x52fd8b`).
     pub owner: Option<OwnerTitle>,
+    /// The party member record the builder finds by guid (`0x496400`, `0x52a02b`), `None` off
+    /// our party.
+    pub party: Option<PartyRecord>,
+}
+
+/// What the builder reads of a party member's record (`0x4e8820`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PartyRecord {
+    /// `+0x8` bit 0: clear adds `PLAYER_OFFLINE` and ends the tooltip (`0x52a6e9`).
+    pub online: bool,
+    /// The name of the area the record's `+0x14` word names (`0x67e460`), the zone line of a
+    /// member out of sight; `None` without an `AreaTable.dbc` row.
+    pub area: Option<String>,
 }
 
 /// The owner line: the owner's name in one of four `UNITNAME_TITLE_*` templates.
@@ -198,7 +211,7 @@ fn level_line(
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
-    let (unit, viewer, player_level, skinning) = {
+    let (unit, viewer, player_level, skinning, me) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
         let unit = model
             .unit(token)
@@ -206,7 +219,13 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             .filter(|u| u.exists && u.guid != 0);
         let viewer = unit.as_ref().and_then(|u| viewer(&model, u));
         let req = &model.player_req;
-        (unit, viewer, req.level, req.skinning)
+        (
+            unit,
+            viewer,
+            req.level,
+            req.skinning,
+            model.unit_guids.player,
+        )
     };
     clear(lua, h);
     let Some(u) = unit else {
@@ -237,11 +256,24 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             None => unknownobject(lua)?.to_str()?.to_string(),
         };
         if let Some(template) = crate::strings::global(lua, owner.kind.key()) {
-            append_line(lua, this, (fill(&template, &[Arg::S(&name)]), WHITE), None, false)?;
+            append_line(
+                lua,
+                this,
+                (fill(&template, &[Arg::S(&name)]), WHITE),
+                None,
+                false,
+            )?;
         }
     }
     if let Some(level) = level_line(lua, &u, player_level, viewer.as_ref()) {
         append_line(lua, this, (level, WHITE), None, false)?;
+    }
+    // A party member whose record is offline: `PLAYER_OFFLINE`, white, and the build ends
+    // (`0x52a6e2`-`0x52a72b`).
+    if u.tooltip.party.as_ref().is_some_and(|r| !r.online) {
+        keyed_line(lua, this, "PLAYER_OFFLINE", WHITE)?;
+        show_or_hide_empty(lua, h);
+        return Ok(true);
     }
     // The faction name, between the level line and the PvP line (`0x52a7a0`); the app applied its
     // gates.
@@ -258,7 +290,10 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
         }
         // `RESURRECTABLE` (`0x52a8d1`), green: a player at 0 health or less (`0x52a8a4`,
         // `0x52a8ac`) the active player may assist (`0x52a8bc`).
-        if (u.tooltip.health as i32) <= 0 && u.is_player && viewer.as_ref().is_some_and(|v| v.can_assist) {
+        if (u.tooltip.health as i32) <= 0
+            && u.is_player
+            && viewer.as_ref().is_some_and(|v| v.can_assist)
+        {
             keyed_line(lua, this, "RESURRECTABLE", GREEN)?;
         }
         // `UNIT_SKINNABLE` (`0x529ed0`): unit flags bit 26 off a creature (`0x52a914`,
@@ -269,6 +304,20 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             });
             keyed_line(lua, this, "UNIT_SKINNABLE", color)?;
         }
+    }
+    // A party member other than the active player (`0x4918e0`, `0x52a953`) with no object: the
+    // name of its record's area, white, and nothing more (`0x52a95e`-`0x52a995`).
+    if !u.has_object {
+        let area = u
+            .tooltip
+            .party
+            .as_ref()
+            .filter(|_| u.guid != me)
+            .and_then(|r| r.area.clone());
+        if let Some(area) = area {
+            append_line(lua, this, (area, WHITE), None, false)?;
+        }
+    } else {
         // `PVP_RANK_CIVILIAN` (`0x52a9b2`), green: `0x612550`'s civilian kill.
         if is_civilian_kill(&u, player_level) {
             keyed_line(lua, this, "PVP_RANK_CIVILIAN", GREEN)?;

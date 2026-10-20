@@ -146,7 +146,13 @@ fn the_status_lines_read_the_install_strings() {
     );
     assert_eq!(
         lines(&s),
-        ["[LEVEL 10]", "[PVP]", "[SKINNABLE]", "[CIVILIAN]", "[LEADER]"]
+        [
+            "[LEVEL 10]",
+            "[PVP]",
+            "[SKINNABLE]",
+            "[CIVILIAN]",
+            "[LEADER]"
+        ]
     );
     s.run(
         r#"
@@ -157,7 +163,13 @@ fn the_status_lines_read_the_install_strings() {
     .unwrap();
     assert_eq!(
         lines(&s),
-        ["[LEVEL 10]", "PvP-aktiviert", "Kürschnerbar", "Zivilist", "Anführer"]
+        [
+            "[LEVEL 10]",
+            "PvP-aktiviert",
+            "Kürschnerbar",
+            "Zivilist",
+            "Anführer"
+        ]
     );
     assert!(s.take_errors().is_empty());
 }
@@ -222,7 +234,10 @@ fn a_dead_player_the_player_may_assist_reads_resurrectable() {
     };
     let mut s = viewer_script(30, 0, assisting);
     s.set_unit("target", Some(dead.clone()));
-    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "[PVP]", "[RESURRECTABLE]"]);
+    assert_eq!(
+        lines(&s),
+        ["[LEVEL_TYPE 20 [PLAYER]]", "[PVP]", "[RESURRECTABLE]"]
+    );
     let (r, g, b): (f32, f32, f32) = s.eval("return STTextLeft4:GetTextColor()").unwrap();
     assert!(
         r == 0.0 && g > 0.99 && b == 0.0,
@@ -275,7 +290,13 @@ fn a_drunk_player_sees_a_lower_level_on_a_unit_it_can_attack() {
         (255, 25, 25),
     ] {
         let mut s = viewer_script(30, drunk, attacking());
-        s.set_unit("target", Some(UnitState { level: 30, ..creature() }));
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                level: 30,
+                ..creature()
+            }),
+        );
         assert_eq!(lines(&s)[0], format!("[LEVEL {tooltip}]"), "drunk {drunk}");
         assert_eq!(
             s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(),
@@ -285,12 +306,24 @@ fn a_drunk_player_sees_a_lower_level_on_a_unit_it_can_attack() {
     }
     // Never below 1.
     let mut s = viewer_script(30, 100, attacking());
-    s.set_unit("target", Some(UnitState { level: 3, ..creature() }));
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            level: 3,
+            ..creature()
+        }),
+    );
     assert_eq!(lines(&s)[0], "[LEVEL 1]");
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 1);
     // A unit the player cannot attack keeps its level.
     let mut s = viewer_script(30, 100, Relations::default());
-    s.set_unit("target", Some(UnitState { level: 30, ..creature() }));
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            level: 30,
+            ..creature()
+        }),
+    );
     assert_eq!(lines(&s)[0], "[LEVEL 30]");
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 30);
     assert!(s.take_errors().is_empty());
@@ -381,5 +414,43 @@ fn the_skinnable_line_takes_the_skill_colour_of_the_players_skinning() {
     assert_eq!(rgb(&mut s, 10, Some(101)), GRAY);
     assert_eq!(rgb(&mut s, 20, Some(99)), RED);
     assert_eq!(rgb(&mut s, 20, Some(100)), ORANGE);
+    assert!(s.take_errors().is_empty());
+}
+
+/// A party member's record decides two lines (`0x52a6e2`-`0x52a72b`, `0x52a93e`-`0x52a995`): an
+/// offline one ends the tooltip after the level line with `PLAYER_OFFLINE`; one online but out of
+/// sight gets its area's name, white, in place of every status line; one in sight neither.
+#[test]
+fn a_party_member_out_of_sight_reads_offline_or_its_zone() {
+    let mut s = viewer_script(30, 0, Relations::default());
+    s.run(r#"PLAYER_OFFLINE = "[OFFLINE]""#).unwrap();
+    let member = |online: bool, has_object: bool| UnitState {
+        has_object,
+        pvp: true,
+        flags: 0x1000,
+        tooltip: UnitTooltipFacts {
+            party: Some(PartyRecord {
+                online,
+                area: Some("Elwynn Forest".into()),
+            }),
+            ..Default::default()
+        },
+        ..player_unit()
+    };
+    s.set_unit("target", Some(member(false, false)));
+    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "[OFFLINE]"]);
+    s.set_unit("target", Some(member(true, false)));
+    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "Elwynn Forest"]);
+    s.set_unit("target", Some(member(true, true)));
+    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]", "[PVP]"]);
+    // The active player's own record names no zone (`0x52a953`).
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            guid: ME,
+            ..member(true, false)
+        }),
+    );
+    assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]"]);
     assert!(s.take_errors().is_empty());
 }

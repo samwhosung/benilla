@@ -27,6 +27,8 @@ pub(crate) fn tooltip_facts(
     UnitTooltipFacts {
         health: store.0.unit_health().unwrap_or(0),
         owner: owner_title(store, creature_type, src),
+        // The party record is the party feed's.
+        party: None,
     }
 }
 
@@ -127,23 +129,46 @@ mod tests {
             catalog: Some(&spells),
             object: &held,
         };
-        let kind = |pairs: &[(u16, u32)], ty: u32| {
-            owner_title(&unit(pairs), ty, &src).map(|o| o.kind)
-        };
+        let kind =
+            |pairs: &[(u16, u32)], ty: u32| owner_title(&unit(pairs), ty, &src).map(|o| o.kind);
         let charmed = [(CHARMEDBY, OWNER as u32)];
         assert_eq!(kind(&charmed, 1), Some(OwnerTitleKind::Pet));
         assert_eq!(kind(&charmed, 3), Some(OwnerTitleKind::Minion));
         let created = |spell: u32| [(CREATEDBY, OWNER as u32), (CREATED_BY_SPELL, spell)];
-        assert_eq!(kind(&created(10), 1), Some(OwnerTitleKind::Pet), "summon pet, a beast");
-        assert_eq!(kind(&created(10), 3), Some(OwnerTitleKind::Minion), "a demon");
-        assert_eq!(kind(&created(11), 11), Some(OwnerTitleKind::Creation), "a totem slot");
+        assert_eq!(
+            kind(&created(10), 1),
+            Some(OwnerTitleKind::Pet),
+            "summon pet, a beast"
+        );
+        assert_eq!(
+            kind(&created(10), 3),
+            Some(OwnerTitleKind::Minion),
+            "a demon"
+        );
+        assert_eq!(
+            kind(&created(11), 11),
+            Some(OwnerTitleKind::Creation),
+            "a totem slot"
+        );
         assert_eq!(kind(&created(12), 7), Some(OwnerTitleKind::Guardian));
         assert_eq!(kind(&created(13), 7), Some(OwnerTitleKind::Creation));
         assert_eq!(kind(&created(14), 7), Some(OwnerTitleKind::Creation));
-        assert_eq!(kind(&created(15), 7), Some(OwnerTitleKind::Minion), "108 is past the range");
-        assert_eq!(kind(&created(9999), 1), Some(OwnerTitleKind::Pet), "no record");
+        assert_eq!(
+            kind(&created(15), 7),
+            Some(OwnerTitleKind::Minion),
+            "108 is past the range"
+        );
+        assert_eq!(
+            kind(&created(9999), 1),
+            Some(OwnerTitleKind::Pet),
+            "no record"
+        );
         // The charmer wins over the creator.
-        let both = [(CHARMEDBY, OWNER as u32), (CREATEDBY, OWNER as u32), (CREATED_BY_SPELL, 12)];
+        let both = [
+            (CHARMEDBY, OWNER as u32),
+            (CREATEDBY, OWNER as u32),
+            (CREATED_BY_SPELL, 12),
+        ];
         assert_eq!(kind(&both, 1), Some(OwnerTitleKind::Pet));
         // No owner, or one out of sight.
         assert_eq!(kind(&[], 1), None);

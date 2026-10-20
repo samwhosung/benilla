@@ -188,7 +188,7 @@ mod tooltip_unit;
 mod ui_errors;
 mod ui_scale;
 mod update_walk;
-pub use tooltip_unit::{OwnerTitle, OwnerTitleKind, TooltipTint, UnitTooltipFacts};
+pub use tooltip_unit::{OwnerTitle, OwnerTitleKind, PartyRecord, TooltipTint, UnitTooltipFacts};
 mod trade;
 mod tradeskill;
 mod trainer;

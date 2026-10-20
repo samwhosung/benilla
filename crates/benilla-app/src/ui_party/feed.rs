@@ -295,10 +295,11 @@ pub(crate) fn feed_party(
         fed.pushed_party = Some(fresh);
     }
 
+    let area_names = areas.as_deref().map(|a| &a.0);
     for (i, token) in PARTY_TOKENS.iter().enumerate() {
         let member = slots.get(i);
         let snap = member.map(|m| {
-            member_unit_state(
+            let mut s = member_unit_state(
                 m,
                 group.stats.get(&m.guid),
                 index.0.get(&m.guid).and_then(|e| stores.get(*e).ok()),
@@ -306,7 +307,9 @@ pub(crate) fn feed_party(
                 own_group.clone(),
                 chr,
                 types,
-            )
+            );
+            s.tooltip.party = party_record(&group, m.guid, area_names);
+            s
         });
         if fed.units[i] != snap {
             gate.audit("feed_party", "a party-token snapshot");
@@ -378,7 +381,7 @@ pub(crate) fn feed_party(
                 Some(s)
             } else {
                 let m = group.members.iter().find(|m| m.guid == *guid)?;
-                Some(member_unit_state(
+                let mut s = member_unit_state(
                     m,
                     group.stats.get(guid),
                     index.0.get(guid).and_then(|e| stores.get(*e).ok()),
@@ -386,7 +389,9 @@ pub(crate) fn feed_party(
                     own_group.clone(),
                     chr,
                     types,
-                ))
+                );
+                s.tooltip.party = party_record(&group, *guid, area_names);
+                Some(s)
             }
         });
         if fed.raid_units[i] != snap {
@@ -744,6 +749,26 @@ fn member_unit_state(
     // A held member's predicates read its descriptor alone (`0x517b16`, `0x517bef`, `0x5164d1`,
     // `0x51659f`): `snapshot`'s, the roster byte never.
     s
+}
+
+/// The party record the unit tooltip finds by guid (`0x496400`): a member of our own party slots
+/// with a record, its online bit and the name of its area (`0x67e460`, with no parent zone).
+fn party_record(
+    group: &GroupState,
+    guid: u64,
+    areas: Option<&benilla_formats::AreaTableCatalog>,
+) -> Option<benilla_ui::script::PartyRecord> {
+    if !group.party_slots().any(|m| m.guid == guid) {
+        return None;
+    }
+    let record = group.stats.get(&guid)?;
+    Some(benilla_ui::script::PartyRecord {
+        online: record.is_online(),
+        area: record
+            .zone
+            .and_then(|zone| areas?.name(u32::from(zone)))
+            .map(str::to_string),
+    })
 }
 
 /// A status bit of a member's record (`+0x08`), false with no record.
