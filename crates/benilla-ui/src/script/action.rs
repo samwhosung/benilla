@@ -569,9 +569,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetActionCooldown(action) → start, duration, enable, in `GetTime` seconds. An absent or
-    // elapsed enabled cooldown answers `(0, 0, 1)`, or a later `CooldownFrame_SetTimer` would
-    // replay the sweep and its finish flash.
+    // GetActionCooldown(action) → start, duration, enable, in `GetTime` seconds. The enable starts
+    // at 0 (`0x4e6f0d`) and only the cooldown query writes it, to 1 before any leg (`0x6e1406`):
+    // a slot that reaches no query, an empty one included, answers `(0, 0, 0)`, and one that
+    // reaches it with nothing running `(0, 0, 1)`, so a later `CooldownFrame_SetTimer` replays no
+    // sweep and no finish flash.
     g.set(
         "GetActionCooldown",
         lua.create_function(|lua, action: Value| {
@@ -579,16 +581,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCooldown(slot)")?;
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(
-                match model.action_states.get(&action).and_then(|s| s.cooldown) {
-                    Some((start, duration, enabled)) if start + duration > now || !enabled => (
-                        crate::script::clock::held_start(start, enabled, now),
-                        duration,
-                        i32::from(enabled),
-                    ),
-                    _ => (0.0, 0.0, 1),
-                },
-            )
+            let Some(state) = model
+                .action_states
+                .get(&action)
+                .filter(|s| !s.state.no_cooldown_query)
+            else {
+                return Ok((0.0, 0.0, 0));
+            };
+            Ok(match state.cooldown {
+                Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                    crate::script::clock::held_start(start, enabled, now),
+                    duration,
+                    i32::from(enabled),
+                ),
+                _ => (0.0, 0.0, 1),
+            })
         })?,
     )?;
 

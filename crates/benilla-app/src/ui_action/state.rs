@@ -47,9 +47,11 @@ enum SlotResolve {
     /// A macro that casts nothing (`[rec+0x564] == 0`): usable while it exists (`0x4e5030`),
     /// with no cooldown, range or check (`0x4e50f4`-`0x4e516f`).
     BareMacro,
-    /// Grey with nothing to report: a `/cast` that did not resolve (`-1`, refused at
-    /// `0x4e518b`), or a macro that no longer exists.
-    Dead,
+    /// A `/cast` that did not resolve (`-1`): grey (refused at `0x4e518b`), with nothing to
+    /// report but the cooldown query's enable, which it takes with its -1 (`0x6e2ea0`).
+    Unresolved,
+    /// A macro that no longer exists: grey, and no cooldown query (`0x4e6cfe`).
+    Missing,
 }
 
 /// Resolves a slot through its macro: every `Is*Action`/`GetActionCooldown` binding goes through
@@ -65,7 +67,8 @@ fn resolve_through_macro(
         ACTION_KIND_MACRO => match bound.0.get(&action) {
             Some(BoundSpell::Spell(s)) => SlotResolve::Action(ACTION_KIND_SPELL, *s),
             Some(BoundSpell::None) => SlotResolve::BareMacro,
-            Some(BoundSpell::Unresolved) | None => SlotResolve::Dead,
+            Some(BoundSpell::Unresolved) => SlotResolve::Unresolved,
+            None => SlotResolve::Missing,
         },
         other => SlotResolve::Action(other, action),
     }
@@ -181,10 +184,16 @@ pub(super) fn feed_action_state(
                 // `0x4e5050`'s spell-less leg: usable while the player-control flag `[0xb4b3e4]`
                 // is set (`0x4e50f4`; `SMSG_CLIENT_CONTROL_UPDATE` clears it, `0x4958e0`).
                 st.usable = !control_lost;
+                st.no_cooldown_query = true;
                 fresh.insert(action, st);
                 continue;
             }
-            SlotResolve::Dead => {
+            SlotResolve::Unresolved => {
+                fresh.insert(action, st);
+                continue;
+            }
+            SlotResolve::Missing => {
+                st.no_cooldown_query = true;
                 fresh.insert(action, st);
                 continue;
             }
@@ -270,6 +279,9 @@ pub(super) fn feed_action_state(
                 let use_spell = items
                     .template(button.action, 0, Ask::New(&commands))
                     .and_then(|t| t.use_spell);
+                // `GetItemCooldown 0x6e2ed0` queries only an item whose record is cached and has an
+                // on-use spell (`0x6e2f14`, `0x6e2f20`-`0x6e2f34`).
+                st.no_cooldown_query = use_spell.is_none();
                 // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too: the
                 // gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
                 let count = script.action_slot(action).map_or(0, |slot| slot.count);

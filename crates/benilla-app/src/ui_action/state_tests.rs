@@ -78,12 +78,12 @@ fn a_macro_slot_resolves_through_its_bound_spell() {
     );
     assert_eq!(
         resolve_through_macro(ACTION_KIND_MACRO, 5, &bound),
-        SlotResolve::Dead,
+        SlotResolve::Unresolved,
         "a /cast of an unknown spell is the reference's -1: grey"
     );
     assert_eq!(
         resolve_through_macro(ACTION_KIND_MACRO, 6, &bound),
-        SlotResolve::Dead,
+        SlotResolve::Missing,
         "a slot whose macro no longer exists: grey"
     );
     assert_eq!(
