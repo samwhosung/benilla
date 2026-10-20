@@ -36,8 +36,12 @@ fn failure_edge(reason: u8) -> CastBarEdge {
 pub(crate) enum Held {
     /// An on-next-swing strike, [`QueuedMeleeSpell`]'s.
     Strike,
-    /// A cast, [`PendingCast`]'s, with its item's template flags (`None` for no item).
-    Cast { item_flags: Option<u32> },
+    /// A cast, [`PendingCast`]'s, with its item's template flags and object guid (`None` for no
+    /// item).
+    Cast {
+        item_flags: Option<u32>,
+        item: Option<u64>,
+    },
     /// The spell whose cursor the arm raises next ([`SpellTargeting::enter_as`]).
     Cursor,
 }
@@ -72,9 +76,9 @@ impl CastCore<'_> {
         };
         match held {
             Held::Strike => self.queued_melee.push(strike, Some(spell_id)),
-            Held::Cast { item_flags } => {
+            Held::Cast { item_flags, item } => {
                 self.queued_melee.push(strike, None);
-                self.pending.push(spell_id, item_flags, now);
+                self.pending.push_cast(spell_id, item_flags, item, now);
             }
             Held::Cursor => self.queued_melee.push(strike, None),
         }
@@ -284,6 +288,7 @@ mod tests {
         bag_index: 255,
         slot: 23,
         entry: 4360,
+        guid: None,
         spell_index: 0,
         on_object: None,
     };
@@ -350,10 +355,22 @@ mod tests {
         let mut s = Slots::default();
         s.queued_melee.arm(HEROIC_STRIKE);
         let now = Instant::now();
-        s.core(&net)
-            .push(FIREBALL, Held::Cast { item_flags: None }, now);
-        s.core(&net)
-            .push(FIREBALL, Held::Cast { item_flags: None }, now);
+        s.core(&net).push(
+            FIREBALL,
+            Held::Cast {
+                item_flags: None,
+                item: None,
+            },
+            now,
+        );
+        s.core(&net).push(
+            FIREBALL,
+            Held::Cast {
+                item_flags: None,
+                item: None,
+            },
+            now,
+        );
         assert_eq!(s.core(&net).slot(), Some(Inflight::Cast(FIREBALL)));
         assert_eq!(s.queued_melee.saved(), Some(HEROIC_STRIKE));
         assert_eq!(s.stream(), ["CHANGED"], "one push, one signal");
@@ -390,8 +407,14 @@ mod tests {
         let (net, rx) = wire();
         let mut s = Slots::default();
         s.queued_melee.arm(HEROIC_STRIKE);
-        s.core(&net)
-            .push(AUTO_SHOT, Held::Cast { item_flags: None }, Instant::now());
+        s.core(&net).push(
+            AUTO_SHOT,
+            Held::Cast {
+                item_flags: None,
+                item: None,
+            },
+            Instant::now(),
+        );
         s.stream();
         s.core(&net).cancel_queued();
         assert_eq!(cancels(&rx), [HEROIC_STRIKE]);
@@ -408,8 +431,14 @@ mod tests {
         let (net, rx) = wire();
         let mut s = Slots::default();
         s.queued_melee.arm(HEROIC_STRIKE);
-        s.core(&net)
-            .push(FIREBALL, Held::Cast { item_flags: None }, Instant::now());
+        s.core(&net).push(
+            FIREBALL,
+            Held::Cast {
+                item_flags: None,
+                item: None,
+            },
+            Instant::now(),
+        );
         s.core(&net).cancel(false, false, REASON_ERROR);
         s.stream();
         s.core(&net).cancel_queued();

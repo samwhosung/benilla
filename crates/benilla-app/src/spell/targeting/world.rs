@@ -601,6 +601,7 @@ mod tests {
             bag_index: 255,
             slot: 24,
             entry: 7148,
+            guid: None,
             spell_index: 0,
             on_object: None,
         };

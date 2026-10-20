@@ -28,8 +28,10 @@ fn action_state_bindings_answer_the_reference_conventions() {
             profession: None,
             is_attack: false,
             equipped: false,
+            item: None,
             // 4 s remaining of a 10 s cooldown, running: started at GetTime 94.
             cooldown: Some((94_000, 10_000, true)),
+            no_cooldown_query: false,
         }),
     );
 

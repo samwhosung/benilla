@@ -44,6 +44,9 @@ pub(crate) enum CastCommit {
         slot: u8,
         /// The item's template entry: the not-ready rung queries the `(use_spell, entry)` record.
         entry: u32,
+        /// The item object's guid, which the in-flight slot keeps beside its spell (`0xcecab0`,
+        /// stored at `0x6e4b00`); `None` for a use with no live instance.
+        guid: Option<u64>,
         spell_index: u8,
         /// `CGItem::Use`'s own target argument, set only for a key in a lock; it bypasses the
         /// binder, as TryCast's target resolve (`6e4ef4`) takes the pair it was passed.
@@ -55,6 +58,14 @@ impl CastCommit {
     /// Whether this commit carries an item: what every forked rung reads.
     pub(crate) fn is_item(self) -> bool {
         matches!(self, CastCommit::Item { .. })
+    }
+
+    /// The used item's guid, which the attempt's push keeps in the in-flight slot (`0x6e4b00`).
+    pub(crate) fn item_guid(self) -> Option<u64> {
+        match self {
+            CastCommit::Item { guid, .. } => guid,
+            CastCommit::Spell => None,
+        }
     }
 
     /// The local not-ready reason for this commit (`0x6094f0`'s forked first rung).
@@ -273,8 +284,12 @@ impl CastLadder<'_, '_> {
         // The spell its attempt pushed stays in the slot through the send; the guard holds it from
         // here, as for a cast sent at its attempt.
         if self.ground.in_slot() == Some(spell_id) {
-            self.pending
-                .push(spell_id, item_flags(&self.items, commit), now);
+            self.pending.push_cast(
+                spell_id,
+                item_flags(&self.items, commit),
+                commit.item_guid(),
+                now,
+            );
         }
         // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`).
         self.ground.clear();
@@ -450,7 +465,10 @@ fn held(
     } else if cursor {
         Held::Cursor
     } else {
-        Held::Cast { item_flags }
+        Held::Cast {
+            item_flags,
+            item: commit.item_guid(),
+        }
     })
 }
 
@@ -969,6 +987,7 @@ mod tests {
         bag_index: 255,
         slot: 24,
         entry: 6948,
+        guid: None,
         spell_index: 0,
         on_object: None,
     };
@@ -1820,6 +1839,7 @@ mod tests {
             bag_index: 255,
             slot: 24,
             entry: BOMB,
+            guid: None,
             spell_index: 0,
             on_object: None,
         };
@@ -1946,6 +1966,7 @@ mod tests {
             bag_index: 255,
             slot: 25,
             entry: MINOR_HEALING_POTION,
+            guid: None,
             spell_index: 0,
             on_object: None,
         };
@@ -2117,6 +2138,7 @@ mod tests {
                 bag_index: 255,
                 slot: 81,
                 entry: 6948,
+                guid: None,
                 spell_index: 0,
                 on_object: Some(0xF110_000C_1F00_A3B2),
             },

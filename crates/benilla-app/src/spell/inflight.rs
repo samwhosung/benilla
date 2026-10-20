@@ -55,6 +55,8 @@ pub(crate) struct PendingCast {
 struct PendingCastState {
     spell_id: u32,
     deadline: Instant,
+    /// The guid of the item the cast came from (`0xcecab0`), `None` for a spell's own cast.
+    item: Option<u64>,
 }
 
 impl PendingCast {
@@ -80,10 +82,17 @@ impl PendingCast {
     /// `SetInFlightSpell(spell, item)` as the attempt calls it (`0x6e5026`). `item_flags` is the
     /// used item's template flags, `None` for a cast with no item: an item whose flags lack
     /// [`ITEM_FLAG_PLAYERCAST`] never enters the slot (a potion, food, a healthstone), so it
-    /// blocks nothing. An item's deadline is short: vmangos refuses some `CMSG_USE_ITEM`s with
+    /// blocks nothing. `item` is the item object's guid, which the slot keeps beside the spell
+    /// (`0x6e4b00`). An item's deadline is short: vmangos refuses some `CMSG_USE_ITEM`s with
     /// only `SMSG_INVENTORY_CHANGE_FAILURE` and no cast result (`HandleUseItemOpcode`), and this
     /// deadline is what reopens casting.
-    pub(crate) fn push(&mut self, spell_id: u32, item_flags: Option<u32>, now: Instant) {
+    pub(crate) fn push_cast(
+        &mut self,
+        spell_id: u32,
+        item_flags: Option<u32>,
+        item: Option<u64>,
+        now: Instant,
+    ) {
         if item_flags.is_some_and(|flags| flags & ITEM_FLAG_PLAYERCAST == 0) {
             return;
         }
@@ -94,8 +103,20 @@ impl PendingCast {
         };
         self.slot = Some(PendingCastState {
             spell_id,
+            item,
             deadline: now + window,
         });
+    }
+
+    /// [`Self::push_cast`] with no item object.
+    #[cfg(test)]
+    pub(crate) fn push(&mut self, spell_id: u32, item_flags: Option<u32>, now: Instant) {
+        self.push_cast(spell_id, item_flags, None, now);
+    }
+
+    /// The guid of the item the outstanding cast came from.
+    pub(crate) fn item(&self) -> Option<u64> {
+        self.slot.as_ref().and_then(|p| p.item)
     }
 
     /// Tighten the deadline to the server's real cast time once `SMSG_SPELL_START` names it.
@@ -277,6 +298,7 @@ impl CastState<'_, '_> {
             form: me
                 .and_then(|(_, store)| store)
                 .map_or(0, |store| store.0.unit_shapeshift_form()),
+            item: None,
         }
     }
 }
@@ -590,7 +612,10 @@ mod tests {
                 |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
                     slots.core(&net).push(
                         FIREBALL,
-                        super::super::Held::Cast { item_flags: None },
+                        super::super::Held::Cast {
+                            item_flags: None,
+                            item: None,
+                        },
                         Instant::now(),
                     );
                 },
@@ -745,7 +770,14 @@ mod tests {
                 move |mut slots: super::super::CastSlots, net: Res<NetCommands>| {
                     let mut core = slots.core(&net);
                     core.push(HEROIC_STRIKE, super::super::Held::Strike, t0);
-                    core.push(FIREBALL, super::super::Held::Cast { item_flags: None }, t0);
+                    core.push(
+                        FIREBALL,
+                        super::super::Held::Cast {
+                            item_flags: None,
+                            item: None,
+                        },
+                        t0,
+                    );
                 },
             )
             .unwrap();
@@ -1266,7 +1298,10 @@ mod tests {
             push(
                 &mut app,
                 FIREBALL,
-                crate::spell::Held::Cast { item_flags: None },
+                crate::spell::Held::Cast {
+                    item_flags: None,
+                    item: None,
+                },
             );
             mark_casting(&mut app, FIREBALL);
 

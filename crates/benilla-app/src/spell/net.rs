@@ -1655,14 +1655,23 @@ mod tests {
         /// (`0x6e5026`), which an item without `ITEM_FLAG_PLAYERCAST` skips. The push's own
         /// signal is the attempt's, not the subject's, so it is dropped.
         fn commit(&mut self, spell_id: u32, item_flags: Option<u32>) {
-            self.push(spell_id, crate::spell::Held::Cast { item_flags });
+            self.push(
+                spell_id,
+                crate::spell::Held::Cast {
+                    item_flags,
+                    item: None,
+                },
+            );
         }
 
         /// The record fill and the push of `held`, unsignalled.
         fn push(&mut self, spell_id: u32, held: crate::spell::Held) {
             let pushes = !matches!(
                 held,
-                crate::spell::Held::Cast { item_flags: Some(f) }
+                crate::spell::Held::Cast {
+                    item_flags: Some(f),
+                    ..
+                }
                     if f & benilla_protocol::messages::ITEM_FLAG_PLAYERCAST == 0
             );
             let world = self.app.world_mut();

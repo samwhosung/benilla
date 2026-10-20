@@ -801,6 +801,7 @@ pub(crate) fn send_item_use(
                     bag_index: it.bag_index,
                     slot: it.slot,
                     entry: it.entry,
+                    guid: it.guid,
                     spell_index: it.spell_index,
                     on_object: it.on_object,
                 },

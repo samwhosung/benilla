@@ -63,9 +63,17 @@ pub struct ActionState {
     pub is_attack: bool,
     /// `IsEquippedAction`: an item action currently worn.
     pub equipped: bool,
+    /// The entry an item slot holds, which `IsCurrentAction`'s item arm compares with the in-flight
+    /// cast's item (`0x4e53fc`-`0x4e5428`); `None` for any other slot.
+    pub item: Option<u32>,
     /// `(start_ms, duration_ms, enabled)`, the start absolute on the `GetTime` clock, so a running
     /// cooldown re-pushes the same triple and a re-arm a new one (`0x6e13e0` returns the start).
     pub cooldown: Option<(i64, u32, bool)>,
+    /// The slot reaches no cooldown query (`0x4e6ca0`): a macro that casts nothing or is gone
+    /// (`0x4e6cfe`), or an item with no cached on-use spell (`0x6e2f34`). Only the query writes
+    /// the enable flag (`0x6e1406`), so `GetActionCooldown` answers the binding's `(0, 0, 0)`
+    /// (`0x4e6f0d`), as for an empty slot.
+    pub no_cooldown_query: bool,
 }
 
 /// The profession window a spell opens (`Effect[0]` 47, `TRADE_SKILL`, tested at `0x4e54fe`): a
@@ -135,6 +143,10 @@ pub struct CastView {
     pub attacking: bool,
     /// The player's form byte (`UNIT_FIELD_BYTES_1` byte 2).
     pub form: u8,
+    /// The entry of the item the in-flight cast came from (`0xcecab0`, read through `0x6e3d20`),
+    /// its object looked up live (`0x4e53ef`): `None` with no item cast in flight or with its
+    /// object gone.
+    pub item: Option<u32>,
 }
 
 impl CastView {
