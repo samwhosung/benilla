@@ -340,6 +340,30 @@ mod emitters {
         assert_eq!(words(&lines), [Some(LineWord::bare("BLOCK"))]);
     }
 
+    /// `0x625e20` returns for a victim the client does not hold as a unit (`0x625e22`): the swing
+    /// stays state 1 with no damage, which writes no line, where a held victim's is `VSBLOCK`.
+    #[test]
+    fn a_full_block_on_a_victim_held_as_no_unit_stays_as_sent() {
+        let blocked = |victim| AttackerState {
+            blocked: 30,
+            ..swing(MOB, victim, 0, 1)
+        };
+        assert_eq!(stems(&melee(blocked(ME))), ["VSBLOCK"]);
+        assert!(melee(blocked(99)).is_empty(), "not held");
+        const TRAP: u64 = 7;
+        let mut bench = Bench::new();
+        let e = bench.world.spawn_empty().id();
+        bench.index.0.insert(TRAP, e);
+        bench.stores.insert(
+            e,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21)])),
+        );
+        let s = blocked(TRAP);
+        let lines =
+            bench.lines(|ctx, st, po, log| super::super::attacker_state(s, ctx, st, po, log));
+        assert!(lines.is_empty(), "a game object");
+    }
+
     /// The word is the line's arm's (`0x629b60`), and only for a line about you: a missed swing
     /// is `MISS` whatever the state says, and your own swing raises nothing.
     #[test]

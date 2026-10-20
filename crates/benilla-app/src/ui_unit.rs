@@ -412,7 +412,7 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
             } else if hit_info & 0x20 != 0 {
                 ("WOUND", "ABSORB")
             } else if hit_info & 0x800 != 0 {
-                ("WOUND", "BLOCK") // a full block the parse did not already make state 5
+                ("WOUND", "BLOCK") // a full block `0x625e20` did not mark
             } else if hit_info & 0x40 != 0 {
                 ("WOUND", "RESIST")
             } else {

@@ -233,7 +233,7 @@ fn ai_reaction(
 /// feedback waits for the clip's attack-hit key (`0x6247d0`); the combat-log line and its
 /// `COMBAT_TEXT_UPDATE` word come off the same packet in [`crate::combat_log`].
 fn attacker_state(
-    mut s: AttackerState,
+    s: AttackerState,
     index: &GuidIndex,
     self_guid: &SelfGuid,
     swings: &mut MessageWriter<SwingMessage>,
@@ -258,7 +258,7 @@ fn attacker_state(
             ),
         );
     }
-    s.mark_full_block(victim.is_some());
+    let s = crate::combat_log::read_swing(s, index, stores);
     let swing = SwingMessage {
         attacker: Entity::PLACEHOLDER, // filled per branch below
         victim,

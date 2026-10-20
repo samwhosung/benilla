@@ -29,6 +29,19 @@ pub(crate) mod chat;
 mod feedback;
 pub(crate) mod text;
 
+/// `SMSG_ATTACKERSTATEUPDATE`'s swing as every consumer reads it: the record read runs
+/// `0x625e20` before any of them (`0x625e0e`), which marks a swing with no damage and a blocked
+/// amount state 5, BLOCK, but only on a victim the client holds as a unit (`0x625e05`, mask 8;
+/// `0x625e22`). On any other victim the state stays as sent.
+pub(crate) fn read_swing(
+    mut s: benilla_protocol::messages::AttackerState,
+    index: &GuidIndex,
+    stores: &impl crate::ui_chat::combat::Stores,
+) -> benilla_protocol::messages::AttackerState {
+    s.mark_full_block(crate::ui_chat::combat::holds_unit(s.victim, index, stores));
+    s
+}
+
 /// The chat line's read-only inputs, built into a [`chat::ChatCtx`] per packet.
 #[derive(SystemParam)]
 pub(crate) struct Ctx<'w> {

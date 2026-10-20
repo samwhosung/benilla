@@ -37,6 +37,23 @@ impl Stores for Query<'_, '_, (Entity, &ObjectStore)> {
     }
 }
 
+/// Whether the client holds `guid` as a unit, the `0x468460` lookup with type mask 8 that the
+/// handlers make before a flash anchor, a float or a full block: a player or a creature, never a
+/// game object.
+pub(crate) fn holds_unit(guid: u64, index: &GuidIndex, stores: &impl Stores) -> bool {
+    use benilla_protocol::messages::ObjectType;
+    index
+        .0
+        .get(&guid)
+        .and_then(|&e| stores.store(e))
+        .is_some_and(|s| {
+            matches!(
+                s.0.object_type(),
+                Some(ObjectType::Unit | ObjectType::Player)
+            )
+        })
+}
+
 /// A world position by entity, for the range gate.
 pub(crate) trait Poses {
     fn pose(&self, entity: Entity) -> Option<Vec3>;

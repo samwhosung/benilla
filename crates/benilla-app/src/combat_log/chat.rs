@@ -64,17 +64,7 @@ impl ChatCtx<'_> {
 
     /// Whether the client holds `guid` as a unit, the `0x468460` lookup with type mask 8.
     fn holds_unit(&self, guid: u64, stores: &impl Stores) -> bool {
-        use benilla_protocol::messages::ObjectType;
-        self.index
-            .0
-            .get(&guid)
-            .and_then(|&e| stores.store(e))
-            .is_some_and(|s| {
-                matches!(
-                    s.0.object_type(),
-                    Some(ObjectType::Unit | ObjectType::Player)
-                )
-            })
+        combat::holds_unit(guid, self.index, stores)
     }
 
     /// One endpoint's half of the display-range gate, [`combat::in_range`].
@@ -107,13 +97,13 @@ impl ChatCtx<'_> {
 /// `SMSG_ATTACKERSTATEUPDATE`: the melee line and its word, every `COMBAT_*` family. `school`, the
 /// first sub-damage's, selects the `…SCHOOL` template; physical (0) takes the plain one.
 pub(super) fn attacker_state(
-    mut s: AttackerState,
+    s: AttackerState,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    s.mark_full_block(ctx.index.0.contains_key(&s.victim));
+    let s = super::read_swing(s, ctx.index, stores);
     // `0x625e40`, checked before the dispatcher (`0x629b3e`, `0x629b45`): a swing from a spell
     // that did not land plainly emits no line; the floating number has the same gate.
     if !s.displayed() {
