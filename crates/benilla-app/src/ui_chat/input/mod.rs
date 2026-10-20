@@ -575,10 +575,9 @@ pub(super) fn drain_chat_input(
                         .ui_errors
                         .0
                         .extend(crate::ui_party::synthetic_roster(&mut group, player_xy));
-                    if arg == "lead" {
-                        // An unmatched leader guid reads as `leader_index` 0, "we lead", which
-                        // shows the leader-only popup rows.
-                        group.leader = 0xF000;
+                    if let (true, Some(me)) = (arg == "lead", self_guid.0) {
+                        // The leader cell holds our guid, which shows the leader-only popup rows.
+                        group.leader = me;
                     }
                 }
             },

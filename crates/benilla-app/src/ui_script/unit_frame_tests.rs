@@ -431,10 +431,9 @@ fn left_clicking_the_player_frame_targets_self() {
             name: "Alice".into(),
             guid: 0xA11CE,
         }],
-        leader_index: 0, // we lead
-        // The player's own guid, unset; 0 is also the ungrouped sentinel, but there is a member.
-        leader_guid: 0,
-        own_guid: 0,
+        leader_index: 0, // we lead: the leader cell holds our guid
+        leader_guid: 0x5E1F,
+        own_guid: 0x5E1F,
         raid: Vec::new(),
         loot_method: "group".into(),
         master_looter: None,
@@ -506,8 +505,8 @@ fn raid_mark_clicks_through_the_nested_level() {
             guid: 0xA11CE,
         }],
         leader_index: 0, // we lead: the mark rows are leader-gated
-        leader_guid: 0,  // the player's own guid; this fixture leaves it unset
-        own_guid: 0,
+        leader_guid: 0x5E1F,
+        own_guid: 0x5E1F,
         raid: Vec::new(),
         loot_method: "group".into(),
         master_looter: None,
@@ -2311,9 +2310,9 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
             guid: 0x7A17,
         }],
         leader_index,
-        // Follows `leader_index`: 0 = the player (unset here), else the member who leads.
-        leader_guid: if leader_index == 0 { 0 } else { 0x7A17 },
-        own_guid: 0,
+        // Follows `leader_index`: 0 = the player, else the member who leads.
+        leader_guid: if leader_index == 0 { 0x5E1F } else { 0x7A17 },
+        own_guid: 0x5E1F,
         raid: Vec::new(),
         loot_method: method.into(),
         master_looter,
