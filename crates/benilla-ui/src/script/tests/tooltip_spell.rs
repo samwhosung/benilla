@@ -1,9 +1,25 @@
 //! The engine spell and aura tooltips: name|rank, one cost|range line, one casttime|cooldown line,
-//! the passive omission, the aura variant (white description, and the gold remaining line on
+//! the passive omission, the aura builder (white description, and the gold remaining line on
 //! `SetPlayerBuff` only), and the selectors that delegate to them.
 
 use super::common::script;
 use crate::script::*;
+
+/// The aura builder's key for an aura pushed with the default level and count.
+fn aura_key(spell_id: u32) -> AuraKey {
+    AuraKey {
+        spell_id,
+        ..Default::default()
+    }
+}
+
+fn aura_view(name: &str, description: &str) -> AuraTooltipView {
+    AuraTooltipView {
+        name: name.into(),
+        description: description.into(),
+        ..Default::default()
+    }
+}
 
 fn fireball() -> SpellTooltipView {
     SpellTooltipView {
@@ -198,8 +214,8 @@ fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `SetTrackingSpell`, as the reference draws it: a gold name over the white aura description,
-/// with no cost, cast time or remaining line.
+/// `SetTrackingSpell` is the aura builder at level 1 and stack 1 (`0x532cde`-`0x532ce7`): a gold
+/// name over the white aura description, with no cost, cast time or remaining line.
 #[test]
 fn tracking_hover_renders_gold_name_over_white_description() {
     let mut s = script();
@@ -216,10 +232,25 @@ fn tracking_hover_renders_gold_name_over_white_description() {
             name: "Find Minerals".into(),
             cost: Some("a cost cell that must NOT render".into()),
             cast_time: Some("nor this".into()),
-            description: "Finding Minerals.".into(),
-            aura_description: "Finding Minerals.".into(),
+            description: "Not the aura's text.".into(),
             ..Default::default()
         },
+    );
+    assert_eq!(
+        s.aura_tooltip_subjects(),
+        vec![AuraKey {
+            spell_id: 2580,
+            level: 1,
+            stack: 1
+        }]
+    );
+    s.set_aura_tooltip(
+        AuraKey {
+            spell_id: 2580,
+            level: 1,
+            stack: 1,
+        },
+        aura_view("Find Minerals", "Finding Minerals."),
     );
     s.run(
         r#"
@@ -291,7 +322,7 @@ fn passive_omits_the_casttime_line() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The buff hover is the aura variant: a white description and, on this entry point only, the
+/// The buff hover is the aura builder: a white description and, on this entry point only, the
 /// remaining-time line computed off the aura's `GetTime` expiry.
 #[test]
 fn player_buff_hover_is_the_aura_variant() {
@@ -302,19 +333,26 @@ fn player_buff_hover_is_the_aura_variant() {
         SpellTooltipView {
             name: "Arcane Intellect".into(),
             rank: Some("Rank 1".into()),
-            cost: Some("60 Mana".into()), // ignored by the aura variant
-            range: Some("30 yd range".into()), // ignored
-            cast_time: Some("Instant".into()), // ignored
-            cooldown: None,
+            cost: Some("60 Mana".into()), // the spell builder's, never the aura's
             description: "Increases Intellect by 2.".into(),
-            aura_description: "Intellect increased by 2.".into(),
             ..Default::default()
         },
+    );
+    // The record's level and stack key the view (`0x532bbf`-`0x532bd2`).
+    s.set_aura_tooltip(
+        AuraKey {
+            spell_id: 1459,
+            level: 60,
+            stack: 1,
+        },
+        aura_view("Arcane Intellect", "Intellect increased by 2."),
     );
     s.tick(10.0); // GetTime = 10
     s.set_player_auras(vec![AuraState {
         spell_id: 1459,
         name: Some("Arcane Intellect".into()),
+        count: 1,
+        level: 60,
         duration: 1800.0,
         expiration_time: 100.0, // 90 s left at now = 10
         helpful: true,
@@ -373,10 +411,15 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
         168,
         SpellTooltipView {
             name: "Ice Armor".into(),
-            rank: Some("Rank 1".into()), // the spell variant's column, never the aura's
-            dispel_type: Some("Magic".into()),
-            aura_description: "Encases the caster in a layer of ice.".into(),
+            rank: Some("Rank 1".into()), // the spell builder's column, never the aura's
             ..Default::default()
+        },
+    );
+    s.set_aura_tooltip(
+        aura_key(168),
+        AuraTooltipView {
+            dispel_type: Some("Magic".into()),
+            ..aura_view("Ice Armor", "Encases the caster in a layer of ice.")
         },
     );
     s.set_player_auras(vec![AuraState {
@@ -472,28 +515,23 @@ fn requirement_and_reagent_lines_render_in_law_order() {
     assert!(s.take_errors().is_empty());
 }
 
-/// `SetUnitBuff`/`SetUnitDebuff` render the aura variant from the unit's sign-filtered list, with
+/// `SetUnitBuff`/`SetUnitDebuff` render the aura builder from the unit's sign-filtered list, with
 /// no remaining line: only `SetPlayerBuff` appends it, and the 1.12 wire carries no other unit's
 /// durations.
 #[test]
 fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_spell_tooltip(
-        589,
-        SpellTooltipView {
-            name: "Shadow Word: Pain".into(),
-            aura_description: "Suffering 12 Shadow damage every 3 sec.".into(),
-            ..Default::default()
-        },
+    s.set_aura_tooltip(
+        aura_key(589),
+        aura_view(
+            "Shadow Word: Pain",
+            "Suffering 12 Shadow damage every 3 sec.",
+        ),
     );
-    s.set_spell_tooltip(
-        1126,
-        SpellTooltipView {
-            name: "Mark of the Wild".into(),
-            aura_description: "Armor increased by 25.".into(),
-            ..Default::default()
-        },
+    s.set_aura_tooltip(
+        aura_key(1126),
+        aura_view("Mark of the Wild", "Armor increased by 25."),
     );
     // The target, guid 7, through the resolver.
     s.set_unit_guids(&crate::script::UnitGuids {
@@ -550,14 +588,7 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
         (2457, "Battle Stance", "A balanced combat stance."),
         (589, "Shadow Word: Pain", "Suffering 12 Shadow damage."),
     ] {
-        s.set_spell_tooltip(
-            id,
-            SpellTooltipView {
-                name: name.into(),
-                aura_description: desc.into(),
-                ..Default::default()
-            },
-        );
+        s.set_aura_tooltip(aura_key(id), aura_view(name, desc));
     }
     // The player's cache: two buffs then a debuff, in one insertion-ordered list.
     s.set_player_auras(vec![
@@ -619,13 +650,7 @@ fn an_aura_setters_miss_leaves_the_tooltip_as_it_was() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     for (id, name) in [(1126, "Mark of the Wild"), (589, "Shadow Word: Pain")] {
-        s.set_spell_tooltip(
-            id,
-            SpellTooltipView {
-                name: name.into(),
-                ..Default::default()
-            },
-        );
+        s.set_aura_tooltip(aura_key(id), aura_view(name, ""));
     }
     s.set_unit_guids(&crate::script::UnitGuids {
         target: 7,
@@ -676,6 +701,152 @@ fn an_aura_setters_miss_leaves_the_tooltip_as_it_was() {
     "#,
     )
     .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// The aura builder is called with the aura's level and stack (`0x534ceb`, `0x534cd1`; the
+/// player's record, `0x532bbf`), and its view is keyed by them: a view built for another level or
+/// count is not this aura's. A miss draws the gold name, asks for the key and waits; the answer
+/// re-renders the hover.
+#[test]
+fn an_aura_hover_asks_for_its_own_level_and_stack() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let rend = AuraKey {
+        spell_id: 3147,
+        level: 25,
+        stack: 1,
+    };
+    let sunder = AuraKey {
+        spell_id: 11597,
+        level: 60,
+        stack: 3,
+    };
+    // Views at the default level and count, which neither aura is.
+    s.set_aura_tooltip(aura_key(3147), aura_view("Rend Flesh", "1 damage"));
+    s.set_aura_tooltip(
+        aura_key(11597),
+        aura_view("Sunder Armor", "Armor decreased by 450."),
+    );
+    s.set_player_auras(vec![AuraState {
+        spell_id: 3147,
+        name: Some("Rend Flesh".into()),
+        level: 25,
+        count: 1,
+        helpful: false,
+        until_cancelled: true,
+        ..Default::default()
+    }]);
+    s.set_unit_guids(&crate::script::UnitGuids {
+        target: 7,
+        ..Default::default()
+    });
+    s.set_unit_auras(
+        7,
+        Some(vec![AuraState {
+            spell_id: 11597,
+            name: Some("Sunder Armor".into()),
+            level: 60,
+            count: 3,
+            helpful: false,
+            ..Default::default()
+        }]),
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        TT:SetPlayerBuff(0)
+        assert(TT:NumLines() == 1 and TTTextLeft1:GetText() == "Rend Flesh", "the name alone")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(s.take_aura_tooltip_asks(), vec![rend]);
+    s.set_aura_tooltip(rend, aura_view("Rend Flesh", "32 to 33 damage"));
+    assert_eq!(
+        s.eval::<String>("return TTTextLeft2:GetText()").unwrap(),
+        "32 to 33 damage",
+        "the answer re-renders the hover"
+    );
+    s.run(r#"TT:SetUnitDebuff("target", 1)"#).unwrap();
+    assert_eq!(s.take_aura_tooltip_asks(), vec![sunder]);
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// The aura text is the only description the builder reads: an empty one is no line, with no
+/// fall back to the spell's description (`0x52f929`-`0x52f938`).
+#[test]
+fn an_aura_with_no_text_draws_its_name_alone() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_spell_tooltip(
+        2457,
+        SpellTooltipView {
+            name: "Battle Stance".into(),
+            description: "A balanced combat stance.".into(),
+            ..Default::default()
+        },
+    );
+    s.set_aura_tooltip(aura_key(2457), aura_view("Battle Stance", ""));
+    s.set_player_auras(vec![AuraState {
+        spell_id: 2457,
+        name: Some("Battle Stance".into()),
+        helpful: true,
+        until_cancelled: true,
+        ..Default::default()
+    }]);
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetPlayerBuff(0)
+        assert(tt:NumLines() == 1, "the name alone, got " .. tt:NumLines())
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// A position inside the 48 records but past the occupied ones is an empty record
+/// (`ClearBuffRecord 0x4e4490`): the builder's miss leaves no line (`0x52f8ae`), and its zero
+/// until-cancelled flag lets the time line through at 0 ms, the slot -1 arm of `0x4e4450`
+/// (`0x4e447e`). The plate shows that line alone.
+#[test]
+fn an_empty_buff_record_reads_zero_seconds_remaining() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_aura_tooltip(
+        aura_key(1126),
+        aura_view("Mark of the Wild", "Armor increased by 25."),
+    );
+    s.set_player_auras(vec![AuraState {
+        spell_id: 1126,
+        name: Some("Mark of the Wild".into()),
+        helpful: true,
+        until_cancelled: true,
+        ..Default::default()
+    }]);
+    s.run(
+        r#"
+        SPELL_TIME_REMAINING_SEC    = "%d second remaining"
+        SPELL_TIME_REMAINING_SEC_P1 = "%d seconds remaining"
+        local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetPlayerBuff(1)
+        assert(tt:IsShown() and tt:NumLines() == 1, "one line, got " .. tt:NumLines())
+        assert(TTTextLeft1:GetText() == "0 seconds remaining", tostring(TTTextLeft1:GetText()))
+        tt:SetPlayerBuff(47)
+        assert(TTTextLeft1:GetText() == "0 seconds remaining", "the last record")
+    "#,
+    )
+    .unwrap();
+    assert!(
+        s.take_aura_tooltip_asks().is_empty(),
+        "spell 0 asks for nothing"
+    );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
@@ -1018,13 +1189,9 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
 fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_spell_tooltip(
-        1459,
-        SpellTooltipView {
-            name: "Arcane Intellect".into(),
-            aura_description: "Intellect increased by 2.".into(),
-            ..Default::default()
-        },
+    s.set_aura_tooltip(
+        aura_key(1459),
+        aura_view("Arcane Intellect", "Intellect increased by 2."),
     );
     s.tick(10.0);
     s.run(
@@ -1232,7 +1399,8 @@ fn firebolt() -> SpellTooltipView {
     }
 }
 
-/// Pet-bar tokens and craft item subjects name no spell, so they are left out.
+/// Pet-bar tokens and craft item subjects name no spell, so they are left out; the auras are the
+/// aura builder's subjects, by spell, level and stack.
 #[test]
 fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
     let mut s = script();
@@ -1284,15 +1452,18 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
             craft_recipe(7421, "Runed Copper Rod", CraftTooltip::Item(6218)),
         ],
     }));
-    let aura = |spell_id| AuraState {
+    let aura = |spell_id, level, count| AuraState {
         spell_id,
+        level,
+        count,
         ..Default::default()
     };
-    s.set_player_auras(vec![aura(1459)]);
-    // The pet's, the target-of-target's and party1's lists, by guid.
-    s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172)]));
-    s.set_unit_auras(0x21, Some(vec![aura(589)]));
-    s.set_unit_auras(0x22, Some(vec![aura(8921)]));
+    s.set_player_auras(vec![aura(1459, 60, 1), aura(11597, 30, 5)]);
+    // The pet's, the target-of-target's and party1's lists, by guid; party1's from its roster
+    // record, level 0 and stack 1.
+    s.set_unit_auras(0xF140_0000_0000_0077, Some(vec![aura(172, 20, 1)]));
+    s.set_unit_auras(0x21, Some(vec![aura(589, 60, 1)]));
+    s.set_unit_auras(0x22, Some(vec![aura(8921, 0, 1)]));
     s.set_tracking(Some(TrackingState {
         spell_id: 2580,
         name: Some("Find Minerals".into()),
@@ -1302,7 +1473,29 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
 
     let mut subjects = s.spell_tooltip_subjects();
     subjects.sort_unstable();
-    assert_eq!(subjects, vec![116, 133, 172, 589, 1459, 2580, 8921, 17253]);
+    assert_eq!(
+        subjects,
+        vec![116, 133, 17253],
+        "the auras are the aura builder's"
+    );
+    // Each aura by the builder's arguments: its level and stack, the tracking spell's 1 and 1.
+    let mut auras: Vec<_> = s
+        .aura_tooltip_subjects()
+        .into_iter()
+        .map(|k| (k.spell_id, k.level, k.stack))
+        .collect();
+    auras.sort_unstable();
+    assert_eq!(
+        auras,
+        vec![
+            (172, 20, 1),
+            (589, 60, 1),
+            (1459, 60, 1),
+            (2580, 1, 1),
+            (8921, 0, 1),
+            (11597, 30, 5)
+        ]
+    );
     // The pet's bar and book are read through the builder's unit selector: the pet's views.
     let mut pet_subjects = s.pet_spell_tooltip_subjects();
     pet_subjects.sort_unstable();

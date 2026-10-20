@@ -332,6 +332,7 @@ fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
         name: Some(name.into()),
         icon: Some(icon.into()),
         count: 0,
+        level: 0,
         debuff_type: None,
         duration: 0.0,
         expiration_time: 0.0,

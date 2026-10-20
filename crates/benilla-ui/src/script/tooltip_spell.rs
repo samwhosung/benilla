@@ -1,9 +1,8 @@
-//! The spell and aura tooltip content, in the line order of the spell builder `0x52e610` and the
-//! aura builder `0x52f880`: name and rank; cost and range; cast time and cooldown (omitted for a
-//! passive spell, with no "Passive" line); the tools, the required item class, then form, white
-//! when met and red when not; reagents, a missing one inline red; the cooldown remaining; the
-//! chance and drain-all lines; the description, gold (white on an aura). Only `SetPlayerBuff`
-//! adds the gold time-remaining line.
+//! The spell tooltip content, in the line order of the spell builder `0x52e610`: name and rank;
+//! cost and range; cast time and cooldown (omitted for a passive spell, with no "Passive" line);
+//! the tools, the required item class, then form, white when met and red when not; reagents, a
+//! missing one inline red; the cooldown remaining; the chance and drain-all lines; the
+//! description, gold. The aura builder `0x52f880` is [`super::tooltip_aura`]'s.
 //!
 //! The app resolves each spell into a [`SpellTooltipView`] (`$`-tokens, cast, range and duration
 //! data, each `GlobalStrings.lua` template by key, read at the render), kept in an ask-once store
@@ -12,14 +11,15 @@
 //! unit selector asks for. A miss records the id; a `set_spell_by_id` miss also waits, and the
 //! app's answer re-renders that tooltip a frame after the hover. That frame is a known difference
 //! from the reference, which builds every spell tooltip at the call (`0x52e610`); a spell no
-//! pushed set names, such as an `enchant:` link's, always meets it. A talent or tracking miss shows
-//! its view on the next hover.
+//! pushed set names, such as an `enchant:` link's, always meets it. A talent miss shows its view on
+//! the next hover. An aura view's miss waits the same way.
 
 use mlua::{Lua, Table, Value};
 
 use super::binding_abi::{self, flag};
 use super::object::{frame_handle_of, frame_wrapper};
 use super::tooltip::{append_line, clear, clear_silent, tip_mut};
+use super::tooltip_aura::AuraKey;
 use super::{CraftTooltip, Model, TooltipText, TrainerTooltip};
 use crate::strings::Arg;
 use crate::widget::FrameHandle;
@@ -35,11 +35,8 @@ const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellTooltipView {
     pub name: String,
-    /// "Rank N", the name line's gray right column on the spell variant.
+    /// "Rank N", the name line's gray right column.
     pub rank: Option<String>,
-    /// The aura variant's gold right column (`0x52f8e5`): the `SpellDispelType.dbc` name, such as
-    /// "Magic", when that row's `[+0x28]` flag is set, so Stealth has none.
-    pub dispel_type: Option<String>,
     /// The cost cell (`0x52e8f9`-`0x52e99f`): `MANA_COST` and its kin by power type (the key
     /// table `0x85416c`), `HEALTH_COST` past them, the `_PER_TIME` form with a cost per second.
     pub cost: Option<TooltipText>,
@@ -83,9 +80,6 @@ pub struct SpellTooltipView {
     pub use_all: Option<TooltipText>,
     /// The `$`-substituted description.
     pub description: TooltipText,
-    /// The `$`-substituted `AuraDescription`, which the aura builder reads; `description` stands in
-    /// when it is empty.
-    pub aura_description: TooltipText,
 }
 
 impl super::UiScript {
@@ -111,12 +105,12 @@ impl super::UiScript {
             model
                 .spell_tooltip_waits
                 .iter()
-                .filter(|(_, w)| w.spell_id == spell_id && w.opts.alt_caster == alt_caster)
+                .filter(|(_, w)| w.subject.is_spell(spell_id, alt_caster))
                 .map(|(h, _)| *h)
                 .collect()
         };
         for h in waiting {
-            if let Err(e) = answer_wait(&self.lua, h, spell_id, alt_caster) {
+            if let Err(e) = answer_wait(&self.lua, h, &|w| w.is_spell(spell_id, alt_caster)) {
                 self.push_error(e);
             }
         }
@@ -148,9 +142,9 @@ impl super::UiScript {
     }
 
     /// The spells whose player view a hover reads from the VM's own state rather than the
-    /// player's book: the open quest's and each log entry's reward spell, the open craft's spell
-    /// subjects, the player's and every other unit's auras, and the tracking spell. The app pushes
-    /// their views ahead of a hover.
+    /// player's book: the open quest's and each log entry's reward spell and the open craft's
+    /// spell subjects. The app pushes their views ahead of a hover; the auras' views are
+    /// [`Self::aura_tooltip_subjects`].
     pub fn spell_tooltip_subjects(&self) -> Vec<u32> {
         let model = self.model_ref();
         let rewards = model
@@ -181,30 +175,40 @@ impl super::UiScript {
                 CraftTooltip::Spell(id) => Some(id),
                 CraftTooltip::Item(_) => None,
             });
-        let auras = model
-            .player_auras
-            .iter()
-            .chain(model.unit_auras.values().flatten())
-            .map(|a| a.spell_id);
-        let tracking = model.tracking.iter().map(|t| t.spell_id);
-        rewards
-            .chain(craft)
-            .chain(auras)
-            .chain(tracking)
-            .filter(|&id| id != 0)
-            .collect()
+        rewards.chain(craft).filter(|&id| id != 0).collect()
     }
 }
 
-/// A spell render that missed its view, kept to re-run when the view lands. The re-run is skipped
-/// unless the tooltip still shows `drawn`, so a line Lua added or rewrote since is kept.
+/// A spell or aura render that missed its view, kept to re-run when the view lands. The re-run is
+/// skipped unless the tooltip still shows `drawn`, so a line Lua added or rewrote since is kept.
 #[derive(Clone)]
-pub(crate) struct SpellWait {
-    spell_id: u32,
+pub(crate) struct ViewWait {
+    pub(super) subject: WaitFor,
     fallback_name: Option<String>,
-    opts: SpellRenderOpts,
-    remaining: Option<String>,
     drawn: Drawn,
+}
+
+/// The view a render waits on and how it was called.
+#[derive(Clone, PartialEq)]
+pub(crate) enum WaitFor {
+    Spell {
+        spell_id: u32,
+        opts: SpellRenderOpts,
+    },
+    /// The aura builder's key and `SetPlayerBuff`'s time line.
+    Aura {
+        key: AuraKey,
+        remaining: Option<String>,
+    },
+}
+
+impl WaitFor {
+    fn is_spell(&self, id: u32, alt_caster: bool) -> bool {
+        match self {
+            WaitFor::Spell { spell_id, opts } => *spell_id == id && opts.alt_caster == alt_caster,
+            WaitFor::Aura { .. } => false,
+        }
+    }
 }
 
 /// Each shown line's left and right cell as `(text, colour)`.
@@ -232,17 +236,49 @@ fn drawn_lines(model: &mut Model, h: FrameHandle) -> mlua::Result<Drawn> {
         .collect())
 }
 
-/// Re-run the render `h` still waits with on `spell_id` in the store `alt_caster` names, read
-/// afresh: an earlier re-render's Lua may have replaced it. Lines Lua added or rewrote since, or a
-/// fade under way, keep the tooltip as it is. The clear is silent: Lua made one setter call and saw
-/// its one `OnTooltipCleared`.
-fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> mlua::Result<()> {
+/// Record that `h`'s render missed the view `subject` names, with what it has drawn meanwhile.
+/// Spell id 0 asks for nothing and waits on nothing.
+pub(super) fn insert_wait(
+    lua: &Lua,
+    h: FrameHandle,
+    subject: WaitFor,
+    fallback_name: Option<String>,
+) -> mlua::Result<()> {
+    let id = match &subject {
+        WaitFor::Spell { spell_id, .. } => *spell_id,
+        WaitFor::Aura { key, .. } => key.spell_id,
+    };
+    if id == 0 {
+        return Ok(());
+    }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let drawn = drawn_lines(&mut model, h)?;
+    model.spell_tooltip_waits.insert(
+        h,
+        ViewWait {
+            subject,
+            fallback_name,
+            drawn,
+        },
+    );
+    Ok(())
+}
+
+/// Re-run the render `h` still waits with, if its subject is one `answers` names, against the
+/// store read afresh: an earlier re-render's Lua may have replaced the wait. Lines Lua added or
+/// rewrote since, or a fade under way, keep the tooltip as it is. The clear is silent: Lua made
+/// one setter call and saw its one `OnTooltipCleared`.
+pub(super) fn answer_wait(
+    lua: &Lua,
+    h: FrameHandle,
+    answers: &dyn Fn(&WaitFor) -> bool,
+) -> mlua::Result<()> {
     let (id, wait) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let Some(wait) = model
             .spell_tooltip_waits
             .get(&h)
-            .filter(|w| w.spell_id == spell_id && w.opts.alt_caster == alt_caster)
+            .filter(|w| answers(&w.subject))
             .cloned()
         else {
             return Ok(());
@@ -256,15 +292,14 @@ fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> ml
     };
     clear_silent(lua, h);
     let this = frame_wrapper(lua, id)?;
-    fill_spell(
-        lua,
-        &this,
-        h,
-        wait.spell_id,
-        wait.fallback_name,
-        wait.opts,
-        wait.remaining,
-    )?;
+    match wait.subject {
+        WaitFor::Spell { spell_id, opts } => {
+            fill_spell(lua, &this, h, spell_id, wait.fallback_name, opts)?;
+        }
+        WaitFor::Aura { key, remaining } => {
+            super::tooltip_aura::fill_aura(lua, &this, h, key, wait.fallback_name, remaining)?;
+        }
+    }
     // As the reference's spell callback sizes after its builder's show (`0x52f869`).
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     super::tooltip::size_tooltip(&mut model, h);
@@ -325,10 +360,6 @@ pub(super) struct TalentLines {
     pub learn: bool,
 }
 
-/// The player's buff cache holds 48 records (`0xbc6040`), the positions `GetBuffRecord 0x4e4430`
-/// answers.
-const PLAYER_BUFF_RECORDS: usize = 48;
-
 /// The talent learn hint's green, `0xff00ff00`.
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// The unmet-requirement red, `0xffff2020` (`0xc0d390`, the item builder's red).
@@ -336,10 +367,8 @@ const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 
 /// The spell builder's options (`0x52e610`'s stack arguments after the spell id, `p2` to `p5`);
 /// `Default` is the plain spell hover.
-#[derive(Clone, Copy, Default)]
-pub(super) struct SpellRenderOpts {
-    /// The aura builder (`0x52f880`): gold name, white description, the dispel class at right.
-    pub(super) aura: bool,
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct SpellRenderOpts {
     /// `p2` compact, which `SetAction` and `SetShapeshift` pass when the `UberTooltips` option is
     /// 0 or missing ([`compact_tooltips`]): the rank shows (`0x52e7fe`), the cost, range and cast
     /// lines drop (`0x52e8b4`, `0x52eb15`), so do met totem, item, form and reagent lines, an unmet
@@ -392,7 +421,7 @@ pub(super) fn live_remaining_ms(cooldown: Option<(f64, f64, bool)>, now: f64) ->
 /// and a recovery column of a minute or more (`0x52f537`..`0x52f581`). A shorter cooldown shows
 /// only in the recast cell.
 fn cooldown_countdown(v: &SpellTooltipView, opts: SpellRenderOpts) -> bool {
-    !opts.aura && opts.remaining_ms > 0 && v.recovery_ms >= 60_000
+    opts.remaining_ms > 0 && v.recovery_ms >= 60_000
 }
 
 /// Renders the spell and answers the builder's return value (`[ebp-0x28]`): whether the tooltip
@@ -404,29 +433,23 @@ fn render_spell(
     this: &Table,
     v: &SpellTooltipView,
     opts: SpellRenderOpts,
-    remaining: Option<String>,
     talent: Option<&TalentLines>,
 ) -> mlua::Result<bool> {
     let SpellRenderOpts {
-        aura,
         compact,
         show_rank,
         alt_caster,
         ..
     } = opts;
     let mut live = false;
-    // The spell builder writes the name white (`0x530270`), the aura builder gold (`0x530380`).
-    let name_color = if aura { GOLD } else { WHITE };
-    let right = if aura {
-        v.dispel_type.clone().map(|t| (t, GOLD))
-    } else {
-        // The rank when compact or asked for (`0x52e7fe`, `0x52e809`).
-        v.rank
-            .clone()
-            .filter(|_| compact || show_rank)
-            .map(|t| (t, GRAY))
-    };
-    append_line(lua, this, (v.name.clone(), name_color), right, false)?;
+    // The name white (`0x530270`), the rank gray at right when compact or asked for (`0x52e7fe`,
+    // `0x52e809`).
+    let right = v
+        .rank
+        .clone()
+        .filter(|_| compact || show_rank)
+        .map(|t| (t, GRAY));
+    append_line(lua, this, (v.name.clone(), WHITE), right, false)?;
     let talent_builder = talent.is_some_and(|t| !t.exceptional);
     // The talent head: the white rank line, then the red requirements while locked.
     if let Some(t) = talent {
@@ -440,7 +463,7 @@ fn render_spell(
     // Each cell's templates, read now (`0x703bf0` at the call); an empty one is no cell.
     let cell = |t: &Option<TooltipText>| t.as_ref().and_then(|t| t.line(lua));
     // A compact build has no cost, range or cast line (`0x52e8b4`, `0x52eb15`).
-    if !aura && !talent_builder && !compact {
+    if !talent_builder && !compact {
         match (cell(&v.cost), cell(&v.range)) {
             (Some(c), Some(r)) => append_line(lua, this, (c, WHITE), Some((r, WHITE)), false)?,
             // With no cost the range takes the left cell (`0x52ea94`-`0x52eaae`).
@@ -462,7 +485,7 @@ fn render_spell(
             }
         }
     }
-    if !aura && !talent_builder {
+    if !talent_builder {
         // The tools, white and unwrapped, unless altCaster drops them (`0x52ed50`) or a compact
         // build has them all (`0x52ee83`-`0x52ee8f`).
         if let Some(totems) = cell(&v.totems)
@@ -530,14 +553,9 @@ fn render_spell(
             append_line(lua, this, (use_all, WHITE), None, false)?;
         }
     }
-    let desc = if aura && !v.aura_description.is_empty() {
-        &v.aura_description
-    } else {
-        &v.description
-    };
+    let desc = &v.description;
     if let Some(text) = desc.line(lua) {
-        let color = if aura { WHITE } else { GOLD };
-        append_line(lua, this, (text, color), None, true)?;
+        append_line(lua, this, (text, GOLD), None, true)?;
     }
     // The talent tail: the white `TOOLTIP_TALENT_NEXT_RANK` header (`0x854a10`, pushed at
     // `0x52b2cd`) over the next rank's gold description, then the green `TOOLTIP_TALENT_LEARN`
@@ -566,11 +584,6 @@ fn render_spell(
             }
         }
     }
-    // The time-remaining line (`SetPlayerBuff` only) is the title's gold `0xffffd200`, not the
-    // description's white: a 1.12.1 screenshot reads (255, 210, 0) on it.
-    if let Some(rem) = remaining {
-        append_line(lua, this, (rem, GOLD), None, false)?;
-    }
     Ok(live || (!talent_builder && cooldown_countdown(v, opts)))
 }
 
@@ -595,14 +608,7 @@ pub(super) fn set_spell_with_talent(
     }
     match spell_view_of(lua, spell_id, false) {
         Some(v) => {
-            render_spell(
-                lua,
-                this,
-                &v,
-                SpellRenderOpts::default(),
-                None,
-                Some(&talent),
-            )?;
+            render_spell(lua, this, &v, SpellRenderOpts::default(), Some(&talent))?;
         }
         None => {
             // No view yet: the rank line alone until the next hover.
@@ -622,7 +628,7 @@ fn set_reward_spell(
     spell: Option<(u32, Option<String>)>,
 ) -> mlua::Result<()> {
     match spell {
-        Some((id, name)) => set_spell_by_id(lua, this, id, name, SpellRenderOpts::default(), None),
+        Some((id, name)) => set_spell_by_id(lua, this, id, name, SpellRenderOpts::default()),
         None => {
             let h = frame_handle_of(lua, this)?;
             clear_silent(lua, h);
@@ -638,9 +644,8 @@ pub(super) fn set_spell_by_id(
     spell_id: u32,
     fallback_name: Option<String>,
     opts: SpellRenderOpts,
-    remaining: Option<String>,
 ) -> mlua::Result<()> {
-    set_spell_flagged(lua, this, spell_id, fallback_name, opts, remaining).map(|_| ())
+    set_spell_flagged(lua, this, spell_id, fallback_name, opts).map(|_| ())
 }
 
 /// [`set_spell_by_id`] answering the builder's return value (see [`render_spell`]). A view still
@@ -652,11 +657,10 @@ pub(super) fn set_spell_flagged(
     spell_id: u32,
     fallback_name: Option<String>,
     opts: SpellRenderOpts,
-    remaining: Option<String>,
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     clear(lua, h);
-    fill_spell(lua, this, h, spell_id, fallback_name, opts, remaining)
+    fill_spell(lua, this, h, spell_id, fallback_name, opts)
 }
 
 /// Fill a cleared tooltip with the spell's view, or with the fallback name and a wait on the ask.
@@ -667,29 +671,15 @@ fn fill_spell(
     spell_id: u32,
     fallback_name: Option<String>,
     opts: SpellRenderOpts,
-    remaining: Option<String>,
 ) -> mlua::Result<bool> {
     let live = match spell_view_of(lua, spell_id, opts.alt_caster) {
-        Some(v) => render_spell(lua, this, &v, opts, remaining, None)?,
+        Some(v) => render_spell(lua, this, &v, opts, None)?,
         None => {
             if let Some(name) = fallback_name.clone() {
                 append_line(lua, this, (name, WHITE), None, false)?;
             }
-            // The fallback stands until the app answers the ask; id 0 asks nothing.
-            if spell_id != 0 {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let drawn = drawn_lines(&mut model, h)?;
-                model.spell_tooltip_waits.insert(
-                    h,
-                    SpellWait {
-                        spell_id,
-                        fallback_name,
-                        opts,
-                        remaining,
-                        drawn,
-                    },
-                );
-            }
+            // The fallback stands until the app answers the ask.
+            insert_wait(lua, h, WaitFor::Spell { spell_id, opts }, fallback_name)?;
             false
         }
     };
@@ -739,9 +729,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 remaining_ms,
                 ..Default::default()
             };
-            Ok(flag(set_spell_flagged(
-                lua, &this, spell_id, name, opts, None,
-            )?))
+            Ok(flag(set_spell_flagged(lua, &this, spell_id, name, opts)?))
         })?,
     )?;
     // GameTooltip:SetShapeshift(index): the stance-bar hover, the form's spell tooltip. It answers
@@ -773,7 +761,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             };
             // The builder's value is read only on the running-cooldown leg (`0x532a89`); the
             // other leg builds with a zero remainder and pushes nil (`0x532abe`, `0x532ac3`).
-            let live = set_spell_flagged(lua, &this, spell_id, name, opts, None)?;
+            let live = set_spell_flagged(lua, &this, spell_id, name, opts)?;
             Ok(flag(remaining_ms > 0 && live))
         })?,
     )?;
@@ -812,178 +800,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             };
             // As `SetShapeshift`: the builder's value counts only with a cooldown running
             // (`0x5328aa`; the other leg builds and pushes nil, `0x5328dc`, `0x5328e1`).
-            let live = set_spell_flagged(lua, &this, spell_id, name, opts, None)?;
+            let live = set_spell_flagged(lua, &this, spell_id, name, opts)?;
             Ok(flag(remaining_ms > 0 && live))
-        })?,
-    )?;
-    // GameTooltip:SetPlayerBuff(buffIndex) (`0x532b00`): the aura variant plus the time-remaining
-    // line only this entry appends, its text `0x52fa50`'s (`tooltip::duration_text`). The argument
-    // is the 0-based cache position `GetPlayerBuff` returns (`BuffFrame.lua:105`), not a filtered
-    // ordinal; one outside the cache's 48 records returns at once, leaving the tooltip as it was
-    // (`GetBuffRecord 0x4e4430`, `0x532bbd`). A surplus argument is ignored, as in the reference.
-    m.set(
-        "SetPlayerBuff",
-        lua.create_function(|lua, (this, index): (Table, Value)| {
-            // `is-number` else `Usage: SetPlayerBuff(buffIndex)` (`0x855258`, `0x532c2b`).
-            let index = i64::from(binding_abi::number_arg(
-                lua,
-                index,
-                "Usage: SetPlayerBuff(buffIndex)",
-            )?);
-            let now = crate::script::clock::now(lua);
-            let Some(pos) = usize::try_from(index)
-                .ok()
-                .filter(|&pos| pos < PLAYER_BUFF_RECORDS)
-            else {
-                return Ok(());
-            };
-            let (spell_id, name, remaining_ms) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                match model.player_auras.get(pos) {
-                    Some(a) => {
-                        // The gate is `untilCancelled`, not a known duration: `0x532b00` skips
-                        // the line when the record's `+0xc` is set (`0x532bdf`), a DBC flag that
-                        // holds before any `SMSG_UPDATE_AURA_DURATION` lands; a lapsed aura shows
-                        // "0 seconds remaining".
-                        let ms = (!a.until_cancelled).then(|| {
-                            // The reference counts integer milliseconds off `GetTickCount`;
-                            // this rounds the float clock to the nearest one.
-                            ((a.expiration_time - now) * 1000.0)
-                                .round()
-                                .clamp(0.0, f64::from(u32::MAX)) as u32
-                        });
-                        (a.spell_id, a.name.clone(), ms)
-                    }
-                    // An empty record: spell 0, which the builder clears and hides on
-                    // (`0x52f8ae`).
-                    None => (0, None, None),
-                }
-            };
-            // `0x52fa50`'s text from the player's own strings; without them the line is skipped.
-            let remaining = remaining_ms.and_then(|ms| {
-                let g = lua.globals();
-                super::tooltip::duration_text(ms, "SPELL_TIME_REMAINING", true, &|key| {
-                    g.get::<String>(key).ok()
-                })
-            });
-            set_spell_by_id(
-                lua,
-                &this,
-                spell_id,
-                name,
-                SpellRenderOpts {
-                    aura: true,
-                    ..Default::default()
-                },
-                remaining,
-            )
-        })?,
-    )?;
-    // GameTooltip:SetUnitBuff/SetUnitDebuff(unit, index [, raidFilter]) (`0x534ac0`, `0x534e30`):
-    // the aura variant with no time line, the index counted within the unit's buffs (its first 32
-    // aura slots) or debuffs (the 16 after them). An index out of that range, or one that finds no
-    // aura, returns before the builder, leaving the tooltip as it was (`0x534bcb`, `0x534c9c`;
-    // `0x534f3e`, `0x534f47`, `0x53501d`).
-    for (verb, usage, helpful, slots) in [
-        (
-            "SetUnitBuff",
-            r#"Usage: SetUnitBuff("unit", index [,raidFilter])"#,
-            true,
-            32,
-        ),
-        (
-            "SetUnitDebuff",
-            r#"Usage: SetUnitDebuff("unit", index [,raidFilter])"#,
-            false,
-            16,
-        ),
-    ] {
-        m.set(
-            verb,
-            lua.create_function(move |lua, (this, token, index): (Table, Value, Value)| {
-                // `is-string` on the unit and `is-number` on the index, both before either is
-                // read, else the usage line (`0x534b5c`, `0x534b70`, `0x534dd2`; `0x855528` for
-                // the debuff).
-                let (Some(token), Some(index)) =
-                    (lua.coerce_string(token)?, lua.coerce_number(index)?)
-                else {
-                    return Err(mlua::Error::RuntimeError(usage.into()));
-                };
-                let token = token.to_string_lossy();
-                // The token resolves before the index is read (`0x534b8b`), as `UnitBuff`'s does,
-                // so an unknown one raises at any index.
-                let hit = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let list = crate::script::aura::auras_of(&model, &token)?;
-                    // `_ftol`, then `index - 1` compared unsigned, so 0 and a negative index are
-                    // past the range (`0x534bc4`).
-                    let ordinal = binding_abi::ftol(index).wrapping_sub(1) as u32;
-                    if ordinal >= slots {
-                        return Ok(());
-                    }
-                    list.and_then(|a| {
-                        a.iter()
-                            .filter(|a| a.helpful == helpful)
-                            .nth(ordinal as usize)
-                    })
-                    .map(|a| (a.spell_id, a.name.clone()))
-                };
-                let Some((spell_id, name)) = hit else {
-                    return Ok(());
-                };
-                set_spell_by_id(
-                    lua,
-                    &this,
-                    spell_id,
-                    name,
-                    SpellRenderOpts {
-                        aura: true,
-                        ..Default::default()
-                    },
-                    None,
-                )
-            })?,
-        )?;
-    }
-    // GameTooltip:SetTrackingSpell() (`0x532c50`): the tracking icon's hover, the name gold over
-    // the white aura description, as the aura builder's gold wrapper `0x530380` writes it. With no
-    // tracking spell (`0xbc6378`) it returns at once, leaving the tooltip as it was (`0x532cda`).
-    m.set(
-        "SetTrackingSpell",
-        lua.create_function(|lua, this: Table| {
-            let hit = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .tracking
-                    .as_ref()
-                    .map(|t| (t.spell_id, t.name.clone()))
-            };
-            let Some((spell_id, fallback_name)) = hit.filter(|(id, _)| *id != 0) else {
-                return Ok(());
-            };
-            let h = frame_handle_of(lua, &this)?;
-            clear(lua, h);
-            match spell_view_of(lua, spell_id, false) {
-                Some(v) => {
-                    append_line(lua, &this, (v.name.clone(), GOLD), None, false)?;
-                    let desc = if !v.aura_description.is_empty() {
-                        &v.aura_description
-                    } else {
-                        &v.description
-                    };
-                    if let Some(desc) = desc.line(lua) {
-                        append_line(lua, &this, (desc, WHITE), None, true)?;
-                    }
-                }
-                None => {
-                    // No view yet: the name alone, gold.
-                    if let Some(name) = fallback_name {
-                        append_line(lua, &this, (name, GOLD), None, false)?;
-                    }
-                }
-            }
-            super::tooltip::show_or_hide_empty(lua, h);
-            Ok(())
         })?,
     )?;
     // GameTooltip:SetQuestRewardSpell() / SetQuestLogRewardSpell() (`0x535bb0`, `0x535c60`): the
@@ -1062,7 +880,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             remaining_ms,
                             ..Default::default()
                         },
-                        None,
                     )?;
                     Ok(flag(remaining_ms > 0 && live))
                 }
@@ -1139,7 +956,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         alt_caster,
                         ..Default::default()
                     },
-                    None,
                 ),
             }
         })?,
@@ -1169,7 +985,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     super::tooltip_item::render_by_id(lua, &this, item_id, None, None)
                 }
                 CraftTooltip::Spell(spell_id) => {
-                    set_spell_by_id(lua, &this, spell_id, None, SpellRenderOpts::default(), None)
+                    set_spell_by_id(lua, &this, spell_id, None, SpellRenderOpts::default())
                 }
             }
         })?,

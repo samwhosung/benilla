@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{KeyedArg, TextPart, TooltipText, UiScript};
+use benilla_ui::script::{AuraKey, AuraTooltipView, KeyedArg, TextPart, TooltipText, UiScript};
 
 use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
 use crate::items::Items;
@@ -75,55 +75,8 @@ pub(super) fn build_view(
     deps.borrow_mut().mod_bits |= vctx.spell_mods.read_bits(d);
     let form = vctx.form;
     let caster = vctx.caster;
-    // The `$`-tokens' level (`0x5075f0` hands the selector to `0x6e3130`, `507645`-`50764a`).
-    let skill = |id| match caster {
-        ViewCaster::Player => {
-            let line = vctx.skill_lines.and_then(|c| c.spell_to_line(id));
-            if let Some(line) = line {
-                deps.borrow_mut().skill_line(line);
-            }
-            line.map_or(0, |line| crate::spell::skill_line_value(vctx.store, line))
-        }
-        // The pet's level is one of the pet's own inputs.
-        ViewCaster::Pet(pet) => crate::spell::pet_skill_value(pet),
-    };
-    // A cross-referenced spell's own family mask decides its modifiers.
-    let lookup = |id| {
-        let t = spells.catalog.get(id)?;
-        deps.borrow_mut().mod_bits |= vctx.spell_mods.read_bits(t);
-        Some(t)
-    };
-    let home = vctx.home_area;
-    let home_area = || {
-        deps.borrow_mut().home = true;
-        home
-    };
-    // `$g`/`$G` read the active player's gender byte (`0x508214`), a pet view's too.
-    let gender = || {
-        deps.borrow_mut().gender = true;
-        vctx.store.and_then(|s| s.0.unit_gender()).unwrap_or(0)
-    };
     // `0x6e3130` for this spell: the level the cost's and the cast time's per-level terms read.
     let pet_level = |pet| d.skill_level(crate::spell::pet_skill_value(pet));
-    let ctx = benilla_formats::TokenContext {
-        durations: &spells.durations,
-        radii: &spells.radii,
-        ranges: Some(&spells.ranges),
-        skill: &skill,
-        lookup: &lookup,
-        mods: Some(vctx.spell_mods),
-        unmodified_points: false,
-        gender: &gender,
-        home_area: &home_area,
-        // Never read: the parts leave each template to the render.
-        global: &|_| None,
-        printf: &crate::ui_script::token_printf,
-    };
-    // The aura tooltip `0x52f880` expands the aura text with the points' modifiers off (`52f940`).
-    let aura_ctx = benilla_formats::TokenContext {
-        unmodified_points: true,
-        ..ctx
-    };
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second column adds `_PER_TIME`, and no cost at all
@@ -370,11 +323,14 @@ pub(super) fn build_view(
             _ => "SPELL_USE_ALL_HEALTH",
         })
     });
+    let description = d
+        .description
+        .as_deref()
+        .map(|t| expand(t, d, spells, vctx, &deps, Default::default(), false))
+        .unwrap_or_default();
     let view = benilla_ui::script::SpellTooltipView {
         name: d.name.clone(),
         rank: d.rank.clone(),
-        // The aura variant's right column (`0x52f8e5`), gated on `SpellDispelType.dbc` `[+0x28]`.
-        dispel_type: spells.catalog.dispel_label(d).map(str::to_string),
         cost,
         range,
         cast_time,
@@ -390,32 +346,101 @@ pub(super) fn build_view(
         reagents,
         reagents_met,
         use_all,
-        description: d
-            .description
-            .as_deref()
-            .map(|t| {
-                tooltip_text(benilla_formats::substitute_parts(
-                    t,
-                    d,
-                    &ctx,
-                    Default::default(),
-                ))
-            })
-            .unwrap_or_default(),
-        aura_description: d
-            .aura_description
-            .as_deref()
-            .map(|t| {
-                tooltip_text(benilla_formats::substitute_parts(
-                    t,
-                    d,
-                    &aura_ctx,
-                    Default::default(),
-                ))
-            })
-            .unwrap_or_default(),
+        description,
     };
     Some((view, deps.into_inner()))
+}
+
+/// Build one aura's tooltip view, the aura builder `0x52f880`'s lines for `key`, and what it read.
+/// The text is `AuraDescription` alone, empty with none (`0x52f929`-`0x52f938`), its tokens at the
+/// key's level and, for a spell whose `StackAmount` is above 1, at its stack, else at 1
+/// (`0x52f8ca`-`0x52f8dc`).
+pub(super) fn build_aura_view(
+    key: AuraKey,
+    spells: &Spells,
+    vctx: &ViewCtx,
+) -> Option<(AuraTooltipView, Deps)> {
+    let d = spells.catalog.get(key.spell_id)?;
+    let deps = RefCell::new(Deps::default());
+    deps.borrow_mut().mod_bits |= vctx.spell_mods.read_bits(d);
+    let at = benilla_formats::ExpandAt {
+        level: u32::from(key.level),
+        stack: if d.stack_amount > 1 {
+            u32::from(key.stack)
+        } else {
+            1
+        },
+    };
+    let description = d
+        .aura_description
+        .as_deref()
+        .map(|t| expand(t, d, spells, vctx, &deps, at, true))
+        .unwrap_or_default();
+    let view = AuraTooltipView {
+        name: d.name.clone(),
+        // The right column (`0x52f8e5`), gated on `SpellDispelType.dbc` `[+0x28]`.
+        dispel_type: spells.catalog.dispel_label(d).map(str::to_string),
+        description,
+    };
+    Some((view, deps.into_inner()))
+}
+
+/// `text`'s `$`-tokens expanded for `d` against `vctx`'s caster as `0x5075f0` does for a caller
+/// passing `at`, each read recorded in `deps`. `unmodified_points` is the aura builder's call,
+/// the points' modifiers off (`0x52f946`).
+fn expand(
+    text: &str,
+    d: &benilla_formats::SpellDisplay,
+    spells: &Spells,
+    vctx: &ViewCtx,
+    deps: &RefCell<Deps>,
+    at: benilla_formats::ExpandAt,
+    unmodified_points: bool,
+) -> TooltipText {
+    let caster = vctx.caster;
+    // The `$`-tokens' level (`0x5075f0` hands the selector to `0x6e3130`, `507645`-`50764a`).
+    let skill = |id| match caster {
+        ViewCaster::Player => {
+            let line = vctx.skill_lines.and_then(|c| c.spell_to_line(id));
+            if let Some(line) = line {
+                deps.borrow_mut().skill_line(line);
+            }
+            line.map_or(0, |line| crate::spell::skill_line_value(vctx.store, line))
+        }
+        // The pet's level is one of the pet's own inputs.
+        ViewCaster::Pet(pet) => crate::spell::pet_skill_value(pet),
+    };
+    // A cross-referenced spell's own family mask decides its modifiers.
+    let lookup = |id| {
+        let t = spells.catalog.get(id)?;
+        deps.borrow_mut().mod_bits |= vctx.spell_mods.read_bits(t);
+        Some(t)
+    };
+    let home = vctx.home_area;
+    let home_area = || {
+        deps.borrow_mut().home = true;
+        home
+    };
+    // `$g`/`$G` read the active player's gender byte (`0x508214`), a pet view's too.
+    let gender = || {
+        deps.borrow_mut().gender = true;
+        vctx.store.and_then(|s| s.0.unit_gender()).unwrap_or(0)
+    };
+    let ctx = benilla_formats::TokenContext {
+        durations: &spells.durations,
+        radii: &spells.radii,
+        ranges: Some(&spells.ranges),
+        skill: &skill,
+        lookup: &lookup,
+        mods: Some(vctx.spell_mods),
+        unmodified_points,
+        gender: &gender,
+        home_area: &home_area,
+        // Never read: the parts leave each template to the render.
+        global: &|_| None,
+        printf: &crate::ui_script::token_printf,
+    };
+    tooltip_text(benilla_formats::substitute_parts(text, d, &ctx, at))
 }
 
 /// The token engine's parts as the render reads them: each template it names by key, its stand-in
@@ -497,6 +522,8 @@ pub(super) struct SpellFeedMemory {
     /// The spells whose view built against the pet is in the VM's pet store, and what each read
     /// of the player's side (the pet's own inputs are [`Self::pet`]).
     pub(super) pet_pushed: HashMap<u32, Deps>,
+    /// The aura views, by the aura builder's key, with what each read.
+    pub(super) aura_pushed: HashMap<AuraKey, Deps>,
     /// What the pet views read off the pet unit.
     pet: Option<PetInputs>,
     /// The player-side inputs the pushed views were checked against last frame.
@@ -508,13 +535,14 @@ pub(super) struct SpellFeedMemory {
 }
 
 impl SpellFeedMemory {
-    /// Queue for a rebuild the pushed views, the player's and the pet's, that read what
-    /// `changes` moved.
+    /// Queue for a rebuild the pushed views, the player's, the pet's and the auras', that read
+    /// what `changes` moved.
     pub(super) fn requeue(
         &mut self,
         changes: &Changes,
         wanted: &mut Vec<u32>,
         wanted_pet: &mut Vec<u32>,
+        wanted_aura: &mut Vec<AuraKey>,
     ) {
         if changes.is_empty() {
             return;
@@ -523,15 +551,25 @@ impl SpellFeedMemory {
             (&mut self.pushed, wanted),
             (&mut self.pet_pushed, wanted_pet),
         ] {
-            pushed.retain(|&id, deps| {
-                let hit = deps.hits(changes);
-                if hit {
-                    queue.push(id);
-                }
-                !hit
-            });
+            requeue_hits(pushed, changes, queue);
         }
+        requeue_hits(&mut self.aura_pushed, changes, wanted_aura);
     }
+}
+
+/// Move each view of `pushed` that read what `changes` moved onto `queue`.
+fn requeue_hits<K: Copy + Eq + std::hash::Hash>(
+    pushed: &mut HashMap<K, Deps>,
+    changes: &Changes,
+    queue: &mut Vec<K>,
+) {
+    pushed.retain(|&key, deps| {
+        let hit = deps.hits(changes);
+        if hit {
+            queue.push(key);
+        }
+        !hit
+    });
 }
 
 /// What a reagent's line renders for `entry`: the carried count and whether its name has streamed,
@@ -593,9 +631,9 @@ pub(super) struct SpellTooltipSources<'w> {
 }
 
 /// Push a view for every spell the UI can hover (the book, the class's talent ranks, the open
-/// trainer's services, and what the VM holds: the pet's spells, the quest rewards, the craft's
-/// subjects, every unit's auras and the tracking spell) before it is hovered, as the reference
-/// reads them all locally; an ask for any other id too.
+/// trainer's services, and what the VM holds: the pet's spells, the quest rewards and the craft's
+/// subjects) and for every aura the VM holds (every unit's and the tracking spell) before it is
+/// hovered, as the reference reads them all locally; an ask for any other id or aura too.
 pub(super) fn feed_spell_tooltips(
     script: Option<NonSendMut<UiScript>>,
     actions: Option<Res<PlayerActions>>,
@@ -631,7 +669,7 @@ pub(super) fn feed_spell_tooltips(
         return;
     };
     let mut wanted: Vec<u32> = script.take_spell_tooltip_asks();
-    // What the VM holds for a hover: pet spells, quest rewards, craft subjects, auras, tracking.
+    // What the VM holds for a hover: quest rewards and craft subjects.
     wanted.extend(
         script
             .spell_tooltip_subjects()
@@ -647,6 +685,14 @@ pub(super) fn feed_spell_tooltips(
                 .filter(|s| !memory.pushed.contains_key(s)),
         );
     }
+    // The aura views: every unit's auras, the tracking spell, and what their setters asked for.
+    let mut wanted_aura: Vec<AuraKey> = script.take_aura_tooltip_asks();
+    wanted_aura.extend(
+        script
+            .aura_tooltip_subjects()
+            .into_iter()
+            .filter(|k| !memory.aura_pushed.contains_key(k)),
+    );
     // The pet views: the pet's bar and book, and what their setters asked for.
     let mut wanted_pet: Vec<u32> = script.take_pet_spell_tooltip_asks();
     wanted_pet.extend(
@@ -729,7 +775,7 @@ pub(super) fn feed_spell_tooltips(
         .collect();
     changes = changes.with_reagents(&memory.reagents, &reagent_state);
     memory.reagents = reagent_state;
-    memory.requeue(&changes, &mut wanted, &mut wanted_pet);
+    memory.requeue(&changes, &mut wanted, &mut wanted_pet, &mut wanted_aura);
     // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds the
     // pet views alone.
     let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
@@ -752,7 +798,9 @@ pub(super) fn feed_spell_tooltips(
     wanted.dedup();
     wanted_pet.sort_unstable();
     wanted_pet.dedup();
-    let (built, built_pet) = {
+    wanted_aura.sort_unstable();
+    wanted_aura.dedup();
+    let (built, built_aura, built_pet) = {
         let mut vctx = ViewCtx {
             home_area: home_area.as_deref(),
             form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
@@ -768,16 +816,27 @@ pub(super) fn feed_spell_tooltips(
             spell_mods,
         };
         let built = build_views(wanted, spells, &mut vctx, memory, false);
+        let built_aura: Vec<(AuraKey, AuraTooltipView)> = wanted_aura
+            .into_iter()
+            .filter_map(|key| {
+                let (view, deps) = build_aura_view(key, spells, &vctx)?;
+                memory.aura_pushed.insert(key, deps);
+                Some((key, view))
+            })
+            .collect();
         // The pet views read the pet's form and reach where the player's read the player's.
         vctx.caster = ViewCaster::Pet(pet);
         vctx.form = pet.map_or(0, |p| p.unit_shapeshift_form());
         vctx.range_caster = pet_unit;
         vctx.attack_target = pet_target;
         let built_pet = build_views(wanted_pet, spells, &mut vctx, memory, true);
-        (built, built_pet)
+        (built, built_aura, built_pet)
     };
     for (id, view) in built {
         script.set_spell_tooltip(id, view);
+    }
+    for (key, view) in built_aura {
+        script.set_aura_tooltip(key, view);
     }
     for (id, view) in built_pet {
         script.set_pet_spell_tooltip(id, view);

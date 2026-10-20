@@ -96,6 +96,7 @@ fn debuff(spell_id: u32, name: &str, debuff_type: Option<&str>) -> AuraState {
         name: Some(name.into()),
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count: 1,
+        level: 0,
         debuff_type: debuff_type.map(str::to_string),
         // Only auras on the player carry a duration on the wire (vmangos `SpellAuras.cpp:7516`).
         duration: 0.0,

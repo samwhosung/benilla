@@ -89,6 +89,7 @@ fn debuff(spell_id: u32, name: &str, count: u8, debuff_type: Option<&str>) -> Au
         name: Some(name.into()),
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count,
+        level: 0,
         debuff_type: debuff_type.map(Into::into),
         // The 1.12 wire carries no duration for another unit's auras.
         duration: 0.0,
@@ -107,6 +108,7 @@ fn buff(spell_id: u32, name: &str) -> AuraState {
         name: Some(name.into()),
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count: 1,
+        level: 0,
         debuff_type: None,
         duration: 0.0,
         expiration_time: 0.0,

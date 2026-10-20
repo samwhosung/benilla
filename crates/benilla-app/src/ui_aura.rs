@@ -70,12 +70,14 @@ impl AuraDurations {
     }
 }
 
-/// A record of the player's cache (`0xbc6040`): the position persists, the fields refresh.
+/// A record of the player's cache (`0xbc6040`), made by `BuildBuffRecord 0x4e44b0` when its aura
+/// enters: the position persists, and only the stack count refreshes.
 struct CachedAura {
     slot: u8,
     spell_id: u32,
     /// When the aura entered the cache, for the duration freshness gate.
     appeared_at: f64,
+    /// The `AURAFLAGS` nibble and the `AURALEVELS` byte as the record was made (`+0xa`, `+0x8`).
     flags: u8,
     level: u8,
     stacks: u8,
@@ -118,7 +120,8 @@ impl Plugin for UiAuraPlugin {
 }
 
 /// `PlayerAuras_Update`'s passes: drop a record whose slot lost its spell, closing the gap
-/// (`0x4e421b`), then append new slots in ascending order (`0x4e424e`-`0x4e4374`).
+/// (`0x4e421b`), then append new slots in ascending order (`0x4e424e`-`0x4e4374`). A record kept
+/// across passes refreshes its stack count alone (`0x4e433b`-`0x4e434a`).
 fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
     cache.retain(|c| {
         live.iter()
@@ -126,8 +129,6 @@ fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
     });
     for a in live {
         if let Some(c) = cache.iter_mut().find(|c| c.slot == a.slot) {
-            c.flags = a.flags;
-            c.level = a.level;
             c.stacks = a.stacks;
         } else {
             if trace_period().is_some() {
@@ -238,19 +239,21 @@ fn projection_of(list: &[AuraState]) -> Vec<AuraProjection> {
 
 /// One aura as `UnitBuff 0x519500` and `UnitDebuff 0x5198f0` return it for a unit not the player:
 /// no duration, which the 1.12 wire carries for the player alone.
-fn unit_aura_state(
-    catalog: Option<&SpellCatalog>,
-    slot: u8,
-    spell_id: u32,
-    count: u8,
-    flags: u8,
-) -> AuraState {
+fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraState {
+    let &AuraInput {
+        slot,
+        spell_id,
+        count,
+        flags,
+        level,
+    } = input;
     let display = catalog.and_then(|cat| cat.get(spell_id));
     AuraState {
         spell_id,
         name: display.map(|d| d.name.clone()),
         icon: display.and_then(|d| d.icon.clone()),
         count,
+        level,
         debuff_type: display
             .zip(catalog)
             .and_then(|(d, cat)| cat.dispel_name(d))
@@ -265,15 +268,23 @@ fn unit_aura_state(
     }
 }
 
-/// What one aura of a unit not the player is listed from: its slot, spell, stack count and
-/// `AURAFLAGS` nibble. A list is a pure function of these and the spell catalog.
-type AuraInput = (u8, u32, u8, u8);
+/// What one aura of a unit not the player is listed from: its slot, spell, stack count,
+/// `AURAFLAGS` nibble and `AURALEVELS` byte. A list is a pure function of these and the spell
+/// catalog.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AuraInput {
+    slot: u8,
+    spell_id: u32,
+    count: u8,
+    flags: u8,
+    level: u8,
+}
 
 /// The list [`AuraInput`]s make.
 fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraState> {
     inputs
         .iter()
-        .map(|&(slot, spell, count, flags)| unit_aura_state(catalog, slot, spell, count, flags))
+        .map(|input| unit_aura_state(catalog, input))
         .collect()
 }
 
@@ -290,13 +301,20 @@ fn other_unit_inputs<'a>(
         .unit_auras()
         .filter(move |a| buffs_visible || a.slot >= UNIT_AURA_POSITIVE_SLOTS)
         .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
-        .map(|a| (a.slot, a.spell_id, a.stacks, a.flags))
+        .map(|a| AuraInput {
+            slot: a.slot,
+            spell_id: a.spell_id,
+            count: a.stacks,
+            flags: a.flags,
+            level: a.level,
+        })
 }
 
 /// A roster record's aura block as the two bindings' roster walk reads it (`0x519763`-`0x5197d2`,
 /// `0x519b53`-`0x519bc5`): ascending slot, the display filter alone (`0x51979f`, `0x519b8f`), no
 /// unit gate and no `AURAFLAGS`, which the record does not hold. The stack count is always 1
-/// (`0x51980f`, `0x519c2d`), and nothing is cancelable.
+/// (`0x51980f`, `0x519c2d`), nothing is cancelable, and the level is 0, what `SetUnitBuff` passes
+/// for a record (`0x534da8`).
 fn record_inputs<'a>(
     slots: impl Iterator<Item = (u8, u16)> + 'a,
     catalog: Option<&'a SpellCatalog>,
@@ -304,7 +322,13 @@ fn record_inputs<'a>(
     slots
         .map(|(slot, spell)| (slot, u32::from(spell)))
         .filter(move |&(_, spell)| spell != 0 && shown_in_aura_ui(catalog, spell))
-        .map(|(slot, spell)| (slot, spell, 1, 0))
+        .map(|(slot, spell_id)| AuraInput {
+            slot,
+            spell_id,
+            count: 1,
+            flags: 0,
+            level: 0,
+        })
 }
 
 /// `UnitBuff 0x519500`'s unit-level gate, before any slot: a unit's buffs are listed only if it
@@ -458,6 +482,7 @@ fn feed_auras(
                 name: display.map(|d| d.name.clone()),
                 icon: display.and_then(|d| d.icon.clone()),
                 count: c.stacks,
+                level: c.level,
                 debuff_type: display
                     .zip(catalog)
                     .and_then(|(d, cat)| cat.dispel_name(d))
@@ -884,9 +909,14 @@ mod tests {
         reconcile(&mut cache, &[slot(0, 10), slot(1, 20)], 1.0);
         let mut restacked = slot(1, 20);
         restacked.stacks = 5;
+        restacked.level = 30;
+        restacked.flags = 0x8;
         reconcile(&mut cache, &[slot(0, 10), restacked], 2.0);
         assert_eq!(order(&cache), [(0, 10), (1, 20)], "position unchanged");
         assert_eq!(cache[1].stacks, 5, "stack count refreshed");
+        // The level and the flags stay as the record was made (`0x4e433b`-`0x4e434a`).
+        assert_eq!(cache[1].level, 60);
+        assert_eq!(cache[1].flags, AURA_FLAG_CANCELABLE | 0x8);
         assert_eq!(cache[0].appeared_at, 1.0, "appeared_at is not disturbed");
     }
 

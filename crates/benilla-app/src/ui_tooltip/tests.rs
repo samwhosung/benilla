@@ -1,6 +1,6 @@
 //! The spell-view cell tests, against the real 5875 data, and the feed's place in the schedule.
 
-use super::spell_feed::{build_view, feed_spell_tooltips, ViewCaster, ViewCtx};
+use super::spell_feed::{build_aura_view, build_view, feed_spell_tooltips, ViewCaster, ViewCtx};
 use super::*;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
@@ -47,7 +47,6 @@ pub(super) struct Shown {
     pub(super) chance: Option<String>,
     pub(super) use_all: Option<String>,
     pub(super) description: String,
-    pub(super) aura_description: String,
 }
 
 impl Shown {
@@ -77,7 +76,6 @@ impl Shown {
             chance: cell(&v.chance),
             use_all: cell(&v.use_all),
             description: text(&v.description),
-            aura_description: text(&v.aura_description),
         }
     }
 }
@@ -309,6 +307,43 @@ fn a_female_players_spell_tooltips_take_the_second_gender_form() {
     assert!(pets.contains("the mage and her allies"), "{pets}");
 }
 
+/// The aura view's text, read through the shipped strings, built for `spell_id` at `level` and
+/// `stack`.
+fn aura_text(spell_id: u32, level: u8, stack: u8, spells: &Spells, vctx: &ViewCtx) -> String {
+    let key = benilla_ui::script::AuraKey {
+        spell_id,
+        level,
+        stack,
+    };
+    let (view, _) = build_aura_view(key, spells, vctx).expect("an aura view");
+    view.description.text(&shipped)
+}
+
+/// The aura builder expands the aura text at the aura's level, and at its count when the spell
+/// stacks (`0x52f8ca`-`0x52f8dc`, `0x52f955`), on the real `Spell.dbc`. Rend Flesh (3147, 1 point
+/// and 1.3 a level over level 1) from a level-25 raptor reads 32 to 33, and at level 0 the
+/// player's skill, none here, reads the flat point. Three stacks of Combustion (28682,
+/// `StackAmount` 10) read three times one; a count on Arcane Intellect (1459, `StackAmount` 0)
+/// reads as one. Fire Blast (2136) has a description and no aura text, and its aura view has no
+/// text: the builder falls back to nothing (`0x52f929`).
+#[test]
+fn the_aura_text_takes_the_auras_level_and_stack_on_real_data() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let vctx = t.ctx(&objects, 0, None);
+    let text = |id, level, stack| aura_text(id, level, stack, &spells, &vctx);
+    assert_eq!(text(3147, 25, 1), "32 to 33 damage inflicted every 3 sec.");
+    assert_eq!(text(3147, 0, 1), "1 damage inflicted every 3 sec.");
+    let combustion =
+        |n| format!("Increases critical strike chance from Fire damage spells by {n}%.");
+    assert_eq!(text(28682, 0, 1), combustion(10));
+    assert_eq!(text(28682, 0, 3), combustion(30));
+    assert_eq!(text(1459, 60, 4), "Increases Intellect by 2.");
+    assert_eq!(text(2136, 0, 1), "");
+}
+
 /// An object index with nothing streamed: no worn item, and every reagent count 0.
 fn no_objects() -> crate::ui_items::TestObjects {
     crate::ui_items::TestObjects::new()
@@ -467,13 +502,15 @@ fn improved_devotion_aura_updates_the_description_but_not_the_aura_text() {
     let objects = objs.get();
     let base = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
     assert!(base.description.contains("55 additional armor"));
-    assert!(base.aura_description.contains("55"));
+    let base_aura = aura_text(465, 0, 1, &spells, &t.ctx(&objects, 0, None));
+    assert!(base_aura.contains("55"), "{base_aura}");
 
     t.spell_mods.set_class_family(devotion.spell_family);
     t.spell_mods.set(false, bit, 8, 25);
     let improved = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
     assert!(improved.description.contains("68 additional armor"));
-    assert_eq!(improved.aura_description, base.aura_description);
+    let improved_aura = aura_text(465, 0, 1, &spells, &t.ctx(&objects, 0, None));
+    assert_eq!(improved_aura, base_aura);
 }
 
 /// Fire Blast rank 1's 8 s is its category recovery, its own recovery 0; Improved Fire Blast's
@@ -1216,7 +1253,14 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     let catalog = std::collections::HashMap::from([
         (3110, spell("Firebolt", "Deals Fire damage.")),
         (17253, spell("Bite", "Bite the enemy.")),
-        (589, spell("Shadow Word: Pain", "Shadow damage over time.")),
+        // The aura builder reads the aura text alone (`0x52f929`).
+        (
+            589,
+            benilla_formats::SpellDisplay {
+                aura_description: Some("Shadow damage over time.".into()),
+                ..spell("Shadow Word: Pain", "Not the aura's text.")
+            },
+        ),
     ]);
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();

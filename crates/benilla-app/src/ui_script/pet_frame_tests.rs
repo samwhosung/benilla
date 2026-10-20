@@ -108,6 +108,7 @@ fn pet_buff(spell_id: u32, name: &str, count: u8) -> AuraState {
         name: Some(name.into()),
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count,
+        level: 0,
         debuff_type: None,
         // Only your own auras carry a duration on the 1.12 wire.
         duration: 0.0,

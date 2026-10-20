@@ -10,10 +10,12 @@
 use std::collections::BTreeSet;
 
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::SpellTooltipView;
+use benilla_ui::script::{AuraKey, AuraTooltipView, SpellTooltipView};
 
 use super::spell_deps::{Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
-use super::spell_feed::{build_view, reagent_state, PetInputs, ViewCaster, ViewCtx};
+use super::spell_feed::{
+    build_aura_view, build_view, reagent_state, PetInputs, ViewCaster, ViewCtx,
+};
 use super::tests::TestCtx;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects};
@@ -430,6 +432,9 @@ struct Rig {
     /// The reagent entries any spell lists, ascending.
     reagents: Vec<u32>,
     families: Vec<u32>,
+    /// The aura builder's level and stack when the sweeps build aura views; `None` builds the
+    /// spell views.
+    aura: Option<(u8, u8)>,
 }
 
 impl Rig {
@@ -507,27 +512,46 @@ impl Rig {
             layout,
             reagents: reagents.into_iter().collect(),
             families: families.into_iter().collect(),
+            aura: None,
         })
     }
+}
+
+/// A built view, the spell builder's or the aura builder's.
+#[derive(Debug, PartialEq)]
+enum Built {
+    Spell(Box<SpellTooltipView>),
+    Aura(AuraTooltipView),
 }
 
 fn build(
     t: &mut TestCtx,
     objects: &Objects,
     spells: &Spells,
+    aura: Option<(u8, u8)>,
     id: u32,
     m: &Mat,
-) -> Option<(SpellTooltipView, Deps)> {
+) -> Option<(Built, Deps)> {
     t.spell_mods = m.mods.clone();
     let mut ctx = t.ctx_for(objects, m.form, None, Some(&m.store));
     ctx.home_area = m.home;
     ctx.range_caster = m.caster;
     ctx.attack_target = m.attack_target;
-    build_view(id, spells, &mut ctx)
+    match aura {
+        None => build_view(id, spells, &mut ctx).map(|(v, d)| (Built::Spell(Box::new(v)), d)),
+        Some((level, stack)) => {
+            let key = AuraKey {
+                spell_id: id,
+                level,
+                stack,
+            };
+            build_aura_view(key, spells, &ctx).map(|(v, d)| (Built::Aura(v), d))
+        }
+    }
 }
 
 /// A spell whose text names another spell's number (`$1234s1`), whose modifiers then answer to
-/// that spell's family.
+/// that spell's family. The spell builder's text and the aura builder's are both read.
 fn cross_references(d: &benilla_formats::SpellDisplay) -> bool {
     [d.description.as_deref(), d.aura_description.as_deref()]
         .into_iter()
@@ -566,8 +590,10 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
         objs,
         ids,
         layout,
+        aura,
         ..
     } = rig;
+    let aura = *aura;
     let objects = objs.get();
     let mut out = Sweep::default();
     let mut before: Option<(Params, Mat)> = None;
@@ -587,7 +613,7 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
             before = Some((p, mat(layout, base, p)));
         }
         let (_, before) = before.as_ref().expect("set above");
-        let Some((view, deps)) = build(t, &objects, spells, id, before) else {
+        let Some((view, deps)) = build(t, &objects, spells, aura, id, before) else {
             continue;
         };
         let moved = flip(layout, &deps);
@@ -597,7 +623,7 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
             after = Some(((p, moved), now, c));
         }
         let (_, now, changes) = after.as_ref().expect("set above");
-        let (moved_view, _) = build(t, &objects, spells, id, now).expect("built before");
+        let (moved_view, _) = build(t, &objects, spells, aura, id, now).expect("built before");
         let hit = deps.hits(changes);
         out.requeued += usize::from(hit);
         if moved_view == view {
@@ -613,7 +639,7 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
             .into_iter()
             .filter(|(_, part)| {
                 let alone = mat(layout, base.xor(*part), p);
-                build(t, &objects, spells, id, &alone).is_some_and(|(v, _)| v != view)
+                build(t, &objects, spells, aura, id, &alone).is_some_and(|(v, _)| v != view)
             })
             .map(|(name, _)| name)
             .collect();
@@ -855,6 +881,34 @@ fn every_view_that_moves_with_an_input_is_requeued_by_that_input() {
     eprintln!("{}", report.join("\n"));
 }
 
+/// The aura builder's views (`0x52f880`) answer to their reads as the spell views do: at level 0,
+/// where the skill line stands in for the caster's level, and at a caster's level and stack,
+/// everything an aura view reads moves it and nothing else does.
+#[test]
+fn every_aura_view_that_moves_with_an_input_is_requeued_by_that_input() {
+    let Some(mut rig) = Rig::new() else { return };
+    let empty = Inputs::default();
+    let outside = |layout: &Layout, deps: &Deps| Inputs::outside(deps, layout);
+    let inside = |layout: &Layout, deps: &Deps| Inputs::ALL.xor(Inputs::outside(deps, layout));
+    for (key, floor) in [((0, 1), 250), ((30, 3), 150)] {
+        rig.aura = Some(key);
+        let s = sweep(&mut rig, empty, &any, &own, &inside);
+        assert_covered(&format!("everything an aura view reads at {key:?}"), &s);
+        assert!(
+            s.moved >= floor,
+            "only {} aura views at {key:?} moved with what they read",
+            s.moved
+        );
+        for base in [empty, Inputs::ALL] {
+            let s = sweep(&mut rig, base, &any, &own, &outside);
+            assert_covered(
+                &format!("everything an aura view at {key:?} does not read"),
+                &s,
+            );
+        }
+    }
+}
+
 /// The tools and reagents lines: a name streaming in re-queues every view that lists the item,
 /// and a count moving re-queues only the spells that list the entry.
 #[test]
@@ -907,7 +961,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
     let unnamed = states(t, &empty.store);
     let before: Vec<_> = listing
         .iter()
-        .map(|&id| build(t, &objects, spells, id, &empty).expect("built"))
+        .map(|&id| build(t, &objects, spells, None, id, &empty).expect("built"))
         .collect();
     for (i, &entry) in reagents.iter().enumerate() {
         let template = crate::items::test_template(&format!("Reagent {i}"));
@@ -917,7 +971,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
     let changes = Changes::default().with_reagents(&unnamed, &named);
     let mut moved = 0;
     for (&id, (view, deps)) in listing.iter().zip(&before) {
-        let (now, _) = build(t, &objects, spells, id, &empty).expect("built");
+        let (now, _) = build(t, &objects, spells, None, id, &empty).expect("built");
         if now != *view {
             moved += 1;
             assert!(
@@ -931,7 +985,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
     // A stack of each entry moves in, sixteen at a time: only the spells listing one are due.
     let plain: Vec<_> = listing
         .iter()
-        .map(|&id| build(t, &objects, spells, id, &empty).expect("built"))
+        .map(|&id| build(t, &objects, spells, None, id, &empty).expect("built"))
         .collect();
     let mut moved = 0;
     for (group, entries) in reagents.chunks(16).enumerate() {
@@ -945,7 +999,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
         let changes = Changes::default().with_reagents(&named, &states(t, &carrying.store));
         assert!(!changes.is_empty());
         for (&id, (view, deps)) in listing.iter().zip(&plain) {
-            let (now, _) = build(t, &objects, spells, id, &carrying).expect("built");
+            let (now, _) = build(t, &objects, spells, None, id, &carrying).expect("built");
             let lists = deps.reagents().iter().any(|e| entries.contains(e));
             assert_eq!(deps.hits(&changes), lists, "spell {id}: {deps:?}");
             if now != *view {

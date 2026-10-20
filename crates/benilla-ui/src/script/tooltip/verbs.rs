@@ -252,6 +252,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // The content methods: items, spells and auras, talents, units.
     crate::script::tooltip_item::install_methods(lua, &m)?;
     crate::script::tooltip_spell::install_methods(lua, &m)?;
+    crate::script::tooltip_aura::install_methods(lua, &m)?;
     crate::script::talent::install_tooltip_method(lua, &m)?;
     crate::script::tooltip_unit::install_methods(lua, &m)?;
 

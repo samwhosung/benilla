@@ -1097,8 +1097,11 @@ pub(crate) struct Model {
     /// selector asks for (`0x52e610`'s fourth argument).
     pub(crate) pet_spell_tooltips: HashMap<u32, super::SpellTooltipView>,
     pub(crate) pet_spell_tooltip_asks: HashSet<u32>,
-    /// The tooltips whose spell render missed its view, re-rendered when the app answers.
-    pub(crate) spell_tooltip_waits: HashMap<FrameHandle, super::tooltip_spell::SpellWait>,
+    /// Each aura's view by the aura builder's arguments, and the misses asked for.
+    pub(crate) aura_tooltips: HashMap<super::AuraKey, super::AuraTooltipView>,
+    pub(crate) aura_tooltip_asks: HashSet<super::AuraKey>,
+    /// The tooltips whose spell or aura render missed its view, re-rendered when the app answers.
+    pub(crate) spell_tooltip_waits: HashMap<FrameHandle, super::tooltip_spell::ViewWait>,
     /// Each tooltip's last item build, kept until its next clear for the rebuild a cache answer
     /// runs (`+0x380`..`+0x440`, `0x52e530`).
     pub(crate) item_builds: HashMap<FrameHandle, super::tooltip_item::build::ItemBuild>,
@@ -1857,6 +1860,8 @@ impl Model {
             spell_tooltip_asks: HashSet::new(),
             pet_spell_tooltips: HashMap::new(),
             pet_spell_tooltip_asks: HashSet::new(),
+            aura_tooltips: HashMap::new(),
+            aura_tooltip_asks: HashSet::new(),
             spell_tooltip_waits: HashMap::new(),
             item_builds: HashMap::new(),
             item_cache_waits: HashMap::new(),

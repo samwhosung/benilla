@@ -394,7 +394,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     spell,
                     link_name(&link).map(str::to_string),
                     Default::default(),
-                    None,
                 );
             }
             let Some((id, enchant_id, roll)) = hyperlink_item_fields(&link) else {

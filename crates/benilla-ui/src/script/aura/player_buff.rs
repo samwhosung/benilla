@@ -198,6 +198,7 @@ mod tests {
             name: Some(name.into()),
             icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
             count: 1,
+            level: 0,
             debuff_type: None,
             duration: 0.0,
             expiration_time: 0.0,

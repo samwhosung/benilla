@@ -31,6 +31,10 @@ pub struct AuraState {
     pub icon: Option<String>,
     /// Stack count, at least 1; the reference shows it only above 1.
     pub count: u8,
+    /// The slot's `UNIT_FIELD_AURALEVELS` byte, the caster's level (vmangos `SpellAuras.cpp:6746`),
+    /// which the aura tooltip's per-level terms read (`0x534ceb`, `0x532bc3`); 0 on a roster
+    /// record, which holds none (`0x534da8`).
+    pub level: u8,
     /// `"Magic"`, `"Curse"`, `"Disease"`, `"Poison"` or `None`; the debuff border tints by it.
     pub debuff_type: Option<String>,
     /// Seconds, from the last apply or refresh; 0 when permanent or on a unit not the player.
@@ -294,6 +298,7 @@ mod tests {
             name: Some(name.into()),
             icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
             count: 1,
+            level: 0,
             debuff_type: None,
             duration: 0.0,
             expiration_time: 0.0,
