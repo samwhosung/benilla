@@ -15,7 +15,13 @@ pub(super) fn register(app: &mut App) {
     app.net_handler(SessionEventKind::StandStateUpdate, on_stand_state_update)
         .net_handler(SessionEventKind::PlayerSkinned, on_player_skinned)
         .init_resource::<SkinnedFeed>()
-        .add_systems(Update, feed_player_skinned.in_set(crate::ui_script::UiFeed));
+        .add_systems(
+            Update,
+            feed_player_skinned
+                .in_set(crate::ui_script::UiFeed)
+                // A signal fired into a VM with no frames yet is lost: it waits for the UI.
+                .run_if(crate::ui_script::ingame_ui_up),
+        );
 }
 
 fn on_stand_state_update(In(ev): In<SessionEvent>, mut out: MessageWriter<ServerStandState>) {
@@ -55,7 +61,7 @@ mod tests {
     use super::*;
 
     /// Each packet signals once, in order, with its byte's truth as `arg1` (`0x5e7d52`,
-    /// `0x48f407`).
+    /// `0x48f407`), once the interface is up to hear it.
     #[test]
     fn player_skinned_signals_its_byte_as_arg1() {
         let mut app = App::new();
@@ -78,12 +84,21 @@ mod tests {
                 SessionEvent::PlayerSkinned { free_repop: true },
             ],
         );
+        let skinned = |app: &App| -> Vec<i64> {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval("return SKINNED")
+                .unwrap()
+        };
         app.update();
-        let skinned: Vec<i64> = app
-            .world()
-            .non_send_resource::<UiScript>()
-            .eval("return SKINNED")
-            .unwrap();
-        assert_eq!(skinned, [0, 1]);
+        assert_eq!(
+            skinned(&app),
+            Vec::<i64>::new(),
+            "no interface yet: they wait"
+        );
+
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        app.update();
+        assert_eq!(skinned(&app), [0, 1]);
     }
 }
