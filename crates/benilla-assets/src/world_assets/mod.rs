@@ -12,7 +12,9 @@ use bevy::render::render_resource::{Buffer, Face};
 
 use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
-use benilla_formats::{blp_to_rgba, read_texture_native_chain, tga_to_rgba, Chain, ModelBlend};
+use benilla_formats::{
+    blp_to_rgba, read_texture_native_chain, tga_texture_size, tga_to_rgba, Chain, ModelBlend,
+};
 pub use benilla_formats::{LooseFile, LooseIndex, LooseIndexCell, LooseOpen};
 
 /// BLP and RGBA to `Image` helpers, re-exported.
@@ -92,7 +94,7 @@ pub fn sprite_dimensions(
     loose: &LooseFiles,
     path: &str,
 ) -> Option<(u32, u32)> {
-    decode_sprite(chain, loose, path, LooseOpen::Index).map(|(w, h, _)| (w, h))
+    decode_texture(chain, loose, path, LooseOpen::Index).map(|(w, h, _)| (w, h))
 }
 
 /// Decode the first of [`sprite_candidates`] that reads and decodes, each read by
@@ -105,6 +107,42 @@ fn decode_sprite(
     path: &str,
     open: LooseOpen,
 ) -> Option<(u32, u32, Vec<u8>)> {
+    decode_sprite_as(chain, loose, path, open, OnRefusal::Miss)
+}
+
+/// [`decode_sprite`] for a load that `TextureCreate` (`0x449d90`) makes: a `.tga` whose header
+/// opens is the texture, and a decode that refuses it leaves the opaque white default
+/// ([`OnRefusal::WhiteDefault`]).
+fn decode_texture(
+    chain: &Mutex<Chain>,
+    loose: &LooseFiles,
+    path: &str,
+    open: LooseOpen,
+) -> Option<(u32, u32, Vec<u8>)> {
+    decode_sprite_as(chain, loose, path, open, OnRefusal::WhiteDefault)
+}
+
+/// What a candidate file that opens but will not decode becomes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OnRefusal {
+    /// Nothing: the next candidate is tried, then the sprite is a miss.
+    Miss,
+    /// `TextureCreate`'s TGA loader `0x44a140` returns the texture once the header opens
+    /// (`0x44a169`) and decodes later, in the callback `0x44a260`; a refused decode fills opaque
+    /// white at the header's size (`0x44a2eb` into `0x448920`) and logs the reference's line
+    /// (`0x835538`), with no next candidate. A header that makes no texture (`0x448450`, see
+    /// [`tga_texture_size`]) fails the candidate as a missing file does. A BLP candidate takes
+    /// another callback (`0x44a500`), whose failure is a solid green 8 by 8 texture instead.
+    WhiteDefault,
+}
+
+fn decode_sprite_as(
+    chain: &Mutex<Chain>,
+    loose: &LooseFiles,
+    path: &str,
+    open: LooseOpen,
+    on_refusal: OnRefusal,
+) -> Option<(u32, u32, Vec<u8>)> {
     let open = loose_open_for(path, open);
     let candidates = sprite_candidates(path);
     // Asked before the chain's lock, so an index build never stalls an archive reader.
@@ -116,7 +154,7 @@ fn decode_sprite(
             Some(file) => file.read(),
             None => chain.read_file(candidate).ok(),
         };
-        if let Some(Ok(decoded)) = bytes.map(|b| decode_sprite_bytes(&b)) {
+        if let Some(decoded) = bytes.and_then(|b| decode_candidate(candidate, &b, on_refusal)) {
             return Some(decoded);
         }
     }
@@ -170,6 +208,32 @@ pub fn sprite_found(chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> boo
     // The loose files first, outside the chain's lock.
     candidates.iter().any(|c| loose.find(c, open).is_some())
         || candidates.iter().any(|c| chain.lock_recover().contains(c))
+}
+
+/// One candidate's bytes through [`decode_sprite_bytes`], or by `on_refusal` what a refused one
+/// leaves: a `.tga` candidate not holding a BLP, whose header makes a texture, is that size of
+/// opaque white.
+fn decode_candidate(
+    candidate: &str,
+    bytes: &[u8],
+    on_refusal: OnRefusal,
+) -> Option<(u32, u32, Vec<u8>)> {
+    if let Ok(decoded) = decode_sprite_bytes(bytes) {
+        return Some(decoded);
+    }
+    if on_refusal != OnRefusal::WhiteDefault
+        || !candidate.ends_with(".tga")
+        || bytes.starts_with(b"BLP2")
+    {
+        return None;
+    }
+    let (width, height) = tga_texture_size(bytes)?;
+    warn!("Texture {candidate} not loaded -- replaced with default.");
+    Some((
+        width,
+        height,
+        vec![0xff; width as usize * height as usize * 4],
+    ))
 }
 
 /// Decode by content, not extension, since addon folders mislabel both ways: a `BLP2` magic is a
@@ -511,7 +575,7 @@ impl WorldAssets {
         if let Some(cached) = self.cache.sprites.get(&key) {
             return cached;
         }
-        let loaded = decode_sprite(&self.chain, &self.loose, path, open)
+        let loaded = decode_texture(&self.chain, &self.loose, path, open)
             .map(|(w, h, rgba)| images.add(sprite_image(w, h, rgba)));
         let open = loose_open_for(path, open);
         self.cache.sprites.insert(key, open, loaded.clone());
@@ -539,7 +603,7 @@ impl WorldAssets {
             return cached.clone();
         }
         if !self.cache.resample_sources.contains_key(path) {
-            let decoded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index);
+            let decoded = decode_texture(&self.chain, &self.loose, path, LooseOpen::Index);
             self.cache
                 .resample_sources
                 .insert(path.to_string(), decoded);
@@ -562,7 +626,7 @@ impl WorldAssets {
         if let Some(cached) = self.cache.tiled.get(&key) {
             return cached;
         }
-        let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
+        let loaded = decode_texture(&self.chain, &self.loose, path, LooseOpen::Index)
             .map(|(w, h, rgba)| images.add(sprite_image_tiled(w, h, rgba)));
         let open = loose_open_for(path, LooseOpen::Index);
         self.cache.tiled.insert(key, open, loaded.clone());
@@ -1140,6 +1204,63 @@ mod tests {
         out
     }
 
+    /// `0x44a140` returns the texture once the header opens, and the refused decode in `0x44a260`
+    /// fills it opaque white (`0x44a2eb` into `0x448920`) at the size `0x448450` made it. A header
+    /// that makes no texture fails the candidate as a missing file does, and so does a candidate
+    /// the TGA loader does not read, or any load that is not `TextureCreate`'s.
+    #[test]
+    fn a_refused_tga_texture_is_opaque_white_at_its_headers_size() {
+        let tga = "interface\\addons\\foo\\icon.tga";
+        let bytes = refused_tga(4, 2, &[0; 32]);
+        assert!(
+            decode_sprite_bytes(&bytes).is_err(),
+            "the decoder refuses it"
+        );
+        assert_eq!(
+            decode_candidate(tga, &bytes, OnRefusal::WhiteDefault),
+            Some((4, 2, vec![0xff; 4 * 2 * 4]))
+        );
+        // The pixels need not be there at all.
+        assert_eq!(
+            decode_candidate(tga, &refused_tga(1, 512, &[]), OnRefusal::WhiteDefault)
+                .map(|(w, h, rgba)| (w, h, rgba.len())),
+            Some((1, 512, 512 * 4))
+        );
+
+        // Misses: not a size `0x448450` makes, a header that does not open, a BLP candidate
+        // (`0x44a500` substitutes a green texture instead), BLP bytes, a load that is no
+        // `TextureCreate`'s.
+        for (candidate, bytes) in [
+            (tga, refused_tga(3, 2, &[0; 24])),
+            (tga, refused_tga(2048, 2, &[0; 24])),
+            (tga, refused_tga(0, 2, &[])),
+            (tga, vec![2, 0, 2]),
+            (
+                "interface\\addons\\foo\\icon.blp",
+                refused_tga(4, 2, &[0; 32]),
+            ),
+            (
+                tga,
+                [&b"BLP2"[..], &refused_tga(4, 2, &[0; 32])[4..]].concat(),
+            ),
+        ] {
+            assert_eq!(
+                decode_candidate(candidate, &bytes, OnRefusal::WhiteDefault),
+                None,
+                "{candidate}"
+            );
+        }
+        assert_eq!(decode_candidate(tga, &bytes, OnRefusal::Miss), None);
+
+        // A TGA that decodes is its pixels, white or not.
+        let mut ok = refused_tga(2, 1, &[1, 2, 3, 77, 4, 5, 6, 88]);
+        ok[17] = 0x28;
+        assert_eq!(
+            decode_candidate(tga, &ok, OnRefusal::WhiteDefault),
+            Some((2, 1, vec![3, 2, 1, 77, 6, 5, 4, 88]))
+        );
+    }
+
     /// The addon corpus' three `BigWigs` ready-check icons are 32-bit TGAs with no alpha bits:
     /// `0x44a140` returns each as a texture of its header's size once the header opens, and the
     /// refused decode leaves it white (`0x44a2eb`).
@@ -1160,6 +1281,8 @@ mod tests {
                 Some((64, 64)),
                 "{name}"
             );
+            let (_, _, rgba) = decode_texture(&chain, &loose, &path, LooseOpen::Index).unwrap();
+            assert!(rgba.iter().all(|&b| b == 0xff), "{name}: opaque white");
         }
     }
 
@@ -1183,6 +1306,11 @@ mod tests {
         let odd = "Interface\\AddOns\\Foo\\Odd";
         assert!(sprite_found(&chain, &loose, icon));
         assert_eq!(sprite_dimensions(&chain, &loose, icon), Some((8, 4)));
+        let (w, h, rgba) = decode_texture(&chain, &loose, icon, LooseOpen::Index).unwrap();
+        assert_eq!((w, h, rgba.len()), (8, 4, 8 * 4 * 4));
+        assert!(rgba.iter().all(|&b| b == 0xff));
+        // A load that is not `TextureCreate`'s still gets no pixels.
+        assert!(decode_sprite(&chain, &loose, icon, LooseOpen::Index).is_none());
         assert!(sprite_found(&chain, &loose, odd));
         assert_eq!(sprite_dimensions(&chain, &loose, odd), None);
     }
