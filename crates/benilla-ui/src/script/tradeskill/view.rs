@@ -226,27 +226,22 @@ pub(super) fn selected_visible_index(model: &Model) -> u32 {
         .map_or(0, |p| (p + 1) as u32)
 }
 
-/// `SelectTradeSkill`: holds the recipe at a visible index. A header index leaves the selection
-/// as it was, and an out-of-range one clears it; the stock Lua folds a header instead of selecting
-/// it (`Blizzard_TradeSkillUI.lua:184-192`).
+/// `SelectTradeSkill` (`0x4fc9b0`): holds the recipe at a visible index by its spell id
+/// (`0xbde044`), which survives a close and remaps across a re-push. A header row's id is -1 and
+/// stores 0 (`jg` at `0x4fc9c9`), as an index past the rows does, compared unsigned (`jae` at
+/// `0x4fc9b6`): both clear the selection. The stock Lua folds a header instead of selecting it
+/// (`Blizzard_TradeSkillUI.lua:184-192`).
 pub(super) fn select(model: &mut Model, index: u32) {
-    let visible = rows(model);
-    match index.checked_sub(1).and_then(|n| visible.get(n as usize)) {
-        Some(Row::Entry(ei)) => {
-            model.trade_skill_selection = (*ei + 1) as u32;
-            // The spell id (`0xbde044`) is what survives a close and remaps across a re-push.
-            model.trade_skill_selected_spell = model
-                .trade_skill
-                .as_ref()
-                .and_then(|t| t.recipes.get(*ei))
-                .map_or(0, |r| r.spell_id);
-        }
-        Some(Row::Header { .. }) => {}
-        None => {
-            model.trade_skill_selection = 0;
-            model.trade_skill_selected_spell = 0;
-        }
-    }
+    let entry = index
+        .checked_sub(1)
+        .and_then(|n| match rows(model).get(n as usize) {
+            Some(Row::Entry(ei)) => Some(*ei),
+            Some(Row::Header { .. }) | None => None,
+        });
+    model.trade_skill_selected_spell = entry
+        .and_then(|ei| model.trade_skill.as_ref()?.recipes.get(ei))
+        .map_or(0, |r| r.spell_id);
+    model.trade_skill_selection = entry.map_or(0, |ei| (ei + 1) as u32);
 }
 
 /// Folds or unfolds the group whose header is visible row `id`; 0 is every group, as the stock
