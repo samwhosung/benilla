@@ -3281,3 +3281,50 @@ fn honor_gained_follows_its_line_and_only_a_written_one() {
     assert_eq!(seen(&s).len(), 2);
     assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
 }
+
+/// The drain fires a queued `UNIT_COMBAT` at its place among the lines queued beside it, so a
+/// handler's order reaches Lua: here a flash, a line, a flash. Only the tokens naming the unit
+/// fire, `"player"` for your own guid.
+#[test]
+fn unit_combat_fires_at_its_place_in_the_drain() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut feed = super::notice_tests::Feed::new();
+    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(7);
+    feed.script()
+        .run(
+            r#"
+            Order = {}
+            Ord = CreateFrame("Frame", "BenillaOrderSpy")
+            Ord:SetScript("OnEvent", function()
+                table.insert(Order, event .. (event == "UNIT_COMBAT" and (" " .. arg1 .. " " .. arg2) or ""))
+            end)
+            Ord:RegisterEvent("UNIT_COMBAT")
+            Ord:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+        "#,
+        )
+        .unwrap();
+    let flash = |guid, action| crate::ui_unit::UnitCombatFeedback {
+        guid,
+        action,
+        flags: "",
+        amount: 0,
+        school: 0,
+    };
+    {
+        let mut log = feed.world.resource_mut::<super::ChatLog>();
+        log.push_unit_combat(flash(7, "DODGE"));
+        log.push_xp_gain(0, 10, 10);
+        log.push_unit_combat(flash(7, "PARRY"));
+        log.push_unit_combat(flash(8, "MISS"));
+    }
+    feed.drain();
+    let order = feed.script().eval::<Vec<String>>("return Order").unwrap();
+    assert_eq!(
+        order,
+        [
+            "UNIT_COMBAT player DODGE",
+            "CHAT_MSG_COMBAT_XP_GAIN",
+            "UNIT_COMBAT player PARRY"
+        ]
+    );
+}

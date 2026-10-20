@@ -7,13 +7,38 @@ use benilla_protocol::messages::{
 };
 
 use super::{queue, queue_reported, queue_worded, to_me, ChatCtx};
+use crate::combat_log::feedback;
 use crate::ui_chat::combat::{self, Family, Fills, LineWord, Poses, Stores, UnitClass};
 use crate::ui_chat::ChatLog;
 
-/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`): split damage, then a periodic hit, then a direct
-/// one, each its own formatter.
+/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`): the line (`0x5e87de`), then, for a spell with a
+/// record and no `Attributes & 0x100` (`0x5e87e3`-`0x5e87f4`), `UNIT_COMBAT` `WOUND` on the target
+/// (`0x5e883f`) with the crit and partial flags, or none for split damage (`0x5e872d`-`0x5e876a`).
 pub(in crate::combat_log) fn spell_damage_log(
     s: SpellDamageLog,
+    ctx: &ChatCtx,
+    stores: &impl Stores,
+    poses: &impl Poses,
+    log: &mut ChatLog,
+) {
+    spell_damage_line(&s, ctx, stores, poses, log);
+    if combat::feedback_spell(ctx.spells, s.spell_id).is_some() {
+        let flags = if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
+            0
+        } else {
+            feedback::hit_flags(s.hit_info & 0x2 != 0, s.absorb, s.resist, s.blocked)
+        };
+        feedback::wound(log, s.target, s.damage, flags, u32::from(s.school));
+    }
+}
+
+/// vmangos `SPELL_HIT_TYPE_SPLIT`, the split-damage bit of the packet's hit info.
+const SPELL_HIT_TYPE_SPLIT: u32 = 0x8;
+
+/// The spell-damage line: split damage, then a periodic hit, then a direct one, each its own
+/// formatter.
+fn spell_damage_line(
+    s: &SpellDamageLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,
@@ -28,7 +53,6 @@ pub(in crate::combat_log) fn spell_damage_log(
     // Split damage (`hit_info & 8`, to `0x62de60`) is tested first, before the periodic split: it
     // reads "%s's %s causes %s %d damage.", has no `…SELFSELF` key and no trailers, and words the
     // split amount to its target (`0x62dfd9`).
-    const SPELL_HIT_TYPE_SPLIT: u32 = 0x8;
     if s.hit_info & SPELL_HIT_TYPE_SPLIT != 0 {
         let Some(kind) = combat::spell_kind(attacker, victim, false) else {
             return;
@@ -78,7 +102,7 @@ pub(in crate::combat_log) fn spell_damage_log(
         s.spell_id,
         (s.attacker, attacker),
         (s.target, victim),
-        &s,
+        s,
     );
 }
 
@@ -343,10 +367,11 @@ pub(in crate::combat_log) fn spell_miss(
     );
 }
 
-/// `SMSG_SPELLLOGMISS` (`0x5e7e00`): one line per missed target, worded by its own
-/// `SpellMissInfo`. Its caller passes the formatter's fifth argument as 1 (`0x5e7f31`), so every
-/// line off this packet is typed as a damage-shield line; addons filter on the chat type the
-/// reference shows.
+/// `SMSG_SPELLLOGMISS` (`0x5e7e00`): per missed target of a spell with a record and no
+/// `Attributes & 0x100` (`0x5e7f0b`-`0x5e7f18`; any other spell has neither), `UNIT_COMBAT`
+/// (`0x5e7f23`), then the line, worded by its own `SpellMissInfo` (`0x5e7f3e`). Its caller passes
+/// the formatter's fifth argument as 1 (`0x5e7f31`), so every line off this packet is typed as a
+/// damage-shield line; addons filter on the chat type the reference shows.
 pub(in crate::combat_log) fn spell_log_miss(
     s: &SpellLogMiss,
     ctx: &ChatCtx,
@@ -354,17 +379,20 @@ pub(in crate::combat_log) fn spell_log_miss(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    let caster = ctx.classify(s.caster, stores);
-    let Some(spell) = ctx.spell_name(s.spell_id) else {
+    if combat::feedback_spell(ctx.spells, s.spell_id).is_none() {
         return;
-    };
+    }
+    let caster = ctx.classify(s.caster, stores);
+    let spell = ctx.spell_name(s.spell_id);
     for &(target, miss_info) in &s.misses {
+        feedback::miss(log, target, miss_info);
+        let Some(spell) = &spell else { continue };
         let victim = ctx.classify(target, stores);
         spell_miss(
             log,
             ctx,
             poses,
-            &spell,
+            spell,
             s.spell_id,
             (s.caster, caster),
             (target, victim),
@@ -375,11 +403,13 @@ pub(in crate::combat_log) fn spell_log_miss(
     }
 }
 
-/// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`): one miss line per entry, with the
-/// ordinary spell chat types (flag 0, `0x6e7d83`), then for a reflect with an outcome
-/// (`0x6e7ded`-`0x6e7dfb`) the reflected spell's line, its outcome on the caster
-/// (`0x6e7dfd`-`0x6e7e14`). The line's caster is the packet's first guid for a unit or object
-/// caster, else the caster unit (`0x6e7d1c`-`0x6e7d4b`), which is the event's resolved caster.
+/// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`): per entry its miss line, with the
+/// ordinary spell chat types (flag 0, `0x6e7d83`), then for a spell without `Attributes & 0x100`
+/// (`0x6e7d9a`) its `UNIT_COMBAT` on the target (`0x6e7de5`). A reflect with an outcome
+/// (`0x6e7ded`-`0x6e7dfb`) then takes the reflected spell's line, its outcome on the caster
+/// (`0x6e7dfd`-`0x6e7e14`), and that outcome's `UNIT_COMBAT` on the caster (`0x6e7e5f`). The line's
+/// caster is the packet's first guid for a unit or object caster, else the caster unit
+/// (`0x6e7d1c`-`0x6e7d4b`), which is the event's resolved caster.
 pub(in crate::combat_log) fn spell_go_misses(
     caster: u64,
     spell_id: u32,
@@ -389,34 +419,34 @@ pub(in crate::combat_log) fn spell_go_misses(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
-    let Some(spell) = ctx.spell_name(spell_id) else {
-        return;
-    };
+    let spell = ctx.spell_name(spell_id);
+    let flashes = combat::feedback_spell(ctx.spells, spell_id).is_some();
     let caster = (caster, ctx.classify(caster, stores));
-    for m in misses {
-        let target = (m.target, ctx.classify(m.target, stores));
-        spell_miss(
-            log, ctx, poses, &spell, spell_id, caster, target, m.info, false, None,
-        );
-        if m.info == super::super::text::SPELL_MISS_REFLECT && m.reflect_result != 0 {
+    let line = |log: &mut ChatLog, target, code| {
+        if let Some(spell) = &spell {
             spell_miss(
-                log,
-                ctx,
-                poses,
-                &spell,
-                spell_id,
-                caster,
-                caster,
-                m.reflect_result,
-                false,
-                None,
+                log, ctx, poses, spell, spell_id, caster, target, code, false, None,
             );
+        }
+    };
+    for m in misses {
+        line(log, (m.target, ctx.classify(m.target, stores)), m.info);
+        if flashes {
+            feedback::miss(log, m.target, m.info);
+        }
+        if m.info == super::super::text::SPELL_MISS_REFLECT && m.reflect_result != 0 {
+            line(log, caster, m.reflect_result);
+            if flashes {
+                feedback::miss(log, caster.0, m.reflect_result);
+            }
         }
     }
 }
 
-/// A travelling spell's missed arrival on a live target (`0x61dd50`): its miss line, with the
-/// ordinary spell chat types (`0x61ddeb`, flag 0), from the missile's caster to its target.
+/// A travelling spell's missed arrival on a live target (`0x61dd50`): for a spell with a record
+/// and no `Attributes & 0x100` (`0x61dda3`), its `UNIT_COMBAT` on the target (`0x61ddcc`), then its
+/// miss line, with the ordinary spell chat types (`0x61ddeb`, flag 0), from the missile's caster
+/// to its target.
 pub(in crate::combat_log) fn missile_miss(
     caster: u64,
     target: u64,
@@ -427,6 +457,9 @@ pub(in crate::combat_log) fn missile_miss(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
+    if combat::feedback_spell(ctx.spells, spell_id).is_some() {
+        feedback::miss(log, target, code);
+    }
     let Some(spell) = ctx.spell_name(spell_id) else {
         return;
     };
@@ -437,7 +470,8 @@ pub(in crate::combat_log) fn missile_miss(
     );
 }
 
-/// `SMSG_SPELLHEALLOG`: a heal line, a BUFF type (`0x62c770`), worded `HEAL` or `HEAL_CRIT` with
+/// `SMSG_SPELLHEALLOG` (`0x5e89c0`): `UNIT_COMBAT` `HEAL` on the target, with no spell gate
+/// (`0x5e8a48`), then the heal line, a BUFF type (`0x62c770`), worded `HEAL` or `HEAL_CRIT` with
 /// the healer's name and the amount (`0x62c8ea`).
 pub(in crate::combat_log) fn spell_heal_log(
     s: SpellHealLog,
@@ -446,6 +480,7 @@ pub(in crate::combat_log) fn spell_heal_log(
     poses: &impl Poses,
     log: &mut ChatLog,
 ) {
+    feedback::heal(log, s.target, s.amount, s.critical);
     let healer = ctx.classify(s.healer, stores);
     let target = ctx.classify(s.target, stores);
     let Some(kind) = combat::spell_kind(healer, target, true) else {
@@ -546,7 +581,10 @@ fn power_gain_line(
     );
 }
 
-/// `SMSG_PERIODICAURALOG` (`0x626dd0`): one line per tick, worded by its aura type.
+/// `SMSG_PERIODICAURALOG` (`0x626dd0`): one line per tick, worded by its aura type. For a spell
+/// without `Attributes & 0x100` a damage tick raises `UNIT_COMBAT` `WOUND` with its absorbed and
+/// resisted flags (`0x626f87`-`0x626fb4`) and a heal tick `HEAL` (`0x627033`), each before its line
+/// (`0x626ff4`, `0x62705e`); energize (`0x494770` is an empty stub) and leech ticks raise none.
 pub(in crate::combat_log) fn periodic_aura_log(
     s: &PeriodicAuraLog,
     ctx: &ChatCtx,
@@ -556,9 +594,8 @@ pub(in crate::combat_log) fn periodic_aura_log(
 ) {
     let caster = (s.caster, ctx.classify(s.caster, stores));
     let target = (s.target, ctx.classify(s.target, stores));
-    let Some(spell) = ctx.spell_name(s.spell_id) else {
-        return;
-    };
+    let flashes = combat::feedback_spell(ctx.spells, s.spell_id).is_some();
+    let spell = ctx.spell_name(s.spell_id);
     for tick in &s.ticks {
         match *tick {
             PeriodicTick::Damage {
@@ -566,28 +603,43 @@ pub(in crate::combat_log) fn periodic_aura_log(
                 school,
                 absorb,
                 resist,
-            } => periodic_damage(
-                log,
-                ctx,
-                poses,
-                &spell,
-                caster,
-                target,
-                PeriodicHit {
-                    damage: amount,
-                    // A u32 on this packet, the same `SPELL_SCHOOL<n>_NAME` index as direct
-                    // damage; one past any name fails the formatter's school gate (`0x628117`).
-                    school: u8::try_from(school).unwrap_or(u8::MAX),
-                    absorbed: absorb,
-                    resisted: resist,
-                },
-            ),
-            PeriodicTick::Heal { amount } => periodic_heal(
-                log, ctx, stores, poses, &spell, s.spell_id, caster, target, amount,
-            ),
+            } => {
+                if flashes {
+                    let flags = feedback::hit_flags(false, absorb, resist, 0);
+                    feedback::wound(log, s.target, amount, flags, school);
+                }
+                let Some(spell) = &spell else { continue };
+                periodic_damage(
+                    log,
+                    ctx,
+                    poses,
+                    spell,
+                    caster,
+                    target,
+                    PeriodicHit {
+                        damage: amount,
+                        // A u32 on this packet, the same `SPELL_SCHOOL<n>_NAME` index as direct
+                        // damage; one past any name fails the formatter's school gate
+                        // (`0x628117`).
+                        school: u8::try_from(school).unwrap_or(u8::MAX),
+                        absorbed: absorb,
+                        resisted: resist,
+                    },
+                );
+            }
+            PeriodicTick::Heal { amount } => {
+                if flashes {
+                    feedback::heal(log, s.target, amount, false);
+                }
+                let Some(spell) = &spell else { continue };
+                periodic_heal(
+                    log, ctx, stores, poses, spell, s.spell_id, caster, target, amount,
+                );
+            }
             // The same displayed-figure divide, at `0x627087` in `0x626dd0`.
             PeriodicTick::Energize { power, amount } => {
-                power_gain_line(log, ctx, poses, &spell, caster, target, power, amount, true)
+                let Some(spell) = &spell else { continue };
+                power_gain_line(log, ctx, poses, spell, caster, target, power, amount, true)
             }
             // Aura 64 goes to the same formatter as the execute log's `POWER_DRAIN` (`0x627910`
             // to `0x627930`, periodic flag set), which makes every wording choice.
@@ -595,20 +647,23 @@ pub(in crate::combat_log) fn periodic_aura_log(
                 power,
                 amount,
                 multiplier,
-            } => power_drain_line(
-                log,
-                ctx,
-                stores,
-                poses,
-                &spell,
-                s.spell_id,
-                caster,
-                target,
-                power,
-                periodic_leech_amount(power, amount),
-                multiplier,
-                true,
-            ),
+            } => {
+                let Some(spell) = &spell else { continue };
+                power_drain_line(
+                    log,
+                    ctx,
+                    stores,
+                    poses,
+                    spell,
+                    s.spell_id,
+                    caster,
+                    target,
+                    power,
+                    periodic_leech_amount(power, amount),
+                    multiplier,
+                    true,
+                );
+            }
         }
     }
 }

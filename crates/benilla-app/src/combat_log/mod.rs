@@ -1,8 +1,12 @@
 //! The combat log: the handlers for the combat packets. The reference answers each packet from one
-//! handler with two consumers: the chat line with the `COMBAT_TEXT_UPDATE` word its formatter
-//! raises after it ([`chat`], the display dispatcher `0x629b60`), and the floating number with the
-//! portrait's `UNIT_COMBAT` flash ([`text`]); they run in that order. The two legs have different
-//! CVar gates and classification rules.
+//! handler that raises three things: the chat line with the `COMBAT_TEXT_UPDATE` word its
+//! formatter raises right after it, and the portrait's `UNIT_COMBAT` flash ([`chat`], with
+//! [`feedback`]), and the floating number ([`text`]). The line and the flash reach Lua through one
+//! ordered queue, the chat drain's, in the handler's own order, which differs per packet: the
+//! spell-damage (`0x5e85e0`), damage-shield (`0x5e84e0`) and `SMSG_SPELL_GO` (`0x6e7a70`) handlers
+//! write the line first, the spell-miss (`0x5e7e00`), heal (`0x5e89c0`), periodic (`0x626dd0`)
+//! and missile-arrival (`0x61dd50`) ones flash first. The float reaches no Lua handler. The legs
+//! have different CVar gates and classification rules.
 //!
 //! The completed swing and the environmental-damage log also drive animation; those handlers
 //! ([`crate::creature_anim::net`]) register after these, so the line runs before the animation.
@@ -20,9 +24,9 @@ use crate::net::{
 };
 use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
-use crate::ui_unit::UnitCombatFeedback;
 
 pub(crate) mod chat;
+mod feedback;
 pub(crate) mod text;
 
 /// The chat line's read-only inputs, built into a [`chat::ChatCtx`] per packet.
@@ -70,7 +74,6 @@ pub(crate) struct Sinks<'w, 's> {
     poses: Query<'w, 's, &'static mut Transform>,
     log: ResMut<'w, ChatLog>,
     text: MessageWriter<'w, CombatTextSpawn>,
-    feedback: MessageWriter<'w, UnitCombatFeedback>,
 }
 
 /// The combat log's handler registration. Added ahead of
@@ -133,7 +136,6 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             c.spells.as_deref(),
             *l.damage_text,
             &mut l.text,
-            &mut l.feedback,
         );
     }
 }
@@ -156,7 +158,6 @@ fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             c.spells.as_deref(),
             *l.damage_text,
             &mut l.text,
-            &mut l.feedback,
         );
     }
 }
@@ -165,7 +166,6 @@ fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::SpellHealLog(s) = ev {
         let ctx = c.ctx();
         chat::spell_heal_log(s, &ctx, &l.stores, &l.poses, &mut l.log);
-        text::spell_heal_log(s, &c.index, &mut l.feedback);
     }
 }
 
@@ -188,7 +188,6 @@ fn on_damage_shield(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             &l.stores,
             *l.damage_text,
             &mut l.text,
-            &mut l.feedback,
         );
     }
 }
@@ -209,7 +208,6 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             c.spells.as_deref(),
             *l.damage_text,
             &mut l.text,
-            &mut l.feedback,
         );
     }
 }
@@ -248,7 +246,6 @@ fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
         spells,
         *l.damage_text,
         &mut l.text,
-        &mut l.feedback,
     );
 }
 
@@ -262,20 +259,12 @@ fn on_missile_miss(
     stores: Query<&ObjectStore>,
     poses: Query<&Transform>,
     mut log: ResMut<ChatLog>,
-    mut feedback: MessageWriter<UnitCombatFeedback>,
 ) {
     for arrival in arrivals.read() {
         let Ok(&Guid(target)) = guids.get(arrival.anchor) else {
             continue;
         };
         let caster = guids.get(arrival.caster).map_or(0, |g| g.0);
-        text::missile_miss(
-            arrival.anchor,
-            arrival.spell_id,
-            arrival.code,
-            c.spells.as_deref(),
-            &mut feedback,
-        );
         let ctx = c.ctx();
         chat::missile_miss(
             caster,
@@ -470,7 +459,6 @@ mod tests {
     fn world(held: &[u64]) -> App {
         let mut app = App::new();
         app.add_message::<CombatTextSpawn>()
-            .add_message::<UnitCombatFeedback>()
             .init_resource::<GuidIndex>()
             .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<Reputations>()
@@ -536,13 +524,8 @@ mod tests {
         app.world_mut()
             .run_system_once_with(on_periodic_aura_log, packet)
             .unwrap();
-        let lines = app.world().resource::<ChatLog>().pending_kinds().len();
-        let flashes = app
-            .world_mut()
-            .resource_mut::<Messages<UnitCombatFeedback>>()
-            .drain()
-            .count();
-        (lines, flashes)
+        let log = app.world().resource::<ChatLog>();
+        (log.pending_combat().len(), log.pending_unit_combat().len())
     }
 
     /// `0x626dd0` skips the whole packet when its target is no unit the client holds
@@ -555,13 +538,8 @@ mod tests {
 
     /// What a world left after one packet: the parked lines and the flashes.
     fn left(app: &mut App) -> (usize, usize) {
-        let lines = app.world().resource::<ChatLog>().pending_kinds().len();
-        let flashes = app
-            .world_mut()
-            .resource_mut::<Messages<UnitCombatFeedback>>()
-            .drain()
-            .count();
-        (lines, flashes)
+        let log = app.world().resource::<ChatLog>();
+        (log.pending_combat().len(), log.pending_unit_combat().len())
     }
 
     /// The creature's `spell_id` missing you in its `SMSG_SPELL_GO`.
@@ -641,7 +619,11 @@ mod tests {
             .map(|l| (l.family.stem, l.subject, l.object))
             .collect();
         assert_eq!(lines, [("SPELLRESIST", MOB, ME)]);
-        assert_eq!(left(&mut app).1, 1);
+        assert_eq!(
+            app.world().resource::<ChatLog>().pending_combat_order(),
+            ["UNIT_COMBAT RESIST", "SPELLRESIST"],
+            "the flash before the line (`0x61ddcc`, `0x61ddeb`)"
+        );
     }
 
     /// `0x625270` drops a kill whose victim is no unit the client holds (`0x6252ab`), and an

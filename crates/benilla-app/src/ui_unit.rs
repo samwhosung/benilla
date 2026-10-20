@@ -43,11 +43,14 @@ pub(crate) struct UnitSnapshots;
 /// One `UNIT_COMBAT` over a unit, the portrait hit indicator's feed. The emitter `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per token naming the unit, with no
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
-/// from the miss and heal wrappers, and the 1.12 binary never emits `ENERGIZE`. The melee victim
-/// event waits for the impact keyframe (`0x6243e0`, reached only from `0x624530`).
-#[derive(Message, Clone, Copy)]
+/// from the miss and heal wrappers, and the 1.12 binary never emits `ENERGIZE`. Each rides the chat
+/// drain's queue ([`crate::ui_chat::ChatLog::push_unit_combat`]), so it reaches Lua at its place
+/// among the combat-log lines raised beside it. The melee victim event waits for the impact
+/// keyframe (`0x6243e0`, reached only from `0x624530`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UnitCombatFeedback {
-    pub(crate) unit: Entity,
+    /// The unit, by the guid `0x494600` is handed.
+    pub(crate) guid: u64,
     /// `arg2`, the action word (`WOUND`, `MISS`, `DODGE`, `PARRY`, `BLOCK`, `HEAL`, …).
     pub(crate) action: &'static str,
     /// `arg3`, the descriptor: `CRITICAL`/`CRUSHING`/`GLANCING`/`ABSORB`/`BLOCK`/`RESIST`, or `""`.
@@ -109,7 +112,7 @@ impl Plugin for UiUnitPlugin {
         // A UI-only harness has no sound or net stack, and a missing resource or message is a
         // system-validation panic; declaring twice is idempotent.
         .init_resource::<crate::sound::MessageSounds>()
-        .add_message::<UnitCombatFeedback>()
+        .init_resource::<crate::ui_chat::ChatLog>()
         .add_message::<crate::net::WorldportMessage>()
         .add_message::<crate::field_watch::FieldNotice>()
         .init_world_leave_sweep()
@@ -146,7 +149,6 @@ impl Plugin for UiUnitPlugin {
                 control_gate::feed_control_bypass,
                 feed_farsight_focus,
                 melee_unit_combat,
-                fire_unit_combat,
             )
                 .chain()
                 .in_set(UnitFeed),
@@ -420,17 +422,22 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
     }
 }
 
-/// The melee `UNIT_COMBAT` producer, on the swing's impact keyframe, `text_only` flushes included;
-/// the swing's `COMBAT_TEXT_UPDATE` rides its combat-log line, at packet parse.
+/// The melee `UNIT_COMBAT` producer, on the swing's impact keyframe, `text_only` flushes included,
+/// queued behind the lines already written; the swing's `COMBAT_TEXT_UPDATE` rides its combat-log
+/// line, at packet parse.
 fn melee_unit_combat(
     mut impacts: MessageReader<crate::creature_anim::SwingImpact>,
-    mut out: MessageWriter<UnitCombatFeedback>,
+    guids: Query<&crate::net::Guid>,
+    mut log: ResMut<crate::ui_chat::ChatLog>,
 ) {
     for crate::creature_anim::SwingImpact { swing: s, .. } in impacts.read() {
         let Some(victim) = s.victim else { continue };
+        let Ok(&crate::net::Guid(guid)) = guids.get(victim) else {
+            continue;
+        };
         let (action, flags) = melee_feedback(s.hit_info, s.victim_state, s.damage);
-        out.write(UnitCombatFeedback {
-            unit: victim,
+        log.push_unit_combat(UnitCombatFeedback {
+            guid,
             action,
             flags,
             amount: s.damage,
@@ -459,36 +466,33 @@ pub(crate) fn fire_combat_text(
     );
 }
 
-/// Drain [`UnitCombatFeedback`] into `UNIT_COMBAT` for `"player"` and `"target"` only; the
-/// reference fires once per token naming the unit, and stock `PetFrame.lua:13` listens for `"pet"`.
-fn fire_unit_combat(
-    script: Option<NonSendMut<UiScript>>,
-    mut events: MessageReader<UnitCombatFeedback>,
-    self_q: Query<(), With<SelfPlayer>>,
-    selection: Res<Selection>,
+/// Fire one [`UnitCombatFeedback`] as `UNIT_COMBAT` for `"player"` and `"target"` only, the tokens
+/// `is_self` and `is_target` say name its unit; the reference fires once per token naming the
+/// unit, and stock `PetFrame.lua:13` listens for `"pet"`. The chat drain calls it at the event's
+/// place in its queue.
+pub(crate) fn fire_unit_combat(
+    script: &mut UiScript,
+    ev: &UnitCombatFeedback,
+    is_self: bool,
+    is_target: bool,
 ) {
-    let Some(mut script) = script else {
-        return;
+    let mut fire = |token: &str| {
+        script.fire_event(
+            "UNIT_COMBAT",
+            vec![
+                ScriptValue::Str(token.to_string()),
+                ScriptValue::Str(ev.action.to_string()),
+                ScriptValue::Str(ev.flags.to_string()),
+                ScriptValue::Int(i64::from(ev.amount)),
+                ScriptValue::Int(i64::from(ev.school)),
+            ],
+        );
     };
-    for ev in events.read() {
-        let mut fire = |token: &str| {
-            script.fire_event(
-                "UNIT_COMBAT",
-                vec![
-                    ScriptValue::Str(token.to_string()),
-                    ScriptValue::Str(ev.action.to_string()),
-                    ScriptValue::Str(ev.flags.to_string()),
-                    ScriptValue::Int(i64::from(ev.amount)),
-                    ScriptValue::Int(i64::from(ev.school)),
-                ],
-            );
-        };
-        if self_q.contains(ev.unit) {
-            fire("player");
-        }
-        if selection.target == Some(ev.unit) {
-            fire("target");
-        }
+    if is_self {
+        fire("player");
+    }
+    if is_target {
+        fire("target");
     }
 }
 
@@ -1706,6 +1710,49 @@ pub(crate) fn add_unit_feed(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The swing's victim flash joins the chat drain's queue behind the lines already in it, so
+    /// the swing's line, queued at the packet, reaches Lua first.
+    #[test]
+    fn a_swing_impact_queues_its_unit_combat_behind_the_lines() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_message::<crate::creature_anim::SwingImpact>()
+            .init_resource::<crate::ui_chat::ChatLog>();
+        let attacker = app.world_mut().spawn(crate::net::Guid(2)).id();
+        let victim = app.world_mut().spawn(crate::net::Guid(1)).id();
+        app.world_mut()
+            .resource_mut::<crate::ui_chat::ChatLog>()
+            .push_xp_gain(0, 10, 10);
+        app.world_mut()
+            .write_message(crate::creature_anim::SwingImpact {
+                swing: crate::creature_anim::SwingMessage {
+                    attacker,
+                    victim: Some(victim),
+                    hit_info: 0x80,
+                    victim_state: 1,
+                    damage: 40,
+                    displayed: true,
+                    seq: 0,
+                },
+                text_only: false,
+                natural: None,
+                pos: None,
+            });
+        app.world_mut().run_system_once(melee_unit_combat).unwrap();
+        let log = app.world().resource::<crate::ui_chat::ChatLog>();
+        assert_eq!(log.pending_kinds(), ["xp", "unit combat"]);
+        assert_eq!(
+            log.pending_unit_combat(),
+            [UnitCombatFeedback {
+                guid: 1,
+                action: "WOUND",
+                flags: "CRITICAL",
+                amount: 40,
+                school: 0,
+            }]
+        );
+    }
 
     /// `"mouseover"` resolves through the pick the tooltip publishes: the hovered unit, until a
     /// nearer GameObject wins it and the resolver rejects the GameObject's guid (`0x515bd9 je`).

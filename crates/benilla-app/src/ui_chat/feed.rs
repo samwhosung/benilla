@@ -43,6 +43,8 @@ pub(super) fn load_emote_texts(mut commands: Commands, assets: Option<Res<WorldA
 
 /// One queued item awaiting its turn through [`feed_chat`].
 enum Pending {
+    /// A `UNIT_COMBAT`, fired at its place among the lines its handler raised beside it.
+    UnitCombat(crate::ui_unit::UnitCombatFeedback),
     /// A decoded `SMSG_MESSAGECHAT`; the player types wait on the sender's name.
     Wire { msg: ChatMessage, tries: u16 },
     /// A channel notice with guids to name (`b_guid` is a kick's or ban's actor, 0 when absent).
@@ -282,6 +284,12 @@ impl ChatLog {
         self.pending.push(Pending::XpLoss { total });
     }
 
+    /// Queue a `UNIT_COMBAT` behind what is already queued, so it fires in the order its handler
+    /// raised it against its lines.
+    pub(crate) fn push_unit_combat(&mut self, ev: crate::ui_unit::UnitCombatFeedback) {
+        self.pending.push(Pending::UnitCombat(ev));
+    }
+
     /// Queue an honor award's line (`SMSG_PVP_CREDIT`); victim 0 is a bonus or objective award.
     pub(crate) fn push_pvp_credit(&mut self, honor: i32, victim: u64, rank: u8, side: u8) {
         // Both forks park: the template resolves at the drain.
@@ -338,6 +346,7 @@ impl ChatLog {
                 Pending::Roll { .. } => "roll",
                 Pending::XpGain { .. } => "xp",
                 Pending::XpLoss { .. } => "xp loss",
+                Pending::UnitCombat(_) => "unit combat",
                 Pending::HonorGain { .. } => "honor",
                 Pending::TextEmote { .. } => "emote",
                 Pending::Discovery { .. } => "discovery",
@@ -348,7 +357,32 @@ impl ChatLog {
             .collect()
     }
 
-    /// The parked honor credits as `(victim, honor, rank, side)`, in order.
+    /// The parked combat lines and `UNIT_COMBAT`s in queue order: a line as its family's stem, a
+    /// `UNIT_COMBAT` as `"UNIT_COMBAT <action>"`.
+    #[cfg(test)]
+    pub(crate) fn pending_combat_order(&self) -> Vec<String> {
+        self.pending
+            .iter()
+            .filter_map(|p| match p {
+                Pending::Combat(line) => Some(line.family.stem.to_string()),
+                Pending::UnitCombat(ev) => Some(format!("UNIT_COMBAT {}", ev.action)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The parked `UNIT_COMBAT`s, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_unit_combat(&self) -> Vec<crate::ui_unit::UnitCombatFeedback> {
+        self.pending
+            .iter()
+            .filter_map(|p| match p {
+                Pending::UnitCombat(ev) => Some(*ev),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The parked XP lines as `(victim, total, base)`, in order; victim 0 is the unnamed form.
     #[cfg(test)]
     pub(crate) fn pending_xp(&self) -> Vec<(u64, u32, u32)> {
@@ -365,6 +399,7 @@ impl ChatLog {
             .collect()
     }
 
+    /// The parked honor credits as `(victim, honor, rank, side)`, in order.
     #[cfg(test)]
     pub(crate) fn pending_honor(&self) -> Vec<(u64, i32, u8, u8)> {
         self.pending
@@ -802,7 +837,8 @@ pub(super) fn feed_chat(
     commands: Res<NetCommands>,
     // The text-emote tables, and our guid for the "are you the performer?" test.
     emote_texts: Option<Res<EmoteTexts>>,
-    self_guid: Res<SelfGuid>,
+    // Our guid, and the selection: `UNIT_COMBAT`'s two tokens.
+    (self_guid, selection): (Res<SelfGuid>, Option<Res<crate::target::Selection>>),
     // The `$`-macro subject: monster and BG lines expand against their addressee's descriptors.
     guids: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
@@ -825,6 +861,18 @@ pub(super) fn feed_chat(
     let mut still = Vec::new();
     for item in pending {
         match item {
+            Pending::UnitCombat(ev) => {
+                let is_target = selection
+                    .as_ref()
+                    .and_then(|s| s.target)
+                    .is_some_and(|t| guids.0.get(&ev.guid) == Some(&t));
+                crate::ui_unit::fire_unit_combat(
+                    &mut script,
+                    &ev,
+                    self_guid.0 == Some(ev.guid),
+                    is_target,
+                );
+            }
             Pending::Event(mut event) => {
                 deliver(&mut script, &mut windows, &mut channels, &mut event);
             }

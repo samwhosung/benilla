@@ -157,11 +157,12 @@ pub(super) fn attacker_state(
     );
 }
 
-/// `SMSG_SPELLDAMAGESHIELD`: the Thorns-style return hit. The sentence's subject is the packet's
-/// `victim`, who wears the shield; `attacker` struck it and takes the damage
+/// `SMSG_SPELLDAMAGESHIELD` (`0x5e84e0`): the Thorns-style return hit. The sentence's subject is
+/// the packet's `victim`, who wears the shield; `attacker` struck it and takes the damage
 /// (`DAMAGESHIELDSELFOTHER` is "You reflect %d %s damage to %s."). The chat type is a two-way on
 /// the bearer: `0x62c140` returns `0x3f` `SPELL_DAMAGESHIELDS_ON_SELF` for class 0 or 1, else
-/// `0x40` `…ON_OTHERS`.
+/// `0x40` `…ON_OTHERS`. After the line (`0x5e8552`), `UNIT_COMBAT` `WOUND` on the attacker, with
+/// no flags and no gate (`0x5e858c`).
 pub(super) fn damage_shield(
     s: DamageShield,
     ctx: &ChatCtx,
@@ -187,6 +188,7 @@ pub(super) fn damage_shield(
         (s.attacker, struck),
         fills,
     );
+    super::feedback::wound(log, s.attacker, s.damage, 0, s.school);
 }
 
 /// `SMSG_PARTYKILLLOG`: "You have slain %s!" or "%s is slain by %s!". Only killer class 0

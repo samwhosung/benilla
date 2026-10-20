@@ -133,6 +133,10 @@ mod emitters {
     const LEARN: u32 = 483;
     const UNLOGGED: u32 = 20_000;
     const PICK_LOCK: u32 = 1804;
+    /// `Attributes & 0x100`: no line, no `UNIT_COMBAT`, no float.
+    const HIDDEN: u32 = 20_001;
+    /// `Attributes & 0x80` alone: no line, but its `UNIT_COMBAT` fires.
+    const UNDISPLAYED: u32 = 20_002;
 
     /// Fireball with no duration row, the two heals with theirs, and the casts.
     fn spells() -> crate::ui_action::Spells {
@@ -177,6 +181,8 @@ mod emitters {
                     cast(LEARN, "Learning", 0, 0, 36),
                     cast(UNLOGGED, "Unlogged", 0, 1, 38),
                     cast(PICK_LOCK, "Pick Lock", 0, 0, 33),
+                    cast(HIDDEN, "Hidden", 0x100, 0, 0),
+                    cast(UNDISPLAYED, "Undisplayed", 0x80, 0, 0),
                 ]
                 .into_iter()
                 .collect(),
@@ -233,11 +239,44 @@ mod emitters {
             self.stores.insert(e, store_of(u));
         }
 
+        /// The lines and `UNIT_COMBAT`s `emit` parks, in queue order
+        /// ([`ChatLog::pending_combat_order`]).
+        fn order(
+            &self,
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+        ) -> Vec<String> {
+            self.run(emit).pending_combat_order()
+        }
+
+        /// The `UNIT_COMBAT`s `emit` parks, as `(guid, action, descriptor, amount)`.
+        fn flashes(
+            &self,
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+        ) -> Vec<(u64, &'static str, &'static str, u32)> {
+            self.run(emit)
+                .pending_unit_combat()
+                .into_iter()
+                .map(|f| (f.guid, f.action, f.flags, f.amount))
+                .collect()
+        }
+
         /// The lines `emit` parks, with their words.
         fn lines(
             &self,
             emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
         ) -> Vec<PendingCombat> {
+            self.run(emit)
+                .pending_combat()
+                .into_iter()
+                .cloned()
+                .collect()
+        }
+
+        /// The log `emit` leaves.
+        fn run(
+            &self,
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &mut ChatLog),
+        ) -> ChatLog {
             let (self_guid, reputations, ranges) = (
                 SelfGuid(Some(ME)),
                 Reputations::default(),
@@ -258,7 +297,7 @@ mod emitters {
             };
             let mut log = ChatLog::default();
             emit(&ctx, &self.stores, &NoPoses, &mut log);
-            log.pending_combat().into_iter().cloned().collect()
+            log
         }
     }
 
@@ -759,5 +798,230 @@ mod emitters {
         let lines =
             bench.lines(|ctx, st, po, log| super::super::enchantment_log(fade, ctx, st, po, log));
         assert!(lines.is_empty(), "a fade's owner held as no unit");
+    }
+
+    // ── `UNIT_COMBAT`: its gates and flags, and its place against the line ──
+
+    fn hit_by(
+        spell_id: u32,
+        damage: u32,
+        absorb: u32,
+        resist: i32,
+        blocked: u32,
+    ) -> SpellDamageLog {
+        SpellDamageLog {
+            target: ME,
+            attacker: MOB,
+            spell_id,
+            damage,
+            school: 2,
+            absorb,
+            resist,
+            periodic: false,
+            blocked,
+            hit_info: 0,
+        }
+    }
+
+    fn damage(s: SpellDamageLog) -> Vec<(u64, &'static str, &'static str, u32)> {
+        Bench::new().flashes(|ctx, st, po, log| super::super::spell_damage_log(s, ctx, st, po, log))
+    }
+
+    /// `0x5e85e0` writes the line (`0x5e87de`), then `UNIT_COMBAT` (`0x5e883f`).
+    #[test]
+    fn a_spell_hit_writes_its_line_then_its_unit_combat() {
+        let s = hit_by(FIREBALL, 300, 0, 0, 0);
+        let order = Bench::new()
+            .order(|ctx, st, po, log| super::super::spell_damage_log(s, ctx, st, po, log));
+        assert_eq!(order, ["SPELLLOGSCHOOL", "UNIT_COMBAT WOUND"]);
+    }
+
+    /// The flash is `WOUND`, its descriptor the first of `ABSORB`, `BLOCK` and `RESIST` when
+    /// nothing got through (`0x49463b`-`0x494656`), the crit when something did; split damage
+    /// flashes with no flags (`0x5e872d`-`0x5e876a`). It needs a record without
+    /// `Attributes & 0x100` (`0x5e87e3`-`0x5e87f4`), whatever the line's own gate says.
+    #[test]
+    fn a_spell_hit_flashes_its_reason_for_a_spell_without_0x100() {
+        assert_eq!(
+            damage(hit_by(FIREBALL, 0, 0, 30, 40)),
+            [(ME, "WOUND", "BLOCK", 0)]
+        );
+        assert_eq!(
+            damage(hit_by(FIREBALL, 0, 50, 30, 40)),
+            [(ME, "WOUND", "ABSORB", 0)]
+        );
+        assert_eq!(damage(hit_by(FIREBALL, 0, 0, 0, 0)), [(ME, "WOUND", "", 0)]);
+        let crit = SpellDamageLog {
+            hit_info: 0x2,
+            ..hit_by(FIREBALL, 300, 50, 0, 0)
+        };
+        assert_eq!(damage(crit), [(ME, "WOUND", "CRITICAL", 300)]);
+        let split = SpellDamageLog {
+            hit_info: 0x8 | 0x2,
+            ..hit_by(FIREBALL, 120, 50, 0, 0)
+        };
+        assert_eq!(damage(split), [(ME, "WOUND", "", 120)]);
+        assert!(damage(hit_by(HIDDEN, 300, 0, 0, 0)).is_empty());
+        assert!(damage(hit_by(24_000, 300, 0, 0, 0)).is_empty());
+        assert_eq!(
+            damage(hit_by(UNDISPLAYED, 300, 0, 0, 0)),
+            [(ME, "WOUND", "", 300)]
+        );
+    }
+
+    /// `0x5e84e0` writes the shield's line (`0x5e8552`), then `UNIT_COMBAT` on the striker
+    /// (`0x5e858c`).
+    #[test]
+    fn a_damage_shield_writes_its_line_then_its_unit_combat() {
+        let s = benilla_protocol::messages::DamageShield {
+            victim: MOB,
+            attacker: ME,
+            damage: 12,
+            school: 3,
+        };
+        let order =
+            Bench::new().order(|ctx, st, po, log| super::super::damage_shield(s, ctx, st, po, log));
+        assert_eq!(order, ["DAMAGESHIELD", "UNIT_COMBAT WOUND"]);
+    }
+
+    /// `0x5e7e00` flashes each target first (`0x5e7f23`), then writes its line (`0x5e7f3e`), and
+    /// does neither for a spell with `Attributes & 0x100` (`0x5e7f15`). Code 0 flashes `NONE`
+    /// (table `0x86582c`) and writes no line (`0x62babb`).
+    #[test]
+    fn a_spell_log_miss_flashes_each_target_then_writes_its_line() {
+        let miss = |spell_id, misses| SpellLogMiss {
+            spell_id,
+            caster: MOB,
+            extended: false,
+            misses,
+        };
+        let s = miss(FIREBALL, vec![(ME, 3), (ME, 4)]);
+        let order = Bench::new()
+            .order(|ctx, st, po, log| super::super::spell_log_miss(&s, ctx, st, po, log));
+        assert_eq!(
+            order,
+            [
+                "UNIT_COMBAT DODGE",
+                "SPELLDODGED",
+                "UNIT_COMBAT PARRY",
+                "SPELLPARRIED"
+            ]
+        );
+        let s = miss(FIREBALL, vec![(ME, 0)]);
+        let order = Bench::new()
+            .order(|ctx, st, po, log| super::super::spell_log_miss(&s, ctx, st, po, log));
+        assert_eq!(order, ["UNIT_COMBAT NONE"]);
+        let s = miss(HIDDEN, vec![(ME, 3)]);
+        assert!(Bench::new()
+            .order(|ctx, st, po, log| super::super::spell_log_miss(&s, ctx, st, po, log))
+            .is_empty());
+    }
+
+    /// `0x6e7a70` writes each entry's line (`0x6e7d95`), then flashes it (`0x6e7de5`); a reflect
+    /// with an outcome then writes the outcome's line on the caster (`0x6e7e14`) and flashes the
+    /// caster (`0x6e7e5f`). A spell with `Attributes & 0x100` keeps its lines and loses its
+    /// flashes (`0x6e7d9a`, `0x6e7e19`).
+    #[test]
+    fn a_go_miss_writes_its_line_then_its_unit_combat() {
+        let entry = |target, info, reflect_result| benilla_protocol::messages::SpellGoMiss {
+            target,
+            info,
+            reflect_result,
+        };
+        let misses = [entry(ME, 3, 0), entry(ME, 11, 2)];
+        let bench = Bench::new();
+        let order = bench.order(|ctx, st, po, log| {
+            super::super::spell_go_misses(MOB, FIREBALL, &misses, ctx, st, po, log)
+        });
+        assert_eq!(
+            order,
+            [
+                "SPELLDODGED",
+                "UNIT_COMBAT DODGE",
+                "SPELLREFLECT",
+                "UNIT_COMBAT REFLECT",
+                "SPELLRESIST",
+                "UNIT_COMBAT RESIST"
+            ]
+        );
+        let flashes = bench.flashes(|ctx, st, po, log| {
+            super::super::spell_go_misses(MOB, FIREBALL, &misses, ctx, st, po, log)
+        });
+        let on: Vec<_> = flashes.iter().map(|f| (f.0, f.1)).collect();
+        assert_eq!(on, [(ME, "DODGE"), (ME, "REFLECT"), (MOB, "RESIST")]);
+        assert!(bench
+            .flashes(|ctx, st, po, log| {
+                super::super::spell_go_misses(MOB, HIDDEN, &misses, ctx, st, po, log)
+            })
+            .is_empty());
+    }
+
+    /// `0x5e89c0` flashes `HEAL` first, with no spell gate (`0x5e8a48`), then writes the line
+    /// (`0x5e8a71`).
+    #[test]
+    fn a_heal_flashes_then_writes_its_line() {
+        let heal = |spell_id, critical| SpellHealLog {
+            target: ME,
+            healer: MOB,
+            spell_id,
+            amount: 90,
+            critical,
+        };
+        let s = heal(FIREBALL, true);
+        let order = Bench::new()
+            .order(|ctx, st, po, log| super::super::spell_heal_log(s, ctx, st, po, log));
+        assert_eq!(order, ["UNIT_COMBAT HEAL", "HEALEDCRIT"]);
+        let s = heal(HIDDEN, false);
+        let flashes = Bench::new()
+            .flashes(|ctx, st, po, log| super::super::spell_heal_log(s, ctx, st, po, log));
+        assert_eq!(flashes, [(ME, "HEAL", "", 90)]);
+    }
+
+    /// `0x626dd0` flashes each tick before its line: a damage tick `WOUND` with its absorbed and
+    /// resisted flags alone (`0x626fb4`, before `0x626ff4`), a heal tick `HEAL` (`0x627033`,
+    /// before `0x62705e`); an energize tick only writes its line.
+    #[test]
+    fn a_periodic_tick_flashes_then_writes_its_line() {
+        let s = PeriodicAuraLog {
+            target: ME,
+            caster: MOB,
+            spell_id: RENEW,
+            ticks: vec![
+                PeriodicTick::Damage {
+                    amount: 0,
+                    school: 2,
+                    absorb: 0,
+                    resist: 12,
+                },
+                PeriodicTick::Heal { amount: 9 },
+                PeriodicTick::Energize {
+                    power: 0,
+                    amount: 30,
+                },
+            ],
+        };
+        let bench = Bench::new();
+        let order =
+            bench.order(|ctx, st, po, log| super::super::periodic_aura_log(&s, ctx, st, po, log));
+        assert_eq!(
+            order,
+            [
+                "UNIT_COMBAT WOUND",
+                "SPELLRESIST",
+                "UNIT_COMBAT HEAL",
+                "PERIODICAURAHEAL",
+                "POWERGAIN"
+            ]
+        );
+        let flashes =
+            bench.flashes(|ctx, st, po, log| super::super::periodic_aura_log(&s, ctx, st, po, log));
+        assert_eq!(flashes, [(ME, "WOUND", "RESIST", 0), (ME, "HEAL", "", 9)]);
+        let hidden = PeriodicAuraLog {
+            spell_id: HIDDEN,
+            ..s
+        };
+        assert!(bench
+            .order(|ctx, st, po, log| super::super::periodic_aura_log(&hidden, ctx, st, po, log))
+            .is_empty());
     }
 }

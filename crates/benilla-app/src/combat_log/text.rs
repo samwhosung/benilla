@@ -2,24 +2,20 @@
 //! per packet. Each classifies the damage source (self, owned by me, or anything else, which is
 //! never drawn), resolves the recipient, applies Gate A (no damage text over self), picks the
 //! category and colour and writes a [`CombatTextSpawn`]. XP is the exception: over self, no gates,
-//! its own row colour. The law itself lives in [`crate::combat_text`].
-//!
-//! Each spell arm also feeds `UNIT_COMBAT` ([`UnitCombatFeedback`], the portrait hit indicator),
-//! ungated and fired at packet receive; the melee arm's rides the swing impact keyframe instead
-//! (`ui_unit::melee_unit_combat`).
+//! its own row colour. The law itself lives in [`crate::combat_text`]. A float reaches no Lua
+//! handler, so where it falls against the packet's line and `UNIT_COMBAT` does not matter.
 
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
     DamageShield, ExplorationXp, LevelUpInfo, PeriodicAuraLog, PeriodicTick, SpellDamageLog,
-    SpellHealLog, SpellLogMiss, XpGain,
+    SpellLogMiss, XpGain,
 };
 
 use crate::combat_text::{
     damage_color, miss_word, spell_text, CombatTextSpawn, DamageSource, DamageTextGates,
 };
 use crate::ui_chat::{combat, ChatLog};
-use crate::ui_unit::UnitCombatFeedback;
 
 use crate::net::{GuidIndex, ObjectStore, SelfGuid};
 
@@ -54,39 +50,10 @@ pub(crate) fn classify_source(
 // The melee number and word (`SMSG_ATTACKERSTATEUPDATE`) spawn at the swing's impact keyframe
 // (`crate::combat_text::melee_impact_text`), not here.
 
-/// `UNIT_COMBAT`'s descriptor, as its one emitter `0x494600` picks it from the packet's flags:
-/// with an amount, `CRITICAL` (`0x80`), `GLANCING` (`0x4000`), `CRUSHING` (`0x8000`); without one,
-/// `ABSORB` (`0x20`), `BLOCK` (`0x800`), `RESIST` (`0x40`); else empty, which the stock portrait
-/// shows as "Miss" (`CombatFeedback.lua:57-58`).
-pub(crate) fn wound_descriptor(amount: u32, flags: u32) -> &'static str {
-    // The amount is tested signed (`0x49460a`, `jle`).
-    let tests: [(u32, &str); 3] = if amount as i32 > 0 {
-        [
-            (0x80, "CRITICAL"),
-            (0x4000, "GLANCING"),
-            (0x8000, "CRUSHING"),
-        ]
-    } else {
-        [(0x20, "ABSORB"), (0x800, "BLOCK"), (0x40, "RESIST")]
-    };
-    tests
-        .into_iter()
-        .find(|&(bit, _)| flags & bit != 0)
-        .map_or("", |(_, word)| word)
-}
-
-/// The flags a spell hit hands `0x494600`: crit `0x80`, and each partial nonzero, absorbed `0x20`,
-/// blocked `0x800`, resisted `0x40` (`0x5e87fa`-`0x5e8825`).
-fn hit_flags(crit: bool, absorb: u32, resist: i32, blocked: u32) -> u32 {
-    let bit = |set: bool, bit: u32| if set { bit } else { 0 };
-    bit(crit, 0x80) | bit(absorb != 0, 0x20) | bit(blocked != 0, 0x800) | bit(resist != 0, 0x40)
-}
-
-/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`), after its line: for a spell with a record and no
-/// `Attributes & 0x100`, `UNIT_COMBAT` `WOUND` over the target, and the spell-damage number or the
-/// stopped hit's word over it; only my spells and my pet's (`PetSpellDamage`-gated) draw, number
-/// and word coloured alike. Split damage flashes `WOUND` with no flags and floats nothing
-/// (`0x5e872d`-`0x5e876a`).
+/// `SMSG_SPELLNONMELEEDAMAGELOG` (`0x5e85e0`): for a spell with a record and no
+/// `Attributes & 0x100`, the spell-damage number or the stopped hit's word over the target; only
+/// my spells and my pet's (`PetSpellDamage`-gated) draw, number and word coloured alike. Split
+/// damage floats nothing (`0x5e872d`-`0x5e876a`).
 pub(super) fn spell_damage_log(
     s: SpellDamageLog,
     index: &GuidIndex,
@@ -95,7 +62,6 @@ pub(super) fn spell_damage_log(
     spells: Option<&crate::ui_action::Spells>,
     gates: DamageTextGates,
     text: &mut MessageWriter<CombatTextSpawn>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
     let crit = s.hit_info & 0x2 != 0;
     if benilla_assets::trace::enabled() {
@@ -110,23 +76,7 @@ pub(super) fn spell_damage_log(
     let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
         return;
     };
-    let split = s.hit_info & 0x8 != 0;
-    // UNIT_COMBAT: any source, any recipient including self.
-    if let Some(&unit) = index.0.get(&s.target) {
-        let flags = if split {
-            0
-        } else {
-            hit_flags(crit, s.absorb, s.resist, s.blocked)
-        };
-        feedback.write(UnitCombatFeedback {
-            unit,
-            action: "WOUND",
-            flags: wound_descriptor(s.damage, flags),
-            amount: s.damage,
-            school: u32::from(s.school),
-        });
-    }
-    if split {
+    if s.hit_info & 0x8 != 0 {
         return;
     }
     let Some(source) = classify_source(s.attacker, index, self_guid, stores) else {
@@ -150,12 +100,9 @@ pub(super) fn spell_damage_log(
     }
 }
 
-/// `SMSG_PERIODICAURALOG` (`0x626dd0`): per tick of a spell with a record and no
-/// `Attributes & 0x100` (`0x626f1b`, `0x62700f`, `0x627095`), a damage tick floats like direct
-/// damage, never as a crit, and flashes `WOUND` with its absorbed and resisted flags
-/// (`0x626f87`-`0x626fb4`); a heal tick flashes `HEAL` (`0x627033`) and floats nothing, as heals
-/// never float in the 1.12 client. Energize (`0x494770` is an empty stub) and leech ticks do
-/// neither.
+/// `SMSG_PERIODICAURALOG` (`0x626dd0`): per damage tick of a spell with a record and no
+/// `Attributes & 0x100` (`0x626f1b`), the number floats like direct damage, never as a crit. Heal,
+/// energize and leech ticks float nothing, as heals never float in the 1.12 client.
 pub(super) fn periodic_aura_log(
     s: PeriodicAuraLog,
     index: &GuidIndex,
@@ -164,7 +111,6 @@ pub(super) fn periodic_aura_log(
     spells: Option<&crate::ui_action::Spells>,
     gates: DamageTextGates,
     text: &mut MessageWriter<CombatTextSpawn>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
     if benilla_assets::trace::enabled() {
         benilla_assets::trace::line(
@@ -180,32 +126,6 @@ pub(super) fn periodic_aura_log(
     let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
         return;
     };
-    if let Some(&unit) = index.0.get(&s.target) {
-        for tick in &s.ticks {
-            let (action, flags, amount, school) = match *tick {
-                PeriodicTick::Damage {
-                    amount,
-                    school,
-                    absorb,
-                    resist,
-                } => (
-                    "WOUND",
-                    wound_descriptor(amount, hit_flags(false, absorb, resist, 0)),
-                    amount,
-                    school,
-                ),
-                PeriodicTick::Heal { amount } => ("HEAL", "", amount, 0),
-                PeriodicTick::Energize { .. } | PeriodicTick::ManaLeech { .. } => continue,
-            };
-            feedback.write(UnitCombatFeedback {
-                unit,
-                action,
-                flags,
-                amount,
-                school,
-            });
-        }
-    }
     let Some(source) = classify_source(s.caster, index, self_guid, stores) else {
         return; // K = other: never drawn
     };
@@ -248,20 +168,9 @@ pub(super) fn damage_shield(
     stores: &Query<&mut ObjectStore>,
     gates: DamageTextGates,
     text: &mut MessageWriter<CombatTextSpawn>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
     if s.damage == 0 {
         return;
-    }
-    // UNIT_COMBAT: the attacker takes the damage, so striking thorns wounds your own portrait.
-    if let Some(&unit) = index.0.get(&s.attacker) {
-        feedback.write(UnitCombatFeedback {
-            unit,
-            action: "WOUND",
-            flags: "",
-            amount: s.damage,
-            school: s.school,
-        });
     }
     let Some(source) = classify_source(s.victim, index, self_guid, stores) else {
         return; // K = other: never drawn
@@ -275,56 +184,6 @@ pub(super) fn damage_shield(
             text: s.damage.to_string(),
             category: 0,
             color,
-        });
-    }
-}
-
-/// `SMSG_SPELLHEALLOG`: `UNIT_COMBAT` `HEAL` for any streamed recipient (`0x5e8a48`), with no
-/// spell gate. No worldtext: heals never float in the 1.12 client.
-pub(super) fn spell_heal_log(
-    s: SpellHealLog,
-    index: &GuidIndex,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
-) {
-    if let Some(&unit) = index.0.get(&s.target) {
-        feedback.write(UnitCombatFeedback {
-            unit,
-            action: "HEAL",
-            flags: if s.critical { "CRITICAL" } else { "" },
-            amount: s.amount,
-            school: 0,
-        });
-    }
-}
-
-/// Miss code (vmangos `SpellMissInfo`) to the `UNIT_COMBAT` action word, the table `0x86582c` that
-/// `0x494720` indexes for a code from 0 to 11, `NONE` first; any other code fires nothing.
-fn miss_action(code: u8) -> Option<&'static str> {
-    Some(match code {
-        0 => "NONE",
-        1 => "MISS",
-        2 => "RESIST",
-        3 => "DODGE",
-        4 => "PARRY",
-        5 => "BLOCK",
-        6 => "EVADE",
-        7 | 8 => "IMMUNE",
-        9 => "DEFLECT",
-        10 => "ABSORB",
-        11 => "REFLECT",
-        _ => return None,
-    })
-}
-
-/// `0x494720(unit, code)`: a miss's `UNIT_COMBAT`, amount, school and flags all 0.
-fn miss_feedback(unit: Entity, code: u8, feedback: &mut MessageWriter<UnitCombatFeedback>) {
-    if let Some(action) = miss_action(code) {
-        feedback.write(UnitCombatFeedback {
-            unit,
-            action,
-            flags: "",
-            amount: 0,
-            school: 0,
         });
     }
 }
@@ -371,8 +230,7 @@ fn miss_float(
 }
 
 /// `SMSG_SPELLLOGMISS` (`0x5e7e00`), per missed target of a spell with a record and no
-/// `Attributes & 0x100` (`0x5e7f0b`-`0x5e7f18`): `UNIT_COMBAT` (`0x5e7f23`), then, after the line,
-/// the word over the target (`0x5e7f6e`).
+/// `Attributes & 0x100` (`0x5e7f0b`-`0x5e7f18`): the word over the target (`0x5e7f6e`).
 pub(super) fn spell_log_miss(
     s: SpellLogMiss,
     index: &GuidIndex,
@@ -381,24 +239,19 @@ pub(super) fn spell_log_miss(
     spells: Option<&crate::ui_action::Spells>,
     gates: DamageTextGates,
     text: &mut MessageWriter<CombatTextSpawn>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
     let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
         return;
     };
     let color = miss_color(s.caster, display, index, self_guid, stores, gates);
     for &(target, code) in &s.misses {
-        if let Some(&unit) = index.0.get(&target) {
-            miss_feedback(unit, code, feedback);
-        }
         miss_float(target, code, color, index, self_guid, text);
     }
 }
 
 /// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`), for a spell with a record and no
-/// `Attributes & 0x100` (`0x6e7d9a`): per entry, after its line, the word over the target
-/// (`0x6e7dd4`) and its `UNIT_COMBAT` (`0x6e7de5`); a reflect with an outcome then words that
-/// outcome over the caster (`0x6e7e51`) and flashes it on the caster (`0x6e7e5f`).
+/// `Attributes & 0x100` (`0x6e7d9a`): per entry the word over the target (`0x6e7dd4`), and for a
+/// reflect with an outcome that outcome's word over the caster (`0x6e7e51`).
 pub(super) fn spell_go_misses(
     caster: u64,
     spell_id: u32,
@@ -409,22 +262,15 @@ pub(super) fn spell_go_misses(
     spells: Option<&crate::ui_action::Spells>,
     gates: DamageTextGates,
     text: &mut MessageWriter<CombatTextSpawn>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
     let Some(display) = combat::feedback_spell(spells, spell_id) else {
         return;
     };
     let color = miss_color(caster, display, index, self_guid, stores, gates);
-    let mut emit = |guid: u64, code: u8| {
-        miss_float(guid, code, color, index, self_guid, text);
-        if let Some(&unit) = index.0.get(&guid) {
-            miss_feedback(unit, code, feedback);
-        }
-    };
     for m in misses {
-        emit(m.target, m.info);
+        miss_float(m.target, m.info, color, index, self_guid, text);
         if m.info == SPELL_MISS_REFLECT && m.reflect_result != 0 {
-            emit(caster, m.reflect_result);
+            miss_float(caster, m.reflect_result, color, index, self_guid, text);
         }
     }
 }
@@ -432,21 +278,6 @@ pub(super) fn spell_go_misses(
 /// vmangos `SPELL_MISS_REFLECT` (`SpellDefines.h:173`), the code the GO's reflect leg tests
 /// (`0x6e7ded`).
 pub(super) const SPELL_MISS_REFLECT: u8 = 11;
-
-/// A travelling spell's missed arrival on a live target (`0x61dd50`): `UNIT_COMBAT` with the
-/// missile's code for a spell with a record and no `Attributes & 0x100` (`0x61dda3`, `0x61ddcc`).
-/// Its word is [`crate::combat_text`]'s.
-pub(super) fn missile_miss(
-    target: Entity,
-    spell_id: u32,
-    code: u8,
-    spells: Option<&crate::ui_action::Spells>,
-    feedback: &mut MessageWriter<UnitCombatFeedback>,
-) {
-    if combat::feedback_spell(spells, spell_id).is_some() {
-        miss_feedback(target, code, feedback);
-    }
-}
 
 /// `SMSG_LOG_XPGAIN`, as `0x637ec0` dispatches it. Your own guid as the victim is an XP loss,
 /// written with no float (`0x637f70`). A kill of a unit the client holds (type mask 8) is named:
@@ -589,7 +420,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_message::<CombatTextSpawn>()
-            .add_message::<UnitCombatFeedback>()
             .init_resource::<GuidIndex>()
             .init_resource::<SelfGuid>();
         let self_e = app
@@ -612,8 +442,7 @@ mod tests {
                 move |index: Res<GuidIndex>,
                       self_guid: Res<SelfGuid>,
                       stores: Query<&mut ObjectStore>,
-                      mut text: MessageWriter<CombatTextSpawn>,
-                      mut feedback: MessageWriter<UnitCombatFeedback>| {
+                      mut text: MessageWriter<CombatTextSpawn>| {
                     spell_log_miss(
                         SpellLogMiss {
                             spell_id: IMMOLATE,
@@ -627,7 +456,6 @@ mod tests {
                         Some(&spells),
                         DamageTextGates::default(),
                         &mut text,
-                        &mut feedback,
                     );
                 },
             )
@@ -683,7 +511,6 @@ mod tests {
             };
             let mut app = App::new();
             app.add_message::<CombatTextSpawn>()
-                .add_message::<UnitCombatFeedback>()
                 .init_resource::<GuidIndex>()
                 .init_resource::<SelfGuid>();
             for guid in [ME, MOB] {
@@ -703,12 +530,8 @@ mod tests {
             }
         }
 
-        /// Run one packet through the leg; the flashes as `(action, descriptor, amount)` and the
-        /// floats' text.
-        fn run(
-            &mut self,
-            packet: impl Packet,
-        ) -> (Vec<(&'static str, &'static str, u32)>, Vec<String>) {
+        /// Run one packet through the leg; the floats' text.
+        fn run(&mut self, packet: impl Packet) -> Vec<String> {
             let spells = self.spells.clone();
             let mut packet = Some(packet);
             self.app
@@ -717,33 +540,19 @@ mod tests {
                     move |index: Res<GuidIndex>,
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
-                          mut text: MessageWriter<CombatTextSpawn>,
-                          mut feedback: MessageWriter<UnitCombatFeedback>| {
+                          mut text: MessageWriter<CombatTextSpawn>| {
                         if let Some(packet) = packet.take() {
-                            packet.emit(
-                                &index,
-                                &self_guid,
-                                &stores,
-                                &spells,
-                                &mut text,
-                                &mut feedback,
-                            );
+                            packet.emit(&index, &self_guid, &stores, &spells, &mut text);
                         }
                     },
                 )
                 .unwrap();
-            let world = self.app.world_mut();
-            let flashes = world
-                .resource_mut::<Messages<UnitCombatFeedback>>()
-                .drain()
-                .map(|f| (f.action, f.flags, f.amount))
-                .collect();
-            let floats = world
+            self.app
+                .world_mut()
                 .resource_mut::<Messages<CombatTextSpawn>>()
                 .drain()
                 .map(|t| t.text)
-                .collect();
-            (flashes, floats)
+                .collect()
         }
     }
 
@@ -756,7 +565,6 @@ mod tests {
             stores: &Query<&mut ObjectStore>,
             spells: &crate::ui_action::Spells,
             text: &mut MessageWriter<CombatTextSpawn>,
-            feedback: &mut MessageWriter<UnitCombatFeedback>,
         );
     }
 
@@ -768,7 +576,6 @@ mod tests {
             stores: &Query<&mut ObjectStore>,
             spells: &crate::ui_action::Spells,
             text: &mut MessageWriter<CombatTextSpawn>,
-            feedback: &mut MessageWriter<UnitCombatFeedback>,
         ) {
             spell_damage_log(
                 self,
@@ -778,7 +585,6 @@ mod tests {
                 Some(spells),
                 DamageTextGates::default(),
                 text,
-                feedback,
             );
         }
     }
@@ -791,7 +597,6 @@ mod tests {
             stores: &Query<&mut ObjectStore>,
             spells: &crate::ui_action::Spells,
             text: &mut MessageWriter<CombatTextSpawn>,
-            feedback: &mut MessageWriter<UnitCombatFeedback>,
         ) {
             periodic_aura_log(
                 self,
@@ -801,7 +606,6 @@ mod tests {
                 Some(spells),
                 DamageTextGates::default(),
                 text,
-                feedback,
             );
         }
     }
@@ -822,55 +626,40 @@ mod tests {
         }
     }
 
-    /// `0x5e85e0` flashes `WOUND` for any hit of a logged spell, its descriptor the first of
-    /// `ABSORB`, `BLOCK` and `RESIST` when nothing got through (`0x49463b`-`0x494656`), and floats
-    /// the same reason (`0x5e888a`-`0x5e88c5`); a hit with no reason at all flashes `WOUND` bare,
-    /// the portrait's "Miss", and floats nothing.
+    /// `0x5e85e0` floats a stopped hit's reason, the first of absorbed, blocked and resisted
+    /// (`0x5e888a`-`0x5e88c5`), and nothing for a hit with no reason; a hit through floats its
+    /// number.
     #[test]
-    fn a_stopped_spell_hit_flashes_and_floats_its_reason() {
+    fn a_stopped_spell_hit_floats_its_reason() {
         let mut leg = Leg::new();
-        assert_eq!(
-            leg.run(hit(FIREBALL, 0, 0, 30, 40)),
-            (vec![("WOUND", "BLOCK", 0)], vec!["Block".to_string()])
-        );
-        assert_eq!(
-            leg.run(hit(FIREBALL, 0, 50, 30, 40)),
-            (vec![("WOUND", "ABSORB", 0)], vec!["Absorb".to_string()])
-        );
-        assert_eq!(
-            leg.run(hit(FIREBALL, 0, 0, 0, 0)),
-            (vec![("WOUND", "", 0)], vec![])
-        );
-        // Through: the crit is the descriptor, and the partials are not.
+        assert_eq!(leg.run(hit(FIREBALL, 0, 0, 30, 40)), ["Block"]);
+        assert_eq!(leg.run(hit(FIREBALL, 0, 50, 30, 40)), ["Absorb"]);
+        assert!(leg.run(hit(FIREBALL, 0, 0, 0, 0)).is_empty());
         let crit = SpellDamageLog {
             hit_info: 0x2,
             ..hit(FIREBALL, 300, 50, 0, 0)
         };
-        assert_eq!(
-            leg.run(crit),
-            (vec![("WOUND", "CRITICAL", 300)], vec!["300".to_string()])
-        );
+        assert_eq!(leg.run(crit), ["300"]);
     }
 
-    /// The flash and the float need the spell's record without `Attributes & 0x100`
-    /// (`0x5e87e3`-`0x5e87f4`); split damage flashes `WOUND` with no flags and floats nothing
-    /// (`0x5e8744`-`0x5e876a`).
+    /// The float needs the spell's record without `Attributes & 0x100` (`0x5e87e3`-`0x5e87f4`);
+    /// split damage floats nothing (`0x5e8744`-`0x5e876a`).
     #[test]
-    fn a_hidden_or_unknown_spell_flashes_nothing_and_a_split_floats_nothing() {
+    fn a_hidden_or_unknown_spell_or_a_split_floats_nothing() {
         let mut leg = Leg::new();
-        assert_eq!(leg.run(hit(HIDDEN, 300, 0, 0, 0)), (vec![], vec![]));
-        assert_eq!(leg.run(hit(24_000, 300, 0, 0, 0)), (vec![], vec![]));
+        assert!(leg.run(hit(HIDDEN, 300, 0, 0, 0)).is_empty());
+        assert!(leg.run(hit(24_000, 300, 0, 0, 0)).is_empty());
         let split = SpellDamageLog {
             hit_info: 0x8 | 0x2,
             ..hit(FIREBALL, 120, 0, 0, 0)
         };
-        assert_eq!(leg.run(split), (vec![("WOUND", "", 120)], vec![]));
+        assert!(leg.run(split).is_empty());
     }
 
-    /// A periodic tick flashes `WOUND` with its absorbed and resisted flags alone
-    /// (`0x626f87`-`0x626fb4`), and a hidden spell's ticks flash and float nothing (`0x626f21`).
+    /// A periodic damage tick floats its reason, a heal tick nothing, and a hidden spell's ticks
+    /// nothing (`0x626f21`).
     #[test]
-    fn a_periodic_tick_flashes_its_partials_for_a_logged_spell_only() {
+    fn a_periodic_tick_floats_for_a_logged_spell_only() {
         let mut leg = Leg::new();
         let tick = |spell_id| PeriodicAuraLog {
             target: MOB,
@@ -886,14 +675,8 @@ mod tests {
                 PeriodicTick::Heal { amount: 9 },
             ],
         };
-        assert_eq!(
-            leg.run(tick(FIREBALL)),
-            (
-                vec![("WOUND", "RESIST", 0), ("HEAL", "", 9)],
-                vec!["Resist".to_string()]
-            )
-        );
-        assert_eq!(leg.run(tick(HIDDEN)), (vec![], vec![]));
+        assert_eq!(leg.run(tick(FIREBALL)), ["Resist"]);
+        assert!(leg.run(tick(HIDDEN)).is_empty());
     }
 
     impl Packet for SpellLogMiss {
@@ -904,7 +687,6 @@ mod tests {
             stores: &Query<&mut ObjectStore>,
             spells: &crate::ui_action::Spells,
             text: &mut MessageWriter<CombatTextSpawn>,
-            feedback: &mut MessageWriter<UnitCombatFeedback>,
         ) {
             spell_log_miss(
                 self,
@@ -914,7 +696,6 @@ mod tests {
                 Some(spells),
                 DamageTextGates::default(),
                 text,
-                feedback,
             );
         }
     }
@@ -930,7 +711,6 @@ mod tests {
             stores: &Query<&mut ObjectStore>,
             spells: &crate::ui_action::Spells,
             text: &mut MessageWriter<CombatTextSpawn>,
-            feedback: &mut MessageWriter<UnitCombatFeedback>,
         ) {
             spell_go_misses(
                 self.0,
@@ -942,16 +722,15 @@ mod tests {
                 Some(spells),
                 DamageTextGates::default(),
                 text,
-                feedback,
             );
         }
     }
 
-    /// The GO's miss list words and flashes each target (`0x6e7dd4`, `0x6e7de5`), Reflect over
-    /// the target too, and a reflect's outcome on the caster (`0x6e7e51`, `0x6e7e5f`), which over
-    /// you is no float (Gate A); a hidden spell does neither (`0x6e7d9a`).
+    /// The GO's miss list floats each target's word (`0x6e7dd4`), Reflect over the target too, and
+    /// a reflect's outcome over the caster (`0x6e7e51`), which over you is no float (Gate A); a
+    /// hidden spell floats nothing (`0x6e7d9a`).
     #[test]
-    fn a_go_miss_list_flashes_and_floats_each_entry_and_the_reflected_outcome() {
+    fn a_go_miss_list_floats_each_entry_and_the_reflected_outcome() {
         let mut leg = Leg::new();
         let entry = |target, info, reflect_result| benilla_protocol::messages::SpellGoMiss {
             target,
@@ -960,25 +739,20 @@ mod tests {
         };
         assert_eq!(
             leg.run(GoMisses(ME, FIREBALL, vec![entry(MOB, 11, 2)])),
-            (
-                vec![("REFLECT", "", 0), ("RESIST", "", 0)],
-                vec!["Reflect".to_string()]
-            )
+            ["Reflect"]
         );
         assert_eq!(
             leg.run(GoMisses(ME, FIREBALL, vec![entry(MOB, 3, 0)])),
-            (vec![("DODGE", "", 0)], vec!["Dodge".to_string()])
+            ["Dodge"]
         );
-        assert_eq!(
-            leg.run(GoMisses(ME, HIDDEN, vec![entry(MOB, 3, 0)])),
-            (vec![], vec![])
-        );
+        assert!(leg
+            .run(GoMisses(ME, HIDDEN, vec![entry(MOB, 3, 0)]))
+            .is_empty());
     }
 
-    /// `0x494720` flashes code 0 too, as `NONE` (table `0x86582c`), under the same
-    /// `Attributes & 0x100` gate as the word (`0x5e7f15`).
+    /// A spell-log miss floats its word under the `Attributes & 0x100` gate (`0x5e7f15`).
     #[test]
-    fn a_spell_log_miss_flashes_code_zero_as_none_for_a_logged_spell() {
+    fn a_spell_log_miss_floats_for_a_logged_spell_only() {
         let mut leg = Leg::new();
         let miss = |spell_id, code| SpellLogMiss {
             spell_id,
@@ -986,11 +760,7 @@ mod tests {
             extended: false,
             misses: vec![(MOB, code)],
         };
-        assert_eq!(leg.run(miss(FIREBALL, 0)), (vec![("NONE", "", 0)], vec![]));
-        assert_eq!(
-            leg.run(miss(FIREBALL, 7)),
-            (vec![("IMMUNE", "", 0)], vec!["Immune".to_string()])
-        );
-        assert_eq!(leg.run(miss(HIDDEN, 7)), (vec![], vec![]));
+        assert_eq!(leg.run(miss(FIREBALL, 7)), ["Immune"]);
+        assert!(leg.run(miss(HIDDEN, 7)).is_empty());
     }
 }
