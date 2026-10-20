@@ -218,10 +218,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
         // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, and the item gate's
         // confirm (`0x495d60`), all signalled below as the call returns, under its input events.
-        let mut ready = appliers.p2().p2().ready_since(script, report_mark);
-        if let Some((event, args)) = popup {
-            ready.push(crate::ui_cast::Ready::Event(event, args));
-        }
+        let ready = appliers.p2().p2().ready_since(script, report_mark);
         // The cast state the call left, for the script's next line: `SpellStopCasting`
         // (`0x6e6e80`) finds the cast it sent in flight (`0x6e5026`), and `IsCurrentAction`
         // (`0x4e53a0`) checks its slot, as stock `ActionButtonUp` reads straight after `UseAction`
@@ -231,12 +228,15 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // The word the call left: `SpellIsTargeting` (`0x6e6cd0`) reads it, and `SpellTargetUnit`
         // binds to it.
         appliers.p1().push_view(script);
-        if ready.is_empty() {
+        if ready.is_empty() && popup.is_none() {
             return tail;
         }
         let macro_lines = tail.take();
         Some(Box::new(move |script: &mut UiScript| {
             crate::ui_cast::fire(script, ready);
+            if let Some(popup) = popup {
+                popup.fire(script);
+            }
             if let Some(lines) = macro_lines {
                 lines(script);
             }

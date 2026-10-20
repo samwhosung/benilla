@@ -645,7 +645,10 @@ impl ScriptCursor<'_, '_> {
 
     /// A bag or paper-doll click while targeting wants an item ([`item::pick_item`]); the confirm
     /// popup it raised, if any.
-    pub(crate) fn pick_item(&mut self, pick: benilla_ui::script::ItemPick) -> item::ConfirmPopup {
+    pub(crate) fn pick_item(
+        &mut self,
+        pick: benilla_ui::script::ItemPick,
+    ) -> Option<item::ConfirmPopup> {
         item::pick_item(
             &mut self.ladder,
             self.enchants.as_deref(),
@@ -659,7 +662,7 @@ impl ScriptCursor<'_, '_> {
     pub(crate) fn confirm_enchant(
         &mut self,
         answer: benilla_ui::script::EnchantAnswer,
-    ) -> item::ConfirmPopup {
+    ) -> Option<item::ConfirmPopup> {
         item::confirm_enchant(
             &mut self.ladder,
             self.enchants.as_deref(),

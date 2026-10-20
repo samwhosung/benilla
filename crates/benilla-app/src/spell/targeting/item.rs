@@ -110,8 +110,29 @@ pub(crate) fn item_bind_verdict(
 }
 
 /// The confirm popup a pick or a Yes raised (`0x495d60`), signalled as its call returns, under
-/// its input events: `BIND_ENCHANT` (event 402, no args) or `REPLACE_ENCHANT` (event 403).
-pub(crate) type ConfirmPopup = Option<(&'static str, Vec<benilla_ui::script::ScriptValue>)>;
+/// its input events.
+pub(crate) enum ConfirmPopup {
+    /// `BIND_ENCHANT` (event 402, no args, `0x4960a3`).
+    Bind,
+    /// `REPLACE_ENCHANT` (event 403, `0x4960e4`): the old enchant's name, then the new one's.
+    Replace { existing: String, new: String },
+}
+
+impl ConfirmPopup {
+    /// Signal the popup's event.
+    pub(crate) fn fire(self, script: &mut benilla_ui::script::UiScript) {
+        match self {
+            ConfirmPopup::Bind => script.fire_event("BIND_ENCHANT", vec![]),
+            ConfirmPopup::Replace { existing, new } => script.fire_event(
+                "REPLACE_ENCHANT",
+                vec![
+                    benilla_ui::script::ScriptValue::Str(existing),
+                    benilla_ui::script::ScriptValue::Str(new),
+                ],
+            ),
+        }
+    }
+}
 
 /// A bag or paper-doll click while targeting wants an item, inside its call (`0x4f9c54`,
 /// `0x4c76df`): resolve the clicked slot's item and run [`gate_item`] on it, unconfirmed. An empty
@@ -121,7 +142,7 @@ pub(crate) fn pick_item(
     enchants: Option<&crate::items::Enchants>,
     parked: &mut EnchantConfirmItem,
     pick: benilla_ui::script::ItemPick,
-) -> ConfirmPopup {
+) -> Option<ConfirmPopup> {
     let benilla_ui::script::ItemPick {
         bag,
         slot,
@@ -147,7 +168,7 @@ pub(crate) fn confirm_enchant(
     enchants: Option<&crate::items::Enchants>,
     parked: &mut EnchantConfirmItem,
     answer: benilla_ui::script::EnchantAnswer,
-) -> ConfirmPopup {
+) -> Option<ConfirmPopup> {
     let item_guid = parked.0?;
     match answer.confirm {
         benilla_ui::script::EnchantConfirm::Bind => {
@@ -182,7 +203,7 @@ fn gate_item(
     item_guid: u64,
     confirmed: bool,
     may_cast: bool,
-) -> ConfirmPopup {
+) -> Option<ConfirmPopup> {
     let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
         return None; // a click raced a cancel
     };
@@ -243,7 +264,7 @@ fn gate_item(
         ItemBind::ConfirmBind => {
             debug!("ui_action: item bind confirm for {spell_id} on item {item_guid:#x}");
             parked.0 = Some(item_guid);
-            Some(("BIND_ENCHANT", vec![]))
+            Some(ConfirmPopup::Bind)
         }
         ItemBind::ConfirmReplace { existing, new } => {
             // Old name first, then new: "Do you want to replace %s with %s?".
@@ -255,13 +276,10 @@ fn gate_item(
             };
             debug!("ui_action: replace-enchant confirm {existing} -> {new} on {item_guid:#x}");
             parked.0 = Some(item_guid);
-            Some((
-                "REPLACE_ENCHANT",
-                vec![
-                    benilla_ui::script::ScriptValue::Str(name(existing)),
-                    benilla_ui::script::ScriptValue::Str(name(new)),
-                ],
-            ))
+            Some(ConfirmPopup::Replace {
+                existing: name(existing),
+                new: name(new),
+            })
         }
         ItemBind::Bind if !may_cast => {
             debug!("ui_action: item pick — cast {spell_id} refused by the protected-action gate");
