@@ -501,6 +501,7 @@ mod tests {
                 flags: 0,
                 enchants: Vec::new(),
                 spell_0: false,
+                spell_charges_0: 0,
             },
         );
         ContainerState {
@@ -711,6 +712,7 @@ mod tests {
                 flags: 0,
                 enchants: Vec::new(),
                 spell_0: false,
+                spell_charges_0: 0,
             },
         );
         s.set_container(

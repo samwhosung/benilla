@@ -164,6 +164,82 @@ fn a_wrapped_description_sizes_in_the_show_and_survives_the_reenter_loop() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The merchant's price for an item object (`0x52e418`..`0x52e473`): the sell price scaled by the
+/// block-0 charges left over the template's below -1, truncated (`idiv`), less the item's own
+/// repair cost (`0x5da330`, never the discounted one) down to 1, then times the stack.
+#[test]
+fn a_bag_items_price_scales_by_its_charges_and_loses_its_repair_cost() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let held = |guid: u64, count, spell_charges_0| ContainerSlot {
+        count,
+        quality: Some(1),
+        item_id: 4376,
+        guid,
+        spell_charges_0,
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: HashMap::from([
+                (1, held(0x4000_0000_0000_0001, 1, -3)),
+                (2, held(0x4000_0000_0000_0002, 2, -5)),
+                (3, held(0x4000_0000_0000_0003, 3, -2)),
+            ]),
+        }),
+    );
+    s.set_item_template(
+        4376,
+        ItemTemplateView {
+            name: "Flame Deflector".into(),
+            quality: 1,
+            sell_price: 100,
+            spell_charges_0: -5,
+            ..Default::default()
+        },
+    );
+    s.set_repair_costs(RepairCosts {
+        bags: HashMap::from([((0, 1), 27), ((0, 2), 18)]),
+        own: HashMap::from([(0x4000_0000_0000_0001, 30), (0x4000_0000_0000_0002, 20)]),
+        ..Default::default()
+    });
+    s.set_merchant(Some(MerchantState::default()));
+    let money = |s: &mut UiScript, slot: u32| -> i64 {
+        s.eval(&format!(
+            r#"
+            money_fired = nil
+            local a = PriceSlot or CreateFrame("Button", "PriceSlot")
+            a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+            local tt = TT or CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+            tt:SetScript("OnTooltipAddMoney", function() money_fired = arg1 end)
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            tt:SetBagItem(0, {slot})
+            return money_fired
+            "#
+        ))
+        .unwrap()
+    };
+    // 3 of 5 charges: 100 × -3 / -5 = 60, less 30.
+    assert_eq!(money(&mut s, 1), 30);
+    // Full charges, less 20, times the stack of 2.
+    assert_eq!(money(&mut s, 2), 160);
+    // 100 × -2 / -5 = 40 with no cost, times 3.
+    assert_eq!(money(&mut s, 3), 120);
+    s.set_repair_costs(RepairCosts {
+        own: HashMap::from([(0x4000_0000_0000_0003, 40)]),
+        ..Default::default()
+    });
+    assert_eq!(
+        money(&mut s, 3),
+        3,
+        "a cost reaching the price leaves 1 each"
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// The mouseover health bar is unit content: an item render on the same tooltip hides it.
 #[test]
 fn item_render_hides_the_unit_health_bar() {

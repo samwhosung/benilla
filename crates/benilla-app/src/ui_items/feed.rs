@@ -277,6 +277,8 @@ fn template_view(
         sell_price: t.sell_price,
         item_set: t.item_set,
         random_property: t.random_property,
+        // Block 0's charges, unfiltered (`+0x144`), the sell price's charge scale (`0x52e432`).
+        spell_charges_0: t.spell_charges_0,
         // The area and map a zone-bound item names (`0x52bac9`..`0x52bb3e`): an id above 0 with
         // a row.
         area_name: i32::try_from(t.area)
@@ -908,6 +910,8 @@ fn resolve_slot(
         bar_placeable: t.placeable_on_action_bar(),
         consumable: t.is_consumable(),
         spell_0: t.has_spell_0(),
+        // The sell price's charge scale reads it (`flds+0x28`, `0x52e43d`).
+        spell_charges_0: fields.item_spell_charges(0).unwrap_or(0),
         cooldown: use_cooldown(
             &t,
             entry,
@@ -1925,8 +1929,18 @@ mod tests {
 
         const ENTRY: u16 = 3; // OBJECT_FIELD_ENTRY
         let mut objs = TestObjects::new();
-        for (guid, entry) in [(0xA1_u64, 1234_u32), (0xA2, 1235), (0xA3, 1236)] {
-            objs.spawn(guid, ObjectFields::from_pairs(&[(ENTRY, entry)]));
+        // The potion has 3 charges left in ITEM_FIELD_SPELL_CHARGES[0] (16), its neighbours set.
+        const CHARGES_0: u16 = 16;
+        for (guid, entry, charges) in [(0xA1_u64, 1234_u32, 0), (0xA2, 1235, -3), (0xA3, 1236, 0)] {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[
+                    (ENTRY, entry),
+                    (14, 1),
+                    (CHARGES_0, charges as u32),
+                    (17, 7),
+                ]),
+            );
         }
         let mut items = Items::default();
         let mut sword = test_template("Sword");
@@ -1963,6 +1977,8 @@ mod tests {
         assert_eq!((sword.quality, sword.inventory_type), (Some(4), 13));
         let potion = slot(0xA2).expect("an occupied slot");
         assert_eq!((potion.quality, potion.inventory_type), (Some(1), 0));
+        // The merchant price's charge scale reads the object's own (`flds+0x28`, `0x52e43d`).
+        assert_eq!((potion.spell_charges_0, sword.spell_charges_0), (-3, 0));
         let pending = slot(0xA3).expect("an occupied slot");
         assert_eq!((pending.quality, pending.inventory_type), (None, 0));
         // The guid and the class: the lock reads the one from the first push, and the

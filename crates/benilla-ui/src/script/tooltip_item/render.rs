@@ -78,6 +78,9 @@ pub(in crate::script) struct ItemInstance {
     /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so
     /// with p6 = 1; every other source stores 0 there (`0x5326e0`).
     pub cooldown_ms: u32,
+    /// The object's `ITEM_FIELD_SPELL_CHARGES[0]` (`flds+0x28`), which scales the merchant price
+    /// (`0x52e43d`); 0 for a source with no object.
+    pub spell_charges_0: i32,
 }
 
 impl ItemInstance {

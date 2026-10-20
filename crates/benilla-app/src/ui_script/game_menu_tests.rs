@@ -735,6 +735,7 @@ fn backpack() -> ContainerState {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
+            spell_charges_0: 0,
         },
     );
     ContainerState {

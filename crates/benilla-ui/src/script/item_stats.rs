@@ -99,6 +99,9 @@ pub struct ItemTemplateView {
     /// `RandomProperty` (template `+0x1b8`): the item can roll a suffix, so a template tooltip
     /// prints `<Random enchantment>` (`0x52cc33`).
     pub random_property: u32,
+    /// Block 0's template charges, unfiltered (`+0x144`): below -1 the merchant price scales by
+    /// the item's charges over them (`0x52e432`).
+    pub spell_charges_0: i32,
     /// The record's area (`+0x1c8`) by its `AreaTable.dbc` name, app-resolved; `None` for an id
     /// of 0 or below, one with no row, or an empty name (`0x52bac9`..`0x52bb01`).
     pub area_name: Option<String>,

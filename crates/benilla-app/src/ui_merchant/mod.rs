@@ -320,6 +320,13 @@ fn repair_costs(
             .then(|| item_repair_cost(guid, objects, items, tables, discount))
             .filter(|&c| c > 0)
     };
+    // The cost before the discount (`0x5da330`), which the merchant price takes off (`0x52e44a`).
+    let own = |guid: u64| {
+        (guid != 0)
+            .then(|| item_repair_cost(guid, objects, items, tables, 0.0))
+            .filter(|&c| c > 0)
+            .map(|c| (guid, c))
+    };
     let mut costs = RepairCosts::default();
     for i in 0..19u8 {
         if let Some(c) = cost(store.player_inv_slot(i).unwrap_or(0)) {
@@ -327,16 +334,20 @@ fn repair_costs(
         }
     }
     for i in 0..16u8 {
-        if let Some(c) = cost(store.player_pack_slot(i).unwrap_or(0)) {
+        let guid = store.player_pack_slot(i).unwrap_or(0);
+        if let Some(c) = cost(guid) {
             costs.bags.insert((0, u32::from(i) + 1), c);
         }
+        costs.own.extend(own(guid));
     }
     for i in 0..crate::ui_items::BANK_SLOTS {
-        if let Some(c) = cost(store.player_bank_slot(i).unwrap_or(0)) {
+        let guid = store.player_bank_slot(i).unwrap_or(0);
+        if let Some(c) = cost(guid) {
             costs
                 .bags
                 .insert((crate::ui_items::BANK_CONTAINER, u32::from(i) + 1), c);
         }
+        costs.own.extend(own(guid));
     }
     // Bags 1-4 are inventory slots 19-22, bank bags 5-10 the bank bag slots.
     let bags = (1..=4u8)
@@ -357,9 +368,11 @@ fn repair_costs(
         };
         let n = b.container_num_slots().unwrap_or(0).min(36) as u8;
         for j in 0..n {
-            if let Some(c) = b.container_slot(j).and_then(cost) {
+            let guid = b.container_slot(j).unwrap_or(0);
+            if let Some(c) = cost(guid) {
                 costs.bags.insert((bag, u32::from(j) + 1), c);
             }
+            costs.own.extend(own(guid));
         }
     }
     costs
@@ -1139,6 +1152,34 @@ mod tests {
         let script = app.world_mut().non_send_resource_mut::<UiScript>();
         let got = script.eval::<i64>("return (GetRepairAllCost())").unwrap();
         assert_eq!(got, i64::from(want), "the undiscounted total is {full}");
+    }
+
+    /// A carried item's own cost (`0x5da330`) rides beside the discounted one, by its guid: the
+    /// merchant price takes off the cost before the discount (`0x52e44a`).
+    #[test]
+    fn a_carried_items_own_cost_rides_beside_the_discounted_one() {
+        use bevy::ecs::system::RunSystemOnce;
+        use purse_fixture::*;
+
+        const PACK_SLOT_1: u16 = 532;
+        let (full, discounted) = sword_prices();
+        let mut app = App::new();
+        app.init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<MerchantOpen>();
+        seat(app.world_mut());
+        let store = player(PACK_SLOT_1, 0).0;
+        let steps = f64::from(0.05f32) + f64::from(0.05f32);
+        let costs = app
+            .world_mut()
+            .run_system_once(
+                move |objects: Objects, items: Res<Items>, tables: Res<RepairTables>| {
+                    repair_costs(&store, &objects, &items, &tables, steps)
+                },
+            )
+            .unwrap();
+        assert_eq!(costs.bags.get(&(0, 1)), Some(&discounted));
+        assert_eq!(costs.own.get(&SWORD), Some(&full));
     }
 
     /// `RepairAllItems()` through the feed and the drain, at [`purse_fixture`]'s vendor carrying

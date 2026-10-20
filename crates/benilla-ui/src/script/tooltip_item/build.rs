@@ -257,22 +257,33 @@ pub(in crate::script) fn build_item(
             false
         }
     };
-    let sell = build.sell_count.zip(view.as_ref().map(|v| v.sell_price));
+    let sell = build.sell_count.zip(view.as_ref()).map(|(count, v)| {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        // An item object's charges and repair cost (`0x52e426` tests the object).
+        let object = build.inst.as_ref().filter(|i| i.object);
+        let charges = object.map(|i| i.spell_charges_0);
+        let cost = object
+            .and_then(|i| model.repair_costs.own.get(&i.guid))
+            .copied()
+            .unwrap_or(0);
+        let amount = sell_amount(v.sell_price, v.spell_charges_0, charges, cost, count);
+        (v.sell_price, amount)
+    });
     {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         keep_misses(&mut model, h, true);
         model.item_builds.insert(h, build);
     }
-    // The sell price, after the lines (`0x52e376`): `OnTooltipAddMoney` with the stack's price,
-    // or ITEM_UNSELLABLE at price 0 (`0x854a74`, pushed at `0x52e4a3`).
-    if let Some((count, price)) = sell {
+    // The sell price, after the lines (`0x52e376`): `OnTooltipAddMoney` with the amount, or
+    // ITEM_UNSELLABLE at price 0 (`0x854a74`, pushed at `0x52e4a3`).
+    if let Some((price, amount)) = sell {
         let (merchant_open, repairing) = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             (model.merchant.is_some(), model.repair_mode)
         };
         if merchant_open && !repairing {
             if price > 0 {
-                fire_add_money(lua, h, u64::from(price) * u64::from(count));
+                fire_add_money(lua, h, amount);
             } else if let Some(t) = crate::strings::global(lua, "ITEM_UNSELLABLE") {
                 append_line(lua, this, (t, WHITE), None, false)?;
             }
@@ -280,6 +291,37 @@ pub(in crate::script) fn build_item(
     }
     show_or_hide_empty(lua, h);
     Ok(live)
+}
+
+/// What the merchant pays (`0x52e418`..`0x52e473`), in copper, the `"%d"` the money handler
+/// gets: the record's sell price, which for an item object scales by its block-0 charges over the
+/// template's when those are below -1 (`imul`, `idiv`, `0x52e432`..`0x52e446`), drops to 1 when
+/// the repair cost (`0x5da330`) reaches it or else loses the cost (`0x52e451`..`0x52e45e`), and
+/// multiplies by a stack above 1 (`0x52e466`..`0x52e471`). Without an object it is the price.
+pub(super) fn sell_amount(
+    price: u32,
+    template_charges: i32,
+    object_charges: Option<i32>,
+    repair_cost: u32,
+    count: u32,
+) -> i64 {
+    let Some(charges) = object_charges else {
+        return i64::from(price);
+    };
+    let mut amount = price as i32;
+    if template_charges < -1 {
+        amount = charges.wrapping_mul(amount) / template_charges;
+    }
+    let cost = repair_cost as i32;
+    if cost >= amount {
+        amount = 1;
+    } else if cost != 0 {
+        amount -= cost;
+    }
+    if count as i32 > 1 {
+        amount = (count as i32).wrapping_mul(amount);
+    }
+    i64::from(amount)
 }
 
 /// `CGTooltip::OnCacheAnswer` (`0x52e530`) for every answer pushed since the last tick: each
@@ -334,4 +376,18 @@ pub(in crate::script) fn answer_item_caches(lua: &Lua) -> Vec<mlua::Error> {
         }
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    /// The charge scale truncates toward zero (`idiv`, `0x52e444`), a pool of -1 or more is no
+    /// scale (`0x52e435`), a spent item still fetches 1 (`0x52e453`), and a source with no object
+    /// takes the price alone (`0x52e42b`).
+    #[test]
+    fn the_charge_scale_truncates_and_no_object_takes_the_price() {
+        assert_eq!(super::sell_amount(7, -3, Some(-2), 0, 1), 4);
+        assert_eq!(super::sell_amount(7, -1, Some(0), 0, 1), 7);
+        assert_eq!(super::sell_amount(7, -3, Some(0), 0, 1), 1);
+        assert_eq!(super::sell_amount(7, -3, None, 9, 5), 7);
+    }
 }

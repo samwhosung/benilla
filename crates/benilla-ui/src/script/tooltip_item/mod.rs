@@ -55,7 +55,7 @@ fn link_name(link: &str) -> Option<&str> {
 }
 
 /// Fire `OnTooltipAddMoney(copper)`: the engine computes, FrameXML's `SetTooltipMoney` draws.
-fn fire_add_money(lua: &Lua, h: crate::widget::FrameHandle, copper: u64) {
+fn fire_add_money(lua: &Lua, h: crate::widget::FrameHandle, copper: i64) {
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         model.frame_id(h)
@@ -131,6 +131,7 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         block_wrapped: false,
         proposed_enchant: None,
         cooldown_ms: 0,
+        spell_charges_0: s.spell_charges_0,
     }
 }
 

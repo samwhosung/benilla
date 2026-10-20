@@ -75,6 +75,9 @@ pub struct RepairCosts {
     pub equipped: std::collections::HashMap<u32, u32>,
     /// Container items by `(bag, slot)`: bags 0-4, the bank vault -1 and bank bags 5-10.
     pub bags: std::collections::HashMap<(i64, u32), u32>,
+    /// The item's own cost before the discount (`0x5da330`), by item guid, for every item of
+    /// [`Self::bags`]: what the merchant price takes off (`0x52e44a`).
+    pub own: std::collections::HashMap<u64, u32>,
 }
 
 /// One open merchant window, pushed whole by the app; `None` means no vendor is open.

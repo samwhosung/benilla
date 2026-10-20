@@ -116,6 +116,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
             flags: 0,
             enchants: Vec::new(),
             spell_0: false,
+            spell_charges_0: 0,
         },
     );
     benilla_ui::script::ContainerState {
