@@ -103,7 +103,7 @@ run() {
     if ! "$@" >"$log" 2>&1; then
         echo "CHECK FAILED: $name"
         # The failing test or error first: a test gate's tail is the doc-test noise after it.
-        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^error(\[E[0-9]+\])?:' "$log" | head -40
+        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^ +(FAIL|SIGSEGV|SIGABRT|SIGKILL|TIMEOUT) \[|^error(\[E[0-9]+\])?:' "$log" | head -40
         tail -30 "$log"
         exit 1
     fi
@@ -116,8 +116,10 @@ run clippy cargo clippy $pflags --all-targets -- -D warnings
 case " $pkgs " in *" benilla-app "* | *" benilla "*)
     run player-clippy cargo clippy -p benilla -p benilla-app --no-default-features -- -D warnings ;;
 esac
-# --no-fail-fast: one red test binary does not hide the failures in the ones after it.
-run test env BENILLA_SKIP_LOG="$skips" cargo test --no-fail-fast $pflags
+# Every test binary runs whatever another fails (`scripts/unit-tests.sh`), and the doctests after.
+run test env BENILLA_SKIP_LOG="$skips" "$root/scripts/unit-tests.sh" $pflags
+# shellcheck disable=SC2086 # one word per package
+run doctest "$root/scripts/doc-tests.sh" $pkgs
 # Data-gated tests skip without the install or the addon corpus and libtest swallows their line,
 # so each skip is also logged to $BENILLA_SKIP_LOG and counted here.
 if [ -s "$skips" ]; then

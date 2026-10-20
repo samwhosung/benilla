@@ -101,7 +101,7 @@ run() {
         echo "GATE FAILED: $name ($((SECONDS - t0)) s)"
         note_timing "$name" "$((SECONDS - t0))" "FAILED"
         # The failing test or error first: a test gate's tail is the doc-test noise after it.
-        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^error(\[E[0-9]+\])?:' "$log" | head -40
+        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^ +(FAIL|SIGSEGV|SIGABRT|SIGKILL|TIMEOUT) \[|^error(\[E[0-9]+\])?:' "$log" | head -40
         tail -30 "$log"
         exit 1
     fi
@@ -147,12 +147,13 @@ else
     note_timing reference 0 SKIPPED
 fi
 
-run test env ${require_data:+BENILLA_REQUIRE_DATA=1} BENILLA_SKIP_LOG="$skips" cargo test --no-fail-fast --workspace
+run test env ${require_data:+BENILLA_REQUIRE_DATA=1} BENILLA_SKIP_LOG="$skips" "$root/scripts/unit-tests.sh" --workspace
+run doctest "$root/scripts/doc-tests.sh" --workspace
 report_skips test
 
 # test-no-install: refuses a test that reads the install without `wow_data_or_skip!`. `WOW_DATA=`
 # (set, empty) is the resolver's "no install"; no build reads it, so the test binaries are reused.
-run test-no-install env -u BENILLA_REQUIRE_DATA WOW_DATA= cargo test --no-fail-fast --workspace
+run test-no-install env -u BENILLA_REQUIRE_DATA WOW_DATA= "$root/scripts/unit-tests.sh" --workspace
 
 # doc-links: refuses a doc link to a `crate::`, `super::`, `self::` or `Self::` path whose leaf is
 # declared nowhere in the workspace. Narrow on purpose: every other unresolved link is a convention.
@@ -184,7 +185,7 @@ run player-clippy cargo clippy -p benilla -p benilla-app --no-default-features -
 run player-tests env ${wow_data:+WOW_DATA="$wow_data"} \
     ${corpus:+BENILLA_ADDON_CORPUS="$root/wow-addons-vanilla"} \
     ${require_data:+BENILLA_REQUIRE_DATA=1} BENILLA_SKIP_LOG="$skips" \
-    cargo test -p benilla-formats -p benilla-app --no-default-features --lib
+    "$root/scripts/unit-tests.sh" -p benilla-formats -p benilla-app --no-default-features --lib
 report_skips player-tests
 
 # enforcer: `benilla-worldview` boots the engine plugins with no server, login, UI or player, in a
