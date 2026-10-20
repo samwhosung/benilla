@@ -80,7 +80,7 @@ fn every_payload_kind_is_the_hooks() {
         match held {
             "item" => s.run("PickupContainerItem(0, 1)").unwrap(),
             "macro" => s.set_cursor_for_test(CursorPayload::Macro(CursorMacro {
-                index: 1,
+                id: 1,
                 texture: None,
             })),
             _ => s.set_cursor_for_test(spell()),
