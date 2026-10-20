@@ -82,8 +82,8 @@ pub struct ItemTemplateView {
     pub required_rep_line: Option<String>,
     pub required_rep_faction: u32,
     pub required_rep_rank: u32,
-    /// Green trigger-spell lines `(trigger, spell id, text)` in wire order: 0 and 5 "Use:",
-    /// 1 "Equip:", 2 "Chance on hit:", 6 a taught spell (no line, only the "Already known" red).
+    /// Green trigger-spell lines `(trigger, spell id, text)` in wire order: 0 "Use:", 1 "Equip:",
+    /// 2 "Chance on hit:", any other trigger the text alone (`0x52da37`..`0x52da61`).
     pub spell_triggers: Vec<(u32, u32, String)>,
     pub lock_id: u32,
     /// "N Charge(s)" for the first spell slot past the builder's gate (`0x52db51`: 0 and -1

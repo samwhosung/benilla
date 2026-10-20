@@ -166,6 +166,8 @@ fn verified_families_signable_locked_resists_known() {
             // No LOCKED: a template source has no item object and no block (`0x52bdb3`..`0x52bdd8`).
             "[RESIST_ALL +5]",
             "[ITEM_SPELL_KNOWN]",
+            // Trigger 6 takes no prefix and still adds its text (`0x52da49`).
+            "Recipe: Stew",
             "\"Sign here.\"",
         ],
         "the verified gated families in the verified order"

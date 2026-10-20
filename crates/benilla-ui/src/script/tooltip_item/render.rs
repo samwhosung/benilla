@@ -612,17 +612,21 @@ pub(super) fn render_view_flagged(
     if taught_known {
         keyed("ITEM_SPELL_KNOWN", &[], RED, false)?;
     }
-    // Green, wrapped trigger lines: the prefix key and the app-resolved text joined by the
-    // literal `"%s %s"` (`0x82ef08`, `0x52da7e`).
+    // Green, wrapped trigger lines: triggers 0 to 2 join their prefix key and the app-resolved
+    // text by the literal `"%s %s"` (`0x82ef08`, `0x52da37`..`0x52dae2`), a missing key reading as
+    // the empty string; any other trigger copies the text alone (`0x52da49`..`0x52da61`).
     for &(trigger, _, ref text) in &v.spell_triggers {
         let key = match trigger {
-            0 | 5 => "ITEM_SPELL_TRIGGER_ONUSE",
-            1 => "ITEM_SPELL_TRIGGER_ONEQUIP",
-            2 => "ITEM_SPELL_TRIGGER_ONPROC",
-            _ => continue,
+            0 => Some("ITEM_SPELL_TRIGGER_ONUSE"),
+            1 => Some("ITEM_SPELL_TRIGGER_ONEQUIP"),
+            2 => Some("ITEM_SPELL_TRIGGER_ONPROC"),
+            _ => None,
         };
-        let Some(prefix) = get(key) else { continue };
-        addw((format!("{prefix} {text}"), GREEN))?;
+        let line = match key {
+            Some(key) => format!("{} {text}", get(key).unwrap_or_default()),
+            None => text.clone(),
+        };
+        addw((line, GREEN))?;
     }
     if let Some(charges) = charges_phrase(v.charges.max(0) as u32, &get) {
         add((charges, WHITE))?;
