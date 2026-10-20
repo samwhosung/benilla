@@ -5,8 +5,9 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
 use benilla_formats::{
-    load_taxi_nodes, load_taxi_paths, load_world_map_continent_catalog, TaxiNodes, TaxiPaths,
-    WorldMapContinent, WorldMapContinentCatalog,
+    load_taxi_nodes, load_taxi_path_nodes, load_taxi_paths, load_world_map_continent_catalog,
+    FactionCatalog, TaxiNodes, TaxiPathNodes, TaxiPaths, WorldMapContinent,
+    WorldMapContinentCatalog,
 };
 use benilla_protocol::messages::{taxi_reply, TaxiMask};
 use bevy::prelude::*;
@@ -60,11 +61,26 @@ pub(super) fn load_taxi_catalogs(
 impl TaxiCatalogs {
     /// The three tables off the patch chain.
     pub(super) fn load(chain: &mut benilla_formats::Chain) -> anyhow::Result<Self> {
-        Ok(Self {
-            nodes: load_taxi_nodes(chain)?,
-            paths: load_taxi_paths(chain)?,
-            continents: load_world_map_continent_catalog(chain)?,
-        })
+        Ok(Self::from_parts(
+            load_taxi_nodes(chain)?,
+            load_taxi_paths(chain)?,
+            &load_taxi_path_nodes(chain)?,
+            load_world_map_continent_catalog(chain)?,
+        ))
+    }
+
+    /// The catalogs from their tables, `TaxiPathNode.dbc`'s points read once.
+    fn from_parts(
+        nodes: TaxiNodes,
+        paths: TaxiPaths,
+        _points: &TaxiPathNodes,
+        continents: WorldMapContinentCatalog,
+    ) -> Self {
+        Self {
+            nodes,
+            paths,
+            continents,
+        }
     }
 }
 
@@ -180,6 +196,16 @@ pub(super) fn build_nodes(
     open: &TaxiOpen,
     cat: &TaxiCatalogs,
     discount: Option<f64>,
+) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
+    build_nodes_for(open, cat, discount, None)
+}
+
+/// [`build_nodes`] for a player, its race and the faction tables.
+pub(super) fn build_nodes_for(
+    open: &TaxiOpen,
+    cat: &TaxiCatalogs,
+    discount: Option<f64>,
+    _player: Option<(u8, &FactionCatalog)>,
 ) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
     let map_id = cat.nodes.get(open.nearest_node)?.map_id;
     let cont = cat.continents.get(map_id)?;

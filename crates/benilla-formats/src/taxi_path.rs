@@ -29,6 +29,17 @@ pub struct TaxiPaths {
 }
 
 impl TaxiPaths {
+    /// A catalog of these hops, a later row replacing an earlier one with its id or its pair.
+    pub fn from_rows(hops: impl IntoIterator<Item = TaxiPath>) -> Self {
+        let mut rows = HashMap::new();
+        let mut by_pair = HashMap::new();
+        for hop in hops {
+            rows.insert(hop.id, hop);
+            by_pair.insert((hop.from, hop.to), hop.id);
+        }
+        Self { rows, by_pair }
+    }
+
     pub fn get(&self, id: u32) -> Option<&TaxiPath> {
         self.rows.get(&id)
     }
@@ -66,17 +77,15 @@ fn schema() -> Schema {
 pub fn load_taxi_paths(chain: &mut Chain) -> Result<TaxiPaths> {
     let bytes = chain.read_file(TAXI_PATH).context("reading TaxiPath.dbc")?;
     let rs = parse(&bytes, schema(), "TaxiPath")?;
-    let mut rows = HashMap::with_capacity(rs.records().len());
-    let mut by_pair = HashMap::with_capacity(rs.records().len());
-    for r in rs.records() {
-        let Some(id) = u32_at(r, 0) else { continue };
-        let Some(from) = u32_at(r, 1) else { continue };
-        let Some(to) = u32_at(r, 2) else { continue };
-        let cost = u32_at(r, 3).unwrap_or(0);
-        rows.insert(id, TaxiPath { id, from, to, cost });
-        by_pair.insert((from, to), id);
-    }
-    Ok(TaxiPaths { rows, by_pair })
+    let hops = rs.records().iter().filter_map(|r| {
+        Some(TaxiPath {
+            id: u32_at(r, 0)?,
+            from: u32_at(r, 1)?,
+            to: u32_at(r, 2)?,
+            cost: u32_at(r, 3).unwrap_or(0),
+        })
+    });
+    Ok(TaxiPaths::from_rows(hops))
 }
 
 #[cfg(test)]

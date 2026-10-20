@@ -36,6 +36,13 @@ pub struct TaxiNodes {
 }
 
 impl TaxiNodes {
+    /// A catalog of these rows, keyed by id, a later row replacing an earlier one.
+    pub fn from_rows(rows: impl IntoIterator<Item = TaxiNode>) -> Self {
+        Self {
+            rows: rows.into_iter().map(|n| (n.id, n)).collect(),
+        }
+    }
+
     pub fn get(&self, id: u32) -> Option<&TaxiNode> {
         self.rows.get(&id)
     }
@@ -80,23 +87,19 @@ pub fn load_taxi_nodes(chain: &mut Chain) -> Result<TaxiNodes> {
         .context("reading TaxiNodes.dbc")?;
     let rs = parse(&bytes, schema(), "TaxiNodes")?;
     let locale = chain.locale();
-    let mut rows = HashMap::with_capacity(rs.records().len());
-    for r in rs.records() {
-        let Some(id) = u32_at(r, 0) else { continue };
-        let (Some(x), Some(y), Some(z)) = (f32_at(r, 2), f32_at(r, 3), f32_at(r, 4)) else {
-            continue;
-        };
-        let node = TaxiNode {
+    let rows = rs.records().iter().filter_map(|r| {
+        let id = u32_at(r, 0)?;
+        let (x, y, z) = (f32_at(r, 2)?, f32_at(r, 3)?, f32_at(r, 4)?);
+        Some(TaxiNode {
             id,
             map_id: u32_at(r, 1).unwrap_or(0),
             pos: [x, y, z],
             name: loc_str(&rs, r, 5, locale).unwrap_or_default(),
             mount_horde: u32_at(r, 14).unwrap_or(0),
             mount_alliance: u32_at(r, 15).unwrap_or(0),
-        };
-        rows.insert(id, node);
-    }
-    Ok(TaxiNodes { rows })
+        })
+    });
+    Ok(TaxiNodes::from_rows(rows))
 }
 
 #[cfg(test)]

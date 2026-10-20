@@ -40,6 +40,13 @@ pub struct WorldMapContinentCatalog {
 }
 
 impl WorldMapContinentCatalog {
+    /// A catalog of these rows, keyed by map id, a later row replacing an earlier one.
+    pub fn from_rows(rows: impl IntoIterator<Item = WorldMapContinent>) -> Self {
+        Self {
+            by_map_id: rows.into_iter().map(|r| (r.map_id, r)).collect(),
+        }
+    }
+
     pub fn get(&self, map_id: u32) -> Option<&WorldMapContinent> {
         self.by_map_id.get(&map_id)
     }

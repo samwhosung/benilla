@@ -39,6 +39,18 @@ pub struct TaxiPathNodes {
 }
 
 impl TaxiPathNodes {
+    /// These waypoints grouped by `PathID`, each path in `NodeIndex` order.
+    pub fn from_rows(rows: impl IntoIterator<Item = TaxiPathNode>) -> Self {
+        let mut paths: HashMap<u32, Vec<TaxiPathNode>> = HashMap::new();
+        for node in rows {
+            paths.entry(node.path_id).or_default().push(node);
+        }
+        for nodes in paths.values_mut() {
+            nodes.sort_by_key(|n| n.node_index);
+        }
+        Self { paths }
+    }
+
     /// A path's nodes in `NodeIndex` order.
     pub fn path(&self, path_id: u32) -> Option<&[TaxiPathNode]> {
         self.paths.get(&path_id).map(Vec::as_slice)
@@ -79,30 +91,19 @@ pub fn load_taxi_path_nodes(chain: &mut Chain) -> Result<TaxiPathNodes> {
         .read_file(TAXI_PATH_NODE)
         .context("reading TaxiPathNode.dbc")?;
     let rs = parse(&bytes, schema(), "TaxiPathNode")?;
-    let mut paths: HashMap<u32, Vec<TaxiPathNode>> = HashMap::new();
-    for r in rs.records() {
-        let Some(id) = u32_at(r, 0) else { continue };
-        let Some(path_id) = u32_at(r, 1) else {
-            continue;
-        };
-        let (Some(x), Some(y), Some(z)) = (f32_at(r, 4), f32_at(r, 5), f32_at(r, 6)) else {
-            continue;
-        };
-        let node = TaxiPathNode {
-            id,
-            path_id,
+    let rows = rs.records().iter().filter_map(|r| {
+        let (x, y, z) = (f32_at(r, 4)?, f32_at(r, 5)?, f32_at(r, 6)?);
+        Some(TaxiPathNode {
+            id: u32_at(r, 0)?,
+            path_id: u32_at(r, 1)?,
             node_index: u32_at(r, 2).unwrap_or(0),
             map_id: u32_at(r, 3).unwrap_or(0),
             pos: [x, y, z],
             flags: u32_at(r, 7).unwrap_or(0),
             delay: u32_at(r, 8).unwrap_or(0),
-        };
-        paths.entry(path_id).or_default().push(node);
-    }
-    for nodes in paths.values_mut() {
-        nodes.sort_by_key(|n| n.node_index);
-    }
-    Ok(TaxiPathNodes { paths })
+        })
+    });
+    Ok(TaxiPathNodes::from_rows(rows))
 }
 
 #[cfg(test)]
