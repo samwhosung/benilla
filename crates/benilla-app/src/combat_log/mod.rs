@@ -101,7 +101,14 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::PvpCredit, on_pvp_credit)
             // Written by the missile flight; declared here too, as registering is idempotent.
             .add_message::<MissileMiss>()
-            .add_systems(Update, on_missile_miss);
+            // After the flight that writes the arrivals, and the party drain whose roster the
+            // classifier reads.
+            .add_systems(
+                Update,
+                on_missile_miss
+                    .after(crate::entities::EntityVisualsSet)
+                    .after(crate::ui_party::drain_party),
+            );
     }
 }
 
@@ -250,7 +257,10 @@ fn on_missile_miss(
     mut arrivals: MessageReader<MissileMiss>,
     guids: Query<&Guid>,
     c: Ctx,
-    mut l: Sinks,
+    stores: Query<&ObjectStore>,
+    poses: Query<&Transform>,
+    mut log: ResMut<ChatLog>,
+    mut feedback: MessageWriter<UnitCombatFeedback>,
 ) {
     for arrival in arrivals.read() {
         let Ok(&Guid(target)) = guids.get(arrival.anchor) else {
@@ -262,7 +272,7 @@ fn on_missile_miss(
             arrival.spell_id,
             arrival.code,
             c.spells.as_deref(),
-            &mut l.feedback,
+            &mut feedback,
         );
         let ctx = c.ctx();
         chat::missile_miss(
@@ -271,9 +281,9 @@ fn on_missile_miss(
             arrival.spell_id,
             arrival.code,
             &ctx,
-            &l.stores,
-            &l.poses,
-            &mut l.log,
+            &stores,
+            &poses,
+            &mut log,
         );
     }
 }

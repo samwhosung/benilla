@@ -839,12 +839,17 @@ pub(crate) mod schedule_tests {
     ///   (`stream_terrain`) already pairs with: the inner-window wait sits between the two, so a
     ///   pair the one system carried now counts on both; and `attach_inner_colliders` against the
     ///   other users of `PendingCollider`, `StreamActivity` and `TerrainStreamer`: it attaches
-    ///   only the held inner tiles' terrain builds, and the others never touch those.
+    ///   only the held inner tiles' terrain builds, and the others never touch those;
+    /// - the missile arrival's log leg (`combat_log::on_missile_miss`) against the portrait
+    ///   booths', the sound emitters' and the UI models' `Transform` writers, the disjoint-lane
+    ///   kind: it reads its two units' poses for the display range, never theirs; and against the
+    ///   terrain stream's exclusive wait (`await_reads_and_attach`), which loads tiles and
+    ///   colliders and touches no unit, store or chat state.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_083;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_092;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

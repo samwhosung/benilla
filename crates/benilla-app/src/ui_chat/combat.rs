@@ -25,6 +25,12 @@ impl Stores for Query<'_, '_, &mut ObjectStore> {
     }
 }
 
+impl Stores for Query<'_, '_, &ObjectStore> {
+    fn store(&self, entity: Entity) -> Option<&ObjectStore> {
+        self.get(entity).ok()
+    }
+}
+
 impl Stores for Query<'_, '_, (Entity, &ObjectStore)> {
     fn store(&self, entity: Entity) -> Option<&ObjectStore> {
         self.get(entity).ok().map(|(_, s)| s)
