@@ -1,6 +1,7 @@
 //! The taxi map builder: the node list, the route search, the fares and the route lines.
 
-use benilla_formats::{TaxiNode, TaxiPath, TaxiPathNode};
+use benilla_formats::{TaxiPath, TaxiPathNode};
+use benilla_protocol::messages::TaxiMask;
 use benilla_ui::script::{TaxiUiState, UiScript};
 
 use super::*;
@@ -13,82 +14,6 @@ fn mask_of(ids: &[u32]) -> TaxiMask {
         mask.0[word] |= 1 << bit;
     }
     mask
-}
-
-#[test]
-fn shortest_route_minimizes_geo_distance_and_carries_fare() {
-    // Nodes 1, 2 and 4 at 0, 40 and 100 on a line. The direct 1→4 edge is 150 long for fare
-    // 10; 1→2→4 is 40 + 60 = 100 long for fare 5 + 20 = 25, and wins.
-    let positions: HashMap<u32, f32> = HashMap::from([(1, 0.0), (2, 40.0), (4, 100.0)]);
-    let dists: HashMap<(u32, u32), f32> = HashMap::from([((1, 4), 150.0)]);
-    let dist = |a: u32, b: u32| {
-        dists
-            .get(&(a, b))
-            .copied()
-            .unwrap_or_else(|| (positions[&a] - positions[&b]).abs())
-    };
-    let mut edges: HashMap<u32, Vec<Edge>> = HashMap::new();
-    edges.insert(1, vec![(4, 10), (2, 5)]);
-    edges.insert(2, vec![(4, 20)]);
-    let known = mask_of(&[1, 2, 4]);
-    let (chain, fare) = shortest_route(
-        &known,
-        |n| edges.get(&n).cloned().unwrap_or_default(),
-        dist,
-        1,
-        4,
-    )
-    .expect("reachable");
-    assert_eq!(
-        chain,
-        vec![1, 2, 4],
-        "the geographically shorter detour wins regardless of fare"
-    );
-    assert_eq!(
-        fare, 25,
-        "the fare is the chosen chain's sum, not a minimum"
-    );
-
-    // An exact distance tie (direct 100 vs 40+60) breaks toward fewer hops.
-    let (chain, fare) = shortest_route(
-        &known,
-        |n| edges.get(&n).cloned().unwrap_or_default(),
-        |a, b| (positions[&a] - positions[&b]).abs(),
-        1,
-        4,
-    )
-    .expect("reachable");
-    assert_eq!(chain, vec![1, 4], "an exact-tie breaks toward fewer hops");
-    assert_eq!(fare, 10);
-
-    // Node 5 has no edge from the known graph at all.
-    assert!(
-        shortest_route(
-            &known,
-            |n| edges.get(&n).cloned().unwrap_or_default(),
-            dist,
-            1,
-            5
-        )
-        .is_none(),
-        "a truly disconnected node has no route"
-    );
-
-    // An edge to node 3 exists, but 3 is not known.
-    let mut gated: HashMap<u32, Vec<Edge>> = HashMap::new();
-    gated.insert(1, vec![(3, 5)]);
-    let known_without_3 = mask_of(&[1]);
-    assert!(
-        shortest_route(
-            &known_without_3,
-            |n| gated.get(&n).cloned().unwrap_or_default(),
-            |_, _| 1.0,
-            1,
-            3
-        )
-        .is_none(),
-        "an edge into an undiscovered node is not a usable route"
-    );
 }
 
 /// `0x4dc3d0`'s rounding: `1 - discount` stays f64 and only the product is stored as f32, so a
@@ -331,6 +256,41 @@ fn index_of(ui: &[TaxiUiNode], name: &str) -> usize {
     ui.iter()
         .position(|n| n.name == name)
         .unwrap_or_else(|| panic!("{name} listed"))
+}
+
+/// `0x4dbbd0` over the shipped path from Thunder Bluff to Gadgetzan (`TaxiPath` 309): x's
+/// difference stored as an f32, y's, z's, the squares and the root at 53 bits, the sum stored as
+/// an f32 at each point.
+#[test]
+fn a_shipped_path_s_length_sums_its_points_as_the_x87_does() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let cat = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
+    assert_eq!(cat.paths.between(22, 40).map(|p| p.id), Some(309));
+    assert_eq!(cat.length_back(22, 40), 8_692.905_273_437_5);
+}
+
+/// A path of one point is 0 long; one with no points, and a pair with only the forward row, weigh
+/// the no-points length 99999997952 (`0x4dbc5d`).
+#[test]
+fn a_path_without_a_run_weighs_the_no_points_length() {
+    let cat = synthetic(
+        vec![
+            row(1, 0.0, 0.0, [0, 0]),
+            row(2, 100.0, 0.0, [0, 0]),
+            row(3, 0.0, 100.0, [0, 0]),
+        ],
+        &[
+            (1, 2, 1, &[(0.0, 0.0)]),
+            (2, 1, 1, &[]),
+            (1, 3, 1, &[(0.0, 0.0), (0.0, 100.0)]),
+        ],
+        rect((-1000.0, -1000.0), (1000.0, 1000.0)),
+    );
+    assert_eq!(cat.length_back(1, 2), 0.0);
+    assert_eq!(cat.length_back(2, 1), 99_999_997_952.0);
+    assert_eq!(cat.length_back(3, 1), 99_999_997_952.0, "no 3 → 1 row");
+    assert_eq!(cat.length_back(1, 3), 100.0);
 }
 
 /// A hop `a → b` is weighed by the points of the path from `b` back to `a` (`0x4dbe01` passes the

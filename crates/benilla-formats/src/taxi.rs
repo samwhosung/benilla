@@ -110,6 +110,27 @@ pub fn load_taxi_path_nodes(chain: &mut Chain) -> Result<TaxiPathNodes> {
 mod tests {
     use super::*;
 
+    /// The reference reads a path's points as one run of consecutive rows in file order
+    /// (`0x4db580` starts a run, `0x4db58c` grows it); the shipped file keeps each path's rows
+    /// together and in `NodeIndex` order, the order [`TaxiPathNodes::path`] gives.
+    #[test]
+    fn shipped_paths_are_single_runs_in_node_index_order() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let bytes = chain.read_file(TAXI_PATH_NODE).expect("read TaxiPathNode");
+        let rs = parse(&bytes, schema(), "TaxiPathNode").expect("parse TaxiPathNode");
+        let mut runs = std::collections::HashSet::new();
+        let mut prev: Option<(u32, u32)> = None;
+        for r in rs.records() {
+            let (path, index) = (u32_at(r, 1).unwrap(), u32_at(r, 2).unwrap());
+            match prev {
+                Some((p, i)) if p == path => assert_eq!(index, i + 1, "path {path}"),
+                _ => assert!(runs.insert(path), "path {path} starts a second run"),
+            }
+            prev = Some((path, index));
+        }
+    }
+
     /// The 5875 layout on path 302 (Orgrimmar to Undercity, two 60 s stops) and path 285.
     #[test]
     fn real_taxi_path_node_layout_sanity() {

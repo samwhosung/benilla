@@ -1,15 +1,15 @@
-//! The taxi map's data: the DBC catalogs, the reference's map projection and route search, and
-//! the node list they build.
+//! The taxi map's data: the DBC catalogs, and the reference's map builder (`0x4db710`), route
+//! search (`0x4dc010`, `0x4dbce0`), fares (`0x4dc3d0`) and route lines (`0x4dc5c0`) over them.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use benilla_formats::{
     load_taxi_nodes, load_taxi_path_nodes, load_taxi_paths, load_world_map_continent_catalog,
-    FactionCatalog, TaxiNodes, TaxiPathNodes, TaxiPaths, WorldMapContinent,
+    FactionCatalog, TaxiNode, TaxiNodes, TaxiPathNode, TaxiPathNodes, TaxiPaths, WorldMapContinent,
     WorldMapContinentCatalog,
 };
-use benilla_protocol::messages::{taxi_reply, TaxiMask};
+use benilla_protocol::messages::taxi_reply;
 use bevy::prelude::*;
 
 use benilla_ui::script::{TaxiNodeType, TaxiUiNode};
@@ -18,12 +18,15 @@ use benilla_assets::{LockRecover, WorldAssets};
 
 use super::TaxiOpen;
 
-/// `TaxiNodes.dbc`, `TaxiPath.dbc` (the direct hops and their fares) and `WorldMapContinent.dbc`
-/// (each continent's taxi-map rect, its `taxi_min`/`taxi_max`).
+/// `TaxiNodes.dbc`, `TaxiPath.dbc` (the direct hops and their fares), each hop's length over its
+/// `TaxiPathNode.dbc` points, and `WorldMapContinent.dbc` (each continent's taxi-map rect, its
+/// `taxi_min`/`taxi_max`).
 #[derive(Resource)]
 pub(crate) struct TaxiCatalogs {
     nodes: TaxiNodes,
     pub(super) paths: TaxiPaths,
+    /// Each path's length over its points ([`path_length`]), by `TaxiPath` id.
+    lengths: HashMap<u32, f32>,
     continents: WorldMapContinentCatalog,
 }
 
@@ -58,8 +61,11 @@ pub(super) fn load_taxi_catalogs(
     }
 }
 
+/// The length of a path with no points (`0x4dbc5d`, the float at `0x807668`).
+const NO_POINTS: f32 = 99_999_997_952.0;
+
 impl TaxiCatalogs {
-    /// The three tables off the patch chain.
+    /// The four tables off the patch chain.
     pub(super) fn load(chain: &mut benilla_formats::Chain) -> anyhow::Result<Self> {
         Ok(Self::from_parts(
             load_taxi_nodes(chain)?,
@@ -69,99 +75,167 @@ impl TaxiCatalogs {
         ))
     }
 
-    /// The catalogs from their tables, `TaxiPathNode.dbc`'s points read once.
+    /// The catalogs from their tables, `TaxiPathNode.dbc`'s points summed once.
     fn from_parts(
         nodes: TaxiNodes,
         paths: TaxiPaths,
-        _points: &TaxiPathNodes,
+        points: &TaxiPathNodes,
         continents: WorldMapContinentCatalog,
     ) -> Self {
         Self {
             nodes,
             paths,
+            lengths: points
+                .paths()
+                .map(|(id, points)| (id, path_length(points)))
+                .collect(),
             continents,
         }
     }
+
+    /// `0x4dbbd0(to, from)`: the length of the path from `to` back to `from` (`0x4dbbf2` reads
+    /// `to * 256 + from`), [`NO_POINTS`] when it has no points. The reference reads that row with
+    /// no null test (`0x4dbc02`) and faults on a pair with only the forward row; here such a pair
+    /// weighs as a path with no points.
+    fn length_back(&self, to: u32, from: u32) -> f32 {
+        self.paths
+            .between(to, from)
+            .and_then(|path| self.lengths.get(&path.id))
+            .copied()
+            .unwrap_or(NO_POINTS)
+    }
 }
 
-/// A node's world `(x, y)` on the taxi map's 0..1 space, as the reference computes it
-/// (`0x4db958`), with the rect from `WorldMapContinent.dbc` fields 9-12 of the node's continent:
+/// A path's length (`0x4dbc68`-`0x4dbccd`): the straight 3-D distance between consecutive points,
+/// added to an f32 sum. The x87 runs at 53 bits, so f64 is its arithmetic: x's difference is
+/// stored as an f32 (`0x4dbc97`), y's and z's are not, and the squares add z, x, then y. The
+/// reference walks the points in file order; the shipped file keeps each path's points
+/// consecutive and in `NodeIndex` order, the order [`TaxiPathNodes`] gives.
+fn path_length(points: &[TaxiPathNode]) -> f32 {
+    let mut sum = 0.0f32;
+    for pair in points.windows(2) {
+        let (from, to) = (pair[0].pos, pair[1].pos);
+        let dx = f64::from(to[0] - from[0]);
+        let dy = f64::from(to[1]) - f64::from(from[1]);
+        let dz = f64::from(to[2]) - f64::from(from[2]);
+        let step = (dz * dz + dx * dx + dy * dy).sqrt();
+        sum = (step + f64::from(sum)) as f32;
+    }
+    sum
+}
+
+/// A node's map position (`0x4db958`-`0x4db995`) on the taxi map's 0..1 space, with the rect from
+/// `WorldMapContinent.dbc` fields 9-12 of the current node's continent, in f64 and stored as f32:
 ///
 /// ```text
 /// u = (Ymax − worldY) / (Xmax − Xmin)    ; world Y (west+) → horizontal, inverted
 /// v = (worldX − Xmin) / (Ymax − Ymin)    ; world X (north+) → vertical, from BOTTOMLEFT
 /// ```
 ///
-/// The denominators are cross-axis; the reference's route projector `0x4dc890` uses same-axis
-/// ones, and the two agree because every shipped continent's rect is square.
+/// The denominators are cross-axis; the route lines' [`project_line`] uses same-axis ones.
 pub(crate) fn project(cont: &WorldMapContinent, world_x: f32, world_y: f32) -> (f32, f32) {
     let (min_x, min_y) = cont.taxi_min;
     let (max_x, max_y) = cont.taxi_max;
-    let x = (max_y - world_y) / (max_x - min_x);
-    let y = (world_x - min_x) / (max_y - min_y);
-    (x, y)
+    let u = (f64::from(max_y) - f64::from(world_y)) / (f64::from(max_x) - f64::from(min_x));
+    let v = (f64::from(world_x) - f64::from(min_x)) / (f64::from(max_y) - f64::from(min_y));
+    (u as f32, v as f32)
 }
 
-/// One outgoing edge, `(to, fare)`.
-type Edge = (u32, u32);
+/// A route line's end (`0x4dc890`): [`project`]'s numerators, each over its own axis's span.
+fn project_line(cont: &WorldMapContinent, world_x: f32, world_y: f32) -> (f32, f32) {
+    let (min_x, min_y) = cont.taxi_min;
+    let (max_x, max_y) = cont.taxi_max;
+    let u = (f64::from(max_y) - f64::from(world_y)) / (f64::from(max_y) - f64::from(min_y));
+    let v = (f64::from(world_x) - f64::from(min_x)) / (f64::from(max_x) - f64::from(min_x));
+    (u as f32, v as f32)
+}
 
-/// The route from `from` to `to` through known nodes, minimizing summed distance with the fare
-/// carried along, as the reference's relaxation (`0x4dbce0`) does; ties go to fewer hops. `dist`
-/// is the per-edge metric: `build_nodes` passes the straight 3-D distance between the two nodes,
-/// where the reference's `0x4dbbd0` sums the length of the path's own points. `from` counts as
-/// known: the server opens the map only on a visited node. The chain runs `from` to `to`.
-fn shortest_route(
-    known: &TaxiMask,
-    edges: impl Fn(u32) -> Vec<Edge>,
-    dist: impl Fn(u32, u32) -> f32,
-    from: u32,
-    to: u32,
-) -> Option<(Vec<u32>, u32)> {
-    if from == to {
-        return Some((vec![from], 0));
-    }
-    // Dijkstra keyed on (distance, hops): a non-negative `f32`'s bits order like its value, and
-    // `Reverse` makes the max-heap a min-heap.
-    let mut best: HashMap<u32, (u32, u32)> = HashMap::new(); // node → (dist_bits, hops)
-    let mut fares: HashMap<u32, u32> = HashMap::new();
-    let mut prev: HashMap<u32, u32> = HashMap::new();
-    let mut heap = BinaryHeap::new();
-    best.insert(from, (0, 0));
-    fares.insert(from, 0);
-    heap.push(Reverse((0u32, 0u32, from)));
+/// The route line from node `a` to node `b`, `[src_u, src_v, dest_u, dest_v]`.
+fn line(cont: &WorldMapContinent, a: &TaxiNode, b: &TaxiNode) -> [f32; 4] {
+    let (au, av) = project_line(cont, a.pos[0], a.pos[1]);
+    let (bu, bv) = project_line(cont, b.pos[0], b.pos[1]);
+    [au, av, bu, bv]
+}
 
-    while let Some(Reverse((dist_bits, hops, node))) = heap.pop() {
-        if node == to {
-            break; // the first pop of `to` is optimal
-        }
-        if best.get(&node) != Some(&(dist_bits, hops)) {
-            continue; // a stale entry: a better path already won
-        }
-        for (next, edge_fare) in edges(node) {
-            if !known.is_known(next) {
-                continue; // the search never steps through an undiscovered node
+/// A slot's route once the route flag `+0x0d` is set: the chain from the current node (`+0x14`,
+/// `+0x18`), its fare sum (`+0x10`) and its length (`+0x1c`).
+#[derive(Clone)]
+struct Route {
+    chain: Vec<u32>,
+    fare: u32,
+    length: f32,
+}
+
+/// The route search over the slots: each slot's direct paths to other slots, in slot order, as
+/// `(slot, price, length back)`.
+struct Search<'a> {
+    ids: &'a [u32],
+    hops: Vec<Vec<(usize, u32, f32)>>,
+}
+
+impl Search<'_> {
+    /// `0x4dbce0(to, from, price)`: `from`'s route plus the hop, kept when `to` has no route yet
+    /// (`0x4dbe17`) or the total is strictly shorter (`0x4dbe2b`), then every slot `to` has a path
+    /// to relaxed in slot order, depth first. The total is the f32 sum of the hop's length back
+    /// and `from`'s (`0x4dbe06`, `0x4dbe14`); fares and hop counts never decide.
+    fn relax(&self, routes: &mut [Option<Route>], to: usize, from: usize, price: u32, back: f32) {
+        let Some(prev) = &routes[from] else {
+            return; // never: the seed and every relaxation start from a routed slot
+        };
+        let length = (f64::from(back) + f64::from(prev.length)) as f32;
+        if let Some(held) = &routes[to] {
+            if length.partial_cmp(&held.length) != Some(Ordering::Less) {
+                return;
             }
-            let leg = dist(node, next).max(0.0);
-            let candidate = ((f32::from_bits(dist_bits) + leg).to_bits(), hops + 1);
-            if best.get(&next).is_none_or(|&b| candidate < b) {
-                best.insert(next, candidate);
-                fares.insert(next, fares[&node] + edge_fare);
-                prev.insert(next, node);
-                heap.push(Reverse((candidate.0, candidate.1, next)));
-            }
+        }
+        let mut chain = Vec::with_capacity(prev.chain.len() + 1);
+        chain.extend_from_slice(&prev.chain);
+        chain.push(self.ids[to]);
+        let fare = prev.fare.wrapping_add(price);
+        routes[to] = Some(Route {
+            chain,
+            fare,
+            length,
+        });
+        for &(next, price, back) in &self.hops[to] {
+            self.relax(routes, next, to, price, back);
         }
     }
+}
 
-    best.get(&to)?;
-    let total_fare = *fares.get(&to)?;
-    let mut chain = vec![to];
-    let mut cur = to;
-    while cur != from {
-        cur = *prev.get(&cur)?;
-        chain.push(cur);
+/// The seed `0x4dc010`: the current node's slot, slot 0 when none matches (`0x4dc039`), takes the
+/// route `[current]` at fare and length 0, and every slot the current node has a path to is
+/// relaxed from it in slot order. A slot left `None` was never reached.
+fn search(cat: &TaxiCatalogs, ids: &[u32], current: u32) -> Vec<Option<Route>> {
+    let mut routes = vec![None; ids.len()];
+    if ids.is_empty() {
+        return routes;
     }
-    chain.reverse();
-    Some((chain, total_fare))
+    let hops_from = |from: u32, from_slot: usize| -> Vec<(usize, u32, f32)> {
+        ids.iter()
+            .enumerate()
+            .filter_map(|(slot, &to)| {
+                let price = cat.paths.between(from, to)?.cost;
+                Some((slot, price, cat.length_back(to, ids[from_slot])))
+            })
+            .collect()
+    };
+    let search = Search {
+        ids,
+        hops: (0..ids.len())
+            .map(|slot| hops_from(ids[slot], slot))
+            .collect(),
+    };
+    let seed = ids.iter().position(|&id| id == current).unwrap_or(0);
+    routes[seed] = Some(Route {
+        chain: vec![current],
+        fare: 0,
+        length: 0.0,
+    });
+    for (slot, price, back) in hops_from(current, seed) {
+        search.relax(&mut routes, slot, seed, price, back);
+    }
+    routes
 }
 
 /// `TaxiNodeCost`'s fare (`0x4dc3d0`): the price times `1 - discount`, both in f64 with nothing
@@ -172,8 +246,8 @@ fn shown_fare(price: u32, discount: f64) -> u32 {
     f64::from(product).round_ties_even() as u32
 }
 
-/// A listed node's chain from the nearest node (the node alone for `Current`) and its fare, for
-/// `drain_taxi`.
+/// A listed node's route for `drain_taxi`, which sends the direct activate when a path joins the
+/// chain's ends and the express with the chain and its raw fare sum otherwise (`0x4dc8d0`).
 pub(super) struct ResolvedTaxiNode {
     pub(super) chain: Vec<u32>,
     pub(super) cost: u32,
@@ -183,15 +257,21 @@ pub(super) struct ResolvedTaxiNode {
 #[derive(Resource, Default)]
 pub(super) struct TaxiRouteCache(pub(super) Vec<ResolvedTaxiNode>);
 
-/// The listed nodes: every known node on the current node's continent, which the reference caches
-/// off the packet (`DAT_00bb4a80+4`), by id. The current node is `Current`, a routable one
-/// `Reachable` with its fare and route segments, and an unroutable one is left out, where the
-/// reference keeps it typed `NONE`, which stock `TaxiFrame.lua` hides; its `DISTANT` type is
-/// never produced. Returns the continent's map id, the Lua nodes and their routes, in one order.
+/// The listed nodes, as the builder `0x4db710` makes its slots: every known id from 1 to 256
+/// whose `TaxiNodes` row lies on the current node's continent and inside its taxi rect, ends
+/// included, in id order (`0x4db8a0`-`0x4dba17`); no slot, no row for the current node or its
+/// continent, or a rect of zero span builds no map. The route search ([`search`]) runs over the
+/// slots alone. The current node is `Current`, a routed one `Reachable` with its fare and route
+/// lines, and an unrouted one is left out, where the reference keeps it typed `NONE`, which stock
+/// `TaxiFrame.lua` hides; its `DISTANT` type is never produced. Returns the continent's map id,
+/// the Lua nodes and their routes, in one order.
 ///
-/// A Lua node's fare takes the flight master's price `discount` ([`shown_fare`]), and is 0 with
-/// none, when the flight master or the player does not resolve (`0x4dc3fa`, `0x4dc423`); the
-/// route's fare stays the raw sum, which `CMSG_ACTIVATETAXIEXPRESS` carries (`0x4dc96f`).
+/// A node with a direct path from the current node shows that path's price and draws its one
+/// segment (`0x4dc44f`, `0x4dc643`) whatever the search routed; any other shows its route's fare
+/// sum and one segment per hop. A Lua node's fare takes the flight master's price `discount`
+/// ([`shown_fare`]), and is 0 with none, when the flight master or the player does not resolve
+/// (`0x4dc3fa`, `0x4dc423`); the route's fare stays the raw sum, which
+/// `CMSG_ACTIVATETAXIEXPRESS` carries (`0x4dc96f`).
 pub(super) fn build_nodes(
     open: &TaxiOpen,
     cat: &TaxiCatalogs,
@@ -207,77 +287,62 @@ pub(super) fn build_nodes_for(
     discount: Option<f64>,
     _player: Option<(u8, &FactionCatalog)>,
 ) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
-    let map_id = cat.nodes.get(open.nearest_node)?.map_id;
-    let cont = cat.continents.get(map_id)?;
-    let dist = |a: u32, b: u32| -> f32 {
-        match (cat.nodes.get(a), cat.nodes.get(b)) {
-            (Some(a), Some(b)) => {
-                let (dx, dy, dz) = (
-                    a.pos[0] - b.pos[0],
-                    a.pos[1] - b.pos[1],
-                    a.pos[2] - b.pos[2],
-                );
-                (dx * dx + dy * dy + dz * dz).sqrt()
-            }
-            _ => f32::MAX / 4.0, // an edge into a node the catalog lacks never wins
-        }
+    let current = cat.nodes.get(open.nearest_node)?;
+    let cont = cat.continents.get(current.map_id)?;
+    let ((min_x, min_y), (max_x, max_y)) = (cont.taxi_min, cont.taxi_max);
+    if max_x - min_x == 0.0 || max_y - min_y == 0.0 {
+        return None; // `0x4db853`, `0x4db870`
+    }
+    // The x87 compares pass a NaN coordinate (`0x4db906`-`0x4db94d`).
+    let inside = |n: &TaxiNode| {
+        let [x, y, _] = n.pos;
+        !(x > max_x || x < min_x || y > max_y || y < min_y)
     };
-    let mut rows: Vec<_> = cat
-        .nodes
-        .rows()
-        .filter(|n| n.map_id == map_id && open.known.is_known(n.id))
+    let slots: Vec<&TaxiNode> = (1..=256)
+        .filter(|&id| open.known.is_known(id))
+        .filter_map(|id| cat.nodes.get(id))
+        .filter(|n| n.map_id == current.map_id && inside(n))
         .collect();
-    rows.sort_by_key(|n| n.id);
+    if slots.is_empty() {
+        return None; // `0x4dba40`
+    }
+    let ids: Vec<u32> = slots.iter().map(|n| n.id).collect();
+    let routes = search(cat, &ids, current.id);
 
-    let mut ui = Vec::new();
-    let mut resolved = Vec::new();
-    for n in rows {
-        let pos = project(cont, n.pos[0], n.pos[1]);
-        if n.id == open.nearest_node {
-            ui.push(TaxiUiNode {
-                name: n.name.clone(),
-                node_type: TaxiNodeType::Current,
-                pos,
-                cost: 0,
-                routes: Vec::new(),
-            });
-            resolved.push(ResolvedTaxiNode {
-                chain: vec![n.id],
-                cost: 0,
-            });
-            continue;
-        }
-        let Some((chain, cost)) = shortest_route(
-            &open.known,
-            |from| cat.paths.paths_from(from).map(|p| (p.to, p.cost)).collect(),
-            dist,
-            open.nearest_node,
-            n.id,
-        ) else {
-            continue; // unroutable: left out
+    let mut ui = Vec::with_capacity(slots.len());
+    let mut resolved = Vec::with_capacity(slots.len());
+    for (n, route) in slots.into_iter().zip(routes) {
+        let Some(route) = route else {
+            continue; // unrouted: left out
         };
-        // Each hop's segment for `GetNumRoutes` and `TaxiGetSrcX`..`TaxiGetDestY`, through this
-        // continent's rect even for a node off it.
-        let routes = chain
-            .windows(2)
-            .filter_map(|w| {
-                let a = cat.nodes.get(w[0])?;
-                let b = cat.nodes.get(w[1])?;
-                let (ax, ay) = project(cont, a.pos[0], a.pos[1]);
-                let (bx, by) = project(cont, b.pos[0], b.pos[1]);
-                Some([ax, ay, bx, by])
-            })
-            .collect();
+        let direct = cat.paths.between(current.id, n.id);
+        let node_type = if n.id == current.id {
+            TaxiNodeType::Current
+        } else {
+            TaxiNodeType::Reachable
+        };
+        let (price, routes) = match direct {
+            Some(path) => (path.cost, vec![line(cont, current, n)]),
+            None => {
+                let lines = route.chain.windows(2).filter_map(|hop| {
+                    Some(line(cont, cat.nodes.get(hop[0])?, cat.nodes.get(hop[1])?))
+                });
+                (route.fare, lines.collect())
+            }
+        };
         ui.push(TaxiUiNode {
             name: n.name.clone(),
-            node_type: TaxiNodeType::Reachable,
-            pos,
-            cost: discount.map_or(0, |d| shown_fare(cost, d)),
+            node_type,
+            pos: project(cont, n.pos[0], n.pos[1]),
+            cost: discount.map_or(0, |d| shown_fare(price, d)),
             routes,
         });
-        resolved.push(ResolvedTaxiNode { chain, cost });
+        resolved.push(ResolvedTaxiNode {
+            chain: route.chain,
+            cost: route.fare,
+        });
     }
-    Some((map_id, ui, resolved))
+    Some((current.map_id, ui, resolved))
 }
 
 /// The message an `SMSG_ACTIVATETAXIREPLY` code shows: the reference's handler (`0x5ed1e0`)
