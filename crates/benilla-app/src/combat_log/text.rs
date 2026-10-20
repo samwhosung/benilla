@@ -768,6 +768,58 @@ mod tests {
             .is_empty());
     }
 
+    /// The GO's miss word over your target is spell gold, the record pushed (`0x6e7d73`,
+    /// `0x6e7dcc`), and `0x607140`'s CVars gate it: `CombatDamage` 0 draws nothing (`0x60718f`).
+    #[test]
+    fn a_go_miss_word_is_spell_gold_and_cvar_gated() {
+        let mut leg = Leg::new();
+        let mut float = |combat_damage| {
+            let spells = leg.spells.clone();
+            leg.app
+                .world_mut()
+                .run_system_once(
+                    move |index: Res<GuidIndex>,
+                          self_guid: Res<SelfGuid>,
+                          stores: Query<&mut ObjectStore>,
+                          mut text: MessageWriter<CombatTextSpawn>| {
+                        let miss = benilla_protocol::messages::SpellGoMiss {
+                            target: MOB,
+                            info: 1,
+                            reflect_result: 0,
+                        };
+                        let gates = DamageTextGates {
+                            combat_damage,
+                            ..DamageTextGates::default()
+                        };
+                        spell_go_misses(
+                            ME,
+                            ME,
+                            FIREBALL,
+                            &[miss],
+                            &index,
+                            &self_guid,
+                            &stores,
+                            Some(&spells),
+                            gates,
+                            &mut text,
+                        );
+                    },
+                )
+                .unwrap();
+            leg.app
+                .world_mut()
+                .resource_mut::<Messages<CombatTextSpawn>>()
+                .drain()
+                .map(|t| (t.text, t.category, t.color))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            float(true),
+            [("Miss".to_string(), 3, Some(COLOR_SPELL_GOLD))]
+        );
+        assert!(float(false).is_empty());
+    }
+
     /// A spell-log miss floats its word under the `Attributes & 0x100` gate (`0x5e7f15`).
     #[test]
     fn a_spell_log_miss_floats_for_a_logged_spell_only() {
