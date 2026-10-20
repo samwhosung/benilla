@@ -624,13 +624,18 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
         reactivated,
         ..
     } = std::mem::take(&mut *sc.pass);
+    // A unit's release drops its token flags and with them its field bridge (`0x5fbc44` →
+    // `0x60c4f0(-1)` → `0x51bdb0`), which only its slot 3 adds back (`0x5fbe36` → `0x60c520`),
+    // after this pass: an object this packet brought back notifies with no bridge.
+    let away: HashSet<u64> = reactivated.iter().copied().collect();
     let none = Vec::new();
     for block in blocks {
         match block {
             // Live objects only (`0x464890`, `0x465371`).
             Notify::Values { guid, sent } => {
                 let moved = copies.get(&guid).unwrap_or(&none);
-                notify(&mut sc, guid, Notified::new(Sent::Fields(&sent), moved));
+                let block = Notified::new(Sent::Fields(&sent), moved);
+                notify(&mut sc, guid, block, !away.contains(&guid));
             }
             // An object not yet shown runs its type's create hook; one shown before runs every
             // field's watch instead (`0x465d79`, `0x465d8e`).
@@ -639,7 +644,8 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
                     create_hook(&mut sc, guid, kind, script.as_deref());
                 } else {
                     let moved = copies.get(&guid).unwrap_or(&none);
-                    notify(&mut sc, guid, Notified::new(Sent::All, moved));
+                    let block = Notified::new(Sent::All, moved);
+                    notify(&mut sc, guid, block, !away.contains(&guid));
                 }
             }
         }
@@ -651,8 +657,8 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
 
 /// One block's notify on a live object: its field edges, the field watches whose callbacks
 /// signal interface events ([`crate::field_watch`]), the item watchers, and the guild timestamp's
-/// watcher.
-fn notify(sc: &mut Scene, guid: u64, block: Notified) {
+/// watcher. `bridged` says whether the unit's field bridge is registered.
+fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     let Some(e) = sc.index.0.get(&guid).copied() else {
         return;
     };
@@ -692,7 +698,10 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified) {
         others: &others,
         pet_bar: sc.pet_bar.as_ref().map_or(0, |bar| bar.spells.pet_guid),
     };
-    let fired = crate::field_watch::values(&around, guid, kind, fields, &block);
+    let mut fired = crate::field_watch::values(&around, guid, kind, fields, &block);
+    if !bridged {
+        fired.retain(|n| !matches!(n, crate::field_watch::FieldNotice::Unit { .. }));
+    }
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
         .values(guid, kind, fields, &block);
     let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
