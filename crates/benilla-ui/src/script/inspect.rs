@@ -110,56 +110,74 @@ impl super::UiScript {
 
 /// The reach of the unit `token` names, through the resolver (`0x515970`, which both verbs call via
 /// `0x515940`): the guid it answers, then that guid's entry. A token the resolver does not
-/// recognise answers nobody here.
-fn reach(lua: &Lua, token: &Option<String>) -> Option<UnitReach> {
-    let token = token.as_deref()?;
+/// recognise raises `Unknown unit name` (`0x515c14`).
+fn reach(lua: &Lua, token: &str) -> mlua::Result<Option<UnitReach>> {
+    super::unit::check_unit_token(&Some(token.to_string()))?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let guid = model.unit_guids.resolve(token).ok().flatten()?;
-    model.unit_reach.get(&guid).copied()
+    let guid = model.unit_guids.resolve(token).ok().flatten();
+    Ok(guid.and_then(|guid| model.unit_reach.get(&guid).copied()))
+}
+
+/// Whether `0x4944a0`'s distance leg passes: in range unless `100.0 < d²`, since `test ah,0x41`
+/// after the compare counts an unordered one as in range, so a NaN distance passes (`0x494531`),
+/// as `CanInspect`'s own test before it does (`0x48a28b`).
+fn in_inspect_range(r: &UnitReach) -> bool {
+    matches!(
+        r.dist_sq.partial_cmp(&CAN_INSPECT_DIST_SQ),
+        Some(Ordering::Less | Ordering::Equal) | None
+    )
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // CanInspect(unit) → 1/nil (`0x48a1b0`), the gate of `InspectFrame_Show`
-    // (`Blizzard_InspectUI.lua:8`), answered by `0x4944a0` (`0x48a2a1`): in range unless
-    // `100.0 < d²`, and `test ah,0x41; je` counts an unordered compare as in range, so a NaN
-    // distance passes. The player and cooperation legs ride in [`UnitReach::inspectable`].
+    // (`Blizzard_InspectUI.lua:8`). `Usage:` unless the argument is a string or a number
+    // (`0x48a1ca`); the resolver raises for an unknown token. Each refusal shows its error through
+    // `0x496720` before the answer, which is `0x4944a0`'s (`0x48a2a1`): no object
+    // `ERR_UNIT_NOT_FOUND`, or `ERR_GENERIC_NO_TARGET` for an empty token (`0x48a2d6`-`0x48a2f3`);
+    // no active player, a unit that is no player, or another one the player cannot cooperate with
+    // `ERR_INVALID_INSPECT_TARGET` (`0x48a21f`, `0x48a231`, `0x48a245` → `0x48a2c7`); beyond 10
+    // yards `ERR_OUT_OF_RANGE` (`0x48a292`). Those legs ride in [`UnitReach::inspectable`].
     g.set(
         "CanInspect",
-        lua.create_function(|lua, unit: Option<String>| {
-            let ok = match reach(lua, &unit) {
-                Some(r) => {
-                    r.inspectable
-                        && matches!(
-                            r.dist_sq.partial_cmp(&CAN_INSPECT_DIST_SQ),
-                            Some(Ordering::Less | Ordering::Equal) | None
-                        )
-                }
-                // No live unit: nil, through `0x4944a0`'s null-`this` guard.
-                None => false,
+        lua.create_function(|lua, unit: Value| {
+            let unit = binding_abi::string_arg(lua, unit, "Usage: CanInspect(unit)")?;
+            let reach = reach(lua, &unit)?;
+            let refusal = match &reach {
+                None if unit.starts_with('\0') || unit.is_empty() => Some("ERR_GENERIC_NO_TARGET"),
+                None => Some("ERR_UNIT_NOT_FOUND"),
+                Some(r) if !r.inspectable => Some("ERR_INVALID_INSPECT_TARGET"),
+                Some(r) if !in_inspect_range(r) => Some("ERR_OUT_OF_RANGE"),
+                Some(_) => None,
             };
+            if let Some(key) = refusal {
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .push_ui_error(key);
+            }
+            let ok = reach.is_some_and(|r| r.inspectable && in_inspect_range(&r));
             Ok(if ok { Value::Integer(1) } else { Value::Nil })
         })?,
     )?;
 
     // CheckInteractDistance(unit, type) → 1/nil (`0x48ba00`): in range only when
-    // `d² < table[type-1]`, strictly, unlike `CanInspect` (`test ah,0x5; jp`). A token with no unit
-    // answers nil (`0x48babe`), as does a `type` outside 1..=4 once truncated toward zero, the
-    // compare being unsigned (`0x48bac5`). `is-number-or-string` on the unit and `is-number` on
-    // `type` gate both, else `Usage: CheckInteractDistance("unit", distIndex)` (`0x842900`,
-    // `0x48bb42`). The reference also raises for an unknown token (`0x515c14`), where this answers
-    // nil.
+    // `d² < table[type-1]`, strictly, unlike `CanInspect` (`test ah,0x5; jp`). `is-number-or-string`
+    // on the unit and `is-number` on `type` gate both, else
+    // `Usage: CheckInteractDistance("unit", distIndex)` (`0x842900`, `0x48bb42`); then the resolver
+    // raises for an unknown token (`0x48ba7e`). A token with no unit answers nil (`0x48babe`), as
+    // does a `type` outside 1..=4 once truncated toward zero, the compare being unsigned
+    // (`0x48bac5`); no arm shows an error.
     g.set(
         "CheckInteractDistance",
         lua.create_function(|lua, (unit, kind): (Value, Value)| {
             const USAGE: &str = r#"Usage: CheckInteractDistance("unit", distIndex)"#;
-            let unit = Some(binding_abi::string_arg(lua, unit, USAGE)?);
+            let unit = binding_abi::string_arg(lua, unit, USAGE)?;
             let kind = binding_abi::index_arg(lua, kind, USAGE)?;
             let thr = kind
                 .checked_sub(1)
                 .and_then(|i| INTERACT_DIST_SQ.get(i).copied());
-            let ok = match (reach(lua, &unit), thr) {
+            let ok = match (reach(lua, &unit)?, thr) {
                 (Some(r), Some(thr)) => r.dist_sq < thr,
                 _ => false,
             };
@@ -288,8 +306,8 @@ mod tests {
         assert!(!answers(&s, r#"CanInspect("party1targettarget")"#));
     }
 
-    /// A chain that ends at nobody, a unit with no object, text after the chain and a token the
-    /// resolver does not read as a chain each answer nil, and the compares fold case.
+    /// A chain that ends at nobody, a unit with no object and text after the chain each answer
+    /// nil, a token the resolver does not know raises, and the compares fold case.
     #[test]
     fn a_chain_that_names_nobody_answers_nil_and_case_folds() {
         let s = seeded();
@@ -303,14 +321,19 @@ mod tests {
             "party3target",
             "party1foo",
             "party1targetfoo",
-            // `npc` is an exact compare with no chain.
-            "npctarget",
             "",
         ] {
             let call = format!(r#"CheckInteractDistance("{token}", 4)"#);
             assert!(!answers(&s, &call), "{call}");
             let call = format!(r#"CanInspect("{token}")"#);
             assert!(!answers(&s, &call), "{call}");
+        }
+        // `npc` is one exact compare with no chain, so the resolver knows no `npctarget`.
+        for call in [
+            r#"CheckInteractDistance("npctarget", 4)"#,
+            r#"CanInspect("npctarget")"#,
+        ] {
+            assert!(s.run(call).is_err(), "{call}");
         }
         assert!(answers(&s, r#"CheckInteractDistance("PARTY1TARGET", 1)"#));
         assert!(answers(&s, r#"CanInspect("Party1Target")"#));
