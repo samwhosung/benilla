@@ -45,6 +45,8 @@ pub(crate) struct FontId(u32);
 pub(crate) struct FontNode {
     /// The name it was declared under, as typed; `None` for a widget's own font.
     pub(crate) name: Option<String>,
+    /// The object id its Lua handle holds at `[0]`, minted with the handle ([`wrapper`]).
+    handle: Option<u32>,
     /// The block (`+0x38`): its own groups merged over what it follows.
     pub(crate) block: FontObject,
     /// The font it follows (`+0x28`).
@@ -65,6 +67,8 @@ pub(crate) struct FontNode {
 pub(crate) struct Fonts {
     nodes: Vec<FontNode>,
     by_lower: HashMap<String, FontId>,
+    /// Handle object id → font, the reverse of [`FontNode::handle`].
+    by_handle: HashMap<u32, FontId>,
 }
 
 impl Fonts {
@@ -117,6 +121,11 @@ impl Fonts {
         &mut self.nodes[id.0 as usize]
     }
 
+    /// The font whose Lua handle holds object id `handle` at `[0]`.
+    pub(crate) fn of_handle(&self, handle: u32) -> Option<FontId> {
+        self.by_handle.get(&handle).copied()
+    }
+
     /// The block of the named font `name`.
     pub(crate) fn block_of(&self, name: &str) -> Option<&FontObject> {
         self.id(name).map(|id| &self.get(id).block)
@@ -133,17 +142,27 @@ impl Fonts {
 
 // ── The handle ───────────────────────────────────────────────────────────────────────────────
 
-/// Get or create the Lua handle of font `id`, the one table its every reader gets back.
+/// Get or create the Lua handle of font `id`, the one table its every reader gets back. Call it
+/// with no model borrow alive.
 ///
-/// `T[0]` holds the font's id as an integer, never a light userdata, so a font handle passed
-/// where a frame is wanted is rejected rather than decoded.
+/// `T[0]` is a light userdata like every object's (`0x701bd0`), its value an object id minted from
+/// the counter frames and regions share ([`Model::next_id`]), so no frame or region lookup takes a
+/// font for one of its own and each reader's type check refuses it.
 pub(crate) fn wrapper(lua: &Lua, id: FontId) -> mlua::Result<Table> {
     let wrappers: Table = lua.named_registry_value(REG_FONT_WRAPPERS)?;
     if let Value::Table(t) = wrappers.raw_get::<Value>(i64::from(id.0))? {
         return Ok(t);
     }
+    let handle = {
+        let mut model = lua.app_data_mut::<Model>().expect("model");
+        let handle = model.next_id;
+        model.next_id += 1;
+        model.fonts.get_mut(id).handle = Some(handle);
+        model.fonts.by_handle.insert(handle, id);
+        handle
+    };
     let t = lua.create_table()?;
-    t.raw_set(0, i64::from(id.0))?;
+    t.raw_set(0, Value::LightUserData(super::object::id_to_lud(handle)))?;
     let meta: Table = lua.named_registry_value(REG_FONT_META)?;
     t.set_metatable(Some(meta))?;
     wrappers.raw_set(i64::from(id.0), t.clone())?;
@@ -160,10 +179,7 @@ pub(crate) fn publish(lua: &Lua, id: FontId, name: &str) -> mlua::Result<()> {
 /// The font a handle holds in `T[0]`; `None` for any other table.
 pub(super) fn id_of_table(model: &Model, t: &Table) -> Option<FontId> {
     match t.raw_get::<Value>(0).ok()? {
-        Value::Integer(i) => u32::try_from(i)
-            .ok()
-            .map(FontId)
-            .filter(|id| (id.0 as usize) < model.fonts.nodes.len()),
+        Value::LightUserData(l) => model.fonts.of_handle(l.0 as usize as u32),
         _ => None,
     }
 }
@@ -202,7 +218,7 @@ pub(super) fn font_arg(
     let model = lua.app_data_ref::<Model>().expect("model");
     match arg {
         Some(Value::Table(t)) => match t.raw_get::<Value>(0)? {
-            Value::Integer(_) | Value::LightUserData(_) => {
+            Value::LightUserData(l) if !l.0.is_null() => {
                 id_of_table(&model, t).map(Some).ok_or_else(|| {
                     mlua::Error::runtime(format!("{who}:{v}(): Wrong object type, expected font"))
                 })

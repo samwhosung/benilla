@@ -1252,7 +1252,9 @@ fn a_font_objects_handle_is_a_light_userdata() {
         "userdata"
     );
     assert!(s
-        .eval::<bool>("return HandleFont[0] ~= HandleMade[0] and HandleFont[0] ~= UIParent[0]")
+        .eval::<bool>(
+            "return HandleFont[0] ~= HandleMade[0] and HandleFont[0] ~= CreateFrame('Frame')[0]"
+        )
         .unwrap());
     for code in [
         "HandleMade:CopyFontObject({ [0] = 0 })",

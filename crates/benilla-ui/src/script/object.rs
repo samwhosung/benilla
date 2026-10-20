@@ -615,11 +615,6 @@ pub(super) fn create_frame(
                             )
                         })?,
                 ),
-                Value::Integer(_) if super::font::id_of_table(&model, t).is_some() => {
-                    return Err(mlua::Error::runtime(
-                        "CreateFrame: Wrong parent object type, expected frame",
-                    ))
-                }
                 _ => {
                     return Err(mlua::Error::runtime(
                         "CreateFrame: Couldn't find 'this' in parent object",

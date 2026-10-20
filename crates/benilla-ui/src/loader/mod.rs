@@ -782,13 +782,13 @@ impl Loader<'_> {
             el.attr("parent")
                 .filter(|name| !name.is_empty())
                 .map(|name| {
-                    // Only a frame counts: `0x76c760` reads the frame registry, so a non-frame
-                    // global of that name is a miss. A frame wrapper is the one table carrying
-                    // lightuserdata at `[0]` (`0x6f3ea0`).
-                    let hit =
-                        self.lua().globals().get::<Table>(name).ok().filter(|t| {
-                            matches!(t.raw_get::<Value>(0), Ok(Value::LightUserData(_)))
-                        });
+                    // Only a frame counts: `0x76c760` asks the object at `[0]` for the Frame id
+                    // (`0x6ee3c9`), so a global holding another object, a region or a Font, or
+                    // none is a miss.
+                    let hit = self.lua().globals().get::<Table>(name).ok().filter(|t| {
+                        crate::script::object::decode_id(t)
+                            .is_ok_and(|id| self.model().id_to_frame.contains_key(&id))
+                    });
                     if hit.is_none() {
                         // The reference's wording (`0x8710f0`).
                         self.report

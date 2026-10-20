@@ -148,17 +148,13 @@ pub(crate) const UNNAMED: &str = "<unnamed>";
 /// [`UNNAMED`] when that is NULL. Read off the model, never through a Lua `GetName` an addon can
 /// override. A frame, a region or a Font object; any other table is unnamed.
 pub(crate) fn object_name(model: &Model, this: &Table) -> String {
-    let name = match this.raw_get::<Value>(0) {
-        Ok(Value::Integer(_)) => {
-            super::font::id_of_table(model, this).and_then(|id| model.fonts.get(id).name.clone())
-        }
-        _ => handle_name(model, this).flatten(),
-    };
-    name.unwrap_or_else(|| UNNAMED.to_string())
+    handle_name(model, this)
+        .flatten()
+        .unwrap_or_else(|| UNNAMED.to_string())
 }
 
-/// A frame's or a region's own name, by the handle in its `[0]`: `None` when `[0]` holds no
-/// handle (`lua_touserdata` NULL), `Some(None)` for an object without a name.
+/// A frame's, a region's or a Font object's own name, by the handle in its `[0]`: `None` when
+/// `[0]` holds no handle (`lua_touserdata` NULL), `Some(None)` for an object without a name.
 pub(crate) fn handle_name(model: &Model, this: &Table) -> Option<Option<String>> {
     let Ok(Value::LightUserData(l)) = this.raw_get::<Value>(0) else {
         return None;
@@ -171,6 +167,8 @@ pub(crate) fn handle_name(model: &Model, this: &Table) -> Option<Option<String>>
         model.arena.frame(h).and_then(|f| f.name.clone())
     } else if let Some(&rh) = model.id_to_region.get(&id) {
         model.arena.region(rh).and_then(|r| r.name.clone())
+    } else if let Some(font) = model.fonts.of_handle(id) {
+        model.fonts.get(font).name.clone()
     } else {
         None
     })
