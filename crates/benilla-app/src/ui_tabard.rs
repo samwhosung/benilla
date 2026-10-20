@@ -167,7 +167,6 @@ fn feed_tabard(
     guilds: Res<GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut last_host: Local<crate::ui_script::VmMemo<Option<TabardHost>>>,
-    mut last_identity: Local<crate::ui_script::VmMemo<Option<u64>>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {
@@ -192,15 +191,8 @@ fn feed_tabard(
     for _ in 0..std::mem::take(&mut open.pending_events) {
         script.fire_event("TABARD_SAVE_PENDING", vec![]);
     }
-    // `TABARD_CANSAVE_CHANGED` on a re-fetched guild record, which refreshes each held member's
-    // tag (`0x5e2890` → `0x5e29c0` → `0x5e08e0`); here, when our identity cache moves. A guild id
-    // change and a player's first create are the field watches' (`crate::field_watch::guild_tag`).
-    let gen = guilds.identity_generation();
-    let last_gen = last_identity.get(&script);
-    if last_gen.is_some() && *last_gen != Some(gen) {
-        script.fire_event("TABARD_CANSAVE_CHANGED", vec![]);
-    }
-    *last_gen = Some(gen);
+    // `TABARD_CANSAVE_CHANGED` is `RefreshGuildTag`'s (`0x5e0902`), raised by its callers
+    // ([`crate::field_watch::guild_tag`]); a guild record landing or dropped raises nothing.
 
     let lines: Vec<_> = open
         .lines
