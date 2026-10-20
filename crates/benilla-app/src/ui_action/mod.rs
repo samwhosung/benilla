@@ -254,7 +254,7 @@ const SPELL_EFFECT_SKIN_PLAYER_CORPSE: u32 = 0x74;
 const SPELL_EFFECT_FEED_PET: u32 = 0x65;
 
 /// Re-derives [`LearnedAbilities`] whenever the book changes, standing in for learn-time writes.
-fn track_learned_abilities(
+pub(crate) fn track_learned_abilities(
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     mut learned: ResMut<LearnedAbilities>,

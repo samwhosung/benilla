@@ -1031,7 +1031,10 @@ impl Plugin for UiItemsPlugin {
                     ask_item_build_lookups.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
-                    feed_player_req.in_set(UnitFeed),
+                    // After the latches, so a skinning spell learnt this frame colours the line now.
+                    feed_player_req
+                        .in_set(UnitFeed)
+                        .after(crate::ui_action::track_learned_abilities),
                     // The item tooltip's lock check: `Lock.dbc` once, the player's openers on change.
                     lock_openers::feed_lock_rows.in_set(UnitFeed),
                     lock_openers::feed_lock_openers.in_set(UnitFeed),
