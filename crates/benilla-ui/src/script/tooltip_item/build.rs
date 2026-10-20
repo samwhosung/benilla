@@ -125,8 +125,9 @@ fn name_of(model: &Model, guid: u64) -> Option<String> {
     held.chain(worn).chain(traded).next()
 }
 
-/// The bag slot that holds the item object `guid`, wherever it moved.
-fn container_object(model: &Model, guid: u64) -> Option<&crate::script::ContainerSlot> {
+/// The bag slot that holds the item object `guid`, wherever it moved; none for guid 0.
+pub(super) fn container_object(model: &Model, guid: u64) -> Option<&crate::script::ContainerSlot> {
+    (guid != 0).then_some(())?;
     model
         .containers
         .values()
@@ -134,43 +135,74 @@ fn container_object(model: &Model, guid: u64) -> Option<&crate::script::Containe
         .find(|s| s.guid == guid)
 }
 
-/// The item object `guid` as the builder reads it live (`0x52b777` finds it by guid), and its
-/// stack, wherever it is held: a bag slot or a worn one.
-fn live_object(model: &Model, guid: u64) -> Option<(ItemInstance, u32)> {
+/// An item object the player holds, as the builder reads it live.
+pub(super) struct HeldObject {
+    pub(super) item_id: u32,
+    /// `None` while the template is in flight.
+    pub(super) quality: Option<u32>,
+    pub(super) count: u32,
+    /// The object with the fields not valid; a setter that sets them says so.
+    pub(super) inst: ItemInstance,
+}
+
+/// The item object `guid` (`0x52b777` finds it by guid) wherever it is held, a bag slot or a worn
+/// one; none for guid 0.
+pub(super) fn live_object(model: &Model, guid: u64) -> Option<HeldObject> {
     if let Some(s) = container_object(model, guid) {
-        return Some((super::slot_instance(s, false), s.count.max(1)));
+        return Some(HeldObject {
+            item_id: s.item_id,
+            quality: s.quality,
+            count: s.count.max(1),
+            inst: super::slot_instance(s, true),
+        });
     }
     model
         .inventory_slots
         .iter()
         .flatten()
-        .find(|s| s.guid == guid)
-        .map(|s| (super::worn_instance(s, true), s.count.max(1)))
+        .find(|s| guid != 0 && s.guid == guid)
+        .map(|s| HeldObject {
+            item_id: s.item_id,
+            quality: u32::try_from(s.quality).ok(),
+            count: s.count.max(1),
+            inst: ItemInstance {
+                openable_source: true,
+                ..super::worn_instance(s, true)
+            },
+        })
 }
 
 impl ItemBuild {
     /// The inputs a rebuild runs with. The builder reads the item object live by its kept guid
     /// (p3, `0x52e560`), and the block fields as they were kept (`+0x3d0`..`+0x440`): the open
-    /// gate's p6 and the cooldown. A name the build lacked is read as it is now.
+    /// gate's p6, the cooldown, the lock id, the wrapped word, the proposed enchant, the charges
+    /// and the durability. A name the build lacked is read as it is now.
     ///
-    /// Deviation: an object no longer held, or a source that keeps no guid (the player's own
-    /// trade slot), rebuilds from the instance the build read, where the reference's lookup finds
-    /// no object and builds from the record and the block alone; benilla's views carry no object
-    /// to read once it is gone, and the kept instance is what the plate showed.
+    /// Deviation: an object no longer held rebuilds from the instance the build read, where the
+    /// reference's lookup finds no object and builds from the record and the block alone;
+    /// benilla's views carry no object to read once it is gone, and the kept instance is what the
+    /// plate showed.
     fn refreshed(mut self, model: &Model) -> Self {
         let Some(kept) = self.inst.take() else {
             return self;
         };
-        let live = (kept.object && kept.guid != 0)
+        let live = kept
+            .object
             .then(|| live_object(model, kept.guid))
             .flatten();
         let mut inst = match live {
-            Some((mut inst, count)) => {
-                inst.openable_source = kept.openable_source;
-                inst.cooldown_ms = kept.cooldown_ms;
-                inst.block_lock_id = kept.block_lock_id;
-                inst.block_wrapped = kept.block_wrapped;
-                self.sell_count = self.sell_count.map(|_| count);
+            Some(held) => {
+                let inst = ItemInstance {
+                    openable_source: kept.openable_source,
+                    cooldown_ms: kept.cooldown_ms,
+                    block_lock_id: kept.block_lock_id,
+                    block_wrapped: kept.block_wrapped,
+                    proposed_enchant: kept.proposed_enchant,
+                    block_charges: kept.block_charges,
+                    block_durability: kept.block_durability,
+                    ..held.inst
+                };
+                self.sell_count = self.sell_count.map(|_| held.count);
                 inst
             }
             None => kept,

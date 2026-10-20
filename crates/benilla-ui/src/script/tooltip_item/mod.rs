@@ -144,7 +144,9 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
 /// (81..112). The bank is out of the mask. A broken item (durability 0 with a maximum, unless
 /// wrapped, `0x6224f7`..`0x62250e`) or one carrying flag `0x10` (`0x622510`) is skipped. The
 /// reference also skips an object whose `[+0xe4]` bit 0 is set (`0x614ea0`); benilla holds no
-/// such fact. `None` when nothing matches, where the setter pushes nil (`0x5325bc`).
+/// such fact. `None` when nothing matches, where the setter pushes nil (`0x5325bc`). The block's
+/// charges are the summed absolute block-0 charges of every copy the same walk reaches
+/// (`0x622180` at `0x532553`, stored at `+0x428`).
 pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::ItemInstance> {
     const BROKEN: u32 = 0x10;
     const WRAPPED: u32 = 0x8;
@@ -153,8 +155,11 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
             flags & WRAPPED == 0 && durability.is_some_and(|(cur, max)| max > 0 && cur == 0);
         !broken && flags & BROKEN == 0
     };
-    let worn = |s: &crate::script::InvSlotView| {
-        (s.item_id == item_id && usable(s.flags, s.durability)).then(|| worn_instance(s, true))
+    let worn_copy = |s: &&crate::script::InvSlotView| {
+        s.item_id == item_id && usable(s.flags, s.durability)
+    };
+    let held_copy = |s: &&crate::script::ContainerSlot| {
+        s.item_id == item_id && usable(s.flags, s.durability)
     };
     let held = |bag: i64| -> Option<render::ItemInstance> {
         let c = model.containers.get(&bag)?;
@@ -163,29 +168,37 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         slots
             .into_iter()
             .map(|(_, s)| s)
-            .find(|s| s.item_id == item_id && usable(s.flags, s.durability))
+            .find(held_copy)
             .map(|s| slot_instance(s, false))
     };
-    // Equipment, then each equipped bag item and straight after it that bag's contents.
-    for s in model.inventory_slots.iter().take(20).skip(1).flatten() {
-        if let Some(i) = worn(s) {
-            return Some(i);
-        }
-    }
-    for bag in 1..=4_i64 {
-        if let Some(i) = model
+    let worn = |i: usize| {
+        model
             .inventory_slots
-            .get(19 + bag as usize)
+            .get(i)
             .and_then(Option::as_ref)
-            .and_then(worn)
-        {
-            return Some(i);
-        }
-        if let Some(i) = held(bag) {
-            return Some(i);
-        }
-    }
-    held(0).or_else(|| held(super::char_stats::KEYRING_CONTAINER))
+            .filter(worn_copy)
+            .map(|s| worn_instance(s, true))
+    };
+    // Equipment, then each equipped bag item and straight after it that bag's contents.
+    let found = (1..20)
+        .find_map(worn)
+        .or_else(|| (1..=4_i64).find_map(|bag| worn(19 + bag as usize).or_else(|| held(bag))))
+        .or_else(|| held(0))
+        .or_else(|| held(super::char_stats::KEYRING_CONTAINER))?;
+    let worn_charges = model.inventory_slots.iter().skip(1).take(23).flatten();
+    let held_charges = (0..=4)
+        .chain([super::char_stats::KEYRING_CONTAINER])
+        .filter_map(|bag| model.containers.get(&bag))
+        .flat_map(|c| c.slots.values());
+    let sum = worn_charges
+        .filter(worn_copy)
+        .map(|s| s.spell_charges[0])
+        .chain(held_charges.filter(held_copy).map(|s| s.spell_charges[0]))
+        .fold(0_i32, |sum, n| sum.wrapping_add(n.wrapping_abs()));
+    Some(render::ItemInstance {
+        block_charges: Some(sum),
+        ..found
+    })
 }
 
 /// A worn (or inspected) slot's item as the builder's item: an object of the player's own, else
@@ -632,50 +645,76 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // GameTooltip:SetTradePlayerItem(slot) / SetTradeTargetItem(slot) (`0x5341e0`, `0x534410`;
-    // `TradeFrame.xml:150`, `TradeFrame.xml:106`), no returns: the player's side the item object
-    // at its slot guid (`[0xb716d0 + slot*8]`, `0x5342c8`), the target side a block off the
-    // partner's slot arrays (the entry `[0xb714f4 + slot*4]`, `0x5344ff`). An empty or
-    // out-of-range slot leaves the tooltip untouched. The partner's permanent enchant
-    // (`[0xb715c0 + slot*4]`, `0x534521`) is not rendered: the trade view has no enchant id.
+    // `TradeFrame.xml:150`, `TradeFrame.xml:106`), no returns, both with the fields valid
+    // (`0x5343be`, `0x5345e9`): the player's side the item object its slot's guid names
+    // (`[0xb716d0 + slot*8]`, `0x5342c8`), the target side a block off the partner's slot arrays
+    // (the entry `[0xb714f4 + slot*4]`, `0x5344ff`). An empty or out-of-range slot, or a guid
+    // naming no object (`0x5342f9`), leaves the tooltip untouched. The partner's permanent
+    // enchant (`[0xb715c0 + slot*4]`, `0x534521`) is not rendered: the trade view has no enchant
+    // id.
     for (name, player_side) in [("SetTradePlayerItem", true), ("SetTradeTargetItem", false)] {
         m.set(
             name,
             lua.create_function(move |lua, (this, slot): (Table, usize)| {
                 let h = frame_handle_of(lua, &this)?;
-                let item = {
+                let cell = slot
+                    .checked_sub(1)
+                    .filter(|&n| n < super::trade::TRADE_SLOTS);
+                let source = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model.trade.as_ref().and_then(|t| {
-                        let side = if player_side { &t.player } else { &t.target };
-                        slot.checked_sub(1)
-                            .and_then(|n| side.slots.get(n))
-                            .and_then(|s| s.clone())
-                    })
-                };
-                let Some(item) = item.filter(|i| i.item_id != 0) else {
-                    return Ok(());
-                };
-                let inst = render::ItemInstance {
-                    name: item.name.clone(),
-                    // The target side's block carries the partner's lock id (`0x534563`), wrapped
-                    // word (`0x534559`), gift creator (`0x534574`) and creator (`0x53454f`); the
-                    // player's lock id is zero (`0x534341`), but its slot is a live item object,
-                    // whose flags and creator the LOCKED, wrapped and maker reads take
-                    // (`0x5342ed`, `0x5343da`, `0x52b789`, `0x52e247`).
-                    block_lock_id: if player_side { 0 } else { item.lock_id },
-                    block_wrapped: !player_side && item.wrapped,
-                    gift_creator: item.gift_creator.clone(),
-                    gift_creator_guid: item.gift_creator_guid,
-                    creator: item.creator.clone(),
-                    creator_guid: item.creator_guid,
-                    object: item.object_flags.is_some(),
-                    flags: item.object_flags.unwrap_or(0),
+                    let side = model
+                        .trade
+                        .as_ref()
+                        .map(|t| if player_side { &t.player } else { &t.target });
                     // The seventh slot alone proposes the spell cast on it (`0x534391`,
                     // `0x534598`, the block's `+0x40c`).
-                    proposed_enchant: (slot == 7).then(|| item.enchantment.clone()).flatten(),
-                    ..Default::default()
+                    let proposed = side
+                        .filter(|_| slot == 7)
+                        .and_then(|s| s.slots[6].as_ref()?.enchantment.clone());
+                    match player_side {
+                        // The object's flags, creator and giver reach the LOCKED, wrapped and
+                        // maker reads (`0x52bdb3`, `0x52b789`, `0x52e247`); the block's charges
+                        // stay -1 and its lock id 0 (`0x534337`, `0x534341`).
+                        true => cell
+                            .and_then(|n| model.trade_offered[n].as_ref())
+                            .and_then(|offered| build::live_object(&model, offered.guid))
+                            .map(|held| {
+                                let inst = render::ItemInstance {
+                                    openable_source: false,
+                                    proposed_enchant: proposed,
+                                    ..held.inst
+                                };
+                                (held.item_id, held.quality, inst)
+                            }),
+                        // The block carries the partner's lock id (`0x534563`), wrapped word
+                        // (`0x534559`), gift creator (`0x534574`), creator (`0x53454f`), charges
+                        // (`0x534595`) and durability (`0x5345b4`, `0x5345c0`).
+                        false => cell
+                            .and_then(|n| side?.slots[n].clone())
+                            .filter(|i| i.item_id != 0)
+                            .map(|item| {
+                                let inst = render::ItemInstance {
+                                    name: item.name.clone(),
+                                    block_lock_id: item.lock_id,
+                                    block_wrapped: item.wrapped,
+                                    gift_creator: item.gift_creator.clone(),
+                                    gift_creator_guid: item.gift_creator_guid,
+                                    creator: item.creator.clone(),
+                                    creator_guid: item.creator_guid,
+                                    proposed_enchant: proposed,
+                                    block_charges: Some(item.charges),
+                                    block_durability: item.durability,
+                                    ..Default::default()
+                                };
+                                (item.item_id, item.quality, inst)
+                            }),
+                    }
                 };
-                let in_flight = match item.name {
-                    Some(name) => InFlight::Name(name, quality_color(item.quality.unwrap_or(1))),
+                let Some((item_id, quality, inst)) = source else {
+                    return Ok(());
+                };
+                let in_flight = match inst.name.clone() {
+                    Some(name) => InFlight::Name(name, quality_color(quality.unwrap_or(1))),
                     None => InFlight::Nothing,
                 };
                 build_item(
@@ -685,7 +724,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     ItemBuild {
                         inst: Some(inst),
                         in_flight,
-                        ..ItemBuild::new(item.item_id)
+                        ..ItemBuild::new(item_id)
                     },
                 )?;
                 Ok(())
@@ -826,23 +865,24 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // `is-number` else `Usage: SetInboxItem(index)` (`0x855584`, `0x53559e`).
             let index = binding_abi::index_arg(lua, index, "Usage: SetInboxItem(index)")?;
             let h = frame_handle_of(lua, &this)?;
-            let (item_id, roll, name) = {
+            let row = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(mail) = &model.mail else {
                     return Ok(Value::Nil);
                 };
-                match mail.inbox.get(index.saturating_sub(1)) {
-                    Some(r) => (r.item_id, r.item_random_property_id, r.item_name.clone()),
-                    None => (0, 0, None),
-                }
+                mail.inbox.get(index.saturating_sub(1)).cloned()
             };
-            if item_id == 0 {
+            let Some(row) = row.filter(|r| r.item_id != 0) else {
                 return Ok(Value::Nil);
-            }
-            // A block source (`0x5355fa`, p6=1) carrying the attachment's roll: no placeholder.
+            };
+            let item_id = row.item_id;
+            // A block source (`0x5355fa`, p6=1) carrying the attachment's roll, so no
+            // placeholder, and its charges and durability (`0x53566f`, `0x53568d`, `0x535699`).
             let inst = render::ItemInstance {
-                name,
-                enchants: roll_enchants(lua, roll),
+                name: row.item_name,
+                enchants: roll_enchants(lua, row.item_random_property_id),
+                block_charges: Some(row.item_charges),
+                block_durability: row.item_durability,
                 ..Default::default()
             };
             let live = build_item(
@@ -872,7 +912,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let index =
                 binding_abi::index_arg(lua, index, r#"Usage: SetAuctionItem("type", index)"#)?;
             let h = frame_handle_of(lua, &this)?;
-            let (item_id, roll, name) = {
+            let (item_id, roll, name, charges) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(auction) = &model.auction else {
                     return Ok(Value::Nil);
@@ -881,17 +921,19 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     return Ok(Value::Nil);
                 };
                 match auction.lists[list].rows.get(index.saturating_sub(1)) {
-                    Some(r) => (r.item_id, r.random_property_id, r.name.clone()),
-                    None => (0, 0, None),
+                    Some(r) => (r.item_id, r.random_property_id, r.name.clone(), r.charges),
+                    None => (0, 0, None, -1),
                 }
             };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
-            // A block source (`0x5359d9`, p6=1) carrying the listing's roll: no placeholder.
+            // A block source (`0x5359d9`, p6=1) carrying the listing's roll, so no placeholder,
+            // and its charges (`0x535a4a`).
             let inst = render::ItemInstance {
                 name,
                 enchants: roll_enchants(lua, roll),
+                block_charges: Some(charges),
                 ..Default::default()
             };
             let live = build_item(

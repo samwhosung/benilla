@@ -98,6 +98,79 @@ impl ItemInstance {
     pub(super) fn wrapped(&self) -> bool {
         self.flags & 0x8 != 0 || self.block_wrapped
     }
+
+    /// The instance fields are valid, the reference's p6 (`[this+0x440]`).
+    fn block_valid(&self) -> bool {
+        !self.openable_source
+    }
+
+    /// What a recipe's product build reads (`0x52dbce`): no item object, as its p3 is zero, and
+    /// the instance fields this build set, which an incremental build keeps (`0x52b6ca` skips
+    /// the stores at `0x52b6cc`..`0x52b70a`). `None` with no fields to keep, a template source.
+    /// A setter that builds from an item object with the fields valid leaves the block's enchant
+    /// slots and roll zero (`0x5326e0`, `0x534308`), so the product of such a build has no
+    /// enchant to show.
+    fn nested_block(&self) -> Option<ItemInstance> {
+        self.block_valid().then(|| ItemInstance {
+            creator: self.creator.clone(),
+            gift_creator: self.gift_creator.clone(),
+            creator_guid: self.creator_guid,
+            gift_creator_guid: self.gift_creator_guid,
+            enchants: match self.object {
+                true => Vec::new(),
+                false => self.enchants.clone(),
+            },
+            block_lock_id: self.block_lock_id,
+            block_wrapped: self.wrapped(),
+            proposed_enchant: self.proposed_enchant.clone(),
+            cooldown_ms: self.cooldown_ms,
+            block_charges: self.block_charges,
+            block_durability: self.block_durability,
+            ..Default::default()
+        })
+    }
+
+    /// The count block `block`'s line prints, `None` for none (`0x52d9bd`..`0x52da06`): with the
+    /// fields valid and no item object, or with an object and a block value other than -1, the
+    /// block's `+0x428`, one value for every block; with an object, its own
+    /// `ITEM_FIELD_SPELL_CHARGES` for the block; else the template's. A template 0 is -1 whatever
+    /// the source, and -1 prints nothing (`0x52db51`).
+    fn charges(&self, block: u8, template: i32) -> Option<i32> {
+        let kept = self.block_charges.unwrap_or(-1);
+        let n = match template {
+            0 => -1,
+            _ if self.block_valid() && (!self.object || kept != -1) => kept,
+            _ if self.object => self
+                .object_charges
+                .get(usize::from(block))
+                .copied()
+                .unwrap_or(0),
+            _ => template,
+        };
+        (n != -1).then_some(n)
+    }
+
+    /// The durability line's `(current, max)` (`0x52cc5b`..`0x52cdc3`), `None` for no line: a
+    /// wrapped gift has none (`0x52cc60`); an item object with a max shows its own
+    /// (`0x52cc92`..`0x52cca6`), else valid fields with a max show the block's
+    /// (`0x52cca8`..`0x52ccb8`). A block max of -1 reads the template's (`0x52cc73`). The current
+    /// is clamped to the max (`0x52cd7c`).
+    fn durability(&self, template_max: u32) -> Option<(u32, u32)> {
+        if self.wrapped() {
+            return None;
+        }
+        let object = self
+            .durability
+            .filter(|&(_, max)| self.object && max > 0);
+        let block = || {
+            let (cur, max) = self.block_durability;
+            let max = if max == u32::MAX { template_max } else { max };
+            (self.block_valid() && max > 0).then_some((cur, max))
+        };
+        object
+            .or_else(block)
+            .map(|(cur, max)| (cur.min(max), max))
+    }
 }
 
 /// The set block's blank gold line, the reference's literal `0x854b2c`: a space and a newline. An
@@ -560,8 +633,11 @@ pub(super) fn render_view_flagged(
                 None => e.name.clone(),
             };
             // The slot's charges: ITEM_SPELL_CHARGES inside the literal `" (%s)"` (`0x854820`,
-            // `0x52caa6..0x52cb38`).
-            if let Some(charges) = charges_phrase(e.charges, &get) {
+            // `0x52caa6..0x52cb38`), none at 0 (`0x52cac9`).
+            if let Some(charges) = (e.charges != 0)
+                .then(|| charges_phrase(e.charges, &get))
+                .flatten()
+            {
                 text.push_str(&format!(" ({charges})"));
             }
             add((text, color))?;
@@ -577,21 +653,14 @@ pub(super) fn render_view_flagged(
             keyed("ITEM_ENCHANT_DISCLAIMER", &[], ENCHANT_RED, false)?;
         }
     }
-    if let Some((cur, max)) = inst.and_then(|i| i.durability).filter(|&(_, max)| max > 0) {
+    // A template source has neither an object nor a block: no line (`0x52cca8`).
+    if let Some((cur, max)) = inst.and_then(|i| i.durability(v.max_durability)) {
         // Red (`0xc0d390`) only when broken.
         let color = if cur == 0 { RED } else { WHITE };
         keyed(
             "DURABILITY_TEMPLATE",
             &[Arg::D(cur.into()), Arg::D(max.into())],
             color,
-            false,
-        )?;
-    } else if v.max_durability > 0 {
-        let full = i64::from(v.max_durability);
-        keyed(
-            "DURABILITY_TEMPLATE",
-            &[Arg::D(full), Arg::D(full)],
-            WHITE,
             false,
         )?;
     }
@@ -724,14 +793,18 @@ pub(super) fn render_view_flagged(
         };
         let color = if line.recipe.is_some() { WHITE } else { GREEN };
         addw((text, color))?;
-        // The absolute count, white (`0x52db51`..`0x52db8f`); a template 0 is -1 (`0x52da06`).
-        if line.charges != 0 && line.charges != -1 {
-            if let Some(charges) = charges_phrase(line.charges.unsigned_abs(), &get) {
-                add((charges, WHITE))?;
-            }
+        // The absolute count, white, itself the plural ordinal (`0x52db51`..`0x52db8f`), 0
+        // included.
+        let charges = match inst {
+            Some(i) => i.charges(line.block, line.charges),
+            None => (line.charges != 0 && line.charges != -1).then_some(line.charges),
+        };
+        if let Some(phrase) = charges.and_then(|n| charges_phrase(n.unsigned_abs(), &get)) {
+            add((phrase, WHITE))?;
         }
         if let Some(recipe) = &line.recipe {
-            add_recipe(lua, this, recipe, flags.product_depth)?;
+            let outer = inst.and_then(ItemInstance::nested_block);
+            add_recipe(lua, this, recipe, flags.product_depth, outer.as_ref())?;
         }
     }
     // The set block (`0x52d8a0..0x52e0f5`), above p4's cut at `0x52e14c`: a blank gold line, the
@@ -981,7 +1054,8 @@ fn time_bucket(ms: u64) -> (&'static str, u32) {
 }
 
 /// A recipe line's tail: the product's tooltip from an incremental build (`0x52dbce`: p1 the
-/// product, no object, no instance block, p7 = 1), its result unread, then the reagents as one
+/// product, no object, p7 = 1) over `outer`, the instance fields the outer build kept
+/// ([`ItemInstance::nested_block`]), its result unread, then the reagents as one
 /// white, wrapped `"\n%s"` of `ITEM_REQ_SKILL` (`0x52dcf0`..`0x52dd38`): each reagent's name,
 /// `"%s (%d)"` above a count of 1 (`0x854b30`), joined by `", "` (`0x84480c`). A reagent whose
 /// record is not cached is asked, with the tooltip as the answer's cookie, and the line waits
@@ -991,6 +1065,7 @@ fn add_recipe(
     this: &Table,
     recipe: &crate::script::ItemRecipe,
     depth: u8,
+    outer: Option<&ItemInstance>,
 ) -> mlua::Result<()> {
     if depth < MAX_PRODUCT_DEPTH {
         // A product not cached asks and adds nothing; the answer rebuilds the whole tooltip
@@ -1000,7 +1075,7 @@ fn add_recipe(
                 product_depth: depth + 1,
                 ..Default::default()
             };
-            render_view_flagged(lua, this, &product, flags, None)?;
+            render_view_flagged(lua, this, &product, flags, outer)?;
         }
     }
     let mut list: Option<String> = None;
@@ -1032,11 +1107,8 @@ fn add_recipe(
 }
 
 /// `ITEM_SPELL_CHARGES` or its `_P1` twin (`0x84e3b4`), pushed at `0x52cae8` for the enchant
-/// suffix and `0x52db61` for the charges line; zero charges have no phrase.
+/// suffix and `0x52db61` for the charges line, `n` its own plural ordinal.
 fn charges_phrase(n: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    if n == 0 {
-        return None;
-    }
     let template = plural_template("ITEM_SPELL_CHARGES", n, get)?;
     Some(fill(&template, &[Arg::D(i64::from(n))]))
 }
@@ -1142,6 +1214,6 @@ mod tests {
     fn charges_phrase_picks_the_plural() {
         assert_eq!(charges_phrase(1, &table).as_deref(), Some("<1 chg>"));
         assert_eq!(charges_phrase(5, &table).as_deref(), Some("<5 chgs>"));
-        assert_eq!(charges_phrase(0, &table), None);
+        assert_eq!(charges_phrase(0, &table).as_deref(), Some("<0 chgs>"));
     }
 }
