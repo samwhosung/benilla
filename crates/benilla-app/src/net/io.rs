@@ -120,7 +120,8 @@ pub(crate) struct PingClock {
     pub(crate) last_rtt_ms: Option<u32>,
     /// The latest [`RTT_RING`] round trips (ms), oldest first.
     rtt_ring: std::collections::VecDeque<u32>,
-    /// The world link's byte counts, `GetNetStats`' rates.
+    /// The last world link's byte counts and connect time (`conn+0x1ab4`-`+0x1abc`), set when
+    /// it connects: `GetNetStats`' rates.
     pub(crate) traffic: Option<Arc<benilla_protocol::LinkTraffic>>,
 }
 
@@ -154,9 +155,13 @@ impl PingClock {
         Some((sum / self.rtt_ring.len() as u64) as u32)
     }
 
-    /// Forgets this connection's measurements.
+    /// Forgets this connection's round trips. The traffic stays: the reference resets its counts
+    /// only when a link connects (`0x537b90`), where the next one replaces it.
     pub(crate) fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            traffic: self.traffic.take(),
+            ..Self::default()
+        };
     }
 }
 
@@ -301,7 +306,7 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
                 // Opcodes already reported for trailing bytes, once per process.
                 let mut tails_announced = std::collections::HashSet::new();
                 loop {
-                    // A cycle starts with no measurements. `writer_loop` clears again on the new
+                    // A cycle starts with no round trips. `writer_loop` clears again on the new
                     // writer, since the keepalive can still fire on the stale one until then.
                     read_clock.lock_recover().clear();
                     match run(
@@ -678,6 +683,8 @@ fn world(
                 return fail(None, format!("world handshake with {world_addr}: {e:#}"));
             }
         };
+        // The new link's counts from its connect, for `GetNetStats` (`0x537b90`).
+        ping_clock.lock_recover().traffic = Some(session.traffic());
         // A cancel during the queue must not be overtaken by the roster.
         if canceled() {
             return Ok(WorldEnd::Failed);

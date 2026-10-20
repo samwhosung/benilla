@@ -1,5 +1,6 @@
-//! The latency behind `GetNetStats()`, the main bar's latency meter's one input (`MainMenuBar.xml`
-//! polls it every 10 s): the average `SMSG_PONG` round trip the net read thread records.
+//! What `GetNetStats()` answers: the world link's KB/s in and out since it connected, and the
+//! average `SMSG_PONG` round trip the net read thread records, the main bar's latency meter's one
+//! input (`MainMenuBar.xml` polls it every 10 s).
 //!
 //! Pushed every frame, not on change: `UiScript` is created after a connection may already have
 //! settled, so a change-gated feed could miss its only edge and leave the meter at 0.
@@ -25,6 +26,14 @@ fn feed_net_stats(script: Option<NonSendMut<UiScript>>, ping: Res<PingShared>) {
     let Some(mut script) = script else { return };
     // Recovered, not unwrapped: a panic on a net thread holding this lock ends the connection,
     // not the app.
-    let latency = ping.0.lock_recover().avg_latency_ms();
+    let (latency, rates) = {
+        let clock = ping.0.lock_recover();
+        let rates = clock
+            .traffic
+            .as_ref()
+            .map_or((0.0, 0.0), |t| t.rates_kbps());
+        (clock.avg_latency_ms(), rates)
+    };
     script.set_latency_ms(latency);
+    script.set_bandwidth_kbps(rates.0, rates.1);
 }

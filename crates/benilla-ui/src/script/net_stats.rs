@@ -1,7 +1,8 @@
-//! `GetNetStats()` (`0x48b8b0`): `bandwidthIn, bandwidthOut, latency` for the main bar's latency
-//! meter. The latency is the average over the connection's 16-slot RTT ring (`HandlePong`
-//! `0x537d60`, `0x537f20`), which the app keeps and pushes here. Both bandwidths read 0: benilla
-//! measures no throughput, and the one stock caller, `MainMenuBarPerformanceBarFrame`, drops them.
+//! `GetNetStats()` (`0x48b8b0`): `bandwidthIn, bandwidthOut, latency`, from `0x537f20`. The two
+//! rates are the KB/s received and sent since the world link connected, the latency the average
+//! of at most 15 round trips in the connection's ring (`HandlePong` `0x537d60`); the app keeps both
+//! and pushes them here. The one stock caller, `MainMenuBarPerformanceBarFrame`, reads the latency
+//! alone; bandwidth addons read the rates.
 
 use mlua::Lua;
 
@@ -14,7 +15,7 @@ impl super::UiScript {
         self.model_mut().net_latency_ms = ms.unwrap_or(0);
     }
 
-    /// Push the KB/s received and sent since the link connected.
+    /// Push the KB/s received and sent since the link connected; 0 before any link.
     pub fn set_bandwidth_kbps(&mut self, received: f32, sent: f32) {
         self.model_mut().net_bandwidth_kbps = (received, sent);
     }
@@ -26,7 +27,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNetStats",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok((0.0_f64, 0.0_f64, i64::from(model.net_latency_ms)))
+            let (received, sent) = model.net_bandwidth_kbps;
+            Ok((
+                f64::from(received),
+                f64::from(sent),
+                i64::from(model.net_latency_ms),
+            ))
         })?,
     )
 }

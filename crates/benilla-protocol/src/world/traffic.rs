@@ -54,9 +54,12 @@ impl LinkTraffic {
     }
 }
 
-/// One rate of `0x537f20`.
-fn kbps(_bytes: u32, _ms: u32) -> f32 {
-    0.0
+/// One rate of `0x537f20`: `bytes · (1/1024) / (ms · 0.001)`, the factors the `f32`s `0x8090d8`
+/// and `0x801360` (`0x537f63`-`0x537f94`), at the client's 53-bit x87 precision, stored as an `f32`
+/// (`0x537f80`). With no time elapsed it is `+∞`, or NaN with no bytes.
+fn kbps(bytes: u32, ms: u32) -> f32 {
+    let seconds = f64::from(ms) * f64::from(0.001_f32);
+    (f64::from(bytes) * f64::from(1.0_f32 / 1024.0) / seconds) as f32
 }
 
 #[cfg(test)]
@@ -67,13 +70,14 @@ mod tests {
     /// `0x801360`), at 53 bits, stored as an `f32` (`0x537f80`).
     #[test]
     fn a_rate_is_kilobytes_over_seconds_since_the_connect() {
-        assert_eq!(kbps(2048, 2000), 1.0);
         assert_eq!(kbps(0, 5000), 0.0);
+        assert_eq!(kbps(1024, 4096), 0.244_140_61);
+        // `0.001f` is a hair over 0.001, so 2 KB in 2 s reads a hair under 1.
+        assert_eq!(kbps(2048, 2000), 0.999_999_94);
         assert_eq!(
             kbps(1024, 3000),
             (1.0 / (3000.0 * f64::from(0.001_f32))) as f32
         );
-        // `0.001f` is not 0.001: three seconds are 3.0000001 of them.
         assert_ne!(kbps(1024, 3000), (1.0_f64 / 3.0) as f32);
     }
 

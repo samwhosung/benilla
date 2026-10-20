@@ -40,7 +40,7 @@ const LONG_SIZE_MAX: usize = 0x7f_ffff;
 pub(super) fn read_frame(
     r: &mut impl Read,
     mut decrypter: Option<&mut DecrypterHalf>,
-    _traffic: &LinkTraffic,
+    traffic: &LinkTraffic,
 ) -> Result<(u16, Vec<u8>)> {
     let (size, opcode) =
         read_header(r, &mut decrypter).map_err(|e| anyhow!("reading world header: {e}"))?;
@@ -48,6 +48,7 @@ pub(super) fn read_frame(
     let mut body = vec![0u8; body_len];
     r.read_exact(&mut body)
         .map_err(|e| anyhow!("reading world body (opcode {opcode:#x}, {body_len} bytes): {e}"))?;
+    traffic.add_received(size);
     Ok((opcode, body))
 }
 
@@ -158,7 +159,7 @@ fn client_header(opcode: u16, body_len: usize) -> Option<([u8; 7], usize)> {
 pub(super) fn send_packet(
     stream: &mut impl Write,
     encrypter: Option<&mut EncrypterHalf>,
-    _traffic: &LinkTraffic,
+    traffic: &LinkTraffic,
     opcode: u16,
     body: &[u8],
 ) -> Result<()> {
@@ -176,6 +177,8 @@ pub(super) fn send_packet(
     let mut packet = Vec::with_capacity(header.len() + body.len());
     packet.extend_from_slice(header);
     packet.extend_from_slice(body);
+    // Counted whatever the socket does with it, as `0x5379c6` adds after the send returns.
+    traffic.add_sent(body.len() + 4);
     stream
         .write_all(&packet)
         .map_err(|e| anyhow!("sending opcode {opcode:#x}: {e}"))?;
