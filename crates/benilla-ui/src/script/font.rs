@@ -14,6 +14,11 @@
 //! `0x770800`). Both stop at a group the follower's mask has dropped ([`FontMask`]), so a colour
 //! set on a FontString survives every later push and `SetFontObject`. A push runs only from a
 //! setter or a link, never per frame.
+//!
+//! What a font holds is its block word's set bits (`+0x38`, `0x100`..`0x1000`), apart from the
+//! values: a follower takes only a held group, while the getters read the values whatever the word
+//! says (`0x79f680`). A setter or a merge holds the group it writes; `CopyFontObject` alone leaves
+//! values held by nothing ([`copy_font`]).
 
 use std::collections::HashMap;
 
@@ -41,14 +46,16 @@ const REG_FONT_WRAPPERS: &str = "__benilla_font_wrappers";
 pub(crate) struct FontId(u32);
 
 /// A font, its block and its two links.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct FontNode {
     /// The name it was declared under, as typed; `None` for a widget's own font.
     pub(crate) name: Option<String>,
     /// The object id its Lua handle holds at `[0]`, minted with the handle ([`wrapper`]).
     handle: Option<u32>,
-    /// The block (`+0x38`): its own groups merged over what it follows.
+    /// The block's values (`+0x3c`..`+0x68`): its own groups merged over what it follows.
     pub(crate) block: FontObject,
+    /// The groups the block holds, its word's set bits (`+0x38`): never one whose value is unset.
+    held: FontMask,
     /// The font it follows (`+0x28`).
     pub(crate) parent: Option<FontId>,
     /// The groups it still takes from [`Self::parent`] (`+0x2c`).
@@ -59,6 +66,24 @@ pub(crate) struct FontNode {
     region_followers: Vec<RegionHandle>,
     /// The SimpleHTML an element font belongs to (`+0x7c`, `0x789e81`), told of each change.
     html: Option<FrameHandle>,
+}
+
+impl Default for FontNode {
+    /// The constructor's (`0x783a40`): holding nothing (`0x783ac7`), following nothing
+    /// (`0x783a95`), and taking every group from what it will follow (`0x783a98`).
+    fn default() -> Self {
+        FontNode {
+            name: None,
+            handle: None,
+            block: FontObject::default(),
+            held: FontMask::NONE,
+            parent: None,
+            mask: FontMask::ALL,
+            font_followers: Vec::new(),
+            region_followers: Vec::new(),
+            html: None,
+        }
+    }
 }
 
 /// Every font, by id, and the named ones by their case-folded name: the font hash `0x783870`
@@ -243,10 +268,10 @@ pub(super) fn font_arg(
 
 // ── The live link ────────────────────────────────────────────────────────────────────────────
 
-/// `ApplyFontBlock 0x770800`: write each of `groups` that the font holds (its set bits, `0x770826`)
-/// and the region's mask passes (`word & mask`, `0x770824`). An empty `CreateFont` font holds
-/// nothing, so it changes nothing.
-pub(crate) fn apply(d: &mut RegionData, fo: &FontObject, groups: FontMask) {
+/// `ApplyFontBlock 0x770800`: write each of `groups` that the region's mask passes
+/// (`word & mask`, `0x770824`), `groups` already cut to what the font holds (its set bits,
+/// `0x770826`). An empty `CreateFont` font holds nothing, so it changes nothing.
+fn apply(d: &mut RegionData, fo: &FontObject, groups: FontMask) {
     let g = groups & d.font_mask;
     // Face, height and flags load together (`0x7714f0`, `0x770848`), the height into `+0xe4`.
     if g.has(FontMask::FONT) {
@@ -285,8 +310,8 @@ pub(crate) fn apply(d: &mut RegionData, fo: &FontObject, groups: FontMask) {
     }
 }
 
-/// The groups `fo` holds, its set bits (`0x100`..`0x1000` of `+0x38`).
-pub(crate) fn held(fo: &FontObject) -> FontMask {
+/// The groups whose value `fo` has set: what a block written whole holds.
+fn held(fo: &FontObject) -> FontMask {
     let mut m = FontMask::NONE;
     for (g, on) in [
         (FontMask::FONT, fo.font.is_some()),
@@ -364,14 +389,33 @@ fn copy_groups(dst: &mut FontObject, src: &FontObject, groups: FontMask) {
     }
 }
 
-/// `FontBlockMergeMasked 0x770910` into font `id` from `src`: each of `groups` that `src` holds,
-/// that `id`'s mask passes, and that differs or is not yet held (`0x7709f2`-`0x7709fc`). Answers
-/// the groups taken, which `id` pushes on.
-fn merge_into(model: &mut Model, id: FontId, src: &FontObject, groups: FontMask) -> FontMask {
+/// The groups of `wrote` a write stores and holds anew: those whose value differs, and those not
+/// yet held even at an equal value (`0x7709f9`, `0x79f65a`), the face aside, which a setter and a
+/// merge store only when it differs (`0x79f2ef`, `0x770973`).
+fn stored(
+    before: &FontObject,
+    before_held: FontMask,
+    after: &FontObject,
+    wrote: FontMask,
+) -> FontMask {
+    differs(before, after, wrote) | (wrote & !before_held & !FontMask::FONT)
+}
+
+/// `FontBlockMergeMasked 0x770910` into font `id` from `src`, which holds `src_held`: each of
+/// `groups` that `src` holds and `id`'s mask passes, where it differs or `id` does not hold it yet
+/// (`0x7709f2`-`0x7709fc`). Answers the groups taken, which `id` holds and pushes on.
+fn merge_into(
+    model: &mut Model,
+    id: FontId,
+    src: &FontObject,
+    src_held: FontMask,
+    groups: FontMask,
+) -> FontMask {
     let node = model.fonts.get_mut(id);
-    let g = groups & node.mask & held(src);
-    let took = differs(&node.block, src, g);
+    let g = groups & node.mask & src_held;
+    let took = stored(&node.block, node.held, src, g);
     copy_groups(&mut node.block, src, took);
+    node.held = node.held | took;
     took
 }
 
@@ -386,15 +430,16 @@ pub(crate) fn push(model: &mut Model, id: FontId, changed: FontMask) {
     }
     let node = model.fonts.get(id);
     let src = node.block.clone();
+    let src_held = node.held;
     let fonts = node.font_followers.clone();
     let regions = node.region_followers.clone();
     let html = node.html;
     for f in fonts {
-        let took = merge_into(model, f, &src, changed);
+        let took = merge_into(model, f, &src, src_held, changed);
         push(model, f, took);
     }
     for rh in regions {
-        apply_to_region(model, rh, id, &src, changed);
+        apply_to_region(model, rh, id, &src, src_held, changed);
     }
     if let Some(h) = html.filter(|_| !(changed & (FontMask::FONT | FontMask::SPACING)).is_empty()) {
         if let Some(st) = model.simple_html.get_mut(&h) {
@@ -403,12 +448,14 @@ pub(crate) fn push(model: &mut Model, id: FontId, changed: FontMask) {
     }
 }
 
-/// [`apply`] onto follower `rh` of font `id`, then re-measure it when a measured group arrived.
+/// [`apply`] the groups of `groups` that font `id` holds (`src_held`) onto its follower `rh`, then
+/// re-measure it when a measured group arrived.
 fn apply_to_region(
     model: &mut Model,
     rh: RegionHandle,
     id: FontId,
     src: &FontObject,
+    src_held: FontMask,
     groups: FontMask,
 ) {
     let Some(d) = model.region_data.get_mut(&rh) else {
@@ -417,7 +464,8 @@ fn apply_to_region(
     if d.font_object != Some(id) {
         return;
     }
-    let landed = groups & d.font_mask & held(src);
+    let groups = groups & src_held;
+    let landed = groups & d.font_mask;
     apply(d, src, groups);
     if !(landed & (FontMask::FONT | FontMask::SHADOW | FontMask::SPACING)).is_empty() {
         model.touch_measure(rh);
@@ -439,8 +487,9 @@ pub(crate) fn link_region(model: &mut Model, rh: RegionHandle, to: Option<FontId
     }
     if let Some(to) = to {
         model.fonts.get_mut(to).region_followers.push(rh);
-        let src = model.fonts.get(to).block.clone();
-        apply_to_region(model, rh, to, &src, FontMask::ALL);
+        let node = model.fonts.get(to);
+        let (src, src_held) = (node.block.clone(), node.held);
+        apply_to_region(model, rh, to, &src, src_held, FontMask::ALL);
     }
     true
 }
@@ -460,13 +509,13 @@ pub(crate) fn would_loop(model: &Model, id: FontId, to: FontId) -> bool {
     true
 }
 
-/// [`link_region`] for a font: follow `to`, merging every group it holds through `id`'s mask
-/// (`0x77e4b0` with all five marked changed) and pushing what that changed. A caller rules out a
-/// loop first ([`would_loop`]).
-pub(crate) fn link_font(model: &mut Model, id: FontId, to: Option<FontId>) {
+/// Move font `id` to follow `to`, out of its old font's follower list and into `to`'s, carrying
+/// nothing (`0x784221`-`0x7842c9`). Answers whether the link moved: the same font again does
+/// nothing (`0x784219`).
+fn relink_font(model: &mut Model, id: FontId, to: Option<FontId>) -> bool {
     let old = model.fonts.get(id).parent;
     if old == to {
-        return;
+        return false;
     }
     if let Some(old) = old {
         let list = &mut model.fonts.get_mut(old).font_followers;
@@ -477,15 +526,50 @@ pub(crate) fn link_font(model: &mut Model, id: FontId, to: Option<FontId>) {
     model.fonts.get_mut(id).parent = to;
     if let Some(to) = to {
         model.fonts.get_mut(to).font_followers.push(id);
-        let src = model.fonts.get(to).block.clone();
-        let took = merge_into(model, id, &src, FontMask::ALL);
+    }
+    true
+}
+
+/// [`link_region`] for a font: follow `to`, merging every group it holds through `id`'s mask
+/// (`0x77e4b0` with all five marked changed) and pushing what that changed. A caller rules out a
+/// loop first ([`would_loop`]).
+pub(crate) fn link_font(model: &mut Model, id: FontId, to: Option<FontId>) {
+    if !relink_font(model, id, to) {
+        return;
+    }
+    if let Some(to) = to {
+        let node = model.fonts.get(to);
+        let (src, src_held) = (node.block.clone(), node.held);
+        let took = merge_into(model, id, &src, src_held, FontMask::ALL);
         push(model, id, took);
     }
 }
 
+/// `CSimpleFont::SetFontObject 0x7841d0`, under `CopyFontObject`: font `id` takes `src`'s values,
+/// follow mask and followed font, and holds nothing.
+///
+/// In its order: `FontBlockMerge 0x770ad0` copies every group `src` holds into `id`'s block
+/// (`0x7841ea`); the word is then ANDed with `+0x6c` (`0x7841f4`), which is 0 in every font (the
+/// constructor `0x783aca` and `0x7841e7`, a copy of another font's, are its only stores), so `id`
+/// keeps the values and holds no group; it takes `src`'s mask (`0x7841fb`) and follows the font
+/// `src` follows, or none when that chain reaches `id` (`0x784207`-`0x784214`), moving lists
+/// without a merge. Its push, slot 5, returns at once for a word of 0 (`0x78418c`): what follows
+/// `id` is told nothing, and a FontString that links to it later takes nothing (`0x770800`).
+fn copy_font(model: &mut Model, id: FontId, src: FontId) {
+    let s = model.fonts.get(src);
+    let (block, held, mask, parent) = (s.block.clone(), s.held, s.mask, s.parent);
+    let node = model.fonts.get_mut(id);
+    copy_groups(&mut node.block, &block, held);
+    node.held = FontMask::NONE;
+    node.mask = mask;
+    let to = parent.filter(|&p| !would_loop(model, id, p));
+    relink_font(model, id, to);
+}
+
 /// One setter's write on font `id` (`0x79f210`, `0x79f4d0` and kin): `f` writes `group`, the
-/// font's own bit of it is cleared for good (`0x79f33a`, `0x79f669`, …), and what changed is
-/// pushed. A value equal to the held one changes nothing (`0x79f65a`).
+/// font's own bit of it is cleared for good (`0x79f33a`, `0x79f669`, …), and what it stored is
+/// held and pushed. A value equal to a held one stores nothing (`0x79f65a`); an equal face stores
+/// nothing even unheld (`0x79f2ef`).
 pub(crate) fn set<R>(
     model: &mut Model,
     id: FontId,
@@ -496,15 +580,19 @@ pub(crate) fn set<R>(
     let before = node.block.clone();
     let out = f(&mut node.block);
     node.mask.clear(group);
-    let changed = differs(&before, &node.block, group);
+    let changed = stored(&before, node.held, &node.block, group & held(&node.block));
+    node.held = (node.held | changed) & held(&node.block);
     push(model, id, changed);
     out
 }
 
-/// Replace font `id`'s block whole and push what that changed; its mask and parent stay.
+/// Replace font `id`'s block whole, as one setter per group would, and push what that stored; its
+/// mask and parent stay.
 pub(crate) fn replace_block(model: &mut Model, id: FontId, block: FontObject) {
-    let changed = differs(&model.fonts.get(id).block, &block, FontMask::ALL);
-    model.fonts.get_mut(id).block = block;
+    let node = model.fonts.get_mut(id);
+    let changed = stored(&node.block, node.held, &block, held(&block));
+    node.held = held(&block);
+    node.block = block;
     push(model, id, changed);
 }
 
@@ -566,19 +654,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CopyFontObject(font | "font") (`0x7a01b0` → `0x79f0e0`): nil is a usage error. The copy is
-    // the source's block taken whole and pushed; what `0x7841d0` does to the mask and the parent
-    // is not modelled.
+    // CopyFontObject(font | "font") (`0x7a01b0` → `0x79f0e0` → `0x7841d0`): `this` first, then
+    // the argument, nil a usage error; the copy is [`copy_font`].
     m.set(
         "CopyFontObject",
         lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let id = id_of(lua, &this)?;
             let who = super::binding_abi::name_of(lua, &this);
             let src = font_arg(lua, &who, Verb::CopyFontObject, args.front())?
                 .expect("CopyFontObject refuses nil");
-            let id = id_of(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            let paint = model.fonts.get(src).block.clone();
-            replace_block(&mut model, id, paint);
+            copy_font(&mut lua.app_data_mut::<Model>().expect("model"), id, src);
             Ok(())
         })?,
     )?;
