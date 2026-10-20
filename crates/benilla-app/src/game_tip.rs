@@ -803,6 +803,26 @@ mod tests {
         assert_eq!(w.resource::<GameTipSetting>().next, 1);
     }
 
+    /// The tip is skipped, and the cursor with it, for a record whose new-character byte is set
+    /// (`0x46b671`): the list parse sets it for a wire level of 0 and stores level 1
+    /// (`0x5b44e8`-`0x5b44f9`), so the record's level says nothing of it.
+    #[test]
+    fn a_new_characters_entry_shows_no_tip_and_freezes_the_index() {
+        let (mut app, tip) = tip_app(None);
+        let mut new = crate::glue_session::roster::test_character(7, "New");
+        new.new_character = true;
+        app.insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            vec![new],
+            7,
+        ));
+        set_edge(&mut app, crate::loading_screen::TipEdge::Pick);
+        app.update();
+
+        let w = app.world();
+        assert_eq!(w.get::<Visibility>(tip), Some(&Visibility::Hidden));
+        assert_eq!(w.resource::<GameTipSetting>().next, 0, "the index stood");
+    }
+
     /// The pick draws the line as the font engine's cells, one node per glyph, each the engine's
     /// own cell one to one; nothing is re-laid while nothing changes, and the dismiss takes the
     /// glyphs down.

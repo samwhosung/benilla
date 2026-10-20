@@ -48,6 +48,8 @@ pub(crate) struct Roster {
     /// The realm-list entry this session connected to, refreshed with each roster.
     pub(crate) realm: Option<benilla_protocol::RealmInfo>,
     env_read: bool,
+    /// The last race whose intro eye was looked up for a new character's entry, with what it found.
+    entry_eye: Option<(u8, Option<[f32; 3]>)>,
 }
 
 impl Roster {
@@ -101,6 +103,8 @@ impl Roster {
 
     /// The picked character's `(map, wow xyz)`, a round trip before `SMSG_LOGIN_VERIFY_WORLD`; the
     /// streamers aim at it during world entry.
+    pub(crate) fn resolve_entry_eye(&mut self, _eye: impl FnOnce(u8) -> Option<[f32; 3]>) {}
+
     pub(crate) fn pending_entry(&self) -> Option<(u32, [f32; 3])> {
         self.pending_row()
             .map(|c| (c.map, [c.position.x, c.position.y, c.position.z]))
@@ -272,5 +276,73 @@ pub(crate) fn test_character(guid: u64, name: &str) -> Character {
         pet_display_id: 0,
         pet_level: 0,
         pet_family: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(mut c: Character, map: u32, xyz: [f32; 3]) -> Character {
+        c.map = map;
+        c.position = benilla_protocol::wire::Vector3d {
+            x: xyz[0],
+            y: xyz[1],
+            z: xyz[2],
+        };
+        c
+    }
+
+    /// World entry opens the map around the record's position, and for a record with `+0x10a` set
+    /// around the race's intro eye instead (`0x46c203`-`0x46c214`, which writes the eye over the
+    /// local copy of `+0x44`-`+0x4c`); a record that sets none, or a race the lookup misses,
+    /// keeps its own position (`0x46c4e6` returns 0 and leaves it).
+    #[test]
+    fn a_new_characters_entry_is_the_intro_eye_and_any_other_keeps_its_position() {
+        let own = [10.0, 20.0, 30.0];
+        let eye = [-5041.0, -824.0, 541.0];
+        let mut new = at(test_character(7, "New"), 1, own);
+        new.race = 3;
+        new.new_character = true;
+        let old = at(test_character(8, "Old"), 1, own);
+
+        let mut roster = Roster::with_pending_pick(vec![new.clone(), old.clone()], 7);
+        assert_eq!(roster.pending_entry(), Some((1, own)), "before the lookup");
+        let mut asked = Vec::new();
+        roster.resolve_entry_eye(|race| {
+            asked.push(race);
+            Some(eye)
+        });
+        assert_eq!(roster.pending_entry(), Some((1, eye)));
+        roster.resolve_entry_eye(|_| panic!("the race is looked up once"));
+        assert_eq!(asked, [3]);
+
+        // The pick moving to a record that is not new takes the record's position again.
+        roster.pending_pick = Some(8);
+        roster.resolve_entry_eye(|_| panic!("a record without +0x10a asks nothing"));
+        assert_eq!(roster.pending_entry(), Some((1, own)));
+
+        // A lookup that found nothing leaves the position and is not repeated.
+        let mut roster = Roster::with_pending_pick(vec![new], 7);
+        roster.resolve_entry_eye(|_| None);
+        assert_eq!(roster.pending_entry(), Some((1, own)));
+        roster.resolve_entry_eye(|_| panic!("a miss is not retried"));
+    }
+
+    /// The eye is the race's, found once: another new character of another race looks up its own.
+    #[test]
+    fn each_race_is_looked_up_for_its_own_eye() {
+        let mut gnome = test_character(1, "Gnome");
+        gnome.race = 7;
+        gnome.new_character = true;
+        let mut troll = test_character(2, "Troll");
+        troll.race = 8;
+        troll.new_character = true;
+        let mut roster = Roster::with_pending_pick(vec![gnome, troll], 1);
+        roster.resolve_entry_eye(|race| Some([f32::from(race), 0.0, 0.0]));
+        assert_eq!(roster.pending_entry().map(|e| e.1[0]), Some(7.0));
+        roster.pending_pick = Some(2);
+        roster.resolve_entry_eye(|race| Some([f32::from(race), 0.0, 0.0]));
+        assert_eq!(roster.pending_entry().map(|e| e.1[0]), Some(8.0));
     }
 }
