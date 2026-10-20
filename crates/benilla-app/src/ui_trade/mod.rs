@@ -627,6 +627,12 @@ fn resolve_slot(
         .then(|| names.resolve_player(item.gift_creator, Ask::Read))
         .flatten()
         .map(str::to_string);
+    // The maker, the partner's block `+0x410` (`0x53453e`) or our object's `ITEM_FIELD_CREATOR`
+    // (`0x52e247`); only read, as the giver is.
+    let creator = (item.creator != 0)
+        .then(|| names.resolve_player(item.creator, Ask::Read))
+        .flatten()
+        .map(str::to_string);
     TradeSlotItem {
         item_id: item.entry,
         name,
@@ -639,6 +645,8 @@ fn resolve_slot(
         wrapped: item.wrapped,
         gift_creator,
         gift_creator_guid: if item.wrapped { item.gift_creator } else { 0 },
+        creator,
+        creator_guid: item.creator,
         enchantment: None,
         link,
     }
@@ -681,7 +689,8 @@ fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<(
             wrapped,
             gift_creator: fields.item_gift_creator().unwrap_or(0),
             perm_enchant: 0,
-            creator: 0,
+            // The tooltip reads our object's maker (`0x52e247`).
+            creator: fields.item_creator().unwrap_or(0),
             charges: 0,
             suffix_factor: 0,
             random_prop_id: 0,
@@ -1323,6 +1332,37 @@ mod tests {
             "a zero guid names no one"
         );
         assert_eq!(giver(&state.player, 3), (true, None), "a name in flight");
+    }
+
+    /// A crafted item's maker rides both columns: the partner's block carries the wire's creator
+    /// (`+0x410`, `0x53453e`), our placed item its object's `ITEM_FIELD_CREATOR` (`0x52e247`); a
+    /// zero guid names no one, and a name not yet answered keeps its guid for the build to ask.
+    #[test]
+    fn a_crafted_items_maker_reaches_both_columns() {
+        let mut items = Items::default();
+        items.insert_template(1234, Some(crate::items::test_template("Bag")));
+        let mut names = NameCache::default();
+        names.insert_player(0x7, "Tailor".to_string(), None);
+        let made = |creator| TradeItem {
+            creator,
+            ..wire_item(1234)
+        };
+        let mut s = TradeSession::default();
+        s.begin(0x9);
+        s.open_window();
+        s.place_own_item(1, made(0x7), 0);
+        s.their.slots[0] = Some(made(0x7));
+        s.their.slots[1] = Some(made(0));
+        s.their.slots[2] = Some(made(0x8));
+        let state = snapshot(&s, &items, None, None, &names).expect("open");
+        let maker = |side: &TradeSideState, i: usize| {
+            let row = side.slots[i].as_ref().expect("filled");
+            (row.creator.clone(), row.creator_guid)
+        };
+        assert_eq!(maker(&state.player, 0), (Some("Tailor".into()), 0x7));
+        assert_eq!(maker(&state.target, 0), (Some("Tailor".into()), 0x7));
+        assert_eq!(maker(&state.target, 1), (None, 0), "a zero guid names no one");
+        assert_eq!(maker(&state.target, 2), (None, 0x8), "a name in flight");
     }
 
     #[test]

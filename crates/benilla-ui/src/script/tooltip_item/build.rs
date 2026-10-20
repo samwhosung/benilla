@@ -119,7 +119,9 @@ fn name_of(model: &Model, guid: u64) -> Option<String> {
         .iter()
         .flat_map(|t| t.player.slots.iter().chain(t.target.slots.iter()))
         .flatten()
-        .filter_map(|s| of(s.gift_creator_guid, &s.gift_creator));
+        .filter_map(|s| {
+            of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
+        });
     held.chain(worn).chain(traded).next()
 }
 

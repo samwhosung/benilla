@@ -750,13 +750,16 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
                     // The target side's block carries the partner's lock id (`0x534563`), wrapped
-                    // word (`0x534559`) and gift creator (`0x534574`); the player's lock id is
-                    // zero (`0x534341`), but its slot is a live item object, whose flags the
-                    // LOCKED and wrapped gates read (`0x5342ed`, `0x5343da`, `0x52b789`).
+                    // word (`0x534559`), gift creator (`0x534574`) and creator (`0x53454f`); the
+                    // player's lock id is zero (`0x534341`), but its slot is a live item object,
+                    // whose flags and creator the LOCKED, wrapped and maker reads take
+                    // (`0x5342ed`, `0x5343da`, `0x52b789`, `0x52e247`).
                     block_lock_id: if player_side { 0 } else { item.lock_id },
                     block_wrapped: !player_side && item.wrapped,
                     gift_creator: item.gift_creator.clone(),
                     gift_creator_guid: item.gift_creator_guid,
+                    creator: item.creator.clone(),
+                    creator_guid: item.creator_guid,
                     object: item.object_flags.is_some(),
                     flags: item.object_flags.unwrap_or(0),
                     // The seventh slot alone proposes the spell cast on it (`0x534391`,
