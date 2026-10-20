@@ -536,11 +536,12 @@ impl SelfCancel<'_> {
         let flags_open = |spells: &Option<Res<Spells>>,
                           pick: fn(&benilla_formats::SpellDisplay) -> bool,
                           spell_id: u32| {
-            // An uncataloged spell cancels, as the server interrupts any ordinary cast.
+            // A spell with no record is spared: both tests leave on a null record (`0x51511a`,
+            // `0x515171`; `Script::Jump`'s `0x513c34`, `0x513c8c`).
             spells
                 .as_ref()
                 .and_then(|s| s.catalog.get(spell_id))
-                .is_none_or(pick)
+                .is_some_and(pick)
         };
         // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
         if let Some(slot) = inflight(&self.pending, &self.queued_melee, &self.ground) {
