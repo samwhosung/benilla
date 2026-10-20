@@ -193,8 +193,9 @@ fn a_reactive_spell_turning_usable_raises_spell_active() {
 }
 
 /// A `/reload` (`0x495664` → `0x490bd0`, `0x48fbf0`) reaches neither of `0x4b23a0`'s callers, the
-/// game's start (`0x48f59f` → `0x4b21c0`) and the active player's arrival (`0x5dea86`), so the new
-/// VM hears no `SPELL_ACTIVE` for a spell already usable; a new arrival empties the list.
+/// game's start (`0x48f59f` → `0x4b21c0`) and the active player's arrival (`0x5dea86`), so the
+/// entry and its answer outlive the VM: the new VM's first refresh raises no `SPELL_ACTIVE` for a
+/// spell already usable, and the entry still words its next turn. A new arrival empties the list.
 #[test]
 fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
     let mut app = app();
@@ -202,10 +203,22 @@ fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
         step(&mut app, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
     );
-    // The seated `/reload`: the leave-world sweep, then a new VM.
+    // The seated `/reload`: the leave-world sweep, then a new VM and its first frame.
     assert!(crate::ui_script::run_leave_world_sweep(app.world_mut()));
     app.insert_non_send_resource(listener());
-    assert!(step(&mut app, 0x1).is_empty(), "the list kept its answer");
+    assert!(step(&mut app, 0x1).is_empty(), "the new VM's first frame");
+    select(&mut app, 0x20);
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_UPDATE_USABLE"],
+        "a refresh: the list kept its answer, no second word"
+    );
+    assert_eq!(step(&mut app, 0), ["SPELL_UPDATE_USABLE"]);
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
+        "the kept entry words its next turn"
+    );
 
     let mut me = app.world_mut().query_filtered::<Entity, With<SelfPlayer>>();
     let me = me.single(app.world()).unwrap();
@@ -220,8 +233,7 @@ fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
 
 /// The list's only writers are its clear, its add (`0x4b27b3`-`0x4b27c7`), its rank move
 /// (`0x4b2844`) and the refresh (`0x4b3231`); unlearning (`0x4b2c50`) never touches it, so an
-/// entry and its answer outlive the spell leaving the book, and relearning a rank no higher moves
-/// nothing (`0x4b2838`).
+/// entry and its answer outlive the spell leaving the book, and the entry still checks.
 #[test]
 fn the_reactive_list_keeps_a_spell_the_book_lost() {
     let mut app = app();
@@ -229,21 +241,51 @@ fn the_reactive_list_keeps_a_spell_the_book_lost() {
         step(&mut app, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
     );
-    fn spells(app: &mut App) -> Mut<'_, PlayerActions> {
-        app.world_mut().resource_mut::<PlayerActions>()
-    }
-    spells(&mut app).spells.retain(|id| *id == FIREBALL);
-    assert!(step(&mut app, 0x1).is_empty(), "both ranks unlearned");
-    spells(&mut app).spells.insert(REVENGE);
-    assert!(
-        step(&mut app, 0x1).is_empty(),
-        "rank 1 relearned: the entry kept its answer, no second word"
-    );
+    book(&mut app).spells.retain(|id| *id == FIREBALL);
     assert_eq!(
         step(&mut app, 0),
         ["SPELL_UPDATE_USABLE"],
-        "the kept entry still checks"
+        "both ranks unlearned: the kept entry still checks"
     );
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
+        "and words its turn"
+    );
+}
+
+/// Relearning a rank no higher than the entry's moves nothing (`0x4b2838`): the entry the
+/// unlearning left keeps its answer, so the next refresh raises no second word.
+#[test]
+fn relearning_a_lower_rank_keeps_the_entrys_answer() {
+    let mut app = app();
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"]
+    );
+    book(&mut app).spells.retain(|id| *id == FIREBALL);
+    assert!(step(&mut app, 0x1).is_empty(), "both ranks unlearned");
+    book(&mut app).spells.insert(REVENGE);
+    select(&mut app, 0x20);
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_UPDATE_USABLE"],
+        "rank 1 relearned: a refresh, the entry kept its answer, no second word"
+    );
+}
+
+/// The book.
+fn book(app: &mut App) -> Mut<'_, PlayerActions> {
+    app.world_mut().resource_mut::<PlayerActions>()
+}
+
+/// Select `guid`, a caller of the usable refresh (`0x493892`).
+fn select(app: &mut App, guid: u64) {
+    app.insert_resource(crate::target::Selection {
+        target: None,
+        guid: Some(guid),
+        last: None,
+    });
 }
 
 /// The re-check is `0x4b31c0`'s own loop (`0x4b31d7`-`0x4b323d`), so it runs inside each of the
@@ -259,11 +301,7 @@ fn the_reactive_re_check_runs_inside_each_usable_refresh_alone() {
     q.single_mut(app.world_mut()).unwrap().0 =
         ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, 0x1)]);
     assert!(step(&mut app, 0x1).is_empty(), "no caller: no re-check");
-    app.insert_resource(crate::target::Selection {
-        target: None,
-        guid: Some(0x20),
-        last: None,
-    });
+    select(&mut app, 0x20);
     assert_eq!(
         step(&mut app, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
