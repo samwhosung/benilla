@@ -126,6 +126,9 @@ windows-sys = { version = "0.59", features = [
 benilla-srp = { path = "../benilla-srp" }
 # The UI's geometry comparisons (`benilla_ui::assert_near!`).
 benilla-ui = { path = "../benilla-ui", features = ["test-support"] }
+# The schedule census keeps the build's own graph, sync points included, through a build pass,
+# whose signature names the `IndexSet` bevy already builds (`game_plugins::schedule_tests`).
+indexmap = "2.14.0"
 num-bigint = "0.4.6"
 sha1.workspace = true
 

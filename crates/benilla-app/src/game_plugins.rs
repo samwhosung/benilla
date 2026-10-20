@@ -338,6 +338,9 @@ pub(crate) mod schedule_tests {
         /// component, or a `With`, `Without`, `Added` or `Has` on it. Read off each system's
         /// access set; a system that reads every component (`EntityRef`, `&World`) names none.
         pub uses_self: HashSet<SystemKey>,
+        /// The build's own order, system to system, with the sync points it placed when the
+        /// census reads [`SyncPoints::Built`].
+        pub built: Vec<(SystemKey, SystemKey)>,
     }
 
     impl Census {
@@ -350,6 +353,65 @@ pub(crate) mod schedule_tests {
 
         pub fn component(&self, id: ComponentId) -> &str {
             self.components.get(&id).map(String::as_str).unwrap_or("?")
+        }
+
+        /// Whether what `a` queues has applied by the time `b` runs: a sync point of the build
+        /// lies on a path from `a` to `b`, so it runs after `a` and before `b`, and applies every
+        /// buffer of a system that ran before it. Reads a [`SyncPoints::Built`] census.
+        pub fn applies_before(&self, a: SystemKey, b: SystemKey) -> bool {
+            let mut next: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+            for (x, y) in &self.built {
+                next.entry(*x).or_default().push(*y);
+            }
+            // Each node at most twice: before a sync point and past one.
+            let mut seen: HashSet<(SystemKey, bool)> = HashSet::new();
+            let mut stack = vec![(a, false)];
+            while let Some((n, synced)) = stack.pop() {
+                for m in next.get(&n).into_iter().flatten() {
+                    let synced = synced || is_sync_point(self.name(*m));
+                    if *m == b && synced {
+                        return true;
+                    }
+                    if seen.insert((*m, synced)) {
+                        stack.push((*m, synced));
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    /// A build pass that keeps the graph the build ends with. Registered after the pass that
+    /// inserts the sync points, it runs after it and sees them.
+    #[derive(Debug, Default)]
+    struct KeepBuiltOrder(std::sync::Arc<std::sync::Mutex<Vec<(SystemKey, SystemKey)>>>);
+
+    impl bevy::ecs::schedule::ScheduleBuildPass for KeepBuiltOrder {
+        type EdgeOptions = ();
+
+        fn add_dependency(&mut self, _: NodeId, _: NodeId, _: Option<&()>) {}
+
+        fn collapse_set(
+            &mut self,
+            _: bevy::ecs::schedule::SystemSetKey,
+            _: &indexmap::IndexSet<SystemKey, bevy::platform::hash::FixedHasher>,
+            _: &bevy::ecs::schedule::graph::DiGraph<NodeId>,
+        ) -> impl Iterator<Item = (NodeId, NodeId)> {
+            std::iter::empty()
+        }
+
+        fn build(
+            &mut self,
+            _: &mut World,
+            _: &mut bevy::ecs::schedule::ScheduleGraph,
+            flat: &mut bevy::ecs::schedule::graph::Dag<SystemKey>,
+        ) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
+            *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                flat.graph().all_edges().collect();
+            Ok(())
         }
     }
 
@@ -519,8 +581,17 @@ pub(crate) mod schedule_tests {
                 }
             }
             // Pass 2: build, and read what the build found. `is_send` is only known once a
-            // system's params have registered their access, i.e. after this.
+            // system's params have registered their access, i.e. after this. The keeper goes in
+            // last, behind the sync points' pass the settings above may have re-added.
+            let built = std::sync::Arc::default();
+            schedule.remove_build_pass::<KeepBuiltOrder>();
+            schedule.add_build_pass(KeepBuiltOrder(std::sync::Arc::clone(&built)));
             schedule.initialize(world).expect("the schedule builds");
+            let built = std::mem::take(
+                &mut *built
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             let mut non_send = Vec::new();
             for (key, system) in schedule.systems().expect("initialized") {
                 if !system.is_send() {
@@ -564,6 +635,7 @@ pub(crate) mod schedule_tests {
                 holds_vm,
                 hosted,
                 uses_self,
+                built,
             }
         })
     }

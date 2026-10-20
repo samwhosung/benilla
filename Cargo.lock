@@ -519,6 +519,7 @@ dependencies = [
  "half",
  "image",
  "include_dir",
+ "indexmap",
  "kira",
  "libc",
  "mint",
