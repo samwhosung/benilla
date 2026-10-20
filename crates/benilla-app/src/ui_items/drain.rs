@@ -99,45 +99,45 @@ pub(super) fn drain_bag_autostores(
     commands: Res<NetCommands>,
 ) {
     hosted_vm.run(|script| {
-    let Some(script) = script else {
-        return;
-    };
-    for a in script.take_bag_autostores() {
-        let (Some((src_bag, src_slot)), Some((dst_bag, _))) =
-            (wire_pos(a.src_bag, a.src_slot), wire_pos(a.dst_bag, 1))
-        else {
-            debug!("ui_items: bag autostore {a:?} out of range — ignored");
-            continue;
+        let Some(script) = script else {
+            return;
         };
-        match a.count {
-            None => {
-                debug!(
-                    "ui_items: autostore lua {}/{} → bag {} (wire {src_bag}/{src_slot} → {dst_bag})",
-                    a.src_bag, a.src_slot, a.dst_bag
-                );
-                let _ = commands.0.send(ClientCommand::AutoStoreBagItem {
-                    src_bag,
-                    src_slot,
-                    dst_bag,
-                });
-            }
-            Some(n) => {
-                let count = n.min(u32::from(u8::MAX)) as u8;
-                debug!(
-                    "ui_items: autostore split lua {}/{} → bag {} × {count} (wire {src_bag}/{src_slot} → {dst_bag})",
-                    a.src_bag, a.src_slot, a.dst_bag
-                );
-                let _ = commands.0.send(ClientCommand::SplitItem {
-                    src_bag,
-                    src_slot,
-                    dst_bag,
-                    // The reference's literal for no destination slot.
-                    dst_slot: 0xFF,
-                    count,
-                });
+        for a in script.take_bag_autostores() {
+            let (Some((src_bag, src_slot)), Some((dst_bag, _))) =
+                (wire_pos(a.src_bag, a.src_slot), wire_pos(a.dst_bag, 1))
+            else {
+                debug!("ui_items: bag autostore {a:?} out of range — ignored");
+                continue;
+            };
+            match a.count {
+                None => {
+                    debug!(
+                        "ui_items: autostore lua {}/{} → bag {} (wire {src_bag}/{src_slot} → {dst_bag})",
+                        a.src_bag, a.src_slot, a.dst_bag
+                    );
+                    let _ = commands.0.send(ClientCommand::AutoStoreBagItem {
+                        src_bag,
+                        src_slot,
+                        dst_bag,
+                    });
+                }
+                Some(n) => {
+                    let count = n.min(u32::from(u8::MAX)) as u8;
+                    debug!(
+                        "ui_items: autostore split lua {}/{} → bag {} × {count} (wire {src_bag}/{src_slot} → {dst_bag})",
+                        a.src_bag, a.src_slot, a.dst_bag
+                    );
+                    let _ = commands.0.send(ClientCommand::SplitItem {
+                        src_bag,
+                        src_slot,
+                        dst_bag,
+                        // The reference's literal for no destination slot.
+                        dst_slot: 0xFF,
+                        count,
+                    });
+                }
             }
         }
-    }
 })
 }
 

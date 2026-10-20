@@ -176,189 +176,126 @@ fn stone_probe(
     mut exit: MessageWriter<AppExit>,
 ) {
     hosted_vm.run(|script| {
-    let Ok(store) = self_store.single() else {
-        return; // not in-world yet
-    };
-    let Some(script) = script else {
-        return; // no UI VM in this build
-    };
-    let now = time.elapsed_secs_f64();
-    let level = store.0.unit_level().unwrap_or(0);
+        let Ok(store) = self_store.single() else {
+            return; // not in-world yet
+        };
+        let Some(script) = script else {
+            return; // no UI VM in this build
+        };
+        let now = time.elapsed_secs_f64();
+        let level = store.0.unit_level().unwrap_or(0);
 
-    match probe.phase {
-        Phase::Wait => {
-            let [x, y, z, map] = target();
-            info!("PROBE_STONE: heading to the meeting stone ({x} {y} {z} map {map})");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".go xyz {x} {y} {z} {map}"),
-                language: None,
-            });
-            probe.phase = Phase::Settling { sent_at: now };
-        }
-        Phase::Settling { sent_at } => {
-            if now - sent_at < SETTLE_SECS {
-                return;
+        match probe.phase {
+            Phase::Wait => {
+                let [x, y, z, map] = target();
+                info!("PROBE_STONE: heading to the meeting stone ({x} {y} {z} map {map})");
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".go xyz {x} {y} {z} {map}"),
+                    language: None,
+                });
+                probe.phase = Phase::Settling { sent_at: now };
             }
-            let me = player.pos;
-            let found = objects.iter().find(|(_, net_e, store, tf)| {
-                net_e.kind == EntityKind::GameObject
-                    && store.0.gameobject_type_id() == GO_TYPE_MEETINGSTONE
-                    && tf.translation.distance(me) < SCAN_RANGE
-            });
-            if let Some((guid, ..)) = found {
-                info!("PROBE_STONE: stone {:#x} in range", guid.0);
-                probe.stone = Some(guid.0);
-                probe.phase = Phase::WaitTemplate { since: now };
-            } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                error!(
-                    "PROBE_STONE: FAIL — no type-{GO_TYPE_MEETINGSTONE} GameObject within \
-                     {SCAN_RANGE} yd in {SCAN_TIMEOUT_SECS}s. This is NOT a passing run"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::WaitTemplate { since } => {
-            let Some(guid) = probe.stone else {
-                probe.phase = Phase::Done;
-                return;
-            };
-            let stone_template = objects
-                .iter()
-                .find(|(g, ..)| g.0 == guid)
-                .and_then(|(_, _, store, _)| templates.of(&store.0))
-                .and_then(|t| t.meeting_stone);
-            if let Some(t) = stone_template {
-                info!(
-                    "PROBE_STONE: template answered — levels {}..={}, area {}",
-                    t.min_level, t.max_level, t.area
-                );
-                probe.tmpl = Some(t);
-                probe.phase = Phase::Control;
-            } else if now - since > SCAN_TIMEOUT_SECS {
-                error!(
-                    "PROBE_STONE: FAIL — the stone's GAMEOBJECT_QUERY never answered in \
-                     {SCAN_TIMEOUT_SECS}s; the level band cannot be read"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::Control => {
-            let (queued, _, shown) = vm_state(&script);
-            probe.fails += check(
-                "CONTROL",
-                "unqueued icon=false",
-                &format!("{}queued icon={shown}", if queued { "" } else { "un" }),
-            );
-            info!("PROBE_STONE: demoting to level {LEVEL_BELOW} for the refusal leg");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".character level {LEVEL_BELOW}"),
-                language: None,
-            });
-            probe.phase = Phase::WaitLevel {
-                want: LEVEL_BELOW,
-                since: now,
-                join: false,
-            };
-        }
-        Phase::WaitLevel { want, since, join } => {
-            if level == want {
-                let guid = probe.stone.unwrap_or_default();
-                uses.write(MeetingStoneUse { go_guid: guid });
-                if join {
-                    info!("PROBE_STONE: level {level} — clicking INSIDE the band");
-                    probe.phase = Phase::WaitQueue { since: now };
-                } else {
-                    info!(
-                        "PROBE_STONE: level {level} — clicking BELOW the band; nothing may go out"
-                    );
-                    probe.phase = Phase::Refused { since: now };
+            Phase::Settling { sent_at } => {
+                if now - sent_at < SETTLE_SECS {
+                    return;
                 }
-            } else if now - since > LEVEL_TIMEOUT_SECS {
-                error!(
-                    "PROBE_STONE: FAIL — `.character level {want}` never took (still {level}) in \
-                     {LEVEL_TIMEOUT_SECS}s. Check the account's GM level: the command needs \
-                     SEC_DEVELOPER 5 and a probe account is 6"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                let me = player.pos;
+                let found = objects.iter().find(|(_, net_e, store, tf)| {
+                    net_e.kind == EntityKind::GameObject
+                        && store.0.gameobject_type_id() == GO_TYPE_MEETINGSTONE
+                        && tf.translation.distance(me) < SCAN_RANGE
+                });
+                if let Some((guid, ..)) = found {
+                    info!("PROBE_STONE: stone {:#x} in range", guid.0);
+                    probe.stone = Some(guid.0);
+                    probe.phase = Phase::WaitTemplate { since: now };
+                } else if now - sent_at > SCAN_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_STONE: FAIL — no type-{GO_TYPE_MEETINGSTONE} GameObject within \
+                         {SCAN_RANGE} yd in {SCAN_TIMEOUT_SECS}s. This is NOT a passing run"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-        }
-        Phase::Refused { since } => {
-            if now - since < REFUSAL_WINDOW_SECS {
-                return;
+            Phase::WaitTemplate { since } => {
+                let Some(guid) = probe.stone else {
+                    probe.phase = Phase::Done;
+                    return;
+                };
+                let stone_template = objects
+                    .iter()
+                    .find(|(g, ..)| g.0 == guid)
+                    .and_then(|(_, _, store, _)| templates.of(&store.0))
+                    .and_then(|t| t.meeting_stone);
+                if let Some(t) = stone_template {
+                    info!(
+                        "PROBE_STONE: template answered — levels {}..={}, area {}",
+                        t.min_level, t.max_level, t.area
+                    );
+                    probe.tmpl = Some(t);
+                    probe.phase = Phase::Control;
+                } else if now - since > SCAN_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_STONE: FAIL — the stone's GAMEOBJECT_QUERY never answered in \
+                         {SCAN_TIMEOUT_SECS}s; the level band cannot be read"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-            let (queued, _, shown) = vm_state(&script);
-            probe.fails += check(
-                "REFUSED",
-                "area=0 unqueued icon=false",
-                &format!(
-                    "area={} {}queued icon={shown}",
-                    queue.area,
-                    if queued { "" } else { "un" }
-                ),
-            );
-            // `data[0] = 0` means no floor, which for this leg is level 1.
-            let want = probe.tmpl.map_or(1, |t| t.min_level.max(1));
-            info!("PROBE_STONE: levelling to {want} for the join leg");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".character level {want}"),
-                language: None,
-            });
-            probe.phase = Phase::WaitLevel {
-                want,
-                since: now,
-                join: true,
-            };
-        }
-        Phase::WaitQueue { since } => {
-            if queue.area != 0 {
-                probe.joined_area = queue.area;
-                probe.phase = Phase::Joined;
-            } else if now - since > QUEUE_TIMEOUT_SECS {
-                error!(
-                    "PROBE_STONE: FAIL — no SMSG 0x295 within {QUEUE_TIMEOUT_SECS}s of the join. \
-                     Either CMSG 0x292 never left, or the server refused it (it re-checks leader / \
-                     raid / full and interact distance, never the level band)"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::Joined => {
-            let (queued, text, shown) = vm_state(&script);
-            probe.status_text = text.clone();
-            probe.icon_shown = shown;
-            let area = probe.tmpl.map_or(0, |t| t.area);
-            probe.fails += check(
-                "JOINED",
-                &format!("area={area} queued icon=true text=yes"),
-                &format!(
-                    "area={} {}queued icon={shown} text={}",
-                    probe.joined_area,
-                    if queued { "" } else { "un" },
-                    if text.is_some() { "yes" } else { "no" }
-                ),
-            );
-            // Leg 4: `0x5f6990` over the live queue refuses the stone we are queued at.
-            probe.darkened = meeting_stone_queued(Some(area), queue.area);
-            probe.fails += check("DARKENED", "true", &probe.darkened.to_string());
-            info!("PROBE_STONE: leaving through the live VM's own CancelMeetingStoneRequest()");
-            let _ = script.eval::<()>("CancelMeetingStoneRequest()");
-            probe.phase = Phase::WaitLeft { since: now };
-        }
-        Phase::WaitLeft { since } => {
-            if queue.area == 0 {
+            Phase::Control => {
                 let (queued, _, shown) = vm_state(&script);
                 probe.fails += check(
-                    "LEFT",
+                    "CONTROL",
+                    "unqueued icon=false",
+                    &format!("{}queued icon={shown}", if queued { "" } else { "un" }),
+                );
+                info!("PROBE_STONE: demoting to level {LEVEL_BELOW} for the refusal leg");
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".character level {LEVEL_BELOW}"),
+                    language: None,
+                });
+                probe.phase = Phase::WaitLevel {
+                    want: LEVEL_BELOW,
+                    since: now,
+                    join: false,
+                };
+            }
+            Phase::WaitLevel { want, since, join } => {
+                if level == want {
+                    let guid = probe.stone.unwrap_or_default();
+                    uses.write(MeetingStoneUse { go_guid: guid });
+                    if join {
+                        info!("PROBE_STONE: level {level} — clicking INSIDE the band");
+                        probe.phase = Phase::WaitQueue { since: now };
+                    } else {
+                        info!(
+                            "PROBE_STONE: level {level} — clicking BELOW the band; nothing may go out"
+                        );
+                        probe.phase = Phase::Refused { since: now };
+                    }
+                } else if now - since > LEVEL_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_STONE: FAIL — `.character level {want}` never took (still {level}) in \
+                         {LEVEL_TIMEOUT_SECS}s. Check the account's GM level: the command needs \
+                         SEC_DEVELOPER 5 and a probe account is 6"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Refused { since } => {
+                if now - since < REFUSAL_WINDOW_SECS {
+                    return;
+                }
+                let (queued, _, shown) = vm_state(&script);
+                probe.fails += check(
+                    "REFUSED",
                     "area=0 unqueued icon=false",
                     &format!(
                         "area={} {}queued icon={shown}",
@@ -366,39 +303,102 @@ fn stone_probe(
                         if queued { "" } else { "un" }
                     ),
                 );
-                probe.phase = Phase::Done;
-            } else if now - since > QUEUE_TIMEOUT_SECS {
-                error!(
-                    "PROBE_STONE: FAIL — still queued at {} {QUEUE_TIMEOUT_SECS}s after \
-                     CancelMeetingStoneRequest()",
-                    queue.area
+                // `data[0] = 0` means no floor, which for this leg is level 1.
+                let want = probe.tmpl.map_or(1, |t| t.min_level.max(1));
+                info!("PROBE_STONE: levelling to {want} for the join leg");
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".character level {want}"),
+                    language: None,
+                });
+                probe.phase = Phase::WaitLevel {
+                    want,
+                    since: now,
+                    join: true,
+                };
+            }
+            Phase::WaitQueue { since } => {
+                if queue.area != 0 {
+                    probe.joined_area = queue.area;
+                    probe.phase = Phase::Joined;
+                } else if now - since > QUEUE_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_STONE: FAIL — no SMSG 0x295 within {QUEUE_TIMEOUT_SECS}s of the join. \
+                         Either CMSG 0x292 never left, or the server refused it (it re-checks leader / \
+                         raid / full and interact distance, never the level band)"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Joined => {
+                let (queued, text, shown) = vm_state(&script);
+                probe.status_text = text.clone();
+                probe.icon_shown = shown;
+                let area = probe.tmpl.map_or(0, |t| t.area);
+                probe.fails += check(
+                    "JOINED",
+                    &format!("area={area} queued icon=true text=yes"),
+                    &format!(
+                        "area={} {}queued icon={shown} text={}",
+                        probe.joined_area,
+                        if queued { "" } else { "un" },
+                        if text.is_some() { "yes" } else { "no" }
+                    ),
                 );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                // Leg 4: `0x5f6990` over the live queue refuses the stone we are queued at.
+                probe.darkened = meeting_stone_queued(Some(area), queue.area);
+                probe.fails += check("DARKENED", "true", &probe.darkened.to_string());
+                info!("PROBE_STONE: leaving through the live VM's own CancelMeetingStoneRequest()");
+                let _ = script.eval::<()>("CancelMeetingStoneRequest()");
+                probe.phase = Phase::WaitLeft { since: now };
+            }
+            Phase::WaitLeft { since } => {
+                if queue.area == 0 {
+                    let (queued, _, shown) = vm_state(&script);
+                    probe.fails += check(
+                        "LEFT",
+                        "area=0 unqueued icon=false",
+                        &format!(
+                            "area={} {}queued icon={shown}",
+                            queue.area,
+                            if queued { "" } else { "un" }
+                        ),
+                    );
+                    probe.phase = Phase::Done;
+                } else if now - since > QUEUE_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_STONE: FAIL — still queued at {} {QUEUE_TIMEOUT_SECS}s after \
+                         CancelMeetingStoneRequest()",
+                        queue.area
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                info!(
+                    "PROBE_STONE: DONE stone={:#x} band={:?} area={} icon={} darkened={} text={:?} fail={}",
+                    probe.stone.unwrap_or_default(),
+                    probe.tmpl.map(|t| (t.min_level, t.max_level)),
+                    probe.joined_area,
+                    probe.icon_shown,
+                    probe.darkened,
+                    probe.status_text,
+                    probe.fails,
+                );
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_STONE: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            info!(
-                "PROBE_STONE: DONE stone={:#x} band={:?} area={} icon={} darkened={} text={:?} fail={}",
-                probe.stone.unwrap_or_default(),
-                probe.tmpl.map(|t| (t.min_level, t.max_level)),
-                probe.joined_area,
-                probe.icon_shown,
-                probe.darkened,
-                probe.status_text,
-                probe.fails,
-            );
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_STONE: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
 })
 }

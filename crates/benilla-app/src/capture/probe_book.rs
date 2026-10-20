@@ -215,109 +215,109 @@ fn book_probe(
     mut exit: MessageWriter<AppExit>,
 ) {
     vm.turn(|script, mut reader| {
-    if self_player.is_empty() {
-        return; // not in-world yet
-    }
-    let Some(script) = script else {
-        return; // no UI VM in this build
-    };
-    let now = time.elapsed_secs_f64();
-    let sample = Sample {
-        convert: cost.convert,
-        total: cost.tick + cost.resolve + cost.measure + cost.extract + cost.convert + cost.diff,
-        skipped: cost.skipped,
-    };
-    let phase = probe.phase;
+        if self_player.is_empty() {
+            return; // not in-world yet
+        }
+        let Some(script) = script else {
+            return; // no UI VM in this build
+        };
+        let now = time.elapsed_secs_f64();
+        let sample = Sample {
+            convert: cost.convert,
+            total: cost.tick + cost.resolve + cost.measure + cost.extract + cost.convert + cost.diff,
+            skipped: cost.skipped,
+        };
+        let phase = probe.phase;
 
-    match phase {
-        Phase::Wait => {
-            // Arm the pass's per-phase split for this run.
-            wanted.0 = true;
-            let [x, y, z] = PLAQUE_AT;
-            info!("PROBE_BOOK: heading to the Old Town plaque ({x} {y} {z}) — GameObject type 9, page_text 2676");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".go xyz {x} {y} {z} 0"),
-                language: None,
-            });
-            probe.phase = Phase::Settling { sent_at: now };
-        }
-        Phase::Settling { sent_at } => {
-            if now - sent_at < SETTLE_SECS {
-                return;
+        match phase {
+            Phase::Wait => {
+                // Arm the pass's per-phase split for this run.
+                wanted.0 = true;
+                let [x, y, z] = PLAQUE_AT;
+                info!("PROBE_BOOK: heading to the Old Town plaque ({x} {y} {z}) — GameObject type 9, page_text 2676");
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".go xyz {x} {y} {z} 0"),
+                    language: None,
+                });
+                probe.phase = Phase::Settling { sent_at: now };
             }
-            let me = player.pos;
-            let plaque = objects.iter().find(|(_, net_e, store, tf)| {
-                net_e.kind == EntityKind::GameObject
-                    && store.0.gameobject_type_id() == GO_TYPE_TEXT
-                    && tf.translation.distance(me) < SCAN_RANGE
-            });
-            if let Some((guid, ..)) = plaque {
+            Phase::Settling { sent_at } => {
+                if now - sent_at < SETTLE_SECS {
+                    return;
+                }
+                let me = player.pos;
+                let plaque = objects.iter().find(|(_, net_e, store, tf)| {
+                    net_e.kind == EntityKind::GameObject
+                        && store.0.gameobject_type_id() == GO_TYPE_TEXT
+                        && tf.translation.distance(me) < SCAN_RANGE
+                });
+                if let Some((guid, ..)) = plaque {
+                    info!(
+                        "PROBE_BOOK: plaque {:#x} in range — sampling {SAMPLE_FRAMES} frames with the reader CLOSED",
+                        guid.0
+                    );
+                    probe.plaque = Some(guid.0);
+                    probe.phase = Phase::Closed;
+                } else if now - sent_at > SCAN_TIMEOUT_SECS {
+                    error!("PROBE_BOOK: FAIL — no type-9 GameObject streamed in within {SCAN_TIMEOUT_SECS}s");
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Closed => {
+                probe.closed.push(sample);
+                if probe.closed.len() >= SAMPLE_FRAMES {
+                    let guid = probe.plaque.unwrap_or_default();
+                    info!("PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own route — `ItemTextOpen::read_pages`)");
+                    reader.read_pages(guid);
+                    probe.phase = Phase::WaitReady { since: now };
+                }
+            }
+            Phase::WaitReady { since } => {
+                let (shown, chars) = reader_state(&script);
+                if shown && chars > 0 {
+                    probe.page_chars = chars;
+                    probe.fails += report_render(&script);
+                    info!("PROBE_BOOK: reader painted a {chars}-char body — sampling {SAMPLE_FRAMES} frames with it OPEN");
+                    probe.phase = Phase::Open;
+                } else if now - since > READY_TIMEOUT_SECS {
+                    error!("PROBE_BOOK: FAIL — reader never painted a page within {READY_TIMEOUT_SECS}s (shown={shown} chars={chars})");
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Open => {
+                probe.open.push(sample);
+                if probe.open.len() >= SAMPLE_FRAMES {
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                report("CLOSED", &probe.closed);
+                report("OPEN", &probe.open);
+                let (closed_mean, ..) =
+                    stats(&probe.closed.iter().map(|s| s.convert).collect::<Vec<_>>());
+                let (open_mean, ..) = stats(&probe.open.iter().map(|s| s.convert).collect::<Vec<_>>());
                 info!(
-                    "PROBE_BOOK: plaque {:#x} in range — sampling {SAMPLE_FRAMES} frames with the reader CLOSED",
-                    guid.0
+                    "PROBE_BOOK: DONE page={} chars, reader costs {:+.0}us/frame in the paint pass fail={}",
+                    probe.page_chars,
+                    open_mean - closed_mean,
+                    probe.fails
                 );
-                probe.plaque = Some(guid.0);
-                probe.phase = Phase::Closed;
-            } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                error!("PROBE_BOOK: FAIL — no type-9 GameObject streamed in within {SCAN_TIMEOUT_SECS}s");
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_BOOK: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Closed => {
-            probe.closed.push(sample);
-            if probe.closed.len() >= SAMPLE_FRAMES {
-                let guid = probe.plaque.unwrap_or_default();
-                info!("PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own route — `ItemTextOpen::read_pages`)");
-                reader.read_pages(guid);
-                probe.phase = Phase::WaitReady { since: now };
-            }
-        }
-        Phase::WaitReady { since } => {
-            let (shown, chars) = reader_state(&script);
-            if shown && chars > 0 {
-                probe.page_chars = chars;
-                probe.fails += report_render(&script);
-                info!("PROBE_BOOK: reader painted a {chars}-char body — sampling {SAMPLE_FRAMES} frames with it OPEN");
-                probe.phase = Phase::Open;
-            } else if now - since > READY_TIMEOUT_SECS {
-                error!("PROBE_BOOK: FAIL — reader never painted a page within {READY_TIMEOUT_SECS}s (shown={shown} chars={chars})");
-                probe.fails += 1;
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::Open => {
-            probe.open.push(sample);
-            if probe.open.len() >= SAMPLE_FRAMES {
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            report("CLOSED", &probe.closed);
-            report("OPEN", &probe.open);
-            let (closed_mean, ..) =
-                stats(&probe.closed.iter().map(|s| s.convert).collect::<Vec<_>>());
-            let (open_mean, ..) = stats(&probe.open.iter().map(|s| s.convert).collect::<Vec<_>>());
-            info!(
-                "PROBE_BOOK: DONE page={} chars, reader costs {:+.0}us/frame in the paint pass fail={}",
-                probe.page_chars,
-                open_mean - closed_mean,
-                probe.fails
-            );
-            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_BOOK: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
 })
 }

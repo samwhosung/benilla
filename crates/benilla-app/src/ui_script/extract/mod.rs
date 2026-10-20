@@ -666,298 +666,359 @@ pub(super) fn paint_script(
     pass: Res<super::UiPassState>,
 ) {
     hosted_vm.run(|script| {
-    let (capture, ui_cost_wanted) = run;
-    // Stand down with the tick half, which already cleared the booth panes.
-    if !pass.live {
-        return;
-    }
-    let Some(mut script) = script else {
-        return;
-    };
-    let prev = prev.get(&script);
-    let Ok(window) = window.single() else {
-        return;
-    };
-    let (w, h) = (window.width(), window.height());
-    let (s, dpi) = (pass.seam, pass.dpi);
-    let (us_tick, us_resolve) = (pass.us_tick, pass.us_resolve);
-    let (solves_before, derives_before) = (Some(pass.solves_before), Some(pass.derives_before));
-    let printing = ui_cost_enabled();
-    let cost_on = printing || ui_cost_wanted.0;
-    let mut t_mark = cost_on.then(std::time::Instant::now);
-    let mut lap = move || -> u128 {
-        if !cost_on {
-            return 0;
+        let (capture, ui_cost_wanted) = run;
+        // Stand down with the tick half, which already cleared the booth panes.
+        if !pass.live {
+            return;
         }
-        t_mark
-            .replace(std::time::Instant::now())
-            .map_or(0, |t| t.elapsed().as_micros())
-    };
-    // ── The second measure and resolve ───────────────────────────────────────────────────────
-    // What was written since the tick half, above all the nameplate anchors from this frame's
-    // camera (`vplates::drive_vplates`); a renamed plate needs its measure too.
-    let mut measured_any = false;
-    if let Some(atlas) = font_atlas.as_deref_mut() {
-        measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
-    }
-    {
-        let _span = bevy::log::info_span!("ui_script: resolve").entered();
-        script.resolve();
-    }
-    if measured_any {
+        let Some(mut script) = script else {
+            return;
+        };
+        let prev = prev.get(&script);
+        let Ok(window) = window.single() else {
+            return;
+        };
+        let (w, h) = (window.width(), window.height());
+        let (s, dpi) = (pass.seam, pass.dpi);
+        let (us_tick, us_resolve) = (pass.us_tick, pass.us_resolve);
+        let (solves_before, derives_before) = (Some(pass.solves_before), Some(pass.derives_before));
+        let printing = ui_cost_enabled();
+        let cost_on = printing || ui_cost_wanted.0;
+        let mut t_mark = cost_on.then(std::time::Instant::now);
+        let mut lap = move || -> u128 {
+            if !cost_on {
+                return 0;
+            }
+            t_mark
+                .replace(std::time::Instant::now())
+                .map_or(0, |t| t.elapsed().as_micros())
+        };
+        // ── The second measure and resolve ───────────────────────────────────────────────────────
+        // What was written since the tick half, above all the nameplate anchors from this frame's
+        // camera (`vplates::drive_vplates`); a renamed plate needs its measure too.
+        let mut measured_any = false;
         if let Some(atlas) = font_atlas.as_deref_mut() {
-            if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
-                script.resolve();
+            measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
+        }
+        {
+            let _span = bevy::log::info_span!("ui_script: resolve").entered();
+            script.resolve();
+        }
+        if measured_any {
+            if let Some(atlas) = font_atlas.as_deref_mut() {
+                if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
+                    script.resolve();
+                }
             }
         }
-    }
-    // Folded into the tick half's own measure figure: one frame, one row.
-    let us_measure = pass.us_measure + lap();
-    // The glyph sheet's repack counter: a repack moves every cached cell's UV.
-    let generation = font_atlas.as_deref().map(|a| a.generation);
-    let extract_span = bevy::log::info_span!("ui_script: extract").entered();
-    let mut out = Vec::new();
-    let mut assets = world_assets;
-    let mut minimap_slot = None;
-    // The link spans of text with a link owner, scrolling message lines and SimpleHTML blocks,
-    // for the click hit-test; other text's are not collected.
-    let mut link_spans: Vec<(
-        benilla_ui::widget::FrameHandle,
-        benilla_ui::layout::Rect,
-        String,
-        String,
-    )> = Vec::new();
-    // The focused editbox's per-byte advances, measured as it draws, for click and scroll.
-    if let Some(atlas) = font_atlas.as_deref_mut() {
-        if let Some(req) = script.editbox_advances_request() {
-            let (cum, rows, cell_h) = crate::ui_text::editbox_advances(&mut atlas.lock(), s, &req);
-            script.set_editbox_advances(req.id, req.key, cum, rows, cell_h);
+        // Folded into the tick half's own measure figure: one frame, one row.
+        let us_measure = pass.us_measure + lap();
+        // The glyph sheet's repack counter: a repack moves every cached cell's UV.
+        let generation = font_atlas.as_deref().map(|a| a.generation);
+        let extract_span = bevy::log::info_span!("ui_script: extract").entered();
+        let mut out = Vec::new();
+        let mut assets = world_assets;
+        let mut minimap_slot = None;
+        // The link spans of text with a link owner, scrolling message lines and SimpleHTML blocks,
+        // for the click hit-test; other text's are not collected.
+        let mut link_spans: Vec<(
+            benilla_ui::widget::FrameHandle,
+            benilla_ui::layout::Rect,
+            String,
+            String,
+        )> = Vec::new();
+        // The focused editbox's per-byte advances, measured as it draws, for click and scroll.
+        if let Some(atlas) = font_atlas.as_deref_mut() {
+            if let Some(req) = script.editbox_advances_request() {
+                let (cum, rows, cell_h) = crate::ui_text::editbox_advances(&mut atlas.lock(), s, &req);
+                script.set_editbox_advances(req.id, req.key, cum, rows, cell_h);
+            }
         }
-    }
-    // The focused editbox's text UI: its Text quad, scroll window, caret and selection spans,
-    // and the blink phase (0.5 s, `0x77a790`).
-    let text_ui = script.focused_editbox_text_ui();
-    let _ = lap(); // re-arm: the editbox seam above is not the walk's cost
-    let extracted = script.extract();
-    let us_exm = lap();
-    let n_extracted = extracted.len();
-    // ── The extract gate ──────────────────────────────────────────────────────
-    // Equal inputs skip the conversion; the quads, minimap slot and link spans stay as they are.
-    let dims = (w.to_bits(), h.to_bits(), s.to_bits(), dpi.to_bits());
-    let settled = capture.is_none()
-        && prev.dims == Some(dims)
-        && prev.generation == generation
-        && text_ui == prev.text_ui
-        && booths.images.0 == prev.portraits
-        && extracted == prev.extracted;
-    if settled {
-        drop(extract_span);
-        let us_cmp = lap();
-        if cost_on {
-            let solves = script.layout_solves() - solves_before.unwrap_or(0);
-            *ui_cost = super::UiFrameCost {
-                measured: ui_cost.measured,
-                measured_texts: std::mem::take(&mut ui_cost.measured_texts),
-                tick: us_tick,
-                resolve: us_resolve,
-                measure: us_measure,
-                extract: us_exm,
-                convert: us_cmp,
-                diff: 0,
-                quads: quads.quads.len(),
-                solves,
-                derives: script.layout_derivations() - derives_before.unwrap_or(0),
-                skipped: true,
-                spliced: 0,
-                dropped: 0,
-            };
+        // The focused editbox's text UI: its Text quad, scroll window, caret and selection spans,
+        // and the blink phase (0.5 s, `0x77a790`).
+        let text_ui = script.focused_editbox_text_ui();
+        let _ = lap(); // re-arm: the editbox seam above is not the walk's cost
+        let extracted = script.extract();
+        let us_exm = lap();
+        let n_extracted = extracted.len();
+        // ── The extract gate ──────────────────────────────────────────────────────
+        // Equal inputs skip the conversion; the quads, minimap slot and link spans stay as they are.
+        let dims = (w.to_bits(), h.to_bits(), s.to_bits(), dpi.to_bits());
+        let settled = capture.is_none()
+            && prev.dims == Some(dims)
+            && prev.generation == generation
+            && text_ui == prev.text_ui
+            && booths.images.0 == prev.portraits
+            && extracted == prev.extracted;
+        if settled {
+            drop(extract_span);
+            let us_cmp = lap();
+            if cost_on {
+                let solves = script.layout_solves() - solves_before.unwrap_or(0);
+                *ui_cost = super::UiFrameCost {
+                    measured: ui_cost.measured,
+                    measured_texts: std::mem::take(&mut ui_cost.measured_texts),
+                    tick: us_tick,
+                    resolve: us_resolve,
+                    measure: us_measure,
+                    extract: us_exm,
+                    convert: us_cmp,
+                    diff: 0,
+                    quads: quads.quads.len(),
+                    solves,
+                    derives: script.layout_derivations() - derives_before.unwrap_or(0),
+                    skipped: true,
+                    spliced: 0,
+                    dropped: 0,
+                };
+            }
+            if printing {
+                let solves = script.layout_solves() - solves_before.unwrap_or(0);
+                eprintln!(
+                    "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
+                     exm={us_exm} exa={us_cmp} diff=0 eq={n_extracted} quads={} \
+                     solves={solves} changed=0 skip=1",
+                    quads.quads.len()
+                );
+            }
+            return;
         }
-        if printing {
-            let solves = script.layout_solves() - solves_before.unwrap_or(0);
-            eprintln!(
-                "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
-                 exm={us_exm} exa={us_cmp} diff=0 eq={n_extracted} quads={} \
-                 solves={solves} changed=0 skip=1",
-                quads.quads.len()
+        if gate_log_enabled() {
+            report_gate_miss(
+                &script,
+                &extracted,
+                &prev.extracted,
+                prev.dims == Some(dims),
+                prev.generation == generation,
+                text_ui == prev.text_ui,
+                booths.images.0 == prev.portraits,
             );
         }
-        return;
-    }
-    if gate_log_enabled() {
-        report_gate_miss(
-            &script,
-            &extracted,
-            &prev.extracted,
-            prev.dims == Some(dims),
-            prev.generation == generation,
-            text_ui == prev.text_ui,
-            booths.images.0 == prev.portraits,
-        );
-    }
-    // ── The per-entry splice ─────────────────────────────────────────────────────────────────
-    // When only the list moved and the few changed entries write only quads, they re-convert
-    // alone and stitch into last frame's `UiQuads` at the ranges `prev.spans` holds.
-    'splice: {
-        macro_rules! no_splice {
-            ($($arg:tt)*) => {{
-                if gate_log_enabled() {
-                    eprintln!("[ui-splice] miss: {}", format_args!($($arg)*));
-                }
-                break 'splice;
-            }};
-        }
-        if capture.is_some() {
-            no_splice!("capture mode");
-        }
-        if ui_diff_enabled() {
-            no_splice!("WOW_UI_DIFF pins the full path");
-        }
-        if prev.dims != Some(dims) {
-            no_splice!("window dims moved");
-        }
-        if prev.generation != generation {
-            no_splice!("font atlas generation moved");
-        }
-        // The caret blink is wall-clock state in no entry, the Text arm's one time input.
-        if text_ui != prev.text_ui {
-            no_splice!("focused editbox text-ui moved");
-        }
-        if booths.images.0 != prev.portraits {
-            no_splice!("portrait sources moved");
-        }
-        // The spans describe last conversion's list; if anything replaced it, convert in full.
-        if prev.spans.len() != prev.extracted.len()
-            || prev.spans.last().copied().unwrap_or(0) as usize != quads.quads.len()
-        {
-            no_splice!("span table stale");
-        }
-        let align = align_entries(&prev.extracted, &extracted);
-        // A window opening moves many entries, which the full conversion serves.
-        const SPLICE_MAX: usize = 64;
-        let changed: Vec<usize> = align
-            .source
-            .iter()
-            .enumerate()
-            .filter_map(|(j, s)| s.is_none().then_some(j))
-            .collect();
-        if changed.len() + align.dropped.len() > SPLICE_MAX {
-            no_splice!(
-                "{} entries changed and {} dropped, over the {SPLICE_MAX} bound",
-                changed.len(),
-                align.dropped.len()
-            );
-        }
-        // All-equal belongs to the gate above; reaching here means two comparisons disagree.
-        if changed.is_empty() && align.dropped.is_empty() {
-            no_splice!("no entry differs (a comparison razor slipped)");
-        }
-        // Departing entries too: the splice cannot un-park a departing minimap slot.
-        if let Some(eq) = changed
-            .iter()
-            .map(|&j| &extracted[j])
-            .chain(align.dropped.iter().map(|&i| &prev.extracted[i]))
-            .find(|eq| !splice_simple(eq))
-        {
-            no_splice!(
-                "a {} entry ({}) is not spliceable",
-                content_kind(&eq.content),
-                script.target_owner_name(eq.target).unwrap_or_default()
-            );
-        }
-        // The scratch side channels are a tripwire: an entry that writes one takes the full path.
-        let mut scratch: Vec<UiQuad> = Vec::new();
-        let mut scratch_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(changed.len());
-        let mut scratch_links = Vec::new();
-        let mut scratch_slot = None;
-        for &j in &changed {
-            let at = scratch.len();
-            convert_entry(
-                extracted[j].clone(),
-                s,
-                w,
-                h,
-                dpi,
-                &mut assets,
-                &mut images,
-                &mut font_atlas,
-                &mut booths,
-                text_ui.as_ref(),
-                capture.is_some(),
-                &mut scratch,
-                &mut scratch_links,
-                &mut scratch_slot,
-            );
-            scratch_ranges.push(at..scratch.len());
-        }
-        if !scratch_links.is_empty() || scratch_slot.is_some() {
-            no_splice!("a re-converted entry wrote a side channel");
-        }
-        // In place: nothing inserted or removed, and each changed entry keeps its quad count.
-        let identity = prev.extracted.len() == extracted.len()
-            && align
+        // ── The per-entry splice ─────────────────────────────────────────────────────────────────
+        // When only the list moved and the few changed entries write only quads, they re-convert
+        // alone and stitch into last frame's `UiQuads` at the ranges `prev.spans` holds.
+        'splice: {
+            macro_rules! no_splice {
+                ($($arg:tt)*) => {{
+                    if gate_log_enabled() {
+                        eprintln!("[ui-splice] miss: {}", format_args!($($arg)*));
+                    }
+                    break 'splice;
+                }};
+            }
+            if capture.is_some() {
+                no_splice!("capture mode");
+            }
+            if ui_diff_enabled() {
+                no_splice!("WOW_UI_DIFF pins the full path");
+            }
+            if prev.dims != Some(dims) {
+                no_splice!("window dims moved");
+            }
+            if prev.generation != generation {
+                no_splice!("font atlas generation moved");
+            }
+            // The caret blink is wall-clock state in no entry, the Text arm's one time input.
+            if text_ui != prev.text_ui {
+                no_splice!("focused editbox text-ui moved");
+            }
+            if booths.images.0 != prev.portraits {
+                no_splice!("portrait sources moved");
+            }
+            // The spans describe last conversion's list; if anything replaced it, convert in full.
+            if prev.spans.len() != prev.extracted.len()
+                || prev.spans.last().copied().unwrap_or(0) as usize != quads.quads.len()
+            {
+                no_splice!("span table stale");
+            }
+            let align = align_entries(&prev.extracted, &extracted);
+            // A window opening moves many entries, which the full conversion serves.
+            const SPLICE_MAX: usize = 64;
+            let changed: Vec<usize> = align
                 .source
                 .iter()
                 .enumerate()
-                .all(|(j, s)| s.is_none_or(|i| i == j));
-        let counts_stable = identity
-            && changed.iter().zip(&scratch_ranges).all(|(&j, r)| {
-                let (a, b) = span_bounds(&prev.spans, j);
-                b - a == r.len()
-            });
-        let mut dirtied = false;
-        if counts_stable {
-            for (&j, r) in changed.iter().zip(&scratch_ranges) {
-                let (a, b) = span_bounds(&prev.spans, j);
-                if quads.quads[a..b] != scratch[r.clone()] {
-                    quads.quads[a..b].clone_from_slice(&scratch[r.clone()]);
-                    dirtied = true;
-                }
+                .filter_map(|(j, s)| s.is_none().then_some(j))
+                .collect();
+            if changed.len() + align.dropped.len() > SPLICE_MAX {
+                no_splice!(
+                    "{} entries changed and {} dropped, over the {SPLICE_MAX} bound",
+                    changed.len(),
+                    align.dropped.len()
+                );
             }
-        } else {
-            // Stitch a fresh list: kept runs moved out of last frame's (no `Arc` clones), the
-            // re-converted entries from the scratch, new spans; `prev.held` keeps the allocation.
-            let mut old = std::mem::take(&mut prev.held);
-            std::mem::swap(&mut old, &mut quads.quads);
-            quads.quads.clear();
-            quads.quads.reserve(old.len() + scratch.len());
-            let mut new_spans: Vec<u32> = Vec::with_capacity(extracted.len());
+            // All-equal belongs to the gate above; reaching here means two comparisons disagree.
+            if changed.is_empty() && align.dropped.is_empty() {
+                no_splice!("no entry differs (a comparison razor slipped)");
+            }
+            // Departing entries too: the splice cannot un-park a departing minimap slot.
+            if let Some(eq) = changed
+                .iter()
+                .map(|&j| &extracted[j])
+                .chain(align.dropped.iter().map(|&i| &prev.extracted[i]))
+                .find(|eq| !splice_simple(eq))
             {
-                let mut src = old.drain(..);
-                // Quads the drain has yielded; kept runs strictly increase, so one pass does it.
-                let mut cursor = 0usize;
-                let mut ci = 0usize;
-                for s in &align.source {
-                    match s {
-                        Some(i) => {
-                            let (a, b) = span_bounds(&prev.spans, *i);
-                            if a > cursor {
-                                src.by_ref().nth(a - cursor - 1);
-                            }
-                            quads.quads.extend(src.by_ref().take(b - a));
-                            cursor = b;
-                        }
-                        None => {
-                            quads
-                                .quads
-                                .extend_from_slice(&scratch[scratch_ranges[ci].clone()]);
-                            ci += 1;
-                        }
-                    }
-                    new_spans.push(quads.quads.len() as u32);
-                }
+                no_splice!(
+                    "a {} entry ({}) is not spliceable",
+                    content_kind(&eq.content),
+                    script.target_owner_name(eq.target).unwrap_or_default()
+                );
             }
-            prev.held = old;
-            prev.spans = new_spans;
-            dirtied = true;
+            // The scratch side channels are a tripwire: an entry that writes one takes the full path.
+            let mut scratch: Vec<UiQuad> = Vec::new();
+            let mut scratch_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(changed.len());
+            let mut scratch_links = Vec::new();
+            let mut scratch_slot = None;
+            for &j in &changed {
+                let at = scratch.len();
+                convert_entry(
+                    extracted[j].clone(),
+                    s,
+                    w,
+                    h,
+                    dpi,
+                    &mut assets,
+                    &mut images,
+                    &mut font_atlas,
+                    &mut booths,
+                    text_ui.as_ref(),
+                    capture.is_some(),
+                    &mut scratch,
+                    &mut scratch_links,
+                    &mut scratch_slot,
+                );
+                scratch_ranges.push(at..scratch.len());
+            }
+            if !scratch_links.is_empty() || scratch_slot.is_some() {
+                no_splice!("a re-converted entry wrote a side channel");
+            }
+            // In place: nothing inserted or removed, and each changed entry keeps its quad count.
+            let identity = prev.extracted.len() == extracted.len()
+                && align
+                    .source
+                    .iter()
+                    .enumerate()
+                    .all(|(j, s)| s.is_none_or(|i| i == j));
+            let counts_stable = identity
+                && changed.iter().zip(&scratch_ranges).all(|(&j, r)| {
+                    let (a, b) = span_bounds(&prev.spans, j);
+                    b - a == r.len()
+                });
+            let mut dirtied = false;
+            if counts_stable {
+                for (&j, r) in changed.iter().zip(&scratch_ranges) {
+                    let (a, b) = span_bounds(&prev.spans, j);
+                    if quads.quads[a..b] != scratch[r.clone()] {
+                        quads.quads[a..b].clone_from_slice(&scratch[r.clone()]);
+                        dirtied = true;
+                    }
+                }
+            } else {
+                // Stitch a fresh list: kept runs moved out of last frame's (no `Arc` clones), the
+                // re-converted entries from the scratch, new spans; `prev.held` keeps the allocation.
+                let mut old = std::mem::take(&mut prev.held);
+                std::mem::swap(&mut old, &mut quads.quads);
+                quads.quads.clear();
+                quads.quads.reserve(old.len() + scratch.len());
+                let mut new_spans: Vec<u32> = Vec::with_capacity(extracted.len());
+                {
+                    let mut src = old.drain(..);
+                    // Quads the drain has yielded; kept runs strictly increase, so one pass does it.
+                    let mut cursor = 0usize;
+                    let mut ci = 0usize;
+                    for s in &align.source {
+                        match s {
+                            Some(i) => {
+                                let (a, b) = span_bounds(&prev.spans, *i);
+                                if a > cursor {
+                                    src.by_ref().nth(a - cursor - 1);
+                                }
+                                quads.quads.extend(src.by_ref().take(b - a));
+                                cursor = b;
+                            }
+                            None => {
+                                quads
+                                    .quads
+                                    .extend_from_slice(&scratch[scratch_ranges[ci].clone()]);
+                                ci += 1;
+                            }
+                        }
+                        new_spans.push(quads.quads.len() as u32);
+                    }
+                }
+                prev.held = old;
+                prev.spans = new_spans;
+                dirtied = true;
+            }
+            if dirtied {
+                quads.dirty = true;
+            }
+            prev.extracted = extracted;
+            if splice_verify_enabled() {
+                verify_splice(
+                    prev,
+                    &quads,
+                    s,
+                    w,
+                    h,
+                    dpi,
+                    &mut assets,
+                    &mut images,
+                    &mut font_atlas,
+                    &mut booths,
+                    text_ui.as_ref(),
+                    capture.is_some(),
+                    &script,
+                );
+            }
+            drop(extract_span);
+            let us_spl = lap();
+            if cost_on {
+                let solves = script.layout_solves() - solves_before.unwrap_or(0);
+                *ui_cost = super::UiFrameCost {
+                    measured: ui_cost.measured,
+                    measured_texts: std::mem::take(&mut ui_cost.measured_texts),
+                    tick: us_tick,
+                    resolve: us_resolve,
+                    measure: us_measure,
+                    extract: us_exm,
+                    convert: us_spl,
+                    diff: 0,
+                    quads: quads.quads.len(),
+                    solves,
+                    derives: script.layout_derivations() - derives_before.unwrap_or(0),
+                    skipped: false,
+                    spliced: changed.len(),
+                    dropped: align.dropped.len(),
+                };
+            }
+            if printing {
+                let solves = script.layout_solves() - solves_before.unwrap_or(0);
+                eprintln!(
+                    "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
+                     exm={us_exm} exa={us_spl} diff=0 eq={n_extracted} quads={} \
+                     solves={solves} changed={} skip=0 spliced={} dropped={}",
+                    quads.quads.len(),
+                    u8::from(dirtied),
+                    changed.len(),
+                    align.dropped.len()
+                );
+            }
+            return;
         }
-        if dirtied {
-            quads.dirty = true;
-        }
-        prev.extracted = extracted;
-        if splice_verify_enabled() {
-            verify_splice(
-                prev,
-                &quads,
+        prev.dims = Some(dims);
+        prev.generation = generation;
+        prev.text_ui = text_ui.clone();
+        prev.portraits = booths.images.0.clone();
+        prev.extracted = extracted.clone();
+        // Cleared only on the full-conversion path: a settled frame's maps are still true, and
+        // clearing them would put the character panes' cameras to sleep.
+        booths.panes.0.clear();
+        booths.character.reset(script.session());
+        let mut spans: Vec<u32> = Vec::with_capacity(prev.extracted.len());
+        for eq in extracted {
+            convert_entry(
+                eq,
                 s,
                 w,
                 h,
@@ -968,12 +1029,76 @@ pub(super) fn paint_script(
                 &mut booths,
                 text_ui.as_ref(),
                 capture.is_some(),
-                &script,
+                &mut out,
+                &mut link_spans,
+                &mut minimap_slot,
             );
+            spans.push(out.len() as u32);
         }
+        prev.spans = spans;
+        // Capture mode only: the held payload's icon at the mouse, for the hardware cursor a capture
+        // cannot show; every payload kind, as `crate::cursor`'s `payload_icon`.
+        if capture.is_some() {
+            use benilla_ui::script::CursorPayload;
+            let texture = script.cursor_payload().and_then(|p| match p {
+                CursorPayload::Item(i) => i.texture,
+                CursorPayload::Spell(s) => s.texture,
+                CursorPayload::Action(a) => a.texture,
+                CursorPayload::Macro(m) => m.texture,
+                CursorPayload::PetAction(p) => p.texture,
+                CursorPayload::StablePet(p) => Some(p.texture),
+                CursorPayload::Merchant(m) => m.texture,
+                CursorPayload::Money(m) => {
+                    Some(benilla_ui::script::coin_icon(i64::from(m.copper)).to_string())
+                }
+            });
+            if let (Some(texture), Some(pos)) = (texture, window.cursor_position()) {
+                if let Some(handle) = assets
+                    .as_mut()
+                    .and_then(|a| a.sprite_texture(&texture, &mut images))
+                {
+                    out.push(cursor_icon_quad(pos, handle));
+                }
+            }
+        }
+
+        // The link spans replace last frame's set, so `OnHyperlinkClick` hit-tests what is on screen.
+        script.set_link_spans(link_spans);
+
+        // Park the slot for `minimap::emit_minimap`; `None` when the minimap is hidden.
+        parked_minimap.0 = minimap_slot;
         drop(extract_span);
-        let us_spl = lap();
+        let us_exa = lap();
+
+        let _span = bevy::log::info_span!("ui_script: diff").entered();
+        let n_quads = out.len();
+        let changed = quads.quads != out;
+        if changed {
+            if ui_diff_enabled() {
+                match quads.quads.iter().zip(&out).position(|(a, b)| a != b) {
+                    Some(i) => {
+                        let (b, a) = (&quads.quads[i], &out[i]);
+                        eprintln!(
+                            "[ui-diff-base] quad {i}/{n_quads}: tex={:?} rect {:?} -> {:?} uv_changed={} color_changed={}",
+                            a.texture.as_ref().and_then(|t| t.path()),
+                            b.rect,
+                            a.rect,
+                            a.uv != b.uv,
+                            a.color != b.color,
+                        );
+                    }
+                    None => eprintln!(
+                        "[ui-diff-base] quad COUNT changed: {} -> {}",
+                        quads.quads.len(),
+                        out.len()
+                    ),
+                }
+            }
+            quads.quads = out;
+            quads.dirty = true;
+        }
         if cost_on {
+            let us_diff = lap();
             let solves = script.layout_solves() - solves_before.unwrap_or(0);
             *ui_cost = super::UiFrameCost {
                 measured: ui_cost.measured,
@@ -982,149 +1107,24 @@ pub(super) fn paint_script(
                 resolve: us_resolve,
                 measure: us_measure,
                 extract: us_exm,
-                convert: us_spl,
-                diff: 0,
-                quads: quads.quads.len(),
+                convert: us_exa,
+                diff: us_diff,
+                quads: n_quads,
                 solves,
                 derives: script.layout_derivations() - derives_before.unwrap_or(0),
                 skipped: false,
-                spliced: changed.len(),
-                dropped: align.dropped.len(),
+                spliced: 0,
+                dropped: 0,
             };
-        }
-        if printing {
-            let solves = script.layout_solves() - solves_before.unwrap_or(0);
-            eprintln!(
-                "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
-                 exm={us_exm} exa={us_spl} diff=0 eq={n_extracted} quads={} \
-                 solves={solves} changed={} skip=0 spliced={} dropped={}",
-                quads.quads.len(),
-                u8::from(dirtied),
-                changed.len(),
-                align.dropped.len()
-            );
-        }
-        return;
-    }
-    prev.dims = Some(dims);
-    prev.generation = generation;
-    prev.text_ui = text_ui.clone();
-    prev.portraits = booths.images.0.clone();
-    prev.extracted = extracted.clone();
-    // Cleared only on the full-conversion path: a settled frame's maps are still true, and
-    // clearing them would put the character panes' cameras to sleep.
-    booths.panes.0.clear();
-    booths.character.reset(script.session());
-    let mut spans: Vec<u32> = Vec::with_capacity(prev.extracted.len());
-    for eq in extracted {
-        convert_entry(
-            eq,
-            s,
-            w,
-            h,
-            dpi,
-            &mut assets,
-            &mut images,
-            &mut font_atlas,
-            &mut booths,
-            text_ui.as_ref(),
-            capture.is_some(),
-            &mut out,
-            &mut link_spans,
-            &mut minimap_slot,
-        );
-        spans.push(out.len() as u32);
-    }
-    prev.spans = spans;
-    // Capture mode only: the held payload's icon at the mouse, for the hardware cursor a capture
-    // cannot show; every payload kind, as `crate::cursor`'s `payload_icon`.
-    if capture.is_some() {
-        use benilla_ui::script::CursorPayload;
-        let texture = script.cursor_payload().and_then(|p| match p {
-            CursorPayload::Item(i) => i.texture,
-            CursorPayload::Spell(s) => s.texture,
-            CursorPayload::Action(a) => a.texture,
-            CursorPayload::Macro(m) => m.texture,
-            CursorPayload::PetAction(p) => p.texture,
-            CursorPayload::StablePet(p) => Some(p.texture),
-            CursorPayload::Merchant(m) => m.texture,
-            CursorPayload::Money(m) => {
-                Some(benilla_ui::script::coin_icon(i64::from(m.copper)).to_string())
-            }
-        });
-        if let (Some(texture), Some(pos)) = (texture, window.cursor_position()) {
-            if let Some(handle) = assets
-                .as_mut()
-                .and_then(|a| a.sprite_texture(&texture, &mut images))
-            {
-                out.push(cursor_icon_quad(pos, handle));
+            if printing {
+                eprintln!(
+                    "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
+                     exm={us_exm} exa={us_exa} diff={us_diff} eq={n_extracted} quads={n_quads} \
+                     solves={solves} changed={} skip=0",
+                    u8::from(changed)
+                );
             }
         }
-    }
-
-    // The link spans replace last frame's set, so `OnHyperlinkClick` hit-tests what is on screen.
-    script.set_link_spans(link_spans);
-
-    // Park the slot for `minimap::emit_minimap`; `None` when the minimap is hidden.
-    parked_minimap.0 = minimap_slot;
-    drop(extract_span);
-    let us_exa = lap();
-
-    let _span = bevy::log::info_span!("ui_script: diff").entered();
-    let n_quads = out.len();
-    let changed = quads.quads != out;
-    if changed {
-        if ui_diff_enabled() {
-            match quads.quads.iter().zip(&out).position(|(a, b)| a != b) {
-                Some(i) => {
-                    let (b, a) = (&quads.quads[i], &out[i]);
-                    eprintln!(
-                        "[ui-diff-base] quad {i}/{n_quads}: tex={:?} rect {:?} -> {:?} uv_changed={} color_changed={}",
-                        a.texture.as_ref().and_then(|t| t.path()),
-                        b.rect,
-                        a.rect,
-                        a.uv != b.uv,
-                        a.color != b.color,
-                    );
-                }
-                None => eprintln!(
-                    "[ui-diff-base] quad COUNT changed: {} -> {}",
-                    quads.quads.len(),
-                    out.len()
-                ),
-            }
-        }
-        quads.quads = out;
-        quads.dirty = true;
-    }
-    if cost_on {
-        let us_diff = lap();
-        let solves = script.layout_solves() - solves_before.unwrap_or(0);
-        *ui_cost = super::UiFrameCost {
-            measured: ui_cost.measured,
-            measured_texts: std::mem::take(&mut ui_cost.measured_texts),
-            tick: us_tick,
-            resolve: us_resolve,
-            measure: us_measure,
-            extract: us_exm,
-            convert: us_exa,
-            diff: us_diff,
-            quads: n_quads,
-            solves,
-            derives: script.layout_derivations() - derives_before.unwrap_or(0),
-            skipped: false,
-            spliced: 0,
-            dropped: 0,
-        };
-        if printing {
-            eprintln!(
-                "[ui-cost] tick={us_tick} resolve={us_resolve} measure={us_measure} \
-                 exm={us_exm} exa={us_exa} diff={us_diff} eq={n_extracted} quads={n_quads} \
-                 solves={solves} changed={} skip=0",
-                u8::from(changed)
-            );
-        }
-    }
 })
 }
 

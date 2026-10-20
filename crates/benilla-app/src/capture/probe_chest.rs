@@ -179,163 +179,163 @@ fn chest_probe(
     mut exit: MessageWriter<AppExit>,
 ) {
     vm.turn(|script, (loot, latch)| {
-    let Ok(driver) = self_q.single() else {
-        return; // not in-world yet
-    };
-    let Some(script) = script else {
-        return; // no UI VM in this build
-    };
-    let now = time.elapsed_secs_f64();
-    let anim = driver.active_anim();
+        let Ok(driver) = self_q.single() else {
+            return; // not in-world yet
+        };
+        let Some(script) = script else {
+            return; // no UI VM in this build
+        };
+        let now = time.elapsed_secs_f64();
+        let anim = driver.active_anim();
 
-    match probe.phase {
-        Phase::Wait => {
-            let [x, y, z, map] = target();
-            info!(
-                "PROBE_CHEST: heading to the chest ({x} {y} {z} map {map}) — the kneel target, \
-                 GameObject type {GO_TYPE_CHEST}"
-            );
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".go xyz {x} {y} {z} {map}"),
-                language: None,
-            });
-            probe.phase = Phase::Settling { sent_at: now };
-        }
-        Phase::Settling { sent_at } => {
-            if now - sent_at < SETTLE_SECS {
-                return;
-            }
-            let me = player.pos;
-            let chest = objects.iter().find(|(_, net_e, store, tf, _)| {
-                net_e.kind == EntityKind::GameObject
-                    && store.0.gameobject_type_id() == GO_TYPE_CHEST
-                    && tf.translation.distance(me) < SCAN_RANGE
-            });
-            if let Some((guid, ..)) = chest {
+        match probe.phase {
+            Phase::Wait => {
+                let [x, y, z, map] = target();
                 info!(
-                    "PROBE_CHEST: chest {:#x} in range — sampling {SAMPLE_FRAMES} frames with it SHUT",
-                    guid.0
+                    "PROBE_CHEST: heading to the chest ({x} {y} {z} map {map}) — the kneel target, \
+                     GameObject type {GO_TYPE_CHEST}"
                 );
-                probe.chest = Some(guid.0);
-                probe.phase = Phase::Before;
-            } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                error!(
-                    "PROBE_CHEST: FAIL — no type-{GO_TYPE_CHEST} GameObject within {SCAN_RANGE} yd \
-                     in {SCAN_TIMEOUT_SECS}s. A chest is a respawning spawn point: if it was looted \
-                     recently it is simply not there yet. This is NOT a passing run"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".go xyz {x} {y} {z} {map}"),
+                    language: None,
+                });
+                probe.phase = Phase::Settling { sent_at: now };
             }
-        }
-        Phase::Before => {
-            probe.before.push(anim);
-            if probe.before.len() < SAMPLE_FRAMES {
-                return;
-            }
-            let Some(guid) = probe.chest else {
-                probe.phase = Phase::Done;
-                return;
-            };
-            // Send exactly what the right-click's lock chain would send.
-            let go = objects
-                .iter()
-                .find(|(g, ..)| g.0 == guid)
-                .map(|(_, _, store, _, anim)| (store, crate::go_anim::go_state(anim, store)));
-            let me_store = self_store.single().ok();
-            match resolve_go_action(guid, &mut go_inputs, &actions.spells, go, me_store, &net) {
-                GoAction::Use => {
-                    info!("PROBE_CHEST: lockless — CMSG_GAMEOBJ_USE on {guid:#x}");
-                    let _ = net.0.send(ClientCommand::GameObjUse { guid });
+            Phase::Settling { sent_at } => {
+                if now - sent_at < SETTLE_SECS {
+                    return;
                 }
-                GoAction::OpenLock(spell_id) => {
-                    info!("PROBE_CHEST: opener cast {spell_id} at {guid:#x} (the live arm)");
-                    let _ = net.0.send(ClientCommand::CastSpellGameObject {
-                        spell_id,
-                        go_guid: guid,
-                    });
-                }
-                GoAction::OpenByKey { .. } | GoAction::Refuse(_) => {
+                let me = player.pos;
+                let chest = objects.iter().find(|(_, net_e, store, tf, _)| {
+                    net_e.kind == EntityKind::GameObject
+                        && store.0.gameobject_type_id() == GO_TYPE_CHEST
+                        && tf.translation.distance(me) < SCAN_RANGE
+                });
+                if let Some((guid, ..)) = chest {
+                    info!(
+                        "PROBE_CHEST: chest {:#x} in range — sampling {SAMPLE_FRAMES} frames with it SHUT",
+                        guid.0
+                    );
+                    probe.chest = Some(guid.0);
+                    probe.phase = Phase::Before;
+                } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     error!(
-                        "PROBE_CHEST: FAIL — the lock chain refuses this object (key/unmet). Aim \
-                         the probe at a chest this character can actually open"
+                        "PROBE_CHEST: FAIL — no type-{GO_TYPE_CHEST} GameObject within {SCAN_RANGE} yd \
+                         in {SCAN_TIMEOUT_SECS}s. A chest is a respawning spawn point: if it was looted \
+                         recently it is simply not there yet. This is NOT a passing run"
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
-                    return;
                 }
             }
-            probe.phase = Phase::WaitLoot { since: now };
-        }
-        Phase::WaitLoot { since } => {
-            if window_open(&script, &loot) {
+            Phase::Before => {
+                probe.before.push(anim);
+                if probe.before.len() < SAMPLE_FRAMES {
+                    return;
+                }
+                let Some(guid) = probe.chest else {
+                    probe.phase = Phase::Done;
+                    return;
+                };
+                // Send exactly what the right-click's lock chain would send.
+                let go = objects
+                    .iter()
+                    .find(|(g, ..)| g.0 == guid)
+                    .map(|(_, _, store, _, anim)| (store, crate::go_anim::go_state(anim, store)));
+                let me_store = self_store.single().ok();
+                match resolve_go_action(guid, &mut go_inputs, &actions.spells, go, me_store, &net) {
+                    GoAction::Use => {
+                        info!("PROBE_CHEST: lockless — CMSG_GAMEOBJ_USE on {guid:#x}");
+                        let _ = net.0.send(ClientCommand::GameObjUse { guid });
+                    }
+                    GoAction::OpenLock(spell_id) => {
+                        info!("PROBE_CHEST: opener cast {spell_id} at {guid:#x} (the live arm)");
+                        let _ = net.0.send(ClientCommand::CastSpellGameObject {
+                            spell_id,
+                            go_guid: guid,
+                        });
+                    }
+                    GoAction::OpenByKey { .. } | GoAction::Refuse(_) => {
+                        error!(
+                            "PROBE_CHEST: FAIL — the lock chain refuses this object (key/unmet). Aim \
+                             the probe at a chest this character can actually open"
+                        );
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                        return;
+                    }
+                }
+                probe.phase = Phase::WaitLoot { since: now };
+            }
+            Phase::WaitLoot { since } => {
+                if window_open(&script, &loot) {
+                    info!(
+                        "PROBE_CHEST: loot window up on {:#x} — sampling {SAMPLE_FRAMES} frames OPEN",
+                        loot.source().unwrap_or_default()
+                    );
+                    probe.phase = Phase::Open;
+                } else if now - since > LOOT_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_CHEST: FAIL — no loot window within {LOOT_TIMEOUT_SECS}s of the use; \
+                         the anim question can't be asked at all"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Open => {
+                probe.open.push(anim);
+                if probe.open.len() >= SAMPLE_FRAMES {
+                    probe.latch_open = latch.0;
+                    probe.kneel_open = kneel.0;
+                    info!("PROBE_CHEST: closing the window through the live VM's own CloseLoot()");
+                    let _ = script.eval::<()>("CloseLoot()");
+                    probe.phase = Phase::WaitClosed { since: now };
+                }
+            }
+            Phase::WaitClosed { since } => {
+                if !window_open(&script, &loot) {
+                    info!("PROBE_CHEST: window closed — sampling {SAMPLE_FRAMES} frames AFTER");
+                    probe.phase = Phase::After;
+                } else if now - since > CLOSE_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_CHEST: FAIL — the loot window never closed within {CLOSE_TIMEOUT_SECS}s"
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::After => {
+                probe.after.push(anim);
+                if probe.after.len() >= SAMPLE_FRAMES {
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                let mut fails = probe.fails;
+                fails += report("BEFORE", ANIM_STAND, &probe.before);
+                fails += report("OPEN", ANIM_LOOT, &probe.open);
+                fails += report("AFTER", ANIM_STAND, &probe.after);
                 info!(
-                    "PROBE_CHEST: loot window up on {:#x} — sampling {SAMPLE_FRAMES} frames OPEN",
-                    loot.source().unwrap_or_default()
+                    "PROBE_CHEST: DONE chest={:#x} latch-while-open={:?} kneel-while-open={} fail={fails}",
+                    probe.chest.unwrap_or_default(),
+                    probe.latch_open.map(|g| format!("{g:#x}")),
+                    probe.kneel_open,
                 );
-                probe.phase = Phase::Open;
-            } else if now - since > LOOT_TIMEOUT_SECS {
-                error!(
-                    "PROBE_CHEST: FAIL — no loot window within {LOOT_TIMEOUT_SECS}s of the use; \
-                     the anim question can't be asked at all"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_CHEST: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Open => {
-            probe.open.push(anim);
-            if probe.open.len() >= SAMPLE_FRAMES {
-                probe.latch_open = latch.0;
-                probe.kneel_open = kneel.0;
-                info!("PROBE_CHEST: closing the window through the live VM's own CloseLoot()");
-                let _ = script.eval::<()>("CloseLoot()");
-                probe.phase = Phase::WaitClosed { since: now };
-            }
-        }
-        Phase::WaitClosed { since } => {
-            if !window_open(&script, &loot) {
-                info!("PROBE_CHEST: window closed — sampling {SAMPLE_FRAMES} frames AFTER");
-                probe.phase = Phase::After;
-            } else if now - since > CLOSE_TIMEOUT_SECS {
-                error!(
-                    "PROBE_CHEST: FAIL — the loot window never closed within {CLOSE_TIMEOUT_SECS}s"
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::After => {
-            probe.after.push(anim);
-            if probe.after.len() >= SAMPLE_FRAMES {
-                probe.phase = Phase::Done;
-            }
-        }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            let mut fails = probe.fails;
-            fails += report("BEFORE", ANIM_STAND, &probe.before);
-            fails += report("OPEN", ANIM_LOOT, &probe.open);
-            fails += report("AFTER", ANIM_STAND, &probe.after);
-            info!(
-                "PROBE_CHEST: DONE chest={:#x} latch-while-open={:?} kneel-while-open={} fail={fails}",
-                probe.chest.unwrap_or_default(),
-                probe.latch_open.map(|g| format!("{g:#x}")),
-                probe.kneel_open,
-            );
-            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_CHEST: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
 })
 }

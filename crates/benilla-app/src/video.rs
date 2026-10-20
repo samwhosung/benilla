@@ -502,22 +502,22 @@ fn drain_restart_gx(
     mut commands: Commands,
 ) {
     hosted_vm.run(|script| {
-    let Some(script) = script else {
-        return;
-    };
-    let asks = script.take_restart_gx_asks();
-    if asks == 0 {
-        // A `ResMut` deref-mut is a change signal, so a quiet frame touches nothing.
-        return;
-    }
-    restarts.0 = restarts.0.wrapping_add(asks);
-    let committed = cvars.commit_latched();
-    if cvars.has_events() {
-        for event in cvars.take_events() {
-            commands.trigger(event);
+        let Some(script) = script else {
+            return;
+        };
+        let asks = script.take_restart_gx_asks();
+        if asks == 0 {
+            // A `ResMut` deref-mut is a change signal, so a quiet frame touches nothing.
+            return;
         }
-    }
-    info!("video: RestartGx — {committed} staged setting(s) committed; re-asserting the display mode and present mode");
+        restarts.0 = restarts.0.wrapping_add(asks);
+        let committed = cvars.commit_latched();
+        if cvars.has_events() {
+            for event in cvars.take_events() {
+                commands.trigger(event);
+            }
+        }
+        info!("video: RestartGx — {committed} staged setting(s) committed; re-asserting the display mode and present mode");
 })
 }
 

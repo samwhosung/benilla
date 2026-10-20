@@ -137,100 +137,100 @@ fn watch_skill_ups(
     mut prev: Local<crate::ui_script::VmMemo<SkillBlock>>,
 ) {
     hosted_vm.run(|script| {
-    let (Some(guid), Ok(store)) = (self_guid.0, self_store.single()) else {
-        return;
-    };
-    // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a stale
-    // skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when a line
-    // is added, removed or changes value; the reference fires it at the end of every skill-list
-    // rebuild (`0x4d2fec`), which its value, max, permanent-bonus and temporary-bonus watchers
-    // run (registered `0x5dda54`-`0x5ddaf0`), and from both header collapse and expand verbs.
-    let Some(script) = script else {
-        return;
-    };
-    let prev = prev.get(&script);
-    let mut cur = std::collections::HashMap::new();
-    for i in 0..PLAYER_SKILL_SLOTS {
-        if let Some(s) = store.0.player_skill(i) {
-            if s.skill_id != 0 {
-                cur.insert(s.skill_id, s.value);
-            }
-        }
-    }
-    match prev.as_ref() {
-        // First fill: seed silently, no lines; the event fires once.
-        None => {
-            if cur.is_empty() {
-                return;
-            }
-            script.fire_event("SKILL_LINES_CHANGED", vec![]);
-            *prev = Some((guid, cur));
-        }
-        Some((prev_guid, _)) if *prev_guid != guid => {
-            // A different character: re-seed, never diff across characters.
-            script.fire_event("SKILL_LINES_CHANGED", vec![]);
-            *prev = Some((guid, cur));
-        }
-        Some((_, prev_map)) => {
-            if *prev_map == cur {
-                return;
-            }
-            // The `0x402` gate reads the player's own race and class row, as `skills_row` does.
-            let (race, class) = (
-                store.0.unit_race().unwrap_or(0),
-                store.0.unit_class().unwrap_or(0),
-            );
-            for (&id, &value) in &cur {
-                let line_id = u32::from(id);
-                let name = || {
-                    skill_lines
-                        .as_ref()
-                        .and_then(|s| s.catalog.line(line_id))
-                        .map(|l| l.name.clone())
-                };
-                let announces = || {
-                    skill_lines
-                        .as_ref()
-                        .is_some_and(|s| s.catalog.announces_skill_ups(line_id, race, class))
-                };
-                match prev_map.get(&id) {
-                    // A rank-up: `ERR_SKILL_UP_SI` (catalog row 54), not `SKILL_RANK_UP`, the
-                    // same enUS sentence with no catalog row.
-                    Some(&old) if value > old => {
-                        if let Some(name) = name() {
-                            if announces() {
-                                debug!("chat: skill-up announced ({name} {old}→{value})");
-                                skill_line(
-                                    &script,
-                                    &chat,
-                                    "ERR_SKILL_UP_SI",
-                                    &[Arg::S(&name), Arg::D(i64::from(value))],
-                                );
-                            } else {
-                                debug!("chat: skill-up silenced ({name} {old}→{value}, the 0x402 gate)");
-                            }
-                        }
-                    }
-                    // A new line: `ERR_SKILL_GAINED_S` (catalog row 53).
-                    None => {
-                        if let Some(name) = name() {
-                            if announces() {
-                                debug!("chat: skill-gain announced ({name} at {value})");
-                                skill_line(&script, &chat, "ERR_SKILL_GAINED_S", &[Arg::S(&name)]);
-                            } else {
-                                debug!(
-                                    "chat: skill-gain silenced ({name} at {value}, the 0x402 gate)"
-                                );
-                            }
-                        }
-                    }
-                    _ => {}
+        let (Some(guid), Ok(store)) = (self_guid.0, self_store.single()) else {
+            return;
+        };
+        // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a stale
+        // skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when a line
+        // is added, removed or changes value; the reference fires it at the end of every skill-list
+        // rebuild (`0x4d2fec`), which its value, max, permanent-bonus and temporary-bonus watchers
+        // run (registered `0x5dda54`-`0x5ddaf0`), and from both header collapse and expand verbs.
+        let Some(script) = script else {
+            return;
+        };
+        let prev = prev.get(&script);
+        let mut cur = std::collections::HashMap::new();
+        for i in 0..PLAYER_SKILL_SLOTS {
+            if let Some(s) = store.0.player_skill(i) {
+                if s.skill_id != 0 {
+                    cur.insert(s.skill_id, s.value);
                 }
             }
-            script.fire_event("SKILL_LINES_CHANGED", vec![]);
-            *prev = Some((guid, cur));
         }
-    }
+        match prev.as_ref() {
+            // First fill: seed silently, no lines; the event fires once.
+            None => {
+                if cur.is_empty() {
+                    return;
+                }
+                script.fire_event("SKILL_LINES_CHANGED", vec![]);
+                *prev = Some((guid, cur));
+            }
+            Some((prev_guid, _)) if *prev_guid != guid => {
+                // A different character: re-seed, never diff across characters.
+                script.fire_event("SKILL_LINES_CHANGED", vec![]);
+                *prev = Some((guid, cur));
+            }
+            Some((_, prev_map)) => {
+                if *prev_map == cur {
+                    return;
+                }
+                // The `0x402` gate reads the player's own race and class row, as `skills_row` does.
+                let (race, class) = (
+                    store.0.unit_race().unwrap_or(0),
+                    store.0.unit_class().unwrap_or(0),
+                );
+                for (&id, &value) in &cur {
+                    let line_id = u32::from(id);
+                    let name = || {
+                        skill_lines
+                            .as_ref()
+                            .and_then(|s| s.catalog.line(line_id))
+                            .map(|l| l.name.clone())
+                    };
+                    let announces = || {
+                        skill_lines
+                            .as_ref()
+                            .is_some_and(|s| s.catalog.announces_skill_ups(line_id, race, class))
+                    };
+                    match prev_map.get(&id) {
+                        // A rank-up: `ERR_SKILL_UP_SI` (catalog row 54), not `SKILL_RANK_UP`, the
+                        // same enUS sentence with no catalog row.
+                        Some(&old) if value > old => {
+                            if let Some(name) = name() {
+                                if announces() {
+                                    debug!("chat: skill-up announced ({name} {old}→{value})");
+                                    skill_line(
+                                        &script,
+                                        &chat,
+                                        "ERR_SKILL_UP_SI",
+                                        &[Arg::S(&name), Arg::D(i64::from(value))],
+                                    );
+                                } else {
+                                    debug!("chat: skill-up silenced ({name} {old}→{value}, the 0x402 gate)");
+                                }
+                            }
+                        }
+                        // A new line: `ERR_SKILL_GAINED_S` (catalog row 53).
+                        None => {
+                            if let Some(name) = name() {
+                                if announces() {
+                                    debug!("chat: skill-gain announced ({name} at {value})");
+                                    skill_line(&script, &chat, "ERR_SKILL_GAINED_S", &[Arg::S(&name)]);
+                                } else {
+                                    debug!(
+                                        "chat: skill-gain silenced ({name} at {value}, the 0x402 gate)"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                script.fire_event("SKILL_LINES_CHANGED", vec![]);
+                *prev = Some((guid, cur));
+            }
+        }
 })
 }
 

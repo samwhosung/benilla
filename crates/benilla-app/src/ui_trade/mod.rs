@@ -802,60 +802,60 @@ fn resignal_trade_items(
     names: Res<NameCache>,
 ) {
     hosted_vm.run(|script| {
-    use crate::item_watch::TradeTouch;
-    let touches: Vec<TradeTouch> = cursor
-        .0
-        .read(&messages)
-        .filter_map(crate::item_watch::ItemNotice::trade)
-        .collect();
-    let Some(script) = script else {
-        return;
-    };
-    for touch in touches {
-        match touch {
-            TradeTouch::Gone(guid) => {
-                let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
-                    continue;
-                };
-                info!(target: "trade", "item {guid:#x} gone from slot {}; sending CMSG_CLEAR_TRADE_ITEM", slot + 1);
-                trade.send_edit(
-                    &commands,
-                    ClientCommand::ClearTradeItem { trade_slot: slot },
-                );
-                trade.clear_own_item(u32::from(slot) + 1);
-                script.empty_trade_slot(slot);
-            }
-            TradeTouch::Changed(guid) => {
-                let Some((slot, bag, bag_slot)) = script.trade_slot_holding(guid) else {
-                    continue;
-                };
-                // The send refuses with no active player or no item object (`0x5d43af`,
-                // `0x5d43da`), and then nothing is stored or signalled (`0x4bfab3`).
-                let count = objects
-                    .object(guid)
-                    .and_then(|f| f.item_stack_count())
-                    .unwrap_or(1);
-                let (Some(_), Some(item), Some((wire_bag, wire_slot))) = (
-                    objects.player(),
-                    own_item(guid, count, &objects, &items),
-                    crate::ui_items::wire_pos(bag, bag_slot),
-                ) else {
-                    continue;
-                };
-                info!(target: "trade", "item {guid:#x} in slot {} changed; sending CMSG_SET_TRADE_ITEM", slot + 1);
-                trade.send_edit(
-                    &commands,
-                    ClientCommand::SetTradeItem {
-                        trade_slot: slot,
-                        bag: wire_bag,
-                        slot: wire_slot,
-                    },
-                );
-                let row = resolve_slot(&item, &items, icons.as_deref(), &names);
-                script.replace_trade_slot(slot, row);
+        use crate::item_watch::TradeTouch;
+        let touches: Vec<TradeTouch> = cursor
+            .0
+            .read(&messages)
+            .filter_map(crate::item_watch::ItemNotice::trade)
+            .collect();
+        let Some(script) = script else {
+            return;
+        };
+        for touch in touches {
+            match touch {
+                TradeTouch::Gone(guid) => {
+                    let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
+                        continue;
+                    };
+                    info!(target: "trade", "item {guid:#x} gone from slot {}; sending CMSG_CLEAR_TRADE_ITEM", slot + 1);
+                    trade.send_edit(
+                        &commands,
+                        ClientCommand::ClearTradeItem { trade_slot: slot },
+                    );
+                    trade.clear_own_item(u32::from(slot) + 1);
+                    script.empty_trade_slot(slot);
+                }
+                TradeTouch::Changed(guid) => {
+                    let Some((slot, bag, bag_slot)) = script.trade_slot_holding(guid) else {
+                        continue;
+                    };
+                    // The send refuses with no active player or no item object (`0x5d43af`,
+                    // `0x5d43da`), and then nothing is stored or signalled (`0x4bfab3`).
+                    let count = objects
+                        .object(guid)
+                        .and_then(|f| f.item_stack_count())
+                        .unwrap_or(1);
+                    let (Some(_), Some(item), Some((wire_bag, wire_slot))) = (
+                        objects.player(),
+                        own_item(guid, count, &objects, &items),
+                        crate::ui_items::wire_pos(bag, bag_slot),
+                    ) else {
+                        continue;
+                    };
+                    info!(target: "trade", "item {guid:#x} in slot {} changed; sending CMSG_SET_TRADE_ITEM", slot + 1);
+                    trade.send_edit(
+                        &commands,
+                        ClientCommand::SetTradeItem {
+                            trade_slot: slot,
+                            bag: wire_bag,
+                            slot: wire_slot,
+                        },
+                    );
+                    let row = resolve_slot(&item, &items, icons.as_deref(), &names);
+                    script.replace_trade_slot(slot, row);
+                }
             }
         }
-    }
 })
 }
 
@@ -881,183 +881,183 @@ fn feed_trade(
     mut closes: CoreCloses,
 ) {
     hosted_vm.run(|script| {
-    let Some(script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let last_open = last_open.get(&script);
-    let last_accept = last_accept.get(&script);
-    let last_player_gold = last_player_gold.get(&script);
-    let last_their_gold = last_their_gold.get(&script);
-    if closes.since_last(&script, NpcWindow::Trade) {
-        *last = None;
-        *last_open = false;
-        *last_accept = (false, false);
-        *last_player_gold = 0;
-        *last_their_gold = 0;
-    }
-
-    let fresh = snapshot(&trade, &items, icons.as_deref(), spells.as_deref(), &names);
-    // A close is the core's, which shut the VM's window and left both offers in place; a
-    // disconnect's clear tells it nothing.
-    let opened = !*last_open && trade.is_open();
-    if opened {
-        // The open clears both offers and our item table before anything is placed (`0x4bf549`).
-        script.open_trade_window();
-        *last = None;
-    }
-    let changed = fresh != *last;
-    // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
-    // whose source has not moved since the last push keeps the VM's value, so a click this
-    // feed's store has not caught up with (or never will, when the bag item is not streamed) is
-    // not rolled back.
-    let held_player = script.trade_player_slots();
-    let source_moved = |i: usize| {
-        let new = fresh.as_ref().map(|f| &f.player.slots[i]);
-        let old = last.as_ref().map(|l| &l.player.slots[i]);
-        new != old
-    };
-    if changed {
-        let mut pushed = fresh.clone();
-        if let (Some(p), Some(held), Some(_)) = (pushed.as_mut(), held_player.as_ref(), &*last) {
-            for (i, slot) in p.player.slots.iter_mut().enumerate() {
-                if !source_moved(i) {
-                    *slot = held[i].clone();
-                }
-            }
-        }
-        script.set_trade(pushed);
-    }
-    // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
-    // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change signals
-    // nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
-    // ([`run_record_callbacks`]).
-    // `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock and its own
-    // `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
-    let invalidated = trade.take_invalidated();
-    for &slot in &invalidated {
-        script.invalidate_trade_slot(slot);
-    }
-    if changed && trade.is_open() && !opened {
-        let empty = TradeState::default();
-        let old = last.as_ref().unwrap_or(&empty);
-        if let Some(new) = fresh.as_ref() {
-            // The record compare (`0x4bf2c7`-`0x4bf378`) reads the wire's item fields, run only on a
-            // status: never the enchant slot's spell, which signals on its own below, and never
-            // what the template cache resolved (name, icon, quality, link), so a template
-            // landing repaints through `TRADE_UPDATE` and signals no slot.
-            let record =
-                |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count, s.lock_id));
-            let changed_slots = |mine: &[Option<TradeSlotItem>],
-                                 theirs: &[Option<TradeSlotItem>]| {
-                mine.iter()
-                    .zip(theirs.iter())
-                    .enumerate()
-                    .filter(|(_, (a, b))| record(a) != record(b))
-                    .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
-                    .collect::<Vec<_>>()
-            };
-            // A moved source fires only where it differs from the VM's column by the item each
-            // slot holds, so the store catching up with a click, its richer row included, is no
-            // change.
-            let held = held_player.as_ref().unwrap_or(&old.player.slots);
-            let item = |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count));
-            let player_changed = new
-                .player
-                .slots
-                .iter()
-                .zip(held.iter())
-                .enumerate()
-                .filter(|(i, (a, b))| source_moved(*i) && item(a) != item(b))
-                .map(|(i, _)| ScriptValue::Int(i as i64 + 1));
-            for slot in player_changed {
-                if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
-                {
-                    continue;
-                }
-                script.fire_event("TRADE_PLAYER_ITEM_CHANGED", vec![slot]);
-            }
-            for slot in changed_slots(&new.target.slots, &old.target.slots) {
-                script.fire_event("TRADE_TARGET_ITEM_CHANGED", vec![slot]);
-            }
-        }
-    }
-    // The enchant slot's spell, after the partner's slots (`0x4bf429` on): the spell we cast
-    // repaints their slot 7, the one they cast repaints ours.
-    for partner_window in trade.take_enchant_changed() {
-        let event = if partner_window {
-            "TRADE_PLAYER_ITEM_CHANGED"
-        } else {
-            "TRADE_TARGET_ITEM_CHANGED"
+        let Some(script) = script else {
+            return;
         };
-        script.fire_event(event, vec![ScriptValue::Int(ENCHANT_SLOT as i64 + 1)]);
-    }
-    // The owed `%s` lines, resolved here where the name cache is; a miss waits for the query it
-    // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
-    // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
-    // which goes to the server, not the VM.
-    let asked = std::mem::take(&mut trade.named_lines_asked);
-    for (i, line) in trade.take_named_lines().into_iter().enumerate() {
-        // The status arms print nothing once the player is no longer an object.
-        if line.needs_live_object && streamed_player(&index, &stores, line.who).is_none() {
-            continue;
+        let last = last.get(&script);
+        let last_open = last_open.get(&script);
+        let last_accept = last_accept.get(&script);
+        let last_player_gold = last_player_gold.get(&script);
+        let last_their_gold = last_their_gold.get(&script);
+        if closes.since_last(&script, NpcWindow::Trade) {
+            *last = None;
+            *last_open = false;
+            *last_accept = (false, false);
+            *last_player_gold = 0;
+            *last_their_gold = 0;
         }
-        match names
-            .resolve_player(line.who, Ask::at(i >= asked, &commands))
-            .map(str::to_string)
-        {
-            Some(name) => errors.push(crate::ui_action::UiError::s(line.key, name)),
-            // Not cached: the line's lookup has asked, so park it and read it again next frame.
-            None => trade.owe_named_line(line),
+
+        let fresh = snapshot(&trade, &items, icons.as_deref(), spells.as_deref(), &names);
+        // A close is the core's, which shut the VM's window and left both offers in place; a
+        // disconnect's clear tells it nothing.
+        let opened = !*last_open && trade.is_open();
+        if opened {
+            // The open clears both offers and our item table before anything is placed (`0x4bf549`).
+            script.open_trade_window();
+            *last = None;
         }
-    }
-    trade.named_lines_asked = trade.named_lines.len();
-    if opened {
-        // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
-        // first and fire the two money events locally; the send goes out with the money intent.
-        if let Some(offer) = script.fold_cursor_money_into_trade() {
-            trade.set_own_gold(offer);
+        let changed = fresh != *last;
+        // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
+        // whose source has not moved since the last push keeps the VM's value, so a click this
+        // feed's store has not caught up with (or never will, when the bag item is not streamed) is
+        // not rolled back.
+        let held_player = script.trade_player_slots();
+        let source_moved = |i: usize| {
+            let new = fresh.as_ref().map(|f| &f.player.slots[i]);
+            let old = last.as_ref().map(|l| &l.player.slots[i]);
+            new != old
+        };
+        if changed {
+            let mut pushed = fresh.clone();
+            if let (Some(p), Some(held), Some(_)) = (pushed.as_mut(), held_player.as_ref(), &*last) {
+                for (i, slot) in p.player.slots.iter_mut().enumerate() {
+                    if !source_moved(i) {
+                        *slot = held[i].clone();
+                    }
+                }
+            }
+            script.set_trade(pushed);
+        }
+        // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
+        // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change signals
+        // nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
+        // ([`run_record_callbacks`]).
+        // `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock and its own
+        // `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
+        let invalidated = trade.take_invalidated();
+        for &slot in &invalidated {
+            script.invalidate_trade_slot(slot);
+        }
+        if changed && trade.is_open() && !opened {
+            let empty = TradeState::default();
+            let old = last.as_ref().unwrap_or(&empty);
+            if let Some(new) = fresh.as_ref() {
+                // The record compare (`0x4bf2c7`-`0x4bf378`) reads the wire's item fields, run only on a
+                // status: never the enchant slot's spell, which signals on its own below, and never
+                // what the template cache resolved (name, icon, quality, link), so a template
+                // landing repaints through `TRADE_UPDATE` and signals no slot.
+                let record =
+                    |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count, s.lock_id));
+                let changed_slots = |mine: &[Option<TradeSlotItem>],
+                                     theirs: &[Option<TradeSlotItem>]| {
+                    mine.iter()
+                        .zip(theirs.iter())
+                        .enumerate()
+                        .filter(|(_, (a, b))| record(a) != record(b))
+                        .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
+                        .collect::<Vec<_>>()
+                };
+                // A moved source fires only where it differs from the VM's column by the item each
+                // slot holds, so the store catching up with a click, its richer row included, is no
+                // change.
+                let held = held_player.as_ref().unwrap_or(&old.player.slots);
+                let item = |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count));
+                let player_changed = new
+                    .player
+                    .slots
+                    .iter()
+                    .zip(held.iter())
+                    .enumerate()
+                    .filter(|(i, (a, b))| source_moved(*i) && item(a) != item(b))
+                    .map(|(i, _)| ScriptValue::Int(i as i64 + 1));
+                for slot in player_changed {
+                    if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
+                    {
+                        continue;
+                    }
+                    script.fire_event("TRADE_PLAYER_ITEM_CHANGED", vec![slot]);
+                }
+                for slot in changed_slots(&new.target.slots, &old.target.slots) {
+                    script.fire_event("TRADE_TARGET_ITEM_CHANGED", vec![slot]);
+                }
+            }
+        }
+        // The enchant slot's spell, after the partner's slots (`0x4bf429` on): the spell we cast
+        // repaints their slot 7, the one they cast repaints ours.
+        for partner_window in trade.take_enchant_changed() {
+            let event = if partner_window {
+                "TRADE_PLAYER_ITEM_CHANGED"
+            } else {
+                "TRADE_TARGET_ITEM_CHANGED"
+            };
+            script.fire_event(event, vec![ScriptValue::Int(ENCHANT_SLOT as i64 + 1)]);
+        }
+        // The owed `%s` lines, resolved here where the name cache is; a miss waits for the query it
+        // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
+        // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
+        // which goes to the server, not the VM.
+        let asked = std::mem::take(&mut trade.named_lines_asked);
+        for (i, line) in trade.take_named_lines().into_iter().enumerate() {
+            // The status arms print nothing once the player is no longer an object.
+            if line.needs_live_object && streamed_player(&index, &stores, line.who).is_none() {
+                continue;
+            }
+            match names
+                .resolve_player(line.who, Ask::at(i >= asked, &commands))
+                .map(str::to_string)
+            {
+                Some(name) => errors.push(crate::ui_action::UiError::s(line.key, name)),
+                // Not cached: the line's lookup has asked, so park it and read it again next frame.
+                None => trade.owe_named_line(line),
+            }
+        }
+        trade.named_lines_asked = trade.named_lines.len();
+        if opened {
+            // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
+            // first and fire the two money events locally; the send goes out with the money intent.
+            if let Some(offer) = script.fold_cursor_money_into_trade() {
+                trade.set_own_gold(offer);
+                script.fire_event("PLAYER_TRADE_MONEY", vec![]);
+                script.fire_event("PLAYER_MONEY", vec![]);
+            }
+            script.fire_event("TRADE_SHOW", vec![]);
+        }
+
+        // `TRADE_ACCEPT_UPDATE(mine, theirs)` on any change while open.
+        let accept = (trade.our_accept, trade.their_accept);
+        if trade.is_open() && accept != *last_accept {
+            script.fire_event(
+                "TRADE_ACCEPT_UPDATE",
+                vec![
+                    ScriptValue::Int(i64::from(accept.0)),
+                    ScriptValue::Int(i64::from(accept.1)),
+                ],
+            );
+        }
+        *last_accept = if trade.is_open() {
+            accept
+        } else {
+            (false, false)
+        };
+
+        // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`), never
+        // `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
+        let player_gold = trade.our.gold;
+        if trade.is_open() && player_gold != *last_player_gold {
             script.fire_event("PLAYER_TRADE_MONEY", vec![]);
-            script.fire_event("PLAYER_MONEY", vec![]);
         }
-        script.fire_event("TRADE_SHOW", vec![]);
-    }
+        *last_player_gold = if trade.is_open() { player_gold } else { 0 };
+        // The partner's gold: `TRADE_MONEY_CHANGED`, which the `TARGET_TRADE` money frame repaints on
+        // (`MoneyFrame.lua:133`). The reference fires it at `0x4bf4d6`, beside `PLAYER_TRADE_MONEY` at
+        // `0x4bf4ab`; which side each reports is inferred from `MoneyFrame.lua`, not traced.
+        let their_gold = trade.their.gold;
+        if trade.is_open() && their_gold != *last_their_gold {
+            script.fire_event("TRADE_MONEY_CHANGED", vec![]);
+        }
+        *last_their_gold = if trade.is_open() { their_gold } else { 0 };
 
-    // `TRADE_ACCEPT_UPDATE(mine, theirs)` on any change while open.
-    let accept = (trade.our_accept, trade.their_accept);
-    if trade.is_open() && accept != *last_accept {
-        script.fire_event(
-            "TRADE_ACCEPT_UPDATE",
-            vec![
-                ScriptValue::Int(i64::from(accept.0)),
-                ScriptValue::Int(i64::from(accept.1)),
-            ],
-        );
-    }
-    *last_accept = if trade.is_open() {
-        accept
-    } else {
-        (false, false)
-    };
-
-    // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`), never
-    // `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
-    let player_gold = trade.our.gold;
-    if trade.is_open() && player_gold != *last_player_gold {
-        script.fire_event("PLAYER_TRADE_MONEY", vec![]);
-    }
-    *last_player_gold = if trade.is_open() { player_gold } else { 0 };
-    // The partner's gold: `TRADE_MONEY_CHANGED`, which the `TARGET_TRADE` money frame repaints on
-    // (`MoneyFrame.lua:133`). The reference fires it at `0x4bf4d6`, beside `PLAYER_TRADE_MONEY` at
-    // `0x4bf4ab`; which side each reports is inferred from `MoneyFrame.lua`, not traced.
-    let their_gold = trade.their.gold;
-    if trade.is_open() && their_gold != *last_their_gold {
-        script.fire_event("TRADE_MONEY_CHANGED", vec![]);
-    }
-    *last_their_gold = if trade.is_open() { their_gold } else { 0 };
-
-    *last = fresh;
-    *last_open = trade.is_open();
+        *last = fresh;
+        *last_open = trade.is_open();
 })
 }
 

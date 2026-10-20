@@ -367,174 +367,358 @@ fn bg_probe(
     mut hosted_vm: crate::script_calls::HostedVm,
 ) {
     hosted_vm.run(|mut script| {
-    let Ok(store) = me.single() else {
-        return;
-    };
-    let arena = arena();
-    let now = time.elapsed_secs_f64();
+        let Ok(store) = me.single() else {
+            return;
+        };
+        let arena = arena();
+        let now = time.elapsed_secs_f64();
 
-    // The probe stands in for a player at the keyboard: auto-AFK comes at 300 s of no input
-    // (`ui_chat::idle`), and vmangos removes an AFK player from a battleground
-    // (`Player.cpp:1741-1742`).
-    idle.stamp_present(std::time::Duration::from_secs_f64(now));
+        // The probe stands in for a player at the keyboard: auto-AFK comes at 300 s of no input
+        // (`ui_chat::idle`), and vmangos removes an AFK player from a battleground
+        // (`Player.cpp:1741-1742`).
+        idle.stamp_present(std::time::Duration::from_secs_f64(now));
 
-    // The tap goes in on the first frame with a VM; the world-entry frame has none yet.
-    if !probe.tap_installed {
-        if let Some(script) = script.as_deref_mut() {
-            match script.eval::<()>(EVENT_TAP) {
-                Ok(()) => {
-                    probe.tap_installed = true;
-                    info!("PROBE bg: TAP installed");
-                }
-                Err(e) => {
-                    probe.tap_installed = true; // a raise will not fix itself
-                    probe.tap_broken = true;
-                    error!("PROBE bg: TAP FAILURE — {e}");
+        // The tap goes in on the first frame with a VM; the world-entry frame has none yet.
+        if !probe.tap_installed {
+            if let Some(script) = script.as_deref_mut() {
+                match script.eval::<()>(EVENT_TAP) {
+                    Ok(()) => {
+                        probe.tap_installed = true;
+                        info!("PROBE bg: TAP installed");
+                    }
+                    Err(e) => {
+                        probe.tap_installed = true; // a raise will not fix itself
+                        probe.tap_broken = true;
+                        error!("PROBE bg: TAP FAILURE — {e}");
+                    }
                 }
             }
         }
-    }
 
-    match probe.phase {
-        Phase::Wait => {
-            // No start in GM mode: `CanUseBattleGroundObject` refuses a GM every objective with no
-            // reply (`Player.cpp:20576`) while the queue and census still work. Under
-            // `WOW_GM=off`, `probe_shield` drops GM mode a moment into the world, so this waits.
-            if store.0.player_flags() & PLAYER_FLAGS_GM != 0 {
-                let since = *probe.waiting_since.get_or_insert(now);
-                if now - since < GM_DROP_WAIT {
+        match probe.phase {
+            Phase::Wait => {
+                // No start in GM mode: `CanUseBattleGroundObject` refuses a GM every objective with no
+                // reply (`Player.cpp:20576`) while the queue and census still work. Under
+                // `WOW_GM=off`, `probe_shield` drops GM mode a moment into the world, so this waits.
+                if store.0.player_flags() & PLAYER_FLAGS_GM != 0 {
+                    let since = *probe.waiting_since.get_or_insert(now);
+                    if now - since < GM_DROP_WAIT {
+                        return;
+                    }
+                    error!(
+                        "PROBE bg: FAILURE — GM mode is still on after {GM_DROP_WAIT:.0}s. A \
+                         battleground is the one place it cannot be left on: \
+                         `CanUseBattleGroundObject` refuses a GM outright (vmangos \
+                         `Player.cpp:20576`), so every objective fails silently while the queue, the \
+                         port, the census and the scoreboard all keep working. Re-run with \
+                         `WOW_GM=off` — and if it WAS set, look for `probe-shield:` lines: the drop \
+                         is sequenced behind the shield and a refused command shows up there."
+                    );
+                    finish(&mut probe, &net);
                     return;
                 }
-                error!(
-                    "PROBE bg: FAILURE — GM mode is still on after {GM_DROP_WAIT:.0}s. A \
-                     battleground is the one place it cannot be left on: \
-                     `CanUseBattleGroundObject` refuses a GM outright (vmangos \
-                     `Player.cpp:20576`), so every objective fails silently while the queue, the \
-                     port, the census and the scoreboard all keep working. Re-run with \
-                     `WOW_GM=off` — and if it WAS set, look for `probe-shield:` lines: the drop \
-                     is sequenced behind the shield and a refused command shows up there."
+                // Revive first: `CanInteractWithNPC` refuses a dead player, logged as an "invalid
+                // creature".
+                gm(&net, ".revive");
+                // Wait for the real level: a missing one read as 0 would level a 60 to 120, above
+                // every bracket ceiling (`battleground_template.max_lvl = 60`).
+                let Some(level) = store.0.unit_level() else {
+                    return;
+                };
+                if level < QUEUE_LEVEL {
+                    gm(&net, format!(".levelup {}", QUEUE_LEVEL - level));
+                }
+                // Clear Deserter (26013): leaving before the match ends casts it
+                // (`Player.cpp:2178/18816`), and the join handler then refuses the queue
+                // (`BG_GROUPJOIN_DESERTERS`, `BattleGroundHandler.cpp:176`).
+                gm(&net, ".unaura 26013");
+                let [x, y, z] = arena.at;
+                info!(
+                    "PROBE bg: SETUP arena={} map={} level>={QUEUE_LEVEL} master={}({})",
+                    arena.key, arena.map, arena.npc_name, arena.npc_entry,
                 );
-                finish(&mut probe, &net);
-                return;
+                gm(&net, format!(".go xyz {x} {y} {z} 0"));
+                probe.phase = Phase::Hopped { sent_at: now };
             }
-            // Revive first: `CanInteractWithNPC` refuses a dead player, logged as an "invalid
-            // creature".
-            gm(&net, ".revive");
-            // Wait for the real level: a missing one read as 0 would level a 60 to 120, above
-            // every bracket ceiling (`battleground_template.max_lvl = 60`).
-            let Some(level) = store.0.unit_level() else {
-                return;
-            };
-            if level < QUEUE_LEVEL {
-                gm(&net, format!(".levelup {}", QUEUE_LEVEL - level));
-            }
-            // Clear Deserter (26013): leaving before the match ends casts it
-            // (`Player.cpp:2178/18816`), and the join handler then refuses the queue
-            // (`BG_GROUPJOIN_DESERTERS`, `BattleGroundHandler.cpp:176`).
-            gm(&net, ".unaura 26013");
-            let [x, y, z] = arena.at;
-            info!(
-                "PROBE bg: SETUP arena={} map={} level>={QUEUE_LEVEL} master={}({})",
-                arena.key, arena.map, arena.npc_name, arena.npc_entry,
-            );
-            gm(&net, format!(".go xyz {x} {y} {z} 0"));
-            probe.phase = Phase::Hopped { sent_at: now };
-        }
-        Phase::Hopped { sent_at } => {
-            if now - sent_at < 3.0 {
-                return; // post-teleport settle: let the battlemasters stream in
-            }
-            // The lever is settled before the join: vmangos evaluates a queue only when a join or
-            // a leave schedules it (`BattleGroundMgr.cpp:1005-1028`), so flipping it under a
-            // waiting entry does nothing.
-            toggle_testing(&mut probe, &net);
-            probe.phase = Phase::Toggled {
-                sent_at: now,
-                corrected: false,
-            };
-        }
-        Phase::Toggled { sent_at, corrected } => {
-            // Drain every frame until the reply shows; the rest is kept for the first census.
-            if let Some(s) = script.as_deref_mut() {
-                let seen = drain_events(&mut probe, s);
-                // The last marker wins: a correcting send's reply can share a drain with the first.
-                let on = seen.rfind("debugging");
-                let off = seen.rfind("normal playercount");
-                match (on, off) {
-                    (Some(a), Some(b)) => probe.testing_seen = Some(a > b),
-                    (Some(_), None) => probe.testing_seen = Some(true),
-                    (None, Some(_)) => probe.testing_seen = Some(false),
-                    (None, None) => {}
+            Phase::Hopped { sent_at } => {
+                if now - sent_at < 3.0 {
+                    return; // post-teleport settle: let the battlemasters stream in
                 }
-                probe.pending_events.push_str(&seen);
+                // The lever is settled before the join: vmangos evaluates a queue only when a join or
+                // a leave schedules it (`BattleGroundMgr.cpp:1005-1028`), so flipping it under a
+                // waiting entry does nothing.
+                toggle_testing(&mut probe, &net);
+                probe.phase = Phase::Toggled {
+                    sent_at: now,
+                    corrected: false,
+                };
             }
-            match probe.testing_seen.take() {
-                Some(true) => {
+            Phase::Toggled { sent_at, corrected } => {
+                // Drain every frame until the reply shows; the rest is kept for the first census.
+                if let Some(s) = script.as_deref_mut() {
+                    let seen = drain_events(&mut probe, s);
+                    // The last marker wins: a correcting send's reply can share a drain with the first.
+                    let on = seen.rfind("debugging");
+                    let off = seen.rfind("normal playercount");
+                    match (on, off) {
+                        (Some(a), Some(b)) => probe.testing_seen = Some(a > b),
+                        (Some(_), None) => probe.testing_seen = Some(true),
+                        (None, Some(_)) => probe.testing_seen = Some(false),
+                        (None, None) => {}
+                    }
+                    probe.pending_events.push_str(&seen);
+                }
+                match probe.testing_seen.take() {
+                    Some(true) => {
+                        info!(
+                            "PROBE bg: TESTING on (1v0) — confirmed from the tap after {:.1}s",
+                            now - sent_at
+                        );
+                        probe.testing_confirmed = true;
+                        probe.phase = Phase::Scanning { since: now };
+                    }
+                    Some(false) if corrected => {
+                        error!(
+                            "PROBE bg: FAILURE — `.debug bg` reads OFF after two sends; the account \
+                             may be below SEC_ADMINISTRATOR (6) for it"
+                        );
+                        finish(&mut probe, &net);
+                    }
+                    Some(false) => {
+                        info!("PROBE bg: TESTING was on; that send turned it OFF — sending once more");
+                        toggle_testing(&mut probe, &net);
+                        probe.phase = Phase::Toggled {
+                            sent_at: now,
+                            corrected: true,
+                        };
+                    }
+                    None if now - sent_at > TOGGLE_REPLY_WINDOW => {
+                        // Unread stays unread: `testing_confirmed` is left false for the failure text.
+                        warn!(
+                            "PROBE bg: TESTING unread — no `.debug bg` reply reached the tap in \
+                             {TOGGLE_REPLY_WINDOW:.0}s; continuing, but if the queue never pops, this \
+                             is the first thing to doubt"
+                        );
+                        probe.phase = Phase::Scanning { since: now };
+                    }
+                    None => {}
+                }
+            }
+            Phase::Scanning { since: sent_at } => {
+                let here = player.pos;
+                // By entry, not nearness: all three stand in one alcove.
+                let master = units.iter().find(|(_, kind, store, tf)| {
+                    kind.kind == benilla_protocol::EntityKind::Unit
+                        && store.0.unit_npc_flags() & npc_flags::BATTLEMASTER != 0
+                        && store.0.object_entry() == Some(arena.npc_entry)
+                        && tf.translation.distance(here) < NEAR_YD
+                });
+                if let Some((guid, ..)) = master {
                     info!(
-                        "PROBE bg: TESTING on (1v0) — confirmed from the tap after {:.1}s",
-                        now - sent_at
+                        "PROBE bg: GREETING {} ({:#x}) on the wire",
+                        arena.npc_name, guid.0
                     );
-                    probe.testing_confirmed = true;
-                    probe.phase = Phase::Scanning { since: now };
-                }
-                Some(false) if corrected => {
+                    let _ = net.0.send(ClientCommand::BattlemasterHello { npc: guid.0 });
+                    probe.phase = Phase::Greeted {
+                        master: guid.0,
+                        sent_at: now,
+                    };
+                } else if now - sent_at > 15.0 {
                     error!(
-                        "PROBE bg: FAILURE — `.debug bg` reads OFF after two sends; the account \
-                         may be below SEC_ADMINISTRATOR (6) for it"
+                        "PROBE bg: FAILURE — {} (entry {}) never streamed within {NEAR_YD:.0} yd in 15 s",
+                        arena.npc_name, arena.npc_entry
                     );
                     finish(&mut probe, &net);
                 }
-                Some(false) => {
-                    info!("PROBE bg: TESTING was on; that send turned it OFF — sending once more");
-                    toggle_testing(&mut probe, &net);
-                    probe.phase = Phase::Toggled {
-                        sent_at: now,
-                        corrected: true,
+            }
+            Phase::Greeted { master, sent_at } => {
+                // The list's guid is the one the join quotes; its arrival proves the level gate passed.
+                if battlefield.battlemaster() == Some(master) {
+                    info!("PROBE bg: LISTED — queueing for map {}", arena.map);
+                    let _ = net.0.send(ClientCommand::BattlemasterJoin {
+                        battlemaster: master,
+                        map_id: arena.map,
+                        instance_id: 0,
+                        as_group: false,
+                    });
+                    probe.phase = Phase::Joined { sent_at: now };
+                } else if now - sent_at > 8.0 {
+                    error!(
+                        "PROBE bg: FAILURE — no SMSG_BATTLEFIELD_LIST 8 s after the hello \
+                         (a level under the bracket floor is refused here, silently)"
+                    );
+                    finish(&mut probe, &net);
+                }
+            }
+            Phase::Joined { sent_at } => {
+                // Status 2 is "ready, confirm", taken through the stock verb. Matched on the map too:
+                // vmangos re-sends a stale queue's status at login.
+                let ready = queue.slots().iter().position(|s| {
+                    s.as_ref()
+                        .is_some_and(|(st, _)| st.status == 2 && st.map_id == arena.map)
+                });
+                if let Some(index) = ready {
+                    let slot = index + 1; // the verbs are 1-based
+                    info!("PROBE bg: CONFIRM — slot {slot} is ready; AcceptBattlefieldPort({slot}, 1)");
+                    if let Some(script) = script {
+                        if let Err(e) = script.eval::<()>(&format!("AcceptBattlefieldPort({slot}, 1)"))
+                        {
+                            error!("PROBE bg: FAILURE — AcceptBattlefieldPort raised: {e}");
+                            finish(&mut probe, &net);
+                            return;
+                        }
+                    } else {
+                        error!("PROBE bg: FAILURE — no VM to take the port through");
+                        finish(&mut probe, &net);
+                        return;
+                    }
+                    probe.phase = Phase::Ported { sent_at: now };
+                } else if now - sent_at > 12.0 && probe.rejoins < MAX_REJOINS {
+                    // Decline and re-join: an entry that did not match is never re-examined until a
+                    // join or a leave schedules its queue (`BattleGroundMgr.cpp:1005`).
+                    probe.rejoins += 1;
+                    let slot = queue
+                        .slots()
+                        .iter()
+                        .position(|s| s.is_some())
+                        .map_or(1, |i| i + 1);
+                    info!(
+                        "PROBE bg: REJOIN {} — nothing popped in 12 s; \
+                         AcceptBattlefieldPort({slot}, 0) then queueing again",
+                        probe.rejoins
+                    );
+                    if let Some(script) = script.as_deref_mut() {
+                        let _ = script.eval::<()>(&format!("AcceptBattlefieldPort({slot}, 0)"));
+                    }
+                    probe.phase = Phase::Rejoining { at: now };
+                } else if now - sent_at > 30.0 {
+                    let slots: Vec<String> = queue
+                        .slots()
+                        .iter()
+                        .map(|s| {
+                            s.as_ref().map_or_else(
+                                || "-".into(),
+                                |(st, _)| format!("{}:{}", st.map_id, st.status),
+                            )
+                        })
+                        .collect();
+                    error!(
+                        "PROBE bg: FAILURE — no slot reached status 2 in 30 s (slots: {}). {} \
+                         Also worth checking: Deserter (26013) on the body, a bracket the server \
+                         refused, or a battleground this body is still registered in from a killed run.",
+                        slots.join(" "),
+                        if probe.testing_confirmed {
+                            "The testing flag was READ BACK as on before the join, so the cause is \
+                             probably not that."
+                        } else {
+                            "The testing flag was NEVER READ BACK (no `.debug bg` reply reached the \
+                             tap), so it is the first suspect: a previous run that died before its \
+                             own restore leaves the lever inverted, and a queue entry is only ever \
+                             evaluated when a join or a leave schedules it."
+                        },
+                    );
+                    finish(&mut probe, &net);
+                }
+            }
+            Phase::Ported { sent_at } => {
+                let here = map.as_ref().map_or(0, |m| m.0);
+                if here == arena.map {
+                    info!(
+                        "PROBE bg: ENTERED map {} after {:.1}s — census every {CENSUS_EVERY:.0}s × {}",
+                        arena.map,
+                        now - sent_at,
+                        census_samples(),
+                    );
+                    probe.phase = Phase::Inside {
+                        entered_at: now,
+                        next_census: now + CENSUS_EVERY,
+                        samples: 0,
+                    };
+                } else if now - sent_at > 30.0 {
+                    error!(
+                        "PROBE bg: FAILURE — 30 s after the port the map is still {here}, not {}",
+                        arena.map
+                    );
+                    finish(&mut probe, &net);
+                }
+            }
+            Phase::Inside {
+                entered_at,
+                next_census,
+                samples,
+            } => {
+                if now < next_census {
+                    return;
+                }
+                let Some(mut script) = script else {
+                    error!("PROBE bg: FAILURE — the VM went away inside the battleground");
+                    finish(&mut probe, &net);
+                    return;
+                };
+                // Drained here, not in `census`, so the tap's self-heal can reach `probe`.
+                let mut events = std::mem::take(&mut probe.pending_events);
+                events.push_str(&drain_events(&mut probe, &mut script));
+                let tap_broken = probe.tap_broken;
+                census(
+                    now - entered_at,
+                    arena,
+                    &player,
+                    &units,
+                    map.as_deref(),
+                    area.as_deref(),
+                    load.as_deref(),
+                    &states,
+                    &dropped,
+                    &go_templates,
+                    &queue,
+                    &mut script,
+                    &events,
+                    tap_broken,
+                );
+                let samples = samples + 1;
+
+                // Inside, the lever has formed the match; off again so the premature-finish countdown
+                // runs (it only decrements while testing is off, `BattleGround.cpp:337`).
+                if samples == 1 {
+                    info!(
+                        "PROBE bg: TESTING — inside the instance; the lever has done its job and the \
+                         premature-finish countdown is frozen while it is on"
+                    );
+                    leave_testing_as_found(&mut probe, &net);
+                }
+
+                if samples >= census_samples() {
+                    // The flag leg, then the graveyard: `.die` clears the probe's god shield, and a
+                    // battleground death is the only way to reach the area spirit healer.
+                    match arena.flag {
+                        Some((entry, [x, y, z])) => {
+                            info!("PROBE bg: FLAG — hopping to {entry} at ({x}, {y}, {z}) to take it");
+                            gm(&net, format!(".go xyz {x} {y} {z} {}", arena.map));
+                            probe.phase = Phase::FlagHop { at: now };
+                        }
+                        None => {
+                            info!("PROBE bg: FLAG — none for this battleground; on to the graveyard");
+                            gm(&net, ".die");
+                            probe.phase = Phase::Dying { sent_at: now };
+                        }
+                    }
+                } else {
+                    probe.phase = Phase::Inside {
+                        entered_at,
+                        next_census: now + CENSUS_EVERY,
+                        samples,
                     };
                 }
-                None if now - sent_at > TOGGLE_REPLY_WINDOW => {
-                    // Unread stays unread: `testing_confirmed` is left false for the failure text.
-                    warn!(
-                        "PROBE bg: TESTING unread — no `.debug bg` reply reached the tap in \
-                         {TOGGLE_REPLY_WINDOW:.0}s; continuing, but if the queue never pops, this \
-                         is the first thing to doubt"
-                    );
-                    probe.phase = Phase::Scanning { since: now };
+            }
+            Phase::Rejoining { at } => {
+                if now - at < 2.0 {
+                    return; // the decline lands and the slot clears
                 }
-                None => {}
-            }
-        }
-        Phase::Scanning { since: sent_at } => {
-            let here = player.pos;
-            // By entry, not nearness: all three stand in one alcove.
-            let master = units.iter().find(|(_, kind, store, tf)| {
-                kind.kind == benilla_protocol::EntityKind::Unit
-                    && store.0.unit_npc_flags() & npc_flags::BATTLEMASTER != 0
-                    && store.0.object_entry() == Some(arena.npc_entry)
-                    && tf.translation.distance(here) < NEAR_YD
-            });
-            if let Some((guid, ..)) = master {
-                info!(
-                    "PROBE bg: GREETING {} ({:#x}) on the wire",
-                    arena.npc_name, guid.0
-                );
-                let _ = net.0.send(ClientCommand::BattlemasterHello { npc: guid.0 });
-                probe.phase = Phase::Greeted {
-                    master: guid.0,
-                    sent_at: now,
+                let Some(master) = battlefield.battlemaster() else {
+                    error!("PROBE bg: FAILURE — the battlemaster list went away before the rejoin");
+                    finish(&mut probe, &net);
+                    return;
                 };
-            } else if now - sent_at > 15.0 {
-                error!(
-                    "PROBE bg: FAILURE — {} (entry {}) never streamed within {NEAR_YD:.0} yd in 15 s",
-                    arena.npc_name, arena.npc_entry
-                );
-                finish(&mut probe, &net);
-            }
-        }
-        Phase::Greeted { master, sent_at } => {
-            // The list's guid is the one the join quotes; its arrival proves the level gate passed.
-            if battlefield.battlemaster() == Some(master) {
-                info!("PROBE bg: LISTED — queueing for map {}", arena.map);
                 let _ = net.0.send(ClientCommand::BattlemasterJoin {
                     battlemaster: master,
                     map_id: arena.map,
@@ -542,355 +726,171 @@ fn bg_probe(
                     as_group: false,
                 });
                 probe.phase = Phase::Joined { sent_at: now };
-            } else if now - sent_at > 8.0 {
-                error!(
-                    "PROBE bg: FAILURE — no SMSG_BATTLEFIELD_LIST 8 s after the hello \
-                     (a level under the bracket floor is refused here, silently)"
-                );
-                finish(&mut probe, &net);
             }
-        }
-        Phase::Joined { sent_at } => {
-            // Status 2 is "ready, confirm", taken through the stock verb. Matched on the map too:
-            // vmangos re-sends a stale queue's status at login.
-            let ready = queue.slots().iter().position(|s| {
-                s.as_ref()
-                    .is_some_and(|(st, _)| st.status == 2 && st.map_id == arena.map)
-            });
-            if let Some(index) = ready {
-                let slot = index + 1; // the verbs are 1-based
-                info!("PROBE bg: CONFIRM — slot {slot} is ready; AcceptBattlefieldPort({slot}, 1)");
-                if let Some(script) = script {
-                    if let Err(e) = script.eval::<()>(&format!("AcceptBattlefieldPort({slot}, 1)"))
-                    {
-                        error!("PROBE bg: FAILURE — AcceptBattlefieldPort raised: {e}");
-                        finish(&mut probe, &net);
-                        return;
-                    }
-                } else {
-                    error!("PROBE bg: FAILURE — no VM to take the port through");
+            Phase::FlagHop { at } => {
+                if now - at < 4.0 {
+                    return; // the hop crosses the map; the far base streams in
+                }
+                let Some((entry, _)) = arena.flag else {
                     finish(&mut probe, &net);
                     return;
-                }
-                probe.phase = Phase::Ported { sent_at: now };
-            } else if now - sent_at > 12.0 && probe.rejoins < MAX_REJOINS {
-                // Decline and re-join: an entry that did not match is never re-examined until a
-                // join or a leave schedules its queue (`BattleGroundMgr.cpp:1005`).
-                probe.rejoins += 1;
-                let slot = queue
-                    .slots()
-                    .iter()
-                    .position(|s| s.is_some())
-                    .map_or(1, |i| i + 1);
-                info!(
-                    "PROBE bg: REJOIN {} — nothing popped in 12 s; \
-                     AcceptBattlefieldPort({slot}, 0) then queueing again",
-                    probe.rejoins
-                );
-                if let Some(script) = script.as_deref_mut() {
-                    let _ = script.eval::<()>(&format!("AcceptBattlefieldPort({slot}, 0)"));
-                }
-                probe.phase = Phase::Rejoining { at: now };
-            } else if now - sent_at > 30.0 {
-                let slots: Vec<String> = queue
-                    .slots()
-                    .iter()
-                    .map(|s| {
-                        s.as_ref().map_or_else(
-                            || "-".into(),
-                            |(st, _)| format!("{}:{}", st.map_id, st.status),
-                        )
-                    })
-                    .collect();
-                error!(
-                    "PROBE bg: FAILURE — no slot reached status 2 in 30 s (slots: {}). {} \
-                     Also worth checking: Deserter (26013) on the body, a bracket the server \
-                     refused, or a battleground this body is still registered in from a killed run.",
-                    slots.join(" "),
-                    if probe.testing_confirmed {
-                        "The testing flag was READ BACK as on before the join, so the cause is \
-                         probably not that."
-                    } else {
-                        "The testing flag was NEVER READ BACK (no `.debug bg` reply reached the \
-                         tap), so it is the first suspect: a previous run that died before its \
-                         own restore leaves the lever inverted, and a queue entry is only ever \
-                         evaluated when a join or a leave schedules it."
-                    },
-                );
-                finish(&mut probe, &net);
-            }
-        }
-        Phase::Ported { sent_at } => {
-            let here = map.as_ref().map_or(0, |m| m.0);
-            if here == arena.map {
-                info!(
-                    "PROBE bg: ENTERED map {} after {:.1}s — census every {CENSUS_EVERY:.0}s × {}",
-                    arena.map,
-                    now - sent_at,
-                    census_samples(),
-                );
-                probe.phase = Phase::Inside {
-                    entered_at: now,
-                    next_census: now + CENSUS_EVERY,
-                    samples: 0,
                 };
-            } else if now - sent_at > 30.0 {
-                error!(
-                    "PROBE bg: FAILURE — 30 s after the port the map is still {here}, not {}",
-                    arena.map
-                );
-                finish(&mut probe, &net);
-            }
-        }
-        Phase::Inside {
-            entered_at,
-            next_census,
-            samples,
-        } => {
-            if now < next_census {
-                return;
-            }
-            let Some(mut script) = script else {
-                error!("PROBE bg: FAILURE — the VM went away inside the battleground");
-                finish(&mut probe, &net);
-                return;
-            };
-            // Drained here, not in `census`, so the tap's self-heal can reach `probe`.
-            let mut events = std::mem::take(&mut probe.pending_events);
-            events.push_str(&drain_events(&mut probe, &mut script));
-            let tap_broken = probe.tap_broken;
-            census(
-                now - entered_at,
-                arena,
-                &player,
-                &units,
-                map.as_deref(),
-                area.as_deref(),
-                load.as_deref(),
-                &states,
-                &dropped,
-                &go_templates,
-                &queue,
-                &mut script,
-                &events,
-                tap_broken,
-            );
-            let samples = samples + 1;
-
-            // Inside, the lever has formed the match; off again so the premature-finish countdown
-            // runs (it only decrements while testing is off, `BattleGround.cpp:337`).
-            if samples == 1 {
-                info!(
-                    "PROBE bg: TESTING — inside the instance; the lever has done its job and the \
-                     premature-finish countdown is frozen while it is on"
-                );
-                leave_testing_as_found(&mut probe, &net);
-            }
-
-            if samples >= census_samples() {
-                // The flag leg, then the graveyard: `.die` clears the probe's god shield, and a
-                // battleground death is the only way to reach the area spirit healer.
-                match arena.flag {
-                    Some((entry, [x, y, z])) => {
-                        info!("PROBE bg: FLAG — hopping to {entry} at ({x}, {y}, {z}) to take it");
-                        gm(&net, format!(".go xyz {x} {y} {z} {}", arena.map));
-                        probe.phase = Phase::FlagHop { at: now };
+                let found = units.iter().find(|(_, kind, store, tf)| {
+                    kind.kind == benilla_protocol::EntityKind::GameObject
+                        && store.0.object_entry() == Some(entry)
+                        && tf.translation.distance(player.pos) < 15.0
+                });
+                match found {
+                    Some((guid, _, store, tf)) => {
+                        // A flag stand has no lock, so a click's `resolve_go_action` sends
+                        // `CMSG_GAMEOBJ_USE`, as here; the lock is logged, not assumed.
+                        let lock = go_templates.of(&store.0).map_or(u32::MAX, |t| t.lock_id);
+                        info!(
+                            "PROBE bg: FLAG {entry} streamed at {:.1} yd, lock_id={lock} — CMSG_GAMEOBJ_USE",
+                            tf.translation.distance(player.pos)
+                        );
+                        let _ = net.0.send(ClientCommand::GameObjUse { guid: guid.0 });
+                        probe.phase = Phase::FlagUsed {
+                            at: now,
+                            samples: 0,
+                        };
                     }
-                    None => {
-                        info!("PROBE bg: FLAG — none for this battleground; on to the graveyard");
+                    None if now - at > 20.0 => {
+                        error!("PROBE bg: FLAG FAILURE — {entry} never streamed within 15 yd in 20 s");
                         gm(&net, ".die");
                         probe.phase = Phase::Dying { sent_at: now };
                     }
+                    None => {}
                 }
-            } else {
-                probe.phase = Phase::Inside {
-                    entered_at,
-                    next_census: now + CENSUS_EVERY,
-                    samples,
+            }
+            Phase::FlagUsed { at, samples } => {
+                if now - at < f64::from(samples + 1) * 3.0 {
+                    return;
+                }
+                let Some(mut script) = script else {
+                    error!("PROBE bg: FAILURE — the VM went away during the flag leg");
+                    finish(&mut probe, &net);
+                    return;
                 };
-            }
-        }
-        Phase::Rejoining { at } => {
-            if now - at < 2.0 {
-                return; // the decline lands and the slot clears
-            }
-            let Some(master) = battlefield.battlemaster() else {
-                error!("PROBE bg: FAILURE — the battlemaster list went away before the rejoin");
-                finish(&mut probe, &net);
-                return;
-            };
-            let _ = net.0.send(ClientCommand::BattlemasterJoin {
-                battlemaster: master,
-                map_id: arena.map,
-                instance_id: 0,
-                as_group: false,
-            });
-            probe.phase = Phase::Joined { sent_at: now };
-        }
-        Phase::FlagHop { at } => {
-            if now - at < 4.0 {
-                return; // the hop crosses the map; the far base streams in
-            }
-            let Some((entry, _)) = arena.flag else {
-                finish(&mut probe, &net);
-                return;
-            };
-            let found = units.iter().find(|(_, kind, store, tf)| {
-                kind.kind == benilla_protocol::EntityKind::GameObject
-                    && store.0.object_entry() == Some(entry)
-                    && tf.translation.distance(player.pos) < 15.0
-            });
-            match found {
-                Some((guid, _, store, tf)) => {
-                    // A flag stand has no lock, so a click's `resolve_go_action` sends
-                    // `CMSG_GAMEOBJ_USE`, as here; the lock is logged, not assumed.
-                    let lock = go_templates.of(&store.0).map_or(u32::MAX, |t| t.lock_id);
-                    info!(
-                        "PROBE bg: FLAG {entry} streamed at {:.1} yd, lock_id={lock} — CMSG_GAMEOBJ_USE",
-                        tf.translation.distance(player.pos)
-                    );
-                    let _ = net.0.send(ClientCommand::GameObjUse { guid: guid.0 });
-                    probe.phase = Phase::FlagUsed {
-                        at: now,
-                        samples: 0,
-                    };
-                }
-                None if now - at > 20.0 => {
-                    error!("PROBE bg: FLAG FAILURE — {entry} never streamed within 15 yd in 20 s");
+                // World state 2339 is the Alliance row's icon selector: 1, or 2 while the flag that
+                // row is about is carried (`BattleGroundWS.cpp:512`, `:714-722`), never the four-value
+                // `m_flagState`, so `2339=1` held all match is correct, not stuck. The buffs are the
+                // other half.
+                let auras = script
+                    .eval::<String>(
+                        r#"
+                        local out = "";
+                        for i = 1, 16 do
+                            local t = UnitBuff("player", i);
+                            if t then out = out .. " " .. t; end
+                        end
+                        return out;
+                        "#,
+                    )
+                    .unwrap_or_else(|e| format!("<raised: {e}>"));
+                let events = drain_events(&mut probe, &mut script);
+                info!(
+                    "PROBE bg: FLAG t={:.0}s ws2338={} ws2339={} captures={}/{} buffs=[{}]{}",
+                    now - at,
+                    ws(&states, 2338),
+                    ws(&states, 2339),
+                    ws(&states, 1581),
+                    ws(&states, 1582),
+                    auras.trim(),
+                    if events.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" events={events}")
+                    },
+                );
+                let samples = samples + 1;
+                if samples >= FLAG_SAMPLES {
+                    info!("PROBE bg: FLAG done — on to the graveyard");
                     gm(&net, ".die");
                     probe.phase = Phase::Dying { sent_at: now };
-                }
-                None => {}
-            }
-        }
-        Phase::FlagUsed { at, samples } => {
-            if now - at < f64::from(samples + 1) * 3.0 {
-                return;
-            }
-            let Some(mut script) = script else {
-                error!("PROBE bg: FAILURE — the VM went away during the flag leg");
-                finish(&mut probe, &net);
-                return;
-            };
-            // World state 2339 is the Alliance row's icon selector: 1, or 2 while the flag that
-            // row is about is carried (`BattleGroundWS.cpp:512`, `:714-722`), never the four-value
-            // `m_flagState`, so `2339=1` held all match is correct, not stuck. The buffs are the
-            // other half.
-            let auras = script
-                .eval::<String>(
-                    r#"
-                    local out = "";
-                    for i = 1, 16 do
-                        local t = UnitBuff("player", i);
-                        if t then out = out .. " " .. t; end
-                    end
-                    return out;
-                    "#,
-                )
-                .unwrap_or_else(|e| format!("<raised: {e}>"));
-            let events = drain_events(&mut probe, &mut script);
-            info!(
-                "PROBE bg: FLAG t={:.0}s ws2338={} ws2339={} captures={}/{} buffs=[{}]{}",
-                now - at,
-                ws(&states, 2338),
-                ws(&states, 2339),
-                ws(&states, 1581),
-                ws(&states, 1582),
-                auras.trim(),
-                if events.trim().is_empty() {
-                    String::new()
                 } else {
-                    format!(" events={events}")
-                },
-            );
-            let samples = samples + 1;
-            if samples >= FLAG_SAMPLES {
-                info!("PROBE bg: FLAG done — on to the graveyard");
-                gm(&net, ".die");
-                probe.phase = Phase::Dying { sent_at: now };
-            } else {
-                probe.phase = Phase::FlagUsed { at, samples };
+                    probe.phase = Phase::FlagUsed { at, samples };
+                }
             }
-        }
-        Phase::Dying { sent_at } => {
-            if store.0.unit_is_dead() {
-                info!("PROBE bg: DEAD — releasing (CMSG_REPOP_REQUEST)");
-                let _ = net.0.send(ClientCommand::RepopRequest);
-                probe.phase = Phase::Ghost {
-                    released_at: now,
-                    next_sample: now + GHOST_SAMPLE_EVERY,
-                    samples: 0,
+            Phase::Dying { sent_at } => {
+                if store.0.unit_is_dead() {
+                    info!("PROBE bg: DEAD — releasing (CMSG_REPOP_REQUEST)");
+                    let _ = net.0.send(ClientCommand::RepopRequest);
+                    probe.phase = Phase::Ghost {
+                        released_at: now,
+                        next_sample: now + GHOST_SAMPLE_EVERY,
+                        samples: 0,
+                    };
+                } else if now - sent_at > 15.0 {
+                    error!(
+                        "PROBE bg: FAILURE — still alive 15 s after `.die` (is the shield re-armed?)"
+                    );
+                    finish(&mut probe, &net);
+                }
+            }
+            Phase::Ghost {
+                released_at,
+                next_sample,
+                samples,
+            } => {
+                if now < next_sample {
+                    return;
+                }
+                let Some(mut script) = script else {
+                    finish(&mut probe, &net);
+                    return;
                 };
-            } else if now - sent_at > 15.0 {
-                error!(
-                    "PROBE bg: FAILURE — still alive 15 s after `.die` (is the shield re-armed?)"
+                // Ghost, nearest spirit guide, the wave clock (non-zero only once
+                // `SMSG_AREA_SPIRIT_HEALER_TIME` answers) and the stock popup.
+                let ghost = store.0.player_is_ghost();
+                let nearest = units
+                    .iter()
+                    .filter(|(_, k, st, _)| {
+                        k.kind == benilla_protocol::EntityKind::Unit
+                            && st.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE != 0
+                    })
+                    .map(|(g, _, _, tf)| (g.0, tf.translation.distance(player.pos)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                let wave = script
+                    .eval::<String>(
+                        "return tostring(GetAreaSpiritHealerTime()) .. \" popup=\" .. \
+                         tostring(StaticPopup_Visible and StaticPopup_Visible(\"AREA_SPIRIT_HEAL\"))",
+                    )
+                    .unwrap_or_else(|e| format!("<raised: {e}>"));
+                let events = drain_events(&mut probe, &mut script);
+                info!(
+                    "PROBE bg: GHOST t={:.0}s ghost={ghost} pos=({:.0},{:.0},{:.0}) area={:?} guide={} wave={wave}{}",
+                    now - released_at,
+                    player.pos.x,
+                    player.pos.y,
+                    player.pos.z,
+                    area.as_deref().and_then(|a| a.0),
+                    nearest.map_or_else(|| "none".to_string(), |(g, d)| format!("{g:#x}@{d:.1}yd")),
+                    if events.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" events={events}")
+                    },
                 );
-                finish(&mut probe, &net);
-            }
-        }
-        Phase::Ghost {
-            released_at,
-            next_sample,
-            samples,
-        } => {
-            if now < next_sample {
-                return;
-            }
-            let Some(mut script) = script else {
-                finish(&mut probe, &net);
-                return;
-            };
-            // Ghost, nearest spirit guide, the wave clock (non-zero only once
-            // `SMSG_AREA_SPIRIT_HEALER_TIME` answers) and the stock popup.
-            let ghost = store.0.player_is_ghost();
-            let nearest = units
-                .iter()
-                .filter(|(_, k, st, _)| {
-                    k.kind == benilla_protocol::EntityKind::Unit
-                        && st.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE != 0
-                })
-                .map(|(g, _, _, tf)| (g.0, tf.translation.distance(player.pos)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            let wave = script
-                .eval::<String>(
-                    "return tostring(GetAreaSpiritHealerTime()) .. \" popup=\" .. \
-                     tostring(StaticPopup_Visible and StaticPopup_Visible(\"AREA_SPIRIT_HEAL\"))",
-                )
-                .unwrap_or_else(|e| format!("<raised: {e}>"));
-            let events = drain_events(&mut probe, &mut script);
-            info!(
-                "PROBE bg: GHOST t={:.0}s ghost={ghost} pos=({:.0},{:.0},{:.0}) area={:?} guide={} wave={wave}{}",
-                now - released_at,
-                player.pos.x,
-                player.pos.y,
-                player.pos.z,
-                area.as_deref().and_then(|a| a.0),
-                nearest.map_or_else(|| "none".to_string(), |(g, d)| format!("{g:#x}@{d:.1}yd")),
-                if events.trim().is_empty() {
-                    String::new()
+                let samples = samples + 1;
+                if samples >= GHOST_SAMPLES {
+                    // Take the wave if one is offered.
+                    match script.eval::<()>("AcceptAreaSpiritHeal()") {
+                        Ok(()) => info!("PROBE bg: GHOST AcceptAreaSpiritHeal() sent"),
+                        Err(e) => error!("PROBE bg: GHOST AcceptAreaSpiritHeal() raised: {e}"),
+                    }
+                    report(arena, &net, &queue, &mut script);
+                    finish(&mut probe, &net);
                 } else {
-                    format!(" events={events}")
-                },
-            );
-            let samples = samples + 1;
-            if samples >= GHOST_SAMPLES {
-                // Take the wave if one is offered.
-                match script.eval::<()>("AcceptAreaSpiritHeal()") {
-                    Ok(()) => info!("PROBE bg: GHOST AcceptAreaSpiritHeal() sent"),
-                    Err(e) => error!("PROBE bg: GHOST AcceptAreaSpiritHeal() raised: {e}"),
+                    probe.phase = Phase::Ghost {
+                        released_at,
+                        next_sample: now + GHOST_SAMPLE_EVERY,
+                        samples,
+                    };
                 }
-                report(arena, &net, &queue, &mut script);
-                finish(&mut probe, &net);
-            } else {
-                probe.phase = Phase::Ghost {
-                    released_at,
-                    next_sample: now + GHOST_SAMPLE_EVERY,
-                    samples,
-                };
             }
+            Phase::Done => {}
         }
-        Phase::Done => {}
-    }
 })
 }
 
