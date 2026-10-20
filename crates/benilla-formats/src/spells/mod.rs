@@ -247,6 +247,12 @@ const ATTR_EX_CHANNELED: u32 = 0x44;
 /// (`0x6e83c0`), not at the send: the stealth openers, positional strikes and Judgement.
 const ATTR_EX2_INITIATE_COMBAT_POST_CAST: u32 = 0x0010_0000;
 
+/// `SPELL_ATTR_EX2_ACTIVE_THREAT`: `0x6e4870` answers 1 for it ahead of every other test.
+const ATTR_EX2_ACTIVE_THREAT: u32 = 0x4000_0000;
+/// `SPELL_ATTR_EX_NO_THREAT` and `SPELL_ATTR_EX2_NOT_AN_ACTION`: `0x6e4870` answers 0 for either.
+const ATTR_EX_NO_THREAT: u32 = 0x400;
+const ATTR_EX2_NOT_AN_ACTION: u32 = 0x1000_0000;
+
 /// `SPELL_ATTR_COOLDOWN_ON_EVENT`: held by the `SMSG_SPELL_COOLDOWN` handler (`0x6e9460`).
 const ATTR_COOLDOWN_ON_EVENT: u32 = 0x0200_0000;
 

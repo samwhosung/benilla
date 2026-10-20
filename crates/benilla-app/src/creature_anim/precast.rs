@@ -61,8 +61,27 @@ pub(super) fn start_at_send(world: &mut World, entity: Entity, spell_id: u32) {
     }
 }
 
+/// `0x60d040`'s `b` argument: whether a matched end runs its tail, whose last step releases the
+/// active player's loot window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrecastTail {
+    /// `b` clear: the clear alone.
+    Skip,
+    /// The tail, its release reading the player's movement flags as the tail does (`0x60d0f7`).
+    Run,
+    /// The tail, its release told whether the unit moves: a spline's end, whose install has just
+    /// written the flags.
+    Moving(bool),
+}
+
+/// An end with the unit's own spell, `0x60d040(+0xc8c, 1, 1)`, from a system that holds
+/// `Commands`: a spline move (`0x6020e8`) and the mover's move messages and acks (`0x60e15d`).
+pub(crate) fn end_precast(commands: &mut Commands, entity: Entity, tail: PrecastTail) {
+    commands.queue(move |world: &mut World| end(world, entity, None, tail));
+}
+
 /// `0x60d040`'s clear: keyed by `spell`, or with the unit's own spell for `None`.
-pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>) {
+pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, _tail: PrecastTail) {
     let Ok(mut unit) = world.get_entity_mut(entity) else {
         return;
     };
@@ -227,6 +246,7 @@ mod tests {
         let end = |spell_id| UnitEdit::EndPrecast {
             entity: unit,
             spell_id,
+            tail: true,
         };
         apply(&mut world, start);
         apply(&mut world, end(Some(OTHER_VISUAL_SPELL)));
@@ -260,5 +280,150 @@ mod tests {
             },
         );
         assert_eq!(precast(&world, unit), None, "the repeat spell's cancel");
+    }
+
+    /// What an end owes the active player's loot window: (`LootMoveStart`, `LootCloseAtRest`).
+    fn owed(world: &mut World) -> (bool, bool) {
+        (
+            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootMoveStart>().0),
+            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0),
+        )
+    }
+
+    /// `0x60d040`'s tail ends in the active player's loot release (`0x60d0ee`-`0x60d10b`):
+    /// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f` (`0x60d0fd`), the four directions
+    /// and FALLING, so the move-start close while it moves and the full close at rest. Only a
+    /// matched end (`0x60d04f`) with `b` set (`0x60d076`) reaches it, and only for the active
+    /// player (`0x5fa6d0`); an end with the unit's own spell matches an empty `+0xc8c` too.
+    #[test]
+    fn an_end_releases_the_active_players_loot_as_it_moves_or_rests() {
+        use crate::creature_anim::move_flags::{FALLING, FORWARD, STRAFE_LEFT, SWIMMING};
+        let (mut world, me) = world();
+        world.entity_mut(me).insert(crate::net::SelfPlayer);
+        let other = world.spawn_empty().id();
+        world.init_resource::<crate::ui_loot::LootMoveStart>();
+        world.init_resource::<crate::ui_loot::LootCloseAtRest>();
+        fn case(
+            world: &mut World,
+            flags: u32,
+            unit: Entity,
+            held: Option<u32>,
+            spell: Option<u32>,
+            tail: PrecastTail,
+        ) -> (bool, bool) {
+            world.insert_resource(crate::player::Player::with_move_flags(flags));
+            world.entity_mut(unit).remove::<Precast>();
+            if let Some(spell_id) = held {
+                world.entity_mut(unit).insert(Precast {
+                    spell_id,
+                    busy: true,
+                });
+            }
+            end(world, unit, spell, tail);
+            owed(world)
+        }
+        let keyed = Some(VISUAL_SPELL);
+        let held = Some(VISUAL_SPELL);
+        let run = PrecastTail::Run;
+        assert_eq!(
+            case(&mut world, FORWARD, me, held, keyed, run),
+            (true, false),
+            "running"
+        );
+        assert_eq!(
+            case(&mut world, STRAFE_LEFT, me, held, keyed, run),
+            (true, false),
+            "strafing"
+        );
+        assert_eq!(
+            case(&mut world, FALLING, me, held, keyed, run),
+            (true, false),
+            "falling"
+        );
+        assert_eq!(
+            case(&mut world, 0, me, held, keyed, run),
+            (false, true),
+            "at rest"
+        );
+        assert_eq!(
+            case(&mut world, SWIMMING, me, held, keyed, run),
+            (false, true),
+            "afloat and still: 0x200f has no swim bit"
+        );
+        assert_eq!(
+            case(&mut world, 0, me, held, Some(OTHER_VISUAL_SPELL), run),
+            (false, false),
+            "another spell's end"
+        );
+        assert_eq!(
+            case(&mut world, 0, me, None, keyed, run),
+            (false, false),
+            "a keyed end with nothing held"
+        );
+        assert_eq!(
+            case(&mut world, 0, me, None, None, run),
+            (false, true),
+            "the unit's own spell matches an empty +0xc8c"
+        );
+        assert_eq!(
+            case(&mut world, 0, me, held, keyed, PrecastTail::Skip),
+            (false, false),
+            "b clear"
+        );
+        assert_eq!(precast(&world, me), None, "b clear still ends it");
+        assert_eq!(
+            case(&mut world, 0, me, held, None, PrecastTail::Moving(true)),
+            (true, false),
+            "a spline's path"
+        );
+        assert_eq!(
+            case(
+                &mut world,
+                FORWARD,
+                me,
+                held,
+                None,
+                PrecastTail::Moving(false)
+            ),
+            (false, true),
+            "a refused path"
+        );
+        assert_eq!(
+            case(&mut world, 0, other, held, keyed, run),
+            (false, false),
+            "another unit"
+        );
+
+        // The edits carry it: the GO's `b`, a failure's and the auto-repeat cancel's set one.
+        world.insert_resource(crate::player::Player::with_move_flags(0));
+        world.entity_mut(me).insert(Precast {
+            spell_id: VISUAL_SPELL,
+            busy: true,
+        });
+        apply(
+            &mut world,
+            UnitEdit::EndPrecast {
+                entity: me,
+                spell_id: keyed,
+                tail: false,
+            },
+        );
+        assert_eq!(owed(&mut world), (false, false), "an edit with b clear");
+        world.entity_mut(me).insert(Precast {
+            spell_id: VISUAL_SPELL,
+            busy: true,
+        });
+        apply(
+            &mut world,
+            UnitEdit::ClearAutoRepeat {
+                entity: me,
+                spell_id: VISUAL_SPELL,
+            },
+        );
+        assert_eq!(
+            owed(&mut world),
+            (false, true),
+            "the auto-repeat cancel (0x6ea12b)"
+        );
     }
 }

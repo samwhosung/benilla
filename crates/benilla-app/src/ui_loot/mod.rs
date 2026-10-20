@@ -438,6 +438,13 @@ impl LootLatch {
 #[derive(Resource, Default)]
 pub(crate) struct LootMoveStart(pub(crate) bool);
 
+/// The loot window's close owed this frame with `dl` clear, `0x48f200(1, 0, 0)`: the precast
+/// end's release for the active player at rest (`0x60d0ee`-`0x60d10b`, its flags `& 0x200f`
+/// clear), which closes an item's loot and sweeps a disenchant window with rows left, where the
+/// move-start close keeps both.
+#[derive(Resource, Default)]
+pub(crate) struct LootCloseAtRest(pub(crate) bool);
+
 pub(crate) struct UiLootPlugin;
 
 /// Applies a loot CVar change.
@@ -458,6 +465,7 @@ impl Plugin for UiLootPlugin {
             .init_resource::<LootLatch>()
             .init_resource::<LootKneel>()
             .init_resource::<LootMoveStart>()
+            .init_resource::<LootCloseAtRest>()
             .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
             .add_systems(
                 Update,
@@ -2388,6 +2396,7 @@ mod tests {
             .init_resource::<LootState>()
             .init_resource::<LootLatch>()
             .init_resource::<LootMoveStart>()
+            .init_resource::<LootCloseAtRest>()
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
@@ -2665,6 +2674,78 @@ mod tests {
         step(&mut app);
         assert_eq!(app.world().resource::<LootState>().source(), None);
         assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CORPSE));
+    }
+
+    /// The precast end's release at rest, `0x48f200(1, 0, 0)` (`0x60d10b`): with `dl` clear an
+    /// item's loot closes with its release and both unlocks (`0x48f2b5` falls through to
+    /// `0x48f2bd`), and a disenchant window with rows left owes its sweep (`0x48f264`), where the
+    /// move-start close keeps both. Owed beside a move-start close it decides, as the two commute.
+    #[test]
+    fn a_close_at_rest_takes_an_items_loot_and_sweeps_a_disenchant_hold() {
+        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+        let (mut app, rx) = close_app();
+        let step = |app: &mut App, move_start: bool| {
+            app.world_mut().resource_mut::<LootCloseAtRest>().0 = true;
+            app.world_mut().resource_mut::<LootMoveStart>().0 = move_start;
+            app.update();
+        };
+        for move_start in [false, true] {
+            open_loot(
+                &mut app,
+                LOCKBOX,
+                loot_type::CORPSE,
+                0,
+                vec![item(0, 117, 1)],
+            );
+            step(&mut app, move_start);
+            assert_eq!(app.world().resource::<LootState>().source(), None);
+            assert!(
+                matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == LOCKBOX),
+                "an item's loot is released (beside a move start: {move_start})"
+            );
+            assert!(rx.try_recv().is_err(), "once");
+            assert_eq!(
+                app.world_mut()
+                    .resource_mut::<LootState>()
+                    .take_item_unlocks(),
+                vec![(LOCKBOX, true), (LOCKBOX, true)],
+                "the close's unlock and the teardown's"
+            );
+        }
+
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::DISENCHANTING,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        step(&mut app, false);
+        let loot = app.world().resource::<LootState>();
+        assert_eq!(loot.source(), Some(CORPSE), "a disenchant hold stays open");
+        assert!(
+            loot.sweep_owed,
+            "and owes its sweep to the feed, with no VM here"
+        );
+        assert!(rx.try_recv().is_err(), "unreleased");
+        app.world_mut().resource_mut::<LootState>().clear();
+        deselects(&mut app);
+
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        step(&mut app, false);
+        assert_eq!(app.world().resource::<LootState>().source(), None);
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CORPSE));
+        assert_eq!(
+            deselects(&mut app),
+            vec![CORPSE],
+            "the close's dead-unit deselect"
+        );
     }
 
     /// The feed and the sweep's loot leg over an empty world, the feed's other inputs at rest.

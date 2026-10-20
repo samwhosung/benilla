@@ -632,7 +632,7 @@ pub(crate) use edits::{apply_unit_edits, flush_unit_edits, UnitEdit, UnitEdits};
 mod precast;
 #[cfg(test)]
 pub(crate) use precast::install_visuals_for_tests;
-pub(crate) use precast::{precast_at_send, Precast};
+pub(crate) use precast::{end_precast, precast_at_send, Precast, PrecastTail};
 
 /// The melee blood spurt.
 mod blood;

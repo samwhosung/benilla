@@ -310,9 +310,7 @@ pub(super) fn control(
     );
     let speed_acks = server_moves.speed_acks;
     if let (true, Ok((e, ..))) = (server_moves.precast_ended, body.single()) {
-        commands
-            .entity(e)
-            .try_remove::<crate::creature_anim::Precast>();
+        crate::creature_anim::end_precast(&mut commands, e, crate::creature_anim::PrecastTail::Run);
     }
 
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
@@ -840,9 +838,11 @@ pub(super) fn control(
             skip,
         );
         if let (true, Ok((e, ..))) = (precast_ended, body.single()) {
-            commands
-                .entity(e)
-                .try_remove::<crate::creature_anim::Precast>();
+            crate::creature_anim::end_precast(
+                &mut commands,
+                e,
+                crate::creature_anim::PrecastTail::Run,
+            );
         }
     } else {
         // Free fly. Park the mover first, so a detach mid-move leaves no stale flags for observers

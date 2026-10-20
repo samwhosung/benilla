@@ -31,10 +31,12 @@ pub(crate) enum UnitEdit {
     /// The same at the active player's send, unless the unit already precasts the spell
     /// (`0x6e588f`).
     SendPrecast { entity: Entity, spell_id: u32 },
-    /// `0x60d040`: the precast ends when it is `spell_id`'s, or whatever it is for `None`.
+    /// `0x60d040`: the precast ends when it is `spell_id`'s, or whatever it is for `None`, and
+    /// runs its tail when `tail` is set (its `b`).
     EndPrecast {
         entity: Entity,
         spell_id: Option<u32>,
+        tail: bool,
     },
     /// `0x60fc50`: the precast's busy bit alone.
     EndPrecastBusy(Entity),
@@ -84,6 +86,7 @@ impl UnitEdit {
             Self::EndPrecast {
                 entity,
                 spell_id: None,
+                tail: true,
             },
             Self::EndPrecastBusy(entity),
         ];
@@ -159,13 +162,24 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
                     unit.remove::<(AutoRepeatArmed, NockedAmmo, NockLatch)>();
                 }
-                precast::end(world, entity, Some(spell_id));
+                precast::end(world, entity, Some(spell_id), precast::PrecastTail::Run);
             }
             UnitEdit::StartPrecast { entity, spell_id } => precast::start(world, entity, spell_id),
             UnitEdit::SendPrecast { entity, spell_id } => {
                 precast::start_at_send(world, entity, spell_id);
             }
-            UnitEdit::EndPrecast { entity, spell_id } => precast::end(world, entity, spell_id),
+            UnitEdit::EndPrecast {
+                entity,
+                spell_id,
+                tail,
+            } => {
+                let tail = if tail {
+                    precast::PrecastTail::Run
+                } else {
+                    precast::PrecastTail::Skip
+                };
+                precast::end(world, entity, spell_id, tail);
+            }
             UnitEdit::EndPrecastBusy(entity) => precast::end_busy(world, entity),
         }
     }

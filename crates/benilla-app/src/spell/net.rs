@@ -664,10 +664,11 @@ fn cast_result(
                 });
             }
             // The report's player cleanup ends the precast of the failed spell (`0x6e1c7f`,
-            // `0x6e1c8e`).
+            // `0x6e1c8e`), with its tail.
             edits.push(crate::creature_anim::UnitEdit::EndPrecast {
                 entity: e,
                 spell_id: Some(spell_id),
+                tail: true,
             });
             cast_events.write(CastEvent {
                 entity: e,
@@ -1071,10 +1072,12 @@ fn spell_go(
         if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
             commands.entity(e).remove::<Casting>();
         }
-        // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`).
+        // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`), its tail run as
+        // `0x6e4870` answers for the record and the cast flags (`0x6e7fa1`, pushed at `0x6e7fbd`).
         edits.push(crate::creature_anim::UnitEdit::EndPrecast {
             entity: e,
             spell_id: Some(spell_id),
+            tail: display.is_some_and(|d| d.test_attributes_and_flags(u32::from(cast_flags))),
         });
         // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It
         // must precede the CastEvent: the cast kit's chain proc consumes it the same frame. The
@@ -1144,6 +1147,7 @@ fn spell_failed_other(
         edits.push(crate::creature_anim::UnitEdit::EndPrecast {
             entity: e,
             spell_id: Some(spell_id),
+            tail: true,
         });
         cast_events.write(CastEvent {
             entity: e,
@@ -1896,6 +1900,11 @@ mod tests {
         }
 
         fn go(&mut self, spell_id: u32) {
+            self.go_flagged(spell_id, 0);
+        }
+
+        /// The GO with its cast flags, read against the world's spell records if it has any.
+        fn go_flagged(&mut self, spell_id: u32, cast_flags: u16) {
             use crate::go_anim::GoLidOpen;
             let (tx, _rx) = crossbeam_channel::unbounded();
             self.app
@@ -1914,12 +1923,13 @@ mod tests {
                           mut items: ResMut<crate::items::Items>,
                           mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
                           mut stand: MessageWriter<crate::player::StandStateRequest>,
-                          edits: Res<crate::creature_anim::UnitEdits>| {
+                          edits: Res<crate::creature_anim::UnitEdits>,
+                          spells: Option<Res<Spells>>| {
                         let net_commands = crate::net::NetCommands(tx.clone());
                         spell_go(
                             Self::SELF,
                             spell_id,
-                            0,
+                            cast_flags,
                             vec![],
                             vec![],
                             None,
@@ -1938,7 +1948,7 @@ mod tests {
                             &mut crate::ui_loot::LootLatch::default(),
                             (
                                 &mut cooldowns,
-                                None,
+                                spells.as_deref(),
                                 &mut items,
                                 &net_commands,
                                 &mut pet_bar,
@@ -2121,6 +2131,57 @@ mod tests {
         assert!(s.precast(me).is_some(), "another spell's failed result");
         s.result(FIREBALL, Some(0x23));
         assert_eq!(s.precast(me), None, "its failed result");
+    }
+
+    /// The GO's end runs its tail as `0x6e4870` answers for the record and the cast flags
+    /// (`0x6e7fa1`, pushed at `0x6e7fbd`), its last step our loot's release; a failure's always
+    /// runs it (`0x6e8e8c` and `0x6e1c8e` push `b` 1).
+    #[test]
+    fn the_go_releases_our_loot_as_its_attribute_test_answers_and_a_failure_always() {
+        use benilla_formats::{SpellCatalog, SpellDisplay};
+        let mut s = CastSeq::new();
+        let me = s.self_e;
+        let world = s.app.world_mut();
+        world.insert_resource(Spells {
+            catalog: SpellCatalog::from_displays(std::collections::HashMap::from([
+                (FIREBALL, SpellDisplay::default()),
+                (
+                    FROSTBOLT,
+                    SpellDisplay {
+                        attributes_ex: 0x400,
+                        ..Default::default()
+                    },
+                ),
+            ])),
+            ..Spells::empty_for_tests()
+        });
+        world.insert_resource(crate::player::Player::with_move_flags(0));
+        world.init_resource::<crate::ui_loot::LootMoveStart>();
+        world.init_resource::<crate::ui_loot::LootCloseAtRest>();
+        let owed = |s: &mut CastSeq| {
+            let world = s.app.world_mut();
+            assert!(
+                !world.resource::<crate::ui_loot::LootMoveStart>().0,
+                "at rest"
+            );
+            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0)
+        };
+        s.give_precast(me, FIREBALL);
+        s.go_flagged(FIREBALL, 0x100);
+        assert!(owed(&mut s), "a plain record's GO");
+        s.give_precast(me, FROSTBOLT);
+        s.go_flagged(FROSTBOLT, 0x100);
+        assert_eq!(s.precast(me), None, "an `AttributesEx & 0x400` GO ends it");
+        assert!(!owed(&mut s), "with no tail");
+        s.give_precast(me, FIREBALL);
+        s.go_flagged(FIREBALL, 0x1);
+        assert!(!owed(&mut s), "flag bit 0");
+        s.give_precast(me, FIREBALL);
+        s.failed_other(FIREBALL);
+        assert!(owed(&mut s), "its failure");
+        s.give_precast(me, FIREBALL);
+        s.result(FIREBALL, Some(0x23));
+        assert!(owed(&mut s), "its failed result");
     }
 
     /// vmangos sends, for every non-triggered cast, `SMSG_SPELL_START` at `Spell::prepare`

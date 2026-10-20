@@ -569,6 +569,14 @@ impl SpellDisplay {
         self.attributes_ex2 & ATTR_EX2_INITIATE_COMBAT_POST_CAST != 0
     }
 
+    /// `TestSpellAttributesAndFlags 0x6e4870(rec, flags)`: 1 for `AttributesEx2 & 0x40000000`;
+    /// else 0 for `AttributesEx & 0x400` or `AttributesEx2 & 0x10000000`; else 1 when `flags`
+    /// bit 0 is clear or bit 12 set. Its one caller, the GO handler `0x6e7a70`, passes the cast
+    /// flags (`0x6e7aa4`) and gates the precast end's tail with the answer (`0x6e7fc5`).
+    pub fn test_attributes_and_flags(&self, _flags: u32) -> bool {
+        true
+    }
+
     /// Hidden from the buff bar (`0x4e4170`, `0x4e42b6`-`0x4e42c8`): `Attributes` read as a byte,
     /// so `0x80` and not the dword's sign, or `AttributesEx & 0x10000000`. The aura stays live;
     /// `GetPlayerBuff` never returns it: warrior stances, Defensive State 5302.
@@ -697,6 +705,37 @@ impl FormRefusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x6e4870`'s order (`0x6e4873`-`0x6e4892`): the `AttributesEx2` 0x40000000 pass first,
+    /// then the two refusals, then the flags. vmangos's GO flags (0x100, with 0x20 for a ranged
+    /// shot) leave bit 0 clear, so a plain record answers 1.
+    #[test]
+    fn the_go_attribute_test_reads_the_record_before_the_flags() {
+        let row = |ex: u32, ex2: u32| SpellDisplay {
+            attributes_ex: ex,
+            attributes_ex2: ex2,
+            ..Default::default()
+        };
+        assert!(row(0, 0).test_attributes_and_flags(0x100), "a plain GO");
+        assert!(row(0, 0).test_attributes_and_flags(0x120));
+        assert!(
+            !row(0, 0).test_attributes_and_flags(0x1),
+            "flag bit 0 alone"
+        );
+        assert!(
+            row(0, 0).test_attributes_and_flags(0x1001),
+            "bit 12 beside it"
+        );
+        assert!(!row(0x400, 0).test_attributes_and_flags(0x100), "Ex 0x400");
+        assert!(
+            !row(0, 0x1000_0000).test_attributes_and_flags(0x100),
+            "Ex2 0x10000000"
+        );
+        assert!(
+            row(0x400, 0x5000_0000).test_attributes_and_flags(0x1),
+            "Ex2 0x40000000 passes ahead of both refusals and the flags"
+        );
+    }
 
     #[test]
     fn is_harmful_follows_the_client_classifier() {
