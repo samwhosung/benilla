@@ -970,6 +970,8 @@ fn spell_go(
                         }
                     }
                 }
+                // The item leg's pair, with or without an insert (`0x6e8500`, `0x6e856b`).
+                cooldowns.flush_item_leg();
             }
             None => {
                 if let Some(d) = display {
@@ -1186,7 +1188,8 @@ fn spell_cooldowns(
 }
 
 /// `SMSG_ITEM_COOLDOWN` (`0x6e95d0`): the fixed 30 s use cooldown, keyed on the item instance's
-/// template entry, as the reference resolves it.
+/// template entry, as the reference resolves it. An item not held flushes the item leg's pair all
+/// the same (`0x6e9656`, `0x6e965b`).
 fn item_cooldown(
     item_guid: u64,
     spell_id: u32,
@@ -1200,8 +1203,9 @@ fn item_cooldown(
         .get(&item_guid)
         .and_then(|&e| stores.get(e).ok())
         .and_then(|s| s.0.object_entry());
-    if let Some(entry) = entry {
-        cooldowns.apply_wire_item_cooldown(entry, spell_id, Instant::now());
+    match entry {
+        Some(entry) => cooldowns.apply_wire_item_cooldown(entry, spell_id, Instant::now()),
+        None => cooldowns.flush_item_leg(),
     }
 }
 

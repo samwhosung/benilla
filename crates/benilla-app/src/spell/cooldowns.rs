@@ -109,7 +109,7 @@ impl CooldownInfo {
 
 /// One cooldown list, the client's `SpellHistory`: the player's is this resource (`0xcecaec`), the
 /// pet's is [`crate::ui_pet::PetBar::cooldowns`] (`0xcecb04`), which the pet bar, the pet book and
-/// the pet's `SMSG_SPELL_GO` leg read and write. Each list's edge feeds its own events: the
+/// the pet's `SMSG_SPELL_GO` leg read and write. Each list's edges feed its own events: the
 /// player's `feed_action_state`, the pet's `ui_pet::bar::fire_pet_cooldown_events`.
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
@@ -117,6 +117,11 @@ pub(crate) struct Cooldowns {
     /// Bumped on every mutation the reference flushes (`0x4b31b0`), the flush's edge. Only counts
     /// up, across [`Self::clear_silent`] too, so a watcher reads a reset as no mutation.
     pub(crate) generation: u64,
+    /// Bumped by the list's calls of `0x4f93d0`, the edge of `BAG_UPDATE_COOLDOWN`:
+    /// `SMSG_ITEM_COOLDOWN` (`0x6e965b`), the spell go's item leg (`0x6e8505`, `0x6e8570`),
+    /// `0x6e3050` (`0x6e3089`) and the cheat (`0x6e9721`). The pet's list calls the pet's flush
+    /// `0x4bce90` in its place (`0x6e3080`), so only the player's feed reads it. Only counts up.
+    pub(crate) bag_flushes: u64,
     /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
     /// feeds must see an expiry, but the reference never fires the event for one.
     expiry_epoch: u64,
@@ -125,6 +130,19 @@ pub(crate) struct Cooldowns {
 impl Cooldowns {
     fn bump(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// `0x4b31b0` then `0x4f93d0`, the pair every item leg calls.
+    pub(crate) fn flush_item_leg(&mut self) {
+        self.bump();
+        self.bag_flushes = self.bag_flushes.wrapping_add(1);
+    }
+
+    /// `0x6e3050`'s tail after its walk, whether or not a record matched: the pair (`0x6e3071`),
+    /// then the bags for the player (`0x6e3089`) or the pet's flush for the pet (`0x6e3080`), which
+    /// reads [`Self::generation`].
+    fn flush_records(&mut self) {
+        self.flush_item_leg();
     }
 
     /// How many records the list holds, elapsed ones included.
@@ -361,38 +379,32 @@ impl Cooldowns {
         }
     }
 
-    /// `SMSG_COOLDOWN_EVENT` (`0x6e1790`, force 0): an on-hold record's recovery and category
-    /// starts become now (`0x6e185a`-`0x6e1863`), and with the recovery start the GCD leg's.
+    /// `SMSG_COOLDOWN_EVENT` (`0x6e3050` → `0x6e1790`, force 0): an on-hold record's recovery and
+    /// category starts become now (`0x6e185a`-`0x6e1863`), and with the recovery start the GCD
+    /// leg's; then [`Self::flush_records`].
     pub(crate) fn cooldown_event(&mut self, spell_id: u32, now: Instant) {
-        let mut touched = false;
         for r in &mut self.records {
             if r.spell_id == spell_id && r.on_hold {
                 r.recovery.start = now;
                 r.category_recovery.start = now;
                 r.on_hold = false;
-                touched = true;
             }
         }
-        if touched {
-            self.bump();
-        }
+        self.flush_records();
     }
 
-    /// `SMSG_CLEAR_COOLDOWN` and the cast-fail revert (`0x6e1790`, force 1).
+    /// `SMSG_CLEAR_COOLDOWN` and the cast-fail revert (`0x6e3050` → `0x6e1790`, force 1), then
+    /// [`Self::flush_records`].
     pub(crate) fn clear_spell(&mut self, spell_id: u32) {
-        let before = self.records.len();
         self.records.retain(|r| r.spell_id != spell_id);
-        if self.records.len() != before {
-            self.bump();
-        }
+        self.flush_records();
     }
 
-    /// `SMSG_COOLDOWN_CHEAT` (`0x6e9700`).
+    /// `SMSG_COOLDOWN_CHEAT` (`0x6e9700`): the list emptied, then the pair (`0x6e9712`) and the
+    /// bags for the player (`0x6e9721`) or the pet's flush, on an empty list too.
     pub(crate) fn wipe(&mut self) {
-        if !self.records.is_empty() {
-            self.records.clear();
-            self.bump();
-        }
+        self.records.clear();
+        self.flush_item_leg();
     }
 
     /// Empty the list with no flush: `SMSG_PET_SPELLS` clears the pet's list (`0x6e9b60` →
@@ -407,7 +419,10 @@ impl Cooldowns {
     /// running cooldown at world entry and [`Self::seed_initial`] appends, so a surviving record
     /// would outlive the fresh one.
     pub(crate) fn clear_session(&mut self) {
-        self.wipe();
+        if !self.records.is_empty() {
+            self.records.clear();
+            self.bump();
+        }
     }
 
     /// One `SMSG_SPELL_COOLDOWN` entry (`0x6e9460`): a nonzero duration is the recovery with no
@@ -457,7 +472,8 @@ impl Cooldowns {
         );
     }
 
-    /// `SMSG_ITEM_COOLDOWN` (`0x6e95d0`): the client's hardcoded 30 s on the item's on-use spell.
+    /// `SMSG_ITEM_COOLDOWN` (`0x6e95d0`): the client's hardcoded 30 s on the item's on-use spell,
+    /// then the item leg's pair (`0x6e9656`, `0x6e965b`).
     pub(crate) fn apply_wire_item_cooldown(
         &mut self,
         item_entry: u32,
@@ -479,6 +495,7 @@ impl Cooldowns {
             0,
             Duration::ZERO,
         );
+        self.flush_item_leg();
     }
 
     /// One `SMSG_INITIAL_SPELLS` cooldown: the wire carries the remainder, so the record starts

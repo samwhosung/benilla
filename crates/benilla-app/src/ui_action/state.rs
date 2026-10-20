@@ -1,15 +1,16 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
-//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM with the reference's events
-//! on each change: the cooldown trio (`0x4b31b0`, `0x4f93d0`), the usable pair (`0x4b31c0`, on a
-//! cache change only, `0x4e5c00`), combat enter and leave (`0x6256ff`, `0x625778`), and
-//! autorepeat start and stop (`0x6e5952`, `0x6ea170`), and between the usable pair each reactive
-//! spell's `SPELL_ACTIVE` ([`super::reactive`]). `IsCurrentAction` reads the cast state
+//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM, and the events their
+//! producers raise, each once a frame in the reference's order: the cooldown pair (`0x4b31b0`) on
+//! a cooldown change, the usable pair (`0x4b31c0`, on a cache change only, `0x4e5c00`) with each
+//! reactive spell's `SPELL_ACTIVE` between them ([`super::reactive`]), `BAG_UPDATE_COOLDOWN`
+//! (`0x4f93d0`) from the item legs, then combat enter and leave (`0x6256ff`, `0x625778`) and
+//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
 //! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
 //! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
 use crate::ui_items::stack_counts;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use bevy::prelude::*;
@@ -19,6 +20,7 @@ use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIN
 use benilla_ui::script::{ActionState, UiScript};
 
 use crate::creature_anim::Engaged;
+use crate::item_watch::ItemNotice;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
@@ -33,6 +35,11 @@ use crate::spell::AutoRepeatActive;
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
     last_generation: Option<u64>,
+    /// The cooldown list's bag flushes ([`Cooldowns`]) as last read.
+    bag_flushes: u64,
+    /// Item slots whose record was missing at the cooldown query, which `0x6e2ed0` asks with the
+    /// callback `0x6e2f70` (`0x6e2efb`).
+    awaiting_records: HashSet<u32>,
     engaged: bool,
     auto_repeat: Option<u32>,
     last_cd_trace: Option<Instant>,
@@ -127,14 +134,18 @@ pub(super) fn feed_action_state(
     relations: crate::target::RelationWorld,
     items: Res<Items>,
     commands: Res<NetCommands>,
-    mut memory: Local<crate::ui_script::VmMemo<StateMemory>>,
+    // The spell charges watcher, and the memory about the VM.
+    (mut item_notices, mut memory): (
+        MessageReader<ItemNotice>,
+        Local<crate::ui_script::VmMemo<StateMemory>>,
+    ),
     // The reactive list, which lives from one arrival to the next, not for a VM.
     mut reactive: Local<super::reactive::ReactiveList>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    let memory = memory.get(&script);
+    let (memory, new_vm) = memory.get_reset(&script);
     let now = Instant::now();
     // Every cooldown pushes its absolute start on the `GetTime` clock, derived from this one
     // pair, so a running cooldown derives the same start every frame.
@@ -167,6 +178,19 @@ pub(super) fn feed_action_state(
         .and_then(|g| objects.entity(g))
         .and_then(|e| units.get(e).ok());
     let cast_ctx = targeting.context();
+
+    // The frame's callers of `0x4f93d0`; a new VM meets the state as it stands and hears none.
+    let mut bags = cooldowns.bag_flushes != memory.bag_flushes;
+    memory.bag_flushes = cooldowns.bag_flushes;
+    // The spell charges watcher on an item of the player's (`0x5d9587`).
+    bags |= item_notices.read().fold(false, |hit, n| {
+        hit | matches!(n, ItemNotice::SpellCharges { .. })
+    });
+    if new_vm {
+        bags = false;
+    }
+    // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`, `0x6e2f8e`).
+    let mut record_flush = false;
 
     let mut fresh: HashMap<u32, ActionState> = HashMap::new();
     for (&slot, button) in &actions.buttons {
@@ -261,9 +285,15 @@ pub(super) fn feed_action_state(
                 // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
                 // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which no
                 // event here marks: an entry is asked when it first shows.
-                let use_spell = items
-                    .template(button.action, 0, Ask::New(&commands))
-                    .and_then(|t| t.use_spell);
+                let template = items.template(button.action, 0, Ask::New(&commands));
+                let awaited = match template {
+                    None if !items.template_answered_unknown(button.action) => {
+                        memory.awaiting_records.insert(button.action);
+                        false
+                    }
+                    _ => memory.awaiting_records.remove(&button.action),
+                };
+                let use_spell = template.and_then(|t| t.use_spell);
                 // `IsCurrentAction`'s item arm holds the entry against the in-flight item
                 // (`0x4e53fc`-`0x4e5428`).
                 st.item = Some(button.action);
@@ -317,6 +347,8 @@ pub(super) fn feed_action_state(
                     let d = spells.as_ref().and_then(|s| s.catalog.get(u.spell_id));
                     let info = cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
                     st.cooldown = info.ui_triple(anchor, ui_now);
+                    // The callback queries again and flushes while the cooldown ends after now.
+                    record_flush |= awaited && info.remaining_ms > 0;
                 }
             }
             _ => {}
@@ -390,11 +422,11 @@ pub(super) fn feed_action_state(
         _ => super::reactive::Refresh::default(),
     };
 
-    // The events in the reference's flush order, the `ACTIONBAR_*` one first.
-    if gen_changed {
+    // The events in the reference's order: each flush's `ACTIONBAR_*` event first, and the
+    // cooldown pair ahead of the bags (`0x6e8500`, `0x6e3071`).
+    if gen_changed || record_flush {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
-        script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
     }
     // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as it
     // turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
@@ -406,6 +438,9 @@ pub(super) fn feed_action_state(
     }
     if usable_changed || reactive.changed {
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
+    }
+    if bags || record_flush {
+        script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
     }
     if engaged != memory.engaged {
         memory.engaged = engaged;
