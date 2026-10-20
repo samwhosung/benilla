@@ -853,7 +853,9 @@ impl UiScript {
         let mut model = self.model_ref().clone();
         model.session = session;
         lua.set_app_data(model);
+        // A fork is a VM of its own, so it carries the profiler's slot and the call host's.
         handler_prof::install(&lua);
+        host::install(&lua);
         UiScript {
             lua,
             instructions: Default::default(),
