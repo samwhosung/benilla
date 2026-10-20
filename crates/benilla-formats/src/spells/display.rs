@@ -100,8 +100,11 @@ pub struct SpellDisplay {
     pub mana_cost_pct: u32,
     /// `manaCostPerlevel` (column 33): the per-level cost term of `GetPowerCost` (`0x6e31b0`).
     pub mana_cost_per_level: u32,
-    /// `manaPerSecond` (column 34): the tooltip's "plus N per sec"; column 35 is 0 on every row.
+    /// `manaPerSecond` (column 34): the tooltip's "plus N per sec" (`0x6e3300`).
     pub mana_per_second: u32,
+    /// `manaPerSecondPerLevel` (column 35): the per-second cost's per-level term (`0x6e332e`), 0
+    /// on every 5875 row.
+    pub mana_per_second_per_level: u32,
     /// `rangeIndex` (column 36): the `SpellRange.dbc` row.
     pub range_index: u32,
     /// `Targets` (column 13): the `TARGET_FLAG_*` seed of the cast arm's targeting word.
@@ -249,6 +252,7 @@ impl Default for SpellDisplay {
             mana_cost_pct: 0,
             mana_cost_per_level: 0,
             mana_per_second: 0,
+            mana_per_second_per_level: 0,
             range_index: 0,
             targets: 0,
             target_creature_type: 0,

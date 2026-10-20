@@ -482,6 +482,21 @@ pub(crate) fn power_cost_at(
     u32::try_from(mods.apply(d, OP_COST, cost)).unwrap_or(0)
 }
 
+/// The per-second cost the tooltip's `_PER_TIME` cell shows, `0x6e3300`: `manaPerSecond` plus
+/// `(level - baseLevel) * manaPerSecondPerLevel` (`0x6e3323`-`0x6e3335`), in 32-bit arithmetic,
+/// `level` the value `0x6e3130` reads. `reads` hears the level when the term has a factor.
+pub(crate) fn per_second_cost(d: &SpellDisplay, level: u32, reads: &mut dyn SpellReads) -> i32 {
+    let level_term = if d.mana_per_second_per_level != 0 {
+        reads.unit(UnitField::Level);
+        level
+            .wrapping_sub(d.base_level)
+            .wrapping_mul(d.mana_per_second_per_level)
+    } else {
+        0
+    };
+    d.mana_per_second.wrapping_add(level_term) as i32
+}
+
 /// What [`power_cost_at`] scales `d`'s percentage cost by: `0x612c50`, a jump table on the power
 /// type plus 2 (`612c53`-`612c5e`), on the caster's fields.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

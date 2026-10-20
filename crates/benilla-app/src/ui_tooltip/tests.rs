@@ -739,6 +739,54 @@ fn cost_and_cast_cells_on_real_data() {
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 }
 
+/// The cost cell's gates test the quotients, signed, after the unsigned division
+/// (`0x52e8dd`-`0x52e923`): a rage cost under 10 has no cell, a per-second cost alone shows the
+/// `_PER_TIME` form with its 0, and the per-second cost scales by the level (`0x6e3300`).
+#[test]
+fn the_cost_cell_tests_the_divided_values() {
+    use benilla_formats::SpellDisplay;
+    let mut spells = Spells::empty_for_tests();
+    let rage = |id: u32, mana_cost| {
+        (
+            id,
+            SpellDisplay {
+                id,
+                name: "Rage".into(),
+                power_type: 1,
+                mana_cost,
+                ..Default::default()
+            },
+        )
+    };
+    let drain = SpellDisplay {
+        id: 900_012,
+        name: "Drain".into(),
+        mana_per_second: 3,
+        mana_per_second_per_level: 2,
+        base_level: 10,
+        ..Default::default()
+    };
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [rage(900_010, 5), rage(900_011, 10), (900_012, drain)].into(),
+    );
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(34, 20)]));
+    let mut t = TestCtx::new();
+    let mut cost = |id| {
+        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+            .unwrap()
+            .cost
+    };
+    assert_eq!(cost(900_010), None, "half a rage point");
+    assert_eq!(cost(900_011).as_deref(), Some("1 Rage"));
+    assert_eq!(
+        cost(900_012).as_deref(),
+        Some("0 Mana, plus 23 per sec"),
+        "3 + (20 - 10) × 2"
+    );
+}
+
 /// The range cell (`0x52e9a2`-`0x52ea8c`): the melee row prints a number off the reaches, an
 /// authored row its own, and the on-next-swing and self rows nothing.
 #[test]

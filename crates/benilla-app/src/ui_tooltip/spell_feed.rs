@@ -76,12 +76,13 @@ pub(super) fn build_view(
     deps.borrow_mut().mod_bits |= vctx.spell_mods.read_bits(d);
     let form = vctx.form;
     let caster = vctx.caster;
-    // `0x6e3130` for this spell: the level the cost's and the cast time's per-level terms read.
+    // `0x6e3130` for this spell: the level the cost's, the per-second cost's and the cast time's
+    // per-level terms read.
     let pet_level = |pet| d.skill_level(crate::spell::pet_skill_value(pet));
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
-    // percentage. Rage shows wire ÷ 10, a per-second column adds `_PER_TIME`, and no cost at all
-    // leaves the cell empty. A pet with no unit costs -1 (`0x6e3233`), which shows as none.
+    // percentage. Rage shows wire ÷ 10, a per-second cost adds `_PER_TIME`, and a cell whose two
+    // quotients are both 0 or less is empty. A pet with no unit costs -1 (`0x6e3233`).
     // The player's reads are the view's record; the pet's level, basis and cast speed are the
     // pet's own inputs ([`PetInputs`]), which rebuild every pet view.
     let resolved_cost = match caster {
@@ -92,9 +93,20 @@ pub(super) fn build_view(
             usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods, &mut Unrecorded)
         }),
     };
+    // The per-second term (`0x6e3300`, `0x52e8c5`), at the same selector's level.
+    let per_second = match caster {
+        ViewCaster::Player => {
+            let level = vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0);
+            usable::per_second_cost(d, level, &mut *deps.borrow_mut())
+        }
+        ViewCaster::Pet(pet) => usable::per_second_cost(d, pet_level(pet), &mut Unrecorded),
+    };
+    // Both divided by the shared per-type divisor (`0x6e7130`), never a local `power_type == 1`
+    // test, unsigned (`0x52e8dd`, `0x52e8f2`); the gates test the quotients, signed.
+    let div = benilla_protocol::messages::power_display_scale(d.power_type);
+    let cost_shown = (resolved_cost / div) as i32;
+    let per_second_shown = ((per_second as u32) / div) as i32;
     let cost = {
-        // The shared per-type divisor (`0x6e7130`), never a local `power_type == 1` test.
-        let div = benilla_protocol::messages::power_display_scale(d.power_type);
         // The key table `0x85416c` for types 0 to 4, `HEALTH_COST` (`0x854fc8`) past them.
         let key = match d.power_type {
             0 => "MANA_COST",
@@ -104,17 +116,18 @@ pub(super) fn build_view(
             4 => "HAPPINESS_COST",
             _ => "HEALTH_COST",
         };
-        let amount = KeyedArg::D(i64::from(resolved_cost / div));
-        if resolved_cost == 0 && d.mana_per_second == 0 {
-            None
-        } else if d.mana_per_second > 0 {
-            // `"%s_PER_TIME"` of the key (`0x854fbc`, `0x52e925`).
+        let amount = KeyedArg::D(i64::from(cost_shown));
+        if per_second_shown > 0 {
+            // `"%s_PER_TIME"` of the key (`0x854fbc`, `0x52e925`), whatever the cost.
             Some(TooltipText::keyed(
                 format!("{key}_PER_TIME"),
-                vec![amount, KeyedArg::D(i64::from(d.mana_per_second / div))],
+                vec![amount, KeyedArg::D(i64::from(per_second_shown))],
             ))
-        } else {
+        } else if cost_shown > 0 {
             Some(TooltipText::keyed(key, vec![amount]))
+        } else {
+            // Neither quotient above 0, so a rage cost of 1 to 9 has no cell (`0x52e913`-`0x52e919`).
+            None
         }
     };
     // The range cell: two attribute gates, `GetMinMaxRange` (`0x6e3480`, `0x52e9c2`), then
@@ -190,7 +203,7 @@ pub(super) fn build_view(
                 "SPELL_ON_NEXT_RANGED"
             } else if d.tooltip_channeled() {
                 "SPELL_CAST_CHANNELED"
-            } else if d.power_type == 0 && resolved_cost > 0 {
+            } else if d.power_type == 0 && cost_shown > 0 {
                 "SPELL_CAST_TIME_INSTANT"
             } else {
                 "SPELL_CAST_TIME_INSTANT_NO_MANA"

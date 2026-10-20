@@ -1225,9 +1225,9 @@ fn real_spell_catalog_cost_columns() {
         (0, 0, 6)
     );
 
-    // `manaPerSecondPerLevel` (column 35) is zero on every row, so it stays unparsed;
-    // `manaCostPerlevel` (33) is nonzero on 72 creature spells, so `power_cost` applies it though
-    // no player tooltip shows it.
+    // `manaPerSecondPerLevel` (column 35) is zero on every row, so the per-second cost's level term
+    // never moves a 5875 tooltip; `manaCostPerlevel` (33) is nonzero on 72 creature spells, so
+    // `power_cost` applies it though no player tooltip shows it.
     let bytes = chain.read_file(super::SPELL).expect("reading Spell.dbc");
     let rs = super::parse(&bytes, super::spell_schema(), "Spell.dbc").expect("Spell.dbc");
     let mut per_level_rows = 0u32;

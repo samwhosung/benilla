@@ -70,6 +70,7 @@ const COL_MANA_COST: usize = 32;
 const COL_MANA_COST_PCT: usize = 156;
 const COL_MANA_COST_PER_LEVEL: usize = 33;
 const COL_MANA_PER_SECOND: usize = 34;
+const COL_MANA_PER_SECOND_PER_LEVEL: usize = 35;
 /// `rangeIndex` (`+0x90`), resolved by `GetMinMaxRange` (`0x6e3480`).
 const COL_RANGE_INDEX: usize = 36;
 /// `modalNextSpell` (`+0x98`): 52 of its 57 nonzero rows are hunter shots naming Auto Shot.
@@ -571,6 +572,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 mana_cost_pct: u32_at(r, COL_MANA_COST_PCT).unwrap_or(0),
                 mana_cost_per_level: u32_at(r, COL_MANA_COST_PER_LEVEL).unwrap_or(0),
                 mana_per_second: u32_at(r, COL_MANA_PER_SECOND).unwrap_or(0),
+                mana_per_second_per_level: u32_at(r, COL_MANA_PER_SECOND_PER_LEVEL).unwrap_or(0),
                 range_index: u32_at(r, COL_RANGE_INDEX).unwrap_or(0),
                 modal_next_spell: u32_at(r, COL_MODAL_NEXT_SPELL).unwrap_or(0),
                 targets: u32_at(r, COL_TARGETS).unwrap_or(0),
