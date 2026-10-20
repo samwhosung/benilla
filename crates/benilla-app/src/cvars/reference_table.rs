@@ -13,9 +13,10 @@ use super::table::{all_rows, Reference};
 const KNOWN: &[(&str, &str)] = &[("Sound_EnableSoundWhenGameIsInBG", "#545")];
 
 /// A default the client computes at registration (`?` in the table), and the string it computes on
-/// a current machine. `SoundBufferSize` (`0x457520`) picks "50" (`0x835e10`) when the detection
-/// record's processor class is 1 and "100" otherwise; the class is 1 above 1500 MHz (`0x6414c0`),
-/// and the record is filled (`0x63a26b`, called at `0x4027e7`) before the sound registration.
+/// a current x86 host. `SoundBufferSize` (`0x457520`) picks "50" (`0x835e10`) when the processor
+/// frequency is above 1500 MHz (`0x6414c0`) and "100" below. The power-information call that reads
+/// it (`0x42c0e0`, room for 4 processors) fails on a host with more logical CPUs, and the
+/// calibrated counter rate (`0x884060`) it falls back to is above 1500 MHz on a current part.
 const COMPUTED_ON_A_CURRENT_HOST: &[(&str, &str)] = &[("SoundBufferSize", "50")];
 
 /// Every registered name, lower-cased, with the defaults the client registers it with (a
@@ -62,7 +63,7 @@ fn the_reference_columns_hold_against_the_registered_cvars() {
             continue;
         };
         if defaults.iter().any(|d| d == "?") {
-            // A computed default has no string to compare, except the one a current machine
+            // A computed default has no string to compare, except the one a current x86 host
             // computes: a `same` row ships it, and a `deviates` row names it.
             if let Some((_, computed)) = COMPUTED_ON_A_CURRENT_HOST
                 .iter()

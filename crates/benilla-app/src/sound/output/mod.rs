@@ -66,8 +66,10 @@ const HANDBACK_WAIT: Duration = Duration::from_millis(250);
 pub(super) const DEVICE_BUFFER_FRAMES: u32 = 512;
 
 /// How far ahead of the device the mix runs. The reference registers `SoundBufferSize`, FMOD 3's
-/// mix-ahead, at `"50"` on a host above 1500 MHz, which is every current machine, and `"100"`
-/// below (`0x457520`, strings at `0x835e10`/`0x835e0c`); this is the first.
+/// mix-ahead, at `"50"` when its processor frequency reads above 1500 MHz and `"100"` below
+/// (`0x457520`, `0x6414c0`, strings at `0x835e10`/`0x835e0c`). A host with more than 4 logical CPUs
+/// reads the calibrated counter rate (`0x42c0e0`, `0x884060`), above 1500 MHz on a current x86
+/// part; this is the first.
 pub(super) const MIX_AHEAD_MS: u32 = 50;
 
 /// Whether an output stream is open, set only by the backend around the stream's life. The stall

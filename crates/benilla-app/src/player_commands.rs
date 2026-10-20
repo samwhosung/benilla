@@ -1,8 +1,11 @@
 //! The console commands the reference registers with its player object: `RegisterPlayerCommands`
 //! (`0x4049e0`), the first virtual of the object `ClientInitializeGame` builds (`0x401726`), runs
-//! at start-up with no build or account test on the way, and `/console` reaches its commands
-//! through `0x63ce00`, which has no category gate. Each is a send to the server; whether the
-//! account may use it is the server's to say.
+//! with no build or account test on the way, and `/console` reaches its commands through
+//! `0x63ce00`, which has no category gate. `ClientDestroyGame` unregisters all six (slot 1,
+//! `0x401f86` to `0x405390`) and `whois` too (`0x5ae316`), so the reference holds them from world
+//! entry only. Registered for the process here they answer the same: the one route into `execute`
+//! at the glue is `drain_glue_console`, and stock GlueXML never calls `ConsoleExec`. Each is a
+//! send to the server; whether the account may use it is the server's to say.
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_assets::MapCatalogRes;
