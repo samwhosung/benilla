@@ -15,7 +15,7 @@ mod chain;
 pub use chain::{Chain, ChainEntry};
 /// Loose `.tga` art, as addon folders ship it.
 mod tga;
-pub use tga::tga_to_rgba;
+pub use tga::{tga_texture_size, tga_to_rgba};
 /// Where the WoW install is; [`Chain`] opens it.
 mod install;
 pub use install::{
