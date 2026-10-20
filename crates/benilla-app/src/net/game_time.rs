@@ -112,8 +112,14 @@ impl GameTime {
     /// difference since the anchor is unsigned, at the rate, and `x` loses 1440 while it exceeds
     /// it; the intermediate steps are the x87's 53 bits, rounded once to the float on the store.
     pub(crate) fn phase(&self, tick: u32) -> f32 {
-        let _ = tick;
-        0.0
+        let elapsed = tick.wrapping_sub(self.tick);
+        let mut x = f64::from(elapsed) * f64::from(MILLISECOND);
+        x *= f64::from(self.scale);
+        x += f64::from(self.phase_base);
+        while x > 1440.0 {
+            x -= 1440.0;
+        }
+        (x * f64::from(ONE_OVER_1440)) as f32
     }
 
     /// The day count moon02's phase reads (see the field).
@@ -126,14 +132,34 @@ impl GameTime {
     /// clock. The sum is the x87's 53 bits rounded to the float on the store; a NaN rate makes the
     /// fraction NaN for good, and no minute steps after it.
     pub(crate) fn tick_frame(&mut self, dt: f32, tick: u32) {
-        let _ = (dt, tick);
+        let sum = (f64::from(dt) * f64::from(self.scale) + f64::from(self.fraction)) as f32;
+        self.fraction = sum;
+        if self.skip != 0 && sum >= 1.0 {
+            // `__ftol` (`0x40a2b0`), then the lesser of the two as unsigned (`0x6435db`).
+            let whole = (sum as i64) as u32;
+            let taken = self.skip.min(whole);
+            self.skip -= taken;
+            self.fraction = (f64::from(sum) - f64::from(taken)) as f32;
+        }
+        while self.fraction >= 1.0 {
+            self.fraction -= 1.0;
+            self.advance_minute(tick);
+        }
     }
 
     /// `0x643ad0`: the clock steps one minute. The minute of day becomes `(minute of day + 1) mod
     /// 1440` (an unset hour or minute counting 0, so the first step lands at 00:01), a new day
     /// adds one to the date, and the anchor is the new minute plus the fraction at this tick.
     fn advance_minute(&mut self, tick: u32) {
-        let _ = tick;
+        let next = (minute_of_day(&self.time) + 1) % 1440;
+        // `0x6424e0`.
+        self.time.hour = next / 60;
+        self.time.minute = next % 60;
+        if next == 0 {
+            self.step_days(1);
+        }
+        self.tick = tick;
+        self.phase_base = (f64::from(next) + f64::from(self.fraction)) as f32;
     }
 
     /// `0x6423c0` on the clock's date, and the day count with it.
@@ -155,8 +181,19 @@ impl GameTime {
     /// anchor and the tick restart from it. The result is the sent hour and minute taken modulo a
     /// day, and 00:01 when either is unset (the step back leaves the unset field negative).
     pub(crate) fn set(&mut self, time: WowTime, tick: u32) {
-        let _ = tick;
         self.take(time);
+        if self.time.minute != 0 {
+            self.time.minute -= 1;
+        } else {
+            self.time.minute = 59;
+            if self.time.hour != 0 {
+                self.time.hour -= 1;
+            } else {
+                self.time.hour = 23;
+                self.step_days(-1);
+            }
+        }
+        self.advance_minute(tick);
     }
 
     /// `0x6436c0(time, 0)`, the sync of the clock to a server time. `d` is the minutes the sent time
@@ -164,15 +201,42 @@ impl GameTime {
     /// minutes, then takes the sent time as sent. A tie takes it. A lag takes it, banks `-d` minutes
     /// to skip and steps `-d` minutes, back to the minute the clock showed.
     pub(crate) fn sync(&mut self, time: WowTime, tick: u32) {
-        let _ = tick;
-        self.take(time);
+        let days = day_number(&time).wrapping_sub(day_number(&self.time));
+        let behind = minute_of_day(&self.time);
+        let ahead = minute_of_day(&time);
+        // `idiv`: the remainder takes the dividend's sign.
+        let d = days
+            .wrapping_mul(1440)
+            .wrapping_sub(behind)
+            .wrapping_add(ahead)
+            % 1440;
+        if d > 0 {
+            for _ in 0..d {
+                self.advance_minute(tick);
+            }
+            self.take(time);
+        } else {
+            self.take(time);
+            self.skip += d.unsigned_abs();
+            for _ in 0..d.unsigned_abs() {
+                self.advance_minute(tick);
+            }
+        }
     }
 
     /// `0x643820`: the rate, held to a sixtieth through sixty. A NaN passes both compares and is
     /// stored through `fld`, which sets its quiet bit. Returns the rate the clock held.
     pub(crate) fn set_scale(&mut self, rate: f32) -> f32 {
         let held = self.scale;
-        self.scale = rate;
+        self.scale = if rate > MAX_SCALE {
+            MAX_SCALE
+        } else if rate.is_nan() {
+            f32::from_bits(rate.to_bits() | 0x0040_0000)
+        } else if rate >= MIN_SCALE {
+            rate
+        } else {
+            MIN_SCALE
+        };
         held
     }
 
@@ -233,7 +297,11 @@ impl GameTime {
 
 /// `0x6424c0`.
 fn minute_of_day(time: &WowTime) -> i32 {
-    time.hour * 60 + time.minute
+    if time.hour < 0 || time.minute < 0 {
+        0
+    } else {
+        time.hour * 60 + time.minute
+    }
 }
 
 /// `WowTime::GetDayNumber` (`0x642320`): 0 for a date with the year, month or day unset, else the
@@ -246,8 +314,10 @@ fn minute_of_day(time: &WowTime) -> i32 {
 /// down one together, which no difference between two dates sees, and a daylight-saving change
 /// can give two dates one number, which the sync (`0x6436c0`) would see.
 fn day_number(time: &WowTime) -> i32 {
-    let _ = time;
-    0
+    if time.year < 0 || time.month < 0 || time.day < 0 {
+        return 0;
+    }
+    days_from_civil(2000 + time.year % 100, time.month, time.day) as i32
 }
 
 /// `0x6423c0(days, 0)`: moves the date by `days` through `mktime` and `localtime`, which write back
@@ -255,7 +325,16 @@ fn day_number(time: &WowTime) -> i32 {
 /// the year, month or day unset stays as it is. The reference adds the days to the date's local
 /// midnight plus an hour, and the UTC days of [`day_number`] stand in for it.
 fn add_days(time: &mut WowTime, days: i32) {
-    let _ = (time, days);
+    if time.year < 0 || time.month < 0 || time.day < 0 {
+        return;
+    }
+    let n = days_from_civil(2000 + time.year, time.month, time.day) + i64::from(days);
+    let (year, month, day) = civil_from_days(n);
+    time.year = (year - 2000) as i32;
+    time.month = month - 1;
+    time.day = day - 1;
+    // 1970-01-01 was a Thursday; `tm_wday` counts from Sunday.
+    time.weekday = (n + 4).rem_euclid(7) as i32;
 }
 
 /// Days from 1970-01-01 to the first of a month plus `day` days (`mktime`'s `tm_mday` less one),
@@ -292,8 +371,38 @@ fn civil_from_days(days: i64) -> (i64, i32, i32) {
 /// 2000, the weekday's `Sun` to `Sat` (`Any` when negative), the hour and the minute to two digits.
 /// Any other negative field prints `A`.
 fn format_time(time: &WowTime) -> String {
-    let _ = time;
-    String::new()
+    // `0x642ae0` masks each field to its width; the pack is 0 only when every masked field is.
+    let masked = [
+        (time.minute, 0x3f),
+        (time.hour, 0x1f),
+        (time.weekday, 0x7),
+        (time.day, 0x3f),
+        (time.month, 0xf),
+        (time.year, 0x1f),
+        (time.spare, 0x3),
+    ];
+    if masked.iter().all(|&(field, mask)| field & mask == 0) {
+        return "Not Set".to_string();
+    }
+    let number = |field: i32, add: i32| match field {
+        f if f < 0 => "A".to_string(),
+        f => (f + add).to_string(),
+    };
+    let weekday = match time.weekday {
+        w if w < 0 => "Any",
+        w => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w as usize % 7],
+    };
+    let minute = match time.minute {
+        m if m < 0 => "A".to_string(),
+        m => format!("{m:02}"),
+    };
+    format!(
+        "{}/{}/{} ({weekday}) {}:{minute}",
+        number(time.month, 1),
+        number(time.day, 1),
+        number(time.year, 2000),
+        number(time.hour, 0),
+    )
 }
 
 /// The in-game clock (`SMSG_LOGIN_SETTIMESPEED` and the other time messages), advanced each frame.
