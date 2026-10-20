@@ -22,6 +22,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::DefenseMessage, on_broadcast)
         .net_handler(K::ServerMessage, on_broadcast)
         .net_handler(K::ChatRestricted, on_broadcast)
+        .net_handler(K::TransferAborted, on_broadcast)
         .net_handler(K::Notification, on_toast)
         .net_handler(K::AreaTriggerMessage, on_toast)
         .net_handler(K::PlayedTime, on_played_time)
@@ -59,7 +60,8 @@ fn on_whisper_refusal(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>)
     }
 }
 
-/// The four world broadcasts, parked for [`super::broadcast`]'s resolve pass.
+/// The four world broadcasts and a transfer abort's line, parked for [`super::broadcast`]'s
+/// resolve pass.
 fn on_broadcast(In(ev): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
     let b = match ev {
         SessionEvent::ZoneUnderAttack { area_id } => Broadcast::ZoneUnderAttack { area_id },
@@ -68,6 +70,7 @@ fn on_broadcast(In(ev): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
             Broadcast::Server { message_type, text }
         }
         SessionEvent::ChatRestricted => Broadcast::ChatRestricted,
+        SessionEvent::TransferAborted { reason } => Broadcast::TransferAborted { reason },
         _ => return,
     };
     broadcast(b, &mut chat_log);
@@ -300,6 +303,21 @@ mod tests {
             )
             .unwrap();
         world.resource::<ChatLog>().pending_len()
+    }
+
+    /// `SMSG_TRANSFER_ABORTED` reaches chat: its reason is parked for the line the resolve pass
+    /// reads from the VM (`0x4019a0`).
+    #[test]
+    fn a_transfer_abort_is_parked_for_its_line() {
+        let mut world = World::new();
+        world.insert_resource(ChatLog::default());
+        world
+            .run_system_once_with(on_broadcast, SessionEvent::TransferAborted { reason: 5 })
+            .unwrap();
+        assert_eq!(
+            world.resource_mut::<ChatLog>().take_broadcasts(),
+            [Broadcast::TransferAborted { reason: 5 }]
+        );
     }
 
     /// An addon line rides an ordinary lane; only its `language` keeps it out of the window.

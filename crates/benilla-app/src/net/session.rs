@@ -684,7 +684,8 @@ fn transfer_pending(map_id: u32, transport_entry: Option<u32>, pending: &mut Pen
     });
 }
 
-/// `SMSG_TRANSFER_ABORTED`: clears the latch.
+/// `SMSG_TRANSFER_ABORTED`: clears the latch, which ends the screen the transfer raised as
+/// `0x401a11` does (`0x407e80`); the reason's line is `ui_chat`'s.
 fn transfer_aborted(reason: u8, pending: &mut PendingTransfer) {
     warn!("net: transfer aborted (reason {reason})");
     pending.0 = None;
