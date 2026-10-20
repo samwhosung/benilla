@@ -62,6 +62,9 @@ pub(crate) enum FieldNotice {
     /// `PVP_TOGGLE_OFF_VERBOSE` (`0x8606e0`, `0x8606c8`) as a chat line of type `0xa`
     /// (`0x5eeb5d`).
     PvpPreference { on: bool },
+    /// The drunk watcher `0x5e2a90` on any player's `PLAYER_BYTES_3` byte 1: the byte's copy and
+    /// its value now, from which the run signals and speaks (`crate::ui_unit::field_events`).
+    Drunk { guid: u64, old: u8, new: u8 },
     /// `FireTutorial(id, 0)` (`0x4b5390`) from a watcher on the active player: the number's
     /// fire-once bit tested and set, then its `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once,
     /// in the watcher's order.
@@ -806,6 +809,56 @@ mod tests {
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(pf(0x1c), 1)]),
             [FieldNotice::Player { id: 524 }]
+        );
+    }
+
+    /// The drunk watcher `0x5e2a90` is a player type watcher on `PLAYER_BYTES_3` byte 1
+    /// (`0x5e2637`-`0x5e2648`), so it runs on every player, after the byte 2 and byte 3 watchers
+    /// registered ahead of it (`0x5e2618`, `0x5e2630`), with the byte's copy (`0x5e2b59`) and the
+    /// byte now (`0x5e2ac9`). The other bytes of the dword do not run it. On the active player
+    /// the rank watch on the whole dword runs after it, the object's own list.
+    #[test]
+    fn the_drunk_watcher_runs_on_every_player_with_its_old_byte() {
+        const OTHER: u64 = 0x08;
+        let bytes_3 = pf(0x1c);
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(bytes_3, 60 << 8)]),
+            [FieldNotice::Drunk {
+                guid: OTHER,
+                old: 0,
+                new: 60
+            }]
+        );
+        assert!(
+            block(&mut other, Some(ME), OTHER, &[(bytes_3, 60 << 8 | 1)]).is_empty(),
+            "the gender byte alone"
+        );
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(bytes_3, 0x0102_0001)]),
+            [
+                signal(OTHER, id::UNIT_NAME_UPDATE),
+                signal(OTHER, id::UNIT_NAME_UPDATE),
+                signal(OTHER, id::UNIT_FACTION),
+                FieldNotice::Drunk {
+                    guid: OTHER,
+                    old: 60,
+                    new: 0
+                }
+            ],
+            "bytes 2, 3 and 1, in registration order"
+        );
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(bytes_3, 90 << 8)]),
+            [
+                FieldNotice::Drunk {
+                    guid: ME,
+                    old: 0,
+                    new: 90
+                },
+                FieldNotice::Player { id: 524 }
+            ]
         );
     }
 

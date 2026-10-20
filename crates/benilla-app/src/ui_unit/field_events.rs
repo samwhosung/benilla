@@ -126,6 +126,7 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
         }
         // Fired by [`fire_field_notices`], which holds the slots and the banks.
         FieldNotice::QuestLog | FieldNotice::Tutorial { .. } => {}
+        FieldNotice::Drunk { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
@@ -145,6 +146,11 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
             crate::ui_action::show_messages(script, sink, "ui_unit", lines.into_iter().flatten());
         }
     }
+}
+
+/// The drunk messages a change of the byte prints.
+fn drunk_messages(_old: u8, _new: u8) -> Vec<u8> {
+    Vec::new()
 }
 
 /// A unit notice's signals into a bare VM, for the stock-file tests that drive the frames off the
@@ -329,7 +335,8 @@ mod tests {
         app.add_message::<FieldNotice>()
             .init_resource::<FieldNoticeCursor>()
             .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>();
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::names::NameCache>();
         let mut script = UiScript::new().unwrap();
         script
             .run(
@@ -471,6 +478,107 @@ mod tests {
                 .pending_lines(),
             ["on, verbose", "off, verbose"]
         );
+    }
+
+    /// `0x5e2a90`'s thresholds, the floats 0.01, 0.5 and 0.9 at `0x80af68` against
+    /// `min(byte, 100) · 0.01` as a single (`0x5e2acc`-`0x5e2aeb`, `0x5e2b5e`-`0x5e2b7c`): a rise
+    /// across threshold k prints message k + 2 and skips threshold k + 1 (`0x5e2bd5`-`0x5e2bdc`), a
+    /// fall prints k + 1, in threshold order.
+    #[test]
+    fn the_drunk_messages_follow_the_thresholds_crossed() {
+        for (old, new, want) in [
+            (0, 1, &[2][..]),
+            (1, 0, &[1]),
+            (0, 49, &[2]),
+            (0, 50, &[2]),
+            (49, 50, &[3]),
+            (50, 49, &[2]),
+            (89, 90, &[4]),
+            (90, 89, &[3]),
+            (0, 95, &[2, 4]),
+            (95, 0, &[1, 2, 3]),
+            (30, 95, &[3]),
+            (60, 60, &[]),
+            (100, 255, &[]),
+        ] {
+            assert_eq!(drunk_messages(old, new), want, "{old} -> {new}");
+        }
+    }
+
+    /// The drunk watcher's run (`0x5e2a90`): on the active player, `UNIT_LEVEL` for `"target"` when
+    /// the player can attack its target (`0x5e2afb`-`0x5e2b38`); then, on any player, each message
+    /// as a system chat line (`0x49a870`, type 0xa): `DRUNK_MESSAGE_SELF%d` for the active player
+    /// (`0x5e2bf8`), else `DRUNK_MESSAGE_OTHER%d` filled with the player's name (`0x5e2c09`,
+    /// `0x609210`).
+    #[test]
+    fn the_drunk_watcher_signals_the_target_and_speaks() {
+        const OTHER: u64 = 0x08;
+        struct Attackable;
+        impl benilla_ui::script::UnitRelations for Attackable {
+            fn holds(&self, guid: u64) -> bool {
+                guid == MOB || guid == ME
+            }
+            fn reaction(&self, _: u64, _: u64) -> Option<u8> {
+                None
+            }
+            fn can_attack(&self, a: u64, b: u64) -> Option<bool> {
+                Some(a == ME && b == MOB)
+            }
+            fn can_assist(&self, _: u64, _: u64) -> Option<bool> {
+                None
+            }
+            fn can_cooperate(&self, _: u64, _: u64) -> Option<bool> {
+                None
+            }
+            fn is_pvp(&self, _: u64) -> Option<bool> {
+                None
+            }
+        }
+        let mut app = world(benilla_ui::script::UnitGuids {
+            target: MOB,
+            ..seated()
+        });
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(OTHER, "Bob".into(), None);
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_unit_relations(Some(std::rc::Rc::new(Attackable)));
+            script
+                .run(
+                    r#"
+                    for k = 1, 4 do
+                        setglobal("DRUNK_MESSAGE_SELF" .. k, "self " .. k)
+                        setglobal("DRUNK_MESSAGE_OTHER" .. k, "%s other " .. k)
+                    end
+                "#,
+                )
+                .unwrap();
+        }
+        let chat = |app: &mut App| -> Vec<String> {
+            let lines = app
+                .world()
+                .resource::<crate::ui_chat::ChatLog>()
+                .pending_lines();
+            app.world_mut()
+                .insert_resource(crate::ui_chat::ChatLog::default());
+            lines
+        };
+        let drunk = |guid, old, new| FieldNotice::Drunk { guid, old, new };
+        assert_eq!(fired(&mut app, &[drunk(ME, 0, 95)]), ["UNIT_LEVEL target"]);
+        assert_eq!(chat(&mut app), ["self 2", "self 4"]);
+        // Another player: no signal, its name in the line.
+        assert!(fired(&mut app, &[drunk(OTHER, 95, 0)]).is_empty());
+        assert_eq!(
+            chat(&mut app),
+            ["Bob other 1", "Bob other 2", "Bob other 3"]
+        );
+        // A target the player cannot attack: the lines alone.
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_unit_guids(&seated());
+        assert!(fired(&mut app, &[drunk(ME, 60, 40)]).is_empty());
+        assert_eq!(chat(&mut app), ["self 2"]);
     }
 
     /// A watcher's tutorial fires inside its run (`0x4b5390` with delay 0): the `TutorialPopup` cue
