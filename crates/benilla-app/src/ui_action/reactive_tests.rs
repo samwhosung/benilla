@@ -308,3 +308,40 @@ fn the_reactive_re_check_runs_inside_each_usable_refresh_alone() {
         "the select's refresh re-checks the list"
     );
 }
+
+/// `0x4b31c0` raises the bar's `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`), then each reactive word
+/// (`0x4b3226`), then `SPELL_UPDATE_USABLE` (`0x4b3246`), all after its pushes: with Revenge on
+/// the bar, its turn to usable raises the three in that order.
+#[test]
+fn the_bars_usable_event_comes_before_the_reactive_word() {
+    let mut app = app();
+    {
+        let mut actions = app.world_mut().resource_mut::<PlayerActions>();
+        actions.buttons.insert(
+            0,
+            benilla_protocol::messages::ActionButton {
+                slot: 0,
+                action: REVENGE,
+                kind: benilla_protocol::messages::ACTION_KIND_SPELL,
+            },
+        );
+        actions.dirty = true;
+    }
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("ACTIONBAR_UPDATE_USABLE")
+            f:SetScript("OnEvent", function() table.insert(HEARD, event) end)"#,
+        )
+        .unwrap();
+    step(&mut app, 0);
+    assert_eq!(
+        step(&mut app, 0x1),
+        [
+            "ACTIONBAR_UPDATE_USABLE",
+            "SPELL_ACTIVE Revenge",
+            "SPELL_UPDATE_USABLE"
+        ]
+    );
+}
