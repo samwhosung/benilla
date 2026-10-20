@@ -178,9 +178,9 @@ pub(crate) struct UiPassState {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiFeed;
 
-/// The drains of what the pass's Lua asked for (a send, a window's verb, a save), after the tick
-/// and the input pass and before the world reads them: the reference applies each inside its
-/// call, so the frame's world sees it.
+/// The drains of what the pass's Lua asked for (a send, a window's verb, a save, a sound), after
+/// the input pass and after every later host they are free to follow: the reference applies each
+/// inside its call, so an ask is drained the frame it is made, wherever in the pass its Lua ran.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UiDrain;
 
@@ -388,18 +388,19 @@ impl Plugin for UiScriptPlugin {
                 )
                     .chain(),
             )
-            // The UI phases in order: feeds after the net drain, the tick and the input pass, the
-            // drains of what their Lua asked, then the paint.
+            // The UI phases in order: feeds after the net drain, the tick and the input pass, then
+            // the paint; the drains of what the Lua asked after the input pass, and after every
+            // later host the VM pass can put them behind (`crate::vm_pass`).
             .configure_sets(
                 Update,
                 (
                     UiFeed.after(WorldStage::Net),
                     UiInput.before(WorldStage::Input),
-                    UiDrain.before(WorldStage::Input),
                     UiPaint,
                 )
                     .chain(),
             )
+            .configure_sets(Update, UiDrain.after(UiInput))
             // `GetFramerate()`'s ring, a static of the client's that no reload or logout
             // resets: the feed hands a new VM its rate before the tick, and each world frame's
             // step joins the ring after its paint, standing for `CGWorldFrame::OnRender`
@@ -447,7 +448,7 @@ impl Plugin for UiScriptPlugin {
             .add_systems(
                 Update,
                 arbitrate_pointer_over_ui
-                    .in_set(crate::ui_script::UiDrain)
+                    .after(UiInput)
                     .before(WorldStage::Input),
             )
             .add_message::<server_alert::LaunchUrl>()

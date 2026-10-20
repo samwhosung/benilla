@@ -796,9 +796,9 @@ impl Plugin for WorldMapUiPlugin {
             Update,
             (
                 // After the script tick: a selection changed this tick projects on the next.
-                feed_world_map.in_set(crate::ui_script::UiDrain),
+                feed_world_map.after(crate::ui_script::UiInput),
                 // After the script tick, so the jump hit-tests this tick's frame rects.
-                dev_map_jump.in_set(crate::ui_script::UiDrain),
+                dev_map_jump.after(crate::ui_script::UiInput),
             ),
         );
     }
