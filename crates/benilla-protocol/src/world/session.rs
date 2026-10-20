@@ -1,4 +1,4 @@
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -83,13 +83,14 @@ pub enum WorldConnectEvent {
 }
 
 impl WorldSession {
-    /// Connect and complete the auth handshake with the logon's account and session key.
+    /// Connect to a realm's world `address` (`host[:port]`, port 9090 when it names none) and
+    /// complete the auth handshake with the logon's account and session key.
     pub fn connect(
-        addr: impl ToSocketAddrs,
+        address: &str,
         username: &str,
         session_key: [u8; SESSION_KEY_LENGTH],
     ) -> Result<Self> {
-        Self::connect_queued(addr, username, session_key, &mut |_| true)
+        Self::connect_queued(address, username, session_key, &mut |_| true)
     }
 
     /// [`Self::connect`], calling `on_event` once the socket connects and with each queue position;
@@ -97,13 +98,13 @@ impl WorldSession {
     /// Deviation: checked per queue packet where the reference checks each tick, so a cancel can
     /// lag one server update.
     pub fn connect_queued(
-        addr: impl ToSocketAddrs,
+        address: &str,
         username: &str,
         session_key: [u8; SESSION_KEY_LENGTH],
         on_event: &mut dyn FnMut(WorldConnectEvent) -> bool,
     ) -> Result<Self> {
         let mut queued = false;
-        let mut stream = TcpStream::connect(addr).context("connecting to world server")?;
+        let mut stream = crate::dial_world(address).context("connecting to world server")?;
         // The connect hook's reset (`0x537b90`): the counts start at zero and the clock now.
         let traffic = Arc::new(LinkTraffic::new());
         if !on_event(WorldConnectEvent::Connected) {

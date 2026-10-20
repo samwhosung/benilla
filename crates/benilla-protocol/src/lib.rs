@@ -70,6 +70,9 @@ impl std::fmt::Display for DialFailure {
 
 impl std::error::Error for DialFailure {}
 
+/// The port a realm's world address dials when it names none (`0x2382`, `0x53785a`).
+const WORLD_DEFAULT_PORT: u16 = 9090;
+
 /// Resolves, then dials the first IPv4 address ([`first_ipv4`]).
 fn dial(host: &str, port: u16) -> Result<TcpStream> {
     use std::net::ToSocketAddrs;
@@ -99,17 +102,56 @@ fn dial(host: &str, port: u16) -> Result<TcpStream> {
     })
 }
 
-/// The address 1.12.1 dials: IPv4 alone, the first the resolver gives (`WowConnection::ConnectToHost`
-/// `0x5b6e40`: `inet_addr`, else `gethostbyname`'s first entry). `localhost` resolves to `::1`
-/// first, which a realmd bound to IPv4 refuses only after about 2 s on Windows.
+/// The address the world dial takes: IPv4 alone, the first the resolver gives
+/// (`WowConnection::ConnectToHost` `0x5b6e40`: `inet_addr`, else `gethostbyname`'s first entry).
+/// `localhost` resolves to `::1` first, which a server bound to IPv4 refuses only after about 2 s
+/// on Windows.
 fn first_ipv4(addrs: &[SocketAddr]) -> Option<SocketAddr> {
     addrs.iter().copied().find(SocketAddr::is_ipv4)
 }
 
-/// A realm's world address split into the host and port the world dial takes.
-#[allow(dead_code)]
+/// Dial a realm's world server at its realm-list address ([`world_host_port`]).
+pub(crate) fn dial_world(address: &str) -> Result<TcpStream> {
+    let (host, port) = world_host_port(address);
+    dial(host, port)
+}
+
+/// A realm's world address as `NetClient::Connect` (`0x537820`) splits it: the host up to the
+/// first `:` (`SStrChr2` `0x64a3f0`, `0x53786c`) and the low 16 bits (`0x5b6e94`) of `_atoi` of
+/// the rest (`0x53787a`), or the whole text and [`WORLD_DEFAULT_PORT`] with no `:`.
 fn world_host_port(address: &str) -> (&str, u16) {
-    host_port(address, 0)
+    match address.split_once(':') {
+        Some((host, port)) => (host, atoi(port) as u16),
+        None => (address, WORLD_DEFAULT_PORT),
+    }
+}
+
+/// `_atoi` (`0x41449c` → `_atol` `0x414411`): C-locale spaces skipped, one `-` or `+`, then the
+/// decimal digits in wrapping 32-bit arithmetic up to the first other byte; 0 with none.
+fn atoi(text: &str) -> i32 {
+    let mut bytes = text
+        .bytes()
+        .skip_while(|b| matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .peekable();
+    let negative = match bytes.peek() {
+        Some(b'-') => {
+            bytes.next();
+            true
+        }
+        Some(b'+') => {
+            bytes.next();
+            false
+        }
+        _ => false,
+    };
+    let value = bytes.take_while(u8::is_ascii_digit).fold(0i32, |n, d| {
+        n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
+    });
+    if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    }
 }
 
 /// The logon hosts of a realmlist, each with its port.
@@ -128,7 +170,7 @@ fn pick(addrs: &[SocketAddr], _draw: u32) -> Option<SocketAddr> {
 #[derive(Debug, Clone)]
 pub struct RealmInfo {
     pub name: String,
-    /// `host:port` of the world server, as the client would connect to it.
+    /// The world server's `host[:port]`, as the client connects to it ([`WorldSession::connect`]).
     pub address: String,
     /// The population, sentinels already rewritten as the reference parser does
     /// ([`auth::MAGIC_POPULATIONS`]); the list shows a band against all realms' mean and deviation.
