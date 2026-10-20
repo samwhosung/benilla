@@ -1968,6 +1968,79 @@ mod tests {
         assert!(world.get_entity(e).is_err(), "the cells died with the item");
     }
 
+    /// A queued `0x1EB` replays from the item's record application, `0x5d8440` (`0x5ebde0` at
+    /// `0x5d85b7`): at the create hook when the record is cached, else when it lands (`0x5d8390`),
+    /// and only for the active player's item while in the world (`0x5d8504`, `0x5d8521`).
+    #[test]
+    fn a_queued_enchant_time_replays_when_the_items_record_applies() {
+        use crate::items::Countdowns;
+        use benilla_protocol::messages::ObjectType;
+        const ME: u64 = 0x0000_0000_0000_0007;
+        const SWORD: u64 = 0x4000_0000_0000_0042;
+        const THEIRS: u64 = 0x4000_0000_0000_0043;
+        const MACE: u64 = 0x4000_0000_0000_0044;
+        const ENTRY: u32 = 117;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        let me = world
+            .spawn((
+                Guid(ME),
+                ObjectStore(ObjectFields::default().into_created(ObjectType::Player)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        let create = |guid: u64, owner: u64| SessionEvent::ItemCreate {
+            guid,
+            container: false,
+            fields: ObjectFields::from_pairs(&[
+                (2, 0x3),
+                (3, ENTRY),
+                (6, owner as u32),
+                (7, (owner >> 32) as u32),
+            ])
+            .into_created(ObjectType::Item),
+        };
+        let queue = |guid: u64| SessionEvent::ItemEnchantTime {
+            item_guid: guid,
+            slot: 1,
+            seconds: 90,
+        };
+        let replayed = |world: &World, guid: u64| -> bool {
+            let e = world.resource::<GuidIndex>().0[&guid];
+            world
+                .get::<Countdowns>(e)
+                .and_then(|c| c.enchant_remaining_ms(1))
+                .is_some_and(|ms| (89_000..=90_000).contains(&ms))
+        };
+
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![
+                queue(SWORD),
+                queue(THEIRS),
+                create(SWORD, ME),
+                create(THEIRS, 0x99),
+            ]),
+        );
+        assert!(!replayed(world, SWORD), "no record yet: nothing applies");
+        super::super::handlers::dispatch(
+            world,
+            vec![SessionEvent::ItemTemplate {
+                entry: ENTRY,
+                info: Some(Box::new(crate::items::test_template("Sword"))),
+            }],
+        );
+        assert!(replayed(world, SWORD), "the record landed and applied");
+        assert!(!replayed(world, THEIRS), "another's item applies no replay");
+
+        super::super::handlers::dispatch(world, super::wire(vec![queue(MACE), create(MACE, ME)]));
+        assert!(
+            replayed(world, MACE),
+            "a cached record applies at the create hook"
+        );
+    }
+
     /// The observer movement-mode family, on a bare `World` with one indexed unit.
     mod spline_modes {
         use super::*;
