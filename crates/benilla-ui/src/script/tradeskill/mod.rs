@@ -98,7 +98,8 @@ pub struct TradeSkillRecipe {
     /// The product's `InventoryType`, which the inv-slot filter folds to slot bits through
     /// `DAT_00809200` (`0x4fcee6`); 0 takes the catch-all bit.
     pub product_inv_type: u32,
-    /// The product's `ItemLevel`, the sort key between tier and name (`record+0x14`, `0x7c9640`).
+    /// The product's `ItemLevel` (`0x7c9640`), the sort key between tier and name, highest first
+    /// (`row+0x14`, `0x4fd4e6`).
     pub product_item_level: u32,
     /// In display order.
     pub reagents: Vec<TradeSkillReagent>,

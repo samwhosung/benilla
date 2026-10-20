@@ -108,8 +108,9 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// The groups in display order (`0x4fca20`): by `ItemClass`, then name, never subclass id; each
-/// group's recipes by tier, product ItemLevel (`record+0x14`), then name. A recipe with no group
-/// yet goes into an empty-named group keyed `u32::MAX`, which sorts last.
+/// group's recipes by tier ascending, product ItemLevel (`row+0x14`) descending (`setl` at
+/// `0x4fd4e6`), then name (`0x4fd380`). A recipe with no group yet goes into an empty-named group
+/// keyed `u32::MAX`, which sorts last.
 pub(super) fn build_groups(recipes: &[TradeSkillRecipe]) -> Vec<TradeSkillGroup> {
     let mut map: HashMap<(u32, u32), TradeSkillGroup> = HashMap::new();
     for (i, r) in recipes.iter().enumerate() {
@@ -134,9 +135,9 @@ pub(super) fn build_groups(recipes: &[TradeSkillRecipe]) -> Vec<TradeSkillGroup>
                 .tier()
                 .cmp(&recipes[b].difficulty.tier())
                 .then_with(|| {
-                    recipes[a]
+                    recipes[b]
                         .product_item_level
-                        .cmp(&recipes[b].product_item_level)
+                        .cmp(&recipes[a].product_item_level)
                 })
                 .then_with(|| collate(&recipes[a].name, &recipes[b].name))
         });
