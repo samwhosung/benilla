@@ -263,14 +263,14 @@ fn index_of(ui: &[TaxiUiNode], name: &str) -> usize {
 
 /// `0x4dbbd0` over the shipped path from Thunder Bluff to Gadgetzan (`TaxiPath` 309): x's
 /// difference stored as an f32, y's, z's, the squares and the root at 53 bits, the sum stored as
-/// an f32 at each point.
+/// an f32 at each point: 8692.9052734375 exactly.
 #[test]
 fn a_shipped_path_s_length_sums_its_points_as_the_x87_does() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let cat = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
     assert_eq!(cat.paths.between(22, 40).map(|p| p.id), Some(309));
-    assert_eq!(cat.length_back(22, 40), 8_692.905_273_437_5);
+    assert_eq!(cat.length_back(22, 40), 8_692.905);
 }
 
 /// A path of one point is 0 long; one with no points, and a pair with only the forward row, weigh
