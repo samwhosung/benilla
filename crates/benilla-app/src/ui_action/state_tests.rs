@@ -28,11 +28,17 @@ fn feed_inputs(app: &mut App) {
         .init_resource::<crate::net::Reputations>();
 }
 
-/// The feed, ahead of the unit snapshots as the plugin orders it.
+/// The feed's two halves, around the unit snapshots as the plugin orders them.
 fn add_action_feed(app: &mut App) {
-    app.add_systems(
+    app.init_resource::<ActionEvents>().add_systems(
         Update,
-        feed_action_state.before(crate::ui_unit::UnitSnapshots),
+        (
+            feed_action_state.before(crate::ui_unit::UnitSnapshots),
+            fire_action_events
+                .in_set(crate::ui_action::CooldownEvents)
+                .after(crate::ui_unit::UnitSnapshots),
+        )
+            .chain(),
     );
 }
 

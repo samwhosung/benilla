@@ -94,6 +94,15 @@ struct UnitFeedMemo {
     worn_hidden: Option<(bool, bool)>,
     /// `PLAYER_FIELD_BYTES` byte 2 (`GetActionBarToggles`, `0x4e7660`); no field watch, no event.
     action_bar_toggles: Option<u8>,
+    /// The events the pushes owe, which [`fire_unit_events`] signals after the action feed.
+    pending: PendingUnitEvents,
+}
+
+/// What [`feed_units`] pushed this frame that owes an event after the usable refresh.
+#[derive(Default)]
+struct PendingUnitEvents {
+    target_changed: bool,
+    combo_points: bool,
 }
 
 /// Adds the per-frame unit feed; the `Unit*` bindings live in `benilla-ui`.
@@ -134,6 +143,14 @@ impl Plugin for UiUnitPlugin {
                     .in_set(field_events::FieldEventPushes)
                     .in_set(UnitSnapshots)
                     .after(WorldEnterSeats),
+                // After the snapshots its handlers read, and ahead of the action feed's events:
+                // `SetPlayerControl` stores the flag (`0x4958ea`) and signals its event
+                // (`0x4958f7`, `0x49590b`) before the usable refresh (`0x4958fc`, `0x495910`).
+                feed_player_control
+                    .after(crate::player::ControlRestore)
+                    .before(crate::ui_action::CooldownEvents),
+                // After the action feed, whose usable refresh precedes these events.
+                fire_unit_events.after(crate::ui_action::CooldownEvents),
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 // After the same feed, whose guids it covers.
@@ -147,7 +164,6 @@ impl Plugin for UiUnitPlugin {
                     .after(crate::ui_aura::AuraEvents)
                     .after(crate::tutorial::TutorialFeed),
                 held::feed_name_candidates,
-                feed_player_control.after(crate::player::ControlRestore),
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
                 feed_farsight_focus,
@@ -1314,13 +1330,17 @@ pub(crate) fn live_player_seat(
     })
 }
 
-/// One pass of the unit feed, for a test that follows a selection change to its event.
+/// One pass of the unit feed and its events, for a test that follows a selection change to its
+/// event.
 #[cfg(test)]
 pub(crate) fn run_feed_units_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
     world
         .run_system_once(feed_units)
         .expect("the unit feed runs as a one-shot system");
+    world
+        .run_system_once(fire_unit_events)
+        .expect("the unit events run as a one-shot system");
 }
 
 fn feed_units(
@@ -1643,17 +1663,13 @@ fn feed_units(
         }
     }
 
-    // `PLAYER_TARGET_CHANGED`, argless, when the selection changes. A `/reload`'s fresh memo finds
-    // none: the shutdown dropped the target and told the dying VM (`0x490bdf`).
+    // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
+    // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the target
+    // and told the dying VM (`0x490bdf`).
     if selection.guid != memo.target_guid {
         gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
         memo.target_guid = selection.guid;
-        // The reference signals it inside `SetSelection`, so inside the key or click whose call
-        // moved the selection; a change that call made hears it under that call's input events.
-        let cause = script.take_selection_cause(selection.guid);
-        script.with_input_events(cause, |script| {
-            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-        });
+        memo.pending.target_changed = true;
     }
 
     // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips the
@@ -1668,7 +1684,7 @@ fn feed_units(
     }
 
     // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads both;
-    // only the count fires `PLAYER_COMBO_POINTS` (`0x5ddff0`).
+    // only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
     if let Some((store, _)) = self_q.iter().next() {
         let banked = (
             store.0.player_combo_points().unwrap_or(0),
@@ -1678,10 +1694,35 @@ fn feed_units(
             gate.audit("feed_units", "the combo-point edge");
             memo.last_combo = Some(banked);
             script.set_combo_points(banked.0, banked.1);
-            if fire {
-                script.fire_event("PLAYER_COMBO_POINTS", vec![]);
-            }
+            memo.pending.combo_points |= fire;
         }
+    }
+}
+
+/// The events [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
+/// reference orders them: `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`)
+/// before `PLAYER_TARGET_CHANGED` (`0x49389c`), and so does a release (`0x4939d3`, `0x493a69`,
+/// `0x493a73`); the combo-point watch refreshes (`0x5ddff0`) before `PLAYER_COMBO_POINTS`
+/// (`0x5ddffa`). A usable handler reads the new target and count, and hears these after it.
+fn fire_unit_events(
+    script: Option<NonSendMut<UiScript>>,
+    selection: Res<Selection>,
+    mut feed: ResMut<UnitFeedState>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let pending = std::mem::take(&mut feed.vm.get(&script).pending);
+    if pending.target_changed {
+        // The reference signals it inside `SetSelection`, so inside the key or click whose call
+        // moved the selection; a change that call made hears it under that call's input events.
+        let cause = script.take_selection_cause(selection.guid);
+        script.with_input_events(cause, |script| {
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        });
+    }
+    if pending.combo_points {
+        script.fire_event("PLAYER_COMBO_POINTS", vec![]);
     }
 }
 
@@ -1696,8 +1737,8 @@ fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
 pub(crate) use held::feed_name_candidates;
 
 /// The bare unit feed, for a test driving the stock unit frames off engine state: the pushes,
-/// the control edge, then the field notices' events, under the plugin's sets so a test's action
-/// feed takes its place around them.
+/// the control edge, the unit events, then the field notices' events, under the plugin's sets so
+/// a test's action feed takes its place around them.
 #[cfg(test)]
 pub(crate) fn add_unit_feed(app: &mut App) {
     app.init_resource::<UnitFeedState>()
@@ -1708,7 +1749,8 @@ pub(crate) fn add_unit_feed(app: &mut App) {
             (
                 relations::feed_unit_relations,
                 feed_units.in_set(UnitSnapshots),
-                feed_player_control,
+                feed_player_control.before(crate::ui_action::CooldownEvents),
+                fire_unit_events.after(crate::ui_action::CooldownEvents),
                 fire_faction_on_forced_table,
                 field_events::fire_field_notices,
             )

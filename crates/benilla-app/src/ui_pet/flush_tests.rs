@@ -377,7 +377,12 @@ fn the_flush_runs_after_every_feed_that_pushes_a_pet_cooldown() {
         }
         false
     };
-    for feed in ["::feed_pet_bar", "::feed_pet_book", "::feed_action_state"] {
+    for feed in [
+        "::feed_pet_bar",
+        "::feed_pet_book",
+        "::feed_action_state",
+        "::fire_action_events",
+    ] {
         let key = named(feed).unwrap_or_else(|| panic!("{feed} is scheduled"));
         assert!(runs_before(key), "{feed} runs before the pet's flush");
     }

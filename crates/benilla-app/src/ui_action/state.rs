@@ -1,12 +1,14 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
-//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM, and the events their
-//! producers raise, each once a frame in the reference's order: the cooldown pair (`0x4b31b0`) on
-//! a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a refresh of the usable cache (`0x4e5c00`)
-//! finds a pair changed, each reactive spell's `SPELL_ACTIVE` ([`super::reactive`]) and
-//! `SPELL_UPDATE_USABLE` from the usable refresh `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN`
-//! (`0x4f93d0`) from the item legs; then combat enter and leave (`0x6256ff`, `0x625778`) and
-//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
-//! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
+//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM ahead of the world-enter
+//! events ([`feed_action_state`]), and the events their producers raise, signalled after the unit
+//! snapshots their handlers read ([`fire_action_events`]), each once a frame in the reference's
+//! order: the cooldown pair (`0x4b31b0`) on a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a
+//! refresh of the usable cache (`0x4e5c00`) finds a pair changed, each reactive spell's
+//! `SPELL_ACTIVE` ([`super::reactive`]) and `SPELL_UPDATE_USABLE` from the usable refresh
+//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs; then combat enter
+//! and leave (`0x6256ff`, `0x625778`) and autorepeat start and stop (`0x6e5952`, `0x6ea170`).
+//! `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is signalled where the
+//! cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
 //! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
@@ -183,7 +185,27 @@ fn profession(
     }
 }
 
-/// Computes and diff-pushes every occupied slot's state, and fires the reference's events.
+/// The events one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
+#[derive(Resource, Default)]
+pub(crate) struct ActionEvents {
+    /// The cooldown pair, `ACTIONBAR_UPDATE_COOLDOWN` and `SPELL_UPDATE_COOLDOWN`.
+    cooldowns: bool,
+    /// `ACTIONBAR_UPDATE_USABLE`.
+    usable_changed: bool,
+    /// `SPELL_UPDATE_USABLE`.
+    refresh: bool,
+    /// Each reactive spell that turned usable in the refresh, by name, a `SPELL_ACTIVE`.
+    activated: Vec<String>,
+    /// `BAG_UPDATE_COOLDOWN`.
+    bags: bool,
+    /// `PLAYER_ENTER_COMBAT` (true) or `PLAYER_LEAVE_COMBAT`.
+    combat: Option<bool>,
+    /// `START_AUTOREPEAT_SPELL` (true) or `STOP_AUTOREPEAT_SPELL`.
+    auto_repeat: Option<bool>,
+}
+
+/// Computes and diff-pushes every occupied slot's state, and owes the reference's events to
+/// [`fire_action_events`].
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_action_state(
     script: Option<NonSendMut<UiScript>>,
@@ -217,12 +239,13 @@ pub(super) fn feed_action_state(
     // The item cache and the channel its misses query on, one param for the same ceiling.
     (items, commands): (Res<Items>, Res<NetCommands>),
     // The usable refresh's field-watch callers, the spell charges watcher, the enter cascade,
-    // the bag feed's `BAG_UPDATE`s and the memory about the VM.
-    (mut edges, mut item_notices, mut entries, bag_updates, mut memory): (
+    // the bag feed's `BAG_UPDATE`s, the events owed and the memory about the VM.
+    (mut edges, mut item_notices, mut entries, bag_updates, mut owed, mut memory): (
         MessageReader<FieldChanged>,
         MessageReader<ItemNotice>,
         MessageReader<crate::net::WorldEnterCascadeMessage>,
         Option<Res<crate::ui_items::feed::BagUpdates>>,
+        ResMut<ActionEvents>,
         Local<crate::ui_script::VmMemo<StateMemory>>,
     ),
     // The bar's usable cache, which lives for the session, not for a VM.
@@ -552,31 +575,55 @@ pub(super) fn feed_action_state(
         _ => super::reactive::Refresh::default(),
     };
 
-    // The events in the reference's order: each flush's `ACTIONBAR_*` event first; the cooldown
-    // pair ahead of the usable refresh a held cooldown or `0x6e3050` runs (`0x6e2e77`,
-    // `0x6e3071`), and both ahead of the bags (`0x6e3089`). `ACTIONBAR_UPDATE_USABLE` comes from
-    // the cache's refresh alone, `SPELL_UPDATE_USABLE` from `0x4b31c0` alone (`0x4b3246`), so the
-    // cache's other callers signal the first without the second.
-    if gen_changed || record_flush {
+    owed.cooldowns |= gen_changed || record_flush;
+    owed.usable_changed |= usable_changed;
+    owed.refresh |= refresh;
+    owed.activated.extend(reactive.activated);
+    owed.bags |= bags || record_flush;
+    if engaged != memory.engaged {
+        memory.engaged = engaged;
+        owed.combat = Some(engaged);
+    }
+    if auto_repeat.0 != memory.auto_repeat {
+        memory.auto_repeat = auto_repeat.0;
+        owed.auto_repeat = Some(auto_repeat.0.is_some());
+    }
+}
+
+/// Signals what [`feed_action_state`] owes, after the unit snapshots: `SelectTarget` stores the
+/// target (`0x4936e2`) before its refresh (`0x493892`), and a watched field is written before its
+/// watch runs, so a handler reads the units the refresh followed. In the reference's order: each
+/// flush's `ACTIONBAR_*` event first; the cooldown pair ahead of the usable refresh a held cooldown
+/// or `0x6e3050` runs (`0x6e2e77`, `0x6e3071`), and both ahead of the bags (`0x6e3089`).
+/// `ACTIONBAR_UPDATE_USABLE` comes from the cache's refresh alone, `SPELL_UPDATE_USABLE` from
+/// `0x4b31c0` alone (`0x4b3246`), so the cache's other callers signal the first without the second.
+pub(super) fn fire_action_events(
+    script: Option<NonSendMut<UiScript>>,
+    mut owed: ResMut<ActionEvents>,
+) {
+    let owed = std::mem::take(&mut *owed);
+    let Some(mut script) = script else {
+        return;
+    };
+    if owed.cooldowns {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
     }
     // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as it
     // turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
-    if usable_changed {
+    if owed.usable_changed {
         script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
     }
-    for name in reactive.activated {
+    for name in owed.activated {
         crate::ui_unit::fire_combat_text(&mut script, "SPELL_ACTIVE", Some(name), None);
     }
-    if refresh {
+    if owed.refresh {
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
     }
-    if bags || record_flush {
+    if owed.bags {
         script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
     }
-    if engaged != memory.engaged {
-        memory.engaged = engaged;
+    if let Some(engaged) = owed.combat {
         script.fire_event(
             if engaged {
                 "PLAYER_ENTER_COMBAT"
@@ -586,10 +633,9 @@ pub(super) fn feed_action_state(
             vec![],
         );
     }
-    if auto_repeat.0 != memory.auto_repeat {
-        memory.auto_repeat = auto_repeat.0;
+    if let Some(on) = owed.auto_repeat {
         script.fire_event(
-            if auto_repeat.0.is_some() {
+            if on {
                 "START_AUTOREPEAT_SPELL"
             } else {
                 "STOP_AUTOREPEAT_SPELL"
