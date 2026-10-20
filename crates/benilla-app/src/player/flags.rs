@@ -167,8 +167,6 @@ mod tests {
             mouselook: false,
             turning: false,
             translating: false,
-            autorun_armed: false,
-            both_engaged: false,
             strafe_left: false,
             strafe_right: false,
             turn_left: false,

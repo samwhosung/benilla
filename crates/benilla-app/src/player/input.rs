@@ -93,10 +93,6 @@ pub(super) struct MoveAxes {
     pub turning: bool,
     /// The reference's `flags & 0xf`, off the net axes: W+S neither streams nor moves.
     pub translating: bool,
-    /// Autorun was toggled on this frame: `ToggleAutoRun` pushes `0x1000` (`0x513de0`).
-    pub autorun_armed: bool,
-    /// Both mouse bits came together this frame (`0x514a73`, `0x5150e2`).
-    pub both_engaged: bool,
     /// The raw strafe and turn keys, for the swim amounts and the wire's turn bits.
     pub strafe_left: bool,
     pub strafe_right: bool,
@@ -119,10 +115,8 @@ pub(super) fn move_axes(
     // ── Autorun ── TOGGLEAUTORUN, a latch (1.12 defaults NUMLOCK and BUTTON4, winit's
     // `Forward`). The reference's window-deactivate handler (`0x514490`, called only from the
     // WM_ACTIVATE slot at `0x493058`) releases every direction bit and keeps `0x1000`.
-    let mut autorun_armed = false;
     if binds.fired(crate::bindings::Input::ToggleAutoRun) {
         player.autorun = !player.autorun;
-        autorun_armed = player.autorun;
     }
     // Name an extra mouse button the bindings do not know, rather than fail silently.
     for b in buttons.get_just_pressed() {
@@ -192,8 +186,6 @@ pub(super) fn move_axes(
         mouselook,
         turning,
         translating,
-        autorun_armed,
-        both_engaged: both_buttons_engaged,
         strafe_left,
         strafe_right,
         turn_left,

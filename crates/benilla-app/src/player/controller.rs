@@ -309,6 +309,22 @@ pub(super) fn control(
     ride::carry(&mut player, &mut cam, transports);
 
     if player.active && !player.detached {
+        // The cast bar's self-cancel, at the command press ([`input::cancels_cast`]) and ahead of
+        // the mover: between the press `0x5150a7` and the cancel `0x51512a` stands only the taint
+        // test `0x494a50`, so it runs whoever drives the body. It reads the commands, never the
+        // streamed word, which a root empties of direction bits. The cast cancel tests no mover
+        // (`0x5150f2`); the channel's needs the player to be it (`0x515180`), so steering a
+        // possessed creature ends a cast but not the Mind Control that holds it.
+        let autorun_on = binds.fired(crate::bindings::Input::ToggleAutoRun) && !player.autorun;
+        if input::cancels_cast(
+            binds,
+            autorun_on,
+            input::both_engaged(binds, &rig, both_buttons),
+            body.single().is_ok(),
+        ) {
+            net.7.pressed = true;
+            net.7.mover_is_player = player.foreign_mover.is_none();
+        }
         // Not driving, while the camera stays on the body and input, physics and the stream yield:
         // - `server_riding`: a server spline (Charge, knockback, taxi, a flee path) owns the body;
         //   `drive_self_ride` has mirrored it into `Player`, reporting FORWARD on purpose.
@@ -748,15 +764,7 @@ pub(super) fn control(
             &dynamics,
         );
 
-        // The cast bar's self-cancel, on the command press ([`input::cancels_cast`]), never the
-        // streamed word, which a root empties of direction bits. The cast cancel tests no mover
-        // (`0x5150f2`); the channel's needs the player to be it (`0x515180`), so steering a
-        // possessed creature ends a cast but not the Mind Control that holds it.
         let steering_ourselves = player.foreign_mover.is_none();
-        if input::cancels_cast(binds, axes.autorun_armed, axes.both_engaged, true) {
-            net.7.pressed = true;
-            net.7.mover_is_player = steering_ourselves;
-        }
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,
         // keyboard turn, pitch and jump close it, mouse-look facing does not, and only for our
         // own character.
