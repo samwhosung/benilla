@@ -289,22 +289,107 @@ fn honor_gain_lines_pick_the_reference_form() {
 #[test]
 fn xp_gain_lines_pick_the_reference_form() {
     let _data = benilla_formats::wow_data_or_skip!();
+    use super::feed::{xp_gain_line, RestState};
+    let normal = || {
+        Some(RestState {
+            state: 2,
+            row: Some(("Normal", 1.0)),
+        })
+    };
+    let rested = || {
+        Some(RestState {
+            state: 1,
+            row: Some(("Rested", 2.0)),
+        })
+    };
     // `COMBATLOG_XPGAIN_FIRSTPERSON`, `COMBATLOG_XPGAIN_EXHAUSTION1` (rested) and
     // `COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED` (`GlobalStrings.lua:801`, `:789`, `:804`).
     assert_eq!(
-        with_strings(|g| super::feed::xp_gain_line(Some("Kobold Vermin"), 35, 0, g)).as_deref(),
+        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 35, 35, normal(), g)).as_deref(),
         Some("Kobold Vermin dies, you gain 35 experience.")
     );
     assert_eq!(
-        with_strings(|g| super::feed::xp_gain_line(Some("Kobold Vermin"), 52, 17, g)).as_deref(),
+        with_strings(|g| xp_gain_line(Some("Kobold Vermin"), 52, 35, rested(), g)).as_deref(),
         Some("Kobold Vermin dies, you gain 52 experience. (+17 exp Rested bonus)")
     );
     assert_eq!(
-        with_strings(|g| super::feed::xp_gain_line(None, 120, 0, g)).as_deref(),
+        with_strings(|g| xp_gain_line(None, 120, 120, None, g)).as_deref(),
         Some("You gain 120 experience.")
     );
     // The shipped lavender, 0x6F6FFF, chat-cache row 46.
     assert_eq!(default_color(K::CombatXpGain), [111, 111, 255]);
+}
+
+/// `0x637ac0`: a named kill's form is its rest state's, read off that state's `Exhaustion.dbc`
+/// row, never off the bonus. A factor of 0 or 1, or no row, is the plain line (`0x637b3e`,
+/// `0x637b54`, `0x637b38`); any other takes the state's key in `0x864330`, whose entry 3 names
+/// the global `NULL` and so writes nothing. No active player, no line (`0x637b06`).
+#[test]
+fn the_xp_line_follows_the_rest_states_exhaustion_row() {
+    use super::feed::{xp_gain_line, RestState};
+    let get = |key: &str| {
+        Some(
+            match key {
+                "COMBATLOG_XPGAIN_FIRSTPERSON" => "%s dies, you gain %d experience.",
+                "COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED" => "You gain %d experience.",
+                "COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED" => "You lose %d experience.",
+                "COMBATLOG_XPGAIN_EXHAUSTION1" => {
+                    "%s dies, you gain %d experience. (%s exp %s bonus)"
+                }
+                "COMBATLOG_XPGAIN_EXHAUSTION4" => {
+                    "%s dies, you gain %d experience. (%s exp %s penalty)"
+                }
+                _ => return None,
+            }
+            .to_string(),
+        )
+    };
+    let line = |total, base, state, row| {
+        xp_gain_line(
+            Some("Defias Thug"),
+            total,
+            base,
+            Some(RestState { state, row }),
+            &get,
+        )
+    };
+    // A bonus with a factor-1 row is still the plain line.
+    assert_eq!(
+        line(60, 40, 2, Some(("Normal", 1.0))).as_deref(),
+        Some("Defias Thug dies, you gain 60 experience.")
+    );
+    // No row for the state, or a factor of 0: plain.
+    assert_eq!(
+        line(60, 40, 1, None).as_deref(),
+        Some("Defias Thug dies, you gain 60 experience.")
+    );
+    assert_eq!(
+        line(60, 40, 1, Some(("Rested", 0.0))).as_deref(),
+        Some("Defias Thug dies, you gain 60 experience.")
+    );
+    // A rested row with no bonus left still words the state, `+0`, with the row's own name.
+    assert_eq!(
+        line(40, 40, 1, Some(("Erholt", 2.0))).as_deref(),
+        Some("Defias Thug dies, you gain 40 experience. (+0 exp Erholt bonus)")
+    );
+    // A penalty state: the signed difference, no `+`.
+    assert_eq!(
+        line(20, 40, 4, Some(("Tired", 0.5))).as_deref(),
+        Some("Defias Thug dies, you gain 20 experience. (-20 exp Tired penalty)")
+    );
+    // State 3's key is `NULL`, no global: no line.
+    assert_eq!(line(60, 40, 3, Some(("Tired", 0.75))), None);
+    // A named kill with no active player writes nothing; the unnamed form needs none.
+    assert_eq!(xp_gain_line(Some("Defias Thug"), 60, 40, None, &get), None);
+    assert_eq!(
+        xp_gain_line(None, 60, 40, None, &get).as_deref(),
+        Some("You gain 60 experience.")
+    );
+    // An XP loss prints the packet's value negated as a signed 32-bit number (`0x637f70`).
+    assert_eq!(
+        super::feed::xp_loss_line((-100i32) as u32, &get).as_deref(),
+        Some("You lose 100 experience.")
+    );
 }
 
 #[test]

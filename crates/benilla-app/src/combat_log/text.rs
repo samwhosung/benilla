@@ -448,15 +448,44 @@ pub(super) fn missile_miss(
     }
 }
 
-/// `SMSG_LOG_XPGAIN`: `"XP: %d"` over self, category 4, the one emitter that skips Gate A
-/// (`0x607260`), for kill and quest XP alike; the packet also writes the chat line.
+/// `SMSG_LOG_XPGAIN`, as `0x637ec0` dispatches it. Your own guid as the victim is an XP loss,
+/// written with no float (`0x637f70`). A kill of a unit the client holds (type mask 8) is named:
+/// `CGUnit_C::SetPendingXP` (`0x60a0c0`) stores it and flushes it at once through `0x6251e0`,
+/// which writes and floats nothing for a zero gain (`0x625202`). Anything else is the unnamed
+/// line (`0x637f90`, victim NULL). Both gains float `"XP: %d"` over self, category 4, the one
+/// emitter that skips Gate A (`0x607260`).
 pub(super) fn xp_gain(
     x: XpGain,
     index: &GuidIndex,
     self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
     text: &mut MessageWriter<CombatTextSpawn>,
     chat_log: &mut ChatLog,
 ) {
+    // `0x468550`: the active player's guid, 0 with none.
+    if x.victim == self_guid.0.unwrap_or(0) {
+        chat_log.push_xp_loss(x.total);
+        return;
+    }
+    let victim_held = index
+        .0
+        .get(&x.victim)
+        .and_then(|&e| stores.get(e).ok())
+        .is_some_and(|s| {
+            use benilla_protocol::messages::ObjectType;
+            matches!(
+                s.0.object_type(),
+                Some(ObjectType::Unit | ObjectType::Player)
+            )
+        });
+    if x.kill && victim_held {
+        if x.total == 0 {
+            return;
+        }
+        chat_log.push_xp_gain(x.victim, x.total, x.base);
+    } else {
+        chat_log.push_xp_gain(0, x.total, x.base);
+    }
     if let Some(&me) = self_guid.0.as_ref().and_then(|g| index.0.get(g)) {
         text.write(CombatTextSpawn {
             anchor: me,
@@ -465,7 +494,6 @@ pub(super) fn xp_gain(
             color: None, // row 4's own purple: XP skips the damage colour law
         });
     }
-    chat_log.push_xp_gain(&x);
 }
 
 /// `SMSG_EXPLORATION_EXPERIENCE`, as the reference's case body `[0x5e41d2, 0x5e42bb]`:

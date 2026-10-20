@@ -434,6 +434,12 @@ impl super::UiScript {
         model.exhaustion = rows.into_iter().map(|(id, n, f)| (id, (n, f))).collect();
     }
 
+    /// A rest state's `Exhaustion.dbc` row, (localized name, XP factor), as the store
+    /// `0xc0dd78` the combat log's XP line reads (`0x637b2a`) holds it.
+    pub fn exhaustion_row(&self, state: u8) -> Option<(String, f64)> {
+        self.model_ref().exhaustion.get(&state).cloned()
+    }
+
     /// Push the combo points (`PLAYER_FIELD_BYTES` byte 1) and their target
     /// (`PLAYER_FIELD_COMBO_TARGET`) together, as `Player::SetComboPoints` writes them. Raw:
     /// `GetComboPoints`' class and target gates are the binding's.

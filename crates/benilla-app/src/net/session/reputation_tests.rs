@@ -101,15 +101,9 @@ fn delta(app: &mut App, slot: u32, standing: i32) {
 }
 
 fn xp_gain(app: &mut App) {
-    let xp = benilla_protocol::messages::XpGain {
-        victim: 0,
-        total: 100,
-        base: 100,
-        kill: false,
-    };
     app.world_mut()
         .resource_mut::<crate::ui_chat::ChatLog>()
-        .push_xp_gain(&xp);
+        .push_xp_gain(0, 100, 100);
 }
 
 fn rank_lines(app: &App) -> Vec<(String, u8, bool)> {

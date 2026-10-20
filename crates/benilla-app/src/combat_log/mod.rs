@@ -341,7 +341,14 @@ fn on_environmental_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
 
 fn on_xp_gain(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::XpGain(x) = ev {
-        text::xp_gain(x, &c.index, &c.self_guid, &mut l.text, &mut l.log);
+        text::xp_gain(
+            x,
+            &c.index,
+            &c.self_guid,
+            &l.stores,
+            &mut l.text,
+            &mut l.log,
+        );
     }
 }
 
@@ -667,5 +674,54 @@ mod tests {
         assert_eq!(credit(NEUTRAL, -40), [(NEUTRAL, -40, 8, 0)]);
         assert!(credit(77, 120).is_empty(), "not held");
         assert_eq!(credit(0, 25), [(0, 25, 8, 0)]);
+    }
+
+    /// `0x637ec0`: a kill of a held unit is named, and floats; a zero one there writes and
+    /// floats nothing (`0x625202`); any other award is unnamed and floats; your own guid is an XP
+    /// loss, with no float (`0x637f70`).
+    #[test]
+    fn the_xp_packet_takes_the_reference_arm() {
+        let gain = |victim, total, kill| {
+            let mut app = world(&[ME, MOB]);
+            let packet = SessionEvent::XpGain(benilla_protocol::messages::XpGain {
+                victim,
+                total,
+                base: 40,
+                kill,
+            });
+            app.world_mut()
+                .run_system_once_with(on_xp_gain, packet)
+                .unwrap();
+            let log = app.world().resource::<ChatLog>();
+            let (lines, kinds) = (log.pending_xp(), log.pending_kinds());
+            let floats = app
+                .world_mut()
+                .resource_mut::<Messages<CombatTextSpawn>>()
+                .drain()
+                .count();
+            (lines, kinds, floats)
+        };
+        assert_eq!(gain(MOB, 60, true), (vec![(MOB, 60, 40)], vec!["xp"], 1));
+        assert_eq!(
+            gain(77, 60, true),
+            (vec![(0, 60, 40)], vec!["xp"], 1),
+            "not held"
+        );
+        assert_eq!(
+            gain(MOB, 60, false),
+            (vec![(0, 60, 40)], vec!["xp"], 1),
+            "no kill"
+        );
+        assert_eq!(gain(MOB, 0, true), (vec![], vec![], 0), "a zero kill");
+        assert_eq!(
+            gain(0, 0, false),
+            (vec![(0, 0, 40)], vec!["xp"], 1),
+            "a zero award"
+        );
+        assert_eq!(
+            gain(ME, 60, true),
+            (vec![], vec!["xp loss"], 0),
+            "your own guid"
+        );
     }
 }
