@@ -384,13 +384,15 @@ pub(super) fn feed_item_sets(
     }
 }
 
-/// Pushes the whole random-suffix table once per VM, when both catalogs are in: its consumers are
-/// click-driven, and a chat-link tooltip has no hover loop to repaint a late answer.
+/// Pushes the whole random-suffix table once per VM, when both catalogs are in, and the enchant
+/// names once the enchant catalog is: their consumers are click-driven, and a chat-link tooltip
+/// has no hover loop to repaint a late answer.
 pub(super) fn feed_random_properties(
     script: Option<NonSendMut<UiScript>>,
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
+    _names_pushed: Local<crate::ui_script::VmMemo<bool>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -2444,5 +2446,46 @@ mod ask_tests {
             1,
             "the next getter asks again"
         );
+    }
+
+    /// A chat link's bare enchant id names its line through the table pushed at load: every named
+    /// `SpellItemEnchantment` row, one whose `Flags & 0x2` silences the combat log included, as
+    /// the builder's loop tests no flag before it prints the name (`0x52ca23`..`0x52ca8b`).
+    #[test]
+    fn a_links_enchant_names_its_line_from_the_table_pushed_at_load() {
+        let mut app = App::new();
+        app.insert_resource(crate::items::Enchants(
+            benilla_formats::EnchantCatalog::from_rows(
+                std::collections::HashMap::new(),
+                std::collections::HashMap::from([(29, "Rockbiter 3".to_string())]),
+                std::collections::HashMap::from([(29, 0x2)]),
+            ),
+        ))
+        .add_systems(Update, super::feed_random_properties);
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        crate::ui_script::test_ui::load_tooltip_template(&script);
+        script.set_item_template(
+            9300,
+            benilla_ui::script::ItemTemplateView {
+                name: "Runed Blade".into(),
+                quality: 2,
+                ..Default::default()
+            },
+        );
+        app.insert_non_send_resource(script);
+        app.update();
+        let line: String = app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval(
+                r#"
+                local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+                tt:SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")
+                tt:SetHyperlink("item:9300:29:0:0")
+                return TTTextLeft2:GetText()
+                "#,
+            )
+            .unwrap();
+        assert_eq!(line, "Rockbiter 3");
     }
 }

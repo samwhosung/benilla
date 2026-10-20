@@ -131,6 +131,11 @@ impl EnchantCatalog {
         self.visuals.len()
     }
 
+    /// `(enchant id, display name)` for every row that carries one, in no order.
+    pub fn iter_names(&self) -> impl Iterator<Item = (u32, &str)> + '_ {
+        self.names.iter().map(|(k, v)| (*k, v.as_str()))
+    }
+
     /// How many enchants carry a name.
     pub fn name_count(&self) -> usize {
         self.names.len()
